@@ -5,10 +5,10 @@ use std::thread;
 use std::time::Duration;
 
 use crossterm::{
-    event::{Event, KeyCode, KeyEventKind, KeyModifiers, EventStream},
+    event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
-use futures::{stream::StreamExt};
+use futures::stream::StreamExt;
 use tokio::task::{AbortHandle, spawn_blocking};
 
 type Tx = Box<dyn Write + Send>;
