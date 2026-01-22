@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 name = "ostool"
 readme = "../README.md"
 repository = "https://github.com/ZR233/ostool"
-version = "0.8.7"
+version = "0.8.8"
 
 [[bin]]
 name = "ostool"
@@ -22,6 +22,7 @@ ui-log = ["jkconfig/logging"]
 
 [dependencies]
 anyhow = {workspace = true, features = ["backtrace"]}
+futures = "0.3"
 byte-unit = "5.1"
 cargo_metadata = "0.23"
 clap = {workspace = true, features = ["derive"]}

@@ -6,7 +6,7 @@ resolver = "3"
 [workspace.dependencies]
 # Cursive TUI framework
 cursive = {version = "0.21", features = ["crossterm-backend"]}
-crossterm = "0.29"
+crossterm = {version = "0.29", features = ["event-stream"]}
 
 # Data processing
 anyhow = "1"

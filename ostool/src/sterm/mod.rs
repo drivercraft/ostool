@@ -5,9 +5,11 @@ use std::thread;
 use std::time::Duration;
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{Event, KeyCode, KeyEventKind, KeyModifiers, EventStream},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
+use futures::{stream::StreamExt};
+use tokio::task::{AbortHandle, spawn_blocking};
 
 type Tx = Box<dyn Write + Send>;
 type Rx = Box<dyn Read + Send>;
@@ -83,57 +85,18 @@ impl SerialTerm {
             is_running: AtomicBool::new(true),
         });
 
+        // 使用 EventStream 异步处理键盘事件
+        let tx_handle = tokio::spawn(Self::tx_work_async(handle.clone(), tx_port));
+
+        let tx_abort = tx_handle.abort_handle();
         // 启动串口接收线程
-        let rx_handle = thread::spawn({
+        let rx_handle = spawn_blocking({
             let handle = handle.clone();
-            move || Self::handle_serial_receive(rx_port, handle, on_line)
+            move || Self::handle_serial_receive(rx_port, handle, tx_abort, on_line)
         });
-
-        // 主线程处理键盘输入
-        let mut key_state = KeySequenceState::Normal;
-
-        while handle.is_running() {
-            // 非阻塞读取键盘事件
-            if event::poll(Duration::from_millis(10)).is_ok()
-                && let Ok(Event::Key(key)) = event::read()
-                && key.kind == KeyEventKind::Press
-            {
-                // 检测 Ctrl+A+x 退出序列
-                match key_state {
-                    KeySequenceState::Normal => {
-                        if key.code == KeyCode::Char('a')
-                            && key.modifiers.contains(KeyModifiers::CONTROL)
-                        {
-                            key_state = KeySequenceState::CtrlAPressed;
-                        } else {
-                            // 普通按键，发送到串口
-                            Self::send_key_to_serial(&tx_port, key)?;
-                        }
-                    }
-                    KeySequenceState::CtrlAPressed => {
-                        if key.code == KeyCode::Char('x') {
-                            // 用户请求退出
-                            eprintln!("\r\nExit by: Ctrl+A+x");
-                            handle.stop();
-                            break;
-                        } else {
-                            // 不是x键，发送上一个按键并重置状态
-                            if let KeyCode::Char('a') = key.code {
-                                // 如果还是 Ctrl+A，保持状态
-                            } else {
-                                // 发送 Ctrl+A 和当前按键
-                                Self::send_ctrl_a_to_serial(&tx_port)?;
-                                Self::send_key_to_serial(&tx_port, key)?;
-                                key_state = KeySequenceState::Normal;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         // 等待接收线程结束
-        let _ = rx_handle.join();
+        let _ = rx_handle.await?;
+        let _ = tx_handle.await;
         info!("Serial terminal exited");
         Ok(())
     }
@@ -141,6 +104,7 @@ impl SerialTerm {
     fn handle_serial_receive<F>(
         rx_port: Arc<Mutex<Rx>>,
         handle: Arc<TermHandle>,
+        tx_abort: AbortHandle,
         on_line: F,
     ) -> io::Result<()>
     where
@@ -189,7 +153,7 @@ impl SerialTerm {
                 }
             }
         }
-
+        tx_abort.abort();
         Ok(())
     }
 
@@ -487,6 +451,67 @@ impl SerialTerm {
     fn send_ctrl_a_to_serial(tx_port: &Arc<Mutex<Tx>>) -> io::Result<()> {
         tx_port.lock().unwrap().write_all(&[0x01])?; // Ctrl+A
         tx_port.lock().unwrap().flush()?;
+        Ok(())
+    }
+
+    async fn tx_work_async(handle: Arc<TermHandle>, tx_port: Arc<Mutex<Tx>>) -> anyhow::Result<()> {
+        // 使用 EventStream 异步处理键盘事件
+        let mut reader = EventStream::new();
+        let mut key_state = KeySequenceState::Normal;
+
+        while handle.is_running() {
+            // 使用 EventStream::next() 异步等待事件，不会阻塞
+            match reader.next().await {
+                Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
+                    // 检测 Ctrl+A+x 退出序列
+                    match key_state {
+                        KeySequenceState::Normal => {
+                            if key.code == KeyCode::Char('a')
+                                && key.modifiers.contains(KeyModifiers::CONTROL)
+                            {
+                                key_state = KeySequenceState::CtrlAPressed;
+                            } else {
+                                // 普通按键，发送到串口
+                                if let Err(e) = Self::send_key_to_serial(&tx_port, key) {
+                                    eprintln!("\r\n发送按键失败: {}", e);
+                                }
+                            }
+                        }
+                        KeySequenceState::CtrlAPressed => {
+                            if key.code == KeyCode::Char('x') {
+                                // 用户请求退出
+                                eprintln!("\r\nExit by: Ctrl+A+x");
+                                handle.stop();
+                                break;
+                            } else {
+                                // 不是x键，发送上一个按键并重置状态
+                                if key.code != KeyCode::Char('a') {
+                                    if let Err(e) = Self::send_ctrl_a_to_serial(&tx_port) {
+                                        eprintln!("\r\n发送 Ctrl+A 失败: {}", e);
+                                    }
+                                    if let Err(e) = Self::send_key_to_serial(&tx_port, key) {
+                                        eprintln!("\r\n发送按键失败: {}", e);
+                                    }
+                                    key_state = KeySequenceState::Normal;
+                                }
+                            }
+                        }
+                    }
+                }
+                Some(Err(e)) => {
+                    eprintln!("\r\n键盘事件错误: {}", e);
+                    break;
+                }
+                None => {
+                    // EventStream 结束
+                    break;
+                }
+                Some(Ok(_)) => {
+                    // 忽略非按键事件（鼠标、调整大小等）
+                }
+            }
+        }
+
         Ok(())
     }
 }
