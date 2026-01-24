@@ -1,3 +1,8 @@
+//! Common utilities and helper functions.
+//!
+//! This module provides utility types and functions used throughout ostool,
+//! including command execution helpers and string processing utilities.
+
 use std::{
     ffi::OsStr,
     ops::{Deref, DerefMut},
@@ -7,6 +12,10 @@ use std::{
 use anyhow::bail;
 use colored::Colorize;
 
+/// A command builder wrapper with variable substitution support.
+///
+/// `Command` wraps `std::process::Command` and adds support for automatic
+/// variable replacement in arguments and environment values.
 pub struct Command {
     inner: std::process::Command,
     value_replace: Box<dyn Fn(&OsStr) -> String>,
@@ -27,6 +36,13 @@ impl DerefMut for Command {
 }
 
 impl Command {
+    /// Creates a new command builder.
+    ///
+    /// # Arguments
+    ///
+    /// * `program` - The program to execute.
+    /// * `workdir` - The working directory for the command.
+    /// * `value_replace` - Function to perform variable substitution on arguments.
     pub fn new<S>(
         program: S,
         workdir: &Path,
@@ -45,6 +61,7 @@ impl Command {
         }
     }
 
+    /// Prints the command to stdout with colored formatting.
     pub fn print_cmd(&self) {
         let mut cmd_str = self.get_program().to_string_lossy().to_string();
 
@@ -56,6 +73,11 @@ impl Command {
         println!("{}", cmd_str.purple().bold());
     }
 
+    /// Executes the command and waits for it to complete.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command fails to execute or exits with non-zero status.
     pub fn run(&mut self) -> anyhow::Result<()> {
         self.print_cmd();
         let status = self.status()?;
@@ -65,6 +87,7 @@ impl Command {
         Ok(())
     }
 
+    /// Adds an argument to the command with variable substitution.
     pub fn arg<S>(&mut self, arg: S) -> &mut Command
     where
         S: AsRef<OsStr>,
@@ -74,6 +97,7 @@ impl Command {
         self
     }
 
+    /// Adds multiple arguments to the command with variable substitution.
     pub fn args<I, S>(&mut self, args: I) -> &mut Command
     where
         I: IntoIterator<Item = S>,
@@ -85,6 +109,7 @@ impl Command {
         self
     }
 
+    /// Sets an environment variable for the command with variable substitution.
     pub fn env<K, V>(&mut self, key: K, val: V) -> &mut Command
     where
         K: AsRef<OsStr>,
@@ -144,6 +169,21 @@ impl Command {
 //     Ok(config)
 // }
 
+/// Replaces environment variable placeholders in a string.
+///
+/// Placeholders use the format `${env:VAR_NAME}` where `VAR_NAME` is the
+/// name of an environment variable. If the variable is not set, the
+/// placeholder is replaced with an empty string.
+///
+/// # Example
+///
+/// ```rust
+/// use ostool::utils::replace_env_placeholders;
+///
+/// std::env::set_var("MY_VAR", "hello");
+/// let result = replace_env_placeholders("Value: ${env:MY_VAR}").unwrap();
+/// assert_eq!(result, "Value: hello");
+/// ```
 pub fn replace_env_placeholders(input: &str) -> anyhow::Result<String> {
     use std::env;
 

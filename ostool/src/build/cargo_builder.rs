@@ -1,3 +1,9 @@
+//! Cargo build command builder and executor.
+//!
+//! This module provides the [`CargoBuilder`] type for constructing and executing
+//! Cargo build commands with customizable options, environment variables, and
+//! pre/post build hooks.
+
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -7,6 +13,21 @@ use colored::Colorize;
 
 use crate::{build::config::Cargo, ctx::AppContext, utils::Command};
 
+/// A builder for constructing and executing Cargo commands.
+///
+/// `CargoBuilder` provides a fluent API for configuring Cargo build or run
+/// commands with custom arguments, environment variables, and build hooks.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use ostool::build::cargo_builder::CargoBuilder;
+/// use ostool::build::config::Cargo;
+/// use ostool::ctx::AppContext;
+///
+/// // CargoBuilder is typically used internally by AppContext
+/// // See AppContext::cargo_build() and AppContext::cargo_run()
+/// ```
 pub struct CargoBuilder<'a> {
     ctx: &'a mut AppContext,
     config: &'a Cargo,
@@ -18,6 +39,13 @@ pub struct CargoBuilder<'a> {
 }
 
 impl<'a> CargoBuilder<'a> {
+    /// Creates a new `CargoBuilder` for executing `cargo build`.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - The application context.
+    /// * `config` - The Cargo build configuration.
+    /// * `config_path` - Optional path to the configuration file.
     pub fn build(ctx: &'a mut AppContext, config: &'a Cargo, config_path: Option<PathBuf>) -> Self {
         Self {
             ctx,
@@ -30,6 +58,13 @@ impl<'a> CargoBuilder<'a> {
         }
     }
 
+    /// Creates a new `CargoBuilder` for executing `cargo run`.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - The application context.
+    /// * `config` - The Cargo build configuration.
+    /// * `config_path` - Optional path to the configuration file.
     pub fn run(ctx: &'a mut AppContext, config: &'a Cargo, config_path: Option<PathBuf>) -> Self {
         Self {
             ctx,
@@ -42,30 +77,38 @@ impl<'a> CargoBuilder<'a> {
         }
     }
 
+    /// Returns `true` if this builder is configured for `cargo run`.
     pub fn is_run(&self) -> bool {
         self.command == "run"
     }
 
+    /// Sets the debug mode for the build.
+    ///
+    /// When enabled, builds in debug mode and enables GDB server for QEMU.
     pub fn debug(self, debug: bool) -> Self {
         self.ctx.debug = debug;
         self
     }
 
+    /// Creates a build command using the context's stored config path.
     pub fn build_auto(ctx: &'a mut AppContext, config: &'a Cargo) -> Self {
         let config_path = ctx.build_config_path.clone();
         Self::build(ctx, config, config_path)
     }
 
+    /// Creates a run command using the context's stored config path.
     pub fn run_auto(ctx: &'a mut AppContext, config: &'a Cargo) -> Self {
         let config_path = ctx.build_config_path.clone();
         Self::run(ctx, config, config_path)
     }
 
+    /// Adds a single argument to the Cargo command.
     pub fn arg(mut self, arg: impl Into<String>) -> Self {
         self.extra_args.push(arg.into());
         self
     }
 
+    /// Adds multiple arguments to the Cargo command.
     pub fn args<I, S>(mut self, args: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -75,16 +118,26 @@ impl<'a> CargoBuilder<'a> {
         self
     }
 
+    /// Sets an environment variable for the Cargo command.
     pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.extra_envs.insert(key.into(), value.into());
         self
     }
 
+    /// Sets whether to skip the objcopy step after building.
     pub fn skip_objcopy(mut self, skip: bool) -> Self {
         self.skip_objcopy = skip;
         self
     }
 
+    /// Executes the configured Cargo command.
+    ///
+    /// This runs pre-build commands, executes Cargo, handles output artifacts,
+    /// and runs post-build commands.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any step of the build process fails.
     pub async fn execute(mut self) -> anyhow::Result<()> {
         // 1. Pre-build commands
         self.run_pre_build_cmds()?;

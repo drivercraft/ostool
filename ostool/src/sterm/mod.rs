@@ -1,3 +1,16 @@
+//! Serial terminal implementation.
+//!
+//! This module provides an interactive serial terminal for communication
+//! with embedded devices and development boards. It supports:
+//!
+//! - Full keyboard input with special key sequences
+//! - Line-based output callback for pattern matching
+//! - Raw terminal mode for proper character handling
+//!
+//! # Exit Sequence
+//!
+//! Press `Ctrl+A` followed by `x` to exit the serial terminal.
+
 use std::io::{self, Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -15,22 +28,43 @@ type Tx = Box<dyn Write + Send>;
 type Rx = Box<dyn Read + Send>;
 type OnlineCallback = Box<dyn Fn(&TermHandle, &str) + Send + Sync>;
 
+/// Interactive serial terminal.
+///
+/// `SerialTerm` provides a bidirectional terminal interface over serial ports,
+/// allowing users to interact with embedded devices in real-time.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use ostool::sterm::SerialTerm;
+///
+/// // SerialTerm is typically used with serial port connections
+/// // See run::uboot for usage examples
+/// ```
 pub struct SerialTerm {
     tx: Arc<Mutex<Tx>>,
     rx: Arc<Mutex<Rx>>,
     on_line: Option<OnlineCallback>,
 }
 
+/// Handle for controlling the terminal session.
+///
+/// Provides methods to stop the terminal from within callbacks.
 pub struct TermHandle {
     is_running: AtomicBool,
 }
 
 impl TermHandle {
+    /// Stops the terminal session.
+    ///
+    /// This can be called from within a line callback to terminate the session
+    /// when a specific pattern is detected.
     pub fn stop(&self) {
         self.is_running
             .store(false, std::sync::atomic::Ordering::Release);
     }
 
+    /// Returns whether the terminal session is still running.
     pub fn is_running(&self) -> bool {
         self.is_running.load(std::sync::atomic::Ordering::Acquire)
     }
@@ -44,6 +78,13 @@ enum KeySequenceState {
 }
 
 impl SerialTerm {
+    /// Creates a new serial terminal with the given read/write streams.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - Writer for sending data to the serial port.
+    /// * `rx` - Reader for receiving data from the serial port.
+    /// * `on_line` - Callback function invoked for each complete line received.
     pub fn new<F>(tx: Tx, rx: Rx, on_line: F) -> Self
     where
         F: Fn(&TermHandle, &str) + Send + Sync + 'static,
@@ -55,6 +96,14 @@ impl SerialTerm {
         }
     }
 
+    /// Runs the interactive serial terminal.
+    ///
+    /// This method blocks until the user exits (Ctrl+A x) or the line callback
+    /// calls `TermHandle::stop()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if terminal mode cannot be set or I/O fails.
     pub async fn run(&mut self) -> anyhow::Result<()> {
         // 启用raw模式
 

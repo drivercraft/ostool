@@ -1,3 +1,13 @@
+//! TUI-based menu configuration system.
+//!
+//! This module provides an interactive terminal user interface for configuring
+//! build options, similar to Linux kernel's menuconfig. It supports editing
+//! configuration for:
+//!
+//! - Build settings (`.build.toml`)
+//! - QEMU settings (`.qemu.toml`)
+//! - U-Boot settings (`.uboot.toml`)
+
 use anyhow::Result;
 use clap::ValueEnum;
 use log::info;
@@ -7,15 +17,30 @@ use crate::ctx::AppContext;
 use crate::run::qemu::QemuConfig;
 use crate::run::uboot::UbootConfig;
 
+/// Menu configuration mode selector.
 #[derive(ValueEnum, Clone, Debug)]
 pub enum MenuConfigMode {
+    /// Configure QEMU runner settings.
     Qemu,
+    /// Configure U-Boot runner settings.
     Uboot,
 }
 
+/// Handler for menu configuration operations.
 pub struct MenuConfigHandler;
 
 impl MenuConfigHandler {
+    /// Handles the menu configuration command.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - The application context.
+    /// * `mode` - Optional mode specifying which configuration to edit.
+    ///   If `None`, shows the default build configuration menu.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the configuration cannot be loaded or saved.
     pub async fn handle_menuconfig(
         ctx: &mut AppContext,
         mode: Option<MenuConfigMode>,

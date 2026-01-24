@@ -1,3 +1,25 @@
+//! QEMU emulator runner with UEFI/OVMF support.
+//!
+//! This module provides functionality for running operating systems in QEMU
+//! with support for:
+//!
+//! - Multiple architectures (x86_64, aarch64, riscv64, etc.)
+//! - UEFI boot via OVMF firmware
+//! - Debug mode with GDB server
+//! - Output pattern matching for test automation
+//!
+//! # Configuration
+//!
+//! QEMU configuration is stored in `.qemu.toml` files:
+//!
+//! ```toml
+//! args = ["-nographic", "-cpu", "cortex-a53"]
+//! uefi = false
+//! to_bin = true
+//! success_regex = ["All tests passed"]
+//! fail_regex = ["PANIC", "FAILED"]
+//! ```
+
 use std::{
     ffi::OsString,
     io::{BufReader, Read},
@@ -19,23 +41,47 @@ use crate::{
     run::ovmf_prebuilt::{Arch, FileType, Prebuilt, Source},
 };
 
+/// QEMU configuration structure.
+///
+/// This configuration is typically loaded from a `.qemu.toml` file.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Default)]
 pub struct QemuConfig {
+    /// Additional QEMU command-line arguments.
     pub args: Vec<String>,
+    /// Whether to use UEFI boot via OVMF firmware.
     pub uefi: bool,
-    /// objcopy output as binary
+    /// Whether to convert ELF to raw binary before loading.
     pub to_bin: bool,
+    /// Regex patterns that indicate successful execution.
     pub success_regex: Vec<String>,
+    /// Regex patterns that indicate failed execution.
     pub fail_regex: Vec<String>,
 }
 
+/// Arguments for running QEMU.
 #[derive(Debug, Clone)]
 pub struct RunQemuArgs {
+    /// Optional path to QEMU configuration file.
     pub qemu_config: Option<PathBuf>,
+    /// Whether to dump the device tree blob.
     pub dtb_dump: bool,
+    /// Whether to show QEMU output.
     pub show_output: bool,
 }
 
+/// Runs the operating system in QEMU.
+///
+/// This function configures and launches QEMU with the appropriate settings
+/// based on the detected architecture and configuration file.
+///
+/// # Arguments
+///
+/// * `ctx` - The application context containing paths and build artifacts.
+/// * `args` - QEMU run arguments.
+///
+/// # Errors
+///
+/// Returns an error if QEMU fails to start or exits with an error.
 pub async fn run_qemu(ctx: AppContext, args: RunQemuArgs) -> anyhow::Result<()> {
     // Build logic will be implemented here
     let config_path = match args.qemu_config.clone() {
