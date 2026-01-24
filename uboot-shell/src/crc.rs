@@ -1,4 +1,9 @@
-/* Table of CRC constants - implements x^16+x^12+x^5+1 */
+//! CRC16-CCITT checksum implementation.
+//!
+//! This module provides CRC16-CCITT checksum calculation used by the YMODEM protocol.
+//! The polynomial used is x^16 + x^12 + x^5 + 1 (0x1021).
+
+/// CRC16-CCITT lookup table - implements polynomial x^16+x^12+x^5+1
 const CRC16_TAB: &[u16] = &[
     0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50a5, 0x60c6, 0x70e7, 0x8108, 0x9129, 0xa14a, 0xb16b,
     0xc18c, 0xd1ad, 0xe1ce, 0xf1ef, 0x1231, 0x0210, 0x3273, 0x2252, 0x52b5, 0x4294, 0x72f7, 0x62d6,
@@ -24,6 +29,25 @@ const CRC16_TAB: &[u16] = &[
     0x2e93, 0x3eb2, 0x0ed1, 0x1ef0,
 ];
 
+/// Calculates CRC16-CCITT checksum for the given data.
+///
+/// # Arguments
+///
+/// * `cksum` - Initial checksum value (usually 0)
+/// * `buf` - Data buffer to calculate checksum for
+///
+/// # Returns
+///
+/// The calculated CRC16-CCITT checksum value.
+///
+/// # Example
+///
+/// ```rust
+/// use uboot_shell::crc::crc16_ccitt;
+///
+/// let data = b"Hello, World!";
+/// let checksum = crc16_ccitt(0, data);
+/// ```
 pub fn crc16_ccitt(mut cksum: u16, buf: &[u8]) -> u16 {
     for &byte in buf {
         cksum = CRC16_TAB[((cksum >> 8) ^ byte as u16) as usize] ^ (cksum << 8);

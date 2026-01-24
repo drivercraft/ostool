@@ -2,11 +2,13 @@
 authors = ["周睿 <zrufo747@outlook.com>"]
 categories = ["os", "embedded", "development-tools"]
 description = "A crate for communicating with u-boot"
+documentation = "https://docs.rs/uboot-shell"
 edition = "2024"
-keywords = ["u-boot", "shell", "embedded"]
+keywords = ["u-boot", "shell", "embedded", "serial", "ymodem"]
 license = "MIT"
 name = "uboot-shell"
-repository = "https://github.com/ZR233/ostool/ostool"
+readme = "README.md"
+repository = "https://github.com/ZR233/ostool"
 version = "0.2.0"
 
 [dependencies]

@@ -1,23 +1,57 @@
+//! YMODEM file transfer protocol implementation.
+//!
+//! This module implements the YMODEM protocol for file transfers over serial connections.
+//! YMODEM is commonly used by U-Boot's `loady` command.
+//!
+//! ## Protocol Overview
+//!
+//! YMODEM transfers files in 128 or 1024 byte blocks with CRC16 error checking.
+//! The protocol supports:
+//!
+//! - File name and size transmission in the first block
+//! - Automatic block size selection (128 or 1024 bytes)
+//! - CRC16-CCITT or checksum error detection
+//! - Retry mechanism for failed transmissions
+
 use std::io::*;
 
 use crate::crc::crc16_ccitt;
 
+/// Start of Header - 128 byte block
 const SOH: u8 = 0x01;
+/// Start of Text - 1024 byte block
 const STX: u8 = 0x02;
+/// End of Transmission
 const EOT: u8 = 0x04;
+/// Acknowledge
 const ACK: u8 = 0x06;
+/// Negative Acknowledge
 const NAK: u8 = 0x15;
-// const CAN: u8 = 0x18;
+// const CAN: u8 = 0x18; // Cancel
+/// End of File padding character
 const EOF: u8 = 0x1A;
+/// CRC mode request character
 const CRC: u8 = 0x43;
 
+/// YMODEM protocol handler for file transfers.
+///
+/// Implements the YMODEM protocol for sending files over serial connections.
+/// Supports both CRC16 and checksum modes.
 pub struct Ymodem {
+    /// Whether to use CRC16 mode (true) or checksum mode (false)
     crc_mode: bool,
+    /// Current block number
     blk: u8,
+    /// Number of remaining retry attempts
     retries: usize,
 }
 
 impl Ymodem {
+    /// Creates a new YMODEM sender.
+    ///
+    /// # Arguments
+    ///
+    /// * `crc_mode` - Whether to start in CRC16 mode (`true`) or checksum mode (`false`)
     pub fn new(crc_mode: bool) -> Self {
         Self {
             crc_mode,
@@ -52,6 +86,19 @@ impl Ymodem {
         }
     }
 
+    /// Sends a file over the YMODEM protocol.
+    ///
+    /// # Arguments
+    ///
+    /// * `dev` - The device implementing `Read + Write` (serial stream)
+    /// * `file` - The readable file stream
+    /// * `name` - File name reported to the receiver
+    /// * `size` - File size in bytes
+    /// * `on_progress` - Callback invoked with the total bytes sent so far
+    ///
+    /// # Errors
+    ///
+    /// Returns any I/O error from the underlying device or file stream.
     pub fn send<D: Write + Read, F: Read>(
         &mut self,
         dev: &mut D,
