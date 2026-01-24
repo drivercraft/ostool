@@ -1,6 +1,6 @@
-//! 压缩功能模块
+//! Compression module.
 //!
-//! 提供各种压缩算法的统一接口，支持gzip、bzip2、lzma等格式
+//! Provides unified interface for compression algorithms. Currently supports gzip.
 
 pub mod gzip;
 pub mod traits;

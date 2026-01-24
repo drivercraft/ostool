@@ -1,6 +1,6 @@
-//! Gzip压缩实现
+//! Gzip compression implementation.
 //!
-//! 使用flate2库提供gzip压缩和解压缩功能
+//! Provides gzip compression and decompression functionality using the flate2 library.
 
 use std::io::{Read, Write};
 
@@ -8,31 +8,34 @@ use crate::compression::traits::CompressionInterface;
 use crate::error::Result;
 use flate2::{read::GzDecoder, write::GzEncoder, Compression as GzipLevel};
 
-/// Gzip压缩器
-/// 支持可配置的压缩级别
+/// Gzip compressor with configurable compression level.
 pub struct GzipCompressor {
-    /// 压缩级别 (0-9, 0表示无压缩)
+    /// Compression level (0-9, where 0 means no compression).
     level: u8,
-    /// 是否启用压缩（false时直接复制数据）
+    /// Whether compression is enabled (false means data is copied directly).
     enabled: bool,
 }
 
 impl Default for GzipCompressor {
     fn default() -> Self {
-        Self::new(6) //
+        Self::new(6)
     }
 }
 
 impl GzipCompressor {
-    /// 创建指定压缩级别的gzip压缩器
+    /// Creates a new gzip compressor with the specified compression level.
+    ///
+    /// # Arguments
+    ///
+    /// * `level` - Compression level from 0 to 9. Level 0 disables compression.
     pub fn new(level: u8) -> Self {
         Self {
-            level: level.clamp(0, 9), // 限制在0-9范围内
-            enabled: level > 0,       // 级别0表示不压缩
+            level: level.clamp(0, 9),
+            enabled: level > 0,
         }
     }
 
-    /// 创建禁用压缩的实例
+    /// Creates a disabled compressor instance that passes data through unchanged.
     pub fn new_disabled() -> Self {
         Self {
             level: 0,
@@ -40,7 +43,7 @@ impl GzipCompressor {
         }
     }
 
-    /// 获取flate2的压缩级别
+    /// Gets the flate2 compression level.
     fn get_compression_level(&self) -> GzipLevel {
         if !self.enabled {
             GzipLevel::none()
@@ -58,7 +61,7 @@ impl GzipCompressor {
 impl CompressionInterface for GzipCompressor {
     fn compress(&self, data: &[u8]) -> Result<Vec<u8>> {
         if !self.enabled {
-            // 如果禁用压缩，直接返回数据副本
+            // If compression is disabled, return a copy of the data.
             return Ok(data.to_vec());
         }
 
@@ -75,7 +78,7 @@ impl CompressionInterface for GzipCompressor {
 
     fn decompress(&self, compressed_data: &[u8]) -> Result<Vec<u8>> {
         if !self.enabled {
-            // 如果没有压缩，直接返回数据副本
+            // If compression was not applied, return a copy of the data.
             return Ok(compressed_data.to_vec());
         }
 

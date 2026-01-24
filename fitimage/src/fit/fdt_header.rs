@@ -256,7 +256,7 @@ mod tests {
         assert_eq!(MemReserveEntry::size(), 16); // 2 * 8 bytes
     }
 
-    #[test]
+    // #[test]
     // fn test_mem_reserve_entry_write() {
     //     let entry = MemReserveEntry::new(0x12345678, 0xABCDEF00);
     //     let mut buffer = Vec::new();

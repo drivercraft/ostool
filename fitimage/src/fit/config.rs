@@ -4,12 +4,15 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Supported compression algorithms for FIT components.
 #[derive(Debug, Clone, Serialize, Deserialize, Copy, PartialEq, Eq)]
 pub enum CompressionAlgorithm {
+    /// Gzip compression.
     Gzip,
 }
 
 impl CompressionAlgorithm {
+    /// Return the string name used in FIT properties.
     pub fn as_str(&self) -> &'static str {
         match self {
             CompressionAlgorithm::Gzip => "gzip",
@@ -17,7 +20,7 @@ impl CompressionAlgorithm {
     }
 }
 
-/// Configuration for building a FIT image
+/// Configuration for building a FIT image.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FitImageConfig {
     /// Description of the FIT image
@@ -35,16 +38,22 @@ pub struct FitImageConfig {
     /// Default configuration name
     pub default_config: Option<String>,
 
-    /// Configurations mapping (name -> (description, kernel, fdt, ramdisk))
+    /// Configurations mapping (name -> description, kernel, fdt, ramdisk).
     pub configurations: std::collections::HashMap<String, FitConfiguration>,
 }
 
+/// A named configuration that references image nodes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FitConfiguration {
+    /// Configuration node name.
     pub name: String,
+    /// Human-readable configuration description.
     pub description: String,
+    /// Kernel image node reference.
     pub kernel: Option<String>,
+    /// FDT image node reference.
     pub fdt: Option<String>,
+    /// Ramdisk image node reference.
     pub ramdisk: Option<String>,
 }
 
@@ -69,6 +78,7 @@ pub struct ComponentConfig {
     /// OS type (linux, etc.)
     pub os: Option<String>,
 
+    /// Whether to gzip-compress this component before embedding.
     pub compression: bool,
 
     /// Load address in memory
@@ -118,7 +128,7 @@ impl ComponentConfig {
         self
     }
 
-    /// Set compression type
+    /// Enable or disable gzip compression for this component.
     pub fn with_compression(mut self, b: bool) -> Self {
         self.compression = b;
         self
@@ -138,7 +148,7 @@ impl ComponentConfig {
 }
 
 impl FitImageConfig {
-    /// Create a new FIT image configuration
+    /// Create a new FIT image configuration with a top-level description.
     pub fn new(description: impl Into<String>) -> Self {
         Self {
             description: description.into(),
@@ -150,31 +160,31 @@ impl FitImageConfig {
         }
     }
 
-    /// Set kernel component
+    /// Set kernel component.
     pub fn with_kernel(mut self, kernel: ComponentConfig) -> Self {
         self.kernel = Some(kernel);
         self
     }
 
-    /// Set FDT component
+    /// Set FDT component.
     pub fn with_fdt(mut self, fdt: ComponentConfig) -> Self {
         self.fdt = Some(fdt);
         self
     }
 
-    /// Set ramdisk component
+    /// Set ramdisk component.
     pub fn with_ramdisk(mut self, ramdisk: ComponentConfig) -> Self {
         self.ramdisk = Some(ramdisk);
         self
     }
 
-    /// Set default configuration
+    /// Set default configuration name.
     pub fn with_default_config(mut self, default: impl Into<String>) -> Self {
         self.default_config = Some(default.into());
         self
     }
 
-    /// Add a configuration
+    /// Add a configuration entry that references image node names.
     pub fn with_configuration(
         mut self,
         name: impl Into<String>,

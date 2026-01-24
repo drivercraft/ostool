@@ -1,6 +1,6 @@
-//! FIT (Flattened Image Tree) 模块
+//! FIT (Flattened Image Tree) module.
 //!
-//! 实现U-Boot FIT image格式的创建和处理功能
+//! Provides functionality for creating and processing U-Boot FIT image format.
 
 pub mod builder;
 pub mod config;

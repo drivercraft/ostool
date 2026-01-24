@@ -1,30 +1,35 @@
-//! 压缩接口定义
+//! Compression interface definitions.
 //!
-//! 定义了所有压缩算法需要实现的标准接口
+//! Defines the standard interface that all compression algorithms must implement.
 
 use crate::error::Result;
 
-/// 压缩接口trait
-/// 所有压缩算法都需要实现这个接口
+/// Compression interface trait.
+///
+/// All compression algorithms must implement this interface.
 pub trait CompressionInterface {
-    /// 压缩数据
+    /// Compresses data.
     ///
-    /// # 参数
-    /// - `data`: 要压缩的原始数据
+    /// # Arguments
     ///
-    /// # 返回
-    /// 压缩后的数据
+    /// * `data` - The raw data to compress
+    ///
+    /// # Returns
+    ///
+    /// The compressed data.
     fn compress(&self, data: &[u8]) -> Result<Vec<u8>>;
 
-    /// 解压缩数据（主要用于验证）
+    /// Decompresses data (mainly used for verification).
     ///
-    /// # 参数
-    /// - `compressed_data`: 已压缩的数据
+    /// # Arguments
     ///
-    /// # 返回
-    /// 解压缩后的原始数据
+    /// * `compressed_data` - The compressed data
+    ///
+    /// # Returns
+    ///
+    /// The decompressed original data.
     fn decompress(&self, compressed_data: &[u8]) -> Result<Vec<u8>>;
 
-    /// 获取压缩算法名称
+    /// Returns the name of the compression algorithm.
     fn get_name(&self) -> &'static str;
 }

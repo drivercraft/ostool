@@ -1,11 +1,11 @@
-//! Error types for mkimage operations
+//! Error types for fitimage operations
 
 use thiserror::Error;
 
-/// Result type alias for mkimage operations
+/// Result type alias for fitimage operations
 pub type Result<T> = std::result::Result<T, MkImageError>;
 
-/// Errors that can occur during mkimage operations
+/// Errors that can occur during fitimage operations
 #[derive(Error, Debug)]
 pub enum MkImageError {
     #[error("Invalid image data: {0}")]

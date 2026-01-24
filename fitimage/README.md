@@ -1,6 +1,6 @@
-# mkimage - FIT Image Library
+# fitimage - FIT Image Library
 
-一个用于创建U-Boot兼容FIT (Flattened Image Tree) 镜像的Rust库。
+一个用于创建 U-Boot 兼容 FIT (Flattened Image Tree) 镜像的 Rust 库。
 
 ## 特性
 
@@ -18,13 +18,13 @@
 
 ```toml
 [dependencies]
-mkimage = "0.1.0"
+fitimage = "0.1.0"
 ```
 
 ### 基本用法
 
 ```rust
-use mkimage::{FitImageBuilder, FitImageConfig, ComponentConfig};
+use fitimage::{ComponentConfig, FitImageBuilder, FitImageConfig};
 
 // 创建FIT镜像配置
 let config = FitImageConfig::new("My FIT Image")
@@ -32,12 +32,13 @@ let config = FitImageConfig::new("My FIT Image")
         ComponentConfig::new("kernel", kernel_data)
             .with_load_address(0x80080000)
             .with_entry_point(0x80080000)
+            .with_compression(true)
     )
     .with_fdt(
         ComponentConfig::new("fdt", fdt_data)
             .with_load_address(0x82000000)
     )
-    .with_kernel_compression(true);
+    ;
 
 // 构建FIT镜像
 let mut builder = FitImageBuilder::new();
@@ -59,9 +60,12 @@ pub struct FitImageConfig {
     pub kernel: Option<ComponentConfig>,
     pub fdt: Option<ComponentConfig>,
     pub ramdisk: Option<ComponentConfig>,
-    pub compress_kernel: bool,
+    pub default_config: Option<String>,
+    pub configurations: std::collections::HashMap<String, FitConfiguration>,
 }
 ```
+
+> `configurations` 用于生成多个启动配置；当未设置时会自动生成默认配置。
 
 ### ComponentConfig
 
@@ -84,20 +88,15 @@ pub struct ComponentConfig {
 impl FitImageBuilder {
     pub fn new() -> Self;
     pub fn build(&mut self, config: FitImageConfig) -> Result<Vec<u8>>;
-    pub fn build_with_compressor(
-        &mut self,
-        config: FitImageConfig,
-        compressor: Box<dyn CompressionInterface>
-    ) -> Result<Vec<u8>>;
 }
 ```
 
 ## 示例
 
-### 完整FIT镜像
+### 完整 FIT 镜像
 
 ```rust
-use mkimage::{FitImageBuilder, FitImageConfig, ComponentConfig};
+use fitimage::{ComponentConfig, FitImageBuilder, FitImageConfig};
 
 fn create_complete_fit() -> Result<(), Box<dyn std::error::Error>> {
     let config = FitImageConfig::new("Complete FIT Image")
@@ -105,6 +104,7 @@ fn create_complete_fit() -> Result<(), Box<dyn std::error::Error>> {
             ComponentConfig::new("linux", kernel_data)
                 .with_load_address(0x80080000)
                 .with_entry_point(0x80080000)
+                .with_compression(true)
         )
         .with_fdt(
             ComponentConfig::new("devicetree", fdt_data)
@@ -114,7 +114,7 @@ fn create_complete_fit() -> Result<(), Box<dyn std::error::Error>> {
             ComponentConfig::new("initramfs", ramdisk_data)
                 .with_load_address(0x84000000)
         )
-        .with_kernel_compression(true);
+        ;
 
     let mut builder = FitImageBuilder::new();
     let fit_data = builder.build(config)?;
@@ -131,16 +131,20 @@ fn create_complete_fit() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 let config = FitImageConfig::new("Compressed FIT")
-    .with_kernel(kernel_component)
-    .with_kernel_compression(true); // 启用gzip压缩
+    .with_kernel(kernel_component.with_compression(true)); // 启用gzip压缩
 ```
 
 ## 兼容性
 
-- ✅ U-Boot FIT格式兼容
+- ✅ U-Boot FIT 格式兼容
 - ✅ 标准设备树结构
 - ✅ ARM64架构支持
 - ✅ Linux OS支持
+
+## TODO
+
+- [ ] 增加 bzip2 压缩支持
+- [ ] 增加 lzma 压缩支持
 
 ## 构建和测试
 
@@ -148,16 +152,20 @@ let config = FitImageConfig::new("Compressed FIT")
 # 构建库
 cargo build --lib
 
-# 运行测试
-cargo test --lib
+# 运行测试（含单元测试与集成测试）
+cargo test
 
-# 运行示例
-cargo run --example basic_usage
-cargo run --example compression_test
-cargo run --example full_fit_test
+# 仅运行文档测试
+cargo test --doc
 ```
 
-## API文档
+## 测试建议
+
+- 单元测试：覆盖哈希/CRC 计算、FDT 字符串表对齐、配置构建边界值。
+- 功能测试：使用 `mkimage`/`dumpimage` 对照验证结构与字段一致性。
+- 文档测试：为关键公开 API 添加可运行示例，保证 doctest 通过。
+
+## API 文档
 
 运行以下命令生成API文档：
 
