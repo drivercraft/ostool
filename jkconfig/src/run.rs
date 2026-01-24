@@ -13,6 +13,14 @@ use crate::{
 
 pub use crate::data::app_data::ElemHock;
 
+/// Run the configuration editor workflow for a typed config.
+///
+/// When `always_use_ui` is false and the config file can be parsed,
+/// the parsed config is returned without launching the UI.
+///
+/// # Errors
+///
+/// Returns errors when schema generation, parsing, or I/O fails.
 pub async fn run<C: JsonSchema + DeserializeOwned>(
     config_path: impl AsRef<Path>,
     always_use_ui: bool,

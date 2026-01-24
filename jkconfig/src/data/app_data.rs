@@ -11,29 +11,43 @@ use cursive::Cursive;
 
 use crate::data::{menu::MenuRoot, types::ElementType};
 
+/// Callback used to provide the list of available features.
 pub type FeaturesCallback = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
 
+/// Callback invoked when a menu element is entered.
 pub type HockCallback = Arc<dyn Fn(&mut Cursive, &str) + Send + Sync>;
 
+/// Hook registration for a specific menu path.
 #[derive(Clone)]
 pub struct ElemHock {
+    /// Menu path string (dot-separated).
     pub path: String,
+    /// Callback executed when entering the path.
     pub callback: HockCallback,
 }
 
+/// Application state container for schema-driven config editing.
 #[derive(Clone)]
 pub struct AppData {
+    /// Root menu parsed from JSON Schema.
     pub root: MenuRoot,
+    /// Current menu path as a list of keys.
     pub current_key: Vec<String>,
+    /// Whether configuration has pending changes.
     pub needs_save: bool,
+    /// Path to the configuration file.
     pub config: PathBuf,
+    /// Custom user data storage.
     pub user_data: HashMap<String, String>,
+    /// Temporary data used by editors.
     pub temp_data: Option<(String, serde_json::Value)>,
+    /// Registered element hooks.
     pub elem_hocks: Vec<ElemHock>,
 }
 
 const DEFAULT_CONFIG_PATH: &str = ".config.toml";
 
+/// Derive a default schema path from a config path.
 pub fn default_schema_by_init(config: &Path) -> PathBuf {
     let binding = config.file_name().unwrap().to_string_lossy();
     let mut name_split = binding.split(".").collect::<Vec<_>>();
@@ -51,6 +65,9 @@ pub fn default_schema_by_init(config: &Path) -> PathBuf {
 }
 
 impl AppData {
+    /// Build `AppData` from optional config and schema paths.
+    ///
+    /// When schema is not provided, it is auto-derived from the config path.
     pub fn new(
         config: Option<impl AsRef<Path>>,
         schema: Option<impl AsRef<Path>>,
@@ -80,6 +97,9 @@ impl AppData {
         init_value_path
     }
 
+    /// Build `AppData` from an initial content string and a schema value.
+    ///
+    /// This is useful when config content has already been loaded.
     pub fn new_with_init_and_schema(
         init: &str,
         init_value_path: &Path,
@@ -116,6 +136,9 @@ impl AppData {
         })
     }
 
+    /// Build `AppData` from a schema value and an optional config path.
+    ///
+    /// If the config file exists, it is loaded to initialize values.
     pub fn new_with_schema(
         config: Option<impl AsRef<Path>>,
         schema: &serde_json::Value,
@@ -156,6 +179,7 @@ impl AppData {
         })
     }
 
+    /// Persist changes and create a timestamped backup when needed.
     pub fn on_exit(&mut self) -> anyhow::Result<()> {
         if !self.needs_save {
             return Ok(());
@@ -193,6 +217,7 @@ impl AppData {
         Ok(())
     }
 
+    /// Enter a submenu path (dot-separated).
     pub fn enter(&mut self, key: &str) {
         if key.is_empty() {
             return;
@@ -200,17 +225,19 @@ impl AppData {
         self.current_key = key.split(".").map(|s| s.to_string()).collect();
     }
 
+    /// Push a field name onto the current path.
     pub fn push_field(&mut self, f: &str) {
         self.current_key.push(f.to_string());
     }
 
-    /// 返回上级路径
+    /// Navigate back to the parent path.
     pub fn navigate_back(&mut self) {
         if !self.current_key.is_empty() {
             self.current_key.pop();
         }
     }
 
+    /// Return the current path as a dot-separated string.
     pub fn key_string(&self) -> String {
         if self.current_key.is_empty() {
             return String::new();
@@ -219,10 +246,12 @@ impl AppData {
         self.current_key.join(".")
     }
 
+    /// Get the element at the current path.
     pub fn current(&self) -> Option<&ElementType> {
         self.root.get_by_key(&self.key_string())
     }
 
+    /// Get the mutable element at the current path.
     pub fn current_mut(&mut self) -> Option<&mut ElementType> {
         self.root.get_mut_by_key(&self.key_string())
     }

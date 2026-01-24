@@ -12,24 +12,32 @@ use crate::data::{
 use log::trace;
 use serde_json::Value;
 
+/// OneOf/AnyOf variant container.
 #[derive(Clone)]
 pub struct OneOf {
+    /// Shared element metadata.
     pub base: ElementBase,
+    /// Available variant elements.
     pub variants: Vec<ElementType>,
+    /// Selected variant index.
     pub selected_index: Option<usize>,
+    /// Default variant index.
     pub default_index: Option<usize>,
 }
 
 impl OneOf {
+    /// Get the currently selected variant.
     pub fn selected(&self) -> Option<&ElementType> {
         self.selected_index.and_then(|idx| self.variants.get(idx))
     }
 
+    /// Get the currently selected variant mutably.
     pub fn selected_mut(&mut self) -> Option<&mut ElementType> {
         self.selected_index
             .and_then(move |idx| self.variants.get_mut(idx))
     }
 
+    /// Resolve a display name for a variant index.
     pub fn variant_display(&self, idx: usize) -> String {
         if let Some(variant) = self.variants.get(idx) {
             match variant {
@@ -49,6 +57,7 @@ impl OneOf {
         }
     }
 
+    /// Get an element by path segments from the selected variant.
     pub fn get_by_field_path(&self, field_path: &[&str]) -> Option<&ElementType> {
         if field_path.is_empty() {
             return None;
@@ -78,6 +87,7 @@ impl OneOf {
         None
     }
 
+    /// Get a mutable element by path segments from the selected variant.
     pub fn get_mut_by_field_path(&mut self, field_path: &[&str]) -> Option<&mut ElementType> {
         if field_path.is_empty() {
             return None;
@@ -116,6 +126,7 @@ impl OneOf {
         variant.update_from_value(value, name).is_ok()
     }
 
+    /// Update selection and data from a JSON value.
     pub fn update_from_value(&mut self, value: &Value) -> Result<(), SchemaError> {
         let mut name: Option<String> = None;
         let mut value = value;
@@ -149,6 +160,7 @@ impl OneOf {
         })
     }
 
+    /// Serialize the selected variant into JSON.
     pub fn as_json(&self) -> Value {
         if let Some(selected) = self.selected() {
             match selected {
@@ -174,10 +186,12 @@ impl OneOf {
         }
     }
 
+    /// Get the field name for this OneOf element.
     pub fn field_name(&self) -> String {
         self.base.field_name()
     }
 
+    /// Select a variant by index and initialize defaults when needed.
     pub fn set_selected_index(&mut self, index: usize) -> Result<(), SchemaError> {
         let path = self.path.clone();
         let v = self
@@ -201,6 +215,7 @@ impl OneOf {
         Ok(())
     }
 
+    /// Whether no variant is selected.
     pub fn is_none(&self) -> bool {
         self.selected_index.is_none()
     }

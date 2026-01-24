@@ -9,6 +9,7 @@ use crate::data::{
     types::{ElementBase, ElementType},
 };
 
+/// Errors produced while converting JSON Schema into internal structures.
 #[derive(thiserror::Error, Debug)]
 pub enum SchemaError {
     #[error("Unsupported schema")]

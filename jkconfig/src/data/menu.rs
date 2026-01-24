@@ -11,14 +11,19 @@ use crate::data::{
     types::{ElementBase, ElementType},
 };
 
+/// Root container for schema-derived menu tree.
 #[derive(Clone)]
 pub struct MenuRoot {
+    /// JSON Schema version string.
     pub schema_version: String,
+    /// Root title displayed in the UI.
     pub title: String,
+    /// Root element (must be a menu).
     pub menu: ElementType,
 }
 
 impl MenuRoot {
+    /// Get the root menu node (panics if root is not a menu).
     pub fn menu(&self) -> &Menu {
         match &self.menu {
             ElementType::Menu(menu) => menu,
@@ -26,6 +31,7 @@ impl MenuRoot {
         }
     }
 
+    /// Get the mutable root menu node (panics if root is not a menu).
     pub fn menu_mut(&mut self) -> &mut Menu {
         match &mut self.menu {
             ElementType::Menu(menu) => menu,
@@ -33,6 +39,7 @@ impl MenuRoot {
         }
     }
 
+    /// Get an element by its dot-separated key.
     pub fn get_by_key(&self, key: &str) -> Option<&ElementType> {
         if key.is_empty() {
             return Some(&self.menu);
@@ -42,6 +49,7 @@ impl MenuRoot {
         self.menu().get_by_field_path(&ks)
     }
 
+    /// Get a mutable element by its dot-separated key.
     pub fn get_mut_by_key(&mut self, key: &str) -> Option<&mut ElementType> {
         if key.is_empty() {
             return Some(&mut self.menu);
@@ -50,10 +58,12 @@ impl MenuRoot {
         self.menu_mut().get_mut_by_field_path(&ks)
     }
 
+    /// Update the menu tree from a JSON object value.
     pub fn update_by_value(&mut self, value: &Value) -> Result<(), SchemaError> {
         self.menu.update_from_value(value, None)
     }
 
+    /// Serialize the menu tree into a JSON value.
     pub fn as_json(&self) -> Value {
         self.menu().as_json()
     }
@@ -74,15 +84,19 @@ impl Debug for MenuRoot {
     }
 }
 
-/// Menu => type: object
+/// Menu node for schema objects (type: object).
 #[derive(Clone)]
 pub struct Menu {
+    /// Shared element metadata.
     pub base: ElementBase,
+    /// Child elements for each field.
     pub children: Vec<ElementType>,
+    /// Whether this menu has been set by user input.
     pub is_set: bool,
 }
 
 impl Menu {
+    /// Serialize this menu into a JSON object.
     pub fn as_json(&self) -> Value {
         let mut result = serde_json::Map::new();
 
@@ -124,6 +138,7 @@ impl Menu {
         Value::Object(result)
     }
 
+    /// Get a child element by its path segments.
     pub fn get_by_field_path(&self, field_path: &[&str]) -> Option<&ElementType> {
         if field_path.is_empty() {
             return None;
@@ -144,6 +159,7 @@ impl Menu {
         }
     }
 
+    /// Get a mutable child element by its path segments.
     pub fn get_mut_by_field_path(&mut self, field_path: &[&str]) -> Option<&mut ElementType> {
         if field_path.is_empty() {
             return None;
@@ -164,6 +180,7 @@ impl Menu {
         }
     }
 
+    /// Update this menu from a JSON object value.
     pub fn update_from_value(&mut self, value: &Value) -> Result<(), SchemaError> {
         let value = value.as_object().ok_or(SchemaError::TypeMismatch {
             path: self.key(),
@@ -183,6 +200,7 @@ impl Menu {
         Ok(())
     }
 
+    /// Whether this menu is considered unset.
     pub fn is_none(&self) -> bool {
         if self.is_required {
             return false;
@@ -190,10 +208,12 @@ impl Menu {
         !self.is_set
     }
 
+    /// Return a copy of child elements for UI rendering.
     pub fn fields(&self) -> Vec<ElementType> {
         self.children.to_vec()
     }
 
+    /// Get a direct child by field name.
     pub fn get_child_by_key(&self, key: &str) -> Option<&ElementType> {
         self.children
             .iter()
@@ -201,6 +221,7 @@ impl Menu {
             .map(|v| v as _)
     }
 
+    /// Get a mutable direct child by field name.
     pub fn get_child_mut_by_key(&mut self, key: &str) -> Option<&mut ElementType> {
         self.children
             .iter_mut()

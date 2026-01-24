@@ -2,34 +2,42 @@ use crate::data::{schema::SchemaError, types::ElementBase};
 
 use serde_json::Value;
 
+/// Leaf configuration item with a concrete value type.
 #[derive(Debug, Clone)]
 pub struct Item {
+    /// Shared element metadata.
     pub base: ElementBase,
+    /// Value storage and type information.
     pub item_type: ItemType,
 }
 
+/// Supported value types for leaf items.
 #[derive(Debug, Clone)]
 pub enum ItemType {
+    /// String value with optional default.
     String {
         value: Option<String>,
         default: Option<String>,
     },
+    /// Floating-point number value with optional default.
     Number {
         value: Option<f64>,
         default: Option<f64>,
     },
+    /// Integer value with optional default.
     Integer {
         value: Option<i64>,
         default: Option<i64>,
     },
-    Boolean {
-        value: bool,
-        default: bool,
-    },
+    /// Boolean value with default.
+    Boolean { value: bool, default: bool },
+    /// Enum selection by index.
     Enum(EnumItem),
+    /// Array of scalar values stored as strings.
     Array(ArrayItem),
 }
 
+/// Array item metadata and values.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ArrayItem {
     /// Array element type (e.g., "string", "integer")
@@ -40,19 +48,27 @@ pub struct ArrayItem {
     pub default: Vec<String>,
 }
 
+/// Enum variants and selected index.
 #[derive(Debug, Clone)]
 pub struct EnumItem {
+    /// List of variant labels.
     pub variants: Vec<String>,
+    /// Selected variant index.
     pub value: Option<usize>,
+    /// Default variant index.
     pub default: Option<usize>,
 }
 
 impl EnumItem {
+    /// Get the currently selected variant as string, if any.
     pub fn value_str(&self) -> Option<&str> {
         self.value
             .and_then(|idx| self.variants.get(idx).map(String::as_str))
     }
 
+    /// Update enum selection from JSON value.
+    ///
+    /// Accepts string values matching a variant or numeric indices.
     pub fn update_from_value(&mut self, value: &Value, path: &str) -> Result<(), SchemaError> {
         match value {
             Value::String(s) => {
@@ -98,6 +114,7 @@ impl EnumItem {
 }
 
 impl ItemType {
+    /// Update the stored value from JSON.
     pub fn update_from_value(&mut self, value: &Value, path: &str) -> Result<(), SchemaError> {
         match self {
             ItemType::String {
@@ -204,6 +221,7 @@ impl ItemType {
 }
 
 impl Item {
+    /// Serialize the item into a JSON value.
     pub fn as_json(&self) -> Value {
         match &self.item_type {
             ItemType::String { value, .. } => match value {
@@ -250,6 +268,7 @@ impl Item {
         }
     }
 
+    /// Update the item from a JSON value.
     pub fn update_from_value(&mut self, value: &Value) -> Result<(), SchemaError> {
         let path = self.base.key();
         self.item_type.update_from_value(value, &path)

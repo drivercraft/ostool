@@ -7,16 +7,23 @@ use crate::data::{item::Item, menu::Menu, oneof::OneOf, schema::SchemaError};
 
 use serde_json::Value;
 
+/// Common fields shared by all schema elements.
 #[derive(Debug, Clone, Default)]
 pub struct ElementBase {
+    /// Schema path for this element.
     pub path: PathBuf,
+    /// Display title derived from schema description or field name.
     pub title: String,
+    /// Help text from schema description.
     pub help: Option<String>,
+    /// Whether this field is required by the schema.
     pub is_required: bool,
+    /// Struct or variant name used for display.
     pub struct_name: String,
 }
 
 impl ElementBase {
+    /// Create a new base element from schema metadata.
     pub fn new(
         path: &Path,
         description: Option<String>,
@@ -43,6 +50,7 @@ impl ElementBase {
         }
     }
 
+    /// Return the dot-separated key for this element.
     pub fn key(&self) -> String {
         self.path
             .iter()
@@ -51,6 +59,7 @@ impl ElementBase {
             .join(".")
     }
 
+    /// Return the last path segment as the field name.
     pub fn field_name(&self) -> String {
         self.path
             .iter()
@@ -60,6 +69,7 @@ impl ElementBase {
     }
 }
 
+/// High-level element types used by the UI and serialization logic.
 #[derive(Debug, Clone)]
 pub enum ElementType {
     Menu(Menu),
@@ -90,6 +100,7 @@ impl DerefMut for ElementType {
 }
 
 impl ElementType {
+    /// Update the element value from a JSON value.
     pub fn update_from_value(
         &mut self,
         value: &Value,
@@ -113,6 +124,7 @@ impl ElementType {
         }
     }
 
+    /// Whether this element is considered unset.
     pub fn is_none(&self) -> bool {
         match self {
             ElementType::Menu(menu) => menu.is_none(),
@@ -128,6 +140,7 @@ impl ElementType {
         }
     }
 
+    /// Reset this element to an "unset" state when allowed.
     pub fn set_none(&mut self) {
         if self.is_required {
             return;
