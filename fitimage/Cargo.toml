@@ -1,6 +1,6 @@
 [package]
 name = "fitimage"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["周睿 <zrufo747@outlook.com>"]
 description = "A Rust library for creating U-Boot compatible FIT images"

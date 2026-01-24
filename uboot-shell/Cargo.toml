@@ -9,7 +9,7 @@ license = "MIT"
 name = "uboot-shell"
 readme = "README.md"
 repository = "https://github.com/ZR233/ostool"
-version = "0.2.0"
+version = "0.2.1"
 
 [dependencies]
 colored = "3"

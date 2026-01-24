@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 name = "ostool"
 readme = "../README.md"
 repository = "https://github.com/ZR233/ostool"
-version = "0.8.8"
+version = "0.8.9"
 
 [[bin]]
 name = "ostool"
