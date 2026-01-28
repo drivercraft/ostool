@@ -180,7 +180,7 @@ impl Command {
 /// ```rust
 /// use ostool::utils::replace_env_placeholders;
 ///
-/// std::env::set_var("MY_VAR", "hello");
+/// unsafe { std::env::set_var("MY_VAR", "hello"); }
 /// let result = replace_env_placeholders("Value: ${env:MY_VAR}").unwrap();
 /// assert_eq!(result, "Value: hello");
 /// ```
