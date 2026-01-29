@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: ["Quality Check"]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-plz:
+    if: ${{ github.repository_owner == 'drivercraft' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Release with release-plz
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  build-binaries:
+    needs: release-plz
+    if: ${{ needs.release-plz.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Compute version and tag
+        id: meta
+        run: |
+          version=$(grep -m1 '^version' ostool/Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=ostool-v$version" >> "$GITHUB_OUTPUT"
+          echo "target=x86_64-unknown-linux-gnu" >> "$GITHUB_OUTPUT"
+
+      - name: Check release exists
+        id: release_check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build binaries
+        if: steps.release_check.outputs.exists == 'true'
+        run: |
+          cargo build --release -p ostool --bin ostool --target ${{ steps.meta.outputs.target }}
+          cargo build --release -p ostool --bin cargo-osrun --target ${{ steps.meta.outputs.target }}
+
+      - name: Package artifacts
+        if: steps.release_check.outputs.exists == 'true'
+        run: |
+          version="${{ steps.meta.outputs.version }}"
+          target="${{ steps.meta.outputs.target }}"
+          dist="dist/ostool-${target}-v${version}"
+          mkdir -p "$dist"
+          cp "target/${target}/release/ostool" "$dist/"
+          cp "target/${target}/release/cargo-osrun" "$dist/"
+          tar -czf "ostool-${target}-v${version}.tar.gz" -C dist "ostool-${target}-v${version}"
+          sha256sum "ostool-${target}-v${version}.tar.gz" > "ostool-${target}-v${version}.tar.gz.sha256"
+
+      - name: Upload release assets
+        if: steps.release_check.outputs.exists == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${{ steps.meta.outputs.version }}"
+          target="${{ steps.meta.outputs.target }}"
+          tag="${{ steps.meta.outputs.tag }}"
+          gh release upload "$tag" \
+            "ostool-${target}-v${version}.tar.gz" \
+            "ostool-${target}-v${version}.tar.gz.sha256" \
+            --clobber

@@ -11,6 +11,11 @@ readme = "../README.md"
 repository = "https://github.com/ZR233/ostool"
 version = "0.8.9"
 
+[package.metadata.binstall]
+bin-dir = "{ name }-{ target }-v{ version }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-{ target }-v{ version }{ archive-suffix }"
+
 [[bin]]
 name = "ostool"
 path = "src/main.rs"
@@ -24,7 +29,6 @@ ui-log = ["jkconfig/logging"]
 
 [dependencies]
 anyhow = {workspace = true, features = ["backtrace"]}
-futures = "0.3"
 byte-unit = "5.1"
 cargo_metadata = "0.23"
 clap = {workspace = true, features = ["derive"]}
@@ -32,6 +36,8 @@ colored = "3"
 crossterm = {workspace = true}
 cursive = {workspace = true, features = ["crossterm-backend"]}
 env_logger = {workspace = true}
+fitimage = {version = "0.1", path = "../fitimage"}
+futures = "0.3"
 indicatif = "0.18"
 jkconfig = {version = "0.1", path = "../jkconfig"}
 log = {workspace = true}
@@ -47,7 +53,6 @@ tftpd = "0.5"
 tokio = {workspace = true, features = ["full"]}
 toml = {workspace = true}
 uboot-shell = {version = "0.2", path = "../uboot-shell"}
-fitimage = {version = "0.1", path = "../fitimage"}
 
 lzma-rs = "0.3"
 regex = "1"
