@@ -37,7 +37,7 @@ pub mod cargo_builder;
 /// Build configuration types and structures.
 pub mod config;
 
-mod someboot;
+pub mod someboot;
 
 /// Specifies the type of runner to use after building.
 ///

@@ -19,7 +19,13 @@ use jkconfig::{
 use object::{Architecture, Object};
 use tokio::fs;
 
-use crate::{build::config::BuildConfig, utils::PathResultExt};
+use crate::{
+    build::{
+        config::{BuildConfig, BuildSystem, Cargo},
+        someboot,
+    },
+    utils::PathResultExt,
+};
 
 /// Configuration for output directories.
 ///
@@ -241,9 +247,9 @@ impl AppContext {
     ///
     /// Returns an error if no ELF file is set or `rust-objcopy` fails.
     pub fn objcopy_output_bin(&mut self) -> anyhow::Result<PathBuf> {
-        if self.paths.artifacts.bin.is_some() {
-            debug!("BIN file already exists: {:?}", self.paths.artifacts.bin);
-            return Ok(self.paths.artifacts.bin.as_ref().unwrap().clone());
+        if let Some(bin) = &self.paths.artifacts.bin {
+            debug!("BIN file already exists: {:?}", bin);
+            return Ok(bin.clone());
         }
 
         let elf_path = self
@@ -327,7 +333,7 @@ impl AppContext {
         };
         self.build_config_path = Some(config_path.clone());
 
-        let Some(c): Option<BuildConfig> = jkconfig::run(
+        let Some(mut c): Option<BuildConfig> = jkconfig::run(
             config_path.clone(),
             menu,
             &[self.ui_hock_feature_select(), self.ui_hock_pacage_select()],
@@ -338,8 +344,19 @@ impl AppContext {
             anyhow::bail!("No build configuration obtained");
         };
 
+        if let BuildSystem::Cargo(cargo) = &mut c.system {
+            let iter = self.someboot_cargo_args(cargo)?.into_iter();
+            cargo.args.extend(iter);
+        }
+
         self.build_config = Some(c.clone());
         Ok(c)
+    }
+
+    fn someboot_cargo_args(&self, cargo: &Cargo) -> anyhow::Result<Vec<String>> {
+        let manifest_path = self.paths.manifest.join("Cargo.toml");
+        let target = &cargo.target;
+        someboot::detect_build_config(&manifest_path, target)
     }
 
     /// Replaces variable placeholders in a string.
