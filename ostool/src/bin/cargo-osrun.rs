@@ -1,4 +1,8 @@
-use std::{env, path::PathBuf, process::exit};
+use std::{
+    env,
+    path::PathBuf,
+    process::{ExitCode, exit},
+};
 
 use clap::{Parser, Subcommand};
 use log::{LevelFilter, debug};
@@ -76,7 +80,18 @@ struct CliUboot {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> ExitCode {
+    match try_main().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("Error: {err:#}");
+            eprintln!("\nTrace:\n{err:?}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn try_main() -> anyhow::Result<()> {
     env_logger::builder()
         .format_module_path(false)
         .filter_level(LevelFilter::Info)
@@ -118,7 +133,7 @@ async fn main() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    app.set_elf_path(args.elf).await;
+    app.set_elf_path(args.elf).await?;
     app.objcopy_elf()?;
 
     app.debug = args.debug;

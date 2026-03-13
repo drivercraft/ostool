@@ -28,6 +28,7 @@ use crate::{
         config::{Cargo, Custom},
     },
     ctx::AppContext,
+    utils::PathResultExt,
 };
 
 /// Cargo builder implementation for building projects.
@@ -150,18 +151,25 @@ impl AppContext {
                 dir.clone()
             };
 
-            bin_path
-                .canonicalize()
-                .or_else(|_| {
-                    if let Some(parent) = bin_path.parent() {
-                        parent
-                            .canonicalize()
-                            .map(|p| p.join(bin_path.file_name().unwrap()))
-                    } else {
-                        Ok(bin_path.clone())
-                    }
-                })
-                .context("Failed to normalize path")
+            match bin_path.canonicalize() {
+                Ok(path) => Ok(path),
+                Err(file_err) => {
+                    let Some(parent) = bin_path.parent() else {
+                        return Err(file_err).with_path("failed to canonicalize path", &bin_path);
+                    };
+                    let Some(file_name) = bin_path.file_name() else {
+                        return Err(file_err).with_path("failed to canonicalize path", &bin_path);
+                    };
+
+                    parent
+                        .canonicalize()
+                        .map(|parent_dir| parent_dir.join(file_name))
+                        .with_path("failed to canonicalize parent path", parent)
+                        .with_context(|| {
+                            format!("failed to normalize path: {}", bin_path.display())
+                        })
+                }
+            }
         };
 
         let build_dir = self

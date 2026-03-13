@@ -1,6 +1,6 @@
-use std::{env::current_dir, path::PathBuf};
+use std::{env::current_dir, path::PathBuf, process::ExitCode};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::*;
 
 use log::info;
@@ -70,7 +70,18 @@ pub struct UbootArgs {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
+    match try_main().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("Error: {err:#}");
+            eprintln!("\nTrace:\n{err:?}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn try_main() -> Result<()> {
     #[cfg(not(feature = "ui-log"))]
     {
         env_logger::builder()
@@ -81,7 +92,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    let pwd = current_dir()?;
+    let pwd = current_dir().context("failed to get current working directory")?;
 
     let workspace_folder = match cli.workdir {
         Some(dir) => dir,
@@ -119,7 +130,7 @@ async fn main() -> Result<()> {
                 }
                 build::config::BuildSystem::Custom(custom_cfg) => {
                     ctx.shell_run_cmd(&custom_cfg.build_cmd)?;
-                    ctx.set_elf_path(custom_cfg.elf_path.clone().into()).await;
+                    ctx.set_elf_path(custom_cfg.elf_path.clone().into()).await?;
                     info!(
                         "ELF {:?}: {}",
                         ctx.arch,

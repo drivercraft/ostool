@@ -11,7 +11,13 @@ use std::{
 
 use colored::Colorize;
 
-use crate::{build::config::Cargo, ctx::AppContext, utils::Command};
+use anyhow::Context;
+
+use crate::{
+    build::config::Cargo,
+    ctx::AppContext,
+    utils::{Command, PathResultExt},
+};
 
 /// A builder for constructing and executing Cargo commands.
 ///
@@ -237,7 +243,7 @@ impl<'a> CargoBuilder<'a> {
             .join(if self.ctx.debug { "debug" } else { "release" })
             .join(&self.config.package);
 
-        self.ctx.set_elf_path(elf_path).await;
+        self.ctx.set_elf_path(elf_path).await?;
 
         if self.config.to_bin && !self.skip_objcopy {
             self.ctx.objcopy_output_bin()?;
@@ -310,7 +316,12 @@ impl<'a> CargoBuilder<'a> {
                 if let Some(ref config_path) = self.config_path {
                     let combined = config_path
                         .parent()
-                        .ok_or_else(|| anyhow::anyhow!("Invalid config path"))?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "invalid config path without parent: {}",
+                                config_path.display()
+                            )
+                        })?
                         .join(extra);
                     Ok(Some(combined))
                 } else {
@@ -397,7 +408,8 @@ impl<'a> CargoBuilder<'a> {
         // Write to temp file
         tokio::fs::write(&target_path, content)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to write to temp file: {}", e))?;
+            .with_path("failed to write downloaded cargo config", &target_path)
+            .with_context(|| format!("while downloading cargo config from {url}"))?;
 
         println!("Config downloaded to: {}", target_path.display());
 

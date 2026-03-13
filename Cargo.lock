@@ -1938,6 +1938,7 @@ dependencies = [
  "sha2",
  "tar",
  "tftpd",
+ "thiserror",
  "tokio",
  "toml",
  "uboot-shell",

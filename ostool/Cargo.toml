@@ -57,4 +57,5 @@ lzma-rs = "0.3"
 regex = "1"
 sha2 = "0.10"
 tar = "0.4"
+thiserror = {workspace = true}
 ureq = "3.0"

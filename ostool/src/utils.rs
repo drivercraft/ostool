@@ -9,6 +9,7 @@ use std::{
     path::Path,
 };
 
+use anyhow::Context;
 use anyhow::bail;
 use colored::Colorize;
 
@@ -118,6 +119,27 @@ impl Command {
         let value = (self.value_replace)(val.as_ref());
         self.inner.env(key, value);
         self
+    }
+}
+
+/// Adds file-system path context to fallible operations.
+pub trait PathResultExt<T> {
+    /// Attach an operation label and the relevant path while preserving the original error as source.
+    fn with_path<P>(self, action: &'static str, path: P) -> anyhow::Result<T>
+    where
+        P: AsRef<Path>;
+}
+
+impl<T, E> PathResultExt<T> for Result<T, E>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    fn with_path<P>(self, action: &'static str, path: P) -> anyhow::Result<T>
+    where
+        P: AsRef<Path>,
+    {
+        let path = path.as_ref().to_path_buf();
+        self.with_context(move || format!("{action}: {}", path.display()))
     }
 }
 

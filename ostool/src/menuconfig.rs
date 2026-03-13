@@ -8,6 +8,7 @@
 //! - QEMU settings (`.qemu.toml`)
 //! - U-Boot settings (`.uboot.toml`)
 
+use anyhow::Context;
 use anyhow::Result;
 use clap::ValueEnum;
 use log::info;
@@ -16,6 +17,7 @@ use tokio::fs;
 use crate::ctx::AppContext;
 use crate::run::qemu::QemuConfig;
 use crate::run::uboot::UbootConfig;
+use crate::utils::PathResultExt;
 
 /// Menu configuration mode selector.
 #[derive(ValueEnum, Clone, Debug)]
@@ -76,14 +78,15 @@ impl MenuConfigHandler {
             println!("\n未找到 U-Boot 配置文件，将使用默认配置");
         }
 
-        let config = jkconfig::run::<QemuConfig>(config_path, true, &[]).await?;
+        let config = jkconfig::run::<QemuConfig>(config_path.clone(), true, &[])
+            .await
+            .with_context(|| format!("failed to load QEMU config: {}", config_path.display()))?;
 
         if let Some(c) = config {
-            fs::write(
-                ctx.value_replace_with_var(ctx.paths.workspace.join(".qemu.toml")),
-                toml::to_string_pretty(&c)?,
-            )
-            .await?;
+            let save_path = ctx.paths.workspace.join(".qemu.toml");
+            fs::write(&save_path, toml::to_string_pretty(&c)?)
+                .await
+                .with_path("failed to write file", &save_path)?;
             println!("\nQEMU 配置已保存到 .qemu.toml");
         } else {
             println!("\n未更改 QEMU 配置");
@@ -105,13 +108,18 @@ impl MenuConfigHandler {
         } else {
             println!("\n未找到 U-Boot 配置文件，将使用默认配置");
         }
-        let config = jkconfig::run::<UbootConfig>(uboot_config_path, true, &[]).await?;
+        let config = jkconfig::run::<UbootConfig>(uboot_config_path.clone(), true, &[])
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to load U-Boot config: {}",
+                    uboot_config_path.display()
+                )
+            })?;
         if let Some(c) = config {
-            fs::write(
-                ctx.value_replace_with_var(ctx.paths.workspace.join(".uboot.toml")),
-                toml::to_string_pretty(&c)?,
-            )
-            .await?;
+            fs::write(&uboot_config_path, toml::to_string_pretty(&c)?)
+                .await
+                .with_path("failed to write file", &uboot_config_path)?;
             println!("\nU-Boot 配置已保存到 .uboot.toml");
         } else {
             println!("\n未更改 U-Boot 配置");

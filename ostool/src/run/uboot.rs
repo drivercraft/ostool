@@ -18,7 +18,12 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use uboot_shell::UbootShell;
 
-use crate::{ctx::AppContext, run::tftp, sterm::SerialTerm, utils::replace_env_placeholders};
+use crate::{
+    ctx::AppContext,
+    run::tftp,
+    sterm::SerialTerm,
+    utils::{PathResultExt, replace_env_placeholders},
+};
 
 /// FIT image 生成相关的错误消息常量
 mod errors {
@@ -102,7 +107,9 @@ pub async fn run_uboot(ctx: AppContext, args: RunUbootArgs) -> anyhow::Result<()
     let schema = schemars::schema_for!(UbootConfig);
     let schema_json = serde_json::to_value(&schema)?;
     let schema_content = serde_json::to_string_pretty(&schema_json)?;
-    fs::write(&schema_path, schema_content).await?;
+    fs::write(&schema_path, schema_content)
+        .await
+        .with_path("failed to write file", &schema_path)?;
 
     // 初始化AppData
     // let app_data = AppData::new(Some(&config_path), Some(schema_path))?;
@@ -111,11 +118,12 @@ pub async fn run_uboot(ctx: AppContext, args: RunUbootArgs) -> anyhow::Result<()
         println!("Using U-Boot config: {}", config_path.display());
         let mut config_content = fs::read_to_string(&config_path)
             .await
-            .map_err(|_| anyhow!("can not open config file: {}", config_path.display()))?;
+            .with_path("failed to read file", &config_path)?;
 
         config_content = replace_env_placeholders(&config_content)?;
 
-        let config: UbootConfig = toml::from_str(&config_content)?;
+        let config: UbootConfig = toml::from_str(&config_content)
+            .with_context(|| format!("failed to parse U-Boot config: {}", config_path.display()))?;
         config
     } else {
         let config = UbootConfig {
@@ -124,14 +132,18 @@ pub async fn run_uboot(ctx: AppContext, args: RunUbootArgs) -> anyhow::Result<()
             ..Default::default()
         };
 
-        fs::write(&config_path, toml::to_string_pretty(&config)?).await?;
+        fs::write(&config_path, toml::to_string_pretty(&config)?)
+            .await
+            .with_path("failed to write file", &config_path)?;
         config
     };
 
-    let baud_rate = config
-        .baud_rate
-        .parse::<u32>()
-        .with_context(|| anyhow!("baud_rate is not valid int"))?;
+    let baud_rate = config.baud_rate.parse::<u32>().with_context(|| {
+        format!(
+            "baud_rate is not a valid integer in {}",
+            config_path.display()
+        )
+    })?;
 
     let mut runner = Runner {
         ctx,
@@ -176,17 +188,12 @@ impl Runner {
         let output_dir = kernel_path
             .parent()
             .and_then(|p| p.to_str())
-            .ok_or(anyhow!(errors::DIR_ERROR))?;
+            .ok_or_else(|| anyhow!("{}: {}", errors::DIR_ERROR, kernel_path.display()))?;
 
         // 读取 kernel 数据
-        let kernel_data = fs::read(kernel_path).await.map_err(|e| {
-            anyhow!(
-                "{} {}: {}",
-                errors::KERNEL_READ_ERROR,
-                kernel_path.display(),
-                e
-            )
-        })?;
+        let kernel_data = fs::read(kernel_path)
+            .await
+            .with_path(errors::KERNEL_READ_ERROR, kernel_path)?;
 
         info!(
             "kernel: {} (size: {:.2})",
@@ -217,36 +224,27 @@ impl Runner {
 
         // 处理 DTB 文件
         if let Some(dtb_path) = dtb_path {
-            match fs::read(dtb_path).await {
-                Ok(data) => {
-                    info!(
-                        "已读取 DTB 文件: {} (大小: {:.2})",
-                        dtb_path.display(),
-                        Byte::from(data.len())
-                    );
-                    fdt_name = Some("fdt");
+            let data = fs::read(dtb_path)
+                .await
+                .with_path(errors::DTB_READ_ERROR, dtb_path)?;
+            info!(
+                "已读取 DTB 文件: {} (大小: {:.2})",
+                dtb_path.display(),
+                Byte::from(data.len())
+            );
+            fdt_name = Some("fdt");
 
-                    // Can not compress DTB, U-Boot will not accept it
-                    let mut fdt_config = ComponentConfig::new("fdt", data.clone())
-                        .with_description("This fdt")
-                        .with_type("flat_dt")
-                        .with_arch(arch);
+            // Can not compress DTB, U-Boot will not accept it
+            let mut fdt_config = ComponentConfig::new("fdt", data.clone())
+                .with_description("This fdt")
+                .with_type("flat_dt")
+                .with_arch(arch);
 
-                    if let Some(addr) = fdt_load_addr {
-                        fdt_config = fdt_config.with_load_address(addr);
-                    }
-
-                    config = config.with_fdt(fdt_config);
-                }
-                Err(e) => {
-                    return Err(anyhow!(
-                        "{} {}: {}",
-                        errors::DTB_READ_ERROR,
-                        dtb_path.display(),
-                        e
-                    ));
-                }
+            if let Some(addr) = fdt_load_addr {
+                fdt_config = fdt_config.with_load_address(addr);
             }
+
+            config = config.with_fdt(fdt_config);
         } else {
             warn!("未指定 DTB 文件，将生成仅包含 kernel 的 FIT image");
         }
@@ -265,18 +263,13 @@ impl Runner {
         let mut builder = FitImageBuilder::new();
         let fit_data = builder
             .build(config)
-            .map_err(|e| anyhow!("{}: {}", errors::FIT_BUILD_ERROR, e))?;
+            .with_context(|| errors::FIT_BUILD_ERROR.to_string())?;
 
         // 保存到文件
         let output_path = Path::new(output_dir).join("image.fit");
-        fs::write(&output_path, fit_data).await.map_err(|e| {
-            anyhow!(
-                "{} {}: {}",
-                errors::FIT_SAVE_ERROR,
-                output_path.display(),
-                e
-            )
-        })?;
+        fs::write(&output_path, fit_data)
+            .await
+            .with_path(errors::FIT_SAVE_ERROR, &output_path)?;
 
         info!("FIT image ok: {}", output_path.display());
         Ok(output_path)
@@ -331,10 +324,10 @@ impl Runner {
         let rx = serialport::new(&self.config.serial, self.baud_rate as _)
             .timeout(Duration::from_millis(200))
             .open()
-            .map_err(|e| anyhow!("Failed to open serial port: {e}"))?;
+            .with_context(|| format!("failed to open serial port {}", self.config.serial))?;
         let tx = rx
             .try_clone()
-            .map_err(|e| anyhow!("Failed to clone serial port: {e}"))?;
+            .with_context(|| format!("failed to clone serial port {}", self.config.serial))?;
 
         println!("Waiting for board on power or reset...");
         let handle: thread::JoinHandle<anyhow::Result<UbootShell>> = thread::spawn(move || {

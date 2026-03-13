@@ -6,7 +6,7 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use cargo_metadata::Metadata;
 use colored::Colorize;
 use cursive::Cursive;
@@ -19,7 +19,7 @@ use jkconfig::{
 use object::{Architecture, Object};
 use tokio::fs;
 
-use crate::build::config::BuildConfig;
+use crate::{build::config::BuildConfig, utils::PathResultExt};
 
 /// Configuration for output directories.
 ///
@@ -148,30 +148,28 @@ impl AppContext {
         let res = cargo_metadata::MetadataCommand::new()
             .current_dir(&self.paths.manifest)
             .no_deps()
-            .exec()?;
+            .exec()
+            .with_context(|| {
+                format!(
+                    "failed to load cargo metadata from {}",
+                    self.paths.manifest.display()
+                )
+            })?;
         Ok(res)
     }
 
     /// Sets the ELF file path and detects its architecture.
     ///
     /// This also reads the ELF file to detect the target CPU architecture.
-    pub async fn set_elf_path(&mut self, path: PathBuf) {
+    pub async fn set_elf_path(&mut self, path: PathBuf) -> anyhow::Result<()> {
         self.paths.artifacts.elf = Some(path.clone());
-        let binary_data = match fs::read(path).await {
-            Ok(data) => data,
-            Err(e) => {
-                println!("Failed to read ELF file: {e}");
-                return;
-            }
-        };
-        let file = match object::File::parse(binary_data.as_slice()) {
-            Ok(f) => f,
-            Err(e) => {
-                println!("Failed to parse ELF file: {e}");
-                return;
-            }
-        };
-        self.arch = Some(file.architecture())
+        let binary_data = fs::read(&path)
+            .await
+            .with_path("failed to read ELF file", &path)?;
+        let file = object::File::parse(binary_data.as_slice())
+            .with_context(|| format!("failed to parse ELF file: {}", path.display()))?;
+        self.arch = Some(file.architecture());
+        Ok(())
     }
 
     /// Strips debug symbols from the ELF file.
@@ -191,13 +189,15 @@ impl AppContext {
             .artifacts
             .elf
             .as_ref()
-            .ok_or(anyhow!("elf not exist"))?
-            .canonicalize()?;
+            .ok_or(anyhow!("elf not exist"))?;
+        let elf_path = elf_path
+            .canonicalize()
+            .with_path("failed to canonicalize file", elf_path)?;
 
         let stripped_elf_path = elf_path.with_file_name(
             elf_path
                 .file_stem()
-                .ok_or(anyhow!("Invalid file path"))?
+                .ok_or_else(|| anyhow!("invalid ELF file path: {}", elf_path.display()))?
                 .to_string_lossy()
                 .to_string()
                 + ".elf",
@@ -251,12 +251,14 @@ impl AppContext {
             .artifacts
             .elf
             .as_ref()
-            .ok_or(anyhow!("elf not exist"))?
-            .canonicalize()?;
+            .ok_or(anyhow!("elf not exist"))?;
+        let elf_path = elf_path
+            .canonicalize()
+            .with_path("failed to canonicalize file", elf_path)?;
 
         let bin_name = elf_path
             .file_stem()
-            .ok_or(anyhow!("Invalid file path"))?
+            .ok_or_else(|| anyhow!("invalid ELF file path: {}", elf_path.display()))?
             .to_string_lossy()
             .to_string()
             + ".bin";
@@ -268,7 +270,7 @@ impl AppContext {
         };
 
         if let Some(parent) = bin_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).with_path("failed to create directory", parent)?;
         }
 
         println!(
@@ -326,11 +328,12 @@ impl AppContext {
         self.build_config_path = Some(config_path.clone());
 
         let Some(c): Option<BuildConfig> = jkconfig::run(
-            config_path,
+            config_path.clone(),
             menu,
             &[self.ui_hock_feature_select(), self.ui_hock_pacage_select()],
         )
-        .await?
+        .await
+        .with_context(|| format!("failed to load build config: {}", config_path.display()))?
         else {
             anyhow::bail!("No build configuration obtained");
         };

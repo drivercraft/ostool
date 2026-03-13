@@ -22,23 +22,23 @@
 
 use std::{
     ffi::OsString,
-    io::{BufReader, Read},
+    io::{self, BufReader, ErrorKind, Read, Write},
     path::PathBuf,
     process::{Child, Stdio},
 };
 
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use colored::Colorize;
 use crossterm::terminal::disable_raw_mode;
 use object::Architecture;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::io::{self, Write};
 use tokio::fs;
 
 use crate::{
     ctx::AppContext,
     run::ovmf_prebuilt::{Arch, FileType, Prebuilt, Source},
+    utils::PathResultExt,
 };
 
 /// QEMU configuration structure.
@@ -94,8 +94,9 @@ pub async fn run_qemu(ctx: AppContext, args: RunQemuArgs) -> anyhow::Result<()> 
     let config = if config_path.exists() {
         let config_content = fs::read_to_string(&config_path)
             .await
-            .map_err(|_| anyhow!("can not open config file: {}", config_path.display()))?;
-        let config: QemuConfig = toml::from_str(&config_content)?;
+            .with_path("failed to read file", &config_path)?;
+        let config: QemuConfig = toml::from_str(&config_content)
+            .with_context(|| format!("failed to parse QEMU config: {}", config_path.display()))?;
         config
     } else {
         let mut config = QemuConfig {
@@ -116,7 +117,9 @@ pub async fn run_qemu(ctx: AppContext, args: RunQemuArgs) -> anyhow::Result<()> 
                 _ => {}
             }
         }
-        fs::write(&config_path, toml::to_string_pretty(&config)?).await?;
+        fs::write(&config_path, toml::to_string_pretty(&config)?)
+            .await
+            .with_path("failed to write file", &config_path)?;
         config
     };
 
@@ -186,8 +189,14 @@ impl QemuRunner {
         }
 
         if self.dtbdump {
-            let _ = fs::remove_file("target/qemu.dtb").await;
-            cmd.arg("-machine").arg("dumpdtb=target/qemu.dtb");
+            let dtb_dump_path = PathBuf::from("target/qemu.dtb");
+            if let Err(err) = fs::remove_file(&dtb_dump_path).await
+                && err.kind() != ErrorKind::NotFound
+            {
+                return Err(err).with_path("failed to remove file", &dtb_dump_path);
+            }
+            cmd.arg("-machine")
+                .arg(format!("dumpdtb={}", dtb_dump_path.display()));
             // machine = format!("{},dumpdtb=target/qemu.dtb", machine);
         }
 
@@ -277,10 +286,13 @@ impl QemuRunner {
             })?;
         let tmp = std::env::temp_dir();
         let bios_dir = tmp.join("ostool").join("ovmf");
-        fs::create_dir_all(&bios_dir).await?;
+        fs::create_dir_all(&bios_dir)
+            .await
+            .with_path("failed to create directory", &bios_dir)?;
 
         println!("Preparing OVMF firmware for architecture: {:?}", arch);
-        let prebuilt = Prebuilt::fetch(Source::LATEST, &bios_dir)?;
+        let prebuilt = Prebuilt::fetch(Source::LATEST, &bios_dir)
+            .with_context(|| format!("failed to prepare OVMF cache: {}", bios_dir.display()))?;
         let arch = match arch {
             Architecture::X86_64 => Arch::X64,
             Architecture::Aarch64 => Arch::Aarch64,

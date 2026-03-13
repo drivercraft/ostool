@@ -2,7 +2,7 @@ use super::{Error, Source};
 use indicatif::{ProgressBar, ProgressStyle};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::{self, Cursor, Read};
+use std::io::{self, Cursor, ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use tar::Archive;
 use ureq::Agent;
@@ -20,10 +20,16 @@ pub(crate) fn update_cache(source: Source, prebuilt_dir: &Path) -> Result<(), Er
 
     // Check if the hash file already has the expected hash in it. If so, assume
     // that we've already got the correct prebuilt downloaded and unpacked.
-    if let Ok(current_hash) = fs::read_to_string(&hash_path)
-        && current_hash == source.sha256
-    {
-        return Ok(());
+    match fs::read_to_string(&hash_path) {
+        Ok(current_hash) if current_hash == source.sha256 => return Ok(()),
+        Ok(_) => {}
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(Error::HashRead {
+                path: hash_path.clone(),
+                source,
+            });
+        }
     }
 
     // let base_url = "https://github.com/rust-osdev/ovmf-prebuilt/releases/download";
@@ -48,15 +54,25 @@ pub(crate) fn update_cache(source: Source, prebuilt_dir: &Path) -> Result<(), Er
     let decompressed = decompress(&data)?;
 
     // Clear out the existing prebuilt dir, if present.
-    let _ = fs::remove_dir_all(prebuilt_dir);
+    if let Err(source) = fs::remove_dir_all(prebuilt_dir)
+        && source.kind() != ErrorKind::NotFound
+    {
+        return Err(Error::RemoveDir {
+            path: prebuilt_dir.to_path_buf(),
+            source,
+        });
+    }
 
     // Extract the files.
-    extract(&decompressed, prebuilt_dir).map_err(Error::Extract)?;
+    extract(&decompressed, prebuilt_dir)?;
 
     // Write out the hash file. When we upgrade to a new release of
     // ovmf-prebuilt, the hash will no longer match, triggering a fresh
     // download.
-    fs::write(&hash_path, actual_hash).map_err(Error::HashWrite)?;
+    fs::write(&hash_path, actual_hash).map_err(|source| Error::HashWrite {
+        path: hash_path.clone(),
+        source,
+    })?;
 
     Ok(())
 }
@@ -148,29 +164,35 @@ fn decompress(data: &[u8]) -> Result<Vec<u8>, Error> {
 /// Extract the tarball's files into `prebuilt_dir`.
 ///
 /// `tarball_data` is raw decompressed tar data.
-fn extract(tarball_data: &[u8], prebuilt_dir: &Path) -> Result<(), io::Error> {
+fn extract(tarball_data: &[u8], prebuilt_dir: &Path) -> Result<(), Error> {
     let cursor = Cursor::new(tarball_data);
     let mut archive = Archive::new(cursor);
 
     // Extract each file entry.
-    for entry in archive.entries()? {
-        let mut entry = entry?;
+    for entry in archive.entries().map_err(Error::ArchiveEntries)? {
+        let mut entry = entry.map_err(Error::ArchiveEntry)?;
 
         // Skip directories.
         if entry.size() == 0 {
             continue;
         }
 
-        let path = entry.path()?;
+        let path = entry.path().map_err(Error::ArchiveEntryPath)?;
         // Strip the leading directory, which is the release name.
         let path: PathBuf = path.components().skip(1).collect();
 
-        let dir = path.parent().unwrap();
+        let dir = path.parent().unwrap_or_else(|| Path::new(""));
         let dst_dir = prebuilt_dir.join(dir);
-        let dst_path = prebuilt_dir.join(path);
+        let dst_path = prebuilt_dir.join(&path);
         info!("unpacking to {}", dst_path.display());
-        fs::create_dir_all(dst_dir)?;
-        entry.unpack(dst_path)?;
+        fs::create_dir_all(&dst_dir).map_err(|source| Error::CreateDir {
+            path: dst_dir.clone(),
+            source,
+        })?;
+        entry.unpack(&dst_path).map_err(|source| Error::Unpack {
+            path: dst_path.clone(),
+            source,
+        })?;
     }
 
     Ok(())
