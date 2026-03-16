@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.12](https://github.com/drivercraft/ostool/compare/ostool-v0.8.11...ostool-v0.8.12) - 2026-03-16
+
+### Other
+
+- 优化 ostool run，减少依赖条件 ([#39](https://github.com/drivercraft/ostool/pull/39))
+
 ## [0.8.11](https://github.com/drivercraft/ostool/compare/ostool-v0.8.10...ostool-v0.8.11) - 2026-01-29
 
 ### Other
