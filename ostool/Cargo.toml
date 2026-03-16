@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 name = "ostool"
 readme = "../README.md"
 repository = "https://github.com/drivercraft/ostool"
-version = "0.8.12"
+version = "0.8.13"
 
 [package.metadata.binstall]
 bin-dir = "{ name }-{ target }-v{ version }/{ bin }{ binary-ext }"

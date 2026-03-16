@@ -23,6 +23,7 @@
 use std::{
     ffi::OsString,
     io::{self, BufReader, ErrorKind, Read, Write},
+    path::Path,
     path::PathBuf,
     process::{Child, Stdio},
 };
@@ -40,6 +41,14 @@ use crate::{
     run::ovmf_prebuilt::{Arch, FileType, Prebuilt, Source},
     utils::PathResultExt,
 };
+
+enum UefiBootConfig {
+    Pflash {
+        code: PathBuf,
+        vars: PathBuf,
+        esp_dir: PathBuf,
+    },
+}
 
 /// QEMU configuration structure.
 ///
@@ -152,9 +161,16 @@ impl QemuRunner {
             self.ctx.objcopy_output_bin()?;
         }
 
-        let arch = self.detect_arch()?;
+        let detected_arch = self.ctx.arch.ok_or_else(|| {
+            anyhow!("Please specify `arch` in QEMU config or provide a valid ELF file.")
+        })?;
+        let arch = format!("{detected_arch:?}").to_lowercase();
 
-        let machine = "virt".to_string();
+        let machine = match detected_arch {
+            Architecture::X86_64 | Architecture::I386 => "q35",
+            _ => "virt",
+        }
+        .to_string();
 
         let mut need_machine = true;
 
@@ -208,14 +224,35 @@ impl QemuRunner {
             cmd.arg("-s").arg("-S");
         }
 
-        if let Some(bios) = self.bios().await? {
-            cmd.arg("-bios").arg(bios);
+        let mut use_kernel_loader = true;
+        if let Some(uefi) = self.prepare_uefi().await? {
+            match uefi {
+                UefiBootConfig::Pflash {
+                    code,
+                    vars,
+                    esp_dir,
+                } => {
+                    cmd.arg("-drive").arg(format!(
+                        "if=pflash,format=raw,unit=0,readonly=on,file={}",
+                        code.display()
+                    ));
+                    cmd.arg("-drive").arg(format!(
+                        "if=pflash,format=raw,unit=1,file={}",
+                        vars.display()
+                    ));
+                    cmd.arg("-drive")
+                        .arg(format!("format=raw,file=fat:rw:{}", esp_dir.display()));
+                    use_kernel_loader = false;
+                }
+            }
         }
 
-        if let Some(bin_path) = &self.ctx.paths.artifacts.bin {
-            cmd.arg("-kernel").arg(bin_path);
-        } else if let Some(elf_path) = &self.ctx.paths.artifacts.elf {
-            cmd.arg("-kernel").arg(elf_path);
+        if use_kernel_loader {
+            if let Some(bin_path) = &self.ctx.paths.artifacts.bin {
+                cmd.arg("-kernel").arg(bin_path);
+            } else if let Some(elf_path) = &self.ctx.paths.artifacts.elf {
+                cmd.arg("-kernel").arg(elf_path);
+            }
         }
         cmd.stdout(Stdio::piped());
         cmd.print_cmd();
@@ -261,25 +298,11 @@ impl QemuRunner {
         Ok(())
     }
 
-    fn detect_arch(&self) -> anyhow::Result<String> {
-        if let Some(arch) = &self.ctx.arch {
-            return Ok(format!("{:?}", arch).to_lowercase());
+    async fn prepare_uefi(&self) -> anyhow::Result<Option<UefiBootConfig>> {
+        if !self.config.uefi {
+            return Ok(None);
         }
 
-        Err(anyhow!(
-            "Please specify `arch` in QEMU config or provide a valid ELF file."
-        ))
-    }
-
-    async fn bios(&self) -> anyhow::Result<Option<PathBuf>> {
-        if self.config.uefi {
-            Ok(Some(self.preper_ovmf().await?))
-        } else {
-            Ok(None)
-        }
-    }
-
-    async fn preper_ovmf(&self) -> anyhow::Result<PathBuf> {
         let arch =
             self.ctx.arch.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("Cannot determine architecture for OVMF preparation")
@@ -302,9 +325,110 @@ impl QemuRunner {
             o => return Err(anyhow::anyhow!("OVMF is not supported for {o:?} ",)),
         };
 
-        let bios_path = prebuilt.get_file(arch, FileType::Code);
+        let code = prebuilt.get_file(arch, FileType::Code);
+        let vars_template = prebuilt.get_file(arch, FileType::Vars);
+        let esp_dir = self.prepare_uefi_esp(arch).await?;
+        let vars = self.prepare_uefi_vars(&vars_template).await?;
 
-        Ok(bios_path)
+        Ok(Some(UefiBootConfig::Pflash {
+            code,
+            vars,
+            esp_dir,
+        }))
+    }
+
+    async fn prepare_uefi_esp(&self, arch: Arch) -> anyhow::Result<PathBuf> {
+        let bin_path = self
+            .ctx
+            .paths
+            .artifacts
+            .bin
+            .as_ref()
+            .ok_or_else(|| anyhow!("UEFI boot requires a BIN artifact"))?;
+        let stem = bin_path
+            .file_stem()
+            .ok_or_else(|| anyhow!("invalid BIN path: {}", bin_path.display()))?;
+        let artifact_dir = self.uefi_artifact_dir(bin_path)?;
+        let esp_dir = artifact_dir.join(format!("{}.esp", stem.to_string_lossy()));
+        let boot_dir = esp_dir.join("EFI").join("BOOT");
+        fs::create_dir_all(&boot_dir)
+            .await
+            .with_path("failed to create directory", &boot_dir)?;
+
+        let boot_path = boot_dir.join(Self::default_uefi_boot_filename(arch));
+        fs::copy(bin_path, &boot_path).await.with_context(|| {
+            format!(
+                "failed to copy EFI image from {} to {}",
+                bin_path.display(),
+                boot_path.display()
+            )
+        })?;
+
+        Ok(esp_dir)
+    }
+
+    fn uefi_artifact_dir(&self, bin_path: &Path) -> anyhow::Result<PathBuf> {
+        let metadata = self.ctx.metadata()?;
+        let target_dir = metadata.target_directory.into_std_path_buf();
+        let target_dir = target_dir.canonicalize().unwrap_or(target_dir);
+        let bin_path = bin_path
+            .canonicalize()
+            .with_path("failed to canonicalize file", bin_path)?;
+        let artifact_dir = match bin_path.strip_prefix(&target_dir) {
+            Ok(relative_bin_path) => {
+                let artifact_parent = relative_bin_path.parent().ok_or_else(|| {
+                    anyhow!(
+                        "invalid BIN path under target directory: {}",
+                        bin_path.display()
+                    )
+                })?;
+                target_dir.join(artifact_parent)
+            }
+            Err(_) => bin_path
+                .parent()
+                .ok_or_else(|| anyhow!("invalid BIN path: {}", bin_path.display()))?
+                .to_path_buf(),
+        };
+
+        Ok(artifact_dir)
+    }
+
+    async fn prepare_uefi_vars(&self, vars_template: &Path) -> anyhow::Result<PathBuf> {
+        let bin_path = self
+            .ctx
+            .paths
+            .artifacts
+            .bin
+            .as_ref()
+            .ok_or_else(|| anyhow!("UEFI boot requires a BIN artifact"))?;
+        let stem = bin_path
+            .file_stem()
+            .ok_or_else(|| anyhow!("invalid BIN path: {}", bin_path.display()))?;
+        let artifact_dir = self.uefi_artifact_dir(bin_path)?;
+        fs::create_dir_all(&artifact_dir)
+            .await
+            .with_path("failed to create directory", &artifact_dir)?;
+
+        let vars = artifact_dir.join(format!("{}.vars.fd", stem.to_string_lossy()));
+        fs::copy(vars_template, &vars).await.with_context(|| {
+            format!(
+                "failed to copy OVMF vars from {} to {}",
+                vars_template.display(),
+                vars.display()
+            )
+        })?;
+
+        Ok(vars)
+    }
+
+    fn default_uefi_boot_filename(arch: Arch) -> &'static str {
+        match arch {
+            Arch::Aarch64 => "BOOTAA64.EFI",
+            Arch::Ia32 => "BOOTIA32.EFI",
+            Arch::LoongArch64 => "BOOTLOONGARCH64.EFI",
+            Arch::Riscv64 => "BOOTRISCV64.EFI",
+            Arch::X64 => "BOOTX64.EFI",
+        }
     }
 
     fn check_output(
