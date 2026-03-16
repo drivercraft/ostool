@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.13](https://github.com/drivercraft/ostool/compare/ostool-v0.8.12...ostool-v0.8.13) - 2026-03-16
+
+### Other
+
+- 更新版本号至 0.8.13，并增强 QEMU UEFI 支持 ([#42](https://github.com/drivercraft/ostool/pull/42))
+- *(ostool)* release v0.8.12 ([#40](https://github.com/drivercraft/ostool/pull/40))
+
 ## [0.8.12](https://github.com/drivercraft/ostool/compare/ostool-v0.8.11...ostool-v0.8.12) - 2026-03-16
 
 ### Other
