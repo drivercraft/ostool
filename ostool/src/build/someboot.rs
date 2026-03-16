@@ -65,7 +65,10 @@ pub fn detect_build_config(manifest_path: &PathBuf, target: &str) -> anyhow::Res
     Ok(cargo_args)
 }
 
-fn read_metadata(manifest_path: &PathBuf, no_deps: bool) -> anyhow::Result<cargo_metadata::Metadata> {
+fn read_metadata(
+    manifest_path: &PathBuf,
+    no_deps: bool,
+) -> anyhow::Result<cargo_metadata::Metadata> {
     let mut cmd = cargo_metadata::MetadataCommand::new();
     cmd.manifest_path(manifest_path);
     if no_deps {
