@@ -10,7 +10,6 @@ use byte_unit::Byte;
 use colored::Colorize;
 use fitimage::{ComponentConfig, FitImageBuilder, FitImageConfig};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use jkconfig::data::app_data::default_schema_by_init;
 use log::{info, warn};
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use schemars::JsonSchema;
@@ -101,18 +100,6 @@ pub async fn run_uboot(ctx: AppContext, args: RunUbootArgs) -> anyhow::Result<()
         Some(path) => path,
         None => ctx.paths.workspace.join(".uboot.toml"),
     };
-
-    let schema_path = default_schema_by_init(&config_path);
-
-    let schema = schemars::schema_for!(UbootConfig);
-    let schema_json = serde_json::to_value(&schema)?;
-    let schema_content = serde_json::to_string_pretty(&schema_json)?;
-    fs::write(&schema_path, schema_content)
-        .await
-        .with_path("failed to write file", &schema_path)?;
-
-    // 初始化AppData
-    // let app_data = AppData::new(Some(&config_path), Some(schema_path))?;
 
     let config = if config_path.exists() {
         println!("Using U-Boot config: {}", config_path.display());
