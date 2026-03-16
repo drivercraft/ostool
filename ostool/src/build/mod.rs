@@ -28,6 +28,7 @@ use crate::{
         config::{Cargo, Custom},
     },
     ctx::AppContext,
+    run::{qemu::RunQemuArgs, uboot::RunUbootArgs},
     utils::PathResultExt,
 };
 
@@ -190,45 +191,46 @@ impl AppContext {
             .map(normalize)
             .transpose()?;
 
-        let mut builder = CargoBuilder::run(self, config, build_config_path);
+        self.paths.config.build_dir = build_dir;
+        self.paths.config.bin_dir = bin_dir;
 
-        builder = builder.arg("--");
+        let debug = matches!(runner, CargoRunnerKind::Qemu { debug: true, .. });
 
-        if let Some(build_dir) = build_dir {
-            builder = builder
-                .arg("--build-dir")
-                .arg(build_dir.display().to_string())
-        }
-
-        if let Some(bin_dir) = bin_dir {
-            builder = builder.arg("--bin-dir").arg(bin_dir.display().to_string())
-        }
+        CargoBuilder::build(self, config, build_config_path)
+            .debug(debug)
+            .skip_objcopy(true)
+            .resolve_artifact_from_json(true)
+            .execute()
+            .await?;
 
         match runner {
             CargoRunnerKind::Qemu {
                 qemu_config,
-                debug,
                 dtb_dump,
+                ..
             } => {
-                if let Some(cfg) = qemu_config {
-                    builder = builder.arg("--config").arg(cfg.display().to_string());
-                }
-
-                builder = builder.debug(*debug);
-
-                if *dtb_dump {
-                    builder = builder.arg("--dtb-dump");
-                }
-                builder = builder.arg("qemu");
+                crate::run::qemu::run_qemu(
+                    self.clone(),
+                    RunQemuArgs {
+                        qemu_config: qemu_config.clone(),
+                        dtb_dump: *dtb_dump,
+                        show_output: true,
+                    },
+                )
+                .await?;
             }
             CargoRunnerKind::Uboot { uboot_config } => {
-                if let Some(cfg) = uboot_config {
-                    builder = builder.arg("--config").arg(cfg.display().to_string());
-                }
-                builder = builder.arg("uboot");
+                crate::run::uboot::run_uboot(
+                    self.clone(),
+                    RunUbootArgs {
+                        config: uboot_config.clone(),
+                        show_output: true,
+                    },
+                )
+                .await?;
             }
         }
 
-        builder.execute().await
+        Ok(())
     }
 }

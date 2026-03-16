@@ -6,12 +6,14 @@
 
 use std::{
     collections::HashMap,
+    io::BufReader,
     path::{Path, PathBuf},
+    process::Stdio,
 };
 
+use anyhow::{Context, anyhow, bail};
+use cargo_metadata::{Message, PackageId};
 use colored::Colorize;
-
-use anyhow::Context;
 
 use crate::{
     build::{config::Cargo, someboot},
@@ -41,6 +43,8 @@ pub struct CargoBuilder<'a> {
     extra_args: Vec<String>,
     extra_envs: HashMap<String, String>,
     skip_objcopy: bool,
+    resolve_artifact_from_json: bool,
+    resolved_elf_path: Option<PathBuf>,
     config_path: Option<PathBuf>,
 }
 
@@ -60,6 +64,8 @@ impl<'a> CargoBuilder<'a> {
             extra_args: Vec::new(),
             extra_envs: HashMap::new(),
             skip_objcopy: false,
+            resolve_artifact_from_json: false,
+            resolved_elf_path: None,
             config_path,
         }
     }
@@ -79,6 +85,8 @@ impl<'a> CargoBuilder<'a> {
             extra_args: Vec::new(),
             extra_envs: HashMap::new(),
             skip_objcopy: true,
+            resolve_artifact_from_json: false,
+            resolved_elf_path: None,
             config_path,
         }
     }
@@ -136,6 +144,12 @@ impl<'a> CargoBuilder<'a> {
         self
     }
 
+    /// Enables artifact path resolution from Cargo JSON messages.
+    pub fn resolve_artifact_from_json(mut self, enable: bool) -> Self {
+        self.resolve_artifact_from_json = enable;
+        self
+    }
+
     /// Executes the configured Cargo command.
     ///
     /// This runs pre-build commands, executes Cargo, handles output artifacts,
@@ -168,8 +182,75 @@ impl<'a> CargoBuilder<'a> {
     }
 
     async fn run_cargo(&mut self) -> anyhow::Result<()> {
+        if self.resolve_artifact_from_json {
+            return self.run_cargo_and_resolve_artifact().await;
+        }
+
         let mut cmd = self.build_cargo_command().await?;
         cmd.run()?;
+        Ok(())
+    }
+
+    async fn run_cargo_and_resolve_artifact(&mut self) -> anyhow::Result<()> {
+        let (target_pkg_id, default_run) = self.target_package_info()?;
+        let mut cmd = self.build_cargo_command().await?;
+
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::inherit());
+        cmd.print_cmd();
+
+        let mut child = cmd
+            .spawn()
+            .context("failed to spawn cargo build command for artifact resolution")?;
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("failed to capture cargo stdout for message parsing"))?;
+        let reader = BufReader::new(stdout);
+
+        let mut executable_artifacts: Vec<(String, PathBuf)> = Vec::new();
+        for message in Message::parse_stream(reader) {
+            let message = message.context("failed to parse cargo JSON message stream")?;
+            match message {
+                Message::CompilerArtifact(artifact) => {
+                    if artifact.package_id == target_pkg_id
+                        && artifact.target.is_bin()
+                        && let Some(executable) = artifact.executable
+                    {
+                        executable_artifacts
+                            .push((artifact.target.name, executable.into_std_path_buf()));
+                    }
+                }
+                Message::CompilerMessage(msg) => {
+                    if let Some(rendered) = msg.message.rendered {
+                        eprint!("{rendered}");
+                    }
+                }
+                Message::TextLine(line) => {
+                    println!("{line}");
+                }
+                _ => {}
+            }
+        }
+
+        let status = child
+            .wait()
+            .context("failed waiting for cargo build process")?;
+        if !status.success() {
+            bail!("failed with status: {status}");
+        }
+
+        let resolved = self.pick_executable_artifact(&executable_artifacts, default_run.as_deref());
+        let Some(resolved) = resolved else {
+            bail!(
+                "no executable artifact found for package '{}' and target '{}'; please check system.Cargo.package/system.Cargo.target",
+                self.config.package,
+                self.config.target
+            );
+        };
+
+        self.resolved_elf_path = Some(resolved);
         Ok(())
     }
 
@@ -238,6 +319,11 @@ impl<'a> CargoBuilder<'a> {
             cmd.arg("--release");
         }
 
+        if self.resolve_artifact_from_json {
+            cmd.arg("--message-format");
+            cmd.arg("json-render-diagnostics");
+        }
+
         // Extra args
         for arg in &self.extra_args {
             cmd.arg(arg);
@@ -251,12 +337,16 @@ impl<'a> CargoBuilder<'a> {
     }
 
     async fn handle_output(&mut self) -> anyhow::Result<()> {
-        let target_dir = self.ctx.paths.build_dir();
+        let elf_path = if let Some(path) = &self.resolved_elf_path {
+            path.clone()
+        } else {
+            let target_dir = self.ctx.paths.build_dir();
 
-        let elf_path = target_dir
-            .join(&self.config.target)
-            .join(if self.ctx.debug { "debug" } else { "release" })
-            .join(&self.config.package);
+            target_dir
+                .join(&self.config.target)
+                .join(if self.ctx.debug { "debug" } else { "release" })
+                .join(&self.config.package)
+        };
 
         self.ctx.set_elf_path(elf_path).await?;
 
@@ -272,6 +362,43 @@ impl<'a> CargoBuilder<'a> {
             self.ctx.shell_run_cmd(cmd)?;
         }
         Ok(())
+    }
+
+    fn target_package_info(&self) -> anyhow::Result<(PackageId, Option<String>)> {
+        let metadata = self.ctx.metadata()?;
+        let Some(package) = metadata
+            .packages
+            .iter()
+            .find(|pkg| pkg.name == self.config.package)
+        else {
+            bail!(
+                "package '{}' not found in cargo metadata under {}",
+                self.config.package,
+                self.ctx.paths.manifest.display()
+            );
+        };
+        Ok((package.id.clone(), package.default_run.clone()))
+    }
+
+    fn pick_executable_artifact(
+        &self,
+        executable_artifacts: &[(String, PathBuf)],
+        default_run: Option<&str>,
+    ) -> Option<PathBuf> {
+        executable_artifacts
+            .iter()
+            .rev()
+            .find(|(name, _)| name == &self.config.package)
+            .or_else(|| {
+                default_run.and_then(|default_bin| {
+                    executable_artifacts
+                        .iter()
+                        .rev()
+                        .find(|(name, _)| name == default_bin)
+                })
+            })
+            .or_else(|| executable_artifacts.last())
+            .map(|(_, path)| path.clone())
     }
 
     fn build_features(&self) -> Vec<String> {
