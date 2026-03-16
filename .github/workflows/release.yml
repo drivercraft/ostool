@@ -12,12 +12,12 @@ permissions:
 
 jobs:
   release-plz:
-    if: ${{ github.repository_owner == 'drivercraft' && github.event.workflow_run.conclusion == 'success' }}
+    if: &release_condition ${{ github.repository_owner == 'drivercraft' && github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-22.04
     steps:
       - &checkout
         name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -35,6 +35,23 @@ jobs:
         uses: release-plz/action@v0.5
         with:
           command: release
-        env:
+        env: &release_env
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  release-plz-pr:
+    name: Release-plz PR
+    if: *release_condition
+    runs-on: ubuntu-22.04
+    concurrency:
+      group: release-plz-pr-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - *checkout
+      - *install-rust
+      - *setup-libudenv
+      - name: Run release-plz
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env: *release_env
