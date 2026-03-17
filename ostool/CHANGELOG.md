@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.14](https://github.com/drivercraft/ostool/compare/ostool-v0.8.13...ostool-v0.8.14) - 2026-03-17
+
+### Other
+
+- 更新版本号至 0.8.14，并增强对 someboot 的构建配置检测支持 ([#46](https://github.com/drivercraft/ostool/pull/46))
+- *(ostool)* release v0.8.13 ([#41](https://github.com/drivercraft/ostool/pull/41))
+
 ## [0.8.13](https://github.com/drivercraft/ostool/compare/ostool-v0.8.12...ostool-v0.8.13) - 2026-03-16
 
 ### Other
