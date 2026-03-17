@@ -302,14 +302,18 @@ impl<'a> CargoBuilder<'a> {
         // Auto-detected args from someboot/build-info.toml
         let workspace_manifest = self.ctx.paths.workspace.join("Cargo.toml");
         if workspace_manifest.exists() {
-            let detected_args =
-                someboot::detect_build_config(&workspace_manifest, &self.config.target)
-                    .with_context(|| {
-                        format!(
-                            "failed to detect someboot build config from {}",
-                            workspace_manifest.display()
-                        )
-                    })?;
+            let detected_args = someboot::detect_build_config_for_package(
+                &workspace_manifest,
+                &self.config.package,
+                &features,
+                &self.config.target,
+            )
+            .with_context(|| {
+                format!(
+                    "failed to detect someboot build config from {}",
+                    workspace_manifest.display()
+                )
+            })?;
             for arg in detected_args {
                 cmd.arg(arg);
             }

@@ -65,6 +65,62 @@ pub fn detect_build_config(manifest_path: &PathBuf, target: &str) -> anyhow::Res
     Ok(cargo_args)
 }
 
+pub fn detect_build_config_for_package(
+    manifest_path: &PathBuf,
+    package: &str,
+    features: &[String],
+    target: &str,
+) -> anyhow::Result<Vec<String>> {
+    let mut cargo_args = Vec::new();
+
+    if !someboot_reachable_for_package(manifest_path, package, features, target)? {
+        return Ok(cargo_args);
+    }
+
+    let meta = read_metadata(manifest_path, false)?;
+    let someboot_roots = collect_someboot_roots(&meta);
+    if someboot_roots.is_empty() {
+        return Ok(cargo_args);
+    }
+
+    let build_info_path = someboot_roots
+        .into_iter()
+        .map(|root| root.join("build-info.toml"))
+        .find(|p| p.exists());
+
+    let Some(build_info_path) = build_info_path else {
+        return Ok(cargo_args);
+    };
+
+    let build_info_raw = std::fs::read_to_string(&build_info_path).with_context(|| {
+        format!(
+            "failed to read build-info.toml: {}",
+            build_info_path.display()
+        )
+    })?;
+
+    let build_info: HashMap<String, TargetBuildInfo> = toml::from_str(&build_info_raw)
+        .with_context(|| {
+            format!(
+                "failed to parse build-info.toml at {}",
+                build_info_path.display()
+            )
+        })?;
+
+    let Some(matched) = pick_target_build_info(&build_info, target) else {
+        return Ok(cargo_args);
+    };
+
+    cargo_args.extend(matched.cargoargs.iter().cloned());
+
+    if !matched.rustflags.is_empty() {
+        cargo_args.push("--config".to_string());
+        cargo_args.push(rustflags_to_cargo_override(target, &matched.rustflags));
+    }
+
+    Ok(cargo_args)
+}
+
 fn read_metadata(
     manifest_path: &PathBuf,
     no_deps: bool,
@@ -110,6 +166,56 @@ fn collect_someboot_roots(meta: &cargo_metadata::Metadata) -> Vec<PathBuf> {
     someboot_roots
 }
 
+fn someboot_reachable_for_package(
+    manifest_path: &PathBuf,
+    package: &str,
+    features: &[String],
+    target: &str,
+) -> anyhow::Result<bool> {
+    let mut cmd = std::process::Command::new("cargo");
+    cmd.arg("tree");
+    cmd.arg("--manifest-path");
+    cmd.arg(manifest_path);
+    cmd.arg("-p");
+    cmd.arg(package);
+    cmd.arg("--target");
+    cmd.arg(target);
+    cmd.arg("-e");
+    cmd.arg("normal,build");
+    cmd.arg("--prefix");
+    cmd.arg("none");
+    cmd.arg("--format");
+    cmd.arg("{p}");
+    if !features.is_empty() {
+        cmd.arg("--features");
+        cmd.arg(features.join(","));
+    }
+
+    let output = cmd.output().with_context(|| {
+        format!(
+            "failed to run `cargo tree` for package `{}` and target `{}`",
+            package, target
+        )
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "`cargo tree` failed for package `{}` and target `{}`: {}\nstderr:\n{}",
+            package,
+            target,
+            output.status,
+            stderr
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .map(str::trim)
+        .any(|line| line.starts_with("someboot v")))
+}
+
 fn pick_target_build_info<'a>(
     build_info: &'a HashMap<String, TargetBuildInfo>,
     target: &str,
@@ -147,8 +253,12 @@ fn rustflags_to_cargo_override(target: &str, rustflags: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::detect_build_config;
-    use std::path::PathBuf;
+    use super::{detect_build_config, detect_build_config_for_package};
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     #[test]
     fn test_local() {
@@ -203,5 +313,87 @@ mod tests {
                 .iter()
                 .any(|arg| arg.starts_with("target.aarch64-unknown-none-softfloat.rustflags="))
         );
+    }
+
+    #[test]
+    fn detect_build_config_for_package_skips_unreachable_optional_someboot() {
+        let root = std::env::temp_dir().join(format!(
+            "ostool-someboot-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be valid")
+                .as_nanos()
+        ));
+
+        if root.exists() {
+            fs::remove_dir_all(&root).expect("failed to remove old temp dir");
+        }
+
+        fs::create_dir_all(root.join("app/src")).unwrap();
+        fs::create_dir_all(root.join("helper/src")).unwrap();
+        fs::create_dir_all(root.join("someboot/src")).unwrap();
+
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\", \"helper\", \"someboot\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+
+        fs::write(
+            root.join("app/Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n\
+             helper = { path = \"../helper\", default-features = false }\n\n[features]\n\
+             with-someboot = [\"helper/use-someboot\"]\n",
+        )
+        .unwrap();
+        fs::write(root.join("app/src/main.rs"), "fn main() {}\n").unwrap();
+
+        fs::write(
+            root.join("helper/Cargo.toml"),
+            "[package]\nname = \"helper\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[features]\n\
+             use-someboot = [\"dep:someboot\"]\n\n[dependencies]\n\
+             someboot = { path = \"../someboot\", optional = true }\n",
+        )
+        .unwrap();
+        fs::write(root.join("helper/src/lib.rs"), "pub fn helper() {}\n").unwrap();
+
+        fs::write(
+            root.join("someboot/Cargo.toml"),
+            "[package]\nname = \"someboot\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(root.join("someboot/src/lib.rs"), "pub fn marker() {}\n").unwrap();
+        fs::write(
+            root.join("someboot/build-info.toml"),
+            "[x86_64-unknown-none]\n\
+             rustflags = [\"-C\", \"relocation-model=pic\"]\n\
+             cargoargs = [\"-Z\", \"build-std=core,alloc\"]\n",
+        )
+        .unwrap();
+
+        let manifest_path = root.join("Cargo.toml");
+
+        let without_optional =
+            detect_build_config_for_package(&manifest_path, "app", &[], "x86_64-unknown-none")
+                .unwrap();
+        assert!(without_optional.is_empty());
+
+        let with_optional = detect_build_config_for_package(
+            &manifest_path,
+            "app",
+            &["app/with-someboot".to_string()],
+            "x86_64-unknown-none",
+        )
+        .unwrap();
+        assert_eq!(&with_optional[0..2], ["-Z", "build-std=core,alloc"]);
+        assert_eq!(with_optional[2], "--config");
+        assert!(
+            with_optional
+                .iter()
+                .any(|arg| arg.starts_with("target.x86_64-unknown-none.rustflags="))
+        );
+
+        fs::remove_dir_all(&root).expect("failed to remove temp workspace");
     }
 }

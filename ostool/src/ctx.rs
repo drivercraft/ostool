@@ -356,7 +356,12 @@ impl AppContext {
     fn someboot_cargo_args(&self, cargo: &Cargo) -> anyhow::Result<Vec<String>> {
         let manifest_path = self.paths.manifest.join("Cargo.toml");
         let target = &cargo.target;
-        someboot::detect_build_config(&manifest_path, target)
+        someboot::detect_build_config_for_package(
+            &manifest_path,
+            &cargo.package,
+            &cargo.features,
+            target,
+        )
     }
 
     /// Replaces variable placeholders in a string.
