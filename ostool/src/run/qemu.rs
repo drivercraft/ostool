@@ -92,10 +92,9 @@ pub struct RunQemuArgs {
 ///
 /// Returns an error if QEMU fails to start or exits with an error.
 pub async fn run_qemu(ctx: AppContext, args: RunQemuArgs) -> anyhow::Result<()> {
-    // Build logic will be implemented here
     let config_path = match args.qemu_config.clone() {
         Some(path) => path,
-        None => ctx.paths.manifest.join(".qemu.toml"),
+        None => find_qemu_config(&ctx)?,
     };
 
     info!("Using QEMU config file: {}", config_path.display());
@@ -509,4 +508,45 @@ impl QemuRunner {
 
         Ok(())
     }
+}
+
+/// Find QEMU configuration file with architecture-specific priority.
+///
+/// Search order:
+/// 1. qemu-<arch>.toml
+/// 2. .qemu-<arch>.toml
+/// 3. qemu.toml
+/// 4. .qemu.toml
+fn find_qemu_config(ctx: &AppContext) -> anyhow::Result<PathBuf> {
+    let manifest_dir = &ctx.paths.manifest;
+
+    // Get architecture string if available
+    let arch_str = ctx.arch.map(|arch| format!("{arch:?}").to_lowercase());
+
+    // Try architecture-specific config files first
+    if let Some(ref arch) = arch_str {
+        let candidates = [
+            manifest_dir.join(format!("qemu-{}.toml", arch)),
+            manifest_dir.join(format!(".qemu-{}.toml", arch)),
+        ];
+        for path in &candidates {
+            if path.exists() {
+                return Ok(path.clone());
+            }
+        }
+    }
+
+    // Fall back to generic config files
+    let fallback_candidates = [
+        manifest_dir.join("qemu.toml"),
+        manifest_dir.join(".qemu.toml"),
+    ];
+    for path in &fallback_candidates {
+        if path.exists() {
+            return Ok(path.clone());
+        }
+    }
+
+    // Return default path if none exists
+    Ok(manifest_dir.join(".qemu.toml"))
 }
