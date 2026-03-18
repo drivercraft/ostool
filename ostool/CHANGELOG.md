@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.15](https://github.com/drivercraft/ostool/compare/ostool-v0.8.14...ostool-v0.8.15) - 2026-03-18
+
+### Added
+
+- 实现 QEMU 配置文件查找功能，支持架构优先级 ([#49](https://github.com/drivercraft/ostool/pull/49))
+
+### Other
+
+- *(ostool)* release v0.8.14 ([#47](https://github.com/drivercraft/ostool/pull/47))
+
 ## [0.8.14](https://github.com/drivercraft/ostool/compare/ostool-v0.8.13...ostool-v0.8.14) - 2026-03-17
 
 ### Other
