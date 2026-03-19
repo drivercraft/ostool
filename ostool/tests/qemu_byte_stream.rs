@@ -38,16 +38,18 @@ impl ByteStreamMatcher {
     fn new(success_patterns: &[&str], fail_patterns: &[&str]) -> Result<Self> {
         let mut success_regex = Vec::with_capacity(success_patterns.len());
         for pattern in success_patterns {
-            success_regex.push(Regex::new(pattern).with_context(|| {
-                format!("failed to compile success regex: {pattern}")
-            })?);
+            success_regex.push(
+                Regex::new(pattern)
+                    .with_context(|| format!("failed to compile success regex: {pattern}"))?,
+            );
         }
 
         let mut fail_regex = Vec::with_capacity(fail_patterns.len());
         for pattern in fail_patterns {
-            fail_regex.push(Regex::new(pattern).with_context(|| {
-                format!("failed to compile fail regex: {pattern}")
-            })?);
+            fail_regex.push(
+                Regex::new(pattern)
+                    .with_context(|| format!("failed to compile fail regex: {pattern}"))?,
+            );
         }
 
         Ok(Self {
@@ -97,12 +99,7 @@ impl ByteStreamMatcher {
             .find(|regex| regex.is_match(&lossy))
             .map(|regex| regex.as_str().to_string())
         {
-            return Some(self.finish(
-                MatchKind::Success,
-                &matched_regex,
-                lossy.into_owned(),
-                now,
-            ));
+            return Some(self.finish(MatchKind::Success, &matched_regex, lossy.into_owned(), now));
         }
 
         if byte == b'\n' {
@@ -255,7 +252,9 @@ fn run_case(success_patterns: &[&str], fail_patterns: &[&str]) -> Result<Option<
                 }
 
                 if let Some(outcome) = matcher.outcome().cloned() {
-                    if let Some(deadline) = matcher.tail_deadline() && Instant::now() >= deadline {
+                    if let Some(deadline) = matcher.tail_deadline()
+                        && Instant::now() >= deadline
+                    {
                         let mut outcome = outcome;
                         outcome.tail_bytes = tail_bytes;
                         guard.shutdown();
@@ -267,7 +266,9 @@ fn run_case(success_patterns: &[&str], fail_patterns: &[&str]) -> Result<Option<
                 if err.kind() == ErrorKind::TimedOut || err.kind() == ErrorKind::WouldBlock =>
             {
                 if let Some(outcome) = matcher.outcome().cloned() {
-                    if let Some(deadline) = matcher.tail_deadline() && Instant::now() >= deadline {
+                    if let Some(deadline) = matcher.tail_deadline()
+                        && Instant::now() >= deadline
+                    {
                         let mut outcome = outcome;
                         outcome.tail_bytes = tail_bytes;
                         guard.shutdown();
@@ -282,14 +283,25 @@ fn run_case(success_patterns: &[&str], fail_patterns: &[&str]) -> Result<Option<
 
 #[test]
 fn qemu_byte_stream_success_matches_before_newline() -> Result<()> {
-    let Some(outcome) = run_case(&[r"Hit any key to stop autoboot:"], &[r"__ostool_never_fail__"])? else {
+    let Some(outcome) = run_case(
+        &[r"Hit any key to stop autoboot:"],
+        &[r"__ostool_never_fail__"],
+    )?
+    else {
         return Ok(());
     };
 
     assert_eq!(outcome.kind, MatchKind::Success);
     assert_eq!(outcome.matched_regex, r"Hit any key to stop autoboot:");
-    assert!(outcome.matched_text.contains("Hit any key to stop autoboot"));
-    assert!(outcome.tail_bytes > 0, "expected tail drain bytes after success");
+    assert!(
+        outcome
+            .matched_text
+            .contains("Hit any key to stop autoboot")
+    );
+    assert!(
+        outcome.tail_bytes > 0,
+        "expected tail drain bytes after success"
+    );
     Ok(())
 }
 
@@ -302,7 +314,10 @@ fn qemu_byte_stream_fail_matches_before_newline() -> Result<()> {
     assert_eq!(outcome.kind, MatchKind::Fail);
     assert_eq!(outcome.matched_regex, r"Net:\s+eth0:");
     assert!(outcome.matched_text.contains("Net:"));
-    assert!(outcome.tail_bytes > 0, "expected tail drain bytes after fail");
+    assert!(
+        outcome.tail_bytes > 0,
+        "expected tail drain bytes after fail"
+    );
     Ok(())
 }
 
@@ -311,13 +326,21 @@ fn qemu_byte_stream_fail_wins_when_both_match() -> Result<()> {
     let Some(outcome) = run_case(
         &[r"Hit any key to stop autoboot:"],
         &[r"Hit any key to stop autoboot:"],
-    )? else {
+    )?
+    else {
         return Ok(());
     };
 
     assert_eq!(outcome.kind, MatchKind::Fail);
     assert_eq!(outcome.matched_regex, r"Hit any key to stop autoboot:");
-    assert!(outcome.matched_text.contains("Hit any key to stop autoboot"));
-    assert!(outcome.tail_bytes > 0, "expected tail drain bytes after fail");
+    assert!(
+        outcome
+            .matched_text
+            .contains("Hit any key to stop autoboot")
+    );
+    assert!(
+        outcome.tail_bytes > 0,
+        "expected tail drain bytes after fail"
+    );
     Ok(())
 }

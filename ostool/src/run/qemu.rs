@@ -418,7 +418,10 @@ impl QemuRunner {
         child: &mut Child,
         matcher: &mut ByteStreamMatcher,
     ) -> anyhow::Result<()> {
-        let stdout = child.stdout.take().context("failed to capture QEMU stdout")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("failed to capture QEMU stdout")?;
         let (tx, rx) = mpsc::channel();
 
         thread::spawn(move || {
