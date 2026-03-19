@@ -84,6 +84,13 @@ pub struct RunQemuArgs {
     pub show_output: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+struct QemuDefaultOverrides {
+    args: Vec<String>,
+    success_regex: Vec<String>,
+    fail_regex: Vec<String>,
+}
+
 /// Runs the operating system in QEMU.
 ///
 /// This function configures and launches QEMU with the appropriate settings
@@ -98,55 +105,107 @@ pub struct RunQemuArgs {
 ///
 /// Returns an error if QEMU fails to start or exits with an error.
 pub async fn run_qemu(ctx: AppContext, args: RunQemuArgs) -> anyhow::Result<()> {
-    let config_path = match args.qemu_config.clone() {
+    run_qemu_with_defaults(ctx, args, QemuDefaultOverrides::default()).await
+}
+
+pub async fn run_qemu_with_more_default_args(
+    ctx: AppContext,
+    run_args: RunQemuArgs,
+    args: Vec<String>,
+    success_regex: Vec<String>,
+    fail_regex: Vec<String>,
+) -> anyhow::Result<()> {
+    run_qemu_with_defaults(
+        ctx,
+        run_args,
+        QemuDefaultOverrides {
+            args,
+            success_regex,
+            fail_regex,
+        },
+    )
+    .await
+}
+
+async fn run_qemu_with_defaults(
+    ctx: AppContext,
+    run_args: RunQemuArgs,
+    overrides: QemuDefaultOverrides,
+) -> anyhow::Result<()> {
+    let config = load_or_create_qemu_config(&ctx, run_args.qemu_config.clone(), overrides).await?;
+    run_qemu_with_config(ctx, run_args, config).await
+}
+
+async fn load_or_create_qemu_config(
+    ctx: &AppContext,
+    explicit_config_path: Option<PathBuf>,
+    overrides: QemuDefaultOverrides,
+) -> anyhow::Result<QemuConfig> {
+    let config_path = match explicit_config_path {
         Some(path) => path,
-        None => find_qemu_config(&ctx)?,
+        None => find_qemu_config(ctx)?,
     };
 
     info!("Using QEMU config file: {}", config_path.display());
 
-    let config = if config_path.exists() {
+    if config_path.exists() {
         let config_content = fs::read_to_string(&config_path)
             .await
             .with_path("failed to read file", &config_path)?;
         let config: QemuConfig = toml::from_str(&config_content)
             .with_context(|| format!("failed to parse QEMU config: {}", config_path.display()))?;
-        config
-    } else {
-        let mut config = QemuConfig {
-            to_bin: true,
-            ..Default::default()
-        };
-        config.args.push("-nographic".to_string());
-        if let Some(arch) = ctx.arch {
-            match arch {
-                Architecture::Aarch64 => {
-                    config.args.push("-cpu".to_string());
-                    config.args.push("cortex-a53".to_string());
-                }
-                Architecture::Riscv64 => {
-                    config.args.push("-cpu".to_string());
-                    config.args.push("rv64".to_string());
-                }
-                _ => {}
-            }
-        }
-        fs::write(&config_path, toml::to_string_pretty(&config)?)
-            .await
-            .with_path("failed to write file", &config_path)?;
-        config
-    };
+        return Ok(config);
+    }
 
+    let config = build_default_qemu_config(ctx.arch, overrides);
+    fs::write(&config_path, toml::to_string_pretty(&config)?)
+        .await
+        .with_path("failed to write file", &config_path)?;
+    Ok(config)
+}
+
+fn build_default_qemu_config(
+    arch: Option<Architecture>,
+    overrides: QemuDefaultOverrides,
+) -> QemuConfig {
+    let mut config = QemuConfig {
+        to_bin: true,
+        success_regex: overrides.success_regex,
+        fail_regex: overrides.fail_regex,
+        ..Default::default()
+    };
+    config.args.push("-nographic".to_string());
+    if let Some(arch) = arch {
+        match arch {
+            Architecture::Aarch64 => {
+                config.args.push("-cpu".to_string());
+                config.args.push("cortex-a53".to_string());
+            }
+            Architecture::Riscv64 => {
+                config.args.push("-cpu".to_string());
+                config.args.push("rv64".to_string());
+            }
+            _ => {}
+        }
+    }
+    config.args.extend(overrides.args);
+    config
+}
+
+async fn run_qemu_with_config(
+    ctx: AppContext,
+    run_args: RunQemuArgs,
+    config: QemuConfig,
+) -> anyhow::Result<()> {
     let mut runner = QemuRunner {
         ctx,
         config,
         args: vec![],
-        dtbdump: args.dtb_dump,
+        dtbdump: run_args.dtb_dump,
         success_regex: vec![],
         fail_regex: vec![],
     };
-    runner.run().await?;
-    Ok(())
+    runner.run().await
 }
 
 struct QemuRunner {
@@ -567,4 +626,49 @@ fn find_qemu_config(ctx: &AppContext) -> anyhow::Result<PathBuf> {
 
     // Return default path if none exists
     Ok(manifest_dir.join(".qemu.toml"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{QemuDefaultOverrides, build_default_qemu_config};
+    use object::Architecture;
+
+    #[test]
+    fn default_qemu_config_keeps_existing_defaults_without_overrides() {
+        let config = build_default_qemu_config(Some(Architecture::Aarch64), Default::default());
+
+        assert!(config.to_bin);
+        assert_eq!(config.args, vec!["-nographic", "-cpu", "cortex-a53"]);
+        assert!(config.success_regex.is_empty());
+        assert!(config.fail_regex.is_empty());
+    }
+
+    #[test]
+    fn default_qemu_config_appends_extra_args_and_regex() {
+        let config = build_default_qemu_config(
+            Some(Architecture::Riscv64),
+            QemuDefaultOverrides {
+                args: vec!["-m".into(), "512M".into()],
+                success_regex: vec!["PASS".into()],
+                fail_regex: vec!["FAIL".into()],
+            },
+        );
+
+        assert_eq!(config.args, vec!["-nographic", "-cpu", "rv64", "-m", "512M"]);
+        assert_eq!(config.success_regex, vec!["PASS"]);
+        assert_eq!(config.fail_regex, vec!["FAIL"]);
+    }
+
+    #[test]
+    fn default_qemu_config_for_other_arch_only_adds_generic_defaults() {
+        let config = build_default_qemu_config(
+            Some(Architecture::X86_64),
+            QemuDefaultOverrides {
+                args: vec!["-smp".into(), "2".into()],
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(config.args, vec!["-nographic", "-smp", "2"]);
+    }
 }
