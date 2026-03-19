@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.16](https://github.com/drivercraft/ostool/compare/ostool-v0.8.15...ostool-v0.8.16) - 2026-03-19
+
+### Added
+
+- 添加字节流匹配器以增强运行时输出检测功能 ([#51](https://github.com/drivercraft/ostool/pull/51))
+
 ## [0.8.15](https://github.com/drivercraft/ostool/compare/ostool-v0.8.14...ostool-v0.8.15) - 2026-03-18
 
 ### Added
