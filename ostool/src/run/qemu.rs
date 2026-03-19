@@ -654,7 +654,10 @@ mod tests {
             },
         );
 
-        assert_eq!(config.args, vec!["-nographic", "-cpu", "rv64", "-m", "512M"]);
+        assert_eq!(
+            config.args,
+            vec!["-nographic", "-cpu", "rv64", "-m", "512M"]
+        );
         assert_eq!(config.success_regex, vec!["PASS"]);
         assert_eq!(config.fail_regex, vec!["FAIL"]);
     }
