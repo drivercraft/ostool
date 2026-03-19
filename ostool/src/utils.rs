@@ -280,19 +280,22 @@ mod tests {
     fn test_replace_env_placeholders() {
         // 设置测试环境变量
         unsafe {
-            env::set_var("TEST_HOME", "/home/test");
-            env::set_var("TEST_PATH", "/usr/local/bin");
+            env::set_var("OSTOOL_TEST_HOME_REPLACE", "/home/test");
+            env::set_var("OSTOOL_TEST_PATH_REPLACE", "/usr/local/bin");
         }
 
         // 测试简单的环境变量替换
         assert_eq!(
-            replace_env_placeholders("${env:TEST_HOME}").unwrap(),
+            replace_env_placeholders("${env:OSTOOL_TEST_HOME_REPLACE}").unwrap(),
             "/home/test"
         );
 
         // 测试多个环境变量
         assert_eq!(
-            replace_env_placeholders("${env:TEST_HOME}:${env:TEST_PATH}").unwrap(),
+            replace_env_placeholders(
+                "${env:OSTOOL_TEST_HOME_REPLACE}:${env:OSTOOL_TEST_PATH_REPLACE}"
+            )
+            .unwrap(),
             "/home/test:/usr/local/bin"
         );
 
@@ -303,7 +306,7 @@ mod tests {
 
         // 测试混合内容
         assert_eq!(
-            replace_env_placeholders("Path: ${env:TEST_HOME}/bin").unwrap(),
+            replace_env_placeholders("Path: ${env:OSTOOL_TEST_HOME_REPLACE}/bin").unwrap(),
             "Path: /home/test/bin"
         );
 
@@ -326,12 +329,13 @@ mod tests {
     #[test]
     fn test_nested_braces() {
         unsafe {
-            env::set_var("TEST_VAR", "value");
+            env::set_var("OSTOOL_TEST_VAR_NESTED", "value");
         }
 
         // 测试嵌套大括号的情况
         assert_eq!(
-            replace_env_placeholders("${env:TEST_VAR} and ${other:placeholder}").unwrap(),
+            replace_env_placeholders("${env:OSTOOL_TEST_VAR_NESTED} and ${other:placeholder}")
+                .unwrap(),
             "value and ${other:placeholder}"
         );
     }
@@ -363,23 +367,26 @@ mod tests {
 
         // 测试包含特殊字符的环境变量名
         unsafe {
-            env::set_var("TEST-VAR", "dash-value");
-            env::set_var("TEST_VAR", "underscore-value");
+            env::set_var("OSTOOL-TEST-VAR-EDGE", "dash-value");
+            env::set_var("OSTOOL_TEST_VAR_EDGE", "underscore-value");
         }
         assert_eq!(
-            replace_env_placeholders("${env:TEST-VAR}").unwrap(),
+            replace_env_placeholders("${env:OSTOOL-TEST-VAR-EDGE}").unwrap(),
             "dash-value"
         );
         assert_eq!(
-            replace_env_placeholders("${env:TEST_VAR}").unwrap(),
+            replace_env_placeholders("${env:OSTOOL_TEST_VAR_EDGE}").unwrap(),
             "underscore-value"
         );
 
         // 测试空的环境变量值
         unsafe {
-            env::set_var("EMPTY_VAR", "");
+            env::set_var("OSTOOL_EMPTY_VAR_EDGE", "");
         }
-        assert_eq!(replace_env_placeholders("${env:EMPTY_VAR}").unwrap(), "");
+        assert_eq!(
+            replace_env_placeholders("${env:OSTOOL_EMPTY_VAR_EDGE}").unwrap(),
+            ""
+        );
     }
 
     #[test]
@@ -391,12 +398,15 @@ mod tests {
 
         // 设置测试环境变量
         unsafe {
-            env::set_var("VAR", "value");
+            env::set_var("OSTOOL_VAR_MALFORMED", "value");
         }
 
         // 测试混合的大括号
         // 当遇到完整的占位符后停止，剩余字符由主循环继续处理
-        assert_eq!(replace_env_placeholders("${env:VAR}}").unwrap(), "value}");
+        assert_eq!(
+            replace_env_placeholders("${env:OSTOOL_VAR_MALFORMED}}").unwrap(),
+            "value}"
+        );
 
         // 测试其他格式错误的情况
         assert_eq!(replace_env_placeholders("{env:VAR}").unwrap(), "{env:VAR}");
