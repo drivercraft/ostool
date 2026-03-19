@@ -19,7 +19,10 @@ use uboot_shell::UbootShell;
 
 use crate::{
     ctx::AppContext,
-    run::tftp,
+    run::{
+        output_matcher::{ByteStreamMatcher, MATCH_DRAIN_DURATION, StreamMatchKind},
+        tftp,
+    },
     sterm::SerialTerm,
     utils::{PathResultExt, replace_env_placeholders},
 };
@@ -483,30 +486,53 @@ impl Runner {
 
         println!("{}", "Interacting with U-Boot shell...".green());
 
-        let success_regex = self.success_regex.clone();
-        let fail_regex = self.fail_regex.clone();
+        let matcher = Arc::new(Mutex::new(ByteStreamMatcher::new(
+            self.success_regex.clone(),
+            self.fail_regex.clone(),
+        )));
 
         let res = Arc::new(Mutex::<Option<anyhow::Result<()>>>::new(None));
         let res_clone = res.clone();
-        let mut shell = SerialTerm::new(tx, rx, move |h, line| {
-            for regex in success_regex.iter() {
-                if regex.is_match(line) {
-                    println!("{}", "\r\n=== SUCCESS PATTERN MATCHED ===".green());
-                    h.stop();
-                    let mut res_lock = res_clone.lock().unwrap();
-                    *res_lock = Some(Ok(()));
-                    return;
+        let matcher_clone = matcher.clone();
+        let mut shell = SerialTerm::new_with_byte_callback(tx, rx, move |h, byte| {
+            let mut matcher = matcher_clone.lock().unwrap();
+            if let Some(matched) = matcher.observe_byte(byte) {
+                match matched.kind {
+                    StreamMatchKind::Success => {
+                        println!(
+                            "{}",
+                            format!(
+                                "\r\n=== SUCCESS PATTERN MATCHED: {} ===",
+                                matched.matched_regex
+                            )
+                            .green()
+                        );
+                        let mut res_lock = res_clone.lock().unwrap();
+                        *res_lock = Some(Ok(()));
+                    }
+                    StreamMatchKind::Fail => {
+                        println!(
+                            "{}",
+                            format!(
+                                "\r\n=== FAIL PATTERN MATCHED: {} ===",
+                                matched.matched_regex
+                            )
+                            .red()
+                        );
+                        let mut res_lock = res_clone.lock().unwrap();
+                        *res_lock = Some(Err(anyhow!(
+                            "Fail pattern matched '{}': {}",
+                            matched.matched_regex,
+                            matched.matched_text.trim_end()
+                        )));
+                    }
                 }
+
+                h.stop_after(MATCH_DRAIN_DURATION);
             }
 
-            for regex in fail_regex.iter() {
-                if regex.is_match(line) {
-                    println!("{}", "\r\n=== FAIL PATTERN MATCHED ===".red());
-                    h.stop();
-                    let mut res_lock = res_clone.lock().unwrap();
-                    *res_lock = Some(Err(anyhow!("Fail pattern matched: {}", line)));
-                    return;
-                }
+            if matcher.should_stop() {
+                h.stop();
             }
         });
         shell.run().await?;

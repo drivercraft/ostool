@@ -4,7 +4,7 @@
 //! with embedded devices and development boards. It supports:
 //!
 //! - Full keyboard input with special key sequences
-//! - Line-based output callback for pattern matching
+//! - Byte-based or line-based output callbacks for pattern matching
 //! - Raw terminal mode for proper character handling
 //!
 //! # Exit Sequence
@@ -15,7 +15,7 @@ use std::io::{self, Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::{
     event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers},
@@ -26,7 +26,7 @@ use tokio::task::{AbortHandle, spawn_blocking};
 
 type Tx = Box<dyn Write + Send>;
 type Rx = Box<dyn Read + Send>;
-type OnlineCallback = Box<dyn Fn(&TermHandle, &str) + Send + Sync>;
+type OnByteCallback = Box<dyn Fn(&TermHandle, u8) + Send + Sync>;
 
 /// Interactive serial terminal.
 ///
@@ -44,7 +44,7 @@ type OnlineCallback = Box<dyn Fn(&TermHandle, &str) + Send + Sync>;
 pub struct SerialTerm {
     tx: Arc<Mutex<Tx>>,
     rx: Arc<Mutex<Rx>>,
-    on_line: Option<OnlineCallback>,
+    on_byte: Option<OnByteCallback>,
 }
 
 /// Handle for controlling the terminal session.
@@ -52,21 +52,37 @@ pub struct SerialTerm {
 /// Provides methods to stop the terminal from within callbacks.
 pub struct TermHandle {
     is_running: AtomicBool,
+    stop_deadline: Mutex<Option<Instant>>,
 }
 
 impl TermHandle {
     /// Stops the terminal session.
     ///
-    /// This can be called from within a line callback to terminate the session
+    /// This can be called from within a receive callback to terminate the session
     /// when a specific pattern is detected.
     pub fn stop(&self) {
         self.is_running
             .store(false, std::sync::atomic::Ordering::Release);
     }
 
+    /// Schedules the terminal to stop after the specified duration.
+    pub fn stop_after(&self, duration: Duration) {
+        let mut deadline = self.stop_deadline.lock().unwrap();
+        if deadline.is_none() {
+            *deadline = Some(Instant::now() + duration);
+        }
+    }
+
     /// Returns whether the terminal session is still running.
     pub fn is_running(&self) -> bool {
         self.is_running.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    fn should_stop_now(&self) -> bool {
+        self.stop_deadline
+            .lock()
+            .unwrap()
+            .is_some_and(|deadline| Instant::now() >= deadline)
     }
 }
 
@@ -89,10 +105,38 @@ impl SerialTerm {
     where
         F: Fn(&TermHandle, &str) + Send + Sync + 'static,
     {
+        let line_buf = Arc::new(Mutex::new(Vec::with_capacity(0x1000)));
+        let on_line = Arc::new(on_line);
+        let on_byte = {
+            let line_buf = line_buf.clone();
+            let on_line = on_line.clone();
+            move |handle: &TermHandle, byte: u8| {
+                let mut line_buf = line_buf.lock().unwrap();
+                line_buf.push(byte);
+                if byte == b'\n' {
+                    let line = String::from_utf8_lossy(&line_buf).to_string();
+                    line_buf.clear();
+                    on_line(handle, &line);
+                }
+            }
+        };
+
         SerialTerm {
             tx: Arc::new(Mutex::new(tx)),
             rx: Arc::new(Mutex::new(rx)),
-            on_line: Some(Box::new(on_line)),
+            on_byte: Some(Box::new(on_byte)),
+        }
+    }
+
+    /// Creates a new serial terminal with a byte-oriented receive callback.
+    pub fn new_with_byte_callback<F>(tx: Tx, rx: Rx, on_byte: F) -> Self
+    where
+        F: Fn(&TermHandle, u8) + Send + Sync + 'static,
+    {
+        SerialTerm {
+            tx: Arc::new(Mutex::new(tx)),
+            rx: Arc::new(Mutex::new(rx)),
+            on_byte: Some(Box::new(on_byte)),
         }
     }
 
@@ -128,10 +172,11 @@ impl SerialTerm {
         let tx_port = self.tx.clone();
         let rx_port = self.rx.clone();
 
-        let on_line = self.on_line.take().unwrap();
+        let on_byte = self.on_byte.take().unwrap();
 
         let handle = Arc::new(TermHandle {
             is_running: AtomicBool::new(true),
+            stop_deadline: Mutex::new(None),
         });
 
         // 使用 EventStream 异步处理键盘事件
@@ -141,7 +186,7 @@ impl SerialTerm {
         // 启动串口接收线程
         let rx_handle = spawn_blocking({
             let handle = handle.clone();
-            move || Self::handle_serial_receive(rx_port, handle, tx_abort, on_line)
+            move || Self::handle_serial_receive(rx_port, handle, tx_abort, on_byte)
         });
         // 等待接收线程结束
         let _ = rx_handle.await?;
@@ -154,14 +199,13 @@ impl SerialTerm {
         rx_port: Arc<Mutex<Rx>>,
         handle: Arc<TermHandle>,
         tx_abort: AbortHandle,
-        on_line: F,
+        on_byte: F,
     ) -> io::Result<()>
     where
-        F: Fn(&TermHandle, &str) + Send + Sync + 'static,
+        F: Fn(&TermHandle, u8) + Send + Sync + 'static,
     {
         let mut buffer = [0u8; 1024];
         let mut byte = [0u8; 1];
-        let mut line = Vec::with_capacity(0x1000);
 
         while handle.is_running() {
             // 从串口读取数据
@@ -170,26 +214,35 @@ impl SerialTerm {
                     // 将数据直接写入stdout
                     let data = &buffer[..bytes_read];
                     for &b in data {
-                        line.push(b);
                         if b == b'\n' {
                             byte[0] = b'\r';
                             io::stdout().write_all(&byte)?;
-                            let line_str = String::from_utf8_lossy(&line);
-                            (on_line)(handle.as_ref(), &line_str);
-                            line.clear();
                         }
                         byte[0] = b;
                         io::stdout().write_all(&byte)?;
+                        (on_byte)(handle.as_ref(), b);
+                        if handle.should_stop_now() {
+                            handle.stop();
+                            break;
+                        }
                     }
 
                     io::stdout().flush()?;
                 }
                 Ok(_) => {
                     // 没有数据可读，短暂休眠
+                    if handle.should_stop_now() {
+                        handle.stop();
+                        break;
+                    }
                     thread::sleep(Duration::from_millis(1));
                 }
                 Err(e) if e.kind() == io::ErrorKind::TimedOut => {
                     // 超时是正常的，继续
+                    if handle.should_stop_now() {
+                        handle.stop();
+                        break;
+                    }
                     if handle.is_running() {
                         continue;
                     } else {

@@ -26,6 +26,9 @@ use std::{
     path::Path,
     path::PathBuf,
     process::{Child, Stdio},
+    sync::mpsc,
+    thread,
+    time::Duration,
 };
 
 use anyhow::{Context, anyhow};
@@ -38,7 +41,10 @@ use tokio::fs;
 
 use crate::{
     ctx::AppContext,
-    run::ovmf_prebuilt::{Arch, FileType, Prebuilt, Source},
+    run::{
+        output_matcher::{ByteStreamMatcher, StreamMatch, StreamMatchKind},
+        ovmf_prebuilt::{Arch, FileType, Prebuilt, Source},
+    },
     utils::PathResultExt,
 };
 
@@ -254,37 +260,15 @@ impl QemuRunner {
             }
         }
         cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
         cmd.print_cmd();
         let mut child = cmd.spawn()?;
-
-        let mut qemu_result: Option<anyhow::Result<()>> = None;
-
-        let stdout = BufReader::new(child.stdout.take().unwrap());
-        let mut line_buf = Vec::new();
-
-        for byte in stdout.bytes() {
-            let byte = match byte {
-                Ok(b) => b,
-                Err(e) => {
-                    println!("stdout: {:?}", e);
-                    continue;
-                }
-            };
-            let _ = std::io::stdout().write_all(&[byte]);
-            let _ = std::io::stdout().flush();
-
-            line_buf.push(byte);
-            if byte != b'\n' {
-                continue;
-            }
-
-            let line = String::from_utf8_lossy(&line_buf).to_string();
-
-            self.check_output(&line, &mut child, &mut qemu_result)?;
-        }
+        let mut matcher =
+            ByteStreamMatcher::new(self.success_regex.clone(), self.fail_regex.clone());
+        Self::process_output_stream(&mut child, &mut matcher)?;
 
         let out = child.wait_with_output()?;
-        if let Some(res) = qemu_result {
+        if let Some(res) = matcher.final_result() {
             res?;
         } else if !out.status.success() {
             unsafe {
@@ -430,48 +414,79 @@ impl QemuRunner {
         }
     }
 
-    fn check_output(
-        &self,
-        out: &str,
+    fn process_output_stream(
         child: &mut Child,
-        res: &mut Option<anyhow::Result<()>>,
+        matcher: &mut ByteStreamMatcher,
     ) -> anyhow::Result<()> {
-        // // Process QEMU output line here
-        // println!("{}", line);
+        let stdout = child.stdout.take().context("failed to capture QEMU stdout")?;
+        let (tx, rx) = mpsc::channel();
 
-        for regex in &self.fail_regex {
-            if regex.is_match(out) {
-                *res = Some(Err(anyhow!(
-                    "Detected failure pattern '{}' in QEMU output.",
-                    regex.as_str()
-                )));
-
-                self.kill_qemu(child)?;
-                return Ok(());
+        thread::spawn(move || {
+            let stdout = BufReader::new(stdout);
+            for byte in stdout.bytes() {
+                match byte {
+                    Ok(byte) => {
+                        if tx.send(Some(byte)).is_err() {
+                            return;
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("stdout: {err:?}");
+                        return;
+                    }
+                }
             }
-        }
 
-        for regex in &self.success_regex {
-            if regex.is_match(out) {
-                *res = Some(Ok(()));
-                println!(
-                    "{}",
-                    format!(
-                        "Detected success pattern '{}' in QEMU output, terminating QEMU.",
-                        regex.as_str()
-                    )
-                    .green()
-                );
-                self.kill_qemu(child)?;
-                return Ok(());
+            let _ = tx.send(None);
+        });
+
+        loop {
+            match rx.recv_timeout(Duration::from_millis(10)) {
+                Ok(Some(byte)) => {
+                    let _ = std::io::stdout().write_all(&[byte]);
+                    let _ = std::io::stdout().flush();
+
+                    if let Some(matched) = matcher.observe_byte(byte) {
+                        Self::print_match_event(&matched);
+                    }
+                }
+                Ok(None) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+
+            if matcher.should_stop() {
+                Self::kill_qemu(child)?;
+                break;
             }
         }
 
         Ok(())
     }
 
-    fn kill_qemu(&self, child: &mut Child) -> anyhow::Result<()> {
-        child.kill()?;
+    fn print_match_event(matched: &StreamMatch) {
+        match matched.kind {
+            StreamMatchKind::Success => println!(
+                "{}",
+                format!(
+                    "\n=== SUCCESS PATTERN MATCHED: {} ===",
+                    matched.matched_regex
+                )
+                .green()
+            ),
+            StreamMatchKind::Fail => println!(
+                "{}",
+                format!("\n=== FAIL PATTERN MATCHED: {} ===", matched.matched_regex).red()
+            ),
+        }
+    }
+
+    fn kill_qemu(child: &mut Child) -> anyhow::Result<()> {
+        if let Err(err) = child.kill()
+            && err.kind() != ErrorKind::InvalidInput
+        {
+            return Err(err.into());
+        }
 
         // 尝试恢复终端状态
         let _ = disable_raw_mode();

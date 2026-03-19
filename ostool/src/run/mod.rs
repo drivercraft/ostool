@@ -16,5 +16,8 @@ pub mod tftp;
 /// U-Boot bootloader integration.
 pub mod uboot;
 
+/// Shared byte-stream matcher for runtime output detection.
+mod output_matcher;
+
 /// OVMF prebuilt firmware downloader (internal).
 mod ovmf_prebuilt;
