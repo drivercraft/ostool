@@ -863,7 +863,7 @@ mod tests {
                 manifest: manifest.clone(),
                 ..Default::default()
             },
-            arch: None,  // 无架构
+            arch: None, // 无架构
             ..Default::default()
         };
 

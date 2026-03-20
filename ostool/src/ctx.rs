@@ -320,7 +320,7 @@ impl AppContext {
     /// This function is used internally and for testing build config path resolution.
     pub(crate) fn resolve_build_config_path(&self, explicit_path: Option<PathBuf>) -> PathBuf {
         match explicit_path {
-            Some(path) => path,  // 显式路径优先级最高
+            Some(path) => path, // 显式路径优先级最高
             None => {
                 // 先搜索 config_search_dir，再搜索 workspace
                 if let Some(ref search_dir) = self.config_search_dir {
