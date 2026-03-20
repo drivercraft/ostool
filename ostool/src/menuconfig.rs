@@ -70,12 +70,14 @@ impl MenuConfigHandler {
 
     async fn handle_qemu_config(ctx: &mut AppContext) -> Result<()> {
         info!("配置 QEMU 运行参数");
-        let config_path = ctx.paths.workspace.join(".qemu.toml");
+
+        // 使用来自 qemu 模块的共享解析器
+        let config_path = crate::run::qemu::resolve_qemu_config_path(ctx, None)?;
+
         if config_path.exists() {
-            println!("\n当前 U-Boot 配置文件: {}", config_path.display());
-            // 这里可以读取并显示当前的 U-Boot 配置
+            println!("\n当前 QEMU 配置文件: {}", config_path.display());
         } else {
-            println!("\n未找到 U-Boot 配置文件，将使用默认配置");
+            println!("\n未找到 QEMU 配置文件，将使用默认配置");
         }
 
         let config = jkconfig::run::<QemuConfig>(config_path.clone(), true, &[])
@@ -83,11 +85,10 @@ impl MenuConfigHandler {
             .with_context(|| format!("failed to load QEMU config: {}", config_path.display()))?;
 
         if let Some(c) = config {
-            let save_path = ctx.paths.workspace.join(".qemu.toml");
-            fs::write(&save_path, toml::to_string_pretty(&c)?)
+            fs::write(&config_path, toml::to_string_pretty(&c)?)
                 .await
-                .with_path("failed to write file", &save_path)?;
-            println!("\nQEMU 配置已保存到 .qemu.toml");
+                .with_path("failed to write file", &config_path)?;
+            println!("\nQEMU 配置已保存到 {}", config_path.display());
         } else {
             println!("\n未更改 QEMU 配置");
         }

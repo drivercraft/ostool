@@ -27,35 +27,38 @@ path = "src/bin/cargo-osrun.rs"
 ui-log = ["jkconfig/logging"]
 
 [dependencies]
-anyhow = {workspace = true, features = ["backtrace"]}
+anyhow = { workspace = true, features = ["backtrace"] }
 byte-unit = "5.1"
 cargo_metadata = "0.23"
-clap = {workspace = true, features = ["derive"]}
+clap = { workspace = true, features = ["derive"] }
 colored = "3"
-crossterm = {workspace = true}
-cursive = {workspace = true, features = ["crossterm-backend"]}
-env_logger = {workspace = true}
-fitimage = {version = "0.1", path = "../fitimage"}
+crossterm = { workspace = true }
+cursive = { workspace = true, features = ["crossterm-backend"] }
+env_logger = { workspace = true }
+fitimage = { version = "0.1", path = "../fitimage" }
 futures = "0.3"
 indicatif = "0.18"
-jkconfig = {version = "0.1", path = "../jkconfig"}
-log = {workspace = true}
+jkconfig = { version = "0.1", path = "../jkconfig" }
+log = { workspace = true }
 network-interface = "2"
-object = "0.37"
+object = "0.38"
 ratatui = "0.29"
-reqwest = {version = "0.12", default-features = false, features = ["rustls-tls"]}
-schemars = {workspace = true, features = ["derive"]}
-serde = {workspace = true, features = ["derive"]}
-serde_json = {workspace = true}
+reqwest = { version = "0.13" }
+schemars = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 serialport = "4.6"
 tftpd = "0.5"
-tokio = {workspace = true, features = ["full"]}
-toml = {workspace = true}
-uboot-shell = {version = "0.2", path = "../uboot-shell"}
+tokio = { workspace = true, features = ["full"] }
+toml = { workspace = true }
+uboot-shell = { version = "0.2", path = "../uboot-shell" }
 
 lzma-rs = "0.3"
 regex = "1"
 sha2 = "0.10"
 tar = "0.4"
-thiserror = {workspace = true}
+thiserror = { workspace = true }
 ureq = "3.0"
+
+[dev-dependencies]
+tempfile = "3"

@@ -94,6 +94,8 @@ pub struct AppContext {
     pub build_config: Option<BuildConfig>,
     /// Path to the build configuration file.
     pub build_config_path: Option<PathBuf>,
+    /// 可选的配置文件搜索目录，设置后优先于 workspace/manifest 进行配置发现
+    pub config_search_dir: Option<PathBuf>,
 }
 
 impl AppContext {
@@ -308,6 +310,33 @@ impl AppContext {
         Ok(bin_path)
     }
 
+    /// Resolves the build configuration file path with search priority.
+    ///
+    /// Configuration search priority:
+    /// 1. Explicit path (if provided)
+    /// 2. config_search_dir/.build.toml (if set and exists)
+    /// 3. workspace/.build.toml (fallback)
+    ///
+    /// This function is used internally and for testing build config path resolution.
+    pub(crate) fn resolve_build_config_path(&self, explicit_path: Option<PathBuf>) -> PathBuf {
+        match explicit_path {
+            Some(path) => path,  // 显式路径优先级最高
+            None => {
+                // 先搜索 config_search_dir，再搜索 workspace
+                if let Some(ref search_dir) = self.config_search_dir {
+                    let search_path = search_dir.join(".build.toml");
+                    if search_path.exists() {
+                        search_path
+                    } else {
+                        self.paths.workspace.join(".build.toml")
+                    }
+                } else {
+                    self.paths.workspace.join(".build.toml")
+                }
+            }
+        }
+    }
+
     /// Loads and prepares the build configuration.
     ///
     /// This method loads the build configuration from a TOML file. If `menu` is
@@ -327,10 +356,7 @@ impl AppContext {
         config_path: Option<PathBuf>,
         menu: bool,
     ) -> anyhow::Result<BuildConfig> {
-        let config_path = match config_path {
-            Some(path) => path,
-            None => self.paths.workspace.join(".build.toml"),
-        };
+        let config_path = self.resolve_build_config_path(config_path);
         self.build_config_path = Some(config_path.clone());
 
         let Some(mut c): Option<BuildConfig> = jkconfig::run(

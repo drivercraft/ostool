@@ -52,7 +52,11 @@ enum RunSubCommands {
 
 #[derive(Args, Debug, Default)]
 pub struct QemuArgs {
-    /// Path to the qemu configuration file, default to '.qemu.toml'
+    /// Path to the qemu configuration file
+    ///
+    /// Default behavior when not specified:
+    /// - With architecture detected: .qemu-{arch}.toml (e.g., .qemu-aarch64.toml)
+    /// - Without architecture: .qemu.toml
     #[arg(short, long)]
     qemu_config: Option<PathBuf>,
     #[arg(short, long)]
