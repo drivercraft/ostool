@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/drivercraft/ostool/compare/ostool-v0.8.16...ostool-v0.9.0) - 2026-03-20
+
+### Added
+
+- 增强 QEMU 默认覆盖与配置文件解析 ([#53](https://github.com/drivercraft/ostool/pull/53))
+
 ## [0.8.16](https://github.com/drivercraft/ostool/compare/ostool-v0.8.15...ostool-v0.8.16) - 2026-03-19
 
 ### Added
