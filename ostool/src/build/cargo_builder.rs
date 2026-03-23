@@ -21,6 +21,12 @@ use crate::{
     utils::{Command, PathResultExt},
 };
 
+#[derive(Debug, Clone)]
+struct ResolvedCargoArtifact {
+    elf_path: PathBuf,
+    cargo_artifact_dir: PathBuf,
+}
+
 /// A builder for constructing and executing Cargo commands.
 ///
 /// `CargoBuilder` provides a fluent API for configuring Cargo build or run
@@ -44,7 +50,7 @@ pub struct CargoBuilder<'a> {
     extra_envs: HashMap<String, String>,
     skip_objcopy: bool,
     resolve_artifact_from_json: bool,
-    resolved_elf_path: Option<PathBuf>,
+    resolved_artifact: Option<ResolvedCargoArtifact>,
     config_path: Option<PathBuf>,
 }
 
@@ -64,8 +70,8 @@ impl<'a> CargoBuilder<'a> {
             extra_args: Vec::new(),
             extra_envs: HashMap::new(),
             skip_objcopy: false,
-            resolve_artifact_from_json: false,
-            resolved_elf_path: None,
+            resolve_artifact_from_json: true,
+            resolved_artifact: None,
             config_path,
         }
     }
@@ -85,8 +91,8 @@ impl<'a> CargoBuilder<'a> {
             extra_args: Vec::new(),
             extra_envs: HashMap::new(),
             skip_objcopy: true,
-            resolve_artifact_from_json: false,
-            resolved_elf_path: None,
+            resolve_artifact_from_json: true,
+            resolved_artifact: None,
             config_path,
         }
     }
@@ -182,13 +188,7 @@ impl<'a> CargoBuilder<'a> {
     }
 
     async fn run_cargo(&mut self) -> anyhow::Result<()> {
-        if self.resolve_artifact_from_json {
-            return self.run_cargo_and_resolve_artifact().await;
-        }
-
-        let mut cmd = self.build_cargo_command().await?;
-        cmd.run()?;
-        Ok(())
+        self.run_cargo_and_resolve_artifact().await
     }
 
     async fn run_cargo_and_resolve_artifact(&mut self) -> anyhow::Result<()> {
@@ -209,7 +209,7 @@ impl<'a> CargoBuilder<'a> {
             .ok_or_else(|| anyhow!("failed to capture cargo stdout for message parsing"))?;
         let reader = BufReader::new(stdout);
 
-        let mut executable_artifacts: Vec<(String, PathBuf)> = Vec::new();
+        let mut executable_artifacts: Vec<(String, ResolvedCargoArtifact)> = Vec::new();
         for message in Message::parse_stream(reader) {
             let message = message.context("failed to parse cargo JSON message stream")?;
             match message {
@@ -218,8 +218,23 @@ impl<'a> CargoBuilder<'a> {
                         && artifact.target.is_bin()
                         && let Some(executable) = artifact.executable
                     {
-                        executable_artifacts
-                            .push((artifact.target.name, executable.into_std_path_buf()));
+                        let elf_path = executable.into_std_path_buf();
+                        let cargo_artifact_dir = elf_path
+                            .parent()
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "cargo reported executable without parent directory: {}",
+                                    elf_path.display()
+                                )
+                            })?
+                            .to_path_buf();
+                        executable_artifacts.push((
+                            artifact.target.name,
+                            ResolvedCargoArtifact {
+                                elf_path,
+                                cargo_artifact_dir,
+                            },
+                        ));
                     }
                 }
                 Message::CompilerMessage(msg) => {
@@ -244,13 +259,13 @@ impl<'a> CargoBuilder<'a> {
         let resolved = self.pick_executable_artifact(&executable_artifacts, default_run.as_deref());
         let Some(resolved) = resolved else {
             bail!(
-                "no executable artifact found for package '{}' and target '{}'; please check system.Cargo.package/system.Cargo.target",
+                "no executable bin artifact found in cargo JSON output for package '{}' and target '{}'; ostool currently resolves only Cargo bin targets. Please check system.Cargo.package/system.Cargo.target",
                 self.config.package,
                 self.config.target
             );
         };
 
-        self.resolved_elf_path = Some(resolved);
+        self.resolved_artifact = Some(resolved);
         Ok(())
     }
 
@@ -324,10 +339,8 @@ impl<'a> CargoBuilder<'a> {
             cmd.arg("--release");
         }
 
-        if self.resolve_artifact_from_json {
-            cmd.arg("--message-format");
-            cmd.arg("json-render-diagnostics");
-        }
+        cmd.arg("--message-format");
+        cmd.arg("json-render-diagnostics");
 
         // Extra args
         for arg in &self.extra_args {
@@ -342,18 +355,17 @@ impl<'a> CargoBuilder<'a> {
     }
 
     async fn handle_output(&mut self) -> anyhow::Result<()> {
-        let elf_path = if let Some(path) = &self.resolved_elf_path {
-            path.clone()
-        } else {
-            let target_dir = self.ctx.paths.build_dir();
+        let resolved = self.resolved_artifact.clone().ok_or_else(|| {
+            anyhow!(
+                "cargo build finished without a resolved executable artifact for package '{}' and target '{}'",
+                self.config.package,
+                self.config.target
+            )
+        })?;
 
-            target_dir
-                .join(&self.config.target)
-                .join(if self.ctx.debug { "debug" } else { "release" })
-                .join(&self.config.package)
-        };
-
-        self.ctx.set_elf_path(elf_path).await?;
+        self.ctx.set_elf_artifact_path(resolved.elf_path).await?;
+        self.ctx.paths.artifacts.cargo_artifact_dir = Some(resolved.cargo_artifact_dir.clone());
+        self.ctx.paths.artifacts.runtime_artifact_dir = Some(resolved.cargo_artifact_dir);
 
         if self.config.to_bin && !self.skip_objcopy {
             self.ctx.objcopy_output_bin()?;
@@ -387,9 +399,9 @@ impl<'a> CargoBuilder<'a> {
 
     fn pick_executable_artifact(
         &self,
-        executable_artifacts: &[(String, PathBuf)],
+        executable_artifacts: &[(String, ResolvedCargoArtifact)],
         default_run: Option<&str>,
-    ) -> Option<PathBuf> {
+    ) -> Option<ResolvedCargoArtifact> {
         executable_artifacts
             .iter()
             .rev()

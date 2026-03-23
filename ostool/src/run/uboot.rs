@@ -97,53 +97,55 @@ pub struct RunUbootArgs {
     pub show_output: bool,
 }
 
-pub async fn run_uboot(ctx: AppContext, args: RunUbootArgs) -> anyhow::Result<()> {
-    // Build logic will be implemented here
-    let config_path = match args.config.clone() {
-        Some(path) => path,
-        None => ctx.paths.workspace.join(".uboot.toml"),
-    };
-
-    let config = if config_path.exists() {
-        println!("Using U-Boot config: {}", config_path.display());
-        let mut config_content = fs::read_to_string(&config_path)
-            .await
-            .with_path("failed to read file", &config_path)?;
-
-        config_content = replace_env_placeholders(&config_content)?;
-
-        let config: UbootConfig = toml::from_str(&config_content)
-            .with_context(|| format!("failed to parse U-Boot config: {}", config_path.display()))?;
-        config
-    } else {
-        let config = UbootConfig {
-            serial: "/dev/ttyUSB0".to_string(),
-            baud_rate: "115200".into(),
-            ..Default::default()
+impl AppContext {
+    pub async fn run_uboot(self, args: RunUbootArgs) -> anyhow::Result<()> {
+        let config_path = match args.config.clone() {
+            Some(path) => path,
+            None => self.paths.workspace.join(".uboot.toml"),
         };
 
-        fs::write(&config_path, toml::to_string_pretty(&config)?)
-            .await
-            .with_path("failed to write file", &config_path)?;
-        config
-    };
+        let config = if config_path.exists() {
+            println!("Using U-Boot config: {}", config_path.display());
+            let mut config_content = fs::read_to_string(&config_path)
+                .await
+                .with_path("failed to read file", &config_path)?;
 
-    let baud_rate = config.baud_rate.parse::<u32>().with_context(|| {
-        format!(
-            "baud_rate is not a valid integer in {}",
-            config_path.display()
-        )
-    })?;
+            config_content = replace_env_placeholders(&config_content)?;
 
-    let mut runner = Runner {
-        ctx,
-        config,
-        baud_rate,
-        success_regex: vec![],
-        fail_regex: vec![],
-    };
-    runner.run().await?;
-    Ok(())
+            let config: UbootConfig = toml::from_str(&config_content).with_context(|| {
+                format!("failed to parse U-Boot config: {}", config_path.display())
+            })?;
+            config
+        } else {
+            let config = UbootConfig {
+                serial: "/dev/ttyUSB0".to_string(),
+                baud_rate: "115200".into(),
+                ..Default::default()
+            };
+
+            fs::write(&config_path, toml::to_string_pretty(&config)?)
+                .await
+                .with_path("failed to write file", &config_path)?;
+            config
+        };
+
+        let baud_rate = config.baud_rate.parse::<u32>().with_context(|| {
+            format!(
+                "baud_rate is not a valid integer in {}",
+                config_path.display()
+            )
+        })?;
+
+        let mut runner = Runner {
+            ctx: self,
+            config,
+            baud_rate,
+            success_regex: vec![],
+            fail_regex: vec![],
+        };
+        runner.run().await?;
+        Ok(())
+    }
 }
 
 struct Runner {

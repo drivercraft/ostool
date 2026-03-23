@@ -10,7 +10,7 @@ use ostool::{
     ctx::{AppContext, OutputConfig, PathConfig},
     run::{
         qemu,
-        uboot::{self, RunUbootArgs},
+        uboot::RunUbootArgs,
     },
 };
 
@@ -143,24 +143,18 @@ async fn try_main() -> anyhow::Result<()> {
 
     match args.command {
         Some(SubCommands::Uboot(_)) => {
-            uboot::run_uboot(
-                app,
-                RunUbootArgs {
-                    config: args.config,
-                    show_output: args.show_output,
-                },
-            )
+            app.run_uboot(RunUbootArgs {
+                config: args.config,
+                show_output: args.show_output,
+            })
             .await?;
         }
         None => {
-            qemu::run_qemu(
-                app,
-                qemu::RunQemuArgs {
-                    qemu_config: args.config,
-                    dtb_dump: args.dtb_dump,
-                    show_output: args.show_output,
-                },
-            )
+            app.run_qemu(qemu::RunQemuArgs {
+                qemu_config: args.config,
+                dtb_dump: args.dtb_dump,
+                show_output: args.show_output,
+            })
             .await?;
         }
     }

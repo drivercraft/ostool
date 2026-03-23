@@ -45,6 +45,10 @@ pub struct OutputArtifacts {
     pub elf: Option<PathBuf>,
     /// Path to the converted binary file.
     pub bin: Option<PathBuf>,
+    /// Cargo-reported directory containing the original ELF artifact.
+    pub cargo_artifact_dir: Option<PathBuf>,
+    /// Directory containing the runtime artifact consumed by runners.
+    pub runtime_artifact_dir: Option<PathBuf>,
 }
 
 /// Path configuration grouping all path-related fields.
@@ -166,11 +170,23 @@ impl AppContext {
         Ok(res)
     }
 
-    /// Sets the ELF file path and detects its architecture.
+    /// Sets the ELF artifact path and synchronizes derived runtime metadata.
     ///
     /// This also reads the ELF file to detect the target CPU architecture.
-    pub async fn set_elf_path(&mut self, path: PathBuf) -> anyhow::Result<()> {
+    pub async fn set_elf_artifact_path(&mut self, path: PathBuf) -> anyhow::Result<()> {
+        let path = path
+            .canonicalize()
+            .with_path("failed to canonicalize file", &path)?;
+        let artifact_dir = path
+            .parent()
+            .ok_or_else(|| anyhow!("invalid ELF file path: {}", path.display()))?
+            .to_path_buf();
+
         self.paths.artifacts.elf = Some(path.clone());
+        self.paths.artifacts.bin = None;
+        self.paths.artifacts.cargo_artifact_dir = Some(artifact_dir.clone());
+        self.paths.artifacts.runtime_artifact_dir = Some(artifact_dir);
+
         let binary_data = fs::read(&path)
             .await
             .with_path("failed to read ELF file", &path)?;
@@ -178,6 +194,14 @@ impl AppContext {
             .with_context(|| format!("failed to parse ELF file: {}", path.display()))?;
         self.arch = Some(file.architecture());
         Ok(())
+    }
+
+    /// Sets the ELF file path and detects its architecture.
+    ///
+    /// This compatibility wrapper keeps older call sites working while also
+    /// updating artifact directories in the application context.
+    pub async fn set_elf_path(&mut self, path: PathBuf) -> anyhow::Result<()> {
+        self.set_elf_artifact_path(path).await
     }
 
     /// Strips debug symbols from the ELF file.
@@ -232,6 +256,9 @@ impl AppContext {
 
         objcopy.run()?;
         self.paths.artifacts.elf = Some(stripped_elf_path.clone());
+        self.paths.artifacts.bin = None;
+        self.paths.artifacts.cargo_artifact_dir = stripped_elf_path.parent().map(PathBuf::from);
+        self.paths.artifacts.runtime_artifact_dir = stripped_elf_path.parent().map(PathBuf::from);
 
         Ok(stripped_elf_path)
     }
@@ -306,6 +333,7 @@ impl AppContext {
 
         objcopy.run()?;
         self.paths.artifacts.bin = Some(bin_path.clone());
+        self.paths.artifacts.runtime_artifact_dir = bin_path.parent().map(PathBuf::from);
 
         Ok(bin_path)
     }
@@ -466,4 +494,35 @@ fn on_package_selected(app: &mut AppData, path: &str, selected: &str) {
         panic!("Not a string item");
     };
     *value = Some(selected.to_string());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppContext;
+
+    #[tokio::test]
+    async fn set_elf_artifact_path_updates_dirs_and_arch() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = std::env::current_exe().unwrap();
+        let copied = temp.path().join("sample-elf");
+        std::fs::copy(&source, &copied).unwrap();
+
+        let mut ctx = AppContext::default();
+        ctx.set_elf_artifact_path(copied.clone()).await.unwrap();
+
+        let expected_elf = copied.canonicalize().unwrap();
+        let expected_dir = expected_elf.parent().unwrap().to_path_buf();
+
+        assert_eq!(ctx.paths.artifacts.elf.as_ref(), Some(&expected_elf));
+        assert_eq!(
+            ctx.paths.artifacts.cargo_artifact_dir.as_ref(),
+            Some(&expected_dir)
+        );
+        assert_eq!(
+            ctx.paths.artifacts.runtime_artifact_dir.as_ref(),
+            Some(&expected_dir)
+        );
+        assert!(ctx.arch.is_some());
+        assert!(ctx.paths.artifacts.bin.is_none());
+    }
 }

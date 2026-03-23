@@ -147,24 +147,18 @@ async fn try_main() -> Result<()> {
 
                     match args.command {
                         RunSubCommands::Qemu(qemu_args) => {
-                            ostool::run::qemu::run_qemu(
-                                ctx,
-                                RunQemuArgs {
-                                    qemu_config: qemu_args.qemu_config,
-                                    dtb_dump: qemu_args.dtb_dump,
-                                    show_output: true,
-                                },
-                            )
+                            ctx.run_qemu(RunQemuArgs {
+                                qemu_config: qemu_args.qemu_config,
+                                dtb_dump: qemu_args.dtb_dump,
+                                show_output: true,
+                            })
                             .await?;
                         }
                         RunSubCommands::Uboot(uboot_args) => {
-                            ostool::run::uboot::run_uboot(
-                                ctx,
-                                RunUbootArgs {
-                                    config: uboot_args.uboot_config,
-                                    show_output: true,
-                                },
-                            )
+                            ctx.run_uboot(RunUbootArgs {
+                                config: uboot_args.uboot_config,
+                                show_output: true,
+                            })
                             .await?;
                         }
                     }

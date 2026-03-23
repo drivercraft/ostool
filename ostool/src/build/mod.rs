@@ -209,25 +209,21 @@ impl AppContext {
                 dtb_dump,
                 ..
             } => {
-                crate::run::qemu::run_qemu(
-                    self.clone(),
-                    RunQemuArgs {
+                self.clone()
+                    .run_qemu(RunQemuArgs {
                         qemu_config: qemu_config.clone(),
                         dtb_dump: *dtb_dump,
                         show_output: true,
-                    },
-                )
-                .await?;
+                    })
+                    .await?;
             }
             CargoRunnerKind::Uboot { uboot_config } => {
-                crate::run::uboot::run_uboot(
-                    self.clone(),
-                    RunUbootArgs {
+                self.clone()
+                    .run_uboot(RunUbootArgs {
                         config: uboot_config.clone(),
                         show_output: true,
-                    },
-                )
-                .await?;
+                    })
+                    .await?;
             }
         }
 

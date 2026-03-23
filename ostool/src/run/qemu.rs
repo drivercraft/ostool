@@ -104,27 +104,30 @@ struct QemuDefaultOverrides {
 /// # Errors
 ///
 /// Returns an error if QEMU fails to start or exits with an error.
-pub async fn run_qemu(ctx: AppContext, args: RunQemuArgs) -> anyhow::Result<()> {
-    run_qemu_with_defaults(ctx, args, QemuDefaultOverrides::default()).await
-}
+impl AppContext {
+    pub async fn run_qemu(self, args: RunQemuArgs) -> anyhow::Result<()> {
+        self.run_qemu_with_more_default_args(args, vec![], vec![], vec![])
+            .await
+    }
 
-pub async fn run_qemu_with_more_default_args(
-    ctx: AppContext,
-    run_args: RunQemuArgs,
-    args: Vec<String>,
-    success_regex: Vec<String>,
-    fail_regex: Vec<String>,
-) -> anyhow::Result<()> {
-    run_qemu_with_defaults(
-        ctx,
-        run_args,
-        QemuDefaultOverrides {
-            args,
-            success_regex,
-            fail_regex,
-        },
-    )
-    .await
+    pub async fn run_qemu_with_more_default_args(
+        self,
+        run_args: RunQemuArgs,
+        args: Vec<String>,
+        success_regex: Vec<String>,
+        fail_regex: Vec<String>,
+    ) -> anyhow::Result<()> {
+        run_qemu_with_defaults(
+            self,
+            run_args,
+            QemuDefaultOverrides {
+                args,
+                success_regex,
+                fail_regex,
+            },
+        )
+        .await
+    }
 }
 
 async fn run_qemu_with_defaults(
@@ -407,29 +410,17 @@ impl QemuRunner {
     }
 
     fn uefi_artifact_dir(&self, bin_path: &Path) -> anyhow::Result<PathBuf> {
-        let metadata = self.ctx.metadata()?;
-        let target_dir = metadata.target_directory.into_std_path_buf();
-        let target_dir = target_dir.canonicalize().unwrap_or(target_dir);
+        if let Some(dir) = &self.ctx.paths.artifacts.runtime_artifact_dir {
+            return Ok(dir.clone());
+        }
+
         let bin_path = bin_path
             .canonicalize()
             .with_path("failed to canonicalize file", bin_path)?;
-        let artifact_dir = match bin_path.strip_prefix(&target_dir) {
-            Ok(relative_bin_path) => {
-                let artifact_parent = relative_bin_path.parent().ok_or_else(|| {
-                    anyhow!(
-                        "invalid BIN path under target directory: {}",
-                        bin_path.display()
-                    )
-                })?;
-                target_dir.join(artifact_parent)
-            }
-            Err(_) => bin_path
-                .parent()
-                .ok_or_else(|| anyhow!("invalid BIN path: {}", bin_path.display()))?
-                .to_path_buf(),
-        };
-
-        Ok(artifact_dir)
+        bin_path
+            .parent()
+            .map(PathBuf::from)
+            .ok_or_else(|| anyhow!("invalid BIN path: {}", bin_path.display()))
     }
 
     async fn prepare_uefi_vars(&self, vars_template: &Path) -> anyhow::Result<PathBuf> {
@@ -649,8 +640,12 @@ pub(crate) fn resolve_qemu_config_path(
 
 #[cfg(test)]
 mod tests {
-    use super::{QemuDefaultOverrides, build_default_qemu_config, resolve_qemu_config_path};
+    use super::{
+        QemuConfig, QemuDefaultOverrides, QemuRunner, build_default_qemu_config,
+        resolve_qemu_config_path,
+    };
     use object::Architecture;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     use crate::ctx::{AppContext, PathConfig};
@@ -695,6 +690,27 @@ mod tests {
         );
 
         assert_eq!(config.args, vec!["-nographic", "-smp", "2"]);
+    }
+
+    #[test]
+    fn uefi_artifact_dir_prefers_runtime_artifact_dir() {
+        let runtime_dir = PathBuf::from("/tmp/ostool-runtime");
+        let mut ctx = AppContext::default();
+        ctx.paths.artifacts.runtime_artifact_dir = Some(runtime_dir.clone());
+
+        let runner = QemuRunner {
+            ctx,
+            config: QemuConfig::default(),
+            args: vec![],
+            dtbdump: false,
+            success_regex: vec![],
+            fail_regex: vec![],
+        };
+
+        let resolved = runner
+            .uefi_artifact_dir(PathBuf::from("/tmp/ignored/kernel.bin").as_path())
+            .unwrap();
+        assert_eq!(resolved, runtime_dir);
     }
 
     // === QEMU 配置路径解析测试 ===
