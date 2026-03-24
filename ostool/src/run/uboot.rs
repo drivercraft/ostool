@@ -88,6 +88,8 @@ pub struct Net {
     pub board_ip: Option<String>,
     pub gatewayip: Option<String>,
     pub netmask: Option<String>,
+    /// Use an existing TFTP root directory directly. On Linux this skips all
+    /// tftpd-hpa detection, installation, config, and service checks.
     pub tftp_dir: Option<String>,
 }
 
@@ -154,6 +156,13 @@ struct Runner<'a> {
     success_regex: Vec<regex::Regex>,
     fail_regex: Vec<regex::Regex>,
     baud_rate: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NetworkBootRequest {
+    bootfile: String,
+    bootcmd: String,
+    ipaddr: Option<String>,
 }
 
 impl Runner<'_> {
@@ -300,12 +309,46 @@ impl Runner<'_> {
             .config
             .net
             .as_ref()
-            .and_then(|net| net.tftp_dir.as_ref())
-            .is_some();
+            .and_then(|net| net.tftp_dir.as_deref())
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from);
 
-        if !is_tftp && let Some(ip) = ip_string.as_ref() {
+        #[cfg(target_os = "linux")]
+        let linux_system_tftp = if let Some(directory) = is_tftp.clone() {
+            info!(
+                "Linux detected: using net.tftp_dir={} and skipping all tftpd-hpa checks",
+                directory.display()
+            );
+            Some(tftp::TftpdHpaConfig {
+                username: None,
+                directory,
+                address: None,
+                options: None,
+            })
+        } else if self.config.net.is_some() && ip_string.is_some() {
+            Some(tftp::ensure_linux_tftpd_hpa()?)
+        } else {
+            None
+        };
+
+        let mut builtin_tftp_started = false;
+
+        #[cfg(not(target_os = "linux"))]
+        if is_tftp.is_none() && let Some(ip) = ip_string.as_ref() {
             info!("TFTP server IP: {}", ip);
             tftp::run_tftp_server(self.tool)?;
+            builtin_tftp_started = true;
+        }
+
+        #[cfg(target_os = "linux")]
+        if linux_system_tftp.is_none()
+            && is_tftp.is_none()
+            && let Some(ip) = ip_string.as_ref()
+        {
+            info!("TFTP server IP: {}", ip);
+            tftp::run_tftp_server(self.tool)?;
+            builtin_tftp_started = true;
         }
 
         info!(
@@ -431,7 +474,19 @@ impl Runner<'_> {
             )
             .await?;
 
-        let fitname = if is_tftp {
+        #[cfg(target_os = "linux")]
+        let mut linux_system_tftp_active = false;
+
+        #[cfg(target_os = "linux")]
+        let fitname = if let Some(system_tftp) = linux_system_tftp.as_ref() {
+            let prepared = tftp::stage_linux_fit_image(&fitimage, &system_tftp.directory)?;
+            linux_system_tftp_active = true;
+            info!(
+                "Staged FIT image to: {}",
+                prepared.absolute_fit_path.display()
+            );
+            prepared.relative_filename
+        } else if is_tftp.is_some() {
             let tftp_dir = self
                 .config
                 .net
@@ -454,17 +509,56 @@ impl Runner<'_> {
             name.to_string()
         };
 
-        let bootcmd =
-            if let Some(ref board_ip) = self.config.net.as_ref().and_then(|e| e.board_ip.clone()) {
+        #[cfg(not(target_os = "linux"))]
+        let fitname = if is_tftp.is_some() {
+            let tftp_dir = self
+                .config
+                .net
+                .as_ref()
+                .and_then(|net| net.tftp_dir.as_ref())
+                .unwrap();
+
+            let fitimage = fitimage.file_name().unwrap();
+            let tftp_path = PathBuf::from(tftp_dir).join(fitimage);
+
+            info!("Setting TFTP file path: {}", tftp_path.display());
+            tftp_path.display().to_string()
+        } else {
+            let name = fitimage
+                .file_name()
+                .and_then(|n| n.to_str())
+                .ok_or(anyhow!("Invalid fitimage filename"))?;
+
+            info!("Using fitimage filename: {}", name);
+            name.to_string()
+        };
+
+        #[cfg(target_os = "linux")]
+        let network_transfer_ready =
+            linux_system_tftp_active || is_tftp.is_some() || builtin_tftp_started;
+
+        #[cfg(not(target_os = "linux"))]
+        let network_transfer_ready = is_tftp.is_some() || builtin_tftp_started;
+
+        let bootcmd = if let Some(request) = build_network_boot_request(
+            self.config
+                .net
+                .as_ref()
+                .and_then(|net| net.board_ip.as_deref()),
+            net_ok,
+            network_transfer_ready,
+            &fitname,
+        ) {
+            if let Some(ref board_ip) = request.ipaddr {
                 uboot.set_env("ipaddr", board_ip)?;
-                format!("tftp {fitname} && bootm",)
-            } else if net_ok {
-                format!("dhcp {fitname} && bootm",)
-            } else {
-                info!("No TFTP config, using loady to upload FIT image...");
-                Self::uboot_loady(&mut uboot, fit_loadaddr as usize, fitimage);
-                "bootm".to_string()
-            };
+            }
+            uboot.set_env("bootfile", &request.bootfile)?;
+            request.bootcmd
+        } else {
+            info!("No TFTP config, using loady to upload FIT image...");
+            Self::uboot_loady(&mut uboot, fit_loadaddr as usize, fitimage);
+            "bootm".to_string()
+        };
 
         info!("Booting kernel with command: {}", bootcmd);
         uboot.cmd_without_reply(&bootcmd)?;
@@ -614,5 +708,73 @@ impl Runner<'_> {
 
         println!("{}", res);
         println!("send ok");
+    }
+}
+
+fn build_network_boot_request(
+    board_ip: Option<&str>,
+    net_ok: bool,
+    network_transfer_ready: bool,
+    fitname: &str,
+) -> Option<NetworkBootRequest> {
+    if !network_transfer_ready {
+        return None;
+    }
+
+    if let Some(board_ip) = board_ip {
+        return Some(NetworkBootRequest {
+            bootfile: fitname.to_string(),
+            bootcmd: format!("tftp {fitname} && bootm"),
+            ipaddr: Some(board_ip.to_string()),
+        });
+    }
+
+    if net_ok {
+        return Some(NetworkBootRequest {
+            bootfile: fitname.to_string(),
+            bootcmd: format!("dhcp {fitname} && bootm"),
+            ipaddr: None,
+        });
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_network_boot_request;
+
+    #[test]
+    fn network_boot_request_uses_same_filename_for_bootfile() {
+        let request = build_network_boot_request(
+            Some("192.168.1.10"),
+            false,
+            true,
+            "ostool/home/user/workspace/target/image.fit",
+        )
+        .unwrap();
+
+        assert_eq!(
+            request.bootfile,
+            "ostool/home/user/workspace/target/image.fit"
+        );
+        assert_eq!(
+            request.bootcmd,
+            "tftp ostool/home/user/workspace/target/image.fit && bootm"
+        );
+    }
+
+    #[test]
+    fn network_boot_request_requires_ready_transport() {
+        assert!(
+            build_network_boot_request(Some("192.168.1.10"), false, false, "image.fit").is_none()
+        );
+        assert!(build_network_boot_request(None, false, true, "image.fit").is_none());
+        assert_eq!(
+            build_network_boot_request(None, true, true, "image.fit")
+                .unwrap()
+                .bootcmd,
+            "dhcp image.fit && bootm"
+        );
     }
 }
