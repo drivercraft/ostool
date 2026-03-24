@@ -40,6 +40,13 @@ pub mod build;
 
 /// Application context and state management.
 pub mod ctx;
+
+/// Custom file logger for ostool.
+///
+/// Provides a file-based logger that writes all log output to
+/// `{workspace_root}/target/ostool.ans`.
+pub mod logger;
+
 mod tool;
 
 /// TUI-based menu configuration system.
@@ -69,4 +76,4 @@ extern crate log;
 extern crate anyhow;
 
 pub use jkconfig::cursive;
-pub use tool::{Tool, ToolConfig};
+pub use tool::{ManifestContext, Tool, ToolConfig, resolve_manifest_context};

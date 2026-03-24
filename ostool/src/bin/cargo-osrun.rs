@@ -2,11 +2,15 @@ use std::{
     env,
     path::PathBuf,
     process::{ExitCode, exit},
+    sync::OnceLock,
 };
 
 use clap::{Parser, Subcommand};
-use log::{LevelFilter, debug};
+use colored::Colorize as _;
+use log::debug;
 use ostool::{
+    logger,
+    resolve_manifest_context,
     Tool, ToolConfig,
     run::{qemu, uboot::RunUbootArgs},
 };
@@ -70,6 +74,8 @@ enum SubCommands {
     Uboot(CliUboot),
 }
 
+static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
+
 #[derive(Debug, Parser, Clone)]
 struct CliUboot {
     #[arg(allow_hyphen_values = true)]
@@ -81,41 +87,45 @@ async fn main() -> ExitCode {
     match try_main().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("Error: {err:#}");
-            eprintln!("\nTrace:\n{err:?}");
+            report_error(&err);
             ExitCode::FAILURE
         }
     }
 }
 
 async fn try_main() -> anyhow::Result<()> {
-    env_logger::builder()
-        .format_module_path(false)
-        .filter_level(LevelFilter::Info)
-        .parse_default_env()
-        .init();
-
     let args = RunnerArgs::parse();
+    if env::var("CARGO").is_err() {
+        println!(
+            "{}",
+            "This binary may only be called via `cargo ndk-runner`."
+                .red()
+                .bold()
+        );
+        exit(1);
+    }
 
+    let manifest_dir: PathBuf = env::var("CARGO_MANIFEST_DIR")?.into();
+    let manifest = manifest_dir.join("Cargo.toml");
+    let manifest = resolve_manifest_context(Some(manifest))?;
+    let log_path = logger::init_file_logger(&manifest.workspace_dir)?;
+    let _ = LOG_PATH.set(log_path.clone());
+    debug!(
+        "Logging initialized at {} for manifest {}",
+        log_path.display(),
+        manifest.manifest_path.display()
+    );
     debug!("Parsed arguments: {:#?}", args);
 
     if args.no_run {
         exit(0);
     }
 
-    if env::var("CARGO").is_err() {
-        eprintln!("This binary may only be called via `cargo ndk-runner`.");
-        exit(1);
-    }
-
-    let manifest_dir: PathBuf = env::var("CARGO_MANIFEST_DIR")?.into();
-    let manifest = manifest_dir.join("Cargo.toml");
-
     let bin_dir: Option<PathBuf> = args.bin_dir.map(PathBuf::from);
     let build_dir: Option<PathBuf> = args.build_dir.map(PathBuf::from);
 
     let mut tool = Tool::new(ToolConfig {
-        manifest: Some(manifest),
+        manifest: Some(manifest.manifest_path),
         build_dir,
         bin_dir,
         debug: args.debug,
@@ -147,4 +157,19 @@ async fn try_main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn report_error(err: &anyhow::Error) {
+    log::error!("{err:#}");
+    log::error!("Trace:\n{err:?}");
+
+    println!("{}", format!("Error: {err:#}").red().bold());
+    println!("{}", format!("\nTrace:\n{err:?}").red());
+
+    if let Some(log_path) = LOG_PATH.get() {
+        println!(
+            "{}",
+            format!("Log file: {}", log_path.display()).yellow().bold()
+        );
+    }
 }

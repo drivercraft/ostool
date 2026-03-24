@@ -1,4 +1,9 @@
-use std::{env::current_dir, ffi::OsStr, path::PathBuf, sync::Arc};
+use std::{
+    env::current_dir,
+    ffi::OsStr,
+    path::PathBuf,
+    sync::Arc,
+};
 
 use anyhow::{Context, anyhow, bail};
 use cargo_metadata::Metadata;
@@ -44,31 +49,24 @@ pub struct Tool {
     pub(crate) ctx: AppContext,
 }
 
+/// Resolved Cargo manifest and workspace paths derived from `cargo metadata`.
+#[derive(Clone, Debug)]
+pub struct ManifestContext {
+    pub manifest_path: PathBuf,
+    pub manifest_dir: PathBuf,
+    pub workspace_dir: PathBuf,
+}
+
 impl Tool {
     /// Creates a new tool from the provided configuration.
     pub fn new(config: ToolConfig) -> anyhow::Result<Self> {
-        let manifest_path = resolve_manifest_path(config.manifest.clone())?;
-        let manifest_dir = manifest_path
-            .parent()
-            .ok_or_else(|| anyhow!("manifest has no parent: {}", manifest_path.display()))?
-            .to_path_buf();
-
-        let metadata = cargo_metadata::MetadataCommand::new()
-            .manifest_path(&manifest_path)
-            .no_deps()
-            .exec()
-            .with_context(|| {
-                format!(
-                    "failed to load cargo metadata from {}",
-                    manifest_path.display()
-                )
-            })?;
+        let manifest = resolve_manifest_context(config.manifest.clone())?;
 
         Ok(Self {
             config,
-            manifest_path,
-            manifest_dir,
-            workspace_dir: PathBuf::from(metadata.workspace_root.as_std_path()),
+            manifest_path: manifest.manifest_path,
+            manifest_dir: manifest.manifest_dir,
+            workspace_dir: manifest.workspace_dir,
             ctx: AppContext::default(),
         })
     }
@@ -431,6 +429,31 @@ fn on_package_selected(app: &mut AppData, path: &str, selected: &str) {
     *value = Some(selected.to_string());
 }
 
+pub fn resolve_manifest_context(input: Option<PathBuf>) -> anyhow::Result<ManifestContext> {
+    let manifest_path = resolve_manifest_path(input)?;
+    let manifest_dir = manifest_path
+        .parent()
+        .ok_or_else(|| anyhow!("manifest has no parent: {}", manifest_path.display()))?
+        .to_path_buf();
+
+    let metadata = cargo_metadata::MetadataCommand::new()
+        .manifest_path(&manifest_path)
+        .no_deps()
+        .exec()
+        .with_context(|| {
+            format!(
+                "failed to load cargo metadata from {}",
+                manifest_path.display()
+            )
+        })?;
+
+    Ok(ManifestContext {
+        manifest_path,
+        manifest_dir,
+        workspace_dir: PathBuf::from(metadata.workspace_root.as_std_path()),
+    })
+}
+
 fn resolve_manifest_path(input: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     let path = match input {
         Some(path) => path,
@@ -461,7 +484,7 @@ fn resolve_manifest_path(input: Option<PathBuf>) -> anyhow::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Tool, ToolConfig};
+    use super::{Tool, ToolConfig, resolve_manifest_context};
 
     #[tokio::test]
     async fn set_elf_artifact_path_updates_dirs_and_arch() {
@@ -499,5 +522,30 @@ mod tests {
         );
         assert!(tool.ctx.arch.is_some());
         assert!(tool.ctx.artifacts.bin.is_none());
+    }
+
+    #[test]
+    fn resolve_manifest_context_uses_workspace_root() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\"]\nresolver = \"3\"\n",
+        )
+        .unwrap();
+
+        let app_dir = temp.path().join("app");
+        std::fs::create_dir_all(app_dir.join("src")).unwrap();
+        std::fs::write(
+            app_dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(app_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let manifest = resolve_manifest_context(Some(app_dir.clone())).unwrap();
+
+        assert_eq!(manifest.manifest_path, app_dir.join("Cargo.toml"));
+        assert_eq!(manifest.manifest_dir, app_dir);
+        assert_eq!(manifest.workspace_dir, temp.path());
     }
 }

@@ -1,10 +1,13 @@
-use std::{path::PathBuf, process::ExitCode};
+use std::{path::PathBuf, process::ExitCode, sync::OnceLock};
 
 use anyhow::Result;
 use clap::*;
+use colored::Colorize as _;
 
 use log::info;
 use ostool::{
+    logger,
+    resolve_manifest_context,
     Tool, ToolConfig,
     build::{self, CargoRunnerKind},
     menuconfig::{MenuConfigHandler, MenuConfigMode},
@@ -19,6 +22,8 @@ struct Cli {
     #[command(subcommand)]
     command: SubCommands,
 }
+
+static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Subcommand)]
 enum SubCommands {
@@ -78,23 +83,22 @@ async fn main() -> ExitCode {
     match try_main().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("Error: {err:#}");
-            eprintln!("\nTrace:\n{err:?}");
+            report_error(&err);
             ExitCode::FAILURE
         }
     }
 }
 
 async fn try_main() -> Result<()> {
-    #[cfg(not(feature = "ui-log"))]
-    {
-        env_logger::builder()
-            .filter_level(log::LevelFilter::Info)
-            .parse_default_env()
-            .init();
-    }
-
     let cli = Cli::parse();
+    let manifest = resolve_manifest_context(cli.manifest.clone())?;
+    let log_path = logger::init_file_logger(&manifest.workspace_dir)?;
+    let _ = LOG_PATH.set(log_path.clone());
+    info!(
+        "Logging initialized at {} for manifest {}",
+        log_path.display(),
+        manifest.manifest_path.display()
+    );
 
     let mut tool = Tool::new(ToolConfig {
         manifest: cli.manifest,
@@ -161,6 +165,21 @@ async fn try_main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn report_error(err: &anyhow::Error) {
+    log::error!("{err:#}");
+    log::error!("Trace:\n{err:?}");
+
+    println!("{}", format!("Error: {err:#}").red().bold());
+    println!("{}", format!("\nTrace:\n{err:?}").red());
+
+    if let Some(log_path) = LOG_PATH.get() {
+        println!(
+            "{}",
+            format!("Log file: {}", log_path.display()).yellow().bold()
+        );
+    }
 }
 
 impl From<QemuArgs> for RunQemuArgs {
