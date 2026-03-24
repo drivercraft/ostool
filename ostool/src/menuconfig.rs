@@ -14,7 +14,7 @@ use clap::ValueEnum;
 use log::info;
 use tokio::fs;
 
-use crate::ctx::AppContext;
+use crate::Tool;
 use crate::run::qemu::QemuConfig;
 use crate::run::uboot::UbootConfig;
 use crate::utils::PathResultExt;
@@ -36,43 +36,38 @@ impl MenuConfigHandler {
     ///
     /// # Arguments
     ///
-    /// * `ctx` - The application context.
+    /// * `tool` - The tool instance.
     /// * `mode` - Optional mode specifying which configuration to edit.
     ///   If `None`, shows the default build configuration menu.
     ///
     /// # Errors
     ///
     /// Returns an error if the configuration cannot be loaded or saved.
-    pub async fn handle_menuconfig(
-        ctx: &mut AppContext,
-        mode: Option<MenuConfigMode>,
-    ) -> Result<()> {
+    pub async fn handle_menuconfig(tool: &mut Tool, mode: Option<MenuConfigMode>) -> Result<()> {
         match mode {
             Some(MenuConfigMode::Qemu) => {
-                Self::handle_qemu_config(ctx).await?;
+                Self::handle_qemu_config(tool).await?;
             }
             Some(MenuConfigMode::Uboot) => {
-                Self::handle_uboot_config(ctx).await?;
+                Self::handle_uboot_config(tool).await?;
             }
             None => {
-                // 默认模式：显示当前构建配置
-                Self::handle_default_config(ctx).await?;
+                Self::handle_default_config(tool).await?;
             }
         }
         Ok(())
     }
 
-    async fn handle_default_config(ctx: &mut AppContext) -> Result<()> {
-        ctx.prepare_build_config(None, true).await?;
+    async fn handle_default_config(tool: &mut Tool) -> Result<()> {
+        tool.prepare_build_config(None, true).await?;
 
         Ok(())
     }
 
-    async fn handle_qemu_config(ctx: &mut AppContext) -> Result<()> {
+    async fn handle_qemu_config(tool: &mut Tool) -> Result<()> {
         info!("配置 QEMU 运行参数");
 
-        // 使用来自 qemu 模块的共享解析器
-        let config_path = crate::run::qemu::resolve_qemu_config_path(ctx, None)?;
+        let config_path = crate::run::qemu::resolve_qemu_config_path(tool, None)?;
 
         if config_path.exists() {
             println!("\n当前 QEMU 配置文件: {}", config_path.display());
@@ -96,13 +91,13 @@ impl MenuConfigHandler {
         Ok(())
     }
 
-    async fn handle_uboot_config(ctx: &mut AppContext) -> Result<()> {
+    async fn handle_uboot_config(tool: &mut Tool) -> Result<()> {
         info!("配置 U-Boot 运行参数");
 
         println!("=== U-Boot 配置模式 ===");
 
         // 检查是否存在 U-Boot 配置文件
-        let uboot_config_path = ctx.paths.workspace.join(".uboot.toml");
+        let uboot_config_path = tool.workspace_dir().join(".uboot.toml");
         if uboot_config_path.exists() {
             println!("\n当前 U-Boot 配置文件: {}", uboot_config_path.display());
             // 这里可以读取并显示当前的 U-Boot 配置

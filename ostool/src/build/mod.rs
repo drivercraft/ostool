@@ -12,7 +12,7 @@
 //!
 //! ```rust,no_run
 //! use ostool::build::config::{BuildConfig, BuildSystem, Cargo};
-//! use ostool::ctx::AppContext;
+//! use ostool::Tool;
 //!
 //! // Build configurations are typically loaded from TOML files
 //! // See .build.toml for example configuration format
@@ -20,16 +20,13 @@
 
 use std::path::PathBuf;
 
-use anyhow::Context;
-
 use crate::{
+    Tool,
     build::{
         cargo_builder::CargoBuilder,
         config::{Cargo, Custom},
     },
-    ctx::AppContext,
     run::{qemu::RunQemuArgs, uboot::RunUbootArgs},
-    utils::PathResultExt,
 };
 
 /// Cargo builder implementation for building projects.
@@ -61,7 +58,7 @@ pub enum CargoRunnerKind {
     },
 }
 
-impl AppContext {
+impl Tool {
     /// Builds the project using the specified build configuration.
     ///
     /// # Arguments
@@ -145,54 +142,7 @@ impl AppContext {
         config: &Cargo,
         runner: &CargoRunnerKind,
     ) -> anyhow::Result<()> {
-        let build_config_path = self.build_config_path.clone();
-
-        let normalize = |dir: &PathBuf| -> anyhow::Result<PathBuf> {
-            let bin_path = if dir.is_relative() {
-                self.paths.manifest.join(dir)
-            } else {
-                dir.clone()
-            };
-
-            match bin_path.canonicalize() {
-                Ok(path) => Ok(path),
-                Err(file_err) => {
-                    let Some(parent) = bin_path.parent() else {
-                        return Err(file_err).with_path("failed to canonicalize path", &bin_path);
-                    };
-                    let Some(file_name) = bin_path.file_name() else {
-                        return Err(file_err).with_path("failed to canonicalize path", &bin_path);
-                    };
-
-                    parent
-                        .canonicalize()
-                        .map(|parent_dir| parent_dir.join(file_name))
-                        .with_path("failed to canonicalize parent path", parent)
-                        .with_context(|| {
-                            format!("failed to normalize path: {}", bin_path.display())
-                        })
-                }
-            }
-        };
-
-        let build_dir = self
-            .paths
-            .config
-            .build_dir
-            .as_ref()
-            .map(&normalize)
-            .transpose()?;
-
-        let bin_dir = self
-            .paths
-            .config
-            .bin_dir
-            .as_ref()
-            .map(normalize)
-            .transpose()?;
-
-        self.paths.config.build_dir = build_dir;
-        self.paths.config.bin_dir = bin_dir;
+        let build_config_path = self.ctx.build_config_path.clone();
 
         let debug = matches!(runner, CargoRunnerKind::Qemu { debug: true, .. });
 
@@ -209,21 +159,19 @@ impl AppContext {
                 dtb_dump,
                 ..
             } => {
-                self.clone()
-                    .run_qemu(RunQemuArgs {
-                        qemu_config: qemu_config.clone(),
-                        dtb_dump: *dtb_dump,
-                        show_output: true,
-                    })
-                    .await?;
+                self.run_qemu(RunQemuArgs {
+                    qemu_config: qemu_config.clone(),
+                    dtb_dump: *dtb_dump,
+                    show_output: true,
+                })
+                .await?;
             }
             CargoRunnerKind::Uboot { uboot_config } => {
-                self.clone()
-                    .run_uboot(RunUbootArgs {
-                        config: uboot_config.clone(),
-                        show_output: true,
-                    })
-                    .await?;
+                self.run_uboot(RunUbootArgs {
+                    config: uboot_config.clone(),
+                    show_output: true,
+                })
+                .await?;
             }
         }
 

@@ -18,7 +18,7 @@ use tokio::fs;
 use uboot_shell::UbootShell;
 
 use crate::{
-    ctx::AppContext,
+    Tool,
     run::{
         output_matcher::{ByteStreamMatcher, MATCH_DRAIN_DURATION, StreamMatchKind},
         tftp,
@@ -97,11 +97,11 @@ pub struct RunUbootArgs {
     pub show_output: bool,
 }
 
-impl AppContext {
-    pub async fn run_uboot(self, args: RunUbootArgs) -> anyhow::Result<()> {
+impl Tool {
+    pub async fn run_uboot(&mut self, args: RunUbootArgs) -> anyhow::Result<()> {
         let config_path = match args.config.clone() {
             Some(path) => path,
-            None => self.paths.workspace.join(".uboot.toml"),
+            None => self.workspace_dir().join(".uboot.toml"),
         };
 
         let config = if config_path.exists() {
@@ -137,7 +137,7 @@ impl AppContext {
         })?;
 
         let mut runner = Runner {
-            ctx: self,
+            tool: self,
             config,
             baud_rate,
             success_regex: vec![],
@@ -148,15 +148,15 @@ impl AppContext {
     }
 }
 
-struct Runner {
-    ctx: AppContext,
+struct Runner<'a> {
+    tool: &'a mut Tool,
     config: UbootConfig,
     success_regex: Vec<regex::Regex>,
     fail_regex: Vec<regex::Regex>,
     baud_rate: u32,
 }
 
-impl Runner {
+impl Runner<'_> {
     /// 生成压缩的 FIT image 包含 kernel 和 FDT
     ///
     /// # 参数
@@ -193,7 +193,7 @@ impl Runner {
             Byte::from(kernel_data.len())
         );
 
-        let arch = match self.ctx.arch.as_ref().unwrap() {
+        let arch = match self.tool.ctx.arch.as_ref().unwrap() {
             object::Architecture::Aarch64 => "arm64",
             object::Architecture::Arm => "arm",
             object::Architecture::LoongArch64 => "loongarch64",
@@ -272,7 +272,7 @@ impl Runner {
         if let Some(ref cmd) = self.config.board_power_off_cmd
             && !cmd.trim().is_empty()
         {
-            let _ = self.ctx.shell_run_cmd(cmd);
+            let _ = self.tool.shell_run_cmd(cmd);
             info!("Board powered off");
         }
         res
@@ -280,11 +280,11 @@ impl Runner {
 
     async fn _run(&mut self) -> anyhow::Result<()> {
         self.preper_regex()?;
-        self.ctx.objcopy_output_bin()?;
+        self.tool.objcopy_output_bin()?;
 
         let kernel = self
+            .tool
             .ctx
-            .paths
             .artifacts
             .bin
             .as_ref()
@@ -305,7 +305,7 @@ impl Runner {
 
         if !is_tftp && let Some(ip) = ip_string.as_ref() {
             info!("TFTP server IP: {}", ip);
-            tftp::run_tftp_server(&self.ctx)?;
+            tftp::run_tftp_server(self.tool)?;
         }
 
         info!(
@@ -330,7 +330,7 @@ impl Runner {
         if let Some(cmd) = self.config.board_reset_cmd.clone()
             && !cmd.trim().is_empty()
         {
-            self.ctx.shell_run_cmd(&cmd)?;
+            self.tool.shell_run_cmd(&cmd)?;
         }
 
         let mut net_ok = false;

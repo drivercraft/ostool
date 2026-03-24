@@ -7,11 +7,8 @@ use std::{
 use clap::{Parser, Subcommand};
 use log::{LevelFilter, debug};
 use ostool::{
-    ctx::{AppContext, OutputConfig, PathConfig},
-    run::{
-        qemu,
-        uboot::RunUbootArgs,
-    },
+    Tool, ToolConfig,
+    run::{qemu, uboot::RunUbootArgs},
 };
 
 #[derive(Debug, Parser, Clone)]
@@ -112,45 +109,35 @@ async fn try_main() -> anyhow::Result<()> {
     }
 
     let manifest_dir: PathBuf = env::var("CARGO_MANIFEST_DIR")?.into();
-
-    let workspace_folder = match env::var("WORKSPACE_FOLDER") {
-        Ok(dir) => PathBuf::from(dir),
-        Err(_) => manifest_dir.clone(),
-    };
+    let manifest = manifest_dir.join("Cargo.toml");
 
     let bin_dir: Option<PathBuf> = args.bin_dir.map(PathBuf::from);
     let build_dir: Option<PathBuf> = args.build_dir.map(PathBuf::from);
 
-    let output_config = OutputConfig { build_dir, bin_dir };
+    let mut tool = Tool::new(ToolConfig {
+        manifest: Some(manifest),
+        build_dir,
+        bin_dir,
+        debug: args.debug,
+    })?;
 
-    let mut app = AppContext {
-        paths: PathConfig {
-            workspace: workspace_folder,
-            manifest: manifest_dir,
-            config: output_config,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
+    tool.set_elf_path(args.elf).await?;
+    tool.objcopy_elf()?;
 
-    app.set_elf_path(args.elf).await?;
-    app.objcopy_elf()?;
-
-    app.debug = args.debug;
     if args.to_bin {
-        app.objcopy_output_bin()?;
+        tool.objcopy_output_bin()?;
     }
 
     match args.command {
         Some(SubCommands::Uboot(_)) => {
-            app.run_uboot(RunUbootArgs {
+            tool.run_uboot(RunUbootArgs {
                 config: args.config,
                 show_output: args.show_output,
             })
             .await?;
         }
         None => {
-            app.run_qemu(qemu::RunQemuArgs {
+            tool.run_qemu(qemu::RunQemuArgs {
                 qemu_config: args.config,
                 dtb_dump: args.dtb_dump,
                 show_output: args.show_output,

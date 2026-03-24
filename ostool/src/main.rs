@@ -1,12 +1,12 @@
-use std::{env::current_dir, path::PathBuf, process::ExitCode};
+use std::{path::PathBuf, process::ExitCode};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::*;
 
 use log::info;
 use ostool::{
+    Tool, ToolConfig,
     build::{self, CargoRunnerKind},
-    ctx::AppContext,
     menuconfig::{MenuConfigHandler, MenuConfigMode},
     run::{qemu::RunQemuArgs, uboot::RunUbootArgs},
 };
@@ -15,7 +15,7 @@ use ostool::{
 #[command(version, about, long_about = None)]
 struct Cli {
     #[arg(short, long)]
-    workdir: Option<PathBuf>,
+    manifest: Option<PathBuf>,
     #[command(subcommand)]
     command: SubCommands,
 }
@@ -96,28 +96,17 @@ async fn try_main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    let pwd = current_dir().context("failed to get current working directory")?;
-
-    let workspace_folder = match cli.workdir {
-        Some(dir) => dir,
-        None => pwd.clone(),
-    };
-
-    let mut ctx = AppContext {
-        paths: ostool::ctx::PathConfig {
-            workspace: workspace_folder.clone(),
-            manifest: workspace_folder.clone(),
-            ..Default::default()
-        },
+    let mut tool = Tool::new(ToolConfig {
+        manifest: cli.manifest,
         ..Default::default()
-    };
+    })?;
 
     match cli.command {
         SubCommands::Build { config } => {
-            ctx.build(config).await?;
+            tool.build(config).await?;
         }
         SubCommands::Run(args) => {
-            let config = ctx.prepare_build_config(args.config, false).await?;
+            let config = tool.prepare_build_config(args.config, false).await?;
             match config.system {
                 build::config::BuildSystem::Cargo(config) => {
                     let kind = match args.command {
@@ -130,24 +119,25 @@ async fn try_main() -> Result<()> {
                             uboot_config: uboot_args.uboot_config,
                         },
                     };
-                    ctx.cargo_run(&config, &kind).await?;
+                    tool.cargo_run(&config, &kind).await?;
                 }
                 build::config::BuildSystem::Custom(custom_cfg) => {
-                    ctx.shell_run_cmd(&custom_cfg.build_cmd)?;
-                    ctx.set_elf_path(custom_cfg.elf_path.clone().into()).await?;
+                    tool.shell_run_cmd(&custom_cfg.build_cmd)?;
+                    tool.set_elf_path(custom_cfg.elf_path.clone().into())
+                        .await?;
                     info!(
                         "ELF {:?}: {}",
-                        ctx.arch,
-                        ctx.paths.artifacts.elf.as_ref().unwrap().display()
+                        tool.ctx().arch,
+                        tool.ctx().artifacts.elf.as_ref().unwrap().display()
                     );
 
                     if custom_cfg.to_bin {
-                        ctx.objcopy_output_bin()?;
+                        tool.objcopy_output_bin()?;
                     }
 
                     match args.command {
                         RunSubCommands::Qemu(qemu_args) => {
-                            ctx.run_qemu(RunQemuArgs {
+                            tool.run_qemu(RunQemuArgs {
                                 qemu_config: qemu_args.qemu_config,
                                 dtb_dump: qemu_args.dtb_dump,
                                 show_output: true,
@@ -155,7 +145,7 @@ async fn try_main() -> Result<()> {
                             .await?;
                         }
                         RunSubCommands::Uboot(uboot_args) => {
-                            ctx.run_uboot(RunUbootArgs {
+                            tool.run_uboot(RunUbootArgs {
                                 config: uboot_args.uboot_config,
                                 show_output: true,
                             })
@@ -166,7 +156,7 @@ async fn try_main() -> Result<()> {
             }
         }
         SubCommands::Menuconfig { mode } => {
-            MenuConfigHandler::handle_menuconfig(&mut ctx, mode).await?;
+            MenuConfigHandler::handle_menuconfig(&mut tool, mode).await?;
         }
     }
 

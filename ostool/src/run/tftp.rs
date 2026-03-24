@@ -17,7 +17,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use colored::Colorize as _;
 use tftpd::{Config, Server};
 
-use crate::ctx::AppContext;
+use crate::Tool;
 
 /// Starts a TFTP server serving files from the build output directory.
 ///
@@ -26,16 +26,16 @@ use crate::ctx::AppContext;
 ///
 /// # Arguments
 ///
-/// * `app` - The application context containing the file paths.
+/// * `tool` - The tool containing the file paths.
 ///
 /// # Errors
 ///
 /// Returns an error if the server fails to start (e.g., port already in use
 /// or insufficient permissions).
-pub fn run_tftp_server(app: &AppContext) -> anyhow::Result<()> {
+pub fn run_tftp_server(tool: &Tool) -> anyhow::Result<()> {
     // TFTP server implementation goes here
-    let mut file_dir = app.paths.manifest.clone();
-    if let Some(elf_path) = &app.paths.artifacts.elf {
+    let mut file_dir = tool.manifest_dir().clone();
+    if let Some(elf_path) = &tool.ctx().artifacts.elf {
         file_dir = elf_path
             .parent()
             .ok_or(anyhow!("{} no parent dir", elf_path.display()))?

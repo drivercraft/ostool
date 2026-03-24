@@ -40,6 +40,7 @@ pub mod build;
 
 /// Application context and state management.
 pub mod ctx;
+mod tool;
 
 /// TUI-based menu configuration system.
 ///
@@ -68,3 +69,4 @@ extern crate log;
 extern crate anyhow;
 
 pub use jkconfig::cursive;
+pub use tool::{Tool, ToolConfig};
