@@ -21,3 +21,6 @@ mod output_matcher;
 
 /// OVMF prebuilt firmware downloader (internal).
 mod ovmf_prebuilt;
+
+/// Shared shell auto-init matcher and delayed command sender.
+mod shell_init;

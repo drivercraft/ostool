@@ -22,18 +22,19 @@
 
 use std::{
     ffi::OsString,
-    io::{self, BufReader, ErrorKind, Read, Write},
+    io::{self, BufReader, ErrorKind, IsTerminal, Read, Write},
     path::Path,
     path::PathBuf,
     process::{Child, Stdio},
-    sync::mpsc,
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::Duration,
 };
 
 use anyhow::{Context, anyhow};
 use colored::Colorize;
-use crossterm::terminal::disable_raw_mode;
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use log::warn;
 use object::Architecture;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -44,6 +45,7 @@ use crate::{
     run::{
         output_matcher::{ByteStreamMatcher, StreamMatch, StreamMatchKind},
         ovmf_prebuilt::{Arch, FileType, Prebuilt, Source},
+        shell_init::{ShellAutoInitMatcher, normalize_shell_init_config, spawn_delayed_send},
     },
     utils::PathResultExt,
 };
@@ -71,6 +73,24 @@ pub struct QemuConfig {
     pub success_regex: Vec<String>,
     /// Regex patterns that indicate failed execution.
     pub fail_regex: Vec<String>,
+    /// String prefix that indicates the guest shell is ready.
+    pub shell_prefix: Option<String>,
+    /// Command sent once after `shell_prefix` is detected.
+    pub shell_init_cmd: Option<String>,
+}
+
+impl QemuConfig {
+    fn normalize(&mut self, config_name: &str) -> anyhow::Result<()> {
+        normalize_shell_init_config(
+            &mut self.shell_prefix,
+            &mut self.shell_init_cmd,
+            config_name,
+        )
+    }
+
+    fn shell_auto_init(&self) -> Option<ShellAutoInitMatcher> {
+        ShellAutoInitMatcher::new(self.shell_prefix.clone(), self.shell_init_cmd.clone())
+    }
 }
 
 /// Arguments for running QEMU.
@@ -152,12 +172,14 @@ async fn load_or_create_qemu_config(
         let config_content = fs::read_to_string(&config_path)
             .await
             .with_path("failed to read file", &config_path)?;
-        let config: QemuConfig = toml::from_str(&config_content)
+        let mut config: QemuConfig = toml::from_str(&config_content)
             .with_context(|| format!("failed to parse QEMU config: {}", config_path.display()))?;
+        config.normalize(&format!("QEMU config {}", config_path.display()))?;
         return Ok(config);
     }
 
-    let config = build_default_qemu_config(tool.ctx.arch, overrides);
+    let mut config = build_default_qemu_config(tool.ctx.arch, overrides);
+    config.normalize(&format!("QEMU config {}", config_path.display()))?;
     fs::write(&config_path, toml::to_string_pretty(&config)?)
         .await
         .with_path("failed to write file", &config_path)?;
@@ -215,6 +237,27 @@ struct QemuRunner<'a> {
     dtbdump: bool,
     success_regex: Vec<regex::Regex>,
     fail_regex: Vec<regex::Regex>,
+}
+
+struct RawModeGuard {
+    enabled: bool,
+}
+
+impl RawModeGuard {
+    fn new() -> Self {
+        let enabled =
+            io::stdin().is_terminal() && io::stdout().is_terminal() && enable_raw_mode().is_ok();
+        Self { enabled }
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        if self.enabled {
+            let _ = disable_raw_mode();
+            let _ = io::stdout().flush();
+        }
+    }
 }
 
 impl QemuRunner<'_> {
@@ -318,13 +361,20 @@ impl QemuRunner<'_> {
                 cmd.arg("-kernel").arg(elf_path);
             }
         }
+        cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
         cmd.print_cmd();
         let mut child = cmd.spawn()?;
+        let stdin = child.stdin.take().map(|stdin| Arc::new(Mutex::new(stdin)));
+        let _raw_mode = RawModeGuard::new();
+        if let Some(stdin) = stdin.as_ref() {
+            Self::spawn_stdin_passthrough(stdin.clone());
+        }
         let mut matcher =
             ByteStreamMatcher::new(self.success_regex.clone(), self.fail_regex.clone());
-        Self::process_output_stream(&mut child, &mut matcher)?;
+        let mut shell_auto_init = self.config.shell_auto_init();
+        Self::process_output_stream(&mut child, &mut matcher, &mut shell_auto_init, stdin)?;
 
         let out = child.wait_with_output()?;
         if let Some(res) = matcher.final_result() {
@@ -464,6 +514,8 @@ impl QemuRunner<'_> {
     fn process_output_stream(
         child: &mut Child,
         matcher: &mut ByteStreamMatcher,
+        shell_auto_init: &mut Option<ShellAutoInitMatcher>,
+        stdin: Option<Arc<Mutex<std::process::ChildStdin>>>,
     ) -> anyhow::Result<()> {
         let stdout = child
             .stdout
@@ -499,6 +551,13 @@ impl QemuRunner<'_> {
                     if let Some(matched) = matcher.observe_byte(byte) {
                         Self::print_match_event(&matched);
                     }
+
+                    if let Some(shell_auto_init) = shell_auto_init.as_mut()
+                        && let Some(command) = shell_auto_init.observe_byte(byte)
+                        && let Some(stdin) = stdin.as_ref()
+                    {
+                        spawn_delayed_send(stdin.clone(), command);
+                    }
                 }
                 Ok(None) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -512,6 +571,39 @@ impl QemuRunner<'_> {
         }
 
         Ok(())
+    }
+
+    fn spawn_stdin_passthrough(stdin: Arc<Mutex<std::process::ChildStdin>>) {
+        thread::spawn(move || {
+            let mut stdin_reader = io::stdin().lock();
+            let mut buffer = [0u8; 1024];
+
+            loop {
+                match stdin_reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let result = (|| -> io::Result<()> {
+                            let mut child_stdin = stdin.lock().unwrap();
+                            child_stdin.write_all(&buffer[..n])?;
+                            child_stdin.flush()?;
+                            Ok(())
+                        })();
+
+                        if let Err(err) = result {
+                            if err.kind() != ErrorKind::BrokenPipe {
+                                warn!("failed to forward stdin to QEMU: {err}");
+                            }
+                            break;
+                        }
+                    }
+                    Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+                    Err(err) => {
+                        warn!("failed to read stdin for QEMU passthrough: {err}");
+                        break;
+                    }
+                }
+            }
+        });
     }
 
     fn print_match_event(matched: &StreamMatch) {
@@ -630,7 +722,13 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    use crate::{Tool, ToolConfig};
+    use crate::{
+        Tool, ToolConfig,
+        run::{
+            output_matcher::{ByteStreamMatcher, StreamMatchKind},
+            shell_init::ShellAutoInitMatcher,
+        },
+    };
 
     fn write_single_crate_manifest(dir: &std::path::Path) {
         std::fs::write(
@@ -690,6 +788,56 @@ mod tests {
         );
 
         assert_eq!(config.args, vec!["-nographic", "-smp", "2"]);
+    }
+
+    #[test]
+    fn qemu_config_normalize_rejects_shell_init_without_prefix() {
+        let mut config = QemuConfig {
+            shell_init_cmd: Some("root".into()),
+            ..Default::default()
+        };
+
+        let err = config.normalize("test config").unwrap_err();
+        assert!(err.to_string().contains("shell_prefix"));
+    }
+
+    #[test]
+    fn qemu_config_normalize_trims_shell_fields() {
+        let mut config = QemuConfig {
+            shell_prefix: Some(" login: ".into()),
+            shell_init_cmd: Some(" root ".into()),
+            ..Default::default()
+        };
+
+        config.normalize("test config").unwrap();
+
+        assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
+        assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
+    }
+
+    #[test]
+    fn qemu_shell_auto_init_can_coexist_with_success_matcher() {
+        let mut matcher = ByteStreamMatcher::new(
+            vec![regex::Regex::new("ready").unwrap()],
+            vec![regex::Regex::new("__never_fail__").unwrap()],
+        );
+        let mut shell_init =
+            ShellAutoInitMatcher::new(Some("login:".to_string()), Some("root".to_string()))
+                .unwrap();
+        let mut sent = None;
+
+        for byte in b"login: system ready\n" {
+            if sent.is_none() {
+                sent = shell_init.observe_byte(*byte);
+            } else {
+                let _ = shell_init.observe_byte(*byte);
+            }
+            let _ = matcher.observe_byte(*byte);
+        }
+
+        let matched = matcher.matched().unwrap();
+        assert_eq!(matched.kind, StreamMatchKind::Success);
+        assert_eq!(sent.as_deref(), Some(&b"root\n"[..]));
     }
 
     #[test]

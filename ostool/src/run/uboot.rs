@@ -1,4 +1,5 @@
 use std::{
+    io::{self, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
@@ -21,6 +22,7 @@ use crate::{
     Tool,
     run::{
         output_matcher::{ByteStreamMatcher, MATCH_DRAIN_DURATION, StreamMatchKind},
+        shell_init::{ShellAutoInitMatcher, normalize_shell_init_config, spawn_delayed_send},
         tftp,
     },
     sterm::SerialTerm,
@@ -60,6 +62,10 @@ pub struct UbootConfig {
     pub success_regex: Vec<String>,
     pub fail_regex: Vec<String>,
     pub uboot_cmd: Option<Vec<String>>,
+    /// String prefix that indicates the target shell is ready after boot.
+    pub shell_prefix: Option<String>,
+    /// Command sent once after `shell_prefix` is detected.
+    pub shell_init_cmd: Option<String>,
 }
 
 impl UbootConfig {
@@ -79,6 +85,18 @@ impl UbootConfig {
                 addr_str.parse::<u64>().ok()
             }
         })
+    }
+
+    fn normalize(&mut self, config_name: &str) -> anyhow::Result<()> {
+        normalize_shell_init_config(
+            &mut self.shell_prefix,
+            &mut self.shell_init_cmd,
+            config_name,
+        )
+    }
+
+    fn shell_auto_init(&self) -> Option<ShellAutoInitMatcher> {
+        ShellAutoInitMatcher::new(self.shell_prefix.clone(), self.shell_init_cmd.clone())
     }
 }
 
@@ -114,16 +132,18 @@ impl Tool {
 
             config_content = replace_env_placeholders(&config_content)?;
 
-            let config: UbootConfig = toml::from_str(&config_content).with_context(|| {
+            let mut config: UbootConfig = toml::from_str(&config_content).with_context(|| {
                 format!("failed to parse U-Boot config: {}", config_path.display())
             })?;
+            config.normalize(&format!("U-Boot config {}", config_path.display()))?;
             config
         } else {
-            let config = UbootConfig {
+            let mut config = UbootConfig {
                 serial: "/dev/ttyUSB0".to_string(),
                 baud_rate: "115200".into(),
                 ..Default::default()
             };
+            config.normalize(&format!("U-Boot config {}", config_path.display()))?;
 
             fs::write(&config_path, toml::to_string_pretty(&config)?)
                 .await
@@ -163,6 +183,26 @@ struct NetworkBootRequest {
     bootfile: String,
     bootcmd: String,
     ipaddr: Option<String>,
+}
+
+struct SharedWrite {
+    inner: Arc<Mutex<Box<dyn Write + Send>>>,
+}
+
+impl SharedWrite {
+    fn new(inner: Arc<Mutex<Box<dyn Write + Send>>>) -> Self {
+        Self { inner }
+    }
+}
+
+impl Write for SharedWrite {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner.lock().unwrap().write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.lock().unwrap().flush()
+    }
 }
 
 impl Runner<'_> {
@@ -335,7 +375,9 @@ impl Runner<'_> {
         let mut builtin_tftp_started = false;
 
         #[cfg(not(target_os = "linux"))]
-        if is_tftp.is_none() && let Some(ip) = ip_string.as_ref() {
+        if is_tftp.is_none()
+            && let Some(ip) = ip_string.as_ref()
+        {
             info!("TFTP server IP: {}", ip);
             tftp::run_tftp_server(self.tool)?;
             builtin_tftp_started = true;
@@ -590,47 +632,62 @@ impl Runner<'_> {
         let res = Arc::new(Mutex::<Option<anyhow::Result<()>>>::new(None));
         let res_clone = res.clone();
         let matcher_clone = matcher.clone();
-        let mut shell = SerialTerm::new_with_byte_callback(tx, rx, move |h, byte| {
-            let mut matcher = matcher_clone.lock().unwrap();
-            if let Some(matched) = matcher.observe_byte(byte) {
-                match matched.kind {
-                    StreamMatchKind::Success => {
-                        println!(
-                            "{}",
-                            format!(
-                                "\r\n=== SUCCESS PATTERN MATCHED: {} ===",
-                                matched.matched_regex
-                            )
-                            .green()
-                        );
-                        let mut res_lock = res_clone.lock().unwrap();
-                        *res_lock = Some(Ok(()));
+        let shared_tx = Arc::new(Mutex::new(tx));
+        let shell_init = Arc::new(Mutex::new(self.config.shell_auto_init()));
+        let shell_init_clone = shell_init.clone();
+        let shared_tx_clone = shared_tx.clone();
+        let mut shell = SerialTerm::new_with_byte_callback(
+            Box::new(SharedWrite::new(shared_tx)),
+            rx,
+            move |h, byte| {
+                let mut matcher = matcher_clone.lock().unwrap();
+                if let Some(matched) = matcher.observe_byte(byte) {
+                    match matched.kind {
+                        StreamMatchKind::Success => {
+                            println!(
+                                "{}",
+                                format!(
+                                    "\r\n=== SUCCESS PATTERN MATCHED: {} ===",
+                                    matched.matched_regex
+                                )
+                                .green()
+                            );
+                            let mut res_lock = res_clone.lock().unwrap();
+                            *res_lock = Some(Ok(()));
+                        }
+                        StreamMatchKind::Fail => {
+                            println!(
+                                "{}",
+                                format!(
+                                    "\r\n=== FAIL PATTERN MATCHED: {} ===",
+                                    matched.matched_regex
+                                )
+                                .red()
+                            );
+                            let mut res_lock = res_clone.lock().unwrap();
+                            *res_lock = Some(Err(anyhow!(
+                                "Fail pattern matched '{}': {}",
+                                matched.matched_regex,
+                                matched.matched_text.trim_end()
+                            )));
+                        }
                     }
-                    StreamMatchKind::Fail => {
-                        println!(
-                            "{}",
-                            format!(
-                                "\r\n=== FAIL PATTERN MATCHED: {} ===",
-                                matched.matched_regex
-                            )
-                            .red()
-                        );
-                        let mut res_lock = res_clone.lock().unwrap();
-                        *res_lock = Some(Err(anyhow!(
-                            "Fail pattern matched '{}': {}",
-                            matched.matched_regex,
-                            matched.matched_text.trim_end()
-                        )));
-                    }
+
+                    h.stop_after(MATCH_DRAIN_DURATION);
                 }
 
-                h.stop_after(MATCH_DRAIN_DURATION);
-            }
+                let mut shell_init = shell_init_clone.lock().unwrap();
+                if let Some(shell_init) = shell_init.as_mut()
+                    && let Some(command) = shell_init.observe_byte(byte)
+                {
+                    spawn_delayed_send(shared_tx_clone.clone(), command);
+                }
 
-            if matcher.should_stop() {
-                h.stop();
-            }
-        });
+                if matcher.should_stop() {
+                    h.stop();
+                }
+            },
+        );
         shell.run().await?;
         {
             let mut res_lock = res.lock().unwrap();
@@ -742,7 +799,7 @@ fn build_network_boot_request(
 
 #[cfg(test)]
 mod tests {
-    use super::build_network_boot_request;
+    use super::{UbootConfig, build_network_boot_request};
 
     #[test]
     fn network_boot_request_uses_same_filename_for_bootfile() {
@@ -776,5 +833,34 @@ mod tests {
                 .bootcmd,
             "dhcp image.fit && bootm"
         );
+    }
+
+    #[test]
+    fn uboot_config_normalize_rejects_shell_init_without_prefix() {
+        let mut config = UbootConfig {
+            serial: "/dev/null".into(),
+            baud_rate: "115200".into(),
+            shell_init_cmd: Some("root".into()),
+            ..Default::default()
+        };
+
+        let err = config.normalize("test config").unwrap_err();
+        assert!(err.to_string().contains("shell_prefix"));
+    }
+
+    #[test]
+    fn uboot_config_normalize_trims_shell_fields() {
+        let mut config = UbootConfig {
+            serial: "/dev/null".into(),
+            baud_rate: "115200".into(),
+            shell_prefix: Some(" login: ".into()),
+            shell_init_cmd: Some(" root ".into()),
+            ..Default::default()
+        };
+
+        config.normalize("test config").unwrap();
+
+        assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
+        assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
     }
 }
