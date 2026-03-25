@@ -678,11 +678,19 @@ pub(crate) fn resolve_qemu_config_path(
     tool: &Tool,
     explicit_path: Option<PathBuf>,
 ) -> anyhow::Result<PathBuf> {
+    resolve_qemu_config_path_in_dir(tool.workspace_dir(), tool.ctx.arch, explicit_path)
+}
+
+pub(crate) fn resolve_qemu_config_path_in_dir(
+    search_dir: &Path,
+    arch: Option<Architecture>,
+    explicit_path: Option<PathBuf>,
+) -> anyhow::Result<PathBuf> {
     if let Some(path) = explicit_path {
         return Ok(path);
     }
 
-    let arch_str = tool.ctx.arch.map(|arch| format!("{arch:?}").to_lowercase());
+    let arch_str = arch.map(|arch| format!("{arch:?}").to_lowercase());
 
     // 文件名优先级顺序
     let candidates: Vec<String> = if let Some(ref arch) = arch_str {
@@ -697,7 +705,7 @@ pub(crate) fn resolve_qemu_config_path(
     };
 
     for filename in &candidates {
-        let path = tool.workspace_dir().join(filename);
+        let path = search_dir.join(filename);
         if path.exists() {
             return Ok(path);
         }
@@ -709,14 +717,14 @@ pub(crate) fn resolve_qemu_config_path(
         ".qemu.toml".to_string()
     };
 
-    Ok(tool.workspace_dir().join(default_filename))
+    Ok(search_dir.join(default_filename))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         QemuConfig, QemuDefaultOverrides, QemuRunner, build_default_qemu_config,
-        resolve_qemu_config_path,
+        resolve_qemu_config_path, resolve_qemu_config_path_in_dir,
     };
     use object::Architecture;
     use std::path::PathBuf;
@@ -937,6 +945,50 @@ mod tests {
         let tool = make_tool(tmp.path());
         let result = resolve_qemu_config_path(&tool, None).unwrap();
         assert_eq!(result, tmp.path().join("qemu.toml"));
+    }
+
+    #[test]
+    fn qemu_config_search_dir_prefers_arch_specific_files() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("qemu-aarch64.toml"), "").unwrap();
+        std::fs::write(tmp.path().join("qemu.toml"), "").unwrap();
+
+        let result = resolve_qemu_config_path_in_dir(
+            tmp.path(),
+            Some(Architecture::Aarch64),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result, tmp.path().join("qemu-aarch64.toml"));
+    }
+
+    #[test]
+    fn qemu_config_search_dir_uses_hidden_generic_before_hidden_default_creation() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join(".qemu.toml"), "").unwrap();
+
+        let result =
+            resolve_qemu_config_path_in_dir(tmp.path(), Some(Architecture::Aarch64), None)
+                .unwrap();
+        assert_eq!(result, tmp.path().join(".qemu.toml"));
+    }
+
+    #[test]
+    fn qemu_config_search_dir_defaults_to_arch_specific_hidden_file() {
+        let tmp = TempDir::new().unwrap();
+
+        let result =
+            resolve_qemu_config_path_in_dir(tmp.path(), Some(Architecture::Aarch64), None)
+                .unwrap();
+        assert_eq!(result, tmp.path().join(".qemu-aarch64.toml"));
+    }
+
+    #[test]
+    fn qemu_config_search_dir_defaults_without_arch() {
+        let tmp = TempDir::new().unwrap();
+
+        let result = resolve_qemu_config_path_in_dir(tmp.path(), None, None).unwrap();
+        assert_eq!(result, tmp.path().join(".qemu.toml"));
     }
 
     #[test]

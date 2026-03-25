@@ -60,6 +60,8 @@ pub struct QemuArgs {
     /// Path to the qemu configuration file
     ///
     /// Default behavior when not specified:
+    /// - Cargo build system: use the target package directory
+    /// - Custom build system: use the workspace directory
     /// - With architecture detected: .qemu-{arch}.toml (e.g., .qemu-aarch64.toml)
     /// - Without architecture: .qemu.toml
     #[arg(short, long)]
@@ -118,6 +120,9 @@ async fn try_main() -> Result<()> {
                             qemu_config: qemu_args.qemu_config,
                             debug: qemu_args.debug,
                             dtb_dump: qemu_args.dtb_dump,
+                            args: vec![],
+                            success_regex: vec![],
+                            fail_regex: vec![],
                         },
                         RunSubCommands::Uboot(uboot_args) => CargoRunnerKind::Uboot {
                             uboot_config: uboot_args.uboot_config,

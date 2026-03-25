@@ -26,7 +26,10 @@ use crate::{
         cargo_builder::CargoBuilder,
         config::{Cargo, Custom},
     },
-    run::{qemu::RunQemuArgs, uboot::RunUbootArgs},
+    run::{
+        qemu::{RunQemuArgs, resolve_qemu_config_path_in_dir},
+        uboot::RunUbootArgs,
+    },
 };
 
 /// Cargo builder implementation for building projects.
@@ -50,6 +53,12 @@ pub enum CargoRunnerKind {
         debug: bool,
         /// Whether to dump the device tree blob.
         dtb_dump: bool,
+        /// Extra default QEMU command-line arguments.
+        args: Vec<String>,
+        /// Regex patterns that indicate successful execution.
+        success_regex: Vec<String>,
+        /// Regex patterns that indicate failed execution.
+        fail_regex: Vec<String>,
     },
     /// Run the built artifact on real hardware via U-Boot.
     Uboot {
@@ -157,13 +166,28 @@ impl Tool {
             CargoRunnerKind::Qemu {
                 qemu_config,
                 dtb_dump,
+                args,
+                success_regex,
+                fail_regex,
                 ..
             } => {
-                self.run_qemu(RunQemuArgs {
-                    qemu_config: qemu_config.clone(),
-                    dtb_dump: *dtb_dump,
-                    show_output: true,
-                })
+                let package_dir = self.resolve_package_manifest_dir(&config.package)?;
+                let resolved_qemu_config = resolve_qemu_config_path_in_dir(
+                    &package_dir,
+                    self.ctx.arch,
+                    qemu_config.clone(),
+                )?;
+
+                self.run_qemu_with_more_default_args(
+                    RunQemuArgs {
+                        qemu_config: Some(resolved_qemu_config),
+                        dtb_dump: *dtb_dump,
+                        show_output: true,
+                    },
+                    args.clone(),
+                    success_regex.clone(),
+                    fail_regex.clone(),
+                )
                 .await?;
             }
             CargoRunnerKind::Uboot { uboot_config } => {

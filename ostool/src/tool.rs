@@ -171,6 +171,28 @@ impl Tool {
             })
     }
 
+    pub(crate) fn resolve_package_manifest_dir(&self, package: &str) -> anyhow::Result<PathBuf> {
+        let metadata = self.metadata()?;
+        let Some(pkg) = metadata.packages.iter().find(|pkg| pkg.name == package) else {
+            bail!(
+                "package '{}' not found in cargo metadata under {}",
+                package,
+                self.manifest_dir().display()
+            );
+        };
+
+        pkg.manifest_path
+            .parent()
+            .map(|path| path.as_std_path().to_path_buf())
+            .ok_or_else(|| {
+                anyhow!(
+                    "package '{}' manifest has no parent: {}",
+                    package,
+                    pkg.manifest_path
+                )
+            })
+    }
+
     /// Sets the ELF artifact path and synchronizes derived runtime metadata.
     pub async fn set_elf_artifact_path(&mut self, path: PathBuf) -> anyhow::Result<()> {
         let path = path
@@ -485,6 +507,8 @@ fn resolve_manifest_path(input: Option<PathBuf>) -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{Tool, ToolConfig, resolve_manifest_context};
+    use crate::run::qemu::resolve_qemu_config_path_in_dir;
+    use object::Architecture;
 
     #[tokio::test]
     async fn set_elf_artifact_path_updates_dirs_and_arch() {
@@ -547,5 +571,88 @@ mod tests {
         assert_eq!(manifest.manifest_path, app_dir.join("Cargo.toml"));
         assert_eq!(manifest.manifest_dir, app_dir);
         assert_eq!(manifest.workspace_dir, temp.path());
+    }
+
+    #[test]
+    fn resolve_package_manifest_dir_uses_selected_package() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\", \"kernel\"]\nresolver = \"3\"\n",
+        )
+        .unwrap();
+
+        let app_dir = temp.path().join("app");
+        std::fs::create_dir_all(app_dir.join("src")).unwrap();
+        std::fs::write(
+            app_dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(app_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let kernel_dir = temp.path().join("kernel");
+        std::fs::create_dir_all(kernel_dir.join("src")).unwrap();
+        std::fs::write(
+            kernel_dir.join("Cargo.toml"),
+            "[package]\nname = \"kernel\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(kernel_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let tool = Tool::new(ToolConfig {
+            manifest: Some(app_dir.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let resolved = tool.resolve_package_manifest_dir("kernel").unwrap();
+        assert_eq!(resolved, kernel_dir);
+    }
+
+    #[test]
+    fn cargo_qemu_config_resolution_prefers_package_dir_over_workspace_root() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\", \"kernel\"]\nresolver = \"3\"\n",
+        )
+        .unwrap();
+        std::fs::write(temp.path().join("qemu-aarch64.toml"), "").unwrap();
+
+        let app_dir = temp.path().join("app");
+        std::fs::create_dir_all(app_dir.join("src")).unwrap();
+        std::fs::write(
+            app_dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(app_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let kernel_dir = temp.path().join("kernel");
+        std::fs::create_dir_all(kernel_dir.join("src")).unwrap();
+        std::fs::write(
+            kernel_dir.join("Cargo.toml"),
+            "[package]\nname = \"kernel\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(kernel_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(kernel_dir.join(".qemu-aarch64.toml"), "").unwrap();
+
+        let tool = Tool::new(ToolConfig {
+            manifest: Some(app_dir),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let package_dir = tool.resolve_package_manifest_dir("kernel").unwrap();
+        let resolved = resolve_qemu_config_path_in_dir(
+            &package_dir,
+            Some(Architecture::Aarch64),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(resolved, kernel_dir.join(".qemu-aarch64.toml"));
     }
 }
