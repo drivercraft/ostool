@@ -12,11 +12,13 @@
 //! Press `Ctrl+A` followed by `x` to exit the serial terminal.
 
 use std::io::{self, Read, Write};
-use std::sync::atomic::AtomicBool;
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use anyhow::anyhow;
 use crossterm::{
     event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode},
@@ -45,6 +47,8 @@ pub struct SerialTerm {
     tx: Arc<Mutex<Tx>>,
     rx: Arc<Mutex<Rx>>,
     on_byte: Option<OnByteCallback>,
+    timeout: Option<Duration>,
+    timeout_label: Option<String>,
 }
 
 /// Handle for controlling the terminal session.
@@ -52,6 +56,7 @@ pub struct SerialTerm {
 /// Provides methods to stop the terminal from within callbacks.
 pub struct TermHandle {
     is_running: AtomicBool,
+    timed_out: AtomicBool,
     stop_deadline: Mutex<Option<Instant>>,
 }
 
@@ -61,8 +66,7 @@ impl TermHandle {
     /// This can be called from within a receive callback to terminate the session
     /// when a specific pattern is detected.
     pub fn stop(&self) {
-        self.is_running
-            .store(false, std::sync::atomic::Ordering::Release);
+        self.is_running.store(false, Ordering::Release);
     }
 
     /// Schedules the terminal to stop after the specified duration.
@@ -75,7 +79,7 @@ impl TermHandle {
 
     /// Returns whether the terminal session is still running.
     pub fn is_running(&self) -> bool {
-        self.is_running.load(std::sync::atomic::Ordering::Acquire)
+        self.is_running.load(Ordering::Acquire)
     }
 
     fn should_stop_now(&self) -> bool {
@@ -83,6 +87,14 @@ impl TermHandle {
             .lock()
             .unwrap()
             .is_some_and(|deadline| Instant::now() >= deadline)
+    }
+
+    fn mark_timed_out(&self) {
+        self.timed_out.store(true, Ordering::Release);
+    }
+
+    fn timed_out(&self) -> bool {
+        self.timed_out.load(Ordering::Acquire)
     }
 }
 
@@ -125,6 +137,8 @@ impl SerialTerm {
             tx: Arc::new(Mutex::new(tx)),
             rx: Arc::new(Mutex::new(rx)),
             on_byte: Some(Box::new(on_byte)),
+            timeout: None,
+            timeout_label: None,
         }
     }
 
@@ -137,7 +151,16 @@ impl SerialTerm {
             tx: Arc::new(Mutex::new(tx)),
             rx: Arc::new(Mutex::new(rx)),
             on_byte: Some(Box::new(on_byte)),
+            timeout: None,
+            timeout_label: None,
         }
+    }
+
+    /// Configures a session timeout for the interactive terminal.
+    pub fn with_timeout(mut self, timeout: Duration, label: impl Into<String>) -> Self {
+        self.timeout = Some(timeout);
+        self.timeout_label = Some(label.into());
+        self
     }
 
     /// Runs the interactive serial terminal.
@@ -160,7 +183,7 @@ impl SerialTerm {
 
         // 确保清理终端状态
         if cleanup_needed {
-            let _ = disable_raw_mode();
+            restore_terminal_mode();
             println!(); // 添加换行符
             eprintln!("✓ 已退出串口终端模式");
         }
@@ -176,8 +199,12 @@ impl SerialTerm {
 
         let handle = Arc::new(TermHandle {
             is_running: AtomicBool::new(true),
+            timed_out: AtomicBool::new(false),
             stop_deadline: Mutex::new(None),
         });
+        if let Some(timeout) = self.timeout {
+            handle.stop_after(timeout);
+        }
 
         // 使用 EventStream 异步处理键盘事件
         let tx_handle = tokio::spawn(Self::tx_work_async(handle.clone(), tx_port));
@@ -191,6 +218,11 @@ impl SerialTerm {
         // 等待接收线程结束
         let _ = rx_handle.await?;
         let _ = tx_handle.await;
+        if handle.timed_out() {
+            let timeout = self.timeout.unwrap();
+            let label = self.timeout_label.as_deref().unwrap_or("serial terminal");
+            return Err(anyhow!("{label} timed out after {}s", timeout.as_secs()));
+        }
         info!("Serial terminal exited");
         Ok(())
     }
@@ -222,6 +254,7 @@ impl SerialTerm {
                         io::stdout().write_all(&byte)?;
                         (on_byte)(handle.as_ref(), b);
                         if handle.should_stop_now() {
+                            handle.mark_timed_out();
                             handle.stop();
                             break;
                         }
@@ -232,6 +265,7 @@ impl SerialTerm {
                 Ok(_) => {
                     // 没有数据可读，短暂休眠
                     if handle.should_stop_now() {
+                        handle.mark_timed_out();
                         handle.stop();
                         break;
                     }
@@ -240,6 +274,7 @@ impl SerialTerm {
                 Err(e) if e.kind() == io::ErrorKind::TimedOut => {
                     // 超时是正常的，继续
                     if handle.should_stop_now() {
+                        handle.mark_timed_out();
                         handle.stop();
                         break;
                     }
@@ -616,4 +651,10 @@ impl SerialTerm {
 
         Ok(())
     }
+}
+
+pub fn restore_terminal_mode() {
+    let _ = disable_raw_mode();
+    let _ = Command::new("stty").arg("echo").arg("icanon").status();
+    let _ = io::stdout().flush();
 }

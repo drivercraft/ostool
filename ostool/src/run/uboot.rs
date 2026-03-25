@@ -22,8 +22,7 @@ use crate::{
     Tool,
     run::{
         output_matcher::{
-            ByteStreamMatcher, MATCH_DRAIN_DURATION, StreamMatchKind, compile_regexes,
-            print_match_event,
+            ByteStreamMatcher, MATCH_DRAIN_DURATION, compile_regexes, print_match_event,
         },
         shell_init::{ShellAutoInitMatcher, normalize_shell_init_config, spawn_delayed_send},
         tftp,
@@ -69,6 +68,8 @@ pub struct UbootConfig {
     pub shell_prefix: Option<String>,
     /// Command sent once after `shell_prefix` is detected.
     pub shell_init_cmd: Option<String>,
+    /// Timeout in seconds after entering kernel output. `None` or `0` disables the timeout.
+    pub timeout: Option<u64>,
 }
 
 impl UbootConfig {
@@ -515,12 +516,6 @@ impl Runner<'_> {
                 );
                 (prepared.relative_filename, true)
             } else if let Some(tftp_dir) = is_tftp.as_deref() {
-                let tftp_dir = self
-                    .config
-                    .net
-                    .as_ref()
-                    .and_then(|net| net.tftp_dir.as_ref())
-                    .unwrap();
                 let fitimage = fitimage.file_name().unwrap();
                 let tftp_path = PathBuf::from(tftp_dir).join(fitimage);
                 info!("Setting TFTP file path: {}", tftp_path.display());
@@ -534,12 +529,6 @@ impl Runner<'_> {
                 (name.to_string(), false)
             }
         } else if let Some(tftp_dir) = is_tftp.as_deref() {
-            let tftp_dir = self
-                .config
-                .net
-                .as_ref()
-                .and_then(|net| net.tftp_dir.as_ref())
-                .unwrap();
             let fitimage = fitimage.file_name().unwrap();
             let tftp_path = PathBuf::from(tftp_dir).join(fitimage);
             info!("Setting TFTP file path: {}", tftp_path.display());
@@ -621,6 +610,9 @@ impl Runner<'_> {
                 }
             },
         );
+        if let Some(timeout) = timeout_duration(self.config.timeout) {
+            shell = shell.with_timeout(timeout, "kernel boot");
+        }
         shell.run().await?;
         {
             let mut res_lock = res.lock().unwrap();
@@ -688,6 +680,13 @@ impl Runner<'_> {
     }
 }
 
+fn timeout_duration(timeout: Option<u64>) -> Option<Duration> {
+    match timeout {
+        Some(0) | None => None,
+        Some(secs) => Some(Duration::from_secs(secs)),
+    }
+}
+
 fn build_network_boot_request(
     board_ip: Option<&str>,
     net_ok: bool,
@@ -719,7 +718,8 @@ fn build_network_boot_request(
 
 #[cfg(test)]
 mod tests {
-    use super::{UbootConfig, build_network_boot_request};
+    use super::{UbootConfig, build_network_boot_request, timeout_duration};
+    use std::time::Duration;
 
     #[test]
     fn network_boot_request_uses_same_filename_for_bootfile() {
@@ -782,5 +782,28 @@ mod tests {
 
         assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
         assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
+    }
+
+    #[test]
+    fn uboot_timeout_zero_disables_timeout() {
+        assert_eq!(timeout_duration(None), None);
+        assert_eq!(timeout_duration(Some(0)), None);
+        assert_eq!(timeout_duration(Some(5)), Some(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn uboot_config_parses_timeout_from_toml() {
+        let config: UbootConfig = toml::from_str(
+            r#"
+serial = "/dev/null"
+baud_rate = "115200"
+success_regex = []
+fail_regex = []
+timeout = 0
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.timeout, Some(0));
     }
 }

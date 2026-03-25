@@ -28,10 +28,11 @@ use std::{
     process::{Child, Stdio},
     sync::{Arc, Mutex, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, anyhow};
+#[cfg(windows)]
 use colored::Colorize;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use log::warn;
@@ -43,12 +44,11 @@ use tokio::fs;
 use crate::{
     Tool,
     run::{
-        output_matcher::{
-            ByteStreamMatcher, StreamMatch, StreamMatchKind, compile_regexes, print_match_event,
-        },
+        output_matcher::{ByteStreamMatcher, compile_regexes, print_match_event},
         ovmf_prebuilt::{Arch, FileType, Prebuilt, Source},
         shell_init::{ShellAutoInitMatcher, normalize_shell_init_config, spawn_delayed_send},
     },
+    sterm::restore_terminal_mode,
     utils::PathResultExt,
 };
 
@@ -79,6 +79,8 @@ pub struct QemuConfig {
     pub shell_prefix: Option<String>,
     /// Command sent once after `shell_prefix` is detected.
     pub shell_init_cmd: Option<String>,
+    /// Timeout in seconds. `None` or `0` disables the timeout.
+    pub timeout: Option<u64>,
 }
 
 impl QemuConfig {
@@ -375,7 +377,16 @@ impl QemuRunner<'_> {
         let mut matcher =
             ByteStreamMatcher::new(self.success_regex.clone(), self.fail_regex.clone());
         let mut shell_auto_init = self.config.shell_auto_init();
-        Self::process_output_stream(&mut child, &mut matcher, &mut shell_auto_init, stdin)?;
+        let timeout = timeout_duration(self.config.timeout);
+        let start = Instant::now();
+        Self::process_output_stream(
+            &mut child,
+            &mut matcher,
+            &mut shell_auto_init,
+            stdin,
+            timeout,
+            start,
+        )?;
 
         let out = child.wait_with_output()?;
         if let Some(res) = matcher.final_result() {
@@ -517,6 +528,8 @@ impl QemuRunner<'_> {
         matcher: &mut ByteStreamMatcher,
         shell_auto_init: &mut Option<ShellAutoInitMatcher>,
         stdin: Option<Arc<Mutex<std::process::ChildStdin>>>,
+        timeout: Option<Duration>,
+        start: Instant,
     ) -> anyhow::Result<()> {
         let stdout = child
             .stdout
@@ -569,6 +582,13 @@ impl QemuRunner<'_> {
                 Self::kill_qemu(child)?;
                 break;
             }
+
+            if let Some(timeout) = timeout
+                && start.elapsed() >= timeout
+            {
+                Self::kill_qemu(child)?;
+                return Err(anyhow!("QEMU timed out after {}s", timeout.as_secs()));
+            }
         }
 
         Ok(())
@@ -614,17 +634,7 @@ impl QemuRunner<'_> {
             return Err(err.into());
         }
 
-        // 尝试恢复终端状态
-        let _ = disable_raw_mode();
-
-        // 使用 stty 命令恢复终端回显 (最可靠的方法)
-        let _ = std::process::Command::new("stty")
-            .arg("echo")
-            .arg("icanon")
-            .status();
-
-        // 刷新输出
-        let _ = io::stdout().flush();
+        restore_terminal_mode();
         println!();
 
         Ok(())
@@ -691,14 +701,21 @@ pub(crate) fn resolve_qemu_config_path_in_dir(
     Ok(search_dir.join(default_filename))
 }
 
+fn timeout_duration(timeout: Option<u64>) -> Option<Duration> {
+    match timeout {
+        Some(0) | None => None,
+        Some(secs) => Some(Duration::from_secs(secs)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         QemuConfig, QemuDefaultOverrides, QemuRunner, build_default_qemu_config,
-        resolve_qemu_config_path, resolve_qemu_config_path_in_dir,
+        resolve_qemu_config_path, resolve_qemu_config_path_in_dir, timeout_duration,
     };
     use object::Architecture;
-    use std::path::PathBuf;
+    use std::{path::PathBuf, time::Duration};
     use tempfile::TempDir;
 
     use crate::{
@@ -735,6 +752,7 @@ mod tests {
         assert_eq!(config.args, vec!["-nographic", "-cpu", "cortex-a53"]);
         assert!(config.success_regex.is_empty());
         assert!(config.fail_regex.is_empty());
+        assert_eq!(config.timeout, None);
     }
 
     #[test]
@@ -745,6 +763,7 @@ mod tests {
                 args: vec!["-m".into(), "512M".into()],
                 success_regex: vec!["PASS".into()],
                 fail_regex: vec!["FAIL".into()],
+                ..Default::default()
             },
         );
 
@@ -754,6 +773,7 @@ mod tests {
         );
         assert_eq!(config.success_regex, vec!["PASS"]);
         assert_eq!(config.fail_regex, vec!["FAIL"]);
+        assert_eq!(config.timeout, None);
     }
 
     #[test]
@@ -769,6 +789,31 @@ mod tests {
 
         assert!(!config.to_bin);
         assert_eq!(config.args, vec!["-nographic", "-smp", "2"]);
+        assert_eq!(config.timeout, None);
+    }
+
+    #[test]
+    fn qemu_timeout_zero_disables_timeout() {
+        assert_eq!(timeout_duration(None), None);
+        assert_eq!(timeout_duration(Some(0)), None);
+        assert_eq!(timeout_duration(Some(3)), Some(Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn qemu_config_parses_timeout_from_toml() {
+        let config: QemuConfig = toml::from_str(
+            r#"
+args = ["-nographic"]
+uefi = false
+to_bin = true
+success_regex = []
+fail_regex = []
+timeout = 0
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.timeout, Some(0));
     }
 
     #[test]
@@ -832,7 +877,6 @@ mod tests {
         let runner = QemuRunner {
             tool: &mut tool,
             config: QemuConfig::default(),
-            args: vec![],
             dtbdump: false,
             success_regex: vec![],
             fail_regex: vec![],
