@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
+use colored::Colorize;
 use regex::Regex;
 
 pub(crate) const MATCH_DRAIN_DURATION: Duration = Duration::from_millis(500);
@@ -11,12 +12,59 @@ pub(crate) enum StreamMatchKind {
     Fail,
 }
 
+impl StreamMatchKind {
+    pub(crate) fn into_result(self, matched: &StreamMatch) -> anyhow::Result<()> {
+        match self {
+            StreamMatchKind::Success => Ok(()),
+            StreamMatchKind::Fail => Err(anyhow!(
+                "Fail pattern matched '{}': {}",
+                matched.matched_regex,
+                matched.matched_text.trim_end()
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct StreamMatch {
     pub(crate) kind: StreamMatchKind,
     pub(crate) matched_regex: String,
     pub(crate) matched_text: String,
     pub(crate) deadline: Instant,
+}
+
+pub(crate) fn compile_regexes(
+    success_patterns: &[String],
+    fail_patterns: &[String],
+) -> anyhow::Result<(Vec<Regex>, Vec<Regex>)> {
+    let success_regex = success_patterns
+        .iter()
+        .map(|p| Regex::new(p).map_err(|e| anyhow!("success regex error: {e}")))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let fail_regex = fail_patterns
+        .iter()
+        .map(|p| Regex::new(p).map_err(|e| anyhow!("fail regex error: {e}")))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok((success_regex, fail_regex))
+}
+
+pub(crate) fn print_match_event(matched: &StreamMatch) {
+    match matched.kind {
+        StreamMatchKind::Success => println!(
+            "{}",
+            format!(
+                "\n=== SUCCESS PATTERN MATCHED: {} ===",
+                matched.matched_regex
+            )
+            .green()
+        ),
+        StreamMatchKind::Fail => println!(
+            "{}",
+            format!("\n=== FAIL PATTERN MATCHED: {}", matched.matched_regex).red()
+        ),
+    }
 }
 
 #[derive(Debug, Clone)]

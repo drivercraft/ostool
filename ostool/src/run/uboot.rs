@@ -21,7 +21,7 @@ use uboot_shell::UbootShell;
 use crate::{
     Tool,
     run::{
-        output_matcher::{ByteStreamMatcher, MATCH_DRAIN_DURATION, StreamMatchKind},
+        output_matcher::{ByteStreamMatcher, MATCH_DRAIN_DURATION, StreamMatchKind, compile_regexes, print_match_event},
         shell_init::{ShellAutoInitMatcher, normalize_shell_init_config, spawn_delayed_send},
         tftp,
     },
@@ -124,31 +124,29 @@ impl Tool {
             None => self.workspace_dir().join(".uboot.toml"),
         };
 
-        let config = if config_path.exists() {
-            println!("Using U-Boot config: {}", config_path.display());
-            let mut config_content = fs::read_to_string(&config_path)
-                .await
-                .with_path("failed to read file", &config_path)?;
-
-            config_content = replace_env_placeholders(&config_content)?;
-
-            let mut config: UbootConfig = toml::from_str(&config_content).with_context(|| {
-                format!("failed to parse U-Boot config: {}", config_path.display())
-            })?;
-            config.normalize(&format!("U-Boot config {}", config_path.display()))?;
-            config
-        } else {
-            let mut config = UbootConfig {
-                serial: "/dev/ttyUSB0".to_string(),
-                baud_rate: "115200".into(),
-                ..Default::default()
-            };
-            config.normalize(&format!("U-Boot config {}", config_path.display()))?;
-
-            fs::write(&config_path, toml::to_string_pretty(&config)?)
-                .await
-                .with_path("failed to write file", &config_path)?;
-            config
+        let config = match fs::read_to_string(&config_path).await {
+            Ok(content) => {
+                println!("Using U-Boot config: {}", config_path.display());
+                let config_content = replace_env_placeholders(&content)?;
+                let mut config: UbootConfig = toml::from_str(&config_content).with_context(|| {
+                    format!("failed to parse U-Boot config: {}", config_path.display())
+                })?;
+                config.normalize(&format!("U-Boot config {}", config_path.display()))?;
+                config
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                let mut config = UbootConfig {
+                    serial: "/dev/ttyUSB0".to_string(),
+                    baud_rate: "115200".into(),
+                    ..Default::default()
+                };
+                config.normalize(&format!("U-Boot config {}", config_path.display()))?;
+                fs::write(&config_path, toml::to_string_pretty(&config)?)
+                    .await
+                    .with_path("failed to write file", &config_path)?;
+                config
+            }
+            Err(e) => return Err(e.into()),
         };
 
         let baud_rate = config.baud_rate.parse::<u32>().with_context(|| {
@@ -206,15 +204,7 @@ impl Write for SharedWrite {
 }
 
 impl Runner<'_> {
-    /// 生成压缩的 FIT image 包含 kernel 和 FDT
-    ///
-    /// # 参数
-    /// - `kernel_path`: kernel 文件路径
-    /// - `dtb_path`: DTB 文件路径（可选）
-    /// - `kernel_load_addr`: kernel 加载地址
-    ///
-    /// # 返回值
-    /// 返回生成的 FIT image 文件路径
+    /// 生成包含 kernel 和 FDT 的压缩 FIT image。
     async fn generate_fit_image(
         &self,
         kernel_path: &Path,
@@ -249,7 +239,6 @@ impl Runner<'_> {
             _ => todo!(),
         };
 
-        // 创建配置，与 test.its 文件中的参数一致
         let mut config = FitImageConfig::new("Various kernels, ramdisks and FDT blobs")
             .with_kernel(
                 ComponentConfig::new("kernel", kernel_data)
@@ -275,7 +264,7 @@ impl Runner<'_> {
             );
             fdt_name = Some("fdt");
 
-            // Can not compress DTB, U-Boot will not accept it
+            // U-Boot 不接受压缩的 DTB
             let mut fdt_config = ComponentConfig::new("fdt", data.clone())
                 .with_description("This fdt")
                 .with_type("flat_dt")
@@ -300,13 +289,10 @@ impl Runner<'_> {
                 None::<String>,
             );
 
-        // 使用新的 mkimage API 构建 FIT image
         let mut builder = FitImageBuilder::new();
         let fit_data = builder
             .build(config)
             .with_context(|| errors::FIT_BUILD_ERROR.to_string())?;
-
-        // 保存到文件
         let output_path = Path::new(output_dir).join("image.fit");
         fs::write(&output_path, fit_data)
             .await
@@ -328,7 +314,7 @@ impl Runner<'_> {
     }
 
     async fn _run(&mut self) -> anyhow::Result<()> {
-        self.preper_regex()?;
+        self.prepare_regex()?;
         self.tool.objcopy_output_bin()?;
 
         let kernel = self
@@ -516,71 +502,54 @@ impl Runner<'_> {
             )
             .await?;
 
-        #[cfg(target_os = "linux")]
-        let mut linux_system_tftp_active = false;
-
-        #[cfg(target_os = "linux")]
-        let fitname = if let Some(system_tftp) = linux_system_tftp.as_ref() {
-            let prepared = tftp::stage_linux_fit_image(&fitimage, &system_tftp.directory)?;
-            linux_system_tftp_active = true;
-            info!(
-                "Staged FIT image to: {}",
-                prepared.absolute_fit_path.display()
-            );
-            prepared.relative_filename
-        } else if is_tftp.is_some() {
+        let (fitname, linux_tftp_active) = if cfg!(target_os = "linux") {
+            if let Some(system_tftp) = linux_system_tftp.as_ref() {
+                let prepared = tftp::stage_linux_fit_image(&fitimage, &system_tftp.directory)?;
+                info!(
+                    "Staged FIT image to: {}",
+                    prepared.absolute_fit_path.display()
+                );
+                (prepared.relative_filename, true)
+            } else if let Some(tftp_dir) = is_tftp.as_deref() {
+                let tftp_dir = self
+                    .config
+                    .net
+                    .as_ref()
+                    .and_then(|net| net.tftp_dir.as_ref())
+                    .unwrap();
+                let fitimage = fitimage.file_name().unwrap();
+                let tftp_path = PathBuf::from(tftp_dir).join(fitimage);
+                info!("Setting TFTP file path: {}", tftp_path.display());
+                (tftp_path.display().to_string(), false)
+            } else {
+                let name = fitimage
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .ok_or(anyhow!("Invalid fitimage filename"))?;
+                info!("Using fitimage filename: {}", name);
+                (name.to_string(), false)
+            }
+        } else if let Some(tftp_dir) = is_tftp.as_deref() {
             let tftp_dir = self
                 .config
                 .net
                 .as_ref()
                 .and_then(|net| net.tftp_dir.as_ref())
                 .unwrap();
-
             let fitimage = fitimage.file_name().unwrap();
             let tftp_path = PathBuf::from(tftp_dir).join(fitimage);
-
             info!("Setting TFTP file path: {}", tftp_path.display());
-            tftp_path.display().to_string()
+            (tftp_path.display().to_string(), false)
         } else {
             let name = fitimage
                 .file_name()
                 .and_then(|n| n.to_str())
                 .ok_or(anyhow!("Invalid fitimage filename"))?;
-
             info!("Using fitimage filename: {}", name);
-            name.to_string()
+            (name.to_string(), false)
         };
 
-        #[cfg(not(target_os = "linux"))]
-        let fitname = if is_tftp.is_some() {
-            let tftp_dir = self
-                .config
-                .net
-                .as_ref()
-                .and_then(|net| net.tftp_dir.as_ref())
-                .unwrap();
-
-            let fitimage = fitimage.file_name().unwrap();
-            let tftp_path = PathBuf::from(tftp_dir).join(fitimage);
-
-            info!("Setting TFTP file path: {}", tftp_path.display());
-            tftp_path.display().to_string()
-        } else {
-            let name = fitimage
-                .file_name()
-                .and_then(|n| n.to_str())
-                .ok_or(anyhow!("Invalid fitimage filename"))?;
-
-            info!("Using fitimage filename: {}", name);
-            name.to_string()
-        };
-
-        #[cfg(target_os = "linux")]
-        let network_transfer_ready =
-            linux_system_tftp_active || is_tftp.is_some() || builtin_tftp_started;
-
-        #[cfg(not(target_os = "linux"))]
-        let network_transfer_ready = is_tftp.is_some() || builtin_tftp_started;
+        let network_transfer_ready = linux_tftp_active || is_tftp.is_some() || builtin_tftp_started;
 
         let bootcmd = if let Some(request) = build_network_boot_request(
             self.config
@@ -604,18 +573,6 @@ impl Runner<'_> {
 
         info!("Booting kernel with command: {}", bootcmd);
         uboot.cmd_without_reply(&bootcmd)?;
-        // if self.config.net.is_some() {
-        //     info!("TFTP upload FIT image to board...");
-        //     let filename = fitimage.file_name().unwrap().to_str().unwrap();
-
-        //     let tftp_cmd = format!("tftp {filename}");
-        //     uboot.cmd(&tftp_cmd)?;
-        //     uboot.cmd_without_reply("bootm")?;
-        // } else {
-        //     info!("No TFTP config, using loady to upload FIT image...");
-        //     Self::uboot_loady(&mut uboot, fit_loadaddr as usize, fitimage);
-        //     uboot.cmd_without_reply("bootm")?;
-        // }
 
         let tx = uboot.tx.take().unwrap();
         let rx = uboot.rx.take().unwrap();
@@ -642,37 +599,9 @@ impl Runner<'_> {
             move |h, byte| {
                 let mut matcher = matcher_clone.lock().unwrap();
                 if let Some(matched) = matcher.observe_byte(byte) {
-                    match matched.kind {
-                        StreamMatchKind::Success => {
-                            println!(
-                                "{}",
-                                format!(
-                                    "\r\n=== SUCCESS PATTERN MATCHED: {} ===",
-                                    matched.matched_regex
-                                )
-                                .green()
-                            );
-                            let mut res_lock = res_clone.lock().unwrap();
-                            *res_lock = Some(Ok(()));
-                        }
-                        StreamMatchKind::Fail => {
-                            println!(
-                                "{}",
-                                format!(
-                                    "\r\n=== FAIL PATTERN MATCHED: {} ===",
-                                    matched.matched_regex
-                                )
-                                .red()
-                            );
-                            let mut res_lock = res_clone.lock().unwrap();
-                            *res_lock = Some(Err(anyhow!(
-                                "Fail pattern matched '{}': {}",
-                                matched.matched_regex,
-                                matched.matched_text.trim_end()
-                            )));
-                        }
-                    }
-
+                    print_match_event(&matched);
+                    let mut res_lock = res_clone.lock().unwrap();
+                    *res_lock = Some(matched.kind.into_result(&matched));
                     h.stop_after(MATCH_DRAIN_DURATION);
                 }
 
@@ -698,23 +627,10 @@ impl Runner<'_> {
         Ok(())
     }
 
-    fn preper_regex(&mut self) -> anyhow::Result<()> {
-        // Prepare regex patterns if needed
-        // Compile success regex patterns
-        for pattern in self.config.success_regex.iter() {
-            // Compile and store the regex
-            let regex =
-                regex::Regex::new(pattern).map_err(|e| anyhow!("success regex error: {e}"))?;
-            self.success_regex.push(regex);
-        }
-
-        // Compile fail regex patterns
-        for pattern in self.config.fail_regex.iter() {
-            // Compile and store the regex
-            let regex = regex::Regex::new(pattern).map_err(|e| anyhow!("fail regex error: {e}"))?;
-            self.fail_regex.push(regex);
-        }
-
+    fn prepare_regex(&mut self) -> anyhow::Result<()> {
+        let (success, fail) = compile_regexes(&self.config.success_regex, &self.config.fail_regex)?;
+        self.success_regex = success;
+        self.fail_regex = fail;
         Ok(())
     }
 

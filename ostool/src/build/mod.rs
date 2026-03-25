@@ -53,6 +53,8 @@ pub enum CargoRunnerKind {
         debug: bool,
         /// Whether to dump the device tree blob.
         dtb_dump: bool,
+        /// Optional override for the generated QEMU config `to_bin` default.
+        to_bin: Option<bool>,
         /// Extra default QEMU command-line arguments.
         args: Vec<String>,
         /// Regex patterns that indicate successful execution.
@@ -166,6 +168,7 @@ impl Tool {
             CargoRunnerKind::Qemu {
                 qemu_config,
                 dtb_dump,
+                to_bin,
                 args,
                 success_regex,
                 fail_regex,
@@ -184,6 +187,7 @@ impl Tool {
                         dtb_dump: *dtb_dump,
                         show_output: true,
                     },
+                    *to_bin,
                     args.clone(),
                     success_regex.clone(),
                     fail_regex.clone(),

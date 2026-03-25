@@ -43,7 +43,7 @@ use tokio::fs;
 use crate::{
     Tool,
     run::{
-        output_matcher::{ByteStreamMatcher, StreamMatch, StreamMatchKind},
+        output_matcher::{ByteStreamMatcher, StreamMatch, StreamMatchKind, compile_regexes, print_match_event},
         ovmf_prebuilt::{Arch, FileType, Prebuilt, Source},
         shell_init::{ShellAutoInitMatcher, normalize_shell_init_config, spawn_delayed_send},
     },
@@ -106,6 +106,7 @@ pub struct RunQemuArgs {
 
 #[derive(Debug, Clone, Default)]
 struct QemuDefaultOverrides {
+    to_bin: Option<bool>,
     args: Vec<String>,
     success_regex: Vec<String>,
     fail_regex: Vec<String>,
@@ -126,13 +127,14 @@ struct QemuDefaultOverrides {
 /// Returns an error if QEMU fails to start or exits with an error.
 impl Tool {
     pub async fn run_qemu(&mut self, args: RunQemuArgs) -> anyhow::Result<()> {
-        self.run_qemu_with_more_default_args(args, vec![], vec![], vec![])
+        self.run_qemu_with_more_default_args(args, None, vec![], vec![], vec![])
             .await
     }
 
     pub async fn run_qemu_with_more_default_args(
         &mut self,
         run_args: RunQemuArgs,
+        to_bin: Option<bool>,
         args: Vec<String>,
         success_regex: Vec<String>,
         fail_regex: Vec<String>,
@@ -141,6 +143,7 @@ impl Tool {
             self,
             run_args,
             QemuDefaultOverrides {
+                to_bin,
                 args,
                 success_regex,
                 fail_regex,
@@ -168,22 +171,24 @@ async fn load_or_create_qemu_config(
 
     info!("Using QEMU config file: {}", config_path.display());
 
-    if config_path.exists() {
-        let config_content = fs::read_to_string(&config_path)
-            .await
-            .with_path("failed to read file", &config_path)?;
-        let mut config: QemuConfig = toml::from_str(&config_content)
-            .with_context(|| format!("failed to parse QEMU config: {}", config_path.display()))?;
-        config.normalize(&format!("QEMU config {}", config_path.display()))?;
-        return Ok(config);
-    }
-
-    let mut config = build_default_qemu_config(tool.ctx.arch, overrides);
-    config.normalize(&format!("QEMU config {}", config_path.display()))?;
-    fs::write(&config_path, toml::to_string_pretty(&config)?)
-        .await
-        .with_path("failed to write file", &config_path)?;
-    Ok(config)
+    let config_content = match fs::read_to_string(&config_path).await {
+        Ok(content) => {
+            let mut config: QemuConfig = toml::from_str(&content)
+                .with_context(|| format!("failed to parse QEMU config: {}", config_path.display()))?;
+            config.normalize(&format!("QEMU config {}", config_path.display()))?;
+            return Ok(config);
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            let mut config = build_default_qemu_config(tool.ctx.arch, overrides);
+            config.normalize(&format!("QEMU config {}", config_path.display()))?;
+            fs::write(&config_path, toml::to_string_pretty(&config)?)
+                .await
+                .with_path("failed to write file", &config_path)?;
+            config
+        }
+        Err(e) => return Err(e.into()),
+    };
+    Ok(config_content)
 }
 
 fn build_default_qemu_config(
@@ -191,7 +196,7 @@ fn build_default_qemu_config(
     overrides: QemuDefaultOverrides,
 ) -> QemuConfig {
     let mut config = QemuConfig {
-        to_bin: true,
+        to_bin: overrides.to_bin.unwrap_or(true),
         success_regex: overrides.success_regex,
         fail_regex: overrides.fail_regex,
         ..Default::default()
@@ -222,7 +227,6 @@ async fn run_qemu_with_config(
     let mut runner = QemuRunner {
         tool,
         config,
-        args: vec![],
         dtbdump: run_args.dtb_dump,
         success_regex: vec![],
         fail_regex: vec![],
@@ -233,7 +237,6 @@ async fn run_qemu_with_config(
 struct QemuRunner<'a> {
     tool: &'a mut Tool,
     config: QemuConfig,
-    args: Vec<String>,
     dtbdump: bool,
     success_regex: Vec<regex::Regex>,
     fail_regex: Vec<regex::Regex>,
@@ -262,7 +265,7 @@ impl Drop for RawModeGuard {
 
 impl QemuRunner<'_> {
     async fn run(&mut self) -> anyhow::Result<()> {
-        self.preper_regex()?;
+        self.prepare_regex()?;
 
         if self.config.to_bin {
             self.tool.objcopy_output_bin()?;
@@ -280,14 +283,6 @@ impl QemuRunner<'_> {
         .to_string();
 
         let mut need_machine = true;
-
-        for arg in &self.config.args {
-            if arg == "-machine" || arg == "-M" {
-                need_machine = false;
-            }
-
-            self.args.push(arg.clone());
-        }
 
         #[allow(unused_mut)]
         let mut qemu_executable = format!("qemu-system-{}", arch);
@@ -308,6 +303,9 @@ impl QemuRunner<'_> {
         let mut cmd = self.tool.command(&qemu_executable);
 
         for arg in &self.config.args {
+            if arg == "-machine" || arg == "-M" {
+                need_machine = false;
+            }
             cmd.arg(arg);
         }
 
@@ -549,7 +547,7 @@ impl QemuRunner<'_> {
                     let _ = std::io::stdout().flush();
 
                     if let Some(matched) = matcher.observe_byte(byte) {
-                        Self::print_match_event(&matched);
+                        print_match_event(&matched);
                     }
 
                     if let Some(shell_auto_init) = shell_auto_init.as_mut()
@@ -606,23 +604,6 @@ impl QemuRunner<'_> {
         });
     }
 
-    fn print_match_event(matched: &StreamMatch) {
-        match matched.kind {
-            StreamMatchKind::Success => println!(
-                "{}",
-                format!(
-                    "\n=== SUCCESS PATTERN MATCHED: {} ===",
-                    matched.matched_regex
-                )
-                .green()
-            ),
-            StreamMatchKind::Fail => println!(
-                "{}",
-                format!("\n=== FAIL PATTERN MATCHED: {} ===", matched.matched_regex).red()
-            ),
-        }
-    }
-
     fn kill_qemu(child: &mut Child) -> anyhow::Result<()> {
         if let Err(err) = child.kill()
             && err.kind() != ErrorKind::InvalidInput
@@ -646,23 +627,10 @@ impl QemuRunner<'_> {
         Ok(())
     }
 
-    fn preper_regex(&mut self) -> anyhow::Result<()> {
-        // Prepare regex patterns if needed
-        // Compile success regex patterns
-        for pattern in self.config.success_regex.iter() {
-            // Compile and store the regex
-            let regex =
-                regex::Regex::new(pattern).map_err(|e| anyhow!("success regex error: {e}"))?;
-            self.success_regex.push(regex);
-        }
-
-        // Compile fail regex patterns
-        for pattern in self.config.fail_regex.iter() {
-            // Compile and store the regex
-            let regex = regex::Regex::new(pattern).map_err(|e| anyhow!("fail regex error: {e}"))?;
-            self.fail_regex.push(regex);
-        }
-
+    fn prepare_regex(&mut self) -> anyhow::Result<()> {
+        let (success, fail) = compile_regexes(&self.config.success_regex, &self.config.fail_regex)?;
+        self.success_regex = success;
+        self.fail_regex = fail;
         Ok(())
     }
 }
@@ -790,11 +758,13 @@ mod tests {
         let config = build_default_qemu_config(
             Some(Architecture::X86_64),
             QemuDefaultOverrides {
+                to_bin: Some(false),
                 args: vec!["-smp".into(), "2".into()],
                 ..Default::default()
             },
         );
 
+        assert!(!config.to_bin);
         assert_eq!(config.args, vec!["-nographic", "-smp", "2"]);
     }
 

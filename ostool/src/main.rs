@@ -120,6 +120,7 @@ async fn try_main() -> Result<()> {
                             qemu_config: qemu_args.qemu_config,
                             debug: qemu_args.debug,
                             dtb_dump: qemu_args.dtb_dump,
+                            to_bin: None,
                             args: vec![],
                             success_regex: vec![],
                             fail_regex: vec![],
