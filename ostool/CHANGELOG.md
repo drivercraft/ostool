@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/drivercraft/ostool/compare/ostool-v0.9.0...ostool-v0.10.0) - 2026-03-25
+
+### Added
+
+- 添加超时配置支持到 QEMU 和 U-Boot 运行器，改进串口终端的超时处理 ([#55](https://github.com/drivercraft/ostool/pull/55))
+
 ## [0.9.0](https://github.com/drivercraft/ostool/compare/ostool-v0.8.16...ostool-v0.9.0) - 2026-03-20
 
 ### Added
