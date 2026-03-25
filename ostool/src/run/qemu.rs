@@ -43,7 +43,9 @@ use tokio::fs;
 use crate::{
     Tool,
     run::{
-        output_matcher::{ByteStreamMatcher, StreamMatch, StreamMatchKind, compile_regexes, print_match_event},
+        output_matcher::{
+            ByteStreamMatcher, StreamMatch, StreamMatchKind, compile_regexes, print_match_event,
+        },
         ovmf_prebuilt::{Arch, FileType, Prebuilt, Source},
         shell_init::{ShellAutoInitMatcher, normalize_shell_init_config, spawn_delayed_send},
     },
@@ -173,8 +175,9 @@ async fn load_or_create_qemu_config(
 
     let config_content = match fs::read_to_string(&config_path).await {
         Ok(content) => {
-            let mut config: QemuConfig = toml::from_str(&content)
-                .with_context(|| format!("failed to parse QEMU config: {}", config_path.display()))?;
+            let mut config: QemuConfig = toml::from_str(&content).with_context(|| {
+                format!("failed to parse QEMU config: {}", config_path.display())
+            })?;
             config.normalize(&format!("QEMU config {}", config_path.display()))?;
             return Ok(config);
         }
@@ -923,12 +926,8 @@ mod tests {
         std::fs::write(tmp.path().join("qemu-aarch64.toml"), "").unwrap();
         std::fs::write(tmp.path().join("qemu.toml"), "").unwrap();
 
-        let result = resolve_qemu_config_path_in_dir(
-            tmp.path(),
-            Some(Architecture::Aarch64),
-            None,
-        )
-        .unwrap();
+        let result =
+            resolve_qemu_config_path_in_dir(tmp.path(), Some(Architecture::Aarch64), None).unwrap();
         assert_eq!(result, tmp.path().join("qemu-aarch64.toml"));
     }
 
@@ -938,8 +937,7 @@ mod tests {
         std::fs::write(tmp.path().join(".qemu.toml"), "").unwrap();
 
         let result =
-            resolve_qemu_config_path_in_dir(tmp.path(), Some(Architecture::Aarch64), None)
-                .unwrap();
+            resolve_qemu_config_path_in_dir(tmp.path(), Some(Architecture::Aarch64), None).unwrap();
         assert_eq!(result, tmp.path().join(".qemu.toml"));
     }
 
@@ -948,8 +946,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
 
         let result =
-            resolve_qemu_config_path_in_dir(tmp.path(), Some(Architecture::Aarch64), None)
-                .unwrap();
+            resolve_qemu_config_path_in_dir(tmp.path(), Some(Architecture::Aarch64), None).unwrap();
         assert_eq!(result, tmp.path().join(".qemu-aarch64.toml"));
     }
 

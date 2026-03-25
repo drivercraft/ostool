@@ -9,9 +9,7 @@ use clap::{Parser, Subcommand};
 use colored::Colorize as _;
 use log::debug;
 use ostool::{
-    logger,
-    resolve_manifest_context,
-    Tool, ToolConfig,
+    Tool, ToolConfig, logger, resolve_manifest_context,
     run::{qemu, uboot::RunUbootArgs},
 };
 

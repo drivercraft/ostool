@@ -6,11 +6,11 @@ use colored::Colorize as _;
 
 use log::info;
 use ostool::{
-    logger,
-    resolve_manifest_context,
     Tool, ToolConfig,
     build::{self, CargoRunnerKind},
+    logger,
     menuconfig::{MenuConfigHandler, MenuConfigMode},
+    resolve_manifest_context,
     run::{qemu::RunQemuArgs, uboot::RunUbootArgs},
 };
 

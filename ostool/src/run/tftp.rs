@@ -338,8 +338,7 @@ fn ensure_tftpd_hpa_service_ready(is_root: bool) -> anyhow::Result<()> {
             program: "systemctl".into(),
             args: vec!["restart".into(), "tftpd-hpa".into()],
         };
-        run_privileged_command(&restart, is_root)
-            .context("failed to restart tftpd-hpa service")?;
+        run_privileged_command(&restart, is_root).context("failed to restart tftpd-hpa service")?;
 
         if udp_port_69_is_listening()? {
             info!("tftpd-hpa is now listening on UDP port 69");
@@ -348,9 +347,7 @@ fn ensure_tftpd_hpa_service_ready(is_root: bool) -> anyhow::Result<()> {
 
         let active = run_capture("systemctl", &["is-active", "tftpd-hpa"])
             .unwrap_or_else(|_| "unknown".to_string());
-        bail!(
-            "tftpd-hpa 服务重启后仍未监听 UDP 69（systemctl is-active: {active}）"
-        );
+        bail!("tftpd-hpa 服务重启后仍未监听 UDP 69（systemctl is-active: {active}）");
     }
 
     bail!("未检测到可用的服务管理器，且 tftpd-hpa 当前未监听 UDP 69，请手动启动服务");

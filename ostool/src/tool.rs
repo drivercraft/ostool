@@ -1,9 +1,4 @@
-use std::{
-    env::current_dir,
-    ffi::OsStr,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{env::current_dir, ffi::OsStr, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, anyhow, bail};
 use cargo_metadata::Metadata;
@@ -646,12 +641,9 @@ mod tests {
         .unwrap();
 
         let package_dir = tool.resolve_package_manifest_dir("kernel").unwrap();
-        let resolved = resolve_qemu_config_path_in_dir(
-            &package_dir,
-            Some(Architecture::Aarch64),
-            None,
-        )
-        .unwrap();
+        let resolved =
+            resolve_qemu_config_path_in_dir(&package_dir, Some(Architecture::Aarch64), None)
+                .unwrap();
 
         assert_eq!(resolved, kernel_dir.join(".qemu-aarch64.toml"));
     }

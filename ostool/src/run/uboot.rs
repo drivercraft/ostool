@@ -21,7 +21,10 @@ use uboot_shell::UbootShell;
 use crate::{
     Tool,
     run::{
-        output_matcher::{ByteStreamMatcher, MATCH_DRAIN_DURATION, StreamMatchKind, compile_regexes, print_match_event},
+        output_matcher::{
+            ByteStreamMatcher, MATCH_DRAIN_DURATION, StreamMatchKind, compile_regexes,
+            print_match_event,
+        },
         shell_init::{ShellAutoInitMatcher, normalize_shell_init_config, spawn_delayed_send},
         tftp,
     },
@@ -128,9 +131,10 @@ impl Tool {
             Ok(content) => {
                 println!("Using U-Boot config: {}", config_path.display());
                 let config_content = replace_env_placeholders(&content)?;
-                let mut config: UbootConfig = toml::from_str(&config_content).with_context(|| {
-                    format!("failed to parse U-Boot config: {}", config_path.display())
-                })?;
+                let mut config: UbootConfig =
+                    toml::from_str(&config_content).with_context(|| {
+                        format!("failed to parse U-Boot config: {}", config_path.display())
+                    })?;
                 config.normalize(&format!("U-Boot config {}", config_path.display()))?;
                 config
             }
