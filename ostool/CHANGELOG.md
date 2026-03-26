@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1](https://github.com/drivercraft/ostool/compare/ostool-v0.10.0...ostool-v0.10.1) - 2026-03-26
+
+### Added
+
+- 增加对 U-Boot 和 QEMU 配置中字符串替换的支持，改进环境变量处理 ([#57](https://github.com/drivercraft/ostool/pull/57))
+
 ## [0.10.0](https://github.com/drivercraft/ostool/compare/ostool-v0.9.0...ostool-v0.10.0) - 2026-03-25
 
 ### Added
