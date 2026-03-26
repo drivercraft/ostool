@@ -391,11 +391,13 @@ impl Tool {
         let package_dir = self.package_root_for_variables()?;
         let workspace_dir = self.workspace_dir.display().to_string();
         let package_dir = package_dir.display().to_string();
+        let tmp_dir = std::env::temp_dir().display().to_string();
 
         replace_placeholders(input, |placeholder| {
             let value = match placeholder {
                 "workspace" | "workspaceFolder" => Some(workspace_dir.clone()),
                 "package" => Some(package_dir.clone()),
+                "tmpDir" => Some(tmp_dir.clone()),
                 p if p.starts_with("env:") => Some(std::env::var(&p[4..]).unwrap_or_default()),
                 _ => None,
             };
@@ -702,6 +704,27 @@ mod tests {
             .unwrap();
         let expected = temp.path().display().to_string();
         assert_eq!(replaced, format!("{expected}:{expected}"));
+    }
+
+    #[test]
+    fn replace_string_uses_cross_platform_tmpdir() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(temp.path().join("src")).unwrap();
+        std::fs::write(temp.path().join("src/lib.rs"), "").unwrap();
+
+        let tool = Tool::new(ToolConfig {
+            manifest: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let replaced = tool.replace_string("${tmpDir}").unwrap();
+        assert_eq!(replaced, std::env::temp_dir().display().to_string());
     }
 
     #[test]
