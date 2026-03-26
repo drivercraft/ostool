@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/drivercraft/ostool/compare/ostool-v0.10.1...ostool-v0.11.0) - 2026-03-26
+
+### Added
+
+- 增加 Riscv64 架构支持 ([#59](https://github.com/drivercraft/ostool/pull/59))
+- 增强 QEMU 运行时参数支持，添加覆盖和追加参数结构 ([#60](https://github.com/drivercraft/ostool/pull/60))
+
 ## [0.10.1](https://github.com/drivercraft/ostool/compare/ostool-v0.10.0...ostool-v0.10.1) - 2026-03-26
 
 ### Added
