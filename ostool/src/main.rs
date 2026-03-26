@@ -7,7 +7,7 @@ use colored::Colorize as _;
 use log::info;
 use ostool::{
     Tool, ToolConfig,
-    build::{self, CargoRunnerKind},
+    build::{self, CargoQemuAppendArgs, CargoQemuOverrideArgs, CargoRunnerKind},
     logger,
     menuconfig::{MenuConfigHandler, MenuConfigMode},
     resolve_manifest_context,
@@ -120,10 +120,9 @@ async fn try_main() -> Result<()> {
                             qemu_config: qemu_args.qemu_config,
                             debug: qemu_args.debug,
                             dtb_dump: qemu_args.dtb_dump,
-                            to_bin: None,
-                            args: vec![],
-                            success_regex: vec![],
-                            fail_regex: vec![],
+                            default_args: CargoQemuOverrideArgs::default(),
+                            append_args: CargoQemuAppendArgs::default(),
+                            override_args: CargoQemuOverrideArgs::default(),
                         },
                         RunSubCommands::Uboot(uboot_args) => CargoRunnerKind::Uboot {
                             uboot_config: uboot_args.uboot_config,

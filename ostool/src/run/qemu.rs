@@ -43,6 +43,7 @@ use tokio::fs;
 
 use crate::{
     Tool,
+    build::{CargoQemuAppendArgs, CargoQemuOverrideArgs},
     run::{
         output_matcher::{ByteStreamMatcher, compile_regexes, print_match_event},
         ovmf_prebuilt::{Arch, FileType, Prebuilt, Source},
@@ -138,11 +139,50 @@ pub struct RunQemuArgs {
 }
 
 #[derive(Debug, Clone, Default)]
-struct QemuDefaultOverrides {
+struct RunQemuAppendArgs {
+    args: Option<Vec<String>>,
+    success_regex: Option<Vec<String>>,
+    fail_regex: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RunQemuOverrideArgs {
     to_bin: Option<bool>,
-    args: Vec<String>,
-    success_regex: Vec<String>,
-    fail_regex: Vec<String>,
+    args: Option<Vec<String>>,
+    success_regex: Option<Vec<String>>,
+    fail_regex: Option<Vec<String>>,
+    shell_prefix: Option<String>,
+    shell_init_cmd: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RunQemuLayers {
+    default_args: RunQemuOverrideArgs,
+    append_args: RunQemuAppendArgs,
+    override_args: RunQemuOverrideArgs,
+}
+
+impl From<CargoQemuAppendArgs> for RunQemuAppendArgs {
+    fn from(value: CargoQemuAppendArgs) -> Self {
+        Self {
+            args: value.args,
+            success_regex: value.success_regex,
+            fail_regex: value.fail_regex,
+        }
+    }
+}
+
+impl From<CargoQemuOverrideArgs> for RunQemuOverrideArgs {
+    fn from(value: CargoQemuOverrideArgs) -> Self {
+        Self {
+            to_bin: value.to_bin,
+            args: value.args,
+            success_regex: value.success_regex,
+            fail_regex: value.fail_regex,
+            shell_prefix: value.shell_prefix,
+            shell_init_cmd: value.shell_init_cmd,
+        }
+    }
 }
 
 /// Runs the operating system in QEMU.
@@ -160,45 +200,48 @@ struct QemuDefaultOverrides {
 /// Returns an error if QEMU fails to start or exits with an error.
 impl Tool {
     pub async fn run_qemu(&mut self, args: RunQemuArgs) -> anyhow::Result<()> {
-        self.run_qemu_with_more_default_args(args, None, vec![], vec![], vec![])
-            .await
+        self.run_qemu_with_layers(
+            args,
+            CargoQemuOverrideArgs::default(),
+            CargoQemuAppendArgs::default(),
+            CargoQemuOverrideArgs::default(),
+        )
+        .await
     }
 
-    pub async fn run_qemu_with_more_default_args(
+    pub async fn run_qemu_with_layers(
         &mut self,
         run_args: RunQemuArgs,
-        to_bin: Option<bool>,
-        args: Vec<String>,
-        success_regex: Vec<String>,
-        fail_regex: Vec<String>,
+        default_args: CargoQemuOverrideArgs,
+        append_args: CargoQemuAppendArgs,
+        override_args: CargoQemuOverrideArgs,
     ) -> anyhow::Result<()> {
-        run_qemu_with_defaults(
+        run_qemu_with_layers(
             self,
             run_args,
-            QemuDefaultOverrides {
-                to_bin,
-                args,
-                success_regex,
-                fail_regex,
+            RunQemuLayers {
+                default_args: default_args.into(),
+                append_args: append_args.into(),
+                override_args: override_args.into(),
             },
         )
         .await
     }
 }
 
-async fn run_qemu_with_defaults(
+async fn run_qemu_with_layers(
     tool: &mut Tool,
     run_args: RunQemuArgs,
-    overrides: QemuDefaultOverrides,
+    layers: RunQemuLayers,
 ) -> anyhow::Result<()> {
-    let config = load_or_create_qemu_config(tool, run_args.qemu_config.clone(), overrides).await?;
+    let config = load_or_create_qemu_config(tool, run_args.qemu_config.clone(), layers).await?;
     run_qemu_with_config(tool, run_args, config).await
 }
 
 async fn load_or_create_qemu_config(
     tool: &Tool,
     explicit_config_path: Option<PathBuf>,
-    overrides: QemuDefaultOverrides,
+    layers: RunQemuLayers,
 ) -> anyhow::Result<QemuConfig> {
     let explicit_config_path = explicit_config_path
         .map(|path| tool.replace_path_variables(path))
@@ -213,11 +256,15 @@ async fn load_or_create_qemu_config(
                 format!("failed to parse QEMU config: {}", config_path.display())
             })?;
             config.replace_strings(tool)?;
+            apply_append_args(&mut config, &layers.append_args);
+            apply_override_args(&mut config, &layers.override_args);
             config.normalize(&format!("QEMU config {}", config_path.display()))?;
             return Ok(config);
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            let mut config = build_default_qemu_config(tool.ctx.arch, overrides);
+            let mut config = build_default_qemu_config(tool.ctx.arch, &layers.default_args);
+            apply_append_args(&mut config, &layers.append_args);
+            apply_override_args(&mut config, &layers.override_args);
             config.normalize(&format!("QEMU config {}", config_path.display()))?;
             fs::write(&config_path, toml::to_string_pretty(&config)?)
                 .await
@@ -231,12 +278,14 @@ async fn load_or_create_qemu_config(
 
 fn build_default_qemu_config(
     arch: Option<Architecture>,
-    overrides: QemuDefaultOverrides,
+    default_args: &RunQemuOverrideArgs,
 ) -> QemuConfig {
     let mut config = QemuConfig {
-        to_bin: overrides.to_bin.unwrap_or(true),
-        success_regex: overrides.success_regex,
-        fail_regex: overrides.fail_regex,
+        to_bin: default_args.to_bin.unwrap_or(true),
+        success_regex: default_args.success_regex.clone().unwrap_or_default(),
+        fail_regex: default_args.fail_regex.clone().unwrap_or_default(),
+        shell_prefix: default_args.shell_prefix.clone(),
+        shell_init_cmd: default_args.shell_init_cmd.clone(),
         ..Default::default()
     };
     config.args.push("-nographic".to_string());
@@ -253,8 +302,43 @@ fn build_default_qemu_config(
             _ => {}
         }
     }
-    config.args.extend(overrides.args);
     config
+        .args
+        .extend(default_args.args.clone().unwrap_or_default());
+    config
+}
+
+fn apply_append_args(config: &mut QemuConfig, append_args: &RunQemuAppendArgs) {
+    if let Some(args) = &append_args.args {
+        config.args.extend(args.clone());
+    }
+    if let Some(success_regex) = &append_args.success_regex {
+        config.success_regex.extend(success_regex.clone());
+    }
+    if let Some(fail_regex) = &append_args.fail_regex {
+        config.fail_regex.extend(fail_regex.clone());
+    }
+}
+
+fn apply_override_args(config: &mut QemuConfig, override_args: &RunQemuOverrideArgs) {
+    if let Some(to_bin) = override_args.to_bin {
+        config.to_bin = to_bin;
+    }
+    if let Some(args) = &override_args.args {
+        config.args = args.clone();
+    }
+    if let Some(success_regex) = &override_args.success_regex {
+        config.success_regex = success_regex.clone();
+    }
+    if let Some(fail_regex) = &override_args.fail_regex {
+        config.fail_regex = fail_regex.clone();
+    }
+    if let Some(shell_prefix) = &override_args.shell_prefix {
+        config.shell_prefix = Some(shell_prefix.clone());
+    }
+    if let Some(shell_init_cmd) = &override_args.shell_init_cmd {
+        config.shell_init_cmd = Some(shell_init_cmd.clone());
+    }
 }
 
 async fn run_qemu_with_config(
@@ -744,8 +828,10 @@ fn timeout_duration(timeout: Option<u64>) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::{
-        QemuConfig, QemuDefaultOverrides, QemuRunner, build_default_qemu_config,
-        resolve_qemu_config_path, resolve_qemu_config_path_in_dir, timeout_duration,
+        QemuConfig, QemuRunner, RunQemuAppendArgs, RunQemuLayers, RunQemuOverrideArgs,
+        apply_append_args, apply_override_args, build_default_qemu_config,
+        load_or_create_qemu_config, resolve_qemu_config_path, resolve_qemu_config_path_in_dir,
+        timeout_duration,
     };
     use object::Architecture;
     use std::{path::PathBuf, time::Duration};
@@ -781,7 +867,8 @@ mod tests {
 
     #[test]
     fn default_qemu_config_keeps_existing_defaults_without_overrides() {
-        let config = build_default_qemu_config(Some(Architecture::Aarch64), Default::default());
+        let config =
+            build_default_qemu_config(Some(Architecture::Aarch64), &RunQemuOverrideArgs::default());
 
         assert!(config.to_bin);
         assert_eq!(config.args, vec!["-nographic", "-cpu", "cortex-a53"]);
@@ -794,10 +881,10 @@ mod tests {
     fn default_qemu_config_appends_extra_args_and_regex() {
         let config = build_default_qemu_config(
             Some(Architecture::Riscv64),
-            QemuDefaultOverrides {
-                args: vec!["-m".into(), "512M".into()],
-                success_regex: vec!["PASS".into()],
-                fail_regex: vec!["FAIL".into()],
+            &RunQemuOverrideArgs {
+                args: Some(vec!["-m".into(), "512M".into()]),
+                success_regex: Some(vec!["PASS".into()]),
+                fail_regex: Some(vec!["FAIL".into()]),
                 ..Default::default()
             },
         );
@@ -815,9 +902,9 @@ mod tests {
     fn default_qemu_config_for_other_arch_only_adds_generic_defaults() {
         let config = build_default_qemu_config(
             Some(Architecture::X86_64),
-            QemuDefaultOverrides {
+            &RunQemuOverrideArgs {
                 to_bin: Some(false),
-                args: vec!["-smp".into(), "2".into()],
+                args: Some(vec!["-smp".into(), "2".into()]),
                 ..Default::default()
             },
         );
@@ -825,6 +912,189 @@ mod tests {
         assert!(!config.to_bin);
         assert_eq!(config.args, vec!["-nographic", "-smp", "2"]);
         assert_eq!(config.timeout, None);
+    }
+
+    #[test]
+    fn default_qemu_config_sets_shell_fields() {
+        let config = build_default_qemu_config(
+            Some(Architecture::Aarch64),
+            &RunQemuOverrideArgs {
+                shell_prefix: Some("login:".into()),
+                shell_init_cmd: Some("root".into()),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
+        assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
+    }
+
+    #[test]
+    fn append_args_extend_existing_lists() {
+        let mut config = QemuConfig {
+            args: vec!["-nographic".into()],
+            success_regex: vec!["PASS".into()],
+            fail_regex: vec!["FAIL".into()],
+            ..Default::default()
+        };
+
+        apply_append_args(
+            &mut config,
+            &RunQemuAppendArgs {
+                args: Some(vec!["-smp".into(), "2".into()]),
+                success_regex: Some(vec!["READY".into()]),
+                fail_regex: Some(vec!["PANIC".into()]),
+            },
+        );
+
+        assert_eq!(config.args, vec!["-nographic", "-smp", "2"]);
+        assert_eq!(config.success_regex, vec!["PASS", "READY"]);
+        assert_eq!(config.fail_regex, vec!["FAIL", "PANIC"]);
+    }
+
+    #[test]
+    fn override_args_replace_only_some_fields() {
+        let mut config = QemuConfig {
+            args: vec!["-nographic".into(), "-smp".into(), "2".into()],
+            to_bin: false,
+            success_regex: vec!["PASS".into()],
+            fail_regex: vec!["FAIL".into()],
+            shell_prefix: Some("login:".into()),
+            shell_init_cmd: Some("root".into()),
+            ..Default::default()
+        };
+
+        apply_override_args(
+            &mut config,
+            &RunQemuOverrideArgs {
+                to_bin: Some(true),
+                args: Some(vec![]),
+                success_regex: Some(vec!["OVERRIDE_OK".into()]),
+                shell_prefix: Some("console>".into()),
+                ..Default::default()
+            },
+        );
+
+        assert!(config.to_bin);
+        assert!(config.args.is_empty());
+        assert_eq!(config.success_regex, vec!["OVERRIDE_OK"]);
+        assert_eq!(config.fail_regex, vec!["FAIL"]);
+        assert_eq!(config.shell_prefix.as_deref(), Some("console>"));
+        assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
+    }
+
+    #[tokio::test]
+    async fn load_existing_qemu_config_applies_append_and_override_layers() {
+        let tmp = TempDir::new().unwrap();
+        write_single_crate_manifest(tmp.path());
+        let config_path = tmp.path().join(".qemu.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+args = ["-nographic", "-machine", "virt"]
+uefi = false
+to_bin = false
+success_regex = ["PASS"]
+fail_regex = ["FAIL"]
+shell_prefix = "login:"
+shell_init_cmd = "root"
+"#,
+        )
+        .unwrap();
+
+        let mut tool = make_tool(tmp.path());
+        tool.ctx.arch = Some(Architecture::Aarch64);
+
+        let config = load_or_create_qemu_config(
+            &tool,
+            Some(config_path),
+            RunQemuLayers {
+                default_args: RunQemuOverrideArgs {
+                    to_bin: Some(true),
+                    args: Some(vec!["-cpu".into(), "cortex-a53".into()]),
+                    success_regex: Some(vec!["SHOULD_NOT_APPEAR".into()]),
+                    fail_regex: Some(vec!["SHOULD_NOT_APPEAR".into()]),
+                    shell_prefix: Some("default-login:".into()),
+                    shell_init_cmd: Some("default-root".into()),
+                },
+                append_args: RunQemuAppendArgs {
+                    args: Some(vec!["-smp".into(), "2".into()]),
+                    success_regex: Some(vec!["READY".into()]),
+                    fail_regex: Some(vec!["PANIC".into()]),
+                },
+                override_args: RunQemuOverrideArgs {
+                    to_bin: Some(true),
+                    args: Some(vec!["-serial".into(), "mon:stdio".into()]),
+                    success_regex: Some(vec!["OVERRIDE_OK".into()]),
+                    fail_regex: Some(vec!["OVERRIDE_FAIL".into()]),
+                    shell_prefix: Some("console>".into()),
+                    shell_init_cmd: Some("run-tests".into()),
+                },
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(config.to_bin);
+        assert_eq!(config.success_regex, vec!["OVERRIDE_OK"]);
+        assert_eq!(config.fail_regex, vec!["OVERRIDE_FAIL"]);
+        assert_eq!(config.shell_prefix.as_deref(), Some("console>"));
+        assert_eq!(config.shell_init_cmd.as_deref(), Some("run-tests"));
+        assert_eq!(config.args, vec!["-serial", "mon:stdio"]);
+    }
+
+    #[tokio::test]
+    async fn load_default_qemu_config_applies_default_then_append_then_override() {
+        let tmp = TempDir::new().unwrap();
+        write_single_crate_manifest(tmp.path());
+        let config_path = tmp.path().join(".qemu.toml");
+
+        let mut tool = make_tool(tmp.path());
+        tool.ctx.arch = Some(Architecture::Aarch64);
+
+        let config = load_or_create_qemu_config(
+            &tool,
+            Some(config_path),
+            RunQemuLayers {
+                default_args: RunQemuOverrideArgs {
+                    to_bin: Some(false),
+                    args: Some(vec!["-m".into(), "512M".into()]),
+                    success_regex: Some(vec!["BOOT_OK".into()]),
+                    fail_regex: Some(vec!["BOOT_FAIL".into()]),
+                    shell_prefix: Some("login:".into()),
+                    shell_init_cmd: Some("root".into()),
+                },
+                append_args: RunQemuAppendArgs {
+                    args: Some(vec!["-smp".into(), "2".into()]),
+                    success_regex: Some(vec!["READY".into()]),
+                    fail_regex: Some(vec!["PANIC".into()]),
+                },
+                override_args: RunQemuOverrideArgs {
+                    success_regex: Some(vec!["FINAL_OK".into()]),
+                    ..Default::default()
+                },
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!config.to_bin);
+        assert_eq!(
+            config.args,
+            vec![
+                "-nographic",
+                "-cpu",
+                "cortex-a53",
+                "-m",
+                "512M",
+                "-smp",
+                "2"
+            ]
+        );
+        assert_eq!(config.success_regex, vec!["FINAL_OK"]);
+        assert_eq!(config.fail_regex, vec!["BOOT_FAIL", "PANIC"]);
+        assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
+        assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
     }
 
     #[test]

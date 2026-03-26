@@ -40,6 +40,34 @@ pub mod config;
 
 pub mod someboot;
 
+/// Cargo QEMU runtime overrides for generated defaults and final invocation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CargoQemuOverrideArgs {
+    /// Optional override for the generated QEMU config `to_bin` default.
+    pub to_bin: Option<bool>,
+    /// QEMU command-line arguments for this override layer.
+    pub args: Option<Vec<String>>,
+    /// Regex patterns that indicate successful execution.
+    pub success_regex: Option<Vec<String>>,
+    /// Regex patterns that indicate failed execution.
+    pub fail_regex: Option<Vec<String>>,
+    /// String prefix that indicates the guest shell is ready.
+    pub shell_prefix: Option<String>,
+    /// Command sent once after `shell_prefix` is detected.
+    pub shell_init_cmd: Option<String>,
+}
+
+/// Cargo QEMU runtime append arguments for the final invocation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CargoQemuAppendArgs {
+    /// QEMU command-line arguments appended to the final argument list.
+    pub args: Option<Vec<String>>,
+    /// Regex patterns appended to the final success matcher list.
+    pub success_regex: Option<Vec<String>>,
+    /// Regex patterns appended to the final failure matcher list.
+    pub fail_regex: Option<Vec<String>>,
+}
+
 /// Specifies the type of runner to use after building.
 ///
 /// This enum determines how the built artifact will be executed,
@@ -53,14 +81,12 @@ pub enum CargoRunnerKind {
         debug: bool,
         /// Whether to dump the device tree blob.
         dtb_dump: bool,
-        /// Optional override for the generated QEMU config `to_bin` default.
-        to_bin: Option<bool>,
-        /// Extra default QEMU command-line arguments.
-        args: Vec<String>,
-        /// Regex patterns that indicate successful execution.
-        success_regex: Vec<String>,
-        /// Regex patterns that indicate failed execution.
-        fail_regex: Vec<String>,
+        /// Overrides applied only when generating a default config.
+        default_args: CargoQemuOverrideArgs,
+        /// Arguments appended after the base config is prepared.
+        append_args: CargoQemuAppendArgs,
+        /// Final overrides applied after append processing.
+        override_args: CargoQemuOverrideArgs,
     },
     /// Run the built artifact on real hardware via U-Boot.
     Uboot {
@@ -168,10 +194,9 @@ impl Tool {
             CargoRunnerKind::Qemu {
                 qemu_config,
                 dtb_dump,
-                to_bin,
-                args,
-                success_regex,
-                fail_regex,
+                default_args,
+                append_args,
+                override_args,
                 ..
             } => {
                 let package_dir = self.resolve_package_manifest_dir(&config.package)?;
@@ -181,16 +206,15 @@ impl Tool {
                     qemu_config.clone(),
                 )?;
 
-                self.run_qemu_with_more_default_args(
+                self.run_qemu_with_layers(
                     RunQemuArgs {
                         qemu_config: Some(resolved_qemu_config),
                         dtb_dump: *dtb_dump,
                         show_output: true,
                     },
-                    *to_bin,
-                    args.clone(),
-                    success_regex.clone(),
-                    fail_regex.clone(),
+                    default_args.clone(),
+                    append_args.clone(),
+                    override_args.clone(),
                 )
                 .await?;
             }
