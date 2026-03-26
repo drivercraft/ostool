@@ -207,10 +207,24 @@ where
 /// assert_eq!(result, "Value: hello");
 /// ```
 pub fn replace_env_placeholders(input: &str) -> anyhow::Result<String> {
-    use std::env;
+    replace_placeholders(input, |placeholder| {
+        if let Some(env_var_name) = placeholder.strip_prefix("env:") {
+            return Ok(Some(std::env::var(env_var_name).unwrap_or_default()));
+        }
 
-    // 使用正则表达式匹配 ${env:VAR_NAME} 格式
-    // 由于我们要避免外部依赖，使用简单的字符串解析
+        Ok(None)
+    })
+}
+
+/// Replaces placeholders in a string using a caller-provided resolver.
+///
+/// Placeholders use the format `${name}`. The resolver can choose to replace
+/// a placeholder by returning `Some(value)` or keep it unchanged with `None`.
+/// This function preserves malformed or unknown placeholders as-is.
+pub fn replace_placeholders<F>(input: &str, mut resolver: F) -> anyhow::Result<String>
+where
+    F: FnMut(&str) -> anyhow::Result<Option<String>>,
+{
     let mut result = String::new();
     let mut chars = input.chars().peekable();
 
@@ -240,28 +254,17 @@ pub fn replace_env_placeholders(input: &str) -> anyhow::Result<String> {
                 }
             }
 
-            // 只有找到完整的占位符才进行处理
-            if found_closing_brace && placeholder.starts_with("env:") {
-                let env_var_name = &placeholder[4..]; // 跳过 "env:"
-
-                // 获取环境变量值，如果不存在则替换为空字符串
-                match env::var(env_var_name) {
-                    Ok(value) => {
-                        println!("Using {env_var_name}={value}");
-                        result.push_str(&value)
-                    }
-                    Err(_) => {
-                        // 环境变量不存在时替换为空字符串，不返回错误
-                        result.push_str("");
-                    }
-                }
-            } else {
-                // 不是完整的占位符或不是环境变量占位符，保持原样
-                result.push_str("${");
-                result.push_str(&placeholder);
-                if found_closing_brace {
+            if found_closing_brace {
+                if let Some(value) = resolver(&placeholder)? {
+                    result.push_str(&value);
+                } else {
+                    result.push_str("${");
+                    result.push_str(&placeholder);
                     result.push('}');
                 }
+            } else {
+                result.push_str("${");
+                result.push_str(&placeholder);
             }
         } else {
             result.push(ch);
@@ -275,6 +278,31 @@ pub fn replace_env_placeholders(input: &str) -> anyhow::Result<String> {
 mod tests {
     use super::*;
     use std::env;
+
+    #[test]
+    fn test_replace_placeholders_supports_custom_variables() {
+        unsafe {
+            env::set_var("OSTOOL_TEST_CUSTOM_ENV", "env-value");
+        }
+
+        let result = replace_placeholders(
+            "workspace=${workspace}, package=${package}, env=${env:OSTOOL_TEST_CUSTOM_ENV}",
+            |placeholder| {
+                Ok(match placeholder {
+                    "workspace" => Some("/tmp/workspace".into()),
+                    "package" => Some("/tmp/workspace/kernel".into()),
+                    p if p.starts_with("env:") => Some(env::var(&p[4..]).unwrap_or_default()),
+                    _ => None,
+                })
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            result,
+            "workspace=/tmp/workspace, package=/tmp/workspace/kernel, env=env-value"
+        );
+    }
 
     #[test]
     fn test_replace_env_placeholders() {
@@ -338,6 +366,23 @@ mod tests {
                 .unwrap(),
             "value and ${other:placeholder}"
         );
+    }
+
+    #[test]
+    fn test_replace_placeholders_keeps_unknown_and_legacy_placeholders() {
+        let result = replace_placeholders(
+            "${workspaceFolder}:${unknown}:${workspace}",
+            |placeholder| {
+                Ok(match placeholder {
+                    "workspaceFolder" => Some("/legacy".into()),
+                    "workspace" => Some("/modern".into()),
+                    _ => None,
+                })
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result, "/legacy:${unknown}:/modern");
     }
 
     #[test]

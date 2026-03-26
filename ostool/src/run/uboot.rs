@@ -28,7 +28,7 @@ use crate::{
         tftp,
     },
     sterm::SerialTerm,
-    utils::{PathResultExt, replace_env_placeholders},
+    utils::PathResultExt,
 };
 
 /// FIT image 生成相关的错误消息常量
@@ -73,6 +73,70 @@ pub struct UbootConfig {
 }
 
 impl UbootConfig {
+    fn replace_strings(&mut self, tool: &Tool) -> anyhow::Result<()> {
+        self.serial = tool.replace_string(&self.serial)?;
+        self.baud_rate = tool.replace_string(&self.baud_rate)?;
+        self.dtb_file = self
+            .dtb_file
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        self.kernel_load_addr = self
+            .kernel_load_addr
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        self.fit_load_addr = self
+            .fit_load_addr
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        self.board_reset_cmd = self
+            .board_reset_cmd
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        self.board_power_off_cmd = self
+            .board_power_off_cmd
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        self.success_regex = self
+            .success_regex
+            .iter()
+            .map(|value| tool.replace_string(value))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        self.fail_regex = self
+            .fail_regex
+            .iter()
+            .map(|value| tool.replace_string(value))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        self.uboot_cmd = self
+            .uboot_cmd
+            .as_ref()
+            .map(|values| {
+                values
+                    .iter()
+                    .map(|value| tool.replace_string(value))
+                    .collect::<anyhow::Result<Vec<_>>>()
+            })
+            .transpose()?;
+        self.shell_prefix = self
+            .shell_prefix
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        self.shell_init_cmd = self
+            .shell_init_cmd
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        if let Some(net) = &mut self.net {
+            net.replace_strings(tool)?;
+        }
+        Ok(())
+    }
+
     pub fn kernel_load_addr_int(&self) -> Option<u64> {
         self.addr_int(self.kernel_load_addr.as_ref())
     }
@@ -115,6 +179,33 @@ pub struct Net {
     pub tftp_dir: Option<String>,
 }
 
+impl Net {
+    fn replace_strings(&mut self, tool: &Tool) -> anyhow::Result<()> {
+        self.interface = tool.replace_string(&self.interface)?;
+        self.board_ip = self
+            .board_ip
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        self.gatewayip = self
+            .gatewayip
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        self.netmask = self
+            .netmask
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        self.tftp_dir = self
+            .tftp_dir
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RunUbootArgs {
     pub config: Option<PathBuf>,
@@ -124,18 +215,17 @@ pub struct RunUbootArgs {
 impl Tool {
     pub async fn run_uboot(&mut self, args: RunUbootArgs) -> anyhow::Result<()> {
         let config_path = match args.config.clone() {
-            Some(path) => path,
+            Some(path) => self.replace_path_variables(path)?,
             None => self.workspace_dir().join(".uboot.toml"),
         };
 
         let config = match fs::read_to_string(&config_path).await {
             Ok(content) => {
                 println!("Using U-Boot config: {}", config_path.display());
-                let config_content = replace_env_placeholders(&content)?;
-                let mut config: UbootConfig =
-                    toml::from_str(&config_content).with_context(|| {
-                        format!("failed to parse U-Boot config: {}", config_path.display())
-                    })?;
+                let mut config: UbootConfig = toml::from_str(&content).with_context(|| {
+                    format!("failed to parse U-Boot config: {}", config_path.display())
+                })?;
+                config.replace_strings(self)?;
                 config.normalize(&format!("U-Boot config {}", config_path.display()))?;
                 config
             }
@@ -718,7 +808,12 @@ fn build_network_boot_request(
 
 #[cfg(test)]
 mod tests {
-    use super::{UbootConfig, build_network_boot_request, timeout_duration};
+    use super::{Net, UbootConfig, build_network_boot_request, timeout_duration};
+    use crate::{
+        Tool, ToolConfig,
+        build::config::{BuildConfig, BuildSystem, Cargo},
+    };
+    use std::collections::HashMap;
     use std::time::Duration;
 
     #[test]
@@ -805,5 +900,97 @@ timeout = 0
         .unwrap();
 
         assert_eq!(config.timeout, Some(0));
+    }
+
+    #[test]
+    fn uboot_config_replaces_string_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("src/lib.rs"), "").unwrap();
+
+        let mut tool = Tool::new(ToolConfig {
+            manifest: Some(tmp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+        tool.ctx.build_config = Some(BuildConfig {
+            system: BuildSystem::Cargo(Cargo {
+                env: HashMap::new(),
+                target: "aarch64-unknown-none".into(),
+                package: "sample".into(),
+                features: vec![],
+                log: None,
+                extra_config: None,
+                args: vec![],
+                pre_build_cmds: vec![],
+                post_build_cmds: vec![],
+                to_bin: false,
+            }),
+        });
+        unsafe {
+            std::env::set_var("OSTOOL_UBOOT_TEST_ENV", "env-ok");
+        }
+
+        let mut config = UbootConfig {
+            serial: "${workspace}/tty".into(),
+            baud_rate: "${env:OSTOOL_UBOOT_TEST_ENV}".into(),
+            dtb_file: Some("${package}/board.dtb".into()),
+            kernel_load_addr: Some("${workspaceFolder}".into()),
+            fit_load_addr: Some("${package}".into()),
+            board_reset_cmd: Some("${workspace}".into()),
+            board_power_off_cmd: Some("${package}".into()),
+            success_regex: vec!["${workspace}".into()],
+            fail_regex: vec!["${package}".into()],
+            uboot_cmd: Some(vec!["setenv boot ${workspace}".into()]),
+            shell_prefix: Some("${workspace}".into()),
+            shell_init_cmd: Some("${package}".into()),
+            net: Some(Net {
+                interface: "${env:OSTOOL_UBOOT_TEST_ENV}".into(),
+                board_ip: Some("${workspace}".into()),
+                gatewayip: Some("${package}".into()),
+                netmask: Some("${workspaceFolder}".into()),
+                tftp_dir: Some("${package}/tftp".into()),
+            }),
+            ..Default::default()
+        };
+
+        config.replace_strings(&tool).unwrap();
+
+        let expected = tmp.path().display().to_string();
+        assert_eq!(config.serial, format!("{expected}/tty"));
+        assert_eq!(config.baud_rate, "env-ok");
+        assert_eq!(
+            config.dtb_file.as_deref(),
+            Some(format!("{expected}/board.dtb").as_str())
+        );
+        assert_eq!(config.kernel_load_addr.as_deref(), Some(expected.as_str()));
+        assert_eq!(config.fit_load_addr.as_deref(), Some(expected.as_str()));
+        assert_eq!(config.board_reset_cmd.as_deref(), Some(expected.as_str()));
+        assert_eq!(
+            config.board_power_off_cmd.as_deref(),
+            Some(expected.as_str())
+        );
+        assert_eq!(config.success_regex, vec![expected.clone()]);
+        assert_eq!(config.fail_regex, vec![expected.clone()]);
+        assert_eq!(
+            config.uboot_cmd,
+            Some(vec![format!("setenv boot {expected}")])
+        );
+        assert_eq!(config.shell_prefix.as_deref(), Some(expected.as_str()));
+        assert_eq!(config.shell_init_cmd.as_deref(), Some(expected.as_str()));
+        let net = config.net.unwrap();
+        assert_eq!(net.interface, "env-ok");
+        assert_eq!(net.board_ip.as_deref(), Some(expected.as_str()));
+        assert_eq!(net.gatewayip.as_deref(), Some(expected.as_str()));
+        assert_eq!(net.netmask.as_deref(), Some(expected.as_str()));
+        assert_eq!(
+            net.tftp_dir.as_deref(),
+            Some(format!("{expected}/tftp").as_str())
+        );
     }
 }

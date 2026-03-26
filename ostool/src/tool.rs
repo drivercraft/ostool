@@ -18,7 +18,7 @@ use crate::{
         someboot,
     },
     ctx::AppContext,
-    utils::PathResultExt,
+    utils::{PathResultExt, replace_placeholders},
 };
 
 /// Static configuration used to initialize a [`Tool`].
@@ -140,14 +140,9 @@ impl Tool {
 
     /// Creates a new command builder for the given program.
     pub fn command(&self, program: &str) -> crate::utils::Command {
-        let workspace_dir = self.workspace_dir.clone();
-        let mut command = crate::utils::Command::new(program, &self.manifest_dir, move |s| {
-            let raw = s.to_string_lossy();
-            raw.replace(
-                "${workspaceFolder}",
-                format!("{}", workspace_dir.display()).as_ref(),
-            )
-        });
+        let tool = self.clone();
+        let mut command =
+            crate::utils::Command::new(program, &self.manifest_dir, move |s| tool.replace_value(s));
         command.env("WORKSPACE_FOLDER", self.workspace_dir.display().to_string());
         command
     }
@@ -381,11 +376,46 @@ impl Tool {
     where
         S: AsRef<OsStr>,
     {
-        let raw = value.as_ref().to_string_lossy();
-        raw.replace(
-            "${workspaceFolder}",
-            format!("{}", self.workspace_dir.display()).as_ref(),
-        )
+        self.replace_value(value)
+    }
+
+    pub fn replace_value<S>(&self, value: S) -> String
+    where
+        S: AsRef<OsStr>,
+    {
+        self.replace_string(&value.as_ref().to_string_lossy())
+            .unwrap_or_else(|_| value.as_ref().to_string_lossy().into_owned())
+    }
+
+    pub fn replace_string(&self, input: &str) -> anyhow::Result<String> {
+        let package_dir = self.package_root_for_variables()?;
+        let workspace_dir = self.workspace_dir.display().to_string();
+        let package_dir = package_dir.display().to_string();
+
+        replace_placeholders(input, |placeholder| {
+            let value = match placeholder {
+                "workspace" | "workspaceFolder" => Some(workspace_dir.clone()),
+                "package" => Some(package_dir.clone()),
+                p if p.starts_with("env:") => Some(std::env::var(&p[4..]).unwrap_or_default()),
+                _ => None,
+            };
+            Ok(value)
+        })
+    }
+
+    pub fn replace_path_variables(&self, path: PathBuf) -> anyhow::Result<PathBuf> {
+        Ok(PathBuf::from(self.replace_string(&path.to_string_lossy())?))
+    }
+
+    fn package_root_for_variables(&self) -> anyhow::Result<PathBuf> {
+        if let Some(BuildConfig {
+            system: BuildSystem::Cargo(cargo),
+        }) = &self.ctx.build_config
+        {
+            return self.resolve_package_manifest_dir(&cargo.package);
+        }
+
+        Ok(self.manifest_dir.clone())
     }
 
     pub fn ui_hocks(&self) -> Vec<ElemHock> {
@@ -502,8 +532,10 @@ fn resolve_manifest_path(input: Option<PathBuf>) -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{Tool, ToolConfig, resolve_manifest_context};
+    use crate::build::config::{BuildConfig, BuildSystem, Cargo};
     use crate::run::qemu::resolve_qemu_config_path_in_dir;
     use object::Architecture;
+    use std::collections::HashMap;
 
     #[tokio::test]
     async fn set_elf_artifact_path_updates_dirs_and_arch() {
@@ -646,5 +678,143 @@ mod tests {
                 .unwrap();
 
         assert_eq!(resolved, kernel_dir.join(".qemu-aarch64.toml"));
+    }
+
+    #[test]
+    fn replace_string_uses_workspace_and_legacy_workspacefolder() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(temp.path().join("src")).unwrap();
+        std::fs::write(temp.path().join("src/lib.rs"), "").unwrap();
+
+        let tool = Tool::new(ToolConfig {
+            manifest: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let replaced = tool
+            .replace_string("${workspace}:${workspaceFolder}")
+            .unwrap();
+        let expected = temp.path().display().to_string();
+        assert_eq!(replaced, format!("{expected}:{expected}"));
+    }
+
+    #[test]
+    fn replace_string_uses_package_dir_from_build_config() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\", \"kernel\"]\nresolver = \"3\"\n",
+        )
+        .unwrap();
+
+        let app_dir = temp.path().join("app");
+        std::fs::create_dir_all(app_dir.join("src")).unwrap();
+        std::fs::write(
+            app_dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(app_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let kernel_dir = temp.path().join("kernel");
+        std::fs::create_dir_all(kernel_dir.join("src")).unwrap();
+        std::fs::write(
+            kernel_dir.join("Cargo.toml"),
+            "[package]\nname = \"kernel\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(kernel_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let mut tool = Tool::new(ToolConfig {
+            manifest: Some(app_dir),
+            ..Default::default()
+        })
+        .unwrap();
+        tool.ctx.build_config = Some(BuildConfig {
+            system: BuildSystem::Cargo(Cargo {
+                env: HashMap::new(),
+                target: "aarch64-unknown-none".into(),
+                package: "kernel".into(),
+                features: vec![],
+                log: None,
+                extra_config: None,
+                args: vec![],
+                pre_build_cmds: vec![],
+                post_build_cmds: vec![],
+                to_bin: false,
+            }),
+        });
+
+        let replaced = tool.replace_string("${package}").unwrap();
+        assert_eq!(replaced, kernel_dir.display().to_string());
+    }
+
+    #[test]
+    fn replace_string_falls_back_to_manifest_dir_for_package() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(temp.path().join("src")).unwrap();
+        std::fs::write(temp.path().join("src/lib.rs"), "").unwrap();
+
+        let tool = Tool::new(ToolConfig {
+            manifest: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let replaced = tool.replace_string("${package}").unwrap();
+        assert_eq!(replaced, temp.path().display().to_string());
+    }
+
+    #[test]
+    fn command_replaces_args_and_env() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(temp.path().join("src")).unwrap();
+        std::fs::write(temp.path().join("src/lib.rs"), "").unwrap();
+
+        let tool = Tool::new(ToolConfig {
+            manifest: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let mut cmd = tool.command("echo");
+        cmd.arg("${workspace}");
+        cmd.env("PKG_DIR", "${package}");
+
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, vec![temp.path().display().to_string()]);
+
+        let envs: Vec<(String, String)> = cmd
+            .get_envs()
+            .filter_map(|(k, v)| {
+                Some((
+                    k.to_string_lossy().into_owned(),
+                    v?.to_string_lossy().into_owned(),
+                ))
+            })
+            .collect();
+        assert!(
+            envs.iter()
+                .any(|(k, v)| k == "PKG_DIR" && v == &temp.path().display().to_string())
+        );
     }
 }

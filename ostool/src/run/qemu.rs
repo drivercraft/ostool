@@ -84,6 +84,35 @@ pub struct QemuConfig {
 }
 
 impl QemuConfig {
+    fn replace_strings(&mut self, tool: &Tool) -> anyhow::Result<()> {
+        self.args = self
+            .args
+            .iter()
+            .map(|arg| tool.replace_string(arg))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        self.success_regex = self
+            .success_regex
+            .iter()
+            .map(|arg| tool.replace_string(arg))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        self.fail_regex = self
+            .fail_regex
+            .iter()
+            .map(|arg| tool.replace_string(arg))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        self.shell_prefix = self
+            .shell_prefix
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        self.shell_init_cmd = self
+            .shell_init_cmd
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        Ok(())
+    }
+
     fn normalize(&mut self, config_name: &str) -> anyhow::Result<()> {
         normalize_shell_init_config(
             &mut self.shell_prefix,
@@ -171,6 +200,9 @@ async fn load_or_create_qemu_config(
     explicit_config_path: Option<PathBuf>,
     overrides: QemuDefaultOverrides,
 ) -> anyhow::Result<QemuConfig> {
+    let explicit_config_path = explicit_config_path
+        .map(|path| tool.replace_path_variables(path))
+        .transpose()?;
     let config_path = resolve_qemu_config_path(tool, explicit_config_path)?;
 
     info!("Using QEMU config file: {}", config_path.display());
@@ -180,6 +212,7 @@ async fn load_or_create_qemu_config(
             let mut config: QemuConfig = toml::from_str(&content).with_context(|| {
                 format!("failed to parse QEMU config: {}", config_path.display())
             })?;
+            config.replace_strings(tool)?;
             config.normalize(&format!("QEMU config {}", config_path.display()))?;
             return Ok(config);
         }
@@ -720,11 +753,13 @@ mod tests {
 
     use crate::{
         Tool, ToolConfig,
+        build::config::{BuildConfig, BuildSystem, Cargo},
         run::{
             output_matcher::{ByteStreamMatcher, StreamMatchKind},
             shell_init::ShellAutoInitMatcher,
         },
     };
+    use std::collections::HashMap;
 
     fn write_single_crate_manifest(dir: &std::path::Path) {
         std::fs::write(
@@ -929,6 +964,65 @@ timeout = 0
         std::fs::write(manifest.join("qemu-aarch64.toml"), "").unwrap();
         let result = resolve_qemu_config_path(&tool, None).unwrap();
         assert_eq!(result, manifest.join("qemu-aarch64.toml"));
+    }
+
+    #[test]
+    fn qemu_config_replaces_string_fields() {
+        let tmp = TempDir::new().unwrap();
+        write_single_crate_manifest(tmp.path());
+        let mut tool = make_tool(tmp.path());
+        tool.ctx.build_config = Some(BuildConfig {
+            system: BuildSystem::Cargo(Cargo {
+                env: HashMap::new(),
+                target: "aarch64-unknown-none".into(),
+                package: "sample".into(),
+                features: vec![],
+                log: None,
+                extra_config: None,
+                args: vec![],
+                pre_build_cmds: vec![],
+                post_build_cmds: vec![],
+                to_bin: false,
+            }),
+        });
+        unsafe {
+            std::env::set_var("OSTOOL_QEMU_TEST_ENV", "env-ok");
+        }
+
+        let mut config = QemuConfig {
+            args: vec!["${workspace}".into(), "${package}".into()],
+            success_regex: vec!["${env:OSTOOL_QEMU_TEST_ENV}".into()],
+            fail_regex: vec!["${workspaceFolder}".into()],
+            shell_prefix: Some("${workspace}".into()),
+            shell_init_cmd: Some("${package}".into()),
+            ..Default::default()
+        };
+
+        config.replace_strings(&tool).unwrap();
+
+        let expected = tmp.path().display().to_string();
+        assert_eq!(config.args, vec![expected.clone(), expected.clone()]);
+        assert_eq!(config.success_regex, vec!["env-ok"]);
+        assert_eq!(config.fail_regex, vec![expected.clone()]);
+        assert_eq!(config.shell_prefix.as_deref(), Some(expected.as_str()));
+        assert_eq!(config.shell_init_cmd.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn qemu_config_explicit_path_supports_variables() {
+        let tmp = TempDir::new().unwrap();
+        write_single_crate_manifest(tmp.path());
+        let tool = make_tool(tmp.path());
+
+        let result = resolve_qemu_config_path(
+            &tool,
+            Some(
+                tool.replace_path_variables("${workspace}/qemu.toml".into())
+                    .unwrap(),
+            ),
+        )
+        .unwrap();
+        assert_eq!(result, tmp.path().join("qemu.toml"));
     }
 
     #[test]
