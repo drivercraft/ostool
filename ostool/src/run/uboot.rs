@@ -331,6 +331,7 @@ impl Runner<'_> {
             object::Architecture::Aarch64 => "arm64",
             object::Architecture::Arm => "arm",
             object::Architecture::LoongArch64 => "loongarch64",
+            object::Architecture::Riscv64 => "riscv",
             _ => todo!(),
         };
 
