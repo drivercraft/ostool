@@ -354,7 +354,7 @@ impl Runner<'_> {
                     .with_type("kernel")
                     .with_arch(arch)
                     .with_os("linux")
-                    .with_compression(true)
+                    .with_compression(false)
                     .with_load_address(kernel_load_addr)
                     .with_entry_point(kernel_entry_addr),
             );
