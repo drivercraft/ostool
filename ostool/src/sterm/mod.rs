@@ -58,6 +58,7 @@ pub struct TermHandle {
     is_running: AtomicBool,
     timed_out: AtomicBool,
     stop_deadline: Mutex<Option<Instant>>,
+    timeout_deadline: Mutex<Option<Instant>>,
 }
 
 impl TermHandle {
@@ -77,6 +78,14 @@ impl TermHandle {
         }
     }
 
+    /// Schedules the terminal to time out after the specified duration.
+    pub fn set_timeout_after(&self, duration: Duration) {
+        let mut deadline = self.timeout_deadline.lock().unwrap();
+        if deadline.is_none() {
+            *deadline = Some(Instant::now() + duration);
+        }
+    }
+
     /// Returns whether the terminal session is still running.
     pub fn is_running(&self) -> bool {
         self.is_running.load(Ordering::Acquire)
@@ -84,6 +93,13 @@ impl TermHandle {
 
     fn should_stop_now(&self) -> bool {
         self.stop_deadline
+            .lock()
+            .unwrap()
+            .is_some_and(|deadline| Instant::now() >= deadline)
+    }
+
+    fn should_timeout_now(&self) -> bool {
+        self.timeout_deadline
             .lock()
             .unwrap()
             .is_some_and(|deadline| Instant::now() >= deadline)
@@ -201,9 +217,10 @@ impl SerialTerm {
             is_running: AtomicBool::new(true),
             timed_out: AtomicBool::new(false),
             stop_deadline: Mutex::new(None),
+            timeout_deadline: Mutex::new(None),
         });
         if let Some(timeout) = self.timeout {
-            handle.stop_after(timeout);
+            handle.set_timeout_after(timeout);
         }
 
         // 使用 EventStream 异步处理键盘事件
@@ -219,7 +236,9 @@ impl SerialTerm {
         let _ = rx_handle.await?;
         let _ = tx_handle.await;
         if handle.timed_out() {
-            let timeout = self.timeout.unwrap();
+            let timeout = self.timeout.ok_or_else(|| {
+                anyhow!("serial terminal entered timed_out state without configured timeout")
+            })?;
             let label = self.timeout_label.as_deref().unwrap_or("serial terminal");
             return Err(anyhow!("{label} timed out after {}s", timeout.as_secs()));
         }
@@ -253,8 +272,12 @@ impl SerialTerm {
                         byte[0] = b;
                         io::stdout().write_all(&byte)?;
                         (on_byte)(handle.as_ref(), b);
-                        if handle.should_stop_now() {
+                        if handle.should_timeout_now() {
                             handle.mark_timed_out();
+                            handle.stop();
+                            break;
+                        }
+                        if handle.should_stop_now() {
                             handle.stop();
                             break;
                         }
@@ -264,8 +287,12 @@ impl SerialTerm {
                 }
                 Ok(_) => {
                     // 没有数据可读，短暂休眠
-                    if handle.should_stop_now() {
+                    if handle.should_timeout_now() {
                         handle.mark_timed_out();
+                        handle.stop();
+                        break;
+                    }
+                    if handle.should_stop_now() {
                         handle.stop();
                         break;
                     }
@@ -273,8 +300,12 @@ impl SerialTerm {
                 }
                 Err(e) if e.kind() == io::ErrorKind::TimedOut => {
                     // 超时是正常的，继续
-                    if handle.should_stop_now() {
+                    if handle.should_timeout_now() {
                         handle.mark_timed_out();
+                        handle.stop();
+                        break;
+                    }
+                    if handle.should_stop_now() {
                         handle.stop();
                         break;
                     }
@@ -657,4 +688,63 @@ pub fn restore_terminal_mode() {
     let _ = disable_raw_mode();
     let _ = Command::new("stty").arg("echo").arg("icanon").status();
     let _ = io::stdout().flush();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Cursor, Result as IoResult};
+
+    use super::*;
+
+    struct SinkWriter(Vec<u8>);
+
+    impl Write for SinkWriter {
+        fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+            self.0.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> IoResult<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn serial_term_graceful_stop_after_without_timeout_does_not_panic() {
+        let mut term = SerialTerm::new_with_byte_callback(
+            Box::new(SinkWriter(Vec::new())),
+            Box::new(Cursor::new(vec![b'x'])),
+            |handle, _| handle.stop_after(Duration::from_millis(0)),
+        );
+
+        term.run_terminal().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn serial_term_with_timeout_reports_timeout_error() {
+        let mut term = SerialTerm::new_with_byte_callback(
+            Box::new(SinkWriter(Vec::new())),
+            Box::new(Cursor::new(Vec::<u8>::new())),
+            |_handle, _| {},
+        )
+        .with_timeout(Duration::from_millis(0), "kernel boot");
+
+        let err = term.run_terminal().await.unwrap_err();
+        assert!(err.to_string().contains("kernel boot timed out"));
+    }
+
+    #[tokio::test]
+    async fn serial_term_graceful_stop_is_not_marked_timeout() {
+        let mut term = SerialTerm::new_with_byte_callback(
+            Box::new(SinkWriter(Vec::new())),
+            Box::new(Cursor::new(vec![b'o', b'k'])),
+            |handle, byte| {
+                if byte == b'k' {
+                    handle.stop_after(Duration::from_millis(0));
+                }
+            },
+        );
+
+        term.run_terminal().await.unwrap();
+    }
 }

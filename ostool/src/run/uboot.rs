@@ -258,7 +258,19 @@ impl Tool {
             success_regex: vec![],
             fail_regex: vec![],
         };
-        runner.run().await?;
+        runner.run().await.with_context(|| {
+            format!(
+                "U-Boot run failed with config {} (serial={}, baud_rate={}, shell_prefix={:?}, \
+                 shell_init_cmd={:?}, success_regex={:?}, fail_regex={:?})",
+                config_path.display(),
+                runner.config.serial,
+                runner.config.baud_rate,
+                runner.config.shell_prefix,
+                runner.config.shell_init_cmd,
+                runner.config.success_regex,
+                runner.config.fail_regex
+            )
+        })?;
         Ok(())
     }
 }
