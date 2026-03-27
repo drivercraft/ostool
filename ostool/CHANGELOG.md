@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1](https://github.com/ZR233/ostool/compare/ostool-v0.11.0...ostool-v0.11.1) - 2026-03-27
+
+### Added
+
+- 增加 U-Boot 运行时错误上下文信息，改进超时处理逻辑
+
 ## [0.11.0](https://github.com/drivercraft/ostool/compare/ostool-v0.10.1...ostool-v0.11.0) - 2026-03-26
 
 ### Added
