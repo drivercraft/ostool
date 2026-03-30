@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2](https://github.com/drivercraft/ostool/compare/ostool-v0.11.1...ostool-v0.11.2) - 2026-03-30
+
+### Fixed
+
+- fix uboot tftp_dir bootfile path ([#64](https://github.com/drivercraft/ostool/pull/64))
+
 ## [0.11.1](https://github.com/ZR233/ostool/compare/ostool-v0.11.0...ostool-v0.11.1) - 2026-03-27
 
 ### Added
