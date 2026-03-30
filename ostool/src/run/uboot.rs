@@ -619,10 +619,10 @@ impl Runner<'_> {
                 );
                 (prepared.relative_filename, true)
             } else if let Some(tftp_dir) = is_tftp.as_deref() {
-                let fitimage = fitimage.file_name().unwrap();
-                let tftp_path = PathBuf::from(tftp_dir).join(fitimage);
-                info!("Setting TFTP file path: {}", tftp_path.display());
-                (tftp_path.display().to_string(), false)
+                let relative_path = tftp::relative_tftp_filename(&fitimage)?;
+                info!("Using existing TFTP root: {}", tftp_dir.display());
+                info!("Setting TFTP bootfile path: {relative_path}");
+                (relative_path, false)
             } else {
                 let name = fitimage
                     .file_name()
@@ -632,10 +632,10 @@ impl Runner<'_> {
                 (name.to_string(), false)
             }
         } else if let Some(tftp_dir) = is_tftp.as_deref() {
-            let fitimage = fitimage.file_name().unwrap();
-            let tftp_path = PathBuf::from(tftp_dir).join(fitimage);
-            info!("Setting TFTP file path: {}", tftp_path.display());
-            (tftp_path.display().to_string(), false)
+            let relative_path = tftp::relative_tftp_filename(&fitimage)?;
+            info!("Using existing TFTP root: {}", tftp_dir.display());
+            info!("Setting TFTP bootfile path: {relative_path}");
+            (relative_path, false)
         } else {
             let name = fitimage
                 .file_name()
@@ -825,9 +825,10 @@ mod tests {
     use crate::{
         Tool, ToolConfig,
         build::config::{BuildConfig, BuildSystem, Cargo},
+        run::tftp,
     };
-    use std::collections::HashMap;
     use std::time::Duration;
+    use std::{collections::HashMap, path::Path};
 
     #[test]
     fn network_boot_request_uses_same_filename_for_bootfile() {
@@ -860,6 +861,16 @@ mod tests {
                 .unwrap()
                 .bootcmd,
             "dhcp image.fit && bootm"
+        );
+    }
+
+    #[test]
+    fn explicit_tftp_dir_uses_same_relative_bootfile_as_system_tftp() {
+        let fitimage = Path::new("/home/user/workspace/target/image.fit");
+
+        assert_eq!(
+            tftp::relative_tftp_filename(fitimage).unwrap(),
+            "ostool/home/user/workspace/target/image.fit"
         );
     }
 

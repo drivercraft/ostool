@@ -146,6 +146,18 @@ pub fn stage_linux_fit_image(
     Ok(prepared)
 }
 
+pub fn relative_tftp_filename(fitimage: &Path) -> anyhow::Result<String> {
+    let artifact_dir = fitimage
+        .parent()
+        .ok_or_else(|| anyhow!("invalid FIT image path: {}", fitimage.display()))?;
+    let relative_path = relative_tftp_directory(artifact_dir)?.join(
+        fitimage
+            .file_name()
+            .ok_or_else(|| anyhow!("invalid FIT image filename: {}", fitimage.display()))?,
+    );
+    Ok(relative_path.to_string_lossy().replace('\\', "/"))
+}
+
 /// Starts a built-in TFTP server serving files from the build output directory.
 pub fn run_tftp_server(tool: &Tool) -> anyhow::Result<()> {
     let mut file_dir = tool.manifest_dir().clone();
@@ -431,18 +443,14 @@ fn prepare_linux_tftp_paths(
     fitimage: &Path,
     tftp_root: &Path,
 ) -> anyhow::Result<LinuxTftpPrepared> {
-    let artifact_dir = fitimage
+    let relative_filename = relative_tftp_filename(fitimage)?;
+    let relative_path = PathBuf::from(&relative_filename);
+    let relative_dir = relative_path
         .parent()
-        .ok_or_else(|| anyhow!("invalid FIT image path: {}", fitimage.display()))?;
-    let relative_dir = relative_tftp_directory(artifact_dir)?;
-    let relative_path = relative_dir.join(
-        fitimage
-            .file_name()
-            .ok_or_else(|| anyhow!("invalid FIT image filename: {}", fitimage.display()))?,
-    );
+        .ok_or_else(|| anyhow!("invalid relative TFTP path: {}", relative_path.display()))?
+        .to_path_buf();
     let target_dir = tftp_root.join(&relative_dir);
     let absolute_fit_path = tftp_root.join(&relative_path);
-    let relative_filename = relative_path.to_string_lossy().replace('\\', "/");
 
     Ok(LinuxTftpPrepared {
         tftp_root: tftp_root.to_path_buf(),
@@ -730,6 +738,17 @@ TFTP_OPTIONS="-l -s -c"
             PathBuf::from(
                 "/srv/tftp/ostool/home/zhourui/opensource/tgoskits2/target/aarch64/release/image.fit"
             )
+        );
+    }
+
+    #[test]
+    fn relative_tftp_filename_keeps_ostool_prefix_for_existing_tftp_root() {
+        let fitimage =
+            Path::new("/home/zhourui/opensource/tgoskits2/target/aarch64/release/image.fit");
+
+        assert_eq!(
+            relative_tftp_filename(fitimage).unwrap(),
+            "ostool/home/zhourui/opensource/tgoskits2/target/aarch64/release/image.fit"
         );
     }
 
