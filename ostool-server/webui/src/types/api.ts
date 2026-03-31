@@ -1,3 +1,5 @@
+import type { JsonSchema } from "@jsonforms/core";
+
 export interface ErrorResponse {
   code: string;
   message: string;
@@ -54,15 +56,42 @@ export interface SerialConfig {
   baud_rate: number;
 }
 
-export interface SerialPortSummary {
-  port_name: string;
-  port_type: string;
-  label: string;
-  usb_vendor_id: number | null;
-  usb_product_id: number | null;
-  manufacturer: string | null;
-  product: string | null;
-  serial_number: string | null;
+export interface BoardEditorUbootData {
+  use_tftp: boolean;
+  kernel_load_addr: string;
+  fit_load_addr: string;
+  board_reset_cmd: string;
+  board_power_off_cmd: string;
+  success_regex_text: string;
+  fail_regex_text: string;
+  uboot_cmd_text: string;
+  shell_prefix: string;
+  shell_init_cmd: string;
+  timeout: number | null;
+}
+
+export interface BoardEditorPxeData {
+  notes: string;
+}
+
+export interface BoardEditorData {
+  id: string;
+  name: string;
+  board_type: string;
+  tags_text: string;
+  notes: string;
+  disabled: boolean;
+  serial_enabled: boolean;
+  serial_port: string;
+  serial_baud_rate: number;
+  boot_kind: "uboot" | "pxe";
+  uboot: BoardEditorUbootData;
+  pxe: BoardEditorPxeData;
+}
+
+export interface BoardEditorDocument {
+  data: BoardEditorData;
+  schema: JsonSchema;
 }
 
 export interface NetworkInterfaceSummary {

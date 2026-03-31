@@ -4,10 +4,10 @@ import type {
   AdminSessionsResponse,
   AdminTftpConfigResponse,
   AdminTftpStatusResponse,
+  BoardEditorDocument,
   BoardConfig,
   ErrorResponse,
   NetworkInterfaceSummary,
-  SerialPortSummary,
   TftpConfig,
   UpdateServerConfigRequest,
 } from "@/types/api";
@@ -50,25 +50,25 @@ export const api = {
   listBoards() {
     return request<BoardConfig[]>("/api/v1/admin/boards");
   },
-  listSerialPorts() {
-    return request<SerialPortSummary[]>("/api/v1/admin/serial-ports");
-  },
   listNetworkInterfaces() {
     return request<NetworkInterfaceSummary[]>("/api/v1/admin/network-interfaces");
   },
-  getBoard(boardId: string) {
-    return request<BoardConfig>(`/api/v1/admin/boards/${encodeURIComponent(boardId)}`);
+  getNewBoardEditor() {
+    return request<BoardEditorDocument>("/api/v1/admin/boards/editor");
   },
-  createBoard(board: BoardConfig) {
-    return request<BoardConfig>("/api/v1/admin/boards", {
+  getBoardEditor(boardId: string) {
+    return request<BoardEditorDocument>(`/api/v1/admin/boards/${encodeURIComponent(boardId)}`);
+  },
+  createBoard(document: BoardEditorDocument) {
+    return request<BoardEditorDocument>("/api/v1/admin/boards", {
       method: "POST",
-      bodyJson: board,
+      bodyJson: document,
     });
   },
-  updateBoard(boardId: string, board: BoardConfig) {
-    return request<BoardConfig>(`/api/v1/admin/boards/${encodeURIComponent(boardId)}`, {
+  updateBoard(boardId: string, document: BoardEditorDocument) {
+    return request<BoardEditorDocument>(`/api/v1/admin/boards/${encodeURIComponent(boardId)}`, {
       method: "PUT",
-      bodyJson: board,
+      bodyJson: document,
     });
   },
   deleteBoard(boardId: string) {

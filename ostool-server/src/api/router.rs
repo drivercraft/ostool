@@ -12,13 +12,14 @@ use serde_json::json;
 
 use crate::{
     api::{
+        board_editor::{BoardEditorData, BoardEditorDocument, build_board_editor_document},
         error::ApiError,
         models::{
             ActionResponse, AdminOverviewResponse, AdminServerConfigEditable,
             AdminServerConfigReadonly, AdminServerConfigResponse, AdminSessionsResponse,
             AdminTftpConfigResponse, AdminTftpStatusResponse, BoardTypeSummary,
             BootProfileResponse, CreateSessionRequest, FileResponse, NetworkInterfaceSummary,
-            SerialPortSummary, SerialStatusResponse, SessionCreatedResponse, SessionDetailResponse,
+            SerialStatusResponse, SessionCreatedResponse, SessionDetailResponse,
             TftpSessionResponse, UpdateServerConfigRequest,
         },
     },
@@ -53,7 +54,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/{*path}", get(serve_admin_history))
         .route("/api/v1/admin/overview", get(get_admin_overview))
         .route("/api/v1/admin/boards", get(list_boards).post(create_board))
-        .route("/api/v1/admin/serial-ports", get(list_serial_ports))
+        .route("/api/v1/admin/boards/editor", get(get_new_board_editor))
         .route(
             "/api/v1/admin/network-interfaces",
             get(list_network_interfaces),
@@ -178,12 +179,6 @@ async fn list_boards(
     ))
 }
 
-async fn list_serial_ports() -> Result<axum::Json<Vec<SerialPortSummary>>, ApiError> {
-    Ok(axum::Json(discover_serial_ports().map_err(|err| {
-        ApiError::service_unavailable(format!("failed to enumerate serial ports: {err:#}"))
-    })?))
-}
-
 async fn list_network_interfaces() -> Result<axum::Json<Vec<NetworkInterfaceSummary>>, ApiError> {
     Ok(axum::Json(discover_network_interfaces().map_err(
         |err| {
@@ -197,7 +192,7 @@ async fn list_network_interfaces() -> Result<axum::Json<Vec<NetworkInterfaceSumm
 async fn get_board(
     Path(board_id): Path<String>,
     State(state): State<AppState>,
-) -> Result<axum::Json<BoardConfig>, ApiError> {
+) -> Result<axum::Json<BoardEditorDocument>, ApiError> {
     let board = state
         .boards
         .read()
@@ -205,14 +200,22 @@ async fn get_board(
         .get(&board_id)
         .cloned()
         .ok_or_else(|| ApiError::not_found(format!("board `{board_id}` not found")))?;
-    Ok(axum::Json(board))
+    Ok(axum::Json(board_editor_document_for_board(&board)))
+}
+
+async fn get_new_board_editor() -> Result<axum::Json<BoardEditorDocument>, ApiError> {
+    Ok(axum::Json(board_editor_document_for_data(
+        BoardEditorData::default(),
+        None,
+    )))
 }
 
 async fn create_board(
     State(state): State<AppState>,
-    axum::Json(board): axum::Json<BoardConfig>,
-) -> Result<(StatusCode, axum::Json<BoardConfig>), ApiError> {
-    validate_board_id(&board.id)?;
+    axum::Json(document): axum::Json<BoardEditorDocument>,
+) -> Result<(StatusCode, axum::Json<BoardEditorDocument>), ApiError> {
+    document.data.validate()?;
+    let board = document.data.to_board_config();
 
     {
         let boards = state.boards.read().await;
@@ -230,35 +233,57 @@ async fn create_board(
         .write()
         .await
         .insert(board.id.clone(), board.clone());
-    Ok((StatusCode::CREATED, axum::Json(board)))
+    Ok((
+        StatusCode::CREATED,
+        axum::Json(board_editor_document_for_board(&board)),
+    ))
 }
 
 async fn update_board(
     Path(board_id): Path<String>,
     State(state): State<AppState>,
-    axum::Json(board): axum::Json<BoardConfig>,
-) -> Result<axum::Json<BoardConfig>, ApiError> {
-    validate_board_id(&board_id)?;
-    if board.id != board_id {
-        return Err(ApiError::bad_request(
-            "board id in path and body must match",
-        ));
-    }
+    axum::Json(document): axum::Json<BoardEditorDocument>,
+) -> Result<axum::Json<BoardEditorDocument>, ApiError> {
+    document.data.validate()?;
+    let board = document.data.to_board_config();
 
     {
         let boards = state.boards.read().await;
         if !boards.contains_key(&board_id) {
             return Err(ApiError::not_found(format!("board `{board_id}` not found")));
         }
+        if board.id != board_id && boards.contains_key(&board.id) {
+            return Err(ApiError::conflict(format!(
+                "board `{}` already exists",
+                board.id
+            )));
+        }
+    }
+
+    if board.id != board_id {
+        let sessions = state.sessions.read().await;
+        if sessions
+            .values()
+            .any(|session| session.board_id == board_id)
+        {
+            return Err(ApiError::conflict(format!(
+                "board `{board_id}` is leased by an active session"
+            )));
+        }
     }
 
     state.board_store.write_board(&board).await?;
-    state
-        .boards
-        .write()
-        .await
-        .insert(board.id.clone(), board.clone());
-    Ok(axum::Json(board))
+    if board.id != board_id {
+        state.board_store.delete_board(&board_id).await?;
+    }
+
+    {
+        let mut boards = state.boards.write().await;
+        boards.remove(&board_id);
+        boards.insert(board.id.clone(), board.clone());
+    }
+
+    Ok(axum::Json(board_editor_document_for_board(&board)))
 }
 
 async fn delete_board(
@@ -775,16 +800,25 @@ fn parse_slot(raw: &str) -> Result<FileSlot, ApiError> {
         .map_err(|err| ApiError::bad_request(err.to_string()))
 }
 
-fn validate_board_id(board_id: &str) -> Result<(), ApiError> {
-    if board_id.trim().is_empty() {
-        return Err(ApiError::bad_request("board id must not be empty"));
-    }
-    if board_id.contains('/') || board_id.contains('\\') {
-        return Err(ApiError::bad_request(
-            "board id must not contain path separators",
-        ));
-    }
-    Ok(())
+fn board_editor_document_for_board(board: &BoardConfig) -> BoardEditorDocument {
+    board_editor_document_for_data(
+        BoardEditorData::from_board_config(board),
+        board.serial.as_ref().map(|serial| serial.port.as_str()),
+    )
+}
+
+fn board_editor_document_for_data(
+    data: BoardEditorData,
+    current_serial_port: Option<&str>,
+) -> BoardEditorDocument {
+    let serial_ports = match discover_serial_ports() {
+        Ok(serial_ports) => serial_ports,
+        Err(err) => {
+            log::warn!("failed to enumerate serial ports for board editor schema: {err:#}");
+            Vec::new()
+        }
+    };
+    build_board_editor_document(data, &serial_ports, current_serial_port)
 }
 
 fn leased_board_ids<'a>(
@@ -911,6 +945,7 @@ mod tests {
 
     use super::{build_router, resolve_server_tftp_network};
     use crate::{
+        api::board_editor::{BoardEditorData, BoardEditorDocument},
         build_app_state,
         config::{BoardConfig, BootConfig, BuiltinTftpConfig, ServerConfig, TftpConfig},
         tftp::service::{TftpManager, build_tftp_manager},
@@ -934,18 +969,46 @@ mod tests {
     }
 
     async fn create_board(app: &Router, board: serde_json::Value) -> StatusCode {
+        let board: BoardConfig = serde_json::from_value(board).unwrap();
+        let request = json!({
+            "data": BoardEditorData::from_board_config(&board),
+            "schema": {
+                "type": "object"
+            }
+        });
+
         app.clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/api/v1/admin/boards")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(board.to_string()))
+                    .body(Body::from(request.to_string()))
                     .unwrap(),
             )
             .await
             .unwrap()
             .status()
+    }
+
+    fn sample_board(board_id: &str) -> BoardConfig {
+        BoardConfig {
+            id: board_id.into(),
+            name: format!("Board {board_id}"),
+            board_type: "rk3568".into(),
+            tags: vec!["lab".into(), "usb".into()],
+            serial: Some(crate::config::SerialConfig {
+                port: "/dev/ttyUSB0".into(),
+                baud_rate: 115_200,
+            }),
+            boot: BootConfig::Uboot(crate::config::UbootProfile {
+                use_tftp: true,
+                success_regex: vec!["login:".into()],
+                ..Default::default()
+            }),
+            notes: Some("rack-a".into()),
+            disabled: false,
+        }
     }
 
     #[tokio::test]
@@ -1063,6 +1126,200 @@ mod tests {
             BootConfig::Uboot(profile) => assert!(profile.use_tftp),
             BootConfig::Pxe(_) => panic!("expected uboot"),
         }
+    }
+
+    #[tokio::test]
+    async fn new_board_editor_endpoint_returns_default_document_and_schema() {
+        let app = test_router().await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/admin/boards/editor")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let document: BoardEditorDocument = serde_json::from_slice(&body).unwrap();
+        assert_eq!(document.data.serial_baud_rate, 115_200);
+        assert_eq!(
+            document.data.boot_kind,
+            crate::api::board_editor::BoardBootKind::Uboot
+        );
+        assert_eq!(
+            document.schema.as_value()["properties"]["serial_baud_rate"]["default"],
+            json!(115_200)
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_board_editor_endpoint_keeps_configured_serial_option() {
+        let app = test_router().await;
+        let mut board = sample_board("demo-board");
+        board.serial.as_mut().unwrap().port = "/dev/not-a-real-tty".into();
+        assert_eq!(
+            create_board(&app, serde_json::to_value(&board).unwrap()).await,
+            StatusCode::CREATED
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/admin/boards/demo-board")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let document: BoardEditorDocument = serde_json::from_slice(&body).unwrap();
+        let serial_options = document.schema.as_value()["properties"]["serial_port"]["oneOf"]
+            .as_array()
+            .unwrap();
+        assert_eq!(document.data.serial_port, "/dev/not-a-real-tty");
+        assert_eq!(serial_options[0]["const"], "/dev/not-a-real-tty");
+        assert_eq!(
+            serial_options[0]["title"],
+            "/dev/not-a-real-tty (当前配置，未检测到)"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_board_persists_wrapper_payload_and_returns_editor_document() {
+        let app = test_router().await;
+        let request = BoardEditorDocument {
+            data: BoardEditorData::from_board_config(&sample_board("create-me")),
+            schema: json!({ "type": "object" }).try_into().unwrap(),
+        };
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/admin/boards")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let document: BoardEditorDocument = serde_json::from_slice(&body).unwrap();
+        assert_eq!(document.data.id, "create-me");
+        assert_eq!(document.data.serial_port, "/dev/ttyUSB0");
+    }
+
+    #[tokio::test]
+    async fn update_board_persists_changes_from_wrapper_payload() {
+        let app = test_router().await;
+        let board = sample_board("demo-board");
+        assert_eq!(
+            create_board(&app, serde_json::to_value(&board).unwrap()).await,
+            StatusCode::CREATED
+        );
+
+        let mut editor = BoardEditorData::from_board_config(&board);
+        editor.name = "Renamed Board".into();
+        editor.serial_enabled = false;
+        editor.uboot.success_regex_text = "booted\nlogin:".into();
+        let request = BoardEditorDocument {
+            data: editor,
+            schema: json!({ "type": "object" }).try_into().unwrap(),
+        };
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/admin/boards/demo-board")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let document: BoardEditorDocument = serde_json::from_slice(&body).unwrap();
+        assert_eq!(document.data.name, "Renamed Board");
+        assert!(!document.data.serial_enabled);
+
+        let boards_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/admin/boards")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let boards_body = to_bytes(boards_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let boards: Vec<BoardConfig> = serde_json::from_slice(&boards_body).unwrap();
+        assert_eq!(boards[0].name, "Renamed Board");
+        assert!(boards[0].serial.is_none());
+    }
+
+    #[tokio::test]
+    async fn create_board_rejects_duplicate_ids_and_missing_required_fields() {
+        let app = test_router().await;
+        let board = sample_board("demo-board");
+        assert_eq!(
+            create_board(&app, serde_json::to_value(&board).unwrap()).await,
+            StatusCode::CREATED
+        );
+
+        let duplicate = BoardEditorDocument {
+            data: BoardEditorData::from_board_config(&board),
+            schema: json!({ "type": "object" }).try_into().unwrap(),
+        };
+        let duplicate_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/admin/boards")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&duplicate).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(duplicate_response.status(), StatusCode::CONFLICT);
+
+        let invalid = BoardEditorDocument {
+            data: BoardEditorData {
+                name: String::new(),
+                ..BoardEditorData::from_board_config(&sample_board("invalid-board"))
+            },
+            schema: json!({ "type": "object" }).try_into().unwrap(),
+        };
+        let invalid_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/admin/boards")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&invalid).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(invalid_response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

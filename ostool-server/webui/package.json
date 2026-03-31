@@ -9,16 +9,22 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@jsonforms/core": "^3.7.0",
+    "@jsonforms/vue": "^3.7.0",
+    "@jsonforms/vue-vanilla": "^3.7.0",
+    "ajv": "^8.18.0",
     "pinia": "^2.3.1",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.1",
+    "@vue/test-utils": "^2.4.6",
     "jsdom": "^26.0.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
     "vitest": "^2.1.8",
     "vue-tsc": "^2.2.0"
-  }
+  },
+  "packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319"
 }
