@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import { api } from "@/api/client";
 import { useUiStore } from "@/stores/ui";
 import type { BoardConfig } from "@/types/api";
 import { boardToForm, createDefaultBoardForm, formToBoard } from "@/utils/boardForm";
+import { suggestBoardId } from "@/utils/boardIdentity";
 
 const route = useRoute();
 const router = useRouter();
@@ -16,8 +17,18 @@ const saving = ref(false);
 const deleting = ref(false);
 const validationError = ref("");
 const form = ref(createDefaultBoardForm());
+const knownBoards = ref<BoardConfig[]>([]);
+const idMode = ref<"auto" | "manual">("auto");
 const isEditing = computed(() => typeof route.params.boardId === "string");
 const boardId = computed(() => route.params.boardId as string | undefined);
+const knownBoardTypes = computed(() =>
+  Array.from(new Set(knownBoards.value.map((board) => board.board_type)))
+    .filter(Boolean)
+    .sort(),
+);
+const suggestedBoardId = computed(() =>
+  suggestBoardId(form.value.board_type, knownBoards.value, boardId.value),
+);
 
 function validateForm(): boolean {
   const payload = formToBoard(form.value);
@@ -47,11 +58,16 @@ async function loadBoard() {
   validationError.value = "";
 
   try {
+    const boards = await api.listBoards();
+    knownBoards.value = boards;
+
     if (isEditing.value && boardId.value) {
       const board = await api.getBoard(boardId.value);
       form.value = boardToForm(board);
+      idMode.value = "manual";
     } else {
       form.value = createDefaultBoardForm();
+      idMode.value = "auto";
     }
   } catch (error) {
     ui.setError((error as Error).message);
@@ -100,6 +116,37 @@ async function removeBoard() {
   }
 }
 
+function syncBoardIdentity() {
+  if (!isEditing.value && idMode.value === "auto") {
+    form.value.id = suggestedBoardId.value;
+  }
+  form.value.name = form.value.id.trim();
+}
+
+function enableManualId() {
+  idMode.value = "manual";
+}
+
+function restoreAutoId() {
+  idMode.value = "auto";
+  syncBoardIdentity();
+}
+
+watch(
+  () => [form.value.board_type, knownBoards.value.length, idMode.value, boardId.value] as const,
+  () => {
+    syncBoardIdentity();
+  },
+);
+
+watch(
+  () => form.value.id,
+  () => {
+    form.value.name = form.value.id.trim();
+  },
+  { immediate: true },
+);
+
 onMounted(() => {
   void loadBoard();
 });
@@ -129,16 +176,50 @@ onMounted(() => {
           <section class="form-section">
             <h4>基本信息</h4>
             <label class="field">
+              <span>板型</span>
+              <input
+                v-model="form.board_type"
+                list="board-type-options"
+                placeholder="输入或选择已有板型"
+                required
+              />
+              <datalist id="board-type-options">
+                <option v-for="boardType in knownBoardTypes" :key="boardType" :value="boardType" />
+              </datalist>
+            </label>
+            <label class="field">
               <span>板子 ID</span>
-              <input v-model="form.id" :readonly="isEditing" placeholder="例如 rk3568-01" />
+              <div class="inline-field-group">
+                <input
+                  v-model="form.id"
+                  :readonly="isEditing || idMode === 'auto'"
+                  :placeholder="suggestedBoardId || '先填写板型'"
+                />
+                <button
+                  v-if="!isEditing && idMode === 'auto'"
+                  class="ghost-button compact-button"
+                  type="button"
+                  @click="enableManualId"
+                >
+                  手动填写
+                </button>
+                <button
+                  v-else-if="!isEditing"
+                  class="ghost-button compact-button"
+                  type="button"
+                  @click="restoreAutoId"
+                >
+                  恢复自动
+                </button>
+              </div>
+              <small class="field-hint">
+                {{ isEditing ? "现有开发板不支持修改 ID。" : idMode === "auto" ? `将按板型自动建议：${suggestedBoardId || "等待板型输入"}` : "当前为手动填写模式。" }}
+              </small>
             </label>
             <label class="field">
               <span>显示名称</span>
-              <input v-model="form.name" placeholder="例如 RK3568 调试板 1" />
-            </label>
-            <label class="field">
-              <span>板型</span>
-              <input v-model="form.board_type" placeholder="例如 rk3568" />
+              <input v-model="form.name" readonly />
+              <small class="field-hint">显示名称自动跟随板子 ID。</small>
             </label>
             <label class="field">
               <span>标签</span>

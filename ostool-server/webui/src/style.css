@@ -232,6 +232,11 @@ a {
   background: rgba(255, 255, 255, 0.86);
 }
 
+.compact-button {
+  padding: 10px 14px;
+  white-space: nowrap;
+}
+
 .danger-button {
   background: var(--danger);
   color: white;
@@ -296,6 +301,12 @@ a {
 .checkbox-field {
   display: grid;
   gap: 8px;
+}
+
+.inline-field-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
 }
 
 .field span {
@@ -448,6 +459,11 @@ a {
   color: var(--danger);
   background: rgba(163, 58, 44, 0.08);
   white-space: pre-wrap;
+}
+
+.field-hint {
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
 .empty-state {
