@@ -83,15 +83,15 @@ pub async fn run_serial_terminal(ws_url: reqwest::Url) -> anyhow::Result<()> {
         .await;
 
     read_task.abort();
-    if let Err(err) = write_task.await {
-        if !err.is_cancelled() {
-            log::debug!("serial websocket writer join error: {err}");
-        }
+    if let Err(err) = write_task.await
+        && !err.is_cancelled()
+    {
+        log::debug!("serial websocket writer join error: {err}");
     }
-    if let Err(err) = read_task.await {
-        if !err.is_cancelled() {
-            log::debug!("serial websocket reader join error: {err}");
-        }
+    if let Err(err) = read_task.await
+        && !err.is_cancelled()
+    {
+        log::debug!("serial websocket reader join error: {err}");
     }
 
     run_result
