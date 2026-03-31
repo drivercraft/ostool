@@ -38,6 +38,9 @@
 /// with custom options and target specifications.
 pub mod build;
 
+/// ostool-server board client and remote terminal integration.
+pub mod board;
+
 /// Application context and state management.
 pub mod ctx;
 

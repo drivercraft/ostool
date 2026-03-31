@@ -98,7 +98,7 @@ async fn run_serial_ws_inner(
     while let Some(message) = ws_receiver.next().await {
         match message {
             Ok(Message::Binary(bytes)) => {
-                tx_port.lock().unwrap().write_all(&bytes)?;
+                write_serial_payload(&mut *tx_port.lock().unwrap(), &bytes)?;
             }
             Ok(Message::Text(text)) => {
                 let control: ClientControlMessage = serde_json::from_str(&text)?;
@@ -115,7 +115,7 @@ async fn run_serial_ws_inner(
                             Some("utf8") | None => data.as_bytes().to_vec(),
                             Some(other) => anyhow::bail!("unsupported encoding `{other}`"),
                         };
-                        tx_port.lock().unwrap().write_all(&payload)?;
+                        write_serial_payload(&mut *tx_port.lock().unwrap(), &payload)?;
                     }
                     other => anyhow::bail!("unsupported websocket control type `{other}`"),
                 }
@@ -131,4 +131,43 @@ async fn run_serial_ws_inner(
     read_task.await?;
     send_task.abort();
     Ok(())
+}
+
+fn write_serial_payload(port: &mut dyn Write, payload: &[u8]) -> anyhow::Result<()> {
+    port.write_all(payload)?;
+    port.flush()?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{self, Write};
+
+    use super::write_serial_payload;
+
+    #[derive(Default)]
+    struct FakeWriter {
+        bytes: Vec<u8>,
+        flushed: bool,
+    }
+
+    impl Write for FakeWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.bytes.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushed = true;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn write_serial_payload_writes_and_flushes() {
+        let mut writer = FakeWriter::default();
+        write_serial_payload(&mut writer, b"help").unwrap();
+        assert_eq!(writer.bytes, b"help");
+        assert!(writer.flushed);
+    }
 }

@@ -27,9 +27,6 @@ pub struct CreateSessionRequest {
     pub board_type: String,
     #[serde(default)]
     pub required_tags: Vec<String>,
-    #[serde(default)]
-    pub wait: bool,
-    pub timeout_ms: Option<u64>,
     pub client_name: Option<String>,
 }
 

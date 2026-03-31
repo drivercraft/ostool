@@ -6,7 +6,7 @@ use colored::Colorize as _;
 
 use log::info;
 use ostool::{
-    Tool, ToolConfig,
+    Tool, ToolConfig, board,
     build::{self, CargoQemuAppendArgs, CargoQemuOverrideArgs, CargoRunnerKind},
     logger,
     menuconfig::{MenuConfigHandler, MenuConfigMode},
@@ -14,7 +14,7 @@ use ostool::{
     run::{qemu::RunQemuArgs, uboot::RunUbootArgs},
 };
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
     #[arg(short, long)]
@@ -25,14 +25,18 @@ struct Cli {
 
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum SubCommands {
     Build {
         /// Path to the build configuration file
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    Run(RunArgs),
+    Run {
+        #[command(subcommand)]
+        command: RunSubCommands,
+    },
+    Board(BoardArgs),
     Menuconfig {
         /// Menu configuration mode (qemu or uboot)
         #[arg(value_enum)]
@@ -40,19 +44,59 @@ enum SubCommands {
     },
 }
 
+#[derive(Args, Debug, Clone)]
+struct ServerArgs {
+    /// ostool-server host
+    #[arg(long, default_value = "127.0.0.1")]
+    server: String,
+    /// ostool-server port
+    #[arg(long, default_value_t = 8080)]
+    port: u16,
+}
+
 #[derive(Args, Debug)]
-struct RunArgs {
+struct BoardArgs {
+    #[command(subcommand)]
+    command: BoardSubCommands,
+}
+
+#[derive(Subcommand, Debug)]
+enum BoardSubCommands {
+    Ls(ServerArgs),
+}
+
+#[derive(Args, Debug)]
+struct RunQemuCommand {
     /// Path to the build configuration file
     #[arg(short, long)]
     config: Option<PathBuf>,
-    #[command(subcommand)]
-    command: RunSubCommands,
+    #[command(flatten)]
+    qemu: QemuArgs,
+}
+
+#[derive(Args, Debug)]
+struct RunUbootCommand {
+    /// Path to the build configuration file
+    #[arg(short, long)]
+    config: Option<PathBuf>,
+    #[command(flatten)]
+    uboot: UbootArgs,
+}
+
+#[derive(Args, Debug)]
+struct BoardRunArgs {
+    /// Board type to allocate from ostool-server
+    #[arg(short = 'b', long = "board")]
+    board: String,
+    #[command(flatten)]
+    server: ServerArgs,
 }
 
 #[derive(Subcommand, Debug)]
 enum RunSubCommands {
-    Qemu(QemuArgs),
-    Uboot(UbootArgs),
+    Qemu(RunQemuCommand),
+    Uboot(RunUbootCommand),
+    Board(BoardRunArgs),
 }
 
 #[derive(Args, Debug, Default)]
@@ -92,8 +136,116 @@ async fn main() -> ExitCode {
 }
 
 async fn try_main() -> Result<()> {
-    let cli = Cli::parse();
-    let manifest = resolve_manifest_context(cli.manifest.clone())?;
+    let Cli { manifest, command } = Cli::parse();
+
+    match command {
+        SubCommands::Board(args) => {
+            let _ = env_logger::try_init();
+            match args.command {
+                BoardSubCommands::Ls(server) => {
+                    board::list_boards(&server.server, server.port).await?;
+                }
+            }
+        }
+        SubCommands::Build { config } => {
+            let mut tool = init_tool(manifest)?;
+            tool.build(config).await?;
+        }
+        SubCommands::Run { command } => match command {
+            RunSubCommands::Board(args) => {
+                let _ = env_logger::try_init();
+                board::run_board(&args.server.server, args.server.port, &args.board).await?;
+            }
+            RunSubCommands::Qemu(args) => {
+                let RunQemuCommand { config, qemu } = args;
+                let qemu_config = qemu.qemu_config.clone();
+                let debug = qemu.debug;
+                let dtb_dump = qemu.dtb_dump;
+
+                let mut tool = init_tool(manifest.clone())?;
+                let config = tool.prepare_build_config(config, false).await?;
+                match config.system {
+                    build::config::BuildSystem::Cargo(config) => {
+                        let kind = CargoRunnerKind::Qemu {
+                            qemu_config,
+                            debug,
+                            dtb_dump,
+                            default_args: CargoQemuOverrideArgs::default(),
+                            append_args: CargoQemuAppendArgs::default(),
+                            override_args: CargoQemuOverrideArgs::default(),
+                        };
+                        tool.cargo_run(&config, &kind).await?;
+                    }
+                    build::config::BuildSystem::Custom(custom_cfg) => {
+                        tool.shell_run_cmd(&custom_cfg.build_cmd)?;
+                        tool.set_elf_path(custom_cfg.elf_path.clone().into())
+                            .await?;
+                        info!(
+                            "ELF {:?}: {}",
+                            tool.ctx().arch,
+                            tool.ctx().artifacts.elf.as_ref().unwrap().display()
+                        );
+
+                        if custom_cfg.to_bin {
+                            tool.objcopy_output_bin()?;
+                        }
+
+                        tool.run_qemu(RunQemuArgs {
+                            qemu_config,
+                            dtb_dump,
+                            show_output: true,
+                        })
+                        .await?;
+                    }
+                }
+            }
+            RunSubCommands::Uboot(args) => {
+                let RunUbootCommand { config, uboot } = args;
+                let uboot_config = uboot.uboot_config;
+
+                let mut tool = init_tool(manifest.clone())?;
+                let config = tool.prepare_build_config(config, false).await?;
+                match config.system {
+                    build::config::BuildSystem::Cargo(config) => {
+                        let kind = CargoRunnerKind::Uboot {
+                            uboot_config: uboot_config.clone(),
+                        };
+                        tool.cargo_run(&config, &kind).await?;
+                    }
+                    build::config::BuildSystem::Custom(custom_cfg) => {
+                        tool.shell_run_cmd(&custom_cfg.build_cmd)?;
+                        tool.set_elf_path(custom_cfg.elf_path.clone().into())
+                            .await?;
+                        info!(
+                            "ELF {:?}: {}",
+                            tool.ctx().arch,
+                            tool.ctx().artifacts.elf.as_ref().unwrap().display()
+                        );
+
+                        if custom_cfg.to_bin {
+                            tool.objcopy_output_bin()?;
+                        }
+
+                        tool.run_uboot(RunUbootArgs {
+                            config: uboot_config,
+                            show_output: true,
+                        })
+                        .await?;
+                    }
+                }
+            }
+        },
+        SubCommands::Menuconfig { mode } => {
+            let mut tool = init_tool(manifest)?;
+            MenuConfigHandler::handle_menuconfig(&mut tool, mode).await?;
+        }
+    }
+
+    Ok(())
+}
+
+fn init_tool(manifest_arg: Option<PathBuf>) -> Result<Tool> {
+    let manifest = resolve_manifest_context(manifest_arg.clone())?;
     let log_path = logger::init_file_logger(&manifest.workspace_dir)?;
     let _ = LOG_PATH.set(log_path.clone());
     info!(
@@ -102,74 +254,10 @@ async fn try_main() -> Result<()> {
         manifest.manifest_path.display()
     );
 
-    let mut tool = Tool::new(ToolConfig {
-        manifest: cli.manifest,
+    Tool::new(ToolConfig {
+        manifest: manifest_arg,
         ..Default::default()
-    })?;
-
-    match cli.command {
-        SubCommands::Build { config } => {
-            tool.build(config).await?;
-        }
-        SubCommands::Run(args) => {
-            let config = tool.prepare_build_config(args.config, false).await?;
-            match config.system {
-                build::config::BuildSystem::Cargo(config) => {
-                    let kind = match args.command {
-                        RunSubCommands::Qemu(qemu_args) => CargoRunnerKind::Qemu {
-                            qemu_config: qemu_args.qemu_config,
-                            debug: qemu_args.debug,
-                            dtb_dump: qemu_args.dtb_dump,
-                            default_args: CargoQemuOverrideArgs::default(),
-                            append_args: CargoQemuAppendArgs::default(),
-                            override_args: CargoQemuOverrideArgs::default(),
-                        },
-                        RunSubCommands::Uboot(uboot_args) => CargoRunnerKind::Uboot {
-                            uboot_config: uboot_args.uboot_config,
-                        },
-                    };
-                    tool.cargo_run(&config, &kind).await?;
-                }
-                build::config::BuildSystem::Custom(custom_cfg) => {
-                    tool.shell_run_cmd(&custom_cfg.build_cmd)?;
-                    tool.set_elf_path(custom_cfg.elf_path.clone().into())
-                        .await?;
-                    info!(
-                        "ELF {:?}: {}",
-                        tool.ctx().arch,
-                        tool.ctx().artifacts.elf.as_ref().unwrap().display()
-                    );
-
-                    if custom_cfg.to_bin {
-                        tool.objcopy_output_bin()?;
-                    }
-
-                    match args.command {
-                        RunSubCommands::Qemu(qemu_args) => {
-                            tool.run_qemu(RunQemuArgs {
-                                qemu_config: qemu_args.qemu_config,
-                                dtb_dump: qemu_args.dtb_dump,
-                                show_output: true,
-                            })
-                            .await?;
-                        }
-                        RunSubCommands::Uboot(uboot_args) => {
-                            tool.run_uboot(RunUbootArgs {
-                                config: uboot_args.uboot_config,
-                                show_output: true,
-                            })
-                            .await?;
-                        }
-                    }
-                }
-            }
-        }
-        SubCommands::Menuconfig { mode } => {
-            MenuConfigHandler::handle_menuconfig(&mut tool, mode).await?;
-        }
-    }
-
-    Ok(())
+    })
 }
 
 fn report_error(err: &anyhow::Error) {
@@ -202,6 +290,47 @@ impl From<UbootArgs> for RunUbootArgs {
         RunUbootArgs {
             config: value.uboot_config,
             show_output: true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::{BoardArgs, BoardSubCommands, Cli, RunSubCommands, SubCommands};
+
+    #[test]
+    fn parse_board_ls_with_server_args() {
+        let cli = Cli::try_parse_from([
+            "ostool", "board", "ls", "--server", "10.0.0.2", "--port", "9000",
+        ])
+        .unwrap();
+
+        match cli.command {
+            SubCommands::Board(BoardArgs {
+                command: BoardSubCommands::Ls(server),
+            }) => {
+                assert_eq!(server.server, "10.0.0.2");
+                assert_eq!(server.port, 9000);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_run_board_with_board_type() {
+        let cli = Cli::try_parse_from(["ostool", "run", "board", "-b", "rk3568"]).unwrap();
+
+        match cli.command {
+            SubCommands::Run {
+                command: RunSubCommands::Board(args),
+            } => {
+                assert_eq!(args.board, "rk3568");
+                assert_eq!(args.server.server, "127.0.0.1");
+                assert_eq!(args.server.port, 8080);
+            }
+            other => panic!("unexpected command: {other:?}"),
         }
     }
 }

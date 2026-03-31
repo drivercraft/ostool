@@ -43,7 +43,7 @@ log = { workspace = true }
 network-interface = "2"
 object = "0.38"
 ratatui = "0.29"
-reqwest = { version = "0.13" }
+reqwest = { version = "0.13", features = ["json"] }
 schemars = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -59,7 +59,8 @@ sha2 = "0.10"
 tar = "0.4"
 thiserror = { workspace = true }
 ureq = "3.0"
-chrono = "0.4.44"
+chrono = { version = "0.4.44", features = ["serde"] }
+tokio-tungstenite = "0.28"
 
 [dev-dependencies]
 tempfile = "3"

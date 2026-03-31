@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    time::{Duration, Instant},
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use axum::{
     Router,
@@ -424,40 +421,19 @@ async fn create_session(
         return Err(ApiError::bad_request("board_type must not be empty"));
     }
 
-    let deadline = request
-        .timeout_ms
-        .map(|timeout_ms| Instant::now() + Duration::from_millis(timeout_ms));
-
-    let session = loop {
-        if let Some(session) = state
-            .create_session(
-                &request.board_type,
-                &request.required_tags,
-                request.client_name.clone(),
-            )
-            .await
-        {
-            break session;
-        }
-
-        if !request.wait {
-            return Err(ApiError::conflict(format!(
+    let session = state
+        .create_session(
+            &request.board_type,
+            &request.required_tags,
+            request.client_name.clone(),
+        )
+        .await
+        .ok_or_else(|| {
+            ApiError::conflict(format!(
                 "no available board for type `{}`",
                 request.board_type
-            )));
-        }
-
-        if let Some(deadline) = deadline
-            && Instant::now() >= deadline
-        {
-            return Err(ApiError::conflict(format!(
-                "timed out waiting for board type `{}`",
-                request.board_type
-            )));
-        }
-
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    };
+            ))
+        })?;
 
     let board = state
         .session_board(&session.id)
@@ -915,6 +891,7 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode, header},
     };
+    use serde_json::json;
     use tempfile::tempdir;
     use tower::util::ServiceExt;
 
@@ -940,6 +917,21 @@ mod tests {
         let state = build_app_state(config_path, config, manager).await.unwrap();
         state.ensure_data_dirs().await.unwrap();
         build_router(state)
+    }
+
+    async fn create_board(app: &Router, board: serde_json::Value) -> StatusCode {
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/admin/boards")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(board.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
     }
 
     #[tokio::test]
@@ -1057,5 +1049,208 @@ mod tests {
             BootConfig::Uboot(profile) => assert!(profile.use_tftp),
             BootConfig::Pxe(_) => panic!("expected uboot"),
         }
+    }
+
+    #[tokio::test]
+    async fn board_types_endpoint_returns_aggregated_counts() {
+        let app = test_router().await;
+        let board_a = json!({
+            "id": "rk3568-01",
+            "name": "rk3568-01",
+            "board_type": "rk3568",
+            "tags": ["lab-a", "usbboot"],
+            "serial": { "port": "/dev/ttyUSB0", "baud_rate": 115200 },
+            "boot": { "kind": "uboot", "use_tftp": false },
+            "notes": null,
+            "disabled": false
+        });
+        let board_b = json!({
+            "id": "rk3568-02",
+            "name": "rk3568-02",
+            "board_type": "rk3568",
+            "tags": ["lab-b"],
+            "serial": { "port": "/dev/ttyUSB1", "baud_rate": 115200 },
+            "boot": { "kind": "uboot", "use_tftp": false },
+            "notes": null,
+            "disabled": false
+        });
+
+        assert_eq!(create_board(&app, board_a).await, StatusCode::CREATED);
+        assert_eq!(create_board(&app, board_b).await, StatusCode::CREATED);
+
+        let session_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/sessions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "board_type": "rk3568",
+                            "required_tags": [],
+                            "client_name": "test",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(session_response.status(), StatusCode::CREATED);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/board-types")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value[0]["board_type"], "rk3568");
+        assert_eq!(value[0]["total"], 2);
+        assert_eq!(value[0]["available"], 1);
+        assert_eq!(value[0]["tags"], json!(["lab-a", "lab-b", "usbboot"]));
+    }
+
+    #[tokio::test]
+    async fn create_session_returns_created_when_board_is_available() {
+        let app = test_router().await;
+        let board = json!({
+            "id": "demo-01",
+            "name": "demo-01",
+            "board_type": "demo",
+            "tags": [],
+            "serial": { "port": "/dev/ttyUSB0", "baud_rate": 115200 },
+            "boot": { "kind": "uboot", "use_tftp": false },
+            "notes": null,
+            "disabled": false
+        });
+        assert_eq!(create_board(&app, board).await, StatusCode::CREATED);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/sessions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "board_type": "demo",
+                            "required_tags": [],
+                            "client_name": "test",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["board_id"], "demo-01");
+        assert_eq!(value["serial_available"], true);
+    }
+
+    #[tokio::test]
+    async fn create_session_returns_conflict_without_waiting_when_pool_is_busy() {
+        let app = test_router().await;
+        let board = json!({
+            "id": "demo-01",
+            "name": "demo-01",
+            "board_type": "demo",
+            "tags": [],
+            "serial": { "port": "/dev/ttyUSB0", "baud_rate": 115200 },
+            "boot": { "kind": "uboot", "use_tftp": false },
+            "notes": null,
+            "disabled": false
+        });
+        assert_eq!(create_board(&app, board).await, StatusCode::CREATED);
+
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/sessions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "board_type": "demo",
+                            "required_tags": [],
+                            "client_name": "first",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::CREATED);
+
+        let second = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/sessions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "board_type": "demo",
+                            "required_tags": [],
+                            "client_name": "second",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(second.status(), StatusCode::CONFLICT);
+        let body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["code"], "conflict");
+        assert_eq!(value["message"], "no available board for type `demo`");
+    }
+
+    #[tokio::test]
+    async fn create_session_rejects_empty_board_type() {
+        let app = test_router().await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/sessions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "board_type": "",
+                            "required_tags": [],
+                            "client_name": "test",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["code"], "bad_request");
+        assert_eq!(value["message"], "board_type must not be empty");
     }
 }
