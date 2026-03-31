@@ -25,3 +25,5 @@ target/
 #.idea/
 /.ostool-server.toml
 /.ostool-server
+/ostool-server/web/dist
+/ostool-server/webui/node_modules

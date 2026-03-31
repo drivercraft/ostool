@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::{BoardConfig, BootConfig, TftpConfig},
+    config::{BoardConfig, BootConfig, LeaseConfig, TftpConfig},
     session::Session,
     tftp::{files::TftpFileRef, status::TftpStatus},
 };
@@ -117,4 +117,38 @@ pub struct AdminSessionsResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BootProfileResponse {
     pub boot: BootConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminOverviewResponse {
+    pub board_count_total: usize,
+    pub board_count_available: usize,
+    pub disabled_board_count: usize,
+    pub active_session_count: usize,
+    pub board_types: Vec<BoardTypeSummary>,
+    pub tftp_status: TftpStatus,
+    pub server: AdminServerConfigReadonly,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminServerConfigReadonly {
+    pub listen_addr: String,
+    pub data_dir: String,
+    pub board_dir: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminServerConfigEditable {
+    pub lease: LeaseConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminServerConfigResponse {
+    pub readonly: AdminServerConfigReadonly,
+    pub editable: AdminServerConfigEditable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateServerConfigRequest {
+    pub lease: LeaseConfig,
 }

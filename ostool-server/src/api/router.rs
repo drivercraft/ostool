@@ -8,7 +8,7 @@ use axum::{
     body::Bytes,
     extract::{Path, State, WebSocketUpgrade},
     http::{HeaderMap, StatusCode},
-    response::{Html, Redirect, Response},
+    response::{Redirect, Response},
     routing::{delete, get, post, put},
 };
 use serde_json::json;
@@ -17,10 +17,12 @@ use crate::{
     api::{
         error::ApiError,
         models::{
-            ActionResponse, AdminSessionsResponse, AdminTftpConfigResponse,
-            AdminTftpStatusResponse, BoardTypeSummary, BootProfileResponse, CreateSessionRequest,
-            FileResponse, SerialStatusResponse, SessionCreatedResponse, SessionDetailResponse,
-            TftpSessionResponse,
+            ActionResponse, AdminOverviewResponse, AdminServerConfigEditable,
+            AdminServerConfigReadonly, AdminServerConfigResponse, AdminSessionsResponse,
+            AdminTftpConfigResponse, AdminTftpStatusResponse, BoardTypeSummary,
+            BootProfileResponse, CreateSessionRequest, FileResponse, SerialStatusResponse,
+            SessionCreatedResponse, SessionDetailResponse, TftpSessionResponse,
+            UpdateServerConfigRequest,
         },
     },
     config::{BoardConfig, BootConfig, TftpConfig},
@@ -32,20 +34,17 @@ use crate::{
         service::build_tftp_manager,
         status::resolve_interface_ipv4,
     },
-    web::assets::layout,
+    web::{serve_admin_asset, serve_admin_history, serve_admin_index},
 };
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
-        .route("/", get(|| async { Redirect::temporary("/admin/boards") }))
-        .route(
-            "/admin",
-            get(|| async { Redirect::temporary("/admin/boards") }),
-        )
-        .route("/admin/boards", get(admin_boards_page))
-        .route("/admin/boards/{board_id}", get(admin_board_detail_page))
-        .route("/admin/sessions", get(admin_sessions_page))
-        .route("/admin/tftp", get(admin_tftp_page))
+        .route("/", get(|| async { Redirect::temporary("/admin/overview") }))
+        .route("/admin", get(serve_admin_index))
+        .route("/admin/", get(serve_admin_index))
+        .route("/admin/assets/{*path}", get(serve_admin_asset))
+        .route("/admin/{*path}", get(serve_admin_history))
+        .route("/api/v1/admin/overview", get(get_admin_overview))
         .route("/api/v1/admin/boards", get(list_boards).post(create_board))
         .route(
             "/api/v1/admin/boards/{board_id}",
@@ -62,6 +61,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/v1/admin/tftp/status", get(get_tftp_status))
         .route("/api/v1/admin/tftp/reconcile", post(reconcile_tftp))
+        .route(
+            "/api/v1/admin/server-config",
+            get(get_server_config).put(update_server_config),
+        )
         .route("/api/v1/board-types", get(list_board_types))
         .route("/api/v1/sessions", post(create_session))
         .route(
@@ -106,74 +109,40 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn admin_boards_page() -> Html<String> {
-    Html(layout(
-        "Boards",
-        r#"<div class="panel">
-<p class="muted">Single-file board configs are stored under <code>.ostool-server/boards/</code>.</p>
-<pre id="payload">Loading boards...</pre>
-</div>
-<script>
-fetchJson('/api/v1/admin/boards')
-  .then(data => renderJson('payload', data))
-  .catch(err => renderJson('payload', { error: err.message }));
-</script>"#,
-    ))
-}
+async fn get_admin_overview(
+    State(state): State<AppState>,
+) -> Result<axum::Json<AdminOverviewResponse>, ApiError> {
+    let boards = state.boards.read().await;
+    let sessions = state.sessions.read().await;
+    let board_types = summarize_board_types(&boards, &sessions);
+    let leased = leased_board_ids(&sessions);
+    let board_count_total = boards.len();
+    let disabled_board_count = boards.values().filter(|board| board.disabled).count();
+    let board_count_available = boards
+        .values()
+        .filter(|board| !board.disabled)
+        .filter(|board| !leased.contains(board.id.as_str()))
+        .count();
+    drop(sessions);
+    drop(boards);
 
-async fn admin_board_detail_page(Path(board_id): Path<String>) -> Html<String> {
-    Html(layout(
-        "Board Detail",
-        &format!(
-            r#"<div class="panel">
-<p class="muted">Board file: <code>{board_id}.toml</code></p>
-<pre id="payload">Loading board...</pre>
-</div>
-<script>
-fetchJson('/api/v1/admin/boards/{board_id}')
-  .then(data => renderJson('payload', data))
-  .catch(err => renderJson('payload', {{ error: err.message }}));
-</script>"#
-        ),
-    ))
-}
+    let tftp_status = state
+        .tftp_manager
+        .read()
+        .await
+        .status()
+        .map_err(|err| ApiError::service_unavailable(format!("failed to get TFTP status: {err}")))?;
+    let config = state.config.read().await.clone();
 
-async fn admin_sessions_page() -> Html<String> {
-    Html(layout(
-        "Sessions",
-        r#"<div class="panel">
-<p class="muted">Active leases in the board pool.</p>
-<pre id="payload">Loading sessions...</pre>
-</div>
-<script>
-fetchJson('/api/v1/admin/sessions')
-  .then(data => renderJson('payload', data))
-  .catch(err => renderJson('payload', { error: err.message }));
-</script>"#,
-    ))
-}
-
-async fn admin_tftp_page() -> Html<String> {
-    Html(layout(
-        "TFTP",
-        r#"<div class="panel">
-<p class="muted">Service-wide TFTP configuration and health.</p>
-<pre id="config">Loading TFTP config...</pre>
-<pre id="status">Loading TFTP status...</pre>
-</div>
-<script>
-Promise.all([
-  fetchJson('/api/v1/admin/tftp'),
-  fetchJson('/api/v1/admin/tftp/status')
-]).then(([cfg, status]) => {
-  renderJson('config', cfg);
-  renderJson('status', status);
-}).catch(err => {
-  renderJson('config', { error: err.message });
-  renderJson('status', { error: err.message });
-});
-</script>"#,
-    ))
+    Ok(axum::Json(AdminOverviewResponse {
+        board_count_total,
+        board_count_available,
+        disabled_board_count,
+        active_session_count: state.sessions.read().await.len(),
+        board_types,
+        tftp_status,
+        server: readonly_server_config(&config),
+    }))
 }
 
 async fn list_boards(
@@ -351,6 +320,39 @@ async fn get_tftp_status(
     Ok(axum::Json(AdminTftpStatusResponse { status }))
 }
 
+async fn get_server_config(
+    State(state): State<AppState>,
+) -> Result<axum::Json<AdminServerConfigResponse>, ApiError> {
+    let config = state.config.read().await.clone();
+    Ok(axum::Json(server_config_response(&config)))
+}
+
+async fn update_server_config(
+    State(state): State<AppState>,
+    axum::Json(request): axum::Json<UpdateServerConfigRequest>,
+) -> Result<axum::Json<AdminServerConfigResponse>, ApiError> {
+    if request.lease.default_ttl_secs == 0 {
+        return Err(ApiError::bad_request("lease.default_ttl_secs must be > 0"));
+    }
+    if request.lease.max_ttl_secs < request.lease.default_ttl_secs {
+        return Err(ApiError::bad_request(
+            "lease.max_ttl_secs must be >= lease.default_ttl_secs",
+        ));
+    }
+    if request.lease.gc_interval_secs == 0 {
+        return Err(ApiError::bad_request("lease.gc_interval_secs must be > 0"));
+    }
+
+    {
+        let mut config = state.config.write().await;
+        config.lease = request.lease;
+    }
+    state.save_config().await?;
+
+    let config = state.config.read().await.clone();
+    Ok(axum::Json(server_config_response(&config)))
+}
+
 async fn reconcile_tftp(
     State(state): State<AppState>,
 ) -> Result<axum::Json<AdminTftpStatusResponse>, ApiError> {
@@ -368,34 +370,7 @@ async fn list_board_types(
 ) -> Result<axum::Json<Vec<BoardTypeSummary>>, ApiError> {
     let boards = state.boards.read().await;
     let sessions = state.sessions.read().await;
-    let leased = sessions
-        .values()
-        .map(|session| session.board_id.as_str())
-        .collect::<BTreeSet<_>>();
-
-    let mut aggregate = BTreeMap::<String, (BTreeSet<String>, usize, usize)>::new();
-    for board in boards.values().filter(|board| !board.disabled) {
-        let entry = aggregate
-            .entry(board.board_type.clone())
-            .or_insert_with(|| (BTreeSet::new(), 0, 0));
-        for tag in &board.tags {
-            entry.0.insert(tag.clone());
-        }
-        entry.1 += 1;
-        if !leased.contains(board.id.as_str()) {
-            entry.2 += 1;
-        }
-    }
-
-    let result = aggregate
-        .into_iter()
-        .map(|(board_type, (tags, total, available))| BoardTypeSummary {
-            board_type,
-            tags: tags.into_iter().collect(),
-            total,
-            available,
-        })
-        .collect::<Vec<_>>();
+    let result = summarize_board_types(&boards, &sessions);
     Ok(axum::Json(result))
 }
 
@@ -782,4 +757,179 @@ fn validate_board_id(board_id: &str) -> Result<(), ApiError> {
         ));
     }
     Ok(())
+}
+
+fn leased_board_ids<'a>(
+    sessions: &'a BTreeMap<String, crate::session::Session>,
+) -> BTreeSet<&'a str> {
+    sessions
+        .values()
+        .map(|session| session.board_id.as_str())
+        .collect::<BTreeSet<_>>()
+}
+
+fn summarize_board_types(
+    boards: &BTreeMap<String, BoardConfig>,
+    sessions: &BTreeMap<String, crate::session::Session>,
+) -> Vec<BoardTypeSummary> {
+    let leased = leased_board_ids(sessions);
+    let mut aggregate = BTreeMap::<String, (BTreeSet<String>, usize, usize)>::new();
+    for board in boards.values().filter(|board| !board.disabled) {
+        let entry = aggregate
+            .entry(board.board_type.clone())
+            .or_insert_with(|| (BTreeSet::new(), 0, 0));
+        for tag in &board.tags {
+            entry.0.insert(tag.clone());
+        }
+        entry.1 += 1;
+        if !leased.contains(board.id.as_str()) {
+            entry.2 += 1;
+        }
+    }
+
+    aggregate
+        .into_iter()
+        .map(|(board_type, (tags, total, available))| BoardTypeSummary {
+            board_type,
+            tags: tags.into_iter().collect(),
+            total,
+            available,
+        })
+        .collect::<Vec<_>>()
+}
+
+fn readonly_server_config(config: &crate::config::ServerConfig) -> AdminServerConfigReadonly {
+    AdminServerConfigReadonly {
+        listen_addr: config.listen_addr.to_string(),
+        data_dir: config.data_dir.display().to_string(),
+        board_dir: config.board_dir.display().to_string(),
+    }
+}
+
+fn server_config_response(config: &crate::config::ServerConfig) -> AdminServerConfigResponse {
+    AdminServerConfigResponse {
+        readonly: readonly_server_config(config),
+        editable: AdminServerConfigEditable {
+            lease: config.lease.clone(),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use axum::{
+        Router,
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use tempfile::tempdir;
+    use tower::util::ServiceExt;
+
+    use super::build_router;
+    use crate::{
+        build_app_state,
+        config::{BuiltinTftpConfig, ServerConfig, TftpConfig},
+        tftp::service::{TftpManager, build_tftp_manager},
+        web::first_asset_path,
+    };
+
+    async fn test_router() -> Router {
+        let temp = tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        std::mem::forget(temp);
+        let config_path = root.join(".ostool-server.toml");
+        let mut config = ServerConfig::default();
+        config.listen_addr = "127.0.0.1:0".parse().unwrap();
+        config.data_dir = root.join("data");
+        config.board_dir = root.join("boards");
+        config.tftp = TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(
+            root.join("tftp"),
+        ));
+        let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
+        let state = build_app_state(config_path, config, manager).await.unwrap();
+        state.ensure_data_dirs().await.unwrap();
+        build_router(state)
+    }
+
+    #[tokio::test]
+    async fn admin_route_serves_embedded_index() {
+        let app: Router = test_router().await;
+        let response = app
+            .oneshot(Request::builder().uri("/admin").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/html"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("ostool-server 管理台"));
+    }
+
+    #[tokio::test]
+    async fn admin_asset_route_serves_embedded_asset() {
+        let asset_path = first_asset_path().expect("missing built frontend asset");
+        let app: Router = test_router().await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/admin/{asset_path}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().contains_key(header::CONTENT_TYPE));
+    }
+
+    #[tokio::test]
+    async fn admin_history_fallback_serves_index() {
+        let app: Router = test_router().await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/boards/demo-board")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("id=\"app\""));
+    }
+
+    #[tokio::test]
+    async fn server_config_endpoint_updates_only_lease() {
+        let app: Router = test_router().await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/admin/server-config")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"lease":{"default_ttl_secs":120,"max_ttl_secs":240,"gc_interval_secs":10}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["editable"]["lease"]["default_ttl_secs"], 120);
+        assert!(value["readonly"]["listen_addr"].is_string());
+    }
 }
