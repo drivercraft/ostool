@@ -366,7 +366,6 @@ mod tests {
         let output_path = dir.path().join("power.log");
         let board = BoardConfig {
             id: "demo".into(),
-            name: "Demo".into(),
             board_type: "demo".into(),
             tags: vec![],
             serial: None,

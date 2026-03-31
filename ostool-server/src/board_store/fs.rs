@@ -96,7 +96,6 @@ mod tests {
         let store = FileBoardStore::new(dir.path().to_path_buf());
         let board = BoardConfig {
             id: "rk3568-01".into(),
-            name: "Board 1".into(),
             board_type: "rk3568".into(),
             tags: vec!["usb".into()],
             serial: None,
@@ -108,7 +107,7 @@ mod tests {
 
         store.write_board(&board).await.unwrap();
         let loaded = store.load_all().await.unwrap();
-        assert_eq!(loaded.get("rk3568-01").unwrap().name, "Board 1");
+        assert_eq!(loaded.get("rk3568-01").unwrap().id, "rk3568-01");
         assert!(dir.path().join("rk3568-01.toml").exists());
     }
 }

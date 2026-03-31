@@ -1,5 +1,3 @@
-import type { JsonSchema } from "@jsonforms/core";
-
 export interface ErrorResponse {
   code: string;
   message: string;
@@ -56,53 +54,15 @@ export interface SerialConfig {
   baud_rate: number;
 }
 
-export interface BoardEditorCustomPowerManagementData {
-  power_on_cmd: string;
-  power_off_cmd: string;
-}
-
-export interface BoardEditorZhongshengRelayPowerManagementData {
-  serial_port: string;
-}
-
-export interface BoardEditorUbootData {
-  use_tftp: boolean;
-  kernel_load_addr: string;
-  fit_load_addr: string;
-  success_regex_text: string;
-  fail_regex_text: string;
-  uboot_cmd_text: string;
-  shell_prefix: string;
-  shell_init_cmd: string;
-  timeout: number | null;
-}
-
-export interface BoardEditorPxeData {
-  notes: string;
-}
-
-export interface BoardEditorData {
-  id: string;
-  name: string;
-  board_type: string;
-  tags_text: string;
-  notes: string;
-  disabled: boolean;
-  serial_enabled: boolean;
-  serial_port: string;
-  serial_baud_rate: number;
-  power_management_enabled: boolean;
-  power_management_kind: "custom" | "zhongsheng_relay";
-  power_management_custom: BoardEditorCustomPowerManagementData;
-  power_management_zhongsheng_relay: BoardEditorZhongshengRelayPowerManagementData;
-  boot_kind: "uboot" | "pxe";
-  uboot: BoardEditorUbootData;
-  pxe: BoardEditorPxeData;
-}
-
-export interface BoardEditorDocument {
-  data: BoardEditorData;
-  schema: JsonSchema;
+export interface SerialPortSummary {
+  port_name: string;
+  port_type: string;
+  label: string;
+  usb_vendor_id: number | null;
+  usb_product_id: number | null;
+  manufacturer: string | null;
+  product: string | null;
+  serial_number: string | null;
 }
 
 export interface NetworkInterfaceSummary {
@@ -131,11 +91,6 @@ export interface UbootProfile {
   use_tftp: boolean;
   kernel_load_addr: string | null;
   fit_load_addr: string | null;
-  success_regex: string[];
-  fail_regex: string[];
-  uboot_cmd: string[] | null;
-  shell_prefix: string | null;
-  shell_init_cmd: string | null;
   timeout: number | null;
 }
 
@@ -148,7 +103,6 @@ export type BootConfig = UbootProfile | PxeProfile;
 
 export interface BoardConfig {
   id: string;
-  name: string;
   board_type: string;
   tags: string[];
   serial: SerialConfig | null;
@@ -156,6 +110,17 @@ export interface BoardConfig {
   boot: BootConfig;
   notes: string | null;
   disabled: boolean;
+}
+
+export interface AdminBoardUpsertRequest {
+  id: string | null;
+  board_type: string;
+  tags: string[];
+  notes: string | null;
+  disabled: boolean;
+  serial: SerialConfig | null;
+  power_management: PowerManagementConfig | null;
+  boot: BootConfig;
 }
 
 export interface BoardTypeSummary {

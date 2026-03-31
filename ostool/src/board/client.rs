@@ -64,6 +64,12 @@ impl BoardServerClientError {
             && self.code.as_deref() == Some("conflict")
             && self.message == format!("no available board for type `{board_type}`")
     }
+
+    pub fn is_board_type_not_found_for(&self, board_type: &str) -> bool {
+        self.status == StatusCode::NOT_FOUND
+            && self.code.as_deref() == Some("not_found")
+            && self.message == format!("board type `{board_type}` not found")
+    }
 }
 
 impl BoardServerClient {
@@ -259,5 +265,15 @@ mod tests {
         assert_eq!(error.status, StatusCode::CONFLICT);
         assert_eq!(error.code.as_deref(), Some("conflict"));
         assert_eq!(error.message, "no available board for type `rk3568`");
+    }
+
+    #[test]
+    fn not_found_error_is_classified_as_missing_board_type() {
+        let error = parse_error_body(
+            StatusCode::NOT_FOUND,
+            r#"{"code":"not_found","message":"board type `rk3568` not found"}"#,
+        );
+        assert!(error.is_board_type_not_found_for("rk3568"));
+        assert!(!error.is_no_available_board_for("rk3568"));
     }
 }

@@ -1,16 +1,15 @@
-import { defineComponent } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BoardEditorDocument } from "@/types/api";
+import type { BoardConfig, SerialPortSummary } from "@/types/api";
 
 const route = {
   params: {} as Record<string, string>,
 };
 
 const push = vi.fn();
-const getNewBoardEditor = vi.fn();
-const getBoardEditor = vi.fn();
+const listSerialPorts = vi.fn();
+const getBoard = vi.fn();
 const createBoard = vi.fn();
 const updateBoard = vi.fn();
 const deleteBoard = vi.fn();
@@ -27,8 +26,8 @@ vi.mock("vue-router", () => ({
 
 vi.mock("@/api/client", () => ({
   api: {
-    getNewBoardEditor,
-    getBoardEditor,
+    listSerialPorts,
+    getBoard,
     createBoard,
     updateBoard,
     deleteBoard,
@@ -39,66 +38,44 @@ vi.mock("@/stores/ui", () => ({
   useUiStore: () => uiStore,
 }));
 
-vi.mock("@jsonforms/vue", () => ({
-  JsonForms: defineComponent({
-    name: "JsonFormsStub",
-    props: {
-      data: { type: Object, required: true },
-      schema: { type: Object, required: true },
-      uischema: { type: Object, required: true },
-      renderers: { type: Array, required: true },
-      validationMode: { type: String, required: false, default: "" },
+function makeSerialPorts(): SerialPortSummary[] {
+  return [
+    {
+      port_name: "/dev/ttyUSB0",
+      port_type: "usb",
+      label: "/dev/ttyUSB0 (USB)",
+      usb_vendor_id: 0x1a86,
+      usb_product_id: 0x7523,
+      manufacturer: "QinHeng",
+      product: "USB Serial",
+      serial_number: "abc",
     },
-    emits: ["change"],
-    template: "<div class='jsonforms-stub'></div>",
-  }),
-}));
+  ];
+}
 
-vi.mock("@jsonforms/vue-vanilla", () => ({
-  vanillaRenderers: [],
-}));
-
-function makeDocument(id = "demo-board"): BoardEditorDocument {
+function makeBoard(id = "demo-board"): BoardConfig {
   return {
-    data: {
-      id,
-      name: `Board ${id}`,
-      board_type: "rk3568",
-      tags_text: "lab, usb",
-      notes: "",
-      disabled: false,
-      serial_enabled: true,
-      serial_port: "/dev/ttyUSB0",
-      serial_baud_rate: 115200,
-      power_management_enabled: true,
-      power_management_kind: "custom",
-      power_management_custom: {
-        power_on_cmd: "echo on",
-        power_off_cmd: "echo off",
-      },
-      power_management_zhongsheng_relay: {
-        serial_port: "/dev/ttyUSB1",
-      },
-      boot_kind: "uboot",
-      uboot: {
-        use_tftp: true,
-        kernel_load_addr: "",
-        fit_load_addr: "",
-        success_regex_text: "",
-        fail_regex_text: "",
-        uboot_cmd_text: "",
-        shell_prefix: "",
-        shell_init_cmd: "",
-        timeout: null,
-      },
-      pxe: {
-        notes: "",
-      },
+    id,
+    board_type: "rk3568",
+    tags: ["lab", "usb"],
+    serial: {
+      port: "/dev/ttyUSB0",
+      baud_rate: 115200,
     },
-    schema: {
-      type: "object",
-      properties: {},
+    power_management: {
+      kind: "custom",
+      power_on_cmd: "echo on",
+      power_off_cmd: "echo off",
     },
+    boot: {
+      kind: "uboot",
+      use_tftp: true,
+      kernel_load_addr: null,
+      fit_load_addr: null,
+      timeout: null,
+    },
+    notes: "rack-a",
+    disabled: false,
   };
 }
 
@@ -106,62 +83,98 @@ describe("BoardEditorView", () => {
   beforeEach(() => {
     route.params = {};
     push.mockReset();
-    getNewBoardEditor.mockReset();
-    getBoardEditor.mockReset();
+    listSerialPorts.mockReset();
+    getBoard.mockReset();
     createBoard.mockReset();
     updateBoard.mockReset();
     deleteBoard.mockReset();
     uiStore.clearMessages.mockReset();
     uiStore.setError.mockReset();
     uiStore.setSuccess.mockReset();
+    listSerialPorts.mockResolvedValue(makeSerialPorts());
   });
 
-  it("loads the new-board editor document and refreshes as a whole", async () => {
-    getNewBoardEditor.mockResolvedValue(makeDocument());
-
+  it("loads a new-board form and refreshes serial ports independently", async () => {
     const BoardEditorView = (await import("./BoardEditorView.vue")).default;
     const wrapper = mount(BoardEditorView);
     await flushPromises();
 
-    expect(getNewBoardEditor).toHaveBeenCalledTimes(1);
-    expect(getBoardEditor).not.toHaveBeenCalled();
-    expect(wrapper.text()).toContain("刷新");
-    expect(wrapper.text()).not.toContain("刷新串口");
+    expect(listSerialPorts).toHaveBeenCalledTimes(1);
+    expect(getBoard).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("刷新串口");
 
-    await wrapper.get("button.ghost-button").trigger("click");
+    const buttons = wrapper.findAll("button");
+    const refreshSerialButton = buttons.find((button) => button.text() === "刷新串口");
+    expect(refreshSerialButton).toBeTruthy();
+
+    await refreshSerialButton!.trigger("click");
     await flushPromises();
 
-    expect(getNewBoardEditor).toHaveBeenCalledTimes(2);
+    expect(listSerialPorts).toHaveBeenCalledTimes(2);
+    expect(getBoard).not.toHaveBeenCalled();
   });
 
-  it("loads the existing board editor document for edit mode", async () => {
+  it("loads an existing board for edit mode", async () => {
     route.params = { boardId: "demo-board" };
-    getBoardEditor.mockResolvedValue(makeDocument("demo-board"));
-
-    const BoardEditorView = (await import("./BoardEditorView.vue")).default;
-    mount(BoardEditorView);
-    await flushPromises();
-
-    expect(getBoardEditor).toHaveBeenCalledWith("demo-board");
-    expect(getNewBoardEditor).not.toHaveBeenCalled();
-  });
-
-  it("saves the wrapper document and routes to the saved board id", async () => {
-    route.params = { boardId: "old-board" };
-    const initial = makeDocument("old-board");
-    const saved = makeDocument("new-board");
-    getBoardEditor.mockResolvedValue(initial);
-    updateBoard.mockResolvedValue(saved);
+    getBoard.mockResolvedValue(makeBoard("demo-board"));
 
     const BoardEditorView = (await import("./BoardEditorView.vue")).default;
     const wrapper = mount(BoardEditorView);
     await flushPromises();
 
-    await wrapper.get("button.primary-button").trigger("click");
+    expect(getBoard).toHaveBeenCalledWith("demo-board");
+    expect(
+      (wrapper.get('input[placeholder="留空则自动分配 {board type}-{num}"]').element as HTMLInputElement).value,
+    ).toBe("demo-board");
+  });
+
+  it("creates a board with blank id as null in the request payload", async () => {
+    createBoard.mockResolvedValue(makeBoard("rk3568-1"));
+
+    const BoardEditorView = (await import("./BoardEditorView.vue")).default;
+    const wrapper = mount(BoardEditorView);
     await flushPromises();
 
-    expect(updateBoard).toHaveBeenCalledWith("old-board", initial);
-    expect(uiStore.setSuccess).toHaveBeenCalledWith("已保存开发板 Board new-board");
-    expect(push).toHaveBeenCalledWith("/boards/new-board");
+    await wrapper.get('input[placeholder="例如 rk3568"]').setValue("rk3568");
+    const saveButton = wrapper.findAll("button").find((button) => button.text() === "保存配置");
+    await saveButton!.trigger("click");
+    await flushPromises();
+
+    expect(createBoard).toHaveBeenCalledWith({
+      id: null,
+      board_type: "rk3568",
+      tags: [],
+      notes: null,
+      disabled: false,
+      serial: null,
+      power_management: null,
+      boot: {
+        kind: "uboot",
+        use_tftp: false,
+        kernel_load_addr: null,
+        fit_load_addr: null,
+        timeout: null,
+      },
+    });
+    expect(uiStore.setSuccess).toHaveBeenCalledWith("已保存开发板 rk3568-1");
+    expect(push).toHaveBeenCalledWith("/boards/rk3568-1");
+  });
+
+  it("updates a board and keeps blank id as null in the payload", async () => {
+    route.params = { boardId: "demo-board" };
+    getBoard.mockResolvedValue(makeBoard("demo-board"));
+    updateBoard.mockResolvedValue(makeBoard("demo-board"));
+
+    const BoardEditorView = (await import("./BoardEditorView.vue")).default;
+    const wrapper = mount(BoardEditorView);
+    await flushPromises();
+
+    await wrapper.get('input[placeholder="留空则自动分配 {board type}-{num}"]').setValue("");
+    const saveButton = wrapper.findAll("button").find((button) => button.text() === "保存配置");
+    await saveButton!.trigger("click");
+    await flushPromises();
+
+    expect(updateBoard).toHaveBeenCalledWith("demo-board", expect.objectContaining({ id: null }));
+    expect(push).toHaveBeenCalledWith("/boards/demo-board");
   });
 });

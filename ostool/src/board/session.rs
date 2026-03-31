@@ -144,6 +144,9 @@ where
                 println!("No available board for type `{board_type}`, retrying in 1s...");
                 sleep(Duration::from_secs(1)).await;
             }
+            Err(err) if err.is_board_type_not_found_for(board_type) => {
+                return Err(err);
+            }
             Err(err) => return Err(err),
         }
     }
@@ -242,6 +245,37 @@ mod tests {
         .await;
 
         assert_eq!(result.unwrap_err().message, "boom");
+    }
+
+    #[tokio::test]
+    async fn acquire_session_stops_retrying_when_board_type_is_missing() {
+        let error = BoardServerClientError {
+            status: StatusCode::NOT_FOUND,
+            code: Some("not_found".to_string()),
+            message: "board type `rk3568` not found".to_string(),
+        };
+        let sleeps = Arc::new(Mutex::new(Vec::new()));
+
+        let result = acquire_session_with(
+            "rk3568",
+            || {
+                let error = error.clone();
+                async move { Err(error) }
+            },
+            {
+                let sleeps = sleeps.clone();
+                move |duration| {
+                    let sleeps = sleeps.clone();
+                    async move {
+                        sleeps.lock().unwrap().push(duration);
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(result.unwrap_err().message, "board type `rk3568` not found");
+        assert!(sleeps.lock().unwrap().is_empty());
     }
 
     #[test]

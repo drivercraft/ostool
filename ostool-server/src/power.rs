@@ -150,7 +150,6 @@ mod tests {
     fn board_with_power_management(power_management: PowerManagementConfig) -> BoardConfig {
         BoardConfig {
             id: "demo".into(),
-            name: "Demo".into(),
             board_type: "demo".into(),
             tags: vec![],
             serial: None,

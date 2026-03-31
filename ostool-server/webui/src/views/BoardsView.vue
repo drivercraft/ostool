@@ -130,7 +130,6 @@ onMounted(() => {
       <table v-else class="data-table">
         <thead>
           <tr>
-            <th>名称</th>
             <th>ID</th>
             <th>板型</th>
             <th>标签</th>
@@ -142,7 +141,6 @@ onMounted(() => {
         </thead>
         <tbody>
           <tr v-for="board in filteredBoards" :key="board.id">
-            <td>{{ board.name }}</td>
             <td><code>{{ board.id }}</code></td>
             <td>{{ board.board_type }}</td>
             <td>{{ board.tags.join(", ") || "-" }}</td>

@@ -350,71 +350,6 @@ a {
   background: rgba(255, 255, 255, 0.6);
 }
 
-.board-editor-jsonforms {
-  display: grid;
-  gap: 24px;
-}
-
-.board-editor-jsonforms .group {
-  margin: 0;
-  padding: 20px;
-  border-radius: 22px;
-  background: rgba(255, 249, 241, 0.9);
-  border: 1px solid rgba(96, 79, 53, 0.12);
-}
-
-.board-editor-jsonforms .group-label {
-  margin: 0 0 16px;
-  font-size: 1.02rem;
-}
-
-.board-editor-jsonforms .group-item > .vertical-layout,
-.board-editor-jsonforms .vertical-layout {
-  display: grid;
-  gap: 16px;
-}
-
-.board-editor-jsonforms .horizontal-layout {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.board-editor-jsonforms .control {
-  display: grid;
-  gap: 8px;
-}
-
-.board-editor-jsonforms .label {
-  color: var(--muted);
-  font-size: 0.92rem;
-}
-
-.board-editor-jsonforms .input,
-.board-editor-jsonforms .select,
-.board-editor-jsonforms .text-area {
-  width: 100%;
-  padding: 12px 14px;
-  border-radius: 16px;
-  border: 1px solid rgba(96, 79, 53, 0.18);
-  background: rgba(255, 255, 255, 0.8);
-}
-
-.board-editor-jsonforms .text-area {
-  min-height: 132px;
-  resize: vertical;
-}
-
-.board-editor-jsonforms .description {
-  color: var(--muted);
-  font-size: 0.85rem;
-}
-
-.board-editor-jsonforms .error {
-  color: var(--danger);
-  font-size: 0.85rem;
-}
-
 .data-table {
   width: 100%;
   border-collapse: collapse;
@@ -555,8 +490,7 @@ code {
   .split-grid,
   .toolbar-grid,
   .form-grid.two-columns,
-  .form-grid.three-columns,
-  .board-editor-jsonforms .horizontal-layout {
+  .form-grid.three-columns {
     grid-template-columns: 1fr;
   }
 }

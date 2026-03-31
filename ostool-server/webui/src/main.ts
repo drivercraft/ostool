@@ -3,7 +3,6 @@ import { createApp } from "vue";
 
 import App from "./App.vue";
 import { router } from "./router";
-import "@jsonforms/vue-vanilla/vanilla.css";
 import "./style.css";
 
 const app = createApp(App);

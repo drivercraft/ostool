@@ -325,7 +325,6 @@ fn absolutize_path(base_dir: &Path, path: &Path) -> PathBuf {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BoardConfig {
     pub id: String,
-    pub name: String,
     pub board_type: String,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -384,13 +383,6 @@ pub struct UbootProfile {
     pub use_tftp: bool,
     pub kernel_load_addr: Option<String>,
     pub fit_load_addr: Option<String>,
-    #[serde(default)]
-    pub success_regex: Vec<String>,
-    #[serde(default)]
-    pub fail_regex: Vec<String>,
-    pub uboot_cmd: Option<Vec<String>>,
-    pub shell_prefix: Option<String>,
-    pub shell_init_cmd: Option<String>,
     pub timeout: Option<u64>,
 }
 
@@ -401,7 +393,9 @@ pub struct PxeProfile {
 
 #[cfg(test)]
 mod tests {
-    use super::{BoardConfig, ServerConfig};
+    use serde_json::json;
+
+    use super::{BoardConfig, BootConfig, ServerConfig, UbootProfile};
 
     #[test]
     fn server_config_round_trip_includes_network() {
@@ -415,7 +409,6 @@ mod tests {
     fn board_config_rejects_legacy_uboot_net_fields() {
         let config = r#"
 id = "demo"
-name = "demo"
 board_type = "demo"
 tags = []
 disabled = false
@@ -440,7 +433,6 @@ interface = "eth0"
     fn board_config_rejects_legacy_power_command_fields() {
         let config = r#"
 id = "demo"
-name = "demo"
 board_type = "demo"
 tags = []
 disabled = false
@@ -458,5 +450,33 @@ board_power_off_cmd = "shutdown"
             message.contains("unknown field") || message.contains("board_reset_cmd"),
             "unexpected error: {message}"
         );
+    }
+
+    #[test]
+    fn board_config_serialization_omits_removed_fields() {
+        let board = BoardConfig {
+            id: "demo-1".into(),
+            board_type: "demo".into(),
+            tags: vec!["lab".into()],
+            serial: None,
+            power_management: None,
+            boot: BootConfig::Uboot(UbootProfile {
+                use_tftp: true,
+                kernel_load_addr: Some("0x100000".into()),
+                fit_load_addr: Some("0x200000".into()),
+                timeout: Some(30),
+            }),
+            notes: None,
+            disabled: false,
+        };
+
+        let value = serde_json::to_value(&board).unwrap();
+        assert_eq!(value["id"], json!("demo-1"));
+        assert!(value.get("name").is_none());
+        assert!(value["boot"].get("success_regex").is_none());
+        assert!(value["boot"].get("fail_regex").is_none());
+        assert!(value["boot"].get("uboot_cmd").is_none());
+        assert!(value["boot"].get("shell_prefix").is_none());
+        assert!(value["boot"].get("shell_init_cmd").is_none());
     }
 }

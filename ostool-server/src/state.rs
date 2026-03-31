@@ -9,7 +9,7 @@ use tokio::sync::{RwLock, watch};
 use uuid::Uuid;
 
 use crate::{
-    board_pool::find_available_board,
+    board_pool::{BoardAllocationStatus, allocate_board},
     board_store::fs::FileBoardStore,
     config::{BoardConfig, ServerConfig},
     session::Session,
@@ -55,10 +55,10 @@ impl AppState {
         board_type: &str,
         required_tags: &[String],
         client_name: Option<String>,
-    ) -> Option<Session> {
+    ) -> Result<Session, BoardAllocationStatus> {
         let boards = self.boards.read().await;
         let sessions = self.sessions.read().await;
-        let board = find_available_board(&boards, &sessions, board_type, required_tags)?;
+        let board = allocate_board(&boards, &sessions, board_type, required_tags)?;
         drop(sessions);
         drop(boards);
 
@@ -74,7 +74,7 @@ impl AppState {
 
         let mut sessions = self.sessions.write().await;
         sessions.insert(session.id.clone(), session.clone());
-        Some(session)
+        Ok(session)
     }
 
     pub async fn get_session(&self, session_id: &str) -> Option<Session> {

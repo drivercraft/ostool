@@ -2,7 +2,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::{BoardConfig, BootConfig, LeaseConfig, TftpConfig, TftpNetworkConfig},
+    config::{
+        BoardConfig, BootConfig, LeaseConfig, PowerManagementConfig, SerialConfig, TftpConfig,
+        TftpNetworkConfig,
+    },
     session::Session,
     tftp::{files::TftpFileRef, status::TftpStatus},
 };
@@ -68,6 +71,20 @@ pub struct SerialPortSummary {
     pub manufacturer: Option<String>,
     pub product: Option<String>,
     pub serial_number: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminBoardUpsertRequest {
+    pub id: Option<String>,
+    pub board_type: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub disabled: bool,
+    pub serial: Option<SerialConfig>,
+    pub power_management: Option<PowerManagementConfig>,
+    pub boot: BootConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -78,7 +78,7 @@ onMounted(() => {
           <tr v-for="session in sessions" :key="session.id">
             <td><code>{{ session.id }}</code></td>
             <td>
-              {{ boardMap.get(session.board_id)?.name || session.board_id }}
+              {{ boardMap.get(session.board_id)?.id || session.board_id }}
             </td>
             <td>{{ session.client_name || "-" }}</td>
             <td>{{ new Date(session.created_at).toLocaleString() }}</td>
