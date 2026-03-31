@@ -5,7 +5,7 @@ use std::{
 };
 
 use chrono::{Duration, Utc};
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, watch};
 use uuid::Uuid;
 
 use crate::{
@@ -23,6 +23,7 @@ pub struct AppState {
     pub boards: Arc<RwLock<BTreeMap<String, BoardConfig>>>,
     pub sessions: Arc<RwLock<BTreeMap<String, Session>>>,
     pub active_serial_sessions: Arc<RwLock<BTreeSet<String>>>,
+    pub serial_shutdown_signals: Arc<RwLock<BTreeMap<String, watch::Sender<bool>>>>,
     pub board_store: Arc<FileBoardStore>,
     pub tftp_manager: Arc<RwLock<Arc<dyn TftpManager>>>,
 }
@@ -42,6 +43,7 @@ pub async fn build_app_state(
         boards: Arc::new(RwLock::new(boards)),
         sessions: Arc::new(RwLock::new(BTreeMap::new())),
         active_serial_sessions: Arc::new(RwLock::new(BTreeSet::new())),
+        serial_shutdown_signals: Arc::new(RwLock::new(BTreeMap::new())),
         board_store,
         tftp_manager: Arc::new(RwLock::new(tftp_manager)),
     })
@@ -89,6 +91,14 @@ impl AppState {
     }
 
     pub async fn remove_session(&self, session_id: &str) -> anyhow::Result<Option<Session>> {
+        if let Some(sender) = self
+            .serial_shutdown_signals
+            .write()
+            .await
+            .remove(session_id)
+        {
+            let _ = sender.send(true);
+        }
         self.active_serial_sessions.write().await.remove(session_id);
         self.tftp_manager
             .read()
@@ -121,6 +131,22 @@ impl AppState {
         self.boards.read().await.get(&session.board_id).cloned()
     }
 
+    pub async fn register_serial_shutdown(&self, session_id: &str) -> watch::Receiver<bool> {
+        let (sender, receiver) = watch::channel(false);
+        self.serial_shutdown_signals
+            .write()
+            .await
+            .insert(session_id.to_string(), sender);
+        receiver
+    }
+
+    pub async fn clear_serial_shutdown(&self, session_id: &str) {
+        self.serial_shutdown_signals
+            .write()
+            .await
+            .remove(session_id);
+    }
+
     pub fn board_path(&self, board_id: &str) -> std::path::PathBuf {
         self.board_store.path_for_id(board_id)
     }
@@ -141,5 +167,50 @@ impl AppState {
 
     pub fn config_path_default() -> &'static Path {
         Path::new(".ostool-server.toml")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use chrono::Utc;
+    use tempfile::tempdir;
+
+    use super::build_app_state;
+    use crate::{
+        ServerConfig,
+        session::Session,
+        tftp::service::{TftpManager, build_tftp_manager},
+    };
+
+    #[tokio::test]
+    async fn remove_session_notifies_registered_serial_shutdown() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let config_path = root.join(".ostool-server.toml");
+        let mut config = ServerConfig::default();
+        config.listen_addr = "127.0.0.1:0".parse().unwrap();
+        config.data_dir = root.join("data");
+        config.board_dir = root.join("boards");
+        let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
+        let state = build_app_state(config_path, config, manager).await.unwrap();
+
+        state.sessions.write().await.insert(
+            "session-1".into(),
+            Session {
+                id: "session-1".into(),
+                board_id: "board-1".into(),
+                client_name: None,
+                created_at: Utc::now(),
+                expires_at: Utc::now(),
+            },
+        );
+
+        let mut shutdown = state.register_serial_shutdown("session-1").await;
+        let removed = state.remove_session("session-1").await.unwrap();
+        assert!(removed.is_some());
+        shutdown.changed().await.unwrap();
+        assert!(*shutdown.borrow());
     }
 }

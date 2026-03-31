@@ -6,6 +6,7 @@ use base64::Engine;
 use futures_util::{Sink, SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_serial::SerialPortBuilderExt;
 
@@ -29,7 +30,9 @@ pub async fn run_serial_ws(
     session_id: String,
     board: BoardConfig,
 ) {
-    let result = run_serial_ws_inner(socket, &state, &session_id, &board).await;
+    let shutdown_rx = state.register_serial_shutdown(&session_id).await;
+    let result = run_serial_ws_inner(socket, &state, &session_id, &board, shutdown_rx).await;
+    state.clear_serial_shutdown(&session_id).await;
     if let Err(err) = result {
         log::warn!("serial websocket ended with error: {err:#}");
     }
@@ -45,6 +48,7 @@ async fn run_serial_ws_inner(
     state: &AppState,
     session_id: &str,
     board: &BoardConfig,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let serial = board
         .serial
@@ -89,6 +93,14 @@ async fn run_serial_ws_inner(
                             send_power_on_failure_and_close(&mut ws_sender, &message).await;
                             break;
                         }
+                    }
+                }
+                changed = shutdown_rx.changed() => {
+                    if changed.is_ok() && *shutdown_rx.borrow() {
+                        let _ = ws_sender
+                            .send(Message::Text(r#"{"type":"closed"}"#.to_string().into()))
+                            .await;
+                        break;
                     }
                 }
                 maybe_message = ws_receiver.next() => {
@@ -147,6 +159,14 @@ async fn run_serial_ws_inner(
             }
         } else {
             tokio::select! {
+                changed = shutdown_rx.changed() => {
+                    if changed.is_ok() && *shutdown_rx.borrow() {
+                        let _ = ws_sender
+                            .send(Message::Text(r#"{"type":"closed"}"#.to_string().into()))
+                            .await;
+                        break;
+                    }
+                }
                 maybe_message = ws_receiver.next() => {
                     let Some(message) = maybe_message else {
                         break;
