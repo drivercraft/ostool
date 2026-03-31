@@ -6,6 +6,8 @@ import type {
   AdminTftpStatusResponse,
   BoardConfig,
   ErrorResponse,
+  NetworkInterfaceSummary,
+  SerialPortSummary,
   TftpConfig,
   UpdateServerConfigRequest,
 } from "@/types/api";
@@ -47,6 +49,12 @@ export const api = {
   },
   listBoards() {
     return request<BoardConfig[]>("/api/v1/admin/boards");
+  },
+  listSerialPorts() {
+    return request<SerialPortSummary[]>("/api/v1/admin/serial-ports");
+  },
+  listNetworkInterfaces() {
+    return request<NetworkInterfaceSummary[]>("/api/v1/admin/network-interfaces");
   },
   getBoard(boardId: string) {
     return request<BoardConfig>(`/api/v1/admin/boards/${encodeURIComponent(boardId)}`);

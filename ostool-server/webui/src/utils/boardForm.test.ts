@@ -16,14 +16,16 @@ describe("board form helpers", () => {
     form.serialEnabled = true;
     form.serialPort = "/dev/ttyUSB0";
     form.serialBaudRate = 1500000;
-    form.uboot.interface = "eth0";
-    form.uboot.server_ip_override = "192.168.1.10";
+    form.uboot.use_tftp = true;
     form.uboot.success_regex_text = "booted\nlogin:";
 
     const board = formToBoard(form);
     expect(board.id).toBe("demo-board");
     expect(board.serial?.baud_rate).toBe(1500000);
     expect(board.boot.kind).toBe("uboot");
+    if (board.boot.kind === "uboot") {
+      expect(board.boot.use_tftp).toBe(true);
+    }
 
     const roundTrip = boardToForm(board);
     expect(roundTrip.tagsText).toBe("lab, usb");

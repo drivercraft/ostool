@@ -1,19 +1,39 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 
 import { api } from "@/api/client";
 import { useUiStore } from "@/stores/ui";
-import type { AdminServerConfigResponse } from "@/types/api";
+import type { AdminServerConfigResponse, NetworkInterfaceSummary } from "@/types/api";
 
 const ui = useUiStore();
 const loading = ref(true);
 const saving = ref(false);
 const config = ref<AdminServerConfigResponse | null>(null);
+const networkInterfaces = ref<NetworkInterfaceSummary[]>([]);
+const networkInterfaceOptions = computed(() => {
+  const options = [...networkInterfaces.value];
+  const currentInterface = config.value?.editable.tftp_network.interface.trim() ?? "";
+  if (currentInterface && !options.some((item) => item.name === currentInterface)) {
+    options.unshift({
+      name: currentInterface,
+      label: `${currentInterface} (当前配置，未检测到)`,
+      ipv4_addresses: [],
+      netmask: null,
+      loopback: false,
+    });
+  }
+  return options;
+});
 
 async function loadConfig() {
   loading.value = true;
   try {
-    config.value = await api.getServerConfig();
+    const [serverConfig, interfaces] = await Promise.all([
+      api.getServerConfig(),
+      api.listNetworkInterfaces(),
+    ]);
+    config.value = serverConfig;
+    networkInterfaces.value = interfaces;
   } catch (error) {
     ui.setError((error as Error).message);
   } finally {
@@ -30,12 +50,22 @@ async function saveConfig() {
   try {
     config.value = await api.updateServerConfig({
       lease: config.value.editable.lease,
+      tftp_network: config.value.editable.tftp_network,
     });
     ui.setSuccess("已保存 Server 安全配置");
   } catch (error) {
     ui.setError((error as Error).message);
   } finally {
     saving.value = false;
+  }
+}
+
+async function refreshNetworkInterfaces() {
+  try {
+    networkInterfaces.value = await api.listNetworkInterfaces();
+    ui.setSuccess("已刷新网络接口列表");
+  } catch (error) {
+    ui.setError((error as Error).message);
   }
 }
 
@@ -102,8 +132,31 @@ onMounted(() => {
                 <input v-model.number="config.editable.lease.gc_interval_secs" type="number" min="1" />
               </label>
             </div>
+            <div class="panel-heading compact with-top-gap">
+              <h4>服务级网络配置</h4>
+            </div>
+            <div class="form-grid">
+              <label class="field">
+                <span>网络接口</span>
+                <div class="inline-field-group">
+                  <select v-model="config.editable.tftp_network.interface">
+                    <option value="">自动选择第一个非 loopback 接口</option>
+                    <option
+                      v-for="networkInterface in networkInterfaceOptions"
+                      :key="networkInterface.name"
+                      :value="networkInterface.name"
+                    >
+                      {{ networkInterface.label }}
+                    </option>
+                  </select>
+                  <button class="ghost-button compact-button" type="button" @click="refreshNetworkInterfaces">
+                    刷新网卡
+                  </button>
+                </div>
+              </label>
+            </div>
             <p class="muted">
-              `lease` 保存后立即生效；`listen_addr`、`data_dir`、`board_dir` 仍保持只读，避免运行中修改导致服务行为不稳定。
+              `lease` 和服务级网络配置保存后立即生效；`listen_addr`、`data_dir`、`board_dir` 仍保持只读，避免运行中修改导致服务行为不稳定。
             </p>
           </section>
         </div>

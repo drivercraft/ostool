@@ -14,6 +14,6 @@ pub mod web;
 pub use api::router::build_router;
 pub use config::{
     BoardConfig, BootConfig, BuiltinTftpConfig, LeaseConfig, PxeProfile, SerialConfig,
-    ServerConfig, SystemTftpdHpaConfig, TftpConfig, UbootNetConfig, UbootProfile,
+    ServerConfig, SystemTftpdHpaConfig, TftpConfig, TftpNetworkConfig, UbootProfile,
 };
 pub use state::{AppState, build_app_state};

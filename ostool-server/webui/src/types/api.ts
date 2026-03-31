@@ -32,11 +32,17 @@ export interface SystemTftpdHpaConfig {
 
 export type TftpConfig = BuiltinTftpConfig | SystemTftpdHpaConfig;
 
+export interface TftpNetworkConfig {
+  interface: string;
+}
+
 export interface TftpStatus {
   provider: string;
   enabled: boolean;
   healthy: boolean;
   writable: boolean;
+  resolved_server_ip: string | null;
+  resolved_netmask: string | null;
   root_dir: string;
   bind_addr_or_address: string | null;
   service_state: string | null;
@@ -48,19 +54,30 @@ export interface SerialConfig {
   baud_rate: number;
 }
 
-export interface UbootNetConfig {
-  interface: string;
-  board_ip: string | null;
-  gatewayip: string | null;
+export interface SerialPortSummary {
+  port_name: string;
+  port_type: string;
+  label: string;
+  usb_vendor_id: number | null;
+  usb_product_id: number | null;
+  manufacturer: string | null;
+  product: string | null;
+  serial_number: string | null;
+}
+
+export interface NetworkInterfaceSummary {
+  name: string;
+  label: string;
+  ipv4_addresses: string[];
   netmask: string | null;
-  server_ip_override: string | null;
+  loopback: boolean;
 }
 
 export interface UbootProfile {
   kind: "uboot";
+  use_tftp: boolean;
   kernel_load_addr: string | null;
   fit_load_addr: string | null;
-  net: UbootNetConfig | null;
   board_reset_cmd: string | null;
   board_power_off_cmd: string | null;
   success_regex: string[];
@@ -134,6 +151,7 @@ export interface AdminServerConfigReadonly {
 
 export interface AdminServerConfigEditable {
   lease: LeaseConfig;
+  tftp_network: TftpNetworkConfig;
 }
 
 export interface AdminServerConfigResponse {
@@ -143,6 +161,14 @@ export interface AdminServerConfigResponse {
 
 export interface UpdateServerConfigRequest {
   lease: LeaseConfig;
+  tftp_network: TftpNetworkConfig;
+}
+
+export interface BootProfileResponse {
+  boot: BootConfig;
+  server_ip: string | null;
+  netmask: string | null;
+  interface: string | null;
 }
 
 export interface FileResponse {
@@ -158,6 +184,7 @@ export interface TftpSessionResponse {
   available: boolean;
   provider: string;
   server_ip: string | null;
+  netmask: string | null;
   writable: boolean;
   files: FileResponse[];
 }

@@ -3,7 +3,6 @@ import type {
   BootConfig,
   PxeProfile,
   SerialConfig,
-  UbootNetConfig,
   UbootProfile,
 } from "@/types/api";
 
@@ -19,11 +18,7 @@ export interface BoardFormModel {
   serialBaudRate: number;
   bootKind: BootConfig["kind"];
   uboot: {
-    interface: string;
-    board_ip: string;
-    gatewayip: string;
-    netmask: string;
-    server_ip_override: string;
+    use_tftp: boolean;
     kernel_load_addr: string;
     fit_load_addr: string;
     board_reset_cmd: string;
@@ -53,11 +48,7 @@ export function createDefaultBoardForm(): BoardFormModel {
     serialBaudRate: 115200,
     bootKind: "uboot",
     uboot: {
-      interface: "",
-      board_ip: "",
-      gatewayip: "",
-      netmask: "",
-      server_ip_override: "",
+      use_tftp: false,
       kernel_load_addr: "",
       fit_load_addr: "",
       board_reset_cmd: "",
@@ -90,11 +81,7 @@ export function boardToForm(board: BoardConfig): BoardFormModel {
 
   if (board.boot.kind === "uboot") {
     form.uboot = {
-      interface: board.boot.net?.interface ?? "",
-      board_ip: board.boot.net?.board_ip ?? "",
-      gatewayip: board.boot.net?.gatewayip ?? "",
-      netmask: board.boot.net?.netmask ?? "",
-      server_ip_override: board.boot.net?.server_ip_override ?? "",
+      use_tftp: board.boot.use_tftp,
       kernel_load_addr: board.boot.kernel_load_addr ?? "",
       fit_load_addr: board.boot.fit_load_addr ?? "",
       board_reset_cmd: board.boot.board_reset_cmd ?? "",
@@ -137,27 +124,11 @@ export function formToBoard(form: BoardFormModel): BoardConfig {
 }
 
 function formToUboot(form: BoardFormModel["uboot"]): UbootProfile {
-  const net = [
-    form.interface,
-    form.board_ip,
-    form.gatewayip,
-    form.netmask,
-    form.server_ip_override,
-  ].some((value) => value.trim() !== "")
-    ? ({
-        interface: form.interface.trim(),
-        board_ip: emptyToNull(form.board_ip),
-        gatewayip: emptyToNull(form.gatewayip),
-        netmask: emptyToNull(form.netmask),
-        server_ip_override: emptyToNull(form.server_ip_override),
-      } satisfies UbootNetConfig)
-    : null;
-
   return {
     kind: "uboot",
+    use_tftp: form.use_tftp,
     kernel_load_addr: emptyToNull(form.kernel_load_addr),
     fit_load_addr: emptyToNull(form.fit_load_addr),
-    net,
     board_reset_cmd: emptyToNull(form.board_reset_cmd),
     board_power_off_cmd: emptyToNull(form.board_power_off_cmd),
     success_regex: parseLines(form.success_regex_text),

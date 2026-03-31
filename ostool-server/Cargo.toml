@@ -26,6 +26,7 @@ futures-util = "0.3"
 log = { workspace = true }
 mime_guess = "2"
 network-interface = "2"
+nusb = "0.2.3"
 rust-embed = "8"
 schemars = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }

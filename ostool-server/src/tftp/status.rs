@@ -11,6 +11,8 @@ pub struct TftpStatus {
     pub enabled: bool,
     pub healthy: bool,
     pub writable: bool,
+    pub resolved_server_ip: Option<String>,
+    pub resolved_netmask: Option<String>,
     pub root_dir: PathBuf,
     pub bind_addr_or_address: Option<String>,
     pub service_state: Option<String>,

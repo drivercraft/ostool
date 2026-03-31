@@ -4,7 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 
 import { api } from "@/api/client";
 import { useUiStore } from "@/stores/ui";
-import type { BoardConfig } from "@/types/api";
+import type { BoardConfig, SerialPortSummary } from "@/types/api";
 import { boardToForm, createDefaultBoardForm, formToBoard } from "@/utils/boardForm";
 import { suggestBoardId } from "@/utils/boardIdentity";
 
@@ -18,6 +18,7 @@ const deleting = ref(false);
 const validationError = ref("");
 const form = ref(createDefaultBoardForm());
 const knownBoards = ref<BoardConfig[]>([]);
+const serialPorts = ref<SerialPortSummary[]>([]);
 const idMode = ref<"auto" | "manual">("auto");
 const isEditing = computed(() => typeof route.params.boardId === "string");
 const boardId = computed(() => route.params.boardId as string | undefined);
@@ -29,7 +30,23 @@ const knownBoardTypes = computed(() =>
 const suggestedBoardId = computed(() =>
   suggestBoardId(form.value.board_type, knownBoards.value, boardId.value),
 );
-
+const serialPortOptions = computed(() => {
+  const options = [...serialPorts.value];
+  const currentPort = form.value.serialPort.trim();
+  if (currentPort && !options.some((item) => item.port_name === currentPort)) {
+    options.unshift({
+      port_name: currentPort,
+      port_type: "configured",
+      label: `${currentPort} (当前配置，未检测到)`,
+      usb_vendor_id: null,
+      usb_product_id: null,
+      manufacturer: null,
+      product: null,
+      serial_number: null,
+    });
+  }
+  return options;
+});
 function validateForm(): boolean {
   const payload = formToBoard(form.value);
   if (!payload.id) {
@@ -58,8 +75,9 @@ async function loadBoard() {
   validationError.value = "";
 
   try {
-    const boards = await api.listBoards();
+    const [boards, ports] = await Promise.all([api.listBoards(), api.listSerialPorts()]);
     knownBoards.value = boards;
+    serialPorts.value = ports;
 
     if (isEditing.value && boardId.value) {
       const board = await api.getBoard(boardId.value);
@@ -73,6 +91,15 @@ async function loadBoard() {
     ui.setError((error as Error).message);
   } finally {
     loading.value = false;
+  }
+}
+
+async function refreshSerialPorts() {
+  try {
+    serialPorts.value = await api.listSerialPorts();
+    ui.setSuccess("已刷新可用串口列表");
+  } catch (error) {
+    ui.setError((error as Error).message);
   }
 }
 
@@ -244,7 +271,24 @@ onMounted(() => {
             <template v-if="form.serialEnabled">
               <label class="field">
                 <span>串口设备</span>
-                <input v-model="form.serialPort" placeholder="/dev/ttyUSB0 或 COM3" />
+                <div class="inline-field-group">
+                  <select v-model="form.serialPort">
+                    <option value="" disabled>请选择可用串口</option>
+                    <option
+                      v-for="port in serialPortOptions"
+                      :key="port.port_name"
+                      :value="port.port_name"
+                    >
+                      {{ port.label }}
+                    </option>
+                  </select>
+                  <button class="ghost-button compact-button" type="button" @click="refreshSerialPorts">
+                    刷新串口
+                  </button>
+                </div>
+                <small class="field-hint">
+                  {{ serialPortOptions.length > 0 ? "优先从系统检测到的串口中选择。" : "当前未检测到可用串口，请先连接设备后刷新。" }}
+                </small>
               </label>
               <label class="field">
                 <span>波特率</span>
@@ -269,33 +313,27 @@ onMounted(() => {
         <section v-if="form.bootKind === 'uboot'" class="form-section">
           <h4>U-Boot 启动配置</h4>
           <div class="form-grid two-columns">
-            <label class="field">
-              <span>网络接口</span>
-              <input v-model="form.uboot.interface" placeholder="例如 eth0" />
+            <label class="checkbox-field">
+              <input v-model="form.uboot.use_tftp" type="checkbox" />
+              <span>使用 TFTP 启动</span>
             </label>
             <label class="field">
-              <span>Server IP 覆盖</span>
-              <input v-model="form.uboot.server_ip_override" placeholder="例如 192.168.1.10" />
-            </label>
-            <label class="field">
-              <span>板端 IP</span>
-              <input v-model="form.uboot.board_ip" />
-            </label>
-            <label class="field">
-              <span>网关</span>
-              <input v-model="form.uboot.gatewayip" />
-            </label>
-            <label class="field">
-              <span>子网掩码</span>
-              <input v-model="form.uboot.netmask" />
-            </label>
-            <label class="field">
-              <span>内核加载地址</span>
-              <input v-model="form.uboot.kernel_load_addr" placeholder="例如 0x80200000" />
+              <span>TFTP 说明</span>
+              <small class="field-hint">
+                {{
+                  form.uboot.use_tftp
+                    ? "该板会从 Server 的 TFTP 服务级网络配置中获取 serverip、网关和网卡信息。"
+                    : "该板不走网络启动；TFTP 相关参数由 Server 忽略。"
+                }}
+              </small>
             </label>
             <label class="field">
               <span>FIT 加载地址</span>
               <input v-model="form.uboot.fit_load_addr" placeholder="例如 0x90000000" />
+            </label>
+            <label class="field">
+              <span>内核加载地址</span>
+              <input v-model="form.uboot.kernel_load_addr" placeholder="例如 0x80200000" />
             </label>
             <label class="field">
               <span>超时（秒）</span>

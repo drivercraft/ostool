@@ -23,10 +23,7 @@ const tone = computed(() =>
 async function loadTftp() {
   loading.value = true;
   try {
-    const [configResponse, statusResponse] = await Promise.all([
-      api.getTftpConfig(),
-      api.getTftpStatus(),
-    ]);
+    const [configResponse, statusResponse] = await Promise.all([api.getTftpConfig(), api.getTftpStatus()]);
     tftpConfig.value = configResponse.tftp;
     tftpStatus.value = statusResponse.status;
   } catch (error) {
@@ -214,6 +211,14 @@ onMounted(() => {
               <div>
                 <dt>服务状态</dt>
                 <dd>{{ tftpStatus.service_state || "-" }}</dd>
+              </div>
+              <div>
+                <dt>当前计算出的 server_ip</dt>
+                <dd>{{ tftpStatus.resolved_server_ip || "-" }}</dd>
+              </div>
+              <div>
+                <dt>当前计算出的 netmask</dt>
+                <dd>{{ tftpStatus.resolved_netmask || "-" }}</dd>
               </div>
             </dl>
             <p v-if="tftpStatus.last_error" class="diagnostic-error">

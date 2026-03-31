@@ -20,14 +20,21 @@ use crate::{
             ActionResponse, AdminOverviewResponse, AdminServerConfigEditable,
             AdminServerConfigReadonly, AdminServerConfigResponse, AdminSessionsResponse,
             AdminTftpConfigResponse, AdminTftpStatusResponse, BoardTypeSummary,
-            BootProfileResponse, CreateSessionRequest, FileResponse, SerialStatusResponse,
-            SessionCreatedResponse, SessionDetailResponse, TftpSessionResponse,
-            UpdateServerConfigRequest,
+            BootProfileResponse, CreateSessionRequest, FileResponse, NetworkInterfaceSummary,
+            SerialPortSummary, SerialStatusResponse, SessionCreatedResponse, SessionDetailResponse,
+            TftpSessionResponse, UpdateServerConfigRequest,
         },
     },
-    config::{BoardConfig, BootConfig, TftpConfig},
+    config::{BoardConfig, BootConfig, ServerConfig, TftpConfig},
     process::run_shell_command,
-    serial::ws::run_serial_ws,
+    serial::{
+        discovery::list_serial_ports as discover_serial_ports,
+        network::{
+            default_non_loopback_interface_name,
+            list_network_interfaces as discover_network_interfaces,
+        },
+        ws::run_serial_ws,
+    },
     state::AppState,
     tftp::{
         files::{FileSlot, TftpFileRef},
@@ -39,13 +46,21 @@ use crate::{
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
-        .route("/", get(|| async { Redirect::temporary("/admin/overview") }))
+        .route(
+            "/",
+            get(|| async { Redirect::temporary("/admin/overview") }),
+        )
         .route("/admin", get(serve_admin_index))
         .route("/admin/", get(serve_admin_index))
         .route("/admin/assets/{*path}", get(serve_admin_asset))
         .route("/admin/{*path}", get(serve_admin_history))
         .route("/api/v1/admin/overview", get(get_admin_overview))
         .route("/api/v1/admin/boards", get(list_boards).post(create_board))
+        .route("/api/v1/admin/serial-ports", get(list_serial_ports))
+        .route(
+            "/api/v1/admin/network-interfaces",
+            get(list_network_interfaces),
+        )
         .route(
             "/api/v1/admin/boards/{board_id}",
             get(get_board).put(update_board).delete(delete_board),
@@ -126,13 +141,14 @@ async fn get_admin_overview(
     drop(sessions);
     drop(boards);
 
-    let tftp_status = state
-        .tftp_manager
-        .read()
-        .await
-        .status()
-        .map_err(|err| ApiError::service_unavailable(format!("failed to get TFTP status: {err}")))?;
+    let mut tftp_status = state.tftp_manager.read().await.status().map_err(|err| {
+        ApiError::service_unavailable(format!("failed to get TFTP status: {err}"))
+    })?;
     let config = state.config.read().await.clone();
+    tftp_status.resolved_server_ip =
+        resolve_server_tftp_network(&config)?.and_then(|network| network.server_ip);
+    tftp_status.resolved_netmask =
+        resolve_server_tftp_network(&config)?.and_then(|network| network.netmask);
 
     Ok(axum::Json(AdminOverviewResponse {
         board_count_total,
@@ -157,6 +173,22 @@ async fn list_boards(
             .cloned()
             .collect::<Vec<_>>(),
     ))
+}
+
+async fn list_serial_ports() -> Result<axum::Json<Vec<SerialPortSummary>>, ApiError> {
+    Ok(axum::Json(discover_serial_ports().map_err(|err| {
+        ApiError::service_unavailable(format!("failed to enumerate serial ports: {err:#}"))
+    })?))
+}
+
+async fn list_network_interfaces() -> Result<axum::Json<Vec<NetworkInterfaceSummary>>, ApiError> {
+    Ok(axum::Json(discover_network_interfaces().map_err(
+        |err| {
+            ApiError::service_unavailable(format!(
+                "failed to enumerate network interfaces: {err:#}"
+            ))
+        },
+    )?))
 }
 
 async fn get_board(
@@ -277,9 +309,8 @@ async fn delete_admin_session(
 async fn get_tftp_config(
     State(state): State<AppState>,
 ) -> Result<axum::Json<AdminTftpConfigResponse>, ApiError> {
-    Ok(axum::Json(AdminTftpConfigResponse {
-        tftp: state.config.read().await.tftp.clone(),
-    }))
+    let config = state.config.read().await.clone();
+    Ok(axum::Json(AdminTftpConfigResponse { tftp: config.tftp }))
 }
 
 async fn update_tftp_config(
@@ -314,9 +345,14 @@ async fn update_tftp_config(
 async fn get_tftp_status(
     State(state): State<AppState>,
 ) -> Result<axum::Json<AdminTftpStatusResponse>, ApiError> {
-    let status = state.tftp_manager.read().await.status().map_err(|err| {
+    let mut status = state.tftp_manager.read().await.status().map_err(|err| {
         ApiError::service_unavailable(format!("failed to get TFTP status: {err}"))
     })?;
+    let config = state.config.read().await.clone();
+    status.resolved_server_ip =
+        resolve_server_tftp_network(&config)?.and_then(|network| network.server_ip);
+    status.resolved_netmask =
+        resolve_server_tftp_network(&config)?.and_then(|network| network.netmask);
     Ok(axum::Json(AdminTftpStatusResponse { status }))
 }
 
@@ -342,10 +378,16 @@ async fn update_server_config(
     if request.lease.gc_interval_secs == 0 {
         return Err(ApiError::bad_request("lease.gc_interval_secs must be > 0"));
     }
+    if request.tftp_network.interface.trim().is_empty() {
+        return Err(ApiError::bad_request(
+            "tftp_network.interface must not be empty",
+        ));
+    }
 
     {
         let mut config = state.config.write().await;
         config.lease = request.lease;
+        config.tftp_network = request.tftp_network;
     }
     state.save_config().await?;
 
@@ -499,7 +541,13 @@ async fn get_boot_profile(
         .session_board(&session_id)
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
-    Ok(axum::Json(BootProfileResponse { boot: board.boot }))
+    let network = resolved_board_tftp_network(&state, &board).await?;
+    Ok(axum::Json(BootProfileResponse {
+        boot: board.boot,
+        server_ip: network.as_ref().and_then(|item| item.server_ip.clone()),
+        netmask: network.as_ref().and_then(|item| item.netmask.clone()),
+        interface: network.as_ref().and_then(|item| item.interface.clone()),
+    }))
 }
 
 async fn get_serial_status(
@@ -610,7 +658,7 @@ async fn put_session_file(
     let file = manager
         .put_session_file(&session_id, slot, filename, &body)
         .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
-    let response = file_response_for_board(&board, file).await?;
+    let response = file_response_for_board(&state, &board, file).await?;
     Ok((StatusCode::CREATED, axum::Json(response)))
 }
 
@@ -627,7 +675,9 @@ async fn get_session_file(
     let file = manager
         .get_session_file(&session_id, slot)?
         .ok_or_else(|| ApiError::not_found(format!("no file for slot `{slot}`")))?;
-    Ok(axum::Json(file_response_for_board(&board, file).await?))
+    Ok(axum::Json(
+        file_response_for_board(&state, &board, file).await?,
+    ))
 }
 
 async fn delete_session_file(
@@ -650,13 +700,18 @@ async fn get_session_tftp_status(
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
     let status = state.tftp_manager.read().await.status()?;
-    let server_ip = resolve_tftp_server_ip(&board).await?;
+    let server_ip = resolved_board_tftp_network(&state, &board)
+        .await?
+        .and_then(|network| network.server_ip);
     let files = session_file_responses(&state, &session_id, &board).await?;
 
     Ok(axum::Json(TftpSessionResponse {
         available: status.enabled && status.healthy && status.writable && server_ip.is_some(),
         provider: status.provider,
         server_ip,
+        netmask: resolved_board_tftp_network(&state, &board)
+            .await?
+            .and_then(|network| network.netmask),
         writable: status.writable,
         files,
     }))
@@ -681,38 +736,21 @@ async fn session_file_responses(
     let files = manager.list_session_files(session_id)?;
     let mut responses = Vec::with_capacity(files.len());
     for file in files {
-        responses.push(file_response_for_board(board, file).await?);
+        responses.push(file_response_for_board(state, board, file).await?);
     }
     Ok(responses)
 }
 
 async fn file_response_for_board(
+    state: &AppState,
     board: &BoardConfig,
     file: TftpFileRef,
 ) -> Result<FileResponse, ApiError> {
-    let tftp_url = resolve_tftp_server_ip(board)
+    let tftp_url = resolved_board_tftp_network(state, board)
         .await?
+        .and_then(|network| network.server_ip)
         .map(|server_ip| format!("tftp://{server_ip}/{}", file.relative_path));
     Ok(FileResponse::from_file(file, tftp_url))
-}
-
-async fn resolve_tftp_server_ip(board: &BoardConfig) -> Result<Option<String>, ApiError> {
-    let BootConfig::Uboot(profile) = &board.boot else {
-        return Ok(None);
-    };
-    let Some(net) = &profile.net else {
-        return Ok(None);
-    };
-    if let Some(server_ip) = net
-        .server_ip_override
-        .as_ref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        return Ok(Some(server_ip.clone()));
-    }
-    resolve_interface_ipv4(&net.interface).map_err(|err| {
-        ApiError::service_unavailable(format!("failed to resolve interface IP: {err}"))
-    })
 }
 
 async fn run_board_command(
@@ -811,8 +849,61 @@ fn server_config_response(config: &crate::config::ServerConfig) -> AdminServerCo
         readonly: readonly_server_config(config),
         editable: AdminServerConfigEditable {
             lease: config.lease.clone(),
+            tftp_network: config.tftp_network.clone(),
         },
     }
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedTftpNetwork {
+    interface: Option<String>,
+    server_ip: Option<String>,
+    netmask: Option<String>,
+}
+
+fn resolve_server_tftp_network(
+    config: &ServerConfig,
+) -> Result<Option<ResolvedTftpNetwork>, ApiError> {
+    let interface = if config.tftp_network.interface.trim().is_empty() {
+        default_non_loopback_interface_name()
+    } else {
+        Some(config.tftp_network.interface.trim().to_string())
+    };
+    let interfaces = discover_network_interfaces().map_err(|err| {
+        ApiError::service_unavailable(format!("failed to enumerate network interfaces: {err:#}"))
+    })?;
+    let matched = interfaces
+        .into_iter()
+        .find(|item| interface.as_deref() == Some(item.name.as_str()));
+    let server_ip = if let Some(interface_name) = interface.as_deref() {
+        resolve_interface_ipv4(interface_name).map_err(|err| {
+            ApiError::service_unavailable(format!("failed to resolve interface IP: {err}"))
+        })?
+    } else {
+        None
+    };
+    let netmask = matched.and_then(|item| item.netmask);
+
+    Ok(Some(ResolvedTftpNetwork {
+        interface,
+        server_ip,
+        netmask,
+    }))
+}
+
+async fn resolved_board_tftp_network(
+    state: &AppState,
+    board: &BoardConfig,
+) -> Result<Option<ResolvedTftpNetwork>, ApiError> {
+    let BootConfig::Uboot(profile) = &board.boot else {
+        return Ok(None);
+    };
+    if !profile.use_tftp {
+        return Ok(None);
+    }
+
+    let config = state.config.read().await.clone();
+    resolve_server_tftp_network(&config)
 }
 
 #[cfg(test)]
@@ -827,10 +918,10 @@ mod tests {
     use tempfile::tempdir;
     use tower::util::ServiceExt;
 
-    use super::build_router;
+    use super::{build_router, resolve_server_tftp_network};
     use crate::{
         build_app_state,
-        config::{BuiltinTftpConfig, ServerConfig, TftpConfig},
+        config::{BoardConfig, BootConfig, BuiltinTftpConfig, ServerConfig, TftpConfig},
         tftp::service::{TftpManager, build_tftp_manager},
         web::first_asset_path,
     };
@@ -844,9 +935,7 @@ mod tests {
         config.listen_addr = "127.0.0.1:0".parse().unwrap();
         config.data_dir = root.join("data");
         config.board_dir = root.join("boards");
-        config.tftp = TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(
-            root.join("tftp"),
-        ));
+        config.tftp = TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(root.join("tftp")));
         let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
         let state = build_app_state(config_path, config, manager).await.unwrap();
         state.ensure_data_dirs().await.unwrap();
@@ -857,7 +946,12 @@ mod tests {
     async fn admin_route_serves_embedded_index() {
         let app: Router = test_router().await;
         let response = app
-            .oneshot(Request::builder().uri("/admin").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/admin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -919,7 +1013,7 @@ mod tests {
                     .uri("/api/v1/admin/server-config")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        r#"{"lease":{"default_ttl_secs":120,"max_ttl_secs":240,"gc_interval_secs":10}}"#,
+                        r#"{"lease":{"default_ttl_secs":120,"max_ttl_secs":240,"gc_interval_secs":10},"tftp_network":{"interface":"lo"}}"#,
                     ))
                     .unwrap(),
             )
@@ -930,6 +1024,38 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["editable"]["lease"]["default_ttl_secs"], 120);
+        assert_eq!(value["editable"]["tftp_network"]["interface"], "lo");
         assert!(value["readonly"]["listen_addr"].is_string());
+    }
+
+    #[test]
+    fn resolve_server_tftp_network_uses_configured_interface() {
+        let mut config = ServerConfig::default();
+        config.tftp_network.interface = "lo".into();
+
+        let resolved = resolve_server_tftp_network(&config).unwrap().unwrap();
+        assert_eq!(resolved.interface.as_deref(), Some("lo"));
+    }
+
+    #[test]
+    fn board_config_new_uboot_profile_supports_use_tftp() {
+        let board = BoardConfig {
+            id: "demo".into(),
+            name: "demo".into(),
+            board_type: "demo".into(),
+            tags: vec![],
+            serial: None,
+            boot: BootConfig::Uboot(crate::config::UbootProfile {
+                use_tftp: true,
+                ..Default::default()
+            }),
+            notes: None,
+            disabled: false,
+        };
+
+        match board.boot {
+            BootConfig::Uboot(profile) => assert!(profile.use_tftp),
+            BootConfig::Pxe(_) => panic!("expected uboot"),
+        }
     }
 }

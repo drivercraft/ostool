@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::{BoardConfig, BootConfig, LeaseConfig, TftpConfig},
+    config::{BoardConfig, BootConfig, LeaseConfig, TftpConfig, TftpNetworkConfig},
     session::Session,
     tftp::{files::TftpFileRef, status::TftpStatus},
 };
@@ -62,6 +62,27 @@ pub struct SerialStatusResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerialPortSummary {
+    pub port_name: String,
+    pub port_type: String,
+    pub label: String,
+    pub usb_vendor_id: Option<u16>,
+    pub usb_product_id: Option<u16>,
+    pub manufacturer: Option<String>,
+    pub product: Option<String>,
+    pub serial_number: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkInterfaceSummary {
+    pub name: String,
+    pub label: String,
+    pub ipv4_addresses: Vec<String>,
+    pub netmask: Option<String>,
+    pub loopback: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileResponse {
     pub slot: String,
     pub filename: String,
@@ -89,6 +110,7 @@ pub struct TftpSessionResponse {
     pub available: bool,
     pub provider: String,
     pub server_ip: Option<String>,
+    pub netmask: Option<String>,
     pub writable: bool,
     pub files: Vec<FileResponse>,
 }
@@ -117,6 +139,9 @@ pub struct AdminSessionsResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BootProfileResponse {
     pub boot: BootConfig,
+    pub server_ip: Option<String>,
+    pub netmask: Option<String>,
+    pub interface: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,6 +165,7 @@ pub struct AdminServerConfigReadonly {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminServerConfigEditable {
     pub lease: LeaseConfig,
+    pub tftp_network: TftpNetworkConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,4 +177,5 @@ pub struct AdminServerConfigResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateServerConfigRequest {
     pub lease: LeaseConfig,
+    pub tftp_network: TftpNetworkConfig,
 }

@@ -18,6 +18,7 @@ pub struct ServerConfig {
     pub board_dir: PathBuf,
     pub lease: LeaseConfig,
     pub tftp: TftpConfig,
+    pub tftp_network: TftpNetworkConfig,
 }
 
 impl Default for ServerConfig {
@@ -39,6 +40,7 @@ impl Default for ServerConfig {
             board_dir,
             lease: LeaseConfig::default(),
             tftp,
+            tftp_network: TftpNetworkConfig::default(),
         }
     }
 }
@@ -51,6 +53,7 @@ impl ServerConfig {
                     .with_context(|| format!("failed to parse {}", path.display()))?;
                 config.normalize_paths(path)?;
                 config.sync_system_tftpd_hpa_config()?;
+                config.sync_tftp_network_defaults();
                 config.validate()?;
                 Ok(config)
             }
@@ -58,6 +61,7 @@ impl ServerConfig {
                 let mut config = Self::default();
                 config.normalize_paths(path)?;
                 config.sync_system_tftpd_hpa_config()?;
+                config.sync_tftp_network_defaults();
                 config.validate()?;
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent).await?;
@@ -101,6 +105,14 @@ impl ServerConfig {
         Ok(())
     }
 
+    fn sync_tftp_network_defaults(&mut self) {
+        if self.tftp_network.interface.trim().is_empty()
+            && let Some(interface) = crate::serial::network::default_non_loopback_interface_name()
+        {
+            self.tftp_network.interface = interface;
+        }
+    }
+
     pub fn normalize_paths(&mut self, config_path: &Path) -> anyhow::Result<()> {
         let config_dir = config_path
             .parent()
@@ -133,6 +145,11 @@ impl ServerConfig {
         }
         if self.lease.gc_interval_secs == 0 {
             bail!("lease.gc_interval_secs must be > 0");
+        }
+        if self.tftp_network.interface.trim().is_empty() {
+            bail!(
+                "tftp_network.interface must be configured or auto-detected from a non-loopback interface"
+            );
         }
         Ok(())
     }
@@ -185,6 +202,11 @@ impl TftpConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct TftpNetworkConfig {
+    pub interface: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BuiltinTftpConfig {
     pub enabled: bool,
@@ -225,7 +247,7 @@ impl SystemTftpdHpaConfig {
             username: Some("tftp".to_string()),
             address: ":69".to_string(),
             options: "-l -s -c".to_string(),
-            manage_config: true,
+            manage_config: false,
             reconcile_on_start: true,
         }
     }
@@ -337,10 +359,12 @@ impl BootConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(deny_unknown_fields)]
 pub struct UbootProfile {
+    #[serde(default)]
+    pub use_tftp: bool,
     pub kernel_load_addr: Option<String>,
     pub fit_load_addr: Option<String>,
-    pub net: Option<UbootNetConfig>,
     pub board_reset_cmd: Option<String>,
     pub board_power_off_cmd: Option<String>,
     #[serde(default)]
@@ -354,15 +378,44 @@ pub struct UbootProfile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
-pub struct UbootNetConfig {
-    pub interface: String,
-    pub board_ip: Option<String>,
-    pub gatewayip: Option<String>,
-    pub netmask: Option<String>,
-    pub server_ip_override: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct PxeProfile {
     pub notes: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BoardConfig, ServerConfig};
+
+    #[test]
+    fn server_config_round_trip_includes_tftp_network() {
+        let config = ServerConfig::default();
+        let encoded = toml::to_string_pretty(&config).unwrap();
+        let decoded: ServerConfig = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.tftp_network.interface, "");
+    }
+
+    #[test]
+    fn board_config_rejects_legacy_uboot_net_fields() {
+        let config = r#"
+id = "demo"
+name = "demo"
+board_type = "demo"
+tags = []
+disabled = false
+
+[boot]
+kind = "uboot"
+use_tftp = true
+
+[boot.net]
+interface = "eth0"
+"#;
+
+        let err = toml::from_str::<BoardConfig>(config).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("unknown field") || message.contains("net"),
+            "unexpected error: {message}"
+        );
+    }
 }
