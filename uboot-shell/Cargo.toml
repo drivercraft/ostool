@@ -11,6 +11,8 @@ version = "0.2.2"
 
 [dependencies]
 colored = "3"
+futures = "0.3"
+futures-timer = "3"
 log = "0.4"
 
 [dev-dependencies]
@@ -18,3 +20,6 @@ env_logger = "0.11"
 indicatif = "0.18"
 ntest = "0.9"
 serialport = "4.6"
+tokio = { workspace = true, features = ["full"] }
+tokio-serial = "5.4"
+tokio-util = { version = "0.7", features = ["compat"] }

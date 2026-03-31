@@ -16,6 +16,7 @@ name = "ostoold"
 path = "src/main.rs"
 
 [dependencies]
+async-trait = "0.1"
 anyhow = { workspace = true }
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
@@ -35,6 +36,7 @@ serialport = "4.6"
 tftpd = "0.5"
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+tokio-serial = "5.4"
 toml = { workspace = true }
 tower-http = { version = "0.6", features = ["fs"] }
 uuid = { version = "1", features = ["serde", "v4"] }

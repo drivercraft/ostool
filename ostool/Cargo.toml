@@ -50,6 +50,7 @@ serde_json = { workspace = true }
 serialport = "4.6"
 tftpd = "0.5"
 tokio = { workspace = true, features = ["full"] }
+tokio-util = { version = "0.7", features = ["compat"] }
 toml = { workspace = true }
 uboot-shell = { version = "0.2", path = "../uboot-shell" }
 
@@ -61,6 +62,7 @@ thiserror = { workspace = true }
 ureq = "3.0"
 chrono = { version = "0.4.44", features = ["serde"] }
 tokio-tungstenite = "0.28"
+tokio-serial = "5.4"
 
 [dev-dependencies]
 tempfile = "3"

@@ -138,9 +138,15 @@ async fn get_admin_overview(
     drop(sessions);
     drop(boards);
 
-    let mut tftp_status = state.tftp_manager.read().await.status().map_err(|err| {
-        ApiError::service_unavailable(format!("failed to get TFTP status: {err}"))
-    })?;
+    let mut tftp_status = state
+        .tftp_manager
+        .read()
+        .await
+        .status()
+        .await
+        .map_err(|err| {
+            ApiError::service_unavailable(format!("failed to get TFTP status: {err}"))
+        })?;
     let config = state.config.read().await.clone();
     tftp_status.resolved_server_ip =
         resolve_server_tftp_network(&config)?.and_then(|network| network.server_ip);
@@ -318,11 +324,11 @@ async fn update_tftp_config(
         .await
         .map_err(|err| ApiError::internal(err.to_string()))?;
     let new_manager = build_tftp_manager(&tftp);
-    new_manager.start_if_needed().map_err(|err| {
+    new_manager.start_if_needed().await.map_err(|err| {
         ApiError::service_unavailable(format!("failed to start TFTP provider: {err}"))
     })?;
     if matches!(tftp, TftpConfig::SystemTftpdHpa(_))
-        && let Err(err) = new_manager.reconcile()
+        && let Err(err) = new_manager.reconcile().await
     {
         return Err(ApiError::service_unavailable(format!(
             "failed to reconcile TFTP provider: {err}"
@@ -342,9 +348,15 @@ async fn update_tftp_config(
 async fn get_tftp_status(
     State(state): State<AppState>,
 ) -> Result<axum::Json<AdminTftpStatusResponse>, ApiError> {
-    let mut status = state.tftp_manager.read().await.status().map_err(|err| {
-        ApiError::service_unavailable(format!("failed to get TFTP status: {err}"))
-    })?;
+    let mut status = state
+        .tftp_manager
+        .read()
+        .await
+        .status()
+        .await
+        .map_err(|err| {
+            ApiError::service_unavailable(format!("failed to get TFTP status: {err}"))
+        })?;
     let config = state.config.read().await.clone();
     status.resolved_server_ip =
         resolve_server_tftp_network(&config)?.and_then(|network| network.server_ip);
@@ -397,7 +409,7 @@ async fn reconcile_tftp(
 ) -> Result<axum::Json<AdminTftpStatusResponse>, ApiError> {
     {
         let manager = state.tftp_manager.read().await;
-        manager.reconcile().map_err(|err| {
+        manager.reconcile().await.map_err(|err| {
             ApiError::service_unavailable(format!("failed to reconcile TFTP: {err}"))
         })?;
     }
@@ -633,6 +645,7 @@ async fn put_session_file(
     let manager = state.tftp_manager.read().await.clone();
     let file = manager
         .put_session_file(&session_id, slot, filename, &body)
+        .await
         .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
     let response = file_response_for_board(&state, &board, file).await?;
     Ok((StatusCode::CREATED, axum::Json(response)))
@@ -649,7 +662,8 @@ async fn get_session_file(
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
     let manager = state.tftp_manager.read().await.clone();
     let file = manager
-        .get_session_file(&session_id, slot)?
+        .get_session_file(&session_id, slot)
+        .await?
         .ok_or_else(|| ApiError::not_found(format!("no file for slot `{slot}`")))?;
     Ok(axum::Json(
         file_response_for_board(&state, &board, file).await?,
@@ -663,7 +677,7 @@ async fn delete_session_file(
     let slot = parse_slot(&slot)?;
     get_session_or_404(&state, &session_id).await?;
     let manager = state.tftp_manager.read().await.clone();
-    manager.remove_session_file(&session_id, slot)?;
+    manager.remove_session_file(&session_id, slot).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -675,7 +689,7 @@ async fn get_session_tftp_status(
         .session_board(&session_id)
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
-    let status = state.tftp_manager.read().await.status()?;
+    let status = state.tftp_manager.read().await.status().await?;
     let server_ip = resolved_board_tftp_network(&state, &board)
         .await?
         .and_then(|network| network.server_ip);
@@ -709,7 +723,7 @@ async fn session_file_responses(
     board: &BoardConfig,
 ) -> Result<Vec<FileResponse>, ApiError> {
     let manager = state.tftp_manager.read().await.clone();
-    let files = manager.list_session_files(session_id)?;
+    let files = manager.list_session_files(session_id).await?;
     let mut responses = Vec::with_capacity(files.len());
     for file in files {
         responses.push(file_response_for_board(state, board, file).await?);

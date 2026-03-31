@@ -1,12 +1,6 @@
-use std::{
-    io::{self, Write},
-    sync::{Arc, Mutex},
-    thread,
-    time::Duration,
-};
+use std::time::Duration;
 
 use anyhow::{Result, bail};
-use log::warn;
 
 pub(crate) const SHELL_INIT_DELAY: Duration = Duration::from_millis(100);
 
@@ -91,53 +85,9 @@ impl ShellAutoInitMatcher {
     }
 }
 
-pub(crate) fn spawn_delayed_send<W>(writer: Arc<Mutex<W>>, command: Vec<u8>)
-where
-    W: Write + Send + 'static,
-{
-    thread::spawn(move || {
-        thread::sleep(SHELL_INIT_DELAY);
-
-        let result = (|| -> io::Result<()> {
-            let mut writer = writer.lock().unwrap();
-            writer.write_all(&command)?;
-            writer.flush()?;
-            Ok(())
-        })();
-
-        if let Err(err) = result {
-            warn!("failed to send shell_init_cmd: {err}");
-        }
-    });
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        SHELL_INIT_DELAY, ShellAutoInitMatcher, normalize_shell_init_config,
-        prepare_shell_init_cmd, spawn_delayed_send,
-    };
-    use std::{
-        io::{self, Write},
-        sync::{Arc, Mutex},
-        time::{Duration, Instant},
-    };
-
-    #[derive(Default)]
-    struct MemoryWriter {
-        bytes: Vec<u8>,
-    }
-
-    impl Write for MemoryWriter {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.bytes.extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
+    use super::{ShellAutoInitMatcher, normalize_shell_init_config, prepare_shell_init_cmd};
 
     #[test]
     fn normalize_shell_init_config_rejects_missing_prefix() {
@@ -184,32 +134,5 @@ mod tests {
 
         assert_eq!(matched.as_deref(), Some(&b"root\n"[..]));
         assert_eq!(matcher.observe_byte(b':'), None);
-    }
-
-    #[test]
-    fn spawn_delayed_send_writes_after_delay() {
-        let writer = Arc::new(Mutex::new(MemoryWriter::default()));
-        let start = Instant::now();
-
-        spawn_delayed_send(writer.clone(), b"root\n".to_vec());
-
-        std::thread::sleep(SHELL_INIT_DELAY / 2);
-        assert!(writer.lock().unwrap().bytes.is_empty());
-
-        let deadline = Instant::now() + Duration::from_secs(1);
-        loop {
-            if !writer.lock().unwrap().bytes.is_empty() {
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "timed out waiting for delayed send"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-
-        let elapsed = start.elapsed();
-        assert!(elapsed >= SHELL_INIT_DELAY);
-        assert_eq!(writer.lock().unwrap().bytes, b"root\n");
     }
 }

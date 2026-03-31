@@ -1,18 +1,12 @@
-use std::{
-    io::{Read, Write},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
+use std::time::Duration;
 
 use anyhow::Context;
 use axum::extract::ws::{Message, WebSocket};
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
-use tokio::{sync::mpsc, task::spawn_blocking};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio_serial::SerialPortBuilderExt;
 
 use crate::{config::SerialConfig, state::AppState};
 
@@ -47,127 +41,98 @@ async fn run_serial_ws_inner(
     session_id: &str,
     serial: &SerialConfig,
 ) -> anyhow::Result<()> {
-    let rx_port = serialport::new(&serial.port, serial.baud_rate)
+    let port = tokio_serial::new(&serial.port, serial.baud_rate)
         .timeout(Duration::from_millis(200))
-        .open()
+        .open_native_async()
         .with_context(|| format!("failed to open serial port {}", serial.port))?;
-    let tx_port = rx_port
-        .try_clone()
-        .with_context(|| format!("failed to clone serial port {}", serial.port))?;
-
-    let rx_port = Arc::new(Mutex::new(rx_port));
-    let tx_port = Arc::new(Mutex::new(tx_port));
-    let stop = Arc::new(AtomicBool::new(false));
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
+    let (mut serial_rx, mut serial_tx) = tokio::io::split(port);
+    let mut serial_buffer = [0u8; 1024];
+
     ws_sender
         .send(Message::Text(r#"{"type":"opened"}"#.to_string().into()))
         .await
         .ok();
 
-    let (serial_tx, mut serial_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    let read_stop = stop.clone();
-    let read_rx_port = rx_port.clone();
-    let read_task = spawn_blocking(move || {
-        let mut buffer = [0u8; 1024];
-        while !read_stop.load(Ordering::Acquire) {
-            match read_rx_port.lock().unwrap().read(&mut buffer) {
-                Ok(read) if read > 0 => {
-                    if serial_tx.send(buffer[..read].to_vec()).is_err() {
-                        break;
+    loop {
+        tokio::select! {
+            maybe_message = ws_receiver.next() => {
+                let Some(message) = maybe_message else {
+                    break;
+                };
+                match message {
+                    Ok(Message::Binary(bytes)) => {
+                        write_serial_payload(&mut serial_tx, &bytes).await?;
                     }
+                    Ok(Message::Text(text)) => {
+                        let control: ClientControlMessage = serde_json::from_str(&text)?;
+                        match control.kind.as_str() {
+                            "close" => {
+                                let _ = ws_sender
+                                    .send(Message::Text(r#"{"type":"closed"}"#.to_string().into()))
+                                    .await;
+                                break;
+                            }
+                            "tx" => {
+                                let Some(data) = control.data.as_deref() else {
+                                    anyhow::bail!("missing tx data");
+                                };
+                                let payload = match control.encoding.as_deref() {
+                                    Some("base64") => base64::engine::general_purpose::STANDARD
+                                        .decode(data)
+                                        .context("invalid base64 payload")?,
+                                    Some("utf8") | None => data.as_bytes().to_vec(),
+                                    Some(other) => anyhow::bail!("unsupported encoding `{other}`"),
+                                };
+                                write_serial_payload(&mut serial_tx, &payload).await?;
+                            }
+                            other => anyhow::bail!("unsupported websocket control type `{other}`"),
+                        }
+                    }
+                    Ok(Message::Close(_)) => break,
+                    Ok(Message::Ping(payload)) => {
+                        ws_sender.send(Message::Pong(payload)).await.ok();
+                    }
+                    Ok(Message::Pong(_)) => {}
+                    Err(err) => return Err(err.into()),
                 }
-                Ok(_) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::TimedOut => {}
-                Err(err) => {
-                    log::warn!("serial read failed: {err}");
+                let _ = state.touch_session(session_id).await;
+            }
+            read = serial_rx.read(&mut serial_buffer) => {
+                let read = read.context("serial read failed")?;
+                if read == 0 {
                     break;
                 }
+                ws_sender
+                    .send(Message::Binary(serial_buffer[..read].to_vec().into()))
+                    .await
+                    .context("failed to send serial output over websocket")?;
+                let _ = state.touch_session(session_id).await;
             }
         }
-    });
-
-    let send_task = tokio::spawn(async move {
-        while let Some(bytes) = serial_rx.recv().await {
-            if ws_sender.send(Message::Binary(bytes.into())).await.is_err() {
-                break;
-            }
-        }
-    });
-
-    while let Some(message) = ws_receiver.next().await {
-        match message {
-            Ok(Message::Binary(bytes)) => {
-                write_serial_payload(&mut *tx_port.lock().unwrap(), &bytes)?;
-            }
-            Ok(Message::Text(text)) => {
-                let control: ClientControlMessage = serde_json::from_str(&text)?;
-                match control.kind.as_str() {
-                    "close" => break,
-                    "tx" => {
-                        let Some(data) = control.data.as_deref() else {
-                            anyhow::bail!("missing tx data");
-                        };
-                        let payload = match control.encoding.as_deref() {
-                            Some("base64") => base64::engine::general_purpose::STANDARD
-                                .decode(data)
-                                .context("invalid base64 payload")?,
-                            Some("utf8") | None => data.as_bytes().to_vec(),
-                            Some(other) => anyhow::bail!("unsupported encoding `{other}`"),
-                        };
-                        write_serial_payload(&mut *tx_port.lock().unwrap(), &payload)?;
-                    }
-                    other => anyhow::bail!("unsupported websocket control type `{other}`"),
-                }
-            }
-            Ok(Message::Close(_)) => break,
-            Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => {}
-            Err(err) => return Err(err.into()),
-        }
-        let _ = state.touch_session(session_id).await;
     }
 
-    stop.store(true, Ordering::Release);
-    read_task.await?;
-    send_task.abort();
+    let _ = ws_sender.send(Message::Close(None)).await;
     Ok(())
 }
 
-fn write_serial_payload(port: &mut dyn Write, payload: &[u8]) -> anyhow::Result<()> {
-    port.write_all(payload)?;
-    port.flush()?;
+async fn write_serial_payload(
+    port: &mut tokio::io::WriteHalf<tokio_serial::SerialStream>,
+    payload: &[u8],
+) -> anyhow::Result<()> {
+    port.write_all(payload).await?;
+    port.flush().await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::{self, Write};
-
-    use super::write_serial_payload;
-
-    #[derive(Default)]
-    struct FakeWriter {
-        bytes: Vec<u8>,
-        flushed: bool,
-    }
-
-    impl Write for FakeWriter {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.bytes.extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            self.flushed = true;
-            Ok(())
-        }
-    }
+    use super::ClientControlMessage;
 
     #[test]
-    fn write_serial_payload_writes_and_flushes() {
-        let mut writer = FakeWriter::default();
-        write_serial_payload(&mut writer, b"help").unwrap();
-        assert_eq!(writer.bytes, b"help");
-        assert!(writer.flushed);
+    fn control_message_parses_close_type() {
+        let message: ClientControlMessage = serde_json::from_str(r#"{"type":"close"}"#).unwrap();
+        assert_eq!(message.kind, "close");
     }
 }

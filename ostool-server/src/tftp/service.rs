@@ -10,6 +10,7 @@ use std::{
 };
 
 use anyhow::{Context, bail};
+use async_trait::async_trait;
 use tftpd::{Config, Server};
 
 use crate::{
@@ -33,25 +34,26 @@ fn ensure_ostool_prefix(root_dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[async_trait]
 pub trait TftpManager: Send + Sync {
-    fn start_if_needed(&self) -> anyhow::Result<()>;
-    fn reconcile(&self) -> anyhow::Result<()>;
-    fn status(&self) -> anyhow::Result<TftpStatus>;
-    fn put_session_file(
+    async fn start_if_needed(&self) -> anyhow::Result<()>;
+    async fn reconcile(&self) -> anyhow::Result<()>;
+    async fn status(&self) -> anyhow::Result<TftpStatus>;
+    async fn put_session_file(
         &self,
         session_id: &str,
         slot: FileSlot,
         filename: &str,
         bytes: &[u8],
     ) -> anyhow::Result<TftpFileRef>;
-    fn get_session_file(
+    async fn get_session_file(
         &self,
         session_id: &str,
         slot: FileSlot,
     ) -> anyhow::Result<Option<TftpFileRef>>;
-    fn list_session_files(&self, session_id: &str) -> anyhow::Result<Vec<TftpFileRef>>;
-    fn remove_session_file(&self, session_id: &str, slot: FileSlot) -> anyhow::Result<()>;
-    fn remove_session_dir(&self, session_id: &str) -> anyhow::Result<()>;
+    async fn list_session_files(&self, session_id: &str) -> anyhow::Result<Vec<TftpFileRef>>;
+    async fn remove_session_file(&self, session_id: &str, slot: FileSlot) -> anyhow::Result<()>;
+    async fn remove_session_dir(&self, session_id: &str) -> anyhow::Result<()>;
     fn root_dir(&self) -> &Path;
 }
 
@@ -78,8 +80,9 @@ impl BuiltinTftpManager {
     }
 }
 
+#[async_trait]
 impl TftpManager for BuiltinTftpManager {
-    fn start_if_needed(&self) -> anyhow::Result<()> {
+    async fn start_if_needed(&self) -> anyhow::Result<()> {
         if !self.config.enabled {
             return Ok(());
         }
@@ -102,11 +105,18 @@ impl TftpManager for BuiltinTftpManager {
         let last_error = Arc::new(Mutex::new(None));
         let error_store = last_error.clone();
 
-        std::thread::spawn(move || match Server::new(&config) {
-            Ok(mut server) => server.listen(),
-            Err(err) => {
-                *error_store.lock().unwrap() = Some(err.to_string());
-                log::error!("builtin tftp server failed to start: {err}");
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || match Server::new(&config) {
+                Ok(mut server) => server.listen(),
+                Err(err) => {
+                    *error_store.lock().unwrap() = Some(err.to_string());
+                    log::error!("builtin tftp server failed to start: {err}");
+                }
+            })
+            .await;
+
+            if let Err(err) = result {
+                log::error!("builtin tftp server task failed: {err}");
             }
         });
 
@@ -117,13 +127,13 @@ impl TftpManager for BuiltinTftpManager {
         Ok(())
     }
 
-    fn reconcile(&self) -> anyhow::Result<()> {
+    async fn reconcile(&self) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.config.root_dir)
             .with_context(|| format!("failed to create {}", self.config.root_dir.display()))?;
-        self.start_if_needed()
+        self.start_if_needed().await
     }
 
-    fn status(&self) -> anyhow::Result<TftpStatus> {
+    async fn status(&self) -> anyhow::Result<TftpStatus> {
         let writable = ensure_ostool_prefix(&self.config.root_dir).is_ok();
         Ok(TftpStatus {
             provider: "builtin".to_string(),
@@ -139,7 +149,7 @@ impl TftpManager for BuiltinTftpManager {
         })
     }
 
-    fn put_session_file(
+    async fn put_session_file(
         &self,
         session_id: &str,
         slot: FileSlot,
@@ -149,7 +159,7 @@ impl TftpManager for BuiltinTftpManager {
         put_session_file(&self.config.root_dir, session_id, slot, filename, bytes)
     }
 
-    fn get_session_file(
+    async fn get_session_file(
         &self,
         session_id: &str,
         slot: FileSlot,
@@ -157,15 +167,15 @@ impl TftpManager for BuiltinTftpManager {
         get_session_file(&self.config.root_dir, session_id, slot)
     }
 
-    fn list_session_files(&self, session_id: &str) -> anyhow::Result<Vec<TftpFileRef>> {
+    async fn list_session_files(&self, session_id: &str) -> anyhow::Result<Vec<TftpFileRef>> {
         list_session_files(&self.config.root_dir, session_id)
     }
 
-    fn remove_session_file(&self, session_id: &str, slot: FileSlot) -> anyhow::Result<()> {
+    async fn remove_session_file(&self, session_id: &str, slot: FileSlot) -> anyhow::Result<()> {
         remove_session_file(&self.config.root_dir, session_id, slot)
     }
 
-    fn remove_session_dir(&self, session_id: &str) -> anyhow::Result<()> {
+    async fn remove_session_dir(&self, session_id: &str) -> anyhow::Result<()> {
         remove_session_dir(&self.config.root_dir, session_id)
     }
 
@@ -205,8 +215,9 @@ impl SystemTftpdHpaManager {
     }
 }
 
+#[async_trait]
 impl TftpManager for SystemTftpdHpaManager {
-    fn start_if_needed(&self) -> anyhow::Result<()> {
+    async fn start_if_needed(&self) -> anyhow::Result<()> {
         if self.config.root_dir.exists() {
             return Ok(());
         }
@@ -223,7 +234,7 @@ impl TftpManager for SystemTftpdHpaManager {
         Ok(())
     }
 
-    fn reconcile(&self) -> anyhow::Result<()> {
+    async fn reconcile(&self) -> anyhow::Result<()> {
         if !cfg!(target_os = "linux") {
             bail!("system_tftpd_hpa provider is only supported on Linux");
         }
@@ -232,7 +243,7 @@ impl TftpManager for SystemTftpdHpaManager {
         }
 
         self.ensure_binary_installed()?;
-        self.start_if_needed()?;
+        self.start_if_needed().await?;
 
         if self.config.manage_config {
             if let Some(parent) = self.config.config_path.parent() {
@@ -280,7 +291,7 @@ impl TftpManager for SystemTftpdHpaManager {
         Ok(())
     }
 
-    fn status(&self) -> anyhow::Result<TftpStatus> {
+    async fn status(&self) -> anyhow::Result<TftpStatus> {
         let healthy = if self.config.enabled {
             udp_port_69_is_listening().unwrap_or(false)
         } else {
@@ -307,7 +318,7 @@ impl TftpManager for SystemTftpdHpaManager {
         })
     }
 
-    fn put_session_file(
+    async fn put_session_file(
         &self,
         session_id: &str,
         slot: FileSlot,
@@ -317,7 +328,7 @@ impl TftpManager for SystemTftpdHpaManager {
         put_session_file(&self.config.root_dir, session_id, slot, filename, bytes)
     }
 
-    fn get_session_file(
+    async fn get_session_file(
         &self,
         session_id: &str,
         slot: FileSlot,
@@ -325,15 +336,15 @@ impl TftpManager for SystemTftpdHpaManager {
         get_session_file(&self.config.root_dir, session_id, slot)
     }
 
-    fn list_session_files(&self, session_id: &str) -> anyhow::Result<Vec<TftpFileRef>> {
+    async fn list_session_files(&self, session_id: &str) -> anyhow::Result<Vec<TftpFileRef>> {
         list_session_files(&self.config.root_dir, session_id)
     }
 
-    fn remove_session_file(&self, session_id: &str, slot: FileSlot) -> anyhow::Result<()> {
+    async fn remove_session_file(&self, session_id: &str, slot: FileSlot) -> anyhow::Result<()> {
         remove_session_file(&self.config.root_dir, session_id, slot)
     }
 
-    fn remove_session_dir(&self, session_id: &str) -> anyhow::Result<()> {
+    async fn remove_session_dir(&self, session_id: &str) -> anyhow::Result<()> {
         remove_session_dir(&self.config.root_dir, session_id)
     }
 

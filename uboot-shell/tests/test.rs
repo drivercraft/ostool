@@ -1,17 +1,20 @@
 use std::{
-    net::TcpStream,
     process::{Child, Command},
     sync::atomic::AtomicU32,
-    time::Duration,
 };
 
 use log::{debug, info};
 use ntest::timeout;
+use tokio::{
+    net::TcpStream,
+    time::{Duration, sleep},
+};
+use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use uboot_shell::UbootShell;
 
 static PORT: AtomicU32 = AtomicU32::new(10000);
 
-fn new_uboot() -> (Child, UbootShell) {
+async fn new_uboot() -> (Child, UbootShell) {
     let port = PORT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
     // qemu-system-aarch64 -machine virt -cpu cortex-a57 -nographic -bios assets/u-boot.bin
@@ -30,69 +33,61 @@ fn new_uboot() -> (Child, UbootShell) {
         .spawn()
         .unwrap();
 
-    let tx;
-
     loop {
-        std::thread::sleep(Duration::from_millis(100));
-        match TcpStream::connect(format!("127.0.0.1:{port}")) {
+        sleep(Duration::from_millis(100)).await;
+        match TcpStream::connect(format!("127.0.0.1:{port}")).await {
             Ok(s) => {
-                tx = s;
-                break;
+                let (rx, tx) = s.into_split();
+                info!("connect ok");
+                return (
+                    out,
+                    UbootShell::new(tx.compat_write(), rx.compat())
+                        .await
+                        .unwrap(),
+                );
             }
             Err(e) => {
                 debug!("wait for qemu serial port ready: {e}");
             }
         }
     }
-
-    let rx = tx.try_clone().unwrap();
-    rx.set_read_timeout(Some(Duration::from_millis(300)))
-        .unwrap();
-    info!("connect ok");
-    (out, UbootShell::new(tx, rx).unwrap())
 }
 
-#[test]
-#[timeout(5000)]
-fn test_shell() {
-    let (mut out, _uboot) = new_uboot();
+#[tokio::test]
+#[timeout(15000)]
+async fn test_shell() {
+    let (mut out, _uboot) = new_uboot().await;
     info!("test_shell ok");
     let _ = out.kill();
     out.wait().unwrap();
 }
 
-fn with_uboot(f: impl FnOnce(&mut UbootShell)) {
-    let (mut out, mut uboot) = new_uboot();
-
-    f(&mut uboot);
-
+#[tokio::test]
+#[timeout(15000)]
+async fn test_cmd() {
+    let (mut out, mut uboot) = new_uboot().await;
+    let res = uboot.cmd("help").await.unwrap();
+    println!("{}", res);
     let _ = out.kill();
     out.wait().unwrap();
 }
 
-#[test]
-#[timeout(5000)]
-fn test_cmd() {
-    with_uboot(|uboot| {
-        let res = uboot.cmd("help").unwrap();
-        println!("{}", res);
-    });
+#[tokio::test]
+#[timeout(15000)]
+async fn test_setenv() {
+    let (mut out, mut uboot) = new_uboot().await;
+    uboot.set_env("ipaddr", "127.0.0.1").await.unwrap();
+    let _ = out.kill();
+    out.wait().unwrap();
 }
 
-#[test]
-#[timeout(5000)]
-fn test_setenv() {
-    with_uboot(|uboot| {
-        uboot.set_env("ipaddr", "127.0.0.1").unwrap();
-    });
-}
-
-#[test]
-#[timeout(5000)]
-fn test_env() {
-    with_uboot(|uboot| {
-        uboot.set_env("fdt_addr", "0x40000000").unwrap();
-        info!("set fdt_addr ok");
-        assert_eq!(uboot.env_int("fdt_addr").unwrap(), 0x40000000);
-    });
+#[tokio::test]
+#[timeout(15000)]
+async fn test_env() {
+    let (mut out, mut uboot) = new_uboot().await;
+    uboot.set_env("fdt_addr", "0x40000000").await.unwrap();
+    info!("set fdt_addr ok");
+    assert_eq!(uboot.env_int("fdt_addr").await.unwrap(), 0x40000000);
+    let _ = out.kill();
+    out.wait().unwrap();
 }

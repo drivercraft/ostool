@@ -1,686 +1,607 @@
-//! Serial terminal implementation.
+//! Async terminal core shared by local serial, remote websocket, and process I/O.
 //!
-//! This module provides an interactive serial terminal for communication
-//! with embedded devices and development boards. It supports:
-//!
-//! - Full keyboard input with special key sequences
-//! - Byte-based or line-based output callbacks for pattern matching
-//! - Raw terminal mode for proper character handling
-//!
-//! # Exit Sequence
-//!
-//! Press `Ctrl+A` followed by `x` to exit the serial terminal.
+//! Press `Ctrl+A` followed by `x` to exit when the exit sequence is enabled.
 
-use std::io::{self, Read, Write};
-use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::{
+    io::{self, IsTerminal, Write},
+    process::Command,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::anyhow;
 use crossterm::{
-    event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers},
+    event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
-use futures::stream::StreamExt;
-use tokio::task::{AbortHandle, spawn_blocking};
+use futures::StreamExt;
+use tokio::{
+    sync::{mpsc, watch},
+    time::{Instant, sleep_until},
+};
 
-type Tx = Box<dyn Write + Send>;
-type Rx = Box<dyn Read + Send>;
-type OnByteCallback = Box<dyn Fn(&TermHandle, u8) + Send + Sync>;
-
-/// Interactive serial terminal.
-///
-/// `SerialTerm` provides a bidirectional terminal interface over serial ports,
-/// allowing users to interact with embedded devices in real-time.
-///
-/// # Example
-///
-/// ```rust,no_run
-/// use ostool::sterm::SerialTerm;
-///
-/// // SerialTerm is typically used with serial port connections
-/// // See run::uboot for usage examples
-/// ```
-pub struct SerialTerm {
-    tx: Arc<Mutex<Tx>>,
-    rx: Arc<Mutex<Rx>>,
-    on_byte: Option<OnByteCallback>,
-    timeout: Option<Duration>,
-    timeout_label: Option<String>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalAction {
+    SendBytes(Vec<u8>),
+    ExitRequested,
+    Noop,
 }
 
-/// Handle for controlling the terminal session.
-///
-/// Provides methods to stop the terminal from within callbacks.
-pub struct TermHandle {
-    is_running: AtomicBool,
+#[derive(Debug, Clone)]
+pub struct TerminalConfig {
+    pub intercept_exit_sequence: bool,
+    pub timeout: Option<Duration>,
+    pub timeout_label: String,
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self {
+            intercept_exit_sequence: true,
+            timeout: None,
+            timeout_label: "terminal".to_string(),
+        }
+    }
+}
+
+pub struct AsyncTerminal {
+    config: TerminalConfig,
+    key_processor: KeyProcessor,
+}
+
+#[derive(Clone)]
+pub struct TerminalHandle {
+    inner: Arc<TerminalState>,
+}
+
+struct TerminalState {
+    running: AtomicBool,
     timed_out: AtomicBool,
     stop_deadline: Mutex<Option<Instant>>,
-    timeout_deadline: Mutex<Option<Instant>>,
+    outbound_tx: mpsc::UnboundedSender<Vec<u8>>,
+    wake_version: AtomicU64,
+    wake_tx: watch::Sender<u64>,
 }
 
-impl TermHandle {
-    /// Stops the terminal session.
-    ///
-    /// This can be called from within a receive callback to terminate the session
-    /// when a specific pattern is detected.
-    pub fn stop(&self) {
-        self.is_running.store(false, Ordering::Release);
-    }
-
-    /// Schedules the terminal to stop after the specified duration.
-    pub fn stop_after(&self, duration: Duration) {
-        let mut deadline = self.stop_deadline.lock().unwrap();
-        if deadline.is_none() {
-            *deadline = Some(Instant::now() + duration);
-        }
-    }
-
-    /// Schedules the terminal to time out after the specified duration.
-    pub fn set_timeout_after(&self, duration: Duration) {
-        let mut deadline = self.timeout_deadline.lock().unwrap();
-        if deadline.is_none() {
-            *deadline = Some(Instant::now() + duration);
-        }
-    }
-
-    /// Returns whether the terminal session is still running.
-    pub fn is_running(&self) -> bool {
-        self.is_running.load(Ordering::Acquire)
-    }
-
-    fn should_stop_now(&self) -> bool {
-        self.stop_deadline
-            .lock()
-            .unwrap()
-            .is_some_and(|deadline| Instant::now() >= deadline)
-    }
-
-    fn should_timeout_now(&self) -> bool {
-        self.timeout_deadline
-            .lock()
-            .unwrap()
-            .is_some_and(|deadline| Instant::now() >= deadline)
-    }
-
-    fn mark_timed_out(&self) {
-        self.timed_out.store(true, Ordering::Release);
-    }
-
-    fn timed_out(&self) -> bool {
-        self.timed_out.load(Ordering::Acquire)
-    }
-}
-
-// 特殊键序列状态
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KeySequenceState {
     Normal,
     CtrlAPressed,
 }
 
-impl SerialTerm {
-    /// Creates a new serial terminal with the given read/write streams.
-    ///
-    /// # Arguments
-    ///
-    /// * `tx` - Writer for sending data to the serial port.
-    /// * `rx` - Reader for receiving data from the serial port.
-    /// * `on_line` - Callback function invoked for each complete line received.
-    pub fn new<F>(tx: Tx, rx: Rx, on_line: F) -> Self
-    where
-        F: Fn(&TermHandle, &str) + Send + Sync + 'static,
-    {
-        let line_buf = Arc::new(Mutex::new(Vec::with_capacity(0x1000)));
-        let on_line = Arc::new(on_line);
-        let on_byte = {
-            let line_buf = line_buf.clone();
-            let on_line = on_line.clone();
-            move |handle: &TermHandle, byte: u8| {
-                let mut line_buf = line_buf.lock().unwrap();
-                line_buf.push(byte);
-                if byte == b'\n' {
-                    let line = String::from_utf8_lossy(&line_buf).to_string();
-                    line_buf.clear();
-                    on_line(handle, &line);
-                }
-            }
-        };
+#[derive(Debug, Clone)]
+struct KeyProcessor {
+    intercept_exit_sequence: bool,
+    state: KeySequenceState,
+}
 
-        SerialTerm {
-            tx: Arc::new(Mutex::new(tx)),
-            rx: Arc::new(Mutex::new(rx)),
-            on_byte: Some(Box::new(on_byte)),
-            timeout: None,
-            timeout_label: None,
+impl AsyncTerminal {
+    pub fn new(config: TerminalConfig) -> Self {
+        let key_processor = KeyProcessor::new(config.intercept_exit_sequence);
+        Self {
+            config,
+            key_processor,
         }
     }
 
-    /// Creates a new serial terminal with a byte-oriented receive callback.
-    pub fn new_with_byte_callback<F>(tx: Tx, rx: Rx, on_byte: F) -> Self
+    pub async fn run<F>(
+        self,
+        inbound_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+        outbound_tx: mpsc::UnboundedSender<Vec<u8>>,
+        on_byte: F,
+    ) -> anyhow::Result<()>
     where
-        F: Fn(&TermHandle, u8) + Send + Sync + 'static,
+        F: FnMut(&TerminalHandle, u8) + Send,
     {
-        SerialTerm {
-            tx: Arc::new(Mutex::new(tx)),
-            rx: Arc::new(Mutex::new(rx)),
-            on_byte: Some(Box::new(on_byte)),
-            timeout: None,
-            timeout_label: None,
+        self.run_with_output(inbound_rx, outbound_tx, io::stdout(), on_byte)
+            .await
+    }
+
+    async fn run_with_output<W, F>(
+        mut self,
+        mut inbound_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+        outbound_tx: mpsc::UnboundedSender<Vec<u8>>,
+        mut output: W,
+        mut on_byte: F,
+    ) -> anyhow::Result<()>
+    where
+        W: Write,
+        F: FnMut(&TerminalHandle, u8) + Send,
+    {
+        let cleanup_needed = io::stdin().is_terminal() && io::stdout().is_terminal();
+        if cleanup_needed {
+            enable_raw_mode().ok();
         }
-    }
 
-    /// Configures a session timeout for the interactive terminal.
-    pub fn with_timeout(mut self, timeout: Duration, label: impl Into<String>) -> Self {
-        self.timeout = Some(timeout);
-        self.timeout_label = Some(label.into());
-        self
-    }
+        let handle = TerminalHandle::new(outbound_tx);
+        if let Some(timeout) = self.config.timeout {
+            handle.stop_after(timeout);
+        }
 
-    /// Runs the interactive serial terminal.
-    ///
-    /// This method blocks until the user exits (Ctrl+A x) or the line callback
-    /// calls `TermHandle::stop()`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if terminal mode cannot be set or I/O fails.
-    pub async fn run(&mut self) -> anyhow::Result<()> {
-        // 启用raw模式
+        let mut events = EventStream::new();
+        let result = self
+            .run_loop(
+                &handle,
+                &mut inbound_rx,
+                &mut events,
+                &mut output,
+                &mut on_byte,
+            )
+            .await;
 
-        // execute!(io::stdout(), Clear(ClearType::All))?;
-
-        // 设置清理函数
-        let cleanup_needed = enable_raw_mode().is_ok();
-
-        let result = self.run_terminal().await;
-
-        // 确保清理终端状态
         if cleanup_needed {
             restore_terminal_mode();
-            println!(); // 添加换行符
+            println!();
             eprintln!("✓ 已退出串口终端模式");
+        }
+
+        if handle.timed_out() {
+            return Err(anyhow!(
+                "{} timed out after {}s",
+                self.config.timeout_label,
+                self.config.timeout.unwrap_or_default().as_secs()
+            ));
         }
 
         result
     }
 
-    async fn run_terminal(&mut self) -> anyhow::Result<()> {
-        let tx_port = self.tx.clone();
-        let rx_port = self.rx.clone();
-
-        let on_byte = self.on_byte.take().unwrap();
-
-        let handle = Arc::new(TermHandle {
-            is_running: AtomicBool::new(true),
-            timed_out: AtomicBool::new(false),
-            stop_deadline: Mutex::new(None),
-            timeout_deadline: Mutex::new(None),
-        });
-        if let Some(timeout) = self.timeout {
-            handle.set_timeout_after(timeout);
-        }
-
-        // 使用 EventStream 异步处理键盘事件
-        let tx_handle = tokio::spawn(Self::tx_work_async(handle.clone(), tx_port));
-
-        let tx_abort = tx_handle.abort_handle();
-        // 启动串口接收线程
-        let rx_handle = spawn_blocking({
-            let handle = handle.clone();
-            move || Self::handle_serial_receive(rx_port, handle, tx_abort, on_byte)
-        });
-        // 等待接收线程结束
-        let _ = rx_handle.await?;
-        let _ = tx_handle.await;
-        if handle.timed_out() {
-            let timeout = self.timeout.ok_or_else(|| {
-                anyhow!("serial terminal entered timed_out state without configured timeout")
-            })?;
-            let label = self.timeout_label.as_deref().unwrap_or("serial terminal");
-            return Err(anyhow!("{label} timed out after {}s", timeout.as_secs()));
-        }
-        info!("Serial terminal exited");
-        Ok(())
-    }
-
-    fn handle_serial_receive<F>(
-        rx_port: Arc<Mutex<Rx>>,
-        handle: Arc<TermHandle>,
-        tx_abort: AbortHandle,
-        on_byte: F,
-    ) -> io::Result<()>
+    async fn run_loop<W, F>(
+        &mut self,
+        handle: &TerminalHandle,
+        inbound_rx: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+        events: &mut EventStream,
+        output: &mut W,
+        on_byte: &mut F,
+    ) -> anyhow::Result<()>
     where
-        F: Fn(&TermHandle, u8) + Send + Sync + 'static,
+        W: Write,
+        F: FnMut(&TerminalHandle, u8) + Send,
     {
-        let mut buffer = [0u8; 1024];
-        let mut byte = [0u8; 1];
-
         while handle.is_running() {
-            // 从串口读取数据
-            match rx_port.lock().unwrap().read(&mut buffer) {
-                Ok(bytes_read) if bytes_read > 0 => {
-                    // 将数据直接写入stdout
-                    let data = &buffer[..bytes_read];
-                    for &b in data {
-                        if b == b'\n' {
-                            byte[0] = b'\r';
-                            io::stdout().write_all(&byte)?;
-                        }
-                        byte[0] = b;
-                        io::stdout().write_all(&byte)?;
-                        (on_byte)(handle.as_ref(), b);
-                        if handle.should_timeout_now() {
-                            handle.mark_timed_out();
-                            handle.stop();
-                            break;
-                        }
-                        if handle.should_stop_now() {
-                            handle.stop();
-                            break;
-                        }
-                    }
-
-                    io::stdout().flush()?;
-                }
-                Ok(_) => {
-                    // 没有数据可读，短暂休眠
-                    if handle.should_timeout_now() {
-                        handle.mark_timed_out();
-                        handle.stop();
-                        break;
-                    }
-                    if handle.should_stop_now() {
-                        handle.stop();
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(1));
-                }
-                Err(e) if e.kind() == io::ErrorKind::TimedOut => {
-                    // 超时是正常的，继续
-                    if handle.should_timeout_now() {
-                        handle.mark_timed_out();
-                        handle.stop();
-                        break;
-                    }
-                    if handle.should_stop_now() {
-                        handle.stop();
-                        break;
-                    }
-                    if handle.is_running() {
-                        continue;
-                    } else {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    eprintln!("\n串口读取错误: {}", e);
-                    break;
-                }
-            }
-        }
-        tx_abort.abort();
-        Ok(())
-    }
-
-    fn send_key_to_serial(
-        tx_port: &Arc<Mutex<Tx>>,
-        key: crossterm::event::KeyEvent,
-    ) -> io::Result<()> {
-        let mut bytes = Vec::new();
-
-        // 处理字符键
-        match key.code {
-            KeyCode::Char(c) => {
-                Self::handle_character_key(c, key.modifiers, &mut bytes);
-            }
-            // 基本控制键
-            KeyCode::Enter => Self::handle_enter_key(key.modifiers, &mut bytes),
-            KeyCode::Backspace => Self::handle_backspace_key(key.modifiers, &mut bytes),
-            KeyCode::Tab => Self::handle_tab_key(key.modifiers, &mut bytes),
-            KeyCode::Esc => {
-                // Esc本身加上可能的修饰符
-                if key.modifiers.contains(KeyModifiers::ALT) {
-                    bytes.extend_from_slice(&[0x1b, 0x1b]); // Alt+Esc
+            let mut wake_rx = handle.subscribe();
+            let mut deadline = Box::pin(async {
+                if let Some(deadline) = handle.stop_deadline() {
+                    sleep_until(deadline).await;
                 } else {
-                    bytes.push(0x1b);
+                    futures::future::pending::<()>().await;
+                }
+            });
+
+            tokio::select! {
+                maybe_chunk = inbound_rx.recv() => {
+                    match maybe_chunk {
+                        Some(chunk) => {
+                            write_output(output, &chunk)?;
+                            for byte in chunk {
+                                (on_byte)(handle, byte);
+                            }
+                        }
+                        None => break,
+                    }
+                }
+                maybe_event = events.next() => {
+                    match maybe_event {
+                        Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
+                            match self.key_processor.process_key(key)? {
+                                TerminalAction::SendBytes(bytes) => {
+                                    handle.send(bytes)?;
+                                }
+                                TerminalAction::ExitRequested => {
+                                    eprintln!("\r\nExit by: Ctrl+A+x");
+                                    handle.stop();
+                                }
+                                TerminalAction::Noop => {}
+                            }
+                        }
+                        Some(Ok(_)) => {}
+                        Some(Err(err)) => return Err(err.into()),
+                        None => break,
+                    }
+                }
+                _ = &mut deadline => {
+                    handle.mark_timed_out();
+                    handle.stop();
+                }
+                changed = wake_rx.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
                 }
             }
-            // 光标控制键
-            KeyCode::Up => Self::handle_arrow_key(key.code, key.modifiers, &mut bytes),
-            KeyCode::Down => Self::handle_arrow_key(key.code, key.modifiers, &mut bytes),
-            KeyCode::Left => Self::handle_arrow_key(key.code, key.modifiers, &mut bytes),
-            KeyCode::Right => Self::handle_arrow_key(key.code, key.modifiers, &mut bytes),
-            // 编辑键
-            KeyCode::Home => Self::handle_home_end_key(key.code, key.modifiers, &mut bytes),
-            KeyCode::End => Self::handle_home_end_key(key.code, key.modifiers, &mut bytes),
-            KeyCode::PageUp => Self::handle_page_key(key.code, key.modifiers, &mut bytes),
-            KeyCode::PageDown => Self::handle_page_key(key.code, key.modifiers, &mut bytes),
-            KeyCode::Insert => Self::handle_insert_key(key.modifiers, &mut bytes),
-            KeyCode::Delete => Self::handle_delete_key(key.modifiers, &mut bytes),
-            // 功能键
-            KeyCode::F(n) => Self::handle_function_key(n, key.modifiers, &mut bytes),
-            // 其他特殊键
-            KeyCode::Null => {}
-            KeyCode::CapsLock => {}
-            KeyCode::ScrollLock => {}
-            KeyCode::NumLock => {}
-            KeyCode::PrintScreen => {}
-            KeyCode::Pause => {}
-            KeyCode::Menu => {}
-            KeyCode::KeypadBegin => {}
-            KeyCode::Media(_) => {}
-            KeyCode::Modifier(_) => {}
-            _ => {}
-        }
-
-        if !bytes.is_empty() {
-            tx_port.lock().unwrap().write_all(&bytes)?;
-            tx_port.lock().unwrap().flush()?;
         }
 
         Ok(())
     }
+}
 
-    fn handle_character_key(c: char, modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
-        if modifiers.contains(KeyModifiers::CONTROL) {
-            // Ctrl 组合键
-            let ctrl_char = match c {
-                'a'..='z' => ((c as u8 - b'a') + 1) as char,
-                'A'..='Z' => ((c as u8 - b'A') + 1) as char,
-                '2' => '\x00', // Ctrl+2 (Null)
-                '3' => '\x1b', // Ctrl+3 (Esc)
-                '4' => '\x1c', // Ctrl+4 (File Separator)
-                '5' => '\x1d', // Ctrl+5 (Group Separator)
-                '6' => '\x1e', // Ctrl+6 (Record Separator)
-                '7' => '\x1f', // Ctrl+7 (Unit Separator)
-                '8' => '\x7f', // Ctrl+8 (Delete)
-                '?' => '\x7f', // Ctrl+? (Delete)
-                '[' => '\x1b', // Ctrl+[ (Esc)
-                ']' => '\x1d', // Ctrl+] (Group Separator)
-                '^' => '\x1e', // Ctrl+^ (Record Separator)
-                '_' => '\x1f', // Ctrl+_ (Unit Separator)
-                _ => c,
+impl TerminalHandle {
+    fn new(outbound_tx: mpsc::UnboundedSender<Vec<u8>>) -> Self {
+        let (wake_tx, _wake_rx) = watch::channel(0u64);
+        Self {
+            inner: Arc::new(TerminalState {
+                running: AtomicBool::new(true),
+                timed_out: AtomicBool::new(false),
+                stop_deadline: Mutex::new(None),
+                outbound_tx,
+                wake_version: AtomicU64::new(0),
+                wake_tx,
+            }),
+        }
+    }
+
+    pub fn stop(&self) {
+        self.inner.running.store(false, Ordering::Release);
+        self.wake();
+    }
+
+    pub fn stop_after(&self, duration: Duration) {
+        let mut deadline = self.inner.stop_deadline.lock().unwrap();
+        if deadline.is_none() {
+            *deadline = Some(Instant::now() + duration);
+            drop(deadline);
+            self.wake();
+        }
+    }
+
+    pub fn send_after(&self, duration: Duration, bytes: Vec<u8>) {
+        let handle = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(duration).await;
+            if handle.is_running() {
+                let _ = handle.send(bytes);
+            }
+        });
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.inner.running.load(Ordering::Acquire)
+    }
+
+    fn send(&self, bytes: Vec<u8>) -> io::Result<()> {
+        self.inner
+            .outbound_tx
+            .send(bytes)
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "terminal transport closed"))
+    }
+
+    fn timed_out(&self) -> bool {
+        self.inner.timed_out.load(Ordering::Acquire)
+    }
+
+    fn mark_timed_out(&self) {
+        self.inner.timed_out.store(true, Ordering::Release);
+    }
+
+    fn stop_deadline(&self) -> Option<Instant> {
+        *self.inner.stop_deadline.lock().unwrap()
+    }
+
+    fn subscribe(&self) -> watch::Receiver<u64> {
+        self.inner.wake_tx.subscribe()
+    }
+
+    fn wake(&self) {
+        let version = self.inner.wake_version.fetch_add(1, Ordering::AcqRel) + 1;
+        let _ = self.inner.wake_tx.send(version);
+    }
+}
+
+impl KeyProcessor {
+    fn new(intercept_exit_sequence: bool) -> Self {
+        Self {
+            intercept_exit_sequence,
+            state: KeySequenceState::Normal,
+        }
+    }
+
+    fn process_key(&mut self, key: KeyEvent) -> io::Result<TerminalAction> {
+        if !self.intercept_exit_sequence {
+            return encode_key_event(key);
+        }
+
+        match self.state {
+            KeySequenceState::Normal => {
+                if key.code == KeyCode::Char('a') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.state = KeySequenceState::CtrlAPressed;
+                    Ok(TerminalAction::Noop)
+                } else {
+                    encode_key_event(key)
+                }
+            }
+            KeySequenceState::CtrlAPressed => {
+                if key.code == KeyCode::Char('x') {
+                    self.state = KeySequenceState::Normal;
+                    Ok(TerminalAction::ExitRequested)
+                } else if key.code == KeyCode::Char('a') {
+                    Ok(TerminalAction::Noop)
+                } else {
+                    self.state = KeySequenceState::Normal;
+                    let mut bytes = vec![0x01];
+                    match encode_key_event(key)? {
+                        TerminalAction::SendBytes(mut key_bytes) => {
+                            bytes.append(&mut key_bytes);
+                            Ok(TerminalAction::SendBytes(bytes))
+                        }
+                        TerminalAction::ExitRequested | TerminalAction::Noop => {
+                            Ok(TerminalAction::SendBytes(bytes))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn encode_key_event(key: KeyEvent) -> io::Result<TerminalAction> {
+    let mut bytes = Vec::new();
+    match key.code {
+        KeyCode::Char(c) => handle_character_key(c, key.modifiers, &mut bytes),
+        KeyCode::Enter => handle_enter_key(key.modifiers, &mut bytes),
+        KeyCode::Backspace => handle_backspace_key(key.modifiers, &mut bytes),
+        KeyCode::Tab => handle_tab_key(key.modifiers, &mut bytes),
+        KeyCode::BackTab => bytes.extend_from_slice(&[0x1b, b'[', b'Z']),
+        KeyCode::Esc => {
+            if key.modifiers.contains(KeyModifiers::ALT) {
+                bytes.extend_from_slice(&[0x1b, 0x1b]);
+            } else {
+                bytes.push(0x1b);
+            }
+        }
+        KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => {
+            handle_arrow_key(key.code, key.modifiers, &mut bytes)
+        }
+        KeyCode::Home | KeyCode::End => handle_home_end_key(key.code, key.modifiers, &mut bytes),
+        KeyCode::PageUp | KeyCode::PageDown => handle_page_key(key.code, key.modifiers, &mut bytes),
+        KeyCode::Insert => handle_insert_key(key.modifiers, &mut bytes),
+        KeyCode::Delete => handle_delete_key(key.modifiers, &mut bytes),
+        KeyCode::F(n) => handle_function_key(n, key.modifiers, &mut bytes),
+        KeyCode::Null
+        | KeyCode::CapsLock
+        | KeyCode::ScrollLock
+        | KeyCode::NumLock
+        | KeyCode::PrintScreen
+        | KeyCode::Pause
+        | KeyCode::Menu
+        | KeyCode::KeypadBegin
+        | KeyCode::Media(_)
+        | KeyCode::Modifier(_) => {}
+    }
+
+    if bytes.is_empty() {
+        Ok(TerminalAction::Noop)
+    } else {
+        Ok(TerminalAction::SendBytes(bytes))
+    }
+}
+
+fn write_output(output: &mut impl Write, chunk: &[u8]) -> io::Result<()> {
+    let mut byte = [0u8; 1];
+    for &b in chunk {
+        if b == b'\n' {
+            byte[0] = b'\r';
+            output.write_all(&byte)?;
+        }
+        byte[0] = b;
+        output.write_all(&byte)?;
+    }
+    output.flush()
+}
+
+fn handle_character_key(c: char, modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        let ctrl_char = match c {
+            'a'..='z' => ((c as u8 - b'a') + 1) as char,
+            'A'..='Z' => ((c as u8 - b'A') + 1) as char,
+            '2' => '\x00',
+            '3' => '\x1b',
+            '4' => '\x1c',
+            '5' => '\x1d',
+            '6' => '\x1e',
+            '7' => '\x1f',
+            '8' => '\x7f',
+            '?' => '\x7f',
+            '[' => '\x1b',
+            ']' => '\x1d',
+            '^' => '\x1e',
+            '_' => '\x1f',
+            _ => c,
+        };
+        bytes.push(ctrl_char as u8);
+    } else if modifiers.contains(KeyModifiers::ALT) {
+        bytes.push(0x1b);
+        bytes.push(c as u8);
+    } else {
+        bytes.push(c as u8);
+    }
+}
+
+fn handle_enter_key(modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
+    if modifiers.contains(KeyModifiers::ALT) {
+        bytes.extend_from_slice(&[0x1b, b'\r']);
+    } else if modifiers.contains(KeyModifiers::SHIFT) {
+        bytes.extend_from_slice(&[0x1b, b'[', b'Z']);
+    } else {
+        bytes.push(b'\r');
+    }
+}
+
+fn handle_backspace_key(modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
+    if modifiers.contains(KeyModifiers::ALT) {
+        bytes.extend_from_slice(&[0x1b, 0x7f]);
+    } else if modifiers.contains(KeyModifiers::CONTROL) {
+        bytes.push(b'\x08');
+    } else {
+        bytes.push(0x7f);
+    }
+}
+
+fn handle_tab_key(modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        bytes.extend_from_slice(&[0x1b, b'[', b'Z']);
+    } else if modifiers.contains(KeyModifiers::ALT) {
+        bytes.extend_from_slice(&[0x1b, b'\t']);
+    } else if modifiers.contains(KeyModifiers::CONTROL) {
+        bytes.extend_from_slice(&[0x1b, b'[', b'I']);
+    } else {
+        bytes.push(b'\t');
+    }
+}
+
+fn handle_arrow_key(key: KeyCode, modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
+    let base_sequence = match key {
+        KeyCode::Up => b'A',
+        KeyCode::Down => b'B',
+        KeyCode::Right => b'C',
+        KeyCode::Left => b'D',
+        _ => return,
+    };
+
+    if modifiers.contains(KeyModifiers::ALT) {
+        bytes.extend_from_slice(&[0x1b, b'[', b'1', b';', b'3', base_sequence]);
+    } else if modifiers.contains(KeyModifiers::SHIFT) {
+        bytes.extend_from_slice(&[0x1b, b'[', b'1', b';', b'2', base_sequence]);
+    } else if modifiers.contains(KeyModifiers::CONTROL) {
+        bytes.extend_from_slice(&[0x1b, b'[', b'1', b';', b'5', base_sequence]);
+    } else {
+        bytes.extend_from_slice(&[0x1b, b'[', base_sequence]);
+    }
+}
+
+fn handle_home_end_key(key: KeyCode, modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
+    let base_sequence = match key {
+        KeyCode::Home => b'H',
+        KeyCode::End => b'F',
+        _ => return,
+    };
+
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        bytes.extend_from_slice(&[0x1b, b'[', b'1', b';', b'2', base_sequence]);
+    } else if modifiers.contains(KeyModifiers::CONTROL) {
+        bytes.extend_from_slice(&[0x1b, b'[', b'1', b';', b'5', base_sequence]);
+    } else {
+        bytes.extend_from_slice(&[0x1b, b'[', base_sequence]);
+    }
+}
+
+fn handle_page_key(key: KeyCode, modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
+    let base_sequence = match key {
+        KeyCode::PageUp => b'5',
+        KeyCode::PageDown => b'6',
+        _ => return,
+    };
+
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        bytes.extend_from_slice(&[0x1b, b'[', base_sequence, b';', b'2', b'~']);
+    } else if modifiers.contains(KeyModifiers::CONTROL) {
+        bytes.extend_from_slice(&[0x1b, b'[', base_sequence, b';', b'5', b'~']);
+    } else if modifiers.contains(KeyModifiers::ALT) {
+        bytes.extend_from_slice(&[0x1b, b'[', base_sequence, b';', b'3', b'~']);
+    } else {
+        bytes.extend_from_slice(&[0x1b, b'[', base_sequence, b'~']);
+    }
+}
+
+fn handle_insert_key(modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        bytes.extend_from_slice(&[0x1b, b'[', b'2', b';', b'2', b'~']);
+    } else if modifiers.contains(KeyModifiers::CONTROL) {
+        bytes.extend_from_slice(&[0x1b, b'[', b'2', b';', b'5', b'~']);
+    } else {
+        bytes.extend_from_slice(&[0x1b, b'[', b'2', b'~']);
+    }
+}
+
+fn handle_delete_key(modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        bytes.extend_from_slice(&[0x1b, b'[', b'3', b';', b'2', b'~']);
+    } else if modifiers.contains(KeyModifiers::CONTROL) {
+        bytes.extend_from_slice(&[0x1b, b'[', b'3', b';', b'5', b'~']);
+    } else if modifiers.contains(KeyModifiers::ALT) {
+        bytes.extend_from_slice(&[0x1b, b'[', b'3', b';', b'3', b'~']);
+    } else {
+        bytes.extend_from_slice(&[0x1b, b'[', b'3', b'~']);
+    }
+}
+
+fn handle_function_key(n: u8, modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
+    match n {
+        1..=4 => {
+            let f_char = match n {
+                1 => b'P',
+                2 => b'Q',
+                3 => b'R',
+                4 => b'S',
+                _ => return,
             };
-            bytes.push(ctrl_char as u8);
-        } else if modifiers.contains(KeyModifiers::ALT) {
-            // Alt 组合键 - 发送ESC前缀
-            bytes.push(0x1b);
-            bytes.push(c as u8);
-        } else {
-            // 普通字符
-            bytes.push(c as u8);
-        }
-    }
 
-    fn handle_enter_key(modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
-        if modifiers.contains(KeyModifiers::ALT) {
-            bytes.extend_from_slice(&[0x1b, b'\r']); // Alt+Enter
-        } else if modifiers.contains(KeyModifiers::SHIFT) {
-            bytes.extend_from_slice(&[0x1b, b'[', b'Z']); // Shift+Enter (在某些终端中)
-        } else {
-            bytes.push(b'\r');
-        }
-    }
-
-    fn handle_backspace_key(modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
-        if modifiers.contains(KeyModifiers::ALT) {
-            bytes.extend_from_slice(&[0x1b, 0x7f]); // Alt+Backspace
-        } else if modifiers.contains(KeyModifiers::CONTROL) {
-            bytes.push(b'\x08'); // Ctrl+Backspace (Ctrl+H)
-        } else {
-            bytes.push(0x7f); // 普通Backspace
-        }
-    }
-
-    fn handle_tab_key(modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
-        if modifiers.contains(KeyModifiers::SHIFT) {
-            // Shift+Tab
-            bytes.extend_from_slice(&[0x1b, b'[', b'Z']);
-        } else if modifiers.contains(KeyModifiers::ALT) {
-            bytes.extend_from_slice(&[0x1b, b'\t']); // Alt+Tab
-        } else if modifiers.contains(KeyModifiers::CONTROL) {
-            bytes.extend_from_slice(&[0x1b, b'[', b'I']); // Ctrl+Tab
-        } else {
-            bytes.push(b'\t');
-        }
-    }
-
-    fn handle_arrow_key(key: KeyCode, modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
-        let base_sequence = match key {
-            KeyCode::Up => b'A',
-            KeyCode::Down => b'B',
-            KeyCode::Right => b'C',
-            KeyCode::Left => b'D',
-            _ => return,
-        };
-
-        if modifiers.contains(KeyModifiers::ALT) {
-            // Alt + 箭头键 (应用模式)
-            bytes.extend_from_slice(&[0x1b, b'[', b'1', b';', b'3', base_sequence]);
-        } else if modifiers.contains(KeyModifiers::SHIFT) {
-            // Shift + 箭头键 (选择模式)
-            bytes.extend_from_slice(&[0x1b, b'[', b'1', b';', b'2', base_sequence]);
-        } else if modifiers.contains(KeyModifiers::CONTROL) {
-            // Ctrl + 箭头键 (单词跳跃)
-            bytes.extend_from_slice(&[0x1b, b'[', b'1', b';', b'5', base_sequence]);
-        } else {
-            // 普通箭头键
-            bytes.extend_from_slice(&[0x1b, b'[', base_sequence]);
-        }
-    }
-
-    fn handle_home_end_key(key: KeyCode, modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
-        let base_sequence = match key {
-            KeyCode::Home => b'H',
-            KeyCode::End => b'F',
-            _ => return,
-        };
-
-        if modifiers.contains(KeyModifiers::SHIFT) {
-            // Shift + Home/End
-            bytes.extend_from_slice(&[0x1b, b'[', b'1', b';', b'2', base_sequence]);
-        } else if modifiers.contains(KeyModifiers::CONTROL) {
-            // Ctrl + Home/End
-            bytes.extend_from_slice(&[0x1b, b'[', b'1', b';', b'5', base_sequence]);
-        } else {
-            // 普通Home/End
-            bytes.extend_from_slice(&[0x1b, b'[', base_sequence]);
-        }
-    }
-
-    fn handle_page_key(key: KeyCode, modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
-        let base_sequence = match key {
-            KeyCode::PageUp => b'5',
-            KeyCode::PageDown => b'6',
-            _ => return,
-        };
-
-        if modifiers.contains(KeyModifiers::SHIFT) {
-            // Shift + PageUp/Down
-            bytes.extend_from_slice(&[0x1b, b'[', base_sequence, b';', b'2', b'~']);
-        } else if modifiers.contains(KeyModifiers::CONTROL) {
-            // Ctrl + PageUp/Down
-            bytes.extend_from_slice(&[0x1b, b'[', base_sequence, b';', b'5', b'~']);
-        } else if modifiers.contains(KeyModifiers::ALT) {
-            // Alt + PageUp/Down
-            bytes.extend_from_slice(&[0x1b, b'[', base_sequence, b';', b'3', b'~']);
-        } else {
-            // 普通PageUp/Down
-            bytes.extend_from_slice(&[0x1b, b'[', base_sequence, b'~']);
-        }
-    }
-
-    fn handle_insert_key(modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
-        if modifiers.contains(KeyModifiers::SHIFT) {
-            bytes.extend_from_slice(&[0x1b, b'[', b'2', b';', b'2', b'~']); // Shift+Insert
-        } else if modifiers.contains(KeyModifiers::CONTROL) {
-            bytes.extend_from_slice(&[0x1b, b'[', b'2', b';', b'5', b'~']); // Ctrl+Insert
-        } else {
-            bytes.extend_from_slice(&[0x1b, b'[', b'2', b'~']); // 普通Insert
-        }
-    }
-
-    fn handle_delete_key(modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
-        if modifiers.contains(KeyModifiers::SHIFT) {
-            bytes.extend_from_slice(&[0x1b, b'[', b'3', b';', b'2', b'~']); // Shift+Delete
-        } else if modifiers.contains(KeyModifiers::CONTROL) {
-            bytes.extend_from_slice(&[0x1b, b'[', b'3', b';', b'5', b'~']); // Ctrl+Delete
-        } else if modifiers.contains(KeyModifiers::ALT) {
-            bytes.extend_from_slice(&[0x1b, b'[', b'3', b';', b'3', b'~']); // Alt+Delete
-        } else {
-            bytes.extend_from_slice(&[0x1b, b'[', b'3', b'~']); // 普通Delete
-        }
-    }
-
-    fn handle_function_key(n: u8, modifiers: KeyModifiers, bytes: &mut Vec<u8>) {
-        match n {
-            1..=4 => {
-                // F1-F4 使用 SS3序列
-                let f_char = match n {
-                    1 => b'P',
-                    2 => b'Q',
-                    3 => b'R',
-                    4 => b'S',
-                    _ => return,
-                };
-
-                if modifiers.contains(KeyModifiers::SHIFT) {
-                    bytes.extend_from_slice(&[0x1b, b'[', b'1', b';', b'2', f_char]);
-                } else if modifiers.contains(KeyModifiers::ALT) {
-                    bytes.extend_from_slice(&[0x1b, b'[', b'1', b';', b'3', f_char]);
-                } else if modifiers.contains(KeyModifiers::CONTROL) {
-                    bytes.extend_from_slice(&[0x1b, b'[', b'1', b';', b'5', f_char]);
-                } else {
-                    bytes.extend_from_slice(&[0x1b, b'O', f_char]);
-                }
-            }
-            5..=12 => {
-                // F5-F12 使用 CSI序列
-                let f_sequence = match n {
-                    5 => &b"15"[..],
-                    6 => &b"17"[..],
-                    7 => &b"18"[..],
-                    8 => &b"19"[..],
-                    9 => &b"20"[..],
-                    10 => &b"21"[..],
-                    11 => &b"23"[..],
-                    12 => &b"24"[..],
-                    _ => return,
-                };
-
-                if modifiers.contains(KeyModifiers::SHIFT) {
-                    bytes.extend_from_slice(&[0x1b, b'[']);
-                    bytes.extend_from_slice(f_sequence);
-                    bytes.extend_from_slice(b";2~");
-                } else if modifiers.contains(KeyModifiers::ALT) {
-                    bytes.extend_from_slice(&[0x1b, b'[']);
-                    bytes.extend_from_slice(f_sequence);
-                    bytes.extend_from_slice(b";3~");
-                } else if modifiers.contains(KeyModifiers::CONTROL) {
-                    bytes.extend_from_slice(&[0x1b, b'[']);
-                    bytes.extend_from_slice(f_sequence);
-                    bytes.extend_from_slice(b";5~");
-                } else {
-                    bytes.extend_from_slice(&[0x1b, b'[']);
-                    bytes.extend_from_slice(f_sequence);
-                    bytes.push(b'~');
-                }
-            }
-            13..=24 => {
-                // F13-F24 (扩展功能键)
-                let f_num = n + 12; // F13 -> 25, F24 -> 36
-                let f_str = f_num.to_string();
-
-                if modifiers.contains(KeyModifiers::SHIFT) {
-                    bytes.extend_from_slice(&[0x1b, b'[']);
-                    bytes.extend_from_slice(f_str.as_bytes());
-                    bytes.extend_from_slice(b";2~");
-                } else if modifiers.contains(KeyModifiers::ALT) {
-                    bytes.extend_from_slice(&[0x1b, b'[']);
-                    bytes.extend_from_slice(f_str.as_bytes());
-                    bytes.extend_from_slice(b";3~");
-                } else if modifiers.contains(KeyModifiers::CONTROL) {
-                    bytes.extend_from_slice(&[0x1b, b'[']);
-                    bytes.extend_from_slice(f_str.as_bytes());
-                    bytes.extend_from_slice(b";5~");
-                } else {
-                    bytes.extend_from_slice(&[0x1b, b'[']);
-                    bytes.extend_from_slice(f_str.as_bytes());
-                    bytes.push(b'~');
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn send_ctrl_a_to_serial(tx_port: &Arc<Mutex<Tx>>) -> io::Result<()> {
-        tx_port.lock().unwrap().write_all(&[0x01])?; // Ctrl+A
-        tx_port.lock().unwrap().flush()?;
-        Ok(())
-    }
-
-    async fn tx_work_async(handle: Arc<TermHandle>, tx_port: Arc<Mutex<Tx>>) -> anyhow::Result<()> {
-        // 使用 EventStream 异步处理键盘事件
-        let mut reader = EventStream::new();
-        let mut key_state = KeySequenceState::Normal;
-
-        while handle.is_running() {
-            // 使用 EventStream::next() 异步等待事件，不会阻塞
-            match reader.next().await {
-                Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
-                    // 检测 Ctrl+A+x 退出序列
-                    match key_state {
-                        KeySequenceState::Normal => {
-                            if key.code == KeyCode::Char('a')
-                                && key.modifiers.contains(KeyModifiers::CONTROL)
-                            {
-                                key_state = KeySequenceState::CtrlAPressed;
-                            } else {
-                                // 普通按键，发送到串口
-                                if let Err(e) = Self::send_key_to_serial(&tx_port, key) {
-                                    eprintln!("\r\n发送按键失败: {}", e);
-                                }
-                            }
-                        }
-                        KeySequenceState::CtrlAPressed => {
-                            if key.code == KeyCode::Char('x') {
-                                // 用户请求退出
-                                eprintln!("\r\nExit by: Ctrl+A+x");
-                                handle.stop();
-                                break;
-                            } else {
-                                // 不是x键，发送上一个按键并重置状态
-                                if key.code != KeyCode::Char('a') {
-                                    if let Err(e) = Self::send_ctrl_a_to_serial(&tx_port) {
-                                        eprintln!("\r\n发送 Ctrl+A 失败: {}", e);
-                                    }
-                                    if let Err(e) = Self::send_key_to_serial(&tx_port, key) {
-                                        eprintln!("\r\n发送按键失败: {}", e);
-                                    }
-                                    key_state = KeySequenceState::Normal;
-                                }
-                            }
-                        }
-                    }
-                }
-                Some(Err(e)) => {
-                    eprintln!("\r\n键盘事件错误: {}", e);
-                    break;
-                }
-                None => {
-                    // EventStream 结束
-                    break;
-                }
-                Some(Ok(_)) => {
-                    // 忽略非按键事件（鼠标、调整大小等）
-                }
+            if modifiers.contains(KeyModifiers::SHIFT) {
+                bytes.extend_from_slice(&[0x1b, b'[', b'1', b';', b'2', f_char]);
+            } else if modifiers.contains(KeyModifiers::ALT) {
+                bytes.extend_from_slice(&[0x1b, b'[', b'1', b';', b'3', f_char]);
+            } else if modifiers.contains(KeyModifiers::CONTROL) {
+                bytes.extend_from_slice(&[0x1b, b'[', b'1', b';', b'5', f_char]);
+            } else {
+                bytes.extend_from_slice(&[0x1b, b'O', f_char]);
             }
         }
+        5..=12 => {
+            let f_sequence = match n {
+                5 => &b"15"[..],
+                6 => &b"17"[..],
+                7 => &b"18"[..],
+                8 => &b"19"[..],
+                9 => &b"20"[..],
+                10 => &b"21"[..],
+                11 => &b"23"[..],
+                12 => &b"24"[..],
+                _ => return,
+            };
 
-        Ok(())
+            if modifiers.contains(KeyModifiers::SHIFT) {
+                bytes.extend_from_slice(&[0x1b, b'[']);
+                bytes.extend_from_slice(f_sequence);
+                bytes.extend_from_slice(b";2~");
+            } else if modifiers.contains(KeyModifiers::ALT) {
+                bytes.extend_from_slice(&[0x1b, b'[']);
+                bytes.extend_from_slice(f_sequence);
+                bytes.extend_from_slice(b";3~");
+            } else if modifiers.contains(KeyModifiers::CONTROL) {
+                bytes.extend_from_slice(&[0x1b, b'[']);
+                bytes.extend_from_slice(f_sequence);
+                bytes.extend_from_slice(b";5~");
+            } else {
+                bytes.extend_from_slice(&[0x1b, b'[']);
+                bytes.extend_from_slice(f_sequence);
+                bytes.push(b'~');
+            }
+        }
+        13..=24 => {
+            let f_num = n + 12;
+            let f_str = f_num.to_string();
+
+            if modifiers.contains(KeyModifiers::SHIFT) {
+                bytes.extend_from_slice(&[0x1b, b'[']);
+                bytes.extend_from_slice(f_str.as_bytes());
+                bytes.extend_from_slice(b";2~");
+            } else if modifiers.contains(KeyModifiers::ALT) {
+                bytes.extend_from_slice(&[0x1b, b'[']);
+                bytes.extend_from_slice(f_str.as_bytes());
+                bytes.extend_from_slice(b";3~");
+            } else if modifiers.contains(KeyModifiers::CONTROL) {
+                bytes.extend_from_slice(&[0x1b, b'[']);
+                bytes.extend_from_slice(f_str.as_bytes());
+                bytes.extend_from_slice(b";5~");
+            } else {
+                bytes.extend_from_slice(&[0x1b, b'[']);
+                bytes.extend_from_slice(f_str.as_bytes());
+                bytes.push(b'~');
+            }
+        }
+        _ => {}
     }
 }
 
@@ -692,59 +613,47 @@ pub fn restore_terminal_mode() {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Cursor, Result as IoResult};
+    use super::{KeyProcessor, TerminalAction, encode_key_event};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    use super::*;
-
-    struct SinkWriter(Vec<u8>);
-
-    impl Write for SinkWriter {
-        fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
-            self.0.extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> IoResult<()> {
-            Ok(())
-        }
-    }
-
-    #[tokio::test]
-    async fn serial_term_graceful_stop_after_without_timeout_does_not_panic() {
-        let mut term = SerialTerm::new_with_byte_callback(
-            Box::new(SinkWriter(Vec::new())),
-            Box::new(Cursor::new(vec![b'x'])),
-            |handle, _| handle.stop_after(Duration::from_millis(0)),
+    #[test]
+    fn ctrl_a_x_requests_exit() {
+        let mut processor = KeyProcessor::new(true);
+        assert_eq!(
+            processor
+                .process_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL))
+                .unwrap(),
+            TerminalAction::Noop
         );
-
-        term.run_terminal().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn serial_term_with_timeout_reports_timeout_error() {
-        let mut term = SerialTerm::new_with_byte_callback(
-            Box::new(SinkWriter(Vec::new())),
-            Box::new(Cursor::new(Vec::<u8>::new())),
-            |_handle, _| {},
-        )
-        .with_timeout(Duration::from_millis(0), "kernel boot");
-
-        let err = term.run_terminal().await.unwrap_err();
-        assert!(err.to_string().contains("kernel boot timed out"));
-    }
-
-    #[tokio::test]
-    async fn serial_term_graceful_stop_is_not_marked_timeout() {
-        let mut term = SerialTerm::new_with_byte_callback(
-            Box::new(SinkWriter(Vec::new())),
-            Box::new(Cursor::new(vec![b'o', b'k'])),
-            |handle, byte| {
-                if byte == b'k' {
-                    handle.stop_after(Duration::from_millis(0));
-                }
-            },
+        assert_eq!(
+            processor
+                .process_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE))
+                .unwrap(),
+            TerminalAction::ExitRequested
         );
+    }
 
-        term.run_terminal().await.unwrap();
+    #[test]
+    fn ctrl_a_then_other_key_replays_ctrl_a_and_key() {
+        let mut processor = KeyProcessor::new(true);
+        let _ = processor.process_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(
+            processor
+                .process_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE))
+                .unwrap(),
+            TerminalAction::SendBytes(vec![0x01, b'b'])
+        );
+    }
+
+    #[test]
+    fn plain_key_encoding_is_preserved() {
+        assert_eq!(
+            encode_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).unwrap(),
+            TerminalAction::SendBytes(vec![b'\r'])
+        );
+        assert_eq!(
+            encode_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)).unwrap(),
+            TerminalAction::SendBytes(vec![0x1b, b'[', b'A'])
+        );
     }
 }

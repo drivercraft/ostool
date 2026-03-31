@@ -22,24 +22,26 @@
 
 use std::{
     ffi::OsString,
-    io::{self, BufReader, ErrorKind, IsTerminal, Read, Write},
+    io::{self, ErrorKind},
     path::Path,
     path::PathBuf,
-    process::{Child, Stdio},
-    sync::{Arc, Mutex, mpsc},
-    thread,
-    time::{Duration, Instant},
+    process::Stdio,
+    sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use anyhow::{Context, anyhow};
 #[cfg(windows)]
 use colored::Colorize;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use log::warn;
 use object::Architecture;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::fs;
+use tokio::{
+    fs,
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
+    process::Command as TokioCommand,
+    sync::mpsc,
+};
 
 use crate::{
     Tool,
@@ -47,9 +49,9 @@ use crate::{
     run::{
         output_matcher::{ByteStreamMatcher, compile_regexes, print_match_event},
         ovmf_prebuilt::{Arch, FileType, Prebuilt, Source},
-        shell_init::{ShellAutoInitMatcher, normalize_shell_init_config, spawn_delayed_send},
+        shell_init::{SHELL_INIT_DELAY, ShellAutoInitMatcher, normalize_shell_init_config},
     },
-    sterm::restore_terminal_mode,
+    sterm::{AsyncTerminal, TerminalConfig},
     utils::PathResultExt,
 };
 
@@ -364,27 +366,6 @@ struct QemuRunner<'a> {
     fail_regex: Vec<regex::Regex>,
 }
 
-struct RawModeGuard {
-    enabled: bool,
-}
-
-impl RawModeGuard {
-    fn new() -> Self {
-        let enabled =
-            io::stdin().is_terminal() && io::stdout().is_terminal() && enable_raw_mode().is_ok();
-        Self { enabled }
-    }
-}
-
-impl Drop for RawModeGuard {
-    fn drop(&mut self) {
-        if self.enabled {
-            let _ = disable_raw_mode();
-            let _ = io::stdout().flush();
-        }
-    }
-}
-
 impl QemuRunner<'_> {
     async fn run(&mut self) -> anyhow::Result<()> {
         self.prepare_regex()?;
@@ -485,34 +466,110 @@ impl QemuRunner<'_> {
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
         cmd.print_cmd();
-        let mut child = cmd.spawn()?;
-        let stdin = child.stdin.take().map(|stdin| Arc::new(Mutex::new(stdin)));
-        let _raw_mode = RawModeGuard::new();
-        if let Some(stdin) = stdin.as_ref() {
-            Self::spawn_stdin_passthrough(stdin.clone());
-        }
-        let mut matcher =
-            ByteStreamMatcher::new(self.success_regex.clone(), self.fail_regex.clone());
-        let mut shell_auto_init = self.config.shell_auto_init();
-        let timeout = timeout_duration(self.config.timeout);
-        let start = Instant::now();
-        Self::process_output_stream(
-            &mut child,
-            &mut matcher,
-            &mut shell_auto_init,
-            stdin,
-            timeout,
-            start,
-        )?;
+        let mut child = TokioCommand::from(cmd.into_std()).spawn()?;
+        let stdin = child.stdin.take().context("failed to capture QEMU stdin")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("failed to capture QEMU stdout")?;
+        let stderr = child
+            .stderr
+            .take()
+            .context("failed to capture QEMU stderr")?;
 
-        let out = child.wait_with_output()?;
-        if let Some(res) = matcher.final_result() {
-            res?;
-        } else if !out.status.success() {
+        let (inbound_tx, inbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let stderr_capture = Arc::new(Mutex::new(Vec::<u8>::new()));
+
+        let stdout_task = tokio::spawn(read_child_stream(stdout, inbound_tx.clone(), None));
+        let stderr_task = tokio::spawn(read_child_stream(
+            stderr,
+            inbound_tx,
+            Some(stderr_capture.clone()),
+        ));
+        let write_task = tokio::spawn(async move {
+            let mut stdin = stdin;
+            while let Some(bytes) = outbound_rx.recv().await {
+                if let Err(err) = stdin.write_all(&bytes).await {
+                    if err.kind() != ErrorKind::BrokenPipe {
+                        return Err(err).context("failed to forward stdin to QEMU");
+                    }
+                    break;
+                }
+                stdin.flush().await.context("failed to flush QEMU stdin")?;
+            }
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let matcher = Arc::new(Mutex::new(ByteStreamMatcher::new(
+            self.success_regex.clone(),
+            self.fail_regex.clone(),
+        )));
+        let shell_auto_init = Arc::new(Mutex::new(self.config.shell_auto_init()));
+        let match_result = Arc::new(Mutex::new(None::<anyhow::Result<()>>));
+        let terminal = AsyncTerminal::new(TerminalConfig {
+            intercept_exit_sequence: false,
+            timeout: timeout_duration(self.config.timeout),
+            timeout_label: "QEMU".to_string(),
+        });
+
+        let terminal_result = terminal
+            .run(inbound_rx, outbound_tx, {
+                let matcher = matcher.clone();
+                let shell_auto_init = shell_auto_init.clone();
+                let match_result = match_result.clone();
+                move |handle, byte| {
+                    let mut matcher = matcher.lock().unwrap();
+                    if let Some(matched) = matcher.observe_byte(byte) {
+                        print_match_event(&matched);
+                        let mut result = match_result.lock().unwrap();
+                        *result = Some(matched.kind.into_result(&matched));
+                        handle.stop_after(crate::run::output_matcher::MATCH_DRAIN_DURATION);
+                    }
+
+                    let mut shell_auto_init = shell_auto_init.lock().unwrap();
+                    if let Some(shell_auto_init) = shell_auto_init.as_mut()
+                        && let Some(command) = shell_auto_init.observe_byte(byte)
+                    {
+                        handle.send_after(SHELL_INIT_DELAY, command);
+                    }
+
+                    if matcher.should_stop() {
+                        handle.stop();
+                    }
+                }
+            })
+            .await;
+
+        let should_kill = matcher.lock().unwrap().should_stop() || terminal_result.is_err();
+        if should_kill
+            && child
+                .try_wait()
+                .context("failed to query QEMU process status")?
+                .is_none()
+        {
+            if let Err(err) = child.kill().await
+                && err.kind() != ErrorKind::InvalidInput
+            {
+                return Err(err.into());
+            }
+        }
+
+        let status = child.wait().await?;
+        let _ = stdout_task.await;
+        let _ = stderr_task.await;
+        let _ = write_task.await;
+
+        terminal_result?;
+
+        if let Some(result) = match_result.lock().unwrap().take() {
+            result?;
+        } else if !status.success() {
             unsafe {
                 return Err(anyhow::anyhow!(
                     "{}",
-                    OsString::from_encoded_bytes_unchecked(out.stderr).to_string_lossy()
+                    OsString::from_encoded_bytes_unchecked(stderr_capture.lock().unwrap().clone())
+                        .to_string_lossy()
                 ));
             }
         }
@@ -640,123 +697,6 @@ impl QemuRunner<'_> {
         }
     }
 
-    fn process_output_stream(
-        child: &mut Child,
-        matcher: &mut ByteStreamMatcher,
-        shell_auto_init: &mut Option<ShellAutoInitMatcher>,
-        stdin: Option<Arc<Mutex<std::process::ChildStdin>>>,
-        timeout: Option<Duration>,
-        start: Instant,
-    ) -> anyhow::Result<()> {
-        let stdout = child
-            .stdout
-            .take()
-            .context("failed to capture QEMU stdout")?;
-        let (tx, rx) = mpsc::channel();
-
-        thread::spawn(move || {
-            let stdout = BufReader::new(stdout);
-            for byte in stdout.bytes() {
-                match byte {
-                    Ok(byte) => {
-                        if tx.send(Some(byte)).is_err() {
-                            return;
-                        }
-                    }
-                    Err(err) => {
-                        eprintln!("stdout: {err:?}");
-                        return;
-                    }
-                }
-            }
-
-            let _ = tx.send(None);
-        });
-
-        loop {
-            match rx.recv_timeout(Duration::from_millis(10)) {
-                Ok(Some(byte)) => {
-                    let _ = std::io::stdout().write_all(&[byte]);
-                    let _ = std::io::stdout().flush();
-
-                    if let Some(matched) = matcher.observe_byte(byte) {
-                        print_match_event(&matched);
-                    }
-
-                    if let Some(shell_auto_init) = shell_auto_init.as_mut()
-                        && let Some(command) = shell_auto_init.observe_byte(byte)
-                        && let Some(stdin) = stdin.as_ref()
-                    {
-                        spawn_delayed_send(stdin.clone(), command);
-                    }
-                }
-                Ok(None) => break,
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            }
-
-            if matcher.should_stop() {
-                Self::kill_qemu(child)?;
-                break;
-            }
-
-            if let Some(timeout) = timeout
-                && start.elapsed() >= timeout
-            {
-                Self::kill_qemu(child)?;
-                return Err(anyhow!("QEMU timed out after {}s", timeout.as_secs()));
-            }
-        }
-
-        Ok(())
-    }
-
-    fn spawn_stdin_passthrough(stdin: Arc<Mutex<std::process::ChildStdin>>) {
-        thread::spawn(move || {
-            let mut stdin_reader = io::stdin().lock();
-            let mut buffer = [0u8; 1024];
-
-            loop {
-                match stdin_reader.read(&mut buffer) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let result = (|| -> io::Result<()> {
-                            let mut child_stdin = stdin.lock().unwrap();
-                            child_stdin.write_all(&buffer[..n])?;
-                            child_stdin.flush()?;
-                            Ok(())
-                        })();
-
-                        if let Err(err) = result {
-                            if err.kind() != ErrorKind::BrokenPipe {
-                                warn!("failed to forward stdin to QEMU: {err}");
-                            }
-                            break;
-                        }
-                    }
-                    Err(err) if err.kind() == ErrorKind::Interrupted => continue,
-                    Err(err) => {
-                        warn!("failed to read stdin for QEMU passthrough: {err}");
-                        break;
-                    }
-                }
-            }
-        });
-    }
-
-    fn kill_qemu(child: &mut Child) -> anyhow::Result<()> {
-        if let Err(err) = child.kill()
-            && err.kind() != ErrorKind::InvalidInput
-        {
-            return Err(err.into());
-        }
-
-        restore_terminal_mode();
-        println!();
-
-        Ok(())
-    }
-
     fn prepare_regex(&mut self) -> anyhow::Result<()> {
         let (success, fail) = compile_regexes(&self.config.success_regex, &self.config.fail_regex)?;
         self.success_regex = success;
@@ -823,6 +763,30 @@ fn timeout_duration(timeout: Option<u64>) -> Option<Duration> {
         Some(0) | None => None,
         Some(secs) => Some(Duration::from_secs(secs)),
     }
+}
+
+async fn read_child_stream<R>(
+    mut reader: R,
+    tx: mpsc::UnboundedSender<Vec<u8>>,
+    capture: Option<Arc<Mutex<Vec<u8>>>>,
+) -> anyhow::Result<()>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut buffer = [0u8; 1024];
+    loop {
+        let read = reader.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        if let Some(capture) = capture.as_ref() {
+            capture.lock().unwrap().extend_from_slice(&buffer[..read]);
+        }
+        if tx.send(buffer[..read].to_vec()).is_err() {
+            break;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

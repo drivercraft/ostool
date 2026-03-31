@@ -1,21 +1,24 @@
-use std::{
-    net::TcpStream,
-    process::{Child, Command},
-    time::Duration,
-};
+use std::process::{Child, Command};
 
 use log::{debug, info};
+use tokio::{
+    net::TcpStream,
+    time::{Duration, sleep},
+};
+use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use uboot_shell::UbootShell;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
 
-    let (mut out, mut uboot) = new_uboot();
+    let (mut out, mut uboot) = new_uboot().await;
 
     uboot
         .loady(0x40200000, "Cargo.toml", |r, a| {
             debug!("{r}/{a}");
         })
+        .await
         .unwrap();
 
     info!("finish");
@@ -23,7 +26,7 @@ fn main() {
     let _ = out.wait();
 }
 
-fn new_uboot() -> (Child, UbootShell) {
+async fn new_uboot() -> (Child, UbootShell) {
     // qemu-system-aarch64 -machine virt -cpu cortex-a57 -nographic -bios assets/u-boot.bin -serial tcp::12345,server
     let out = Command::new("qemu-system-aarch64")
         .args([
@@ -40,24 +43,22 @@ fn new_uboot() -> (Child, UbootShell) {
         .spawn()
         .unwrap();
 
-    let tx;
-
     loop {
-        std::thread::sleep(Duration::from_millis(100));
-        match TcpStream::connect("127.0.0.1:12345") {
+        sleep(Duration::from_millis(100)).await;
+        match TcpStream::connect("127.0.0.1:12345").await {
             Ok(s) => {
-                tx = s;
-                break;
+                let (rx, tx) = s.into_split();
+                println!("connect ok");
+                return (
+                    out,
+                    UbootShell::new(tx.compat_write(), rx.compat())
+                        .await
+                        .unwrap(),
+                );
             }
             Err(e) => {
                 println!("wait for qemu serial port ready: {e}");
             }
         }
     }
-
-    let rx = tx.try_clone().unwrap();
-    rx.set_read_timeout(Some(Duration::from_millis(300)))
-        .unwrap();
-    println!("connect ok");
-    (out, UbootShell::new(tx, rx).unwrap())
 }

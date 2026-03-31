@@ -1,8 +1,7 @@
 use std::{
-    io::{self, Write},
+    io,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    thread,
     time::Duration,
 };
 
@@ -15,7 +14,16 @@ use log::{info, warn};
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::fs;
+use tokio::{
+    fs,
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::mpsc,
+};
+use tokio_serial::SerialPortBuilderExt;
+use tokio_util::compat::{
+    FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt, TokioAsyncReadCompatExt,
+    TokioAsyncWriteCompatExt,
+};
 use uboot_shell::UbootShell;
 
 use crate::{
@@ -24,10 +32,10 @@ use crate::{
         output_matcher::{
             ByteStreamMatcher, MATCH_DRAIN_DURATION, compile_regexes, print_match_event,
         },
-        shell_init::{ShellAutoInitMatcher, normalize_shell_init_config, spawn_delayed_send},
+        shell_init::{SHELL_INIT_DELAY, ShellAutoInitMatcher, normalize_shell_init_config},
         tftp,
     },
-    sterm::SerialTerm,
+    sterm::{AsyncTerminal, TerminalConfig},
     utils::PathResultExt,
 };
 
@@ -290,26 +298,6 @@ struct NetworkBootRequest {
     ipaddr: Option<String>,
 }
 
-struct SharedWrite {
-    inner: Arc<Mutex<Box<dyn Write + Send>>>,
-}
-
-impl SharedWrite {
-    fn new(inner: Arc<Mutex<Box<dyn Write + Send>>>) -> Self {
-        Self { inner }
-    }
-}
-
-impl Write for SharedWrite {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.inner.lock().unwrap().write(buf)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.lock().unwrap().flush()
-    }
-}
-
 impl Runner<'_> {
     /// 生成包含 kernel 和 FDT 的压缩 FIT image。
     async fn generate_fit_image(
@@ -492,19 +480,13 @@ impl Runner<'_> {
             self.config.serial, self.baud_rate
         );
 
-        let rx = serialport::new(&self.config.serial, self.baud_rate as _)
+        let serial = tokio_serial::new(&self.config.serial, self.baud_rate)
             .timeout(Duration::from_millis(200))
-            .open()
+            .open_native_async()
             .with_context(|| format!("failed to open serial port {}", self.config.serial))?;
-        let tx = rx
-            .try_clone()
-            .with_context(|| format!("failed to clone serial port {}", self.config.serial))?;
+        let (rx, tx) = tokio::io::split(serial);
 
         println!("Waiting for board on power or reset...");
-        let handle: thread::JoinHandle<anyhow::Result<UbootShell>> = thread::spawn(move || {
-            let uboot = UbootShell::new(tx, rx)?;
-            Ok(uboot)
-        });
 
         if let Some(cmd) = self.config.board_reset_cmd.clone()
             && !cmd.trim().is_empty()
@@ -513,70 +495,69 @@ impl Runner<'_> {
         }
 
         let mut net_ok = false;
-
-        let mut uboot = handle.join().unwrap()?;
-        uboot.set_env("autoload", "yes")?;
+        let mut uboot = UbootShell::new(tx.compat_write(), rx.compat()).await?;
+        uboot.set_env("autoload", "yes").await?;
 
         if let Some(ref cmds) = self.config.uboot_cmd {
             for cmd in cmds.iter() {
                 info!("Running U-Boot command: {}", cmd);
-                uboot.cmd(cmd)?;
+                uboot.cmd(cmd).await?;
             }
         }
 
         if let Some(ref net) = self.config.net {
             if let Some(ref gatewayip) = net.gatewayip {
-                uboot.set_env("gatewayip", gatewayip)?;
+                uboot.set_env("gatewayip", gatewayip).await?;
             }
 
             if let Some(ref netmask) = net.netmask {
-                uboot.set_env("netmask", netmask)?;
+                uboot.set_env("netmask", netmask).await?;
             }
         }
 
         if let Some(ref ip) = ip_string
-            && let Ok(output) = uboot.cmd("net list")
+            && let Ok(output) = uboot.cmd("net list").await
         {
             let device_list = output.strip_prefix("net list").unwrap_or(&output).trim();
 
             if device_list.is_empty() {
-                let _ = uboot.cmd("bootdev hunt ethernet");
+                let _ = uboot.cmd("bootdev hunt ethernet").await;
             }
 
             info!("Board network ok");
 
-            uboot.set_env("serverip", ip.clone())?;
+            uboot.set_env("serverip", ip.clone()).await?;
             net_ok = true;
         }
 
         let mut fdt_load_addr = None;
         let mut ramfs_load_addr = None;
 
-        if let Ok(addr) = uboot.env_int("fdt_addr_r") {
+        if let Ok(addr) = uboot.env_int("fdt_addr_r").await {
             fdt_load_addr = Some(addr as u64);
         }
 
-        if let Ok(addr) = uboot.env_int("ramdisk_addr_r") {
+        if let Ok(addr) = uboot.env_int("ramdisk_addr_r").await {
             ramfs_load_addr = Some(addr as u64);
         }
 
         let kernel_entry = if let Some(entry) = self.config.kernel_load_addr_int() {
             info!("Using configured kernel load address: {entry:#x}");
             entry
-        } else if let Ok(entry) = uboot.env_int("kernel_addr_r") {
+        } else if let Ok(entry) = uboot.env_int("kernel_addr_r").await {
             info!("Using $kernel_addr_r as kernel entry: {entry:#x}");
             entry as u64
-        } else if let Ok(entry) = uboot.env_int("loadaddr") {
+        } else if let Ok(entry) = uboot.env_int("loadaddr").await {
             info!("Using $loadaddr as kernel entry: {entry:#x}");
             entry as u64
         } else {
             return Err(anyhow!("Cannot determine kernel entry address"));
         };
 
-        let mut fit_loadaddr = if let Ok(addr) = uboot.env_int("kernel_comp_addr_r") {
+        let mut fit_loadaddr = if let Ok(addr) = uboot.env_int("kernel_comp_addr_r").await {
             info!("image load to kernel_comp_addr_r: {addr:#x}");
             addr as u64
-        } else if let Ok(addr) = uboot.env_int("kernel_addr_c") {
+        } else if let Ok(addr) = uboot.env_int("kernel_addr_c").await {
             info!("image load to kernel_addr_c: {addr:#x}");
             addr as u64
         } else {
@@ -589,7 +570,9 @@ impl Runner<'_> {
             fit_loadaddr = fit_load_addr_int;
         }
 
-        uboot.set_env("loadaddr", format!("{:#x}", fit_loadaddr))?;
+        uboot
+            .set_env("loadaddr", format!("{:#x}", fit_loadaddr))
+            .await?;
 
         info!("fitimage loadaddr: {fit_loadaddr:#x}");
         info!("kernel entry: {kernel_entry:#x}");
@@ -657,23 +640,18 @@ impl Runner<'_> {
             &fitname,
         ) {
             if let Some(ref board_ip) = request.ipaddr {
-                uboot.set_env("ipaddr", board_ip)?;
+                uboot.set_env("ipaddr", board_ip).await?;
             }
-            uboot.set_env("bootfile", &request.bootfile)?;
+            uboot.set_env("bootfile", &request.bootfile).await?;
             request.bootcmd
         } else {
             info!("No TFTP config, using loady to upload FIT image...");
-            Self::uboot_loady(&mut uboot, fit_loadaddr as usize, fitimage);
+            Self::uboot_loady(&mut uboot, fit_loadaddr as usize, fitimage).await?;
             "bootm".to_string()
         };
 
         info!("Booting kernel with command: {}", bootcmd);
-        uboot.cmd_without_reply(&bootcmd)?;
-
-        let tx = uboot.tx.take().unwrap();
-        let rx = uboot.rx.take().unwrap();
-
-        drop(uboot);
+        uboot.cmd_without_reply(&bootcmd).await?;
 
         println!("{}", "Interacting with U-Boot shell...".green());
 
@@ -685,14 +663,52 @@ impl Runner<'_> {
         let res = Arc::new(Mutex::<Option<anyhow::Result<()>>>::new(None));
         let res_clone = res.clone();
         let matcher_clone = matcher.clone();
-        let shared_tx = Arc::new(Mutex::new(tx));
         let shell_init = Arc::new(Mutex::new(self.config.shell_auto_init()));
         let shell_init_clone = shell_init.clone();
-        let shared_tx_clone = shared_tx.clone();
-        let mut shell = SerialTerm::new_with_byte_callback(
-            Box::new(SharedWrite::new(shared_tx)),
-            rx,
-            move |h, byte| {
+        let mut serial_rx = uboot.rx.take().unwrap().compat();
+        let mut serial_tx = uboot.tx.take().unwrap().compat_write();
+        drop(uboot);
+        let (inbound_tx, inbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+
+        let read_task = tokio::spawn(async move {
+            let mut buffer = [0u8; 1024];
+            loop {
+                let read = serial_rx
+                    .read(&mut buffer)
+                    .await
+                    .context("failed to read serial output")?;
+                if read == 0 {
+                    break;
+                }
+                if inbound_tx.send(buffer[..read].to_vec()).is_err() {
+                    break;
+                }
+            }
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let write_task = tokio::spawn(async move {
+            while let Some(bytes) = outbound_rx.recv().await {
+                serial_tx
+                    .write_all(&bytes)
+                    .await
+                    .context("failed to write serial input")?;
+                serial_tx
+                    .flush()
+                    .await
+                    .context("failed to flush serial input")?;
+            }
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let terminal = AsyncTerminal::new(TerminalConfig {
+            intercept_exit_sequence: true,
+            timeout: timeout_duration(self.config.timeout),
+            timeout_label: "kernel boot".to_string(),
+        });
+        terminal
+            .run(inbound_rx, outbound_tx, move |h, byte| {
                 let mut matcher = matcher_clone.lock().unwrap();
                 if let Some(matched) = matcher.observe_byte(byte) {
                     print_match_event(&matched);
@@ -705,18 +721,17 @@ impl Runner<'_> {
                 if let Some(shell_init) = shell_init.as_mut()
                     && let Some(command) = shell_init.observe_byte(byte)
                 {
-                    spawn_delayed_send(shared_tx_clone.clone(), command);
+                    h.send_after(SHELL_INIT_DELAY, command);
                 }
 
                 if matcher.should_stop() {
                     h.stop();
                 }
-            },
-        );
-        if let Some(timeout) = timeout_duration(self.config.timeout) {
-            shell = shell.with_timeout(timeout, "kernel boot");
-        }
-        shell.run().await?;
+            })
+            .await?;
+        write_task.abort();
+        read_task.abort();
+
         {
             let mut res_lock = res.lock().unwrap();
             if let Some(result) = res_lock.take() {
@@ -760,7 +775,11 @@ impl Runner<'_> {
         Some(ip_string)
     }
 
-    fn uboot_loady(uboot: &mut UbootShell, addr: usize, file: impl Into<PathBuf>) {
+    async fn uboot_loady(
+        uboot: &mut UbootShell,
+        addr: usize,
+        file: impl Into<PathBuf>,
+    ) -> anyhow::Result<()> {
         println!("{}", "\r\nsend file".green());
 
         let pb = ProgressBar::new(100);
@@ -774,12 +793,13 @@ impl Runner<'_> {
                 pb.set_length(a as _);
                 pb.set_position(x as _);
             })
-            .unwrap();
+            .await?;
 
         pb.finish_with_message("upload done");
 
         println!("{}", res);
         println!("send ok");
+        Ok(())
     }
 }
 

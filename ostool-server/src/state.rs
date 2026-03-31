@@ -93,7 +93,8 @@ impl AppState {
         self.tftp_manager
             .read()
             .await
-            .remove_session_dir(session_id)?;
+            .remove_session_dir(session_id)
+            .await?;
         Ok(self.sessions.write().await.remove(session_id))
     }
 

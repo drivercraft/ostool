@@ -74,6 +74,10 @@ impl Command {
         println!("{}", cmd_str.purple().bold());
     }
 
+    pub fn into_std(self) -> std::process::Command {
+        self.inner
+    }
+
     /// Executes the command and waits for it to complete.
     ///
     /// # Errors

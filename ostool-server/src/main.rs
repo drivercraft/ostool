@@ -30,11 +30,11 @@ async fn main() -> anyhow::Result<()> {
 
     let state = build_app_state(cli.config.clone(), config, tftp_manager.clone()).await?;
     state.ensure_data_dirs().await?;
-    tftp_manager.start_if_needed()?;
+    tftp_manager.start_if_needed().await?;
     if let ostool_server::TftpConfig::SystemTftpdHpa(cfg) = &state.config.read().await.tftp
         && cfg.reconcile_on_start
     {
-        tftp_manager.reconcile()?;
+        tftp_manager.reconcile().await?;
     }
 
     let gc_state = state.clone();

@@ -1,67 +1,23 @@
-//! # uboot-shell
-//!
-//! A Rust library for communicating with U-Boot bootloader over serial connection.
-//!
-//! This crate provides functionality to interact with U-Boot shell, execute commands,
-//! transfer files via YMODEM protocol, and manage environment variables.
-//!
-//! ## Features
-//!
-//! - Automatic U-Boot shell detection and synchronization
-//! - Command execution with retry support
-//! - YMODEM file transfer protocol implementation
-//! - Environment variable management
-//! - CRC16-CCITT checksum support
-//!
-//! ## Quick Start
-//!
-//! ```rust,no_run
-//! use uboot_shell::UbootShell;
-//! use std::io::{Read, Write};
-//!
-//! // Open serial port (using serialport crate)
-//! let port = serialport::new("/dev/ttyUSB0", 115200)
-//!     .open()
-//!     .unwrap();
-//! let rx = port.try_clone().unwrap();
-//! let tx = port;
-//!
-//! // Create U-Boot shell instance (blocks until shell is ready)
-//! let mut uboot = UbootShell::new(tx, rx).unwrap();
-//!
-//! // Execute commands
-//! let output = uboot.cmd("help").unwrap();
-//! println!("{}", output);
-//!
-//! // Get/set environment variables
-//! let bootargs = uboot.env("bootargs").unwrap();
-//! uboot.set_env("myvar", "myvalue").unwrap();
-//!
-//! // Transfer file via YMODEM
-//! uboot.loady(0x80000000, "kernel.bin", |sent, total| {
-//!     println!("Progress: {}/{}", sent, total);
-//! }).unwrap();
-//! ```
-//!
-//! ## Modules
-//!
-//! - [`crc`] - CRC16-CCITT checksum implementation
-//! - [`ymodem`] - YMODEM file transfer protocol
+//! Async U-Boot shell communication over runtime-neutral futures I/O.
 
 #[macro_use]
 extern crate log;
 
 use std::{
-    fs::File,
-    io::*,
+    io::{Error, ErrorKind, Result, stdout},
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread,
-    time::{Duration, Instant},
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
 };
+
+use futures::{
+    AsyncReadExt, AsyncWriteExt,
+    future::{Either, FutureExt, select},
+    io::{AllowStdIo, AsyncRead, AsyncWrite},
+    pin_mut,
+};
+use futures_timer::Delay;
 
 /// CRC16-CCITT checksum implementation.
 pub mod crc;
@@ -79,192 +35,133 @@ const CTRL_C: u8 = 0x03;
 const INT_STR: &str = "<INTERRUPT>";
 const INT: &[u8] = INT_STR.as_bytes();
 
-/// U-Boot shell communication interface.
-///
-/// `UbootShell` provides methods to interact with U-Boot bootloader
-/// over a serial connection. It handles shell synchronization,
-/// command execution, and file transfers.
-///
-/// # Example
-///
-/// ```rust,no_run
-/// use uboot_shell::UbootShell;
-///
-/// // Assuming tx and rx are Read/Write implementations
-/// # fn example(tx: impl std::io::Write + Send + 'static, rx: impl std::io::Read + Send + 'static) {
-/// let mut shell = UbootShell::new(tx, rx).unwrap();
-/// let result = shell.cmd("printenv").unwrap();
-/// # }
-/// ```
+type Tx = Box<dyn AsyncWrite + Send + Unpin>;
+type Rx = Box<dyn AsyncRead + Send + Unpin>;
+
 pub struct UbootShell {
-    /// Transmit channel for sending data to U-Boot.
-    pub tx: Option<Box<dyn Write + Send>>,
-    /// Receive channel for reading data from U-Boot.
-    pub rx: Option<Box<dyn Read + Send>>,
+    /// Transmit stream for sending bytes to U-Boot.
+    pub tx: Option<Tx>,
+    /// Receive stream for reading bytes from U-Boot.
+    pub rx: Option<Rx>,
     /// Shell prompt prefix detected during initialization.
     perfix: String,
 }
 
 impl UbootShell {
-    /// Creates a new UbootShell instance and waits for U-Boot shell to be ready.
-    ///
-    /// This function will block until it successfully detects the U-Boot shell prompt.
-    /// It sends interrupt signals (Ctrl+C) to ensure the shell is in a clean state.
-    ///
-    /// # Arguments
-    ///
-    /// * `tx` - A writable stream for sending data to U-Boot
-    /// * `rx` - A readable stream for receiving data from U-Boot
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(UbootShell)` if the shell is successfully initialized,
-    /// or an `Err` if communication fails.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the serial I/O fails or the prompt cannot be detected
-    /// within the internal retry loop.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use uboot_shell::UbootShell;
-    ///
-    /// let port = serialport::new("/dev/ttyUSB0", 115200).open().unwrap();
-    /// let rx = port.try_clone().unwrap();
-    /// let mut uboot = UbootShell::new(port, rx).unwrap();
-    /// ```
-    pub fn new(tx: impl Write + Send + 'static, rx: impl Read + Send + 'static) -> Result<Self> {
-        let mut s = Self {
+    pub async fn new(
+        tx: impl AsyncWrite + Send + Unpin + 'static,
+        rx: impl AsyncRead + Send + Unpin + 'static,
+    ) -> Result<Self> {
+        let mut shell = Self {
             tx: Some(Box::new(tx)),
             rx: Some(Box::new(rx)),
-            perfix: "".to_string(),
+            perfix: String::new(),
         };
-        s.wait_for_shell()?;
-        debug!("shell ready, perfix: `{}`", s.perfix);
-        Ok(s)
+        shell.wait_for_shell().await?;
+        debug!("shell ready, perfix: `{}`", shell.perfix);
+        Ok(shell)
     }
 
-    fn rx(&mut self) -> &mut Box<dyn Read + Send> {
+    fn rx(&mut self) -> &mut Rx {
         self.rx.as_mut().unwrap()
     }
 
-    fn tx(&mut self) -> &mut Box<dyn Write + Send> {
+    fn tx(&mut self) -> &mut Tx {
         self.tx.as_mut().unwrap()
     }
 
-    fn wait_for_interrupt(&mut self) -> Result<Vec<u8>> {
-        let mut tx = self.tx.take().unwrap();
+    async fn wait_for_interrupt(&mut self) -> Result<Vec<u8>> {
+        let mut history = Vec::new();
+        let mut interrupt_line = Vec::new();
+        let interval = Duration::from_millis(20);
+        let mut last_interrupt = std::time::Instant::now() - interval;
 
-        let ok = Arc::new(AtomicBool::new(false));
-
-        let tx_handle = thread::spawn({
-            let ok = ok.clone();
-            move || {
-                while !ok.load(Ordering::Acquire) {
-                    let _ = tx.write_all(&[CTRL_C]);
-                    thread::sleep(Duration::from_millis(20));
-                }
-                tx
-            }
-        });
-        let mut history: Vec<u8> = Vec::new();
-        let mut interrupt_line: Vec<u8> = Vec::new();
         debug!("wait for interrupt");
         loop {
-            match self.read_byte() {
+            if last_interrupt.elapsed() >= interval {
+                self.tx().write_all(&[CTRL_C]).await?;
+                self.tx().flush().await?;
+                last_interrupt = std::time::Instant::now();
+            }
+
+            match self.read_byte_with_timeout(interval).await {
                 Ok(ch) => {
                     history.push(ch);
-
                     if history.last() == Some(&b'\n') {
                         let line = history.trim_ascii_end();
                         dbg!("{}", String::from_utf8_lossy(line));
-                        let it = line.ends_with(INT);
-                        if it {
+                        let interrupted = line.ends_with(INT);
+                        if interrupted {
                             interrupt_line.extend_from_slice(line);
                         }
                         history.clear();
-                        if it {
-                            ok.store(true, Ordering::Release);
+                        if interrupted {
                             break;
                         }
                     }
                 }
-
-                Err(ref e) if e.kind() == ErrorKind::TimedOut => {
-                    continue;
-                }
-                Err(e) => {
-                    return Err(e);
-                }
+                Err(err) if err.kind() == ErrorKind::TimedOut => {}
+                Err(err) => return Err(err),
             }
         }
-
-        self.tx = Some(tx_handle.join().unwrap());
 
         Ok(interrupt_line)
     }
 
-    fn clear_shell(&mut self) -> Result<()> {
-        let _ = self.read_to_end(&mut vec![]);
-        Ok(())
+    async fn clear_shell(&mut self) -> Result<()> {
+        loop {
+            match self
+                .read_byte_with_timeout(Duration::from_millis(300))
+                .await
+            {
+                Ok(_) => {}
+                Err(err) if err.kind() == ErrorKind::TimedOut => return Ok(()),
+                Err(err) => return Err(err),
+            }
+        }
     }
 
-    fn wait_for_shell(&mut self) -> Result<()> {
-        let mut line = self.wait_for_interrupt()?;
+    async fn wait_for_shell(&mut self) -> Result<()> {
+        let mut line = self.wait_for_interrupt().await?;
         debug!("got {}", String::from_utf8_lossy(&line));
-        line.resize(line.len() - INT.len(), 0);
+        line.resize(line.len().saturating_sub(INT.len()), 0);
         self.perfix = String::from_utf8_lossy(&line).to_string();
-        self.clear_shell()?;
+        self.clear_shell().await?;
         Ok(())
     }
 
-    fn read_byte(&mut self) -> Result<u8> {
+    async fn read_byte(&mut self) -> Result<u8> {
+        self.read_byte_with_timeout(Duration::from_secs(5)).await
+    }
+
+    async fn read_byte_with_timeout(&mut self, timeout_limit: Duration) -> Result<u8> {
         let mut buff = [0u8; 1];
-        let time_out = Duration::from_secs(5);
-        let start = Instant::now();
+        let start = std::time::Instant::now();
 
         loop {
-            match self.rx().read_exact(&mut buff) {
-                Ok(_) => return Ok(buff[0]),
-                Err(e) => {
-                    if e.kind() == ErrorKind::TimedOut {
-                        if start.elapsed() > time_out {
-                            return Err(std::io::Error::new(
-                                std::io::ErrorKind::TimedOut,
-                                "Timeout",
-                            ));
-                        }
-                    } else {
-                        return Err(e);
+            let read = self.rx().read_exact(&mut buff).fuse();
+            let delay = Delay::new(Duration::from_millis(200)).fuse();
+            pin_mut!(read, delay);
+
+            match select(read, delay).await {
+                Either::Left((Ok(_), _)) => return Ok(buff[0]),
+                Either::Left((Err(err), _)) => return Err(err),
+                Either::Right((_, _)) => {
+                    if start.elapsed() > timeout_limit {
+                        return Err(Error::new(ErrorKind::TimedOut, "Timeout"));
                     }
                 }
             }
         }
     }
 
-    /// Waits for a specific string to appear in the U-Boot output.
-    ///
-    /// Reads from the serial connection until the specified string is found.
-    ///
-    /// # Arguments
-    ///
-    /// * `val` - The string to wait for
-    ///
-    /// # Returns
-    ///
-    /// Returns the accumulated output up to and including the matched string.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the underlying read operation times out or fails.
-    pub fn wait_for_reply(&mut self, val: &str) -> Result<String> {
+    pub async fn wait_for_reply(&mut self, val: &str) -> Result<String> {
         let mut reply = Vec::new();
         let mut display = Vec::new();
         debug!("wait for `{}`", val);
+
         loop {
-            let byte = self.read_byte()?;
+            let byte = self.read_byte().await?;
             reply.push(byte);
             display.push(byte);
             if byte == b'\n' {
@@ -277,54 +174,42 @@ impl UbootShell {
                 break;
             }
         }
+
         Ok(String::from_utf8_lossy(&reply)
             .trim()
             .trim_end_matches(&self.perfix)
             .to_string())
     }
 
-    /// Sends a command to U-Boot without waiting for the response.
-    ///
-    /// This is useful for commands that don't produce output or when
-    /// you want to handle the response separately.
-    ///
-    /// # Arguments
-    ///
-    /// * `cmd` - The command string to send
-    ///
-    /// # Errors
-    ///
-    /// Returns any I/O error that occurs while writing to the serial stream.
-    pub fn cmd_without_reply(&mut self, cmd: &str) -> Result<()> {
-        self.tx().write_all(cmd.as_bytes())?;
-        self.tx().write_all("\n".as_bytes())?;
-        // self.tx().flush()?;
-        // self.wait_for_reply(cmd)?;
-        // debug!("cmd ok");
+    pub async fn cmd_without_reply(&mut self, cmd: &str) -> Result<()> {
+        self.tx().write_all(cmd.as_bytes()).await?;
+        self.tx().write_all(b"\n").await?;
+        self.tx().flush().await?;
         Ok(())
     }
 
-    fn _cmd(&mut self, cmd: &str) -> Result<String> {
-        let _ = self.read_to_end(&mut vec![]);
+    async fn _cmd(&mut self, cmd: &str) -> Result<String> {
+        self.clear_shell().await?;
         let ok_str = "cmd-ok";
         let cmd_with_id = format!("{cmd}&& echo {ok_str}");
-        self.cmd_without_reply(&cmd_with_id)?;
+        self.cmd_without_reply(&cmd_with_id).await?;
         let perfix = self.perfix.clone();
         let res = self
-            .wait_for_reply(&perfix)?
+            .wait_for_reply(&perfix)
+            .await?
             .trim_end()
             .trim_end_matches(self.perfix.as_str().trim())
             .trim_end()
             .to_string();
+
         if res.ends_with(ok_str) {
-            let res = res
+            Ok(res
                 .trim()
                 .trim_end_matches(ok_str)
                 .trim_end()
                 .trim_start_matches(&cmd_with_id)
                 .trim()
-                .to_string();
-            Ok(res)
+                .to_string())
         } else {
             Err(Error::other(format!(
                 "command `{cmd}` failed, response: {res}",
@@ -332,44 +217,16 @@ impl UbootShell {
         }
     }
 
-    /// Executes a command in U-Boot shell and returns the output.
-    ///
-    /// This method sends the command, waits for completion, and verifies
-    /// that the command executed successfully. It includes automatic retry
-    /// logic (up to 3 attempts) for improved reliability.
-    ///
-    /// # Arguments
-    ///
-    /// * `cmd` - The command string to execute
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(String)` with the command output on success,
-    /// or an `Err` if the command fails after all retries.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the command fails after retries or if serial I/O fails.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use uboot_shell::UbootShell;
-    /// # fn example(uboot: &mut UbootShell) {
-    /// let output = uboot.cmd("printenv bootargs").unwrap();
-    /// println!("bootargs: {}", output);
-    /// # }
-    /// ```
-    pub fn cmd(&mut self, cmd: &str) -> Result<String> {
+    pub async fn cmd(&mut self, cmd: &str) -> Result<String> {
         info!("cmd: {cmd}");
         let mut retry = 3;
         while retry > 0 {
-            match self._cmd(cmd) {
+            match self._cmd(cmd).await {
                 Ok(res) => return Ok(res),
-                Err(e) => {
-                    warn!("cmd `{}` failed: {}, retrying...", cmd, e);
+                Err(err) => {
+                    warn!("cmd `{}` failed: {}, retrying...", cmd, err);
                     retry -= 1;
-                    thread::sleep(Duration::from_millis(100));
+                    Delay::new(Duration::from_millis(100)).await;
                 }
             }
         }
@@ -378,92 +235,36 @@ impl UbootShell {
         )))
     }
 
-    /// Sets a U-Boot environment variable.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - The name of the environment variable
-    /// * `value` - The value to set
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use uboot_shell::UbootShell;
-    /// # fn example(uboot: &mut UbootShell) {
-    /// uboot.set_env("bootargs", "console=ttyS0,115200").unwrap();
-    /// # }
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns any error from the underlying command execution.
-    pub fn set_env(&mut self, name: impl Into<String>, value: impl Into<String>) -> Result<()> {
-        self.cmd(&format!("setenv {} {}", name.into(), value.into()))?;
+    pub async fn set_env(
+        &mut self,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Result<()> {
+        self.cmd(&format!("setenv {} {}", name.into(), value.into()))
+            .await?;
         Ok(())
     }
 
-    /// Gets the value of a U-Boot environment variable.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - The name of the environment variable
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(String)` with the variable value, or an `Err` if not found.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ErrorKind::NotFound` if the variable is not set or cannot be read.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use uboot_shell::UbootShell;
-    /// # fn example(uboot: &mut UbootShell) {
-    /// let bootargs = uboot.env("bootargs").unwrap();
-    /// # }
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns `ErrorKind::NotFound` if the variable is not set or cannot be read.
-    pub fn env(&mut self, name: impl Into<String>) -> Result<String> {
+    pub async fn env(&mut self, name: impl Into<String>) -> Result<String> {
         let name = name.into();
-        let s = self.cmd(&format!("echo ${}", name))?;
-        let sp = s
-            .split("\n")
-            .filter(|s| !s.trim().is_empty())
+        let s = self.cmd(&format!("echo ${name}")).await?;
+        let parts = s
+            .split('\n')
+            .filter(|line| !line.trim().is_empty())
             .collect::<Vec<_>>();
-        let s = sp
+        let value = parts
             .last()
             .ok_or(Error::new(
                 ErrorKind::NotFound,
-                format!("env {} not found", name),
+                format!("env {name} not found"),
             ))?
             .to_string();
-        Ok(s)
+        Ok(value)
     }
 
-    /// Gets a U-Boot environment variable as an integer.
-    ///
-    /// Supports both decimal and hexadecimal (0x prefix) formats.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - The name of the environment variable
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(usize)` with the parsed integer value,
-    /// or an `Err` if not found or not a valid number.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ErrorKind::InvalidData` if the value is not a valid integer.
-    pub fn env_int(&mut self, name: impl Into<String>) -> Result<usize> {
+    pub async fn env_int(&mut self, name: impl Into<String>) -> Result<usize> {
         let name = name.into();
-        let line = self.env(&name)?;
+        let line = self.env(&name).await?;
         debug!("env {name} = {line}");
 
         parse_int(&line).ok_or(Error::new(
@@ -472,69 +273,37 @@ impl UbootShell {
         ))
     }
 
-    /// Transfers a file to U-Boot memory using YMODEM protocol.
-    ///
-    /// Uses the U-Boot `loady` command to receive files via YMODEM protocol.
-    /// The file will be loaded to the specified memory address.
-    ///
-    /// # Arguments
-    ///
-    /// * `addr` - The memory address where the file will be loaded
-    /// * `file` - Path to the file to transfer
-    /// * `on_progress` - Callback function called with (bytes_sent, total_bytes)
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(String)` with the U-Boot response on success.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file cannot be opened, the path has a non-UTF-8
-    /// file name, or if the serial transfer fails.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use uboot_shell::UbootShell;
-    /// # fn example(uboot: &mut UbootShell) {
-    /// uboot.loady(0x80000000, "kernel.bin", |sent, total| {
-    ///     println!("Progress: {}/{} bytes", sent, total);
-    /// }).unwrap();
-    /// # }
-    /// ```
-    pub fn loady(
+    pub async fn loady(
         &mut self,
         addr: usize,
         file: impl Into<PathBuf>,
         on_progress: impl Fn(usize, usize),
     ) -> Result<String> {
-        self.cmd_without_reply(&format!("loady {:#x}", addr,))?;
-        let crc = self.wait_for_load_crc()?;
-        let mut p = ymodem::Ymodem::new(crc);
+        self.cmd_without_reply(&format!("loady {addr:#x}")).await?;
+        let crc = self.wait_for_load_crc().await?;
+        let mut protocol = ymodem::Ymodem::new(crc);
 
         let file = file.into();
         let name = file
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "file name must be valid UTF-8"))?;
+        let size = std::fs::metadata(&file)?.len() as usize;
+        let mut file = AllowStdIo::new(std::fs::File::open(&file)?);
 
-        let mut file = File::open(&file)?;
-
-        let size = file.metadata()?.len() as usize;
-
-        p.send(self, &mut file, name, size, |p| {
-            on_progress(p, size);
-        })?;
+        protocol
+            .send(self, &mut file, name, size, |sent| on_progress(sent, size))
+            .await?;
         let perfix = self.perfix.clone();
-        self.wait_for_reply(&perfix)
+        self.wait_for_reply(&perfix).await
     }
 
-    fn wait_for_load_crc(&mut self) -> Result<bool> {
+    async fn wait_for_load_crc(&mut self) -> Result<bool> {
         let mut reply = Vec::new();
         loop {
-            let byte = self.read_byte()?;
+            let byte = self.read_byte().await?;
             reply.push(byte);
-            print_raw(&[byte]);
+            print_raw(&[byte]).await?;
 
             if reply.ends_with(b"C") {
                 return Ok(true);
@@ -550,19 +319,31 @@ impl UbootShell {
     }
 }
 
-impl Read for UbootShell {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        self.rx().read(buf)
+impl AsyncRead for UbootShell {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<Result<usize>> {
+        let this = self.get_mut();
+        Pin::new(this.rx.as_mut().unwrap().as_mut()).poll_read(cx, buf)
     }
 }
 
-impl Write for UbootShell {
-    fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        self.tx().write(buf)
+impl AsyncWrite for UbootShell {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
+        let this = self.get_mut();
+        Pin::new(this.tx.as_mut().unwrap().as_mut()).poll_write(cx, buf)
     }
 
-    fn flush(&mut self) -> Result<()> {
-        self.tx().flush()
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+        let this = self.get_mut();
+        Pin::new(this.tx.as_mut().unwrap().as_mut()).poll_flush(cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+        let this = self.get_mut();
+        Pin::new(this.tx.as_mut().unwrap().as_mut()).poll_close(cx)
     }
 }
 
@@ -573,14 +354,22 @@ fn parse_int(line: &str) -> Option<usize> {
         line = &line[2..];
         radix = 16;
     }
-    u64::from_str_radix(line, radix).ok().map(|o| o as _)
+    u64::from_str_radix(line, radix)
+        .ok()
+        .map(|value| value as usize)
 }
 
-fn print_raw(buff: &[u8]) {
+async fn print_raw(buff: &[u8]) -> Result<()> {
     #[cfg(target_os = "windows")]
-    print_raw_win(buff);
+    {
+        print_raw_win(buff);
+        Ok(())
+    }
     #[cfg(not(target_os = "windows"))]
-    stdout().write_all(buff).unwrap();
+    {
+        let mut out = AllowStdIo::new(stdout());
+        out.write_all(buff).await
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -589,7 +378,6 @@ fn print_raw_win(buff: &[u8]) {
     static PRINT_BUFF: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
     let mut g = PRINT_BUFF.lock().unwrap();
-
     g.extend_from_slice(buff);
 
     if g.ends_with(b"\n") {

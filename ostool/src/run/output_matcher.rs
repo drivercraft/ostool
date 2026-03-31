@@ -147,16 +147,4 @@ impl ByteStreamMatcher {
         self.matched()
             .is_some_and(|matched| Instant::now() >= matched.deadline)
     }
-
-    pub(crate) fn final_result(&self) -> Option<anyhow::Result<()>> {
-        let matched = self.matched()?;
-        match matched.kind {
-            StreamMatchKind::Success => Some(Ok(())),
-            StreamMatchKind::Fail => Some(Err(anyhow!(
-                "Detected fail pattern '{}' in output: {}",
-                matched.matched_regex,
-                matched.matched_text.trim_end()
-            ))),
-        }
-    }
 }
