@@ -1,0 +1,39 @@
+[package]
+authors = ["周睿 <zrufo747@outlook.com>"]
+categories = ["command-line-utilities", "embedded", "development-tools"]
+description = "Server for managing development boards, serial sessions, and TFTP artifacts"
+edition = "2024"
+keywords = ["embedded", "u-boot", "tftp", "serial", "server"]
+license = "MIT OR Apache-2.0"
+name = "ostool-server"
+readme = "../README.md"
+repository = "https://github.com/drivercraft/ostool"
+version = "0.1.0"
+
+[[bin]]
+name = "ostoold"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
+chrono = { version = "0.4.44", features = ["serde"] }
+clap = { workspace = true, features = ["derive"] }
+env_logger = { workspace = true }
+futures-util = "0.3"
+log = { workspace = true }
+network-interface = "2"
+schemars = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serialport = "4.6"
+tftpd = "0.5"
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+toml = { workspace = true }
+tower-http = { version = "0.6", features = ["fs"] }
+uuid = { version = "1", features = ["serde", "v4"] }
+
+[dev-dependencies]
+tempfile = "3"
