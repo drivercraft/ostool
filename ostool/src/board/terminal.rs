@@ -10,6 +10,7 @@ use crate::sterm::{AsyncTerminal, TerminalConfig};
 struct ServerControlMessage {
     #[serde(rename = "type")]
     kind: String,
+    message: Option<String>,
 }
 
 pub async fn run_serial_terminal(ws_url: reqwest::Url) -> anyhow::Result<()> {
@@ -31,8 +32,19 @@ pub async fn run_serial_terminal(ws_url: reqwest::Url) -> anyhow::Result<()> {
                 }
                 Message::Text(text) => {
                     if let Ok(control) = serde_json::from_str::<ServerControlMessage>(&text) {
-                        if matches!(control.kind.as_str(), "opened" | "closed") {
-                            continue;
+                        match control.kind.as_str() {
+                            "opened" | "closed" => continue,
+                            "error" => {
+                                let message = control
+                                    .message
+                                    .unwrap_or_else(|| "serial websocket error".to_string());
+                                let formatted = format!("\n[ostool-server] {message}\n");
+                                if inbound_tx.send(formatted.into_bytes()).is_err() {
+                                    break;
+                                }
+                                break;
+                            }
+                            _ => {}
                         }
                     }
                     if inbound_tx.send(text.bytes().collect()).is_err() {
@@ -93,5 +105,13 @@ mod tests {
     fn parse_server_control_message() {
         let opened: ServerControlMessage = serde_json::from_str(r#"{"type":"opened"}"#).unwrap();
         assert_eq!(opened.kind, "opened");
+    }
+
+    #[test]
+    fn parse_server_error_control_message() {
+        let error: ServerControlMessage =
+            serde_json::from_str(r#"{"type":"error","message":"power failed"}"#).unwrap();
+        assert_eq!(error.kind, "error");
+        assert_eq!(error.message.as_deref(), Some("power failed"));
     }
 }

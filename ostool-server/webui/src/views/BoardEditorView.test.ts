@@ -70,13 +70,20 @@ function makeDocument(id = "demo-board"): BoardEditorDocument {
       serial_enabled: true,
       serial_port: "/dev/ttyUSB0",
       serial_baud_rate: 115200,
+      power_management_enabled: true,
+      power_management_kind: "custom",
+      power_management_custom: {
+        power_on_cmd: "echo on",
+        power_off_cmd: "echo off",
+      },
+      power_management_zhongsheng_relay: {
+        serial_port: "/dev/ttyUSB1",
+      },
       boot_kind: "uboot",
       uboot: {
         use_tftp: true,
         kernel_load_addr: "",
         fit_load_addr: "",
-        board_reset_cmd: "",
-        board_power_off_cmd: "",
         success_regex_text: "",
         fail_regex_text: "",
         uboot_cmd_text: "",

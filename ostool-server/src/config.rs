@@ -330,6 +330,7 @@ pub struct BoardConfig {
     #[serde(default)]
     pub tags: Vec<String>,
     pub serial: Option<SerialConfig>,
+    pub power_management: Option<PowerManagementConfig>,
     pub boot: BootConfig,
     pub notes: Option<String>,
     #[serde(default)]
@@ -340,6 +341,24 @@ pub struct BoardConfig {
 pub struct SerialConfig {
     pub port: String,
     pub baud_rate: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PowerManagementConfig {
+    Custom(CustomPowerManagement),
+    ZhongshengRelay(ZhongshengRelayPowerManagement),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CustomPowerManagement {
+    pub power_on_cmd: String,
+    pub power_off_cmd: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ZhongshengRelayPowerManagement {
+    pub serial_port: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -365,8 +384,6 @@ pub struct UbootProfile {
     pub use_tftp: bool,
     pub kernel_load_addr: Option<String>,
     pub fit_load_addr: Option<String>,
-    pub board_reset_cmd: Option<String>,
-    pub board_power_off_cmd: Option<String>,
     #[serde(default)]
     pub success_regex: Vec<String>,
     #[serde(default)]
@@ -415,6 +432,30 @@ interface = "eth0"
         let message = err.to_string();
         assert!(
             message.contains("unknown field") || message.contains("net"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn board_config_rejects_legacy_power_command_fields() {
+        let config = r#"
+id = "demo"
+name = "demo"
+board_type = "demo"
+tags = []
+disabled = false
+
+[boot]
+kind = "uboot"
+use_tftp = false
+board_reset_cmd = "reboot"
+board_power_off_cmd = "shutdown"
+"#;
+
+        let err = toml::from_str::<BoardConfig>(config).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("unknown field") || message.contains("board_reset_cmd"),
             "unexpected error: {message}"
         );
     }

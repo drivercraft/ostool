@@ -4,7 +4,10 @@ use serde_json::{Value, json};
 
 use crate::{
     api::{error::ApiError, models::SerialPortSummary},
-    config::{BoardConfig, BootConfig, PxeProfile, SerialConfig, UbootProfile},
+    config::{
+        BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, PxeProfile,
+        SerialConfig, UbootProfile, ZhongshengRelayPowerManagement,
+    },
 };
 
 const DEFAULT_SERIAL_BAUD_RATE: u32 = 115_200;
@@ -17,6 +20,28 @@ pub enum BoardBootKind {
     Pxe,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PowerManagementKind {
+    #[default]
+    Custom,
+    ZhongshengRelay,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
+pub struct BoardEditorCustomPowerManagementData {
+    #[serde(default)]
+    pub power_on_cmd: String,
+    #[serde(default)]
+    pub power_off_cmd: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
+pub struct BoardEditorZhongshengRelayPowerManagementData {
+    #[serde(default)]
+    pub serial_port: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
 pub struct BoardEditorUbootData {
     #[serde(default)]
@@ -25,10 +50,6 @@ pub struct BoardEditorUbootData {
     pub kernel_load_addr: String,
     #[serde(default)]
     pub fit_load_addr: String,
-    #[serde(default)]
-    pub board_reset_cmd: String,
-    #[serde(default)]
-    pub board_power_off_cmd: String,
     #[serde(default)]
     pub success_regex_text: String,
     #[serde(default)]
@@ -66,6 +87,14 @@ pub struct BoardEditorData {
     #[serde(default = "default_serial_baud_rate")]
     pub serial_baud_rate: u32,
     #[serde(default)]
+    pub power_management_enabled: bool,
+    #[serde(default)]
+    pub power_management_kind: PowerManagementKind,
+    #[serde(default)]
+    pub power_management_custom: BoardEditorCustomPowerManagementData,
+    #[serde(default)]
+    pub power_management_zhongsheng_relay: BoardEditorZhongshengRelayPowerManagementData,
+    #[serde(default)]
     pub boot_kind: BoardBootKind,
     #[serde(default)]
     pub uboot: BoardEditorUbootData,
@@ -85,6 +114,11 @@ impl Default for BoardEditorData {
             serial_enabled: false,
             serial_port: String::new(),
             serial_baud_rate: default_serial_baud_rate(),
+            power_management_enabled: false,
+            power_management_kind: PowerManagementKind::default(),
+            power_management_custom: BoardEditorCustomPowerManagementData::default(),
+            power_management_zhongsheng_relay:
+                BoardEditorZhongshengRelayPowerManagementData::default(),
             boot_kind: BoardBootKind::default(),
             uboot: BoardEditorUbootData::default(),
             pxe: BoardEditorPxeData::default(),
@@ -118,10 +152,34 @@ impl BoardEditorData {
                 .as_ref()
                 .map(|serial| serial.baud_rate)
                 .unwrap_or(DEFAULT_SERIAL_BAUD_RATE),
+            power_management_enabled: board.power_management.is_some(),
+            power_management_kind: PowerManagementKind::default(),
+            power_management_custom: BoardEditorCustomPowerManagementData::default(),
+            power_management_zhongsheng_relay:
+                BoardEditorZhongshengRelayPowerManagementData::default(),
             boot_kind: BoardBootKind::default(),
             uboot: BoardEditorUbootData::default(),
             pxe: BoardEditorPxeData::default(),
         };
+
+        if let Some(power_management) = &board.power_management {
+            match power_management {
+                PowerManagementConfig::Custom(custom) => {
+                    data.power_management_kind = PowerManagementKind::Custom;
+                    data.power_management_custom = BoardEditorCustomPowerManagementData {
+                        power_on_cmd: custom.power_on_cmd.clone(),
+                        power_off_cmd: custom.power_off_cmd.clone(),
+                    };
+                }
+                PowerManagementConfig::ZhongshengRelay(relay) => {
+                    data.power_management_kind = PowerManagementKind::ZhongshengRelay;
+                    data.power_management_zhongsheng_relay =
+                        BoardEditorZhongshengRelayPowerManagementData {
+                            serial_port: relay.serial_port.clone(),
+                        };
+                }
+            }
+        }
 
         match &board.boot {
             BootConfig::Uboot(profile) => {
@@ -130,8 +188,6 @@ impl BoardEditorData {
                     use_tftp: profile.use_tftp,
                     kernel_load_addr: profile.kernel_load_addr.clone().unwrap_or_default(),
                     fit_load_addr: profile.fit_load_addr.clone().unwrap_or_default(),
-                    board_reset_cmd: profile.board_reset_cmd.clone().unwrap_or_default(),
-                    board_power_off_cmd: profile.board_power_off_cmd.clone().unwrap_or_default(),
                     success_regex_text: join_lines(&profile.success_regex),
                     fail_regex_text: join_lines(&profile.fail_regex),
                     uboot_cmd_text: join_lines(profile.uboot_cmd.as_deref().unwrap_or(&[])),
@@ -157,13 +213,39 @@ impl BoardEditorData {
             baud_rate: self.serial_baud_rate,
         });
 
+        let power_management =
+            self.power_management_enabled
+                .then(|| match self.power_management_kind {
+                    PowerManagementKind::Custom => {
+                        PowerManagementConfig::Custom(CustomPowerManagement {
+                            power_on_cmd: self
+                                .power_management_custom
+                                .power_on_cmd
+                                .trim()
+                                .to_string(),
+                            power_off_cmd: self
+                                .power_management_custom
+                                .power_off_cmd
+                                .trim()
+                                .to_string(),
+                        })
+                    }
+                    PowerManagementKind::ZhongshengRelay => {
+                        PowerManagementConfig::ZhongshengRelay(ZhongshengRelayPowerManagement {
+                            serial_port: self
+                                .power_management_zhongsheng_relay
+                                .serial_port
+                                .trim()
+                                .to_string(),
+                        })
+                    }
+                });
+
         let boot = match self.boot_kind {
             BoardBootKind::Uboot => BootConfig::Uboot(UbootProfile {
                 use_tftp: self.uboot.use_tftp,
                 kernel_load_addr: empty_to_none(&self.uboot.kernel_load_addr),
                 fit_load_addr: empty_to_none(&self.uboot.fit_load_addr),
-                board_reset_cmd: empty_to_none(&self.uboot.board_reset_cmd),
-                board_power_off_cmd: empty_to_none(&self.uboot.board_power_off_cmd),
                 success_regex: parse_lines(&self.uboot.success_regex_text),
                 fail_regex: parse_lines(&self.uboot.fail_regex_text),
                 uboot_cmd: parse_optional_lines(&self.uboot.uboot_cmd_text),
@@ -182,6 +264,7 @@ impl BoardEditorData {
             board_type: self.board_type.trim().to_string(),
             tags: parse_tags(&self.tags_text),
             serial,
+            power_management,
             boot,
             notes: empty_to_none(&self.notes),
             disabled: self.disabled,
@@ -213,6 +296,34 @@ impl BoardEditorData {
                 "serial_baud_rate must be > 0 when serial is enabled",
             ));
         }
+        if self.power_management_enabled {
+            match self.power_management_kind {
+                PowerManagementKind::Custom => {
+                    if self.power_management_custom.power_on_cmd.trim().is_empty() {
+                        return Err(ApiError::bad_request(
+                            "power_management_custom.power_on_cmd must not be empty",
+                        ));
+                    }
+                    if self.power_management_custom.power_off_cmd.trim().is_empty() {
+                        return Err(ApiError::bad_request(
+                            "power_management_custom.power_off_cmd must not be empty",
+                        ));
+                    }
+                }
+                PowerManagementKind::ZhongshengRelay => {
+                    if self
+                        .power_management_zhongsheng_relay
+                        .serial_port
+                        .trim()
+                        .is_empty()
+                    {
+                        return Err(ApiError::bad_request(
+                            "power_management_zhongsheng_relay.serial_port must not be empty",
+                        ));
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -220,17 +331,23 @@ impl BoardEditorData {
 pub fn build_board_editor_document(
     data: BoardEditorData,
     serial_ports: &[SerialPortSummary],
-    current_serial_port: Option<&str>,
+    current_board_serial_port: Option<&str>,
+    current_power_management_serial_port: Option<&str>,
 ) -> BoardEditorDocument {
     BoardEditorDocument {
-        schema: build_board_editor_schema(serial_ports, current_serial_port),
+        schema: build_board_editor_schema(
+            serial_ports,
+            current_board_serial_port,
+            current_power_management_serial_port,
+        ),
         data,
     }
 }
 
 pub fn build_board_editor_schema(
     serial_ports: &[SerialPortSummary],
-    current_serial_port: Option<&str>,
+    current_board_serial_port: Option<&str>,
+    current_power_management_serial_port: Option<&str>,
 ) -> Schema {
     let mut schema = schema_for!(BoardEditorData).to_value();
 
@@ -276,6 +393,36 @@ pub fn build_board_editor_schema(
     );
     set_property_value(
         &mut schema,
+        &["properties", "power_management_enabled"],
+        json!({ "default": false }),
+    );
+    set_property_value(
+        &mut schema,
+        &["properties", "power_management_kind"],
+        json!({ "default": "custom" }),
+    );
+    set_property_value(
+        &mut schema,
+        &[
+            "properties",
+            "power_management_custom",
+            "properties",
+            "power_on_cmd",
+        ],
+        json!({ "default": "" }),
+    );
+    set_property_value(
+        &mut schema,
+        &[
+            "properties",
+            "power_management_custom",
+            "properties",
+            "power_off_cmd",
+        ],
+        json!({ "default": "" }),
+    );
+    set_property_value(
+        &mut schema,
         &["properties", "boot_kind"],
         json!({ "default": "uboot" }),
     );
@@ -300,21 +447,42 @@ pub fn build_board_editor_schema(
         json!({ "default": "" }),
     );
 
-    let serial_options = collect_serial_options(serial_ports, current_serial_port);
-    if !serial_options.is_empty() {
+    let board_serial_options = collect_serial_options(serial_ports, current_board_serial_port);
+    if !board_serial_options.is_empty() {
         set_property_value(
             &mut schema,
             &["properties", "serial_port"],
             json!({
-                "oneOf": serial_options
-                    .into_iter()
-                    .map(|(value, title)| json!({ "const": value, "title": title }))
-                    .collect::<Vec<_>>(),
+                "oneOf": serial_options_to_one_of(board_serial_options),
+            }),
+        );
+    }
+
+    let relay_serial_options =
+        collect_serial_options(serial_ports, current_power_management_serial_port);
+    if !relay_serial_options.is_empty() {
+        set_property_value(
+            &mut schema,
+            &[
+                "properties",
+                "power_management_zhongsheng_relay",
+                "properties",
+                "serial_port",
+            ],
+            json!({
+                "oneOf": serial_options_to_one_of(relay_serial_options),
             }),
         );
     }
 
     Schema::try_from(schema).expect("generated board editor schema must be valid")
+}
+
+fn serial_options_to_one_of(options: Vec<(String, String)>) -> Vec<Value> {
+    options
+        .into_iter()
+        .map(|(value, title)| json!({ "const": value, "title": title }))
+        .collect()
 }
 
 fn set_property_value(schema: &mut Value, path: &[&str], patch: Value) {
@@ -444,14 +612,17 @@ fn join_lines(lines: &[String]) -> String {
 mod tests {
     use serde_json::Value;
 
-    use super::{BoardBootKind, BoardEditorData, BoardEditorUbootData, build_board_editor_schema};
+    use super::{BoardBootKind, BoardEditorData, PowerManagementKind, build_board_editor_schema};
     use crate::{
         api::models::SerialPortSummary,
-        config::{BoardConfig, BootConfig, SerialConfig, UbootProfile},
+        config::{
+            BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, SerialConfig,
+            UbootProfile, ZhongshengRelayPowerManagement,
+        },
     };
 
     #[test]
-    fn board_editor_round_trip_preserves_serial_and_multiline_fields() {
+    fn board_editor_round_trip_preserves_custom_power_and_multiline_fields() {
         let board = BoardConfig {
             id: "demo-board".into(),
             name: "Demo Board".into(),
@@ -461,12 +632,14 @@ mod tests {
                 port: "/dev/ttyUSB0".into(),
                 baud_rate: 1_500_000,
             }),
+            power_management: Some(PowerManagementConfig::Custom(CustomPowerManagement {
+                power_on_cmd: "relay on".into(),
+                power_off_cmd: "relay off".into(),
+            })),
             boot: BootConfig::Uboot(UbootProfile {
                 use_tftp: true,
                 kernel_load_addr: Some("0x80200000".into()),
                 fit_load_addr: None,
-                board_reset_cmd: Some("reboot".into()),
-                board_power_off_cmd: None,
                 success_regex: vec!["booted".into(), "login:".into()],
                 fail_regex: vec!["panic".into()],
                 uboot_cmd: Some(vec!["setenv foo bar".into(), "bootm".into()]),
@@ -483,6 +656,9 @@ mod tests {
         assert!(data.serial_enabled);
         assert_eq!(data.serial_port, "/dev/ttyUSB0");
         assert_eq!(data.serial_baud_rate, 1_500_000);
+        assert!(data.power_management_enabled);
+        assert_eq!(data.power_management_kind, PowerManagementKind::Custom);
+        assert_eq!(data.power_management_custom.power_on_cmd, "relay on");
         assert_eq!(data.boot_kind, BoardBootKind::Uboot);
         assert_eq!(data.uboot.success_regex_text, "booted\nlogin:");
         assert_eq!(data.uboot.uboot_cmd_text, "setenv foo bar\nbootm");
@@ -494,6 +670,13 @@ mod tests {
             round_trip.serial.as_ref().map(|item| item.port.as_str()),
             Some("/dev/ttyUSB0")
         );
+        match round_trip.power_management {
+            Some(PowerManagementConfig::Custom(custom)) => {
+                assert_eq!(custom.power_on_cmd, "relay on");
+                assert_eq!(custom.power_off_cmd, "relay off");
+            }
+            _ => panic!("expected custom power management"),
+        }
 
         let BootConfig::Uboot(profile) = round_trip.boot else {
             panic!("expected uboot profile");
@@ -507,19 +690,56 @@ mod tests {
     }
 
     #[test]
+    fn board_editor_round_trip_preserves_relay_power_management() {
+        let board = BoardConfig {
+            id: "relay-board".into(),
+            name: "Relay Board".into(),
+            board_type: "phytium".into(),
+            tags: vec![],
+            serial: None,
+            power_management: Some(PowerManagementConfig::ZhongshengRelay(
+                ZhongshengRelayPowerManagement {
+                    serial_port: "/dev/ttyUSB9".into(),
+                },
+            )),
+            boot: BootConfig::Uboot(UbootProfile::default()),
+            notes: None,
+            disabled: false,
+        };
+
+        let data = BoardEditorData::from_board_config(&board);
+        assert!(data.power_management_enabled);
+        assert_eq!(
+            data.power_management_kind,
+            PowerManagementKind::ZhongshengRelay
+        );
+        assert_eq!(
+            data.power_management_zhongsheng_relay.serial_port,
+            "/dev/ttyUSB9"
+        );
+
+        let round_trip = data.to_board_config();
+        match round_trip.power_management {
+            Some(PowerManagementConfig::ZhongshengRelay(relay)) => {
+                assert_eq!(relay.serial_port, "/dev/ttyUSB9");
+            }
+            _ => panic!("expected relay power management"),
+        }
+    }
+
+    #[test]
     fn empty_text_fields_become_none_and_serial_can_be_disabled() {
         let mut data = BoardEditorData {
             id: "demo-board".into(),
             name: "Demo Board".into(),
             board_type: "rk3568".into(),
             serial_enabled: false,
+            power_management_enabled: false,
             boot_kind: BoardBootKind::Uboot,
-            uboot: BoardEditorUbootData {
+            uboot: super::BoardEditorUbootData {
                 use_tftp: false,
                 kernel_load_addr: " ".into(),
                 fit_load_addr: String::new(),
-                board_reset_cmd: String::new(),
-                board_power_off_cmd: String::new(),
                 success_regex_text: String::new(),
                 fail_regex_text: "panic\n".into(),
                 uboot_cmd_text: "\n".into(),
@@ -535,6 +755,7 @@ mod tests {
         let board = data.to_board_config();
         assert!(board.serial.is_none());
         assert!(board.notes.is_none());
+        assert!(board.power_management.is_none());
 
         let BootConfig::Uboot(profile) = board.boot else {
             panic!("expected uboot profile");
@@ -546,7 +767,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_includes_current_serial_port_when_not_detected() {
+    fn schema_includes_current_relay_serial_port_when_not_detected() {
         let schema = build_board_editor_schema(
             &[SerialPortSummary {
                 port_name: "/dev/ttyUSB1".into(),
@@ -559,15 +780,28 @@ mod tests {
                 serial_number: None,
             }],
             Some("/dev/ttyUSB9"),
+            Some("/dev/ttyUSB7"),
         );
 
-        let one_of = schema
+        let board_serial_options = schema
             .as_value()
             .pointer("/properties/serial_port/oneOf")
             .and_then(Value::as_array)
             .expect("serial_port oneOf");
+        assert_eq!(board_serial_options[0]["const"], "/dev/ttyUSB9");
 
-        assert_eq!(one_of[0]["const"], "/dev/ttyUSB9");
-        assert_eq!(one_of[0]["title"], "/dev/ttyUSB9 (当前配置，未检测到)");
+        let relay_serial_options = schema
+            .as_value()
+            .pointer(
+                "/$defs/BoardEditorZhongshengRelayPowerManagementData/properties/serial_port/oneOf",
+            )
+            .and_then(Value::as_array)
+            .expect("relay serial_port oneOf");
+
+        assert_eq!(relay_serial_options[0]["const"], "/dev/ttyUSB7");
+        assert_eq!(
+            relay_serial_options[0]["title"],
+            "/dev/ttyUSB7 (当前配置，未检测到)"
+        );
     }
 }

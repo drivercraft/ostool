@@ -100,6 +100,7 @@ mod tests {
             board_type: "rk3568".into(),
             tags: vec!["usb".into()],
             serial: None,
+            power_management: None,
             boot: BootConfig::Pxe(PxeProfile::default()),
             notes: None,
             disabled: false,

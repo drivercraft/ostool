@@ -56,12 +56,19 @@ export interface SerialConfig {
   baud_rate: number;
 }
 
+export interface BoardEditorCustomPowerManagementData {
+  power_on_cmd: string;
+  power_off_cmd: string;
+}
+
+export interface BoardEditorZhongshengRelayPowerManagementData {
+  serial_port: string;
+}
+
 export interface BoardEditorUbootData {
   use_tftp: boolean;
   kernel_load_addr: string;
   fit_load_addr: string;
-  board_reset_cmd: string;
-  board_power_off_cmd: string;
   success_regex_text: string;
   fail_regex_text: string;
   uboot_cmd_text: string;
@@ -84,6 +91,10 @@ export interface BoardEditorData {
   serial_enabled: boolean;
   serial_port: string;
   serial_baud_rate: number;
+  power_management_enabled: boolean;
+  power_management_kind: "custom" | "zhongsheng_relay";
+  power_management_custom: BoardEditorCustomPowerManagementData;
+  power_management_zhongsheng_relay: BoardEditorZhongshengRelayPowerManagementData;
   boot_kind: "uboot" | "pxe";
   uboot: BoardEditorUbootData;
   pxe: BoardEditorPxeData;
@@ -102,13 +113,24 @@ export interface NetworkInterfaceSummary {
   loopback: boolean;
 }
 
+export interface CustomPowerManagement {
+  kind: "custom";
+  power_on_cmd: string;
+  power_off_cmd: string;
+}
+
+export interface ZhongshengRelayPowerManagement {
+  kind: "zhongsheng_relay";
+  serial_port: string;
+}
+
+export type PowerManagementConfig = CustomPowerManagement | ZhongshengRelayPowerManagement;
+
 export interface UbootProfile {
   kind: "uboot";
   use_tftp: boolean;
   kernel_load_addr: string | null;
   fit_load_addr: string | null;
-  board_reset_cmd: string | null;
-  board_power_off_cmd: string | null;
   success_regex: string[];
   fail_regex: string[];
   uboot_cmd: string[] | null;
@@ -130,6 +152,7 @@ export interface BoardConfig {
   board_type: string;
   tags: string[];
   serial: SerialConfig | null;
+  power_management: PowerManagementConfig | null;
   boot: BootConfig;
   notes: string | null;
   disabled: boolean;

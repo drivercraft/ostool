@@ -87,6 +87,82 @@ export const boardEditorUiSchema = {
     },
     {
       type: "Group",
+      label: "电源管理",
+      elements: [
+        {
+          type: "Control",
+          scope: "#/properties/power_management_enabled",
+          label: "启用电源管理",
+        },
+        {
+          type: "Control",
+          scope: "#/properties/power_management_kind",
+          label: "电源管理类型",
+          rule: {
+            effect: RuleEffect.SHOW,
+            condition: {
+              scope: "#/properties/power_management_enabled",
+              schema: { const: true },
+            },
+          },
+        },
+        {
+          type: "Group",
+          label: "Custom 电源管理",
+          rule: {
+            effect: RuleEffect.SHOW,
+            condition: {
+              scope: "#",
+              schema: {
+                properties: {
+                  power_management_enabled: { const: true },
+                  power_management_kind: { const: "custom" },
+                },
+                required: ["power_management_enabled", "power_management_kind"],
+              },
+            },
+          },
+          elements: [
+            {
+              type: "Control",
+              scope: "#/properties/power_management_custom/properties/power_on_cmd",
+              label: "开机命令",
+            },
+            {
+              type: "Control",
+              scope: "#/properties/power_management_custom/properties/power_off_cmd",
+              label: "关机命令",
+            },
+          ],
+        },
+        {
+          type: "Group",
+          label: "中盛继电模块",
+          rule: {
+            effect: RuleEffect.SHOW,
+            condition: {
+              scope: "#",
+              schema: {
+                properties: {
+                  power_management_enabled: { const: true },
+                  power_management_kind: { const: "zhongsheng_relay" },
+                },
+                required: ["power_management_enabled", "power_management_kind"],
+              },
+            },
+          },
+          elements: [
+            {
+              type: "Control",
+              scope: "#/properties/power_management_zhongsheng_relay/properties/serial_port",
+              label: "可用串口设备",
+            },
+          ],
+        },
+      ],
+    },
+    {
+      type: "Group",
       label: "启动方式",
       elements: [
         {
@@ -134,21 +210,6 @@ export const boardEditorUiSchema = {
               type: "Control",
               scope: "#/properties/uboot/properties/kernel_load_addr",
               label: "内核加载地址",
-            },
-          ],
-        },
-        {
-          type: "HorizontalLayout",
-          elements: [
-            {
-              type: "Control",
-              scope: "#/properties/uboot/properties/board_reset_cmd",
-              label: "板子复位命令",
-            },
-            {
-              type: "Control",
-              scope: "#/properties/uboot/properties/board_power_off_cmd",
-              label: "板子关机命令",
             },
           ],
         },

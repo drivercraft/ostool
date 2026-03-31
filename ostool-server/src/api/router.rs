@@ -23,8 +23,8 @@ use crate::{
             TftpSessionResponse, UpdateServerConfigRequest,
         },
     },
-    config::{BoardConfig, BootConfig, ServerConfig, TftpConfig},
-    process::run_shell_command,
+    config::{BoardConfig, BootConfig, PowerManagementConfig, ServerConfig, TftpConfig},
+    power::{PowerAction, PowerActionError, execute_power_action_for_board},
     serial::{
         discovery::list_serial_ports as discover_serial_ports,
         network::{
@@ -98,8 +98,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/v1/sessions/{session_id}/serial/ws", get(serial_ws))
         .route(
-            "/api/v1/sessions/{session_id}/board/reset",
-            post(reset_board),
+            "/api/v1/sessions/{session_id}/board/power-on",
+            post(power_on_board),
         )
         .route(
             "/api/v1/sessions/{session_id}/board/power-off",
@@ -206,6 +206,7 @@ async fn get_board(
 async fn get_new_board_editor() -> Result<axum::Json<BoardEditorDocument>, ApiError> {
     Ok(axum::Json(board_editor_document_for_data(
         BoardEditorData::default(),
+        None,
         None,
     )))
 }
@@ -605,7 +606,7 @@ async fn serial_ws(
         .session_board(&session_id)
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
-    let Some(serial) = board.serial.clone() else {
+    let Some(_serial) = board.serial.clone() else {
         return Err(ApiError::conflict("board has no serial configuration"));
     };
 
@@ -616,21 +617,21 @@ async fn serial_ws(
         }
     }
 
-    Ok(ws.on_upgrade(move |socket| run_serial_ws(socket, state, session_id, serial)))
+    Ok(ws.on_upgrade(move |socket| run_serial_ws(socket, state, session_id, board)))
 }
 
-async fn reset_board(
+async fn power_on_board(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<ActionResponse>, ApiError> {
-    run_board_command(&state, &session_id, true).await
+    run_board_power_action(&state, &session_id, true).await
 }
 
 async fn power_off_board(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<ActionResponse>, ApiError> {
-    run_board_command(&state, &session_id, false).await
+    run_board_power_action(&state, &session_id, false).await
 }
 
 async fn list_session_files(
@@ -768,31 +769,29 @@ async fn file_response_for_board(
     Ok(FileResponse::from_file(file, tftp_url))
 }
 
-async fn run_board_command(
+async fn run_board_power_action(
     state: &AppState,
     session_id: &str,
-    reset: bool,
+    power_on: bool,
 ) -> Result<axum::Json<ActionResponse>, ApiError> {
     let board = state
         .session_board(session_id)
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
-    let BootConfig::Uboot(profile) = &board.boot else {
-        return Err(ApiError::bad_request("board boot mode is not U-Boot"));
-    };
-    let command = if reset {
-        profile.board_reset_cmd.as_deref()
-    } else {
-        profile.board_power_off_cmd.as_deref()
-    }
-    .filter(|cmd| !cmd.trim().is_empty())
-    .ok_or_else(|| ApiError::bad_request("requested board action is not configured"))?;
 
-    run_shell_command(command).map_err(ApiError::from)?;
-    Ok(axum::Json(ActionResponse {
-        ok: true,
-        message: format!("executed `{command}`"),
-    }))
+    let action = if power_on {
+        PowerAction::On
+    } else {
+        PowerAction::Off
+    };
+    let message = execute_power_action_for_board(&board, action).map_err(|err| match err {
+        PowerActionError::NotConfigured | PowerActionError::InvalidConfig(_) => {
+            ApiError::bad_request(err.to_string())
+        }
+        PowerActionError::Execution(err) => ApiError::from(err),
+    })?;
+
+    Ok(axum::Json(ActionResponse { ok: true, message }))
 }
 
 fn parse_slot(raw: &str) -> Result<FileSlot, ApiError> {
@@ -804,12 +803,23 @@ fn board_editor_document_for_board(board: &BoardConfig) -> BoardEditorDocument {
     board_editor_document_for_data(
         BoardEditorData::from_board_config(board),
         board.serial.as_ref().map(|serial| serial.port.as_str()),
+        board
+            .power_management
+            .as_ref()
+            .and_then(|power_management| {
+                if let PowerManagementConfig::ZhongshengRelay(relay) = power_management {
+                    Some(relay.serial_port.as_str())
+                } else {
+                    None
+                }
+            }),
     )
 }
 
 fn board_editor_document_for_data(
     data: BoardEditorData,
-    current_serial_port: Option<&str>,
+    current_board_serial_port: Option<&str>,
+    current_power_management_serial_port: Option<&str>,
 ) -> BoardEditorDocument {
     let serial_ports = match discover_serial_ports() {
         Ok(serial_ports) => serial_ports,
@@ -818,7 +828,12 @@ fn board_editor_document_for_data(
             Vec::new()
         }
     };
-    build_board_editor_document(data, &serial_ports, current_serial_port)
+    build_board_editor_document(
+        data,
+        &serial_ports,
+        current_board_serial_port,
+        current_power_management_serial_port,
+    )
 }
 
 fn leased_board_ids<'a>(
@@ -933,6 +948,10 @@ async fn resolved_board_tftp_network(
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::{
+        fs,
+        sync::{Mutex, OnceLock},
+    };
 
     use axum::{
         Router,
@@ -947,7 +966,10 @@ mod tests {
     use crate::{
         api::board_editor::{BoardEditorData, BoardEditorDocument},
         build_app_state,
-        config::{BoardConfig, BootConfig, BuiltinTftpConfig, ServerConfig, TftpConfig},
+        config::{
+            BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
+            PowerManagementConfig, ServerConfig, TftpConfig, ZhongshengRelayPowerManagement,
+        },
         tftp::service::{TftpManager, build_tftp_manager},
         web::first_asset_path,
     };
@@ -1001,6 +1023,10 @@ mod tests {
                 port: "/dev/ttyUSB0".into(),
                 baud_rate: 115_200,
             }),
+            power_management: Some(PowerManagementConfig::Custom(CustomPowerManagement {
+                power_on_cmd: "echo on".into(),
+                power_off_cmd: "echo off".into(),
+            })),
             boot: BootConfig::Uboot(crate::config::UbootProfile {
                 use_tftp: true,
                 success_regex: vec!["login:".into()],
@@ -1114,6 +1140,7 @@ mod tests {
             board_type: "demo".into(),
             tags: vec![],
             serial: None,
+            power_management: None,
             boot: BootConfig::Uboot(crate::config::UbootProfile {
                 use_tftp: true,
                 ..Default::default()
@@ -1154,6 +1181,10 @@ mod tests {
             document.schema.as_value()["properties"]["serial_baud_rate"]["default"],
             json!(115_200)
         );
+        assert_eq!(
+            document.schema.as_value()["properties"]["power_management_kind"]["default"],
+            json!("custom")
+        );
     }
 
     #[tokio::test]
@@ -1161,6 +1192,11 @@ mod tests {
         let app = test_router().await;
         let mut board = sample_board("demo-board");
         board.serial.as_mut().unwrap().port = "/dev/not-a-real-tty".into();
+        board.power_management = Some(PowerManagementConfig::ZhongshengRelay(
+            ZhongshengRelayPowerManagement {
+                serial_port: "/dev/not-a-real-relay".into(),
+            },
+        ));
         assert_eq!(
             create_board(&app, serde_json::to_value(&board).unwrap()).await,
             StatusCode::CREATED
@@ -1189,6 +1225,12 @@ mod tests {
             serial_options[0]["title"],
             "/dev/not-a-real-tty (当前配置，未检测到)"
         );
+        let relay_serial_options = document.schema.as_value()
+            ["$defs"]["BoardEditorZhongshengRelayPowerManagementData"]["properties"]["serial_port"]
+            ["oneOf"]
+            .as_array()
+            .unwrap();
+        assert_eq!(relay_serial_options[0]["const"], "/dev/not-a-real-relay");
     }
 
     #[tokio::test]
@@ -1271,6 +1313,195 @@ mod tests {
         let boards: Vec<BoardConfig> = serde_json::from_slice(&boards_body).unwrap();
         assert_eq!(boards[0].name, "Renamed Board");
         assert!(boards[0].serial.is_none());
+    }
+
+    #[tokio::test]
+    async fn power_actions_execute_custom_power_management_commands() {
+        let app = test_router().await;
+        let mut board = sample_board("power-board");
+        board.power_management = Some(PowerManagementConfig::Custom(CustomPowerManagement {
+            power_on_cmd: "printf power-on >/dev/null".into(),
+            power_off_cmd: "printf power-off >/dev/null".into(),
+        }));
+        assert_eq!(
+            create_board(&app, serde_json::to_value(&board).unwrap()).await,
+            StatusCode::CREATED
+        );
+
+        let session = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/sessions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "board_type": "rk3568",
+                            "required_tags": [],
+                            "client_name": "test",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let session_body = to_bytes(session.into_body(), usize::MAX).await.unwrap();
+        let session_value: serde_json::Value = serde_json::from_slice(&session_body).unwrap();
+        let session_id = session_value["session_id"].as_str().unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/sessions/{session_id}/board/power-on"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["message"], "executed `printf power-on >/dev/null`");
+    }
+
+    #[tokio::test]
+    async fn power_actions_execute_zhongsheng_relay_via_mbpoll() {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("lock env");
+
+        let app = test_router().await;
+        let script_dir = tempdir().unwrap();
+        let output_path = script_dir.path().join("mbpoll.log");
+        let script_path = script_dir.path().join("mbpoll-mock.sh");
+        fs::write(
+            &script_path,
+            format!(
+                "#!/bin/sh\nprintf '%s' \"$*\" > {}\n",
+                output_path.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            permissions.set_mode(0o755);
+            fs::set_permissions(&script_path, permissions).unwrap();
+        }
+
+        let mut board = sample_board("relay-board");
+        board.power_management = Some(PowerManagementConfig::ZhongshengRelay(
+            ZhongshengRelayPowerManagement {
+                serial_port: "/dev/ttyUSB5".into(),
+            },
+        ));
+        assert_eq!(
+            create_board(&app, serde_json::to_value(&board).unwrap()).await,
+            StatusCode::CREATED
+        );
+
+        let session = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/sessions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "board_type": "rk3568",
+                            "required_tags": [],
+                            "client_name": "test",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let session_body = to_bytes(session.into_body(), usize::MAX).await.unwrap();
+        let session_value: serde_json::Value = serde_json::from_slice(&session_body).unwrap();
+        let session_id = session_value["session_id"].as_str().unwrap();
+
+        unsafe {
+            std::env::set_var("OSTOOL_MBPOLL_BIN", &script_path);
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/sessions/{session_id}/board/power-off"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        unsafe {
+            std::env::remove_var("OSTOOL_MBPOLL_BIN");
+        }
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let logged = fs::read_to_string(output_path).unwrap();
+        assert_eq!(
+            logged,
+            "-m rtu -a 1 -r 1 -t 0 -b 38400 -P none -v /dev/ttyUSB5 0"
+        );
+    }
+
+    #[tokio::test]
+    async fn power_actions_reject_boards_without_power_management() {
+        let app = test_router().await;
+        let mut board = sample_board("no-power-board");
+        board.power_management = None;
+        assert_eq!(
+            create_board(&app, serde_json::to_value(&board).unwrap()).await,
+            StatusCode::CREATED
+        );
+
+        let session = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/sessions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "board_type": "rk3568",
+                            "required_tags": [],
+                            "client_name": "test",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let session_body = to_bytes(session.into_body(), usize::MAX).await.unwrap();
+        let session_value: serde_json::Value = serde_json::from_slice(&session_body).unwrap();
+        let session_id = session_value["session_id"].as_str().unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/sessions/{session_id}/board/power-on"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
