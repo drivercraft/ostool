@@ -2212,6 +2212,7 @@ dependencies = [
  "tftpd",
  "thiserror 2.0.17",
  "tokio",
+ "tokio-modbus",
  "tokio-serial",
  "toml",
  "tower",
@@ -3405,6 +3406,26 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.108",
+]
+
+[[package]]
+name = "tokio-modbus"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95d06136e737e962c71d922a09148f5a264f6609a021fdf031ad16ffd172c818"
+dependencies = [
+ "async-trait",
+ "byteorder",
+ "bytes",
+ "crc",
+ "futures-core",
+ "futures-util",
+ "log",
+ "smallvec",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-serial",
+ "tokio-util",
 ]
 
 [[package]]

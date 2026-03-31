@@ -150,9 +150,9 @@ async fn get_admin_overview(
         })?;
     let config = state.config.read().await.clone();
     tftp_status.resolved_server_ip =
-        resolve_server_tftp_network(&config)?.and_then(|network| network.server_ip);
+        resolve_server_network(&config)?.and_then(|network| network.server_ip);
     tftp_status.resolved_netmask =
-        resolve_server_tftp_network(&config)?.and_then(|network| network.netmask);
+        resolve_server_network(&config)?.and_then(|network| network.netmask);
 
     Ok(axum::Json(AdminOverviewResponse {
         board_count_total,
@@ -385,9 +385,8 @@ async fn get_tftp_status(
         })?;
     let config = state.config.read().await.clone();
     status.resolved_server_ip =
-        resolve_server_tftp_network(&config)?.and_then(|network| network.server_ip);
-    status.resolved_netmask =
-        resolve_server_tftp_network(&config)?.and_then(|network| network.netmask);
+        resolve_server_network(&config)?.and_then(|network| network.server_ip);
+    status.resolved_netmask = resolve_server_network(&config)?.and_then(|network| network.netmask);
     Ok(axum::Json(AdminTftpStatusResponse { status }))
 }
 
@@ -413,16 +412,14 @@ async fn update_server_config(
     if request.lease.gc_interval_secs == 0 {
         return Err(ApiError::bad_request("lease.gc_interval_secs must be > 0"));
     }
-    if request.tftp_network.interface.trim().is_empty() {
-        return Err(ApiError::bad_request(
-            "tftp_network.interface must not be empty",
-        ));
+    if request.network.interface.trim().is_empty() {
+        return Err(ApiError::bad_request("network.interface must not be empty"));
     }
 
     {
         let mut config = state.config.write().await;
         config.lease = request.lease;
-        config.tftp_network = request.tftp_network;
+        config.network = request.network;
     }
     state.save_config().await?;
 
@@ -555,7 +552,7 @@ async fn get_boot_profile(
         .session_board(&session_id)
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
-    let network = resolved_board_tftp_network(&state, &board).await?;
+    let network = resolved_board_network(&state, &board).await?;
     Ok(axum::Json(BootProfileResponse {
         boot: board.boot,
         server_ip: network.as_ref().and_then(|item| item.server_ip.clone()),
@@ -716,7 +713,7 @@ async fn get_session_tftp_status(
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
     let status = state.tftp_manager.read().await.status().await?;
-    let server_ip = resolved_board_tftp_network(&state, &board)
+    let server_ip = resolved_board_network(&state, &board)
         .await?
         .and_then(|network| network.server_ip);
     let files = session_file_responses(&state, &session_id, &board).await?;
@@ -725,7 +722,7 @@ async fn get_session_tftp_status(
         available: status.enabled && status.healthy && status.writable && server_ip.is_some(),
         provider: status.provider,
         server_ip,
-        netmask: resolved_board_tftp_network(&state, &board)
+        netmask: resolved_board_network(&state, &board)
             .await?
             .and_then(|network| network.netmask),
         writable: status.writable,
@@ -762,7 +759,7 @@ async fn file_response_for_board(
     board: &BoardConfig,
     file: TftpFileRef,
 ) -> Result<FileResponse, ApiError> {
-    let tftp_url = resolved_board_tftp_network(state, board)
+    let tftp_url = resolved_board_network(state, board)
         .await?
         .and_then(|network| network.server_ip)
         .map(|server_ip| format!("tftp://{server_ip}/{}", file.relative_path));
@@ -784,12 +781,14 @@ async fn run_board_power_action(
     } else {
         PowerAction::Off
     };
-    let message = execute_power_action_for_board(&board, action).map_err(|err| match err {
-        PowerActionError::NotConfigured | PowerActionError::InvalidConfig(_) => {
-            ApiError::bad_request(err.to_string())
-        }
-        PowerActionError::Execution(err) => ApiError::from(err),
-    })?;
+    let message = execute_power_action_for_board(&board, action)
+        .await
+        .map_err(|err| match err {
+            PowerActionError::NotConfigured | PowerActionError::InvalidConfig(_) => {
+                ApiError::bad_request(err.to_string())
+            }
+            PowerActionError::Execution(err) => ApiError::from(err),
+        })?;
 
     Ok(axum::Json(ActionResponse { ok: true, message }))
 }
@@ -888,25 +887,23 @@ fn server_config_response(config: &crate::config::ServerConfig) -> AdminServerCo
         readonly: readonly_server_config(config),
         editable: AdminServerConfigEditable {
             lease: config.lease.clone(),
-            tftp_network: config.tftp_network.clone(),
+            network: config.network.clone(),
         },
     }
 }
 
 #[derive(Debug, Clone)]
-struct ResolvedTftpNetwork {
+struct ResolvedNetwork {
     interface: Option<String>,
     server_ip: Option<String>,
     netmask: Option<String>,
 }
 
-fn resolve_server_tftp_network(
-    config: &ServerConfig,
-) -> Result<Option<ResolvedTftpNetwork>, ApiError> {
-    let interface = if config.tftp_network.interface.trim().is_empty() {
+fn resolve_server_network(config: &ServerConfig) -> Result<Option<ResolvedNetwork>, ApiError> {
+    let interface = if config.network.interface.trim().is_empty() {
         default_non_loopback_interface_name()
     } else {
-        Some(config.tftp_network.interface.trim().to_string())
+        Some(config.network.interface.trim().to_string())
     };
     let interfaces = discover_network_interfaces().map_err(|err| {
         ApiError::service_unavailable(format!("failed to enumerate network interfaces: {err:#}"))
@@ -923,17 +920,17 @@ fn resolve_server_tftp_network(
     };
     let netmask = matched.and_then(|item| item.netmask);
 
-    Ok(Some(ResolvedTftpNetwork {
+    Ok(Some(ResolvedNetwork {
         interface,
         server_ip,
         netmask,
     }))
 }
 
-async fn resolved_board_tftp_network(
+async fn resolved_board_network(
     state: &AppState,
     board: &BoardConfig,
-) -> Result<Option<ResolvedTftpNetwork>, ApiError> {
+) -> Result<Option<ResolvedNetwork>, ApiError> {
     let BootConfig::Uboot(profile) = &board.boot else {
         return Ok(None);
     };
@@ -942,16 +939,13 @@ async fn resolved_board_tftp_network(
     }
 
     let config = state.config.read().await.clone();
-    resolve_server_tftp_network(&config)
+    resolve_server_network(&config)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::future;
     use std::sync::Arc;
-    use std::{
-        fs,
-        sync::{Mutex, OnceLock},
-    };
 
     use axum::{
         Router,
@@ -959,10 +953,18 @@ mod tests {
         http::{Request, StatusCode, header},
     };
     use serde_json::json;
+    #[cfg(unix)]
+    use serialport::{SerialPort, TTYPort};
     use tempfile::tempdir;
+    use tokio::sync::{mpsc, oneshot};
+    #[cfg(unix)]
+    use tokio_modbus::{
+        ExceptionCode, Request as ModbusRequest, Response as ModbusResponse, SlaveRequest,
+        server::{Service, rtu::Server},
+    };
     use tower::util::ServiceExt;
 
-    use super::{build_router, resolve_server_tftp_network};
+    use super::{build_router, resolve_server_network};
     use crate::{
         api::board_editor::{BoardEditorData, BoardEditorDocument},
         build_app_state,
@@ -1037,6 +1039,61 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[derive(Clone)]
+    struct RecordingRelayService {
+        requests: mpsc::UnboundedSender<(u8, u16, bool)>,
+    }
+
+    #[cfg(unix)]
+    impl Service for RecordingRelayService {
+        type Request = SlaveRequest<'static>;
+        type Response = ModbusResponse;
+        type Exception = ExceptionCode;
+        type Future = future::Ready<std::result::Result<Self::Response, Self::Exception>>;
+
+        fn call(&self, req: Self::Request) -> Self::Future {
+            match req.request {
+                ModbusRequest::WriteSingleCoil(address, coil) => {
+                    self.requests.send((req.slave, address, coil)).unwrap();
+                    future::ready(Ok(ModbusResponse::WriteSingleCoil(address, coil)))
+                }
+                _ => future::ready(Err(ExceptionCode::IllegalFunction)),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn spawn_relay_test_server() -> (
+        String,
+        TTYPort,
+        tokio::task::JoinHandle<std::io::Result<tokio_modbus::server::Terminated>>,
+        mpsc::UnboundedReceiver<(u8, u16, bool)>,
+        oneshot::Sender<()>,
+    ) {
+        let (master, mut slave) = TTYPort::pair().unwrap();
+        slave.set_exclusive(false).unwrap();
+        let slave_path = slave.name().unwrap();
+
+        let server_stream = tokio_serial::SerialStream::try_from(master).unwrap();
+        let (request_tx, request_rx) = mpsc::unbounded_channel();
+        let (stop_tx, stop_rx) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            Server::new(server_stream)
+                .serve_until(
+                    RecordingRelayService {
+                        requests: request_tx,
+                    },
+                    async move {
+                        let _ = stop_rx.await;
+                    },
+                )
+                .await
+        });
+
+        (slave_path, slave, task, request_rx, stop_tx)
+    }
+
     #[tokio::test]
     async fn admin_route_serves_embedded_index() {
         let app: Router = test_router().await;
@@ -1108,7 +1165,7 @@ mod tests {
                     .uri("/api/v1/admin/server-config")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        r#"{"lease":{"default_ttl_secs":120,"max_ttl_secs":240,"gc_interval_secs":10},"tftp_network":{"interface":"lo"}}"#,
+                        r#"{"lease":{"default_ttl_secs":120,"max_ttl_secs":240,"gc_interval_secs":10},"network":{"interface":"lo"}}"#,
                     ))
                     .unwrap(),
             )
@@ -1119,16 +1176,16 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["editable"]["lease"]["default_ttl_secs"], 120);
-        assert_eq!(value["editable"]["tftp_network"]["interface"], "lo");
+        assert_eq!(value["editable"]["network"]["interface"], "lo");
         assert!(value["readonly"]["listen_addr"].is_string());
     }
 
     #[test]
-    fn resolve_server_tftp_network_uses_configured_interface() {
+    fn resolve_server_network_uses_configured_interface() {
         let mut config = ServerConfig::default();
-        config.tftp_network.interface = "lo".into();
+        config.network.interface = "lo".into();
 
-        let resolved = resolve_server_tftp_network(&config).unwrap().unwrap();
+        let resolved = resolve_server_network(&config).unwrap().unwrap();
         assert_eq!(resolved.interface.as_deref(), Some("lo"));
     }
 
@@ -1370,37 +1427,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn power_actions_execute_zhongsheng_relay_via_mbpoll() {
-        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let _guard = ENV_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("lock env");
-
+    #[cfg(unix)]
+    async fn power_actions_execute_zhongsheng_relay_via_modbus_rtu() {
         let app = test_router().await;
-        let script_dir = tempdir().unwrap();
-        let output_path = script_dir.path().join("mbpoll.log");
-        let script_path = script_dir.path().join("mbpoll-mock.sh");
-        fs::write(
-            &script_path,
-            format!(
-                "#!/bin/sh\nprintf '%s' \"$*\" > {}\n",
-                output_path.display()
-            ),
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&script_path).unwrap().permissions();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            permissions.set_mode(0o755);
-            fs::set_permissions(&script_path, permissions).unwrap();
-        }
+        let (relay_port, _relay_handle, server, mut requests, stop_tx) = spawn_relay_test_server();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         let mut board = sample_board("relay-board");
         board.power_management = Some(PowerManagementConfig::ZhongshengRelay(
             ZhongshengRelayPowerManagement {
-                serial_port: "/dev/ttyUSB5".into(),
+                serial_port: relay_port.clone(),
             },
         ));
         assert_eq!(
@@ -1431,9 +1467,6 @@ mod tests {
         let session_value: serde_json::Value = serde_json::from_slice(&session_body).unwrap();
         let session_id = session_value["session_id"].as_str().unwrap();
 
-        unsafe {
-            std::env::set_var("OSTOOL_MBPOLL_BIN", &script_path);
-        }
         let response = app
             .clone()
             .oneshot(
@@ -1445,16 +1478,24 @@ mod tests {
             )
             .await
             .unwrap();
-        unsafe {
-            std::env::remove_var("OSTOOL_MBPOLL_BIN");
-        }
 
-        assert_eq!(response.status(), StatusCode::OK);
-        let logged = fs::read_to_string(output_path).unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(
-            logged,
-            "-m rtu -a 1 -r 1 -t 0 -b 38400 -P none -v /dev/ttyUSB5 0"
+            value["message"],
+            format!("executed Zhongsheng relay power-off via {relay_port}")
         );
+
+        let request = tokio::time::timeout(std::time::Duration::from_secs(1), requests.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(request, (1, 0, false));
+
+        let _ = stop_tx.send(());
+        let _ = server.await.unwrap();
     }
 
     #[tokio::test]

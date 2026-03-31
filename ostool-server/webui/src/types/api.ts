@@ -203,7 +203,7 @@ export interface AdminServerConfigReadonly {
 
 export interface AdminServerConfigEditable {
   lease: LeaseConfig;
-  tftp_network: TftpNetworkConfig;
+  network: TftpNetworkConfig;
 }
 
 export interface AdminServerConfigResponse {
@@ -213,7 +213,7 @@ export interface AdminServerConfigResponse {
 
 export interface UpdateServerConfigRequest {
   lease: LeaseConfig;
-  tftp_network: TftpNetworkConfig;
+  network: TftpNetworkConfig;
 }
 
 export interface BootProfileResponse {

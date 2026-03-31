@@ -1,9 +1,23 @@
+use std::time::Duration;
+
+use anyhow::Context;
 use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_modbus::{
+    Slave,
+    client::{Client, Writer, rtu},
+};
+use tokio_serial::{DataBits, Parity, SerialPortBuilderExt, StopBits};
 
 use crate::{
     config::{BoardConfig, CustomPowerManagement, PowerManagementConfig},
-    process::{run_program_command, run_shell_command},
+    process::run_shell_command,
 };
+
+const ZHONGSHENG_RELAY_BAUD_RATE: u32 = 38_400;
+const ZHONGSHENG_RELAY_SLAVE_ID: u8 = 1;
+const ZHONGSHENG_RELAY_COIL_ADDRESS: u16 = 0;
+const ZHONGSHENG_RELAY_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PowerAction {
@@ -30,7 +44,7 @@ pub enum PowerActionError {
     Execution(#[from] anyhow::Error),
 }
 
-pub fn execute_power_action_for_board(
+pub async fn execute_power_action_for_board(
     board: &BoardConfig,
     action: PowerAction,
 ) -> Result<String, PowerActionError> {
@@ -38,10 +52,10 @@ pub fn execute_power_action_for_board(
         .power_management
         .as_ref()
         .ok_or(PowerActionError::NotConfigured)?;
-    execute_power_action(power_management, action)
+    execute_power_action(power_management, action).await
 }
 
-pub fn execute_power_action(
+pub async fn execute_power_action(
     power_management: &PowerManagementConfig,
     action: PowerAction,
 ) -> Result<String, PowerActionError> {
@@ -60,7 +74,7 @@ pub fn execute_power_action(
                     action.label()
                 )));
             }
-            run_shell_command(command)?;
+            run_shell_command(command).await?;
             Ok(format!("executed `{command}`"))
         }
         PowerManagementConfig::ZhongshengRelay(relay) => {
@@ -69,7 +83,7 @@ pub fn execute_power_action(
                     "board power management relay serial port is not configured".to_string(),
                 ));
             }
-            run_zhongsheng_relay_action(&relay.serial_port, action)?;
+            run_zhongsheng_relay_action(&relay.serial_port, action).await?;
             Ok(format!(
                 "executed Zhongsheng relay {} via {}",
                 action.label(),
@@ -79,47 +93,58 @@ pub fn execute_power_action(
     }
 }
 
-fn run_zhongsheng_relay_action(serial_port: &str, action: PowerAction) -> anyhow::Result<()> {
-    let value = match action {
-        PowerAction::On => "1",
-        PowerAction::Off => "0",
-    };
-    let program = std::env::var("OSTOOL_MBPOLL_BIN").unwrap_or_else(|_| "mbpoll".to_string());
-    run_program_command(
-        &program,
-        &[
-            "-m",
-            "rtu",
-            "-a",
-            "1",
-            "-r",
-            "1",
-            "-t",
-            "0",
-            "-b",
-            "38400",
-            "-P",
-            "none",
-            "-v",
-            serial_port,
-            value,
-        ],
+async fn run_zhongsheng_relay_action(serial_port: &str, action: PowerAction) -> anyhow::Result<()> {
+    let transport = tokio_serial::new(serial_port, ZHONGSHENG_RELAY_BAUD_RATE)
+        .data_bits(DataBits::Eight)
+        .exclusive(false)
+        .parity(Parity::None)
+        .stop_bits(StopBits::One)
+        .timeout(ZHONGSHENG_RELAY_TIMEOUT)
+        .open_native_async()
+        .with_context(|| format!("failed to open relay serial port {serial_port}"))?;
+
+    write_zhongsheng_relay_action(transport, action).await
+}
+
+async fn write_zhongsheng_relay_action<T>(transport: T, action: PowerAction) -> anyhow::Result<()>
+where
+    T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let mut context = rtu::attach_slave(transport, Slave(ZHONGSHENG_RELAY_SLAVE_ID));
+    let coil = matches!(action, PowerAction::On);
+
+    tokio::time::timeout(
+        ZHONGSHENG_RELAY_TIMEOUT,
+        context.write_single_coil(ZHONGSHENG_RELAY_COIL_ADDRESS, coil),
     )
+    .await
+    .context("timed out writing Zhongsheng relay coil")?
+    .context("failed to write Zhongsheng relay coil")?
+    .context("Zhongsheng relay rejected coil write")?;
+
+    if let Err(err) = context.disconnect().await {
+        log::debug!("failed to close Zhongsheng relay Modbus session: {err}");
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        sync::{Mutex, OnceLock},
+    use std::{future, time::Duration};
+
+    use tokio::sync::{mpsc, oneshot};
+    use tokio_modbus::{
+        ExceptionCode, Request, Response, SlaveRequest,
+        server::{Service, rtu::Server},
     };
 
-    use tempfile::tempdir;
-
-    use super::{PowerAction, execute_power_action_for_board};
+    use super::{
+        PowerAction, ZHONGSHENG_RELAY_COIL_ADDRESS, ZHONGSHENG_RELAY_SLAVE_ID,
+        execute_power_action_for_board, write_zhongsheng_relay_action,
+    };
     use crate::config::{
         BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, PxeProfile,
-        ZhongshengRelayPowerManagement,
     };
 
     fn board_with_power_management(power_management: PowerManagementConfig) -> BoardConfig {
@@ -136,66 +161,117 @@ mod tests {
         }
     }
 
-    #[test]
-    fn custom_power_management_executes_commands() {
+    #[tokio::test]
+    async fn custom_power_management_executes_commands() {
         let board =
             board_with_power_management(PowerManagementConfig::Custom(CustomPowerManagement {
                 power_on_cmd: "printf power-on >/dev/null".into(),
                 power_off_cmd: "printf power-off >/dev/null".into(),
             }));
 
-        let message = execute_power_action_for_board(&board, PowerAction::On).unwrap();
+        let message = execute_power_action_for_board(&board, PowerAction::On)
+            .await
+            .unwrap();
         assert_eq!(message, "executed `printf power-on >/dev/null`");
     }
 
-    #[test]
-    fn relay_power_management_executes_mbpoll_override() {
-        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let _guard = ENV_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("lock env");
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn relay_power_management_writes_single_coil_for_power_off() {
+        let (client, server, mut requests, stop_tx) = spawn_relay_test_server();
 
-        let dir = tempdir().unwrap();
-        let output_path = dir.path().join("mbpoll.log");
-        let script_path = dir.path().join("mbpoll-mock.sh");
-        fs::write(
-            &script_path,
-            format!(
-                "#!/bin/sh\nprintf '%s' \"$*\" > {}\n",
-                output_path.display()
-            ),
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = fs::metadata(&script_path).unwrap().permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(&script_path, permissions).unwrap();
-        }
+        write_zhongsheng_relay_action(client, PowerAction::Off)
+            .await
+            .unwrap();
 
-        let board = board_with_power_management(PowerManagementConfig::ZhongshengRelay(
-            ZhongshengRelayPowerManagement {
-                serial_port: "/dev/ttyUSB7".into(),
-            },
-        ));
-
-        unsafe {
-            std::env::set_var("OSTOOL_MBPOLL_BIN", &script_path);
-        }
-        let message = execute_power_action_for_board(&board, PowerAction::Off).unwrap();
-        unsafe {
-            std::env::remove_var("OSTOOL_MBPOLL_BIN");
-        }
-
+        let request = tokio::time::timeout(Duration::from_secs(1), requests.recv())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(
-            fs::read_to_string(output_path).unwrap(),
-            "-m rtu -a 1 -r 1 -t 0 -b 38400 -P none -v /dev/ttyUSB7 0"
+            request,
+            (
+                ZHONGSHENG_RELAY_SLAVE_ID,
+                ZHONGSHENG_RELAY_COIL_ADDRESS,
+                false
+            )
         );
+
+        let _ = stop_tx.send(());
+        let _ = server.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn relay_power_management_writes_single_coil_for_power_on() {
+        let (client, server, mut requests, stop_tx) = spawn_relay_test_server();
+
+        write_zhongsheng_relay_action(client, PowerAction::On)
+            .await
+            .unwrap();
+
+        let request = tokio::time::timeout(Duration::from_secs(1), requests.recv())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(
-            message,
-            "executed Zhongsheng relay power-off via /dev/ttyUSB7"
+            request,
+            (
+                ZHONGSHENG_RELAY_SLAVE_ID,
+                ZHONGSHENG_RELAY_COIL_ADDRESS,
+                true
+            )
         );
+
+        let _ = stop_tx.send(());
+        let _ = server.await.unwrap();
+    }
+
+    #[derive(Clone)]
+    struct RecordingRelayService {
+        requests: mpsc::UnboundedSender<(u8, u16, bool)>,
+    }
+
+    impl Service for RecordingRelayService {
+        type Request = SlaveRequest<'static>;
+        type Response = Response;
+        type Exception = ExceptionCode;
+        type Future = future::Ready<std::result::Result<Self::Response, Self::Exception>>;
+
+        fn call(&self, req: Self::Request) -> Self::Future {
+            match req.request {
+                Request::WriteSingleCoil(address, coil) => {
+                    self.requests.send((req.slave, address, coil)).unwrap();
+                    future::ready(Ok(Response::WriteSingleCoil(address, coil)))
+                }
+                _ => future::ready(Err(ExceptionCode::IllegalFunction)),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn spawn_relay_test_server() -> (
+        tokio_serial::SerialStream,
+        tokio::task::JoinHandle<std::io::Result<tokio_modbus::server::Terminated>>,
+        mpsc::UnboundedReceiver<(u8, u16, bool)>,
+        oneshot::Sender<()>,
+    ) {
+        let (client, server) = tokio_serial::SerialStream::pair().unwrap();
+        let (request_tx, request_rx) = mpsc::unbounded_channel();
+        let (stop_tx, stop_rx) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            Server::new(server)
+                .serve_until(
+                    RecordingRelayService {
+                        requests: request_tx,
+                    },
+                    async move {
+                        let _ = stop_rx.await;
+                    },
+                )
+                .await
+        });
+
+        (client, task, request_rx, stop_tx)
     }
 }

@@ -12,7 +12,7 @@ const config = ref<AdminServerConfigResponse | null>(null);
 const networkInterfaces = ref<NetworkInterfaceSummary[]>([]);
 const networkInterfaceOptions = computed(() => {
   const options = [...networkInterfaces.value];
-  const currentInterface = config.value?.editable.tftp_network.interface.trim() ?? "";
+  const currentInterface = config.value?.editable.network.interface.trim() ?? "";
   if (currentInterface && !options.some((item) => item.name === currentInterface)) {
     options.unshift({
       name: currentInterface,
@@ -50,7 +50,7 @@ async function saveConfig() {
   try {
     config.value = await api.updateServerConfig({
       lease: config.value.editable.lease,
-      tftp_network: config.value.editable.tftp_network,
+      network: config.value.editable.network,
     });
     ui.setSuccess("已保存 Server 安全配置");
   } catch (error) {
@@ -139,7 +139,7 @@ onMounted(() => {
               <label class="field">
                 <span>网络接口</span>
                 <div class="inline-field-group">
-                  <select v-model="config.editable.tftp_network.interface">
+                  <select v-model="config.editable.network.interface">
                     <option value="">自动选择第一个非 loopback 接口</option>
                     <option
                       v-for="networkInterface in networkInterfaceOptions"

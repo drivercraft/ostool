@@ -18,7 +18,7 @@ pub struct ServerConfig {
     pub board_dir: PathBuf,
     pub lease: LeaseConfig,
     pub tftp: TftpConfig,
-    pub tftp_network: TftpNetworkConfig,
+    pub network: TftpNetworkConfig,
 }
 
 impl Default for ServerConfig {
@@ -40,7 +40,7 @@ impl Default for ServerConfig {
             board_dir,
             lease: LeaseConfig::default(),
             tftp,
-            tftp_network: TftpNetworkConfig::default(),
+            network: TftpNetworkConfig::default(),
         }
     }
 }
@@ -53,7 +53,7 @@ impl ServerConfig {
                     .with_context(|| format!("failed to parse {}", path.display()))?;
                 config.normalize_paths(path)?;
                 config.sync_system_tftpd_hpa_config()?;
-                config.sync_tftp_network_defaults();
+                config.sync_network_defaults();
                 config.validate()?;
                 Ok(config)
             }
@@ -61,7 +61,7 @@ impl ServerConfig {
                 let mut config = Self::default();
                 config.normalize_paths(path)?;
                 config.sync_system_tftpd_hpa_config()?;
-                config.sync_tftp_network_defaults();
+                config.sync_network_defaults();
                 config.validate()?;
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent).await?;
@@ -105,11 +105,11 @@ impl ServerConfig {
         Ok(())
     }
 
-    fn sync_tftp_network_defaults(&mut self) {
-        if self.tftp_network.interface.trim().is_empty()
+    fn sync_network_defaults(&mut self) {
+        if self.network.interface.trim().is_empty()
             && let Some(interface) = crate::serial::network::default_non_loopback_interface_name()
         {
-            self.tftp_network.interface = interface;
+            self.network.interface = interface;
         }
     }
 
@@ -146,9 +146,9 @@ impl ServerConfig {
         if self.lease.gc_interval_secs == 0 {
             bail!("lease.gc_interval_secs must be > 0");
         }
-        if self.tftp_network.interface.trim().is_empty() {
+        if self.network.interface.trim().is_empty() {
             bail!(
-                "tftp_network.interface must be configured or auto-detected from a non-loopback interface"
+                "network.interface must be configured or auto-detected from a non-loopback interface"
             );
         }
         Ok(())
@@ -404,11 +404,11 @@ mod tests {
     use super::{BoardConfig, ServerConfig};
 
     #[test]
-    fn server_config_round_trip_includes_tftp_network() {
+    fn server_config_round_trip_includes_network() {
         let config = ServerConfig::default();
         let encoded = toml::to_string_pretty(&config).unwrap();
         let decoded: ServerConfig = toml::from_str(&encoded).unwrap();
-        assert_eq!(decoded.tftp_network.interface, "");
+        assert_eq!(decoded.network.interface, "");
     }
 
     #[test]

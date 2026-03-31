@@ -1,8 +1,7 @@
-use std::process::Command;
-
 use anyhow::{Context, bail};
+use tokio::process::Command;
 
-pub fn run_shell_command(command: &str) -> anyhow::Result<()> {
+pub async fn run_shell_command(command: &str) -> anyhow::Result<()> {
     if command.trim().is_empty() {
         return Ok(());
     }
@@ -19,6 +18,7 @@ pub fn run_shell_command(command: &str) -> anyhow::Result<()> {
 
     let status = process
         .status()
+        .await
         .with_context(|| format!("failed to start command `{command}`"))?;
 
     if status.success() {
@@ -28,14 +28,18 @@ pub fn run_shell_command(command: &str) -> anyhow::Result<()> {
     }
 }
 
-pub fn run_program_command(program: &str, args: &[&str]) -> anyhow::Result<()> {
-    let status = Command::new(program).args(args).status().with_context(|| {
-        if args.is_empty() {
-            format!("failed to start command `{program}`")
-        } else {
-            format!("failed to start command `{} {}`", program, args.join(" "))
-        }
-    })?;
+pub async fn run_program_command(program: &str, args: &[&str]) -> anyhow::Result<()> {
+    let status = Command::new(program)
+        .args(args)
+        .status()
+        .await
+        .with_context(|| {
+            if args.is_empty() {
+                format!("failed to start command `{program}`")
+            } else {
+                format!("failed to start command `{} {}`", program, args.join(" "))
+            }
+        })?;
 
     if status.success() {
         Ok(())

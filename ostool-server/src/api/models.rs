@@ -162,7 +162,7 @@ pub struct AdminServerConfigReadonly {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminServerConfigEditable {
     pub lease: LeaseConfig,
-    pub tftp_network: TftpNetworkConfig,
+    pub network: TftpNetworkConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,5 +174,5 @@ pub struct AdminServerConfigResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateServerConfigRequest {
     pub lease: LeaseConfig,
-    pub tftp_network: TftpNetworkConfig,
+    pub network: TftpNetworkConfig,
 }

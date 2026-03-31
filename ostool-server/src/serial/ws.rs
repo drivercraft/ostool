@@ -233,7 +233,7 @@ fn spawn_power_action_task(
     board: BoardConfig,
     action: PowerAction,
 ) -> JoinHandle<Result<String, PowerActionError>> {
-    tokio::task::spawn_blocking(move || execute_power_action_for_board(&board, action))
+    tokio::spawn(async move { execute_power_action_for_board(&board, action).await })
 }
 
 async fn cleanup_power_link(
@@ -258,9 +258,9 @@ async fn cleanup_power_link(
         }
     }
 
-    match tokio::task::spawn_blocking({
+    match tokio::spawn({
         let board = board.clone();
-        move || execute_power_action_for_board(&board, PowerAction::Off)
+        async move { execute_power_action_for_board(&board, PowerAction::Off).await }
     })
     .await
     {
