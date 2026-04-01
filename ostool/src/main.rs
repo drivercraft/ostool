@@ -7,7 +7,10 @@ use colored::Colorize as _;
 use log::info;
 use ostool::{
     Tool, ToolConfig, board,
-    build::{self, CargoQemuAppendArgs, CargoQemuOverrideArgs, CargoRunnerKind},
+    build::{
+        self, CargoQemuAppendArgs, CargoQemuOverrideArgs, CargoQemuRunnerArgs, CargoRunnerKind,
+        CargoUbootRunnerArgs,
+    },
     logger,
     menuconfig::{MenuConfigHandler, MenuConfigMode},
     resolve_manifest_context,
@@ -166,14 +169,14 @@ async fn try_main() -> Result<()> {
                 let config = tool.prepare_build_config(config, false).await?;
                 match config.system {
                     build::config::BuildSystem::Cargo(config) => {
-                        let kind = CargoRunnerKind::Qemu {
+                        let kind = CargoRunnerKind::Qemu(CargoQemuRunnerArgs {
                             qemu_config,
                             debug,
                             dtb_dump,
                             default_args: CargoQemuOverrideArgs::default(),
                             append_args: CargoQemuAppendArgs::default(),
                             override_args: CargoQemuOverrideArgs::default(),
-                        };
+                        });
                         tool.cargo_run(&config, &kind).await?;
                     }
                     build::config::BuildSystem::Custom(custom_cfg) => {
@@ -207,9 +210,9 @@ async fn try_main() -> Result<()> {
                 let config = tool.prepare_build_config(config, false).await?;
                 match config.system {
                     build::config::BuildSystem::Cargo(config) => {
-                        let kind = CargoRunnerKind::Uboot {
+                        let kind = CargoRunnerKind::Uboot(CargoUbootRunnerArgs {
                             uboot_config: uboot_config.clone(),
-                        };
+                        });
                         tool.cargo_run(&config, &kind).await?;
                     }
                     build::config::BuildSystem::Custom(custom_cfg) => {

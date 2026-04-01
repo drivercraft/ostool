@@ -68,31 +68,39 @@ pub struct CargoQemuAppendArgs {
     pub fail_regex: Option<Vec<String>>,
 }
 
+/// Parameters for running a built Cargo artifact in QEMU.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CargoQemuRunnerArgs {
+    /// Optional path to QEMU configuration file.
+    pub qemu_config: Option<PathBuf>,
+    /// Whether to enable debug mode (GDB server).
+    pub debug: bool,
+    /// Whether to dump the device tree blob.
+    pub dtb_dump: bool,
+    /// Overrides applied only when generating a default config.
+    pub default_args: CargoQemuOverrideArgs,
+    /// Arguments appended after the base config is prepared.
+    pub append_args: CargoQemuAppendArgs,
+    /// Final overrides applied after append processing.
+    pub override_args: CargoQemuOverrideArgs,
+}
+
+/// Parameters for running a built Cargo artifact on real hardware via U-Boot.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CargoUbootRunnerArgs {
+    /// Optional path to U-Boot configuration file.
+    pub uboot_config: Option<PathBuf>,
+}
+
 /// Specifies the type of runner to use after building.
 ///
 /// This enum determines how the built artifact will be executed,
 /// either through QEMU emulation or via U-Boot on real hardware.
 pub enum CargoRunnerKind {
     /// Run the built artifact in QEMU emulator.
-    Qemu {
-        /// Optional path to QEMU configuration file.
-        qemu_config: Option<PathBuf>,
-        /// Whether to enable debug mode (GDB server).
-        debug: bool,
-        /// Whether to dump the device tree blob.
-        dtb_dump: bool,
-        /// Overrides applied only when generating a default config.
-        default_args: CargoQemuOverrideArgs,
-        /// Arguments appended after the base config is prepared.
-        append_args: CargoQemuAppendArgs,
-        /// Final overrides applied after append processing.
-        override_args: CargoQemuOverrideArgs,
-    },
+    Qemu(CargoQemuRunnerArgs),
     /// Run the built artifact on real hardware via U-Boot.
-    Uboot {
-        /// Optional path to U-Boot configuration file.
-        uboot_config: Option<PathBuf>,
-    },
+    Uboot(CargoUbootRunnerArgs),
 }
 
 impl Tool {
@@ -181,7 +189,7 @@ impl Tool {
     ) -> anyhow::Result<()> {
         let build_config_path = self.ctx.build_config_path.clone();
 
-        let debug = matches!(runner, CargoRunnerKind::Qemu { debug: true, .. });
+        let debug = matches!(runner, CargoRunnerKind::Qemu(args) if args.debug);
 
         CargoBuilder::build(self, config, build_config_path)
             .debug(debug)
@@ -191,14 +199,14 @@ impl Tool {
             .await?;
 
         match runner {
-            CargoRunnerKind::Qemu {
+            CargoRunnerKind::Qemu(CargoQemuRunnerArgs {
                 qemu_config,
                 dtb_dump,
                 default_args,
                 append_args,
                 override_args,
                 ..
-            } => {
+            }) => {
                 let package_dir = self.resolve_package_manifest_dir(&config.package)?;
                 let resolved_qemu_config = resolve_qemu_config_path_in_dir(
                     &package_dir,
@@ -218,7 +226,7 @@ impl Tool {
                 )
                 .await?;
             }
-            CargoRunnerKind::Uboot { uboot_config } => {
+            CargoRunnerKind::Uboot(CargoUbootRunnerArgs { uboot_config }) => {
                 self.run_uboot(RunUbootArgs {
                     config: uboot_config.clone(),
                     show_output: true,

@@ -300,7 +300,10 @@ async fn build_board_config_for_update(
     request: AdminBoardUpsertRequest,
 ) -> Result<BoardConfig, ApiError> {
     let mut request = normalize_board_upsert_request(request)?;
-    let board_id = request.id.take().unwrap_or_else(|| current_board_id.to_string());
+    let board_id = request
+        .id
+        .take()
+        .unwrap_or_else(|| current_board_id.to_string());
     Ok(request.into_board_config(board_id))
 }
 
@@ -329,7 +332,9 @@ fn normalize_board_upsert_request(
 fn normalize_required_string(value: &mut String, field_name: &str) -> Result<(), ApiError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(ApiError::bad_request(format!("{field_name} must not be empty")));
+        return Err(ApiError::bad_request(format!(
+            "{field_name} must not be empty"
+        )));
     }
     if trimmed.len() != value.len() {
         *value = trimmed.to_string();
@@ -357,7 +362,9 @@ fn normalize_tags(tags: &mut Vec<String>) {
         .collect();
 }
 
-fn normalize_serial_config(serial: Option<&mut crate::config::SerialConfig>) -> Result<(), ApiError> {
+fn normalize_serial_config(
+    serial: Option<&mut crate::config::SerialConfig>,
+) -> Result<(), ApiError> {
     let Some(serial) = serial else {
         return Ok(());
     };
@@ -389,16 +396,10 @@ fn normalize_power_management_config(
     match power_management {
         PowerManagementConfig::Custom(custom) => {
             normalize_required_string(&mut custom.power_on_cmd, "power_management.power_on_cmd")?;
-            normalize_required_string(
-                &mut custom.power_off_cmd,
-                "power_management.power_off_cmd",
-            )?;
+            normalize_required_string(&mut custom.power_off_cmd, "power_management.power_off_cmd")?;
         }
         PowerManagementConfig::ZhongshengRelay(relay) => {
-            normalize_required_string(
-                &mut relay.serial_port,
-                "power_management.serial_port",
-            )?;
+            normalize_required_string(&mut relay.serial_port, "power_management.serial_port")?;
         }
     }
 
@@ -623,12 +624,10 @@ async fn create_session(
             BoardAllocationStatus::BoardTypeNotFound => {
                 ApiError::not_found(format!("board type `{}` not found", request.board_type))
             }
-            BoardAllocationStatus::NoAvailableBoard => {
-                ApiError::conflict(format!(
-                    "no available board for type `{}`",
-                    request.board_type
-                ))
-            }
+            BoardAllocationStatus::NoAvailableBoard => ApiError::conflict(format!(
+                "no available board for type `{}`",
+                request.board_type
+            )),
         })?;
 
     let board = state
@@ -1544,7 +1543,9 @@ mod tests {
             )
             .await
             .unwrap();
-        let boards_body = to_bytes(boards_response.into_body(), usize::MAX).await.unwrap();
+        let boards_body = to_bytes(boards_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let boards: Vec<BoardConfig> = serde_json::from_slice(&boards_body).unwrap();
         assert_eq!(boards[0].id, "demo-board-renamed");
     }
