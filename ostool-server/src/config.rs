@@ -37,7 +37,7 @@ impl Default for ServerConfig {
         ));
 
         Self {
-            listen_addr: SocketAddr::from(([127, 0, 0, 1], 8080)),
+            listen_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
             data_dir,
             board_dir,
             dtb_dir,
@@ -333,7 +333,7 @@ pub struct BoardConfig {
     #[serde(default)]
     pub tags: Vec<String>,
     pub serial: Option<SerialConfig>,
-    pub power_management: Option<PowerManagementConfig>,
+    pub power_management: PowerManagementConfig,
     pub boot: BootConfig,
     pub notes: Option<String>,
     #[serde(default)]
@@ -395,15 +395,21 @@ pub struct PxeProfile {
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
     use serde_json::json;
 
-    use super::{BoardConfig, BootConfig, ServerConfig, UbootProfile};
+    use super::{
+        BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, ServerConfig,
+        UbootProfile,
+    };
 
     #[test]
     fn server_config_round_trip_includes_network() {
         let config = ServerConfig::default();
         let encoded = toml::to_string_pretty(&config).unwrap();
         let decoded: ServerConfig = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.listen_addr, SocketAddr::from(([0, 0, 0, 0], 8080)));
         assert_eq!(decoded.network.interface, "");
         assert!(decoded.dtb_dir.ends_with("dtbs"));
     }
@@ -462,7 +468,10 @@ board_power_off_cmd = "shutdown"
             board_type: "demo".into(),
             tags: vec!["lab".into()],
             serial: None,
-            power_management: None,
+            power_management: PowerManagementConfig::Custom(CustomPowerManagement {
+                power_on_cmd: "echo on".into(),
+                power_off_cmd: "echo off".into(),
+            }),
             boot: BootConfig::Uboot(UbootProfile {
                 use_tftp: true,
                 dtb_name: Some("board.dtb".into()),

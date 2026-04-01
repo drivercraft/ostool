@@ -11,9 +11,14 @@ readme = "../README.md"
 repository = "https://github.com/drivercraft/ostool"
 version = "0.1.0"
 
-# [[bin]]
-# name = "ostoold"
-# path = "src/main.rs"
+[package.metadata.binstall]
+bin-dir = "{ name }-{ version }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-{ version }-{ target }.{ archive-format }"
+
+[[bin]]
+name = "ostool-server"
+path = "src/main.rs"
 
 [dependencies]
 async-trait = "0.1"

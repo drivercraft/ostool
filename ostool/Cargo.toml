@@ -11,9 +11,9 @@ repository = "https://github.com/drivercraft/ostool"
 version = "0.11.2"
 
 [package.metadata.binstall]
-bin-dir = "{ name }-{ target }-v{ version }/{ bin }{ binary-ext }"
+bin-dir = "{ name }-{ version }-{ target }/{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
-pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-{ target }-v{ version }{ archive-suffix }"
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-{ version }-{ target }.{ archive-format }"
 
 [[bin]]
 name = "ostool"

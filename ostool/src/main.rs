@@ -178,9 +178,8 @@ async fn try_main() -> Result<()> {
                 let (server, port) =
                     board_config.resolve_server(args.server.server.as_deref(), args.server.port);
                 let client = BoardServerClient::new(&server, port)?;
-                let session = BoardSession::acquire(client.clone(), &board_config.board_type)
-                    .await
-                    .map_err(anyhow::Error::from)?;
+                let session =
+                    BoardSession::acquire(client.clone(), &board_config.board_type).await?;
 
                 println!("Allocated board session:");
                 println!("  board_type: {}", board_config.board_type);
@@ -221,14 +220,14 @@ async fn try_main() -> Result<()> {
                 let config = tool.prepare_build_config(config, false).await?;
                 match config.system {
                     build::config::BuildSystem::Cargo(config) => {
-                        let kind = CargoRunnerKind::Qemu(CargoQemuRunnerArgs {
+                        let kind = CargoRunnerKind::Qemu(Box::new(CargoQemuRunnerArgs {
                             qemu_config,
                             debug,
                             dtb_dump,
                             default_args: CargoQemuOverrideArgs::default(),
                             append_args: CargoQemuAppendArgs::default(),
                             override_args: CargoQemuOverrideArgs::default(),
-                        });
+                        }));
                         tool.cargo_run(&config, &kind).await?;
                     }
                     build::config::BuildSystem::Custom(custom_cfg) => {

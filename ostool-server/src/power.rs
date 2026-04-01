@@ -48,11 +48,7 @@ pub async fn execute_power_action_for_board(
     board: &BoardConfig,
     action: PowerAction,
 ) -> Result<String, PowerActionError> {
-    let power_management = board
-        .power_management
-        .as_ref()
-        .ok_or(PowerActionError::NotConfigured)?;
-    execute_power_action(power_management, action).await
+    execute_power_action(&board.power_management, action).await
 }
 
 pub async fn execute_power_action(
@@ -153,7 +149,7 @@ mod tests {
             board_type: "demo".into(),
             tags: vec![],
             serial: None,
-            power_management: Some(power_management),
+            power_management,
             boot: BootConfig::Pxe(PxeProfile::default()),
             notes: None,
             disabled: false,

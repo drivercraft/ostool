@@ -98,7 +98,7 @@ pub struct CargoUbootRunnerArgs {
 /// either through QEMU emulation or via U-Boot on real hardware.
 pub enum CargoRunnerKind {
     /// Run the built artifact in QEMU emulator.
-    Qemu(CargoQemuRunnerArgs),
+    Qemu(Box<CargoQemuRunnerArgs>),
     /// Run the built artifact on real hardware via U-Boot.
     Uboot(CargoUbootRunnerArgs),
 }
@@ -199,14 +199,15 @@ impl Tool {
             .await?;
 
         match runner {
-            CargoRunnerKind::Qemu(CargoQemuRunnerArgs {
-                qemu_config,
-                dtb_dump,
-                default_args,
-                append_args,
-                override_args,
-                ..
-            }) => {
+            CargoRunnerKind::Qemu(args) => {
+                let CargoQemuRunnerArgs {
+                    qemu_config,
+                    dtb_dump,
+                    default_args,
+                    append_args,
+                    override_args,
+                    ..
+                } = args.as_ref();
                 let package_dir = self.resolve_package_manifest_dir(&config.package)?;
                 let resolved_qemu_config = resolve_qemu_config_path_in_dir(
                     &package_dir,

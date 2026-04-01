@@ -104,7 +104,7 @@ export interface BoardConfig {
   board_type: string;
   tags: string[];
   serial: SerialConfig | null;
-  power_management: PowerManagementConfig | null;
+  power_management: PowerManagementConfig;
   boot: BootConfig;
   notes: string | null;
   disabled: boolean;
@@ -117,7 +117,7 @@ export interface AdminBoardUpsertRequest {
   notes: string | null;
   disabled: boolean;
   serial: SerialConfig | null;
-  power_management: PowerManagementConfig | null;
+  power_management: PowerManagementConfig;
   boot: BootConfig;
 }
 

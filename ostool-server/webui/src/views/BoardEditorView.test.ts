@@ -141,6 +141,10 @@ describe("BoardEditorView", () => {
     await flushPromises();
 
     await wrapper.get('input[placeholder="例如 rk3568"]').setValue("rk3568");
+    const textInputs = wrapper
+      .findAll('input:not([type="checkbox"]):not([type="number"]):not([type="file"])');
+    await textInputs[3].setValue("echo on");
+    await textInputs[4].setValue("echo off");
     const saveButton = wrapper.findAll("button").find((button) => button.text() === "保存配置");
     await saveButton!.trigger("click");
     await flushPromises();
@@ -152,7 +156,11 @@ describe("BoardEditorView", () => {
       notes: null,
       disabled: false,
       serial: null,
-      power_management: null,
+      power_management: {
+        kind: "custom",
+        power_on_cmd: "echo on",
+        power_off_cmd: "echo off",
+      },
       boot: {
         kind: "uboot",
         use_tftp: false,
@@ -179,6 +187,20 @@ describe("BoardEditorView", () => {
 
     expect(updateBoard).toHaveBeenCalledWith("demo-board", expect.objectContaining({ id: null }));
     expect(push).toHaveBeenCalledWith("/boards/demo-board");
+  });
+
+  it("blocks saving when required power management fields are empty", async () => {
+    const BoardEditorView = (await import("./BoardEditorView.vue")).default;
+    const wrapper = mount(BoardEditorView);
+    await flushPromises();
+
+    await wrapper.get('input[placeholder="例如 rk3568"]').setValue("rk3568");
+    const saveButton = wrapper.findAll("button").find((button) => button.text() === "保存配置");
+    await saveButton!.trigger("click");
+    await flushPromises();
+
+    expect(createBoard).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("Custom 电源管理必须填写开机命令");
   });
 
   it("fills upload DTB name automatically after choosing a file", async () => {

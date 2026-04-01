@@ -367,7 +367,7 @@ fn normalize_board_upsert_request(
     normalize_optional_string(&mut request.notes);
     normalize_tags(&mut request.tags);
     normalize_serial_config(request.serial.as_mut())?;
-    normalize_power_management_config(request.power_management.as_mut())?;
+    normalize_power_management_config(&mut request.power_management)?;
     normalize_boot_config(&mut request.boot);
 
     if let Some(id) = request.id.as_ref()
@@ -444,12 +444,8 @@ fn normalize_serial_config(
 }
 
 fn normalize_power_management_config(
-    power_management: Option<&mut PowerManagementConfig>,
+    power_management: &mut PowerManagementConfig,
 ) -> Result<(), ApiError> {
-    let Some(power_management) = power_management else {
-        return Ok(());
-    };
-
     match power_management {
         PowerManagementConfig::Custom(custom) => {
             normalize_required_string(&mut custom.power_on_cmd, "power_management.power_on_cmd")?;
@@ -1496,10 +1492,10 @@ mod tests {
                 port: "/dev/ttyUSB0".into(),
                 baud_rate: 115_200,
             }),
-            power_management: Some(PowerManagementConfig::Custom(CustomPowerManagement {
+            power_management: PowerManagementConfig::Custom(CustomPowerManagement {
                 power_on_cmd: "echo on".into(),
                 power_off_cmd: "echo off".into(),
-            })),
+            }),
             boot: BootConfig::Uboot(crate::config::UbootProfile {
                 use_tftp: true,
                 ..Default::default()
@@ -1666,7 +1662,10 @@ mod tests {
             board_type: "demo".into(),
             tags: vec![],
             serial: None,
-            power_management: None,
+            power_management: PowerManagementConfig::Custom(CustomPowerManagement {
+                power_on_cmd: "echo on".into(),
+                power_off_cmd: "echo off".into(),
+            }),
             boot: BootConfig::Uboot(crate::config::UbootProfile {
                 use_tftp: true,
                 ..Default::default()
@@ -1767,7 +1766,7 @@ mod tests {
                     "board_type": "rk3568",
                     "tags": [],
                     "serial": null,
-                    "power_management": null,
+                    "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
                     "boot": { "kind": "pxe", "notes": null },
                     "notes": null,
                     "disabled": false
@@ -1790,7 +1789,7 @@ mod tests {
                             "board_type": "rk3568",
                             "tags": [" lab "],
                             "serial": null,
-                            "power_management": null,
+                            "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
                             "boot": { "kind": "pxe", "notes": null },
                             "notes": " ",
                             "disabled": false
@@ -1832,7 +1831,7 @@ mod tests {
                             "board_type": "rk3568",
                             "tags": ["usb"],
                             "serial": null,
-                            "power_management": null,
+                            "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
                             "boot": { "kind": "uboot", "use_tftp": false },
                             "notes": "updated",
                             "disabled": true
@@ -1874,7 +1873,7 @@ mod tests {
                             "board_type": "rk3568",
                             "tags": ["lab"],
                             "serial": null,
-                            "power_management": null,
+                            "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
                             "boot": { "kind": "pxe", "notes": "pxe" },
                             "notes": null,
                             "disabled": false
@@ -1912,10 +1911,10 @@ mod tests {
     async fn power_actions_execute_custom_power_management_commands() {
         let app = test_router().await;
         let mut board = sample_board("power-board");
-        board.power_management = Some(PowerManagementConfig::Custom(CustomPowerManagement {
+        board.power_management = PowerManagementConfig::Custom(CustomPowerManagement {
             power_on_cmd: "printf power-on >/dev/null".into(),
             power_off_cmd: "printf power-off >/dev/null".into(),
-        }));
+        });
         assert_eq!(
             create_board(&app, serde_json::to_value(&board).unwrap()).await,
             StatusCode::CREATED
@@ -1970,11 +1969,11 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         let mut board = sample_board("relay-board");
-        board.power_management = Some(PowerManagementConfig::ZhongshengRelay(
+        board.power_management = PowerManagementConfig::ZhongshengRelay(
             ZhongshengRelayPowerManagement {
                 serial_port: relay_port.clone(),
             },
-        ));
+        );
         assert_eq!(
             create_board(&app, serde_json::to_value(&board).unwrap()).await,
             StatusCode::CREATED
@@ -2035,53 +2034,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn power_actions_reject_boards_without_power_management() {
-        let app = test_router().await;
-        let mut board = sample_board("no-power-board");
-        board.power_management = None;
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&board).unwrap()).await,
-            StatusCode::CREATED
-        );
-
-        let session = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/sessions")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "board_type": "rk3568",
-                            "required_tags": [],
-                            "client_name": "test",
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let session_body = to_bytes(session.into_body(), usize::MAX).await.unwrap();
-        let session_value: serde_json::Value = serde_json::from_slice(&session_body).unwrap();
-        let session_id = session_value["session_id"].as_str().unwrap();
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/api/v1/sessions/{session_id}/board/power-on"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
     async fn create_board_rejects_duplicate_ids_and_missing_required_fields() {
         let app = test_router().await;
         let board = sample_board("demo-board");
@@ -2117,7 +2069,7 @@ mod tests {
                             "board_type": " ",
                             "tags": [],
                             "serial": null,
-                            "power_management": null,
+                            "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
                             "boot": { "kind": "pxe", "notes": null },
                             "notes": null,
                             "disabled": false
@@ -2129,6 +2081,32 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(invalid_response.status(), StatusCode::BAD_REQUEST);
+
+        let missing_power_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/admin/boards")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "id": null,
+                            "board_type": "rk3568",
+                            "tags": [],
+                            "serial": null,
+                            "power_management": null,
+                            "boot": { "kind": "pxe", "notes": null },
+                            "notes": null,
+                            "disabled": false
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing_power_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[tokio::test]
@@ -2197,7 +2175,7 @@ mod tests {
                     "board_type": "rk3568",
                     "tags": [],
                     "serial": null,
-                    "power_management": null,
+                    "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
                     "boot": { "kind": "uboot", "use_tftp": true, "dtb_name": "board.dtb" },
                     "notes": null,
                     "disabled": false
@@ -2266,7 +2244,7 @@ mod tests {
                     "board_type": "rk3568",
                     "tags": [],
                     "serial": { "port": "/dev/ttyUSB0", "baud_rate": 115200 },
-                    "power_management": null,
+                    "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
                     "boot": { "kind": "uboot", "use_tftp": true, "dtb_name": "board.dtb" },
                     "notes": null,
                     "disabled": false
@@ -2322,6 +2300,7 @@ mod tests {
             "board_type": "rk3568",
             "tags": ["lab-a", "usbboot"],
             "serial": { "port": "/dev/ttyUSB0", "baud_rate": 115200 },
+            "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
             "boot": { "kind": "uboot", "use_tftp": false },
             "notes": null,
             "disabled": false
@@ -2331,6 +2310,7 @@ mod tests {
             "board_type": "rk3568",
             "tags": ["lab-b"],
             "serial": { "port": "/dev/ttyUSB1", "baud_rate": 115200 },
+            "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
             "boot": { "kind": "uboot", "use_tftp": false },
             "notes": null,
             "disabled": false
@@ -2551,6 +2531,7 @@ mod tests {
             "board_type": "demo",
             "tags": [],
             "serial": { "port": "/dev/ttyUSB0", "baud_rate": 115200 },
+            "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
             "boot": { "kind": "uboot", "use_tftp": false },
             "notes": null,
             "disabled": false
@@ -2592,6 +2573,7 @@ mod tests {
             "board_type": "demo",
             "tags": [],
             "serial": { "port": "/dev/ttyUSB0", "baud_rate": 115200 },
+            "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
             "boot": { "kind": "uboot", "use_tftp": false },
             "notes": null,
             "disabled": false

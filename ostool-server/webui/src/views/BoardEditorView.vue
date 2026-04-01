@@ -25,7 +25,6 @@ interface BoardEditorFormState {
   serial_enabled: boolean;
   serial_port: string;
   serial_baud_rate: number;
-  power_management_enabled: boolean;
   power_management_kind: PowerManagementKind;
   power_on_cmd: string;
   power_off_cmd: string;
@@ -68,7 +67,6 @@ function defaultFormState(): BoardEditorFormState {
     serial_enabled: false,
     serial_port: "",
     serial_baud_rate: DEFAULT_SERIAL_BAUD_RATE,
-    power_management_enabled: false,
     power_management_kind: "custom",
     power_on_cmd: "",
     power_off_cmd: "",
@@ -94,16 +92,13 @@ function boardToFormState(board: BoardConfig): BoardEditorFormState {
     next.serial_baud_rate = board.serial.baud_rate;
   }
 
-  if (board.power_management) {
-    next.power_management_enabled = true;
-    if (board.power_management.kind === "custom") {
-      next.power_management_kind = "custom";
-      next.power_on_cmd = board.power_management.power_on_cmd;
-      next.power_off_cmd = board.power_management.power_off_cmd;
-    } else {
-      next.power_management_kind = "zhongsheng_relay";
-      next.relay_serial_port = board.power_management.serial_port;
-    }
+  if (board.power_management.kind === "custom") {
+    next.power_management_kind = "custom";
+    next.power_on_cmd = board.power_management.power_on_cmd;
+    next.power_off_cmd = board.power_management.power_off_cmd;
+  } else {
+    next.power_management_kind = "zhongsheng_relay";
+    next.relay_serial_port = board.power_management.serial_port;
   }
 
   if (board.boot.kind === "uboot") {
@@ -145,11 +140,7 @@ function buildBootConfig(): BootConfig {
   };
 }
 
-function buildPowerManagementConfig(): PowerManagementConfig | null {
-  if (!form.value.power_management_enabled) {
-    return null;
-  }
-
+function buildPowerManagementConfig(): PowerManagementConfig {
   if (form.value.power_management_kind === "custom") {
     return {
       kind: "custom",
@@ -197,20 +188,16 @@ function validateForm(): string {
   if (form.value.serial_enabled && (!Number.isFinite(form.value.serial_baud_rate) || form.value.serial_baud_rate <= 0)) {
     errors.push("启用串口时波特率必须大于 0");
   }
-  if (form.value.power_management_enabled && form.value.power_management_kind === "custom") {
+  if (form.value.power_management_kind === "custom") {
     if (!form.value.power_on_cmd.trim()) {
-      errors.push("启用 Custom 电源管理时必须填写开机命令");
+      errors.push("Custom 电源管理必须填写开机命令");
     }
     if (!form.value.power_off_cmd.trim()) {
-      errors.push("启用 Custom 电源管理时必须填写关机命令");
+      errors.push("Custom 电源管理必须填写关机命令");
     }
   }
-  if (
-    form.value.power_management_enabled &&
-    form.value.power_management_kind === "zhongsheng_relay" &&
-    !form.value.relay_serial_port.trim()
-  ) {
-    errors.push("启用中盛继电模块时必须选择串口设备");
+  if (form.value.power_management_kind === "zhongsheng_relay" && !form.value.relay_serial_port.trim()) {
+    errors.push("中盛继电模块必须选择串口设备");
   }
   return errors.join("\n");
 }
@@ -458,45 +445,38 @@ onMounted(() => {
 
         <section class="form-section">
           <h4>电源管理</h4>
-          <label class="checkbox-field">
-            <input v-model="form.power_management_enabled" type="checkbox" />
-            <span>启用电源管理</span>
+          <label class="field">
+            <span>电源管理类型</span>
+            <select v-model="form.power_management_kind">
+              <option value="custom">Custom</option>
+              <option value="zhongsheng_relay">中盛继电模块</option>
+            </select>
           </label>
 
-          <template v-if="form.power_management_enabled">
+          <div v-if="form.power_management_kind === 'custom'" class="form-grid two-columns">
             <label class="field">
-              <span>电源管理类型</span>
-              <select v-model="form.power_management_kind">
-                <option value="custom">Custom</option>
-                <option value="zhongsheng_relay">中盛继电模块</option>
-              </select>
+              <span>开机命令</span>
+              <input v-model="form.power_on_cmd" />
             </label>
-
-            <div v-if="form.power_management_kind === 'custom'" class="form-grid two-columns">
-              <label class="field">
-                <span>开机命令</span>
-                <input v-model="form.power_on_cmd" />
-              </label>
-              <label class="field">
-                <span>关机命令</span>
-                <input v-model="form.power_off_cmd" />
-              </label>
-            </div>
-
-            <label v-else class="field">
-              <span>继电模块串口</span>
-              <select v-model="form.relay_serial_port">
-                <option value="">请选择串口设备</option>
-                <option
-                  v-for="option in serialOptions(form.relay_serial_port)"
-                  :key="option.value"
-                  :value="option.value"
-                >
-                  {{ option.label }}
-                </option>
-              </select>
+            <label class="field">
+              <span>关机命令</span>
+              <input v-model="form.power_off_cmd" />
             </label>
-          </template>
+          </div>
+
+          <label v-else class="field">
+            <span>继电模块串口</span>
+            <select v-model="form.relay_serial_port">
+              <option value="">请选择串口设备</option>
+              <option
+                v-for="option in serialOptions(form.relay_serial_port)"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
         </section>
 
         <section class="form-section">

@@ -62,18 +62,13 @@ async fn run_serial_ws_inner(
     let (mut ws_sender, mut ws_receiver) = socket.split();
     let (mut serial_rx, mut serial_tx) = tokio::io::split(port);
     let mut serial_buffer = [0u8; 1024];
-    let mut power_on_task = None;
-    let mut power_linked = false;
+    let mut power_on_task = Some(spawn_power_action_task(board.clone(), PowerAction::On));
+    let power_linked = true;
 
     ws_sender
         .send(Message::Text(r#"{"type":"opened"}"#.to_string().into()))
         .await
         .ok();
-    if board.power_management.is_some() {
-        power_linked = true;
-        power_on_task = Some(spawn_power_action_task(board.clone(), PowerAction::On));
-    }
-
     loop {
         if let Some(task) = power_on_task.as_mut() {
             tokio::select! {
@@ -369,10 +364,10 @@ mod tests {
             board_type: "demo".into(),
             tags: vec![],
             serial: None,
-            power_management: Some(PowerManagementConfig::Custom(CustomPowerManagement {
+            power_management: PowerManagementConfig::Custom(CustomPowerManagement {
                 power_on_cmd: String::new(),
                 power_off_cmd: format!("printf 'off\\n' >> {}", output_path.display()),
-            })),
+            }),
             boot: BootConfig::Pxe(PxeProfile::default()),
             notes: None,
             disabled: false,

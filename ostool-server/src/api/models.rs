@@ -84,7 +84,7 @@ pub struct AdminBoardUpsertRequest {
     #[serde(default)]
     pub disabled: bool,
     pub serial: Option<SerialConfig>,
-    pub power_management: Option<PowerManagementConfig>,
+    pub power_management: PowerManagementConfig,
     pub boot: BootConfig,
 }
 

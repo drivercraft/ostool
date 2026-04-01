@@ -5,6 +5,14 @@ on:
     workflows: ["Quality Check"]
     branches: [main]
     types: [completed]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to package, e.g. ostool-v0.11.0 or ostool-server-v0.1.0
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -12,7 +20,7 @@ permissions:
 
 jobs:
   release-plz:
-    if: &release_condition ${{ github.repository_owner == 'drivercraft' && github.event.workflow_run.conclusion == 'success' }}
+    if: &release_condition ${{ github.repository_owner == 'drivercraft' && github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-22.04
     steps:
       - &checkout
@@ -55,3 +63,79 @@ jobs:
         with:
           command: release-pr
         env: *release_env
+
+  release-assets:
+    name: Build Release Assets
+    if: ${{ github.repository_owner == 'drivercraft' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+      TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - *checkout
+      - *install-rust
+      - *setup-libudenv
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ostool-server/webui/pnpm-lock.yaml
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: Resolve release package
+        id: release_info
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG}"
+          case "$tag" in
+            ostool-v*)
+              package="ostool"
+              version="${tag#ostool-v}"
+              binaries="ostool cargo-osrun"
+              ;;
+            ostool-server-v*)
+              package="ostool-server"
+              version="${tag#ostool-server-v}"
+              binaries="ostool-server"
+              ;;
+            *)
+              echo "Unsupported release tag: $tag" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "package=$package" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "binaries=$binaries" >> "$GITHUB_OUTPUT"
+      - name: Build release binaries
+        run: cargo build --locked --release -p ${{ steps.release_info.outputs.package }}
+      - name: Package release archive
+        id: package_archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="${{ steps.release_info.outputs.package }}"
+          version="${{ steps.release_info.outputs.version }}"
+          target="${TARGET}"
+          archive_root="${package}-${version}-${target}"
+          archive_name="${archive_root}.tgz"
+
+          rm -rf "$archive_root" "$archive_name"
+          mkdir -p "$archive_root"
+
+          for bin in ${{ steps.release_info.outputs.binaries }}; do
+            cp "target/release/${bin}" "${archive_root}/${bin}"
+          done
+
+          tar -czf "$archive_name" "$archive_root"
+          echo "archive=${archive_name}" >> "$GITHUB_OUTPUT"
+      - name: Upload release archive
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${RELEASE_TAG}" "${{ steps.package_archive.outputs.archive }}" --clobber

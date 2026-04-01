@@ -88,7 +88,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::FileBoardStore;
-    use crate::config::{BoardConfig, BootConfig, PxeProfile};
+    use crate::config::{
+        BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, PxeProfile,
+    };
 
     #[tokio::test]
     async fn board_store_round_trip_per_file() {
@@ -99,7 +101,10 @@ mod tests {
             board_type: "rk3568".into(),
             tags: vec!["usb".into()],
             serial: None,
-            power_management: None,
+            power_management: PowerManagementConfig::Custom(CustomPowerManagement {
+                power_on_cmd: "echo on".into(),
+                power_off_cmd: "echo off".into(),
+            }),
             boot: BootConfig::Pxe(PxeProfile::default()),
             notes: None,
             disabled: false,

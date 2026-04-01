@@ -1,0 +1,21 @@
+[Unit]
+Description=OSTool Board Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=__BINDIR__/ostool-server --config /etc/ostool-server/config.toml
+Restart=on-failure
+RestartSec=5
+WorkingDirectory=/var/lib/ostool-server
+
+ReadWritePaths=/var/lib/ostool-server /srv/tftp
+ProtectHome=true
+PrivateTmp=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ostool-server
+
+[Install]
+WantedBy=multi-user.target
