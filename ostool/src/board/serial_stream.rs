@@ -105,17 +105,9 @@ pub async fn connect_serial_stream(
 
 impl SerialStreamTasks {
     pub async fn shutdown(self) -> anyhow::Result<()> {
-        let read_result = self.read_task.await;
         let write_result = self.write_task.await;
+        let read_result = self.read_task.await;
 
-        if let Ok(Err(err)) = read_result {
-            return Err(err);
-        }
-        if let Err(err) = read_result
-            && !err.is_cancelled()
-        {
-            return Err(anyhow::anyhow!("serial websocket reader join error: {err}"));
-        }
         if let Ok(Err(err)) = write_result {
             return Err(err);
         }
@@ -124,7 +116,62 @@ impl SerialStreamTasks {
         {
             return Err(anyhow::anyhow!("serial websocket writer join error: {err}"));
         }
+        if let Ok(Err(err)) = read_result {
+            return Err(err);
+        }
+        if let Err(err) = read_result
+            && !err.is_cancelled()
+        {
+            return Err(anyhow::anyhow!("serial websocket reader join error: {err}"));
+        }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use tokio::{sync::Notify, task::JoinHandle};
+
+    use super::SerialStreamTasks;
+
+    #[tokio::test]
+    async fn shutdown_waits_for_writer_before_reader() {
+        let reader_released = Arc::new(Notify::new());
+        let writer_finished = Arc::new(AtomicBool::new(false));
+
+        let read_task: JoinHandle<anyhow::Result<()>> = {
+            let reader_released = reader_released.clone();
+            let writer_finished = writer_finished.clone();
+            tokio::spawn(async move {
+                while !writer_finished.load(Ordering::SeqCst) {
+                    reader_released.notified().await;
+                }
+                Ok(())
+            })
+        };
+
+        let write_task: JoinHandle<anyhow::Result<()>> = {
+            let reader_released = reader_released.clone();
+            let writer_finished = writer_finished.clone();
+            tokio::spawn(async move {
+                writer_finished.store(true, Ordering::SeqCst);
+                reader_released.notify_waiters();
+                Ok(())
+            })
+        };
+
+        SerialStreamTasks {
+            read_task,
+            write_task,
+        }
+        .shutdown()
+        .await
+        .unwrap();
     }
 }

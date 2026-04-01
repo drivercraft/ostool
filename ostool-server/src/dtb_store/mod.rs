@@ -80,9 +80,13 @@ impl DtbStore {
         fs::write(&temp_path, bytes)
             .await
             .with_context(|| format!("failed to write {}", temp_path.display()))?;
-        fs::rename(&temp_path, &path)
-            .await
-            .with_context(|| format!("failed to rename {} to {}", temp_path.display(), path.display()))?;
+        fs::rename(&temp_path, &path).await.with_context(|| {
+            format!(
+                "failed to rename {} to {}",
+                temp_path.display(),
+                path.display()
+            )
+        })?;
         self.get(&name)
             .await?
             .ok_or_else(|| anyhow::anyhow!("DTB `{name}` disappeared after write"))
@@ -104,13 +108,15 @@ impl DtbStore {
             bail!("DTB `{new_name}` already exists");
         }
 
-        fs::rename(&current_path, &new_path).await.with_context(|| {
-            format!(
-                "failed to rename {} to {}",
-                current_path.display(),
-                new_path.display()
-            )
-        })?;
+        fs::rename(&current_path, &new_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to rename {} to {}",
+                    current_path.display(),
+                    new_path.display()
+                )
+            })?;
         self.get(&new_name)
             .await?
             .ok_or_else(|| anyhow::anyhow!("DTB `{new_name}` disappeared after rename"))

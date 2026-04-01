@@ -30,6 +30,13 @@ async fn main() -> anyhow::Result<()> {
 
     let state = build_app_state(cli.config.clone(), config, tftp_manager.clone()).await?;
     state.ensure_data_dirs().await?;
+    for (board_id, err) in state.power_off_all_boards_on_startup().await {
+        log::warn!(
+            "failed to power off board `{}` during server startup; marking it disabled for this process: {}",
+            board_id,
+            err
+        );
+    }
     tftp_manager.start_if_needed().await?;
     if let ostool_server::TftpConfig::SystemTftpdHpa(cfg) = &state.config.read().await.tftp
         && cfg.reconcile_on_start

@@ -19,8 +19,7 @@ use crate::{
             AdminSessionsResponse, AdminTftpConfigResponse, AdminTftpStatusResponse,
             BoardTypeSummary, BootProfileResponse, CreateSessionRequest, DtbFileResponse,
             FileResponse, NetworkInterfaceSummary, SerialPortSummary, SerialStatusResponse,
-            SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse,
-            TftpSessionResponse,
+            SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse, TftpSessionResponse,
             UpdateServerConfigRequest,
         },
     },
@@ -255,11 +254,16 @@ async fn create_dtb(
         return Err(ApiError::bad_request("DTB upload body must not be empty"));
     }
     if state.dtb_store.get(&dtb_name).await?.is_some() {
-        return Err(ApiError::conflict(format!("DTB `{dtb_name}` already exists")));
+        return Err(ApiError::conflict(format!(
+            "DTB `{dtb_name}` already exists"
+        )));
     }
 
     let file = state.dtb_store.write(&dtb_name, &body).await?;
-    Ok((StatusCode::CREATED, axum::Json(DtbFileResponse::from_dtb(file))))
+    Ok((
+        StatusCode::CREATED,
+        axum::Json(DtbFileResponse::from_dtb(file)),
+    ))
 }
 
 async fn create_board(
@@ -509,7 +513,9 @@ async fn update_dtb(
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|value| normalize_dtb_name(value).map_err(|err| ApiError::bad_request(err.to_string())))
+        .map(|value| {
+            normalize_dtb_name(value).map_err(|err| ApiError::bad_request(err.to_string()))
+        })
         .transpose()?;
     let mut effective_name = current_name.clone();
 
@@ -525,16 +531,20 @@ async fn update_dtb(
     if let Some(new_name) = requested_name.as_deref()
         && new_name != current_name
     {
-        state.dtb_store.rename(&current_name, new_name).await.map_err(|err| {
-            let message = err.to_string();
-            if message.contains("already exists") {
-                ApiError::conflict(message)
-            } else if message.contains("not found") {
-                ApiError::not_found(message)
-            } else {
-                ApiError::from(err)
-            }
-        })?;
+        state
+            .dtb_store
+            .rename(&current_name, new_name)
+            .await
+            .map_err(|err| {
+                let message = err.to_string();
+                if message.contains("already exists") {
+                    ApiError::conflict(message)
+                } else if message.contains("not found") {
+                    ApiError::not_found(message)
+                } else {
+                    ApiError::from(err)
+                }
+            })?;
         rewrite_board_dtb_references(&state, &current_name, new_name).await?;
         effective_name = new_name.to_string();
     }
@@ -874,7 +884,9 @@ async fn get_session_dtb(
 
     let file = ensure_session_preset_dtb_file(&state, &session_id, &board).await?;
     let tftp_url = if let Some(file) = file {
-        file_response_for_board(&state, &board, file).await?.tftp_url
+        file_response_for_board(&state, &board, file)
+            .await?
+            .tftp_url
     } else {
         None
     };
@@ -1307,7 +1319,10 @@ fn session_dtb_file_path(dtb_name: &str) -> String {
 }
 
 fn session_dtb_relative_path(session_id: &str, dtb_name: &str) -> String {
-    format!("ostool/sessions/{session_id}/{}", session_dtb_file_path(dtb_name))
+    format!(
+        "ostool/sessions/{session_id}/{}",
+        session_dtb_file_path(dtb_name)
+    )
 }
 
 async fn ensure_session_preset_dtb_file(
@@ -1969,11 +1984,10 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         let mut board = sample_board("relay-board");
-        board.power_management = PowerManagementConfig::ZhongshengRelay(
-            ZhongshengRelayPowerManagement {
+        board.power_management =
+            PowerManagementConfig::ZhongshengRelay(ZhongshengRelayPowerManagement {
                 serial_port: relay_port.clone(),
-            },
-        );
+            });
         assert_eq!(
             create_board(&app, serde_json::to_value(&board).unwrap()).await,
             StatusCode::CREATED
@@ -2106,14 +2120,20 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(missing_power_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            missing_power_response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
     }
 
     #[tokio::test]
     async fn admin_dtb_endpoints_support_create_rename_replace_and_delete() {
         let app = test_router().await;
 
-        assert_eq!(upload_dtb(&app, "board.dtb", "dtb-v1").await, StatusCode::CREATED);
+        assert_eq!(
+            upload_dtb(&app, "board.dtb", "dtb-v1").await,
+            StatusCode::CREATED
+        );
 
         let rename_response = app
             .clone()
@@ -2144,7 +2164,8 @@ mod tests {
         let replace_body = to_bytes(replace_response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let file: crate::api::models::DtbFileResponse = serde_json::from_slice(&replace_body).unwrap();
+        let file: crate::api::models::DtbFileResponse =
+            serde_json::from_slice(&replace_body).unwrap();
         assert_eq!(file.name, "board-v2.dtb");
         assert_eq!(file.size, 6);
         assert_eq!(file.relative_tftp_path_template, "boot/dtb/board-v2.dtb");
@@ -2166,7 +2187,10 @@ mod tests {
     #[tokio::test]
     async fn renaming_dtb_updates_board_references_and_referenced_dtb_cannot_be_deleted() {
         let app = test_router().await;
-        assert_eq!(upload_dtb(&app, "board.dtb", "dtb").await, StatusCode::CREATED);
+        assert_eq!(
+            upload_dtb(&app, "board.dtb", "dtb").await,
+            StatusCode::CREATED
+        );
         assert_eq!(
             create_board(
                 &app,
@@ -2222,7 +2246,9 @@ mod tests {
             )
             .await
             .unwrap();
-        let board_body = to_bytes(board_response.into_body(), usize::MAX).await.unwrap();
+        let board_body = to_bytes(board_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let board: BoardConfig = serde_json::from_slice(&board_body).unwrap();
         match board.boot {
             BootConfig::Uboot(profile) => {
@@ -2235,7 +2261,10 @@ mod tests {
     #[tokio::test]
     async fn session_dtb_endpoint_stages_preset_file_and_supports_download() {
         let app = test_router().await;
-        assert_eq!(upload_dtb(&app, "board.dtb", "dtb-bytes").await, StatusCode::CREATED);
+        assert_eq!(
+            upload_dtb(&app, "board.dtb", "dtb-bytes").await,
+            StatusCode::CREATED
+        );
         assert_eq!(
             create_board(
                 &app,
@@ -2266,8 +2295,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(dtb_response.status(), StatusCode::OK);
-        let dtb_body = to_bytes(dtb_response.into_body(), usize::MAX).await.unwrap();
-        let dtb: crate::api::models::SessionDtbResponse = serde_json::from_slice(&dtb_body).unwrap();
+        let dtb_body = to_bytes(dtb_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let dtb: crate::api::models::SessionDtbResponse =
+            serde_json::from_slice(&dtb_body).unwrap();
         assert_eq!(dtb.dtb_name.as_deref(), Some("board.dtb"));
         assert_eq!(
             dtb.relative_path.as_deref(),

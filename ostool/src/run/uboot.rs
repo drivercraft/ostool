@@ -32,8 +32,7 @@ use crate::{
     board::{
         client::{
             BoardServerClient, BootConfig as RemoteBootConfig, BootProfileResponse,
-            SerialStatusResponse, SessionCreatedResponse, SessionDtbResponse,
-            TftpSessionResponse,
+            SerialStatusResponse, SessionCreatedResponse, SessionDtbResponse, TftpSessionResponse,
         },
         config::BoardRunConfig,
         serial_stream::{
@@ -796,8 +795,7 @@ impl RunnerBackend for RemoteBackend {
         fs::create_dir_all(&output_dir)
             .await
             .with_context(|| format!("failed to create {}", output_dir.display()))?;
-        let target_path =
-            output_dir.join(format!("ostool-{}-{dtb_name}", self.session.session_id));
+        let target_path = output_dir.join(format!("ostool-{}-{dtb_name}", self.session.session_id));
         fs::write(&target_path, bytes)
             .await
             .with_path("failed to write preset DTB", &target_path)?;
@@ -1355,9 +1353,7 @@ fn build_network_boot_request(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        LocalUbootConfig, Net, UbootConfig, build_network_boot_request, timeout_duration,
-    };
+    use super::{LocalUbootConfig, Net, UbootConfig, build_network_boot_request, timeout_duration};
     use crate::{
         Tool, ToolConfig,
         board::config::BoardRunConfig,

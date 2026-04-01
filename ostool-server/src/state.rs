@@ -13,6 +13,7 @@ use crate::{
     board_store::fs::FileBoardStore,
     config::{BoardConfig, ServerConfig},
     dtb_store::DtbStore,
+    power::{PowerAction, execute_power_action_for_board},
     session::Session,
     tftp::service::TftpManager,
 };
@@ -165,6 +166,28 @@ impl AppState {
         Ok(())
     }
 
+    pub async fn power_off_all_boards_on_startup(&self) -> Vec<(String, String)> {
+        let boards = self
+            .boards
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<BoardConfig>>();
+        let mut failures = Vec::new();
+
+        for board in boards {
+            if let Err(err) = execute_power_action_for_board(&board, PowerAction::Off).await {
+                failures.push((board.id.clone(), err.to_string()));
+                if let Some(stored) = self.boards.write().await.get_mut(&board.id) {
+                    stored.disabled = true;
+                }
+            }
+        }
+
+        failures
+    }
+
     pub async fn save_config(&self) -> anyhow::Result<()> {
         let config = self.config.read().await.clone();
         tokio::fs::write(&*self.config_path, toml::to_string_pretty(&config)?).await?;
@@ -178,7 +201,7 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{fs, sync::Arc};
 
     use chrono::Utc;
     use tempfile::tempdir;
@@ -219,5 +242,112 @@ mod tests {
         assert!(removed.is_some());
         shutdown.changed().await.unwrap();
         assert!(*shutdown.borrow());
+    }
+
+    #[tokio::test]
+    async fn startup_power_off_runs_for_all_loaded_boards() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let board_dir = root.join("boards");
+        let power_log = root.join("power.log");
+        std::fs::create_dir_all(&board_dir).unwrap();
+        std::fs::write(
+            board_dir.join("board-1.toml"),
+            format!(
+                r#"
+id = "board-1"
+board_type = "demo"
+tags = []
+disabled = false
+
+[power_management]
+kind = "custom"
+power_on_cmd = "printf on >> /dev/null"
+power_off_cmd = "printf board-1 >> {}"
+
+[boot]
+kind = "pxe"
+"#,
+                power_log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            board_dir.join("board-2.toml"),
+            format!(
+                r#"
+id = "board-2"
+board_type = "demo"
+tags = []
+disabled = false
+
+[power_management]
+kind = "custom"
+power_on_cmd = "printf on >> /dev/null"
+power_off_cmd = "printf board-2 >> {}"
+
+[boot]
+kind = "pxe"
+"#,
+                power_log.display()
+            ),
+        )
+        .unwrap();
+
+        let config_path = root.join(".ostool-server.toml");
+        let mut config = ServerConfig::default();
+        config.listen_addr = "127.0.0.1:0".parse().unwrap();
+        config.data_dir = root.join("data");
+        config.board_dir = board_dir;
+        config.dtb_dir = root.join("dtbs");
+        let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
+        let state = build_app_state(config_path, config, manager).await.unwrap();
+
+        let failures = state.power_off_all_boards_on_startup().await;
+        assert!(failures.is_empty());
+
+        let content = fs::read_to_string(power_log).unwrap();
+        assert!(content.contains("board-1"));
+        assert!(content.contains("board-2"));
+    }
+
+    #[tokio::test]
+    async fn startup_power_off_failures_disable_boards_and_do_not_abort() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let board_dir = root.join("boards");
+        std::fs::create_dir_all(&board_dir).unwrap();
+        std::fs::write(
+            board_dir.join("board-1.toml"),
+            r#"
+id = "board-1"
+board_type = "demo"
+tags = []
+disabled = false
+
+[power_management]
+kind = "custom"
+power_on_cmd = "printf on >> /dev/null"
+power_off_cmd = ""
+
+[boot]
+kind = "pxe"
+"#,
+        )
+        .unwrap();
+
+        let config_path = root.join(".ostool-server.toml");
+        let mut config = ServerConfig::default();
+        config.listen_addr = "127.0.0.1:0".parse().unwrap();
+        config.data_dir = root.join("data");
+        config.board_dir = board_dir;
+        config.dtb_dir = root.join("dtbs");
+        let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
+        let state = build_app_state(config_path, config, manager).await.unwrap();
+
+        let failures = state.power_off_all_boards_on_startup().await;
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].0, "board-1");
+        assert!(state.boards.read().await.get("board-1").unwrap().disabled);
     }
 }
