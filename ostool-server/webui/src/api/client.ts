@@ -6,6 +6,7 @@ import type {
   AdminTftpConfigResponse,
   AdminTftpStatusResponse,
   BoardConfig,
+  DtbFileResponse,
   ErrorResponse,
   NetworkInterfaceSummary,
   SerialPortSummary,
@@ -53,6 +54,37 @@ export const api = {
   },
   getBoard(boardId: string) {
     return request<BoardConfig>(`/api/v1/admin/boards/${encodeURIComponent(boardId)}`);
+  },
+  listDtbs() {
+    return request<DtbFileResponse[]>("/api/v1/admin/dtbs");
+  },
+  getDtb(dtbName: string) {
+    return request<DtbFileResponse>(`/api/v1/admin/dtbs/${encodeURIComponent(dtbName)}`);
+  },
+  createDtb(dtbName: string, file: Blob) {
+    return request<DtbFileResponse>("/api/v1/admin/dtbs", {
+      method: "POST",
+      headers: {
+        "X-Dtb-Name": dtbName,
+      },
+      body: file,
+    });
+  },
+  updateDtb(currentName: string, nextName?: string | null, file?: Blob | null) {
+    const headers = new Headers();
+    if (nextName) {
+      headers.set("X-Dtb-Name", nextName);
+    }
+    return request<DtbFileResponse>(`/api/v1/admin/dtbs/${encodeURIComponent(currentName)}`, {
+      method: "PUT",
+      headers,
+      body: file ?? undefined,
+    });
+  },
+  deleteDtb(dtbName: string) {
+    return request<void>(`/api/v1/admin/dtbs/${encodeURIComponent(dtbName)}`, {
+      method: "DELETE",
+    });
   },
   listSerialPorts() {
     return request<SerialPortSummary[]>("/api/v1/admin/serial-ports");

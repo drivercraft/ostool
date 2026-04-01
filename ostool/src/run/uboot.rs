@@ -32,7 +32,8 @@ use crate::{
     board::{
         client::{
             BoardServerClient, BootConfig as RemoteBootConfig, BootProfileResponse,
-            SerialStatusResponse, SessionCreatedResponse, TftpSessionResponse,
+            SerialStatusResponse, SessionCreatedResponse, SessionDtbResponse,
+            TftpSessionResponse,
         },
         config::BoardRunConfig,
         serial_stream::{
@@ -108,6 +109,7 @@ pub struct LocalUbootConfig {
 impl UbootConfig {
     pub fn from_board_run_config(config: &BoardRunConfig) -> Self {
         Self {
+            dtb_file: config.dtb_file.clone(),
             success_regex: config.success_regex.clone(),
             fail_regex: config.fail_regex.clone(),
             shell_prefix: config.shell_prefix.clone(),
@@ -374,6 +376,11 @@ struct PreparedBootArtifact {
     network_transfer_ready: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+struct PreparedDtb {
+    fit_source: Option<PathBuf>,
+}
+
 #[async_trait]
 trait RunnerBackend {
     async fn resolve_runtime(
@@ -381,6 +388,11 @@ trait RunnerBackend {
         tool: &mut Tool,
         config: &UbootConfig,
     ) -> anyhow::Result<ResolvedRuntime>;
+    async fn prepare_dtb(
+        &mut self,
+        tool: &Tool,
+        config: &UbootConfig,
+    ) -> anyhow::Result<PreparedDtb>;
     async fn open_console(&mut self) -> anyhow::Result<ConsoleTransport>;
     async fn after_console_open(&mut self, tool: &Tool) -> anyhow::Result<()>;
     async fn stage_fit_image(
@@ -506,6 +518,16 @@ impl RunnerBackend for LocalBackend {
         })
     }
 
+    async fn prepare_dtb(
+        &mut self,
+        _tool: &Tool,
+        config: &UbootConfig,
+    ) -> anyhow::Result<PreparedDtb> {
+        Ok(PreparedDtb {
+            fit_source: config.dtb_file.as_ref().map(PathBuf::from),
+        })
+    }
+
     async fn open_console(&mut self) -> anyhow::Result<ConsoleTransport> {
         let serial = self
             .config
@@ -607,6 +629,7 @@ struct RemoteBackend {
     boot_profile: Option<BootProfileResponse>,
     serial_status: Option<SerialStatusResponse>,
     tftp_status: Option<TftpSessionResponse>,
+    session_dtb: Option<SessionDtbResponse>,
     console_tasks: Option<SerialStreamTasks>,
 }
 
@@ -618,6 +641,7 @@ impl RemoteBackend {
             boot_profile: None,
             serial_status: None,
             tftp_status: None,
+            session_dtb: None,
             console_tasks: None,
         }
     }
@@ -706,6 +730,84 @@ impl RunnerBackend for RemoteBackend {
             timeout: profile.timeout,
             use_tftp: profile.use_tftp,
             ..Default::default()
+        })
+    }
+
+    async fn prepare_dtb(
+        &mut self,
+        tool: &Tool,
+        config: &UbootConfig,
+    ) -> anyhow::Result<PreparedDtb> {
+        let session_dtb = self
+            .client
+            .get_session_dtb(&self.session.session_id)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to get session DTB metadata for session `{}`",
+                    self.session.session_id
+                )
+            })?;
+        self.session_dtb = Some(session_dtb.clone());
+
+        if let Some(local_dtb) = config.dtb_file.as_ref().map(PathBuf::from) {
+            let upload_path = if let Some(session_file_path) = session_dtb.session_file_path.clone()
+            {
+                session_file_path
+            } else {
+                let file_name = local_dtb
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| anyhow!("invalid DTB filename: {}", local_dtb.display()))?;
+                format!("boot/dtb/{file_name}")
+            };
+            let payload = fs::read(&local_dtb)
+                .await
+                .with_path("failed to read DTB file", &local_dtb)?;
+            self.client
+                .upload_session_file(&self.session.session_id, &upload_path, payload)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to upload DTB override for session `{}`",
+                        self.session.session_id
+                    )
+                })?;
+            return Ok(PreparedDtb {
+                fit_source: Some(local_dtb),
+            });
+        }
+
+        let Some(dtb_name) = session_dtb.dtb_name.as_deref() else {
+            return Ok(PreparedDtb::default());
+        };
+        let bytes = self
+            .client
+            .download_session_dtb(&self.session.session_id)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to download preset DTB for session `{}`",
+                    self.session.session_id
+                )
+            })?;
+        let output_dir = tool
+            .ctx()
+            .artifacts
+            .runtime_artifact_dir
+            .clone()
+            .unwrap_or_else(std::env::temp_dir);
+        fs::create_dir_all(&output_dir)
+            .await
+            .with_context(|| format!("failed to create {}", output_dir.display()))?;
+        let target_path =
+            output_dir.join(format!("ostool-{}-{dtb_name}", self.session.session_id));
+        fs::write(&target_path, bytes)
+            .await
+            .with_path("failed to write preset DTB", &target_path)?;
+
+        Ok(PreparedDtb {
+            fit_source: Some(target_path),
         })
     }
 
@@ -937,6 +1039,7 @@ where
             .backend
             .resolve_runtime(self.tool, &self.config)
             .await?;
+        let prepared_dtb = self.backend.prepare_dtb(self.tool, &self.config).await?;
         if let Some(interface) = runtime.interface.as_deref() {
             info!("Using network interface hint: {interface}");
         }
@@ -1027,16 +1130,13 @@ where
 
         info!("fitimage loadaddr: {fit_loadaddr:#x}");
         info!("kernel entry: {kernel_entry:#x}");
-        let dtb = self.config.dtb_file.clone();
-        if let Some(ref dtb_file) = dtb {
-            info!("Using DTB from: {}", dtb_file);
+        if let Some(ref dtb_path) = prepared_dtb.fit_source {
+            info!("Using DTB from: {}", dtb_path.display());
         }
-
-        let dtb_path = dtb.as_ref().map(Path::new);
         let fitimage = self
             .generate_fit_image(
                 &kernel,
-                dtb_path,
+                prepared_dtb.fit_source.as_deref(),
                 kernel_entry,
                 kernel_entry,
                 fdt_load_addr,
@@ -1269,9 +1369,12 @@ fn build_network_boot_request(
 
 #[cfg(test)]
 mod tests {
-    use super::{LocalUbootConfig, Net, UbootConfig, build_network_boot_request, timeout_duration};
+    use super::{
+        LocalUbootConfig, Net, UbootConfig, build_network_boot_request, timeout_duration,
+    };
     use crate::{
         Tool, ToolConfig,
+        board::config::BoardRunConfig,
         build::config::{BuildConfig, BuildSystem, Cargo},
     };
     use std::collections::HashMap;
@@ -1467,5 +1570,22 @@ timeout = 0
             net.tftp_dir.as_deref(),
             Some(format!("{expected}/tftp").as_str())
         );
+    }
+
+    #[test]
+    fn uboot_config_from_board_run_config_keeps_dtb_file() {
+        let config = UbootConfig::from_board_run_config(&BoardRunConfig {
+            board_type: "rk3568".into(),
+            dtb_file: Some("/tmp/board.dtb".into()),
+            success_regex: vec!["ok".into()],
+            fail_regex: vec!["fail".into()],
+            shell_prefix: Some("login:".into()),
+            shell_init_cmd: Some("root".into()),
+            server: None,
+            port: None,
+        });
+
+        assert_eq!(config.dtb_file.as_deref(), Some("/tmp/board.dtb"));
+        assert_eq!(config.success_regex, vec!["ok"]);
     }
 }

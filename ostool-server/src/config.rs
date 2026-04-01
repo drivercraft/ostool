@@ -16,6 +16,7 @@ pub struct ServerConfig {
     pub listen_addr: SocketAddr,
     pub data_dir: PathBuf,
     pub board_dir: PathBuf,
+    pub dtb_dir: PathBuf,
     pub lease: LeaseConfig,
     pub tftp: TftpConfig,
     pub network: TftpNetworkConfig,
@@ -25,6 +26,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         let data_dir = PathBuf::from(".ostool-server");
         let board_dir = data_dir.join("boards");
+        let dtb_dir = data_dir.join("dtbs");
 
         #[cfg(target_os = "linux")]
         let tftp = TftpConfig::SystemTftpdHpa(SystemTftpdHpaConfig::default());
@@ -38,6 +40,7 @@ impl Default for ServerConfig {
             listen_addr: SocketAddr::from(([127, 0, 0, 1], 8080)),
             data_dir,
             board_dir,
+            dtb_dir,
             lease: LeaseConfig::default(),
             tftp,
             network: TftpNetworkConfig::default(),
@@ -122,6 +125,7 @@ impl ServerConfig {
 
         self.data_dir = absolutize_path(&config_dir, &self.data_dir);
         self.board_dir = absolutize_path(&config_dir, &self.board_dir);
+        self.dtb_dir = absolutize_path(&config_dir, &self.dtb_dir);
 
         match &mut self.tftp {
             TftpConfig::Builtin(cfg) => {
@@ -381,6 +385,7 @@ impl BootConfig {
 pub struct UbootProfile {
     #[serde(default)]
     pub use_tftp: bool,
+    pub dtb_name: Option<String>,
     pub kernel_load_addr: Option<String>,
     pub fit_load_addr: Option<String>,
     pub timeout: Option<u64>,
@@ -403,6 +408,7 @@ mod tests {
         let encoded = toml::to_string_pretty(&config).unwrap();
         let decoded: ServerConfig = toml::from_str(&encoded).unwrap();
         assert_eq!(decoded.network.interface, "");
+        assert!(decoded.dtb_dir.ends_with("dtbs"));
     }
 
     #[test]
@@ -462,6 +468,7 @@ board_power_off_cmd = "shutdown"
             power_management: None,
             boot: BootConfig::Uboot(UbootProfile {
                 use_tftp: true,
+                dtb_name: Some("board.dtb".into()),
                 kernel_load_addr: Some("0x100000".into()),
                 fit_load_addr: Some("0x200000".into()),
                 timeout: Some(30),
@@ -478,5 +485,6 @@ board_power_off_cmd = "shutdown"
         assert!(value["boot"].get("uboot_cmd").is_none());
         assert!(value["boot"].get("shell_prefix").is_none());
         assert!(value["boot"].get("shell_init_cmd").is_none());
+        assert_eq!(value["boot"]["dtb_name"], json!("board.dtb"));
     }
 }

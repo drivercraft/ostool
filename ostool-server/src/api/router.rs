@@ -4,8 +4,8 @@ use axum::{
     Router,
     body::Bytes,
     extract::{Path, State, WebSocketUpgrade},
-    http::{HeaderMap, StatusCode},
-    response::{Redirect, Response},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Redirect, Response},
     routing::{delete, get, post, put},
 };
 use serde_json::json;
@@ -17,14 +17,16 @@ use crate::{
             ActionResponse, AdminBoardUpsertRequest, AdminOverviewResponse,
             AdminServerConfigEditable, AdminServerConfigReadonly, AdminServerConfigResponse,
             AdminSessionsResponse, AdminTftpConfigResponse, AdminTftpStatusResponse,
-            BoardTypeSummary, BootProfileResponse, CreateSessionRequest, FileResponse,
-            NetworkInterfaceSummary, SerialPortSummary, SerialStatusResponse,
-            SessionCreatedResponse, SessionDetailResponse, TftpSessionResponse,
+            BoardTypeSummary, BootProfileResponse, CreateSessionRequest, DtbFileResponse,
+            FileResponse, NetworkInterfaceSummary, SerialPortSummary, SerialStatusResponse,
+            SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse,
+            TftpSessionResponse,
             UpdateServerConfigRequest,
         },
     },
     board_pool::BoardAllocationStatus,
     config::{BoardConfig, BootConfig, PowerManagementConfig, ServerConfig, TftpConfig},
+    dtb_store::normalize_dtb_name,
     power::{PowerAction, PowerActionError, execute_power_action_for_board},
     serial::{
         discovery::list_serial_ports as discover_serial_ports,
@@ -55,6 +57,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/{*path}", get(serve_admin_history))
         .route("/api/v1/admin/overview", get(get_admin_overview))
         .route("/api/v1/admin/boards", get(list_boards).post(create_board))
+        .route("/api/v1/admin/dtbs", get(list_dtbs).post(create_dtb))
         .route("/api/v1/admin/serial-ports", get(list_serial_ports))
         .route(
             "/api/v1/admin/network-interfaces",
@@ -63,6 +66,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/admin/boards/{board_id}",
             get(get_board).put(update_board).delete(delete_board),
+        )
+        .route(
+            "/api/v1/admin/dtbs/{dtb_name}",
+            get(get_dtb).put(update_dtb).delete(delete_dtb),
         )
         .route("/api/v1/admin/sessions", get(list_admin_sessions))
         .route(
@@ -92,6 +99,11 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/sessions/{session_id}/boot-profile",
             get(get_boot_profile),
+        )
+        .route("/api/v1/sessions/{session_id}/dtb", get(get_session_dtb))
+        .route(
+            "/api/v1/sessions/{session_id}/dtb/download",
+            get(download_session_dtb),
         )
         .route(
             "/api/v1/sessions/{session_id}/serial",
@@ -180,6 +192,15 @@ async fn list_boards(
     ))
 }
 
+async fn list_dtbs(
+    State(state): State<AppState>,
+) -> Result<axum::Json<Vec<DtbFileResponse>>, ApiError> {
+    let files = state.dtb_store.list_all().await?;
+    Ok(axum::Json(
+        files.into_iter().map(DtbFileResponse::from_dtb).collect(),
+    ))
+}
+
 async fn list_network_interfaces() -> Result<axum::Json<Vec<NetworkInterfaceSummary>>, ApiError> {
     Ok(axum::Json(discover_network_interfaces().map_err(
         |err| {
@@ -208,6 +229,37 @@ async fn get_board(
         .cloned()
         .ok_or_else(|| ApiError::not_found(format!("board `{board_id}` not found")))?;
     Ok(axum::Json(board))
+}
+
+async fn get_dtb(
+    Path(dtb_name): Path<String>,
+    State(state): State<AppState>,
+) -> Result<axum::Json<DtbFileResponse>, ApiError> {
+    let dtb_name =
+        normalize_dtb_name(&dtb_name).map_err(|err| ApiError::bad_request(err.to_string()))?;
+    let file = state
+        .dtb_store
+        .get(&dtb_name)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("DTB `{dtb_name}` not found")))?;
+    Ok(axum::Json(DtbFileResponse::from_dtb(file)))
+}
+
+async fn create_dtb(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, axum::Json<DtbFileResponse>), ApiError> {
+    let dtb_name = dtb_name_header(&headers, "X-Dtb-Name")?;
+    if body.is_empty() {
+        return Err(ApiError::bad_request("DTB upload body must not be empty"));
+    }
+    if state.dtb_store.get(&dtb_name).await?.is_some() {
+        return Err(ApiError::conflict(format!("DTB `{dtb_name}` already exists")));
+    }
+
+    let file = state.dtb_store.write(&dtb_name, &body).await?;
+    Ok((StatusCode::CREATED, axum::Json(DtbFileResponse::from_dtb(file))))
 }
 
 async fn create_board(
@@ -325,6 +377,11 @@ fn normalize_board_upsert_request(
             "board id must not contain path separators",
         ));
     }
+    if let BootConfig::Uboot(profile) = &request.boot
+        && let Some(dtb_name) = profile.dtb_name.as_deref()
+    {
+        normalize_dtb_name(dtb_name).map_err(|err| ApiError::bad_request(err.to_string()))?;
+    }
 
     Ok(request)
 }
@@ -409,6 +466,7 @@ fn normalize_power_management_config(
 fn normalize_boot_config(boot: &mut BootConfig) {
     match boot {
         BootConfig::Uboot(profile) => {
+            normalize_optional_string(&mut profile.dtb_name);
             normalize_optional_string(&mut profile.kernel_load_addr);
             normalize_optional_string(&mut profile.fit_load_addr);
         }
@@ -442,6 +500,87 @@ impl AdminBoardUpsertRequest {
             disabled: self.disabled,
         }
     }
+}
+
+async fn update_dtb(
+    Path(dtb_name): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<axum::Json<DtbFileResponse>, ApiError> {
+    let current_name =
+        normalize_dtb_name(&dtb_name).map_err(|err| ApiError::bad_request(err.to_string()))?;
+    let requested_name = headers
+        .get("X-Dtb-Name")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| normalize_dtb_name(value).map_err(|err| ApiError::bad_request(err.to_string())))
+        .transpose()?;
+    let mut effective_name = current_name.clone();
+
+    if requested_name.as_deref() == Some(current_name.as_str()) && body.is_empty() {
+        let file = state
+            .dtb_store
+            .get(&current_name)
+            .await?
+            .ok_or_else(|| ApiError::not_found(format!("DTB `{current_name}` not found")))?;
+        return Ok(axum::Json(DtbFileResponse::from_dtb(file)));
+    }
+
+    if let Some(new_name) = requested_name.as_deref()
+        && new_name != current_name
+    {
+        state.dtb_store.rename(&current_name, new_name).await.map_err(|err| {
+            let message = err.to_string();
+            if message.contains("already exists") {
+                ApiError::conflict(message)
+            } else if message.contains("not found") {
+                ApiError::not_found(message)
+            } else {
+                ApiError::from(err)
+            }
+        })?;
+        rewrite_board_dtb_references(&state, &current_name, new_name).await?;
+        effective_name = new_name.to_string();
+    }
+
+    if !body.is_empty() {
+        state.dtb_store.write(&effective_name, &body).await?;
+    } else if requested_name.is_none() {
+        return Err(ApiError::bad_request(
+            "DTB update requires a new name or replacement file body",
+        ));
+    }
+
+    let file = state
+        .dtb_store
+        .get(&effective_name)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("DTB `{effective_name}` not found")))?;
+    Ok(axum::Json(DtbFileResponse::from_dtb(file)))
+}
+
+async fn delete_dtb(
+    Path(dtb_name): Path<String>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, ApiError> {
+    let dtb_name =
+        normalize_dtb_name(&dtb_name).map_err(|err| ApiError::bad_request(err.to_string()))?;
+    let boards = state.boards.read().await;
+    let referenced_by = boards_referencing_dtb(&boards, &dtb_name);
+    drop(boards);
+    if !referenced_by.is_empty() {
+        return Err(ApiError::conflict(format!(
+            "DTB `{dtb_name}` is referenced by boards: {}",
+            referenced_by.join(", ")
+        )));
+    }
+    if state.dtb_store.get(&dtb_name).await?.is_none() {
+        return Err(ApiError::not_found(format!("DTB `{dtb_name}` not found")));
+    }
+    state.dtb_store.delete(&dtb_name).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn delete_board(
@@ -719,6 +858,77 @@ async fn get_boot_profile(
         netmask: network.as_ref().and_then(|item| item.netmask.clone()),
         interface: network.as_ref().and_then(|item| item.interface.clone()),
     }))
+}
+
+async fn get_session_dtb(
+    Path(session_id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<axum::Json<SessionDtbResponse>, ApiError> {
+    get_session_or_404(&state, &session_id).await?;
+    let board = state
+        .session_board(&session_id)
+        .await
+        .ok_or_else(|| ApiError::not_found("session board not found"))?;
+    let Some(dtb_name) = board_preset_dtb_name(&board).map(str::to_string) else {
+        return Ok(axum::Json(SessionDtbResponse {
+            dtb_name: None,
+            relative_path: None,
+            session_file_path: None,
+            tftp_url: None,
+        }));
+    };
+
+    let file = ensure_session_preset_dtb_file(&state, &session_id, &board).await?;
+    let tftp_url = if let Some(file) = file {
+        file_response_for_board(&state, &board, file).await?.tftp_url
+    } else {
+        None
+    };
+
+    Ok(axum::Json(SessionDtbResponse {
+        dtb_name: Some(dtb_name.clone()),
+        relative_path: Some(session_dtb_relative_path(&session_id, &dtb_name)),
+        session_file_path: Some(session_dtb_file_path(&dtb_name)),
+        tftp_url,
+    }))
+}
+
+async fn download_session_dtb(
+    Path(session_id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<Response, ApiError> {
+    get_session_or_404(&state, &session_id).await?;
+    let board = state
+        .session_board(&session_id)
+        .await
+        .ok_or_else(|| ApiError::not_found("session board not found"))?;
+    let dtb_name = board_preset_dtb_name(&board)
+        .ok_or_else(|| ApiError::not_found("board has no preset DTB configured"))?;
+    let bytes = state.dtb_store.read(dtb_name).await.map_err(|err| {
+        let message = err.to_string();
+        if message.contains("No such file") || message.contains("not found") {
+            ApiError::not_found(format!("preset DTB `{dtb_name}` not found"))
+        } else {
+            ApiError::from(err)
+        }
+    })?;
+
+    Ok((
+        StatusCode::OK,
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/octet-stream"),
+            ),
+            (
+                header::CONTENT_DISPOSITION,
+                HeaderValue::from_str(&format!("attachment; filename=\"{dtb_name}\""))
+                    .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 async fn get_serial_status(
@@ -1006,11 +1216,20 @@ fn summarize_board_types(
         .collect::<Vec<_>>()
 }
 
+fn boards_referencing_dtb(boards: &BTreeMap<String, BoardConfig>, dtb_name: &str) -> Vec<String> {
+    boards
+        .values()
+        .filter(|board| board_preset_dtb_name(board) == Some(dtb_name))
+        .map(|board| board.id.clone())
+        .collect()
+}
+
 fn readonly_server_config(config: &crate::config::ServerConfig) -> AdminServerConfigReadonly {
     AdminServerConfigReadonly {
         listen_addr: config.listen_addr.to_string(),
         data_dir: config.data_dir.display().to_string(),
         board_dir: config.board_dir.display().to_string(),
+        dtb_dir: config.dtb_dir.display().to_string(),
     }
 }
 
@@ -1074,6 +1293,95 @@ async fn resolved_board_network(
     resolve_server_network(&config)
 }
 
+fn dtb_name_header(headers: &HeaderMap, name: &str) -> Result<String, ApiError> {
+    let value = headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| ApiError::bad_request(format!("missing {name} header")))?;
+    normalize_dtb_name(value).map_err(|err| ApiError::bad_request(err.to_string()))
+}
+
+fn board_preset_dtb_name(board: &BoardConfig) -> Option<&str> {
+    let BootConfig::Uboot(profile) = &board.boot else {
+        return None;
+    };
+    profile.dtb_name.as_deref()
+}
+
+fn session_dtb_file_path(dtb_name: &str) -> String {
+    format!("boot/dtb/{dtb_name}")
+}
+
+fn session_dtb_relative_path(session_id: &str, dtb_name: &str) -> String {
+    format!("ostool/sessions/{session_id}/{}", session_dtb_file_path(dtb_name))
+}
+
+async fn ensure_session_preset_dtb_file(
+    state: &AppState,
+    session_id: &str,
+    board: &BoardConfig,
+) -> Result<Option<TftpFileRef>, ApiError> {
+    let Some(dtb_name) = board_preset_dtb_name(board) else {
+        return Ok(None);
+    };
+    let file_path = session_dtb_file_path(dtb_name);
+    let manager = state.tftp_manager.read().await.clone();
+    if let Some(existing) = manager.get_session_file(session_id, &file_path).await? {
+        return Ok(Some(existing));
+    }
+
+    let bytes = state.dtb_store.read(dtb_name).await.map_err(|err| {
+        let message = err.to_string();
+        if message.contains("No such file") || message.contains("not found") {
+            ApiError::not_found(format!("preset DTB `{dtb_name}` not found"))
+        } else {
+            ApiError::from(err)
+        }
+    })?;
+    let file = manager
+        .put_session_file(session_id, &file_path, &bytes)
+        .await
+        .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
+    Ok(Some(file))
+}
+
+async fn rewrite_board_dtb_references(
+    state: &AppState,
+    old_name: &str,
+    new_name: &str,
+) -> Result<(), ApiError> {
+    let affected = {
+        let boards = state.boards.read().await;
+        boards
+            .values()
+            .filter_map(|board| {
+                let mut next = board.clone();
+                let BootConfig::Uboot(profile) = &mut next.boot else {
+                    return None;
+                };
+                if profile.dtb_name.as_deref() != Some(old_name) {
+                    return None;
+                }
+                profile.dtb_name = Some(new_name.to_string());
+                Some(next)
+            })
+            .collect::<Vec<_>>()
+    };
+
+    for board in &affected {
+        state.board_store.write_board(board).await?;
+    }
+
+    if !affected.is_empty() {
+        let mut boards = state.boards.write().await;
+        for board in affected {
+            boards.insert(board.id.clone(), board);
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::future;
@@ -1117,6 +1425,7 @@ mod tests {
         config.network.interface = "lo".into();
         config.data_dir = root.join("data");
         config.board_dir = root.join("boards");
+        config.dtb_dir = root.join("dtbs");
         config.tftp = TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(root.join("tftp")));
         let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
         let state = build_app_state(config_path, config, manager).await.unwrap();
@@ -1163,6 +1472,21 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         value["session_id"].as_str().unwrap().to_string()
+    }
+
+    async fn upload_dtb(app: &Router, name: &str, body: &'static str) -> StatusCode {
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/admin/dtbs")
+                    .header("X-Dtb-Name", name)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
     }
 
     fn sample_board(board_id: &str) -> BoardConfig {
@@ -1807,6 +2131,189 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(invalid_response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn admin_dtb_endpoints_support_create_rename_replace_and_delete() {
+        let app = test_router().await;
+
+        assert_eq!(upload_dtb(&app, "board.dtb", "dtb-v1").await, StatusCode::CREATED);
+
+        let rename_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/admin/dtbs/board.dtb")
+                    .header("X-Dtb-Name", "board-v2.dtb")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rename_response.status(), StatusCode::OK);
+
+        let replace_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/admin/dtbs/board-v2.dtb")
+                    .body(Body::from("dtb-v2"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(replace_response.status(), StatusCode::OK);
+        let replace_body = to_bytes(replace_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let file: crate::api::models::DtbFileResponse = serde_json::from_slice(&replace_body).unwrap();
+        assert_eq!(file.name, "board-v2.dtb");
+        assert_eq!(file.size, 6);
+        assert_eq!(file.relative_tftp_path_template, "boot/dtb/board-v2.dtb");
+
+        let delete_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/admin/dtbs/board-v2.dtb")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn renaming_dtb_updates_board_references_and_referenced_dtb_cannot_be_deleted() {
+        let app = test_router().await;
+        assert_eq!(upload_dtb(&app, "board.dtb", "dtb").await, StatusCode::CREATED);
+        assert_eq!(
+            create_board(
+                &app,
+                json!({
+                    "id": "rk3568-dtb",
+                    "board_type": "rk3568",
+                    "tags": [],
+                    "serial": null,
+                    "power_management": null,
+                    "boot": { "kind": "uboot", "use_tftp": true, "dtb_name": "board.dtb" },
+                    "notes": null,
+                    "disabled": false
+                }),
+            )
+            .await,
+            StatusCode::CREATED
+        );
+
+        let delete_referenced = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/admin/dtbs/board.dtb")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_referenced.status(), StatusCode::CONFLICT);
+
+        let rename_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/admin/dtbs/board.dtb")
+                    .header("X-Dtb-Name", "board-renamed.dtb")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rename_response.status(), StatusCode::OK);
+
+        let board_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/admin/boards/rk3568-dtb")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let board_body = to_bytes(board_response.into_body(), usize::MAX).await.unwrap();
+        let board: BoardConfig = serde_json::from_slice(&board_body).unwrap();
+        match board.boot {
+            BootConfig::Uboot(profile) => {
+                assert_eq!(profile.dtb_name.as_deref(), Some("board-renamed.dtb"))
+            }
+            BootConfig::Pxe(_) => panic!("expected uboot"),
+        }
+    }
+
+    #[tokio::test]
+    async fn session_dtb_endpoint_stages_preset_file_and_supports_download() {
+        let app = test_router().await;
+        assert_eq!(upload_dtb(&app, "board.dtb", "dtb-bytes").await, StatusCode::CREATED);
+        assert_eq!(
+            create_board(
+                &app,
+                json!({
+                    "id": "rk3568-dtb",
+                    "board_type": "rk3568",
+                    "tags": [],
+                    "serial": { "port": "/dev/ttyUSB0", "baud_rate": 115200 },
+                    "power_management": null,
+                    "boot": { "kind": "uboot", "use_tftp": true, "dtb_name": "board.dtb" },
+                    "notes": null,
+                    "disabled": false
+                }),
+            )
+            .await,
+            StatusCode::CREATED
+        );
+        let session_id = create_session(&app, "rk3568").await;
+
+        let dtb_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/sessions/{session_id}/dtb"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(dtb_response.status(), StatusCode::OK);
+        let dtb_body = to_bytes(dtb_response.into_body(), usize::MAX).await.unwrap();
+        let dtb: crate::api::models::SessionDtbResponse = serde_json::from_slice(&dtb_body).unwrap();
+        assert_eq!(dtb.dtb_name.as_deref(), Some("board.dtb"));
+        assert_eq!(
+            dtb.relative_path.as_deref(),
+            Some(format!("ostool/sessions/{session_id}/boot/dtb/board.dtb").as_str())
+        );
+        assert_eq!(dtb.session_file_path.as_deref(), Some("boot/dtb/board.dtb"));
+
+        let download_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/sessions/{session_id}/dtb/download"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(download_response.status(), StatusCode::OK);
+        let download_body = to_bytes(download_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(download_body.as_ref(), b"dtb-bytes");
     }
 
     #[tokio::test]

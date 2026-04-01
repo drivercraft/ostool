@@ -12,6 +12,7 @@ use crate::{
     board_pool::{BoardAllocationStatus, allocate_board},
     board_store::fs::FileBoardStore,
     config::{BoardConfig, ServerConfig},
+    dtb_store::DtbStore,
     session::Session,
     tftp::service::TftpManager,
 };
@@ -25,6 +26,7 @@ pub struct AppState {
     pub active_serial_sessions: Arc<RwLock<BTreeSet<String>>>,
     pub serial_shutdown_signals: Arc<RwLock<BTreeMap<String, watch::Sender<bool>>>>,
     pub board_store: Arc<FileBoardStore>,
+    pub dtb_store: Arc<DtbStore>,
     pub tftp_manager: Arc<RwLock<Arc<dyn TftpManager>>>,
 }
 
@@ -35,6 +37,8 @@ pub async fn build_app_state(
 ) -> anyhow::Result<AppState> {
     let board_store = Arc::new(FileBoardStore::new(config.board_dir.clone()));
     board_store.ensure_dir().await?;
+    let dtb_store = Arc::new(DtbStore::new(config.dtb_dir.clone()));
+    dtb_store.ensure_dir().await?;
     let boards = board_store.load_all().await?;
 
     Ok(AppState {
@@ -45,6 +49,7 @@ pub async fn build_app_state(
         active_serial_sessions: Arc::new(RwLock::new(BTreeSet::new())),
         serial_shutdown_signals: Arc::new(RwLock::new(BTreeMap::new())),
         board_store,
+        dtb_store,
         tftp_manager: Arc::new(RwLock::new(tftp_manager)),
     })
 }
@@ -155,6 +160,7 @@ impl AppState {
         let config = self.config.read().await.clone();
         tokio::fs::create_dir_all(&config.data_dir).await?;
         tokio::fs::create_dir_all(&config.board_dir).await?;
+        tokio::fs::create_dir_all(&config.dtb_dir).await?;
         tokio::fs::create_dir_all(config.tftp.root_dir()).await?;
         Ok(())
     }
@@ -193,6 +199,7 @@ mod tests {
         config.listen_addr = "127.0.0.1:0".parse().unwrap();
         config.data_dir = root.join("data");
         config.board_dir = root.join("boards");
+        config.dtb_dir = root.join("dtbs");
         let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
         let state = build_app_state(config_path, config, manager).await.unwrap();
 

@@ -8,6 +8,7 @@ import type {
   AdminBoardUpsertRequest,
   BoardConfig,
   BootConfig,
+  DtbFileResponse,
   PowerManagementConfig,
   SerialPortSummary,
 } from "@/types/api";
@@ -31,6 +32,7 @@ interface BoardEditorFormState {
   relay_serial_port: string;
   boot_kind: BootKind;
   use_tftp: boolean;
+  dtb_name: string;
   kernel_load_addr: string;
   fit_load_addr: string;
   timeout_text: string;
@@ -47,9 +49,14 @@ const loading = ref(true);
 const saving = ref(false);
 const deleting = ref(false);
 const refreshingSerials = ref(false);
+const uploadingDtb = ref(false);
 const validationError = ref("");
 const form = ref<BoardEditorFormState>(defaultFormState());
 const serialPorts = ref<SerialPortSummary[]>([]);
+const dtbs = ref<DtbFileResponse[]>([]);
+const dtbUploadName = ref("");
+const dtbUploadFile = ref<File | null>(null);
+const dtbFileInput = ref<HTMLInputElement | null>(null);
 const isEditing = computed(() => typeof route.params.boardId === "string");
 const boardId = computed(() => route.params.boardId as string | undefined);
 
@@ -70,6 +77,7 @@ function defaultFormState(): BoardEditorFormState {
     relay_serial_port: "",
     boot_kind: "uboot",
     use_tftp: false,
+    dtb_name: "",
     kernel_load_addr: "",
     fit_load_addr: "",
     timeout_text: "",
@@ -106,6 +114,7 @@ function boardToFormState(board: BoardConfig): BoardEditorFormState {
   if (board.boot.kind === "uboot") {
     next.boot_kind = "uboot";
     next.use_tftp = board.boot.use_tftp;
+    next.dtb_name = board.boot.dtb_name ?? "";
     next.kernel_load_addr = board.boot.kernel_load_addr ?? "";
     next.fit_load_addr = board.boot.fit_load_addr ?? "";
     next.timeout_text = board.boot.timeout === null ? "" : String(board.boot.timeout);
@@ -134,6 +143,7 @@ function buildBootConfig(): BootConfig {
     return {
       kind: "uboot",
       use_tftp: form.value.use_tftp,
+      dtb_name: trimToNull(form.value.dtb_name),
       kernel_load_addr: trimToNull(form.value.kernel_load_addr),
       fit_load_addr: trimToNull(form.value.fit_load_addr),
       timeout: trimToNull(form.value.timeout_text) === null
@@ -237,6 +247,18 @@ function serialOptions(currentValue: string) {
   return Array.from(options.entries()).map(([value, label]) => ({ value, label }));
 }
 
+function dtbOptions(currentValue: string) {
+  const options = new Map<string, string>();
+  for (const dtb of dtbs.value) {
+    options.set(dtb.name, `${dtb.name} (${dtb.relative_tftp_path_template})`);
+  }
+  const trimmed = currentValue.trim();
+  if (trimmed && !options.has(trimmed)) {
+    options.set(trimmed, `${trimmed} (当前配置，未检测到)`);
+  }
+  return Array.from(options.entries()).map(([value, label]) => ({ value, label }));
+}
+
 async function loadSerialPorts() {
   serialPorts.value = await api.listSerialPorts();
 }
@@ -259,16 +281,58 @@ async function loadEditor() {
   ui.clearMessages();
 
   try {
-    const [ports, board] = await Promise.all([
+    const [ports, dtbList, board] = await Promise.all([
       api.listSerialPorts(),
+      api.listDtbs(),
       isEditing.value && boardId.value ? api.getBoard(boardId.value) : Promise.resolve(null),
     ]);
     serialPorts.value = ports;
+    dtbs.value = dtbList;
     form.value = board ? boardToFormState(board) : defaultFormState();
   } catch (error) {
     ui.setError((error as Error).message);
   } finally {
     loading.value = false;
+  }
+}
+
+function onDtbFileChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0] ?? null;
+  dtbUploadFile.value = file;
+  if (file) {
+    dtbUploadName.value = file.name;
+  }
+}
+
+async function uploadDtbAndSelect() {
+  if (!dtbUploadFile.value) {
+    ui.setError("请选择要上传的 DTB 文件");
+    return;
+  }
+  const dtbName = dtbUploadName.value.trim() || dtbUploadFile.value.name;
+  if (!dtbName) {
+    ui.setError("请填写 DTB 文件名");
+    return;
+  }
+
+  uploadingDtb.value = true;
+  try {
+    const created = await api.createDtb(dtbName, dtbUploadFile.value);
+    dtbs.value = [...dtbs.value.filter((item) => item.name !== created.name), created].sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+    form.value.dtb_name = created.name;
+    dtbUploadName.value = "";
+    dtbUploadFile.value = null;
+    if (dtbFileInput.value) {
+      dtbFileInput.value.value = "";
+    }
+    ui.setSuccess(`已上传 DTB ${created.name}`);
+  } catch (error) {
+    ui.setError((error as Error).message);
+  } finally {
+    uploadingDtb.value = false;
   }
 }
 
@@ -466,6 +530,42 @@ onMounted(() => {
                 <span>超时（秒）</span>
                 <input v-model="form.timeout_text" type="number" min="0" placeholder="留空表示无超时" />
               </label>
+            </div>
+
+            <div class="form-grid two-columns">
+              <label class="field">
+                <span>预设 DTB</span>
+                <select v-model="form.dtb_name">
+                  <option value="">不使用预设 DTB</option>
+                  <option
+                    v-for="option in dtbOptions(form.dtb_name)"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
+                  </option>
+                </select>
+              </label>
+              <div class="field">
+                <span>上传并选中</span>
+                <div class="inline-form-row">
+                  <input v-model="dtbUploadName" placeholder="例如 board.dtb" />
+                  <input
+                    ref="dtbFileInput"
+                    type="file"
+                    accept=".dtb,application/octet-stream"
+                    @change="onDtbFileChange"
+                  />
+                  <button
+                    class="ghost-button"
+                    type="button"
+                    :disabled="uploadingDtb"
+                    @click="uploadDtbAndSelect"
+                  >
+                    {{ uploadingDtb ? "上传中..." : "上传 DTB" }}
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div class="form-grid two-columns">

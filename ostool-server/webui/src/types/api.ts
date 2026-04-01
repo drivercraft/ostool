@@ -89,6 +89,7 @@ export type PowerManagementConfig = CustomPowerManagement | ZhongshengRelayPower
 export interface UbootProfile {
   kind: "uboot";
   use_tftp: boolean;
+  dtb_name: string | null;
   kernel_load_addr: string | null;
   fit_load_addr: string | null;
   timeout: number | null;
@@ -130,6 +131,13 @@ export interface BoardTypeSummary {
   available: number;
 }
 
+export interface DtbFileResponse {
+  name: string;
+  size: number;
+  updated_at: string;
+  relative_tftp_path_template: string;
+}
+
 export interface Session {
   id: string;
   board_id: string;
@@ -164,6 +172,7 @@ export interface AdminServerConfigReadonly {
   listen_addr: string;
   data_dir: string;
   board_dir: string;
+  dtb_dir: string;
 }
 
 export interface AdminServerConfigEditable {

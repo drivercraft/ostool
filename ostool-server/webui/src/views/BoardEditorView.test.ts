@@ -9,6 +9,8 @@ const route = {
 
 const push = vi.fn();
 const listSerialPorts = vi.fn();
+const listDtbs = vi.fn();
+const createDtb = vi.fn();
 const getBoard = vi.fn();
 const createBoard = vi.fn();
 const updateBoard = vi.fn();
@@ -27,6 +29,8 @@ vi.mock("vue-router", () => ({
 vi.mock("@/api/client", () => ({
   api: {
     listSerialPorts,
+    listDtbs,
+    createDtb,
     getBoard,
     createBoard,
     updateBoard,
@@ -70,6 +74,7 @@ function makeBoard(id = "demo-board"): BoardConfig {
     boot: {
       kind: "uboot",
       use_tftp: true,
+      dtb_name: null,
       kernel_load_addr: null,
       fit_load_addr: null,
       timeout: null,
@@ -84,6 +89,8 @@ describe("BoardEditorView", () => {
     route.params = {};
     push.mockReset();
     listSerialPorts.mockReset();
+    listDtbs.mockReset();
+    createDtb.mockReset();
     getBoard.mockReset();
     createBoard.mockReset();
     updateBoard.mockReset();
@@ -92,6 +99,7 @@ describe("BoardEditorView", () => {
     uiStore.setError.mockReset();
     uiStore.setSuccess.mockReset();
     listSerialPorts.mockResolvedValue(makeSerialPorts());
+    listDtbs.mockResolvedValue([]);
   });
 
   it("loads a new-board form and refreshes serial ports independently", async () => {
@@ -151,6 +159,7 @@ describe("BoardEditorView", () => {
       boot: {
         kind: "uboot",
         use_tftp: false,
+        dtb_name: null,
         kernel_load_addr: null,
         fit_load_addr: null,
         timeout: null,
@@ -176,5 +185,51 @@ describe("BoardEditorView", () => {
 
     expect(updateBoard).toHaveBeenCalledWith("demo-board", expect.objectContaining({ id: null }));
     expect(push).toHaveBeenCalledWith("/boards/demo-board");
+  });
+
+  it("fills upload DTB name automatically after choosing a file", async () => {
+    const BoardEditorView = (await import("./BoardEditorView.vue")).default;
+    const wrapper = mount(BoardEditorView);
+    await flushPromises();
+
+    const uploadNameInput = wrapper.get('input[placeholder="例如 board.dtb"]');
+    const fileInputs = wrapper.findAll('input[type="file"]');
+    const uploadFileInput = fileInputs[0];
+    Object.defineProperty(uploadFileInput.element, "files", {
+      value: [new File(["dtb"], "picked-board.dtb", { type: "application/octet-stream" })],
+      configurable: true,
+    });
+
+    await uploadFileInput.trigger("change");
+
+    expect((uploadNameInput.element as HTMLInputElement).value).toBe("picked-board.dtb");
+  });
+
+  it("uploads DTB with selected filename even if the name field stays blank", async () => {
+    createDtb.mockResolvedValue({
+      name: "picked-board.dtb",
+      size: 3,
+      updated_at: "2026-04-01T00:00:00Z",
+      relative_tftp_path_template: "boot/dtb/picked-board.dtb",
+    });
+
+    const BoardEditorView = (await import("./BoardEditorView.vue")).default;
+    const wrapper = mount(BoardEditorView);
+    await flushPromises();
+
+    const fileInputs = wrapper.findAll('input[type="file"]');
+    const uploadFileInput = fileInputs[0];
+    Object.defineProperty(uploadFileInput.element, "files", {
+      value: [new File(["dtb"], "picked-board.dtb", { type: "application/octet-stream" })],
+      configurable: true,
+    });
+    await uploadFileInput.trigger("change");
+    await wrapper.get('input[placeholder="例如 board.dtb"]').setValue("");
+
+    const uploadButton = wrapper.findAll("button").find((button) => button.text() === "上传 DTB");
+    await uploadButton!.trigger("click");
+    await flushPromises();
+
+    expect(createDtb).toHaveBeenCalledWith("picked-board.dtb", expect.any(File));
   });
 });

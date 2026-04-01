@@ -55,6 +55,7 @@ pub enum BootConfig {
 pub struct UbootProfile {
     #[serde(default)]
     pub use_tftp: bool,
+    pub dtb_name: Option<String>,
     pub kernel_load_addr: Option<String>,
     pub fit_load_addr: Option<String>,
     pub timeout: Option<u64>,
@@ -99,6 +100,14 @@ pub struct TftpSessionResponse {
     pub netmask: Option<String>,
     pub writable: bool,
     pub files: Vec<FileResponse>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionDtbResponse {
+    pub dtb_name: Option<String>,
+    pub relative_path: Option<String>,
+    pub session_file_path: Option<String>,
+    pub tftp_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -233,6 +242,32 @@ impl BoardServerClient {
         self.decode_json(response).await
     }
 
+    pub async fn get_session_dtb(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionDtbResponse, BoardServerClientError> {
+        let response = self
+            .client
+            .get(self.endpoint(&format!("/api/v1/sessions/{session_id}/dtb")))
+            .send()
+            .await
+            .map_err(Self::request_error)?;
+        self.decode_json(response).await
+    }
+
+    pub async fn download_session_dtb(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<u8>, BoardServerClientError> {
+        let response = self
+            .client
+            .get(self.endpoint(&format!("/api/v1/sessions/{session_id}/dtb/download")))
+            .send()
+            .await
+            .map_err(Self::request_error)?;
+        self.decode_bytes(response).await
+    }
+
     pub async fn upload_session_file(
         &self,
         session_id: &str,
@@ -283,6 +318,21 @@ impl BoardServerClient {
     ) -> Result<(), BoardServerClientError> {
         if response.status().is_success() {
             Ok(())
+        } else {
+            Err(Self::api_error(response).await)
+        }
+    }
+
+    async fn decode_bytes(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<Vec<u8>, BoardServerClientError> {
+        if response.status().is_success() {
+            response
+                .bytes()
+                .await
+                .map(|bytes| bytes.to_vec())
+                .map_err(Self::request_error)
         } else {
             Err(Self::api_error(response).await)
         }
@@ -443,5 +493,24 @@ mod tests {
         assert!(response.available);
         assert_eq!(response.files.len(), 1);
         assert_eq!(response.files[0].filename, "image.fit");
+    }
+
+    #[test]
+    fn parse_session_dtb_response() {
+        let response: super::SessionDtbResponse = serde_json::from_str(
+            r#"{
+                "dtb_name": "board.dtb",
+                "relative_path": "ostool/sessions/demo/boot/dtb/board.dtb",
+                "session_file_path": "boot/dtb/board.dtb",
+                "tftp_url": "tftp://10.0.0.2/ostool/sessions/demo/boot/dtb/board.dtb"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(response.dtb_name.as_deref(), Some("board.dtb"));
+        assert_eq!(
+            response.session_file_path.as_deref(),
+            Some("boot/dtb/board.dtb")
+        );
     }
 }

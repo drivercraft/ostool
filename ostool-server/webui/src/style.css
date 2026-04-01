@@ -309,6 +309,22 @@ a {
   gap: 10px;
 }
 
+.inline-form-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.action-field {
+  align-self: end;
+}
+
+.table-form-stack {
+  display: grid;
+  gap: 10px;
+}
+
 .field span {
   color: var(--muted);
   font-size: 0.92rem;
@@ -490,7 +506,8 @@ code {
   .split-grid,
   .toolbar-grid,
   .form-grid.two-columns,
-  .form-grid.three-columns {
+  .form-grid.three-columns,
+  .inline-form-row {
     grid-template-columns: 1fr;
   }
 }

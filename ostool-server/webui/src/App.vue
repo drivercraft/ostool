@@ -20,6 +20,7 @@ watch(
 const navItems = computed(() => [
   { to: "/overview", label: "总览" },
   { to: "/boards", label: "开发板" },
+  { to: "/dtbs", label: "DTB 管理" },
   { to: "/sessions", label: "会话租约" },
   { to: "/tftp", label: "TFTP 配置" },
   { to: "/server", label: "Server 配置" },

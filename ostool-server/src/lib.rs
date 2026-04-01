@@ -4,6 +4,7 @@ pub mod api;
 pub mod board_pool;
 pub mod board_store;
 pub mod config;
+pub mod dtb_store;
 pub mod power;
 pub mod process;
 pub mod serial;
@@ -18,4 +19,5 @@ pub use config::{
     PowerManagementConfig, PxeProfile, SerialConfig, ServerConfig, SystemTftpdHpaConfig,
     TftpConfig, TftpNetworkConfig, UbootProfile, ZhongshengRelayPowerManagement,
 };
+pub use dtb_store::{DtbFile, DtbStore};
 pub use state::{AppState, build_app_state};

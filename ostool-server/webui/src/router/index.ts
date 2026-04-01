@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from "vue-router";
 
 import BoardEditorView from "@/views/BoardEditorView.vue";
 import BoardsView from "@/views/BoardsView.vue";
+import DtbView from "@/views/DtbView.vue";
 import OverviewView from "@/views/OverviewView.vue";
 import ServerView from "@/views/ServerView.vue";
 import SessionsView from "@/views/SessionsView.vue";
@@ -34,6 +35,12 @@ export const router = createRouter({
       name: "board-edit",
       component: BoardEditorView,
       meta: { title: "编辑开发板" },
+    },
+    {
+      path: "/dtbs",
+      name: "dtbs",
+      component: DtbView,
+      meta: { title: "DTB 管理" },
     },
     {
       path: "/sessions",

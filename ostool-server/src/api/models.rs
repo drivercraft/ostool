@@ -6,6 +6,7 @@ use crate::{
         BoardConfig, BootConfig, LeaseConfig, PowerManagementConfig, SerialConfig, TftpConfig,
         TftpNetworkConfig,
     },
+    dtb_store::DtbFile,
     session::Session,
     tftp::{files::TftpFileRef, status::TftpStatus},
 };
@@ -88,6 +89,26 @@ pub struct AdminBoardUpsertRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DtbFileResponse {
+    pub name: String,
+    pub size: u64,
+    pub updated_at: DateTime<Utc>,
+    pub relative_tftp_path_template: String,
+}
+
+impl DtbFileResponse {
+    pub fn from_dtb(file: DtbFile) -> Self {
+        let name = file.name;
+        Self {
+            relative_tftp_path_template: format!("boot/dtb/{name}"),
+            name,
+            size: file.size,
+            updated_at: file.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkInterfaceSummary {
     pub name: String,
     pub label: String,
@@ -125,6 +146,14 @@ pub struct TftpSessionResponse {
     pub netmask: Option<String>,
     pub writable: bool,
     pub files: Vec<FileResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionDtbResponse {
+    pub dtb_name: Option<String>,
+    pub relative_path: Option<String>,
+    pub session_file_path: Option<String>,
+    pub tftp_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,6 +201,7 @@ pub struct AdminServerConfigReadonly {
     pub listen_addr: String,
     pub data_dir: String,
     pub board_dir: String,
+    pub dtb_dir: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

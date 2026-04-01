@@ -9,6 +9,7 @@ use crate::{Tool, run::shell_init::normalize_shell_init_config};
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
 pub struct BoardRunConfig {
     pub board_type: String,
+    pub dtb_file: Option<String>,
     #[serde(default)]
     pub success_regex: Vec<String>,
     #[serde(default)]
@@ -52,6 +53,11 @@ impl BoardRunConfig {
 
     fn replace_strings(&mut self, tool: &Tool) -> anyhow::Result<()> {
         self.board_type = tool.replace_string(&self.board_type)?;
+        self.dtb_file = self
+            .dtb_file
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
         self.success_regex = self
             .success_regex
             .iter()
@@ -82,6 +88,14 @@ impl BoardRunConfig {
 
     fn normalize(&mut self, config_name: &str) -> anyhow::Result<()> {
         self.board_type = self.board_type.trim().to_string();
+        if let Some(dtb_file) = self.dtb_file.as_mut() {
+            let trimmed = dtb_file.trim();
+            if trimmed.is_empty() {
+                self.dtb_file = None;
+            } else if trimmed.len() != dtb_file.len() {
+                *dtb_file = trimmed.to_string();
+            }
+        }
         if self.board_type.is_empty() {
             anyhow::bail!("`board_type` must not be empty in {config_name}");
         }
@@ -102,6 +116,7 @@ mod tests {
         let mut config: BoardRunConfig = toml::from_str(
             r#"
 board_type = " orangepi5plus "
+dtb_file = " ${workspace}/board.dtb "
 success_regex = ["ok"]
 fail_regex = ["panic"]
 shell_prefix = " login: "
@@ -115,6 +130,7 @@ port = 9000
         config.normalize("test board config").unwrap();
 
         assert_eq!(config.board_type, "orangepi5plus");
+        assert_eq!(config.dtb_file.as_deref(), Some("${workspace}/board.dtb"));
         assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
         assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
         assert_eq!(
