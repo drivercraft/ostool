@@ -45,6 +45,63 @@ pub struct HeartbeatResponse {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BootConfig {
+    Uboot(UbootProfile),
+    Pxe(PxeProfile),
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct UbootProfile {
+    #[serde(default)]
+    pub use_tftp: bool,
+    pub kernel_load_addr: Option<String>,
+    pub fit_load_addr: Option<String>,
+    pub timeout: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct PxeProfile {
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BootProfileResponse {
+    pub boot: BootConfig,
+    pub server_ip: Option<String>,
+    pub netmask: Option<String>,
+    pub interface: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SerialStatusResponse {
+    pub available: bool,
+    pub connected: bool,
+    pub port: Option<String>,
+    pub baud_rate: Option<u32>,
+    pub ws_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileResponse {
+    pub filename: String,
+    pub relative_path: String,
+    pub tftp_url: Option<String>,
+    pub size: u64,
+    pub uploaded_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TftpSessionResponse {
+    pub available: bool,
+    pub provider: String,
+    pub server_ip: Option<String>,
+    pub netmask: Option<String>,
+    pub writable: bool,
+    pub files: Vec<FileResponse>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct ErrorResponse {
     code: String,
     message: String,
@@ -135,6 +192,62 @@ impl BoardServerClient {
             return Ok(());
         }
         self.decode_empty(response).await
+    }
+
+    pub async fn get_boot_profile(
+        &self,
+        session_id: &str,
+    ) -> Result<BootProfileResponse, BoardServerClientError> {
+        let response = self
+            .client
+            .get(self.endpoint(&format!("/api/v1/sessions/{session_id}/boot-profile")))
+            .send()
+            .await
+            .map_err(Self::request_error)?;
+        self.decode_json(response).await
+    }
+
+    pub async fn get_serial_status(
+        &self,
+        session_id: &str,
+    ) -> Result<SerialStatusResponse, BoardServerClientError> {
+        let response = self
+            .client
+            .get(self.endpoint(&format!("/api/v1/sessions/{session_id}/serial")))
+            .send()
+            .await
+            .map_err(Self::request_error)?;
+        self.decode_json(response).await
+    }
+
+    pub async fn get_tftp_status(
+        &self,
+        session_id: &str,
+    ) -> Result<TftpSessionResponse, BoardServerClientError> {
+        let response = self
+            .client
+            .get(self.endpoint(&format!("/api/v1/sessions/{session_id}/tftp")))
+            .send()
+            .await
+            .map_err(Self::request_error)?;
+        self.decode_json(response).await
+    }
+
+    pub async fn upload_session_file(
+        &self,
+        session_id: &str,
+        relative_path: &str,
+        bytes: Vec<u8>,
+    ) -> Result<FileResponse, BoardServerClientError> {
+        let response = self
+            .client
+            .put(self.endpoint(&format!("/api/v1/sessions/{session_id}/files")))
+            .header("X-File-Path", relative_path)
+            .body(bytes)
+            .send()
+            .await
+            .map_err(Self::request_error)?;
+        self.decode_json(response).await
     }
 
     pub fn resolve_ws_url(&self, ws_url: &str) -> anyhow::Result<Url> {
@@ -230,7 +343,7 @@ impl fmt::Display for BoardTypeSummary {
 mod tests {
     use reqwest::StatusCode;
 
-    use super::{BoardServerClient, parse_error_body};
+    use super::{BoardServerClient, BootConfig, parse_error_body};
 
     #[test]
     fn resolve_relative_ws_url_uses_server_defaults() {
@@ -275,5 +388,60 @@ mod tests {
         );
         assert!(error.is_board_type_not_found_for("rk3568"));
         assert!(!error.is_no_available_board_for("rk3568"));
+    }
+
+    #[test]
+    fn parse_uboot_boot_profile() {
+        let response: super::BootProfileResponse = serde_json::from_str(
+            r#"{
+                "boot": {
+                    "kind": "uboot",
+                    "use_tftp": true,
+                    "kernel_load_addr": "0x100000",
+                    "fit_load_addr": "0x200000",
+                    "timeout": 30
+                },
+                "server_ip": "10.0.0.2",
+                "netmask": "255.255.255.0",
+                "interface": "eth0"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(response.server_ip.as_deref(), Some("10.0.0.2"));
+        match response.boot {
+            BootConfig::Uboot(profile) => {
+                assert!(profile.use_tftp);
+                assert_eq!(profile.timeout, Some(30));
+            }
+            BootConfig::Pxe(_) => panic!("expected uboot profile"),
+        }
+    }
+
+    #[test]
+    fn parse_tftp_session_file_response() {
+        let response: super::TftpSessionResponse = serde_json::from_str(
+            r#"{
+                "available": true,
+                "provider": "builtin",
+                "server_ip": "10.0.0.2",
+                "netmask": "255.255.255.0",
+                "writable": true,
+                "files": [
+                    {
+                        "filename": "image.fit",
+                        "relative_path": "ostool/sessions/demo/boot/image.fit",
+                        "tftp_url": "tftp://10.0.0.2/ostool/sessions/demo/boot/image.fit",
+                        "size": 1234,
+                        "uploaded_at": "2026-04-01T00:00:00Z"
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        assert!(response.available);
+        assert_eq!(response.files.len(), 1);
+        assert_eq!(response.files[0].filename, "image.fit");
     }
 }

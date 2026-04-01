@@ -7,10 +7,10 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::sterm::{AsyncTerminal, TerminalConfig};
 
 #[derive(Debug, Deserialize)]
-struct ServerControlMessage {
+pub(crate) struct ServerControlMessage {
     #[serde(rename = "type")]
-    kind: String,
-    message: Option<String>,
+    pub(crate) kind: String,
+    pub(crate) message: Option<String>,
 }
 
 pub async fn run_serial_terminal(ws_url: reqwest::Url) -> anyhow::Result<()> {

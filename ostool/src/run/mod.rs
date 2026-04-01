@@ -23,4 +23,4 @@ mod output_matcher;
 mod ovmf_prebuilt;
 
 /// Shared shell auto-init matcher and delayed command sender.
-mod shell_init;
+pub(crate) mod shell_init;

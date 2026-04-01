@@ -7,9 +7,10 @@ use colored::Colorize as _;
 use log::info;
 use ostool::{
     Tool, ToolConfig, board,
+    board::{client::BoardServerClient, config::BoardRunConfig, session::BoardSession},
     build::{
         self, CargoQemuAppendArgs, CargoQemuOverrideArgs, CargoQemuRunnerArgs, CargoRunnerKind,
-        CargoUbootRunnerArgs,
+        CargoUbootRunnerArgs, cargo_builder::CargoBuilder,
     },
     logger,
     menuconfig::{MenuConfigHandler, MenuConfigMode},
@@ -88,11 +89,24 @@ struct RunUbootCommand {
 
 #[derive(Args, Debug)]
 struct BoardRunArgs {
-    /// Board type to allocate from ostool-server
-    #[arg(short = 'b', long = "board")]
-    board: String,
+    /// Path to the build configuration file
+    #[arg(short, long)]
+    config: Option<PathBuf>,
+    /// Path to the board runner configuration file, defaults to `pwd/.board.toml`
+    #[arg(long = "board-config")]
+    board_config: Option<PathBuf>,
     #[command(flatten)]
-    server: ServerArgs,
+    server: RunBoardServerArgs,
+}
+
+#[derive(Args, Debug, Default)]
+struct RunBoardServerArgs {
+    /// ostool-server host
+    #[arg(long)]
+    server: Option<String>,
+    /// ostool-server port
+    #[arg(long)]
+    port: Option<u16>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -156,8 +170,46 @@ async fn try_main() -> Result<()> {
         }
         SubCommands::Run { command } => match command {
             RunSubCommands::Board(args) => {
-                let _ = env_logger::try_init();
-                board::run_board(&args.server.server, args.server.port, &args.board).await?;
+                let mut tool = init_tool(manifest.clone())?;
+                let board_config =
+                    BoardRunConfig::load_or_create(&tool, args.board_config.clone()).await?;
+                prepare_uboot_artifacts(&mut tool, args.config.clone()).await?;
+
+                let (server, port) =
+                    board_config.resolve_server(args.server.server.as_deref(), args.server.port);
+                let client = BoardServerClient::new(&server, port)?;
+                let session = BoardSession::acquire(client.clone(), &board_config.board_type)
+                    .await
+                    .map_err(anyhow::Error::from)?;
+
+                println!("Allocated board session:");
+                println!("  board_type: {}", board_config.board_type);
+                println!("  board_id: {}", session.info().board_id);
+                println!("  session_id: {}", session.info().session_id);
+                println!("  lease_expires_at: {}", session.info().lease_expires_at);
+                println!("  boot_mode: {}", session.info().boot_mode);
+
+                let run_result = match session.info().boot_mode.as_str() {
+                    "uboot" => {
+                        tool.run_uboot_remote(&board_config, client, session.info().clone())
+                            .await
+                    }
+                    other => Err(anyhow::anyhow!(
+                        "unsupported board boot mode `{other}`; only `uboot` is supported"
+                    )),
+                };
+
+                let release_result = session.release().await;
+                match (run_result, release_result) {
+                    (Ok(()), Ok(())) => {}
+                    (Err(err), Ok(())) => return Err(err),
+                    (Ok(()), Err(err)) => return Err(err),
+                    (Err(run_err), Err(release_err)) => {
+                        return Err(run_err.context(format!(
+                            "additionally failed to release board session: {release_err:#}"
+                        )));
+                    }
+                }
             }
             RunSubCommands::Qemu(args) => {
                 let RunQemuCommand { config, qemu } = args;
@@ -247,6 +299,38 @@ async fn try_main() -> Result<()> {
     Ok(())
 }
 
+async fn prepare_uboot_artifacts(
+    tool: &mut Tool,
+    config_path: Option<PathBuf>,
+) -> Result<ostool::build::config::BuildConfig> {
+    let config = tool.prepare_build_config(config_path, false).await?;
+    match &config.system {
+        build::config::BuildSystem::Cargo(cargo) => {
+            let build_config_path = tool.ctx().build_config_path.clone();
+            CargoBuilder::build(tool, cargo, build_config_path)
+                .skip_objcopy(true)
+                .resolve_artifact_from_json(true)
+                .execute()
+                .await?;
+        }
+        build::config::BuildSystem::Custom(custom_cfg) => {
+            tool.shell_run_cmd(&custom_cfg.build_cmd)?;
+            tool.set_elf_path(custom_cfg.elf_path.clone().into())
+                .await?;
+            info!(
+                "ELF {:?}: {}",
+                tool.ctx().arch,
+                tool.ctx().artifacts.elf.as_ref().unwrap().display()
+            );
+
+            if custom_cfg.to_bin {
+                tool.objcopy_output_bin()?;
+            }
+        }
+    }
+    Ok(config)
+}
+
 fn init_tool(manifest_arg: Option<PathBuf>) -> Result<Tool> {
     let manifest = resolve_manifest_context(manifest_arg.clone())?;
     let log_path = logger::init_file_logger(&manifest.workspace_dir)?;
@@ -323,15 +407,52 @@ mod tests {
 
     #[test]
     fn parse_run_board_with_board_type() {
-        let cli = Cli::try_parse_from(["ostool", "run", "board", "-b", "rk3568"]).unwrap();
+        let cli = Cli::try_parse_from(["ostool", "run", "board"]).unwrap();
 
         match cli.command {
             SubCommands::Run {
                 command: RunSubCommands::Board(args),
             } => {
-                assert_eq!(args.board, "rk3568");
-                assert_eq!(args.server.server, "127.0.0.1");
-                assert_eq!(args.server.port, 8080);
+                assert!(args.config.is_none());
+                assert!(args.board_config.is_none());
+                assert!(args.server.server.is_none());
+                assert!(args.server.port.is_none());
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_run_board_with_build_and_board_config() {
+        let cli = Cli::try_parse_from([
+            "ostool",
+            "run",
+            "board",
+            "--config",
+            "board.build.toml",
+            "--board-config",
+            "remote.board.toml",
+            "--server",
+            "10.0.0.2",
+            "--port",
+            "9000",
+        ])
+        .unwrap();
+
+        match cli.command {
+            SubCommands::Run {
+                command: RunSubCommands::Board(args),
+            } => {
+                assert_eq!(
+                    args.config.as_deref(),
+                    Some(std::path::Path::new("board.build.toml"))
+                );
+                assert_eq!(
+                    args.board_config.as_deref(),
+                    Some(std::path::Path::new("remote.board.toml"))
+                );
+                assert_eq!(args.server.server.as_deref(), Some("10.0.0.2"));
+                assert_eq!(args.server.port, Some(9000));
             }
             other => panic!("unexpected command: {other:?}"),
         }

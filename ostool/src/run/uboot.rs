@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::Context;
+use async_trait::async_trait;
 use byte_unit::Byte;
 use colored::Colorize;
 use fitimage::{ComponentConfig, FitImageBuilder, FitImageConfig};
@@ -28,6 +29,16 @@ use uboot_shell::UbootShell;
 
 use crate::{
     Tool,
+    board::{
+        client::{
+            BoardServerClient, BootConfig as RemoteBootConfig, BootProfileResponse,
+            SerialStatusResponse, SessionCreatedResponse, TftpSessionResponse,
+        },
+        config::BoardRunConfig,
+        serial_stream::{
+            BoxedAsyncRead, BoxedAsyncWrite, SerialStreamTasks, connect_serial_stream,
+        },
+    },
     run::{
         output_matcher::{
             ByteStreamMatcher, MATCH_DRAIN_DURATION, compile_regexes, print_match_event,
@@ -50,10 +61,6 @@ mod errors {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct UbootConfig {
-    /// Serial console device
-    /// e.g., /dev/ttyUSB0 on linux, COM3 on Windows
-    pub serial: String,
-    pub baud_rate: String,
     pub dtb_file: Option<String>,
     /// Kernel load address
     /// if not specified, use U-Boot env variable 'loadaddr'
@@ -78,12 +85,38 @@ pub struct UbootConfig {
     pub shell_init_cmd: Option<String>,
     /// Timeout in seconds after entering kernel output. `None` or `0` disables the timeout.
     pub timeout: Option<u64>,
+    #[serde(flatten)]
+    pub local: LocalUbootConfig,
+}
+
+#[derive(Default, Serialize, Deserialize, JsonSchema, Debug, Clone)]
+pub struct LocalUbootConfig {
+    /// Serial console device
+    /// e.g., /dev/ttyUSB0 on linux, COM3 on Windows
+    pub serial: Option<String>,
+    pub baud_rate: Option<String>,
+    /// TFTP boot configuration
+    pub net: Option<Net>,
+    /// Board reset command
+    /// shell command to reset the board
+    pub board_reset_cmd: Option<String>,
+    /// Board power off command
+    /// shell command to power off the board
+    pub board_power_off_cmd: Option<String>,
 }
 
 impl UbootConfig {
+    pub fn from_board_run_config(config: &BoardRunConfig) -> Self {
+        Self {
+            success_regex: config.success_regex.clone(),
+            fail_regex: config.fail_regex.clone(),
+            shell_prefix: config.shell_prefix.clone(),
+            shell_init_cmd: config.shell_init_cmd.clone(),
+            ..Default::default()
+        }
+    }
+
     fn replace_strings(&mut self, tool: &Tool) -> anyhow::Result<()> {
-        self.serial = tool.replace_string(&self.serial)?;
-        self.baud_rate = tool.replace_string(&self.baud_rate)?;
         self.dtb_file = self
             .dtb_file
             .as_deref()
@@ -139,9 +172,7 @@ impl UbootConfig {
             .as_deref()
             .map(|value| tool.replace_string(value))
             .transpose()?;
-        if let Some(net) = &mut self.net {
-            net.replace_strings(tool)?;
-        }
+        self.local.replace_strings(tool)?;
         Ok(())
     }
 
@@ -173,6 +204,35 @@ impl UbootConfig {
 
     fn shell_auto_init(&self) -> Option<ShellAutoInitMatcher> {
         ShellAutoInitMatcher::new(self.shell_prefix.clone(), self.shell_init_cmd.clone())
+    }
+}
+
+impl LocalUbootConfig {
+    fn replace_strings(&mut self, tool: &Tool) -> anyhow::Result<()> {
+        self.serial = self
+            .serial
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        self.baud_rate = self
+            .baud_rate
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        self.board_reset_cmd = self
+            .board_reset_cmd
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        self.board_power_off_cmd = self
+            .board_power_off_cmd
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        if let Some(net) = &mut self.net {
+            net.replace_strings(tool)?;
+        }
+        Ok(())
     }
 }
 
@@ -222,73 +282,66 @@ pub struct RunUbootArgs {
 
 impl Tool {
     pub async fn run_uboot(&mut self, args: RunUbootArgs) -> anyhow::Result<()> {
-        let config_path = match args.config.clone() {
+        let config = self.load_uboot_config(args.config.clone()).await?;
+        let backend = LocalBackend::new(config.local.clone());
+        let mut runner = Runner::new(self, config, backend);
+        runner.run().await
+    }
+
+    pub async fn run_uboot_remote(
+        &mut self,
+        board_config: &BoardRunConfig,
+        client: BoardServerClient,
+        session: SessionCreatedResponse,
+    ) -> anyhow::Result<()> {
+        let config = UbootConfig::from_board_run_config(board_config);
+        let backend = RemoteBackend::new(client, session);
+        let mut runner = Runner::new(self, config, backend);
+        runner.run().await
+    }
+
+    async fn load_uboot_config(&mut self, config: Option<PathBuf>) -> anyhow::Result<UbootConfig> {
+        let config_path = match config {
             Some(path) => self.replace_path_variables(path)?,
             None => self.workspace_dir().join(".uboot.toml"),
         };
 
-        let config = match fs::read_to_string(&config_path).await {
+        let mut config = match fs::read_to_string(&config_path).await {
             Ok(content) => {
                 println!("Using U-Boot config: {}", config_path.display());
-                let mut config: UbootConfig = toml::from_str(&content).with_context(|| {
+                toml::from_str(&content).with_context(|| {
                     format!("failed to parse U-Boot config: {}", config_path.display())
-                })?;
-                config.replace_strings(self)?;
-                config.normalize(&format!("U-Boot config {}", config_path.display()))?;
-                config
+                })?
             }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                let mut config = UbootConfig {
-                    serial: "/dev/ttyUSB0".to_string(),
-                    baud_rate: "115200".into(),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                let config = UbootConfig {
+                    local: LocalUbootConfig {
+                        serial: Some("/dev/ttyUSB0".to_string()),
+                        baud_rate: Some("115200".to_string()),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
-                config.normalize(&format!("U-Boot config {}", config_path.display()))?;
                 fs::write(&config_path, toml::to_string_pretty(&config)?)
                     .await
                     .with_path("failed to write file", &config_path)?;
                 config
             }
-            Err(e) => return Err(e.into()),
+            Err(err) => return Err(err.into()),
         };
 
-        let baud_rate = config.baud_rate.parse::<u32>().with_context(|| {
-            format!(
-                "baud_rate is not a valid integer in {}",
-                config_path.display()
-            )
-        })?;
-
-        let mut runner = Runner {
-            tool: self,
-            config,
-            baud_rate,
-            success_regex: vec![],
-            fail_regex: vec![],
-        };
-        runner.run().await.with_context(|| {
-            format!(
-                "U-Boot run failed with config {} (serial={}, baud_rate={}, shell_prefix={:?}, \
-                 shell_init_cmd={:?}, success_regex={:?}, fail_regex={:?})",
-                config_path.display(),
-                runner.config.serial,
-                runner.config.baud_rate,
-                runner.config.shell_prefix,
-                runner.config.shell_init_cmd,
-                runner.config.success_regex,
-                runner.config.fail_regex
-            )
-        })?;
-        Ok(())
+        config.replace_strings(self)?;
+        config.normalize(&format!("U-Boot config {}", config_path.display()))?;
+        Ok(config)
     }
 }
 
-struct Runner<'a> {
+struct Runner<'a, B> {
     tool: &'a mut Tool,
     config: UbootConfig,
     success_regex: Vec<regex::Regex>,
     fail_regex: Vec<regex::Regex>,
-    baud_rate: u32,
+    backend: B,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -298,7 +351,452 @@ struct NetworkBootRequest {
     ipaddr: Option<String>,
 }
 
-impl Runner<'_> {
+struct ConsoleTransport {
+    tx: BoxedAsyncWrite,
+    rx: BoxedAsyncRead,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ResolvedRuntime {
+    server_ip: Option<String>,
+    netmask: Option<String>,
+    interface: Option<String>,
+    gateway_ip: Option<String>,
+    board_ip: Option<String>,
+    kernel_load_addr: Option<u64>,
+    fit_load_addr: Option<u64>,
+    timeout: Option<u64>,
+    use_tftp: bool,
+}
+
+struct PreparedBootArtifact {
+    bootfile: Option<String>,
+    network_transfer_ready: bool,
+}
+
+#[async_trait]
+trait RunnerBackend {
+    async fn resolve_runtime(
+        &mut self,
+        tool: &mut Tool,
+        config: &UbootConfig,
+    ) -> anyhow::Result<ResolvedRuntime>;
+    async fn open_console(&mut self) -> anyhow::Result<ConsoleTransport>;
+    async fn after_console_open(&mut self, tool: &Tool) -> anyhow::Result<()>;
+    async fn stage_fit_image(
+        &mut self,
+        fitimage: &Path,
+        runtime: &ResolvedRuntime,
+    ) -> anyhow::Result<PreparedBootArtifact>;
+    async fn finish_console(&mut self) -> anyhow::Result<()>;
+    async fn after_run(&mut self, tool: &Tool) -> anyhow::Result<()>;
+}
+
+struct LocalBackend {
+    config: LocalUbootConfig,
+    baud_rate: Option<u32>,
+    linux_system_tftp: Option<tftp::TftpdHpaConfig>,
+    existing_tftp_dir: Option<PathBuf>,
+    builtin_tftp_started: bool,
+}
+
+impl LocalBackend {
+    fn new(config: LocalUbootConfig) -> Self {
+        Self {
+            config,
+            baud_rate: None,
+            linux_system_tftp: None,
+            existing_tftp_dir: None,
+            builtin_tftp_started: false,
+        }
+    }
+}
+
+#[async_trait]
+impl RunnerBackend for LocalBackend {
+    async fn resolve_runtime(
+        &mut self,
+        tool: &mut Tool,
+        _config: &UbootConfig,
+    ) -> anyhow::Result<ResolvedRuntime> {
+        let baud_rate = self
+            .config
+            .baud_rate
+            .as_deref()
+            .ok_or_else(|| anyhow!("local U-Boot backend requires `baud_rate`"))?
+            .parse::<u32>()
+            .context("`baud_rate` is not a valid integer")?;
+        self.baud_rate = Some(baud_rate);
+
+        let server_ip = detect_tftp_ip(self.config.net.as_ref());
+        let existing_tftp_dir = self
+            .config
+            .net
+            .as_ref()
+            .and_then(|net| net.tftp_dir.as_deref())
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from);
+        self.existing_tftp_dir = existing_tftp_dir.clone();
+
+        #[cfg(target_os = "linux")]
+        {
+            self.linux_system_tftp = if let Some(directory) = existing_tftp_dir.clone() {
+                info!(
+                    "Linux detected: using net.tftp_dir={} and skipping all tftpd-hpa checks",
+                    directory.display()
+                );
+                Some(tftp::TftpdHpaConfig {
+                    username: None,
+                    directory,
+                    address: None,
+                    options: None,
+                })
+            } else if self.config.net.is_some() && server_ip.is_some() {
+                Some(tftp::ensure_linux_tftpd_hpa()?)
+            } else {
+                None
+            };
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            if existing_tftp_dir.is_none()
+                && let Some(ip) = server_ip.as_ref()
+            {
+                info!("TFTP server IP: {}", ip);
+                tftp::run_tftp_server(tool)?;
+                self.builtin_tftp_started = true;
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            if self.linux_system_tftp.is_none()
+                && existing_tftp_dir.is_none()
+                && let Some(ip) = server_ip.as_ref()
+            {
+                info!("TFTP server IP: {}", ip);
+                tftp::run_tftp_server(tool)?;
+                self.builtin_tftp_started = true;
+            }
+        }
+
+        Ok(ResolvedRuntime {
+            server_ip,
+            netmask: self.config.net.as_ref().and_then(|net| net.netmask.clone()),
+            interface: self
+                .config
+                .net
+                .as_ref()
+                .map(|net| net.interface.clone())
+                .filter(|value| !value.trim().is_empty()),
+            gateway_ip: self
+                .config
+                .net
+                .as_ref()
+                .and_then(|net| net.gatewayip.clone()),
+            board_ip: self
+                .config
+                .net
+                .as_ref()
+                .and_then(|net| net.board_ip.clone()),
+            use_tftp: self.config.net.is_some(),
+            ..Default::default()
+        })
+    }
+
+    async fn open_console(&mut self) -> anyhow::Result<ConsoleTransport> {
+        let serial = self
+            .config
+            .serial
+            .as_deref()
+            .ok_or_else(|| anyhow!("local U-Boot backend requires `serial`"))?;
+        let baud_rate = self
+            .baud_rate
+            .ok_or_else(|| anyhow!("local U-Boot backend missing parsed baud rate"))?;
+
+        info!("Opening serial port: {} @ {}", serial, baud_rate);
+        let serial = tokio_serial::new(serial, baud_rate)
+            .timeout(Duration::from_millis(200))
+            .open_native_async()
+            .with_context(|| format!("failed to open serial port {serial}"))?;
+        let (rx, tx) = tokio::io::split(serial);
+
+        Ok(ConsoleTransport {
+            tx: Box::new(tx.compat_write()),
+            rx: Box::new(rx.compat()),
+        })
+    }
+
+    async fn after_console_open(&mut self, tool: &Tool) -> anyhow::Result<()> {
+        println!("Waiting for board on power or reset...");
+        if let Some(cmd) = self.config.board_reset_cmd.as_deref()
+            && !cmd.trim().is_empty()
+        {
+            tool.shell_run_cmd(cmd)?;
+        }
+        Ok(())
+    }
+
+    async fn stage_fit_image(
+        &mut self,
+        fitimage: &Path,
+        _runtime: &ResolvedRuntime,
+    ) -> anyhow::Result<PreparedBootArtifact> {
+        let Some(file_name) = fitimage.file_name().and_then(|name| name.to_str()) else {
+            return Err(anyhow!("Invalid fitimage filename"));
+        };
+
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(system_tftp) = self.linux_system_tftp.as_ref() {
+                let prepared = tftp::stage_linux_fit_image(fitimage, &system_tftp.directory)?;
+                info!(
+                    "Staged FIT image to: {}",
+                    prepared.absolute_fit_path.display()
+                );
+                return Ok(PreparedBootArtifact {
+                    bootfile: Some(prepared.relative_filename),
+                    network_transfer_ready: true,
+                });
+            }
+        }
+
+        if let Some(tftp_dir) = self.existing_tftp_dir.as_deref() {
+            let tftp_path = PathBuf::from(tftp_dir).join(file_name);
+            info!("Setting TFTP file path: {}", tftp_path.display());
+            return Ok(PreparedBootArtifact {
+                bootfile: Some(tftp_path.display().to_string()),
+                network_transfer_ready: true,
+            });
+        }
+
+        if self.builtin_tftp_started {
+            info!("Using fitimage filename: {}", file_name);
+            return Ok(PreparedBootArtifact {
+                bootfile: Some(file_name.to_string()),
+                network_transfer_ready: true,
+            });
+        }
+
+        Ok(PreparedBootArtifact {
+            bootfile: None,
+            network_transfer_ready: false,
+        })
+    }
+
+    async fn finish_console(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn after_run(&mut self, tool: &Tool) -> anyhow::Result<()> {
+        if let Some(cmd) = self.config.board_power_off_cmd.as_deref()
+            && !cmd.trim().is_empty()
+            && let Err(err) = tool.shell_run_cmd(cmd)
+        {
+            log::warn!("board power-off command failed: {err:#}");
+        }
+        Ok(())
+    }
+}
+
+struct RemoteBackend {
+    client: BoardServerClient,
+    session: SessionCreatedResponse,
+    boot_profile: Option<BootProfileResponse>,
+    serial_status: Option<SerialStatusResponse>,
+    tftp_status: Option<TftpSessionResponse>,
+    console_tasks: Option<SerialStreamTasks>,
+}
+
+impl RemoteBackend {
+    fn new(client: BoardServerClient, session: SessionCreatedResponse) -> Self {
+        Self {
+            client,
+            session,
+            boot_profile: None,
+            serial_status: None,
+            tftp_status: None,
+            console_tasks: None,
+        }
+    }
+}
+
+#[async_trait]
+impl RunnerBackend for RemoteBackend {
+    async fn resolve_runtime(
+        &mut self,
+        _tool: &mut Tool,
+        _config: &UbootConfig,
+    ) -> anyhow::Result<ResolvedRuntime> {
+        let boot_profile = self
+            .client
+            .get_boot_profile(&self.session.session_id)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to get boot profile for session `{}`",
+                    self.session.session_id
+                )
+            })?;
+        let serial_status = self
+            .client
+            .get_serial_status(&self.session.session_id)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to get serial status for session `{}`",
+                    self.session.session_id
+                )
+            })?;
+        let tftp_status = self
+            .client
+            .get_tftp_status(&self.session.session_id)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to get tftp status for session `{}`",
+                    self.session.session_id
+                )
+            })?;
+
+        let profile = match &boot_profile.boot {
+            RemoteBootConfig::Uboot(profile) => profile.clone(),
+            other => {
+                return Err(anyhow!(
+                    "unsupported remote boot mode `{:?}`; only `uboot` is supported",
+                    other
+                ));
+            }
+        };
+
+        if !serial_status.available {
+            return Err(anyhow!(
+                "session `{}` has no serial console available",
+                self.session.session_id
+            ));
+        }
+        if serial_status.ws_url.is_none() && self.session.ws_url.is_none() {
+            return Err(anyhow!(
+                "session `{}` did not return a serial websocket URL",
+                self.session.session_id
+            ));
+        }
+
+        let server_ip = tftp_status
+            .server_ip
+            .clone()
+            .or_else(|| boot_profile.server_ip.clone());
+        let netmask = tftp_status
+            .netmask
+            .clone()
+            .or_else(|| boot_profile.netmask.clone());
+
+        self.boot_profile = Some(boot_profile.clone());
+        self.serial_status = Some(serial_status);
+        self.tftp_status = Some(tftp_status);
+
+        Ok(ResolvedRuntime {
+            server_ip,
+            netmask,
+            interface: boot_profile.interface.clone(),
+            kernel_load_addr: parse_optional_addr(profile.kernel_load_addr.as_deref()),
+            fit_load_addr: parse_optional_addr(profile.fit_load_addr.as_deref()),
+            timeout: profile.timeout,
+            use_tftp: profile.use_tftp,
+            ..Default::default()
+        })
+    }
+
+    async fn open_console(&mut self) -> anyhow::Result<ConsoleTransport> {
+        let serial_status = self
+            .serial_status
+            .as_ref()
+            .ok_or_else(|| anyhow!("remote runtime not initialized"))?;
+        let ws_url = serial_status
+            .ws_url
+            .as_deref()
+            .or(self.session.ws_url.as_deref())
+            .ok_or_else(|| anyhow!("server did not return a serial websocket URL"))?;
+        let ws_url = self.client.resolve_ws_url(ws_url)?;
+        let (tx, rx, tasks) = connect_serial_stream(ws_url).await?;
+        self.console_tasks = Some(tasks);
+        Ok(ConsoleTransport { tx, rx })
+    }
+
+    async fn after_console_open(&mut self, _tool: &Tool) -> anyhow::Result<()> {
+        println!("Waiting for remote board to power on through ostool-server...");
+        Ok(())
+    }
+
+    async fn stage_fit_image(
+        &mut self,
+        fitimage: &Path,
+        runtime: &ResolvedRuntime,
+    ) -> anyhow::Result<PreparedBootArtifact> {
+        let tftp_status = self
+            .tftp_status
+            .as_ref()
+            .ok_or_else(|| anyhow!("remote runtime not initialized"))?;
+        if !runtime.use_tftp || !tftp_status.available {
+            return Ok(PreparedBootArtifact {
+                bootfile: None,
+                network_transfer_ready: false,
+            });
+        }
+
+        let fit_name = fitimage
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| anyhow!("Invalid fitimage filename"))?;
+        let upload_path = format!("boot/{fit_name}");
+        let payload = fs::read(fitimage)
+            .await
+            .with_path("failed to read file", fitimage)?;
+        let uploaded = self
+            .client
+            .upload_session_file(&self.session.session_id, &upload_path, payload)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to upload FIT image for session `{}`",
+                    self.session.session_id
+                )
+            })?;
+
+        Ok(PreparedBootArtifact {
+            bootfile: Some(uploaded.relative_path),
+            network_transfer_ready: true,
+        })
+    }
+
+    async fn finish_console(&mut self) -> anyhow::Result<()> {
+        if let Some(tasks) = self.console_tasks.take() {
+            tasks.shutdown().await?;
+        }
+        Ok(())
+    }
+
+    async fn after_run(&mut self, _tool: &Tool) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a, B> Runner<'a, B>
+where
+    B: RunnerBackend,
+{
+    fn new(tool: &'a mut Tool, config: UbootConfig, backend: B) -> Self {
+        Self {
+            tool,
+            config,
+            success_regex: vec![],
+            fail_regex: vec![],
+            backend,
+        }
+    }
+
     /// 生成包含 kernel 和 FDT 的压缩 FIT image。
     async fn generate_fit_image(
         &self,
@@ -399,14 +897,23 @@ impl Runner<'_> {
     }
 
     async fn run(&mut self) -> anyhow::Result<()> {
-        let res = self._run().await;
-        if let Some(ref cmd) = self.config.board_power_off_cmd
-            && !cmd.trim().is_empty()
-        {
-            let _ = self.tool.shell_run_cmd(cmd);
-            info!("Board powered off");
+        let run_result = self._run().await;
+
+        if let Err(err) = self.backend.finish_console().await {
+            if run_result.is_ok() {
+                return Err(err);
+            }
+            log::warn!("backend console cleanup failed: {err:#}");
         }
-        res
+
+        if let Err(err) = self.backend.after_run(self.tool).await {
+            if run_result.is_ok() {
+                return Err(err);
+            }
+            log::warn!("backend post-run cleanup failed: {err:#}");
+        }
+
+        run_result
     }
 
     async fn _run(&mut self) -> anyhow::Result<()> {
@@ -419,83 +926,25 @@ impl Runner<'_> {
             .artifacts
             .bin
             .as_ref()
-            .ok_or(anyhow!("bin not exist"))?;
+            .ok_or(anyhow!("bin not exist"))?
+            .clone();
 
         info!("Starting U-Boot runner...");
 
         info!("kernel from: {}", kernel.display());
 
-        let ip_string = self.detect_tftp_ip();
-
-        let is_tftp = self
-            .config
-            .net
-            .as_ref()
-            .and_then(|net| net.tftp_dir.as_deref())
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from);
-
-        #[cfg(target_os = "linux")]
-        let linux_system_tftp = if let Some(directory) = is_tftp.clone() {
-            info!(
-                "Linux detected: using net.tftp_dir={} and skipping all tftpd-hpa checks",
-                directory.display()
-            );
-            Some(tftp::TftpdHpaConfig {
-                username: None,
-                directory,
-                address: None,
-                options: None,
-            })
-        } else if self.config.net.is_some() && ip_string.is_some() {
-            Some(tftp::ensure_linux_tftpd_hpa()?)
-        } else {
-            None
-        };
-
-        let mut builtin_tftp_started = false;
-
-        #[cfg(not(target_os = "linux"))]
-        if is_tftp.is_none()
-            && let Some(ip) = ip_string.as_ref()
-        {
-            info!("TFTP server IP: {}", ip);
-            tftp::run_tftp_server(self.tool)?;
-            builtin_tftp_started = true;
+        let runtime = self
+            .backend
+            .resolve_runtime(self.tool, &self.config)
+            .await?;
+        if let Some(interface) = runtime.interface.as_deref() {
+            info!("Using network interface hint: {interface}");
         }
-
-        #[cfg(target_os = "linux")]
-        if linux_system_tftp.is_none()
-            && is_tftp.is_none()
-            && let Some(ip) = ip_string.as_ref()
-        {
-            info!("TFTP server IP: {}", ip);
-            tftp::run_tftp_server(self.tool)?;
-            builtin_tftp_started = true;
-        }
-
-        info!(
-            "Opening serial port: {} @ {}",
-            self.config.serial, self.baud_rate
-        );
-
-        let serial = tokio_serial::new(&self.config.serial, self.baud_rate)
-            .timeout(Duration::from_millis(200))
-            .open_native_async()
-            .with_context(|| format!("failed to open serial port {}", self.config.serial))?;
-        let (rx, tx) = tokio::io::split(serial);
-
-        println!("Waiting for board on power or reset...");
-
-        if let Some(cmd) = self.config.board_reset_cmd.clone()
-            && !cmd.trim().is_empty()
-        {
-            self.tool.shell_run_cmd(&cmd)?;
-        }
+        let ConsoleTransport { tx, rx } = self.backend.open_console().await?;
+        self.backend.after_console_open(self.tool).await?;
 
         let mut net_ok = false;
-        let mut uboot = UbootShell::new(tx.compat_write(), rx.compat()).await?;
+        let mut uboot = UbootShell::new(tx, rx).await?;
         uboot.set_env("autoload", "yes").await?;
 
         if let Some(ref cmds) = self.config.uboot_cmd {
@@ -505,17 +954,15 @@ impl Runner<'_> {
             }
         }
 
-        if let Some(ref net) = self.config.net {
-            if let Some(ref gatewayip) = net.gatewayip {
-                uboot.set_env("gatewayip", gatewayip).await?;
-            }
-
-            if let Some(ref netmask) = net.netmask {
-                uboot.set_env("netmask", netmask).await?;
-            }
+        if let Some(ref gatewayip) = runtime.gateway_ip {
+            uboot.set_env("gatewayip", gatewayip).await?;
         }
 
-        if let Some(ref ip) = ip_string
+        if let Some(ref netmask) = runtime.netmask {
+            uboot.set_env("netmask", netmask).await?;
+        }
+
+        if let Some(ref ip) = runtime.server_ip
             && let Ok(output) = uboot.cmd("net list").await
         {
             let device_list = output.strip_prefix("net list").unwrap_or(&output).trim();
@@ -541,7 +988,11 @@ impl Runner<'_> {
             ramfs_load_addr = Some(addr as u64);
         }
 
-        let kernel_entry = if let Some(entry) = self.config.kernel_load_addr_int() {
+        let kernel_entry = if let Some(entry) = self
+            .config
+            .kernel_load_addr_int()
+            .or(runtime.kernel_load_addr)
+        {
             info!("Using configured kernel load address: {entry:#x}");
             entry
         } else if let Ok(entry) = uboot.env_int("kernel_addr_r").await {
@@ -566,7 +1017,7 @@ impl Runner<'_> {
             addr
         };
 
-        if let Some(fit_load_addr_int) = self.config.fit_load_addr_int() {
+        if let Some(fit_load_addr_int) = self.config.fit_load_addr_int().or(runtime.fit_load_addr) {
             fit_loadaddr = fit_load_addr_int;
         }
 
@@ -584,7 +1035,7 @@ impl Runner<'_> {
         let dtb_path = dtb.as_ref().map(Path::new);
         let fitimage = self
             .generate_fit_image(
-                kernel,
+                &kernel,
                 dtb_path,
                 kernel_entry,
                 kernel_entry,
@@ -593,57 +1044,25 @@ impl Runner<'_> {
             )
             .await?;
 
-        let (fitname, linux_tftp_active) = if cfg!(target_os = "linux") {
-            if let Some(system_tftp) = linux_system_tftp.as_ref() {
-                let prepared = tftp::stage_linux_fit_image(&fitimage, &system_tftp.directory)?;
-                info!(
-                    "Staged FIT image to: {}",
-                    prepared.absolute_fit_path.display()
-                );
-                (prepared.relative_filename, true)
-            } else if let Some(tftp_dir) = is_tftp.as_deref() {
-                let relative_path = tftp::relative_tftp_filename(&fitimage)?;
-                info!("Using existing TFTP root: {}", tftp_dir.display());
-                info!("Setting TFTP bootfile path: {relative_path}");
-                (relative_path, false)
+        let prepared = self.backend.stage_fit_image(&fitimage, &runtime).await?;
+
+        let bootcmd = if let Some(fitname) = prepared.bootfile.as_deref() {
+            if let Some(request) = build_network_boot_request(
+                runtime.board_ip.as_deref(),
+                net_ok,
+                prepared.network_transfer_ready,
+                fitname,
+            ) {
+                if let Some(ref board_ip) = request.ipaddr {
+                    uboot.set_env("ipaddr", board_ip).await?;
+                }
+                uboot.set_env("bootfile", &request.bootfile).await?;
+                request.bootcmd
             } else {
-                let name = fitimage
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .ok_or(anyhow!("Invalid fitimage filename"))?;
-                info!("Using fitimage filename: {}", name);
-                (name.to_string(), false)
+                info!("No network boot request available, using loady to upload FIT image...");
+                Self::uboot_loady(&mut uboot, fit_loadaddr as usize, fitimage).await?;
+                "bootm".to_string()
             }
-        } else if let Some(tftp_dir) = is_tftp.as_deref() {
-            let relative_path = tftp::relative_tftp_filename(&fitimage)?;
-            info!("Using existing TFTP root: {}", tftp_dir.display());
-            info!("Setting TFTP bootfile path: {relative_path}");
-            (relative_path, false)
-        } else {
-            let name = fitimage
-                .file_name()
-                .and_then(|n| n.to_str())
-                .ok_or(anyhow!("Invalid fitimage filename"))?;
-            info!("Using fitimage filename: {}", name);
-            (name.to_string(), false)
-        };
-
-        let network_transfer_ready = linux_tftp_active || is_tftp.is_some() || builtin_tftp_started;
-
-        let bootcmd = if let Some(request) = build_network_boot_request(
-            self.config
-                .net
-                .as_ref()
-                .and_then(|net| net.board_ip.as_deref()),
-            net_ok,
-            network_transfer_ready,
-            &fitname,
-        ) {
-            if let Some(ref board_ip) = request.ipaddr {
-                uboot.set_env("ipaddr", board_ip).await?;
-            }
-            uboot.set_env("bootfile", &request.bootfile).await?;
-            request.bootcmd
         } else {
             info!("No TFTP config, using loady to upload FIT image...");
             Self::uboot_loady(&mut uboot, fit_loadaddr as usize, fitimage).await?;
@@ -704,7 +1123,7 @@ impl Runner<'_> {
 
         let terminal = AsyncTerminal::new(TerminalConfig {
             intercept_exit_sequence: true,
-            timeout: timeout_duration(self.config.timeout),
+            timeout: timeout_duration(self.config.timeout.or(runtime.timeout)),
             timeout_label: "kernel boot".to_string(),
         });
         terminal
@@ -748,33 +1167,6 @@ impl Runner<'_> {
         Ok(())
     }
 
-    fn detect_tftp_ip(&self) -> Option<String> {
-        let net = self.config.net.as_ref()?;
-
-        let mut ip_string = String::new();
-
-        let interfaces = NetworkInterface::show().unwrap();
-        for interface in interfaces.iter() {
-            debug!("net Interface: {}", interface.name);
-            if interface.name == net.interface {
-                let addr_list: Vec<Addr> = interface.addr.to_vec();
-                for one in addr_list {
-                    if let Addr::V4(v4_if_addr) = one {
-                        ip_string = v4_if_addr.ip.to_string();
-                    }
-                }
-            }
-        }
-
-        if ip_string.trim().is_empty() {
-            return None;
-        }
-
-        info!("TFTP : {}", ip_string);
-
-        Some(ip_string)
-    }
-
     async fn uboot_loady(
         uboot: &mut UbootShell,
         addr: usize,
@@ -801,6 +1193,42 @@ impl Runner<'_> {
         println!("send ok");
         Ok(())
     }
+}
+
+fn detect_tftp_ip(net: Option<&Net>) -> Option<String> {
+    let net = net?;
+
+    let mut ip_string = String::new();
+
+    let interfaces = NetworkInterface::show().ok()?;
+    for interface in interfaces.iter() {
+        debug!("net Interface: {}", interface.name);
+        if interface.name == net.interface {
+            let addr_list: Vec<Addr> = interface.addr.to_vec();
+            for one in addr_list {
+                if let Addr::V4(v4_if_addr) = one {
+                    ip_string = v4_if_addr.ip.to_string();
+                }
+            }
+        }
+    }
+
+    if ip_string.trim().is_empty() {
+        return None;
+    }
+
+    info!("TFTP : {}", ip_string);
+    Some(ip_string)
+}
+
+fn parse_optional_addr(value: Option<&str>) -> Option<u64> {
+    value.and_then(|addr_str| {
+        if addr_str.starts_with("0x") || addr_str.starts_with("0X") {
+            u64::from_str_radix(&addr_str[2..], 16).ok()
+        } else {
+            addr_str.parse::<u64>().ok()
+        }
+    })
 }
 
 fn timeout_duration(timeout: Option<u64>) -> Option<Duration> {
@@ -841,14 +1269,13 @@ fn build_network_boot_request(
 
 #[cfg(test)]
 mod tests {
-    use super::{Net, UbootConfig, build_network_boot_request, timeout_duration};
+    use super::{LocalUbootConfig, Net, UbootConfig, build_network_boot_request, timeout_duration};
     use crate::{
         Tool, ToolConfig,
         build::config::{BuildConfig, BuildSystem, Cargo},
-        run::tftp,
     };
+    use std::collections::HashMap;
     use std::time::Duration;
-    use std::{collections::HashMap, path::Path};
 
     #[test]
     fn network_boot_request_uses_same_filename_for_bootfile() {
@@ -885,21 +1312,14 @@ mod tests {
     }
 
     #[test]
-    fn explicit_tftp_dir_uses_same_relative_bootfile_as_system_tftp() {
-        let fitimage = Path::new("/home/user/workspace/target/image.fit");
-
-        assert_eq!(
-            tftp::relative_tftp_filename(fitimage).unwrap(),
-            "ostool/home/user/workspace/target/image.fit"
-        );
-    }
-
-    #[test]
     fn uboot_config_normalize_rejects_shell_init_without_prefix() {
         let mut config = UbootConfig {
-            serial: "/dev/null".into(),
-            baud_rate: "115200".into(),
             shell_init_cmd: Some("root".into()),
+            local: LocalUbootConfig {
+                serial: Some("/dev/null".into()),
+                baud_rate: Some("115200".into()),
+                ..Default::default()
+            },
             ..Default::default()
         };
 
@@ -910,10 +1330,13 @@ mod tests {
     #[test]
     fn uboot_config_normalize_trims_shell_fields() {
         let mut config = UbootConfig {
-            serial: "/dev/null".into(),
-            baud_rate: "115200".into(),
             shell_prefix: Some(" login: ".into()),
             shell_init_cmd: Some(" root ".into()),
+            local: LocalUbootConfig {
+                serial: Some("/dev/null".into()),
+                baud_rate: Some("115200".into()),
+                ..Default::default()
+            },
             ..Default::default()
         };
 
@@ -981,42 +1404,50 @@ timeout = 0
         }
 
         let mut config = UbootConfig {
-            serial: "${workspace}/tty".into(),
-            baud_rate: "${env:OSTOOL_UBOOT_TEST_ENV}".into(),
             dtb_file: Some("${package}/board.dtb".into()),
             kernel_load_addr: Some("${workspaceFolder}".into()),
             fit_load_addr: Some("${package}".into()),
-            board_reset_cmd: Some("${workspace}".into()),
-            board_power_off_cmd: Some("${package}".into()),
             success_regex: vec!["${workspace}".into()],
             fail_regex: vec!["${package}".into()],
             uboot_cmd: Some(vec!["setenv boot ${workspace}".into()]),
             shell_prefix: Some("${workspace}".into()),
             shell_init_cmd: Some("${package}".into()),
-            net: Some(Net {
-                interface: "${env:OSTOOL_UBOOT_TEST_ENV}".into(),
-                board_ip: Some("${workspace}".into()),
-                gatewayip: Some("${package}".into()),
-                netmask: Some("${workspaceFolder}".into()),
-                tftp_dir: Some("${package}/tftp".into()),
-            }),
+            local: LocalUbootConfig {
+                serial: Some("${workspace}/tty".into()),
+                baud_rate: Some("${env:OSTOOL_UBOOT_TEST_ENV}".into()),
+                board_reset_cmd: Some("${workspace}".into()),
+                board_power_off_cmd: Some("${package}".into()),
+                net: Some(Net {
+                    interface: "${env:OSTOOL_UBOOT_TEST_ENV}".into(),
+                    board_ip: Some("${workspace}".into()),
+                    gatewayip: Some("${package}".into()),
+                    netmask: Some("${workspaceFolder}".into()),
+                    tftp_dir: Some("${package}/tftp".into()),
+                }),
+            },
             ..Default::default()
         };
 
         config.replace_strings(&tool).unwrap();
 
         let expected = tmp.path().display().to_string();
-        assert_eq!(config.serial, format!("{expected}/tty"));
-        assert_eq!(config.baud_rate, "env-ok");
+        assert_eq!(
+            config.local.serial.as_deref(),
+            Some(format!("{expected}/tty").as_str())
+        );
+        assert_eq!(config.local.baud_rate.as_deref(), Some("env-ok"));
         assert_eq!(
             config.dtb_file.as_deref(),
             Some(format!("{expected}/board.dtb").as_str())
         );
         assert_eq!(config.kernel_load_addr.as_deref(), Some(expected.as_str()));
         assert_eq!(config.fit_load_addr.as_deref(), Some(expected.as_str()));
-        assert_eq!(config.board_reset_cmd.as_deref(), Some(expected.as_str()));
         assert_eq!(
-            config.board_power_off_cmd.as_deref(),
+            config.local.board_reset_cmd.as_deref(),
+            Some(expected.as_str())
+        );
+        assert_eq!(
+            config.local.board_power_off_cmd.as_deref(),
             Some(expected.as_str())
         );
         assert_eq!(config.success_regex, vec![expected.clone()]);
@@ -1027,7 +1458,7 @@ timeout = 0
         );
         assert_eq!(config.shell_prefix.as_deref(), Some(expected.as_str()));
         assert_eq!(config.shell_init_cmd.as_deref(), Some(expected.as_str()));
-        let net = config.net.unwrap();
+        let net = config.local.net.unwrap();
         assert_eq!(net.interface, "env-ok");
         assert_eq!(net.board_ip.as_deref(), Some(expected.as_str()));
         assert_eq!(net.gatewayip.as_deref(), Some(expected.as_str()));

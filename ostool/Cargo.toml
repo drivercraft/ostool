@@ -28,6 +28,7 @@ ui-log = ["jkconfig/logging"]
 
 [dependencies]
 anyhow = { workspace = true, features = ["backtrace"] }
+async-trait = "0.1"
 byte-unit = "5.1"
 cargo_metadata = "0.23"
 clap = { workspace = true, features = ["derive"] }

@@ -1,4 +1,6 @@
 pub mod client;
+pub mod config;
+pub mod serial_stream;
 pub mod session;
 pub mod terminal;
 

@@ -129,7 +129,8 @@ async fn get_content_by_ui(
     siv.add_fullscreen_layer(menu_view(&title, "", fields));
 
     // 运行应用
-    siv.run();
+    siv.run_crossterm()
+        .map_err(|err| anyhow::anyhow!("failed to launch interactive config UI: {err}"))?;
 
     let app = siv.take_user_data::<AppData>().unwrap();
     // println!("Data: \n{:#?}", app.root);
