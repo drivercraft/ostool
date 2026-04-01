@@ -80,9 +80,8 @@ struct CliUboot {
     runner_args: Vec<String>,
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
-    match try_main().await {
+fn main() -> ExitCode {
+    match try_main() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             report_error(&err);
@@ -91,7 +90,7 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn try_main() -> anyhow::Result<()> {
+fn try_main() -> anyhow::Result<()> {
     let args = RunnerArgs::parse();
     if env::var("CARGO").is_err() {
         println!(
@@ -129,7 +128,7 @@ async fn try_main() -> anyhow::Result<()> {
         debug: args.debug,
     })?;
 
-    tool.set_elf_path(args.elf).await?;
+    tool.set_elf_path(args.elf)?;
     tool.objcopy_elf()?;
 
     if args.to_bin {
@@ -141,16 +140,14 @@ async fn try_main() -> anyhow::Result<()> {
             tool.run_uboot(RunUbootArgs {
                 config: args.config,
                 show_output: args.show_output,
-            })
-            .await?;
+            })?;
         }
         None => {
             tool.run_qemu(qemu::RunQemuArgs {
                 qemu_config: args.config,
                 dtb_dump: args.dtb_dump,
                 show_output: args.show_output,
-            })
-            .await?;
+            })?;
         }
     }
 

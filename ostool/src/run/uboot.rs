@@ -1,4 +1,5 @@
 use std::{
+    fs,
     io::{self, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -15,7 +16,6 @@ use log::{info, warn};
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::fs;
 use uboot_shell::UbootShell;
 
 use crate::{
@@ -213,13 +213,13 @@ pub struct RunUbootArgs {
 }
 
 impl Tool {
-    pub async fn run_uboot(&mut self, args: RunUbootArgs) -> anyhow::Result<()> {
+    pub fn run_uboot(&mut self, args: RunUbootArgs) -> anyhow::Result<()> {
         let config_path = match args.config.clone() {
             Some(path) => self.replace_path_variables(path)?,
             None => self.workspace_dir().join(".uboot.toml"),
         };
 
-        let config = match fs::read_to_string(&config_path).await {
+        let config = match fs::read_to_string(&config_path) {
             Ok(content) => {
                 println!("Using U-Boot config: {}", config_path.display());
                 let mut config: UbootConfig = toml::from_str(&content).with_context(|| {
@@ -237,7 +237,6 @@ impl Tool {
                 };
                 config.normalize(&format!("U-Boot config {}", config_path.display()))?;
                 fs::write(&config_path, toml::to_string_pretty(&config)?)
-                    .await
                     .with_path("failed to write file", &config_path)?;
                 config
             }
@@ -258,7 +257,7 @@ impl Tool {
             success_regex: vec![],
             fail_regex: vec![],
         };
-        runner.run().await.with_context(|| {
+        runner.run().with_context(|| {
             format!(
                 "U-Boot run failed with config {} (serial={}, baud_rate={}, shell_prefix={:?}, \
                  shell_init_cmd={:?}, success_regex={:?}, fail_regex={:?})",
@@ -312,7 +311,7 @@ impl Write for SharedWrite {
 
 impl Runner<'_> {
     /// 生成包含 kernel 和 FDT 的压缩 FIT image。
-    async fn generate_fit_image(
+    fn generate_fit_image(
         &self,
         kernel_path: &Path,
         dtb_path: Option<&Path>,
@@ -330,7 +329,6 @@ impl Runner<'_> {
 
         // 读取 kernel 数据
         let kernel_data = fs::read(kernel_path)
-            .await
             .with_path(errors::KERNEL_READ_ERROR, kernel_path)?;
 
         info!(
@@ -363,7 +361,6 @@ impl Runner<'_> {
         // 处理 DTB 文件
         if let Some(dtb_path) = dtb_path {
             let data = fs::read(dtb_path)
-                .await
                 .with_path(errors::DTB_READ_ERROR, dtb_path)?;
             info!(
                 "已读取 DTB 文件: {} (大小: {:.2})",
@@ -403,15 +400,14 @@ impl Runner<'_> {
             .with_context(|| errors::FIT_BUILD_ERROR.to_string())?;
         let output_path = Path::new(output_dir).join("image.fit");
         fs::write(&output_path, fit_data)
-            .await
             .with_path(errors::FIT_SAVE_ERROR, &output_path)?;
 
         info!("FIT image ok: {}", output_path.display());
         Ok(output_path)
     }
 
-    async fn run(&mut self) -> anyhow::Result<()> {
-        let res = self._run().await;
+    fn run(&mut self) -> anyhow::Result<()> {
+        let res = self._run();
         if let Some(ref cmd) = self.config.board_power_off_cmd
             && !cmd.trim().is_empty()
         {
@@ -421,7 +417,7 @@ impl Runner<'_> {
         res
     }
 
-    async fn _run(&mut self) -> anyhow::Result<()> {
+    fn _run(&mut self) -> anyhow::Result<()> {
         self.prepare_regex()?;
         self.tool.objcopy_output_bin()?;
 
@@ -607,8 +603,7 @@ impl Runner<'_> {
                 kernel_entry,
                 fdt_load_addr,
                 ramfs_load_addr,
-            )
-            .await?;
+            )?;
 
         let (fitname, linux_tftp_active) = if cfg!(target_os = "linux") {
             if let Some(system_tftp) = linux_system_tftp.as_ref() {
@@ -716,7 +711,7 @@ impl Runner<'_> {
         if let Some(timeout) = timeout_duration(self.config.timeout) {
             shell = shell.with_timeout(timeout, "kernel boot");
         }
-        shell.run().await?;
+        shell.run()?;
         {
             let mut res_lock = res.lock().unwrap();
             if let Some(result) = res_lock.take() {

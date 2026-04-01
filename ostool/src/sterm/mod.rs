@@ -20,11 +20,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use crossterm::{
-    event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
-use futures::stream::StreamExt;
-use tokio::task::{AbortHandle, spawn_blocking};
 
 type Tx = Box<dyn Write + Send>;
 type Rx = Box<dyn Read + Send>;
@@ -187,7 +185,7 @@ impl SerialTerm {
     /// # Errors
     ///
     /// Returns an error if terminal mode cannot be set or I/O fails.
-    pub async fn run(&mut self) -> anyhow::Result<()> {
+    pub fn run(&mut self) -> anyhow::Result<()> {
         // 启用raw模式
 
         // execute!(io::stdout(), Clear(ClearType::All))?;
@@ -195,7 +193,7 @@ impl SerialTerm {
         // 设置清理函数
         let cleanup_needed = enable_raw_mode().is_ok();
 
-        let result = self.run_terminal().await;
+        let result = self.run_terminal();
 
         // 确保清理终端状态
         if cleanup_needed {
@@ -207,7 +205,7 @@ impl SerialTerm {
         result
     }
 
-    async fn run_terminal(&mut self) -> anyhow::Result<()> {
+    fn run_terminal(&mut self) -> anyhow::Result<()> {
         let tx_port = self.tx.clone();
         let rx_port = self.rx.clone();
 
@@ -223,18 +221,25 @@ impl SerialTerm {
             handle.set_timeout_after(timeout);
         }
 
-        // 使用 EventStream 异步处理键盘事件
-        let tx_handle = tokio::spawn(Self::tx_work_async(handle.clone(), tx_port));
-
-        let tx_abort = tx_handle.abort_handle();
-        // 启动串口接收线程
-        let rx_handle = spawn_blocking({
+        // 启动键盘处理线程
+        let tx_handle = thread::spawn({
             let handle = handle.clone();
-            move || Self::handle_serial_receive(rx_port, handle, tx_abort, on_byte)
+            let tx_port = tx_port.clone();
+            move || Self::tx_work(handle, tx_port)
         });
+
+        // 启动串口接收线程
+        let rx_handle = thread::spawn({
+            let handle = handle.clone();
+            move || Self::handle_serial_receive(rx_port, handle, on_byte)
+        });
+
         // 等待接收线程结束
-        let _ = rx_handle.await?;
-        let _ = tx_handle.await;
+        rx_handle.join().expect("rx thread panicked")?;
+
+        // 等待键盘线程结束
+        let _ = tx_handle.join();
+
         if handle.timed_out() {
             let timeout = self.timeout.ok_or_else(|| {
                 anyhow!("serial terminal entered timed_out state without configured timeout")
@@ -249,7 +254,6 @@ impl SerialTerm {
     fn handle_serial_receive<F>(
         rx_port: Arc<Mutex<Rx>>,
         handle: Arc<TermHandle>,
-        tx_abort: AbortHandle,
         on_byte: F,
     ) -> io::Result<()>
     where
@@ -317,11 +321,12 @@ impl SerialTerm {
                 }
                 Err(e) => {
                     eprintln!("\n串口读取错误: {}", e);
+                    handle.stop();
                     break;
                 }
             }
         }
-        tx_abort.abort();
+        handle.stop();
         Ok(())
     }
 
@@ -622,64 +627,62 @@ impl SerialTerm {
         Ok(())
     }
 
-    async fn tx_work_async(handle: Arc<TermHandle>, tx_port: Arc<Mutex<Tx>>) -> anyhow::Result<()> {
-        // 使用 EventStream 异步处理键盘事件
-        let mut reader = EventStream::new();
+    fn tx_work(handle: Arc<TermHandle>, tx_port: Arc<Mutex<Tx>>) -> anyhow::Result<()> {
         let mut key_state = KeySequenceState::Normal;
 
         while handle.is_running() {
-            // 使用 EventStream::next() 异步等待事件，不会阻塞
-            match reader.next().await {
-                Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
-                    // 检测 Ctrl+A+x 退出序列
-                    match key_state {
-                        KeySequenceState::Normal => {
-                            if key.code == KeyCode::Char('a')
-                                && key.modifiers.contains(KeyModifiers::CONTROL)
-                            {
-                                key_state = KeySequenceState::CtrlAPressed;
-                            } else {
-                                // 普通按键，发送到串口
-                                if let Err(e) = Self::send_key_to_serial(&tx_port, key) {
-                                    eprintln!("\r\n发送按键失败: {}", e);
-                                }
-                            }
-                        }
-                        KeySequenceState::CtrlAPressed => {
-                            if key.code == KeyCode::Char('x') {
-                                // 用户请求退出
-                                eprintln!("\r\nExit by: Ctrl+A+x");
-                                handle.stop();
-                                break;
-                            } else {
-                                // 不是x键，发送上一个按键并重置状态
-                                if key.code != KeyCode::Char('a') {
-                                    if let Err(e) = Self::send_ctrl_a_to_serial(&tx_port) {
-                                        eprintln!("\r\n发送 Ctrl+A 失败: {}", e);
-                                    }
+            // 使用 poll 检查是否有事件，带超时避免忙等待
+            if event::poll(Duration::from_millis(50)).unwrap_or(false) {
+                match event::read() {
+                    Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
+                        // 检测 Ctrl+A+x 退出序列
+                        match key_state {
+                            KeySequenceState::Normal => {
+                                if key.code == KeyCode::Char('a')
+                                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                                {
+                                    key_state = KeySequenceState::CtrlAPressed;
+                                } else {
+                                    // 普通按键，发送到串口
                                     if let Err(e) = Self::send_key_to_serial(&tx_port, key) {
                                         eprintln!("\r\n发送按键失败: {}", e);
                                     }
-                                    key_state = KeySequenceState::Normal;
+                                }
+                            }
+                            KeySequenceState::CtrlAPressed => {
+                                if key.code == KeyCode::Char('x') {
+                                    // 用户请求退出
+                                    eprintln!("\r\nExit by: Ctrl+A+x");
+                                    handle.stop();
+                                    break;
+                                } else {
+                                    // 不是x键，发送上一个按键并重置状态
+                                    if key.code != KeyCode::Char('a') {
+                                        if let Err(e) = Self::send_ctrl_a_to_serial(&tx_port) {
+                                            eprintln!("\r\n发送 Ctrl+A 失败: {}", e);
+                                        }
+                                        if let Err(e) = Self::send_key_to_serial(&tx_port, key) {
+                                            eprintln!("\r\n发送按键失败: {}", e);
+                                        }
+                                        key_state = KeySequenceState::Normal;
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                Some(Err(e)) => {
-                    eprintln!("\r\n键盘事件错误: {}", e);
-                    break;
-                }
-                None => {
-                    // EventStream 结束
-                    break;
-                }
-                Some(Ok(_)) => {
-                    // 忽略非按键事件（鼠标、调整大小等）
+                    Ok(_) => {
+                        // 忽略非按键事件（鼠标、调整大小等）
+                    }
+                    Err(e) => {
+                        eprintln!("\r\n键盘事件错误: {}", e);
+                        handle.stop();
+                        break;
+                    }
                 }
             }
         }
 
+        handle.stop();
         Ok(())
     }
 }
@@ -709,19 +712,19 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn serial_term_graceful_stop_after_without_timeout_does_not_panic() {
+    #[test]
+    fn serial_term_graceful_stop_after_without_timeout_does_not_panic() {
         let mut term = SerialTerm::new_with_byte_callback(
             Box::new(SinkWriter(Vec::new())),
             Box::new(Cursor::new(vec![b'x'])),
             |handle, _| handle.stop_after(Duration::from_millis(0)),
         );
 
-        term.run_terminal().await.unwrap();
+        term.run_terminal().unwrap();
     }
 
-    #[tokio::test]
-    async fn serial_term_with_timeout_reports_timeout_error() {
+    #[test]
+    fn serial_term_with_timeout_reports_timeout_error() {
         let mut term = SerialTerm::new_with_byte_callback(
             Box::new(SinkWriter(Vec::new())),
             Box::new(Cursor::new(Vec::<u8>::new())),
@@ -729,12 +732,12 @@ mod tests {
         )
         .with_timeout(Duration::from_millis(0), "kernel boot");
 
-        let err = term.run_terminal().await.unwrap_err();
+        let err = term.run_terminal().unwrap_err();
         assert!(err.to_string().contains("kernel boot timed out"));
     }
 
-    #[tokio::test]
-    async fn serial_term_graceful_stop_is_not_marked_timeout() {
+    #[test]
+    fn serial_term_graceful_stop_is_not_marked_timeout() {
         let mut term = SerialTerm::new_with_byte_callback(
             Box::new(SinkWriter(Vec::new())),
             Box::new(Cursor::new(vec![b'o', b'k'])),
@@ -745,6 +748,6 @@ mod tests {
             },
         );
 
-        term.run_terminal().await.unwrap();
+        term.run_terminal().unwrap();
     }
 }

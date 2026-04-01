@@ -8,16 +8,17 @@
 //! - QEMU settings (`.qemu.toml`)
 //! - U-Boot settings (`.uboot.toml`)
 
+use std::fs;
+
 use anyhow::Context;
 use anyhow::Result;
 use clap::ValueEnum;
 use log::info;
-use tokio::fs;
 
-use crate::Tool;
 use crate::run::qemu::QemuConfig;
 use crate::run::uboot::UbootConfig;
 use crate::utils::PathResultExt;
+use crate::Tool;
 
 /// Menu configuration mode selector.
 #[derive(ValueEnum, Clone, Debug)]
@@ -43,28 +44,28 @@ impl MenuConfigHandler {
     /// # Errors
     ///
     /// Returns an error if the configuration cannot be loaded or saved.
-    pub async fn handle_menuconfig(tool: &mut Tool, mode: Option<MenuConfigMode>) -> Result<()> {
+    pub fn handle_menuconfig(tool: &mut Tool, mode: Option<MenuConfigMode>) -> Result<()> {
         match mode {
             Some(MenuConfigMode::Qemu) => {
-                Self::handle_qemu_config(tool).await?;
+                Self::handle_qemu_config(tool)?;
             }
             Some(MenuConfigMode::Uboot) => {
-                Self::handle_uboot_config(tool).await?;
+                Self::handle_uboot_config(tool)?;
             }
             None => {
-                Self::handle_default_config(tool).await?;
+                Self::handle_default_config(tool)?;
             }
         }
         Ok(())
     }
 
-    async fn handle_default_config(tool: &mut Tool) -> Result<()> {
-        tool.prepare_build_config(None, true).await?;
+    fn handle_default_config(tool: &mut Tool) -> Result<()> {
+        tool.prepare_build_config(None, true)?;
 
         Ok(())
     }
 
-    async fn handle_qemu_config(tool: &mut Tool) -> Result<()> {
+    fn handle_qemu_config(tool: &mut Tool) -> Result<()> {
         info!("配置 QEMU 运行参数");
 
         let config_path = crate::run::qemu::resolve_qemu_config_path(tool, None)?;
@@ -76,12 +77,10 @@ impl MenuConfigHandler {
         }
 
         let config = jkconfig::run::<QemuConfig>(config_path.clone(), true, &[])
-            .await
             .with_context(|| format!("failed to load QEMU config: {}", config_path.display()))?;
 
         if let Some(c) = config {
             fs::write(&config_path, toml::to_string_pretty(&c)?)
-                .await
                 .with_path("failed to write file", &config_path)?;
             println!("\nQEMU 配置已保存到 {}", config_path.display());
         } else {
@@ -91,7 +90,7 @@ impl MenuConfigHandler {
         Ok(())
     }
 
-    async fn handle_uboot_config(tool: &mut Tool) -> Result<()> {
+    fn handle_uboot_config(tool: &mut Tool) -> Result<()> {
         info!("配置 U-Boot 运行参数");
 
         println!("=== U-Boot 配置模式 ===");
@@ -105,7 +104,6 @@ impl MenuConfigHandler {
             println!("\n未找到 U-Boot 配置文件，将使用默认配置");
         }
         let config = jkconfig::run::<UbootConfig>(uboot_config_path.clone(), true, &[])
-            .await
             .with_context(|| {
                 format!(
                     "failed to load U-Boot config: {}",
@@ -114,7 +112,6 @@ impl MenuConfigHandler {
             })?;
         if let Some(c) = config {
             fs::write(&uboot_config_path, toml::to_string_pretty(&c)?)
-                .await
                 .with_path("failed to write file", &uboot_config_path)?;
             println!("\nU-Boot 配置已保存到 .uboot.toml");
         } else {

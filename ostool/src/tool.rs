@@ -10,7 +10,7 @@ use jkconfig::{
     ui::components::editors::{show_feature_select, show_list_select},
 };
 use object::Object;
-use tokio::fs;
+use std::fs;
 
 use crate::{
     build::{
@@ -184,7 +184,7 @@ impl Tool {
     }
 
     /// Sets the ELF artifact path and synchronizes derived runtime metadata.
-    pub async fn set_elf_artifact_path(&mut self, path: PathBuf) -> anyhow::Result<()> {
+    pub fn set_elf_artifact_path(&mut self, path: PathBuf) -> anyhow::Result<()> {
         let path = path
             .canonicalize()
             .with_path("failed to canonicalize file", &path)?;
@@ -199,7 +199,6 @@ impl Tool {
         self.ctx.artifacts.runtime_artifact_dir = Some(artifact_dir);
 
         let binary_data = fs::read(&path)
-            .await
             .with_path("failed to read ELF file", &path)?;
         let file = object::File::parse(binary_data.as_slice())
             .with_context(|| format!("failed to parse ELF file: {}", path.display()))?;
@@ -208,8 +207,8 @@ impl Tool {
     }
 
     /// Sets the ELF file path and detects its architecture.
-    pub async fn set_elf_path(&mut self, path: PathBuf) -> anyhow::Result<()> {
-        self.set_elf_artifact_path(path).await
+    pub fn set_elf_path(&mut self, path: PathBuf) -> anyhow::Result<()> {
+        self.set_elf_artifact_path(path)
     }
 
     /// Strips debug symbols from the ELF file.
@@ -334,7 +333,7 @@ impl Tool {
     }
 
     /// Loads and prepares the build configuration.
-    pub async fn prepare_build_config(
+    pub fn prepare_build_config(
         &mut self,
         config_path: Option<PathBuf>,
         menu: bool,
@@ -347,7 +346,6 @@ impl Tool {
             menu,
             &[self.ui_hock_feature_select(), self.ui_hock_pacage_select()],
         )
-        .await
         .with_context(|| format!("failed to load build config: {}", config_path.display()))?
         else {
             bail!("No build configuration obtained");
@@ -539,8 +537,8 @@ mod tests {
     use object::Architecture;
     use std::collections::HashMap;
 
-    #[tokio::test]
-    async fn set_elf_artifact_path_updates_dirs_and_arch() {
+    #[test]
+    fn set_elf_artifact_path_updates_dirs_and_arch() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(
             temp.path().join("Cargo.toml"),
@@ -559,7 +557,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        tool.set_elf_artifact_path(copied.clone()).await.unwrap();
+        tool.set_elf_artifact_path(copied.clone()).unwrap();
 
         let expected_elf = copied.canonicalize().unwrap();
         let expected_dir = expected_elf.parent().unwrap().to_path_buf();

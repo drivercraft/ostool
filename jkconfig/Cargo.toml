@@ -41,11 +41,10 @@ tower = {version = "0.5", optional = true}
 tower-http = {version = "0.6", features = ["fs", "cors"], optional = true}
 
 [features]
-default = ["web"]
+default = []
 web = ["axum", "tokio", "tower", "tower-http", "chrono"]
 logging = []
 
 [dev-dependencies]
 env_logger = "0.11"
 schemars = {workspace=true, features = ["derive"]}
-tokio-test = "0.4"

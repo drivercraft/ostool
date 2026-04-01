@@ -22,6 +22,7 @@
 
 use std::{
     ffi::OsString,
+    fs,
     io::{self, BufReader, ErrorKind, IsTerminal, Read, Write},
     path::Path,
     path::PathBuf,
@@ -39,7 +40,6 @@ use log::warn;
 use object::Architecture;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::fs;
 
 use crate::{
     Tool,
@@ -199,17 +199,16 @@ impl From<CargoQemuOverrideArgs> for RunQemuOverrideArgs {
 ///
 /// Returns an error if QEMU fails to start or exits with an error.
 impl Tool {
-    pub async fn run_qemu(&mut self, args: RunQemuArgs) -> anyhow::Result<()> {
+    pub fn run_qemu(&mut self, args: RunQemuArgs) -> anyhow::Result<()> {
         self.run_qemu_with_layers(
             args,
             CargoQemuOverrideArgs::default(),
             CargoQemuAppendArgs::default(),
             CargoQemuOverrideArgs::default(),
         )
-        .await
     }
 
-    pub async fn run_qemu_with_layers(
+    pub fn run_qemu_with_layers(
         &mut self,
         run_args: RunQemuArgs,
         default_args: CargoQemuOverrideArgs,
@@ -225,20 +224,19 @@ impl Tool {
                 override_args: override_args.into(),
             },
         )
-        .await
     }
 }
 
-async fn run_qemu_with_layers(
+fn run_qemu_with_layers(
     tool: &mut Tool,
     run_args: RunQemuArgs,
     layers: RunQemuLayers,
 ) -> anyhow::Result<()> {
-    let config = load_or_create_qemu_config(tool, run_args.qemu_config.clone(), layers).await?;
-    run_qemu_with_config(tool, run_args, config).await
+    let config = load_or_create_qemu_config(tool, run_args.qemu_config.clone(), layers)?;
+    run_qemu_with_config(tool, run_args, config)
 }
 
-async fn load_or_create_qemu_config(
+fn load_or_create_qemu_config(
     tool: &Tool,
     explicit_config_path: Option<PathBuf>,
     layers: RunQemuLayers,
@@ -250,7 +248,7 @@ async fn load_or_create_qemu_config(
 
     info!("Using QEMU config file: {}", config_path.display());
 
-    let config_content = match fs::read_to_string(&config_path).await {
+    let config_content = match fs::read_to_string(&config_path) {
         Ok(content) => {
             let mut config: QemuConfig = toml::from_str(&content).with_context(|| {
                 format!("failed to parse QEMU config: {}", config_path.display())
@@ -267,7 +265,6 @@ async fn load_or_create_qemu_config(
             apply_override_args(&mut config, &layers.override_args);
             config.normalize(&format!("QEMU config {}", config_path.display()))?;
             fs::write(&config_path, toml::to_string_pretty(&config)?)
-                .await
                 .with_path("failed to write file", &config_path)?;
             config
         }
@@ -341,7 +338,7 @@ fn apply_override_args(config: &mut QemuConfig, override_args: &RunQemuOverrideA
     }
 }
 
-async fn run_qemu_with_config(
+fn run_qemu_with_config(
     tool: &mut Tool,
     run_args: RunQemuArgs,
     config: QemuConfig,
@@ -353,7 +350,7 @@ async fn run_qemu_with_config(
         success_regex: vec![],
         fail_regex: vec![],
     };
-    runner.run().await
+    runner.run()
 }
 
 struct QemuRunner<'a> {
@@ -386,7 +383,7 @@ impl Drop for RawModeGuard {
 }
 
 impl QemuRunner<'_> {
-    async fn run(&mut self) -> anyhow::Result<()> {
+    fn run(&mut self) -> anyhow::Result<()> {
         self.prepare_regex()?;
 
         if self.config.to_bin {
@@ -433,7 +430,7 @@ impl QemuRunner<'_> {
 
         if self.dtbdump {
             let dtb_dump_path = PathBuf::from("target/qemu.dtb");
-            if let Err(err) = fs::remove_file(&dtb_dump_path).await
+            if let Err(err) = fs::remove_file(&dtb_dump_path)
                 && err.kind() != ErrorKind::NotFound
             {
                 return Err(err).with_path("failed to remove file", &dtb_dump_path);
@@ -452,7 +449,7 @@ impl QemuRunner<'_> {
         }
 
         let mut use_kernel_loader = true;
-        if let Some(uefi) = self.prepare_uefi().await? {
+        if let Some(uefi) = self.prepare_uefi()? {
             match uefi {
                 UefiBootConfig::Pflash {
                     code,
@@ -519,7 +516,7 @@ impl QemuRunner<'_> {
         Ok(())
     }
 
-    async fn prepare_uefi(&self) -> anyhow::Result<Option<UefiBootConfig>> {
+    fn prepare_uefi(&self) -> anyhow::Result<Option<UefiBootConfig>> {
         if !self.config.uefi {
             return Ok(None);
         }
@@ -531,7 +528,6 @@ impl QemuRunner<'_> {
         let tmp = std::env::temp_dir();
         let bios_dir = tmp.join("ostool").join("ovmf");
         fs::create_dir_all(&bios_dir)
-            .await
             .with_path("failed to create directory", &bios_dir)?;
 
         println!("Preparing OVMF firmware for architecture: {:?}", arch);
@@ -548,8 +544,8 @@ impl QemuRunner<'_> {
 
         let code = prebuilt.get_file(arch, FileType::Code);
         let vars_template = prebuilt.get_file(arch, FileType::Vars);
-        let esp_dir = self.prepare_uefi_esp(arch).await?;
-        let vars = self.prepare_uefi_vars(&vars_template).await?;
+        let esp_dir = self.prepare_uefi_esp(arch)?;
+        let vars = self.prepare_uefi_vars(&vars_template)?;
 
         Ok(Some(UefiBootConfig::Pflash {
             code,
@@ -558,7 +554,7 @@ impl QemuRunner<'_> {
         }))
     }
 
-    async fn prepare_uefi_esp(&self, arch: Arch) -> anyhow::Result<PathBuf> {
+    fn prepare_uefi_esp(&self, arch: Arch) -> anyhow::Result<PathBuf> {
         let bin_path = self
             .tool
             .ctx
@@ -573,11 +569,10 @@ impl QemuRunner<'_> {
         let esp_dir = artifact_dir.join(format!("{}.esp", stem.to_string_lossy()));
         let boot_dir = esp_dir.join("EFI").join("BOOT");
         fs::create_dir_all(&boot_dir)
-            .await
             .with_path("failed to create directory", &boot_dir)?;
 
         let boot_path = boot_dir.join(Self::default_uefi_boot_filename(arch));
-        fs::copy(bin_path, &boot_path).await.with_context(|| {
+        fs::copy(bin_path, &boot_path).with_context(|| {
             format!(
                 "failed to copy EFI image from {} to {}",
                 bin_path.display(),
@@ -602,7 +597,7 @@ impl QemuRunner<'_> {
             .ok_or_else(|| anyhow!("invalid BIN path: {}", bin_path.display()))
     }
 
-    async fn prepare_uefi_vars(&self, vars_template: &Path) -> anyhow::Result<PathBuf> {
+    fn prepare_uefi_vars(&self, vars_template: &Path) -> anyhow::Result<PathBuf> {
         let bin_path = self
             .tool
             .ctx
@@ -615,11 +610,10 @@ impl QemuRunner<'_> {
             .ok_or_else(|| anyhow!("invalid BIN path: {}", bin_path.display()))?;
         let artifact_dir = self.uefi_artifact_dir(bin_path)?;
         fs::create_dir_all(&artifact_dir)
-            .await
             .with_path("failed to create directory", &artifact_dir)?;
 
         let vars = artifact_dir.join(format!("{}.vars.fd", stem.to_string_lossy()));
-        fs::copy(vars_template, &vars).await.with_context(|| {
+        fs::copy(vars_template, &vars).with_context(|| {
             format!(
                 "failed to copy OVMF vars from {} to {}",
                 vars_template.display(),
@@ -983,8 +977,8 @@ mod tests {
         assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
     }
 
-    #[tokio::test]
-    async fn load_existing_qemu_config_applies_append_and_override_layers() {
+    #[test]
+    fn load_existing_qemu_config_applies_append_and_override_layers() {
         let tmp = TempDir::new().unwrap();
         write_single_crate_manifest(tmp.path());
         let config_path = tmp.path().join(".qemu.toml");
@@ -1032,7 +1026,6 @@ shell_init_cmd = "root"
                 },
             },
         )
-        .await
         .unwrap();
 
         assert!(config.to_bin);
@@ -1043,8 +1036,8 @@ shell_init_cmd = "root"
         assert_eq!(config.args, vec!["-serial", "mon:stdio"]);
     }
 
-    #[tokio::test]
-    async fn load_default_qemu_config_applies_default_then_append_then_override() {
+    #[test]
+    fn load_default_qemu_config_applies_default_then_append_then_override() {
         let tmp = TempDir::new().unwrap();
         write_single_crate_manifest(tmp.path());
         let config_path = tmp.path().join(".qemu.toml");
@@ -1075,7 +1068,6 @@ shell_init_cmd = "root"
                 },
             },
         )
-        .await
         .unwrap();
 
         assert!(!config.to_bin);

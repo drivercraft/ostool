@@ -36,20 +36,17 @@ crossterm = { workspace = true }
 cursive = { workspace = true, features = ["crossterm-backend"] }
 env_logger = { workspace = true }
 fitimage = { version = "0.1", path = "../fitimage" }
-futures = "0.3"
 indicatif = "0.18"
-jkconfig = { version = "0.1", path = "../jkconfig" }
+jkconfig = { version = "0.1", path = "../jkconfig", default-features = false }
 log = { workspace = true }
 network-interface = "2"
 object = "0.38"
 ratatui = "0.29"
-reqwest = { version = "0.13" }
 schemars = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serialport = "4.6"
 tftpd = "0.5"
-tokio = { workspace = true, features = ["full"] }
 toml = { workspace = true }
 uboot-shell = { version = "0.2", path = "../uboot-shell" }
 

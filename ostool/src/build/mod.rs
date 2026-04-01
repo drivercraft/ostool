@@ -72,6 +72,7 @@ pub struct CargoQemuAppendArgs {
 ///
 /// This enum determines how the built artifact will be executed,
 /// either through QEMU emulation or via U-Boot on real hardware.
+#[allow(clippy::large_enum_variant)]
 pub enum CargoRunnerKind {
     /// Run the built artifact in QEMU emulator.
     Qemu {
@@ -105,11 +106,11 @@ impl Tool {
     /// # Errors
     ///
     /// Returns an error if the build process fails.
-    pub async fn build_with_config(&mut self, config: &config::BuildConfig) -> anyhow::Result<()> {
+    pub fn build_with_config(&mut self, config: &config::BuildConfig) -> anyhow::Result<()> {
         match &config.system {
             config::BuildSystem::Custom(custom) => self.build_custom(custom)?,
             config::BuildSystem::Cargo(cargo) => {
-                self.cargo_build(cargo).await?;
+                self.cargo_build(cargo)?;
             }
         }
         Ok(())
@@ -129,10 +130,10 @@ impl Tool {
     /// # Errors
     ///
     /// Returns an error if the configuration cannot be loaded or the build fails.
-    pub async fn build(&mut self, config_path: Option<PathBuf>) -> anyhow::Result<()> {
-        let build_config = self.prepare_build_config(config_path, false).await?;
+    pub fn build(&mut self, config_path: Option<PathBuf>) -> anyhow::Result<()> {
+        let build_config = self.prepare_build_config(config_path, false)?;
         println!("Build configuration: {:?}", build_config);
-        self.build_with_config(&build_config).await
+        self.build_with_config(&build_config)
     }
 
     /// Executes a custom build using shell commands.
@@ -158,10 +159,8 @@ impl Tool {
     /// # Errors
     ///
     /// Returns an error if the Cargo build fails.
-    pub async fn cargo_build(&mut self, config: &Cargo) -> anyhow::Result<()> {
-        cargo_builder::CargoBuilder::build_auto(self, config)
-            .execute()
-            .await
+    pub fn cargo_build(&mut self, config: &Cargo) -> anyhow::Result<()> {
+        cargo_builder::CargoBuilder::build_auto(self, config).execute()
     }
 
     /// Builds and runs the project using Cargo with the specified runner.
@@ -174,7 +173,7 @@ impl Tool {
     /// # Errors
     ///
     /// Returns an error if the build or run fails.
-    pub async fn cargo_run(
+    pub fn cargo_run(
         &mut self,
         config: &Cargo,
         runner: &CargoRunnerKind,
@@ -187,8 +186,7 @@ impl Tool {
             .debug(debug)
             .skip_objcopy(true)
             .resolve_artifact_from_json(true)
-            .execute()
-            .await?;
+            .execute()?;
 
         match runner {
             CargoRunnerKind::Qemu {
@@ -215,15 +213,13 @@ impl Tool {
                     default_args.clone(),
                     append_args.clone(),
                     override_args.clone(),
-                )
-                .await?;
+                )?;
             }
             CargoRunnerKind::Uboot { uboot_config } => {
                 self.run_uboot(RunUbootArgs {
                     config: uboot_config.clone(),
                     show_output: true,
-                })
-                .await?;
+                })?;
             }
         }
 

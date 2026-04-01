@@ -6,12 +6,12 @@ use colored::Colorize as _;
 
 use log::info;
 use ostool::{
-    Tool, ToolConfig,
     build::{self, CargoQemuAppendArgs, CargoQemuOverrideArgs, CargoRunnerKind},
     logger,
     menuconfig::{MenuConfigHandler, MenuConfigMode},
     resolve_manifest_context,
     run::{qemu::RunQemuArgs, uboot::RunUbootArgs},
+    Tool, ToolConfig,
 };
 
 #[derive(Parser)]
@@ -80,9 +80,8 @@ pub struct UbootArgs {
     uboot_config: Option<PathBuf>,
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
-    match try_main().await {
+fn main() -> ExitCode {
+    match try_main() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             report_error(&err);
@@ -91,7 +90,7 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn try_main() -> Result<()> {
+fn try_main() -> Result<()> {
     let cli = Cli::parse();
     let manifest = resolve_manifest_context(cli.manifest.clone())?;
     let log_path = logger::init_file_logger(&manifest.workspace_dir)?;
@@ -109,10 +108,10 @@ async fn try_main() -> Result<()> {
 
     match cli.command {
         SubCommands::Build { config } => {
-            tool.build(config).await?;
+            tool.build(config)?;
         }
         SubCommands::Run(args) => {
-            let config = tool.prepare_build_config(args.config, false).await?;
+            let config = tool.prepare_build_config(args.config, false)?;
             match config.system {
                 build::config::BuildSystem::Cargo(config) => {
                     let kind = match args.command {
@@ -128,12 +127,11 @@ async fn try_main() -> Result<()> {
                             uboot_config: uboot_args.uboot_config,
                         },
                     };
-                    tool.cargo_run(&config, &kind).await?;
+                    tool.cargo_run(&config, &kind)?;
                 }
                 build::config::BuildSystem::Custom(custom_cfg) => {
                     tool.shell_run_cmd(&custom_cfg.build_cmd)?;
-                    tool.set_elf_path(custom_cfg.elf_path.clone().into())
-                        .await?;
+                    tool.set_elf_path(custom_cfg.elf_path.clone().into())?;
                     info!(
                         "ELF {:?}: {}",
                         tool.ctx().arch,
@@ -150,22 +148,20 @@ async fn try_main() -> Result<()> {
                                 qemu_config: qemu_args.qemu_config,
                                 dtb_dump: qemu_args.dtb_dump,
                                 show_output: true,
-                            })
-                            .await?;
+                            })?;
                         }
                         RunSubCommands::Uboot(uboot_args) => {
                             tool.run_uboot(RunUbootArgs {
                                 config: uboot_args.uboot_config,
                                 show_output: true,
-                            })
-                            .await?;
+                            })?;
                         }
                     }
                 }
             }
         }
         SubCommands::Menuconfig { mode } => {
-            MenuConfigHandler::handle_menuconfig(&mut tool, mode).await?;
+            MenuConfigHandler::handle_menuconfig(&mut tool, mode)?;
         }
     }
 

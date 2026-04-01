@@ -164,15 +164,15 @@ impl<'a> CargoBuilder<'a> {
     /// # Errors
     ///
     /// Returns an error if any step of the build process fails.
-    pub async fn execute(mut self) -> anyhow::Result<()> {
+    pub fn execute(mut self) -> anyhow::Result<()> {
         // 1. Pre-build commands
         self.run_pre_build_cmds()?;
 
         // 2. Build and run cargo
-        self.run_cargo().await?;
+        self.run_cargo()?;
 
         // 3. Handle output
-        self.handle_output().await?;
+        self.handle_output()?;
 
         // 4. Post-build commands
         self.run_post_build_cmds()?;
@@ -187,13 +187,13 @@ impl<'a> CargoBuilder<'a> {
         Ok(())
     }
 
-    async fn run_cargo(&mut self) -> anyhow::Result<()> {
-        self.run_cargo_and_resolve_artifact().await
+    fn run_cargo(&mut self) -> anyhow::Result<()> {
+        self.run_cargo_and_resolve_artifact()
     }
 
-    async fn run_cargo_and_resolve_artifact(&mut self) -> anyhow::Result<()> {
+    fn run_cargo_and_resolve_artifact(&mut self) -> anyhow::Result<()> {
         let (target_pkg_id, default_run) = self.target_package_info()?;
-        let mut cmd = self.build_cargo_command().await?;
+        let mut cmd = self.build_cargo_command()?;
 
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::inherit());
@@ -269,7 +269,7 @@ impl<'a> CargoBuilder<'a> {
         Ok(())
     }
 
-    async fn build_cargo_command(&mut self) -> anyhow::Result<Command> {
+    fn build_cargo_command(&mut self) -> anyhow::Result<Command> {
         let mut cmd = self.tool.command("cargo");
 
         cmd.arg(&self.command);
@@ -284,7 +284,7 @@ impl<'a> CargoBuilder<'a> {
         }
 
         // Extra config
-        if let Some(extra_config_path) = self.cargo_extra_config().await? {
+        if let Some(extra_config_path) = self.cargo_extra_config()? {
             cmd.arg("--config");
             cmd.arg(extra_config_path.display().to_string());
         }
@@ -352,7 +352,7 @@ impl<'a> CargoBuilder<'a> {
         Ok(cmd)
     }
 
-    async fn handle_output(&mut self) -> anyhow::Result<()> {
+    fn handle_output(&mut self) -> anyhow::Result<()> {
         let resolved = self.resolved_artifact.clone().ok_or_else(|| {
             anyhow!(
                 "cargo build finished without a resolved executable artifact for package '{}' and target '{}'",
@@ -361,7 +361,7 @@ impl<'a> CargoBuilder<'a> {
             )
         })?;
 
-        self.tool.set_elf_artifact_path(resolved.elf_path).await?;
+        self.tool.set_elf_artifact_path(resolved.elf_path)?;
         self.tool.ctx.artifacts.cargo_artifact_dir = Some(resolved.cargo_artifact_dir.clone());
         self.tool.ctx.artifacts.runtime_artifact_dir = Some(resolved.cargo_artifact_dir);
 
@@ -450,7 +450,7 @@ impl<'a> CargoBuilder<'a> {
         }
     }
 
-    async fn cargo_extra_config(&self) -> anyhow::Result<Option<PathBuf>> {
+    fn cargo_extra_config(&self) -> anyhow::Result<Option<PathBuf>> {
         let s = match self.config.extra_config.as_ref() {
             Some(s) => s,
             None => return Ok(None),
@@ -462,7 +462,7 @@ impl<'a> CargoBuilder<'a> {
             let download_url = Self::convert_to_raw_url(s);
 
             // Download to temp directory
-            match self.download_config_to_temp(&download_url).await {
+            match self.download_config_to_temp(&download_url) {
                 Ok(path) => Ok(Some(path)),
                 Err(e) => {
                     eprintln!("Failed to download config from {}: {}", s, e);
@@ -518,7 +518,7 @@ impl<'a> CargoBuilder<'a> {
         url.to_string()
     }
 
-    async fn download_config_to_temp(&self, url: &str) -> anyhow::Result<PathBuf> {
+    fn download_config_to_temp(&self, url: &str) -> anyhow::Result<PathBuf> {
         use std::time::SystemTime;
 
         println!("Downloading cargo config from: {}", url);
@@ -537,14 +537,14 @@ impl<'a> CargoBuilder<'a> {
         let filename = format!("cargo_config_{}_{}", timestamp, url_path);
         let target_path = temp_dir.join(filename);
 
-        // Create reqwest client
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| anyhow::anyhow!("Failed to create HTTP client: {}", e))?;
+        // Build agent with timeout
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(30)))
+            .build();
+        let agent = ureq::Agent::new_with_config(config);
 
         // Build request with User-Agent for GitHub
-        let mut request = client.get(url);
+        let mut request = agent.get(url);
 
         if url.contains("github.com") || url.contains("githubusercontent.com") {
             // GitHub requires User-Agent
@@ -552,9 +552,8 @@ impl<'a> CargoBuilder<'a> {
         }
 
         // Download the file
-        let response = request
-            .send()
-            .await
+        let mut response = request
+            .call()
             .map_err(|e| anyhow::anyhow!("Failed to download from {}: {}", url, e))?;
 
         if !response.status().is_success() {
@@ -562,13 +561,12 @@ impl<'a> CargoBuilder<'a> {
         }
 
         let content = response
-            .bytes()
-            .await
+            .body_mut()
+            .read_to_vec()
             .map_err(|e| anyhow::anyhow!("Failed to read response body: {}", e))?;
 
         // Write to temp file
-        tokio::fs::write(&target_path, content)
-            .await
+        std::fs::write(&target_path, content)
             .with_path("failed to write downloaded cargo config", &target_path)
             .with_context(|| format!("while downloading cargo config from {url}"))?;
 

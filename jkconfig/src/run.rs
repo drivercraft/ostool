@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{fs, path::Path};
 
 use anyhow::Context;
 pub use cursive;
@@ -21,7 +21,7 @@ pub use crate::data::app_data::ElemHock;
 /// # Errors
 ///
 /// Returns errors when schema generation, parsing, or I/O fails.
-pub async fn run<C: JsonSchema + DeserializeOwned>(
+pub fn run<C: JsonSchema + DeserializeOwned>(
     config_path: impl AsRef<Path>,
     always_use_ui: bool,
     elem_hocks: &[ElemHock],
@@ -30,9 +30,7 @@ pub async fn run<C: JsonSchema + DeserializeOwned>(
     let schema = schemars::schema_for!(C);
     let schema_json = serde_json::to_value(&schema)?;
 
-    let content = tokio::fs::read_to_string(&config_path)
-        .await
-        .unwrap_or_default();
+    let content = fs::read_to_string(config_path).unwrap_or_default();
 
     let ext = config_path
         .extension()
@@ -45,7 +43,7 @@ pub async fn run<C: JsonSchema + DeserializeOwned>(
         return Ok(Some(c));
     }
 
-    let app = get_content_by_ui(config_path, &content, &schema_json, elem_hocks).await?;
+    let app = get_content_by_ui(config_path, &content, &schema_json, elem_hocks)?;
     if !app.needs_save {
         return Ok(None);
     }
@@ -66,14 +64,12 @@ pub async fn run<C: JsonSchema + DeserializeOwned>(
     match ext.as_str() {
         "json" => {
             let content = serde_json::to_string_pretty(&val)?;
-            tokio::fs::write(&config_path, content)
-                .await
+            fs::write(config_path, content)
                 .with_context(|| format!("Failed to write {}", config_path.display()))?;
         }
         "toml" => {
             let content = toml::to_string_pretty(&val)?;
-            tokio::fs::write(&config_path, content)
-                .await
+            fs::write(config_path, content)
                 .with_context(|| format!("Failed to write {}", config_path.display()))?;
         }
         _ => {
@@ -95,7 +91,7 @@ fn to_typed<C: JsonSchema + DeserializeOwned>(s: &str, ext: &str) -> anyhow::Res
     Ok(c)
 }
 
-async fn get_content_by_ui(
+fn get_content_by_ui(
     config: impl AsRef<Path>,
     content: &str,
     schema: &serde_json::Value,
