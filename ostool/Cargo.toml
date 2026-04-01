@@ -38,7 +38,7 @@ env_logger = { workspace = true }
 fitimage = { version = "0.1", path = "../fitimage" }
 futures = "0.3"
 indicatif = "0.18"
-jkconfig = { version = "0.1", path = "../jkconfig" }
+jkconfig = { version = "0.1", path = "../jkconfig", default-features = false }
 log = { workspace = true }
 network-interface = "2"
 object = "0.38"
