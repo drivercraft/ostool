@@ -6,13 +6,13 @@ use base64::Engine;
 use futures_util::{Sink, SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_serial::SerialPortBuilderExt;
 
 use crate::{
     config::BoardConfig,
     power::{PowerAction, PowerActionError, execute_power_action_for_board},
+    session::SessionState,
     state::AppState,
 };
 
@@ -27,29 +27,22 @@ struct ClientControlMessage {
 pub async fn run_serial_ws(
     socket: WebSocket,
     state: AppState,
-    session_id: String,
-    board: BoardConfig,
+    session: std::sync::Arc<SessionState>,
 ) {
-    let shutdown_rx = state.register_serial_shutdown(&session_id).await;
-    let result = run_serial_ws_inner(socket, &state, &session_id, &board, shutdown_rx).await;
-    state.clear_serial_shutdown(&session_id).await;
+    let result = run_serial_ws_inner(socket, &state, session.clone()).await;
+    session.clear_serial_connected();
     if let Err(err) = result {
         log::warn!("serial websocket ended with error: {err:#}");
     }
-    state
-        .active_serial_sessions
-        .write()
-        .await
-        .remove(&session_id);
 }
 
 async fn run_serial_ws_inner(
     socket: WebSocket,
-    state: &AppState,
-    session_id: &str,
-    board: &BoardConfig,
-    mut shutdown_rx: watch::Receiver<bool>,
+    _state: &AppState,
+    session: std::sync::Arc<SessionState>,
 ) -> anyhow::Result<()> {
+    let session_id = session.snapshot().await.id;
+    let board = session.board().clone();
     let serial = board
         .serial
         .as_ref()
@@ -64,6 +57,7 @@ async fn run_serial_ws_inner(
     let mut serial_buffer = [0u8; 1024];
     let mut power_on_task = Some(spawn_power_action_task(board.clone(), PowerAction::On));
     let power_linked = true;
+    let mut shutdown_rx = session.subscribe_shutdown();
 
     ws_sender
         .send(Message::Text(r#"{"type":"opened"}"#.to_string().into()))
@@ -138,7 +132,7 @@ async fn run_serial_ws_inner(
                         Ok(Message::Pong(_)) => {}
                         Err(err) => return Err(err.into()),
                     }
-                    let _ = state.touch_session(session_id).await;
+                    let _ = session.heartbeat().await;
                 }
                 read = serial_rx.read(&mut serial_buffer) => {
                     let read = read.context("serial read failed")?;
@@ -149,7 +143,7 @@ async fn run_serial_ws_inner(
                         .send(Message::Binary(serial_buffer[..read].to_vec().into()))
                         .await
                         .context("failed to send serial output over websocket")?;
-                    let _ = state.touch_session(session_id).await;
+                    let _ = session.heartbeat().await;
                 }
             }
         } else {
@@ -202,7 +196,7 @@ async fn run_serial_ws_inner(
                         Ok(Message::Pong(_)) => {}
                         Err(err) => return Err(err.into()),
                     }
-                    let _ = state.touch_session(session_id).await;
+                    let _ = session.heartbeat().await;
                 }
                 read = serial_rx.read(&mut serial_buffer) => {
                     let read = read.context("serial read failed")?;
@@ -213,13 +207,13 @@ async fn run_serial_ws_inner(
                         .send(Message::Binary(serial_buffer[..read].to_vec().into()))
                         .await
                         .context("failed to send serial output over websocket")?;
-                    let _ = state.touch_session(session_id).await;
+                    let _ = session.heartbeat().await;
                 }
             }
         }
     }
 
-    cleanup_power_link(board, power_linked, power_on_task).await;
+    cleanup_power_link(&board, power_linked, power_on_task).await;
     let _ = ws_sender.send(Message::Close(None)).await;
     Ok(())
 }

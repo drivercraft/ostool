@@ -61,6 +61,7 @@ struct TerminalState {
     running: AtomicBool,
     timed_out: AtomicBool,
     stop_deadline: Mutex<Option<Instant>>,
+    timeout_deadline: Mutex<Option<Instant>>,
     outbound_tx: mpsc::UnboundedSender<Vec<u8>>,
     wake_version: AtomicU64,
     wake_tx: watch::Sender<u64>,
@@ -118,7 +119,7 @@ impl AsyncTerminal {
 
         let handle = TerminalHandle::new(outbound_tx);
         if let Some(timeout) = self.config.timeout {
-            handle.stop_after(timeout);
+            handle.timeout_after(timeout);
         }
 
         let mut events = EventStream::new();
@@ -163,8 +164,15 @@ impl AsyncTerminal {
     {
         while handle.is_running() {
             let mut wake_rx = handle.subscribe();
-            let mut deadline = Box::pin(async {
+            let mut stop_deadline = Box::pin(async {
                 if let Some(deadline) = handle.stop_deadline() {
+                    sleep_until(deadline).await;
+                } else {
+                    futures::future::pending::<()>().await;
+                }
+            });
+            let mut timeout_deadline = Box::pin(async {
+                if let Some(deadline) = handle.timeout_deadline() {
                     sleep_until(deadline).await;
                 } else {
                     futures::future::pending::<()>().await;
@@ -202,7 +210,10 @@ impl AsyncTerminal {
                         None => break,
                     }
                 }
-                _ = &mut deadline => {
+                _ = &mut stop_deadline => {
+                    handle.stop();
+                }
+                _ = &mut timeout_deadline => {
                     handle.mark_timed_out();
                     handle.stop();
                 }
@@ -226,6 +237,7 @@ impl TerminalHandle {
                 running: AtomicBool::new(true),
                 timed_out: AtomicBool::new(false),
                 stop_deadline: Mutex::new(None),
+                timeout_deadline: Mutex::new(None),
                 outbound_tx,
                 wake_version: AtomicU64::new(0),
                 wake_tx,
@@ -240,6 +252,15 @@ impl TerminalHandle {
 
     pub fn stop_after(&self, duration: Duration) {
         let mut deadline = self.inner.stop_deadline.lock().unwrap();
+        if deadline.is_none() {
+            *deadline = Some(Instant::now() + duration);
+            drop(deadline);
+            self.wake();
+        }
+    }
+
+    pub fn timeout_after(&self, duration: Duration) {
+        let mut deadline = self.inner.timeout_deadline.lock().unwrap();
         if deadline.is_none() {
             *deadline = Some(Instant::now() + duration);
             drop(deadline);
@@ -278,6 +299,10 @@ impl TerminalHandle {
 
     fn stop_deadline(&self) -> Option<Instant> {
         *self.inner.stop_deadline.lock().unwrap()
+    }
+
+    fn timeout_deadline(&self) -> Option<Instant> {
+        *self.inner.timeout_deadline.lock().unwrap()
     }
 
     fn subscribe(&self) -> watch::Receiver<u64> {
@@ -613,8 +638,11 @@ pub fn restore_terminal_mode() {
 
 #[cfg(test)]
 mod tests {
-    use super::{KeyProcessor, TerminalAction, encode_key_event};
+    use std::time::Duration;
+
+    use super::{KeyProcessor, TerminalAction, TerminalHandle, encode_key_event};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use tokio::sync::mpsc;
 
     #[test]
     fn ctrl_a_x_requests_exit() {
@@ -655,5 +683,25 @@ mod tests {
             encode_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)).unwrap(),
             TerminalAction::SendBytes(vec![0x1b, b'[', b'A'])
         );
+    }
+
+    #[test]
+    fn stop_after_does_not_mark_timeout() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let handle = TerminalHandle::new(tx);
+        handle.stop_after(Duration::from_millis(10));
+        assert!(!handle.timed_out());
+        assert!(handle.stop_deadline().is_some());
+        assert!(handle.timeout_deadline().is_none());
+    }
+
+    #[test]
+    fn timeout_after_sets_timeout_deadline_only() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let handle = TerminalHandle::new(tx);
+        handle.timeout_after(Duration::from_millis(10));
+        assert!(!handle.timed_out());
+        assert!(handle.stop_deadline().is_none());
+        assert!(handle.timeout_deadline().is_some());
     }
 }

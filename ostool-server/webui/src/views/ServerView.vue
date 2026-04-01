@@ -49,7 +49,6 @@ async function saveConfig() {
   saving.value = true;
   try {
     config.value = await api.updateServerConfig({
-      lease: config.value.editable.lease,
       network: config.value.editable.network,
     });
     ui.setSuccess("已保存 Server 安全配置");
@@ -116,23 +115,6 @@ onMounted(() => {
 
           <section class="panel nested-panel">
             <div class="panel-heading compact">
-              <h4>可编辑 Lease 参数</h4>
-            </div>
-            <div class="form-grid">
-              <label class="field">
-                <span>默认 TTL（秒）</span>
-                <input v-model.number="config.editable.lease.default_ttl_secs" type="number" min="1" />
-              </label>
-              <label class="field">
-                <span>最大 TTL（秒）</span>
-                <input v-model.number="config.editable.lease.max_ttl_secs" type="number" min="1" />
-              </label>
-              <label class="field">
-                <span>GC 间隔（秒）</span>
-                <input v-model.number="config.editable.lease.gc_interval_secs" type="number" min="1" />
-              </label>
-            </div>
-            <div class="panel-heading compact with-top-gap">
               <h4>服务级网络配置</h4>
             </div>
             <div class="form-grid">
@@ -156,7 +138,7 @@ onMounted(() => {
               </label>
             </div>
             <p class="muted">
-              `lease` 和服务级网络配置保存后立即生效；`listen_addr`、`data_dir`、`board_dir` 仍保持只读，避免运行中修改导致服务行为不稳定。
+              服务级网络配置保存后立即生效；`listen_addr`、`data_dir`、`board_dir` 仍保持只读，避免运行中修改导致服务行为不稳定。
             </p>
           </section>
         </div>

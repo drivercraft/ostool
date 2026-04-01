@@ -3,6 +3,7 @@ use futures::{SinkExt, StreamExt};
 use tokio::{
     io::{AsyncReadExt, split},
     task::JoinHandle,
+    time::timeout,
 };
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -126,6 +127,50 @@ impl SerialStreamTasks {
         }
 
         Ok(())
+    }
+
+    pub async fn shutdown_with_timeout(self, duration: std::time::Duration) -> anyhow::Result<()> {
+        let SerialStreamTasks {
+            mut read_task,
+            mut write_task,
+        } = self;
+        let shutdown = async {
+            let write_result = (&mut write_task).await;
+            let read_result = (&mut read_task).await;
+
+            if let Ok(Err(err)) = write_result {
+                return Err(err);
+            }
+            if let Err(err) = write_result
+                && !err.is_cancelled()
+            {
+                return Err(anyhow::anyhow!("serial websocket writer join error: {err}"));
+            }
+            if let Ok(Err(err)) = read_result {
+                return Err(err);
+            }
+            if let Err(err) = read_result
+                && !err.is_cancelled()
+            {
+                return Err(anyhow::anyhow!("serial websocket reader join error: {err}"));
+            }
+
+            Ok(())
+        };
+
+        match timeout(duration, shutdown).await {
+            Ok(result) => result,
+            Err(_) => {
+                write_task.abort();
+                read_task.abort();
+                let _ = write_task.await;
+                let _ = read_task.await;
+                Err(anyhow::anyhow!(
+                    "serial websocket shutdown timed out after {}s",
+                    duration.as_secs_f64()
+                ))
+            }
+        }
     }
 }
 

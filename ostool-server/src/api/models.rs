@@ -3,8 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::{
-        BoardConfig, BootConfig, LeaseConfig, PowerManagementConfig, SerialConfig, TftpConfig,
-        TftpNetworkConfig,
+        BoardConfig, BootConfig, PowerManagementConfig, SerialConfig, TftpConfig, TftpNetworkConfig,
     },
     dtb_store::DtbFile,
     session::Session,
@@ -206,7 +205,6 @@ pub struct AdminServerConfigReadonly {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminServerConfigEditable {
-    pub lease: LeaseConfig,
     pub network: TftpNetworkConfig,
 }
 
@@ -218,6 +216,5 @@ pub struct AdminServerConfigResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateServerConfigRequest {
-    pub lease: LeaseConfig,
     pub network: TftpNetworkConfig,
 }

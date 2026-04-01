@@ -8,6 +8,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     routing::{delete, get, post, put},
 };
+use futures_util::future::join_all;
 use serde_json::json;
 
 use crate::{
@@ -138,7 +139,7 @@ async fn get_admin_overview(
     State(state): State<AppState>,
 ) -> Result<axum::Json<AdminOverviewResponse>, ApiError> {
     let boards = state.boards.read().await;
-    let sessions = state.sessions.read().await;
+    let sessions = session_snapshots(&state).await;
     let board_types = summarize_board_types(&boards, &sessions);
     let leased = leased_board_ids(&sessions);
     let board_count_total = boards.len();
@@ -315,7 +316,7 @@ async fn update_board(
         let sessions = state.sessions.read().await;
         if sessions
             .values()
-            .any(|session| session.board_id == board_id)
+            .any(|session| session.board().id == board_id)
         {
             return Err(ApiError::conflict(format!(
                 "board `{board_id}` is leased by an active session"
@@ -595,7 +596,7 @@ async fn delete_board(
         let sessions = state.sessions.read().await;
         if sessions
             .values()
-            .any(|session| session.board_id == board_id)
+            .any(|session| session.board().id == board_id)
         {
             return Err(ApiError::conflict(format!(
                 "board `{board_id}` is leased by an active session"
@@ -618,7 +619,7 @@ async fn list_admin_sessions(
     State(state): State<AppState>,
 ) -> Result<axum::Json<AdminSessionsResponse>, ApiError> {
     Ok(axum::Json(AdminSessionsResponse {
-        sessions: state.sessions.read().await.values().cloned().collect(),
+        sessions: session_snapshots(&state).await,
     }))
 }
 
@@ -701,24 +702,12 @@ async fn update_server_config(
     State(state): State<AppState>,
     axum::Json(request): axum::Json<UpdateServerConfigRequest>,
 ) -> Result<axum::Json<AdminServerConfigResponse>, ApiError> {
-    if request.lease.default_ttl_secs == 0 {
-        return Err(ApiError::bad_request("lease.default_ttl_secs must be > 0"));
-    }
-    if request.lease.max_ttl_secs < request.lease.default_ttl_secs {
-        return Err(ApiError::bad_request(
-            "lease.max_ttl_secs must be >= lease.default_ttl_secs",
-        ));
-    }
-    if request.lease.gc_interval_secs == 0 {
-        return Err(ApiError::bad_request("lease.gc_interval_secs must be > 0"));
-    }
     if request.network.interface.trim().is_empty() {
         return Err(ApiError::bad_request("network.interface must not be empty"));
     }
 
     {
         let mut config = state.config.write().await;
-        config.lease = request.lease;
         config.network = request.network;
     }
     state.save_config().await?;
@@ -743,7 +732,7 @@ async fn list_board_types(
     State(state): State<AppState>,
 ) -> Result<axum::Json<Vec<BoardTypeSummary>>, ApiError> {
     let boards = state.boards.read().await;
-    let sessions = state.sessions.read().await;
+    let sessions = session_snapshots(&state).await;
     let result = summarize_board_types(&boards, &sessions);
     Ok(axum::Json(result))
 }
@@ -805,11 +794,7 @@ async fn get_session(
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
     let files = session_file_responses(&state, &session_id, &board).await?;
-    let connected = state
-        .active_serial_sessions
-        .read()
-        .await
-        .contains(&session_id);
+    let connected = session.serial_connected;
 
     Ok(axum::Json(SessionDetailResponse {
         session,
@@ -946,10 +931,10 @@ async fn get_serial_status(
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
     let connected = state
-        .active_serial_sessions
-        .read()
+        .get_session(&session_id)
         .await
-        .contains(&session_id);
+        .map(|session| session.serial_connected)
+        .unwrap_or(false);
     let response = if let Some(serial) = board.serial {
         SerialStatusResponse {
             available: true,
@@ -975,22 +960,20 @@ async fn serial_ws(
     State(state): State<AppState>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
-    let board = state
-        .session_board(&session_id)
+    let session = state
+        .session_state(&session_id)
         .await
-        .ok_or_else(|| ApiError::not_found("session board not found"))?;
+        .ok_or_else(|| ApiError::not_found("session not found"))?;
+    let board = session.board().clone();
     let Some(_serial) = board.serial.clone() else {
         return Err(ApiError::conflict("board has no serial configuration"));
     };
 
-    {
-        let mut active = state.active_serial_sessions.write().await;
-        if !active.insert(session_id.clone()) {
-            return Err(ApiError::conflict("serial websocket already connected"));
-        }
+    if !session.try_set_serial_connected() {
+        return Err(ApiError::conflict("serial websocket already connected"));
     }
 
-    Ok(ws.on_upgrade(move |socket| run_serial_ws(socket, state, session_id, board)))
+    Ok(ws.on_upgrade(move |socket| run_serial_ws(socket, state, session)))
 }
 
 async fn power_on_board(
@@ -1183,18 +1166,16 @@ fn parse_relative_path(raw: &str) -> Result<String, ApiError> {
     normalize_relative_path(raw).map_err(|err| ApiError::bad_request(err.to_string()))
 }
 
-fn leased_board_ids<'a>(
-    sessions: &'a BTreeMap<String, crate::session::Session>,
-) -> BTreeSet<&'a str> {
+fn leased_board_ids(sessions: &[crate::session::Session]) -> BTreeSet<&str> {
     sessions
-        .values()
+        .iter()
         .map(|session| session.board_id.as_str())
         .collect::<BTreeSet<_>>()
 }
 
 fn summarize_board_types(
     boards: &BTreeMap<String, BoardConfig>,
-    sessions: &BTreeMap<String, crate::session::Session>,
+    sessions: &[crate::session::Session],
 ) -> Vec<BoardTypeSummary> {
     let leased = leased_board_ids(sessions);
     let mut aggregate = BTreeMap::<String, (BTreeSet<String>, usize, usize)>::new();
@@ -1222,6 +1203,22 @@ fn summarize_board_types(
         .collect::<Vec<_>>()
 }
 
+async fn session_snapshots(state: &AppState) -> Vec<crate::session::Session> {
+    let sessions = state
+        .sessions
+        .read()
+        .await
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    join_all(
+        sessions
+            .into_iter()
+            .map(|session| async move { session.snapshot().await }),
+    )
+    .await
+}
+
 fn boards_referencing_dtb(boards: &BTreeMap<String, BoardConfig>, dtb_name: &str) -> Vec<String> {
     boards
         .values()
@@ -1243,7 +1240,6 @@ fn server_config_response(config: &crate::config::ServerConfig) -> AdminServerCo
     AdminServerConfigResponse {
         readonly: readonly_server_config(config),
         editable: AdminServerConfigEditable {
-            lease: config.lease.clone(),
             network: config.network.clone(),
         },
     }
@@ -1637,7 +1633,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn server_config_endpoint_updates_only_lease() {
+    async fn server_config_endpoint_updates_only_network() {
         let app: Router = test_router().await;
         let response = app
             .oneshot(
@@ -1645,9 +1641,7 @@ mod tests {
                     .method("PUT")
                     .uri("/api/v1/admin/server-config")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"lease":{"default_ttl_secs":120,"max_ttl_secs":240,"gc_interval_secs":10},"network":{"interface":"lo"}}"#,
-                    ))
+                    .body(Body::from(r#"{"network":{"interface":"lo"}}"#))
                     .unwrap(),
             )
             .await
@@ -1656,7 +1650,6 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["editable"]["lease"]["default_ttl_secs"], 120);
         assert_eq!(value["editable"]["network"]["interface"], "lo");
         assert!(value["readonly"]["listen_addr"].is_string());
     }

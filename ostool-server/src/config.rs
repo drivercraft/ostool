@@ -17,7 +17,6 @@ pub struct ServerConfig {
     pub data_dir: PathBuf,
     pub board_dir: PathBuf,
     pub dtb_dir: PathBuf,
-    pub lease: LeaseConfig,
     pub tftp: TftpConfig,
     pub network: TftpNetworkConfig,
 }
@@ -41,7 +40,6 @@ impl Default for ServerConfig {
             data_dir,
             board_dir,
             dtb_dir,
-            lease: LeaseConfig::default(),
             tftp,
             network: TftpNetworkConfig::default(),
         }
@@ -141,38 +139,12 @@ impl ServerConfig {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.lease.default_ttl_secs == 0 {
-            bail!("lease.default_ttl_secs must be > 0");
-        }
-        if self.lease.max_ttl_secs < self.lease.default_ttl_secs {
-            bail!("lease.max_ttl_secs must be >= lease.default_ttl_secs");
-        }
-        if self.lease.gc_interval_secs == 0 {
-            bail!("lease.gc_interval_secs must be > 0");
-        }
         if self.network.interface.trim().is_empty() {
             bail!(
                 "network.interface must be configured or auto-detected from a non-loopback interface"
             );
         }
         Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct LeaseConfig {
-    pub default_ttl_secs: u64,
-    pub max_ttl_secs: u64,
-    pub gc_interval_secs: u64,
-}
-
-impl Default for LeaseConfig {
-    fn default() -> Self {
-        Self {
-            default_ttl_secs: 900,
-            max_ttl_secs: 3600,
-            gc_interval_secs: 30,
-        }
     }
 }
 
@@ -241,8 +213,8 @@ pub struct SystemTftpdHpaConfig {
     pub reconcile_on_start: bool,
 }
 
-impl SystemTftpdHpaConfig {
-    pub fn default() -> Self {
+impl Default for SystemTftpdHpaConfig {
+    fn default() -> Self {
         Self {
             enabled: true,
             root_dir: PathBuf::from(DEFAULT_SYSTEM_TFTP_ROOT),

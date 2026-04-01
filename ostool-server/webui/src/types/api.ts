@@ -4,12 +4,6 @@ export interface ErrorResponse {
   details?: unknown;
 }
 
-export interface LeaseConfig {
-  default_ttl_secs: number;
-  max_ttl_secs: number;
-  gc_interval_secs: number;
-}
-
 export interface BuiltinTftpConfig {
   provider: "builtin";
   enabled: boolean;
@@ -173,7 +167,6 @@ export interface AdminServerConfigReadonly {
 }
 
 export interface AdminServerConfigEditable {
-  lease: LeaseConfig;
   network: TftpNetworkConfig;
 }
 
@@ -183,7 +176,6 @@ export interface AdminServerConfigResponse {
 }
 
 export interface UpdateServerConfigRequest {
-  lease: LeaseConfig;
   network: TftpNetworkConfig;
 }
 

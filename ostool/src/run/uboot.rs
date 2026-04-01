@@ -869,7 +869,9 @@ impl RunnerBackend for RemoteBackend {
 
     async fn finish_console(&mut self) -> anyhow::Result<()> {
         if let Some(tasks) = self.console_tasks.take() {
-            tasks.shutdown().await?;
+            if let Err(err) = tasks.shutdown_with_timeout(Duration::from_secs(2)).await {
+                log::warn!("remote serial console shutdown did not complete cleanly: {err:#}");
+            }
         }
         Ok(())
     }
@@ -1242,8 +1244,35 @@ where
                 }
             })
             .await?;
-        write_task.abort();
-        read_task.abort();
+        let mut write_task = write_task;
+        let write_join = tokio::time::timeout(Duration::from_secs(1), &mut write_task).await;
+        match write_join {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(err))) => return Err(err),
+            Ok(Err(err)) if !err.is_cancelled() => {
+                return Err(anyhow!("serial writer task join error: {err}"));
+            }
+            Ok(Err(_)) => {}
+            Err(_) => {
+                write_task.abort();
+                let _ = write_task.await;
+            }
+        }
+
+        let mut read_task = read_task;
+        let read_join = tokio::time::timeout(Duration::from_millis(300), &mut read_task).await;
+        match read_join {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(err))) => return Err(err),
+            Ok(Err(err)) if !err.is_cancelled() => {
+                return Err(anyhow!("serial reader task join error: {err}"));
+            }
+            Ok(Err(_)) => {}
+            Err(_) => {
+                read_task.abort();
+                let _ = read_task.await;
+            }
+        }
 
         {
             let mut res_lock = res.lock().unwrap();

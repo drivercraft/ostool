@@ -47,8 +47,7 @@ async fn main() -> anyhow::Result<()> {
     let gc_state = state.clone();
     tokio::spawn(async move {
         loop {
-            let interval = Duration::from_secs(gc_state.config.read().await.lease.gc_interval_secs);
-            tokio::time::sleep(interval).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
             if let Err(err) = gc_state.cleanup_expired_sessions().await {
                 log::warn!("failed to cleanup expired sessions: {err:#}");
             }

@@ -92,9 +92,8 @@ async fn run_heartbeat_loop(
     mut stop_rx: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     loop {
-        let delay = next_heartbeat_delay(*lease_expires_at.read().await);
         tokio::select! {
-            _ = tokio::time::sleep(delay) => {}
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
             changed = stop_rx.changed() => {
                 if changed.is_err() || *stop_rx.borrow() {
                     break;
@@ -116,14 +115,6 @@ async fn run_heartbeat_loop(
     }
 
     Ok(())
-}
-
-fn next_heartbeat_delay(lease_expires_at: DateTime<Utc>) -> Duration {
-    let remaining = (lease_expires_at - Utc::now())
-        .to_std()
-        .unwrap_or_else(|_| Duration::from_secs(1));
-    let half = remaining / 2;
-    half.clamp(Duration::from_secs(1), Duration::from_secs(30))
 }
 
 async fn acquire_session_with<CreateFn, CreateFut, SleepFn, SleepFut>(
@@ -162,7 +153,7 @@ mod tests {
     use chrono::Utc;
     use reqwest::StatusCode;
 
-    use super::{acquire_session_with, next_heartbeat_delay};
+    use super::acquire_session_with;
     use crate::board::client::{BoardServerClientError, SessionCreatedResponse};
 
     fn created_session(id: &str) -> SessionCreatedResponse {
@@ -276,17 +267,5 @@ mod tests {
 
         assert_eq!(result.unwrap_err().message, "board type `rk3568` not found");
         assert!(sleeps.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn heartbeat_delay_is_clamped_to_reasonable_bounds() {
-        assert_eq!(
-            next_heartbeat_delay(Utc::now() + chrono::Duration::seconds(120)),
-            Duration::from_secs(30)
-        );
-        assert_eq!(
-            next_heartbeat_delay(Utc::now() + chrono::Duration::seconds(1)),
-            Duration::from_secs(1)
-        );
     }
 }

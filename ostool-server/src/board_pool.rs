@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{config::BoardConfig, session::Session};
+use crate::config::BoardConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BoardAllocationStatus {
@@ -10,15 +10,10 @@ pub enum BoardAllocationStatus {
 
 pub fn allocate_board(
     boards: &BTreeMap<String, BoardConfig>,
-    sessions: &BTreeMap<String, Session>,
+    leased_boards: &BTreeSet<String>,
     board_type: &str,
     required_tags: &[String],
 ) -> Result<BoardConfig, BoardAllocationStatus> {
-    let leased_boards = sessions
-        .values()
-        .map(|session| session.board_id.as_str())
-        .collect::<BTreeSet<_>>();
-
     let matching_boards = boards
         .values()
         .filter(|board| !board.disabled)
@@ -39,7 +34,7 @@ pub fn allocate_board(
 
     matching_boards
         .into_iter()
-        .find(|board| !leased_boards.contains(board.id.as_str()))
+        .find(|board| !leased_boards.contains(&board.id))
         .cloned()
         .ok_or(BoardAllocationStatus::NoAvailableBoard)
 }

@@ -118,10 +118,10 @@ pub fn list_session_files(root_dir: &Path, session_id: &str) -> anyhow::Result<V
             let path = entry.path();
             if path.is_dir() {
                 stack.push(path);
-            } else if path.is_file() {
-                if let Some(file) = file_ref_from_disk(root_dir, session_id, path)? {
-                    files.push(file);
-                }
+            } else if path.is_file()
+                && let Some(file) = file_ref_from_disk(root_dir, session_id, path)?
+            {
+                files.push(file);
             }
         }
     }
