@@ -467,8 +467,6 @@ fn normalize_boot_config(boot: &mut BootConfig) {
     match boot {
         BootConfig::Uboot(profile) => {
             normalize_optional_string(&mut profile.dtb_name);
-            normalize_optional_string(&mut profile.kernel_load_addr);
-            normalize_optional_string(&mut profile.fit_load_addr);
         }
         BootConfig::Pxe(profile) => {
             normalize_optional_string(&mut profile.notes);
@@ -1835,7 +1833,7 @@ mod tests {
                             "tags": ["usb"],
                             "serial": null,
                             "power_management": null,
-                            "boot": { "kind": "uboot", "use_tftp": false, "kernel_load_addr": null, "fit_load_addr": null, "timeout": 10 },
+                            "boot": { "kind": "uboot", "use_tftp": false },
                             "notes": "updated",
                             "disabled": true
                         })

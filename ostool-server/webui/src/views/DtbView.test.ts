@@ -100,10 +100,15 @@ describe("DtbView", () => {
     const wrapper = mount(DtbView);
     await flushPromises();
 
-    const renameInput = wrapper.get('input[placeholder="board.dtb"]');
+    const editButton = wrapper.findAll("button").find((button) => button.text() === "修改");
+    await editButton!.trigger("click");
+    await flushPromises();
+
+    const modal = wrapper.get(".modal-card");
+    const renameInput = modal.get('input[placeholder="例如 board.dtb"]');
     await renameInput.setValue("board-v2.dtb");
 
-    const saveButton = wrapper.findAll("button").find((button) => button.text() === "保存");
+    const saveButton = modal.findAll("button").find((button) => button.text() === "保存修改");
     await saveButton!.trigger("click");
     await flushPromises();
 
@@ -121,9 +126,13 @@ describe("DtbView", () => {
     const wrapper = mount(DtbView);
     await flushPromises();
 
-    const renameInput = wrapper.get('input[placeholder="board.dtb"]');
-    const fileInputs = wrapper.findAll('input[type="file"]');
-    const replaceFileInput = fileInputs[1];
+    const editButton = wrapper.findAll("button").find((button) => button.text() === "修改");
+    await editButton!.trigger("click");
+    await flushPromises();
+
+    const modal = wrapper.get(".modal-card");
+    const renameInput = modal.get('input[placeholder="例如 board.dtb"]');
+    const replaceFileInput = modal.get('input[type="file"]');
     Object.defineProperty(replaceFileInput.element, "files", {
       value: [new File(["dtb"], "renamed-by-file.dtb", { type: "application/octet-stream" })],
       configurable: true,

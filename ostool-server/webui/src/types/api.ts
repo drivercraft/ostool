@@ -90,9 +90,6 @@ export interface UbootProfile {
   kind: "uboot";
   use_tftp: boolean;
   dtb_name: string | null;
-  kernel_load_addr: string | null;
-  fit_load_addr: string | null;
-  timeout: number | null;
 }
 
 export interface PxeProfile {

@@ -386,9 +386,6 @@ pub struct UbootProfile {
     #[serde(default)]
     pub use_tftp: bool,
     pub dtb_name: Option<String>,
-    pub kernel_load_addr: Option<String>,
-    pub fit_load_addr: Option<String>,
-    pub timeout: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -469,9 +466,6 @@ board_power_off_cmd = "shutdown"
             boot: BootConfig::Uboot(UbootProfile {
                 use_tftp: true,
                 dtb_name: Some("board.dtb".into()),
-                kernel_load_addr: Some("0x100000".into()),
-                fit_load_addr: Some("0x200000".into()),
-                timeout: Some(30),
             }),
             notes: None,
             disabled: false,

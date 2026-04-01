@@ -56,9 +56,6 @@ pub struct UbootProfile {
     #[serde(default)]
     pub use_tftp: bool,
     pub dtb_name: Option<String>,
-    pub kernel_load_addr: Option<String>,
-    pub fit_load_addr: Option<String>,
-    pub timeout: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -446,10 +443,7 @@ mod tests {
             r#"{
                 "boot": {
                     "kind": "uboot",
-                    "use_tftp": true,
-                    "kernel_load_addr": "0x100000",
-                    "fit_load_addr": "0x200000",
-                    "timeout": 30
+                    "use_tftp": true
                 },
                 "server_ip": "10.0.0.2",
                 "netmask": "255.255.255.0",
@@ -462,7 +456,6 @@ mod tests {
         match response.boot {
             BootConfig::Uboot(profile) => {
                 assert!(profile.use_tftp);
-                assert_eq!(profile.timeout, Some(30));
             }
             BootConfig::Pxe(_) => panic!("expected uboot profile"),
         }

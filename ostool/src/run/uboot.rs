@@ -367,7 +367,6 @@ struct ResolvedRuntime {
     board_ip: Option<String>,
     kernel_load_addr: Option<u64>,
     fit_load_addr: Option<u64>,
-    timeout: Option<u64>,
     use_tftp: bool,
 }
 
@@ -725,9 +724,6 @@ impl RunnerBackend for RemoteBackend {
             server_ip,
             netmask,
             interface: boot_profile.interface.clone(),
-            kernel_load_addr: parse_optional_addr(profile.kernel_load_addr.as_deref()),
-            fit_load_addr: parse_optional_addr(profile.fit_load_addr.as_deref()),
-            timeout: profile.timeout,
             use_tftp: profile.use_tftp,
             ..Default::default()
         })
@@ -1223,7 +1219,7 @@ where
 
         let terminal = AsyncTerminal::new(TerminalConfig {
             intercept_exit_sequence: true,
-            timeout: timeout_duration(self.config.timeout.or(runtime.timeout)),
+            timeout: timeout_duration(self.config.timeout),
             timeout_label: "kernel boot".to_string(),
         });
         terminal
@@ -1319,16 +1315,6 @@ fn detect_tftp_ip(net: Option<&Net>) -> Option<String> {
 
     info!("TFTP : {}", ip_string);
     Some(ip_string)
-}
-
-fn parse_optional_addr(value: Option<&str>) -> Option<u64> {
-    value.and_then(|addr_str| {
-        if addr_str.starts_with("0x") || addr_str.starts_with("0X") {
-            u64::from_str_radix(&addr_str[2..], 16).ok()
-        } else {
-            addr_str.parse::<u64>().ok()
-        }
-    })
 }
 
 fn timeout_duration(timeout: Option<u64>) -> Option<Duration> {

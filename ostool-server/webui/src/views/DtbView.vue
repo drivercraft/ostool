@@ -11,15 +11,13 @@ const creating = ref(false);
 const updatingName = ref<string | null>(null);
 const deletingName = ref<string | null>(null);
 const dtbs = ref<DtbFileResponse[]>([]);
-const renameDrafts = ref<Record<string, string>>({});
-const replaceFiles = ref<Record<string, File | null>>({});
 const newDtbName = ref("");
 const newDtbFile = ref<File | null>(null);
 const newDtbInput = ref<HTMLInputElement | null>(null);
-
-function hydrateDrafts(files: DtbFileResponse[]) {
-  renameDrafts.value = Object.fromEntries(files.map((file) => [file.name, file.name]));
-}
+const editingDtbName = ref<string | null>(null);
+const editDtbName = ref("");
+const editDtbFile = ref<File | null>(null);
+const editDtbFileInput = ref<HTMLInputElement | null>(null);
 
 function formatSize(size: number): string {
   if (size < 1024) {
@@ -40,7 +38,6 @@ async function loadDtbs() {
   try {
     const files = await api.listDtbs();
     dtbs.value = files;
-    hydrateDrafts(files);
   } catch (error) {
     ui.setError((error as Error).message);
   } finally {
@@ -57,18 +54,12 @@ function onNewFileChange(event: Event) {
   }
 }
 
-function onReplaceFileChange(name: string, event: Event) {
+function onReplaceFileChange(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0] ?? null;
-  replaceFiles.value = {
-    ...replaceFiles.value,
-    [name]: file,
-  };
+  editDtbFile.value = file;
   if (file) {
-    renameDrafts.value = {
-      ...renameDrafts.value,
-      [name]: file.name,
-    };
+    editDtbName.value = file.name;
   }
 }
 
@@ -100,9 +91,31 @@ async function createDtb() {
   }
 }
 
-async function saveDtb(currentName: string) {
-  const nextName = (renameDrafts.value[currentName] ?? currentName).trim();
-  const replaceFile = replaceFiles.value[currentName] ?? null;
+function openEditDtb(dtb: DtbFileResponse) {
+  editingDtbName.value = dtb.name;
+  editDtbName.value = dtb.name;
+  editDtbFile.value = null;
+  if (editDtbFileInput.value) {
+    editDtbFileInput.value.value = "";
+  }
+}
+
+function closeEditDtb() {
+  editingDtbName.value = null;
+  editDtbName.value = "";
+  editDtbFile.value = null;
+  if (editDtbFileInput.value) {
+    editDtbFileInput.value.value = "";
+  }
+}
+
+async function saveDtb() {
+  const currentName = editingDtbName.value;
+  if (!currentName) {
+    return;
+  }
+  const nextName = editDtbName.value.trim();
+  const replaceFile = editDtbFile.value;
   if (!nextName) {
     ui.setError("DTB 文件名不能为空");
     return;
@@ -120,11 +133,7 @@ async function saveDtb(currentName: string) {
       replaceFile,
     );
     ui.setSuccess(`已更新 DTB ${updated.name}`);
-    replaceFiles.value = {
-      ...replaceFiles.value,
-      [currentName]: null,
-      [updated.name]: null,
-    };
+    closeEditDtb();
     await loadDtbs();
   } catch (error) {
     ui.setError((error as Error).message);
@@ -203,7 +212,6 @@ onMounted(() => {
             <th>大小</th>
             <th>更新时间</th>
             <th>TFTP 路径模板</th>
-            <th>重命名 / 替换</th>
             <th>操作</th>
           </tr>
         </thead>
@@ -214,26 +222,13 @@ onMounted(() => {
             <td>{{ formatTime(dtb.updated_at) }}</td>
             <td><code>{{ dtb.relative_tftp_path_template }}</code></td>
             <td>
-              <div class="table-form-stack">
-                <input
-                  v-model="renameDrafts[dtb.name]"
-                  :placeholder="dtb.name"
-                />
-                <input
-                  type="file"
-                  accept=".dtb,application/octet-stream"
-                  @change="onReplaceFileChange(dtb.name, $event)"
-                />
-              </div>
-            </td>
-            <td>
               <div class="toolbar-actions">
                 <button
                   class="ghost-button compact-button"
                   :disabled="updatingName === dtb.name"
-                  @click="saveDtb(dtb.name)"
+                  @click="openEditDtb(dtb)"
                 >
-                  {{ updatingName === dtb.name ? "保存中..." : "保存" }}
+                  修改
                 </button>
                 <button
                   class="danger-button compact-button"
@@ -249,4 +244,44 @@ onMounted(() => {
       </table>
     </div>
   </section>
+
+  <div
+    v-if="editingDtbName"
+    class="modal-overlay"
+    @click.self="closeEditDtb"
+  >
+    <div class="modal-card">
+      <div class="panel-heading compact">
+        <div>
+          <p class="eyebrow">编辑 DTB</p>
+          <h4>{{ editingDtbName }}</h4>
+        </div>
+      </div>
+
+      <div class="form-grid two-columns">
+        <label class="field">
+          <span>文件名</span>
+          <input v-model="editDtbName" placeholder="例如 board.dtb" />
+        </label>
+        <label class="field">
+          <span>替换文件</span>
+          <input
+            ref="editDtbFileInput"
+            type="file"
+            accept=".dtb,application/octet-stream"
+            @change="onReplaceFileChange"
+          />
+        </label>
+      </div>
+
+      <div class="toolbar-actions modal-actions">
+        <button class="ghost-button" :disabled="updatingName === editingDtbName" @click="closeEditDtb">
+          取消
+        </button>
+        <button class="primary-button" :disabled="updatingName === editingDtbName" @click="saveDtb">
+          {{ updatingName === editingDtbName ? "保存中..." : "保存修改" }}
+        </button>
+      </div>
+    </div>
+  </div>
 </template>

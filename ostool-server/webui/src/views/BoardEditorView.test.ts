@@ -75,9 +75,6 @@ function makeBoard(id = "demo-board"): BoardConfig {
       kind: "uboot",
       use_tftp: true,
       dtb_name: null,
-      kernel_load_addr: null,
-      fit_load_addr: null,
-      timeout: null,
     },
     notes: "rack-a",
     disabled: false,
@@ -160,9 +157,6 @@ describe("BoardEditorView", () => {
         kind: "uboot",
         use_tftp: false,
         dtb_name: null,
-        kernel_load_addr: null,
-        fit_load_addr: null,
-        timeout: null,
       },
     });
     expect(uiStore.setSuccess).toHaveBeenCalledWith("已保存开发板 rk3568-1");
@@ -192,9 +186,13 @@ describe("BoardEditorView", () => {
     const wrapper = mount(BoardEditorView);
     await flushPromises();
 
-    const uploadNameInput = wrapper.get('input[placeholder="例如 board.dtb"]');
-    const fileInputs = wrapper.findAll('input[type="file"]');
-    const uploadFileInput = fileInputs[0];
+    const openButton = wrapper.findAll("button").find((button) => button.text() === "新增 DTB");
+    await openButton!.trigger("click");
+    await flushPromises();
+
+    const modal = wrapper.get(".modal-card");
+    const uploadNameInput = modal.get('input[placeholder="例如 board.dtb"]');
+    const uploadFileInput = modal.get('input[type="file"]');
     Object.defineProperty(uploadFileInput.element, "files", {
       value: [new File(["dtb"], "picked-board.dtb", { type: "application/octet-stream" })],
       configurable: true,
@@ -217,16 +215,20 @@ describe("BoardEditorView", () => {
     const wrapper = mount(BoardEditorView);
     await flushPromises();
 
-    const fileInputs = wrapper.findAll('input[type="file"]');
-    const uploadFileInput = fileInputs[0];
+    const openButton = wrapper.findAll("button").find((button) => button.text() === "新增 DTB");
+    await openButton!.trigger("click");
+    await flushPromises();
+
+    const modal = wrapper.get(".modal-card");
+    const uploadFileInput = modal.get('input[type="file"]');
     Object.defineProperty(uploadFileInput.element, "files", {
       value: [new File(["dtb"], "picked-board.dtb", { type: "application/octet-stream" })],
       configurable: true,
     });
     await uploadFileInput.trigger("change");
-    await wrapper.get('input[placeholder="例如 board.dtb"]').setValue("");
+    await modal.get('input[placeholder="例如 board.dtb"]').setValue("");
 
-    const uploadButton = wrapper.findAll("button").find((button) => button.text() === "上传 DTB");
+    const uploadButton = modal.findAll("button").find((button) => button.text() === "上传并选中");
     await uploadButton!.trigger("click");
     await flushPromises();
 

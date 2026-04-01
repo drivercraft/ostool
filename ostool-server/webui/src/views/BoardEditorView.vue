@@ -33,9 +33,6 @@ interface BoardEditorFormState {
   boot_kind: BootKind;
   use_tftp: boolean;
   dtb_name: string;
-  kernel_load_addr: string;
-  fit_load_addr: string;
-  timeout_text: string;
   pxe_notes: string;
 }
 
@@ -57,6 +54,7 @@ const dtbs = ref<DtbFileResponse[]>([]);
 const dtbUploadName = ref("");
 const dtbUploadFile = ref<File | null>(null);
 const dtbFileInput = ref<HTMLInputElement | null>(null);
+const showingDtbUploadModal = ref(false);
 const isEditing = computed(() => typeof route.params.boardId === "string");
 const boardId = computed(() => route.params.boardId as string | undefined);
 
@@ -78,9 +76,6 @@ function defaultFormState(): BoardEditorFormState {
     boot_kind: "uboot",
     use_tftp: false,
     dtb_name: "",
-    kernel_load_addr: "",
-    fit_load_addr: "",
-    timeout_text: "",
     pxe_notes: "",
   };
 }
@@ -115,9 +110,6 @@ function boardToFormState(board: BoardConfig): BoardEditorFormState {
     next.boot_kind = "uboot";
     next.use_tftp = board.boot.use_tftp;
     next.dtb_name = board.boot.dtb_name ?? "";
-    next.kernel_load_addr = board.boot.kernel_load_addr ?? "";
-    next.fit_load_addr = board.boot.fit_load_addr ?? "";
-    next.timeout_text = board.boot.timeout === null ? "" : String(board.boot.timeout);
   } else {
     next.boot_kind = "pxe";
     next.pxe_notes = board.boot.notes ?? "";
@@ -144,11 +136,6 @@ function buildBootConfig(): BootConfig {
       kind: "uboot",
       use_tftp: form.value.use_tftp,
       dtb_name: trimToNull(form.value.dtb_name),
-      kernel_load_addr: trimToNull(form.value.kernel_load_addr),
-      fit_load_addr: trimToNull(form.value.fit_load_addr),
-      timeout: trimToNull(form.value.timeout_text) === null
-        ? null
-        : Number.parseInt(form.value.timeout_text, 10),
     };
   }
 
@@ -225,13 +212,6 @@ function validateForm(): string {
   ) {
     errors.push("启用中盛继电模块时必须选择串口设备");
   }
-  if (form.value.boot_kind === "uboot" && trimToNull(form.value.timeout_text) !== null) {
-    const timeout = Number.parseInt(form.value.timeout_text, 10);
-    if (!Number.isInteger(timeout) || timeout < 0) {
-      errors.push("U-Boot 超时必须为空或非负整数");
-    }
-  }
-
   return errors.join("\n");
 }
 
@@ -305,6 +285,19 @@ function onDtbFileChange(event: Event) {
   }
 }
 
+function openDtbUploadModal() {
+  showingDtbUploadModal.value = true;
+}
+
+function closeDtbUploadModal() {
+  showingDtbUploadModal.value = false;
+  dtbUploadName.value = "";
+  dtbUploadFile.value = null;
+  if (dtbFileInput.value) {
+    dtbFileInput.value.value = "";
+  }
+}
+
 async function uploadDtbAndSelect() {
   if (!dtbUploadFile.value) {
     ui.setError("请选择要上传的 DTB 文件");
@@ -323,11 +316,7 @@ async function uploadDtbAndSelect() {
       a.name.localeCompare(b.name),
     );
     form.value.dtb_name = created.name;
-    dtbUploadName.value = "";
-    dtbUploadFile.value = null;
-    if (dtbFileInput.value) {
-      dtbFileInput.value.value = "";
-    }
+    closeDtbUploadModal();
     ui.setSuccess(`已上传 DTB ${created.name}`);
   } catch (error) {
     ui.setError((error as Error).message);
@@ -526,57 +515,45 @@ onMounted(() => {
                 <input v-model="form.use_tftp" type="checkbox" />
                 <span>使用 TFTP 启动</span>
               </label>
-              <label class="field">
-                <span>超时（秒）</span>
-                <input v-model="form.timeout_text" type="number" min="0" placeholder="留空表示无超时" />
-              </label>
             </div>
 
-            <div class="form-grid two-columns">
-              <label class="field">
-                <span>预设 DTB</span>
-                <select v-model="form.dtb_name">
-                  <option value="">不使用预设 DTB</option>
-                  <option
-                    v-for="option in dtbOptions(form.dtb_name)"
-                    :key="option.value"
-                    :value="option.value"
-                  >
-                    {{ option.label }}
-                  </option>
-                </select>
-              </label>
-              <div class="field">
-                <span>上传并选中</span>
-                <div class="inline-form-row">
-                  <input v-model="dtbUploadName" placeholder="例如 board.dtb" />
-                  <input
-                    ref="dtbFileInput"
-                    type="file"
-                    accept=".dtb,application/octet-stream"
-                    @change="onDtbFileChange"
-                  />
-                  <button
-                    class="ghost-button"
-                    type="button"
-                    :disabled="uploadingDtb"
-                    @click="uploadDtbAndSelect"
-                  >
-                    {{ uploadingDtb ? "上传中..." : "上传 DTB" }}
-                  </button>
+            <div class="split-grid dtb-config-grid">
+              <section class="panel nested-panel dtb-selection-panel">
+                <div class="panel-heading compact">
+                  <div>
+                    <h4>预设 DTB</h4>
+                    <p class="field-hint">为当前开发板选择默认使用的设备树文件。</p>
+                  </div>
                 </div>
-              </div>
-            </div>
+                <label class="field">
+                  <span>已选择 DTB</span>
+                  <select v-model="form.dtb_name">
+                    <option value="">不使用预设 DTB</option>
+                    <option
+                      v-for="option in dtbOptions(form.dtb_name)"
+                      :key="option.value"
+                      :value="option.value"
+                    >
+                      {{ option.label }}
+                    </option>
+                  </select>
+                </label>
+                <p class="selection-caption">
+                  {{ form.dtb_name ? `当前选择：${form.dtb_name}` : "当前未绑定预设 DTB" }}
+                </p>
+              </section>
 
-            <div class="form-grid two-columns">
-              <label class="field">
-                <span>FIT 加载地址</span>
-                <input v-model="form.fit_load_addr" />
-              </label>
-              <label class="field">
-                <span>内核加载地址</span>
-                <input v-model="form.kernel_load_addr" />
-              </label>
+              <section class="panel nested-panel dtb-action-panel">
+                <div class="panel-heading compact">
+                  <div>
+                    <h4>新增 DTB</h4>
+                    <p class="field-hint">上传新的 DTB 后会自动加入列表，并直接选中。</p>
+                  </div>
+                </div>
+                <button class="primary-button" type="button" @click="openDtbUploadModal">
+                  新增 DTB
+                </button>
+              </section>
             </div>
           </template>
 
@@ -596,4 +573,44 @@ onMounted(() => {
       </template>
     </div>
   </section>
+
+  <div
+    v-if="showingDtbUploadModal"
+    class="modal-overlay"
+    @click.self="closeDtbUploadModal"
+  >
+    <div class="modal-card">
+      <div class="panel-heading compact">
+        <div>
+          <p class="eyebrow">新增 DTB</p>
+          <h4>上传并绑定到当前开发板</h4>
+        </div>
+      </div>
+
+      <div class="form-grid two-columns">
+        <label class="field">
+          <span>文件名</span>
+          <input v-model="dtbUploadName" placeholder="例如 board.dtb" />
+        </label>
+        <label class="field">
+          <span>选择文件</span>
+          <input
+            ref="dtbFileInput"
+            type="file"
+            accept=".dtb,application/octet-stream"
+            @change="onDtbFileChange"
+          />
+        </label>
+      </div>
+
+      <div class="toolbar-actions modal-actions">
+        <button class="ghost-button" type="button" :disabled="uploadingDtb" @click="closeDtbUploadModal">
+          取消
+        </button>
+        <button class="primary-button" type="button" :disabled="uploadingDtb" @click="uploadDtbAndSelect">
+          {{ uploadingDtb ? "上传中..." : "上传并选中" }}
+        </button>
+      </div>
+    </div>
+  </div>
 </template>
