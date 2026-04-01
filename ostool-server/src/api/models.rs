@@ -98,7 +98,6 @@ pub struct NetworkInterfaceSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileResponse {
-    pub slot: String,
     pub filename: String,
     pub relative_path: String,
     pub tftp_url: Option<String>,
@@ -109,7 +108,6 @@ pub struct FileResponse {
 impl FileResponse {
     pub fn from_file(file: TftpFileRef, tftp_url: Option<String>) -> Self {
         Self {
-            slot: file.slot.to_string(),
             filename: file.filename,
             relative_path: file.relative_path,
             tftp_url,

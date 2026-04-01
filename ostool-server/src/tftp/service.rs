@@ -17,7 +17,7 @@ use crate::{
     config::{BuiltinTftpConfig, SystemTftpdHpaConfig, TftpConfig},
     tftp::{
         files::{
-            FileSlot, TftpFileRef, get_session_file, list_session_files, put_session_file,
+            TftpFileRef, get_session_file, list_session_files, put_session_file,
             remove_session_dir, remove_session_file,
         },
         status::{
@@ -42,17 +42,20 @@ pub trait TftpManager: Send + Sync {
     async fn put_session_file(
         &self,
         session_id: &str,
-        slot: FileSlot,
-        filename: &str,
+        relative_path: &str,
         bytes: &[u8],
     ) -> anyhow::Result<TftpFileRef>;
     async fn get_session_file(
         &self,
         session_id: &str,
-        slot: FileSlot,
+        relative_path: &str,
     ) -> anyhow::Result<Option<TftpFileRef>>;
     async fn list_session_files(&self, session_id: &str) -> anyhow::Result<Vec<TftpFileRef>>;
-    async fn remove_session_file(&self, session_id: &str, slot: FileSlot) -> anyhow::Result<()>;
+    async fn remove_session_file(
+        &self,
+        session_id: &str,
+        relative_path: &str,
+    ) -> anyhow::Result<()>;
     async fn remove_session_dir(&self, session_id: &str) -> anyhow::Result<()>;
     fn root_dir(&self) -> &Path;
 }
@@ -152,27 +155,30 @@ impl TftpManager for BuiltinTftpManager {
     async fn put_session_file(
         &self,
         session_id: &str,
-        slot: FileSlot,
-        filename: &str,
+        relative_path: &str,
         bytes: &[u8],
     ) -> anyhow::Result<TftpFileRef> {
-        put_session_file(&self.config.root_dir, session_id, slot, filename, bytes)
+        put_session_file(&self.config.root_dir, session_id, relative_path, bytes)
     }
 
     async fn get_session_file(
         &self,
         session_id: &str,
-        slot: FileSlot,
+        relative_path: &str,
     ) -> anyhow::Result<Option<TftpFileRef>> {
-        get_session_file(&self.config.root_dir, session_id, slot)
+        get_session_file(&self.config.root_dir, session_id, relative_path)
     }
 
     async fn list_session_files(&self, session_id: &str) -> anyhow::Result<Vec<TftpFileRef>> {
         list_session_files(&self.config.root_dir, session_id)
     }
 
-    async fn remove_session_file(&self, session_id: &str, slot: FileSlot) -> anyhow::Result<()> {
-        remove_session_file(&self.config.root_dir, session_id, slot)
+    async fn remove_session_file(
+        &self,
+        session_id: &str,
+        relative_path: &str,
+    ) -> anyhow::Result<()> {
+        remove_session_file(&self.config.root_dir, session_id, relative_path)
     }
 
     async fn remove_session_dir(&self, session_id: &str) -> anyhow::Result<()> {
@@ -321,27 +327,30 @@ impl TftpManager for SystemTftpdHpaManager {
     async fn put_session_file(
         &self,
         session_id: &str,
-        slot: FileSlot,
-        filename: &str,
+        relative_path: &str,
         bytes: &[u8],
     ) -> anyhow::Result<TftpFileRef> {
-        put_session_file(&self.config.root_dir, session_id, slot, filename, bytes)
+        put_session_file(&self.config.root_dir, session_id, relative_path, bytes)
     }
 
     async fn get_session_file(
         &self,
         session_id: &str,
-        slot: FileSlot,
+        relative_path: &str,
     ) -> anyhow::Result<Option<TftpFileRef>> {
-        get_session_file(&self.config.root_dir, session_id, slot)
+        get_session_file(&self.config.root_dir, session_id, relative_path)
     }
 
     async fn list_session_files(&self, session_id: &str) -> anyhow::Result<Vec<TftpFileRef>> {
         list_session_files(&self.config.root_dir, session_id)
     }
 
-    async fn remove_session_file(&self, session_id: &str, slot: FileSlot) -> anyhow::Result<()> {
-        remove_session_file(&self.config.root_dir, session_id, slot)
+    async fn remove_session_file(
+        &self,
+        session_id: &str,
+        relative_path: &str,
+    ) -> anyhow::Result<()> {
+        remove_session_file(&self.config.root_dir, session_id, relative_path)
     }
 
     async fn remove_session_dir(&self, session_id: &str) -> anyhow::Result<()> {

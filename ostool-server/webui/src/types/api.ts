@@ -189,7 +189,6 @@ export interface BootProfileResponse {
 }
 
 export interface FileResponse {
-  slot: string;
   filename: string;
   relative_path: string;
   tftp_url: string | null;

@@ -36,7 +36,7 @@ use crate::{
     },
     state::AppState,
     tftp::{
-        files::{FileSlot, TftpFileRef},
+        files::{TftpFileRef, normalize_relative_path},
         service::build_tftp_manager,
         status::resolve_interface_ipv4,
     },
@@ -108,11 +108,11 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/sessions/{session_id}/files",
-            get(list_session_files),
+            get(list_session_files).put(put_session_file),
         )
         .route(
-            "/api/v1/sessions/{session_id}/files/{slot}",
-            put(put_session_file)
+            "/api/v1/sessions/{session_id}/files/{*path}",
+            put(reject_legacy_put_session_file)
                 .get(get_session_file)
                 .delete(delete_session_file),
         )
@@ -805,21 +805,21 @@ async fn list_session_files(
 }
 
 async fn put_session_file(
-    Path((session_id, slot)): Path<(String, String)>,
+    Path(session_id): Path<String>,
     State(state): State<AppState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<(StatusCode, axum::Json<FileResponse>), ApiError> {
-    let slot = parse_slot(&slot)?;
     let _session = get_session_or_404(&state, &session_id).await?;
     let board = state
         .session_board(&session_id)
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
-    let filename = headers
-        .get("X-File-Name")
+    let relative_path = headers
+        .get("X-File-Path")
         .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| ApiError::bad_request("missing X-File-Name header"))?;
+        .ok_or_else(|| ApiError::bad_request("missing X-File-Path header"))?;
+    let relative_path = parse_relative_path(relative_path)?;
 
     if !state.config.read().await.tftp.enabled() {
         return Err(ApiError::conflict("TFTP provider is disabled"));
@@ -827,7 +827,7 @@ async fn put_session_file(
 
     let manager = state.tftp_manager.read().await.clone();
     let file = manager
-        .put_session_file(&session_id, slot, filename, &body)
+        .put_session_file(&session_id, &relative_path, &body)
         .await
         .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
     let response = file_response_for_board(&state, &board, file).await?;
@@ -835,32 +835,42 @@ async fn put_session_file(
 }
 
 async fn get_session_file(
-    Path((session_id, slot)): Path<(String, String)>,
+    Path((session_id, path)): Path<(String, String)>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<FileResponse>, ApiError> {
-    let slot = parse_slot(&slot)?;
+    let relative_path = parse_relative_path(&path)?;
     let board = state
         .session_board(&session_id)
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
     let manager = state.tftp_manager.read().await.clone();
     let file = manager
-        .get_session_file(&session_id, slot)
+        .get_session_file(&session_id, &relative_path)
         .await?
-        .ok_or_else(|| ApiError::not_found(format!("no file for slot `{slot}`")))?;
+        .ok_or_else(|| ApiError::not_found(format!("file `{relative_path}` not found")))?;
     Ok(axum::Json(
         file_response_for_board(&state, &board, file).await?,
     ))
 }
 
+async fn reject_legacy_put_session_file(
+    Path((_session_id, _path)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    Err(ApiError::not_found(
+        "upload files via PUT /api/v1/sessions/{session_id}/files with X-File-Path",
+    ))
+}
+
 async fn delete_session_file(
-    Path((session_id, slot)): Path<(String, String)>,
+    Path((session_id, path)): Path<(String, String)>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, ApiError> {
-    let slot = parse_slot(&slot)?;
+    let relative_path = parse_relative_path(&path)?;
     get_session_or_404(&state, &session_id).await?;
     let manager = state.tftp_manager.read().await.clone();
-    manager.remove_session_file(&session_id, slot).await?;
+    manager
+        .remove_session_file(&session_id, &relative_path)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -953,9 +963,8 @@ async fn run_board_power_action(
     Ok(axum::Json(ActionResponse { ok: true, message }))
 }
 
-fn parse_slot(raw: &str) -> Result<FileSlot, ApiError> {
-    raw.parse::<FileSlot>()
-        .map_err(|err| ApiError::bad_request(err.to_string()))
+fn parse_relative_path(raw: &str) -> Result<String, ApiError> {
+    normalize_relative_path(raw).map_err(|err| ApiError::bad_request(err.to_string()))
 }
 
 fn leased_board_ids<'a>(
@@ -1105,6 +1114,7 @@ mod tests {
         let config_path = root.join(".ostool-server.toml");
         let mut config = ServerConfig::default();
         config.listen_addr = "127.0.0.1:0".parse().unwrap();
+        config.network.interface = "lo".into();
         config.data_dir = root.join("data");
         config.board_dir = root.join("boards");
         config.tftp = TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(root.join("tftp")));
@@ -1127,6 +1137,32 @@ mod tests {
             .await
             .unwrap()
             .status()
+    }
+
+    async fn create_session(app: &Router, board_type: &str) -> String {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/sessions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "board_type": board_type,
+                            "required_tags": [],
+                            "client_name": "test",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        value["session_id"].as_str().unwrap().to_string()
     }
 
     fn sample_board(board_id: &str) -> BoardConfig {
@@ -1837,6 +1873,169 @@ mod tests {
         assert_eq!(value[0]["total"], 2);
         assert_eq!(value[0]["available"], 1);
         assert_eq!(value[0]["tags"], json!(["lab-a", "lab-b", "usbboot"]));
+    }
+
+    #[tokio::test]
+    async fn session_file_endpoints_support_nested_paths() {
+        let app = test_router().await;
+        assert_eq!(
+            create_board(
+                &app,
+                serde_json::to_value(sample_board("nested-files")).unwrap()
+            )
+            .await,
+            StatusCode::CREATED
+        );
+        let session_id = create_session(&app, "rk3568").await;
+
+        let upload = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{session_id}/files"))
+                    .header("X-File-Path", "boot/Image")
+                    .body(Body::from("kernel-image"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(upload.status(), StatusCode::CREATED);
+        let upload_body = to_bytes(upload.into_body(), usize::MAX).await.unwrap();
+        let uploaded: serde_json::Value = serde_json::from_slice(&upload_body).unwrap();
+        assert_eq!(uploaded["filename"], "Image");
+        assert_eq!(
+            uploaded["relative_path"],
+            format!("ostool/sessions/{session_id}/boot/Image")
+        );
+        assert_eq!(
+            uploaded["tftp_url"],
+            format!("tftp://127.0.0.1/ostool/sessions/{session_id}/boot/Image")
+        );
+
+        let get_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/sessions/{session_id}/files/boot/Image"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get_response.status(), StatusCode::OK);
+
+        let delete_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/sessions/{session_id}/files/boot/Image"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+        let missing_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/sessions/{session_id}/files/boot/Image"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn session_file_list_supports_multiple_paths_and_overwrite() {
+        let app = test_router().await;
+        assert_eq!(
+            create_board(
+                &app,
+                serde_json::to_value(sample_board("list-files")).unwrap()
+            )
+            .await,
+            StatusCode::CREATED
+        );
+        let session_id = create_session(&app, "rk3568").await;
+
+        for (path, body) in [
+            ("boot/Image", "v1"),
+            ("boot/dtb/board.dtb", "dtb"),
+            ("boot/Image", "updated-kernel"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri(format!("/api/v1/sessions/{session_id}/files"))
+                        .header("X-File-Path", path)
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CREATED);
+        }
+
+        let list_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/sessions/{session_id}/files"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_body = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let files: serde_json::Value = serde_json::from_slice(&list_body).unwrap();
+        assert_eq!(files.as_array().unwrap().len(), 2);
+        assert_eq!(
+            files[0]["relative_path"],
+            format!("ostool/sessions/{session_id}/boot/Image")
+        );
+        assert_eq!(files[0]["size"], "updated-kernel".len());
+        assert_eq!(
+            files[1]["relative_path"],
+            format!("ostool/sessions/{session_id}/boot/dtb/board.dtb")
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_slot_file_route_is_removed() {
+        let app = test_router().await;
+        assert_eq!(
+            create_board(
+                &app,
+                serde_json::to_value(sample_board("legacy-files")).unwrap()
+            )
+            .await,
+            StatusCode::CREATED
+        );
+        let session_id = create_session(&app, "rk3568").await;
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{session_id}/files/kernel"))
+                    .body(Body::from("legacy"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
