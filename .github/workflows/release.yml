@@ -21,26 +21,28 @@ permissions:
 jobs:
   release-plz:
     if: &release_condition ${{ github.repository_owner == 'drivercraft' && github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - &checkout
         name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
       - &install-rust
         name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
 
       - &setup-libudenv
-        uses: awalsh128/cache-apt-pkgs-action@latest
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.0
         with:
           packages: libudev-dev
           version: 1.0
 
       - name: Release with release-plz
-        uses: release-plz/action@v0.5
+        uses: release-plz/action@v0.5.128
         with:
           command: release
         env: &release_env
@@ -50,7 +52,7 @@ jobs:
   release-plz-pr:
     name: Release-plz PR
     if: *release_condition
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     concurrency:
       group: release-plz-pr-${{ github.ref }}
       cancel-in-progress: false
@@ -59,7 +61,7 @@ jobs:
       - *install-rust
       - *setup-libudenv
       - name: Run release-plz
-        uses: release-plz/action@v0.5
+        uses: release-plz/action@v0.5.128
         with:
           command: release-pr
         env: *release_env
@@ -67,7 +69,7 @@ jobs:
   release-assets:
     name: Build Release Assets
     if: ${{ github.repository_owner == 'drivercraft' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch') }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     env:
@@ -78,13 +80,13 @@ jobs:
       - *install-rust
       - *setup-libudenv
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6.3.0
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: ostool-server/webui/pnpm-lock.yaml
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5.0.0
         with:
           version: 10
       - name: Resolve release package
