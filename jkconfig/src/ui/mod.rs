@@ -1377,17 +1377,33 @@ impl TuiApp {
             (
                 Text::from(vec![
                     Line::from(vec![
-                        key("j/k"), txt("move"), sp(),
-                        key("Enter"), txt("open/edit"), sp(),
-                        key("Tab"), txt("focus"), sp(),
-                        key("Space"), txt("toggle bool"),
+                        key("j/k"),
+                        txt("move"),
+                        sp(),
+                        key("Enter"),
+                        txt("open/edit"),
+                        sp(),
+                        key("Tab"),
+                        txt("focus"),
+                        sp(),
+                        key("Space"),
+                        txt("toggle bool"),
                     ]),
                     Line::from(vec![
-                        key("c"), txt("clear"), sp(),
-                        key("m"), txt("toggle opt"), sp(),
-                        key("s"), txt("save"), sp(),
-                        key("q"), txt("quit"), sp(),
-                        key("?"), txt("help"),
+                        key("c"),
+                        txt("clear"),
+                        sp(),
+                        key("m"),
+                        txt("toggle opt"),
+                        sp(),
+                        key("s"),
+                        txt("save"),
+                        sp(),
+                        key("q"),
+                        txt("quit"),
+                        sp(),
+                        key("?"),
+                        txt("help"),
                     ]),
                 ]),
                 Style::default(),
@@ -1716,11 +1732,22 @@ impl TuiApp {
 
                 // Title bar with icon
                 let title_text = Line::from(vec![
-                    Span::styled(" X ", Style::default().fg(Color::Black).bg(self.ui.theme.error).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        " X ",
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(self.ui.theme.error)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(" "),
                     Span::styled(
-                        format!(" Cannot Save — {} Required Field(s) Missing ", modal.missing_count),
-                        Style::default().fg(self.ui.theme.error).add_modifier(Modifier::BOLD),
+                        format!(
+                            " Cannot Save — {} Required Field(s) Missing ",
+                            modal.missing_count
+                        ),
+                        Style::default()
+                            .fg(self.ui.theme.error)
+                            .add_modifier(Modifier::BOLD),
                     ),
                 ]);
                 frame.render_widget(Paragraph::new(title_text), chunks[0]);
@@ -1751,7 +1778,10 @@ impl TuiApp {
                         Span::styled("Enter", self.ui.theme.text().add_modifier(Modifier::BOLD)),
                         Span::styled(" or ", self.ui.theme.muted()),
                         Span::styled("Esc", self.ui.theme.text().add_modifier(Modifier::BOLD)),
-                        Span::styled(" to close and fill in the missing fields.", self.ui.theme.muted()),
+                        Span::styled(
+                            " to close and fill in the missing fields.",
+                            self.ui.theme.muted(),
+                        ),
                     ])),
                     chunks[2],
                 );
