@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
+if [[ -n "${SCRIPT_SOURCE}" && -f "${SCRIPT_SOURCE}" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")" && pwd)"
+else
+    SCRIPT_DIR=""
+fi
+
 SERVICE_NAME="ostool-server"
-UNIT_FILE="${SCRIPT_DIR}/${SERVICE_NAME}.service"
+UNIT_FILE=""
+if [[ -n "${SCRIPT_DIR}" ]]; then
+    UNIT_FILE="${SCRIPT_DIR}/${SERVICE_NAME}.service"
+fi
 CONFIG_DIR="/etc/${SERVICE_NAME}"
 DATA_DIR="/var/lib/${SERVICE_NAME}"
 CONFIG_FILE="${CONFIG_DIR}/config.toml"
 SYSTEM_BIN_DIR="/usr/local/bin"
 SYSTEM_BIN_PATH="${SYSTEM_BIN_DIR}/${SERVICE_NAME}"
-REMOTE_SCRIPT_BASE_URL="${OSTOOL_SERVER_SCRIPT_BASE_URL:-https://raw.githubusercontent.com/drivercraft/ostool/main/ostool-server/scripts}"
 
 LOCAL_PATH=""
 
@@ -74,26 +82,34 @@ run_cmd() {
 }
 
 load_unit_template() {
-    if [[ -f "${UNIT_FILE}" ]]; then
+    if [[ -n "${UNIT_FILE}" && -f "${UNIT_FILE}" ]]; then
         cat "${UNIT_FILE}"
         return 0
     fi
 
-    local remote_unit_url="${REMOTE_SCRIPT_BASE_URL}/${SERVICE_NAME}.service"
-    echo "Local service template not found, downloading: ${remote_unit_url}" >&2
+    cat <<'EOF'
+[Unit]
+Description=OSTool Board Server
+After=network.target
 
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "${remote_unit_url}"
-        return 0
-    fi
+[Service]
+Type=simple
+ExecStart=__BIN_PATH__ --config /etc/ostool-server/config.toml
+Restart=on-failure
+RestartSec=5
+WorkingDirectory=/var/lib/ostool-server
 
-    if command -v wget >/dev/null 2>&1; then
-        wget -qO- "${remote_unit_url}"
-        return 0
-    fi
+ReadWritePaths=/etc/ostool-server /var/lib/ostool-server /srv/tftp
+ProtectHome=true
+PrivateTmp=true
 
-    echo "Neither curl nor wget is available to download ${remote_unit_url}" >&2
-    return 1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ostool-server
+
+[Install]
+WantedBy=multi-user.target
+EOF
 }
 
 render_unit_file() {
@@ -172,10 +188,10 @@ if [[ -n "$LOCAL_PATH" ]]; then
     fi
     LOCAL_PATH="$(cd "$LOCAL_PATH" && pwd)"
     echo "Installing from local source: ${LOCAL_PATH}"
-    cargo install --path "${LOCAL_PATH}"
+    cargo install --force --path "${LOCAL_PATH}"
 else
     echo "Installing from crates.io..."
-    cargo install "${SERVICE_NAME}"
+    cargo install --force "${SERVICE_NAME}"
 fi
 
 BIN_SOURCE="$(command -v "${SERVICE_NAME}" || true)"
