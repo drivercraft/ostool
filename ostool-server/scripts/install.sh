@@ -80,7 +80,7 @@ load_unit_template() {
     fi
 
     local remote_unit_url="${REMOTE_SCRIPT_BASE_URL}/${SERVICE_NAME}.service"
-    echo "Local service template not found, downloading: ${remote_unit_url}"
+    echo "Local service template not found, downloading: ${remote_unit_url}" >&2
 
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL "${remote_unit_url}"

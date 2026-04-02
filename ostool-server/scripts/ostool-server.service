@@ -9,7 +9,7 @@ Restart=on-failure
 RestartSec=5
 WorkingDirectory=/var/lib/ostool-server
 
-ReadWritePaths=/var/lib/ostool-server /srv/tftp
+ReadWritePaths=/etc/ostool-server /var/lib/ostool-server /srv/tftp
 ProtectHome=true
 PrivateTmp=true
 

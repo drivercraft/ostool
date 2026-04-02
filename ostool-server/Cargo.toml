@@ -7,7 +7,7 @@ edition = "2024"
 keywords = ["embedded", "u-boot", "tftp", "serial", "server"]
 license = "MIT OR Apache-2.0"
 name = "ostool-server"
-readme = "../README.md"
+readme = "README.md"
 repository = "https://github.com/drivercraft/ostool"
 version = "0.1.1"
 

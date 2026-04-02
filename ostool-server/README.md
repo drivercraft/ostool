@@ -11,6 +11,21 @@ It provides:
 
 ## Install
 
+Before installing `ostool-server`, make sure `Node.js` and `pnpm` are available in your environment.
+The crate build process compiles the bundled web UI, so `cargo install` will fail if either tool is missing.
+
+You can download and install Node.js from:
+
+```text
+https://nodejs.org/en/download
+```
+
+After Node.js is installed, install `pnpm` with:
+
+```bash
+npm install -g pnpm
+```
+
 ### Install directly with curl
 
 The install script can be executed directly from GitHub:
