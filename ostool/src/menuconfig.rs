@@ -14,8 +14,8 @@ use clap::ValueEnum;
 use log::info;
 use tokio::fs;
 
-use crate::build::config::BuildConfig;
 use crate::Tool;
+use crate::build::config::BuildConfig;
 use crate::run::qemu::QemuConfig;
 use crate::run::uboot::UbootConfig;
 use crate::utils::PathResultExt;

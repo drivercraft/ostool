@@ -148,13 +148,7 @@ impl AsyncTerminal {
 
         let mut events = interactive_input_enabled.then(EventStream::new);
         let result = self
-            .run_loop(
-                &handle,
-                inbound_rx,
-                &mut events,
-                output,
-                on_byte,
-            )
+            .run_loop(&handle, inbound_rx, &mut events, output, on_byte)
             .await;
 
         if interactive_input_enabled {
@@ -668,7 +662,11 @@ pub fn restore_terminal_mode() {
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Cursor, sync::{Arc, Mutex}, time::Duration};
+    use std::{
+        io::Cursor,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
 
     use super::{KeyProcessor, TerminalAction, TerminalHandle, encode_key_event};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

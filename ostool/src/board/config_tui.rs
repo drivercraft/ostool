@@ -146,7 +146,10 @@ impl BoardConfigApp {
         Self::new(config.path, config.board)
     }
 
-    fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> anyhow::Result<EditorOutcome> {
+    fn run(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    ) -> anyhow::Result<EditorOutcome> {
         loop {
             terminal
                 .draw(|frame| self.render(frame))
@@ -432,14 +435,12 @@ fn draw_input(
     let max_chars = area.width.saturating_sub(2) as usize;
     let (visible_text, cursor_offset) = field.visible_text_and_cursor(max_chars);
 
-    let paragraph = Paragraph::new(visible_text)
-        .style(text_style)
-        .block(
-            Block::default()
-                .title(Span::styled(format!(" {label} "), title_style))
-                .borders(Borders::ALL)
-                .border_style(border_style),
-        );
+    let paragraph = Paragraph::new(visible_text).style(text_style).block(
+        Block::default()
+            .title(Span::styled(format!(" {label} "), title_style))
+            .borders(Borders::ALL)
+            .border_style(border_style),
+    );
     frame.render_widget(paragraph, area);
     cursor_offset
 }

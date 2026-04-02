@@ -393,8 +393,8 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    use tempfile::tempdir;
     use serde_json::json;
+    use tempfile::tempdir;
 
     use super::{
         BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, ServerConfig,
@@ -426,7 +426,8 @@ mod tests {
     async fn write_to_path_persists_default_port_2999() {
         let temp = tempdir().unwrap();
         let path = temp.path().join("config.toml");
-        let mut config = ServerConfig::default_for_path(Path::new("/etc/ostool-server/config.toml"));
+        let mut config =
+            ServerConfig::default_for_path(Path::new("/etc/ostool-server/config.toml"));
         config.network.interface = "eth0".into();
 
         config.write_to_path(&path).await.unwrap();
