@@ -134,29 +134,60 @@ impl WalkContext {
         &self,
         is_required: bool,
         field_name: Option<&str>,
-    ) -> Result<Option<OneOf>, SchemaError> {
+    ) -> Result<Option<ElementType>, SchemaError> {
         if let Some(one_of) = self.get("oneOf")
             && let Some(variants) = one_of.as_array()
-            && let Some(field_name) = field_name
         {
-            let mut variant_elements = Vec::new();
-            for variant in variants {
-                // Process each variant
-                let mut walk = self.clone();
-                walk.value = variant.clone();
-                if let Some(element_type) = walk.as_element_type(false, None)? {
-                    variant_elements.push(element_type);
-                }
+            // Detect "oneOf + const" pattern: schemars generates some enums as
+            // oneOf [{const: "A", type: string}, {const: "B", type: string}, ...]
+            // Convert this to an Enum item instead of a OneOf.
+            let const_variants: Vec<(String, Option<String>)> = variants
+                .iter()
+                .filter_map(|v| {
+                    let val = v.get("const")?.as_str()?.to_string();
+                    let desc = v.get("description").and_then(|d| d.as_str()).map(String::from);
+                    Some((val, desc))
+                })
+                .collect();
+
+            if !const_variants.is_empty() && const_variants.len() == variants.len() {
+                let names = const_variants.iter().map(|(v, _)| v.clone()).collect();
+                let enum_item = Item {
+                    base: ElementBase::new(
+                        &self.path,
+                        self.description()?,
+                        is_required,
+                        field_name.unwrap_or("enum"),
+                    ),
+                    item_type: ItemType::Enum(EnumItem {
+                        variants: names,
+                        value: None,
+                        default: None,
+                    }),
+                };
+                return Ok(Some(ElementType::Item(enum_item)));
             }
 
-            let one_of = OneOf {
-                base: ElementBase::new(&self.path, self.description()?, is_required, field_name),
-                variants: variant_elements,
-                selected_index: None,
-                default_index: None,
-            };
+            // Standard OneOf handling
+            if let Some(field_name) = field_name {
+                let mut variant_elements = Vec::new();
+                for variant in variants {
+                    let mut walk = self.clone();
+                    walk.value = variant.clone();
+                    if let Some(element_type) = walk.as_element_type(false, None)? {
+                        variant_elements.push(element_type);
+                    }
+                }
 
-            return Ok(Some(one_of));
+                let one_of = OneOf {
+                    base: ElementBase::new(&self.path, self.description()?, is_required, field_name),
+                    variants: variant_elements,
+                    selected_index: None,
+                    default_index: None,
+                };
+
+                return Ok(Some(ElementType::OneOf(one_of)));
+            }
         }
 
         Ok(None)
@@ -176,8 +207,8 @@ impl WalkContext {
             return Ok(Some(val));
         }
 
-        if let Some(one_of) = self.handle_oneof(is_required, field_name)? {
-            return Ok(Some(ElementType::OneOf(one_of)));
+        if let Some(elem) = self.handle_oneof(is_required, field_name)? {
+            return Ok(Some(elem));
         }
 
         if let Some(item) = self.as_item(is_required)? {
@@ -283,10 +314,32 @@ impl WalkContext {
         Ok(None)
     }
 
-    fn as_anyof(&self, _is_required: bool) -> Result<Option<ElementType>, SchemaError> {
+    fn as_anyof(&self, is_required: bool) -> Result<Option<ElementType>, SchemaError> {
         if let Some(one_of) = self.get("anyOf")
             && let Some(variants) = one_of.as_array()
         {
+            // Handle Option<T> pattern: anyOf [T, {"type": null}]
+            // Resolve the non-null variant directly as the element type.
+            if variants.len() == 2 {
+                let has_null = variants.iter().any(|v| {
+                    v.get("type").and_then(|t| t.as_str()) == Some("null")
+                        && v.as_object().map_or(false, |o| o.len() <= 1)
+                });
+                if has_null {
+                    let non_null = variants.iter().find(|v| {
+                        v.get("type").and_then(|t| t.as_str()) != Some("null")
+                    });
+                    if let Some(inner) = non_null {
+                        let mut walk = self.clone();
+                        walk.value = inner.clone();
+                        if let Some(elem) = walk.as_element_type(is_required, None)? {
+                            return Ok(Some(elem));
+                        }
+                    }
+                }
+            }
+
+            // Fallback: try first variant
             let var_object = variants[0].clone();
             let mut walk = self.clone();
             walk.value = var_object;

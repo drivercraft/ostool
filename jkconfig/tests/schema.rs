@@ -432,3 +432,47 @@ mod menu_root_get_mut_by_key_tests {
         }
     }
 }
+
+#[test]
+fn test_loglevel_schema() {
+    #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+    pub enum LogLevel {
+        Trace,
+        Debug,
+        Info,
+        Warn,
+        Error,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Default)]
+    pub struct Cargo {
+        pub log: Option<LogLevel>,
+    }
+
+    let schema = schemars::schema_for!(Cargo);
+    println!(
+        "Generated JSON Schema: \n{}",
+        serde_json::to_string_pretty(&schema.as_value()).unwrap()
+    );
+    let menu = MenuRoot::try_from(schema.as_value()).unwrap();
+
+    println!("Generated MenuRoot: \n{:#?}", menu);
+
+    // Verify: log field should be Enum, not OneOf
+    let log_item = menu.get_by_key("log").expect("log field should exist");
+    match log_item {
+        jkconfig::data::types::ElementType::Item(item) => {
+            assert!(
+                matches!(&item.item_type, jkconfig::data::item::ItemType::Enum(_)),
+                "log should be Enum, got {:?}",
+                item.item_type
+            );
+            if let jkconfig::data::item::ItemType::Enum(ei) = &item.item_type {
+                assert_eq!(ei.variants.len(), 5, "should have 5 enum variants");
+                assert_eq!(ei.variants[0], "Trace");
+                assert_eq!(ei.variants[4], "Error");
+            }
+        }
+        other => panic!("log should be Item(Enum), got {:?}", other),
+    }
+}

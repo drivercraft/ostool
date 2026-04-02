@@ -136,3 +136,38 @@ impl MenuConfigHandler {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use jkconfig::data::menu::MenuRoot;
+    use jkconfig::data::types::ElementType;
+    use schemars::schema_for;
+    use crate::build::config::BuildConfig;
+
+    #[test]
+    fn test_log_field_is_enum_not_oneof() {
+        let schema = schema_for!(BuildConfig);
+        let menu = MenuRoot::try_from(schema.as_value()).expect("schema parse ok");
+
+        fn find_log(elem: &ElementType) -> Option<&ElementType> {
+            match elem {
+                ElementType::Menu(m) => m.children.iter().find_map(|c| find_log(c)),
+                ElementType::OneOf(o) => o.variants.iter().find_map(|v| find_log(v)),
+                ElementType::Item(item) if item.base.key().ends_with("log") => Some(elem),
+                _ => None,
+            }
+        }
+
+        let log_elem = find_log(&menu.menu).expect("log field should exist");
+        match log_elem {
+            ElementType::Item(item) => {
+                assert!(
+                    matches!(&item.item_type, jkconfig::data::item::ItemType::Enum(e) if e.variants.len() == 5),
+                    "log should be Enum with 5 variants, got: {:?}",
+                    item.item_type
+                );
+            }
+            other => panic!("log should be Item(Enum), got: {:?}", other),
+        }
+    }
+}
