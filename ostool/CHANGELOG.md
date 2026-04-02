@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/drivercraft/ostool/compare/ostool-v0.11.2...ostool-v0.12.0) - 2026-04-02
+
+### Added
+
+- add remote support ([#67](https://github.com/drivercraft/ostool/pull/67))
+
 ## [0.11.2](https://github.com/drivercraft/ostool/compare/ostool-v0.11.1...ostool-v0.11.2) - 2026-03-30
 
 ### Fixed

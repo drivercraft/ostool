@@ -7,7 +7,7 @@ keywords = ["u-boot", "shell", "embedded", "serial", "ymodem"]
 license = "MIT"
 name = "uboot-shell"
 repository = "https://github.com/drivercraft/ostool"
-version = "0.2.2"
+version = "0.2.3"
 
 [dependencies]
 colored = "3"

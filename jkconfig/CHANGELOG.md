@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/drivercraft/ostool/compare/jkconfig-v0.1.8...jkconfig-v0.2.0) - 2026-04-02
+
+### Added
+
+- add remote support ([#67](https://github.com/drivercraft/ostool/pull/67))
+
 ## [0.1.8](https://github.com/drivercraft/ostool/compare/jkconfig-v0.1.7...jkconfig-v0.1.8) - 2026-03-25
 
 ### Other

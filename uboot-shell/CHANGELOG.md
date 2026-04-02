@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3](https://github.com/drivercraft/ostool/compare/uboot-shell-v0.2.2...uboot-shell-v0.2.3) - 2026-04-02
+
+### Added
+
+- add remote support ([#67](https://github.com/drivercraft/ostool/pull/67))
+
 ## [0.2.2](https://github.com/drivercraft/ostool/compare/uboot-shell-v0.2.1...uboot-shell-v0.2.2) - 2026-01-29
 
 ### Fixed
