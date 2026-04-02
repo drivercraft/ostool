@@ -9,13 +9,11 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_BOARD_SERVER_IP: &str = "localhost";
 pub const DEFAULT_BOARD_SERVER_PORT: u16 = 2999;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct BoardGlobalConfigFile {
     #[serde(default)]
     pub board: BoardGlobalConfig,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BoardGlobalConfig {

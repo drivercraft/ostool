@@ -120,9 +120,10 @@ fn menu_selected(s: &mut Cursive) -> Option<ElementType> {
 fn on_change_set(s: &mut Cursive) {
     update_selected(s, |elem| {
         if let ElementType::Menu(menu) = elem
-            && !menu.is_required {
-                menu.is_set = !menu.is_set;
-            }
+            && !menu.is_required
+        {
+            menu.is_set = !menu.is_set;
+        }
     });
 }
 
