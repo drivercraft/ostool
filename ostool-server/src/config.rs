@@ -76,14 +76,23 @@ impl ServerConfig {
                 config.sync_system_tftpd_hpa_config()?;
                 config.sync_network_defaults();
                 config.validate()?;
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent).await?;
-                }
-                fs::write(path, toml::to_string_pretty(&config)?).await?;
+                config.write_to_path(path).await?;
                 Ok(config)
             }
             Err(err) => Err(err.into()),
         }
+    }
+
+    pub async fn write_to_path(&self, path: &Path) -> anyhow::Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        fs::write(path, toml::to_string_pretty(self)?)
+            .await
+            .with_context(|| format!("failed to write {}", path.display()))?;
+        Ok(())
     }
 
     fn sync_system_tftpd_hpa_config(&mut self) -> anyhow::Result<()> {
@@ -384,6 +393,7 @@ mod tests {
         path::{Path, PathBuf},
     };
 
+    use tempfile::tempdir;
     use serde_json::json;
 
     use super::{
@@ -410,6 +420,19 @@ mod tests {
             PathBuf::from("/var/lib/ostool-server/boards")
         );
         assert_eq!(config.dtb_dir, PathBuf::from("/var/lib/ostool-server/dtbs"));
+    }
+
+    #[tokio::test]
+    async fn write_to_path_persists_default_port_2999() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let mut config = ServerConfig::default_for_path(Path::new("/etc/ostool-server/config.toml"));
+        config.network.interface = "eth0".into();
+
+        config.write_to_path(&path).await.unwrap();
+
+        let content = std::fs::read_to_string(path).unwrap();
+        assert!(content.contains("listen_addr = \"0.0.0.0:2999\""));
     }
 
     #[test]

@@ -9,6 +9,7 @@ DATA_DIR="/var/lib/${SERVICE_NAME}"
 CONFIG_FILE="${CONFIG_DIR}/config.toml"
 SYSTEM_BIN_DIR="/usr/local/bin"
 SYSTEM_BIN_PATH="${SYSTEM_BIN_DIR}/${SERVICE_NAME}"
+REMOTE_SCRIPT_BASE_URL="${OSTOOL_SERVER_SCRIPT_BASE_URL:-https://raw.githubusercontent.com/drivercraft/ostool/main/ostool-server/scripts}"
 
 LOCAL_PATH=""
 
@@ -72,9 +73,32 @@ run_cmd() {
     fi
 }
 
+load_unit_template() {
+    if [[ -f "${UNIT_FILE}" ]]; then
+        cat "${UNIT_FILE}"
+        return 0
+    fi
+
+    local remote_unit_url="${REMOTE_SCRIPT_BASE_URL}/${SERVICE_NAME}.service"
+    echo "Local service template not found, downloading: ${remote_unit_url}"
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "${remote_unit_url}"
+        return 0
+    fi
+
+    if command -v wget >/dev/null 2>&1; then
+        wget -qO- "${remote_unit_url}"
+        return 0
+    fi
+
+    echo "Neither curl nor wget is available to download ${remote_unit_url}" >&2
+    return 1
+}
+
 render_unit_file() {
     local bin_path="$1"
-    sed "s|__BIN_PATH__|${bin_path}|g" "${UNIT_FILE}"
+    load_unit_template | sed "s|__BIN_PATH__|${bin_path}|g"
 }
 
 # --- step 1: check rust environment ---
@@ -107,7 +131,21 @@ if [[ "$(id -u)" -ne 0 ]]; then
     fi
 fi
 
-# --- step 3: cargo install ---
+# --- step 3: stop existing service ---
+
+echo ""
+echo "==> Checking existing service..."
+
+if run_cmd systemctl cat "${SERVICE_NAME}" >/dev/null 2>&1; then
+    echo "Stopping existing ${SERVICE_NAME} service..."
+    run_cmd systemctl stop "${SERVICE_NAME}" || true
+    run_cmd systemctl reset-failed "${SERVICE_NAME}" || true
+    echo "Existing service stopped."
+else
+    echo "No existing ${SERVICE_NAME} service found."
+fi
+
+# --- step 4: cargo install ---
 
 echo ""
 echo "==> Installing ostool-server..."
@@ -140,7 +178,7 @@ run_cmd mkdir -p "${SYSTEM_BIN_DIR}"
 run_cmd install -m 755 "${BIN_SOURCE}" "${SYSTEM_BIN_PATH}"
 echo "Installed system binary to: ${SYSTEM_BIN_PATH}"
 
-# --- step 4: create FHS directories ---
+# --- step 5: create FHS directories ---
 
 echo ""
 echo "==> Creating directories..."
@@ -159,7 +197,7 @@ echo "  ${CONFIG_DIR}"
 echo "  ${DATA_DIR}/boards"
 echo "  ${DATA_DIR}/dtbs"
 
-# --- step 5: generate default config ---
+# --- step 6: generate default config ---
 
 echo ""
 echo "==> Checking configuration..."
@@ -170,7 +208,7 @@ else
     echo "Configuration file will be created automatically on first start: ${CONFIG_FILE}"
 fi
 
-# --- step 6: install systemd service ---
+# --- step 7: install systemd service ---
 
 echo ""
 echo "==> Installing systemd service..."
