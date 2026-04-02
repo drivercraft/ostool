@@ -548,10 +548,10 @@ impl QemuRunner<'_> {
                 .context("failed to query QEMU process status")?
                 .is_none()
             && let Err(err) = child.kill().await
-                && err.kind() != ErrorKind::InvalidInput
-            {
-                return Err(err.into());
-            }
+            && err.kind() != ErrorKind::InvalidInput
+        {
+            return Err(err.into());
+        }
 
         let status = child.wait().await?;
         let _ = stdout_task.await;

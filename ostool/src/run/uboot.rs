@@ -869,9 +869,10 @@ impl RunnerBackend for RemoteBackend {
 
     async fn finish_console(&mut self) -> anyhow::Result<()> {
         if let Some(tasks) = self.console_tasks.take()
-            && let Err(err) = tasks.shutdown_with_timeout(Duration::from_secs(2)).await {
-                log::warn!("remote serial console shutdown did not complete cleanly: {err:#}");
-            }
+            && let Err(err) = tasks.shutdown_with_timeout(Duration::from_secs(2)).await
+        {
+            log::warn!("remote serial console shutdown did not complete cleanly: {err:#}");
+        }
         Ok(())
     }
 
