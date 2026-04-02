@@ -4,9 +4,8 @@ members = ["ostool", "uboot-shell", "jkconfig", "fitimage", "ostool-server"]
 resolver = "3"
 
 [workspace.dependencies]
-# Cursive TUI framework
-cursive = {version = "0.21", features = ["crossterm-backend"]}
 crossterm = {version = "0.29", features = ["event-stream"]}
+ratatui = "0.30"
 
 # Data processing
 anyhow = "1"

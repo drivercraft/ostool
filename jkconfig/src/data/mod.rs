@@ -24,6 +24,9 @@
 /// Runtime state and configuration document types.
 pub mod app_data;
 
+/// Hook definitions and controlled mutation APIs.
+pub mod hook;
+
 /// Individual configuration item representation.
 pub mod item;
 
@@ -48,5 +51,10 @@ pub mod types;
 /// Read-only tree traversal helpers.
 pub mod visit;
 
-pub use app_data::{AppState, ConfigDocument, ElementHook};
+pub use app_data::{AppState, ConfigDocument};
+pub use hook::{
+    ElementHook, HookContext, HookFlow, HookMutation, HookOption, InputBinding, InputKind,
+    InputPageSpec, MessageLevel, MultiSelectBinding, MultiSelectSpec, SingleSelectBinding,
+    SingleSelectSpec,
+};
 pub use path::ElementPath;

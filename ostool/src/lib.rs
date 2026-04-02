@@ -78,5 +78,4 @@ extern crate log;
 #[macro_use]
 extern crate anyhow;
 
-pub use jkconfig::cursive;
 pub use tool::{ManifestContext, Tool, ToolConfig, resolve_manifest_context};

@@ -1,42 +1,19 @@
 use std::{
-    collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
     time::SystemTime,
 };
 
-use anyhow::bail;
-use cursive::Cursive;
+use anyhow::{anyhow, bail};
 
 use crate::data::{
+    hook::ElementHook,
+    item::ItemType,
     menu::{Menu, MenuRoot},
     path::ElementPath,
     resolver::ElementResolver,
     types::ElementType,
 };
-
-/// Callback used to provide the list of available features.
-pub type FeaturesCallback = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
-
-/// Callback invoked when a menu element is entered.
-pub type HookCallback = Arc<dyn Fn(&mut Cursive, &ElementPath) + Send + Sync>;
-
-/// Hook registration for a specific element path.
-#[derive(Clone)]
-pub struct ElementHook {
-    pub path: ElementPath,
-    pub callback: HookCallback,
-}
-
-impl ElementHook {
-    pub fn new(path: impl Into<ElementPath>, callback: HookCallback) -> Self {
-        Self {
-            path: path.into(),
-            callback,
-        }
-    }
-}
 
 /// Persisted configuration document plus schema-derived tree.
 #[derive(Clone)]
@@ -52,14 +29,12 @@ pub struct MenuState {
     pub selected_index: usize,
 }
 
-/// Runtime application state for TUI and web workflows.
+/// Runtime application state shared by TUI and web workflows.
 #[derive(Clone)]
 pub struct AppState {
     pub document: ConfigDocument,
     pub nav_stack: Vec<MenuState>,
     pub needs_save: bool,
-    pub user_data: HashMap<String, String>,
-    pub temp_data: Option<(String, serde_json::Value)>,
     pub element_hooks: Vec<ElementHook>,
 }
 
@@ -213,7 +188,7 @@ impl ConfigDocument {
             "toml" | "tml" => toml::to_string_pretty(&json_value)?,
             "json" => serde_json::to_string_pretty(&json_value)?,
             _ => {
-                bail!("Unsupported config file extension: {}", ext);
+                bail!("Unsupported config file extension: {ext}");
             }
         };
 
@@ -242,8 +217,6 @@ impl AppState {
                 selected_index: 0,
             }],
             needs_save: false,
-            user_data: HashMap::new(),
-            temp_data: None,
             element_hooks: Vec::new(),
         }
     }
@@ -253,7 +226,7 @@ impl AppState {
     }
 
     pub fn current_path_string(&self) -> String {
-        self.current_path().as_key()
+        self.current_path().display()
     }
 
     pub fn current_menu(&self) -> Option<&Menu> {
@@ -281,17 +254,17 @@ impl AppState {
         }
     }
 
-    pub fn set_selected_by_key(&mut self, key: &str) {
+    pub fn move_selection(&mut self, delta: isize) {
         let Some(menu) = self.current_menu() else {
             return;
         };
-        let index = menu
-            .children
-            .iter()
-            .position(|element| element.key() == key);
-        if let Some(index) = index {
-            self.set_selected_index(index);
+        if menu.children.is_empty() {
+            return;
         }
+
+        let current = self.selected_index() as isize;
+        let next = (current + delta).clamp(0, menu.children.len() as isize - 1) as usize;
+        self.set_selected_index(next);
     }
 
     pub fn clamp_selection(&mut self) {
@@ -340,6 +313,10 @@ impl AppState {
         self.needs_save = true;
     }
 
+    pub fn discard_changes(&mut self) {
+        self.needs_save = false;
+    }
+
     pub fn persist_if_needed(&mut self) -> anyhow::Result<()> {
         if self.needs_save {
             self.document.persist()?;
@@ -354,11 +331,493 @@ impl AppState {
             .find(|hook| hook.path == selected_path)
             .cloned()
     }
+
+    pub fn get_string(&self, path: impl Into<ElementPath>) -> anyhow::Result<Option<String>> {
+        let path = path.into();
+        let element = self
+            .document
+            .get(&path)
+            .ok_or_else(|| anyhow!("missing element: {}", path.display()))?;
+        match element {
+            ElementType::Item(item) => match &item.item_type {
+                ItemType::String { value, .. } => Ok(value.clone()),
+                _ => bail!("element is not a string: {}", path.display()),
+            },
+            _ => bail!("element is not a string: {}", path.display()),
+        }
+    }
+
+    pub fn get_strings(&self, path: impl Into<ElementPath>) -> anyhow::Result<Vec<String>> {
+        let path = path.into();
+        let element = self
+            .document
+            .get(&path)
+            .ok_or_else(|| anyhow!("missing element: {}", path.display()))?;
+        match element {
+            ElementType::Item(item) => match &item.item_type {
+                ItemType::Array(array) => Ok(array.values.clone()),
+                _ => bail!("element is not a string array: {}", path.display()),
+            },
+            _ => bail!("element is not a string array: {}", path.display()),
+        }
+    }
+
+    pub fn get_integer(&self, path: impl Into<ElementPath>) -> anyhow::Result<Option<i64>> {
+        let path = path.into();
+        let element = self
+            .document
+            .get(&path)
+            .ok_or_else(|| anyhow!("missing element: {}", path.display()))?;
+        match element {
+            ElementType::Item(item) => match &item.item_type {
+                ItemType::Integer { value, .. } => Ok(*value),
+                _ => bail!("element is not an integer: {}", path.display()),
+            },
+            _ => bail!("element is not an integer: {}", path.display()),
+        }
+    }
+
+    pub fn get_number(&self, path: impl Into<ElementPath>) -> anyhow::Result<Option<f64>> {
+        let path = path.into();
+        let element = self
+            .document
+            .get(&path)
+            .ok_or_else(|| anyhow!("missing element: {}", path.display()))?;
+        match element {
+            ElementType::Item(item) => match &item.item_type {
+                ItemType::Number { value, .. } => Ok(*value),
+                _ => bail!("element is not a number: {}", path.display()),
+            },
+            _ => bail!("element is not a number: {}", path.display()),
+        }
+    }
+
+    pub fn get_bool(&self, path: impl Into<ElementPath>) -> anyhow::Result<Option<bool>> {
+        let path = path.into();
+        let element = self
+            .document
+            .get(&path)
+            .ok_or_else(|| anyhow!("missing element: {}", path.display()))?;
+        match element {
+            ElementType::Item(item) => match &item.item_type {
+                ItemType::Boolean { value, .. } => Ok(Some(*value)),
+                _ => bail!("element is not a bool: {}", path.display()),
+            },
+            _ => bail!("element is not a bool: {}", path.display()),
+        }
+    }
+
+    pub fn toggle_bool(&mut self, path: impl Into<ElementPath>) -> anyhow::Result<()> {
+        let path = path.into();
+        let element = self
+            .document
+            .get_mut(&path)
+            .ok_or_else(|| anyhow!("missing element: {}", path.display()))?;
+        match element {
+            ElementType::Item(item) => match &mut item.item_type {
+                ItemType::Boolean { value, .. } => {
+                    *value = !*value;
+                    self.mark_dirty();
+                    Ok(())
+                }
+                _ => bail!("element is not a bool: {}", path.display()),
+            },
+            _ => bail!("element is not a bool: {}", path.display()),
+        }
+    }
+
+    pub fn set_string(
+        &mut self,
+        path: impl Into<ElementPath>,
+        value: String,
+    ) -> anyhow::Result<()> {
+        let path = path.into();
+        let element = self
+            .document
+            .get_mut(&path)
+            .ok_or_else(|| anyhow!("missing element: {}", path.display()))?;
+        match element {
+            ElementType::Item(item) => match &mut item.item_type {
+                ItemType::String { value: current, .. } => {
+                    *current = Some(value);
+                    self.mark_dirty();
+                    Ok(())
+                }
+                _ => bail!("element is not a string: {}", path.display()),
+            },
+            _ => bail!("element is not a string: {}", path.display()),
+        }
+    }
+
+    pub fn set_optional_string(
+        &mut self,
+        path: impl Into<ElementPath>,
+        value: Option<String>,
+    ) -> anyhow::Result<()> {
+        match value {
+            Some(value) => self.set_string(path, value),
+            None => self.clear_optional(path),
+        }
+    }
+
+    pub fn set_string_array(
+        &mut self,
+        path: impl Into<ElementPath>,
+        values: Vec<String>,
+    ) -> anyhow::Result<()> {
+        let path = path.into();
+        let element = self
+            .document
+            .get_mut(&path)
+            .ok_or_else(|| anyhow!("missing element: {}", path.display()))?;
+        match element {
+            ElementType::Item(item) => match &mut item.item_type {
+                ItemType::Array(array) => {
+                    array.values = values;
+                    self.mark_dirty();
+                    Ok(())
+                }
+                _ => bail!("element is not an array: {}", path.display()),
+            },
+            _ => bail!("element is not an array: {}", path.display()),
+        }
+    }
+
+    pub fn set_integer(&mut self, path: impl Into<ElementPath>, value: i64) -> anyhow::Result<()> {
+        let path = path.into();
+        let element = self
+            .document
+            .get_mut(&path)
+            .ok_or_else(|| anyhow!("missing element: {}", path.display()))?;
+        match element {
+            ElementType::Item(item) => match &mut item.item_type {
+                ItemType::Integer { value: current, .. } => {
+                    *current = Some(value);
+                    self.mark_dirty();
+                    Ok(())
+                }
+                _ => bail!("element is not an integer: {}", path.display()),
+            },
+            _ => bail!("element is not an integer: {}", path.display()),
+        }
+    }
+
+    pub fn set_optional_integer(
+        &mut self,
+        path: impl Into<ElementPath>,
+        value: Option<i64>,
+    ) -> anyhow::Result<()> {
+        match value {
+            Some(value) => self.set_integer(path, value),
+            None => self.clear_optional(path),
+        }
+    }
+
+    pub fn set_number(&mut self, path: impl Into<ElementPath>, value: f64) -> anyhow::Result<()> {
+        let path = path.into();
+        let element = self
+            .document
+            .get_mut(&path)
+            .ok_or_else(|| anyhow!("missing element: {}", path.display()))?;
+        match element {
+            ElementType::Item(item) => match &mut item.item_type {
+                ItemType::Number { value: current, .. } => {
+                    *current = Some(value);
+                    self.mark_dirty();
+                    Ok(())
+                }
+                _ => bail!("element is not a number: {}", path.display()),
+            },
+            _ => bail!("element is not a number: {}", path.display()),
+        }
+    }
+
+    pub fn set_optional_number(
+        &mut self,
+        path: impl Into<ElementPath>,
+        value: Option<f64>,
+    ) -> anyhow::Result<()> {
+        match value {
+            Some(value) => self.set_number(path, value),
+            None => self.clear_optional(path),
+        }
+    }
+
+    pub fn set_enum_variant(
+        &mut self,
+        path: impl Into<ElementPath>,
+        variant: &str,
+    ) -> anyhow::Result<()> {
+        let path = path.into();
+        let element = self
+            .document
+            .get_mut(&path)
+            .ok_or_else(|| anyhow!("missing element: {}", path.display()))?;
+        match element {
+            ElementType::Item(item) => match &mut item.item_type {
+                ItemType::Enum(enum_item) => {
+                    let idx = enum_item
+                        .variants
+                        .iter()
+                        .position(|candidate| candidate == variant)
+                        .ok_or_else(|| anyhow!("invalid enum variant '{variant}'"))?;
+                    enum_item.value = Some(idx);
+                    self.mark_dirty();
+                    Ok(())
+                }
+                _ => bail!("element is not an enum: {}", path.display()),
+            },
+            _ => bail!("element is not an enum: {}", path.display()),
+        }
+    }
+
+    pub fn set_oneof_index(
+        &mut self,
+        path: impl Into<ElementPath>,
+        index: usize,
+    ) -> anyhow::Result<()> {
+        let path = path.into();
+        let element = self
+            .document
+            .get_mut(&path)
+            .ok_or_else(|| anyhow!("missing element: {}", path.display()))?;
+        match element {
+            ElementType::OneOf(one_of) => {
+                one_of.set_selected_index(index)?;
+                self.mark_dirty();
+                Ok(())
+            }
+            _ => bail!("element is not a oneOf: {}", path.display()),
+        }
+    }
+
+    pub fn clear_optional(&mut self, path: impl Into<ElementPath>) -> anyhow::Result<()> {
+        let path = path.into();
+        let element = self
+            .document
+            .get_mut(&path)
+            .ok_or_else(|| anyhow!("missing element: {}", path.display()))?;
+        if element.is_required {
+            bail!(
+                "element is required and cannot be cleared: {}",
+                path.display()
+            );
+        }
+        element.set_none();
+        self.mark_dirty();
+        Ok(())
+    }
+
+    pub fn toggle_menu_set(&mut self, path: impl Into<ElementPath>) -> anyhow::Result<()> {
+        let path = path.into();
+        let element = self
+            .document
+            .get_mut(&path)
+            .ok_or_else(|| anyhow!("missing element: {}", path.display()))?;
+        match element {
+            ElementType::Menu(menu) => {
+                if menu.is_required {
+                    bail!("menu is required and cannot be toggled: {}", path.display());
+                }
+                menu.is_set = !menu.is_set;
+                self.mark_dirty();
+                Ok(())
+            }
+            _ => bail!("element is not a menu: {}", path.display()),
+        }
+    }
+
+    pub fn element_kind(element: &ElementType) -> &'static str {
+        match element {
+            ElementType::Menu(_) => "Object",
+            ElementType::OneOf(_) => "OneOf",
+            ElementType::Item(item) => match &item.item_type {
+                ItemType::String { .. } => "String",
+                ItemType::Number { .. } => "Number",
+                ItemType::Integer { .. } => "Integer",
+                ItemType::Boolean { .. } => "Boolean",
+                ItemType::Enum(_) => "Enum",
+                ItemType::Array(_) => "Array",
+            },
+        }
+    }
+
+    pub fn element_tag(element: &ElementType) -> &'static str {
+        match element {
+            ElementType::Menu(_) => "OBJ",
+            ElementType::OneOf(_) => "ALT",
+            ElementType::Item(item) => match &item.item_type {
+                ItemType::String { .. } => "TXT",
+                ItemType::Number { .. } => "NUM",
+                ItemType::Integer { .. } => "INT",
+                ItemType::Boolean { .. } => "BOL",
+                ItemType::Enum(_) => "ENU",
+                ItemType::Array(_) => "ARR",
+            },
+        }
+    }
+
+    pub fn element_status(element: &ElementType) -> &'static str {
+        if element.is_required {
+            "required"
+        } else if element.is_none() {
+            "optional / unset"
+        } else {
+            "optional / set"
+        }
+    }
+
+    pub fn element_summary(element: &ElementType) -> String {
+        match element {
+            ElementType::Menu(menu) => {
+                let set_label = if menu.is_required {
+                    "required".to_string()
+                } else if menu.is_set {
+                    "set".to_string()
+                } else {
+                    "unset".to_string()
+                };
+                format!("{} fields, {set_label}", menu.children.len())
+            }
+            ElementType::OneOf(one_of) => one_of
+                .selected_index
+                .map(|idx| one_of.variant_display(idx))
+                .unwrap_or_else(|| "unset".to_string()),
+            ElementType::Item(item) => match &item.item_type {
+                ItemType::String { value, .. } => value.clone().unwrap_or_else(|| "<empty>".into()),
+                ItemType::Number { value, .. } => value
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<empty>".into()),
+                ItemType::Integer { value, .. } => value
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<empty>".into()),
+                ItemType::Boolean { value, .. } => value.to_string(),
+                ItemType::Enum(enum_item) => enum_item
+                    .value_str()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "<unset>".into()),
+                ItemType::Array(array_item) => {
+                    if array_item.values.is_empty() {
+                        "[]".to_string()
+                    } else {
+                        format!("{} item(s)", array_item.values.len())
+                    }
+                }
+            },
+        }
+    }
+
+    pub fn selected_detail_text(&self) -> String {
+        let Some(element) = self.current() else {
+            return "No items in this menu.".to_string();
+        };
+
+        let mut lines = vec![
+            format!("Title: {}", element.title),
+            format!("Path: {}", element.key()),
+            format!("Type: {}", Self::element_kind(element)),
+            format!("State: {}", Self::element_status(element)),
+        ];
+
+        if let Some(help) = &element.help {
+            lines.push(String::new());
+            lines.push(help.clone());
+        }
+
+        match element {
+            ElementType::Menu(menu) => {
+                lines.push(String::new());
+                lines.push(format!("Children: {}", menu.children.len()));
+            }
+            ElementType::OneOf(one_of) => {
+                lines.push(String::new());
+                lines.push(format!("Variants: {}", one_of.variants.len()));
+                lines.push(format!(
+                    "Selected: {}",
+                    one_of
+                        .selected_index
+                        .map(|idx| one_of.variant_display(idx))
+                        .unwrap_or_else(|| "unset".to_string())
+                ));
+            }
+            ElementType::Item(item) => match &item.item_type {
+                ItemType::String { value, default } => {
+                    lines.push(String::new());
+                    lines.push(format!(
+                        "Current: {}",
+                        value.clone().unwrap_or_else(|| "<empty>".to_string())
+                    ));
+                    if let Some(default) = default {
+                        lines.push(format!("Default: {default}"));
+                    }
+                }
+                ItemType::Number { value, default } => {
+                    lines.push(String::new());
+                    lines.push(format!(
+                        "Current: {}",
+                        value
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "<empty>".to_string())
+                    ));
+                    if let Some(default) = default {
+                        lines.push(format!("Default: {default}"));
+                    }
+                }
+                ItemType::Integer { value, default } => {
+                    lines.push(String::new());
+                    lines.push(format!(
+                        "Current: {}",
+                        value
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "<empty>".to_string())
+                    ));
+                    if let Some(default) = default {
+                        lines.push(format!("Default: {default}"));
+                    }
+                }
+                ItemType::Boolean { value, default } => {
+                    lines.push(String::new());
+                    lines.push(format!("Current: {value}"));
+                    lines.push(format!("Default: {default}"));
+                }
+                ItemType::Enum(enum_item) => {
+                    lines.push(String::new());
+                    lines.push(format!(
+                        "Current: {}",
+                        enum_item.value_str().unwrap_or("<unset>")
+                    ));
+                    lines.push(format!("Variants: {}", enum_item.variants.join(", ")));
+                }
+                ItemType::Array(array_item) => {
+                    lines.push(String::new());
+                    lines.push(format!("Element type: {}", array_item.element_type));
+                    lines.push(format!("Items: {}", array_item.values.len()));
+                    if !array_item.values.is_empty() {
+                        lines.push(String::new());
+                        lines.extend(
+                            array_item
+                                .values
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, value)| format!("[{idx}] {value}")),
+                        );
+                    }
+                }
+            },
+        }
+
+        lines.join("\n")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::{
+        item::{Item, ItemType},
+        menu::Menu,
+        types::ElementBase,
+    };
 
     #[test]
     fn test_schema_default() {
@@ -366,5 +825,42 @@ mod tests {
         let expected_schema_name = "config-schema.json";
         let schema_path = default_schema_by_init(Path::new(name));
         assert_eq!(schema_path, PathBuf::from(expected_schema_name));
+    }
+
+    #[test]
+    fn clear_optional_rejects_required_element() {
+        let document = ConfigDocument {
+            root: MenuRoot {
+                schema_version: "test".into(),
+                title: "root".into(),
+                menu: ElementType::Menu(Menu {
+                    base: ElementBase {
+                        path: PathBuf::new(),
+                        title: "root".into(),
+                        help: None,
+                        is_required: true,
+                        struct_name: "Root".into(),
+                    },
+                    children: vec![ElementType::Item(Item {
+                        base: ElementBase {
+                            path: PathBuf::from("name"),
+                            title: "name".into(),
+                            help: None,
+                            is_required: true,
+                            struct_name: "string".into(),
+                        },
+                        item_type: ItemType::String {
+                            value: Some("value".into()),
+                            default: None,
+                        },
+                    })],
+                    is_set: true,
+                }),
+            },
+            config: PathBuf::from("config.toml"),
+        };
+        let mut app = AppState::new(document);
+        let err = app.clear_optional("name").unwrap_err().to_string();
+        assert!(err.contains("required"));
     }
 }

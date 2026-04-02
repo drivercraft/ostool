@@ -2,7 +2,7 @@
 //!
 //! This module provides a file-based logger that writes all log output to
 //! `{workspace_root}/target/ostool.ans`, keeping the terminal clean and
-//! avoiding conflicts with TUI (cursive/ratatui).
+//! avoiding conflicts with the ratatui-based TUI.
 
 use std::{
     fs::{File, OpenOptions},

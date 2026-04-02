@@ -31,7 +31,6 @@ cargo_metadata = "0.23"
 clap = { workspace = true, features = ["derive"] }
 colored = "3"
 crossterm = { workspace = true }
-cursive = { workspace = true, features = ["crossterm-backend"] }
 env_logger = { workspace = true }
 fitimage = { version = "0.1", path = "../fitimage" }
 futures = "0.3"
@@ -40,7 +39,7 @@ jkconfig = { version = "0.2", path = "../jkconfig", default-features = false }
 log = { workspace = true }
 network-interface = "2"
 object = "0.39"
-ratatui = "0.30"
+ratatui = { workspace = true }
 reqwest = { version = "0.13", features = ["json"] }
 schemars = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }

@@ -42,7 +42,7 @@ ostool uses Rust workspace architecture, containing the following core modules:
 ### Technology Stack
 
 - **Rust** - Core development language providing memory safety and performance
-- **Cursive** - Modern TUI framework
+- **Ratatui** - Modern TUI framework
 - **JSON Schema** - Configuration validation and type safety
 - **Tokio** - Async runtime
 - **Serialport** - Serial communication

@@ -1,10 +1,9 @@
 use clap::{Parser, Subcommand};
-use cursive::{Cursive, CursiveExt, event::Key};
 use std::path::PathBuf;
 
 use jkconfig::{
     data::{AppState, ConfigDocument},
-    ui::{handle_back, handle_quit, handle_save, start_ui},
+    ui::run_tui as launch_tui,
 };
 
 // mod menu_view;
@@ -74,27 +73,7 @@ fn main() -> anyhow::Result<()> {
 
 /// 运行TUI界面
 fn run_tui(app_state: AppState) -> anyhow::Result<()> {
-    // 创建Cursive应用
-    let mut siv = Cursive::default();
-
-    // 设置状态为user_data
-    siv.set_user_data(app_state);
-
-    // 添加全局键盘事件处理
-    siv.add_global_callback('q', handle_quit);
-    siv.add_global_callback('Q', handle_quit);
-    siv.add_global_callback('s', handle_save);
-    siv.add_global_callback('S', handle_save);
-    siv.add_global_callback(Key::Esc, handle_back);
-    start_ui(&mut siv);
-
-    // 运行应用
-    siv.run();
-
-    println!("Exiting jkconfig...");
-    let mut app = siv.take_user_data::<AppState>().unwrap();
-    println!("Data: \n{:#?}", app.document.root);
+    let mut app = launch_tui(app_state)?;
     app.persist_if_needed()?;
-
     Ok(())
 }

@@ -25,7 +25,7 @@ A beautiful Terminal User Interface (TUI) configuration editor powered by JSON S
 
 ## ✨ Features
 
-- 🎨 **Beautiful TUI Interface** - Modern, responsive terminal UI built with [Cursive](https://github.com/gyscos/cursive)
+- 🎨 **Beautiful TUI Interface** - Modern, responsive terminal UI built with [Ratatui](https://github.com/ratatui/ratatui)
 - 📋 **JSON Schema Driven** - Automatically generates UI from JSON Schema (Draft 2020-12)
 - 🔧 **Multiple Data Types** - Support for String, Integer, Number, Boolean, Enum, Array, Object, and OneOf
 - 💾 **Multi-Format Support** - Read/write TOML and JSON configuration files
@@ -694,7 +694,7 @@ Error: Schema conversion error at path...
 ## 📚 Documentation
 
 - [JSON Schema Specification](https://json-schema.org/)
-- [Cursive Documentation](https://docs.rs/cursive/)
+- [Ratatui Documentation](https://docs.rs/ratatui/)
 - [TOML Specification](https://toml.io/)
 
 ## 🤝 Contributing
@@ -718,7 +718,7 @@ at your option.
 
 ## 👏 Acknowledgments
 
-- Built with [Cursive](https://github.com/gyscos/cursive) TUI framework
+- Built with [Ratatui](https://github.com/ratatui/ratatui) TUI framework
 - Inspired by Linux kernel's `menuconfig`
 - JSON Schema validation and parsing
 

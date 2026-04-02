@@ -1,7 +1,7 @@
 [package]
 authors = ["周睿 <zrufo747@outlook.com>"]
 categories = ["command-line-interface", "config"]
-description = "A Cursive-based TUI component library for JSON Schema configuration"
+description = "A Ratatui-based TUI component library for JSON Schema configuration"
 edition = "2024"
 keywords = ["tui", "config", "json-schema", "terminal"]
 license = "MIT OR Apache-2.0"
@@ -15,8 +15,9 @@ path = "src/main.rs"
 required-features = ["web"]
 
 [dependencies]
-# Cursive TUI framework
-cursive = {workspace = true, features = ["crossterm-backend"]}
+crossterm = {workspace = true}
+ratatui = {workspace = true}
+unicode-width = "0.2"
 
 # Data processing
 anyhow = {workspace = true}

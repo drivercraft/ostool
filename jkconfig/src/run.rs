@@ -1,14 +1,12 @@
 use std::path::Path;
 
 use anyhow::Context;
-pub use cursive;
-use cursive::{Cursive, CursiveExt, event::Key};
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 
 use crate::{
     data::{AppState, ConfigDocument, ElementHook},
-    ui::{handle_back, handle_quit, handle_save, start_ui},
+    ui::run_tui,
 };
 
 /// Run the configuration editor workflow for a typed config.
@@ -102,25 +100,6 @@ async fn get_content_by_ui(
     let document = ConfigDocument::new_with_init_and_schema(content, config.as_ref(), schema)?;
     let mut app_state = AppState::new(document);
     app_state.element_hooks = element_hooks.to_vec();
-
-    // 创建Cursive应用
-    let mut siv = Cursive::default();
-
-    // 设置状态为user_data
-    siv.set_user_data(app_state);
-
-    // 添加全局键盘事件处理
-    siv.add_global_callback('q', handle_quit);
-    siv.add_global_callback('Q', handle_quit);
-    siv.add_global_callback('s', handle_save);
-    siv.add_global_callback('S', handle_save);
-    siv.add_global_callback(Key::Esc, handle_back);
-    start_ui(&mut siv);
-
-    // 运行应用
-    siv.run_crossterm()
-        .map_err(|err| anyhow::anyhow!("failed to launch interactive config UI: {err}"))?;
-
-    let app = siv.take_user_data::<AppState>().unwrap();
-    Ok(app)
+    run_tui(app_state)
+        .map_err(|err| anyhow::anyhow!("failed to launch interactive config UI: {err}"))
 }

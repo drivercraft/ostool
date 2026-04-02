@@ -42,7 +42,7 @@ ostool 采用 Rust 工作空间架构，包含以下核心模块：
 ### 技术栈
 
 - **Rust** - 核心开发语言，提供内存安全和性能
-- **Cursive** - 现代化 TUI 框架
+- **Ratatui** - 现代化 TUI 框架
 - **JSON Schema** - 配置验证和类型安全
 - **Tokio** - 异步运行时
 - **Serialport** - 串口通信
