@@ -37,12 +37,6 @@
 //! - [`ui`] - UI components and editors
 //! - [`web`] - Web server module (requires `web` feature)
 
-// #[macro_use]
-// extern crate log;
-
-#[macro_use]
-mod log;
-
 /// Configuration data structures and schema parsing.
 ///
 /// This module provides the core data structures for managing configuration

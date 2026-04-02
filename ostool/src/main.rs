@@ -1,8 +1,9 @@
-use std::{path::PathBuf, process::ExitCode, sync::OnceLock};
+use std::{path::PathBuf, process::ExitCode};
 
 use anyhow::Result;
 use clap::*;
 use colored::Colorize as _;
+use env_logger::Env;
 
 use log::info;
 use ostool::{
@@ -15,7 +16,6 @@ use ostool::{
         self, CargoQemuAppendArgs, CargoQemuOverrideArgs, CargoQemuRunnerArgs, CargoRunnerKind,
         CargoUbootRunnerArgs, cargo_builder::CargoBuilder,
     },
-    logger,
     menuconfig::{MenuConfigHandler, MenuConfigMode},
     resolve_manifest_context,
     run::{qemu::RunQemuArgs, uboot::RunUbootArgs},
@@ -29,8 +29,6 @@ struct Cli {
     #[command(subcommand)]
     command: SubCommands,
 }
-
-static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Subcommand, Debug)]
 enum SubCommands {
@@ -147,67 +145,67 @@ async fn main() -> ExitCode {
 }
 
 async fn try_main() -> Result<()> {
+    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+
     let Cli { manifest, command } = Cli::parse();
 
     match command {
-        SubCommands::Board(args) => {
-            match args.command {
-                BoardSubCommands::Ls(server) => {
-                    let global_config = load_board_global_config_with_notice()?;
-                    let (server, port) =
-                        global_config.resolve_server(server.server.as_deref(), server.port);
-                    board::list_boards(&server, port).await?;
-                }
-                BoardSubCommands::Run(args) => {
-                    let global_config = load_board_global_config_with_notice()?;
-                    let mut tool = init_tool(manifest.clone())?;
-                    let board_config =
-                        BoardRunConfig::load_or_create(&tool, args.board_config.clone()).await?;
-                    prepare_uboot_artifacts(&mut tool, args.config.clone()).await?;
+        SubCommands::Board(args) => match args.command {
+            BoardSubCommands::Ls(server) => {
+                let global_config = load_board_global_config_with_notice()?;
+                let (server, port) =
+                    global_config.resolve_server(server.server.as_deref(), server.port);
+                board::list_boards(&server, port).await?;
+            }
+            BoardSubCommands::Run(args) => {
+                let global_config = load_board_global_config_with_notice()?;
+                let mut tool = init_tool(manifest.clone())?;
+                let board_config =
+                    BoardRunConfig::load_or_create(&tool, args.board_config.clone()).await?;
+                prepare_uboot_artifacts(&mut tool, args.config.clone()).await?;
 
-                    let (server, port) = board_config.resolve_server(
-                        args.server.server.as_deref(),
-                        args.server.port,
-                        &global_config.board,
-                    );
-                    let client = BoardServerClient::new(&server, port)?;
-                    let session =
-                        BoardSession::acquire(client.clone(), &board_config.board_type).await?;
+                let (server, port) = board_config.resolve_server(
+                    args.server.server.as_deref(),
+                    args.server.port,
+                    &global_config.board,
+                );
+                let client = BoardServerClient::new(&server, port)?;
+                let session =
+                    BoardSession::acquire(client.clone(), &board_config.board_type).await?;
 
-                    println!("Allocated board session:");
-                    println!("  board_type: {}", board_config.board_type);
-                    println!("  board_id: {}", session.info().board_id);
-                    println!("  session_id: {}", session.info().session_id);
-                    println!("  lease_expires_at: {}", session.info().lease_expires_at);
-                    println!("  boot_mode: {}", session.info().boot_mode);
+                println!("Allocated board session:");
+                println!("  board_type: {}", board_config.board_type);
+                println!("  board_id: {}", session.info().board_id);
+                println!("  session_id: {}", session.info().session_id);
+                println!("  lease_expires_at: {}", session.info().lease_expires_at);
+                println!("  boot_mode: {}", session.info().boot_mode);
 
-                    let run_result = match session.info().boot_mode.as_str() {
-                        "uboot" => {
-                            tool.run_uboot_remote(&board_config, client, session.info().clone())
-                                .await
-                        }
-                        other => Err(anyhow::anyhow!(
-                            "unsupported board boot mode `{other}`; only `uboot` is supported"
-                        )),
-                    };
+                let run_result = match session.info().boot_mode.as_str() {
+                    "uboot" => {
+                        tool.run_uboot_remote(&board_config, client, session.info().clone())
+                            .await
+                    }
+                    other => Err(anyhow::anyhow!(
+                        "unsupported board boot mode `{other}`; only `uboot` is supported"
+                    )),
+                };
 
-                    let release_result = session.release().await;
-                    match (run_result, release_result) {
-                        (Ok(()), Ok(())) => {}
-                        (Err(err), Ok(())) => return Err(err),
-                        (Ok(()), Err(err)) => return Err(err),
-                        (Err(run_err), Err(release_err)) => {
-                            return Err(run_err.context(format!(
-                                "additionally failed to release board session: {release_err:#}"
-                            )));
-                        }
+                let release_result = session.release().await;
+                match (run_result, release_result) {
+                    (Ok(()), Ok(())) => {}
+                    (Err(err), Ok(())) => return Err(err),
+                    (Ok(()), Err(err)) => return Err(err),
+                    (Err(run_err), Err(release_err)) => {
+                        return Err(run_err.context(format!(
+                            "additionally failed to release board session: {release_err:#}"
+                        )));
                     }
                 }
-                BoardSubCommands::Config => {
-                    run_board_config_tui()?;
-                }
             }
-        }
+            BoardSubCommands::Config => {
+                run_board_config_tui()?;
+            }
+        },
         SubCommands::Build { config } => {
             let mut tool = init_tool(manifest)?;
             tool.build(config).await?;
@@ -335,13 +333,7 @@ async fn prepare_uboot_artifacts(
 
 fn init_tool(manifest_arg: Option<PathBuf>) -> Result<Tool> {
     let manifest = resolve_manifest_context(manifest_arg.clone())?;
-    let log_path = logger::init_file_logger(&manifest.workspace_dir)?;
-    let _ = LOG_PATH.set(log_path.clone());
-    info!(
-        "Logging initialized at {} for manifest {}",
-        log_path.display(),
-        manifest.manifest_path.display()
-    );
+    info!("Using manifest {}", manifest.manifest_path.display());
 
     Tool::new(ToolConfig {
         manifest: manifest_arg,
@@ -355,13 +347,6 @@ fn report_error(err: &anyhow::Error) {
 
     println!("{}", format!("Error: {err:#}").red().bold());
     println!("{}", format!("\nTrace:\n{err:?}").red());
-
-    if let Some(log_path) = LOG_PATH.get() {
-        println!(
-            "{}",
-            format!("Log file: {}", log_path.display()).yellow().bold()
-        );
-    }
 }
 
 fn load_board_global_config_with_notice() -> Result<LoadedBoardGlobalConfig> {

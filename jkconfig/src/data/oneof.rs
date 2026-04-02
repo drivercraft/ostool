@@ -9,7 +9,6 @@ use crate::data::{
     types::{ElementBase, ElementType},
 };
 
-use log::trace;
 use serde_json::Value;
 
 /// OneOf/AnyOf variant container.
@@ -64,11 +63,6 @@ impl OneOf {
         }
 
         let selected = self.selected()?;
-        info!(
-            "OneOf get by field path: {:?}, selected: {:?}",
-            field_path,
-            selected.key()
-        );
 
         match selected {
             ElementType::Menu(menu) => {
@@ -95,12 +89,6 @@ impl OneOf {
 
         let selected = self.selected_mut()?;
 
-        info!(
-            "OneOf get by field path: {:?}, selected: {:?}",
-            field_path,
-            selected.key()
-        );
-
         match selected {
             ElementType::Menu(menu) => {
                 return menu.get_mut_by_field_path(field_path);
@@ -122,7 +110,6 @@ impl OneOf {
         let Some(variant) = self.variants.get_mut(index) else {
             return false;
         };
-        trace!("Try index {index} , {variant:?}");
         variant.update_from_value(value, name).is_ok()
     }
 
@@ -137,11 +124,6 @@ impl OneOf {
             value = inner_value;
         }
 
-        trace!(
-            "Updating OneOf at {} type `{name:?}` with value: {:?}",
-            self.key(),
-            value
-        );
         for idx in 0..self.variants.len() {
             if self.try_update_index(idx, name.as_deref(), value) {
                 self.selected_index = Some(idx);

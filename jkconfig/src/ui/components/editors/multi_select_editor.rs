@@ -201,11 +201,6 @@ fn toggle_selection(s: &mut Cursive) {
             {
                 array_mut.values = selected_variants.clone();
                 app.needs_save = true;
-                info!(
-                    "Multi select updated with {} items selected for key: {}",
-                    selected_variants.len(),
-                    current_key
-                );
             }
         }
 
@@ -470,11 +465,6 @@ fn toggle_extended_selection(s: &mut Cursive) {
             {
                 array_mut.values = all_selected.clone();
                 app.needs_save = true;
-                info!(
-                    "Extended multi select updated with {} items selected for key: {}",
-                    all_selected.len(),
-                    current_key
-                );
             }
         }
 
@@ -703,13 +693,6 @@ fn toggle_dep_features_selection(s: &mut Cursive) {
             {
                 array_mut.values = all_selected.clone();
                 app.needs_save = true;
-                info!(
-                    "Dep features select updated with {} features for {} and total {} items for key: {}",
-                    selected_indices.len(),
-                    dep_name,
-                    all_selected.len(),
-                    current_key
-                );
             }
 
             // 更新状态栏显示

@@ -23,9 +23,6 @@ path = "src/main.rs"
 name = "cargo-osrun"
 path = "src/bin/cargo-osrun.rs"
 
-[features]
-ui-log = ["jkconfig/logging"]
-
 [dependencies]
 anyhow = { workspace = true, features = ["backtrace"] }
 async-trait = "0.1"

@@ -40,13 +40,11 @@ pub fn show_string_edit(
             let st = s
                 .call_on_name("edit_value", |v: &mut EditView| v.get_content())
                 .unwrap();
-            info!("Setting string value for key {}: {}", key, st);
 
             if let Some(app) = s.user_data::<crate::data::app_data::AppData>()
                 && let Some(ElementType::Item(item)) = app.root.get_mut_by_key(&key)
                 && let ItemType::String { value, .. } = &mut item.item_type
             {
-                info!("Old value: {:?}", value);
                 *value = Some(st.to_string());
             }
             handle_back(s);

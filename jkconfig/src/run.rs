@@ -107,11 +107,6 @@ async fn get_content_by_ui(
     let title = app_data.root.title.clone();
     let fields = app_data.root.menu().fields();
 
-    #[cfg(feature = "logging")]
-    {
-        cursive::logger::init();
-        cursive::logger::set_filter_levels_from_env();
-    }
     // 创建Cursive应用
     let mut siv = Cursive::default();
 
@@ -124,7 +119,6 @@ async fn get_content_by_ui(
     siv.add_global_callback('s', handle_save);
     siv.add_global_callback('S', handle_save);
     siv.add_global_callback(Key::Esc, handle_back);
-    siv.add_global_callback('~', cursive::Cursive::toggle_debug_console);
     // 初始菜单路径为空
     siv.add_fullscreen_layer(menu_view(&title, "", fields));
 

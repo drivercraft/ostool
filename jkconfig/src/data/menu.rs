@@ -3,7 +3,6 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use log::trace;
 use serde_json::Value;
 
 use crate::data::{
@@ -143,7 +142,6 @@ impl Menu {
         if field_path.is_empty() {
             return None;
         }
-        info!("menu get by field path: {:?}", field_path);
         let first_field = field_path[0];
 
         let child = self.get_child_by_key(first_field)?;
@@ -187,11 +185,9 @@ impl Menu {
             expected: "object".to_string(),
             actual: serde_json::to_string_pretty(value).unwrap(),
         })?;
-        trace!("Updating Menu at {} with value: {:?}", self.key(), value);
         for (key, val) in value {
             if let Some(element) = self.get_child_mut_by_key(key) {
                 element.update_from_value(val, None)?;
-                trace!("Updated child {} of Menu at {}", key, self.key());
             }
             self.is_set = true;
             // If key doesn't exist in menu children, skip it as per requirement

@@ -63,8 +63,6 @@ fn test_object() {
 
 #[test]
 fn test_value() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let schema = schema_for!(AnimalObject);
 
     let origin = AnimalObject {
@@ -111,8 +109,6 @@ fn test_value() {
 
 #[test]
 fn test_value_enum() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let schema = schema_for!(AnimalObject);
 
     let origin = AnimalObject {

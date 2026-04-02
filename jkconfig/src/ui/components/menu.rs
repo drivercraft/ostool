@@ -23,7 +23,6 @@ pub fn menu_view(title: &str, path: &str, fields: Vec<ElementType>) -> impl Into
     select.set_on_select(on_select);
     select.set_on_submit(on_submit);
     menu_select_flush_fields(&mut select, &fields);
-    info!("Created menu view for path: {}", path);
     let select = select.with_name(&menu_select_name);
 
     // 创建标题栏
@@ -119,14 +118,11 @@ fn menu_selected(s: &mut Cursive) -> Option<ElementType> {
 }
 
 fn on_change_set(s: &mut Cursive) {
-    info!("Toggling 'is_set' for menu");
-
     update_selected(s, |elem| {
         if let ElementType::Menu(menu) = elem {
             if !menu.is_required {
                 menu.is_set = !menu.is_set;
             }
-            info!("Menu {} is_set toggled to {}", menu.key(), menu.is_set);
         }
     });
 }
@@ -146,7 +142,6 @@ pub fn menu_view_name(path: &str) -> String {
 }
 
 pub fn menu_select_flush(s: &mut Cursive, path: &str) {
-    info!("Flushing menu select for path: {}", path);
     let Some(app) = s.user_data::<AppData>() else {
         return;
     };
@@ -159,17 +154,14 @@ pub fn menu_select_flush(s: &mut Cursive, path: &str) {
             {
                 menu
             } else {
-                warn!("No menu selected in OneOf for path: {}", path);
                 return;
             }
         }
         _ => {
-            warn!("No menu found for path: {}", path);
             return;
         }
     };
 
-    info!("Found menu: {}", menu.key());
     let name = menu_view_name(path);
     let fields = menu.fields();
     s.call_on_name(&name, |view: &mut SelectView<ElementType>| {
@@ -191,7 +183,6 @@ fn menu_select_flush_fields(view: &mut SelectView<ElementType>, fields: &[Elemen
     {
         view.set_selection(idx);
     }
-    info!("Menu select view flushed with {} fields", fields.len());
 }
 
 /// 格式化项目标签，显示类型和当前值
@@ -236,9 +227,7 @@ fn create_help_text() -> StyledString {
     text.append_styled("S", Style::from(Effect::Bold));
     text.append_plain(" Save & Exit  ");
     text.append_styled("Q", Style::from(Effect::Bold));
-    text.append_plain(" Quit  ");
-    text.append_styled("~", Style::from(Effect::Bold));
-    text.append_plain(" Console");
+    text.append_plain(" Quit");
 
     text
 }
@@ -613,7 +602,6 @@ pub fn enter_menu(s: &mut Cursive, menu: &Menu) {
 
 fn enter_elem(s: &mut Cursive, elem: &ElementType) {
     let key = elem.key();
-    info!("Entering key: {}, type {}", key, elem.struct_name);
     let mut path = String::new();
 
     if let Some(app) = s.user_data::<AppData>() {
@@ -624,7 +612,6 @@ fn enter_elem(s: &mut Cursive, elem: &ElementType) {
     if let Some(app_data) = s.user_data::<AppData>() {
         for hook in app_data.elem_hocks.iter().cloned() {
             if hook.path == path {
-                info!("Found hock for path: {}, type: {}", path, elem.struct_name);
                 (hook.callback)(s, &path);
                 hocked = true;
                 break;
@@ -637,7 +624,6 @@ fn enter_elem(s: &mut Cursive, elem: &ElementType) {
 
     match elem {
         ElementType::Menu(menu) => {
-            info!("Handling Menu: {}", menu.title);
             // 进入子菜单
             if menu.is_none() {
                 if let Some(ElementType::Menu(m)) =
@@ -651,7 +637,6 @@ fn enter_elem(s: &mut Cursive, elem: &ElementType) {
             }
         }
         ElementType::OneOf(one_of) => {
-            info!("Handling OneOf: {}", one_of.title);
             if let Some(selected) = one_of.selected()
                 && let ElementType::Menu(menu) = selected
             {
@@ -664,7 +649,6 @@ fn enter_elem(s: &mut Cursive, elem: &ElementType) {
             show_oneof_dialog(s, one_of);
         }
         ElementType::Item(item) => {
-            info!("Handling Item: {}", item.base.key());
             // 根据类型显示编辑对话框
             match &item.item_type {
                 ItemType::Boolean { .. } => {
@@ -701,7 +685,6 @@ pub fn enter_key(s: &mut Cursive, key: &str) {
     if let Some(app) = s.user_data::<AppData>()
         && let Some(item) = app.root.get_by_key(key).cloned()
     {
-        info!("Entering key: {}, got {}", key, item.key());
         app.enter(key);
         enter_elem(s, &item);
     }
@@ -725,6 +708,5 @@ fn on_oneof_switch(s: &mut Cursive) {
 
 /// 处理项目选择
 fn on_submit(s: &mut Cursive, item: &ElementType) {
-    info!("Submitting item: {}", item.key());
     enter_key(s, &item.key());
 }

@@ -22,8 +22,6 @@ pub struct DogAAA {
 
 #[test]
 fn test_value() {
-    env_logger::builder().is_test(true).init();
-
     let schema = schema_for!(AppData);
 
     let origin = AppData {

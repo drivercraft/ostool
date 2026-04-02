@@ -1664,8 +1664,6 @@ dependencies = [
  "chrono",
  "clap",
  "cursive",
- "env_logger",
- "log",
  "schemars",
  "serde",
  "serde_json",
