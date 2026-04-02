@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 
 const DEFAULT_SYSTEM_TFTP_ROOT: &str = "/srv/tftp";
+const SYSTEM_CONFIG_DIR: &str = "/etc/ostool-server";
+const SYSTEM_DATA_DIR: &str = "/var/lib/ostool-server";
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ServerConfig {
@@ -23,7 +25,19 @@ pub struct ServerConfig {
 
 impl Default for ServerConfig {
     fn default() -> Self {
-        let data_dir = PathBuf::from(".ostool-server");
+        Self::default_for_path(Path::new(".ostool-server.toml"))
+    }
+}
+
+impl ServerConfig {
+    pub fn default_for_path(path: &Path) -> Self {
+        let use_system_layout = path.starts_with(SYSTEM_CONFIG_DIR);
+
+        let data_dir = if use_system_layout {
+            PathBuf::from(SYSTEM_DATA_DIR)
+        } else {
+            PathBuf::from(".ostool-server")
+        };
         let board_dir = data_dir.join("boards");
         let dtb_dir = data_dir.join("dtbs");
 
@@ -44,9 +58,7 @@ impl Default for ServerConfig {
             network: TftpNetworkConfig::default(),
         }
     }
-}
 
-impl ServerConfig {
     pub async fn load_or_create(path: &Path) -> anyhow::Result<Self> {
         match fs::read_to_string(path).await {
             Ok(content) => {
@@ -59,7 +71,7 @@ impl ServerConfig {
                 Ok(config)
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                let mut config = Self::default();
+                let mut config = Self::default_for_path(path);
                 config.normalize_paths(path)?;
                 config.sync_system_tftpd_hpa_config()?;
                 config.sync_network_defaults();
@@ -72,6 +84,19 @@ impl ServerConfig {
             }
             Err(err) => Err(err.into()),
         }
+    }
+
+    pub async fn write_default(path: &Path) -> anyhow::Result<Self> {
+        let mut config = Self::default_for_path(path);
+        config.normalize_paths(path)?;
+        config.sync_system_tftpd_hpa_config()?;
+        config.sync_network_defaults();
+        config.validate()?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        fs::write(path, toml::to_string_pretty(&config)?).await?;
+        Ok(config)
     }
 
     fn sync_system_tftpd_hpa_config(&mut self) -> anyhow::Result<()> {
@@ -367,7 +392,10 @@ pub struct PxeProfile {
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
+    use std::{
+        net::SocketAddr,
+        path::{Path, PathBuf},
+    };
 
     use serde_json::json;
 
@@ -384,6 +412,14 @@ mod tests {
         assert_eq!(decoded.listen_addr, SocketAddr::from(([0, 0, 0, 0], 8080)));
         assert_eq!(decoded.network.interface, "");
         assert!(decoded.dtb_dir.ends_with("dtbs"));
+    }
+
+    #[test]
+    fn system_config_defaults_use_fhs_layout() {
+        let config = ServerConfig::default_for_path(Path::new("/etc/ostool-server/config.toml"));
+        assert_eq!(config.data_dir, PathBuf::from("/var/lib/ostool-server"));
+        assert_eq!(config.board_dir, PathBuf::from("/var/lib/ostool-server/boards"));
+        assert_eq!(config.dtb_dir, PathBuf::from("/var/lib/ostool-server/dtbs"));
     }
 
     #[test]

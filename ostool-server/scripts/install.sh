@@ -7,6 +7,8 @@ UNIT_FILE="${SCRIPT_DIR}/${SERVICE_NAME}.service"
 CONFIG_DIR="/etc/${SERVICE_NAME}"
 DATA_DIR="/var/lib/${SERVICE_NAME}"
 CONFIG_FILE="${CONFIG_DIR}/config.toml"
+SYSTEM_BIN_DIR="/usr/local/bin"
+SYSTEM_BIN_PATH="${SYSTEM_BIN_DIR}/${SERVICE_NAME}"
 
 LOCAL_PATH=""
 
@@ -23,6 +25,10 @@ usage() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --local)
+            if [[ $# -lt 2 ]]; then
+                echo "Missing argument for --local"
+                usage
+            fi
             LOCAL_PATH="$2"
             shift 2
             ;;
@@ -66,6 +72,11 @@ run_cmd() {
     fi
 }
 
+render_unit_file() {
+    local bin_path="$1"
+    sed "s|__BIN_PATH__|${bin_path}|g" "${UNIT_FILE}"
+}
+
 # --- step 1: check rust environment ---
 
 echo "==> Checking Rust environment..."
@@ -102,6 +113,10 @@ echo ""
 echo "==> Installing ostool-server..."
 
 if [[ -n "$LOCAL_PATH" ]]; then
+    if [[ ! -d "$LOCAL_PATH" ]]; then
+        echo "Local source directory does not exist: ${LOCAL_PATH}" >&2
+        exit 1
+    fi
     LOCAL_PATH="$(cd "$LOCAL_PATH" && pwd)"
     echo "Installing from local source: ${LOCAL_PATH}"
     cargo install --path "${LOCAL_PATH}"
@@ -110,13 +125,30 @@ else
     cargo install "${SERVICE_NAME}"
 fi
 
-BINDIR="$(dirname "$(command -v ${SERVICE_NAME})")"
-echo "Installed to: ${BINDIR}/${SERVICE_NAME}"
+BIN_SOURCE="$(command -v "${SERVICE_NAME}" || true)"
+if [[ -z "${BIN_SOURCE}" ]]; then
+    echo "Failed to locate installed binary: ${SERVICE_NAME}" >&2
+    exit 1
+fi
+
+BIN_SOURCE="$(readlink -f "${BIN_SOURCE}")"
+echo "Cargo installed binary to: ${BIN_SOURCE}"
+
+echo ""
+echo "==> Installing system binary..."
+run_cmd mkdir -p "${SYSTEM_BIN_DIR}"
+run_cmd install -m 755 "${BIN_SOURCE}" "${SYSTEM_BIN_PATH}"
+echo "Installed system binary to: ${SYSTEM_BIN_PATH}"
 
 # --- step 4: create FHS directories ---
 
 echo ""
 echo "==> Creating directories..."
+
+if run_cmd test -d "${CONFIG_DIR}"; then
+    echo "Cleaning configuration directory: ${CONFIG_DIR}"
+    run_cmd rm -rf "${CONFIG_DIR}"
+fi
 
 run_cmd mkdir -p "${CONFIG_DIR}"
 run_cmd mkdir -p "${DATA_DIR}/boards"
@@ -132,42 +164,10 @@ echo "  ${DATA_DIR}/dtbs"
 echo ""
 echo "==> Checking configuration..."
 
-if run_cmd test -f "${CONFIG_FILE}"; then
-    echo "Configuration file already exists: ${CONFIG_FILE}"
-    echo "Skipping config generation."
-else
-    echo "Generating default configuration: ${CONFIG_FILE}"
-    run_cmd tee "${CONFIG_FILE}" >/dev/null <<'CONF'
-listen_addr = "0.0.0.0:8080"
-data_dir = "/var/lib/ostool-server"
-board_dir = "/var/lib/ostool-server/boards"
-dtb_dir = "/var/lib/ostool-server/dtbs"
-
-[lease]
-default_ttl_secs = 900
-max_ttl_secs = 3600
-gc_interval_secs = 30
-
-[network]
-interface = ""
-
-[tftp]
-provider = "system_tftpd_hpa"
-
-[tftp.config]
-enabled = true
-root_dir = "/srv/tftp"
-config_path = "/etc/default/tftpd-hpa"
-service_name = "tftpd-hpa"
-username = "tftp"
-address = ":69"
-options = "-l -s -c"
-manage_config = false
-reconcile_on_start = true
-CONF
-    echo "Default configuration written."
-    echo "Please review and edit: ${CONFIG_FILE}"
-fi
+echo "Generating default configuration: ${CONFIG_FILE}"
+run_cmd "${SYSTEM_BIN_PATH}" --config "${CONFIG_FILE}" --write-default-config
+echo "Default configuration written."
+echo "Please review and edit: ${CONFIG_FILE}"
 
 # --- step 6: install systemd service ---
 
@@ -176,8 +176,8 @@ echo "==> Installing systemd service..."
 
 SYSTEMD_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
 
-# Replace __BINDIR__ placeholder with actual binary path
-sed "s|__BINDIR__|${BINDIR}|g" "${UNIT_FILE}" | run_cmd tee "${SYSTEMD_UNIT}" >/dev/null
+# Replace __BIN_PATH__ placeholder with actual binary path
+render_unit_file "${SYSTEM_BIN_PATH}" | run_cmd tee "${SYSTEMD_UNIT}" >/dev/null
 
 run_cmd systemctl daemon-reload
 run_cmd systemctl enable "${SERVICE_NAME}"
@@ -185,9 +185,24 @@ run_cmd systemctl enable "${SERVICE_NAME}"
 echo "Service installed and enabled."
 
 if prompt_yes_no "Start ${SERVICE_NAME} now?" "Y"; then
-    run_cmd systemctl start "${SERVICE_NAME}"
-    sleep 1
-    run_cmd systemctl status "${SERVICE_NAME}" --no-pager || true
+    run_cmd systemctl reset-failed "${SERVICE_NAME}" || true
+    if run_cmd systemctl start "${SERVICE_NAME}"; then
+        sleep 2
+        if run_cmd systemctl is-active --quiet "${SERVICE_NAME}"; then
+            run_cmd systemctl status "${SERVICE_NAME}" --no-pager || true
+        else
+            echo "Failed to bring ${SERVICE_NAME} to an active state."
+            run_cmd systemctl status "${SERVICE_NAME}" --no-pager || true
+            echo "Recent logs:"
+            run_cmd journalctl -u "${SERVICE_NAME}" -n 20 --no-pager || true
+            exit 1
+        fi
+    else
+        echo "Failed to start ${SERVICE_NAME}."
+        echo "Recent logs:"
+        run_cmd journalctl -u "${SERVICE_NAME}" -n 20 --no-pager || true
+        exit 1
+    fi
 else
     echo "You can start it later with: systemctl start ${SERVICE_NAME}"
 fi

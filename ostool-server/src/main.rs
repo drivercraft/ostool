@@ -13,6 +13,8 @@ use ostool_server::{
 struct Cli {
     #[arg(short, long, default_value = ".ostool-server.toml")]
     config: PathBuf,
+    #[arg(long, help = "Write the default config to --config and exit")]
+    write_default_config: bool,
 }
 
 #[tokio::main]
@@ -20,6 +22,11 @@ async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     let cli = Cli::parse();
+    if cli.write_default_config {
+        ServerConfig::write_default(&cli.config).await?;
+        return Ok(());
+    }
+
     let config = ServerConfig::load_or_create(&cli.config).await?;
     let tftp_manager: Arc<dyn TftpManager> = match &config.tftp {
         ostool_server::TftpConfig::Builtin(cfg) => Arc::new(BuiltinTftpManager::new(cfg.clone())),

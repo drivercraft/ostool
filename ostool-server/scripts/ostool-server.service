@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=__BINDIR__/ostool-server --config /etc/ostool-server/config.toml
+ExecStart=__BIN_PATH__ --config /etc/ostool-server/config.toml
 Restart=on-failure
 RestartSec=5
 WorkingDirectory=/var/lib/ostool-server
