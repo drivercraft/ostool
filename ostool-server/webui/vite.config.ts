@@ -3,6 +3,8 @@ import { fileURLToPath, URL } from "node:url";
 import vue from "@vitejs/plugin-vue";
 import { defineConfig } from "vite";
 
+const outDir = process.env.OSTOOL_SERVER_WEB_DIST_DIR ?? "../web/dist";
+
 export default defineConfig({
   base: "/admin/",
   plugins: [vue()],
@@ -12,7 +14,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: "../web/dist",
+    outDir,
     emptyOutDir: true,
   },
   test: {

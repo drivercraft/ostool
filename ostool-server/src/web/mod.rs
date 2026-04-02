@@ -8,7 +8,7 @@ use mime_guess::from_path;
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
-#[folder = "web/dist"]
+#[folder = "$OSTOOL_SERVER_WEB_DIST_DIR"]
 struct WebUiAssets;
 
 pub async fn serve_admin_index() -> Response {
