@@ -145,7 +145,22 @@ else
     echo "No existing ${SERVICE_NAME} service found."
 fi
 
-# --- step 4: cargo install ---
+# --- step 4: clean previous configuration ---
+
+echo ""
+echo "==> Cleaning previous configuration..."
+
+if run_cmd test -d "${CONFIG_DIR}"; then
+    echo "Removing existing configuration directory: ${CONFIG_DIR}"
+    run_cmd rm -rf "${CONFIG_DIR}"
+else
+    echo "No existing configuration directory found."
+fi
+
+run_cmd mkdir -p "${CONFIG_DIR}"
+echo "Prepared configuration directory: ${CONFIG_DIR}"
+
+# --- step 5: cargo install ---
 
 echo ""
 echo "==> Installing ostool-server..."
@@ -178,15 +193,10 @@ run_cmd mkdir -p "${SYSTEM_BIN_DIR}"
 run_cmd install -m 755 "${BIN_SOURCE}" "${SYSTEM_BIN_PATH}"
 echo "Installed system binary to: ${SYSTEM_BIN_PATH}"
 
-# --- step 5: create FHS directories ---
+# --- step 6: create FHS directories ---
 
 echo ""
 echo "==> Creating directories..."
-
-if run_cmd test -d "${CONFIG_DIR}"; then
-    echo "Cleaning configuration directory: ${CONFIG_DIR}"
-    run_cmd rm -rf "${CONFIG_DIR}"
-fi
 
 run_cmd mkdir -p "${CONFIG_DIR}"
 run_cmd mkdir -p "${DATA_DIR}/boards"
@@ -197,7 +207,7 @@ echo "  ${CONFIG_DIR}"
 echo "  ${DATA_DIR}/boards"
 echo "  ${DATA_DIR}/dtbs"
 
-# --- step 6: generate default config ---
+# --- step 7: generate default config ---
 
 echo ""
 echo "==> Checking configuration..."
@@ -208,7 +218,7 @@ else
     echo "Configuration file will be created automatically on first start: ${CONFIG_FILE}"
 fi
 
-# --- step 7: install systemd service ---
+# --- step 8: install systemd service ---
 
 echo ""
 echo "==> Installing systemd service..."
