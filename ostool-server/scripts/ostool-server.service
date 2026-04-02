@@ -4,12 +4,13 @@ After=network.target
 
 [Service]
 Type=simple
+User=root
+Group=root
 ExecStart=__BIN_PATH__ --config /etc/ostool-server/config.toml
 Restart=on-failure
 RestartSec=5
 WorkingDirectory=/var/lib/ostool-server
 
-ReadWritePaths=/etc/ostool-server /var/lib/ostool-server /srv/tftp
 ProtectHome=true
 PrivateTmp=true
 
