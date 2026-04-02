@@ -84,14 +84,16 @@ fn copy_dir_all(source: &Path, target: &Path) {
         .unwrap_or_else(|err| panic!("failed to read directory {}: {err}", source.display()));
 
     for entry in entries {
-        let entry = entry.unwrap_or_else(|err| {
-            panic!("failed to read entry in {}: {err}", source.display())
-        });
+        let entry = entry
+            .unwrap_or_else(|err| panic!("failed to read entry in {}: {err}", source.display()));
         let file_name = entry.file_name();
         let path = entry.path();
         let destination = target.join(&file_name);
         let file_type = entry.file_type().unwrap_or_else(|err| {
-            panic!("failed to determine file type for {}: {err}", path.display())
+            panic!(
+                "failed to determine file type for {}: {err}",
+                path.display()
+            )
         });
 
         if should_skip(&file_name) {
@@ -119,11 +121,7 @@ fn should_skip(file_name: &std::ffi::OsStr) -> bool {
     )
 }
 
-fn run_pnpm(
-    work_dir: &Path,
-    args: &[&str],
-    extra_env: Option<(&str, &std::ffi::OsStr)>,
-) {
+fn run_pnpm(work_dir: &Path, args: &[&str], extra_env: Option<(&str, &std::ffi::OsStr)>) {
     let mut command = Command::new("pnpm");
     command
         .arg("--dir")
@@ -137,14 +135,13 @@ fn run_pnpm(
         command.env(key, value);
     }
 
-    let status = command.status()
-        .unwrap_or_else(|err| {
-            panic!(
-                "failed to run `pnpm --dir {} {}`: {err}",
-                work_dir.display(),
-                args.join(" ")
-            )
-        });
+    let status = command.status().unwrap_or_else(|err| {
+        panic!(
+            "failed to run `pnpm --dir {} {}`: {err}",
+            work_dir.display(),
+            args.join(" ")
+        )
+    });
 
     if !status.success() {
         panic!(
