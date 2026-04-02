@@ -35,7 +35,7 @@ use theme::Theme;
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MIN_TERMINAL_WIDTH: u16 = 72;
-const MIN_TERMINAL_HEIGHT: u16 = 21;
+const MIN_TERMINAL_HEIGHT: u16 = 24;
 
 pub fn run_tui(app_state: AppState) -> anyhow::Result<AppState> {
     let mut terminal = setup_terminal()?;
@@ -1045,33 +1045,23 @@ impl TuiApp {
             self.ui.mode = AppMode::Browse;
         }
 
+        // Vertical layout: Header | Navigation | Detail | Editor | Footer
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
-                Constraint::Min(0),
-                Constraint::Length(3),
+                Constraint::Length(2),     // Header (compact)
+                Constraint::Max(14),     // Navigation (scrollable list)
+                Constraint::Min(8),      // Detail (full info display)
+                Constraint::Length(3),    // Editor / Action bar
+                Constraint::Length(3),    // Footer (shortcuts)
             ])
             .split(area);
-        let header = layout[0];
-        let body = layout[1];
-        let footer = layout[2];
 
-        self.render_header(frame, header);
-        let body_chunks = if body.width < 80 || body.height < 24 {
-            Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-                .split(body)
-        } else {
-            Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
-                .split(body)
-        };
-        self.render_navigation(frame, body_chunks[0]);
-        self.render_detail(frame, body_chunks[1]);
-        self.render_footer(frame, footer);
+        self.render_header(frame, layout[0]);
+        self.render_navigation(frame, layout[1]);
+        self.render_detail(frame, layout[2]);
+        self.render_editor_or_action(frame, layout[3]);
+        self.render_footer(frame, layout[4]);
 
         if self.has_modal() {
             self.render_modal(frame);
@@ -1083,7 +1073,7 @@ impl TuiApp {
         frame.render_widget(Clear, area);
         let paragraph = Paragraph::new(Text::from(vec![
             Line::from("Terminal is too small for jkconfig."),
-            Line::from("Minimum size: 72 columns x 20 rows."),
+            Line::from("Minimum size: 72 columns x 24 rows."),
             Line::from("Resize the terminal or press q / Esc to quit."),
         ]))
         .alignment(Alignment::Center)
@@ -1099,33 +1089,24 @@ impl TuiApp {
     fn render_header(&self, frame: &mut Frame, area: Rect) {
         let title = self.state.document.title();
         let dirty = if self.state.needs_save {
-            "modified"
+            "*"
         } else {
-            "clean"
-        };
-        let mode = match self.ui.mode {
-            AppMode::Browse => "browse",
-            AppMode::Modal => "modal",
-            AppMode::ConfirmSave => "confirm-save",
-            AppMode::ConfirmQuit => "confirm-quit",
-            AppMode::TooSmall => "too-small",
+            ""
         };
         let text = Line::from(vec![
             Span::styled(" JKConfig ", self.ui.theme.accent()),
+            Span::styled(format!("{title}"), self.ui.theme.text().add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            Span::styled(self.state.current_path_string(), self.ui.theme.muted()),
             Span::raw("  "),
             Span::styled(
-                title.to_string(),
-                self.ui.theme.text().add_modifier(Modifier::BOLD),
+                if dirty.is_empty() { "".into() } else { format!("{dirty}") },
+                if dirty.is_empty() {
+                    self.ui.theme.muted()
+                } else {
+                    Style::default().fg(self.ui.theme.error)
+                },
             ),
-            Span::raw("  "),
-            Span::styled(
-                format!("path: {}", self.state.current_path_string()),
-                self.ui.theme.muted(),
-            ),
-            Span::raw("  "),
-            Span::styled(format!("state: {dirty}"), self.ui.theme.muted()),
-            Span::raw("  "),
-            Span::styled(format!("mode: {mode}"), self.ui.theme.muted()),
         ]);
         frame.render_widget(
             Paragraph::new(text).block(
@@ -1211,21 +1192,6 @@ impl TuiApp {
     }
 
     fn render_detail(&mut self, frame: &mut Frame, area: Rect) {
-        let Some(element) = self.state.current().cloned() else {
-            return;
-        };
-
-        let show_inline = self.inline_supported();
-        let constraints = if show_inline {
-            vec![Constraint::Min(6), Constraint::Length(5)]
-        } else {
-            vec![Constraint::Min(6), Constraint::Length(3)]
-        };
-        let detail_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(constraints)
-            .split(area);
-
         let detail_text = self.state.selected_detail_text();
         frame.render_widget(
             Paragraph::new(detail_text)
@@ -1237,11 +1203,17 @@ impl TuiApp {
                         .borders(Borders::ALL)
                         .border_style(self.ui.theme.passive_border()),
                 ),
-            detail_chunks[0],
+            area,
         );
+    }
 
-        let editor_area = detail_chunks[1];
-        match &element {
+    fn render_editor_or_action(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(element) = self.state.current() else {
+            return;
+        };
+
+        let show_inline = self.inline_supported();
+        match element {
             ElementType::Item(item)
                 if matches!(
                     item.item_type,
@@ -1255,20 +1227,20 @@ impl TuiApp {
                 let (text, cursor_offset, error) = if let Some(editor) = editor {
                     let (visible, cursor_offset) = editor
                         .buffer
-                        .visible_text_and_cursor(editor_area.width.saturating_sub(2) as usize);
+                        .visible_text_and_cursor(area.width.saturating_sub(2) as usize);
                     (visible, Some(cursor_offset), editor.error.clone())
                 } else {
-                    let initial = AppState::element_summary(&element);
+                    let initial = AppState::element_summary(element);
                     let cursor_offset = initial.len() as u16;
                     (initial, None.or(Some(cursor_offset)), None)
                 };
 
-                let editor_layout = Layout::default()
+                let chunks = Layout::default()
                     .direction(Direction::Vertical)
-                    .constraints([Constraint::Length(3), Constraint::Length(2)])
-                    .split(editor_area);
-                let input_area = editor_layout[0];
-                let hint_area = editor_layout[1];
+                    .constraints([Constraint::Min(1), Constraint::Length(2)])
+                    .split(area);
+                let input_area = chunks[0];
+                let hint_area = chunks[1];
 
                 frame.render_widget(
                     Paragraph::new(text).block(
@@ -1306,53 +1278,32 @@ impl TuiApp {
                     ));
                 }
             }
-            ElementType::Item(item) => {
-                let text = match &item.item_type {
-                    ItemType::Boolean { .. } => {
-                        "Press Space or Enter to toggle this boolean value."
-                    }
-                    ItemType::Enum(_) => "Press Enter to choose a variant.",
-                    ItemType::Array(_) => "Press Enter to open the array editor.",
-                    ItemType::String { .. }
-                    | ItemType::Integer { .. }
-                    | ItemType::Number { .. } => "Press Enter to edit this value in a dialog.",
+            _ => {
+                let text = match element {
+                    ElementType::Item(item) => match &item.item_type {
+                        ItemType::Boolean { .. } => "Space toggle",
+                        ItemType::Enum(_) => "Enter choose variant",
+                        ItemType::Array(_) => "Enter open array editor",
+                        ItemType::String { .. } | ItemType::Integer { .. } | ItemType::Number { .. } => {
+                            "Enter edit in dialog"
+                        }
+                    },
+                    ElementType::Menu(_) => "Enter navigate  M toggle optional",
+                    ElementType::OneOf(_) => "Enter select  Tab switch variant",
                 };
                 frame.render_widget(
-                    Paragraph::new(text).block(
-                        Block::default()
-                            .title(" Editor ")
-                            .borders(Borders::ALL)
-                            .border_style(self.ui.theme.passive_border()),
-                    ),
-                    editor_area,
-                );
-            }
-            ElementType::Menu(_) => {
-                frame.render_widget(
-                    Paragraph::new(
-                        "Press Enter to enter this object. Press M to toggle optional objects.",
-                    )
+                    Paragraph::new(Line::from(vec![
+                        Span::styled(text, self.ui.theme.muted()),
+                        Span::raw("  "),
+                        Span::styled("? help", self.ui.theme.muted()),
+                    ]))
                     .block(
                         Block::default()
-                            .title(" Action ")
+                            .title(" Actions ")
                             .borders(Borders::ALL)
                             .border_style(self.ui.theme.passive_border()),
                     ),
-                    editor_area,
-                );
-            }
-            ElementType::OneOf(_) => {
-                frame.render_widget(
-                    Paragraph::new(
-                        "Press Enter to enter the selected variant or Tab to switch variants.",
-                    )
-                    .block(
-                        Block::default()
-                            .title(" Action ")
-                            .borders(Borders::ALL)
-                            .border_style(self.ui.theme.passive_border()),
-                    ),
-                    editor_area,
+                    area,
                 );
             }
         }
