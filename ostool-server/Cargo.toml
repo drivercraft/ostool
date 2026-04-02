@@ -11,6 +11,8 @@ readme = "../README.md"
 repository = "https://github.com/drivercraft/ostool"
 version = "0.1.0"
 
+exclude = ["webui/node_modules/*", "webui/dist/*"]
+
 [package.metadata.binstall]
 bin-dir = "{ name }-{ version }-{ target }/{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
@@ -21,33 +23,33 @@ name = "ostool-server"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = {workspace = true}
 async-trait = "0.1"
-anyhow = { workspace = true }
-axum = { version = "0.8", features = ["ws"] }
+axum = {version = "0.8", features = ["ws"]}
 base64 = "0.22"
-chrono = { version = "0.4.44", features = ["serde"] }
-clap = { workspace = true, features = ["derive"] }
-env_logger = { workspace = true }
+chrono = {version = "0.4.44", features = ["serde"]}
+clap = {workspace = true, features = ["derive"]}
+env_logger = {workspace = true}
 futures-util = "0.3"
-log = { workspace = true }
+log = {workspace = true}
 mime_guess = "2"
 network-interface = "2"
 nusb = "0.2.3"
 rust-embed = "8"
-schemars = { workspace = true, features = ["derive"] }
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
+schemars = {workspace = true, features = ["derive"]}
+serde = {workspace = true, features = ["derive"]}
+serde_json = {workspace = true}
 serialport = "4.6"
 tftpd = "0.5"
-thiserror = { workspace = true }
-tokio = { workspace = true, features = ["full"] }
-tokio-modbus = { version = "0.17.0", default-features = false, features = ["rtu"] }
+thiserror = {workspace = true}
+tokio = {workspace = true, features = ["full"]}
+tokio-modbus = {version = "0.17.0", default-features = false, features = ["rtu"]}
 tokio-serial = "5.4"
-toml = { workspace = true }
-tower-http = { version = "0.6", features = ["fs"] }
-uuid = { version = "1", features = ["serde", "v4"] }
+toml = {workspace = true}
+tower-http = {version = "0.6", features = ["fs"]}
+uuid = {version = "1", features = ["serde", "v4"]}
 
 [dev-dependencies]
 tempfile = "3"
-tokio-modbus = { version = "0.17.0", default-features = false, features = ["rtu", "rtu-server"] }
-tower = { version = "0.5", features = ["util"] }
+tokio-modbus = {version = "0.17.0", default-features = false, features = ["rtu", "rtu-server"]}
+tower = {version = "0.5", features = ["util"]}
