@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/drivercraft/ostool/compare/ostool-server-v0.1.1...ostool-server-v0.1.2) - 2026-04-02
+
+### Added
+
+- add board connect ([#76](https://github.com/drivercraft/ostool/pull/76))
+
+### Fixed
+
+- improve script robustness and update service unit template handling ([#75](https://github.com/drivercraft/ostool/pull/75))
+- improve configuration cleanup process in installation script ([#74](https://github.com/drivercraft/ostool/pull/74))
+- update README and service configuration for installation clarity ([#72](https://github.com/drivercraft/ostool/pull/72))
+
 ## [0.1.1](https://github.com/drivercraft/ostool/compare/ostool-server-v0.1.0...ostool-server-v0.1.1) - 2026-04-02
 
 ### Added
