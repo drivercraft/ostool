@@ -102,7 +102,6 @@ Restart=on-failure
 RestartSec=5
 WorkingDirectory=/var/lib/ostool-server
 
-ProtectHome=true
 PrivateTmp=true
 
 StandardOutput=journal
