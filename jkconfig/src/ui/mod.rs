@@ -235,7 +235,7 @@ impl TuiApp {
         }
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('s')) {
-            self.should_exit = true;
+            self.open_confirm_save();
             return Ok(());
         }
 
@@ -818,6 +818,21 @@ impl TuiApp {
         }));
     }
 
+    fn open_validation_modal(&mut self, missing: &[String]) {
+        self.set_status(
+            MessageLevel::Error,
+            format!("Cannot save: {} required field(s) missing.", missing.len()),
+        );
+        self.open_modal(ModalState::Help(HelpModal {
+            title: "Cannot Save".into(),
+            body: format!(
+                "Required fields are missing:\n\n- {}\n\nFill these fields and save again.",
+                missing.join("\n- ")
+            ),
+            scroll: 0,
+        }));
+    }
+
     fn open_oneof_modal(&mut self) {
         let Some(path) = self.state.selected_path() else {
             return;
@@ -973,6 +988,12 @@ impl TuiApp {
     fn apply_confirm_action(&mut self, action: ConfirmAction) -> anyhow::Result<()> {
         match action {
             ConfirmAction::SaveAndExit => {
+                let missing = self.state.missing_required_paths();
+                if !missing.is_empty() {
+                    self.close_top_modal();
+                    self.open_validation_modal(&missing);
+                    return Ok(());
+                }
                 self.should_exit = true;
             }
             ConfirmAction::DiscardAndExit => {
@@ -1377,7 +1398,7 @@ impl TuiApp {
                         ]))
                     })
                     .collect::<Vec<_>>();
-                let mut state = modal.state.clone();
+                let mut state = modal.state;
                 frame.render_stateful_widget(
                     List::new(items).highlight_style(self.ui.theme.selected_row()),
                     list_area,
@@ -1447,7 +1468,7 @@ impl TuiApp {
                         ]))
                     })
                     .collect::<Vec<_>>();
-                let mut state = modal.state.clone();
+                let mut state = modal.state;
                 frame.render_stateful_widget(
                     List::new(items).highlight_style(self.ui.theme.selected_row()),
                     list_area,
@@ -1549,7 +1570,7 @@ impl TuiApp {
                         .map(|(idx, value)| ListItem::new(Line::from(format!("[{idx}] {value}"))))
                         .collect()
                 };
-                let mut state = modal.state.clone();
+                let mut state = modal.state;
                 frame.render_stateful_widget(
                     List::new(items).highlight_style(self.ui.theme.selected_row()),
                     list_area,
@@ -1576,7 +1597,7 @@ impl TuiApp {
                     .iter()
                     .map(|option| ListItem::new(Line::from(option.clone())))
                     .collect::<Vec<_>>();
-                let mut state = modal.state.clone();
+                let mut state = modal.state;
                 frame.render_stateful_widget(
                     List::new(items)
                         .highlight_style(self.ui.theme.selected_row())

@@ -45,6 +45,7 @@ pub async fn run<C: JsonSchema + DeserializeOwned>(
     if !app.needs_save {
         return Ok(None);
     }
+    app.validate_before_save()?;
     let val = app.document.as_json();
 
     let c = match ext.as_str() {

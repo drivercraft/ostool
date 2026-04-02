@@ -319,9 +319,28 @@ impl AppState {
 
     pub fn persist_if_needed(&mut self) -> anyhow::Result<()> {
         if self.needs_save {
+            self.validate_before_save()?;
             self.document.persist()?;
         }
         Ok(())
+    }
+
+    pub fn missing_required_paths(&self) -> Vec<String> {
+        let mut missing = Vec::new();
+        collect_missing_required_element(&self.document.root.menu, &mut missing);
+        missing
+    }
+
+    pub fn validate_before_save(&self) -> anyhow::Result<()> {
+        let missing = self.missing_required_paths();
+        if missing.is_empty() {
+            return Ok(());
+        }
+
+        bail!(
+            "Cannot save config; required fields are missing:\n- {}",
+            missing.join("\n- ")
+        );
     }
 
     pub fn find_selected_hook(&self) -> Option<ElementHook> {
@@ -810,6 +829,41 @@ impl AppState {
     }
 }
 
+fn collect_missing_required_element(element: &ElementType, missing: &mut Vec<String>) {
+    match element {
+        ElementType::Menu(menu) => {
+            if !menu.is_required && !menu.is_set {
+                return;
+            }
+            for child in &menu.children {
+                collect_missing_required_element(child, missing);
+            }
+        }
+        ElementType::OneOf(one_of) => {
+            if let Some(selected) = one_of.selected() {
+                collect_missing_required_element(selected, missing);
+            } else if one_of.is_required {
+                missing.push(one_of.key());
+            }
+        }
+        ElementType::Item(item) => match &item.item_type {
+            ItemType::String { value, .. } if item.base.is_required && value.is_none() => {
+                missing.push(item.base.key());
+            }
+            ItemType::Number { value, .. } if item.base.is_required && value.is_none() => {
+                missing.push(item.base.key());
+            }
+            ItemType::Integer { value, .. } if item.base.is_required && value.is_none() => {
+                missing.push(item.base.key());
+            }
+            ItemType::Enum(enum_item) if item.base.is_required && enum_item.value.is_none() => {
+                missing.push(item.base.key());
+            }
+            _ => {}
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -862,5 +916,87 @@ mod tests {
         let mut app = AppState::new(document);
         let err = app.clear_optional("name").unwrap_err().to_string();
         assert!(err.contains("required"));
+    }
+
+    #[test]
+    fn missing_required_paths_reports_missing_required_string() {
+        let document = ConfigDocument {
+            root: MenuRoot {
+                schema_version: "test".into(),
+                title: "root".into(),
+                menu: ElementType::Menu(Menu {
+                    base: ElementBase {
+                        path: PathBuf::new(),
+                        title: "root".into(),
+                        help: None,
+                        is_required: true,
+                        struct_name: "Root".into(),
+                    },
+                    children: vec![ElementType::Item(Item {
+                        base: ElementBase {
+                            path: PathBuf::from("system").join("package"),
+                            title: "package".into(),
+                            help: None,
+                            is_required: true,
+                            struct_name: "string".into(),
+                        },
+                        item_type: ItemType::String {
+                            value: None,
+                            default: None,
+                        },
+                    })],
+                    is_set: true,
+                }),
+            },
+            config: PathBuf::from("config.toml"),
+        };
+        let app = AppState::new(document);
+        assert_eq!(app.missing_required_paths(), vec!["system.package"]);
+    }
+
+    #[test]
+    fn missing_required_paths_skips_unset_optional_menu() {
+        let document = ConfigDocument {
+            root: MenuRoot {
+                schema_version: "test".into(),
+                title: "root".into(),
+                menu: ElementType::Menu(Menu {
+                    base: ElementBase {
+                        path: PathBuf::new(),
+                        title: "root".into(),
+                        help: None,
+                        is_required: true,
+                        struct_name: "Root".into(),
+                    },
+                    children: vec![ElementType::Menu(Menu {
+                        base: ElementBase {
+                            path: PathBuf::from("optional"),
+                            title: "optional".into(),
+                            help: None,
+                            is_required: false,
+                            struct_name: "Optional".into(),
+                        },
+                        children: vec![ElementType::Item(Item {
+                            base: ElementBase {
+                                path: PathBuf::from("optional").join("package"),
+                                title: "package".into(),
+                                help: None,
+                                is_required: true,
+                                struct_name: "string".into(),
+                            },
+                            item_type: ItemType::String {
+                                value: None,
+                                default: None,
+                            },
+                        })],
+                        is_set: false,
+                    })],
+                    is_set: true,
+                }),
+            },
+            config: PathBuf::from("config.toml"),
+        };
+        let app = AppState::new(document);
+        assert!(app.missing_required_paths().is_empty());
     }
 }

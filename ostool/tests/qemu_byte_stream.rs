@@ -251,29 +251,27 @@ fn run_case(success_patterns: &[&str], fail_patterns: &[&str]) -> Result<Option<
                     }
                 }
 
-                if let Some(outcome) = matcher.outcome().cloned() {
-                    if let Some(deadline) = matcher.tail_deadline()
-                        && Instant::now() >= deadline
-                    {
-                        let mut outcome = outcome;
-                        outcome.tail_bytes = tail_bytes;
-                        guard.shutdown();
-                        return Ok(Some(outcome));
-                    }
+                if let Some(outcome) = matcher.outcome().cloned()
+                    && let Some(deadline) = matcher.tail_deadline()
+                    && Instant::now() >= deadline
+                {
+                    let mut outcome = outcome;
+                    outcome.tail_bytes = tail_bytes;
+                    guard.shutdown();
+                    return Ok(Some(outcome));
                 }
             }
             Err(err)
                 if err.kind() == ErrorKind::TimedOut || err.kind() == ErrorKind::WouldBlock =>
             {
-                if let Some(outcome) = matcher.outcome().cloned() {
-                    if let Some(deadline) = matcher.tail_deadline()
-                        && Instant::now() >= deadline
-                    {
-                        let mut outcome = outcome;
-                        outcome.tail_bytes = tail_bytes;
-                        guard.shutdown();
-                        return Ok(Some(outcome));
-                    }
+                if let Some(outcome) = matcher.outcome().cloned()
+                    && let Some(deadline) = matcher.tail_deadline()
+                    && Instant::now() >= deadline
+                {
+                    let mut outcome = outcome;
+                    outcome.tail_bytes = tail_bytes;
+                    guard.shutdown();
+                    return Ok(Some(outcome));
                 }
             }
             Err(err) => return Err(err.into()),
