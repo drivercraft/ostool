@@ -14,7 +14,7 @@ pub fn calculate_sha1(data: &[u8]) -> String {
     use sha1::{Digest, Sha1};
     let mut hasher = Sha1::new();
     hasher.update(data);
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Calculate CRC32 hash for data

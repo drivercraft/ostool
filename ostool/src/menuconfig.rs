@@ -14,6 +14,7 @@ use clap::ValueEnum;
 use log::info;
 use tokio::fs;
 
+use crate::build::config::BuildConfig;
 use crate::Tool;
 use crate::run::qemu::QemuConfig;
 use crate::run::uboot::UbootConfig;
@@ -59,7 +60,18 @@ impl MenuConfigHandler {
     }
 
     async fn handle_default_config(tool: &mut Tool) -> Result<()> {
-        tool.prepare_build_config(None, true).await?;
+        let config_path = tool.resolve_build_config_path(None);
+        tool.ctx_mut().build_config_path = Some(config_path.clone());
+
+        let config = jkconfig::run::<BuildConfig>(config_path.clone(), true, &tool.ui_hocks())
+            .await
+            .with_context(|| format!("failed to load build config: {}", config_path.display()))?;
+
+        if let Some(config) = config {
+            tool.ctx_mut().build_config = Some(config);
+        } else {
+            println!("\n未更改构建配置");
+        }
 
         Ok(())
     }

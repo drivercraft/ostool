@@ -42,7 +42,10 @@ pub(crate) fn update_cache(source: Source, prebuilt_dir: &Path) -> Result<(), Er
     let data = download_url(&url)?;
 
     // Validate the hash.
-    let actual_hash = format!("{:x}", Sha256::digest(&data));
+    let actual_hash: String = Sha256::digest(&data)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     if actual_hash != source.sha256 {
         return Err(Error::HashMismatch {
             actual: actual_hash,
