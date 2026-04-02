@@ -68,6 +68,7 @@ struct BoardArgs {
 #[derive(Subcommand, Debug)]
 enum BoardSubCommands {
     Ls(BoardServerArgs),
+    Connect(BoardConnectArgs),
     Run(BoardRunArgs),
     Config,
 }
@@ -98,6 +99,15 @@ struct BoardRunArgs {
     /// Path to the board runner configuration file, defaults to `pwd/.board.toml`
     #[arg(long = "board-config")]
     board_config: Option<PathBuf>,
+    #[command(flatten)]
+    server: BoardServerArgs,
+}
+
+#[derive(Args, Debug)]
+struct BoardConnectArgs {
+    /// Board type to allocate and connect
+    #[arg(short = 'b', long)]
+    board_type: String,
     #[command(flatten)]
     server: BoardServerArgs,
 }
@@ -156,6 +166,12 @@ async fn try_main() -> Result<()> {
                 let (server, port) =
                     global_config.resolve_server(server.server.as_deref(), server.port);
                 board::list_boards(&server, port).await?;
+            }
+            BoardSubCommands::Connect(args) => {
+                let global_config = load_board_global_config_with_notice()?;
+                let (server, port) =
+                    global_config.resolve_server(args.server.server.as_deref(), args.server.port);
+                board::connect_board(&server, port, &args.board_type).await?;
             }
             BoardSubCommands::Run(args) => {
                 let global_config = load_board_global_config_with_notice()?;
@@ -398,6 +414,56 @@ mod tests {
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_board_connect_with_short_board_type() {
+        let cli = Cli::try_parse_from(["ostool", "board", "connect", "-b", "rk3568"]).unwrap();
+
+        match cli.command {
+            SubCommands::Board(BoardArgs {
+                command: BoardSubCommands::Connect(args),
+            }) => {
+                assert_eq!(args.board_type, "rk3568");
+                assert!(args.server.server.is_none());
+                assert!(args.server.port.is_none());
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_board_connect_with_long_args() {
+        let cli = Cli::try_parse_from([
+            "ostool",
+            "board",
+            "connect",
+            "--board-type",
+            "rk3568",
+            "--server",
+            "10.0.0.2",
+            "--port",
+            "9000",
+        ])
+        .unwrap();
+
+        match cli.command {
+            SubCommands::Board(BoardArgs {
+                command: BoardSubCommands::Connect(args),
+            }) => {
+                assert_eq!(args.board_type, "rk3568");
+                assert_eq!(args.server.server.as_deref(), Some("10.0.0.2"));
+                assert_eq!(args.server.port, Some(9000));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_board_connect_requires_board_type() {
+        let err = Cli::try_parse_from(["ostool", "board", "connect"]).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("--board-type"));
     }
 
     #[test]

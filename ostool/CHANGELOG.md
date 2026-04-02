@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- add `ostool board connect -b <board-type>` for lightweight interactive board shell access via `ostool-server`
+
 ## [0.12.1](https://github.com/drivercraft/ostool/compare/ostool-v0.12.0...ostool-v0.12.1) - 2026-04-02
 
 ### Added

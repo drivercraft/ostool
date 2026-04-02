@@ -25,6 +25,10 @@ pub async fn list_boards(server: &str, port: u16) -> anyhow::Result<()> {
 }
 
 pub async fn run_board(server: &str, port: u16, board_type: &str) -> anyhow::Result<()> {
+    connect_board(server, port, board_type).await
+}
+
+pub async fn connect_board(server: &str, port: u16, board_type: &str) -> anyhow::Result<()> {
     let client = BoardServerClient::new(server, port)?;
     let session = BoardSession::acquire(client.clone(), board_type)
         .await
