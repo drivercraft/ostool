@@ -18,7 +18,7 @@ jobs:
     - uses: actions/checkout@v6.0.2
     - uses: actions/setup-node@v6.3.0
       with:
-        node-version: 22
+        node-version: 24
         cache: pnpm
         cache-dependency-path: ostool-server/webui/pnpm-lock.yaml
     - uses: pnpm/action-setup@v5.0.0

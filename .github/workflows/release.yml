@@ -82,7 +82,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6.3.0
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           cache-dependency-path: ostool-server/webui/pnpm-lock.yaml
       - name: Setup pnpm
