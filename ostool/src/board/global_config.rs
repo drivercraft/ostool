@@ -10,18 +10,12 @@ pub const DEFAULT_BOARD_SERVER_IP: &str = "localhost";
 pub const DEFAULT_BOARD_SERVER_PORT: u16 = 2999;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default)]
 pub struct BoardGlobalConfigFile {
     #[serde(default)]
     pub board: BoardGlobalConfig,
 }
 
-impl Default for BoardGlobalConfigFile {
-    fn default() -> Self {
-        Self {
-            board: BoardGlobalConfig::default(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BoardGlobalConfig {
