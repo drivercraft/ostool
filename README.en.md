@@ -126,6 +126,15 @@ ostool run uboot
 
 # Run with specific U-Boot config file
 ostool run uboot --uboot-config my-uboot.toml
+
+# Configure the remote board server
+ostool board config
+
+# List remote board types
+ostool board ls
+
+# Run on a remote board
+ostool board run
 ```
 
 > Exit shortcut: In the serial terminal (e.g., `ostool run uboot`), press `Ctrl+A` then `x` to quit; the tool captures this sequence and exits gracefully instead of sending it to the target device.
@@ -258,6 +267,24 @@ Configuration files support environment variable substitution using `${env:VAR_N
 serial = "${env:SERIAL_DEVICE:-/dev/ttyUSB0}"
 baud_rate = "${env:BAUD_RATE:-115200}"
 ```
+
+### Board Global Config (`~/.ostool/config.toml`)
+
+`ostool board` commands read a user-level global config. The first board command will create it automatically when missing:
+
+```toml
+[board]
+server_ip = "localhost"
+port = 2999
+```
+
+Use the TUI editor to update it:
+
+```bash
+ostool board config
+```
+
+Project-local `.board.toml` `server` / `port` fields still apply to `ostool board run`, with precedence lower than CLI flags and higher than the global config.
 
 ## 🛠️ Subproject Details
 

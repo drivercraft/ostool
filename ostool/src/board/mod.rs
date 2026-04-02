@@ -1,5 +1,7 @@
 pub mod client;
 pub mod config;
+pub mod config_tui;
+pub mod global_config;
 pub mod serial_stream;
 pub mod session;
 pub mod terminal;

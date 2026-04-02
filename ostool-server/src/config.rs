@@ -50,7 +50,7 @@ impl ServerConfig {
         ));
 
         Self {
-            listen_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
+            listen_addr: SocketAddr::from(([0, 0, 0, 0], 2999)),
             data_dir,
             board_dir,
             dtb_dir,
@@ -84,19 +84,6 @@ impl ServerConfig {
             }
             Err(err) => Err(err.into()),
         }
-    }
-
-    pub async fn write_default(path: &Path) -> anyhow::Result<Self> {
-        let mut config = Self::default_for_path(path);
-        config.normalize_paths(path)?;
-        config.sync_system_tftpd_hpa_config()?;
-        config.sync_network_defaults();
-        config.validate()?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).await?;
-        }
-        fs::write(path, toml::to_string_pretty(&config)?).await?;
-        Ok(config)
     }
 
     fn sync_system_tftpd_hpa_config(&mut self) -> anyhow::Result<()> {
@@ -409,7 +396,7 @@ mod tests {
         let config = ServerConfig::default();
         let encoded = toml::to_string_pretty(&config).unwrap();
         let decoded: ServerConfig = toml::from_str(&encoded).unwrap();
-        assert_eq!(decoded.listen_addr, SocketAddr::from(([0, 0, 0, 0], 8080)));
+        assert_eq!(decoded.listen_addr, SocketAddr::from(([0, 0, 0, 0], 2999)));
         assert_eq!(decoded.network.interface, "");
         assert!(decoded.dtb_dir.ends_with("dtbs"));
     }
@@ -418,7 +405,10 @@ mod tests {
     fn system_config_defaults_use_fhs_layout() {
         let config = ServerConfig::default_for_path(Path::new("/etc/ostool-server/config.toml"));
         assert_eq!(config.data_dir, PathBuf::from("/var/lib/ostool-server"));
-        assert_eq!(config.board_dir, PathBuf::from("/var/lib/ostool-server/boards"));
+        assert_eq!(
+            config.board_dir,
+            PathBuf::from("/var/lib/ostool-server/boards")
+        );
         assert_eq!(config.dtb_dir, PathBuf::from("/var/lib/ostool-server/dtbs"));
     }
 

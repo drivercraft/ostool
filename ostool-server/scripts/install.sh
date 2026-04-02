@@ -164,10 +164,11 @@ echo "  ${DATA_DIR}/dtbs"
 echo ""
 echo "==> Checking configuration..."
 
-echo "Generating default configuration: ${CONFIG_FILE}"
-run_cmd "${SYSTEM_BIN_PATH}" --config "${CONFIG_FILE}" --write-default-config
-echo "Default configuration written."
-echo "Please review and edit: ${CONFIG_FILE}"
+if run_cmd test -f "${CONFIG_FILE}"; then
+    echo "Configuration file already exists: ${CONFIG_FILE}"
+else
+    echo "Configuration file will be created automatically on first start: ${CONFIG_FILE}"
+fi
 
 # --- step 6: install systemd service ---
 

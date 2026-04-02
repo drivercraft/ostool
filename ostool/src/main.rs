@@ -7,7 +7,10 @@ use colored::Colorize as _;
 use log::info;
 use ostool::{
     Tool, ToolConfig, board,
-    board::{client::BoardServerClient, config::BoardRunConfig, session::BoardSession},
+    board::{
+        client::BoardServerClient, config::BoardRunConfig, config_tui::run_board_config_tui,
+        global_config::LoadedBoardGlobalConfig, session::BoardSession,
+    },
     build::{
         self, CargoQemuAppendArgs, CargoQemuOverrideArgs, CargoQemuRunnerArgs, CargoRunnerKind,
         CargoUbootRunnerArgs, cargo_builder::CargoBuilder,
@@ -48,14 +51,14 @@ enum SubCommands {
     },
 }
 
-#[derive(Args, Debug, Clone)]
-struct ServerArgs {
+#[derive(Args, Debug, Default, Clone)]
+struct BoardServerArgs {
     /// ostool-server host
-    #[arg(long, default_value = "127.0.0.1")]
-    server: String,
+    #[arg(long)]
+    server: Option<String>,
     /// ostool-server port
-    #[arg(long, default_value_t = 8080)]
-    port: u16,
+    #[arg(long)]
+    port: Option<u16>,
 }
 
 #[derive(Args, Debug)]
@@ -66,7 +69,9 @@ struct BoardArgs {
 
 #[derive(Subcommand, Debug)]
 enum BoardSubCommands {
-    Ls(ServerArgs),
+    Ls(BoardServerArgs),
+    Run(BoardRunArgs),
+    Config,
 }
 
 #[derive(Args, Debug)]
@@ -96,24 +101,13 @@ struct BoardRunArgs {
     #[arg(long = "board-config")]
     board_config: Option<PathBuf>,
     #[command(flatten)]
-    server: RunBoardServerArgs,
-}
-
-#[derive(Args, Debug, Default)]
-struct RunBoardServerArgs {
-    /// ostool-server host
-    #[arg(long)]
-    server: Option<String>,
-    /// ostool-server port
-    #[arg(long)]
-    port: Option<u16>,
+    server: BoardServerArgs,
 }
 
 #[derive(Subcommand, Debug)]
 enum RunSubCommands {
     Qemu(RunQemuCommand),
     Uboot(RunUbootCommand),
-    Board(BoardRunArgs),
 }
 
 #[derive(Args, Debug, Default)]
@@ -160,7 +154,58 @@ async fn try_main() -> Result<()> {
             let _ = env_logger::try_init();
             match args.command {
                 BoardSubCommands::Ls(server) => {
-                    board::list_boards(&server.server, server.port).await?;
+                    let global_config = load_board_global_config_with_notice()?;
+                    let (server, port) =
+                        global_config.resolve_server(server.server.as_deref(), server.port);
+                    board::list_boards(&server, port).await?;
+                }
+                BoardSubCommands::Run(args) => {
+                    let global_config = load_board_global_config_with_notice()?;
+                    let mut tool = init_tool(manifest.clone())?;
+                    let board_config =
+                        BoardRunConfig::load_or_create(&tool, args.board_config.clone()).await?;
+                    prepare_uboot_artifacts(&mut tool, args.config.clone()).await?;
+
+                    let (server, port) = board_config.resolve_server(
+                        args.server.server.as_deref(),
+                        args.server.port,
+                        &global_config.board,
+                    );
+                    let client = BoardServerClient::new(&server, port)?;
+                    let session =
+                        BoardSession::acquire(client.clone(), &board_config.board_type).await?;
+
+                    println!("Allocated board session:");
+                    println!("  board_type: {}", board_config.board_type);
+                    println!("  board_id: {}", session.info().board_id);
+                    println!("  session_id: {}", session.info().session_id);
+                    println!("  lease_expires_at: {}", session.info().lease_expires_at);
+                    println!("  boot_mode: {}", session.info().boot_mode);
+
+                    let run_result = match session.info().boot_mode.as_str() {
+                        "uboot" => {
+                            tool.run_uboot_remote(&board_config, client, session.info().clone())
+                                .await
+                        }
+                        other => Err(anyhow::anyhow!(
+                            "unsupported board boot mode `{other}`; only `uboot` is supported"
+                        )),
+                    };
+
+                    let release_result = session.release().await;
+                    match (run_result, release_result) {
+                        (Ok(()), Ok(())) => {}
+                        (Err(err), Ok(())) => return Err(err),
+                        (Ok(()), Err(err)) => return Err(err),
+                        (Err(run_err), Err(release_err)) => {
+                            return Err(run_err.context(format!(
+                                "additionally failed to release board session: {release_err:#}"
+                            )));
+                        }
+                    }
+                }
+                BoardSubCommands::Config => {
+                    run_board_config_tui()?;
                 }
             }
         }
@@ -169,47 +214,6 @@ async fn try_main() -> Result<()> {
             tool.build(config).await?;
         }
         SubCommands::Run { command } => match command {
-            RunSubCommands::Board(args) => {
-                let mut tool = init_tool(manifest.clone())?;
-                let board_config =
-                    BoardRunConfig::load_or_create(&tool, args.board_config.clone()).await?;
-                prepare_uboot_artifacts(&mut tool, args.config.clone()).await?;
-
-                let (server, port) =
-                    board_config.resolve_server(args.server.server.as_deref(), args.server.port);
-                let client = BoardServerClient::new(&server, port)?;
-                let session =
-                    BoardSession::acquire(client.clone(), &board_config.board_type).await?;
-
-                println!("Allocated board session:");
-                println!("  board_type: {}", board_config.board_type);
-                println!("  board_id: {}", session.info().board_id);
-                println!("  session_id: {}", session.info().session_id);
-                println!("  lease_expires_at: {}", session.info().lease_expires_at);
-                println!("  boot_mode: {}", session.info().boot_mode);
-
-                let run_result = match session.info().boot_mode.as_str() {
-                    "uboot" => {
-                        tool.run_uboot_remote(&board_config, client, session.info().clone())
-                            .await
-                    }
-                    other => Err(anyhow::anyhow!(
-                        "unsupported board boot mode `{other}`; only `uboot` is supported"
-                    )),
-                };
-
-                let release_result = session.release().await;
-                match (run_result, release_result) {
-                    (Ok(()), Ok(())) => {}
-                    (Err(err), Ok(())) => return Err(err),
-                    (Ok(()), Err(err)) => return Err(err),
-                    (Err(run_err), Err(release_err)) => {
-                        return Err(run_err.context(format!(
-                            "additionally failed to release board session: {release_err:#}"
-                        )));
-                    }
-                }
-            }
             RunSubCommands::Qemu(args) => {
                 let RunQemuCommand { config, qemu } = args;
                 let qemu_config = qemu.qemu_config.clone();
@@ -361,6 +365,14 @@ fn report_error(err: &anyhow::Error) {
     }
 }
 
+fn load_board_global_config_with_notice() -> Result<LoadedBoardGlobalConfig> {
+    let loaded = LoadedBoardGlobalConfig::load_or_create()?;
+    if loaded.created {
+        println!("Created default board config: {}", loaded.path.display());
+    }
+    Ok(loaded)
+}
+
 impl From<QemuArgs> for RunQemuArgs {
     fn from(value: QemuArgs) -> Self {
         RunQemuArgs {
@@ -384,7 +396,7 @@ impl From<UbootArgs> for RunUbootArgs {
 mod tests {
     use clap::Parser;
 
-    use super::{BoardArgs, BoardSubCommands, Cli, RunSubCommands, SubCommands};
+    use super::{BoardArgs, BoardSubCommands, Cli, SubCommands};
 
     #[test]
     fn parse_board_ls_with_server_args() {
@@ -397,21 +409,21 @@ mod tests {
             SubCommands::Board(BoardArgs {
                 command: BoardSubCommands::Ls(server),
             }) => {
-                assert_eq!(server.server, "10.0.0.2");
-                assert_eq!(server.port, 9000);
+                assert_eq!(server.server.as_deref(), Some("10.0.0.2"));
+                assert_eq!(server.port, Some(9000));
             }
             other => panic!("unexpected command: {other:?}"),
         }
     }
 
     #[test]
-    fn parse_run_board_with_board_type() {
-        let cli = Cli::try_parse_from(["ostool", "run", "board"]).unwrap();
+    fn parse_board_run_with_board_type() {
+        let cli = Cli::try_parse_from(["ostool", "board", "run"]).unwrap();
 
         match cli.command {
-            SubCommands::Run {
-                command: RunSubCommands::Board(args),
-            } => {
+            SubCommands::Board(BoardArgs {
+                command: BoardSubCommands::Run(args),
+            }) => {
                 assert!(args.config.is_none());
                 assert!(args.board_config.is_none());
                 assert!(args.server.server.is_none());
@@ -422,11 +434,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_run_board_with_build_and_board_config() {
+    fn parse_board_run_with_build_and_board_config() {
         let cli = Cli::try_parse_from([
             "ostool",
-            "run",
             "board",
+            "run",
             "--config",
             "board.build.toml",
             "--board-config",
@@ -439,9 +451,9 @@ mod tests {
         .unwrap();
 
         match cli.command {
-            SubCommands::Run {
-                command: RunSubCommands::Board(args),
-            } => {
+            SubCommands::Board(BoardArgs {
+                command: BoardSubCommands::Run(args),
+            }) => {
                 assert_eq!(
                     args.config.as_deref(),
                     Some(std::path::Path::new("board.build.toml"))
@@ -455,5 +467,25 @@ mod tests {
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_board_config_command() {
+        let cli = Cli::try_parse_from(["ostool", "board", "config"]).unwrap();
+
+        match cli.command {
+            SubCommands::Board(BoardArgs {
+                command: BoardSubCommands::Config,
+            }) => {}
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_run_board_is_rejected() {
+        let err = Cli::try_parse_from(["ostool", "run", "board"]).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("unrecognized subcommand"));
+        assert!(rendered.contains("board"));
     }
 }

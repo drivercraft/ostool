@@ -4,7 +4,9 @@ use anyhow::Context as _;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{Tool, run::shell_init::normalize_shell_init_config};
+use crate::{
+    Tool, board::global_config::BoardGlobalConfig, run::shell_init::normalize_shell_init_config,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
 pub struct BoardRunConfig {
@@ -42,12 +44,17 @@ impl BoardRunConfig {
         Ok(config)
     }
 
-    pub fn resolve_server(&self, cli_server: Option<&str>, cli_port: Option<u16>) -> (String, u16) {
+    pub fn resolve_server(
+        &self,
+        cli_server: Option<&str>,
+        cli_port: Option<u16>,
+        global_config: &BoardGlobalConfig,
+    ) -> (String, u16) {
         let server = cli_server
             .map(str::to_string)
             .or_else(|| self.server.clone())
-            .unwrap_or_else(|| "127.0.0.1".to_string());
-        let port = cli_port.or(self.port).unwrap_or(8080);
+            .unwrap_or_else(|| global_config.server_ip.clone());
+        let port = cli_port.or(self.port).unwrap_or(global_config.port);
         (server, port)
     }
 
@@ -110,6 +117,7 @@ impl BoardRunConfig {
 #[cfg(test)]
 mod tests {
     use super::BoardRunConfig;
+    use crate::board::global_config::BoardGlobalConfig;
 
     #[test]
     fn board_run_config_parses_and_normalizes_shell_fields() {
@@ -134,7 +142,14 @@ port = 9000
         assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
         assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
         assert_eq!(
-            config.resolve_server(Some("127.0.0.1"), None),
+            config.resolve_server(
+                Some("127.0.0.1"),
+                None,
+                &BoardGlobalConfig {
+                    server_ip: "localhost".into(),
+                    port: 2999,
+                }
+            ),
             ("127.0.0.1".to_string(), 9000)
         );
     }
