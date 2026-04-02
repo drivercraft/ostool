@@ -58,4 +58,15 @@ impl Theme {
     pub fn selected_row(self) -> Style {
         Style::default().fg(self.text).bg(self.selection_bg)
     }
+
+    pub fn required(self) -> Style {
+        Style::default()
+            .fg(self.error)
+            .bg(self.background)
+            .add_modifier(Modifier::BOLD)
+    }
+
+    pub fn required_dim(self) -> Style {
+        Style::default().fg(self.error).bg(self.background)
+    }
 }

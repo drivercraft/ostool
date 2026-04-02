@@ -678,7 +678,11 @@ impl AppState {
 
     pub fn element_status(element: &ElementType) -> &'static str {
         if element.is_required {
-            "required"
+            if element.is_none() {
+                "required / NOT SET"
+            } else {
+                "required / set"
+            }
         } else if element.is_none() {
             "optional / unset"
         } else {
@@ -737,6 +741,9 @@ impl AppState {
             format!("Type: {}", Self::element_kind(element)),
             format!("State: {}", Self::element_status(element)),
         ];
+        if element.is_required && element.is_none() {
+            lines.insert(0, ">>> REQUIRED FIELD (NOT SET) <<<".to_string());
+        }
 
         if let Some(help) = &element.help {
             lines.push(String::new());

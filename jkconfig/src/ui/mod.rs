@@ -14,7 +14,7 @@ use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Position, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
@@ -35,7 +35,7 @@ use theme::Theme;
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MIN_TERMINAL_WIDTH: u16 = 72;
-const MIN_TERMINAL_HEIGHT: u16 = 20;
+const MIN_TERMINAL_HEIGHT: u16 = 21;
 
 pub fn run_tui(app_state: AppState) -> anyhow::Result<AppState> {
     let mut terminal = setup_terminal()?;
@@ -124,6 +124,13 @@ struct HelpModal {
 }
 
 #[derive(Debug, Clone)]
+struct ValidationErrorModal {
+    missing_count: usize,
+    missing_fields: Vec<String>,
+    scroll: u16,
+}
+
+#[derive(Debug, Clone)]
 enum ConfirmAction {
     SaveAndExit,
     DiscardAndExit,
@@ -147,6 +154,7 @@ enum ModalState {
     OneOfSelect(OneOfModal),
     Help(HelpModal),
     Confirm(ConfirmModal),
+    ValidationError(ValidationErrorModal),
 }
 
 struct TuiState {
@@ -303,7 +311,7 @@ impl TuiApp {
                     self.set_status(MessageLevel::Warning, err.to_string());
                 }
             }
-            KeyCode::Char('h') | KeyCode::Char('H') => self.open_help_modal(),
+            KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Char('?') => self.open_help_modal(),
             KeyCode::Char(' ') => {
                 if let Some(path) = self.state.selected_path()
                     && let Some(ElementType::Item(item)) = self.state.current()
@@ -592,6 +600,10 @@ impl TuiApp {
                 }
                 _ => {}
             },
+            Some(ModalState::ValidationError(_)) => match key.code {
+                KeyCode::Esc | KeyCode::Enter => close_modal = true,
+                _ => {}
+            },
             None => {}
         }
 
@@ -823,12 +835,9 @@ impl TuiApp {
             MessageLevel::Error,
             format!("Cannot save: {} required field(s) missing.", missing.len()),
         );
-        self.open_modal(ModalState::Help(HelpModal {
-            title: "Cannot Save".into(),
-            body: format!(
-                "Required fields are missing:\n\n- {}\n\nFill these fields and save again.",
-                missing.join("\n- ")
-            ),
+        self.open_modal(ModalState::ValidationError(ValidationErrorModal {
+            missing_count: missing.len(),
+            missing_fields: missing.to_vec(),
             scroll: 0,
         }));
     }
@@ -1041,7 +1050,7 @@ impl TuiApp {
             .constraints([
                 Constraint::Length(3),
                 Constraint::Min(0),
-                Constraint::Length(2),
+                Constraint::Length(3),
             ])
             .split(area);
         let header = layout[0];
@@ -1133,20 +1142,53 @@ impl TuiApp {
             return;
         };
 
+        // Compute max title width for alignment
+        let max_title_len = menu
+            .children
+            .iter()
+            .map(|e| e.title.len())
+            .max()
+            .unwrap_or(0);
+
         let items = menu
             .children
             .iter()
             .map(|element| {
                 let summary = AppState::element_summary(element);
-                ListItem::new(Line::from(vec![
-                    Span::styled(
-                        format!("[{}] ", AppState::element_tag(element)),
-                        self.ui.theme.accent(),
-                    ),
-                    Span::styled(element.title.clone(), self.ui.theme.text()),
-                    Span::raw("  "),
-                    Span::styled(summary, self.ui.theme.muted()),
-                ]))
+                let is_required_unset = element.is_required && element.is_none();
+                let mut spans: Vec<Span> = vec![];
+
+                // Fixed-width marker column: always 2 chars to keep alignment
+                if is_required_unset {
+                    spans.push(Span::styled("* ", self.ui.theme.required()));
+                } else {
+                    spans.push(Span::raw("  "));
+                }
+
+                // Tag column: fixed width [XXX]
+                spans.push(Span::styled(
+                    format!("[{:>3}] ", AppState::element_tag(element)),
+                    if is_required_unset {
+                        self.ui.theme.required_dim()
+                    } else {
+                        self.ui.theme.accent()
+                    },
+                ));
+
+                // Title column: padded to align summary
+                let padded_title = format!("{:<width$}", element.title, width = max_title_len);
+                spans.push(Span::styled(
+                    padded_title,
+                    if is_required_unset {
+                        self.ui.theme.required()
+                    } else {
+                        self.ui.theme.text()
+                    },
+                ));
+
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(summary, self.ui.theme.muted()));
+                ListItem::new(Line::from(spans))
             })
             .collect::<Vec<_>>();
 
@@ -1317,24 +1359,43 @@ impl TuiApp {
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
-        let status = self
-            .ui
-            .status
-            .as_ref()
-            .map(|status| status.text.clone())
-            .unwrap_or_else(|| {
-                "j/k move  Enter open/edit  Tab focus/switch  c clear  m toggle optional  s save  q quit".into()
-            });
+        let key = |k: &str| Span::styled(format!("[{k}]"), self.ui.theme.accent());
+        let sp = || Span::raw("  ");
+        let txt = |s: &str| Span::styled(s.to_string(), self.ui.theme.muted());
 
-        let style = match self.ui.status.as_ref().map(|status| status.level) {
-            Some(MessageLevel::Success) => Style::default().fg(self.ui.theme.success),
-            Some(MessageLevel::Warning) => Style::default().fg(self.ui.theme.warning),
-            Some(MessageLevel::Error) => Style::default().fg(self.ui.theme.error),
-            _ => self.ui.theme.muted(),
+        let (content, style) = if let Some(status) = &self.ui.status {
+            (
+                Text::from(Line::from(status.text.clone())),
+                match status.level {
+                    MessageLevel::Success => Style::default().fg(self.ui.theme.success),
+                    MessageLevel::Warning => Style::default().fg(self.ui.theme.warning),
+                    MessageLevel::Error => Style::default().fg(self.ui.theme.error),
+                    MessageLevel::Info => self.ui.theme.text(),
+                },
+            )
+        } else {
+            (
+                Text::from(vec![
+                    Line::from(vec![
+                        key("j/k"), txt("move"), sp(),
+                        key("Enter"), txt("open/edit"), sp(),
+                        key("Tab"), txt("focus"), sp(),
+                        key("Space"), txt("toggle bool"),
+                    ]),
+                    Line::from(vec![
+                        key("c"), txt("clear"), sp(),
+                        key("m"), txt("toggle opt"), sp(),
+                        key("s"), txt("save"), sp(),
+                        key("q"), txt("quit"), sp(),
+                        key("?"), txt("help"),
+                    ]),
+                ]),
+                Style::default(),
+            )
         };
 
         frame.render_widget(
-            Paragraph::new(status).style(style).block(
+            Paragraph::new(content).style(style).block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(self.ui.theme.passive_border()),
@@ -1623,6 +1684,76 @@ impl TuiApp {
                                 .border_style(self.ui.theme.active_border()),
                         ),
                     area,
+                );
+            }
+            ModalState::ValidationError(modal) => {
+                let width = 70.min(frame.area().width.saturating_sub(4));
+                let height = (8 + modal.missing_fields.len() as u16).min(22);
+                let area = centered_rect(frame.area(), width, height);
+                frame.render_widget(Clear, area);
+
+                let inner = area.inner(Margin {
+                    vertical: 1,
+                    horizontal: 1,
+                });
+
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(3),
+                        Constraint::Min(4),
+                        Constraint::Length(3),
+                    ])
+                    .split(inner);
+
+                // Border with error style
+                frame.render_widget(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(self.ui.theme.error)),
+                    area,
+                );
+
+                // Title bar with icon
+                let title_text = Line::from(vec![
+                    Span::styled(" X ", Style::default().fg(Color::Black).bg(self.ui.theme.error).add_modifier(Modifier::BOLD)),
+                    Span::raw(" "),
+                    Span::styled(
+                        format!(" Cannot Save — {} Required Field(s) Missing ", modal.missing_count),
+                        Style::default().fg(self.ui.theme.error).add_modifier(Modifier::BOLD),
+                    ),
+                ]);
+                frame.render_widget(Paragraph::new(title_text), chunks[0]);
+
+                // Field list
+                let field_lines: Vec<Line> = modal
+                    .missing_fields
+                    .iter()
+                    .map(|field| {
+                        Line::from(vec![
+                            Span::styled("  ", self.ui.theme.text()),
+                            Span::styled("\u{2717} ", Style::default().fg(self.ui.theme.error)),
+                            Span::styled(field.clone(), self.ui.theme.text()),
+                        ])
+                    })
+                    .collect();
+                frame.render_widget(
+                    Paragraph::new(field_lines)
+                        .scroll((modal.scroll, 0))
+                        .block(Block::default().borders(Borders::NONE)),
+                    chunks[1],
+                );
+
+                // Footer hint
+                frame.render_widget(
+                    Paragraph::new(Line::from(vec![
+                        Span::styled("Press ", self.ui.theme.muted()),
+                        Span::styled("Enter", self.ui.theme.text().add_modifier(Modifier::BOLD)),
+                        Span::styled(" or ", self.ui.theme.muted()),
+                        Span::styled("Esc", self.ui.theme.text().add_modifier(Modifier::BOLD)),
+                        Span::styled(" to close and fill in the missing fields.", self.ui.theme.muted()),
+                    ])),
+                    chunks[2],
                 );
             }
             ModalState::Confirm(modal) => {
