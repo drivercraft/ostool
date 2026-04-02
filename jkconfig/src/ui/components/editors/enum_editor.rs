@@ -7,16 +7,18 @@ use cursive::{
 
 use crate::{
     data::{
-        AppData,
+        AppState,
         item::{EnumItem, ItemType},
         types::ElementType,
     },
-    ui::handle_back,
+    ui::{components::menu::refresh_menu, handle_back},
 };
 
 /// 显示枚举选择对话框
-pub fn show_enum_select(s: &mut Cursive, title: &str, enum_item: &EnumItem) {
+pub fn show_enum_select(s: &mut Cursive, path: &str, title: &str, enum_item: &EnumItem) {
     let mut select = SelectView::new();
+    let path = path.to_string();
+    let path_submit = path.clone();
 
     for (idx, variant) in enum_item.variants.iter().enumerate() {
         let label = if Some(idx) == enum_item.value {
@@ -36,14 +38,14 @@ pub fn show_enum_select(s: &mut Cursive, title: &str, enum_item: &EnumItem) {
                     .child(select.with_name("enum_select").fixed_height(10)),
             )
             .title("Select Option")
-            .button("OK", on_ok)
+            .button("OK", move |s| on_ok(s, &path_submit))
             .button("Cancel", handle_back),
         )
-        .on_event(Key::Enter, on_ok),
+        .on_event(Key::Enter, move |s| on_ok(s, &path)),
     );
 }
 
-fn on_ok(s: &mut Cursive) {
+fn on_ok(s: &mut Cursive, path: &str) {
     let selection = s
         .call_on_name("enum_select", |v: &mut SelectView<usize>| v.selection())
         .unwrap();
@@ -51,13 +53,15 @@ fn on_ok(s: &mut Cursive) {
         return;
     };
 
-    if let Some(app) = s.user_data::<crate::data::app_data::AppData>()
-        && let Some(ElementType::Item(item)) = app.current_mut()
+    if let Some(app) = s.user_data::<AppState>()
+        && let Some(ElementType::Item(item)) = app.get_mut_by_key(path)
         && let ItemType::Enum(en) = &mut item.item_type
     {
         en.value = Some(*selection);
+        app.mark_dirty();
     }
     handle_back(s);
+    refresh_menu(s);
 }
 
 pub fn show_list_select(
@@ -65,7 +69,7 @@ pub fn show_list_select(
     title: &str,
     items: &[String],
     path: &str,
-    on_ok: fn(&mut AppData, path: &str, selected: &str),
+    on_ok: fn(&mut AppState, path: &str, selected: &str),
 ) {
     let mut select = SelectView::new();
 
@@ -102,7 +106,7 @@ fn on_list_ok(
     s: &mut Cursive,
     ls: &[String],
     path: &str,
-    on_ok: fn(&mut AppData, path: &str, selected: &str),
+    on_ok: fn(&mut AppState, path: &str, selected: &str),
 ) {
     let selection = s
         .call_on_name("list_select", |v: &mut SelectView<usize>| v.selection())
@@ -111,11 +115,13 @@ fn on_list_ok(
         return;
     };
 
-    let Some(app) = s.user_data::<crate::data::app_data::AppData>() else {
+    let Some(app) = s.user_data::<AppState>() else {
         return;
     };
 
     on_ok(app, path, ls[*selection].as_str());
+    app.mark_dirty();
 
     handle_back(s);
+    refresh_menu(s);
 }

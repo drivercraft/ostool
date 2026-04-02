@@ -9,40 +9,58 @@ use std::{
 use anyhow::bail;
 use cursive::Cursive;
 
-use crate::data::{menu::MenuRoot, types::ElementType};
+use crate::data::{
+    menu::{Menu, MenuRoot},
+    path::ElementPath,
+    resolver::ElementResolver,
+    types::ElementType,
+};
 
 /// Callback used to provide the list of available features.
 pub type FeaturesCallback = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
 
 /// Callback invoked when a menu element is entered.
-pub type HockCallback = Arc<dyn Fn(&mut Cursive, &str) + Send + Sync>;
+pub type HookCallback = Arc<dyn Fn(&mut Cursive, &ElementPath) + Send + Sync>;
 
-/// Hook registration for a specific menu path.
+/// Hook registration for a specific element path.
 #[derive(Clone)]
-pub struct ElemHock {
-    /// Menu path string (dot-separated).
-    pub path: String,
-    /// Callback executed when entering the path.
-    pub callback: HockCallback,
+pub struct ElementHook {
+    pub path: ElementPath,
+    pub callback: HookCallback,
 }
 
-/// Application state container for schema-driven config editing.
+impl ElementHook {
+    pub fn new(path: impl Into<ElementPath>, callback: HookCallback) -> Self {
+        Self {
+            path: path.into(),
+            callback,
+        }
+    }
+}
+
+/// Persisted configuration document plus schema-derived tree.
 #[derive(Clone)]
-pub struct AppData {
-    /// Root menu parsed from JSON Schema.
+pub struct ConfigDocument {
     pub root: MenuRoot,
-    /// Current menu path as a list of keys.
-    pub current_key: Vec<String>,
-    /// Whether configuration has pending changes.
-    pub needs_save: bool,
-    /// Path to the configuration file.
     pub config: PathBuf,
-    /// Custom user data storage.
+}
+
+/// Navigation state for a single menu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MenuState {
+    pub path: ElementPath,
+    pub selected_index: usize,
+}
+
+/// Runtime application state for TUI and web workflows.
+#[derive(Clone)]
+pub struct AppState {
+    pub document: ConfigDocument,
+    pub nav_stack: Vec<MenuState>,
+    pub needs_save: bool,
     pub user_data: HashMap<String, String>,
-    /// Temporary data used by editors.
     pub temp_data: Option<(String, serde_json::Value)>,
-    /// Registered element hooks.
-    pub elem_hocks: Vec<ElemHock>,
+    pub element_hooks: Vec<ElementHook>,
 }
 
 const DEFAULT_CONFIG_PATH: &str = ".config.toml";
@@ -50,7 +68,7 @@ const DEFAULT_CONFIG_PATH: &str = ".config.toml";
 /// Derive a default schema path from a config path.
 pub fn default_schema_by_init(config: &Path) -> PathBuf {
     let binding = config.file_name().unwrap().to_string_lossy();
-    let mut name_split = binding.split(".").collect::<Vec<_>>();
+    let mut name_split = binding.split('.').collect::<Vec<_>>();
     if name_split.len() > 1 {
         name_split.pop();
     }
@@ -64,10 +82,7 @@ pub fn default_schema_by_init(config: &Path) -> PathBuf {
     }
 }
 
-impl AppData {
-    /// Build `AppData` from optional config and schema paths.
-    ///
-    /// When schema is not provided, it is auto-derived from the config path.
+impl ConfigDocument {
     pub fn new(
         config: Option<impl AsRef<Path>>,
         schema: Option<impl AsRef<Path>>,
@@ -97,9 +112,6 @@ impl AppData {
         init_value_path
     }
 
-    /// Build `AppData` from an initial content string and a schema value.
-    ///
-    /// This is useful when config content has already been loaded.
     pub fn new_with_init_and_schema(
         init: &str,
         init_value_path: &Path,
@@ -115,8 +127,8 @@ impl AppData {
             {
                 "json" => serde_json::from_str(init)?,
                 "toml" => {
-                    let v: toml::Value = toml::from_str(init)?;
-                    serde_json::to_value(v)?
+                    let value: toml::Value = toml::from_str(init)?;
+                    serde_json::to_value(value)?
                 }
                 ext => {
                     bail!("Unsupported config file extension: {ext:?}");
@@ -125,26 +137,17 @@ impl AppData {
             root.update_by_value(&init_json)?;
         }
 
-        Ok(AppData {
+        Ok(Self {
             root,
-            current_key: Vec::new(),
-            needs_save: false,
             config: init_value_path.into(),
-            temp_data: None,
-            elem_hocks: Vec::new(),
-            user_data: HashMap::new(),
         })
     }
 
-    /// Build `AppData` from a schema value and an optional config path.
-    ///
-    /// If the config file exists, it is loaded to initialize values.
     pub fn new_with_schema(
         config: Option<impl AsRef<Path>>,
         schema: &serde_json::Value,
     ) -> anyhow::Result<Self> {
         let init_value_path = Self::init_value_path(config);
-
         let mut root = MenuRoot::try_from(schema)?;
 
         if init_value_path.exists() {
@@ -157,8 +160,8 @@ impl AppData {
                 let init_json: serde_json::Value = match ext {
                     "json" => serde_json::from_str(&init_content)?,
                     "toml" => {
-                        let v: toml::Value = toml::from_str(&init_content)?;
-                        serde_json::to_value(v)?
+                        let value: toml::Value = toml::from_str(&init_content)?;
+                        serde_json::to_value(value)?
                     }
                     _ => {
                         bail!("Unsupported config file extension: {ext:?}");
@@ -168,33 +171,45 @@ impl AppData {
             }
         }
 
-        Ok(AppData {
+        Ok(Self {
             root,
-            current_key: Vec::new(),
-            needs_save: false,
             config: init_value_path,
-            temp_data: None,
-            elem_hocks: Vec::new(),
-            user_data: HashMap::new(),
         })
     }
 
-    /// Persist changes and create a timestamped backup when needed.
-    pub fn on_exit(&mut self) -> anyhow::Result<()> {
-        if !self.needs_save {
-            return Ok(());
-        }
+    pub fn title(&self) -> &str {
+        &self.root.title
+    }
+
+    pub fn as_json(&self) -> serde_json::Value {
+        self.root.as_json()
+    }
+
+    pub fn get(&self, path: &ElementPath) -> Option<&ElementType> {
+        ElementResolver::resolve(&self.root, path).ok()
+    }
+
+    pub fn get_mut(&mut self, path: &ElementPath) -> Option<&mut ElementType> {
+        ElementResolver::resolve_mut(&mut self.root, path).ok()
+    }
+
+    pub fn menu(&self, path: &ElementPath) -> Option<&Menu> {
+        ElementResolver::menu(&self.root, path).ok()
+    }
+
+    pub fn menu_mut(&mut self, path: &ElementPath) -> Option<&mut Menu> {
+        ElementResolver::menu_mut(&mut self.root, path).ok()
+    }
+
+    pub fn persist(&mut self) -> anyhow::Result<()> {
         let ext = self
             .config
             .extension()
             .and_then(|s| s.to_str())
             .unwrap_or("");
-
         let json_value = self.root.as_json();
 
-        println!("value to save:\n {:?}", json_value);
-
-        let s = match ext {
+        let content = match ext {
             "toml" | "tml" => toml::to_string_pretty(&json_value)?,
             "json" => serde_json::to_string_pretty(&json_value)?,
             _ => {
@@ -203,57 +218,141 @@ impl AppData {
         };
 
         if self.config.exists() {
-            let bk = format!(
+            let backup_ext = format!(
                 "bk-{:?}.{ext}",
                 SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)?
                     .as_secs()
             );
-
-            let backup_path = self.config.with_extension(bk);
+            let backup_path = self.config.with_extension(backup_ext);
             fs::copy(&self.config, &backup_path)?;
         }
-        fs::write(&self.config, s)?;
+
+        fs::write(&self.config, content)?;
+        Ok(())
+    }
+}
+
+impl AppState {
+    pub fn new(document: ConfigDocument) -> Self {
+        Self {
+            document,
+            nav_stack: vec![MenuState {
+                path: ElementPath::root(),
+                selected_index: 0,
+            }],
+            needs_save: false,
+            user_data: HashMap::new(),
+            temp_data: None,
+            element_hooks: Vec::new(),
+        }
+    }
+
+    pub fn current_path(&self) -> &ElementPath {
+        &self.nav_stack.last().expect("root menu state").path
+    }
+
+    pub fn current_path_string(&self) -> String {
+        self.current_path().as_key()
+    }
+
+    pub fn current_menu(&self) -> Option<&Menu> {
+        self.document.menu(self.current_path())
+    }
+
+    pub fn current_menu_mut(&mut self) -> Option<&mut Menu> {
+        let path = self.current_path().clone();
+        self.document.menu_mut(&path)
+    }
+
+    pub fn selected_index(&self) -> usize {
+        self.nav_stack
+            .last()
+            .expect("root menu state")
+            .selected_index
+    }
+
+    pub fn set_selected_index(&mut self, index: usize) {
+        if let Some(menu) = self.current_menu() {
+            let max_index = menu.children.len().saturating_sub(1);
+            if let Some(state) = self.nav_stack.last_mut() {
+                state.selected_index = index.min(max_index);
+            }
+        }
+    }
+
+    pub fn set_selected_by_key(&mut self, key: &str) {
+        let Some(menu) = self.current_menu() else {
+            return;
+        };
+        let index = menu
+            .children
+            .iter()
+            .position(|element| element.key() == key);
+        if let Some(index) = index {
+            self.set_selected_index(index);
+        }
+    }
+
+    pub fn clamp_selection(&mut self) {
+        let selected = self.selected_index();
+        self.set_selected_index(selected);
+    }
+
+    pub fn current(&self) -> Option<&ElementType> {
+        self.current_menu()?.children.get(self.selected_index())
+    }
+
+    pub fn current_mut(&mut self) -> Option<&mut ElementType> {
+        let index = self.selected_index();
+        self.current_menu_mut()?.children.get_mut(index)
+    }
+
+    pub fn selected_path(&self) -> Option<ElementPath> {
+        self.current()
+            .map(|element| ElementPath::parse(&element.key()))
+    }
+
+    pub fn enter_menu(&mut self, path: impl Into<ElementPath>) {
+        self.nav_stack.push(MenuState {
+            path: path.into(),
+            selected_index: 0,
+        });
+    }
+
+    pub fn navigate_back(&mut self) -> bool {
+        if self.nav_stack.len() <= 1 {
+            return false;
+        }
+        self.nav_stack.pop();
+        true
+    }
+
+    pub fn get_by_key(&self, key: &str) -> Option<&ElementType> {
+        self.document.get(&ElementPath::parse(key))
+    }
+
+    pub fn get_mut_by_key(&mut self, key: &str) -> Option<&mut ElementType> {
+        self.document.get_mut(&ElementPath::parse(key))
+    }
+
+    pub fn mark_dirty(&mut self) {
+        self.needs_save = true;
+    }
+
+    pub fn persist_if_needed(&mut self) -> anyhow::Result<()> {
+        if self.needs_save {
+            self.document.persist()?;
+        }
         Ok(())
     }
 
-    /// Enter a submenu path (dot-separated).
-    pub fn enter(&mut self, key: &str) {
-        if key.is_empty() {
-            return;
-        }
-        self.current_key = key.split(".").map(|s| s.to_string()).collect();
-    }
-
-    /// Push a field name onto the current path.
-    pub fn push_field(&mut self, f: &str) {
-        self.current_key.push(f.to_string());
-    }
-
-    /// Navigate back to the parent path.
-    pub fn navigate_back(&mut self) {
-        if !self.current_key.is_empty() {
-            self.current_key.pop();
-        }
-    }
-
-    /// Return the current path as a dot-separated string.
-    pub fn key_string(&self) -> String {
-        if self.current_key.is_empty() {
-            return String::new();
-        }
-
-        self.current_key.join(".")
-    }
-
-    /// Get the element at the current path.
-    pub fn current(&self) -> Option<&ElementType> {
-        self.root.get_by_key(&self.key_string())
-    }
-
-    /// Get the mutable element at the current path.
-    pub fn current_mut(&mut self) -> Option<&mut ElementType> {
-        self.root.get_mut_by_key(&self.key_string())
+    pub fn find_selected_hook(&self) -> Option<ElementHook> {
+        let selected_path = self.selected_path()?;
+        self.element_hooks
+            .iter()
+            .find(|hook| hook.path == selected_path)
+            .cloned()
     }
 }
 

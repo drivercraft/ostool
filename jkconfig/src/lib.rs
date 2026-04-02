@@ -18,16 +18,17 @@
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use jkconfig::data::AppData;
+//! use jkconfig::data::{AppState, ConfigDocument};
 //!
 //! // Load configuration with schema
-//! let app_data = AppData::new(
+//! let document = ConfigDocument::new(
 //!     Some("config.toml"),
 //!     Some("config-schema.json")
 //! ).unwrap();
+//! let app_state = AppState::new(document);
 //!
 //! // Access the configuration tree
-//! let json_value = app_data.root.as_json();
+//! let json_value = app_state.document.as_json();
 //! ```
 //!
 //! ## Modules

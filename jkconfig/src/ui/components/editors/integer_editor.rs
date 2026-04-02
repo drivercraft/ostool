@@ -5,8 +5,8 @@ use cursive::{
 };
 
 use crate::{
-    data::{item::ItemType, types::ElementType},
-    ui::handle_back,
+    data::{AppState, item::ItemType, types::ElementType},
+    ui::{components::menu::refresh_menu, handle_back},
 };
 
 /// 显示整数编辑对话框
@@ -40,13 +40,15 @@ pub fn show_integer_edit(
 
             match content.parse::<i64>() {
                 Ok(num) => {
-                    if let Some(app) = s.user_data::<crate::data::app_data::AppData>()
-                        && let Some(ElementType::Item(item)) = app.root.get_mut_by_key(&key)
+                    if let Some(app) = s.user_data::<AppState>()
+                        && let Some(ElementType::Item(item)) = app.get_mut_by_key(&key)
                         && let ItemType::Integer { value, .. } = &mut item.item_type
                     {
                         *value = Some(num);
+                        app.mark_dirty();
                     }
                     handle_back(s);
+                    refresh_menu(s);
                 }
                 Err(_) => {
                     s.add_layer(Dialog::info("Invalid integer format!").dismiss_button("Ok"));

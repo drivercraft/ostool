@@ -5,8 +5,8 @@ use cursive::{
 };
 
 use crate::{
-    data::{item::ItemType, types::ElementType},
-    ui::handle_back,
+    data::{AppState, item::ItemType, types::ElementType},
+    ui::{components::menu::refresh_menu, handle_back},
 };
 
 /// 显示数字编辑对话框
@@ -40,13 +40,15 @@ pub fn show_number_edit(
 
             match content.parse::<f64>() {
                 Ok(_num) => {
-                    if let Some(app) = s.user_data::<crate::data::app_data::AppData>()
-                        && let Some(ElementType::Item(item)) = app.root.get_mut_by_key(&key)
+                    if let Some(app) = s.user_data::<AppState>()
+                        && let Some(ElementType::Item(item)) = app.get_mut_by_key(&key)
                         && let ItemType::Number { value, .. } = &mut item.item_type
                     {
                         *value = Some(_num);
+                        app.mark_dirty();
                     }
                     handle_back(s);
+                    refresh_menu(s);
                 }
                 Err(_) => {
                     s.add_layer(Dialog::info("Invalid number format!").dismiss_button("Ok"));

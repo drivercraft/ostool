@@ -2,7 +2,7 @@ use cursive::{Cursive, views::Dialog};
 use std::{collections::HashMap, path::Path};
 
 use crate::{
-    data::{app_data::AppData, item::ItemType, types::ElementType},
+    data::{AppState, item::ItemType, types::ElementType},
     ui::{
         components::editors::multi_select_editor::{
             DepItem, ExtendedMultiSelectItem, show_extended_multi_select,
@@ -42,7 +42,7 @@ pub fn show_feature_select(
                 let all_features: Vec<String> = pkg.features.keys().cloned().collect();
 
                 // 获取当前选中的特性列表
-                let selected_values = if let Some(app) = s.user_data::<AppData>() {
+                let selected_values = if let Some(app) = s.user_data::<AppState>() {
                     if let Some(ElementType::Item(item)) = app.current() {
                         if let ItemType::Array(array) = &item.item_type {
                             array.values.clone()

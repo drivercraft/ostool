@@ -5,8 +5,7 @@ use cargo_metadata::Metadata;
 use colored::Colorize;
 use cursive::Cursive;
 use jkconfig::{
-    ElemHock,
-    data::{app_data::AppData, item::ItemType, types::ElementType},
+    data::{AppState, ElementHook, item::ItemType, types::ElementType},
     ui::components::editors::{show_feature_select, show_list_select},
 };
 use object::Object;
@@ -420,19 +419,19 @@ impl Tool {
         Ok(self.manifest_dir.clone())
     }
 
-    pub fn ui_hocks(&self) -> Vec<ElemHock> {
+    pub fn ui_hocks(&self) -> Vec<ElementHook> {
         vec![self.ui_hock_feature_select(), self.ui_hock_pacage_select()]
     }
 
-    fn ui_hock_feature_select(&self) -> ElemHock {
+    fn ui_hock_feature_select(&self) -> ElementHook {
         let path = "system.features";
         let cargo_toml = self.workspace_dir.join("Cargo.toml");
-        ElemHock {
-            path: path.to_string(),
-            callback: Arc::new(move |siv: &mut Cursive, _path: &str| {
+        ElementHook {
+            path: path.into(),
+            callback: Arc::new(move |siv: &mut Cursive, _path| {
                 let mut package = String::new();
-                if let Some(app) = siv.user_data::<AppData>()
-                    && let Some(pkg) = app.root.get_by_key("system.package")
+                if let Some(app) = siv.user_data::<AppState>()
+                    && let Some(pkg) = app.get_by_key("system.package")
                     && let ElementType::Item(item) = pkg
                     && let ItemType::String { value: Some(v), .. } = &item.item_type
                 {
@@ -444,13 +443,13 @@ impl Tool {
         }
     }
 
-    fn ui_hock_pacage_select(&self) -> ElemHock {
+    fn ui_hock_pacage_select(&self) -> ElementHook {
         let path = "system.package";
         let cargo_toml = self.workspace_dir.join("Cargo.toml");
 
-        ElemHock {
-            path: path.to_string(),
-            callback: Arc::new(move |siv: &mut Cursive, path: &str| {
+        ElementHook {
+            path: path.into(),
+            callback: Arc::new(move |siv: &mut Cursive, path| {
                 let mut items = Vec::new();
                 if let Ok(metadata) = cargo_metadata::MetadataCommand::new()
                     .manifest_path(&cargo_toml)
@@ -462,14 +461,14 @@ impl Tool {
                     }
                 }
 
-                show_list_select(siv, "Pacage", &items, path, on_package_selected);
+                show_list_select(siv, "Pacage", &items, &path.as_key(), on_package_selected);
             }),
         }
     }
 }
 
-fn on_package_selected(app: &mut AppData, path: &str, selected: &str) {
-    let ElementType::Item(item) = app.root.get_mut_by_key(path).unwrap() else {
+fn on_package_selected(app: &mut AppState, path: &str, selected: &str) {
+    let ElementType::Item(item) = app.get_mut_by_key(path).unwrap() else {
         panic!("Not an item element");
     };
     let ItemType::String { value, .. } = &mut item.item_type else {

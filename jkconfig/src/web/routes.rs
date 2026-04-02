@@ -5,10 +5,8 @@
 use axum::{Router, routing::get};
 use tower_http::services::ServeDir;
 
-use super::{
-    handlers::{api_config_handler, health_check, root_handler, static_handler},
-    server::AppState,
-};
+use super::handlers::{api_config_handler, health_check, root_handler, static_handler};
+use crate::data::AppState;
 
 /// 创建应用路由
 pub fn create_routes(state: AppState) -> Router {

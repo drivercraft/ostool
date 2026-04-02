@@ -5,11 +5,16 @@ use cursive::{
     views::{Dialog, DummyView, LinearLayout, OnEventView, SelectView, TextView},
 };
 
-use crate::{data::oneof::OneOf, ui::handle_back};
+use crate::{
+    data::{AppState, oneof::OneOf, types::ElementType},
+    ui::{components::menu::refresh_menu, handle_back},
+};
 
 /// 显示 OneOf 选择对话框
-pub fn show_oneof_dialog(s: &mut Cursive, one_of: &OneOf) {
+pub fn show_oneof_dialog(s: &mut Cursive, path: &str, one_of: &OneOf) {
     let mut select = SelectView::new();
+    let path = path.to_string();
+    let path_submit = path.clone();
 
     for (idx, _) in one_of.variants.iter().enumerate() {
         let display = one_of.variant_display(idx);
@@ -30,25 +35,25 @@ pub fn show_oneof_dialog(s: &mut Cursive, one_of: &OneOf) {
                     .child(select.with_name("oneof_select").fixed_height(10)),
             )
             .title("Select One Of")
-            .button("OK", on_ok)
+            .button("OK", move |s| on_ok(s, &path_submit))
             .button("Cancel", handle_back),
         )
-        .on_event(Key::Enter, on_ok),
+        .on_event(Key::Enter, move |s| on_ok(s, &path)),
     );
 }
 
-fn on_ok(s: &mut Cursive) {
+fn on_ok(s: &mut Cursive, path: &str) {
     let selection = s
         .call_on_name("oneof_select", |v: &mut SelectView<usize>| v.selection())
         .unwrap();
 
     if let Some(idx) = selection
-        && let Some(app) = s.user_data::<crate::data::app_data::AppData>()
-        && let Some(current) = app.current_mut()
-        && let crate::data::types::ElementType::OneOf(one_of) = current
+        && let Some(app) = s.user_data::<AppState>()
+        && let Some(ElementType::OneOf(one_of)) = app.get_mut_by_key(path)
     {
         let _ = one_of.set_selected_index(*idx);
-
-        handle_back(s);
+        app.mark_dirty();
     }
+    handle_back(s);
+    refresh_menu(s);
 }

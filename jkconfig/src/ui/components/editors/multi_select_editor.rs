@@ -5,7 +5,7 @@ use cursive::{
     views::{DummyView, LinearLayout, OnEventView, ScrollView, SelectView, TextView},
 };
 
-use crate::data::{app_data::AppData, item::ItemType, types::ElementType};
+use crate::data::{AppState, item::ItemType, types::ElementType};
 
 /// 多选项结构体
 #[derive(Debug, Clone)]
@@ -76,7 +76,7 @@ pub fn show_multi_select(s: &mut Cursive, title: &str, multi_select: &MultiSelec
     }
 
     // 保存完整的选项列表到应用数据中，供后续toggle_selection使用
-    if let Some(app) = s.user_data::<AppData>() {
+    if let Some(app) = s.user_data::<AppState>() {
         // 获取当前正在编辑的项的key
         let current_key = if let Some(ElementType::Item(item)) = app.current() {
             item.base.key().to_string()
@@ -159,7 +159,7 @@ fn toggle_selection(s: &mut Cursive) {
         let mut variants = Vec::new();
         let mut current_key = String::new();
 
-        if let Some(app) = s.user_data::<AppData>()
+        if let Some(app) = s.user_data::<AppState>()
             && let Some((_, temp_value)) = &app.temp_data
         {
             // 尝试从temp_data中获取保存的结构体数据
@@ -182,7 +182,7 @@ fn toggle_selection(s: &mut Cursive) {
         }
 
         // 更新保存的数据
-        if let Some(app) = s.user_data::<AppData>() {
+        if let Some(app) = s.user_data::<AppState>() {
             let data = MultiSelectTempData {
                 selected_indices: selected_indices.clone(),
                 variants: variants.clone(),
@@ -196,11 +196,11 @@ fn toggle_selection(s: &mut Cursive) {
                 .filter_map(|&idx| variants.get(idx).cloned())
                 .collect();
 
-            if let Some(ElementType::Item(item_mut)) = app.root.get_mut_by_key(&current_key)
+            if let Some(ElementType::Item(item_mut)) = app.get_mut_by_key(&current_key)
                 && let ItemType::Array(array_mut) = &mut item_mut.item_type
             {
                 array_mut.values = selected_variants.clone();
-                app.needs_save = true;
+                app.mark_dirty();
             }
         }
 
@@ -300,7 +300,7 @@ pub fn show_extended_multi_select(
     }
 
     // 保存数据到应用数据中
-    if let Some(app) = s.user_data::<AppData>() {
+    if let Some(app) = s.user_data::<AppState>() {
         let current_key = if let Some(ElementType::Item(item)) = app.current() {
             item.base.key().to_string()
         } else {
@@ -386,7 +386,7 @@ fn toggle_extended_selection(s: &mut Cursive) {
         let mut dep_selected_features = HashMap::new();
         let mut current_key = String::new();
 
-        if let Some(app) = s.user_data::<AppData>()
+        if let Some(app) = s.user_data::<AppState>()
             && let Some((_, temp_value)) = &app.temp_data
             && let Ok(data) =
                 serde_json::from_value::<ExtendedMultiSelectTempData>(temp_value.clone())
@@ -428,7 +428,7 @@ fn toggle_extended_selection(s: &mut Cursive) {
         }
 
         // 更新保存的数据并直接保存到ArrayItem
-        if let Some(app) = s.user_data::<AppData>() {
+        if let Some(app) = s.user_data::<AppState>() {
             let data = ExtendedMultiSelectTempData {
                 selected_indices: selected_indices.clone(),
                 variants: variants.clone(),
@@ -460,11 +460,11 @@ fn toggle_extended_selection(s: &mut Cursive) {
             let all_selected: Vec<String> =
                 selected_variants.into_iter().chain(dep_features).collect();
 
-            if let Some(ElementType::Item(item_mut)) = app.root.get_mut_by_key(&current_key)
+            if let Some(ElementType::Item(item_mut)) = app.get_mut_by_key(&current_key)
                 && let ItemType::Array(array_mut) = &mut item_mut.item_type
             {
                 array_mut.values = all_selected.clone();
-                app.needs_save = true;
+                app.mark_dirty();
             }
         }
 
@@ -544,7 +544,7 @@ fn show_dep_features_select(
     }
 
     // 保存依赖项选择数据
-    if let Some(app) = s.user_data::<AppData>() {
+    if let Some(app) = s.user_data::<AppState>() {
         let data = DepFeaturesTempData {
             main_selected_indices: main_selected_indices.to_vec(),
             main_variants: main_variants.to_vec(),
@@ -625,7 +625,7 @@ fn toggle_dep_features_selection(s: &mut Cursive) {
         let mut selected_indices = Vec::new();
         let mut current_key = String::new();
 
-        if let Some(app) = s.user_data::<AppData>()
+        if let Some(app) = s.user_data::<AppState>()
             && let Some((key, temp_value)) = &app.temp_data
             && key == "dep_features_select"
             && let Ok(data) = serde_json::from_value::<DepFeaturesTempData>(temp_value.clone())
@@ -650,7 +650,7 @@ fn toggle_dep_features_selection(s: &mut Cursive) {
         }
 
         // 更新数据并更新主界面和ArrayItem
-        if let Some(app) = s.user_data::<AppData>() {
+        if let Some(app) = s.user_data::<AppState>() {
             let data = DepFeaturesTempData {
                 main_selected_indices: main_selected_indices.clone(),
                 main_variants: main_variants.clone(),
@@ -688,11 +688,11 @@ fn toggle_dep_features_selection(s: &mut Cursive) {
                 .chain(dep_features_selected)
                 .collect();
 
-            if let Some(ElementType::Item(item_mut)) = app.root.get_mut_by_key(&current_key)
+            if let Some(ElementType::Item(item_mut)) = app.get_mut_by_key(&current_key)
                 && let ItemType::Array(array_mut) = &mut item_mut.item_type
             {
                 array_mut.values = all_selected.clone();
-                app.needs_save = true;
+                app.mark_dirty();
             }
 
             // 更新状态栏显示

@@ -8,7 +8,7 @@ use axum::{
 };
 use serde_json::json;
 
-use super::server::AppState;
+use crate::data::AppState;
 
 /// 根路径处理器 - 返回Hello World页面
 pub async fn root_handler() -> Html<&'static str> {
@@ -18,7 +18,8 @@ pub async fn root_handler() -> Html<&'static str> {
 /// API处理器 - 返回配置信息
 pub async fn api_config_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({
-        "title": state.app_data.root.title,
+        "title": state.document.title(),
+        "config": state.document.as_json(),
         "message": "jkconfig Web API",
         "version": "0.1.1"
     }))

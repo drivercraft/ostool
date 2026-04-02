@@ -1,58 +1,54 @@
 use cursive::{Cursive, views::Dialog};
 
-use crate::{data::AppData, ui::components::menu::menu_select_flush};
+use crate::{
+    data::AppState,
+    ui::components::menu::{install_menu_view, refresh_menu},
+};
 
 pub mod components;
 
+pub fn start_ui(siv: &mut Cursive) {
+    install_menu_view(siv);
+}
+
 pub fn handle_back(siv: &mut Cursive) {
-    if let Some(app) = siv.user_data::<AppData>() {
-        if app.current_key.is_empty() {
-            handle_quit(siv);
-            return;
-        }
-        app.navigate_back();
-
-        let key = app.key_string();
+    if siv.screen().len() > 1 {
         siv.pop_layer();
-
-        menu_select_flush(siv, &key);
+        refresh_menu(siv);
+        return;
     }
-}
 
-pub fn handle_edit(siv: &mut Cursive) {
-    if let Some(app) = siv.user_data::<AppData>() {
-        app.navigate_back();
-        let key = app.key_string();
-        menu_select_flush(siv, &key);
+    if let Some(app) = siv.user_data::<AppState>()
+        && app.navigate_back()
+    {
+        refresh_menu(siv);
+        return;
     }
-}
 
-pub fn enter_submenu(siv: &mut Cursive, key: &str) {
-    if let Some(app) = siv.user_data::<AppData>() {
-        app.enter(key);
-    }
+    handle_quit(siv);
 }
 
 pub fn handle_quit(siv: &mut Cursive) {
-    enter_submenu(siv, "_");
     siv.add_layer(
         Dialog::text("Quit without saving?")
             .title("Quit")
-            .button("Back", handle_back)
+            .button("Back", |s| {
+                s.pop_layer();
+            })
             .button("Quit", |s| {
                 s.quit();
             }),
     );
 }
 
-/// 处理保存 - S键
 pub fn handle_save(siv: &mut Cursive) {
     siv.add_layer(
         Dialog::text("Save and exit?")
             .title("Save")
             .button("Ok", |s| {
-                let app = s.user_data::<AppData>().unwrap();
-                app.needs_save = true;
+                if let Some(app) = s.user_data::<AppState>() {
+                    app.mark_dirty();
+                }
                 s.quit();
             })
             .button("Cancel", |s| {

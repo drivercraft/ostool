@@ -11,14 +11,17 @@
 //!
 //! The data module is organized into several submodules:
 //!
-//! - [`app_data`] - Main application data container
+//! - [`app_data`] - Runtime state and persisted document types
 //! - [`item`] - Individual configuration items
 //! - [`menu`] - Menu structure for navigation
 //! - [`oneof`] - OneOf/AnyOf schema variant handling
+//! - [`path`] - Canonical element paths
+//! - [`resolver`] - Shared tree lookup logic
 //! - [`schema`] - JSON Schema parsing utilities
 //! - [`types`] - Element type definitions
+//! - [`visit`] - Tree traversal helpers
 
-/// Main application data container and configuration management.
+/// Runtime state and configuration document types.
 pub mod app_data;
 
 /// Individual configuration item representation.
@@ -30,10 +33,20 @@ pub mod menu;
 /// OneOf/AnyOf schema variant handling.
 pub mod oneof;
 
+/// Canonical element path support.
+pub mod path;
+
+/// Tree lookup and menu resolution.
+pub mod resolver;
+
 /// JSON Schema parsing utilities.
 pub mod schema;
 
 /// Element type definitions for different data types.
 pub mod types;
 
-pub use app_data::AppData;
+/// Read-only tree traversal helpers.
+pub mod visit;
+
+pub use app_data::{AppState, ConfigDocument, ElementHook};
+pub use path::ElementPath;

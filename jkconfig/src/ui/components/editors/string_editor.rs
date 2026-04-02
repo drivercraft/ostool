@@ -5,8 +5,8 @@ use cursive::{
 };
 
 use crate::{
-    data::{item::ItemType, types::ElementType},
-    ui::handle_back,
+    data::{AppState, item::ItemType, types::ElementType},
+    ui::{components::menu::refresh_menu, handle_back},
 };
 
 /// 显示字符串编辑对话框
@@ -41,13 +41,15 @@ pub fn show_string_edit(
                 .call_on_name("edit_value", |v: &mut EditView| v.get_content())
                 .unwrap();
 
-            if let Some(app) = s.user_data::<crate::data::app_data::AppData>()
-                && let Some(ElementType::Item(item)) = app.root.get_mut_by_key(&key)
+            if let Some(app) = s.user_data::<AppState>()
+                && let Some(ElementType::Item(item)) = app.get_mut_by_key(&key)
                 && let ItemType::String { value, .. } = &mut item.item_type
             {
                 *value = Some(st.to_string());
+                app.mark_dirty();
             }
             handle_back(s);
+            refresh_menu(s);
         })
         .button("Cancel", handle_back),
     );

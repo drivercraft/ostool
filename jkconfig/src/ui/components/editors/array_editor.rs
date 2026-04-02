@@ -8,8 +8,8 @@ use cursive::{
 };
 
 use crate::{
-    data::{item::ItemType, types::ElementType},
-    ui::handle_back,
+    data::{AppState, item::ItemType, types::ElementType},
+    ui::{components::menu::refresh_menu, handle_back},
 };
 
 /// 显示数组编辑对话框
@@ -97,7 +97,7 @@ fn on_delete(s: &mut Cursive) {
         && *idx != usize::MAX
     {
         // Get the value to display in confirmation
-        let value = if let Some(app) = s.user_data::<crate::data::app_data::AppData>()
+        let value = if let Some(app) = s.user_data::<AppState>()
             && let Some(ElementType::Item(item)) = app.current()
             && let ItemType::Array(array_item) = &item.item_type
             && *idx < array_item.values.len()
@@ -118,14 +118,16 @@ fn on_delete(s: &mut Cursive) {
             )
             .title("Confirm Delete")
             .button("Yes", move |s| {
-                if let Some(app) = s.user_data::<crate::data::app_data::AppData>()
+                if let Some(app) = s.user_data::<AppState>()
                     && let Some(ElementType::Item(item)) = app.current_mut()
                     && let ItemType::Array(array_item) = &mut item.item_type
                     && *idx < array_item.values.len()
                 {
                     array_item.values.remove(*idx);
+                    app.mark_dirty();
                     s.pop_layer(); // Close confirm dialog
                     refresh_array_view(s);
+                    refresh_menu(s);
                 }
             })
             .button("No", |s| {
@@ -154,13 +156,15 @@ fn show_add_item_dialog(s: &mut Cursive, key: &str) {
                 .unwrap();
 
             if !content.is_empty() {
-                if let Some(app) = s.user_data::<crate::data::app_data::AppData>()
-                    && let Some(ElementType::Item(item)) = app.root.get_mut_by_key(&key)
+                if let Some(app) = s.user_data::<AppState>()
+                    && let Some(ElementType::Item(item)) = app.get_mut_by_key(&key)
                     && let ItemType::Array(array_item) = &mut item.item_type
                 {
                     array_item.values.push(content.to_string());
+                    app.mark_dirty();
                     s.pop_layer(); // Close add dialog
                     refresh_array_view(s);
+                    refresh_menu(s);
                 }
             } else {
                 s.add_layer(
@@ -180,8 +184,8 @@ fn show_edit_item_dialog(s: &mut Cursive, key: &str, idx: usize) {
     let key = key.to_string();
 
     // Get current value
-    let current_value = if let Some(app) = s.user_data::<crate::data::app_data::AppData>()
-        && let Some(ElementType::Item(item)) = app.root.get_by_key(&key)
+    let current_value = if let Some(app) = s.user_data::<AppState>()
+        && let Some(ElementType::Item(item)) = app.get_by_key(&key)
         && let ItemType::Array(array_item) = &item.item_type
         && idx < array_item.values.len()
     {
@@ -212,14 +216,16 @@ fn show_edit_item_dialog(s: &mut Cursive, key: &str, idx: usize) {
                 .unwrap();
 
             if !content.is_empty() {
-                if let Some(app) = s.user_data::<crate::data::app_data::AppData>()
-                    && let Some(ElementType::Item(item)) = app.root.get_mut_by_key(&key)
+                if let Some(app) = s.user_data::<AppState>()
+                    && let Some(ElementType::Item(item)) = app.get_mut_by_key(&key)
                     && let ItemType::Array(array_item) = &mut item.item_type
                     && idx < array_item.values.len()
                 {
                     array_item.values[idx] = content.to_string();
+                    app.mark_dirty();
                     s.pop_layer(); // Close edit dialog
                     refresh_array_view(s);
+                    refresh_menu(s);
                 }
             } else {
                 s.add_layer(
@@ -237,7 +243,7 @@ fn show_edit_item_dialog(s: &mut Cursive, key: &str, idx: usize) {
 
 fn refresh_array_view(s: &mut Cursive) {
     // Get current array values
-    let values = if let Some(app) = s.user_data::<crate::data::app_data::AppData>()
+    let values = if let Some(app) = s.user_data::<AppState>()
         && let Some(ElementType::Item(item)) = app.current()
         && let ItemType::Array(array_item) = &item.item_type
     {
