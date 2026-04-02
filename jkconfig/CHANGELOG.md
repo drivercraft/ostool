@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/drivercraft/ostool/compare/jkconfig-v0.2.0...jkconfig-v0.2.1) - 2026-04-02
+
+### Other
+
+- simplify default implementation for BoardGlobalConfigFile and improve code clarity
+- remove logging dependencies and related code from the project
+
 ## [0.2.0](https://github.com/drivercraft/ostool/compare/jkconfig-v0.1.8...jkconfig-v0.2.0) - 2026-04-02
 
 ### Added

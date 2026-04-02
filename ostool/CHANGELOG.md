@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1](https://github.com/drivercraft/ostool/compare/ostool-v0.12.0...ostool-v0.12.1) - 2026-04-02
+
+### Added
+
+- enhance board configuration input handling and improve terminal interaction
+
+### Other
+
+- simplify default implementation for BoardGlobalConfigFile and improve code clarity
+- reorganize imports and improve code formatting in multiple files
+- Update dependencies and improve hash calculations
+- remove logging dependencies and related code from the project
+- update configuration handling in install script and remove default config writing from CLI
+
 ## [0.12.0](https://github.com/drivercraft/ostool/compare/ostool-v0.11.2...ostool-v0.12.0) - 2026-04-02
 
 ### Added
