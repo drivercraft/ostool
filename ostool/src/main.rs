@@ -151,7 +151,6 @@ async fn try_main() -> Result<()> {
 
     match command {
         SubCommands::Board(args) => {
-            let _ = env_logger::try_init();
             match args.command {
                 BoardSubCommands::Ls(server) => {
                     let global_config = load_board_global_config_with_notice()?;

@@ -102,7 +102,7 @@ impl AsyncTerminal {
     }
 
     async fn run_with_output<W, F>(
-        mut self,
+        self,
         mut inbound_rx: mpsc::UnboundedReceiver<Vec<u8>>,
         outbound_tx: mpsc::UnboundedSender<Vec<u8>>,
         mut output: W,
@@ -112,9 +112,33 @@ impl AsyncTerminal {
         W: Write,
         F: FnMut(&TerminalHandle, u8) + Send,
     {
-        let cleanup_needed = io::stdin().is_terminal() && io::stdout().is_terminal();
-        if cleanup_needed {
+        let interactive_input_enabled = io::stdin().is_terminal() && io::stdout().is_terminal();
+        self.run_with_output_mode(
+            &mut inbound_rx,
+            outbound_tx,
+            &mut output,
+            &mut on_byte,
+            interactive_input_enabled,
+        )
+        .await
+    }
+
+    async fn run_with_output_mode<W, F>(
+        mut self,
+        inbound_rx: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+        outbound_tx: mpsc::UnboundedSender<Vec<u8>>,
+        output: &mut W,
+        on_byte: &mut F,
+        interactive_input_enabled: bool,
+    ) -> anyhow::Result<()>
+    where
+        W: Write,
+        F: FnMut(&TerminalHandle, u8) + Send,
+    {
+        if interactive_input_enabled {
             enable_raw_mode().ok();
+        } else {
+            debug!("keyboard input disabled because stdin/stdout are not TTY");
         }
 
         let handle = TerminalHandle::new(outbound_tx);
@@ -122,18 +146,18 @@ impl AsyncTerminal {
             handle.timeout_after(timeout);
         }
 
-        let mut events = EventStream::new();
+        let mut events = interactive_input_enabled.then(EventStream::new);
         let result = self
             .run_loop(
                 &handle,
-                &mut inbound_rx,
+                inbound_rx,
                 &mut events,
-                &mut output,
-                &mut on_byte,
+                output,
+                on_byte,
             )
             .await;
 
-        if cleanup_needed {
+        if interactive_input_enabled {
             restore_terminal_mode();
             println!();
             eprintln!("✓ 已退出串口终端模式");
@@ -154,7 +178,7 @@ impl AsyncTerminal {
         &mut self,
         handle: &TerminalHandle,
         inbound_rx: &mut mpsc::UnboundedReceiver<Vec<u8>>,
-        events: &mut EventStream,
+        events: &mut Option<EventStream>,
         output: &mut W,
         on_byte: &mut F,
     ) -> anyhow::Result<()>
@@ -191,7 +215,13 @@ impl AsyncTerminal {
                         None => break,
                     }
                 }
-                maybe_event = events.next() => {
+                maybe_event = async {
+                    if let Some(events) = events.as_mut() {
+                        events.next().await
+                    } else {
+                        futures::future::pending().await
+                    }
+                } => {
                     match maybe_event {
                         Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
                             match self.key_processor.process_key(key)? {
@@ -638,7 +668,7 @@ pub fn restore_terminal_mode() {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{io::Cursor, sync::{Arc, Mutex}, time::Duration};
 
     use super::{KeyProcessor, TerminalAction, TerminalHandle, encode_key_event};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -703,5 +733,62 @@ mod tests {
         assert!(!handle.timed_out());
         assert!(handle.stop_deadline().is_none());
         assert!(handle.timeout_deadline().is_some());
+    }
+
+    #[tokio::test]
+    async fn non_tty_mode_consumes_output_without_event_stream() {
+        let terminal = super::AsyncTerminal::new(super::TerminalConfig {
+            intercept_exit_sequence: true,
+            timeout: None,
+            timeout_label: "test terminal".to_string(),
+        });
+        let (inbound_tx, mut inbound_rx) = mpsc::unbounded_channel();
+        let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_clone = seen.clone();
+        let mut written = Vec::new();
+
+        inbound_tx.send(b"hello".to_vec()).unwrap();
+        drop(inbound_tx);
+
+        terminal
+            .run_with_output_mode(
+                &mut inbound_rx,
+                outbound_tx,
+                &mut Cursor::new(&mut written),
+                &mut move |_handle, byte| seen_clone.lock().unwrap().push(byte),
+                false,
+            )
+            .await
+            .unwrap();
+
+        drop(outbound_rx);
+        assert_eq!(written, b"hello");
+        assert_eq!(*seen.lock().unwrap(), b"hello");
+    }
+
+    #[tokio::test]
+    async fn non_tty_mode_still_honors_timeout() {
+        let terminal = super::AsyncTerminal::new(super::TerminalConfig {
+            intercept_exit_sequence: true,
+            timeout: Some(Duration::from_millis(10)),
+            timeout_label: "test terminal".to_string(),
+        });
+        let (_inbound_tx, mut inbound_rx) = mpsc::unbounded_channel();
+        let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel();
+        let mut written = Vec::new();
+
+        let err = terminal
+            .run_with_output_mode(
+                &mut inbound_rx,
+                outbound_tx,
+                &mut Cursor::new(&mut written),
+                &mut |_handle, _byte| {},
+                false,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("timed out"));
     }
 }
