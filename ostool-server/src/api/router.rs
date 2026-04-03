@@ -1522,18 +1522,39 @@ mod tests {
         web::first_asset_path,
     };
 
+    #[cfg(unix)]
+    type RelayServerHandle =
+        tokio::task::JoinHandle<std::io::Result<tokio_modbus::server::Terminated>>;
+    #[cfg(unix)]
+    type RelayRequestRx = mpsc::UnboundedReceiver<(u8, u16, bool)>;
+    #[cfg(unix)]
+    type RelayTestServer = (
+        String,
+        TTYPort,
+        RelayServerHandle,
+        RelayRequestRx,
+        oneshot::Sender<()>,
+    );
+
+    fn test_server_config(root: &std::path::Path) -> ServerConfig {
+        ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            data_dir: root.join("data"),
+            board_dir: root.join("boards"),
+            dtb_dir: root.join("dtbs"),
+            tftp: TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(root.join("tftp"))),
+            network: crate::TftpNetworkConfig {
+                interface: "lo".into(),
+            },
+        }
+    }
+
     async fn test_router() -> Router {
         let temp = tempdir().unwrap();
         let root = temp.path().to_path_buf();
         std::mem::forget(temp);
         let config_path = root.join(".ostool-server.toml");
-        let mut config = ServerConfig::default();
-        config.listen_addr = "127.0.0.1:0".parse().unwrap();
-        config.network.interface = "lo".into();
-        config.data_dir = root.join("data");
-        config.board_dir = root.join("boards");
-        config.dtb_dir = root.join("dtbs");
-        config.tftp = TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(root.join("tftp")));
+        let config = test_server_config(&root);
         let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
         let state = build_app_state(config_path, config, manager).await.unwrap();
         state.ensure_data_dirs().await.unwrap();
@@ -1649,13 +1670,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn spawn_relay_test_server() -> (
-        String,
-        TTYPort,
-        tokio::task::JoinHandle<std::io::Result<tokio_modbus::server::Terminated>>,
-        mpsc::UnboundedReceiver<(u8, u16, bool)>,
-        oneshot::Sender<()>,
-    ) {
+    fn spawn_relay_test_server() -> RelayTestServer {
         let (master, mut slave) = TTYPort::pair().unwrap();
         slave.set_exclusive(false).unwrap();
         let slave_path = slave.name().unwrap();

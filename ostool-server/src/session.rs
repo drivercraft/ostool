@@ -244,35 +244,30 @@ async fn run_session_actor(
     session: Arc<SessionState>,
     mut command_rx: mpsc::UnboundedReceiver<SessionCommand>,
 ) {
-    while let Some(command) = command_rx.recv().await {
-        match command {
-            SessionCommand::Stop(reason) => {
-                if !session.begin_release() {
-                    break;
-                }
+    if let Some(SessionCommand::Stop(reason)) = command_rx.recv().await {
+        if !session.begin_release() {
+            return;
+        }
 
-                session.signal_shutdown();
-                let snapshot = session.snapshot().await;
+        session.signal_shutdown();
+        let snapshot = session.snapshot().await;
 
-                if let Err(err) = app_state
-                    .transition_board_to_releasing(&snapshot.board_id, &snapshot.id)
-                    .await
-                {
-                    log::warn!(
-                        "failed to mark board `{}` releasing for session `{}`: {err}",
-                        snapshot.board_id,
-                        snapshot.id
-                    );
-                }
+        if let Err(err) = app_state
+            .transition_board_to_releasing(&snapshot.board_id, &snapshot.id)
+            .await
+        {
+            log::warn!(
+                "failed to mark board `{}` releasing for session `{}`: {err}",
+                snapshot.board_id,
+                snapshot.id
+            );
+        }
 
-                if let Err(err) = app_state.enqueue_release(session.clone(), reason) {
-                    log::warn!(
-                        "failed to enqueue release job for session `{}`: {err}",
-                        snapshot.id
-                    );
-                }
-                break;
-            }
+        if let Err(err) = app_state.enqueue_release(session.clone(), reason) {
+            log::warn!(
+                "failed to enqueue release job for session `{}`: {err}",
+                snapshot.id
+            );
         }
     }
 }

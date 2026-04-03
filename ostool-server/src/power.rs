@@ -146,6 +146,16 @@ mod tests {
         BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, PxeProfile,
     };
 
+    type RelayServerHandle =
+        tokio::task::JoinHandle<std::io::Result<tokio_modbus::server::Terminated>>;
+    type RelayRequestRx = mpsc::UnboundedReceiver<(u8, u16, bool)>;
+    type RelayTestServer = (
+        tokio_serial::SerialStream,
+        RelayServerHandle,
+        RelayRequestRx,
+        oneshot::Sender<()>,
+    );
+
     fn board_with_power_management(power_management: PowerManagementConfig) -> BoardConfig {
         BoardConfig {
             id: "demo".into(),
@@ -248,12 +258,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn spawn_relay_test_server() -> (
-        tokio_serial::SerialStream,
-        tokio::task::JoinHandle<std::io::Result<tokio_modbus::server::Terminated>>,
-        mpsc::UnboundedReceiver<(u8, u16, bool)>,
-        oneshot::Sender<()>,
-    ) {
+    fn spawn_relay_test_server() -> RelayTestServer {
         let (client, server) = tokio_serial::SerialStream::pair().unwrap();
         let (request_tx, request_rx) = mpsc::unbounded_channel();
         let (stop_tx, stop_rx) = oneshot::channel();

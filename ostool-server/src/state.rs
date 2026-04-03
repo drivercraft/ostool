@@ -245,7 +245,7 @@ impl AppState {
 
         for session in sessions {
             let snapshot = session.snapshot().await;
-            if snapshot.state.is_releasing() {
+            if snapshot.state == crate::session::SessionLifecycleState::Releasing {
                 continue;
             }
             if snapshot.expires_at <= now {
@@ -639,16 +639,6 @@ pub enum TouchSessionError {
     Releasing,
 }
 
-trait SessionLifecycleStateExt {
-    fn is_releasing(self) -> bool;
-}
-
-impl SessionLifecycleStateExt for crate::session::SessionLifecycleState {
-    fn is_releasing(self) -> bool {
-        self == crate::session::SessionLifecycleState::Releasing
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{fs, path::Path, sync::Arc, time::Duration};
@@ -770,12 +760,16 @@ mod tests {
 
     async fn test_state(root: &Path) -> super::AppState {
         let config_path = root.join(".ostool-server.toml");
-        let mut config = ServerConfig::default();
-        config.listen_addr = "127.0.0.1:0".parse().unwrap();
-        config.network.interface = "lo".into();
-        config.data_dir = root.join("data");
-        config.board_dir = root.join("boards");
-        config.dtb_dir = root.join("dtbs");
+        let config = ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            data_dir: root.join("data"),
+            board_dir: root.join("boards"),
+            dtb_dir: root.join("dtbs"),
+            network: crate::TftpNetworkConfig {
+                interface: "lo".into(),
+            },
+            ..ServerConfig::default()
+        };
         let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
         build_app_state(config_path, config, manager).await.unwrap()
     }
@@ -863,12 +857,16 @@ mod tests {
         let root = temp.path().to_path_buf();
         let power_log = root.join("power.log");
         let config_path = root.join(".ostool-server.toml");
-        let mut config = ServerConfig::default();
-        config.listen_addr = "127.0.0.1:0".parse().unwrap();
-        config.network.interface = "lo".into();
-        config.data_dir = root.join("data");
-        config.board_dir = root.join("boards");
-        config.dtb_dir = root.join("dtbs");
+        let config = ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            data_dir: root.join("data"),
+            board_dir: root.join("boards"),
+            dtb_dir: root.join("dtbs"),
+            network: crate::TftpNetworkConfig {
+                interface: "lo".into(),
+            },
+            ..ServerConfig::default()
+        };
         let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
         let state = build_app_state(config_path, config, manager).await.unwrap();
         *state.tftp_manager.write().await = Arc::new(FailingRemoveTftpManager {
@@ -984,12 +982,16 @@ kind = "pxe"
         .unwrap();
 
         let config_path = root.join(".ostool-server.toml");
-        let mut config = ServerConfig::default();
-        config.listen_addr = "127.0.0.1:0".parse().unwrap();
-        config.network.interface = "lo".into();
-        config.data_dir = root.join("data");
-        config.board_dir = board_dir;
-        config.dtb_dir = root.join("dtbs");
+        let config = ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            data_dir: root.join("data"),
+            board_dir,
+            dtb_dir: root.join("dtbs"),
+            network: crate::TftpNetworkConfig {
+                interface: "lo".into(),
+            },
+            ..ServerConfig::default()
+        };
         let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
         let state = build_app_state(config_path, config, manager).await.unwrap();
 

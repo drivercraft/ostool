@@ -101,13 +101,16 @@ fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandl
 
     std::fs::create_dir_all(&board_dir)
         .with_context(|| format!("failed to create {}", board_dir.display()))?;
-    let mut config = ServerConfig::default();
-    config.listen_addr = "127.0.0.1:0".parse().unwrap();
-    config.network.interface = "lo".into();
-    config.data_dir = data_dir;
-    config.board_dir = board_dir.clone();
-    config.dtb_dir = dtb_dir;
-    config.tftp = TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(tftp_root));
+    let config = ServerConfig {
+        listen_addr: "127.0.0.1:0".parse().unwrap(),
+        data_dir,
+        board_dir: board_dir.clone(),
+        dtb_dir,
+        tftp: TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(tftp_root)),
+        network: ostool_server::TftpNetworkConfig {
+            interface: "lo".into(),
+        },
+    };
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)
         .with_context(|| format!("failed to write {}", config_path.display()))?;
 
@@ -210,16 +213,13 @@ fn run_ws_lifecycle_case(mode: ClientShutdownMode) -> Result<()> {
         runtime.block_on(run_client_flow(&base_url, mode, serial_ready_tx))
     });
 
-    match serial_ready_rx.recv_timeout(Duration::from_secs(3)) {
-        Ok(()) => {
-            serial_master
-                .write_all(EXPECTED_SERIAL_PAYLOAD)
-                .context("failed to write PTY payload")?;
-            serial_master
-                .flush()
-                .context("failed to flush PTY payload")?;
-        }
-        Err(_) => {}
+    if let Ok(()) = serial_ready_rx.recv_timeout(Duration::from_secs(3)) {
+        serial_master
+            .write_all(EXPECTED_SERIAL_PAYLOAD)
+            .context("failed to write PTY payload")?;
+        serial_master
+            .flush()
+            .context("failed to flush PTY payload")?;
     }
 
     let client_result = client_thread
@@ -390,8 +390,8 @@ where
         }
         if Instant::now() >= deadline {
             bail!(
-                "timed out waiting for power status predicate, last status: {}",
-                format!("{status:?}")
+                "timed out waiting for power status predicate, last status: {:?}",
+                status
             );
         }
         tokio::time::sleep(POLL_INTERVAL).await;

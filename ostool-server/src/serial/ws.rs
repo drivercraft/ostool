@@ -368,12 +368,14 @@ mod tests {
 
     async fn test_state(root: &std::path::Path) -> crate::AppState {
         let config_path = root.join(".ostool-server.toml");
-        let mut config = ServerConfig::default();
-        config.listen_addr = "127.0.0.1:0".parse().unwrap();
-        config.data_dir = root.join("data");
-        config.board_dir = root.join("boards");
-        config.dtb_dir = root.join("dtbs");
-        config.tftp = TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(root.join("tftp")));
+        let config = ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            data_dir: root.join("data"),
+            board_dir: root.join("boards"),
+            dtb_dir: root.join("dtbs"),
+            tftp: TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(root.join("tftp"))),
+            ..ServerConfig::default()
+        };
         let manager: std::sync::Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
         build_app_state(config_path, config, manager).await.unwrap()
     }
