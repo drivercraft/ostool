@@ -1092,7 +1092,7 @@ impl TuiApp {
         let text = Line::from(vec![
             Span::styled(" JKConfig ", self.ui.theme.accent()),
             Span::styled(
-                format!("{title}"),
+                title.to_string(),
                 self.ui.theme.text().add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
@@ -1102,7 +1102,7 @@ impl TuiApp {
                 if dirty.is_empty() {
                     "".into()
                 } else {
-                    format!("{dirty}")
+                    dirty.to_string()
                 },
                 if dirty.is_empty() {
                     self.ui.theme.muted()

@@ -331,7 +331,7 @@ impl WalkContext {
             if variants.len() == 2 {
                 let has_null = variants.iter().any(|v| {
                     v.get("type").and_then(|t| t.as_str()) == Some("null")
-                        && v.as_object().map_or(false, |o| o.len() <= 1)
+                        && v.as_object().is_some_and(|o| o.len() <= 1)
                 });
                 if has_null {
                     let non_null = variants
