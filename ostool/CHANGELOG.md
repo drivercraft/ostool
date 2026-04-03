@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.4](https://github.com/drivercraft/ostool/compare/ostool-v0.12.3...ostool-v0.12.4) - 2026-04-03
+
+### Added
+
+- enhance UI components and add board statistics in the management view
+- add apply_overrides method to BoardRunConfig and refactor board command handling
+
 ## [0.12.3](https://github.com/drivercraft/ostool/compare/ostool-v0.12.2...ostool-v0.12.3) - 2026-04-03
 
 ### Added

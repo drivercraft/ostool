@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/drivercraft/ostool/compare/ostool-server-v0.1.3...ostool-server-v0.1.4) - 2026-04-03
+
+### Added
+
+- enhance UI components and add board statistics in the management view
+- add upgrade script for ostool-server installation
+
+### Other
+
+- Refactor serial configuration handling and update UI components
+
 ## [0.1.3](https://github.com/drivercraft/ostool/compare/ostool-server-v0.1.2...ostool-server-v0.1.3) - 2026-04-03
 
 ### Other
