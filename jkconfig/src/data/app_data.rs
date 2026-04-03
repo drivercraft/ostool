@@ -647,33 +647,11 @@ impl AppState {
     }
 
     pub fn element_kind(element: &ElementType) -> &'static str {
-        match element {
-            ElementType::Menu(_) => "Object",
-            ElementType::OneOf(_) => "OneOf",
-            ElementType::Item(item) => match &item.item_type {
-                ItemType::String { .. } => "String",
-                ItemType::Number { .. } => "Number",
-                ItemType::Integer { .. } => "Integer",
-                ItemType::Boolean { .. } => "Boolean",
-                ItemType::Enum(_) => "Enum",
-                ItemType::Array(_) => "Array",
-            },
-        }
+        element_kind_and_tag(element).0
     }
 
     pub fn element_tag(element: &ElementType) -> &'static str {
-        match element {
-            ElementType::Menu(_) => "OBJ",
-            ElementType::OneOf(_) => "ALT",
-            ElementType::Item(item) => match &item.item_type {
-                ItemType::String { .. } => "TXT",
-                ItemType::Number { .. } => "NUM",
-                ItemType::Integer { .. } => "INT",
-                ItemType::Boolean { .. } => "BOL",
-                ItemType::Enum(_) => "ENU",
-                ItemType::Array(_) => "ARR",
-            },
-        }
+        element_kind_and_tag(element).1
     }
 
     pub fn element_status(element: &ElementType) -> &'static str {
@@ -768,38 +746,13 @@ impl AppState {
             }
             ElementType::Item(item) => match &item.item_type {
                 ItemType::String { value, default } => {
-                    lines.push(String::new());
-                    lines.push(format!(
-                        "Current: {}",
-                        value.clone().unwrap_or_else(|| "<empty>".to_string())
-                    ));
-                    if let Some(default) = default {
-                        lines.push(format!("Default: {default}"));
-                    }
+                    push_current_and_default(&mut lines, value.as_deref(), default.as_deref());
                 }
                 ItemType::Number { value, default } => {
-                    lines.push(String::new());
-                    lines.push(format!(
-                        "Current: {}",
-                        value
-                            .map(|value| value.to_string())
-                            .unwrap_or_else(|| "<empty>".to_string())
-                    ));
-                    if let Some(default) = default {
-                        lines.push(format!("Default: {default}"));
-                    }
+                    push_current_and_default(&mut lines, value.as_ref(), default.as_ref());
                 }
                 ItemType::Integer { value, default } => {
-                    lines.push(String::new());
-                    lines.push(format!(
-                        "Current: {}",
-                        value
-                            .map(|value| value.to_string())
-                            .unwrap_or_else(|| "<empty>".to_string())
-                    ));
-                    if let Some(default) = default {
-                        lines.push(format!("Default: {default}"));
-                    }
+                    push_current_and_default(&mut lines, value.as_ref(), default.as_ref());
                 }
                 ItemType::Boolean { value, default } => {
                     lines.push(String::new());
@@ -836,6 +789,38 @@ impl AppState {
     }
 }
 
+fn element_kind_and_tag(element: &ElementType) -> (&'static str, &'static str) {
+    match element {
+        ElementType::Menu(_) => ("Object", "OBJ"),
+        ElementType::OneOf(_) => ("OneOf", "ALT"),
+        ElementType::Item(item) => match &item.item_type {
+            ItemType::String { .. } => ("String", "TXT"),
+            ItemType::Number { .. } => ("Number", "NUM"),
+            ItemType::Integer { .. } => ("Integer", "INT"),
+            ItemType::Boolean { .. } => ("Boolean", "BOL"),
+            ItemType::Enum(_) => ("Enum", "ENU"),
+            ItemType::Array(_) => ("Array", "ARR"),
+        },
+    }
+}
+
+fn push_current_and_default<T: std::fmt::Display>(
+    lines: &mut Vec<String>,
+    value: Option<T>,
+    default: Option<T>,
+) {
+    lines.push(String::new());
+    lines.push(format!(
+        "Current: {}",
+        value
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "<empty>".to_string())
+    ));
+    if let Some(default) = default {
+        lines.push(format!("Default: {default}"));
+    }
+}
+
 fn collect_missing_required_element(element: &ElementType, missing: &mut Vec<String>) {
     match element {
         ElementType::Menu(menu) => {
@@ -853,21 +838,11 @@ fn collect_missing_required_element(element: &ElementType, missing: &mut Vec<Str
                 missing.push(one_of.key());
             }
         }
-        ElementType::Item(item) => match &item.item_type {
-            ItemType::String { value, .. } if item.base.is_required && value.is_none() => {
+        ElementType::Item(item) => {
+            if item.base.is_required && element.is_none() {
                 missing.push(item.base.key());
             }
-            ItemType::Number { value, .. } if item.base.is_required && value.is_none() => {
-                missing.push(item.base.key());
-            }
-            ItemType::Integer { value, .. } if item.base.is_required && value.is_none() => {
-                missing.push(item.base.key());
-            }
-            ItemType::Enum(enum_item) if item.base.is_required && enum_item.value.is_none() => {
-                missing.push(item.base.key());
-            }
-            _ => {}
-        },
+        }
     }
 }
 

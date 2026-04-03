@@ -291,7 +291,7 @@ impl TuiApp {
                     };
                     if self.ui.focus == FocusTarget::Detail
                         && self.ui.inline_editor.is_none()
-                        && self.inline_supported()
+                        && self.can_focus_detail()
                     {
                         self.begin_inline_editor()?;
                     }
@@ -669,7 +669,7 @@ impl TuiApp {
                     self.state.toggle_bool(path)?;
                 }
                 ItemType::String { .. } | ItemType::Integer { .. } | ItemType::Number { .. } => {
-                    if self.inline_supported() {
+                    if self.can_focus_detail() {
                         self.ui.focus = FocusTarget::Detail;
                         self.begin_inline_editor()?;
                     } else {
@@ -1212,7 +1212,7 @@ impl TuiApp {
             return;
         };
 
-        let show_inline = self.inline_supported();
+        let show_inline = self.can_focus_detail();
         match element {
             ElementType::Item(item)
                 if matches!(
@@ -1799,10 +1799,6 @@ impl TuiApp {
                     ItemType::String { .. } | ItemType::Integer { .. } | ItemType::Number { .. }
                 )
         )
-    }
-
-    fn inline_supported(&self) -> bool {
-        self.can_focus_detail()
     }
 
     fn has_modal(&self) -> bool {

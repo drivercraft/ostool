@@ -63,7 +63,7 @@ impl MenuConfigHandler {
         let config_path = tool.resolve_build_config_path(None);
         tool.ctx_mut().build_config_path = Some(config_path.clone());
 
-        let config = jkconfig::run::<BuildConfig>(config_path.clone(), true, &tool.ui_hocks())
+        let config = jkconfig::run::<BuildConfig>(config_path.clone(), true, &tool.ui_hooks())
             .await
             .with_context(|| format!("failed to load build config: {}", config_path.display()))?;
 

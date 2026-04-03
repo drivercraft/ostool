@@ -42,8 +42,6 @@ pub type HookApplySingle =
     Arc<dyn for<'a> Fn(&mut HookMutation<'a>, String) -> anyhow::Result<()> + Send + Sync>;
 pub type HookApplyMulti =
     Arc<dyn for<'a> Fn(&mut HookMutation<'a>, Vec<String>) -> anyhow::Result<()> + Send + Sync>;
-pub type HookApplyInput =
-    Arc<dyn for<'a> Fn(&mut HookMutation<'a>, String) -> anyhow::Result<()> + Send + Sync>;
 
 #[derive(Clone)]
 pub enum SingleSelectBinding {
@@ -78,7 +76,7 @@ pub enum InputBinding {
     SetOptionalInteger { path: ElementPath },
     SetNumber { path: ElementPath },
     SetOptionalNumber { path: ElementPath },
-    Custom(HookApplyInput),
+    Custom(HookApplySingle),
 }
 
 #[derive(Clone)]

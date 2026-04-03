@@ -346,7 +346,7 @@ impl Tool {
         let config_path = self.resolve_build_config_path(config_path);
         self.ctx.build_config_path = Some(config_path.clone());
 
-        let hooks = self.ui_hocks();
+        let hooks = self.ui_hooks();
         let Some(mut c): Option<BuildConfig> = jkconfig::run(config_path.clone(), menu, &hooks)
             .await
             .with_context(|| format!("failed to load build config: {}", config_path.display()))?
@@ -421,15 +421,15 @@ impl Tool {
         Ok(self.manifest_dir.clone())
     }
 
-    pub fn ui_hocks(&self) -> Vec<ElementHook> {
+    pub fn ui_hooks(&self) -> Vec<ElementHook> {
         vec![
-            self.ui_hock_feature_select(),
-            self.ui_hock_pacage_select(),
-            self.ui_hock_target_select(),
+            self.ui_hook_feature_select(),
+            self.ui_hook_package_select(),
+            self.ui_hook_target_select(),
         ]
     }
 
-    fn ui_hock_feature_select(&self) -> ElementHook {
+    fn ui_hook_feature_select(&self) -> ElementHook {
         let path = "system.features";
         let cargo_toml = self.workspace_dir.join("Cargo.toml");
         ElementHook {
@@ -472,7 +472,7 @@ impl Tool {
         }
     }
 
-    fn ui_hock_pacage_select(&self) -> ElementHook {
+    fn ui_hook_package_select(&self) -> ElementHook {
         let path = "system.package";
         let cargo_toml = self.workspace_dir.join("Cargo.toml");
 
@@ -507,7 +507,7 @@ impl Tool {
         }
     }
 
-    fn ui_hock_target_select(&self) -> ElementHook {
+    fn ui_hook_target_select(&self) -> ElementHook {
         let path = "system.target";
         let cargo_toml = self.workspace_dir.join("Cargo.toml");
 
@@ -523,14 +523,7 @@ impl Tool {
 
                 let mut warnings = Vec::new();
                 let (options, help) = if package.is_empty() {
-                    let rustup_targets = collect_rustup_targets()?;
-                    if rustup_targets.is_empty() {
-                        bail!("No Rust targets available from `rustup target list`");
-                    }
-                    (
-                        build_target_options(TargetCandidateSet::Rustup(&rustup_targets)),
-                        "Package has no docs.rs targets; showing rustup targets.".to_string(),
-                    )
+                    fallback_rustup_targets()?
                 } else {
                     match collect_package_doc_targets(&cargo_toml, &package) {
                         Ok(Some(doc_targets)) => (
@@ -538,30 +531,12 @@ impl Tool {
                             "Select a target declared by the selected package docs.rs metadata."
                                 .to_string(),
                         ),
-                        Ok(None) => {
-                            let rustup_targets = collect_rustup_targets()?;
-                            if rustup_targets.is_empty() {
-                                bail!("No Rust targets available from `rustup target list`");
-                            }
-                            (
-                                build_target_options(TargetCandidateSet::Rustup(&rustup_targets)),
-                                "Package has no docs.rs targets; showing rustup targets."
-                                    .to_string(),
-                            )
-                        }
+                        Ok(None) => fallback_rustup_targets()?,
                         Err(err) => {
                             warnings.push(format!(
                                 "Failed to inspect docs.rs targets for package '{package}': {err}"
                             ));
-                            let rustup_targets = collect_rustup_targets()?;
-                            if rustup_targets.is_empty() {
-                                bail!("No Rust targets available from `rustup target list`");
-                            }
-                            (
-                                build_target_options(TargetCandidateSet::Rustup(&rustup_targets)),
-                                "Package has no docs.rs targets; showing rustup targets."
-                                    .to_string(),
-                            )
+                            fallback_rustup_targets()?
                         }
                     }
                 };
@@ -598,6 +573,17 @@ struct RustupTargetOption {
 enum TargetCandidateSet<'a> {
     DocsRs(&'a [String]),
     Rustup(&'a [RustupTargetOption]),
+}
+
+fn fallback_rustup_targets() -> anyhow::Result<(Vec<HookOption>, String)> {
+    let rustup_targets = collect_rustup_targets()?;
+    if rustup_targets.is_empty() {
+        bail!("No Rust targets available from `rustup target list`");
+    }
+    Ok((
+        build_target_options(TargetCandidateSet::Rustup(&rustup_targets)),
+        "Package has no docs.rs targets; showing rustup targets.".to_string(),
+    ))
 }
 
 fn collect_feature_options(
@@ -1357,7 +1343,7 @@ targets = "aarch64-unknown-none"
         })
         .unwrap();
 
-        let hooks: Vec<ElementHook> = tool.ui_hocks();
+        let hooks: Vec<ElementHook> = tool.ui_hooks();
         assert!(
             hooks
                 .iter()
