@@ -43,15 +43,28 @@ export interface TftpStatus {
   last_error: string | null;
 }
 
+export type SerialPortKeyKind = "serial_number" | "usb_path";
+
+export interface SerialPortKey {
+  kind: SerialPortKeyKind;
+  value: string;
+}
+
 export interface SerialConfig {
-  port: string;
+  key: SerialPortKey;
   baud_rate: number;
+  resolved_device_path?: string | null;
+  resolved_usb_path?: string | null;
 }
 
 export interface SerialPortSummary {
-  port_name: string;
+  current_device_path: string;
   port_type: string;
   label: string;
+  primary_key_kind: SerialPortKeyKind | null;
+  primary_key_value: string | null;
+  usb_path: string | null;
+  stable_identity: boolean;
   usb_vendor_id: number | null;
   usb_product_id: number | null;
   manufacturer: string | null;

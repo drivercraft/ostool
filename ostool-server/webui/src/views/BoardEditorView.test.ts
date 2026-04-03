@@ -45,9 +45,13 @@ vi.mock("@/stores/ui", () => ({
 function makeSerialPorts(): SerialPortSummary[] {
   return [
     {
-      port_name: "/dev/ttyUSB0",
+      current_device_path: "/dev/ttyUSB0",
       port_type: "usb",
-      label: "/dev/ttyUSB0 (USB)",
+      label: "[SN] abc | /dev/serial/by-path/demo / /dev/ttyUSB0 / QinHeng / USB Serial",
+      primary_key_kind: "serial_number",
+      primary_key_value: "abc",
+      usb_path: "/dev/serial/by-path/demo",
+      stable_identity: true,
       usb_vendor_id: 0x1a86,
       usb_product_id: 0x7523,
       manufacturer: "QinHeng",
@@ -63,8 +67,13 @@ function makeBoard(id = "demo-board"): BoardConfig {
     board_type: "rk3568",
     tags: ["lab", "usb"],
     serial: {
-      port: "/dev/ttyUSB0",
+      key: {
+        kind: "serial_number",
+        value: "abc",
+      },
       baud_rate: 115200,
+      resolved_device_path: "/dev/ttyUSB0",
+      resolved_usb_path: "/dev/serial/by-path/demo",
     },
     power_management: {
       kind: "custom",

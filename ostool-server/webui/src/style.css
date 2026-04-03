@@ -507,6 +507,61 @@ a {
   background: var(--neutral-soft);
 }
 
+.serial-key-card {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(15, 104, 79, 0.08);
+  border: 1px solid rgba(15, 104, 79, 0.14);
+}
+
+.serial-key-badge {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--brand);
+  background: var(--brand-soft);
+  font-weight: 700;
+}
+
+.serial-key-badge.neutral {
+  color: var(--neutral);
+  background: var(--neutral-soft);
+}
+
+.serial-key-card strong,
+.serial-summary strong {
+  font-size: 0.98rem;
+  line-break: anywhere;
+}
+
+.serial-key-secondary {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-break: anywhere;
+}
+
+.serial-key-secondary.unresolved {
+  color: var(--warn);
+}
+
+.serial-summary {
+  display: grid;
+  gap: 4px;
+}
+
+.serial-baud {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
 .notice {
   margin-bottom: 18px;
   padding: 14px 16px;

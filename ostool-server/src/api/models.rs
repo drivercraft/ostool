@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::{
-        BoardConfig, BootConfig, PowerManagementConfig, SerialConfig, TftpConfig, TftpNetworkConfig,
+        BoardConfig, BootConfig, PowerManagementConfig, SerialConfig, SerialPortKeyKind,
+        TftpConfig, TftpNetworkConfig,
     },
     dtb_store::DtbFile,
     session::Session,
@@ -64,9 +65,13 @@ pub struct SerialStatusResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerialPortSummary {
-    pub port_name: String,
+    pub current_device_path: String,
     pub port_type: String,
     pub label: String,
+    pub primary_key_kind: Option<SerialPortKeyKind>,
+    pub primary_key_value: Option<String>,
+    pub usb_path: Option<String>,
+    pub stable_identity: bool,
     pub usb_vendor_id: Option<u16>,
     pub usb_product_id: Option<u16>,
     pub manufacturer: Option<String>,

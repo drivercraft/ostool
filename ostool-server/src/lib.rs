@@ -16,8 +16,9 @@ pub mod web;
 pub use api::router::build_router;
 pub use config::{
     BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement, PowerManagementConfig,
-    PxeProfile, SerialConfig, ServerConfig, SystemTftpdHpaConfig, TftpConfig, TftpNetworkConfig,
-    UbootProfile, VirtualPowerManagement, ZhongshengRelayPowerManagement,
+    PxeProfile, SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig, SystemTftpdHpaConfig,
+    TftpConfig, TftpNetworkConfig, UbootProfile, VirtualPowerManagement,
+    ZhongshengRelayPowerManagement,
 };
 pub use dtb_store::{DtbFile, DtbStore};
 pub use state::{AppState, BoardLeaseState, build_app_state};

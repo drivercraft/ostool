@@ -10,6 +10,7 @@ import type {
   BootConfig,
   DtbFileResponse,
   PowerManagementConfig,
+  SerialPortKeyKind,
   SerialPortSummary,
 } from "@/types/api";
 
@@ -23,7 +24,8 @@ interface BoardEditorFormState {
   notes: string;
   disabled: boolean;
   serial_enabled: boolean;
-  serial_port: string;
+  serial_key_kind: SerialPortKeyKind;
+  serial_key_value: string;
   serial_baud_rate: number;
   power_management_kind: PowerManagementKind;
   power_on_cmd: string;
@@ -56,6 +58,14 @@ const dtbFileInput = ref<HTMLInputElement | null>(null);
 const showingDtbUploadModal = ref(false);
 const isEditing = computed(() => typeof route.params.boardId === "string");
 const boardId = computed(() => route.params.boardId as string | undefined);
+const selectedBoardSerialSummary = computed(() => {
+  const selected = selectedBoardSerialOptionValue();
+  return serialPorts.value.find((port) => serialOptionValue(port) === selected) ?? null;
+});
+const selectedRelaySerialSummary = computed(() => {
+  const selected = form.value.relay_serial_port.trim();
+  return serialPorts.value.find((port) => relaySerialOptionValue(port) === selected) ?? null;
+});
 
 function defaultFormState(): BoardEditorFormState {
   return {
@@ -65,7 +75,8 @@ function defaultFormState(): BoardEditorFormState {
     notes: "",
     disabled: false,
     serial_enabled: false,
-    serial_port: "",
+    serial_key_kind: "serial_number",
+    serial_key_value: "",
     serial_baud_rate: DEFAULT_SERIAL_BAUD_RATE,
     power_management_kind: "custom",
     power_on_cmd: "",
@@ -88,7 +99,8 @@ function boardToFormState(board: BoardConfig): BoardEditorFormState {
 
   if (board.serial) {
     next.serial_enabled = true;
-    next.serial_port = board.serial.port;
+    next.serial_key_kind = board.serial.key.kind;
+    next.serial_key_value = board.serial.key.value;
     next.serial_baud_rate = board.serial.baud_rate;
   }
 
@@ -164,7 +176,10 @@ function buildRequestPayload(): AdminBoardUpsertRequest {
     disabled: form.value.disabled,
     serial: form.value.serial_enabled
       ? {
-          port: form.value.serial_port.trim(),
+          key: {
+            kind: form.value.serial_key_kind,
+            value: form.value.serial_key_value.trim(),
+          },
           baud_rate: form.value.serial_baud_rate,
         }
       : null,
@@ -182,7 +197,7 @@ function validateForm(): string {
   if (form.value.id.includes("/") || form.value.id.includes("\\")) {
     errors.push("板子 ID 不能包含路径分隔符");
   }
-  if (form.value.serial_enabled && !form.value.serial_port.trim()) {
+  if (form.value.serial_enabled && !form.value.serial_key_value.trim()) {
     errors.push("启用串口时必须选择串口设备");
   }
   if (form.value.serial_enabled && (!Number.isFinite(form.value.serial_baud_rate) || form.value.serial_baud_rate <= 0)) {
@@ -202,16 +217,150 @@ function validateForm(): string {
   return errors.join("\n");
 }
 
-function serialOptions(currentValue: string) {
+function serialOptionValue(port: SerialPortSummary) {
+  if (port.primary_key_kind && port.primary_key_value) {
+    return `${port.primary_key_kind}:${port.primary_key_value}`;
+  }
+  return `unstable:${port.current_device_path}`;
+}
+
+function serialOptionLabel(port: SerialPortSummary) {
+  const primary = port.primary_key_kind && port.primary_key_value
+    ? `[${port.primary_key_kind === "serial_number" ? "SN" : "USB PATH"}] ${port.primary_key_value}`
+    : `[UNSTABLE] ${port.current_device_path}`;
+  const details = [
+    port.usb_path,
+    port.current_device_path,
+    port.manufacturer,
+    port.product,
+  ].filter((value): value is string => Boolean(value));
+  return details.length === 0 ? primary : `${primary} | ${details.join(" / ")}`;
+}
+
+function relaySerialOptionValue(port: SerialPortSummary) {
+  return port.current_device_path;
+}
+
+function relaySerialOptionLabel(port: SerialPortSummary) {
+  return port.label;
+}
+
+function selectedBoardSerialOptionValue() {
+  const value = form.value.serial_key_value.trim();
+  if (!value) {
+    return "";
+  }
+  return `${form.value.serial_key_kind}:${value}`;
+}
+
+function parseBoardSerialSelection(value: string) {
+  const [kind, ...rest] = value.split(":");
+  if (kind === "serial_number" || kind === "usb_path") {
+    form.value.serial_key_kind = kind;
+    form.value.serial_key_value = rest.join(":");
+  }
+}
+
+function boardSerialOptions(currentValue: string) {
+  const options = new Map<string, { label: string; disabled: boolean }>();
+  for (const port of serialPorts.value) {
+    const value = serialOptionValue(port);
+    options.set(value, {
+      label: serialOptionLabel(port),
+      disabled: !port.stable_identity,
+    });
+  }
+  const trimmed = currentValue.trim();
+  if (trimmed && !options.has(trimmed)) {
+    const keyKind = form.value.serial_key_kind === "serial_number" ? "SN" : "USB PATH";
+    options.set(trimmed, {
+      label: `[${keyKind}] ${form.value.serial_key_value} (当前配置，未检测到)`,
+      disabled: false,
+    });
+  }
+  return Array.from(options.entries()).map(([value, option]) => ({
+    value,
+    label: option.label,
+    disabled: option.disabled,
+  }));
+}
+
+function relaySerialOptions(currentValue: string) {
   const options = new Map<string, string>();
   for (const port of serialPorts.value) {
-    options.set(port.port_name, port.label);
+    options.set(relaySerialOptionValue(port), relaySerialOptionLabel(port));
   }
   const trimmed = currentValue.trim();
   if (trimmed && !options.has(trimmed)) {
     options.set(trimmed, `${trimmed} (当前配置，未检测到)`);
   }
   return Array.from(options.entries()).map(([value, label]) => ({ value, label }));
+}
+
+function serialPrimaryLabel(kind: SerialPortKeyKind) {
+  return kind === "serial_number" ? "SN" : "USB PATH";
+}
+
+function selectedBoardSerialDescription() {
+  if (selectedBoardSerialSummary.value) {
+    const port = selectedBoardSerialSummary.value;
+    const secondary = [
+      port.usb_path,
+      port.current_device_path,
+      port.manufacturer,
+      port.product,
+      port.usb_vendor_id !== null && port.usb_product_id !== null
+        ? `VID:PID ${port.usb_vendor_id.toString(16).padStart(4, "0")}:${port.usb_product_id
+            .toString(16)
+            .padStart(4, "0")}`
+        : null,
+    ].filter((value): value is string => Boolean(value));
+    return {
+      primaryLabel: serialPrimaryLabel(port.primary_key_kind!),
+      primaryValue: port.primary_key_value!,
+      secondary,
+      unresolved: false,
+    };
+  }
+
+  if (!form.value.serial_key_value.trim()) {
+    return null;
+  }
+
+  return {
+    primaryLabel: serialPrimaryLabel(form.value.serial_key_kind),
+    primaryValue: form.value.serial_key_value.trim(),
+    secondary: ["当前未检测到对应设备"],
+    unresolved: true,
+  };
+}
+
+function selectedRelaySerialDescription() {
+  const port = selectedRelaySerialSummary.value;
+  if (!port) {
+    return form.value.relay_serial_port.trim()
+      ? {
+          primaryLabel: "当前设备",
+          primaryValue: form.value.relay_serial_port.trim(),
+          secondary: ["当前未检测到对应设备"],
+        }
+      : null;
+  }
+
+  const secondary = [
+    port.primary_key_kind && port.primary_key_value
+      ? `${serialPrimaryLabel(port.primary_key_kind)}: ${port.primary_key_value}`
+      : null,
+    port.usb_path,
+    port.manufacturer,
+    port.product,
+  ].filter((value): value is string => Boolean(value));
+
+  return {
+    primaryLabel: "当前设备",
+    primaryValue: port.current_device_path,
+    secondary,
+  };
 }
 
 function dtbOptions(currentValue: string) {
@@ -425,16 +574,32 @@ onMounted(() => {
           <div v-if="form.serial_enabled" class="form-grid two-columns">
             <label class="field">
               <span>串口设备</span>
-              <select v-model="form.serial_port">
+              <select
+                :value="selectedBoardSerialOptionValue()"
+                @change="parseBoardSerialSelection(($event.target as HTMLSelectElement).value)"
+              >
                 <option value="">请选择串口设备</option>
                 <option
-                  v-for="option in serialOptions(form.serial_port)"
+                  v-for="option in boardSerialOptions(selectedBoardSerialOptionValue())"
                   :key="option.value"
                   :value="option.value"
+                  :disabled="option.disabled"
                 >
                   {{ option.label }}
                 </option>
               </select>
+              <div v-if="selectedBoardSerialDescription()" class="serial-key-card">
+                <span class="serial-key-badge">{{ selectedBoardSerialDescription()!.primaryLabel }}</span>
+                <strong>{{ selectedBoardSerialDescription()!.primaryValue }}</strong>
+                <p
+                  v-for="detail in selectedBoardSerialDescription()!.secondary"
+                  :key="detail"
+                  class="serial-key-secondary"
+                  :class="{ unresolved: selectedBoardSerialDescription()!.unresolved }"
+                >
+                  {{ detail }}
+                </p>
+              </div>
             </label>
             <label class="field">
               <span>波特率</span>
@@ -469,13 +634,24 @@ onMounted(() => {
             <select v-model="form.relay_serial_port">
               <option value="">请选择串口设备</option>
               <option
-                v-for="option in serialOptions(form.relay_serial_port)"
+                v-for="option in relaySerialOptions(form.relay_serial_port)"
                 :key="option.value"
                 :value="option.value"
+                >
+                  {{ option.label }}
+                </option>
+              </select>
+            <div v-if="selectedRelaySerialDescription()" class="serial-key-card">
+              <span class="serial-key-badge neutral">{{ selectedRelaySerialDescription()!.primaryLabel }}</span>
+              <strong>{{ selectedRelaySerialDescription()!.primaryValue }}</strong>
+              <p
+                v-for="detail in selectedRelaySerialDescription()!.secondary"
+                :key="detail"
+                class="serial-key-secondary"
               >
-                {{ option.label }}
-              </option>
-            </select>
+                {{ detail }}
+              </p>
+            </div>
           </label>
         </section>
 

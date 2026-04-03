@@ -31,6 +31,7 @@ use crate::{
     power::{PowerAction, PowerActionError},
     serial::{
         discovery::list_serial_ports as discover_serial_ports,
+        discovery::resolve_serial_config,
         network::{
             default_non_loopback_interface_name,
             list_network_interfaces as discover_network_interfaces,
@@ -199,15 +200,15 @@ async fn get_admin_overview(
 async fn list_boards(
     State(state): State<AppState>,
 ) -> Result<axum::Json<Vec<BoardConfig>>, ApiError> {
-    Ok(axum::Json(
-        state
-            .boards
-            .read()
-            .await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>(),
-    ))
+    let boards = state
+        .boards
+        .read()
+        .await
+        .values()
+        .cloned()
+        .map(with_resolved_serial_config)
+        .collect::<Vec<_>>();
+    Ok(axum::Json(boards))
 }
 
 async fn list_dtbs(
@@ -246,7 +247,7 @@ async fn get_board(
         .get(&board_id)
         .cloned()
         .ok_or_else(|| ApiError::not_found(format!("board `{board_id}` not found")))?;
-    Ok(axum::Json(board))
+    Ok(axum::Json(with_resolved_serial_config(board)))
 }
 
 async fn get_board_power_status(
@@ -483,20 +484,22 @@ fn normalize_serial_config(
         return Ok(());
     };
 
-    let trimmed = serial.port.trim();
+    let trimmed = serial.key.value.trim();
     if trimmed.is_empty() {
         return Err(ApiError::bad_request(
-            "serial.port must not be empty when serial is configured",
+            "serial.key.value must not be empty when serial is configured",
         ));
     }
-    if trimmed.len() != serial.port.len() {
-        serial.port = trimmed.to_string();
+    if trimmed.len() != serial.key.value.len() {
+        serial.key.value = trimmed.to_string();
     }
     if serial.baud_rate == 0 {
         return Err(ApiError::bad_request(
             "serial.baud_rate must be > 0 when serial is configured",
         ));
     }
+    serial.resolved_device_path = None;
+    serial.resolved_usb_path = None;
     Ok(())
 }
 
@@ -1000,10 +1003,12 @@ async fn get_serial_status(
         .map(|session| session.serial_connected)
         .unwrap_or(false);
     let response = if let Some(serial) = board.serial {
+        let resolved = resolve_serial_config(&serial)
+            .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
         SerialStatusResponse {
             available: true,
             connected,
-            port: Some(serial.port),
+            port: Some(resolved.current_device_path),
             baud_rate: Some(serial.baud_rate),
             ws_url: Some(format!("/api/v1/sessions/{session_id}/serial/ws")),
         }
@@ -1017,6 +1022,17 @@ async fn get_serial_status(
         }
     };
     Ok(axum::Json(response))
+}
+
+fn with_resolved_serial_config(mut board: BoardConfig) -> BoardConfig {
+    if let Some(serial) = board.serial.as_mut()
+        && let Ok(resolved) = resolve_serial_config(serial)
+    {
+        serial.resolved_device_path = Some(resolved.current_device_path);
+        serial.resolved_usb_path = resolved.usb_path;
+    }
+
+    board
 }
 
 async fn serial_ws(
@@ -1513,8 +1529,8 @@ mod tests {
         build_app_state,
         config::{
             BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
-            PowerManagementConfig, ServerConfig, TftpConfig, VirtualPowerManagement,
-            ZhongshengRelayPowerManagement,
+            PowerManagementConfig, SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig,
+            TftpConfig, VirtualPowerManagement, ZhongshengRelayPowerManagement,
         },
         session::SessionLifecycleState,
         state::BoardLeaseState,
@@ -1622,9 +1638,14 @@ mod tests {
             id: board_id.into(),
             board_type: "rk3568".into(),
             tags: vec!["lab".into(), "usb".into()],
-            serial: Some(crate::config::SerialConfig {
-                port: "/dev/ttyUSB0".into(),
+            serial: Some(SerialConfig {
+                key: SerialPortKey {
+                    kind: SerialPortKeyKind::UsbPath,
+                    value: "/dev/serial/by-path/pci-0000:00:14.0-usb-0:10.4:1.0-port0".into(),
+                },
                 baud_rate: 115_200,
+                resolved_device_path: None,
+                resolved_usb_path: None,
             }),
             power_management: PowerManagementConfig::Custom(CustomPowerManagement {
                 power_on_cmd: "echo on".into(),
@@ -1878,7 +1899,12 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let board: BoardConfig = serde_json::from_slice(&body).unwrap();
         assert_eq!(board.id, "create-me");
-        assert_eq!(board.serial.unwrap().port, "/dev/ttyUSB0");
+        let serial = board.serial.unwrap();
+        assert_eq!(serial.key.kind, SerialPortKeyKind::UsbPath);
+        assert_eq!(
+            serial.key.value,
+            "/dev/serial/by-path/pci-0000:00:14.0-usb-0:10.4:1.0-port0"
+        );
     }
 
     #[tokio::test]
@@ -2633,7 +2659,13 @@ mod tests {
                     "id": "rk3568-dtb",
                     "board_type": "rk3568",
                     "tags": [],
-                    "serial": { "port": "/dev/ttyUSB0", "baud_rate": 115200 },
+                    "serial": {
+                        "key": {
+                            "kind": "usb_path",
+                            "value": "/dev/serial/by-path/pci-0000:00:14.0-usb-0:10.4:1.0-port0"
+                        },
+                        "baud_rate": 115200
+                    },
                     "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
                     "boot": { "kind": "uboot", "use_tftp": true, "dtb_name": "board.dtb" },
                     "notes": null,
@@ -2692,7 +2724,13 @@ mod tests {
             "id": "rk3568-01",
             "board_type": "rk3568",
             "tags": ["lab-a", "usbboot"],
-            "serial": { "port": "/dev/ttyUSB0", "baud_rate": 115200 },
+            "serial": {
+                "key": {
+                    "kind": "usb_path",
+                    "value": "/dev/serial/by-path/pci-0000:00:14.0-usb-0:10.4:1.0-port0"
+                },
+                "baud_rate": 115200
+            },
             "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
             "boot": { "kind": "uboot", "use_tftp": false },
             "notes": null,
@@ -2702,7 +2740,13 @@ mod tests {
             "id": "rk3568-02",
             "board_type": "rk3568",
             "tags": ["lab-b"],
-            "serial": { "port": "/dev/ttyUSB1", "baud_rate": 115200 },
+            "serial": {
+                "key": {
+                    "kind": "serial_number",
+                    "value": "BG02M9TR"
+                },
+                "baud_rate": 115200
+            },
             "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
             "boot": { "kind": "uboot", "use_tftp": false },
             "notes": null,
@@ -2923,7 +2967,13 @@ mod tests {
             "id": "demo-01",
             "board_type": "demo",
             "tags": [],
-            "serial": { "port": "/dev/ttyUSB0", "baud_rate": 115200 },
+            "serial": {
+                "key": {
+                    "kind": "usb_path",
+                    "value": "/dev/serial/by-path/pci-0000:00:14.0-usb-0:10.4:1.0-port0"
+                },
+                "baud_rate": 115200
+            },
             "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
             "boot": { "kind": "uboot", "use_tftp": false },
             "notes": null,
@@ -2965,7 +3015,13 @@ mod tests {
             "id": "demo-01",
             "board_type": "demo",
             "tags": [],
-            "serial": { "port": "/dev/ttyUSB0", "baud_rate": 115200 },
+            "serial": {
+                "key": {
+                    "kind": "usb_path",
+                    "value": "/dev/serial/by-path/pci-0000:00:14.0-usb-0:10.4:1.0-port0"
+                },
+                "baud_rate": 115200
+            },
             "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
             "boot": { "kind": "uboot", "use_tftp": false },
             "notes": null,

@@ -335,8 +335,25 @@ pub struct BoardConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SerialConfig {
-    pub port: String,
+    pub key: SerialPortKey,
     pub baud_rate: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_device_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_usb_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct SerialPortKey {
+    pub kind: SerialPortKeyKind,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SerialPortKeyKind {
+    SerialNumber,
+    UsbPath,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

@@ -12,6 +12,7 @@ use tokio_serial::SerialPortBuilderExt;
 use crate::{
     config::BoardConfig,
     power::{PowerAction, PowerActionError},
+    serial::discovery::resolve_serial_config,
     session::SessionState,
     state::AppState,
 };
@@ -47,10 +48,16 @@ async fn run_serial_ws_inner(
         .serial
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("board has no serial configuration"))?;
-    let port = tokio_serial::new(&serial.port, serial.baud_rate)
+    let resolved_serial = resolve_serial_config(serial)?;
+    let port = tokio_serial::new(&resolved_serial.current_device_path, serial.baud_rate)
         .timeout(Duration::from_millis(200))
         .open_native_async()
-        .with_context(|| format!("failed to open serial port {}", serial.port))?;
+        .with_context(|| {
+            format!(
+                "failed to open serial port {}",
+                resolved_serial.current_device_path
+            )
+        })?;
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
     let (mut serial_rx, mut serial_tx) = tokio::io::split(port);

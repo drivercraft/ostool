@@ -1,6 +1,17 @@
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
+
 use nusb::MaybeFuture;
 
-use crate::api::models::SerialPortSummary;
+use crate::{
+    api::models::SerialPortSummary,
+    config::{SerialConfig, SerialPortKeyKind},
+};
+
+const SERIAL_BY_PATH_DIR: &str = "/dev/serial/by-path";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct UsbDeviceRecord {
@@ -11,8 +22,81 @@ struct UsbDeviceRecord {
     serial_number: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SerialPortRecord {
+    pub current_device_path: String,
+    pub port_type: String,
+    pub primary_key_kind: Option<SerialPortKeyKind>,
+    pub primary_key_value: Option<String>,
+    pub usb_path: Option<String>,
+    pub stable_identity: bool,
+    pub usb_vendor_id: Option<u16>,
+    pub usb_product_id: Option<u16>,
+    pub manufacturer: Option<String>,
+    pub product: Option<String>,
+    pub serial_number: Option<String>,
+}
+
 pub fn list_serial_ports() -> anyhow::Result<Vec<SerialPortSummary>> {
+    let records = discover_serial_ports()?;
+    Ok(records
+        .into_iter()
+        .map(|record| SerialPortSummary {
+            label: serial_port_label(&record),
+            current_device_path: record.current_device_path,
+            port_type: record.port_type,
+            primary_key_kind: record.primary_key_kind,
+            primary_key_value: record.primary_key_value,
+            usb_path: record.usb_path,
+            stable_identity: record.stable_identity,
+            usb_vendor_id: record.usb_vendor_id,
+            usb_product_id: record.usb_product_id,
+            manufacturer: record.manufacturer,
+            product: record.product,
+            serial_number: record.serial_number,
+        })
+        .collect())
+}
+
+pub fn resolve_serial_config(serial: &SerialConfig) -> anyhow::Result<SerialPortRecord> {
+    let records = discover_serial_ports()?;
+    if let Some(matched) = records.into_iter().find(|record| {
+        record.primary_key_kind == Some(serial.key.kind.clone())
+            && record.primary_key_value.as_deref() == Some(serial.key.value.as_str())
+    }) {
+        return Ok(matched);
+    }
+
+    if serial.key.kind == SerialPortKeyKind::UsbPath && Path::new(&serial.key.value).exists() {
+        return Ok(SerialPortRecord {
+            current_device_path: serial.key.value.clone(),
+            port_type: "usb".to_string(),
+            primary_key_kind: Some(SerialPortKeyKind::UsbPath),
+            primary_key_value: Some(serial.key.value.clone()),
+            usb_path: serial
+                .key
+                .value
+                .starts_with(SERIAL_BY_PATH_DIR)
+                .then(|| serial.key.value.clone()),
+            stable_identity: true,
+            usb_vendor_id: None,
+            usb_product_id: None,
+            manufacturer: None,
+            product: None,
+            serial_number: None,
+        });
+    }
+
+    Err(anyhow::anyhow!(
+        "failed to resolve serial device for {} `{}`",
+        serial_key_kind_label(&serial.key.kind),
+        serial.key.value
+    ))
+}
+
+fn discover_serial_ports() -> anyhow::Result<Vec<SerialPortRecord>> {
     let usb_devices = load_usb_devices().unwrap_or_default();
+    let by_path_map = load_usb_path_map();
     let mut ports = serialport::available_ports()?
         .into_iter()
         .map(|port| match port.port_type {
@@ -27,27 +111,23 @@ pub fn list_serial_ports() -> anyhow::Result<Vec<SerialPortSummary>> {
                 let serial_number = usb_match
                     .and_then(|device| device.serial_number.clone())
                     .or(info.serial_number.clone());
-
-                let mut detail_parts = Vec::new();
-                if let Some(manufacturer) = manufacturer.clone() {
-                    detail_parts.push(manufacturer);
-                }
-                if let Some(product) = product.clone() {
-                    detail_parts.push(product);
-                }
-                detail_parts.push(format!("VID:PID {:04x}:{:04x}", info.vid, info.pid));
-                if let Some(serial_number) = serial_number.clone() {
-                    detail_parts.push(format!("SN {serial_number}"));
-                }
-
-                SerialPortSummary {
-                    port_name: port.port_name.clone(),
-                    port_type: "usb".to_string(),
-                    label: if detail_parts.is_empty() {
-                        format!("{} (usb)", port.port_name)
+                let usb_path = by_path_map.get(port.port_name.as_str()).cloned();
+                let (primary_key_kind, primary_key_value) =
+                    if let Some(serial_number) = serial_number.clone() {
+                        (Some(SerialPortKeyKind::SerialNumber), Some(serial_number))
+                    } else if let Some(usb_path) = usb_path.clone() {
+                        (Some(SerialPortKeyKind::UsbPath), Some(usb_path))
                     } else {
-                        format!("{} ({})", port.port_name, detail_parts.join(" / "))
-                    },
+                        (None, None)
+                    };
+
+                SerialPortRecord {
+                    current_device_path: port.port_name,
+                    port_type: "usb".to_string(),
+                    primary_key_kind,
+                    primary_key_value,
+                    stable_identity: serial_number.is_some() || usb_path.is_some(),
+                    usb_path,
                     usb_vendor_id: Some(info.vid),
                     usb_product_id: Some(info.pid),
                     manufacturer,
@@ -55,30 +135,39 @@ pub fn list_serial_ports() -> anyhow::Result<Vec<SerialPortSummary>> {
                     serial_number,
                 }
             }
-            serialport::SerialPortType::BluetoothPort => SerialPortSummary {
-                port_name: port.port_name.clone(),
+            serialport::SerialPortType::BluetoothPort => SerialPortRecord {
+                current_device_path: port.port_name,
                 port_type: "bluetooth".to_string(),
-                label: format!("{} (蓝牙串口)", port.port_name),
+                primary_key_kind: None,
+                primary_key_value: None,
+                stable_identity: false,
+                usb_path: None,
                 usb_vendor_id: None,
                 usb_product_id: None,
                 manufacturer: None,
                 product: None,
                 serial_number: None,
             },
-            serialport::SerialPortType::PciPort => SerialPortSummary {
-                port_name: port.port_name.clone(),
+            serialport::SerialPortType::PciPort => SerialPortRecord {
+                current_device_path: port.port_name,
                 port_type: "pci".to_string(),
-                label: format!("{} (PCI 串口)", port.port_name),
+                primary_key_kind: None,
+                primary_key_value: None,
+                stable_identity: false,
+                usb_path: None,
                 usb_vendor_id: None,
                 usb_product_id: None,
                 manufacturer: None,
                 product: None,
                 serial_number: None,
             },
-            serialport::SerialPortType::Unknown => SerialPortSummary {
-                port_name: port.port_name.clone(),
+            serialport::SerialPortType::Unknown => SerialPortRecord {
+                current_device_path: port.port_name,
                 port_type: "unknown".to_string(),
-                label: format!("{} (未知类型)", port.port_name),
+                primary_key_kind: None,
+                primary_key_value: None,
+                stable_identity: false,
+                usb_path: None,
                 usb_vendor_id: None,
                 usb_product_id: None,
                 manufacturer: None,
@@ -88,7 +177,11 @@ pub fn list_serial_ports() -> anyhow::Result<Vec<SerialPortSummary>> {
         })
         .collect::<Vec<_>>();
 
-    ports.sort_by(|a, b| a.port_name.cmp(&b.port_name));
+    ports.sort_by(|a, b| {
+        b.stable_identity
+            .cmp(&a.stable_identity)
+            .then_with(|| a.current_device_path.cmp(&b.current_device_path))
+    });
     Ok(ports)
 }
 
@@ -104,6 +197,79 @@ fn load_usb_devices() -> anyhow::Result<Vec<UsbDeviceRecord>> {
         })
         .collect::<Vec<_>>();
     Ok(devices)
+}
+
+fn load_usb_path_map() -> BTreeMap<String, String> {
+    let mut by_path = BTreeMap::new();
+    let Ok(entries) = fs::read_dir(SERIAL_BY_PATH_DIR) else {
+        return by_path;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(target) = fs::read_link(&path) else {
+            continue;
+        };
+        let device_path = resolve_symlink_target(path.parent().unwrap_or(Path::new("/")), &target);
+        if let (Some(device_path), Some(usb_path)) =
+            (device_path.and_then(path_to_string), path_to_string(path))
+        {
+            by_path.insert(device_path, usb_path);
+        }
+    }
+
+    by_path
+}
+
+fn resolve_symlink_target(base_dir: &Path, target: &Path) -> Option<PathBuf> {
+    let candidate = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        base_dir.join(target)
+    };
+    fs::canonicalize(candidate).ok()
+}
+
+fn path_to_string(path: impl AsRef<Path>) -> Option<String> {
+    path.as_ref().to_str().map(ToOwned::to_owned)
+}
+
+fn serial_port_label(record: &SerialPortRecord) -> String {
+    let primary = match (&record.primary_key_kind, &record.primary_key_value) {
+        (Some(kind), Some(value)) => format!("[{}] {}", serial_key_kind_short_label(kind), value),
+        _ => format!("[UNSTABLE] {}", record.current_device_path),
+    };
+
+    let mut detail_parts = Vec::new();
+    if let Some(usb_path) = record.usb_path.as_deref() {
+        detail_parts.push(usb_path.to_string());
+    }
+    detail_parts.push(record.current_device_path.clone());
+    if let Some(manufacturer) = record.manufacturer.as_deref() {
+        detail_parts.push(manufacturer.to_string());
+    }
+    if let Some(product) = record.product.as_deref() {
+        detail_parts.push(product.to_string());
+    }
+    if let (Some(vid), Some(pid)) = (record.usb_vendor_id, record.usb_product_id) {
+        detail_parts.push(format!("VID:PID {vid:04x}:{pid:04x}"));
+    }
+
+    format!("{primary} ({})", detail_parts.join(" / "))
+}
+
+fn serial_key_kind_short_label(kind: &SerialPortKeyKind) -> &'static str {
+    match kind {
+        SerialPortKeyKind::SerialNumber => "SN",
+        SerialPortKeyKind::UsbPath => "USB PATH",
+    }
+}
+
+fn serial_key_kind_label(kind: &SerialPortKeyKind) -> &'static str {
+    match kind {
+        SerialPortKeyKind::SerialNumber => "serial number",
+        SerialPortKeyKind::UsbPath => "usb path",
+    }
 }
 
 fn match_usb_device<'a>(
@@ -144,7 +310,8 @@ fn match_usb_device<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{UsbDeviceRecord, match_usb_device};
+    use super::{SerialPortRecord, UsbDeviceRecord, match_usb_device, serial_port_label};
+    use crate::config::SerialPortKeyKind;
 
     fn usb_info(
         vid: u16,
@@ -201,5 +368,26 @@ mod tests {
             match_usb_device(&devices, &usb_info(0x10c4, 0xea60, None, None, None)).unwrap();
 
         assert_eq!(matched.product.as_deref(), Some("CP2102"));
+    }
+
+    #[test]
+    fn serial_port_label_highlights_primary_key() {
+        let label = serial_port_label(&SerialPortRecord {
+            current_device_path: "/dev/ttyUSB1".into(),
+            port_type: "usb".into(),
+            primary_key_kind: Some(SerialPortKeyKind::SerialNumber),
+            primary_key_value: Some("ABC123".into()),
+            usb_path: Some("/dev/serial/by-path/demo".into()),
+            stable_identity: true,
+            usb_vendor_id: Some(0x0403),
+            usb_product_id: Some(0x6001),
+            manufacturer: Some("FTDI".into()),
+            product: Some("UART".into()),
+            serial_number: Some("ABC123".into()),
+        });
+
+        assert!(label.contains("[SN] ABC123"));
+        assert!(label.contains("/dev/serial/by-path/demo"));
+        assert!(label.contains("/dev/ttyUSB1"));
     }
 }

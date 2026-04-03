@@ -12,8 +12,9 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
 use ostool_server::{
-    BoardConfig, BootConfig, BuiltinTftpConfig, PowerManagementConfig, ServerConfig, TftpConfig,
-    UbootProfile, VirtualPowerManagement, build_app_state, build_router,
+    BoardConfig, BootConfig, BuiltinTftpConfig, PowerManagementConfig, SerialConfig, SerialPortKey,
+    SerialPortKeyKind, ServerConfig, TftpConfig, UbootProfile, VirtualPowerManagement,
+    build_app_state, build_router,
     tftp::service::{TftpManager, build_tftp_manager},
 };
 use reqwest::StatusCode;
@@ -78,9 +79,14 @@ fn sample_virtual_board(serial_port: String) -> BoardConfig {
         id: TEST_BOARD_ID.into(),
         board_type: TEST_BOARD_TYPE.into(),
         tags: vec![],
-        serial: Some(ostool_server::SerialConfig {
-            port: serial_port,
+        serial: Some(SerialConfig {
+            key: SerialPortKey {
+                kind: SerialPortKeyKind::UsbPath,
+                value: serial_port,
+            },
             baud_rate: TEST_SERIAL_BAUD_RATE,
+            resolved_device_path: None,
+            resolved_usb_path: None,
         }),
         power_management: PowerManagementConfig::Virtual(VirtualPowerManagement::default()),
         boot: BootConfig::Uboot(UbootProfile {

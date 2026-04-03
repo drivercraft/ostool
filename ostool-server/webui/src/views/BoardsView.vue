@@ -65,6 +65,22 @@ function boardStatus(board: BoardConfig): string {
   return "可用";
 }
 
+function serialPrimaryLabel(board: BoardConfig): string {
+  if (!board.serial) {
+    return "";
+  }
+  return board.serial.key.kind === "serial_number" ? "SN" : "USB PATH";
+}
+
+function serialSecondaryLines(board: BoardConfig): string[] {
+  if (!board.serial) {
+    return [];
+  }
+  return [board.serial.resolved_usb_path, board.serial.resolved_device_path]
+    .filter((value): value is string => Boolean(value))
+    .filter((value, index, items) => items.indexOf(value) === index);
+}
+
 async function loadBoards() {
   loading.value = true;
   try {
@@ -144,7 +160,21 @@ onMounted(() => {
             <td><code>{{ board.id }}</code></td>
             <td>{{ board.board_type }}</td>
             <td>{{ board.tags.join(", ") || "-" }}</td>
-            <td>{{ board.serial ? `${board.serial.port} @ ${board.serial.baud_rate}` : "未配置" }}</td>
+            <td>
+              <div v-if="board.serial" class="serial-summary">
+                <span class="serial-key-badge">{{ serialPrimaryLabel(board) }}</span>
+                <strong>{{ board.serial.key.value }}</strong>
+                <span class="serial-baud">@ {{ board.serial.baud_rate }}</span>
+                <span
+                  v-for="detail in serialSecondaryLines(board)"
+                  :key="detail"
+                  class="serial-key-secondary"
+                >
+                  {{ detail }}
+                </span>
+              </div>
+              <span v-else>未配置</span>
+            </td>
             <td>{{ board.boot.kind }}</td>
             <td>
               <StatusPill :tone="boardTone(board)" :label="boardStatus(board)" />
