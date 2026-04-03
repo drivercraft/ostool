@@ -222,8 +222,8 @@ async fn run_serial_ws_inner(
     }
     .await;
 
-    let result = finalize_power_linked_session(state, &board, power_linked, power_on_task, result)
-        .await;
+    let result =
+        finalize_power_linked_session(state, &board, power_linked, power_on_task, result).await;
     let _ = state
         .request_session_stop(&session_id, crate::session::SessionStopReason::SerialClosed)
         .await;

@@ -128,7 +128,9 @@ pub async fn build_app_state(
     Ok(state)
 }
 
-fn initial_board_runtimes(boards: &BTreeMap<String, BoardConfig>) -> BTreeMap<String, BoardRuntimeState> {
+fn initial_board_runtimes(
+    boards: &BTreeMap<String, BoardConfig>,
+) -> BTreeMap<String, BoardRuntimeState> {
     boards
         .keys()
         .map(|board_id| (board_id.clone(), BoardRuntimeState::default()))
@@ -145,7 +147,10 @@ fn initial_virtual_power_statuses(
         .collect()
 }
 
-async fn run_release_coordinator(state: AppState, mut release_rx: mpsc::UnboundedReceiver<ReleaseJob>) {
+async fn run_release_coordinator(
+    state: AppState,
+    mut release_rx: mpsc::UnboundedReceiver<ReleaseJob>,
+) {
     while let Some(job) = release_rx.recv().await {
         let state = state.clone();
         tokio::spawn(async move {
@@ -435,9 +440,7 @@ impl AppState {
             .ok_or_else(|| anyhow::anyhow!("board runtime `{board_id}` not found"))?;
 
         if runtime.active_session_id.as_deref() != Some(session_id) {
-            anyhow::bail!(
-                "board `{board_id}` is no longer associated with session `{session_id}`"
-            );
+            anyhow::bail!("board `{board_id}` is no longer associated with session `{session_id}`");
         }
 
         runtime.lease_state = BoardLeaseState::Idle;
@@ -459,9 +462,7 @@ impl AppState {
             .ok_or_else(|| anyhow::anyhow!("board runtime `{board_id}` not found"))?;
 
         if runtime.active_session_id.as_deref() != Some(session_id) {
-            anyhow::bail!(
-                "board `{board_id}` is no longer associated with session `{session_id}`"
-            );
+            anyhow::bail!("board `{board_id}` is no longer associated with session `{session_id}`");
         }
 
         runtime.lease_state = BoardLeaseState::Error;
@@ -607,7 +608,11 @@ impl AppState {
     }
 }
 
-async fn retry_release_step<F, Fut>(attempts: usize, delay: Duration, mut operation: F) -> Result<(), String>
+async fn retry_release_step<F, Fut>(
+    attempts: usize,
+    delay: Duration,
+    mut operation: F,
+) -> Result<(), String>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<(), String>>,
@@ -790,7 +795,10 @@ mod tests {
         let session = state.create_session("demo", &[], None).await.unwrap();
         let runtime = state.board_runtime_status("board-1").await.unwrap();
         assert_eq!(runtime.lease_state, BoardLeaseState::Using);
-        assert_eq!(runtime.active_session_id.as_deref(), Some(session.id.as_str()));
+        assert_eq!(
+            runtime.active_session_id.as_deref(),
+            Some(session.id.as_str())
+        );
     }
 
     #[tokio::test]
@@ -833,16 +841,10 @@ mod tests {
             .await
             .insert(board.id.clone(), board.clone());
         state.sync_board_runtime_states().await;
-        let session = SessionState::new_with_actor(
-            "session-1".into(),
-            board.clone(),
-            None,
-            state.clone(),
-        );
+        let session =
+            SessionState::new_with_actor("session-1".into(), board.clone(), None, state.clone());
         let mut shutdown = session.subscribe_shutdown();
-        state
-            .claim_board_for_session(&board.id, "session-1")
-            .await;
+        state.claim_board_for_session(&board.id, "session-1").await;
         state
             .sessions
             .write()
@@ -892,12 +894,8 @@ mod tests {
             .await
             .insert(board.id.clone(), board.clone());
         state.sync_board_runtime_states().await;
-        let session = SessionState::new_with_actor(
-            "session-1".into(),
-            board.clone(),
-            None,
-            state.clone(),
-        );
+        let session =
+            SessionState::new_with_actor("session-1".into(), board.clone(), None, state.clone());
         state.claim_board_for_session(&board.id, "session-1").await;
         state
             .sessions
@@ -911,7 +909,12 @@ mod tests {
         assert!(!state.sessions.read().await.contains_key("session-1"));
         let runtime = state.board_runtime_status("board-1").await.unwrap();
         assert_eq!(runtime.lease_state, BoardLeaseState::Error);
-        assert!(runtime.last_release_error.unwrap().contains("tftp cleanup failed"));
+        assert!(
+            runtime
+                .last_release_error
+                .unwrap()
+                .contains("tftp cleanup failed")
+        );
     }
 
     #[tokio::test]
@@ -940,12 +943,8 @@ mod tests {
             .await
             .insert(board.id.clone(), board.clone());
         state.sync_board_runtime_states().await;
-        let session = SessionState::new_with_actor(
-            "session-1".into(),
-            board.clone(),
-            None,
-            state.clone(),
-        );
+        let session =
+            SessionState::new_with_actor("session-1".into(), board.clone(), None, state.clone());
         state.claim_board_for_session(&board.id, "session-1").await;
         state
             .sessions
@@ -1016,12 +1015,8 @@ kind = "pxe"
             .insert(board.id.clone(), board.clone());
         state.sync_board_runtime_states().await;
         state.sync_virtual_power_statuses().await;
-        let session = SessionState::new_with_actor(
-            "session-1".into(),
-            board.clone(),
-            None,
-            state.clone(),
-        );
+        let session =
+            SessionState::new_with_actor("session-1".into(), board.clone(), None, state.clone());
         state.claim_board_for_session(&board.id, "session-1").await;
         state
             .sessions

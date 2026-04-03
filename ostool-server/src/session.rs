@@ -117,17 +117,8 @@ impl SessionState {
         app_state: AppState,
     ) -> Arc<Self> {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
-        let session = Self::new_inner(
-            session_id,
-            board,
-            client_name,
-            Some(command_tx),
-        );
-        tokio::spawn(run_session_actor(
-            app_state,
-            session.clone(),
-            command_rx,
-        ));
+        let session = Self::new_inner(session_id, board, client_name, Some(command_tx));
+        tokio::spawn(run_session_actor(app_state, session.clone(), command_rx));
         session
     }
 
@@ -139,7 +130,11 @@ impl SessionState {
     ) -> Arc<Self> {
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
         Arc::new(Self {
-            info: RwLock::new(Session::new_with_id(session_id, board.id.clone(), client_name)),
+            info: RwLock::new(Session::new_with_id(
+                session_id,
+                board.id.clone(),
+                client_name,
+            )),
             board,
             shutdown_tx,
             lifecycle_state: AtomicU8::new(SessionLifecycleState::Active.as_u8()),

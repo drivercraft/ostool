@@ -21,8 +21,8 @@ use crate::{
             BoardPowerAction, BoardPowerStatusResponse, BoardRuntimeStatusResponse,
             BoardTypeSummary, BootProfileResponse, CreateSessionRequest, DtbFileResponse,
             FileResponse, NetworkInterfaceSummary, SerialPortSummary, SerialStatusResponse,
-            SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse,
-            TftpSessionResponse, UpdateServerConfigRequest,
+            SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse, TftpSessionResponse,
+            UpdateServerConfigRequest,
         },
     },
     board_pool::BoardAllocationStatus,
@@ -1507,7 +1507,9 @@ mod tests {
 
     use super::{build_router, resolve_server_network};
     use crate::{
-        api::models::{BoardPowerStatusResponse, BoardRuntimeStatusResponse, SessionDetailResponse},
+        api::models::{
+            BoardPowerStatusResponse, BoardRuntimeStatusResponse, SessionDetailResponse,
+        },
         build_app_state,
         config::{
             BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,

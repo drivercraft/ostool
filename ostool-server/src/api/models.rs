@@ -5,9 +5,9 @@ use crate::{
     config::{
         BoardConfig, BootConfig, PowerManagementConfig, SerialConfig, TftpConfig, TftpNetworkConfig,
     },
-    state::BoardLeaseState,
     dtb_store::DtbFile,
     session::Session,
+    state::BoardLeaseState,
     tftp::{files::TftpFileRef, status::TftpStatus},
 };
 
