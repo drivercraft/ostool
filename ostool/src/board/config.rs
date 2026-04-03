@@ -58,6 +58,36 @@ impl BoardRunConfig {
         (server, port)
     }
 
+    pub fn apply_overrides(
+        &mut self,
+        tool: &Tool,
+        board_type: Option<&str>,
+        server: Option<&str>,
+        port: Option<u16>,
+    ) -> anyhow::Result<()> {
+        if let Some(board_type) = board_type {
+            self.board_type = tool.replace_string(board_type)?;
+        }
+
+        if let Some(server) = server {
+            let server = tool.replace_string(server)?;
+            let server = server.trim().to_string();
+            if server.is_empty() {
+                anyhow::bail!("board server override must not be empty");
+            }
+            self.server = Some(server);
+        }
+
+        if let Some(port) = port {
+            if port == 0 {
+                anyhow::bail!("board port override must be in 1..=65535");
+            }
+            self.port = Some(port);
+        }
+
+        self.normalize("board run arguments")
+    }
+
     fn replace_strings(&mut self, tool: &Tool) -> anyhow::Result<()> {
         self.board_type = tool.replace_string(&self.board_type)?;
         self.dtb_file = self
@@ -117,7 +147,7 @@ impl BoardRunConfig {
 #[cfg(test)]
 mod tests {
     use super::BoardRunConfig;
-    use crate::board::global_config::BoardGlobalConfig;
+    use crate::{Tool, board::global_config::BoardGlobalConfig};
 
     #[test]
     fn board_run_config_parses_and_normalizes_shell_fields() {
@@ -161,5 +191,26 @@ port = 9000
             path.file_name().and_then(|name| name.to_str()),
             Some(".board.toml")
         );
+    }
+
+    #[test]
+    fn board_run_config_apply_overrides_replaces_board_type_and_server() {
+        let mut config: BoardRunConfig = toml::from_str(
+            r#"
+board_type = "orangepi5plus"
+server = "10.0.0.2"
+port = 9000
+"#,
+        )
+        .unwrap();
+        let tool = Tool::new(Default::default()).unwrap();
+
+        config
+            .apply_overrides(&tool, Some(" rk3568 "), Some(" 127.0.0.1 "), Some(7000))
+            .unwrap();
+
+        assert_eq!(config.board_type, "rk3568");
+        assert_eq!(config.server.as_deref(), Some("127.0.0.1"));
+        assert_eq!(config.port, Some(7000));
     }
 }
