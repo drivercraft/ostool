@@ -57,6 +57,26 @@ If you already have the repository locally:
 bash ostool-server/scripts/install.sh --local ./ostool-server
 ```
 
+## Upgrade
+
+To upgrade an existing `ostool-server` installation while preserving the current config and data:
+
+```bash
+bash ostool-server/scripts/update.sh
+```
+
+You can also run the upgrade script directly from GitHub:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/drivercraft/ostool/main/ostool-server/scripts/update.sh | bash
+```
+
+To upgrade from a local checkout instead of crates.io:
+
+```bash
+bash ostool-server/scripts/update.sh --local ./ostool-server
+```
+
 ## Configuration
 
 The default config path is:
