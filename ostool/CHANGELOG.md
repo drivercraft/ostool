@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.3](https://github.com/drivercraft/ostool/compare/ostool-v0.12.2...ostool-v0.12.3) - 2026-04-03
+
+### Added
+
+- update schema handling to convert "oneOf" with const variants to Enum and add tests for log field validation
+- add validation for required fields before saving configuration
+
+### Other
+
+- improve formatting and readability in various modules
+- simplify element handling and improve hook naming consistency
+- Add theme support and refactor UI components
+- Refactor UI and Web Handlers
+
 ## [0.12.2](https://github.com/drivercraft/ostool/compare/ostool-v0.12.1...ostool-v0.12.2) - 2026-04-02
 
 ### Added
