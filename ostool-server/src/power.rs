@@ -86,6 +86,9 @@ pub async fn execute_power_action(
                 relay.serial_port
             ))
         }
+        PowerManagementConfig::Virtual(_) => Err(PowerActionError::InvalidConfig(
+            "virtual power management must be executed via application state".to_string(),
+        )),
     }
 }
 

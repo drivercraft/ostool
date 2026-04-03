@@ -50,6 +50,8 @@ tower-http = {version = "0.6", features = ["fs"]}
 uuid = {version = "1", features = ["serde", "v4"]}
 
 [dev-dependencies]
+reqwest = {version = "0.13", features = ["json"]}
 tempfile = "3"
 tokio-modbus = {version = "0.17.0", default-features = false, features = ["rtu", "rtu-server"]}
+tokio-tungstenite = "0.28"
 tower = {version = "0.5", features = ["util"]}

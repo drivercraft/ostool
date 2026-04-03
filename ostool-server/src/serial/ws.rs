@@ -11,7 +11,7 @@ use tokio_serial::SerialPortBuilderExt;
 
 use crate::{
     config::BoardConfig,
-    power::{PowerAction, PowerActionError, execute_power_action_for_board},
+    power::{PowerAction, PowerActionError},
     session::SessionState,
     state::AppState,
 };
@@ -55,7 +55,11 @@ async fn run_serial_ws_inner(
     let (mut ws_sender, mut ws_receiver) = socket.split();
     let (mut serial_rx, mut serial_tx) = tokio::io::split(port);
     let mut serial_buffer = [0u8; 1024];
-    let mut power_on_task = Some(spawn_power_action_task(board.clone(), PowerAction::On));
+    let mut power_on_task = Some(spawn_power_action_task(
+        state.clone(),
+        board.clone(),
+        PowerAction::On,
+    ));
     let power_linked = true;
     let mut shutdown_rx = session.subscribe_shutdown();
 
@@ -218,24 +222,21 @@ async fn run_serial_ws_inner(
     }
     .await;
 
-    let mut result =
-        finalize_power_linked_session(&board, power_linked, power_on_task, result).await;
-    if let Err(err) = state.remove_session_without_power_off(&session_id).await {
-        if result.is_ok() {
-            result = Err(err);
-        } else {
-            log::warn!("session `{session_id}` release after websocket close failed: {err:#}");
-        }
-    }
+    let result = finalize_power_linked_session(state, &board, power_linked, power_on_task, result)
+        .await;
+    let _ = state
+        .request_session_stop(&session_id, crate::session::SessionStopReason::SerialClosed)
+        .await;
     let _ = ws_sender.send(Message::Close(None)).await;
     result
 }
 
 fn spawn_power_action_task(
+    state: AppState,
     board: BoardConfig,
     action: PowerAction,
 ) -> JoinHandle<Result<String, PowerActionError>> {
-    tokio::spawn(async move { execute_power_action_for_board(&board, action).await })
+    tokio::spawn(async move { state.execute_board_power_action(&board, action).await })
 }
 
 async fn cleanup_power_link(
@@ -259,23 +260,10 @@ async fn cleanup_power_link(
             Err(err) => log::warn!("session `{}` power-on task join failed: {err}", board.id),
         }
     }
-
-    match tokio::spawn({
-        let board = board.clone();
-        async move { execute_power_action_for_board(&board, PowerAction::Off).await }
-    })
-    .await
-    {
-        Ok(Ok(_)) => {}
-        Ok(Err(err)) => log::warn!("session `{}` automatic power-off failed: {err}", board.id),
-        Err(err) => log::warn!(
-            "session `{}` automatic power-off task join failed: {err}",
-            board.id
-        ),
-    }
 }
 
 async fn finalize_power_linked_session<T>(
+    _state: &AppState,
     board: &BoardConfig,
     power_linked: bool,
     power_on_task: Option<JoinHandle<Result<String, PowerActionError>>>,
@@ -328,10 +316,13 @@ mod tests {
         send_power_on_failure_and_close,
     };
     use crate::{
+        build_app_state,
         config::{
-            BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, PxeProfile,
+            BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
+            PowerManagementConfig, PxeProfile, ServerConfig, TftpConfig,
         },
         power::PowerActionError,
+        tftp::service::{TftpManager, build_tftp_manager},
     };
 
     #[derive(Default)]
@@ -375,6 +366,18 @@ mod tests {
         assert_eq!(message.kind, "close");
     }
 
+    async fn test_state(root: &std::path::Path) -> crate::AppState {
+        let config_path = root.join(".ostool-server.toml");
+        let mut config = ServerConfig::default();
+        config.listen_addr = "127.0.0.1:0".parse().unwrap();
+        config.data_dir = root.join("data");
+        config.board_dir = root.join("boards");
+        config.dtb_dir = root.join("dtbs");
+        config.tftp = TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(root.join("tftp")));
+        let manager: std::sync::Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
+        build_app_state(config_path, config, manager).await.unwrap()
+    }
+
     #[tokio::test]
     async fn cleanup_waits_for_power_on_task_before_power_off() {
         let dir = tempdir().unwrap();
@@ -402,13 +405,14 @@ mod tests {
         cleanup_power_link(&board, true, Some(power_on_task)).await;
 
         let content = fs::read_to_string(dir.path().join("power.log")).unwrap();
-        assert_eq!(content, "on\noff\n");
+        assert_eq!(content, "on\n");
     }
 
     #[tokio::test]
     async fn finalize_runs_power_off_even_when_session_errors() {
         let dir = tempdir().unwrap();
         let output_path = dir.path().join("power.log");
+        let state = test_state(dir.path()).await;
         let board = BoardConfig {
             id: "demo".into(),
             board_type: "demo".into(),
@@ -426,6 +430,7 @@ mod tests {
         let power_on_task =
             tokio::spawn(async { Ok::<String, PowerActionError>("executed".into()) });
         let result = finalize_power_linked_session::<()>(
+            &state,
             &board,
             true,
             Some(power_on_task),
@@ -434,8 +439,7 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        let content = fs::read_to_string(dir.path().join("power.log")).unwrap();
-        assert_eq!(content, "off\n");
+        assert!(!output_path.exists());
     }
 
     #[tokio::test]
