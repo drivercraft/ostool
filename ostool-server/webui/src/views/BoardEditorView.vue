@@ -527,12 +527,19 @@ onMounted(() => {
         </div>
       </div>
 
-      <div v-if="loading" class="empty-state">正在加载开发板配置...</div>
+      <div v-if="loading" class="empty-state">
+        <div class="empty-state-icon">&#9641;</div>
+        正在加载开发板配置...
+      </div>
       <template v-else>
         <p v-if="validationError" class="diagnostic-error">{{ validationError }}</p>
 
+        <!-- 基本信息 -->
         <section class="form-section">
-          <h4>基本信息</h4>
+          <div class="form-section-header">
+            <span class="form-section-icon info">&#9776;</span>
+            <h4>基本信息</h4>
+          </div>
           <div class="form-grid two-columns">
             <label class="field">
               <span>板型</span>
@@ -547,31 +554,43 @@ onMounted(() => {
             </label>
           </div>
 
-          <div class="form-grid two-columns">
+          <div class="form-grid two-columns" style="margin-top: 16px">
             <label class="field">
               <span>标签</span>
               <input v-model="form.tags_text" placeholder="lab, usb" />
             </label>
-            <label class="checkbox-field">
-              <input v-model="form.disabled" type="checkbox" />
-              <span>禁用该开发板</span>
+            <label class="toggle-field">
+              <span class="toggle-switch">
+                <input v-model="form.disabled" type="checkbox" />
+                <span class="toggle-track" />
+                <span class="toggle-knob" />
+              </span>
+              <span class="toggle-label">禁用该开发板</span>
             </label>
           </div>
 
-          <label class="field">
+          <label class="field" style="margin-top: 16px">
             <span>备注</span>
             <textarea v-model="form.notes" rows="4" />
           </label>
         </section>
 
+        <!-- 串口配置 -->
         <section class="form-section">
-          <h4>串口配置</h4>
-          <label class="checkbox-field">
-            <input v-model="form.serial_enabled" type="checkbox" />
-            <span>启用串口</span>
+          <div class="form-section-header">
+            <span class="form-section-icon serial">&#8982;</span>
+            <h4>串口配置</h4>
+          </div>
+          <label class="toggle-field">
+            <span class="toggle-switch">
+              <input v-model="form.serial_enabled" type="checkbox" />
+              <span class="toggle-track" />
+              <span class="toggle-knob" />
+            </span>
+            <span class="toggle-label">启用串口</span>
           </label>
 
-          <div v-if="form.serial_enabled" class="form-grid two-columns">
+          <div v-if="form.serial_enabled" class="form-grid two-columns" style="margin-top: 18px">
             <label class="field">
               <span>串口设备</span>
               <select
@@ -608,8 +627,12 @@ onMounted(() => {
           </div>
         </section>
 
+        <!-- 电源管理 -->
         <section class="form-section">
-          <h4>电源管理</h4>
+          <div class="form-section-header">
+            <span class="form-section-icon power">&#9889;</span>
+            <h4>电源管理</h4>
+          </div>
           <label class="field">
             <span>电源管理类型</span>
             <select v-model="form.power_management_kind">
@@ -618,7 +641,7 @@ onMounted(() => {
             </select>
           </label>
 
-          <div v-if="form.power_management_kind === 'custom'" class="form-grid two-columns">
+          <div v-if="form.power_management_kind === 'custom'" class="form-grid two-columns" style="margin-top: 16px">
             <label class="field">
               <span>开机命令</span>
               <input v-model="form.power_on_cmd" />
@@ -629,7 +652,7 @@ onMounted(() => {
             </label>
           </div>
 
-          <label v-else class="field">
+          <label v-else class="field" style="margin-top: 16px">
             <span>继电模块串口</span>
             <select v-model="form.relay_serial_port">
               <option value="">请选择串口设备</option>
@@ -637,10 +660,10 @@ onMounted(() => {
                 v-for="option in relaySerialOptions(form.relay_serial_port)"
                 :key="option.value"
                 :value="option.value"
-                >
-                  {{ option.label }}
-                </option>
-              </select>
+              >
+                {{ option.label }}
+              </option>
+            </select>
             <div v-if="selectedRelaySerialDescription()" class="serial-key-card">
               <span class="serial-key-badge neutral">{{ selectedRelaySerialDescription()!.primaryLabel }}</span>
               <strong>{{ selectedRelaySerialDescription()!.primaryValue }}</strong>
@@ -655,8 +678,12 @@ onMounted(() => {
           </label>
         </section>
 
+        <!-- 启动方式 -->
         <section class="form-section">
-          <h4>启动方式</h4>
+          <div class="form-section-header">
+            <span class="form-section-icon boot">&#9654;</span>
+            <h4>启动方式</h4>
+          </div>
           <label class="field">
             <span>启动模式</span>
             <select v-model="form.boot_kind">
@@ -666,14 +693,16 @@ onMounted(() => {
           </label>
 
           <template v-if="form.boot_kind === 'uboot'">
-            <div class="form-grid two-columns">
-              <label class="checkbox-field">
+            <label class="toggle-field" style="margin-top: 16px">
+              <span class="toggle-switch">
                 <input v-model="form.use_tftp" type="checkbox" />
-                <span>使用 TFTP 启动</span>
-              </label>
-            </div>
+                <span class="toggle-track" />
+                <span class="toggle-knob" />
+              </span>
+              <span class="toggle-label">使用 TFTP 启动</span>
+            </label>
 
-            <div class="split-grid dtb-config-grid">
+            <div class="split-grid dtb-config-grid" style="margin-top: 18px">
               <section class="panel nested-panel dtb-selection-panel">
                 <div class="panel-heading compact">
                   <div>
@@ -713,7 +742,7 @@ onMounted(() => {
             </div>
           </template>
 
-          <label v-else class="field">
+          <label v-else class="field" style="margin-top: 16px">
             <span>PXE 备注</span>
             <textarea v-model="form.pxe_notes" rows="4" />
           </label>

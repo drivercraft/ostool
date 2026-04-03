@@ -436,6 +436,9 @@ fn write_output(output: &mut impl Write, chunk: &[u8]) -> io::Result<()> {
         }
         byte[0] = b;
         output.write_all(&byte)?;
+        if b == b'\n' {
+            output.flush()?;
+        }
     }
     output.flush()
 }
@@ -663,14 +666,40 @@ pub fn restore_terminal_mode() {
 #[cfg(test)]
 mod tests {
     use std::{
-        io::Cursor,
+        io::{self, Cursor, Write},
         sync::{Arc, Mutex},
         time::Duration,
     };
 
-    use super::{KeyProcessor, TerminalAction, TerminalHandle, encode_key_event};
+    use super::{KeyProcessor, TerminalAction, TerminalHandle, encode_key_event, write_output};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use tokio::sync::mpsc;
+
+    struct FlushCountingWriter {
+        buf: Vec<u8>,
+        flushes: usize,
+    }
+
+    impl FlushCountingWriter {
+        fn new() -> Self {
+            Self {
+                buf: Vec::new(),
+                flushes: 0,
+            }
+        }
+    }
+
+    impl Write for FlushCountingWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.buf.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushes += 1;
+            Ok(())
+        }
+    }
 
     #[test]
     fn ctrl_a_x_requests_exit() {
@@ -711,6 +740,16 @@ mod tests {
             encode_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)).unwrap(),
             TerminalAction::SendBytes(vec![0x1b, b'[', b'A'])
         );
+    }
+
+    #[test]
+    fn write_output_flushes_on_newline_boundaries() {
+        let mut writer = FlushCountingWriter::new();
+
+        write_output(&mut writer, b"line1\nline2").unwrap();
+
+        assert_eq!(writer.buf, b"line1\r\nline2");
+        assert_eq!(writer.flushes, 2);
     }
 
     #[test]
