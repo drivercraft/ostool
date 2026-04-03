@@ -5,6 +5,7 @@ use crate::{
     config::{
         BoardConfig, BootConfig, PowerManagementConfig, SerialConfig, TftpConfig, TftpNetworkConfig,
     },
+    state::BoardLeaseState,
     dtb_store::DtbFile,
     session::Session,
     tftp::{files::TftpFileRef, status::TftpStatus},
@@ -159,6 +160,29 @@ pub struct SessionDtbResponse {
 pub struct ActionResponse {
     pub ok: bool,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BoardPowerAction {
+    PowerOn,
+    PowerOff,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoardPowerStatusResponse {
+    pub available: bool,
+    pub powered: Option<bool>,
+    pub last_action: Option<BoardPowerAction>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoardRuntimeStatusResponse {
+    pub lease_state: BoardLeaseState,
+    pub active_session_id: Option<String>,
+    pub last_release_error: Option<String>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

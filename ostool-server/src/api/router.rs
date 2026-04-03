@@ -18,16 +18,17 @@ use crate::{
             ActionResponse, AdminBoardUpsertRequest, AdminOverviewResponse,
             AdminServerConfigEditable, AdminServerConfigReadonly, AdminServerConfigResponse,
             AdminSessionsResponse, AdminTftpConfigResponse, AdminTftpStatusResponse,
+            BoardPowerAction, BoardPowerStatusResponse, BoardRuntimeStatusResponse,
             BoardTypeSummary, BootProfileResponse, CreateSessionRequest, DtbFileResponse,
             FileResponse, NetworkInterfaceSummary, SerialPortSummary, SerialStatusResponse,
-            SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse, TftpSessionResponse,
-            UpdateServerConfigRequest,
+            SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse,
+            TftpSessionResponse, UpdateServerConfigRequest,
         },
     },
     board_pool::BoardAllocationStatus,
     config::{BoardConfig, BootConfig, PowerManagementConfig, ServerConfig, TftpConfig},
     dtb_store::normalize_dtb_name,
-    power::{PowerAction, PowerActionError, execute_power_action_for_board},
+    power::{PowerAction, PowerActionError},
     serial::{
         discovery::list_serial_ports as discover_serial_ports,
         network::{
@@ -36,7 +37,8 @@ use crate::{
         },
         ws::run_serial_ws,
     },
-    state::AppState,
+    session::SessionStopReason,
+    state::{AppState, BoardLeaseState, TouchSessionError},
     tftp::{
         files::{TftpFileRef, normalize_relative_path},
         service::build_tftp_manager,
@@ -62,6 +64,14 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/admin/network-interfaces",
             get(list_network_interfaces),
+        )
+        .route(
+            "/api/v1/admin/boards/{board_id}/power-status",
+            get(get_board_power_status),
+        )
+        .route(
+            "/api/v1/admin/boards/{board_id}/runtime-status",
+            get(get_board_runtime_status),
         )
         .route(
             "/api/v1/admin/boards/{board_id}",
@@ -139,17 +149,21 @@ async fn get_admin_overview(
     State(state): State<AppState>,
 ) -> Result<axum::Json<AdminOverviewResponse>, ApiError> {
     let boards = state.boards.read().await;
-    let sessions = session_snapshots(&state).await;
-    let board_types = summarize_board_types(&boards, &sessions);
-    let leased = leased_board_ids(&sessions);
+    let runtimes = state.board_runtimes.read().await;
+    let board_types = summarize_board_types(&boards, &runtimes);
     let board_count_total = boards.len();
     let disabled_board_count = boards.values().filter(|board| board.disabled).count();
     let board_count_available = boards
         .values()
         .filter(|board| !board.disabled)
-        .filter(|board| !leased.contains(board.id.as_str()))
+        .filter(|board| {
+            runtimes
+                .get(&board.id)
+                .map(|runtime| runtime.lease_state == BoardLeaseState::Idle)
+                .unwrap_or(false)
+        })
         .count();
-    drop(sessions);
+    drop(runtimes);
     drop(boards);
 
     let mut tftp_status = state
@@ -171,7 +185,11 @@ async fn get_admin_overview(
         board_count_total,
         board_count_available,
         disabled_board_count,
-        active_session_count: state.sessions.read().await.len(),
+        active_session_count: session_snapshots(&state)
+            .await
+            .into_iter()
+            .filter(|session| session.state == crate::session::SessionLifecycleState::Active)
+            .count(),
         board_types,
         tftp_status,
         server: readonly_server_config(&config),
@@ -229,6 +247,38 @@ async fn get_board(
         .cloned()
         .ok_or_else(|| ApiError::not_found(format!("board `{board_id}` not found")))?;
     Ok(axum::Json(board))
+}
+
+async fn get_board_power_status(
+    Path(board_id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<axum::Json<BoardPowerStatusResponse>, ApiError> {
+    let status = state
+        .board_power_status(&board_id)
+        .await
+        .ok_or_else(|| ApiError::not_found(format!("board `{board_id}` not found")))?;
+    Ok(axum::Json(BoardPowerStatusResponse {
+        available: status.available,
+        powered: status.powered,
+        last_action: status.last_action.map(board_power_action),
+        updated_at: status.updated_at,
+    }))
+}
+
+async fn get_board_runtime_status(
+    Path(board_id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<axum::Json<BoardRuntimeStatusResponse>, ApiError> {
+    let status = state
+        .board_runtime_status(&board_id)
+        .await
+        .ok_or_else(|| ApiError::not_found(format!("board `{board_id}` not found")))?;
+    Ok(axum::Json(BoardRuntimeStatusResponse {
+        lease_state: status.lease_state,
+        active_session_id: status.active_session_id,
+        last_release_error: status.last_release_error,
+        updated_at: status.updated_at,
+    }))
 }
 
 async fn get_dtb(
@@ -289,6 +339,8 @@ async fn create_board(
         .write()
         .await
         .insert(board.id.clone(), board.clone());
+    state.sync_board_runtime_states().await;
+    state.sync_virtual_power_statuses().await;
     Ok((StatusCode::CREATED, axum::Json(board)))
 }
 
@@ -312,16 +364,14 @@ async fn update_board(
         }
     }
 
-    if board.id != board_id {
-        let sessions = state.sessions.read().await;
-        if sessions
-            .values()
-            .any(|session| session.board().id == board_id)
-        {
-            return Err(ApiError::conflict(format!(
-                "board `{board_id}` is leased by an active session"
-            )));
-        }
+    let runtime = state
+        .board_runtime_status(&board_id)
+        .await
+        .ok_or_else(|| ApiError::not_found(format!("board `{board_id}` not found")))?;
+    if runtime.lease_state != BoardLeaseState::Idle {
+        return Err(ApiError::conflict(format!(
+            "board `{board_id}` is not idle"
+        )));
     }
 
     state.board_store.write_board(&board).await?;
@@ -334,6 +384,8 @@ async fn update_board(
         boards.remove(&board_id);
         boards.insert(board.id.clone(), board.clone());
     }
+    state.sync_board_runtime_states().await;
+    state.sync_virtual_power_statuses().await;
 
     Ok(axum::Json(board))
 }
@@ -459,6 +511,7 @@ fn normalize_power_management_config(
         PowerManagementConfig::ZhongshengRelay(relay) => {
             normalize_required_string(&mut relay.serial_port, "power_management.serial_port")?;
         }
+        PowerManagementConfig::Virtual(_) => {}
     }
 
     Ok(())
@@ -592,16 +645,14 @@ async fn delete_board(
     Path(board_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, ApiError> {
-    {
-        let sessions = state.sessions.read().await;
-        if sessions
-            .values()
-            .any(|session| session.board().id == board_id)
-        {
-            return Err(ApiError::conflict(format!(
-                "board `{board_id}` is leased by an active session"
-            )));
-        }
+    let runtime = state
+        .board_runtime_status(&board_id)
+        .await
+        .ok_or_else(|| ApiError::not_found(format!("board `{board_id}` not found")))?;
+    if runtime.lease_state != BoardLeaseState::Idle {
+        return Err(ApiError::conflict(format!(
+            "board `{board_id}` is not idle"
+        )));
     }
 
     {
@@ -610,6 +661,8 @@ async fn delete_board(
             return Err(ApiError::not_found(format!("board `{board_id}` not found")));
         }
     }
+    state.sync_board_runtime_states().await;
+    state.sync_virtual_power_statuses().await;
 
     state.board_store.delete_board(&board_id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -627,13 +680,15 @@ async fn delete_admin_session(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, ApiError> {
-    let removed = state.remove_session(&session_id).await?;
+    let removed = state
+        .request_session_stop(&session_id, SessionStopReason::ApiDelete)
+        .await;
     if removed.is_none() {
         return Err(ApiError::not_found(format!(
             "session `{session_id}` not found"
         )));
     }
-    Ok(StatusCode::NO_CONTENT)
+    Ok(StatusCode::ACCEPTED)
 }
 
 async fn get_tftp_config(
@@ -732,8 +787,8 @@ async fn list_board_types(
     State(state): State<AppState>,
 ) -> Result<axum::Json<Vec<BoardTypeSummary>>, ApiError> {
     let boards = state.boards.read().await;
-    let sessions = session_snapshots(&state).await;
-    let result = summarize_board_types(&boards, &sessions);
+    let runtimes = state.board_runtimes.read().await;
+    let result = summarize_board_types(&boards, &runtimes);
     Ok(axum::Json(result))
 }
 
@@ -810,9 +865,16 @@ async fn heartbeat_session(
     State(state): State<AppState>,
 ) -> Result<axum::Json<serde_json::Value>, ApiError> {
     let session = state
-        .touch_session(&session_id)
+        .heartbeat_session(&session_id)
         .await
-        .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` not found")))?;
+        .map_err(|err| match err {
+            TouchSessionError::NotFound => {
+                ApiError::not_found(format!("session `{session_id}` not found"))
+            }
+            TouchSessionError::Releasing => {
+                ApiError::conflict(format!("session `{session_id}` is releasing"))
+            }
+        })?;
     Ok(axum::Json(json!({
         "session_id": session.id,
         "lease_expires_at": session.expires_at
@@ -823,13 +885,15 @@ async fn delete_session(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, ApiError> {
-    let removed = state.remove_session(&session_id).await?;
+    let removed = state
+        .request_session_stop(&session_id, SessionStopReason::ApiDelete)
+        .await;
     if removed.is_none() {
         return Err(ApiError::not_found(format!(
             "session `{session_id}` not found"
         )));
     }
-    Ok(StatusCode::NO_CONTENT)
+    Ok(StatusCode::ACCEPTED)
 }
 
 async fn get_boot_profile(
@@ -968,6 +1032,9 @@ async fn serial_ws(
     let Some(_serial) = board.serial.clone() else {
         return Err(ApiError::conflict("board has no serial configuration"));
     };
+    if session.is_releasing() {
+        return Err(ApiError::conflict("session is releasing"));
+    }
 
     if !session.try_set_serial_connected() {
         return Err(ApiError::conflict("serial websocket already connected"));
@@ -1009,7 +1076,15 @@ async fn put_session_file(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<(StatusCode, axum::Json<FileResponse>), ApiError> {
-    let _session = get_session_or_404(&state, &session_id).await?;
+    let session = state
+        .session_state(&session_id)
+        .await
+        .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` not found")))?;
+    if session.is_releasing() {
+        return Err(ApiError::conflict(format!(
+            "session `{session_id}` is releasing"
+        )));
+    }
     let board = state
         .session_board(&session_id)
         .await
@@ -1065,7 +1140,15 @@ async fn delete_session_file(
     State(state): State<AppState>,
 ) -> Result<StatusCode, ApiError> {
     let relative_path = parse_relative_path(&path)?;
-    get_session_or_404(&state, &session_id).await?;
+    let session = state
+        .session_state(&session_id)
+        .await
+        .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` not found")))?;
+    if session.is_releasing() {
+        return Err(ApiError::conflict(format!(
+            "session `{session_id}` is releasing"
+        )));
+    }
     let manager = state.tftp_manager.read().await.clone();
     manager
         .remove_session_file(&session_id, &relative_path)
@@ -1140,6 +1223,15 @@ async fn run_board_power_action(
     session_id: &str,
     power_on: bool,
 ) -> Result<axum::Json<ActionResponse>, ApiError> {
+    let session = state
+        .session_state(session_id)
+        .await
+        .ok_or_else(|| ApiError::not_found("session board not found"))?;
+    if session.is_releasing() {
+        return Err(ApiError::conflict(format!(
+            "session `{session_id}` is releasing"
+        )));
+    }
     let board = state
         .session_board(session_id)
         .await
@@ -1150,7 +1242,8 @@ async fn run_board_power_action(
     } else {
         PowerAction::Off
     };
-    let message = execute_power_action_for_board(&board, action)
+    let message = state
+        .execute_board_power_action(&board, action)
         .await
         .map_err(|err| match err {
             PowerActionError::NotConfigured | PowerActionError::InvalidConfig(_) => {
@@ -1162,22 +1255,21 @@ async fn run_board_power_action(
     Ok(axum::Json(ActionResponse { ok: true, message }))
 }
 
+fn board_power_action(action: PowerAction) -> BoardPowerAction {
+    match action {
+        PowerAction::On => BoardPowerAction::PowerOn,
+        PowerAction::Off => BoardPowerAction::PowerOff,
+    }
+}
+
 fn parse_relative_path(raw: &str) -> Result<String, ApiError> {
     normalize_relative_path(raw).map_err(|err| ApiError::bad_request(err.to_string()))
 }
 
-fn leased_board_ids(sessions: &[crate::session::Session]) -> BTreeSet<&str> {
-    sessions
-        .iter()
-        .map(|session| session.board_id.as_str())
-        .collect::<BTreeSet<_>>()
-}
-
 fn summarize_board_types(
     boards: &BTreeMap<String, BoardConfig>,
-    sessions: &[crate::session::Session],
+    runtimes: &BTreeMap<String, crate::state::BoardRuntimeState>,
 ) -> Vec<BoardTypeSummary> {
-    let leased = leased_board_ids(sessions);
     let mut aggregate = BTreeMap::<String, (BTreeSet<String>, usize, usize)>::new();
     for board in boards.values().filter(|board| !board.disabled) {
         let entry = aggregate
@@ -1187,7 +1279,11 @@ fn summarize_board_types(
             entry.0.insert(tag.clone());
         }
         entry.1 += 1;
-        if !leased.contains(board.id.as_str()) {
+        if runtimes
+            .get(&board.id)
+            .map(|runtime| runtime.lease_state == BoardLeaseState::Idle)
+            .unwrap_or(false)
+        {
             entry.2 += 1;
         }
     }
@@ -1411,11 +1507,15 @@ mod tests {
 
     use super::{build_router, resolve_server_network};
     use crate::{
+        api::models::{BoardPowerStatusResponse, BoardRuntimeStatusResponse, SessionDetailResponse},
         build_app_state,
         config::{
             BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
-            PowerManagementConfig, ServerConfig, TftpConfig, ZhongshengRelayPowerManagement,
+            PowerManagementConfig, ServerConfig, TftpConfig, VirtualPowerManagement,
+            ZhongshengRelayPowerManagement,
         },
+        session::SessionLifecycleState,
+        state::BoardLeaseState,
         tftp::service::{TftpManager, build_tftp_manager},
         web::first_asset_path,
     };
@@ -1514,6 +1614,12 @@ mod tests {
             notes: Some("rack-a".into()),
             disabled: false,
         }
+    }
+
+    fn sample_virtual_board(board_id: &str) -> BoardConfig {
+        let mut board = sample_board(board_id);
+        board.power_management = PowerManagementConfig::Virtual(VirtualPowerManagement::default());
+        board
     }
 
     #[cfg(unix)]
@@ -1916,6 +2022,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn update_board_accepts_virtual_power_management() {
+        let app = test_router().await;
+        let board = sample_board("demo-board");
+        assert_eq!(
+            create_board(&app, serde_json::to_value(&board).unwrap()).await,
+            StatusCode::CREATED
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/admin/boards/demo-board")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "id": "demo-board",
+                            "board_type": "rk3568",
+                            "tags": ["lab"],
+                            "serial": null,
+                            "power_management": { "kind": "virtual" },
+                            "boot": { "kind": "pxe", "notes": null },
+                            "notes": null,
+                            "disabled": false
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let status_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/admin/boards/demo-board/power-status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(status_response.status(), StatusCode::OK);
+        let body = to_bytes(status_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let status: BoardPowerStatusResponse = serde_json::from_slice(&body).unwrap();
+        assert!(status.available);
+        assert_eq!(status.powered, Some(false));
+        assert!(status.last_action.is_none());
+    }
+
+    #[tokio::test]
     async fn power_actions_execute_custom_power_management_commands() {
         let app = test_router().await;
         let mut board = sample_board("power-board");
@@ -1967,6 +2128,196 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["message"], "executed `printf power-on >/dev/null`");
+    }
+
+    #[tokio::test]
+    async fn virtual_power_status_reports_board_state_before_and_after_actions() {
+        let app = test_router().await;
+        let board = sample_virtual_board("virtual-board");
+        assert_eq!(
+            create_board(&app, serde_json::to_value(&board).unwrap()).await,
+            StatusCode::CREATED
+        );
+
+        let initial = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/admin/boards/virtual-board/power-status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(initial.status(), StatusCode::OK);
+        let initial_body = to_bytes(initial.into_body(), usize::MAX).await.unwrap();
+        let initial_status: BoardPowerStatusResponse =
+            serde_json::from_slice(&initial_body).unwrap();
+        assert!(initial_status.available);
+        assert_eq!(initial_status.powered, Some(false));
+        assert!(initial_status.last_action.is_none());
+        assert!(initial_status.updated_at.is_none());
+
+        let session_id = create_session(&app, "rk3568").await;
+        let power_on = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/sessions/{session_id}/board/power-on"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(power_on.status(), StatusCode::OK);
+        let power_on_body = to_bytes(power_on.into_body(), usize::MAX).await.unwrap();
+        let power_on_value: serde_json::Value = serde_json::from_slice(&power_on_body).unwrap();
+        assert_eq!(
+            power_on_value["message"],
+            "recorded virtual power-on for board `virtual-board`"
+        );
+
+        let powered = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/admin/boards/virtual-board/power-status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let powered_body = to_bytes(powered.into_body(), usize::MAX).await.unwrap();
+        let powered_status: BoardPowerStatusResponse =
+            serde_json::from_slice(&powered_body).unwrap();
+        assert_eq!(powered_status.powered, Some(true));
+        assert_eq!(
+            powered_status.last_action,
+            Some(crate::api::models::BoardPowerAction::PowerOn)
+        );
+        assert!(powered_status.updated_at.is_some());
+
+        let power_off = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/sessions/{session_id}/board/power-off"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(power_off.status(), StatusCode::OK);
+        let power_off_body = to_bytes(power_off.into_body(), usize::MAX).await.unwrap();
+        let power_off_value: serde_json::Value = serde_json::from_slice(&power_off_body).unwrap();
+        assert_eq!(
+            power_off_value["message"],
+            "recorded virtual power-off for board `virtual-board`"
+        );
+
+        let powered_off = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/admin/boards/virtual-board/power-status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let powered_off_body = to_bytes(powered_off.into_body(), usize::MAX).await.unwrap();
+        let powered_off_status: BoardPowerStatusResponse =
+            serde_json::from_slice(&powered_off_body).unwrap();
+        assert_eq!(powered_off_status.powered, Some(false));
+        assert_eq!(
+            powered_off_status.last_action,
+            Some(crate::api::models::BoardPowerAction::PowerOff)
+        );
+        assert!(powered_off_status.updated_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn board_runtime_status_reports_idle_board() {
+        let app = test_router().await;
+        let board = sample_virtual_board("runtime-board");
+        assert_eq!(
+            create_board(&app, serde_json::to_value(&board).unwrap()).await,
+            StatusCode::CREATED
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/admin/boards/runtime-board/runtime-status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let status: BoardRuntimeStatusResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(status.lease_state, BoardLeaseState::Idle);
+        assert!(status.active_session_id.is_none());
+        assert!(status.last_release_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_session_returns_accepted_and_marks_session_releasing() {
+        let app = test_router().await;
+        let mut board = sample_board("release-board");
+        board.serial = None;
+        board.power_management = PowerManagementConfig::Custom(CustomPowerManagement {
+            power_on_cmd: "printf power-on >/dev/null".into(),
+            power_off_cmd: "sh -c 'sleep 1'".into(),
+        });
+        assert_eq!(
+            create_board(&app, serde_json::to_value(&board).unwrap()).await,
+            StatusCode::CREATED
+        );
+
+        let session_id = create_session(&app, "rk3568").await;
+        let delete_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/sessions/{session_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_response.status(), StatusCode::ACCEPTED);
+
+        let mut state = SessionLifecycleState::Active;
+        for _ in 0..10 {
+            let session_response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/api/v1/sessions/{session_id}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(session_response.status(), StatusCode::OK);
+            let session_body = to_bytes(session_response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let detail: SessionDetailResponse = serde_json::from_slice(&session_body).unwrap();
+            state = detail.session.state;
+            if state == SessionLifecycleState::Releasing {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        assert_eq!(state, SessionLifecycleState::Releasing);
     }
 
     #[tokio::test]

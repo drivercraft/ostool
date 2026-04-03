@@ -11,7 +11,7 @@ use tokio_serial::SerialPortBuilderExt;
 
 use crate::{
     config::BoardConfig,
-    power::{PowerAction, PowerActionError, execute_power_action_for_board},
+    power::{PowerAction, PowerActionError},
     session::SessionState,
     state::AppState,
 };
@@ -38,7 +38,7 @@ pub async fn run_serial_ws(
 
 async fn run_serial_ws_inner(
     socket: WebSocket,
-    _state: &AppState,
+    state: &AppState,
     session: std::sync::Arc<SessionState>,
 ) -> anyhow::Result<()> {
     let session_id = session.snapshot().await.id;
@@ -55,7 +55,11 @@ async fn run_serial_ws_inner(
     let (mut ws_sender, mut ws_receiver) = socket.split();
     let (mut serial_rx, mut serial_tx) = tokio::io::split(port);
     let mut serial_buffer = [0u8; 1024];
-    let mut power_on_task = Some(spawn_power_action_task(board.clone(), PowerAction::On));
+    let mut power_on_task = Some(spawn_power_action_task(
+        state.clone(),
+        board.clone(),
+        PowerAction::On,
+    ));
     let power_linked = true;
     let mut shutdown_rx = session.subscribe_shutdown();
 
@@ -63,166 +67,176 @@ async fn run_serial_ws_inner(
         .send(Message::Text(r#"{"type":"opened"}"#.to_string().into()))
         .await
         .ok();
-    loop {
-        if let Some(task) = power_on_task.as_mut() {
-            tokio::select! {
-                power_result = task => {
-                    power_on_task = None;
-                    match power_result {
-                        Ok(Ok(_)) => {}
-                        Ok(Err(err)) => {
-                            let message = format!("automatic power-on failed: {err}");
-                            log::warn!("session `{session_id}` {message}");
-                            send_power_on_failure_and_close(&mut ws_sender, &message).await;
-                            break;
-                        }
-                        Err(err) => {
-                            let message = format!("automatic power-on task join failed: {err}");
-                            log::warn!("session `{session_id}` {message}");
-                            send_power_on_failure_and_close(&mut ws_sender, &message).await;
-                            break;
-                        }
-                    }
-                }
-                changed = shutdown_rx.changed() => {
-                    if changed.is_ok() && *shutdown_rx.borrow() {
-                        let _ = ws_sender
-                            .send(Message::Text(r#"{"type":"closed"}"#.to_string().into()))
-                            .await;
-                        break;
-                    }
-                }
-                maybe_message = ws_receiver.next() => {
-                    let Some(message) = maybe_message else {
-                        break;
-                    };
-                    match message {
-                        Ok(Message::Binary(bytes)) => {
-                            write_serial_payload(&mut serial_tx, &bytes).await?;
-                        }
-                        Ok(Message::Text(text)) => {
-                            let control: ClientControlMessage = serde_json::from_str(&text)?;
-                            match control.kind.as_str() {
-                                "close" => {
-                                    let _ = ws_sender
-                                        .send(Message::Text(r#"{"type":"closed"}"#.to_string().into()))
-                                        .await;
-                                    break;
-                                }
-                                "tx" => {
-                                    let Some(data) = control.data.as_deref() else {
-                                        anyhow::bail!("missing tx data");
-                                    };
-                                    let payload = match control.encoding.as_deref() {
-                                        Some("base64") => base64::engine::general_purpose::STANDARD
-                                            .decode(data)
-                                            .context("invalid base64 payload")?,
-                                        Some("utf8") | None => data.as_bytes().to_vec(),
-                                        Some(other) => anyhow::bail!("unsupported encoding `{other}`"),
-                                    };
-                                    write_serial_payload(&mut serial_tx, &payload).await?;
-                                }
-                                other => anyhow::bail!("unsupported websocket control type `{other}`"),
+    let result = async {
+        loop {
+            if let Some(task) = power_on_task.as_mut() {
+                tokio::select! {
+                    power_result = task => {
+                        power_on_task = None;
+                        match power_result {
+                            Ok(Ok(_)) => {}
+                            Ok(Err(err)) => {
+                                let message = format!("automatic power-on failed: {err}");
+                                log::warn!("session `{session_id}` {message}");
+                                send_power_on_failure_and_close(&mut ws_sender, &message).await;
+                                break;
+                            }
+                            Err(err) => {
+                                let message = format!("automatic power-on task join failed: {err}");
+                                log::warn!("session `{session_id}` {message}");
+                                send_power_on_failure_and_close(&mut ws_sender, &message).await;
+                                break;
                             }
                         }
-                        Ok(Message::Close(_)) => break,
-                        Ok(Message::Ping(payload)) => {
-                            ws_sender.send(Message::Pong(payload)).await.ok();
+                    }
+                    changed = shutdown_rx.changed() => {
+                        if changed.is_ok() && *shutdown_rx.borrow() {
+                            let _ = ws_sender
+                                .send(Message::Text(r#"{"type":"closed"}"#.to_string().into()))
+                                .await;
+                            break;
                         }
-                        Ok(Message::Pong(_)) => {}
-                        Err(err) => return Err(err.into()),
                     }
-                    let _ = session.heartbeat().await;
-                }
-                read = serial_rx.read(&mut serial_buffer) => {
-                    let read = read.context("serial read failed")?;
-                    if read == 0 {
-                        break;
-                    }
-                    ws_sender
-                        .send(Message::Binary(serial_buffer[..read].to_vec().into()))
-                        .await
-                        .context("failed to send serial output over websocket")?;
-                    let _ = session.heartbeat().await;
-                }
-            }
-        } else {
-            tokio::select! {
-                changed = shutdown_rx.changed() => {
-                    if changed.is_ok() && *shutdown_rx.borrow() {
-                        let _ = ws_sender
-                            .send(Message::Text(r#"{"type":"closed"}"#.to_string().into()))
-                            .await;
-                        break;
-                    }
-                }
-                maybe_message = ws_receiver.next() => {
-                    let Some(message) = maybe_message else {
-                        break;
-                    };
-                    match message {
-                        Ok(Message::Binary(bytes)) => {
-                            write_serial_payload(&mut serial_tx, &bytes).await?;
-                        }
-                        Ok(Message::Text(text)) => {
-                            let control: ClientControlMessage = serde_json::from_str(&text)?;
-                            match control.kind.as_str() {
-                                "close" => {
-                                    let _ = ws_sender
-                                        .send(Message::Text(r#"{"type":"closed"}"#.to_string().into()))
-                                        .await;
-                                    break;
-                                }
-                                "tx" => {
-                                    let Some(data) = control.data.as_deref() else {
-                                        anyhow::bail!("missing tx data");
-                                    };
-                                    let payload = match control.encoding.as_deref() {
-                                        Some("base64") => base64::engine::general_purpose::STANDARD
-                                            .decode(data)
-                                            .context("invalid base64 payload")?,
-                                        Some("utf8") | None => data.as_bytes().to_vec(),
-                                        Some(other) => anyhow::bail!("unsupported encoding `{other}`"),
-                                    };
-                                    write_serial_payload(&mut serial_tx, &payload).await?;
-                                }
-                                other => anyhow::bail!("unsupported websocket control type `{other}`"),
+                    maybe_message = ws_receiver.next() => {
+                        let Some(message) = maybe_message else {
+                            break;
+                        };
+                        match message {
+                            Ok(Message::Binary(bytes)) => {
+                                write_serial_payload(&mut serial_tx, &bytes).await?;
                             }
+                            Ok(Message::Text(text)) => {
+                                let control: ClientControlMessage = serde_json::from_str(&text)?;
+                                match control.kind.as_str() {
+                                    "close" => {
+                                        let _ = ws_sender
+                                            .send(Message::Text(r#"{"type":"closed"}"#.to_string().into()))
+                                            .await;
+                                        break;
+                                    }
+                                    "tx" => {
+                                        let Some(data) = control.data.as_deref() else {
+                                            anyhow::bail!("missing tx data");
+                                        };
+                                        let payload = match control.encoding.as_deref() {
+                                            Some("base64") => base64::engine::general_purpose::STANDARD
+                                                .decode(data)
+                                                .context("invalid base64 payload")?,
+                                            Some("utf8") | None => data.as_bytes().to_vec(),
+                                            Some(other) => anyhow::bail!("unsupported encoding `{other}`"),
+                                        };
+                                        write_serial_payload(&mut serial_tx, &payload).await?;
+                                    }
+                                    other => anyhow::bail!("unsupported websocket control type `{other}`"),
+                                }
+                            }
+                            Ok(Message::Close(_)) => break,
+                            Ok(Message::Ping(payload)) => {
+                                ws_sender.send(Message::Pong(payload)).await.ok();
+                            }
+                            Ok(Message::Pong(_)) => {}
+                            Err(err) => return Err(err.into()),
                         }
-                        Ok(Message::Close(_)) => break,
-                        Ok(Message::Ping(payload)) => {
-                            ws_sender.send(Message::Pong(payload)).await.ok();
-                        }
-                        Ok(Message::Pong(_)) => {}
-                        Err(err) => return Err(err.into()),
+                        let _ = session.heartbeat().await;
                     }
-                    let _ = session.heartbeat().await;
+                    read = serial_rx.read(&mut serial_buffer) => {
+                        let read = read.context("serial read failed")?;
+                        if read == 0 {
+                            break;
+                        }
+                        ws_sender
+                            .send(Message::Binary(serial_buffer[..read].to_vec().into()))
+                            .await
+                            .context("failed to send serial output over websocket")?;
+                        let _ = session.heartbeat().await;
+                    }
                 }
-                read = serial_rx.read(&mut serial_buffer) => {
-                    let read = read.context("serial read failed")?;
-                    if read == 0 {
-                        break;
+            } else {
+                tokio::select! {
+                    changed = shutdown_rx.changed() => {
+                        if changed.is_ok() && *shutdown_rx.borrow() {
+                            let _ = ws_sender
+                                .send(Message::Text(r#"{"type":"closed"}"#.to_string().into()))
+                                .await;
+                            break;
+                        }
                     }
-                    ws_sender
-                        .send(Message::Binary(serial_buffer[..read].to_vec().into()))
-                        .await
-                        .context("failed to send serial output over websocket")?;
-                    let _ = session.heartbeat().await;
+                    maybe_message = ws_receiver.next() => {
+                        let Some(message) = maybe_message else {
+                            break;
+                        };
+                        match message {
+                            Ok(Message::Binary(bytes)) => {
+                                write_serial_payload(&mut serial_tx, &bytes).await?;
+                            }
+                            Ok(Message::Text(text)) => {
+                                let control: ClientControlMessage = serde_json::from_str(&text)?;
+                                match control.kind.as_str() {
+                                    "close" => {
+                                        let _ = ws_sender
+                                            .send(Message::Text(r#"{"type":"closed"}"#.to_string().into()))
+                                            .await;
+                                        break;
+                                    }
+                                    "tx" => {
+                                        let Some(data) = control.data.as_deref() else {
+                                            anyhow::bail!("missing tx data");
+                                        };
+                                        let payload = match control.encoding.as_deref() {
+                                            Some("base64") => base64::engine::general_purpose::STANDARD
+                                                .decode(data)
+                                                .context("invalid base64 payload")?,
+                                            Some("utf8") | None => data.as_bytes().to_vec(),
+                                            Some(other) => anyhow::bail!("unsupported encoding `{other}`"),
+                                        };
+                                        write_serial_payload(&mut serial_tx, &payload).await?;
+                                    }
+                                    other => anyhow::bail!("unsupported websocket control type `{other}`"),
+                                }
+                            }
+                            Ok(Message::Close(_)) => break,
+                            Ok(Message::Ping(payload)) => {
+                                ws_sender.send(Message::Pong(payload)).await.ok();
+                            }
+                            Ok(Message::Pong(_)) => {}
+                            Err(err) => return Err(err.into()),
+                        }
+                        let _ = session.heartbeat().await;
+                    }
+                    read = serial_rx.read(&mut serial_buffer) => {
+                        let read = read.context("serial read failed")?;
+                        if read == 0 {
+                            break;
+                        }
+                        ws_sender
+                            .send(Message::Binary(serial_buffer[..read].to_vec().into()))
+                            .await
+                            .context("failed to send serial output over websocket")?;
+                        let _ = session.heartbeat().await;
+                    }
                 }
             }
         }
-    }
 
-    cleanup_power_link(&board, power_linked, power_on_task).await;
+        Ok(())
+    }
+    .await;
+
+    let result = finalize_power_linked_session(state, &board, power_linked, power_on_task, result)
+        .await;
+    let _ = state
+        .request_session_stop(&session_id, crate::session::SessionStopReason::SerialClosed)
+        .await;
     let _ = ws_sender.send(Message::Close(None)).await;
-    Ok(())
+    result
 }
 
 fn spawn_power_action_task(
+    state: AppState,
     board: BoardConfig,
     action: PowerAction,
 ) -> JoinHandle<Result<String, PowerActionError>> {
-    tokio::spawn(async move { execute_power_action_for_board(&board, action).await })
+    tokio::spawn(async move { state.execute_board_power_action(&board, action).await })
 }
 
 async fn cleanup_power_link(
@@ -246,20 +260,17 @@ async fn cleanup_power_link(
             Err(err) => log::warn!("session `{}` power-on task join failed: {err}", board.id),
         }
     }
+}
 
-    match tokio::spawn({
-        let board = board.clone();
-        async move { execute_power_action_for_board(&board, PowerAction::Off).await }
-    })
-    .await
-    {
-        Ok(Ok(_)) => {}
-        Ok(Err(err)) => log::warn!("session `{}` automatic power-off failed: {err}", board.id),
-        Err(err) => log::warn!(
-            "session `{}` automatic power-off task join failed: {err}",
-            board.id
-        ),
-    }
+async fn finalize_power_linked_session<T>(
+    _state: &AppState,
+    board: &BoardConfig,
+    power_linked: bool,
+    power_on_task: Option<JoinHandle<Result<String, PowerActionError>>>,
+    result: anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    cleanup_power_link(board, power_linked, power_on_task).await;
+    result
 }
 
 async fn send_power_on_failure_and_close<S>(ws_sender: &mut S, message: &str)
@@ -300,12 +311,18 @@ mod tests {
     use futures_util::Sink;
     use tempfile::tempdir;
 
-    use super::{ClientControlMessage, cleanup_power_link, send_power_on_failure_and_close};
+    use super::{
+        ClientControlMessage, cleanup_power_link, finalize_power_linked_session,
+        send_power_on_failure_and_close,
+    };
     use crate::{
+        build_app_state,
         config::{
-            BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, PxeProfile,
+            BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
+            PowerManagementConfig, PxeProfile, ServerConfig, TftpConfig,
         },
         power::PowerActionError,
+        tftp::service::{TftpManager, build_tftp_manager},
     };
 
     #[derive(Default)]
@@ -349,6 +366,18 @@ mod tests {
         assert_eq!(message.kind, "close");
     }
 
+    async fn test_state(root: &std::path::Path) -> crate::AppState {
+        let config_path = root.join(".ostool-server.toml");
+        let mut config = ServerConfig::default();
+        config.listen_addr = "127.0.0.1:0".parse().unwrap();
+        config.data_dir = root.join("data");
+        config.board_dir = root.join("boards");
+        config.dtb_dir = root.join("dtbs");
+        config.tftp = TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(root.join("tftp")));
+        let manager: std::sync::Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
+        build_app_state(config_path, config, manager).await.unwrap()
+    }
+
     #[tokio::test]
     async fn cleanup_waits_for_power_on_task_before_power_off() {
         let dir = tempdir().unwrap();
@@ -376,7 +405,41 @@ mod tests {
         cleanup_power_link(&board, true, Some(power_on_task)).await;
 
         let content = fs::read_to_string(dir.path().join("power.log")).unwrap();
-        assert_eq!(content, "on\noff\n");
+        assert_eq!(content, "on\n");
+    }
+
+    #[tokio::test]
+    async fn finalize_runs_power_off_even_when_session_errors() {
+        let dir = tempdir().unwrap();
+        let output_path = dir.path().join("power.log");
+        let state = test_state(dir.path()).await;
+        let board = BoardConfig {
+            id: "demo".into(),
+            board_type: "demo".into(),
+            tags: vec![],
+            serial: None,
+            power_management: PowerManagementConfig::Custom(CustomPowerManagement {
+                power_on_cmd: String::new(),
+                power_off_cmd: format!("printf 'off\\n' >> {}", output_path.display()),
+            }),
+            boot: BootConfig::Pxe(PxeProfile::default()),
+            notes: None,
+            disabled: false,
+        };
+
+        let power_on_task =
+            tokio::spawn(async { Ok::<String, PowerActionError>("executed".into()) });
+        let result = finalize_power_linked_session::<()>(
+            &state,
+            &board,
+            true,
+            Some(power_on_task),
+            Err(anyhow::anyhow!("websocket send failed")),
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(!output_path.exists());
     }
 
     #[tokio::test]

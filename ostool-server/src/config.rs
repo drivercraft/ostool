@@ -344,6 +344,7 @@ pub struct SerialConfig {
 pub enum PowerManagementConfig {
     Custom(CustomPowerManagement),
     ZhongshengRelay(ZhongshengRelayPowerManagement),
+    Virtual(VirtualPowerManagement),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -356,6 +357,9 @@ pub struct CustomPowerManagement {
 pub struct ZhongshengRelayPowerManagement {
     pub serial_port: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct VirtualPowerManagement {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -398,7 +402,7 @@ mod tests {
 
     use super::{
         BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, ServerConfig,
-        UbootProfile,
+        UbootProfile, VirtualPowerManagement,
     };
 
     #[test]
@@ -511,5 +515,28 @@ board_power_off_cmd = "shutdown"
         assert!(value["boot"].get("shell_prefix").is_none());
         assert!(value["boot"].get("shell_init_cmd").is_none());
         assert_eq!(value["boot"]["dtb_name"], json!("board.dtb"));
+    }
+
+    #[test]
+    fn board_config_round_trip_supports_virtual_power_management() {
+        let board = BoardConfig {
+            id: "demo-virtual".into(),
+            board_type: "demo".into(),
+            tags: vec![],
+            serial: None,
+            power_management: PowerManagementConfig::Virtual(VirtualPowerManagement::default()),
+            boot: BootConfig::Pxe(Default::default()),
+            notes: None,
+            disabled: false,
+        };
+
+        let encoded = toml::to_string_pretty(&board).unwrap();
+        assert!(encoded.contains("kind = \"virtual\""));
+
+        let decoded: BoardConfig = toml::from_str(&encoded).unwrap();
+        assert!(matches!(
+            decoded.power_management,
+            PowerManagementConfig::Virtual(_)
+        ));
     }
 }
