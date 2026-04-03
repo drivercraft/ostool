@@ -92,6 +92,21 @@ impl AppState {
     }
 
     pub async fn remove_session(&self, session_id: &str) -> anyhow::Result<Option<Session>> {
+        self.remove_session_inner(session_id, true).await
+    }
+
+    pub async fn remove_session_without_power_off(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<Option<Session>> {
+        self.remove_session_inner(session_id, false).await
+    }
+
+    async fn remove_session_inner(
+        &self,
+        session_id: &str,
+        power_off: bool,
+    ) -> anyhow::Result<Option<Session>> {
         let session = self.sessions.read().await.get(session_id).cloned();
         let Some(session) = session else {
             return Ok(None);
@@ -108,17 +123,20 @@ impl AppState {
 
         session.signal_shutdown();
         session.clear_serial_connected();
-        self.tftp_manager
-            .read()
-            .await
-            .remove_session_dir(session_id)
-            .await?;
-        if let Err(err) = execute_power_action_for_board(session.board(), PowerAction::Off).await {
+        if power_off
+            && let Err(err) =
+                execute_power_action_for_board(session.board(), PowerAction::Off).await
+        {
             log::warn!(
                 "failed to power off board `{}` while releasing session `{session_id}`: {err}",
                 session.board().id
             );
         }
+        self.tftp_manager
+            .read()
+            .await
+            .remove_session_dir(session_id)
+            .await?;
         Ok(Some(session.snapshot().await))
     }
 
@@ -200,8 +218,9 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, sync::Arc};
+    use std::{fs, path::Path, sync::Arc};
 
+    use async_trait::async_trait;
     use tempfile::tempdir;
 
     use super::build_app_state;
@@ -211,7 +230,11 @@ mod tests {
             BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, PxeProfile,
         },
         session::SessionState,
-        tftp::service::{TftpManager, build_tftp_manager},
+        tftp::{
+            files::TftpFileRef,
+            service::{TftpManager, build_tftp_manager},
+            status::TftpStatus,
+        },
     };
 
     fn sample_board(board_id: &str) -> BoardConfig {
@@ -227,6 +250,73 @@ mod tests {
             boot: BootConfig::Pxe(PxeProfile::default()),
             notes: None,
             disabled: false,
+        }
+    }
+
+    struct FailingRemoveTftpManager {
+        root_dir: std::path::PathBuf,
+    }
+
+    #[async_trait]
+    impl TftpManager for FailingRemoveTftpManager {
+        async fn start_if_needed(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn reconcile(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<TftpStatus> {
+            Ok(TftpStatus {
+                provider: "test".into(),
+                enabled: true,
+                healthy: true,
+                writable: true,
+                resolved_server_ip: None,
+                resolved_netmask: None,
+                root_dir: self.root_dir.clone(),
+                bind_addr_or_address: None,
+                service_state: None,
+                last_error: None,
+            })
+        }
+
+        async fn put_session_file(
+            &self,
+            _session_id: &str,
+            _relative_path: &str,
+            _bytes: &[u8],
+        ) -> anyhow::Result<TftpFileRef> {
+            anyhow::bail!("not implemented in test")
+        }
+
+        async fn get_session_file(
+            &self,
+            _session_id: &str,
+            _relative_path: &str,
+        ) -> anyhow::Result<Option<TftpFileRef>> {
+            Ok(None)
+        }
+
+        async fn list_session_files(&self, _session_id: &str) -> anyhow::Result<Vec<TftpFileRef>> {
+            Ok(Vec::new())
+        }
+
+        async fn remove_session_file(
+            &self,
+            _session_id: &str,
+            _relative_path: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn remove_session_dir(&self, _session_id: &str) -> anyhow::Result<()> {
+            anyhow::bail!("simulated TFTP cleanup failure")
+        }
+
+        fn root_dir(&self) -> &Path {
+            &self.root_dir
         }
     }
 
@@ -256,6 +346,98 @@ mod tests {
         assert!(removed.is_some());
         shutdown.changed().await.unwrap();
         assert!(*shutdown.borrow());
+    }
+
+    #[tokio::test]
+    async fn remove_session_powers_off_even_when_tftp_cleanup_fails() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let power_log = root.join("power.log");
+        let config_path = root.join(".ostool-server.toml");
+        let mut config = ServerConfig::default();
+        config.listen_addr = "127.0.0.1:0".parse().unwrap();
+        config.data_dir = root.join("data");
+        config.board_dir = root.join("boards");
+        config.dtb_dir = root.join("dtbs");
+        let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
+        let state = build_app_state(config_path, config, manager).await.unwrap();
+        *state.tftp_manager.write().await = Arc::new(FailingRemoveTftpManager {
+            root_dir: root.join("tftp"),
+        });
+
+        let session = SessionState::new(
+            BoardConfig {
+                id: "board-1".into(),
+                board_type: "demo".into(),
+                tags: vec![],
+                serial: None,
+                power_management: PowerManagementConfig::Custom(CustomPowerManagement {
+                    power_on_cmd: "printf on >/dev/null".into(),
+                    power_off_cmd: format!("printf off >> {}", power_log.display()),
+                }),
+                boot: BootConfig::Pxe(PxeProfile::default()),
+                notes: None,
+                disabled: false,
+            },
+            None,
+        );
+        let session_id = session.snapshot().await.id;
+        state
+            .sessions
+            .write()
+            .await
+            .insert(session_id.clone(), session);
+
+        let err = state.remove_session(&session_id).await.unwrap_err();
+        assert!(err.to_string().contains("simulated TFTP cleanup failure"));
+        assert_eq!(fs::read_to_string(power_log).unwrap(), "off");
+        assert!(!state.sessions.read().await.contains_key(&session_id));
+    }
+
+    #[tokio::test]
+    async fn remove_session_without_power_off_skips_power_action() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let power_log = root.join("power.log");
+        let config_path = root.join(".ostool-server.toml");
+        let mut config = ServerConfig::default();
+        config.listen_addr = "127.0.0.1:0".parse().unwrap();
+        config.data_dir = root.join("data");
+        config.board_dir = root.join("boards");
+        config.dtb_dir = root.join("dtbs");
+        let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
+        let state = build_app_state(config_path, config, manager).await.unwrap();
+
+        let session = SessionState::new(
+            BoardConfig {
+                id: "board-1".into(),
+                board_type: "demo".into(),
+                tags: vec![],
+                serial: None,
+                power_management: PowerManagementConfig::Custom(CustomPowerManagement {
+                    power_on_cmd: "printf on >/dev/null".into(),
+                    power_off_cmd: format!("printf off >> {}", power_log.display()),
+                }),
+                boot: BootConfig::Pxe(PxeProfile::default()),
+                notes: None,
+                disabled: false,
+            },
+            None,
+        );
+        let session_id = session.snapshot().await.id;
+        state
+            .sessions
+            .write()
+            .await
+            .insert(session_id.clone(), session);
+
+        let removed = state
+            .remove_session_without_power_off(&session_id)
+            .await
+            .unwrap();
+        assert!(removed.is_some());
+        assert!(!power_log.exists());
+        assert!(!state.sessions.read().await.contains_key(&session_id));
     }
 
     #[tokio::test]

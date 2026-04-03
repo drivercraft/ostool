@@ -1049,11 +1049,11 @@ impl TuiApp {
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2),     // Header (compact)
-                Constraint::Max(14),     // Navigation (scrollable list)
-                Constraint::Min(8),      // Detail (full info display)
-                Constraint::Length(3),    // Editor / Action bar
-                Constraint::Length(3),    // Footer (shortcuts)
+                Constraint::Length(3), // Header (1 line + border)
+                Constraint::Max(14),   // Navigation (scrollable list)
+                Constraint::Min(8),    // Detail (full info display)
+                Constraint::Length(5), // Editor / Action bar (input + hint + borders)
+                Constraint::Length(4), // Footer (shortcuts, 2 lines + border)
             ])
             .split(area);
 
@@ -1088,19 +1088,22 @@ impl TuiApp {
 
     fn render_header(&self, frame: &mut Frame, area: Rect) {
         let title = self.state.document.title();
-        let dirty = if self.state.needs_save {
-            "*"
-        } else {
-            ""
-        };
+        let dirty = if self.state.needs_save { "*" } else { "" };
         let text = Line::from(vec![
             Span::styled(" JKConfig ", self.ui.theme.accent()),
-            Span::styled(format!("{title}"), self.ui.theme.text().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{title}"),
+                self.ui.theme.text().add_modifier(Modifier::BOLD),
+            ),
             Span::raw("  "),
             Span::styled(self.state.current_path_string(), self.ui.theme.muted()),
             Span::raw("  "),
             Span::styled(
-                if dirty.is_empty() { "".into() } else { format!("{dirty}") },
+                if dirty.is_empty() {
+                    "".into()
+                } else {
+                    format!("{dirty}")
+                },
                 if dirty.is_empty() {
                     self.ui.theme.muted()
                 } else {
@@ -1232,7 +1235,7 @@ impl TuiApp {
                 } else {
                     let initial = AppState::element_summary(element);
                     let cursor_offset = initial.len() as u16;
-                    (initial, None.or(Some(cursor_offset)), None)
+                    (initial, Some(cursor_offset), None)
                 };
 
                 let chunks = Layout::default()
@@ -1284,9 +1287,9 @@ impl TuiApp {
                         ItemType::Boolean { .. } => "Space toggle",
                         ItemType::Enum(_) => "Enter choose variant",
                         ItemType::Array(_) => "Enter open array editor",
-                        ItemType::String { .. } | ItemType::Integer { .. } | ItemType::Number { .. } => {
-                            "Enter edit in dialog"
-                        }
+                        ItemType::String { .. }
+                        | ItemType::Integer { .. }
+                        | ItemType::Number { .. } => "Enter edit in dialog",
                     },
                     ElementType::Menu(_) => "Enter navigate  M toggle optional",
                     ElementType::OneOf(_) => "Enter select  Tab switch variant",

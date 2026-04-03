@@ -139,10 +139,10 @@ impl MenuConfigHandler {
 
 #[cfg(test)]
 mod tests {
+    use crate::build::config::BuildConfig;
     use jkconfig::data::menu::MenuRoot;
     use jkconfig::data::types::ElementType;
     use schemars::schema_for;
-    use crate::build::config::BuildConfig;
 
     #[test]
     fn test_log_field_is_enum_not_oneof() {

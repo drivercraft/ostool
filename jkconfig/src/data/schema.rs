@@ -145,7 +145,10 @@ impl WalkContext {
                 .iter()
                 .filter_map(|v| {
                     let val = v.get("const")?.as_str()?.to_string();
-                    let desc = v.get("description").and_then(|d| d.as_str()).map(String::from);
+                    let desc = v
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .map(String::from);
                     Some((val, desc))
                 })
                 .collect();
@@ -180,7 +183,12 @@ impl WalkContext {
                 }
 
                 let one_of = OneOf {
-                    base: ElementBase::new(&self.path, self.description()?, is_required, field_name),
+                    base: ElementBase::new(
+                        &self.path,
+                        self.description()?,
+                        is_required,
+                        field_name,
+                    ),
                     variants: variant_elements,
                     selected_index: None,
                     default_index: None,
@@ -326,9 +334,9 @@ impl WalkContext {
                         && v.as_object().map_or(false, |o| o.len() <= 1)
                 });
                 if has_null {
-                    let non_null = variants.iter().find(|v| {
-                        v.get("type").and_then(|t| t.as_str()) != Some("null")
-                    });
+                    let non_null = variants
+                        .iter()
+                        .find(|v| v.get("type").and_then(|t| t.as_str()) != Some("null"));
                     if let Some(inner) = non_null {
                         let mut walk = self.clone();
                         walk.value = inner.clone();

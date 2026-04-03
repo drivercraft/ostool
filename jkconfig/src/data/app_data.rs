@@ -194,7 +194,7 @@ impl ConfigDocument {
 
         if self.config.exists() {
             let backup_ext = format!(
-                "bk-{:?}.{ext}",
+                "bk-{}.{ext}",
                 SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)?
                     .as_secs()
