@@ -371,8 +371,9 @@ pub struct CustomPowerManagement {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ZhongshengRelayPowerManagement {
-    pub serial_port: String,
+    pub key: SerialPortKey,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -418,8 +419,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, ServerConfig,
-        UbootProfile, VirtualPowerManagement,
+        BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, SerialPortKey,
+        SerialPortKeyKind, ServerConfig, UbootProfile, VirtualPowerManagement,
+        ZhongshengRelayPowerManagement,
     };
 
     #[test]
@@ -555,5 +557,62 @@ board_power_off_cmd = "shutdown"
             decoded.power_management,
             PowerManagementConfig::Virtual(_)
         ));
+    }
+
+    #[test]
+    fn board_config_round_trip_supports_relay_power_management_key() {
+        let board = BoardConfig {
+            id: "demo-relay".into(),
+            board_type: "demo".into(),
+            tags: vec![],
+            serial: None,
+            power_management: PowerManagementConfig::ZhongshengRelay(
+                ZhongshengRelayPowerManagement {
+                    key: SerialPortKey {
+                        kind: SerialPortKeyKind::SerialNumber,
+                        value: "relay-key".into(),
+                    },
+                },
+            ),
+            boot: BootConfig::Pxe(Default::default()),
+            notes: None,
+            disabled: false,
+        };
+
+        let encoded = toml::to_string_pretty(&board).unwrap();
+        assert!(encoded.contains("kind = \"zhongsheng_relay\""));
+        assert!(encoded.contains("[power_management.key]"));
+        assert!(encoded.contains("value = \"relay-key\""));
+
+        let decoded: BoardConfig = toml::from_str(&encoded).unwrap();
+        let PowerManagementConfig::ZhongshengRelay(relay) = decoded.power_management else {
+            panic!("expected relay power management");
+        };
+        assert_eq!(relay.key.kind, SerialPortKeyKind::SerialNumber);
+        assert_eq!(relay.key.value, "relay-key");
+    }
+
+    #[test]
+    fn board_config_rejects_legacy_relay_serial_port_field() {
+        let config = r#"
+id = "demo"
+board_type = "demo"
+tags = []
+disabled = false
+
+[power_management]
+kind = "zhongsheng_relay"
+serial_port = "/dev/ttyUSB0"
+
+[boot]
+kind = "pxe"
+"#;
+
+        let err = toml::from_str::<BoardConfig>(config).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("unknown field") || message.contains("serial_port"),
+            "unexpected error: {message}"
+        );
     }
 }

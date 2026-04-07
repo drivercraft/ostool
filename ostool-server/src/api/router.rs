@@ -484,15 +484,7 @@ fn normalize_serial_config(
         return Ok(());
     };
 
-    let trimmed = serial.key.value.trim();
-    if trimmed.is_empty() {
-        return Err(ApiError::bad_request(
-            "serial.key.value must not be empty when serial is configured",
-        ));
-    }
-    if trimmed.len() != serial.key.value.len() {
-        serial.key.value = trimmed.to_string();
-    }
+    normalize_serial_key_value(&mut serial.key, "serial.key.value")?;
     if serial.baud_rate == 0 {
         return Err(ApiError::bad_request(
             "serial.baud_rate must be > 0 when serial is configured",
@@ -500,6 +492,20 @@ fn normalize_serial_config(
     }
     serial.resolved_device_path = None;
     serial.resolved_usb_path = None;
+    Ok(())
+}
+
+fn normalize_serial_key_value(
+    key: &mut crate::config::SerialPortKey,
+    field: &str,
+) -> Result<(), ApiError> {
+    let trimmed = key.value.trim();
+    if trimmed.is_empty() {
+        return Err(ApiError::bad_request(format!("{field} must not be empty")));
+    }
+    if trimmed.len() != key.value.len() {
+        key.value = trimmed.to_string();
+    }
     Ok(())
 }
 
@@ -512,7 +518,7 @@ fn normalize_power_management_config(
             normalize_required_string(&mut custom.power_off_cmd, "power_management.power_off_cmd")?;
         }
         PowerManagementConfig::ZhongshengRelay(relay) => {
-            normalize_required_string(&mut relay.serial_port, "power_management.serial_port")?;
+            normalize_serial_key_value(&mut relay.key, "power_management.key.value")?;
         }
         PowerManagementConfig::Virtual(_) => {}
     }
@@ -2373,7 +2379,10 @@ mod tests {
         let mut board = sample_board("relay-board");
         board.power_management =
             PowerManagementConfig::ZhongshengRelay(ZhongshengRelayPowerManagement {
-                serial_port: relay_port.clone(),
+                key: SerialPortKey {
+                    kind: SerialPortKeyKind::UsbPath,
+                    value: relay_port.clone(),
+                },
             });
         assert_eq!(
             create_board(&app, serde_json::to_value(&board).unwrap()).await,

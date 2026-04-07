@@ -88,7 +88,7 @@ export interface CustomPowerManagement {
 
 export interface ZhongshengRelayPowerManagement {
   kind: "zhongsheng_relay";
-  serial_port: string;
+  key: SerialPortKey;
 }
 
 export type PowerManagementConfig = CustomPowerManagement | ZhongshengRelayPowerManagement;

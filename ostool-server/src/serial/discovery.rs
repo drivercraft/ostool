@@ -8,7 +8,7 @@ use nusb::MaybeFuture;
 
 use crate::{
     api::models::SerialPortSummary,
-    config::{SerialConfig, SerialPortKeyKind},
+    config::{SerialConfig, SerialPortKey, SerialPortKeyKind},
 };
 
 const SERIAL_BY_PATH_DIR: &str = "/dev/serial/by-path";
@@ -59,25 +59,35 @@ pub fn list_serial_ports() -> anyhow::Result<Vec<SerialPortSummary>> {
 }
 
 pub fn resolve_serial_config(serial: &SerialConfig) -> anyhow::Result<SerialPortRecord> {
+    resolve_serial_key(&serial.key)
+}
+
+pub fn resolve_serial_key(key: &SerialPortKey) -> anyhow::Result<SerialPortRecord> {
     let records = discover_serial_ports()?;
-    if let Some(matched) = records.into_iter().find(|record| {
-        record.primary_key_kind == Some(serial.key.kind.clone())
-            && record.primary_key_value.as_deref() == Some(serial.key.value.as_str())
+    resolve_serial_key_from_records(&records, key)
+}
+
+fn resolve_serial_key_from_records(
+    records: &[SerialPortRecord],
+    key: &SerialPortKey,
+) -> anyhow::Result<SerialPortRecord> {
+    if let Some(matched) = records.iter().find(|record| {
+        record.primary_key_kind == Some(key.kind.clone())
+            && record.primary_key_value.as_deref() == Some(key.value.as_str())
     }) {
-        return Ok(matched);
+        return Ok(matched.clone());
     }
 
-    if serial.key.kind == SerialPortKeyKind::UsbPath && Path::new(&serial.key.value).exists() {
+    if key.kind == SerialPortKeyKind::UsbPath && Path::new(&key.value).exists() {
         return Ok(SerialPortRecord {
-            current_device_path: serial.key.value.clone(),
+            current_device_path: key.value.clone(),
             port_type: "usb".to_string(),
             primary_key_kind: Some(SerialPortKeyKind::UsbPath),
-            primary_key_value: Some(serial.key.value.clone()),
-            usb_path: serial
-                .key
+            primary_key_value: Some(key.value.clone()),
+            usb_path: key
                 .value
                 .starts_with(SERIAL_BY_PATH_DIR)
-                .then(|| serial.key.value.clone()),
+                .then(|| key.value.clone()),
             stable_identity: true,
             usb_vendor_id: None,
             usb_product_id: None,
@@ -89,8 +99,8 @@ pub fn resolve_serial_config(serial: &SerialConfig) -> anyhow::Result<SerialPort
 
     Err(anyhow::anyhow!(
         "failed to resolve serial device for {} `{}`",
-        serial_key_kind_label(&serial.key.kind),
-        serial.key.value
+        serial_key_kind_label(&key.kind),
+        key.value
     ))
 }
 
@@ -310,8 +320,13 @@ fn match_usb_device<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{SerialPortRecord, UsbDeviceRecord, match_usb_device, serial_port_label};
-    use crate::config::SerialPortKeyKind;
+    use tempfile::tempdir;
+
+    use super::{
+        SerialPortRecord, UsbDeviceRecord, match_usb_device, resolve_serial_key_from_records,
+        serial_port_label,
+    };
+    use crate::config::{SerialPortKey, SerialPortKeyKind};
 
     fn usb_info(
         vid: u16,
@@ -389,5 +404,97 @@ mod tests {
         assert!(label.contains("[SN] ABC123"));
         assert!(label.contains("/dev/serial/by-path/demo"));
         assert!(label.contains("/dev/ttyUSB1"));
+    }
+
+    #[test]
+    fn resolve_serial_key_matches_serial_number_record() {
+        let resolved = resolve_serial_key_from_records(
+            &[SerialPortRecord {
+                current_device_path: "/dev/ttyUSB7".into(),
+                port_type: "usb".into(),
+                primary_key_kind: Some(SerialPortKeyKind::SerialNumber),
+                primary_key_value: Some("relay-123".into()),
+                usb_path: Some("/dev/serial/by-path/demo".into()),
+                stable_identity: true,
+                usb_vendor_id: Some(0x1a86),
+                usb_product_id: Some(0x7523),
+                manufacturer: Some("QinHeng".into()),
+                product: Some("USB Serial".into()),
+                serial_number: Some("relay-123".into()),
+            }],
+            &SerialPortKey {
+                kind: SerialPortKeyKind::SerialNumber,
+                value: "relay-123".into(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(resolved.current_device_path, "/dev/ttyUSB7");
+    }
+
+    #[test]
+    fn resolve_serial_key_matches_usb_path_record() {
+        let resolved = resolve_serial_key_from_records(
+            &[SerialPortRecord {
+                current_device_path: "/dev/ttyUSB8".into(),
+                port_type: "usb".into(),
+                primary_key_kind: Some(SerialPortKeyKind::UsbPath),
+                primary_key_value: Some("/dev/serial/by-path/relay".into()),
+                usb_path: Some("/dev/serial/by-path/relay".into()),
+                stable_identity: true,
+                usb_vendor_id: Some(0x0403),
+                usb_product_id: Some(0x6001),
+                manufacturer: Some("FTDI".into()),
+                product: Some("UART".into()),
+                serial_number: None,
+            }],
+            &SerialPortKey {
+                kind: SerialPortKeyKind::UsbPath,
+                value: "/dev/serial/by-path/relay".into(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(resolved.current_device_path, "/dev/ttyUSB8");
+    }
+
+    #[test]
+    fn resolve_serial_key_falls_back_to_existing_usb_path() {
+        let temp = tempdir().unwrap();
+        let existing_path = temp.path().join("ttyUSB-relay");
+        std::fs::write(&existing_path, b"").unwrap();
+
+        let resolved = resolve_serial_key_from_records(
+            &[],
+            &SerialPortKey {
+                kind: SerialPortKeyKind::UsbPath,
+                value: existing_path.display().to_string(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolved.current_device_path,
+            existing_path.display().to_string()
+        );
+        assert_eq!(resolved.primary_key_kind, Some(SerialPortKeyKind::UsbPath));
+        assert!(resolved.stable_identity);
+    }
+
+    #[test]
+    fn resolve_serial_key_returns_error_when_key_is_missing() {
+        let err = resolve_serial_key_from_records(
+            &[],
+            &SerialPortKey {
+                kind: SerialPortKeyKind::SerialNumber,
+                value: "missing-relay".into(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("failed to resolve serial device for serial number `missing-relay`")
+        );
     }
 }

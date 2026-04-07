@@ -10,8 +10,9 @@ use tokio_modbus::{
 use tokio_serial::{DataBits, Parity, SerialPortBuilderExt, StopBits};
 
 use crate::{
-    config::{BoardConfig, CustomPowerManagement, PowerManagementConfig},
+    config::{BoardConfig, CustomPowerManagement, PowerManagementConfig, SerialPortKeyKind},
     process::run_shell_command,
+    serial::discovery::resolve_serial_key,
 };
 
 const ZHONGSHENG_RELAY_BAUD_RATE: u32 = 38_400;
@@ -74,16 +75,23 @@ pub async fn execute_power_action(
             Ok(format!("executed `{command}`"))
         }
         PowerManagementConfig::ZhongshengRelay(relay) => {
-            if relay.serial_port.trim().is_empty() {
+            if relay.key.value.trim().is_empty() {
                 return Err(PowerActionError::InvalidConfig(
-                    "board power management relay serial port is not configured".to_string(),
+                    "board power management relay serial key is not configured".to_string(),
                 ));
             }
-            run_zhongsheng_relay_action(&relay.serial_port, action).await?;
+            let resolved_serial = resolve_serial_key(&relay.key).map_err(|err| {
+                PowerActionError::Execution(anyhow::anyhow!(
+                    "failed to resolve relay serial device for {} `{}`: {err}",
+                    relay_serial_key_kind_label(&relay.key.kind),
+                    relay.key.value
+                ))
+            })?;
+            run_zhongsheng_relay_action(&resolved_serial.current_device_path, action).await?;
             Ok(format!(
                 "executed Zhongsheng relay {} via {}",
                 action.label(),
-                relay.serial_port
+                resolved_serial.current_device_path
             ))
         }
         PowerManagementConfig::Virtual(_) => Err(PowerActionError::InvalidConfig(
@@ -103,6 +111,13 @@ async fn run_zhongsheng_relay_action(serial_port: &str, action: PowerAction) -> 
         .with_context(|| format!("failed to open relay serial port {serial_port}"))?;
 
     write_zhongsheng_relay_action(transport, action).await
+}
+
+fn relay_serial_key_kind_label(kind: &SerialPortKeyKind) -> &'static str {
+    match kind {
+        SerialPortKeyKind::SerialNumber => "serial number",
+        SerialPortKeyKind::UsbPath => "usb path",
+    }
 }
 
 async fn write_zhongsheng_relay_action<T>(transport: T, action: PowerAction) -> anyhow::Result<()>
@@ -132,6 +147,7 @@ where
 mod tests {
     use std::{future, time::Duration};
 
+    use serialport::{SerialPort, TTYPort};
     use tokio::sync::{mpsc, oneshot};
     use tokio_modbus::{
         ExceptionCode, Request, Response, SlaveRequest,
@@ -144,12 +160,14 @@ mod tests {
     };
     use crate::config::{
         BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, PxeProfile,
+        SerialPortKey, SerialPortKeyKind, ZhongshengRelayPowerManagement,
     };
 
     type RelayServerHandle =
         tokio::task::JoinHandle<std::io::Result<tokio_modbus::server::Terminated>>;
     type RelayRequestRx = mpsc::UnboundedReceiver<(u8, u16, bool)>;
     type RelayTestServer = (
+        String,
         tokio_serial::SerialStream,
         RelayServerHandle,
         RelayRequestRx,
@@ -186,7 +204,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn relay_power_management_writes_single_coil_for_power_off() {
-        let (client, server, mut requests, stop_tx) = spawn_relay_test_server();
+        let (_relay_path, client, server, mut requests, stop_tx) = spawn_relay_test_server();
 
         write_zhongsheng_relay_action(client, PowerAction::Off)
             .await
@@ -212,7 +230,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn relay_power_management_writes_single_coil_for_power_on() {
-        let (client, server, mut requests, stop_tx) = spawn_relay_test_server();
+        let (_relay_path, client, server, mut requests, stop_tx) = spawn_relay_test_server();
 
         write_zhongsheng_relay_action(client, PowerAction::On)
             .await
@@ -233,6 +251,85 @@ mod tests {
 
         let _ = stop_tx.send(());
         let _ = server.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn relay_power_management_resolves_current_device_from_key() {
+        let (relay_port, _client, server, mut requests, stop_tx) = spawn_relay_test_server();
+        let board = board_with_power_management(PowerManagementConfig::ZhongshengRelay(
+            ZhongshengRelayPowerManagement {
+                key: SerialPortKey {
+                    kind: SerialPortKeyKind::UsbPath,
+                    value: relay_port.clone(),
+                },
+            },
+        ));
+
+        let message = execute_power_action_for_board(&board, PowerAction::Off)
+            .await
+            .unwrap();
+        assert_eq!(
+            message,
+            format!("executed Zhongsheng relay power-off via {relay_port}")
+        );
+
+        let request = tokio::time::timeout(Duration::from_secs(1), requests.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            request,
+            (
+                ZHONGSHENG_RELAY_SLAVE_ID,
+                ZHONGSHENG_RELAY_COIL_ADDRESS,
+                false
+            )
+        );
+
+        let _ = stop_tx.send(());
+        let _ = server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn relay_power_management_rejects_empty_key() {
+        let board = board_with_power_management(PowerManagementConfig::ZhongshengRelay(
+            ZhongshengRelayPowerManagement {
+                key: SerialPortKey {
+                    kind: SerialPortKeyKind::UsbPath,
+                    value: String::new(),
+                },
+            },
+        ));
+
+        let err = execute_power_action_for_board(&board, PowerAction::On)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, super::PowerActionError::InvalidConfig(_)));
+        assert_eq!(
+            err.to_string(),
+            "board power management relay serial key is not configured"
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_power_management_reports_resolution_failures() {
+        let board = board_with_power_management(PowerManagementConfig::ZhongshengRelay(
+            ZhongshengRelayPowerManagement {
+                key: SerialPortKey {
+                    kind: SerialPortKeyKind::UsbPath,
+                    value: "/definitely/missing/relay-device".into(),
+                },
+            },
+        ));
+
+        let err = execute_power_action_for_board(&board, PowerAction::Off)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("failed to resolve relay serial device for usb path")
+        );
     }
 
     #[derive(Clone)]
@@ -259,7 +356,12 @@ mod tests {
 
     #[cfg(unix)]
     fn spawn_relay_test_server() -> RelayTestServer {
-        let (client, server) = tokio_serial::SerialStream::pair().unwrap();
+        let (master, mut slave) = TTYPort::pair().unwrap();
+        slave.set_exclusive(false).unwrap();
+        let slave_path = slave.name().unwrap();
+
+        let client = tokio_serial::SerialStream::try_from(slave).unwrap();
+        let server = tokio_serial::SerialStream::try_from(master).unwrap();
         let (request_tx, request_rx) = mpsc::unbounded_channel();
         let (stop_tx, stop_rx) = oneshot::channel();
         let task = tokio::spawn(async move {
@@ -275,6 +377,6 @@ mod tests {
                 .await
         });
 
-        (client, task, request_rx, stop_tx)
+        (slave_path, client, task, request_rx, stop_tx)
     }
 }

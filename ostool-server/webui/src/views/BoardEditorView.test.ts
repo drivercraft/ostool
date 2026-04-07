@@ -90,6 +90,19 @@ function makeBoard(id = "demo-board"): BoardConfig {
   };
 }
 
+function makeRelayBoard(id = "relay-board"): BoardConfig {
+  return {
+    ...makeBoard(id),
+    power_management: {
+      kind: "zhongsheng_relay",
+      key: {
+        kind: "serial_number",
+        value: "abc",
+      },
+    },
+  };
+}
+
 describe("BoardEditorView", () => {
   beforeEach(() => {
     route.params = {};
@@ -196,6 +209,33 @@ describe("BoardEditorView", () => {
 
     expect(updateBoard).toHaveBeenCalledWith("demo-board", expect.objectContaining({ id: null }));
     expect(push).toHaveBeenCalledWith("/boards/demo-board");
+  });
+
+  it("saves relay power management using a stable serial key", async () => {
+    route.params = { boardId: "relay-board" };
+    getBoard.mockResolvedValue(makeRelayBoard("relay-board"));
+    updateBoard.mockResolvedValue(makeRelayBoard("relay-board"));
+
+    const BoardEditorView = (await import("./BoardEditorView.vue")).default;
+    const wrapper = mount(BoardEditorView);
+    await flushPromises();
+
+    const saveButton = wrapper.findAll("button").find((button) => button.text() === "保存配置");
+    await saveButton!.trigger("click");
+    await flushPromises();
+
+    expect(updateBoard).toHaveBeenCalledWith(
+      "relay-board",
+      expect.objectContaining({
+        power_management: {
+          kind: "zhongsheng_relay",
+          key: {
+            kind: "serial_number",
+            value: "abc",
+          },
+        },
+      }),
+    );
   });
 
   it("blocks saving when required power management fields are empty", async () => {
