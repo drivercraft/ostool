@@ -18,6 +18,14 @@ type RequestOptions = RequestInit & {
   bodyJson?: unknown;
 };
 
+async function readJsonBody<T>(response: Response): Promise<T | undefined> {
+  const text = await response.text();
+  if (!text.trim()) {
+    return undefined;
+  }
+  return JSON.parse(text) as T;
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers);
   let body = options.body;
@@ -34,15 +42,11 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   });
 
   if (!response.ok) {
-    const error = (await response.json().catch(() => null)) as ErrorResponse | null;
+    const error = (await readJsonBody<ErrorResponse>(response).catch(() => null)) ?? null;
     throw new Error(error?.message || `请求失败：${response.status}`);
   }
 
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  return (await response.json()) as T;
+  return (await readJsonBody<T>(response)) as T;
 }
 
 export const api = {

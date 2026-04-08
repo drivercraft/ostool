@@ -16,6 +16,20 @@ const boardMap = computed(() =>
   new Map(boards.value.map((board) => [board.id, board])),
 );
 
+function sessionStatus(session: Session) {
+  if (session.state === "releasing") {
+    return {
+      tone: "neutral" as const,
+      label: "释放中",
+    };
+  }
+
+  return {
+    tone: "warn" as const,
+    label: "占用中",
+  };
+}
+
 async function loadSessions() {
   loading.value = true;
   try {
@@ -36,7 +50,7 @@ async function releaseSession(sessionId: string) {
 
   try {
     await api.deleteSession(sessionId);
-    ui.setSuccess(`已释放会话 ${sessionId}`);
+    ui.setSuccess(`已发起释放会话 ${sessionId}`);
     await loadSessions();
   } catch (error) {
     ui.setError((error as Error).message);
@@ -84,10 +98,17 @@ onMounted(() => {
             <td>{{ new Date(session.created_at).toLocaleString() }}</td>
             <td>{{ formatLeaseRemaining(session.expires_at) }}</td>
             <td>
-              <StatusPill tone="warn" label="占用中" />
+              <StatusPill
+                :tone="sessionStatus(session).tone"
+                :label="sessionStatus(session).label"
+              />
             </td>
             <td>
-              <button class="inline-link danger-link" @click="releaseSession(session.id)">
+              <button
+                class="inline-link danger-link"
+                :disabled="session.state === 'releasing'"
+                @click="releaseSession(session.id)"
+              >
                 强制释放
               </button>
             </td>

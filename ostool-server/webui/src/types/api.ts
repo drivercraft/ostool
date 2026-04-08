@@ -148,6 +148,7 @@ export interface Session {
   client_name: string | null;
   created_at: string;
   expires_at: string;
+  state: "active" | "releasing";
 }
 
 export interface AdminSessionsResponse {
