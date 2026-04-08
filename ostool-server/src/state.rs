@@ -23,7 +23,8 @@ use crate::{
 const RELEASE_RETRY_ATTEMPTS: usize = 3;
 const RELEASE_RETRY_DELAY: Duration = Duration::from_millis(200);
 const RELEASE_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
-const RELEASE_COMPLETION_TIMEOUT: Duration = Duration::from_secs(5);
+const RELEASE_COMPLETION_TIMEOUT: Duration = Duration::from_secs(8);
+const ZHONGSHENG_RELEASE_SETTLE_DELAY: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -80,6 +81,15 @@ pub struct BoardPowerStatusSnapshot {
 struct ReleaseJob {
     session: Arc<SessionState>,
     reason: SessionStopReason,
+}
+
+fn release_settle_delay(board: &BoardConfig) -> Option<Duration> {
+    match board.power_management {
+        // Zhongsheng relay boards need a short settle window after power-off
+        // before we consider the session fully released.
+        PowerManagementConfig::ZhongshengRelay(_) => Some(ZHONGSHENG_RELEASE_SETTLE_DELAY),
+        _ => None,
+    }
 }
 
 #[derive(Clone)]
@@ -508,6 +518,7 @@ impl AppState {
     async fn process_release_job(&self, job: ReleaseJob) {
         let session = job.session;
         let snapshot = session.snapshot().await;
+        let board = session.board().clone();
         log::debug!(
             "processing release for session `{}` on board `{}` due to {:?}",
             snapshot.id,
@@ -526,7 +537,7 @@ impl AppState {
 
         if let Err(err) = retry_release_step(RELEASE_RETRY_ATTEMPTS, RELEASE_RETRY_DELAY, || {
             let state = self.clone();
-            let board = session.board().clone();
+            let board = board.clone();
             async move {
                 state
                     .execute_board_power_action(&board, PowerAction::Off)
@@ -538,6 +549,12 @@ impl AppState {
         .await
         {
             errors.push(format!("power-off failed: {err}"));
+        }
+
+        if errors.is_empty()
+            && let Some(delay) = release_settle_delay(&board)
+        {
+            tokio::time::sleep(delay).await;
         }
 
         if let Err(err) = retry_release_step(RELEASE_RETRY_ATTEMPTS, RELEASE_RETRY_DELAY, || {
@@ -644,14 +661,26 @@ mod tests {
     use std::{fs, path::Path, sync::Arc, time::Duration};
 
     use async_trait::async_trait;
+    #[cfg(unix)]
+    use serialport::{SerialPort, TTYPort};
     use tempfile::tempdir;
+    #[cfg(unix)]
+    use tokio::sync::{mpsc, oneshot};
+    #[cfg(unix)]
+    use tokio_modbus::{
+        ExceptionCode, Request, Response, SlaveRequest,
+        server::{Service, rtu::Server},
+    };
 
-    use super::{BoardLeaseState, TouchSessionError, build_app_state};
+    use super::{
+        BoardLeaseState, TouchSessionError, ZHONGSHENG_RELEASE_SETTLE_DELAY, build_app_state,
+    };
     use crate::{
         ServerConfig,
         config::{
             BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, PxeProfile,
-            VirtualPowerManagement,
+            SerialPortKey, SerialPortKeyKind, VirtualPowerManagement,
+            ZhongshengRelayPowerManagement,
         },
         power::PowerAction,
         session::{SessionState, SessionStopReason},
@@ -689,6 +718,69 @@ mod tests {
             notes: None,
             disabled: false,
         }
+    }
+
+    #[cfg(unix)]
+    type RelayServerHandle =
+        tokio::task::JoinHandle<std::io::Result<tokio_modbus::server::Terminated>>;
+    #[cfg(unix)]
+    type RelayRequestRx = mpsc::UnboundedReceiver<(u8, u16, bool)>;
+    #[cfg(unix)]
+    type RelayTestServer = (
+        String,
+        TTYPort,
+        RelayServerHandle,
+        RelayRequestRx,
+        oneshot::Sender<()>,
+    );
+
+    #[cfg(unix)]
+    #[derive(Clone)]
+    struct RecordingRelayService {
+        requests: mpsc::UnboundedSender<(u8, u16, bool)>,
+    }
+
+    #[cfg(unix)]
+    impl Service for RecordingRelayService {
+        type Request = SlaveRequest<'static>;
+        type Response = Response;
+        type Exception = ExceptionCode;
+        type Future = std::future::Ready<std::result::Result<Self::Response, Self::Exception>>;
+
+        fn call(&self, req: Self::Request) -> Self::Future {
+            match req.request {
+                Request::WriteSingleCoil(address, coil) => {
+                    self.requests.send((req.slave, address, coil)).unwrap();
+                    std::future::ready(Ok(Response::WriteSingleCoil(address, coil)))
+                }
+                _ => std::future::ready(Err(ExceptionCode::IllegalFunction)),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn spawn_relay_test_server() -> RelayTestServer {
+        let (master, mut slave) = TTYPort::pair().unwrap();
+        slave.set_exclusive(false).unwrap();
+        let slave_path = slave.name().unwrap();
+
+        let server_stream = tokio_serial::SerialStream::try_from(master).unwrap();
+        let (request_tx, request_rx) = mpsc::unbounded_channel();
+        let (stop_tx, stop_rx) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            Server::new(server_stream)
+                .serve_until(
+                    RecordingRelayService {
+                        requests: request_tx,
+                    },
+                    async move {
+                        let _ = stop_rx.await;
+                    },
+                )
+                .await
+        });
+
+        (slave_path, slave, task, request_rx, stop_tx)
     }
 
     struct FailingRemoveTftpManager {
@@ -956,6 +1048,73 @@ mod tests {
         let removed = state.remove_session("session-1").await.unwrap();
         assert!(removed.is_some());
         assert_eq!(fs::read_to_string(power_log).unwrap(), "off\n");
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn zhongsheng_release_waits_before_session_is_fully_removed() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let state = test_state(&root).await;
+        let (relay_port, _relay_handle, server, mut requests, stop_tx) = spawn_relay_test_server();
+
+        let board = BoardConfig {
+            id: "board-1".into(),
+            board_type: "demo".into(),
+            tags: vec![],
+            serial: None,
+            power_management: PowerManagementConfig::ZhongshengRelay(
+                ZhongshengRelayPowerManagement {
+                    key: SerialPortKey {
+                        kind: SerialPortKeyKind::UsbPath,
+                        value: relay_port,
+                    },
+                },
+            ),
+            boot: BootConfig::Pxe(PxeProfile::default()),
+            notes: None,
+            disabled: false,
+        };
+        state
+            .boards
+            .write()
+            .await
+            .insert(board.id.clone(), board.clone());
+        state.sync_board_runtime_states().await;
+        let session =
+            SessionState::new_with_actor("session-1".into(), board.clone(), None, state.clone());
+        state.claim_board_for_session(&board.id, "session-1").await;
+        state
+            .sessions
+            .write()
+            .await
+            .insert("session-1".into(), session);
+
+        state
+            .request_session_stop("session-1", SessionStopReason::ApiDelete)
+            .await
+            .unwrap();
+
+        let request = tokio::time::timeout(Duration::from_secs(1), requests.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(request, (1, 0, false));
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(state.get_session("session-1").await.is_some());
+        let runtime = state.board_runtime_status("board-1").await.unwrap();
+        assert_eq!(runtime.lease_state, BoardLeaseState::Releasing);
+        assert_eq!(runtime.active_session_id.as_deref(), Some("session-1"));
+
+        tokio::time::sleep(ZHONGSHENG_RELEASE_SETTLE_DELAY + Duration::from_millis(300)).await;
+        assert!(state.get_session("session-1").await.is_none());
+        let runtime = state.board_runtime_status("board-1").await.unwrap();
+        assert_eq!(runtime.lease_state, BoardLeaseState::Idle);
+        assert!(runtime.active_session_id.is_none());
+
+        let _ = stop_tx.send(());
+        let _ = server.await.unwrap();
     }
 
     #[tokio::test]

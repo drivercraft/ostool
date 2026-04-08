@@ -2444,6 +2444,118 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)]
+    async fn delete_session_keeps_zhongsheng_session_releasing_before_final_removal() {
+        let app = test_router().await;
+        let (relay_port, _relay_handle, server, _requests, stop_tx) = spawn_relay_test_server();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        let mut board = sample_board("relay-release-board");
+        board.serial = None;
+        board.power_management =
+            PowerManagementConfig::ZhongshengRelay(ZhongshengRelayPowerManagement {
+                key: SerialPortKey {
+                    kind: SerialPortKeyKind::UsbPath,
+                    value: relay_port,
+                },
+            });
+        assert_eq!(
+            create_board(&app, serde_json::to_value(&board).unwrap()).await,
+            StatusCode::CREATED
+        );
+
+        let session_id = create_session(&app, "rk3568").await;
+
+        let delete_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/sessions/{session_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_response.status(), StatusCode::ACCEPTED);
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let session_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/sessions/{session_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(session_response.status(), StatusCode::OK);
+        let session_body = to_bytes(session_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let detail: SessionDetailResponse = serde_json::from_slice(&session_body).unwrap();
+        assert_eq!(detail.session.state, SessionLifecycleState::Releasing);
+
+        let runtime_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/admin/boards/relay-release-board/runtime-status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(runtime_response.status(), StatusCode::OK);
+        let runtime_body = to_bytes(runtime_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let runtime: BoardRuntimeStatusResponse = serde_json::from_slice(&runtime_body).unwrap();
+        assert_eq!(runtime.lease_state, BoardLeaseState::Releasing);
+        assert_eq!(
+            runtime.active_session_id.as_deref(),
+            Some(session_id.as_str())
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(2300)).await;
+
+        let session_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/sessions/{session_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(session_response.status(), StatusCode::NOT_FOUND);
+
+        let runtime_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/admin/boards/relay-release-board/runtime-status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(runtime_response.status(), StatusCode::OK);
+        let runtime_body = to_bytes(runtime_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let runtime: BoardRuntimeStatusResponse = serde_json::from_slice(&runtime_body).unwrap();
+        assert_eq!(runtime.lease_state, BoardLeaseState::Idle);
+        assert!(runtime.active_session_id.is_none());
+
+        let _ = stop_tx.send(());
+        let _ = server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn create_board_rejects_duplicate_ids_and_missing_required_fields() {
         let app = test_router().await;
         let board = sample_board("demo-board");
