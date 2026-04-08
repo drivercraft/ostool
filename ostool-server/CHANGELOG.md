@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6](https://github.com/drivercraft/ostool/compare/ostool-server-v0.1.5...ostool-server-v0.1.6) - 2026-04-08
+
+### Added
+
+- add session management features and update UI for session status
+
+### Other
+
+- add session deletion test for Zhongsheng relay boards with settle delay
+
 ## [0.1.5](https://github.com/drivercraft/ostool/compare/ostool-server-v0.1.4...ostool-server-v0.1.5) - 2026-04-07
 
 ### Other
