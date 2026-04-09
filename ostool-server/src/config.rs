@@ -21,6 +21,8 @@ pub struct ServerConfig {
     pub dtb_dir: PathBuf,
     pub tftp: TftpConfig,
     pub network: TftpNetworkConfig,
+    #[serde(default)]
+    pub upload_limits: UploadLimitsConfig,
 }
 
 impl Default for ServerConfig {
@@ -56,6 +58,7 @@ impl ServerConfig {
             dtb_dir,
             tftp,
             network: TftpNetworkConfig::default(),
+            upload_limits: UploadLimitsConfig::default(),
         }
     }
 
@@ -165,7 +168,23 @@ impl ServerConfig {
                 "network.interface must be configured or auto-detected from a non-loopback interface"
             );
         }
+        if self.upload_limits.session_file_max_mib == 0 {
+            bail!("upload_limits.session_file_max_mib must be greater than 0");
+        }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UploadLimitsConfig {
+    pub session_file_max_mib: u32,
+}
+
+impl Default for UploadLimitsConfig {
+    fn default() -> Self {
+        Self {
+            session_file_max_mib: 64,
+        }
     }
 }
 
@@ -431,7 +450,32 @@ mod tests {
         let decoded: ServerConfig = toml::from_str(&encoded).unwrap();
         assert_eq!(decoded.listen_addr, SocketAddr::from(([0, 0, 0, 0], 2999)));
         assert_eq!(decoded.network.interface, "");
+        assert_eq!(decoded.upload_limits.session_file_max_mib, 64);
         assert!(decoded.dtb_dir.ends_with("dtbs"));
+    }
+
+    #[test]
+    fn server_config_defaults_upload_limits_when_missing() {
+        let decoded: ServerConfig = toml::from_str(
+            r#"
+listen_addr = "0.0.0.0:2999"
+data_dir = ".ostool-server"
+board_dir = ".ostool-server/boards"
+dtb_dir = ".ostool-server/dtbs"
+
+[tftp]
+provider = "builtin"
+enabled = true
+root_dir = ".ostool-server/tftp-root"
+bind_addr = "0.0.0.0:69"
+
+[network]
+interface = "eth0"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(decoded.upload_limits.session_file_max_mib, 64);
     }
 
     #[test]
@@ -457,6 +501,7 @@ mod tests {
 
         let content = std::fs::read_to_string(path).unwrap();
         assert!(content.contains("listen_addr = \"0.0.0.0:2999\""));
+        assert!(content.contains("session_file_max_mib = 64"));
     }
 
     #[test]

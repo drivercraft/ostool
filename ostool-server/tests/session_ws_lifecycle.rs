@@ -13,8 +13,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
 use ostool_server::{
     BoardConfig, BootConfig, BuiltinTftpConfig, PowerManagementConfig, SerialConfig, SerialPortKey,
-    SerialPortKeyKind, ServerConfig, TftpConfig, UbootProfile, VirtualPowerManagement,
-    build_app_state, build_router,
+    SerialPortKeyKind, ServerConfig, TftpConfig, UbootProfile, UploadLimitsConfig,
+    VirtualPowerManagement, build_app_state, build_router,
     tftp::service::{TftpManager, build_tftp_manager},
 };
 use reqwest::StatusCode;
@@ -116,6 +116,7 @@ fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandl
         network: ostool_server::TftpNetworkConfig {
             interface: "lo".into(),
         },
+        upload_limits: UploadLimitsConfig::default(),
     };
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)
         .with_context(|| format!("failed to write {}", config_path.display()))?;

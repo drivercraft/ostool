@@ -17,7 +17,7 @@ pub use api::router::build_router;
 pub use config::{
     BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement, PowerManagementConfig,
     PxeProfile, SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig, SystemTftpdHpaConfig,
-    TftpConfig, TftpNetworkConfig, UbootProfile, VirtualPowerManagement,
+    TftpConfig, TftpNetworkConfig, UbootProfile, UploadLimitsConfig, VirtualPowerManagement,
     ZhongshengRelayPowerManagement,
 };
 pub use dtb_store::{DtbFile, DtbStore};

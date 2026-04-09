@@ -30,6 +30,10 @@ export interface TftpNetworkConfig {
   interface: string;
 }
 
+export interface UploadLimitsConfig {
+  session_file_max_mib: number;
+}
+
 export interface TftpStatus {
   provider: string;
   enabled: boolean;
@@ -178,10 +182,12 @@ export interface AdminServerConfigReadonly {
   data_dir: string;
   board_dir: string;
   dtb_dir: string;
+  dtb_upload_max_mib: number;
 }
 
 export interface AdminServerConfigEditable {
   network: TftpNetworkConfig;
+  upload_limits: UploadLimitsConfig;
 }
 
 export interface AdminServerConfigResponse {
@@ -191,6 +197,7 @@ export interface AdminServerConfigResponse {
 
 export interface UpdateServerConfigRequest {
   network: TftpNetworkConfig;
+  upload_limits: UploadLimitsConfig;
 }
 
 export interface BootProfileResponse {

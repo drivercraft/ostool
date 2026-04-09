@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use axum::{
     Router,
-    body::Bytes,
-    extract::{Path, State, WebSocketUpgrade},
+    body::{Bytes, to_bytes},
+    extract::{Path, Request, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Redirect, Response},
     routing::{delete, get, post, put},
@@ -47,6 +47,8 @@ use crate::{
     },
     web::{serve_admin_asset, serve_admin_history, serve_admin_index},
 };
+
+const DTB_UPLOAD_MAX_MIB: u32 = 10;
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
@@ -298,10 +300,11 @@ async fn get_dtb(
 
 async fn create_dtb(
     State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Bytes,
+    request: Request,
 ) -> Result<(StatusCode, axum::Json<DtbFileResponse>), ApiError> {
+    let headers = request.headers();
     let dtb_name = dtb_name_header(&headers, "X-Dtb-Name")?;
+    let body = read_limited_body(request, DTB_UPLOAD_MAX_MIB, "DTB").await?;
     if body.is_empty() {
         return Err(ApiError::bad_request("DTB upload body must not be empty"));
     }
@@ -566,9 +569,9 @@ impl AdminBoardUpsertRequest {
 async fn update_dtb(
     Path(dtb_name): Path<String>,
     State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Bytes,
+    request: Request,
 ) -> Result<axum::Json<DtbFileResponse>, ApiError> {
+    let headers = request.headers();
     let current_name =
         normalize_dtb_name(&dtb_name).map_err(|err| ApiError::bad_request(err.to_string()))?;
     let requested_name = headers
@@ -581,6 +584,7 @@ async fn update_dtb(
         })
         .transpose()?;
     let mut effective_name = current_name.clone();
+    let body = read_limited_body(request, DTB_UPLOAD_MAX_MIB, "DTB").await?;
 
     if requested_name.as_deref() == Some(current_name.as_str()) && body.is_empty() {
         let file = state
@@ -769,10 +773,16 @@ async fn update_server_config(
     if request.network.interface.trim().is_empty() {
         return Err(ApiError::bad_request("network.interface must not be empty"));
     }
+    if request.upload_limits.session_file_max_mib == 0 {
+        return Err(ApiError::bad_request(
+            "upload_limits.session_file_max_mib must be greater than 0",
+        ));
+    }
 
     {
         let mut config = state.config.write().await;
         config.network = request.network;
+        config.upload_limits = request.upload_limits;
     }
     state.save_config().await?;
 
@@ -1095,8 +1105,7 @@ async fn list_session_files(
 async fn put_session_file(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Bytes,
+    request: Request,
 ) -> Result<(StatusCode, axum::Json<FileResponse>), ApiError> {
     let session = state
         .session_state(&session_id)
@@ -1111,11 +1120,14 @@ async fn put_session_file(
         .session_board(&session_id)
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
+    let headers = request.headers();
     let relative_path = headers
         .get("X-File-Path")
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| ApiError::bad_request("missing X-File-Path header"))?;
     let relative_path = parse_relative_path(relative_path)?;
+    let max_mib = state.config.read().await.upload_limits.session_file_max_mib;
+    let body = read_limited_body(request, max_mib, "session file").await?;
 
     if !state.config.read().await.tftp.enabled() {
         return Err(ApiError::conflict("TFTP provider is disabled"));
@@ -1351,6 +1363,7 @@ fn readonly_server_config(config: &crate::config::ServerConfig) -> AdminServerCo
         data_dir: config.data_dir.display().to_string(),
         board_dir: config.board_dir.display().to_string(),
         dtb_dir: config.dtb_dir.display().to_string(),
+        dtb_upload_max_mib: DTB_UPLOAD_MAX_MIB,
     }
 }
 
@@ -1359,8 +1372,43 @@ fn server_config_response(config: &crate::config::ServerConfig) -> AdminServerCo
         readonly: readonly_server_config(config),
         editable: AdminServerConfigEditable {
             network: config.network.clone(),
+            upload_limits: config.upload_limits.clone(),
         },
     }
+}
+
+fn mib_to_bytes(limit_mib: u32) -> usize {
+    (limit_mib as usize) * 1024 * 1024
+}
+
+fn payload_too_large_message(label: &str, max_mib: u32) -> String {
+    format!("{label} upload body exceeds limit of {max_mib} MiB")
+}
+
+async fn read_limited_body(request: Request, max_mib: u32, label: &str) -> Result<Bytes, ApiError> {
+    let limit_bytes = mib_to_bytes(max_mib);
+    let headers = request.headers();
+    if let Some(content_length) = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        && content_length > limit_bytes as u64
+    {
+        return Err(ApiError::payload_too_large(payload_too_large_message(
+            label, max_mib,
+        )));
+    }
+
+    to_bytes(request.into_body(), limit_bytes)
+        .await
+        .map_err(|err| {
+            let message = err.to_string();
+            if message.contains("length limit exceeded") {
+                ApiError::payload_too_large(payload_too_large_message(label, max_mib))
+            } else {
+                ApiError::bad_request(format!("failed to read {label} upload body: {message}"))
+            }
+        })
 }
 
 #[derive(Debug, Clone)]
@@ -1527,7 +1575,7 @@ mod tests {
     };
     use tower::util::ServiceExt;
 
-    use super::{build_router, resolve_server_network};
+    use super::{DTB_UPLOAD_MAX_MIB, build_router, mib_to_bytes, resolve_server_network};
     use crate::{
         api::models::{
             BoardPowerStatusResponse, BoardRuntimeStatusResponse, SessionDetailResponse,
@@ -1536,7 +1584,7 @@ mod tests {
         config::{
             BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
             PowerManagementConfig, SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig,
-            TftpConfig, VirtualPowerManagement, ZhongshengRelayPowerManagement,
+            TftpConfig, UploadLimitsConfig, VirtualPowerManagement, ZhongshengRelayPowerManagement,
         },
         session::SessionLifecycleState,
         state::BoardLeaseState,
@@ -1568,6 +1616,7 @@ mod tests {
             network: crate::TftpNetworkConfig {
                 interface: "lo".into(),
             },
+            upload_limits: UploadLimitsConfig::default(),
         }
     }
 
@@ -1791,7 +1840,9 @@ mod tests {
                     .method("PUT")
                     .uri("/api/v1/admin/server-config")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(r#"{"network":{"interface":"lo"}}"#))
+                    .body(Body::from(
+                        r#"{"network":{"interface":"lo"},"upload_limits":{"session_file_max_mib":32}}"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -1801,6 +1852,11 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["editable"]["network"]["interface"], "lo");
+        assert_eq!(
+            value["editable"]["upload_limits"]["session_file_max_mib"],
+            32
+        );
+        assert_eq!(value["readonly"]["dtb_upload_max_mib"], DTB_UPLOAD_MAX_MIB);
         assert!(value["readonly"]["listen_addr"].is_string());
     }
 
@@ -2693,6 +2749,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admin_dtb_endpoints_enforce_upload_limit() {
+        let app = test_router().await;
+        let oversized = vec![b'x'; mib_to_bytes(DTB_UPLOAD_MAX_MIB) + 1];
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/admin/dtbs")
+                    .header("X-Dtb-Name", "oversized.dtb")
+                    .body(Body::from(oversized.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let create_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let create_value: serde_json::Value = serde_json::from_slice(&create_body).unwrap();
+        assert_eq!(create_value["code"], "payload_too_large");
+        assert_eq!(
+            create_value["message"],
+            format!("DTB upload body exceeds limit of {DTB_UPLOAD_MAX_MIB} MiB")
+        );
+
+        assert_eq!(
+            upload_dtb(&app, "replace-me.dtb", "dtb-v1").await,
+            StatusCode::CREATED
+        );
+        let replace_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/admin/dtbs/replace-me.dtb")
+                    .body(Body::from(oversized))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(replace_response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
     async fn renaming_dtb_updates_board_references_and_referenced_dtb_cannot_be_deleted() {
         let app = test_router().await;
         assert_eq!(
@@ -3051,6 +3153,74 @@ mod tests {
         assert_eq!(
             files[1]["relative_path"],
             format!("ostool/sessions/{session_id}/boot/dtb/board.dtb")
+        );
+    }
+
+    #[tokio::test]
+    async fn session_file_upload_enforces_dynamic_limit() {
+        let app = test_router().await;
+        assert_eq!(
+            create_board(
+                &app,
+                serde_json::to_value(sample_board("limited-files")).unwrap()
+            )
+            .await,
+            StatusCode::CREATED
+        );
+        let session_id = create_session(&app, "rk3568").await;
+
+        let initial_upload = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{session_id}/files"))
+                    .header("X-File-Path", "boot/Image")
+                    .body(Body::from(vec![b'a'; 1024 * 1024]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(initial_upload.status(), StatusCode::CREATED);
+
+        let update_limit = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/admin/server-config")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"network":{"interface":"lo"},"upload_limits":{"session_file_max_mib":1}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(update_limit.status(), StatusCode::OK);
+
+        let oversized = vec![b'b'; 1024 * 1024 + 1];
+        let oversized_upload = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{session_id}/files"))
+                    .header("X-File-Path", "boot/Image")
+                    .body(Body::from(oversized))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(oversized_upload.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let oversized_body = to_bytes(oversized_upload.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let oversized_value: serde_json::Value = serde_json::from_slice(&oversized_body).unwrap();
+        assert_eq!(oversized_value["code"], "payload_too_large");
+        assert_eq!(
+            oversized_value["message"],
+            "session file upload body exceeds limit of 1 MiB"
         );
     }
 

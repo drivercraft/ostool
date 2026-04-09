@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     config::{
         BoardConfig, BootConfig, PowerManagementConfig, SerialConfig, SerialPortKeyKind,
-        TftpConfig, TftpNetworkConfig,
+        TftpConfig, TftpNetworkConfig, UploadLimitsConfig,
     },
     dtb_store::DtbFile,
     session::Session,
@@ -230,11 +230,13 @@ pub struct AdminServerConfigReadonly {
     pub data_dir: String,
     pub board_dir: String,
     pub dtb_dir: String,
+    pub dtb_upload_max_mib: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminServerConfigEditable {
     pub network: TftpNetworkConfig,
+    pub upload_limits: UploadLimitsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -246,4 +248,5 @@ pub struct AdminServerConfigResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateServerConfigRequest {
     pub network: TftpNetworkConfig,
+    pub upload_limits: UploadLimitsConfig,
 }

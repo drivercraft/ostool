@@ -46,10 +46,18 @@ async function saveConfig() {
     return;
   }
 
+  const sessionFileMaxMib = Number(config.value.editable.upload_limits.session_file_max_mib);
+  if (!Number.isFinite(sessionFileMaxMib) || sessionFileMaxMib < 1) {
+    ui.setError("Session 文件上传上限必须是大于等于 1 的整数 MiB");
+    return;
+  }
+  config.value.editable.upload_limits.session_file_max_mib = Math.trunc(sessionFileMaxMib);
+
   saving.value = true;
   try {
     config.value = await api.updateServerConfig({
       network: config.value.editable.network,
+      upload_limits: config.value.editable.upload_limits,
     });
     ui.setSuccess("已保存 Server 安全配置");
   } catch (error) {
@@ -110,6 +118,14 @@ onMounted(() => {
                 <dt>板子目录</dt>
                 <dd>{{ config.readonly.board_dir }}</dd>
               </div>
+              <div>
+                <dt>DTB 目录</dt>
+                <dd>{{ config.readonly.dtb_dir }}</dd>
+              </div>
+              <div>
+                <dt>DTB 上传上限</dt>
+                <dd>{{ config.readonly.dtb_upload_max_mib }} MiB</dd>
+              </div>
             </dl>
           </section>
 
@@ -136,9 +152,22 @@ onMounted(() => {
                   </button>
                 </div>
               </label>
+              <label class="field">
+                <span>Session 文件上传上限</span>
+                <input
+                  v-model.number="config.editable.upload_limits.session_file_max_mib"
+                  type="number"
+                  min="1"
+                  step="1"
+                />
+              </label>
             </div>
             <p class="muted">
-              服务级网络配置保存后立即生效；`listen_addr`、`data_dir`、`board_dir` 仍保持只读，避免运行中修改导致服务行为不稳定。
+              服务级网络配置和 session 文件上传上限保存后会立即作用于新的请求；DTB 上传上限固定为
+              {{ config.readonly.dtb_upload_max_mib }} MiB。
+            </p>
+            <p class="muted">
+              `listen_addr`、`data_dir`、`board_dir`、`dtb_dir` 仍保持只读，避免运行中修改导致服务行为不稳定。
             </p>
           </section>
         </div>

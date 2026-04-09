@@ -18,6 +18,8 @@ const editingDtbName = ref<string | null>(null);
 const editDtbName = ref("");
 const editDtbFile = ref<File | null>(null);
 const editDtbFileInput = ref<HTMLInputElement | null>(null);
+const DTB_UPLOAD_MAX_MIB = 10;
+const DTB_UPLOAD_MAX_BYTES = DTB_UPLOAD_MAX_MIB * 1024 * 1024;
 
 function formatSize(size: number): string {
   if (size < 1024) {
@@ -31,6 +33,13 @@ function formatSize(size: number): string {
 
 function formatTime(value: string): string {
   return new Date(value).toLocaleString("zh-CN", { hour12: false });
+}
+
+function validateDtbFileSize(file: File | null): string | null {
+  if (file && file.size > DTB_UPLOAD_MAX_BYTES) {
+    return `DTB 文件大小不能超过 ${DTB_UPLOAD_MAX_MIB} MiB`;
+  }
+  return null;
 }
 
 async function loadDtbs() {
@@ -66,6 +75,11 @@ function onReplaceFileChange(event: Event) {
 async function createDtb() {
   if (!newDtbFile.value) {
     ui.setError("请选择要上传的 DTB 文件");
+    return;
+  }
+  const sizeError = validateDtbFileSize(newDtbFile.value);
+  if (sizeError) {
+    ui.setError(sizeError);
     return;
   }
   const name = newDtbName.value.trim() || newDtbFile.value.name;
@@ -116,6 +130,11 @@ async function saveDtb() {
   }
   const nextName = editDtbName.value.trim();
   const replaceFile = editDtbFile.value;
+  const sizeError = validateDtbFileSize(replaceFile);
+  if (sizeError) {
+    ui.setError(sizeError);
+    return;
+  }
   if (!nextName) {
     ui.setError("DTB 文件名不能为空");
     return;
@@ -180,6 +199,7 @@ onMounted(() => {
 
       <section class="form-section">
         <h4>上传新 DTB</h4>
+        <p class="muted">单个 DTB 文件最大支持 {{ DTB_UPLOAD_MAX_MIB }} MiB。</p>
         <div class="form-grid three-columns">
           <label class="field">
             <span>文件名</span>
@@ -273,6 +293,7 @@ onMounted(() => {
           />
         </label>
       </div>
+      <p class="muted">替换上传时同样受 {{ DTB_UPLOAD_MAX_MIB }} MiB 限制。</p>
 
       <div class="toolbar-actions modal-actions">
         <button class="ghost-button" :disabled="updatingName === editingDtbName" @click="closeEditDtb">

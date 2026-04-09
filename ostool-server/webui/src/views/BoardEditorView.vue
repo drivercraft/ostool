@@ -49,6 +49,8 @@ const saving = ref(false);
 const deleting = ref(false);
 const refreshingSerials = ref(false);
 const uploadingDtb = ref(false);
+const DTB_UPLOAD_MAX_MIB = 10;
+const DTB_UPLOAD_MAX_BYTES = DTB_UPLOAD_MAX_MIB * 1024 * 1024;
 const validationError = ref("");
 const form = ref<BoardEditorFormState>(defaultFormState());
 const serialPorts = ref<SerialPortSummary[]>([]);
@@ -467,6 +469,13 @@ function onDtbFileChange(event: Event) {
   }
 }
 
+function validateDtbUploadFile(file: File | null): string | null {
+  if (file && file.size > DTB_UPLOAD_MAX_BYTES) {
+    return `DTB 文件大小不能超过 ${DTB_UPLOAD_MAX_MIB} MiB`;
+  }
+  return null;
+}
+
 function openDtbUploadModal() {
   showingDtbUploadModal.value = true;
 }
@@ -483,6 +492,11 @@ function closeDtbUploadModal() {
 async function uploadDtbAndSelect() {
   if (!dtbUploadFile.value) {
     ui.setError("请选择要上传的 DTB 文件");
+    return;
+  }
+  const sizeError = validateDtbUploadFile(dtbUploadFile.value);
+  if (sizeError) {
+    ui.setError(sizeError);
     return;
   }
   const dtbName = dtbUploadName.value.trim() || dtbUploadFile.value.name;
@@ -838,6 +852,7 @@ onMounted(() => {
           />
         </label>
       </div>
+      <p class="muted">DTB 上传上限固定为 {{ DTB_UPLOAD_MAX_MIB }} MiB。</p>
 
       <div class="toolbar-actions modal-actions">
         <button class="ghost-button" type="button" :disabled="uploadingDtb" @click="closeDtbUploadModal">
