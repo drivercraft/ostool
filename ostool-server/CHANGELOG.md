@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7](https://github.com/drivercraft/ostool/compare/ostool-server-v0.1.6...ostool-server-v0.1.7) - 2026-04-09
+
+### Added
+
+- add upload limits configuration for DTB and session files
+
 ## [0.1.6](https://github.com/drivercraft/ostool/compare/ostool-server-v0.1.5...ostool-server-v0.1.6) - 2026-04-08
 
 ### Added
