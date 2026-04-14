@@ -276,15 +276,46 @@ impl Net {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct RunUbootArgs {
-    pub config: Option<PathBuf>,
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunUbootOptions {
     pub show_output: bool,
 }
 
 impl Tool {
-    pub async fn run_uboot(&mut self, args: RunUbootArgs) -> anyhow::Result<()> {
-        let config = self.load_uboot_config(args.config.clone()).await?;
+    pub fn default_uboot_config(&self) -> UbootConfig {
+        UbootConfig {
+            local: LocalUbootConfig {
+                serial: Some("/dev/ttyUSB0".to_string()),
+                baud_rate: Some("115200".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    pub async fn load_uboot_config_from_dir(&mut self, dir: &Path) -> anyhow::Result<UbootConfig> {
+        let dir = self.replace_path_variables(dir.to_path_buf())?;
+        self.load_uboot_config_from_path(&dir.join(".uboot.toml"))
+            .await
+    }
+
+    pub async fn load_uboot_config_from_path(
+        &mut self,
+        path: &Path,
+    ) -> anyhow::Result<UbootConfig> {
+        let config_path = self.replace_path_variables(path.to_path_buf())?;
+        load_or_create_uboot_config_at_path(self, config_path, self.default_uboot_config()).await
+    }
+
+    pub async fn run_uboot(
+        &mut self,
+        config: &UbootConfig,
+        options: RunUbootOptions,
+    ) -> anyhow::Result<()> {
+        let _ = options.show_output;
+        let mut config = config.clone();
+        config.replace_strings(self)?;
+        config.normalize("U-Boot runtime config")?;
         let backend = LocalBackend::new(config.local.clone());
         let mut runner = Runner::new(self, config, backend);
         runner.run().await
@@ -301,41 +332,33 @@ impl Tool {
         let mut runner = Runner::new(self, config, backend);
         runner.run().await
     }
+}
 
-    async fn load_uboot_config(&mut self, config: Option<PathBuf>) -> anyhow::Result<UbootConfig> {
-        let config_path = match config {
-            Some(path) => self.replace_path_variables(path)?,
-            None => self.workspace_dir().join(".uboot.toml"),
-        };
+async fn load_or_create_uboot_config_at_path(
+    tool: &Tool,
+    config_path: PathBuf,
+    default_config: UbootConfig,
+) -> anyhow::Result<UbootConfig> {
+    let mut config = match fs::read_to_string(&config_path).await {
+        Ok(content) => {
+            println!("Using U-Boot config: {}", config_path.display());
+            toml::from_str(&content).with_context(|| {
+                format!("failed to parse U-Boot config: {}", config_path.display())
+            })?
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            let config = default_config;
+            fs::write(&config_path, toml::to_string_pretty(&config)?)
+                .await
+                .with_path("failed to write file", &config_path)?;
+            config
+        }
+        Err(err) => return Err(err.into()),
+    };
 
-        let mut config = match fs::read_to_string(&config_path).await {
-            Ok(content) => {
-                println!("Using U-Boot config: {}", config_path.display());
-                toml::from_str(&content).with_context(|| {
-                    format!("failed to parse U-Boot config: {}", config_path.display())
-                })?
-            }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                let config = UbootConfig {
-                    local: LocalUbootConfig {
-                        serial: Some("/dev/ttyUSB0".to_string()),
-                        baud_rate: Some("115200".to_string()),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                };
-                fs::write(&config_path, toml::to_string_pretty(&config)?)
-                    .await
-                    .with_path("failed to write file", &config_path)?;
-                config
-            }
-            Err(err) => return Err(err.into()),
-        };
-
-        config.replace_strings(self)?;
-        config.normalize(&format!("U-Boot config {}", config_path.display()))?;
-        Ok(config)
-    }
+    config.replace_strings(tool)?;
+    config.normalize(&format!("U-Boot config {}", config_path.display()))?;
+    Ok(config)
 }
 
 struct Runner<'a, B> {
@@ -1617,5 +1640,94 @@ timeout = 0
                 "run avb_boot".to_string()
             ])
         );
+    }
+
+    #[tokio::test]
+    async fn load_uboot_config_from_path_creates_default_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("src/lib.rs"), "").unwrap();
+
+        let mut tool = Tool::new(ToolConfig {
+            manifest: Some(tmp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let path = tmp.path().join("custom.uboot.toml");
+        let config = tool.load_uboot_config_from_path(&path).await.unwrap();
+
+        assert_eq!(config.local.serial.as_deref(), Some("/dev/ttyUSB0"));
+        assert_eq!(config.local.baud_rate.as_deref(), Some("115200"));
+        assert!(path.exists());
+    }
+
+    #[tokio::test]
+    async fn load_uboot_config_from_dir_replaces_package_variables() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\", \"kernel\"]\nresolver = \"3\"\n",
+        )
+        .unwrap();
+
+        let app_dir = tmp.path().join("app");
+        std::fs::create_dir_all(app_dir.join("src")).unwrap();
+        std::fs::write(
+            app_dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(app_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let kernel_dir = tmp.path().join("kernel");
+        std::fs::create_dir_all(kernel_dir.join("src")).unwrap();
+        std::fs::write(
+            kernel_dir.join("Cargo.toml"),
+            "[package]\nname = \"kernel\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(kernel_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        std::fs::write(
+            tmp.path().join(".uboot.toml"),
+            r#"
+dtb_file = "${package}/board.dtb"
+success_regex = []
+fail_regex = []
+serial = "/dev/null"
+baud_rate = "115200"
+"#,
+        )
+        .unwrap();
+
+        let mut tool = Tool::new(ToolConfig {
+            manifest: Some(app_dir),
+            ..Default::default()
+        })
+        .unwrap();
+        tool.ctx.build_config = Some(BuildConfig {
+            system: BuildSystem::Cargo(Cargo {
+                env: HashMap::new(),
+                target: "aarch64-unknown-none".into(),
+                package: "kernel".into(),
+                features: vec![],
+                log: None,
+                extra_config: None,
+                args: vec![],
+                pre_build_cmds: vec![],
+                post_build_cmds: vec![],
+                to_bin: false,
+            }),
+        });
+
+        let config = tool.load_uboot_config_from_dir(tmp.path()).await.unwrap();
+        let expected = kernel_dir.join("board.dtb").display().to_string();
+        assert_eq!(config.dtb_file.as_deref(), Some(expected.as_str()));
     }
 }

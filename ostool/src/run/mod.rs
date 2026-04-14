@@ -11,7 +11,7 @@
 pub mod qemu;
 
 /// TFTP server for network booting.
-pub mod tftp;
+pub(crate) mod tftp;
 
 /// U-Boot bootloader integration.
 pub mod uboot;

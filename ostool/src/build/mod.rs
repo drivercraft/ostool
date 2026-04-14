@@ -18,7 +18,7 @@
 //! // See .build.toml for example configuration format
 //! ```
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use crate::{
     Tool,
@@ -27,69 +27,39 @@ use crate::{
         config::{Cargo, Custom},
     },
     run::{
-        qemu::{RunQemuArgs, resolve_qemu_config_path_in_dir},
-        uboot::RunUbootArgs,
+        qemu::{QemuConfig, RunQemuOptions},
+        uboot::{RunUbootOptions, UbootConfig},
     },
 };
 
 /// Cargo builder implementation for building projects.
-pub mod cargo_builder;
+mod cargo_builder;
 
 /// Build configuration types and structures.
 pub mod config;
 
 pub mod someboot;
 
-/// Cargo QEMU runtime overrides for generated defaults and final invocation.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CargoQemuOverrideArgs {
-    /// Optional override for the generated QEMU config `to_bin` default.
-    pub to_bin: Option<bool>,
-    /// QEMU command-line arguments for this override layer.
-    pub args: Option<Vec<String>>,
-    /// Regex patterns that indicate successful execution.
-    pub success_regex: Option<Vec<String>>,
-    /// Regex patterns that indicate failed execution.
-    pub fail_regex: Option<Vec<String>>,
-    /// String prefix that indicates the guest shell is ready.
-    pub shell_prefix: Option<String>,
-    /// Command sent once after `shell_prefix` is detected.
-    pub shell_init_cmd: Option<String>,
-}
-
-/// Cargo QEMU runtime append arguments for the final invocation.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CargoQemuAppendArgs {
-    /// QEMU command-line arguments appended to the final argument list.
-    pub args: Option<Vec<String>>,
-    /// Regex patterns appended to the final success matcher list.
-    pub success_regex: Option<Vec<String>>,
-    /// Regex patterns appended to the final failure matcher list.
-    pub fail_regex: Option<Vec<String>>,
-}
-
 /// Parameters for running a built Cargo artifact in QEMU.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CargoQemuRunnerArgs {
-    /// Optional path to QEMU configuration file.
-    pub qemu_config: Option<PathBuf>,
+    /// Optional fully prepared QEMU runtime configuration.
+    pub qemu: Option<QemuConfig>,
     /// Whether to enable debug mode (GDB server).
     pub debug: bool,
     /// Whether to dump the device tree blob.
     pub dtb_dump: bool,
-    /// Overrides applied only when generating a default config.
-    pub default_args: CargoQemuOverrideArgs,
-    /// Arguments appended after the base config is prepared.
-    pub append_args: CargoQemuAppendArgs,
-    /// Final overrides applied after append processing.
-    pub override_args: CargoQemuOverrideArgs,
+    /// Whether to show QEMU output.
+    pub show_output: bool,
 }
 
 /// Parameters for running a built Cargo artifact on real hardware via U-Boot.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct CargoUbootRunnerArgs {
-    /// Optional path to U-Boot configuration file.
-    pub uboot_config: Option<PathBuf>,
+    /// Optional fully prepared U-Boot runtime configuration.
+    pub uboot: Option<UbootConfig>,
+    /// Whether to show U-Boot output.
+    pub show_output: bool,
 }
 
 /// Specifies the type of runner to use after building.
@@ -98,12 +68,37 @@ pub struct CargoUbootRunnerArgs {
 /// either through QEMU emulation or via U-Boot on real hardware.
 pub enum CargoRunnerKind {
     /// Run the built artifact in QEMU emulator.
-    Qemu(Box<CargoQemuRunnerArgs>),
+    Qemu(CargoQemuRunnerArgs),
     /// Run the built artifact on real hardware via U-Boot.
     Uboot(CargoUbootRunnerArgs),
 }
 
 impl Tool {
+    /// Returns the default build configuration template.
+    pub fn default_build_config(&self) -> config::BuildConfig {
+        config::BuildConfig::default()
+    }
+
+    /// Loads a build configuration from a workspace-like directory.
+    pub async fn load_build_config_from_dir(
+        &mut self,
+        dir: &Path,
+        menu: bool,
+    ) -> anyhow::Result<config::BuildConfig> {
+        self.prepare_build_config(Some(dir.join(".build.toml")), menu)
+            .await
+    }
+
+    /// Loads a build configuration from an explicit file path.
+    pub async fn load_build_config_from_path(
+        &mut self,
+        path: &Path,
+        menu: bool,
+    ) -> anyhow::Result<config::BuildConfig> {
+        self.prepare_build_config(Some(path.to_path_buf()), menu)
+            .await
+    }
+
     /// Builds the project using the specified build configuration.
     ///
     /// # Arguments
@@ -137,22 +132,7 @@ impl Tool {
     /// # Errors
     ///
     /// Returns an error if the configuration cannot be loaded or the build fails.
-    pub async fn build(&mut self, config_path: Option<PathBuf>) -> anyhow::Result<()> {
-        let build_config = self.prepare_build_config(config_path, false).await?;
-        println!("Build configuration: {:?}", build_config);
-        self.build_with_config(&build_config).await
-    }
-
-    /// Executes a custom build using shell commands.
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Custom build configuration containing the shell command.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the shell command fails.
-    pub fn build_custom(&mut self, config: &Custom) -> anyhow::Result<()> {
+    pub(crate) fn build_custom(&mut self, config: &Custom) -> anyhow::Result<()> {
         self.shell_run_cmd(&config.build_cmd)?;
         Ok(())
     }
@@ -166,8 +146,43 @@ impl Tool {
     /// # Errors
     ///
     /// Returns an error if the Cargo build fails.
-    pub async fn cargo_build(&mut self, config: &Cargo) -> anyhow::Result<()> {
+    pub(crate) async fn cargo_build(&mut self, config: &Cargo) -> anyhow::Result<()> {
         cargo_builder::CargoBuilder::build_auto(self, config)
+            .execute()
+            .await
+    }
+
+    pub(crate) async fn prepare_runtime_artifacts(
+        &mut self,
+        config: &config::BuildConfig,
+        debug: bool,
+    ) -> anyhow::Result<()> {
+        match &config.system {
+            config::BuildSystem::Custom(custom) => {
+                self.prepare_custom_runtime_artifacts(custom).await
+            }
+            config::BuildSystem::Cargo(cargo) => {
+                self.prepare_cargo_runtime_artifacts(cargo, debug).await
+            }
+        }
+    }
+
+    async fn prepare_custom_runtime_artifacts(&mut self, config: &Custom) -> anyhow::Result<()> {
+        self.build_custom(config)?;
+        self.prepare_elf_artifact(config.elf_path.clone().into(), config.to_bin)
+            .await
+    }
+
+    async fn prepare_cargo_runtime_artifacts(
+        &mut self,
+        config: &Cargo,
+        debug: bool,
+    ) -> anyhow::Result<()> {
+        let build_config_path = self.ctx.build_config_path.clone();
+        CargoBuilder::build(self, config, build_config_path)
+            .debug(debug)
+            .skip_objcopy(true)
+            .resolve_artifact_from_json(true)
             .execute()
             .await
     }
@@ -200,38 +215,31 @@ impl Tool {
 
         match runner {
             CargoRunnerKind::Qemu(args) => {
-                let CargoQemuRunnerArgs {
-                    qemu_config,
-                    dtb_dump,
-                    default_args,
-                    append_args,
-                    override_args,
-                    ..
-                } = args.as_ref();
-                let package_dir = self.resolve_package_manifest_dir(&config.package)?;
-                let resolved_qemu_config = resolve_qemu_config_path_in_dir(
-                    &package_dir,
-                    self.ctx.arch,
-                    qemu_config.clone(),
-                )?;
-
-                self.run_qemu_with_layers(
-                    RunQemuArgs {
-                        qemu_config: Some(resolved_qemu_config),
-                        dtb_dump: *dtb_dump,
-                        show_output: true,
+                let qemu = match &args.qemu {
+                    Some(config) => config.clone(),
+                    None => self.load_qemu_config_for_cargo(config).await?,
+                };
+                self.run_qemu(
+                    &qemu,
+                    RunQemuOptions {
+                        dtb_dump: args.dtb_dump,
+                        show_output: args.show_output,
                     },
-                    default_args.clone(),
-                    append_args.clone(),
-                    override_args.clone(),
                 )
                 .await?;
             }
-            CargoRunnerKind::Uboot(CargoUbootRunnerArgs { uboot_config }) => {
-                self.run_uboot(RunUbootArgs {
-                    config: uboot_config.clone(),
-                    show_output: true,
-                })
+            CargoRunnerKind::Uboot(args) => {
+                let workspace_dir = self.workspace_dir().clone();
+                let uboot = match &args.uboot {
+                    Some(config) => config.clone(),
+                    None => self.load_uboot_config_from_dir(&workspace_dir).await?,
+                };
+                self.run_uboot(
+                    &uboot,
+                    RunUbootOptions {
+                        show_output: args.show_output,
+                    },
+                )
                 .await?;
             }
         }

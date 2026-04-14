@@ -29,6 +29,14 @@ pub struct BuildConfig {
     pub system: BuildSystem,
 }
 
+impl Default for BuildConfig {
+    fn default() -> Self {
+        Self {
+            system: BuildSystem::Cargo(Cargo::default()),
+        }
+    }
+}
+
 /// Specifies the build system to use.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub enum BuildSystem {

@@ -32,16 +32,7 @@ struct ResolvedCargoArtifact {
 /// `CargoBuilder` provides a fluent API for configuring Cargo build or run
 /// commands with custom arguments, environment variables, and build hooks.
 ///
-/// # Example
-///
-/// ```rust,no_run
-/// use ostool::build::cargo_builder::CargoBuilder;
-/// use ostool::build::config::Cargo;
-/// use ostool::Tool;
-///
-/// // CargoBuilder is typically used internally by Tool
-/// // See Tool::cargo_build() and Tool::cargo_run()
-/// ```
+/// This builder is an internal implementation detail used by [`Tool`].
 pub struct CargoBuilder<'a> {
     tool: &'a mut Tool,
     config: &'a Cargo,
@@ -76,32 +67,6 @@ impl<'a> CargoBuilder<'a> {
         }
     }
 
-    /// Creates a new `CargoBuilder` for executing `cargo run`.
-    ///
-    /// # Arguments
-    ///
-    /// * `tool` - The tool context.
-    /// * `config` - The Cargo build configuration.
-    /// * `config_path` - Optional path to the configuration file.
-    pub fn run(tool: &'a mut Tool, config: &'a Cargo, config_path: Option<PathBuf>) -> Self {
-        Self {
-            tool,
-            config,
-            command: "run".to_string(),
-            extra_args: Vec::new(),
-            extra_envs: HashMap::new(),
-            skip_objcopy: true,
-            resolve_artifact_from_json: true,
-            resolved_artifact: None,
-            config_path,
-        }
-    }
-
-    /// Returns `true` if this builder is configured for `cargo run`.
-    pub fn is_run(&self) -> bool {
-        self.command == "run"
-    }
-
     /// Sets the debug mode for the build.
     ///
     /// When enabled, builds in debug mode and enables GDB server for QEMU.
@@ -114,34 +79,6 @@ impl<'a> CargoBuilder<'a> {
     pub fn build_auto(tool: &'a mut Tool, config: &'a Cargo) -> Self {
         let config_path = tool.ctx.build_config_path.clone();
         Self::build(tool, config, config_path)
-    }
-
-    /// Creates a run command using the context's stored config path.
-    pub fn run_auto(tool: &'a mut Tool, config: &'a Cargo) -> Self {
-        let config_path = tool.ctx.build_config_path.clone();
-        Self::run(tool, config, config_path)
-    }
-
-    /// Adds a single argument to the Cargo command.
-    pub fn arg(mut self, arg: impl Into<String>) -> Self {
-        self.extra_args.push(arg.into());
-        self
-    }
-
-    /// Adds multiple arguments to the Cargo command.
-    pub fn args<I, S>(mut self, args: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.extra_args.extend(args.into_iter().map(|s| s.into()));
-        self
-    }
-
-    /// Sets an environment variable for the Cargo command.
-    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.extra_envs.insert(key.into(), value.into());
-        self
     }
 
     /// Sets whether to skip the objcopy step after building.
@@ -343,10 +280,6 @@ impl<'a> CargoBuilder<'a> {
         // Extra args
         for arg in &self.extra_args {
             cmd.arg(arg);
-        }
-
-        if self.is_run() && self.tool.debug_enabled() {
-            cmd.arg("--debug");
         }
 
         Ok(cmd)

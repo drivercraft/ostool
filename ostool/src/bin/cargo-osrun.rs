@@ -10,7 +10,7 @@ use colored::Colorize as _;
 use log::debug;
 use ostool::{
     Tool, ToolConfig, logger, resolve_manifest_context,
-    run::{qemu, uboot::RunUbootArgs},
+    run::{qemu::RunQemuOptions, uboot::RunUbootOptions},
 };
 
 #[derive(Debug, Parser, Clone)]
@@ -129,27 +129,40 @@ async fn try_main() -> anyhow::Result<()> {
         debug: args.debug,
     })?;
 
-    tool.set_elf_path(args.elf).await?;
-    tool.objcopy_elf()?;
-
-    if args.to_bin {
-        tool.objcopy_output_bin()?;
-    }
+    tool.prepare_elf_artifact(args.elf, args.to_bin).await?;
 
     match args.command {
         Some(SubCommands::Uboot(_)) => {
-            tool.run_uboot(RunUbootArgs {
-                config: args.config,
-                show_output: args.show_output,
-            })
+            let config = match args.config.as_deref() {
+                Some(path) => tool.load_uboot_config_from_path(path).await?,
+                None => {
+                    tool.load_uboot_config_from_dir(&manifest.workspace_dir)
+                        .await?
+                }
+            };
+            tool.run_uboot(
+                &config,
+                RunUbootOptions {
+                    show_output: args.show_output,
+                },
+            )
             .await?;
         }
         None => {
-            tool.run_qemu(qemu::RunQemuArgs {
-                qemu_config: args.config,
-                dtb_dump: args.dtb_dump,
-                show_output: args.show_output,
-            })
+            let config = match args.config.as_deref() {
+                Some(path) => tool.load_qemu_config_from_path(path).await?,
+                None => {
+                    tool.load_qemu_config_from_dir(&manifest.workspace_dir)
+                        .await?
+                }
+            };
+            tool.run_qemu(
+                &config,
+                RunQemuOptions {
+                    dtb_dump: args.dtb_dump,
+                    show_output: args.show_output,
+                },
+            )
             .await?;
         }
     }

@@ -25,14 +25,14 @@ pub struct BoardRunConfig {
 }
 
 impl BoardRunConfig {
-    pub fn default_path(explicit_path: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    pub(crate) fn default_path(explicit_path: Option<PathBuf>) -> anyhow::Result<PathBuf> {
         match explicit_path {
             Some(path) => Ok(path),
             None => Ok(current_dir()?.join(".board.toml")),
         }
     }
 
-    pub async fn load_or_create(
+    pub(crate) async fn load_or_create(
         tool: &Tool,
         explicit_path: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
@@ -46,7 +46,7 @@ impl BoardRunConfig {
         Ok(config)
     }
 
-    pub fn resolve_server(
+    pub(crate) fn resolve_server(
         &self,
         cli_server: Option<&str>,
         cli_port: Option<u16>,
@@ -60,7 +60,7 @@ impl BoardRunConfig {
         (server, port)
     }
 
-    pub fn apply_overrides(
+    pub(crate) fn apply_overrides(
         &mut self,
         tool: &Tool,
         board_type: Option<&str>,
@@ -175,7 +175,12 @@ impl BoardRunConfig {
 #[cfg(test)]
 mod tests {
     use super::BoardRunConfig;
-    use crate::{Tool, board::global_config::BoardGlobalConfig};
+    use crate::{
+        Tool, ToolConfig,
+        board::global_config::BoardGlobalConfig,
+        build::config::{BuildConfig, BuildSystem, Cargo},
+    };
+    use std::collections::HashMap;
 
     #[test]
     fn board_run_config_parses_and_normalizes_shell_fields() {
@@ -242,5 +247,105 @@ port = 9000
         assert_eq!(config.board_type, "rk3568");
         assert_eq!(config.server.as_deref(), Some("127.0.0.1"));
         assert_eq!(config.port, Some(7000));
+    }
+
+    #[tokio::test]
+    async fn load_board_run_config_from_path_normalizes_loaded_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("src/lib.rs"), "").unwrap();
+        let config_path = tmp.path().join("custom.board.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+board_type = " rk3568 "
+shell_prefix = " login: "
+shell_init_cmd = " root "
+"#,
+        )
+        .unwrap();
+
+        let mut tool = Tool::new(ToolConfig {
+            manifest: Some(tmp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let config = tool
+            .load_board_run_config_from_path(&config_path)
+            .await
+            .unwrap();
+        assert_eq!(config.board_type, "rk3568");
+        assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
+        assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
+    }
+
+    #[tokio::test]
+    async fn load_board_run_config_from_dir_replaces_package_variables() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\", \"kernel\"]\nresolver = \"3\"\n",
+        )
+        .unwrap();
+
+        let app_dir = tmp.path().join("app");
+        std::fs::create_dir_all(app_dir.join("src")).unwrap();
+        std::fs::write(
+            app_dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(app_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let kernel_dir = tmp.path().join("kernel");
+        std::fs::create_dir_all(kernel_dir.join("src")).unwrap();
+        std::fs::write(
+            kernel_dir.join("Cargo.toml"),
+            "[package]\nname = \"kernel\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(kernel_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        std::fs::write(
+            tmp.path().join(".board.toml"),
+            r#"
+board_type = "kernel-board"
+dtb_file = "${package}/board.dtb"
+"#,
+        )
+        .unwrap();
+
+        let mut tool = Tool::new(ToolConfig {
+            manifest: Some(app_dir),
+            ..Default::default()
+        })
+        .unwrap();
+        tool.ctx.build_config = Some(BuildConfig {
+            system: BuildSystem::Cargo(Cargo {
+                env: HashMap::new(),
+                target: "aarch64-unknown-none".into(),
+                package: "kernel".into(),
+                features: vec![],
+                log: None,
+                extra_config: None,
+                args: vec![],
+                pre_build_cmds: vec![],
+                post_build_cmds: vec![],
+                to_bin: false,
+            }),
+        });
+
+        let config = tool
+            .load_board_run_config_from_dir(tmp.path())
+            .await
+            .unwrap();
+        let expected = kernel_dir.join("board.dtb").display().to_string();
+        assert_eq!(config.dtb_file.as_deref(), Some(expected.as_str()));
     }
 }

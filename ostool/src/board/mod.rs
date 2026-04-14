@@ -6,10 +6,9 @@ pub mod serial_stream;
 pub mod session;
 pub mod terminal;
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use anyhow::Context as _;
-use log::info;
 
 use crate::board::{
     client::{BoardServerClient, BoardTypeSummary},
@@ -18,18 +17,10 @@ use crate::board::{
     global_config::LoadedBoardGlobalConfig,
     session::BoardSession,
 };
-use crate::{
-    Tool,
-    build::{
-        cargo_builder::CargoBuilder,
-        config::{BuildConfig, BuildSystem, Cargo},
-    },
-};
+use crate::{Tool, build::config::BuildConfig};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RunBoardArgs {
-    pub config: Option<PathBuf>,
-    pub board_config: Option<PathBuf>,
+pub struct RunBoardOptions {
     pub board_type: Option<String>,
     pub server: Option<String>,
     pub port: Option<u16>,
@@ -181,66 +172,59 @@ async fn finalize_session(
 }
 
 impl Tool {
-    pub async fn run_board(&mut self, args: RunBoardArgs) -> anyhow::Result<()> {
-        let build_config = self
-            .prepare_build_config(args.config.clone(), false)
-            .await?;
-        self.run_board_with_build_config(&build_config, args).await
+    pub fn default_board_run_config(&self) -> BoardRunConfig {
+        BoardRunConfig::default()
     }
 
-    pub async fn cargo_run_board(
+    pub async fn load_board_run_config_from_dir(
         &mut self,
-        cargo: &Cargo,
-        args: RunBoardArgs,
-    ) -> anyhow::Result<()> {
-        let build_config_path = self.ctx.build_config_path.clone();
-        CargoBuilder::build(self, cargo, build_config_path)
-            .skip_objcopy(true)
-            .resolve_artifact_from_json(true)
-            .execute()
-            .await?;
+        dir: &Path,
+    ) -> anyhow::Result<BoardRunConfig> {
+        let dir = self.replace_path_variables(dir.to_path_buf())?;
+        self.load_board_run_config_from_path(&dir.join(".board.toml"))
+            .await
+    }
 
-        self.run_prepared_board(args).await
+    pub async fn load_board_run_config_from_path(
+        &mut self,
+        path: &Path,
+    ) -> anyhow::Result<BoardRunConfig> {
+        let path = self.replace_path_variables(path.to_path_buf())?;
+        BoardRunConfig::load_or_create(self, Some(path)).await
+    }
+
+    pub async fn run_board(
+        &mut self,
+        build_config: &BuildConfig,
+        board_config: &BoardRunConfig,
+        options: RunBoardOptions,
+    ) -> anyhow::Result<()> {
+        self.run_board_with_build_config(build_config, board_config, options)
+            .await
     }
 
     async fn run_board_with_build_config(
         &mut self,
         build_config: &BuildConfig,
-        args: RunBoardArgs,
+        board_config: &BoardRunConfig,
+        options: RunBoardOptions,
     ) -> anyhow::Result<()> {
-        match &build_config.system {
-            BuildSystem::Cargo(cargo) => self.cargo_run_board(cargo, args).await,
-            BuildSystem::Custom(custom_cfg) => {
-                self.shell_run_cmd(&custom_cfg.build_cmd)?;
-                self.set_elf_path(custom_cfg.elf_path.clone().into())
-                    .await?;
-                info!(
-                    "ELF {:?}: {}",
-                    self.ctx().arch,
-                    self.ctx().artifacts.elf.as_ref().unwrap().display()
-                );
-
-                if custom_cfg.to_bin {
-                    self.objcopy_output_bin()?;
-                }
-
-                self.run_prepared_board(args).await
-            }
-        }
+        self.prepare_runtime_artifacts(build_config, false).await?;
+        self.run_prepared_board(board_config, options).await
     }
 
-    async fn run_prepared_board(&mut self, args: RunBoardArgs) -> anyhow::Result<()> {
+    async fn run_prepared_board(
+        &mut self,
+        board_config: &BoardRunConfig,
+        options: RunBoardOptions,
+    ) -> anyhow::Result<()> {
         let global_config = load_board_global_config_with_notice()?;
-        let explicit_board_config = args
-            .board_config
-            .map(|path| self.replace_path_variables(path))
-            .transpose()?;
-        let mut board_config = BoardRunConfig::load_or_create(self, explicit_board_config).await?;
+        let mut board_config = board_config.clone();
         board_config.apply_overrides(
             self,
-            args.board_type.as_deref(),
-            args.server.as_deref(),
-            args.port,
+            options.board_type.as_deref(),
+            options.server.as_deref(),
+            options.port,
         )?;
 
         let (server, port) = board_config.resolve_server(None, None, &global_config.board);
@@ -264,12 +248,12 @@ impl Tool {
 
 #[cfg(test)]
 mod tests {
-    use super::{RunBoardArgs, render_board_table};
+    use super::{RunBoardOptions, render_board_table};
     use crate::board::client::BoardTypeSummary;
 
     #[test]
     fn run_board_args_default_to_no_overrides() {
-        assert_eq!(RunBoardArgs::default().board_type, None);
+        assert_eq!(RunBoardOptions::default().board_type, None);
     }
 
     #[test]

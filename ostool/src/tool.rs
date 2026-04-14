@@ -118,7 +118,7 @@ impl Tool {
     }
 
     /// Executes a shell command in the current context.
-    pub fn shell_run_cmd(&self, cmd: &str) -> anyhow::Result<()> {
+    pub(crate) fn shell_run_cmd(&self, cmd: &str) -> anyhow::Result<()> {
         let mut command = match std::env::consts::OS {
             "windows" => {
                 let mut command = self.command("powershell");
@@ -143,7 +143,7 @@ impl Tool {
     }
 
     /// Creates a new command builder for the given program.
-    pub fn command(&self, program: &str) -> crate::utils::Command {
+    pub(crate) fn command(&self, program: &str) -> crate::utils::Command {
         let tool = self.clone();
         let mut command =
             crate::utils::Command::new(program, &self.manifest_dir, move |s| tool.replace_value(s));
@@ -188,7 +188,7 @@ impl Tool {
     }
 
     /// Sets the ELF artifact path and synchronizes derived runtime metadata.
-    pub async fn set_elf_artifact_path(&mut self, path: PathBuf) -> anyhow::Result<()> {
+    pub(crate) async fn set_elf_artifact_path(&mut self, path: PathBuf) -> anyhow::Result<()> {
         let path = path
             .canonicalize()
             .with_path("failed to canonicalize file", &path)?;
@@ -211,13 +211,23 @@ impl Tool {
         Ok(())
     }
 
-    /// Sets the ELF file path and detects its architecture.
-    pub async fn set_elf_path(&mut self, path: PathBuf) -> anyhow::Result<()> {
-        self.set_elf_artifact_path(path).await
+    /// Imports an ELF artifact, strips it to a runtime `.elf`, and optionally
+    /// materializes a `.bin` image.
+    pub async fn prepare_elf_artifact(
+        &mut self,
+        path: PathBuf,
+        to_bin: bool,
+    ) -> anyhow::Result<()> {
+        self.set_elf_artifact_path(path).await?;
+        self.objcopy_elf()?;
+        if to_bin {
+            self.objcopy_output_bin()?;
+        }
+        Ok(())
     }
 
     /// Strips debug symbols from the ELF file.
-    pub fn objcopy_elf(&mut self) -> anyhow::Result<PathBuf> {
+    pub(crate) fn objcopy_elf(&mut self) -> anyhow::Result<PathBuf> {
         let elf_path = self
             .ctx
             .artifacts
@@ -271,7 +281,7 @@ impl Tool {
     }
 
     /// Converts the ELF file to raw binary format.
-    pub fn objcopy_output_bin(&mut self) -> anyhow::Result<PathBuf> {
+    pub(crate) fn objcopy_output_bin(&mut self) -> anyhow::Result<PathBuf> {
         if let Some(bin) = &self.ctx.artifacts.bin {
             debug!("BIN file already exists: {:?}", bin);
             return Ok(bin.clone());
@@ -338,7 +348,7 @@ impl Tool {
     }
 
     /// Loads and prepares the build configuration.
-    pub async fn prepare_build_config(
+    pub(crate) async fn prepare_build_config(
         &mut self,
         config_path: Option<PathBuf>,
         menu: bool,
@@ -373,14 +383,7 @@ impl Tool {
         )
     }
 
-    pub fn value_replace_with_var<S>(&self, value: S) -> String
-    where
-        S: AsRef<OsStr>,
-    {
-        self.replace_value(value)
-    }
-
-    pub fn replace_value<S>(&self, value: S) -> String
+    pub(crate) fn replace_value<S>(&self, value: S) -> String
     where
         S: AsRef<OsStr>,
     {
@@ -388,7 +391,7 @@ impl Tool {
             .unwrap_or_else(|_| value.as_ref().to_string_lossy().into_owned())
     }
 
-    pub fn replace_string(&self, input: &str) -> anyhow::Result<String> {
+    pub(crate) fn replace_string(&self, input: &str) -> anyhow::Result<String> {
         let package_dir = self.package_root_for_variables()?;
         let workspace_dir = self.workspace_dir.display().to_string();
         let package_dir = package_dir.display().to_string();
@@ -406,7 +409,7 @@ impl Tool {
         })
     }
 
-    pub fn replace_path_variables(&self, path: PathBuf) -> anyhow::Result<PathBuf> {
+    pub(crate) fn replace_path_variables(&self, path: PathBuf) -> anyhow::Result<PathBuf> {
         Ok(PathBuf::from(self.replace_string(&path.to_string_lossy())?))
     }
 
@@ -421,7 +424,7 @@ impl Tool {
         Ok(self.manifest_dir.clone())
     }
 
-    pub fn ui_hooks(&self) -> Vec<ElementHook> {
+    pub(crate) fn ui_hooks(&self) -> Vec<ElementHook> {
         vec![
             self.ui_hook_feature_select(),
             self.ui_hook_package_select(),
