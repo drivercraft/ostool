@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3](https://github.com/drivercraft/ostool/compare/jkconfig-v0.2.2...jkconfig-v0.2.3) - 2026-04-14
+
+### Added
+
+- support forwarding uboot_cmd from board run config ([#83](https://github.com/drivercraft/ostool/pull/83))
+
 ## [0.2.2](https://github.com/drivercraft/ostool/compare/jkconfig-v0.2.1...jkconfig-v0.2.2) - 2026-04-03
 
 ### Added

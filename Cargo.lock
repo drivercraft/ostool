@@ -1631,7 +1631,7 @@ dependencies = [
 
 [[package]]
 name = "jkconfig"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -2159,7 +2159,7 @@ dependencies = [
 
 [[package]]
 name = "ostool"
-version = "0.12.4"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "async-trait",
