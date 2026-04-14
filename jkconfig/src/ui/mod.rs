@@ -513,14 +513,14 @@ impl TuiApp {
                         close_modal = true;
                     }
                 }
-                KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if modal
-                        .buffer
-                        .can_accept_char(kind_for_input(modal.spec.kind), ch)
-                    {
-                        modal.buffer.insert_char(ch);
-                        modal.error = None;
-                    }
+                KeyCode::Char(ch)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && modal
+                            .buffer
+                            .can_accept_char(kind_for_input(modal.spec.kind), ch) =>
+                {
+                    modal.buffer.insert_char(ch);
+                    modal.error = None;
                 }
                 _ => {}
             },

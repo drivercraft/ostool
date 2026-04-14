@@ -16,6 +16,8 @@ pub struct BoardRunConfig {
     pub success_regex: Vec<String>,
     #[serde(default)]
     pub fail_regex: Vec<String>,
+    #[serde(default)]
+    pub uboot_cmd: Option<Vec<String>>,
     pub shell_prefix: Option<String>,
     pub shell_init_cmd: Option<String>,
     pub server: Option<String>,
@@ -105,6 +107,16 @@ impl BoardRunConfig {
             .iter()
             .map(|value| tool.replace_string(value))
             .collect::<anyhow::Result<Vec<_>>>()?;
+        self.uboot_cmd = self
+            .uboot_cmd
+            .as_ref()
+            .map(|values| {
+                values
+                    .iter()
+                    .map(|value| tool.replace_string(value))
+                    .collect::<anyhow::Result<Vec<_>>>()
+            })
+            .transpose()?;
         self.shell_prefix = self
             .shell_prefix
             .as_deref()
@@ -133,6 +145,22 @@ impl BoardRunConfig {
                 *dtb_file = trimmed.to_string();
             }
         }
+        if let Some(commands) = self.uboot_cmd.as_mut() {
+            commands.retain_mut(|command| {
+                let trimmed = command.trim();
+                if trimmed.is_empty() {
+                    false
+                } else {
+                    if trimmed.len() != command.len() {
+                        *command = trimmed.to_string();
+                    }
+                    true
+                }
+            });
+            if commands.is_empty() {
+                self.uboot_cmd = None;
+            }
+        }
         if self.board_type.is_empty() {
             anyhow::bail!("`board_type` must not be empty in {config_name}");
         }
@@ -157,6 +185,7 @@ board_type = " orangepi5plus "
 dtb_file = " ${workspace}/board.dtb "
 success_regex = ["ok"]
 fail_regex = ["panic"]
+uboot_cmd = [" run bootcmd "]
 shell_prefix = " login: "
 shell_init_cmd = " root "
 server = "10.0.0.2"
@@ -169,6 +198,7 @@ port = 9000
 
         assert_eq!(config.board_type, "orangepi5plus");
         assert_eq!(config.dtb_file.as_deref(), Some("${workspace}/board.dtb"));
+        assert_eq!(config.uboot_cmd, Some(vec!["run bootcmd".to_string()]));
         assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
         assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
         assert_eq!(

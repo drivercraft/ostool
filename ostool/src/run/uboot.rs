@@ -111,6 +111,7 @@ impl UbootConfig {
             dtb_file: config.dtb_file.clone(),
             success_regex: config.success_regex.clone(),
             fail_regex: config.fail_regex.clone(),
+            uboot_cmd: config.uboot_cmd.clone(),
             shell_prefix: config.shell_prefix.clone(),
             shell_init_cmd: config.shell_init_cmd.clone(),
             ..Default::default()
@@ -1298,10 +1299,20 @@ where
         println!("{}", "\r\nsend file".green());
 
         let pb = ProgressBar::new(100);
-        pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-        .unwrap()
-        .with_key("eta", |state: &ProgressState, w: &mut dyn core::fmt::Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
-        .progress_chars("#>-"));
+        pb.set_style(
+            ProgressStyle::with_template(
+                "{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] \
+                 {bytes}/{total_bytes} ({eta})",
+            )
+            .unwrap()
+            .with_key(
+                "eta",
+                |state: &ProgressState, w: &mut dyn core::fmt::Write| {
+                    write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+                },
+            )
+            .progress_chars("#>-"),
+        );
 
         let res = uboot
             .loady(addr, file, |x, a| {
@@ -1382,14 +1393,14 @@ fn build_network_boot_request(
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::HashMap, time::Duration};
+
     use super::{LocalUbootConfig, Net, UbootConfig, build_network_boot_request, timeout_duration};
     use crate::{
         Tool, ToolConfig,
         board::config::BoardRunConfig,
         build::config::{BuildConfig, BuildSystem, Cargo},
     };
-    use std::collections::HashMap;
-    use std::time::Duration;
 
     #[test]
     fn network_boot_request_uses_same_filename_for_bootfile() {
@@ -1590,6 +1601,7 @@ timeout = 0
             dtb_file: Some("/tmp/board.dtb".into()),
             success_regex: vec!["ok".into()],
             fail_regex: vec!["fail".into()],
+            uboot_cmd: Some(vec!["run ab_select_cmd".into(), "run avb_boot".into()]),
             shell_prefix: Some("login:".into()),
             shell_init_cmd: Some("root".into()),
             server: None,
@@ -1598,5 +1610,12 @@ timeout = 0
 
         assert_eq!(config.dtb_file.as_deref(), Some("/tmp/board.dtb"));
         assert_eq!(config.success_regex, vec!["ok"]);
+        assert_eq!(
+            config.uboot_cmd,
+            Some(vec![
+                "run ab_select_cmd".to_string(),
+                "run avb_boot".to_string()
+            ])
+        );
     }
 }
