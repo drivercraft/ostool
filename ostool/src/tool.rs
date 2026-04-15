@@ -78,12 +78,22 @@ impl Tool {
         &mut self.ctx
     }
 
+    pub fn set_build_config_path(&mut self, path: Option<PathBuf>) {
+        self.ctx.build_config_path = path;
+    }
+
     pub fn into_context(self) -> AppContext {
         self.ctx
     }
 
     pub(crate) fn debug_enabled(&self) -> bool {
         self.config.debug
+    }
+
+    pub(crate) fn sync_cargo_context(&mut self, cargo: &Cargo) {
+        self.ctx.build_config = Some(BuildConfig {
+            system: BuildSystem::Cargo(cargo.clone()),
+        });
     }
 
     pub(crate) fn manifest_dir(&self) -> &PathBuf {

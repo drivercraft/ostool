@@ -293,18 +293,47 @@ impl Tool {
         }
     }
 
-    pub async fn load_uboot_config_from_dir(&mut self, dir: &Path) -> anyhow::Result<UbootConfig> {
-        let dir = self.replace_path_variables(dir.to_path_buf())?;
-        self.load_uboot_config_from_path(&dir.join(".uboot.toml"))
+    pub async fn read_uboot_config_from_path_for_cargo(
+        &mut self,
+        cargo: &crate::build::config::Cargo,
+        path: &Path,
+    ) -> anyhow::Result<UbootConfig> {
+        self.sync_cargo_context(cargo);
+        let config_path = self.replace_path_variables(path.to_path_buf())?;
+        read_uboot_config_at_path(self, config_path).await
+    }
+
+    pub async fn ensure_uboot_config_for_cargo(
+        &mut self,
+        cargo: &crate::build::config::Cargo,
+    ) -> anyhow::Result<UbootConfig> {
+        self.sync_cargo_context(cargo);
+        let workspace_dir = self.workspace_dir().clone();
+        self.ensure_uboot_config_in_dir_for_cargo(cargo, &workspace_dir)
             .await
     }
 
-    pub async fn load_uboot_config_from_path(
+    pub async fn ensure_uboot_config_in_dir_for_cargo(
+        &mut self,
+        cargo: &crate::build::config::Cargo,
+        dir: &Path,
+    ) -> anyhow::Result<UbootConfig> {
+        self.sync_cargo_context(cargo);
+        let dir = self.replace_path_variables(dir.to_path_buf())?;
+        ensure_uboot_config_at_path(self, dir.join(".uboot.toml"), self.default_uboot_config()).await
+    }
+
+    pub async fn ensure_uboot_config_in_dir(&mut self, dir: &Path) -> anyhow::Result<UbootConfig> {
+        let dir = self.replace_path_variables(dir.to_path_buf())?;
+        ensure_uboot_config_at_path(self, dir.join(".uboot.toml"), self.default_uboot_config()).await
+    }
+
+    pub async fn read_uboot_config_from_path(
         &mut self,
         path: &Path,
     ) -> anyhow::Result<UbootConfig> {
         let config_path = self.replace_path_variables(path.to_path_buf())?;
-        load_or_create_uboot_config_at_path(self, config_path, self.default_uboot_config()).await
+        read_uboot_config_at_path(self, config_path).await
     }
 
     pub async fn run_uboot(
@@ -334,18 +363,26 @@ impl Tool {
     }
 }
 
-async fn load_or_create_uboot_config_at_path(
+async fn read_uboot_config_at_path(tool: &Tool, config_path: PathBuf) -> anyhow::Result<UbootConfig> {
+    let mut config: UbootConfig = fs::read_to_string(&config_path)
+        .await
+        .with_context(|| format!("failed to read U-Boot config: {}", config_path.display()))
+        .and_then(|content| {
+            toml::from_str(&content)
+                .with_context(|| format!("failed to parse U-Boot config: {}", config_path.display()))
+        })?;
+    config.replace_strings(tool)?;
+    config.normalize(&format!("U-Boot config {}", config_path.display()))?;
+    Ok(config)
+}
+
+async fn ensure_uboot_config_at_path(
     tool: &Tool,
     config_path: PathBuf,
     default_config: UbootConfig,
 ) -> anyhow::Result<UbootConfig> {
     let mut config = match fs::read_to_string(&config_path).await {
-        Ok(content) => {
-            println!("Using U-Boot config: {}", config_path.display());
-            toml::from_str(&content).with_context(|| {
-                format!("failed to parse U-Boot config: {}", config_path.display())
-            })?
-        }
+        Ok(_) => return read_uboot_config_at_path(tool, config_path).await,
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             let config = default_config;
             fs::write(&config_path, toml::to_string_pretty(&config)?)
@@ -1643,7 +1680,7 @@ timeout = 0
     }
 
     #[tokio::test]
-    async fn load_uboot_config_from_path_creates_default_file() {
+    async fn ensure_uboot_config_in_dir_creates_default_file() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp.path().join("Cargo.toml"),
@@ -1659,16 +1696,15 @@ timeout = 0
         })
         .unwrap();
 
-        let path = tmp.path().join("custom.uboot.toml");
-        let config = tool.load_uboot_config_from_path(&path).await.unwrap();
+        let config = tool.ensure_uboot_config_in_dir(tmp.path()).await.unwrap();
 
         assert_eq!(config.local.serial.as_deref(), Some("/dev/ttyUSB0"));
         assert_eq!(config.local.baud_rate.as_deref(), Some("115200"));
-        assert!(path.exists());
+        assert!(tmp.path().join(".uboot.toml").exists());
     }
 
     #[tokio::test]
-    async fn load_uboot_config_from_dir_replaces_package_variables() {
+    async fn ensure_uboot_config_in_dir_replaces_package_variables() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp.path().join("Cargo.toml"),
@@ -1726,7 +1762,7 @@ baud_rate = "115200"
             }),
         });
 
-        let config = tool.load_uboot_config_from_dir(tmp.path()).await.unwrap();
+        let config = tool.ensure_uboot_config_in_dir(tmp.path()).await.unwrap();
         let expected = kernel_dir.join("board.dtb").display().to_string();
         assert_eq!(config.dtb_file.as_deref(), Some(expected.as_str()));
     }

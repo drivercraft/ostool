@@ -146,7 +146,8 @@ impl Tool {
     /// # Errors
     ///
     /// Returns an error if the Cargo build fails.
-    pub(crate) async fn cargo_build(&mut self, config: &Cargo) -> anyhow::Result<()> {
+    pub async fn cargo_build(&mut self, config: &Cargo) -> anyhow::Result<()> {
+        self.sync_cargo_context(config);
         cargo_builder::CargoBuilder::build_auto(self, config)
             .execute()
             .await
@@ -202,6 +203,7 @@ impl Tool {
         config: &Cargo,
         runner: &CargoRunnerKind,
     ) -> anyhow::Result<()> {
+        self.sync_cargo_context(config);
         let build_config_path = self.ctx.build_config_path.clone();
 
         let debug = matches!(runner, CargoRunnerKind::Qemu(args) if args.debug);
@@ -217,7 +219,7 @@ impl Tool {
             CargoRunnerKind::Qemu(args) => {
                 let qemu = match &args.qemu {
                     Some(config) => config.clone(),
-                    None => self.load_qemu_config_for_cargo(config).await?,
+                    None => self.ensure_qemu_config_for_cargo(config).await?,
                 };
                 self.run_qemu(
                     &qemu,
@@ -229,10 +231,9 @@ impl Tool {
                 .await?;
             }
             CargoRunnerKind::Uboot(args) => {
-                let workspace_dir = self.workspace_dir().clone();
                 let uboot = match &args.uboot {
                     Some(config) => config.clone(),
-                    None => self.load_uboot_config_from_dir(&workspace_dir).await?,
+                    None => self.ensure_uboot_config_for_cargo(config).await?,
                 };
                 self.run_uboot(
                     &uboot,

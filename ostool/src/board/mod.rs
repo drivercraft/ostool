@@ -17,7 +17,10 @@ use crate::board::{
     global_config::LoadedBoardGlobalConfig,
     session::BoardSession,
 };
-use crate::{Tool, build::config::BuildConfig};
+use crate::{
+    Tool,
+    build::config::{BuildConfig, BuildSystem, Cargo},
+};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunBoardOptions {
@@ -176,21 +179,40 @@ impl Tool {
         BoardRunConfig::default()
     }
 
-    pub async fn load_board_run_config_from_dir(
+    pub async fn read_board_run_config_from_path_for_cargo(
+        &mut self,
+        cargo: &Cargo,
+        path: &Path,
+    ) -> anyhow::Result<BoardRunConfig> {
+        self.sync_cargo_context(cargo);
+        let path = self.replace_path_variables(path.to_path_buf())?;
+        BoardRunConfig::read_from_path(self, path)
+    }
+
+    pub async fn ensure_board_run_config_in_dir_for_cargo(
+        &mut self,
+        cargo: &Cargo,
+        dir: &Path,
+    ) -> anyhow::Result<BoardRunConfig> {
+        self.sync_cargo_context(cargo);
+        let dir = self.replace_path_variables(dir.to_path_buf())?;
+        BoardRunConfig::load_or_create(self, Some(dir.join(".board.toml"))).await
+    }
+
+    pub async fn ensure_board_run_config_in_dir(
         &mut self,
         dir: &Path,
     ) -> anyhow::Result<BoardRunConfig> {
         let dir = self.replace_path_variables(dir.to_path_buf())?;
-        self.load_board_run_config_from_path(&dir.join(".board.toml"))
-            .await
+        BoardRunConfig::load_or_create(self, Some(dir.join(".board.toml"))).await
     }
 
-    pub async fn load_board_run_config_from_path(
+    pub async fn read_board_run_config_from_path(
         &mut self,
         path: &Path,
     ) -> anyhow::Result<BoardRunConfig> {
         let path = self.replace_path_variables(path.to_path_buf())?;
-        BoardRunConfig::load_or_create(self, Some(path)).await
+        BoardRunConfig::read_from_path(self, path)
     }
 
     pub async fn run_board(
@@ -201,6 +223,23 @@ impl Tool {
     ) -> anyhow::Result<()> {
         self.run_board_with_build_config(build_config, board_config, options)
             .await
+    }
+
+    pub async fn cargo_run_board(
+        &mut self,
+        cargo: &Cargo,
+        board_config: &BoardRunConfig,
+        options: RunBoardOptions,
+    ) -> anyhow::Result<()> {
+        self.sync_cargo_context(cargo);
+        self.run_board_with_build_config(
+            &BuildConfig {
+                system: BuildSystem::Cargo(cargo.clone()),
+            },
+            board_config,
+            options,
+        )
+        .await
     }
 
     async fn run_board_with_build_config(
