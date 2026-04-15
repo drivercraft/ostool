@@ -303,7 +303,7 @@ async fn create_dtb(
     request: Request,
 ) -> Result<(StatusCode, axum::Json<DtbFileResponse>), ApiError> {
     let headers = request.headers();
-    let dtb_name = dtb_name_header(&headers, "X-Dtb-Name")?;
+    let dtb_name = dtb_name_header(headers, "X-Dtb-Name")?;
     let body = read_limited_body(request, DTB_UPLOAD_MAX_MIB, "DTB").await?;
     if body.is_empty() {
         return Err(ApiError::bad_request("DTB upload body must not be empty"));

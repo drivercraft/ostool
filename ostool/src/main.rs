@@ -224,7 +224,7 @@ async fn try_main() -> Result<()> {
                             dtb_dump,
                             show_output: true,
                         });
-                        tool.cargo_run(&config, &kind).await?;
+                        tool.cargo_run(config, &kind).await?;
                     }
                     build::config::BuildSystem::Custom(custom_cfg) => {
                         tool.build_with_config(&build_config).await?;
@@ -266,7 +266,7 @@ async fn try_main() -> Result<()> {
                             uboot: uboot_config,
                             show_output: true,
                         });
-                        tool.cargo_run(&config, &kind).await?;
+                        tool.cargo_run(config, &kind).await?;
                     }
                     build::config::BuildSystem::Custom(custom_cfg) => {
                         tool.build_with_config(&build_config).await?;
