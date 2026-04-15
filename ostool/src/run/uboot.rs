@@ -83,7 +83,8 @@ pub struct UbootConfig {
     pub shell_prefix: Option<String>,
     /// Command sent once after `shell_prefix` is detected.
     pub shell_init_cmd: Option<String>,
-    /// Timeout in seconds after entering kernel output. `None` or `0` disables the timeout.
+    /// Timeout in seconds after entering the serial terminal interaction stage. `None` or `0`
+    /// disables the timeout.
     pub timeout: Option<u64>,
     #[serde(flatten)]
     pub local: LocalUbootConfig,
@@ -114,6 +115,7 @@ impl UbootConfig {
             uboot_cmd: config.uboot_cmd.clone(),
             shell_prefix: config.shell_prefix.clone(),
             shell_init_cmd: config.shell_init_cmd.clone(),
+            timeout: config.timeout,
             ..Default::default()
         }
     }
@@ -1670,12 +1672,14 @@ timeout = 0
             uboot_cmd: Some(vec!["run ab_select_cmd".into(), "run avb_boot".into()]),
             shell_prefix: Some("login:".into()),
             shell_init_cmd: Some("root".into()),
+            timeout: Some(12),
             server: None,
             port: None,
         });
 
         assert_eq!(config.dtb_file.as_deref(), Some("/tmp/board.dtb"));
         assert_eq!(config.success_regex, vec!["ok"]);
+        assert_eq!(config.timeout, Some(12));
         assert_eq!(
             config.uboot_cmd,
             Some(vec![

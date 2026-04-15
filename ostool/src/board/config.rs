@@ -20,6 +20,7 @@ pub struct BoardRunConfig {
     pub uboot_cmd: Option<Vec<String>>,
     pub shell_prefix: Option<String>,
     pub shell_init_cmd: Option<String>,
+    pub timeout: Option<u64>,
     pub server: Option<String>,
     pub port: Option<u16>,
 }
@@ -204,6 +205,7 @@ fail_regex = ["panic"]
 uboot_cmd = [" run bootcmd "]
 shell_prefix = " login: "
 shell_init_cmd = " root "
+timeout = 15
 server = "10.0.0.2"
 port = 9000
 "#,
@@ -217,6 +219,7 @@ port = 9000
         assert_eq!(config.uboot_cmd, Some(vec!["run bootcmd".to_string()]));
         assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
         assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
+        assert_eq!(config.timeout, Some(15));
         assert_eq!(
             config.resolve_server(
                 Some("127.0.0.1"),
@@ -277,6 +280,7 @@ port = 9000
 board_type = " rk3568 "
 shell_prefix = " login: "
 shell_init_cmd = " root "
+timeout = 8
 "#,
         )
         .unwrap();
@@ -294,6 +298,7 @@ shell_init_cmd = " root "
         assert_eq!(config.board_type, "rk3568");
         assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
         assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
+        assert_eq!(config.timeout, Some(8));
     }
 
     #[tokio::test]
