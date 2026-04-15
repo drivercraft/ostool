@@ -218,7 +218,7 @@ async fn try_main() -> Result<()> {
                             ),
                             None => None,
                         };
-                        let kind = CargoRunnerKind::Qemu(CargoQemuRunnerArgs {
+                        let kind = CargoRunnerKind::new_qemu(CargoQemuRunnerArgs {
                             qemu: qemu_config,
                             debug,
                             dtb_dump,
@@ -262,7 +262,7 @@ async fn try_main() -> Result<()> {
                             ),
                             None => None,
                         };
-                        let kind = CargoRunnerKind::Uboot(CargoUbootRunnerArgs {
+                        let kind = CargoRunnerKind::new_uboot(CargoUbootRunnerArgs {
                             uboot: uboot_config,
                             show_output: true,
                         });

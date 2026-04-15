@@ -18,13 +18,13 @@ fn main() {
     let _ = RunQemuOptions::default();
     let _ = RunUbootOptions::default();
     let _ = board::RunBoardOptions::default();
-    let _ = build::CargoRunnerKind::Qemu(build::CargoQemuRunnerArgs {
+    let _ = build::CargoRunnerKind::new_qemu(build::CargoQemuRunnerArgs {
         qemu: Some(qemu),
         debug: false,
         dtb_dump: false,
         show_output: true,
     });
-    let _ = build::CargoRunnerKind::Uboot(build::CargoUbootRunnerArgs {
+    let _ = build::CargoRunnerKind::new_uboot(build::CargoUbootRunnerArgs {
         uboot: Some(uboot),
         show_output: true,
     });

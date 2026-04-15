@@ -68,9 +68,19 @@ pub struct CargoUbootRunnerArgs {
 /// either through QEMU emulation or via U-Boot on real hardware.
 pub enum CargoRunnerKind {
     /// Run the built artifact in QEMU emulator.
-    Qemu(CargoQemuRunnerArgs),
+    Qemu(Box<CargoQemuRunnerArgs>),
     /// Run the built artifact on real hardware via U-Boot.
-    Uboot(CargoUbootRunnerArgs),
+    Uboot(Box<CargoUbootRunnerArgs>),
+}
+
+impl CargoRunnerKind {
+    pub fn new_qemu(args: CargoQemuRunnerArgs) -> Self {
+        Self::Qemu(Box::new(args))
+    }
+
+    pub fn new_uboot(args: CargoUbootRunnerArgs) -> Self {
+        Self::Uboot(Box::new(args))
+    }
 }
 
 impl Tool {
