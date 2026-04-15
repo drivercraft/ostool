@@ -287,7 +287,10 @@ shell_init_cmd = " root "
         })
         .unwrap();
 
-        let config = tool.read_board_run_config_from_path(&config_path).await.unwrap();
+        let config = tool
+            .read_board_run_config_from_path(&config_path)
+            .await
+            .unwrap();
         assert_eq!(config.board_type, "rk3568");
         assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
         assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
@@ -349,7 +352,10 @@ dtb_file = "${package}/board.dtb"
             }),
         });
 
-        let config = tool.ensure_board_run_config_in_dir(tmp.path()).await.unwrap();
+        let config = tool
+            .ensure_board_run_config_in_dir(tmp.path())
+            .await
+            .unwrap();
         let expected = kernel_dir.join("board.dtb").display().to_string();
         assert_eq!(config.dtb_file.as_deref(), Some(expected.as_str()));
     }

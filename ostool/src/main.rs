@@ -212,7 +212,10 @@ async fn try_main() -> Result<()> {
                 match &build_config.system {
                     build::config::BuildSystem::Cargo(config) => {
                         let qemu_config = match qemu.qemu_config.as_deref() {
-                            Some(path) => Some(tool.read_qemu_config_from_path_for_cargo(config, path).await?),
+                            Some(path) => Some(
+                                tool.read_qemu_config_from_path_for_cargo(config, path)
+                                    .await?,
+                            ),
                             None => None,
                         };
                         let kind = CargoRunnerKind::Qemu(CargoQemuRunnerArgs {
@@ -253,9 +256,10 @@ async fn try_main() -> Result<()> {
                 match &build_config.system {
                     build::config::BuildSystem::Cargo(config) => {
                         let uboot_config = match uboot.uboot_config.as_deref() {
-                            Some(path) => {
-                                Some(tool.read_uboot_config_from_path_for_cargo(config, path).await?)
-                            }
+                            Some(path) => Some(
+                                tool.read_uboot_config_from_path_for_cargo(config, path)
+                                    .await?,
+                            ),
                             None => None,
                         };
                         let kind = CargoRunnerKind::Uboot(CargoUbootRunnerArgs {
@@ -324,7 +328,10 @@ async fn load_qemu_config(
 ) -> Result<QemuConfig> {
     match config_path {
         Some(path) => tool.read_qemu_config_from_path(path).await,
-        None => tool.ensure_qemu_config_in_dir(&manifest.workspace_dir).await,
+        None => {
+            tool.ensure_qemu_config_in_dir(&manifest.workspace_dir)
+                .await
+        }
     }
 }
 
@@ -335,7 +342,10 @@ async fn load_uboot_config(
 ) -> Result<UbootConfig> {
     match config_path {
         Some(path) => tool.read_uboot_config_from_path(path).await,
-        None => tool.ensure_uboot_config_in_dir(&manifest.workspace_dir).await,
+        None => {
+            tool.ensure_uboot_config_in_dir(&manifest.workspace_dir)
+                .await
+        }
     }
 }
 
@@ -346,7 +356,10 @@ async fn load_board_config(
 ) -> Result<board::config::BoardRunConfig> {
     match config_path {
         Some(path) => tool.read_board_run_config_from_path(path).await,
-        None => tool.ensure_board_run_config_in_dir(&manifest.workspace_dir).await,
+        None => {
+            tool.ensure_board_run_config_in_dir(&manifest.workspace_dir)
+                .await
+        }
     }
 }
 

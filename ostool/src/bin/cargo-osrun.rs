@@ -135,7 +135,10 @@ async fn try_main() -> anyhow::Result<()> {
         Some(SubCommands::Uboot(_)) => {
             let config = match args.config.as_deref() {
                 Some(path) => tool.read_uboot_config_from_path(path).await?,
-                None => tool.ensure_uboot_config_in_dir(&manifest.workspace_dir).await?,
+                None => {
+                    tool.ensure_uboot_config_in_dir(&manifest.workspace_dir)
+                        .await?
+                }
             };
             tool.run_uboot(
                 &config,
@@ -148,7 +151,10 @@ async fn try_main() -> anyhow::Result<()> {
         None => {
             let config = match args.config.as_deref() {
                 Some(path) => tool.read_qemu_config_from_path(path).await?,
-                None => tool.ensure_qemu_config_in_dir(&manifest.workspace_dir).await?,
+                None => {
+                    tool.ensure_qemu_config_in_dir(&manifest.workspace_dir)
+                        .await?
+                }
             };
             tool.run_qemu(
                 &config,

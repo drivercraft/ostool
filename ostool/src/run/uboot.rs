@@ -320,12 +320,14 @@ impl Tool {
     ) -> anyhow::Result<UbootConfig> {
         self.sync_cargo_context(cargo);
         let dir = self.replace_path_variables(dir.to_path_buf())?;
-        ensure_uboot_config_at_path(self, dir.join(".uboot.toml"), self.default_uboot_config()).await
+        ensure_uboot_config_at_path(self, dir.join(".uboot.toml"), self.default_uboot_config())
+            .await
     }
 
     pub async fn ensure_uboot_config_in_dir(&mut self, dir: &Path) -> anyhow::Result<UbootConfig> {
         let dir = self.replace_path_variables(dir.to_path_buf())?;
-        ensure_uboot_config_at_path(self, dir.join(".uboot.toml"), self.default_uboot_config()).await
+        ensure_uboot_config_at_path(self, dir.join(".uboot.toml"), self.default_uboot_config())
+            .await
     }
 
     pub async fn read_uboot_config_from_path(
@@ -363,13 +365,17 @@ impl Tool {
     }
 }
 
-async fn read_uboot_config_at_path(tool: &Tool, config_path: PathBuf) -> anyhow::Result<UbootConfig> {
+async fn read_uboot_config_at_path(
+    tool: &Tool,
+    config_path: PathBuf,
+) -> anyhow::Result<UbootConfig> {
     let mut config: UbootConfig = fs::read_to_string(&config_path)
         .await
         .with_context(|| format!("failed to read U-Boot config: {}", config_path.display()))
         .and_then(|content| {
-            toml::from_str(&content)
-                .with_context(|| format!("failed to parse U-Boot config: {}", config_path.display()))
+            toml::from_str(&content).with_context(|| {
+                format!("failed to parse U-Boot config: {}", config_path.display())
+            })
         })?;
     config.replace_strings(tool)?;
     config.normalize(&format!("U-Boot config {}", config_path.display()))?;
