@@ -11,7 +11,7 @@ const MATCH_EXCERPT_CONTEXT_CHARS: usize = 120;
 const MATCH_EXCERPT_MAX_CHARS: usize = 240;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StreamMatchKind {
+pub enum StreamMatchKind {
     Success,
     Fail,
 }
@@ -30,11 +30,11 @@ impl StreamMatchKind {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct StreamMatch {
-    pub(crate) kind: StreamMatchKind,
-    pub(crate) matched_regex: String,
-    pub(crate) matched_text: String,
-    pub(crate) deadline: Instant,
+pub struct StreamMatch {
+    pub kind: StreamMatchKind,
+    pub matched_regex: String,
+    pub matched_text: String,
+    pub deadline: Instant,
 }
 
 pub(crate) fn compile_regexes(
@@ -87,7 +87,7 @@ enum StreamMatchState {
     Matched(StreamMatch),
 }
 
-pub(crate) struct ByteStreamMatcher {
+pub struct ByteStreamMatcher {
     success_regex: Vec<Regex>,
     fail_regex: Vec<Regex>,
     match_buf: Vec<u8>,
@@ -95,7 +95,7 @@ pub(crate) struct ByteStreamMatcher {
 }
 
 impl ByteStreamMatcher {
-    pub(crate) fn new(success_regex: Vec<Regex>, fail_regex: Vec<Regex>) -> Self {
+    pub fn new(success_regex: Vec<Regex>, fail_regex: Vec<Regex>) -> Self {
         Self {
             success_regex,
             fail_regex,
@@ -104,7 +104,7 @@ impl ByteStreamMatcher {
         }
     }
 
-    pub(crate) fn observe_byte(&mut self, byte: u8) -> Option<StreamMatch> {
+    pub fn observe_byte(&mut self, byte: u8) -> Option<StreamMatch> {
         self.match_buf.push(byte);
         if self.match_buf.len() > MAX_MATCH_WINDOW_BYTES {
             let overflow = self.match_buf.len() - MAX_MATCH_WINDOW_BYTES;
@@ -149,14 +149,14 @@ impl ByteStreamMatcher {
         }
     }
 
-    pub(crate) fn matched(&self) -> Option<&StreamMatch> {
+    pub fn matched(&self) -> Option<&StreamMatch> {
         match &self.state {
             StreamMatchState::Pending => None,
             StreamMatchState::Matched(matched) => Some(matched),
         }
     }
 
-    pub(crate) fn should_stop(&self) -> bool {
+    pub fn should_stop(&self) -> bool {
         self.matched()
             .is_some_and(|matched| Instant::now() >= matched.deadline)
     }
