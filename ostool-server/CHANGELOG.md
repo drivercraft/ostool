@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8](https://github.com/drivercraft/ostool/compare/ostool-server-v0.1.7...ostool-server-v0.1.8) - 2026-04-15
+
+### Other
+
+- *(ostool)* CargoRunnerKind and clean up cargo_run calls ([#87](https://github.com/drivercraft/ostool/pull/87))
+
 ## [0.1.7](https://github.com/drivercraft/ostool/compare/ostool-server-v0.1.6...ostool-server-v0.1.7) - 2026-04-09
 
 ### Added
