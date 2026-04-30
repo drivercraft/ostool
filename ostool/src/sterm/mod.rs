@@ -428,14 +428,8 @@ pub fn encode_key_event(key: KeyEvent) -> io::Result<TerminalAction> {
 }
 
 fn write_output(output: &mut impl Write, chunk: &[u8]) -> io::Result<()> {
-    let mut byte = [0u8; 1];
     for &b in chunk {
-        if b == b'\n' {
-            byte[0] = b'\r';
-            output.write_all(&byte)?;
-        }
-        byte[0] = b;
-        output.write_all(&byte)?;
+        output.write_all(&[b])?;
         if b == b'\n' {
             output.flush()?;
         }
@@ -747,6 +741,16 @@ mod tests {
         let mut writer = FlushCountingWriter::new();
 
         write_output(&mut writer, b"line1\nline2").unwrap();
+
+        assert_eq!(writer.buf, b"line1\nline2");
+        assert_eq!(writer.flushes, 2);
+    }
+
+    #[test]
+    fn write_output_preserves_existing_carriage_returns() {
+        let mut writer = FlushCountingWriter::new();
+
+        write_output(&mut writer, b"line1\r\nline2").unwrap();
 
         assert_eq!(writer.buf, b"line1\r\nline2");
         assert_eq!(writer.flushes, 2);
