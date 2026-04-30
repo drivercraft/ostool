@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1](https://github.com/drivercraft/ostool/compare/ostool-v0.15.0...ostool-v0.15.1) - 2026-04-30
+
+### Fixed
+
+- *(sterm)* remove automatic \n to \r\n conversion in write_output ([#92](https://github.com/drivercraft/ostool/pull/92))
+
 ## [0.15.0](https://github.com/drivercraft/ostool/compare/ostool-v0.14.0...ostool-v0.15.0) - 2026-04-15
 
 ### Fixed
