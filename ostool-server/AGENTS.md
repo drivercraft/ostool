@@ -19,6 +19,7 @@
 - 服务器改动优先运行 `cargo test -p ostool-server`。
 - 注意：该 crate 的 `build.rs` 会触发 `pnpm install --frozen-lockfile` 和
   `pnpm run build`，依赖 Node.js 和 pnpm，并会在 Cargo target 目录下生成 web 依赖和
-  构建输出。工具不可用时，说明跳过了该检查，不要改用全局安装来掩盖环境差异。
+  构建输出。工具不可用时，说明跳过了该检查，不要通过改变工具来源或提交生成产物来
+  掩盖环境差异。
 - API 契约、嵌入 web 资源或构建集成变化时，在 Node.js 和 pnpm 可用的环境中同步运行
   `ostool-server/webui` 的局部检查。
