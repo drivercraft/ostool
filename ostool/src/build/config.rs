@@ -11,6 +11,7 @@
 //! target = "aarch64-unknown-none"
 //! package = "my-kernel"
 //! features = ["feature1", "feature2"]
+//! profile = "Release"
 //! to_bin = true
 //! ```
 
@@ -81,6 +82,12 @@ pub struct Cargo {
     /// Can be a local path or a URL (including GitHub URLs which are
     /// automatically converted to raw content URLs).
     pub extra_config: Option<String>,
+    /// Cargo build profile to use.
+    ///
+    /// When omitted, ostool preserves the legacy behavior: QEMU debug runs use
+    /// Cargo's dev profile, and normal builds/runs use Cargo's release profile.
+    #[serde(default)]
+    pub profile: Option<CargoBuildProfile>,
     /// Additional Cargo command-line arguments.
     pub args: Vec<String>,
     /// Shell commands to run before the build.
@@ -91,6 +98,15 @@ pub struct Cargo {
     pub post_build_cmds: Vec<String>,
     /// Whether to convert the ELF to raw binary format after building.
     pub to_bin: bool,
+}
+
+/// Cargo build profile selection.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub enum CargoBuildProfile {
+    /// Cargo dev/debug profile.
+    Debug,
+    /// Cargo release profile.
+    Release,
 }
 
 /// Dependency configuration for feature management.

@@ -171,8 +171,13 @@ log = "Info"
 # Environment variables
 env = { "RUSTFLAGS" = "-C link-arg=-Tlinker.ld" }
 
+# Cargo build profile. Supported values are "Debug" and "Release".
+# When omitted, legacy behavior is preserved: QEMU --debug uses Debug,
+# while other builds/runs use Release.
+profile = "Release"
+
 # Additional cargo arguments
-args = ["--release"]
+args = []
 
 # Pre-build commands
 pre_build_cmds = ["make prepare"]

@@ -17,7 +17,10 @@ use colored::Colorize;
 
 use crate::{
     Tool,
-    build::{config::Cargo, someboot},
+    build::{
+        config::{Cargo, CargoBuildProfile},
+        someboot,
+    },
     utils::{Command, PathResultExt},
 };
 
@@ -270,7 +273,7 @@ impl<'a> CargoBuilder<'a> {
         }
 
         // Release mode
-        if !self.tool.debug_enabled() {
+        if self.effective_profile() == CargoBuildProfile::Release {
             cmd.arg("--release");
         }
 
@@ -357,6 +360,16 @@ impl<'a> CargoBuilder<'a> {
         features
     }
 
+    fn effective_profile(&self) -> CargoBuildProfile {
+        self.config.profile.unwrap_or_else(|| {
+            if self.tool.debug_enabled() {
+                CargoBuildProfile::Debug
+            } else {
+                CargoBuildProfile::Release
+            }
+        })
+    }
+
     fn log_level_feature(&self) -> Option<String> {
         let level = self.config.log.clone()?;
 
@@ -371,7 +384,7 @@ impl<'a> CargoBuilder<'a> {
         if has_log {
             Some(format!(
                 "log/{}max_level_{}",
-                if self.tool.debug_enabled() {
+                if self.effective_profile() == CargoBuildProfile::Debug {
                     ""
                 } else {
                     "release_"

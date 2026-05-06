@@ -171,8 +171,12 @@ log = "Info"
 # 环境变量
 env = { "RUSTFLAGS" = "-C link-arg=-Tlinker.ld" }
 
+# Cargo 构建 profile，可选值为 "Debug" 或 "Release"。
+# 省略时保持兼容行为：QEMU --debug 使用 Debug，其它构建/运行使用 Release。
+profile = "Release"
+
 # 额外的 cargo 参数
-args = ["--release"]
+args = []
 
 # 构建前执行的命令
 pre_build_cmds = ["make prepare"]

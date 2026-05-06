@@ -1122,6 +1122,7 @@ mod tests {
                 features: vec![],
                 log: None,
                 extra_config: None,
+                profile: None,
                 args: vec![],
                 pre_build_cmds: vec![],
                 post_build_cmds: vec![],
