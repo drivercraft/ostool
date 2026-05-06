@@ -200,7 +200,7 @@ async fn try_main() -> Result<()> {
                 let (mut tool, manifest_ctx) = init_tool(manifest.clone())?;
                 let mut build_config =
                     load_build_config(&mut tool, &manifest_ctx, args.config.as_deref()).await?;
-                apply_cargo_selector(&mut build_config, &args.cargo_selector)?;
+                apply_cargo_selector(&mut tool, &mut build_config, &args.cargo_selector)?;
                 let board_config =
                     load_board_config(&mut tool, &manifest_ctx, args.board_config.as_deref())
                         .await?;
@@ -226,7 +226,7 @@ async fn try_main() -> Result<()> {
             let (mut tool, manifest_ctx) = init_tool(manifest)?;
             let mut build_config =
                 load_build_config(&mut tool, &manifest_ctx, config.as_deref()).await?;
-            apply_cargo_selector(&mut build_config, &cargo_selector)?;
+            apply_cargo_selector(&mut tool, &mut build_config, &cargo_selector)?;
             tool.build_with_config(&build_config).await?;
         }
         SubCommands::Run { command } => match command {
@@ -242,7 +242,7 @@ async fn try_main() -> Result<()> {
                 let (mut tool, manifest_ctx) = init_tool(manifest.clone())?;
                 let mut build_config =
                     load_build_config(&mut tool, &manifest_ctx, config.as_deref()).await?;
-                apply_cargo_selector(&mut build_config, &cargo_selector)?;
+                apply_cargo_selector(&mut tool, &mut build_config, &cargo_selector)?;
                 match &build_config.system {
                     build::config::BuildSystem::Cargo(config) => {
                         let qemu_config = match qemu.qemu_config.as_deref() {
@@ -291,7 +291,7 @@ async fn try_main() -> Result<()> {
                 let (mut tool, manifest_ctx) = init_tool(manifest.clone())?;
                 let mut build_config =
                     load_build_config(&mut tool, &manifest_ctx, config.as_deref()).await?;
-                apply_cargo_selector(&mut build_config, &cargo_selector)?;
+                apply_cargo_selector(&mut tool, &mut build_config, &cargo_selector)?;
                 match &build_config.system {
                     build::config::BuildSystem::Cargo(config) => {
                         let uboot_config = match uboot.uboot_config.as_deref() {
@@ -361,6 +361,7 @@ async fn load_build_config(
 }
 
 fn apply_cargo_selector(
+    tool: &mut Tool,
     build_config: &mut build::config::BuildConfig,
     selector: &CargoSelectorArgs,
 ) -> Result<()> {
@@ -379,6 +380,7 @@ fn apply_cargo_selector(
         cargo.bin = Some(bin.clone());
     }
 
+    tool.ctx_mut().build_config = Some(build_config.clone());
     Ok(())
 }
 
