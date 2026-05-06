@@ -8,9 +8,9 @@ Applies to the Vue/Vite front end in `ostool-server/webui/`.
 
 - Use pnpm as declared by `packageManager` and `pnpm-lock.yaml`. Do not switch to
   npm, yarn, or another package manager.
-- Do not install Node.js or pnpm globally on the host. Use the project's
-  container/CI environment, or an already available local toolchain if the user
-  has provided one.
+- If Node.js or pnpm are unavailable, report which web UI check could not run
+  instead of switching package managers or committing generated dependency
+  output.
 - Keep API client types in `src/api/` and `src/types/` aligned with
   `ostool-server/src/api/models.rs`.
 - Do not commit `dist`, `node_modules`, coverage output, or other generated web

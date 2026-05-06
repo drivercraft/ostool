@@ -19,24 +19,16 @@ subdirectories override or extend these rules for their own tree.
 - `.github/workflows/check.yaml`: current CI source of truth for formatting,
   clippy, build, and tests.
 
-## Dependency And Tooling Policy
+## Dependency And Tooling
 
-- Third-party development dependencies and toolchains default to Docker, Dev
-  Container, CI, or another project-local isolated environment, not direct
-  installation on the macOS host.
-- Do not run host-level install commands by default, including `brew install`,
-  `curl | sh`, `npm -g`, `rustup`, `pyenv`, or language runtime installers.
-  These are allowed only when the user explicitly requests that host install in
-  the current conversation.
-- When a dependency is needed, first look for project-native Docker, Dev
-  Container, docker-compose, CI, Makefile, or script entrypoints and run inside
-  that environment.
-- If this repository lacks a containerized entrypoint for the needed task,
-  prefer proposing or adding a project-local Docker/Dev Container path instead
-  of extending the host runtime.
-- Small operating-system utilities may be exceptions, but explain why they must
-  be installed on the host and wait for user confirmation unless the user
-  already requested the install.
+- Use the toolchain and dependency versions declared by this repository or its
+  CI when reproducing checks.
+- Do not add, remove, or replace development environment entrypoints such as
+  Dockerfiles, Dev Containers, install scripts, or package managers unless the
+  task is explicitly about that workflow.
+- If required tools are not available in the current environment, report the
+  missing tool and the check that could not be run instead of substituting an
+  untracked host setup.
 
 ## Git And Commits
 
@@ -57,7 +49,8 @@ subdirectories override or extend these rules for their own tree.
 - For focused changes, run the narrowest package or web UI checks that cover the
   touched area, and state exactly what was or was not run.
 - The CI installs QEMU, U-Boot tools, libudev, Node.js 24, and pnpm 10.33.0.
-  Do not install these on the host just to reproduce CI.
+  Treat that workflow as CI evidence, not as a requirement to install the same
+  tools in every local environment.
 
 ## Documentation
 

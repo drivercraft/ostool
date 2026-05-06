@@ -22,5 +22,5 @@ local instructions.
 
 - Prefer `cargo test -p ostool-server` for server-only changes.
 - If API contracts, embedded web assets, or build integration changes, also run
-  the relevant `ostool-server/webui` checks from its local instructions when an
-  isolated Node/pnpm environment is available.
+  the relevant `ostool-server/webui` checks from its local instructions when
+  Node.js and pnpm are available.
