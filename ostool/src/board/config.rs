@@ -347,6 +347,7 @@ dtb_file = "${package}/board.dtb"
                 env: HashMap::new(),
                 target: "aarch64-unknown-none".into(),
                 package: "kernel".into(),
+                bin: None,
                 features: vec![],
                 log: None,
                 extra_config: None,

@@ -10,6 +10,7 @@
 //! [system.Cargo]
 //! target = "aarch64-unknown-none"
 //! package = "my-kernel"
+//! bin = "my-kernel"
 //! features = ["feature1", "feature2"]
 //! to_bin = true
 //! ```
@@ -72,6 +73,13 @@ pub struct Cargo {
     pub target: String,
     /// Package name to build.
     pub package: String,
+    /// Binary target name to build within the selected package.
+    ///
+    /// When omitted, Cargo's normal package binary resolution is used when it
+    /// is unambiguous. Packages with multiple binary targets should set this
+    /// field or pass `--bin` on the command line.
+    #[serde(default)]
+    pub bin: Option<String>,
     /// Cargo features to enable.
     pub features: Vec<String>,
     /// Log level feature to automatically enable.

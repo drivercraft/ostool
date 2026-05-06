@@ -102,6 +102,9 @@ ostool build
 # Build with specific config file
 ostool build --config custom-build.toml
 
+# Temporarily override Cargo package / binary target
+ostool build --config custom-build.toml --package paging-test --bin basic
+
 # Build in specified working directory
 ostool --workdir /path/to/project build
 ```
@@ -121,6 +124,9 @@ ostool run qemu --dtb-dump
 # Run with specific Qemu config file
 ostool run qemu --qemu-config my-qemu.toml
 
+# Run after temporarily overriding Cargo package / binary target
+ostool run qemu --package paging-test --bin basic
+
 # Run with U-Boot
 ostool run uboot
 
@@ -135,6 +141,9 @@ ostool board ls
 
 # Run on a remote board
 ostool board run
+
+# Run a specific Cargo binary target on a remote board
+ostool board run --package paging-test --bin basic
 ```
 
 > Exit shortcut: In the serial terminal (e.g., `ostool run uboot`), press `Ctrl+A` then `x` to quit; the tool captures this sequence and exits gracefully instead of sending it to the target device.
@@ -161,6 +170,10 @@ target = "aarch64-unknown-none"
 
 # Package name
 package = "my-os-kernel"
+
+# Binary target name. Omit it when the package has only one binary;
+# set it here or pass `--bin <name>` when the package has multiple binaries.
+bin = "my-os-kernel"
 
 # Enabled features
 features = ["page-alloc-4g"]

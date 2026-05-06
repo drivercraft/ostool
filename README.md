@@ -102,6 +102,9 @@ ostool build
 # 指定配置文件构建
 ostool build --config custom-build.toml
 
+# 临时覆盖 Cargo package / binary target
+ostool build --config custom-build.toml --package paging-test --bin basic
+
 # 在指定工作目录中构建
 ostool --workdir /path/to/project build
 ```
@@ -121,6 +124,9 @@ ostool run qemu --dtb-dump
 # 指定 Qemu 配置文件运行
 ostool run qemu --qemu-config my-qemu.toml
 
+# 临时覆盖 Cargo package / binary target 后运行
+ostool run qemu --package paging-test --bin basic
+
 # 使用 U-Boot 运行
 ostool run uboot
 
@@ -135,6 +141,9 @@ ostool board ls
 
 # 在远端开发板上运行
 ostool board run
+
+# 在远端开发板上运行指定 Cargo binary target
+ostool board run --package paging-test --bin basic
 ```
 
 > 交互退出：在串口终端（如 `ostool run uboot`）中，按下 `Ctrl+A` 后再按 `x`，工具会检测到该序列并优雅退出，不会将按键发送到目标设备。
@@ -161,6 +170,10 @@ target = "aarch64-unknown-none"
 
 # 包名称
 package = "my-os-kernel"
+
+# 二进制 target 名称。包内只有一个 binary 时可省略；
+# 包内有多个 binary 时建议设置，或在命令行传 `--bin <name>`。
+bin = "my-os-kernel"
 
 # 启用的特性
 features = ["page-alloc-4g"]

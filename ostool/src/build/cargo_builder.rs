@@ -193,14 +193,12 @@ impl<'a> CargoBuilder<'a> {
             bail!("failed with status: {status}");
         }
 
-        let resolved = self.pick_executable_artifact(&executable_artifacts, default_run.as_deref());
-        let Some(resolved) = resolved else {
-            bail!(
-                "no executable bin artifact found in cargo JSON output for package '{}' and target '{}'; ostool currently resolves only Cargo bin targets. Please check system.Cargo.package/system.Cargo.target",
-                self.config.package,
-                self.config.target
-            );
-        };
+        let resolved = select_executable_artifact(
+            &executable_artifacts,
+            self.config.bin.as_deref(),
+            default_run.as_deref(),
+            &self.config.package,
+        )?;
 
         self.resolved_artifact = Some(resolved);
         Ok(())
@@ -229,6 +227,10 @@ impl<'a> CargoBuilder<'a> {
         // Package and target
         cmd.arg("-p");
         cmd.arg(&self.config.package);
+        if let Some(bin) = &self.config.bin {
+            cmd.arg("--bin");
+            cmd.arg(bin);
+        }
         cmd.arg("--target");
         cmd.arg(&self.config.target);
         cmd.arg("-Z");
@@ -326,27 +328,6 @@ impl<'a> CargoBuilder<'a> {
             );
         };
         Ok((package.id.clone(), package.default_run.clone()))
-    }
-
-    fn pick_executable_artifact(
-        &self,
-        executable_artifacts: &[(String, ResolvedCargoArtifact)],
-        default_run: Option<&str>,
-    ) -> Option<ResolvedCargoArtifact> {
-        executable_artifacts
-            .iter()
-            .rev()
-            .find(|(name, _)| name == &self.config.package)
-            .or_else(|| {
-                default_run.and_then(|default_bin| {
-                    executable_artifacts
-                        .iter()
-                        .rev()
-                        .find(|(name, _)| name == default_bin)
-                })
-            })
-            .or_else(|| executable_artifacts.last())
-            .map(|(_, path)| path.clone())
     }
 
     fn build_features(&self) -> Vec<String> {
@@ -509,4 +490,60 @@ impl<'a> CargoBuilder<'a> {
 
         Ok(target_path)
     }
+}
+
+fn select_executable_artifact(
+    executable_artifacts: &[(String, ResolvedCargoArtifact)],
+    explicit_bin: Option<&str>,
+    default_run: Option<&str>,
+    package: &str,
+) -> anyhow::Result<ResolvedCargoArtifact> {
+    if let Some(bin) = explicit_bin {
+        return executable_artifacts
+            .iter()
+            .rev()
+            .find(|(name, _)| name == bin)
+            .map(|(_, artifact)| artifact.clone())
+            .ok_or_else(|| {
+                anyhow!(
+                    "binary target `{bin}` was not built for package `{package}`; check system.Cargo.bin or --bin"
+                )
+            });
+    }
+
+    if executable_artifacts.is_empty() {
+        bail!(
+            "no executable bin artifact found in cargo JSON output for package `{package}`; ostool currently resolves only Cargo bin targets"
+        );
+    }
+
+    if let Some((_, artifact)) = executable_artifacts
+        .iter()
+        .rev()
+        .find(|(name, _)| name == package)
+    {
+        return Ok(artifact.clone());
+    }
+
+    if let Some(default_bin) = default_run
+        && let Some((_, artifact)) = executable_artifacts
+            .iter()
+            .rev()
+            .find(|(name, _)| name == default_bin)
+    {
+        return Ok(artifact.clone());
+    }
+
+    if executable_artifacts.len() == 1 {
+        return Ok(executable_artifacts[0].1.clone());
+    }
+
+    let bins = executable_artifacts
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    bail!(
+        "package `{package}` has multiple binary targets ({bins}); pass system.Cargo.bin or --bin"
+    )
 }

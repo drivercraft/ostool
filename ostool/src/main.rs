@@ -32,6 +32,8 @@ enum SubCommands {
         /// Path to the build configuration file
         #[arg(short, long)]
         config: Option<PathBuf>,
+        #[command(flatten)]
+        cargo_selector: CargoSelectorArgs,
     },
     Run {
         #[command(subcommand)]
@@ -75,6 +77,8 @@ struct RunQemuCommand {
     #[arg(short, long)]
     config: Option<PathBuf>,
     #[command(flatten)]
+    cargo_selector: CargoSelectorArgs,
+    #[command(flatten)]
     qemu: QemuArgs,
 }
 
@@ -84,7 +88,25 @@ struct RunUbootCommand {
     #[arg(short, long)]
     config: Option<PathBuf>,
     #[command(flatten)]
+    cargo_selector: CargoSelectorArgs,
+    #[command(flatten)]
     uboot: UbootArgs,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+struct CargoSelectorArgs {
+    /// Override the Cargo package from the build configuration
+    #[arg(long)]
+    package: Option<String>,
+    /// Select a Cargo binary target within the selected package
+    #[arg(long)]
+    bin: Option<String>,
+}
+
+impl CargoSelectorArgs {
+    fn is_empty(&self) -> bool {
+        self.package.is_none() && self.bin.is_none()
+    }
 }
 
 #[derive(Args, Debug)]
@@ -92,6 +114,8 @@ struct BoardRunArgs {
     /// Path to the build configuration file
     #[arg(short, long)]
     config: Option<PathBuf>,
+    #[command(flatten)]
+    cargo_selector: CargoSelectorArgs,
     /// Path to the board runner configuration file, defaults to `pwd/.board.toml`
     #[arg(long = "board-config")]
     board_config: Option<PathBuf>,
@@ -174,8 +198,9 @@ async fn try_main() -> Result<()> {
             }
             BoardSubCommands::Run(args) => {
                 let (mut tool, manifest_ctx) = init_tool(manifest.clone())?;
-                let build_config =
+                let mut build_config =
                     load_build_config(&mut tool, &manifest_ctx, args.config.as_deref()).await?;
+                apply_cargo_selector(&mut build_config, &args.cargo_selector)?;
                 let board_config =
                     load_board_config(&mut tool, &manifest_ctx, args.board_config.as_deref())
                         .await?;
@@ -194,21 +219,30 @@ async fn try_main() -> Result<()> {
                 board::config()?;
             }
         },
-        SubCommands::Build { config } => {
+        SubCommands::Build {
+            config,
+            cargo_selector,
+        } => {
             let (mut tool, manifest_ctx) = init_tool(manifest)?;
-            let build_config =
+            let mut build_config =
                 load_build_config(&mut tool, &manifest_ctx, config.as_deref()).await?;
+            apply_cargo_selector(&mut build_config, &cargo_selector)?;
             tool.build_with_config(&build_config).await?;
         }
         SubCommands::Run { command } => match command {
             RunSubCommands::Qemu(args) => {
-                let RunQemuCommand { config, qemu } = args;
+                let RunQemuCommand {
+                    config,
+                    cargo_selector,
+                    qemu,
+                } = args;
                 let debug = qemu.debug;
                 let dtb_dump = qemu.dtb_dump;
 
                 let (mut tool, manifest_ctx) = init_tool(manifest.clone())?;
-                let build_config =
+                let mut build_config =
                     load_build_config(&mut tool, &manifest_ctx, config.as_deref()).await?;
+                apply_cargo_selector(&mut build_config, &cargo_selector)?;
                 match &build_config.system {
                     build::config::BuildSystem::Cargo(config) => {
                         let qemu_config = match qemu.qemu_config.as_deref() {
@@ -248,11 +282,16 @@ async fn try_main() -> Result<()> {
                 }
             }
             RunSubCommands::Uboot(args) => {
-                let RunUbootCommand { config, uboot } = args;
+                let RunUbootCommand {
+                    config,
+                    cargo_selector,
+                    uboot,
+                } = args;
 
                 let (mut tool, manifest_ctx) = init_tool(manifest.clone())?;
-                let build_config =
+                let mut build_config =
                     load_build_config(&mut tool, &manifest_ctx, config.as_deref()).await?;
+                apply_cargo_selector(&mut build_config, &cargo_selector)?;
                 match &build_config.system {
                     build::config::BuildSystem::Cargo(config) => {
                         let uboot_config = match uboot.uboot_config.as_deref() {
@@ -319,6 +358,28 @@ async fn load_build_config(
                 .await
         }
     }
+}
+
+fn apply_cargo_selector(
+    build_config: &mut build::config::BuildConfig,
+    selector: &CargoSelectorArgs,
+) -> Result<()> {
+    if selector.is_empty() {
+        return Ok(());
+    }
+
+    let build::config::BuildSystem::Cargo(cargo) = &mut build_config.system else {
+        anyhow::bail!("--package/--bin can only be used with system.Cargo build configs");
+    };
+
+    if let Some(package) = &selector.package {
+        cargo.package = package.clone();
+    }
+    if let Some(bin) = &selector.bin {
+        cargo.bin = Some(bin.clone());
+    }
+
+    Ok(())
 }
 
 async fn load_qemu_config(
