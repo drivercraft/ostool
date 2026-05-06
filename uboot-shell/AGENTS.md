@@ -1,21 +1,17 @@
 # AGENTS.md - uboot-shell crate
 
-## Scope
+## 适用范围
 
-Applies to `uboot-shell/`, the async U-Boot shell and YMODEM library.
+适用于 `uboot-shell/`，即异步 U-Boot shell 与 YMODEM 库。
 
-## Local Rules
+## 局部规则
 
-- Treat prompt detection, interrupt handling, timeouts, byte streams, and YMODEM
-  transfer behavior as protocol-sensitive.
-- Keep the crate runtime-neutral around `futures::io` unless a broader design
-  change is requested.
-- Do not claim hardware U-Boot behavior was verified unless a real target or
-  explicit serial fixture was actually exercised.
-- Keep logging useful for protocol diagnosis without flooding normal output.
+- prompt 检测、中断处理、超时、字节流和 YMODEM 传输行为都属于协议敏感内容。
+- 除非要求更大范围的设计调整，否则围绕 `futures::io` 保持 runtime-neutral。
+- 未实际运行真实目标或明确的串口 fixture 时，不要声称已经验证硬件 U-Boot 行为。
+- 日志应有助于协议诊断，但不要淹没正常输出。
 
-## Validation
+## 验证
 
-- Prefer `cargo test -p uboot-shell` for crate changes.
-- Add focused byte-stream or protocol tests when changing timeout, prompt, CRC,
-  or YMODEM behavior.
+- crate 改动优先运行 `cargo test -p uboot-shell`。
+- 修改超时、prompt、CRC 或 YMODEM 行为时，添加聚焦的字节流或协议测试。
