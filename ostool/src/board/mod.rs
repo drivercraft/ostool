@@ -150,7 +150,7 @@ pub async fn connect_board(server: &str, port: u16, board_type: &str) -> anyhow:
     finalize_session(session, result).await
 }
 
-fn print_allocated_board_session(session: &BoardSession, board_type: &str) {
+pub(crate) fn print_allocated_board_session(session: &BoardSession, board_type: &str) {
     println!("Allocated board session:");
     println!("  board_type: {board_type}");
     println!("  board_id: {}", session.info().board_id);
@@ -159,7 +159,7 @@ fn print_allocated_board_session(session: &BoardSession, board_type: &str) {
     println!("  boot_mode: {}", session.info().boot_mode);
 }
 
-async fn finalize_session(
+pub(crate) async fn finalize_session(
     session: BoardSession,
     run_result: anyhow::Result<()>,
 ) -> anyhow::Result<()> {

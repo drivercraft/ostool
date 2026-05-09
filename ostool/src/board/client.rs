@@ -336,6 +336,26 @@ impl BoardServerClient {
         self.decode_bytes(response).await
     }
 
+    pub async fn power_on_board(&self, session_id: &str) -> Result<(), BoardServerClientError> {
+        let response = self
+            .client
+            .post(self.endpoint(&format!("/api/v1/sessions/{session_id}/board/power-on")))
+            .send()
+            .await
+            .map_err(Self::request_error)?;
+        self.decode_empty(response).await
+    }
+
+    pub async fn power_off_board(&self, session_id: &str) -> Result<(), BoardServerClientError> {
+        let response = self
+            .client
+            .post(self.endpoint(&format!("/api/v1/sessions/{session_id}/board/power-off")))
+            .send()
+            .await
+            .map_err(Self::request_error)?;
+        self.decode_empty(response).await
+    }
+
     pub async fn upload_session_file(
         &self,
         session_id: &str,

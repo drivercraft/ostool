@@ -10,10 +10,13 @@ use env_logger::Env;
 use log::info;
 use ostool::{
     ManifestContext, Tool, board,
-    build::{self, CargoQemuRunnerArgs, CargoRunnerKind, CargoUbootRunnerArgs},
+    build::{
+        self, CargoHttpbootRunnerArgs, CargoQemuRunnerArgs, CargoRunnerKind, CargoUbootRunnerArgs,
+    },
     invocation::{Invocation, InvocationOptions},
     menuconfig::{MenuConfigHandler, MenuConfigMode},
     run::{
+        httpboot::{HttpBootConfig, RunHttpBootOptions},
         qemu::{QemuConfig, RunQemuOptions},
         uboot::{RunUbootOptions, UbootConfig},
     },
@@ -141,6 +144,7 @@ struct BoardConnectArgs {
 enum RunSubCommands {
     Qemu(RunQemuCommand),
     Uboot(RunUbootCommand),
+    Httpboot(RunHttpbootCommand),
 }
 
 #[derive(Args, Debug, Default)]
@@ -166,6 +170,22 @@ pub struct UbootArgs {
     /// Path to the uboot configuration file, default to '.uboot.toml'
     #[arg(short, long)]
     uboot_config: Option<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+struct RunHttpbootCommand {
+    /// Path to the build configuration file
+    #[arg(short, long)]
+    config: Option<PathBuf>,
+    #[command(flatten)]
+    httpboot: HttpbootArgs,
+}
+
+#[derive(Args, Debug)]
+pub struct HttpbootArgs {
+    /// Path to the HTTP Boot configuration file, default to '.httpboot.toml'
+    #[arg(long = "httpboot-config")]
+    httpboot_config: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -328,6 +348,48 @@ async fn try_main() -> Result<()> {
                     }
                 }
             }
+            RunSubCommands::Httpboot(args) => {
+                let RunHttpbootCommand { config, httpboot } = args;
+
+                let (mut tool, manifest_ctx) = init_tool(manifest.clone())?;
+                let build_config =
+                    load_build_config(&mut tool, &manifest_ctx, config.as_deref()).await?;
+                match &build_config.system {
+                    build::config::BuildSystem::Cargo(config) => {
+                        let httpboot_config = match httpboot.httpboot_config.as_deref() {
+                            Some(path) => Some(
+                                tool.read_httpboot_config_from_path_for_cargo(config, path)
+                                    .await?,
+                            ),
+                            None => None,
+                        };
+                        let kind = CargoRunnerKind::new_httpboot(CargoHttpbootRunnerArgs {
+                            httpboot: httpboot_config,
+                            show_output: true,
+                        });
+                        tool.cargo_run(config, &kind).await?;
+                    }
+                    build::config::BuildSystem::Custom(custom_cfg) => {
+                        tool.build_with_config(&build_config).await?;
+                        tool.prepare_elf_artifact(
+                            custom_cfg.elf_path.clone().into(),
+                            custom_cfg.to_bin,
+                        )
+                        .await?;
+                        let httpboot_config = load_httpboot_config(
+                            &mut tool,
+                            &manifest_ctx,
+                            httpboot.httpboot_config.as_deref(),
+                        )
+                        .await?;
+                        tool.run_httpboot(
+                            &httpboot_config,
+                            RunHttpBootOptions { show_output: true },
+                        )
+                        .await?;
+                    }
+                }
+            }
         },
         SubCommands::Menuconfig { mode } => {
             let (mut tool, _) = init_tool(manifest)?;
@@ -418,6 +480,21 @@ async fn load_uboot_config(
         Some(path) => tool.read_uboot_config_from_path(path).await,
         None => {
             tool.ensure_uboot_config_in_dir(&manifest.workspace_dir)
+                .await
+        }
+    }
+}
+
+/// Loads HTTP Boot config from an explicit path or workspace default.
+async fn load_httpboot_config(
+    tool: &mut Tool,
+    manifest: &ManifestContext,
+    config_path: Option<&std::path::Path>,
+) -> Result<HttpBootConfig> {
+    match config_path {
+        Some(path) => tool.read_httpboot_config_from_path(path).await,
+        None => {
+            tool.ensure_httpboot_config_in_dir(&manifest.workspace_dir)
                 .await
         }
     }
@@ -866,6 +943,37 @@ dtb_file = "${package}/board.dtb"
         })
         .unwrap();
         (temp, tool)
+    }
+
+    #[test]
+    fn parse_run_httpboot_command() {
+        let cli = Cli::try_parse_from([
+            "ostool",
+            "run",
+            "httpboot",
+            "--config",
+            "board.build.toml",
+            "--httpboot-config",
+            "remote.httpboot.toml",
+        ])
+        .unwrap();
+
+        match cli.command {
+            SubCommands::Run { command } => match command {
+                RunSubCommands::Httpboot(args) => {
+                    assert_eq!(
+                        args.config.as_deref(),
+                        Some(std::path::Path::new("board.build.toml"))
+                    );
+                    assert_eq!(
+                        args.httpboot.httpboot_config.as_deref(),
+                        Some(std::path::Path::new("remote.httpboot.toml"))
+                    );
+                }
+                other => panic!("expected run httpboot, got {other:?}"),
+            },
+            other => panic!("expected run command, got {other:?}"),
+        }
     }
 
     #[test]

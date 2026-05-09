@@ -6,7 +6,7 @@
 //! - Configuring build options via TOML configuration files
 //! - Running pre-build and post-build shell commands
 //! - Automatic feature detection and configuration
-//! - Multiple runner types (QEMU, U-Boot)
+//! - Multiple runner types (QEMU, U-Boot, UEFI HTTP Boot)
 //!
 //! # Example
 //!
@@ -32,6 +32,7 @@ use crate::{
     invocation::{ActiveBuildContext, ActiveCargoBuild, ActiveCustomBuild},
     project::{ProjectLayout, metadata, variables::VariableScope},
     run::{
+        httpboot::{HttpBootConfig, RunHttpBootOptions},
         qemu::{QemuConfig, RunQemuOptions},
         uboot::{RunUbootOptions, UbootConfig},
     },
@@ -71,15 +72,26 @@ pub struct CargoUbootRunnerArgs {
     pub show_output: bool,
 }
 
+/// Parameters for running a built Cargo artifact via UEFI HTTP Boot.
+#[derive(Debug, Clone, Default)]
+pub struct CargoHttpbootRunnerArgs {
+    /// Optional fully prepared HTTP Boot runtime configuration.
+    pub httpboot: Option<HttpBootConfig>,
+    /// Whether to show HTTP Boot output.
+    pub show_output: bool,
+}
+
 /// Specifies the type of runner to use after building.
 ///
 /// This enum determines how the built artifact will be executed,
-/// either through QEMU emulation or via U-Boot on real hardware.
+/// through QEMU emulation, U-Boot, or UEFI HTTP Boot on real hardware.
 pub enum CargoRunnerKind {
     /// Run the built artifact in QEMU emulator.
     Qemu(Box<CargoQemuRunnerArgs>),
     /// Run the built artifact on real hardware via U-Boot.
     Uboot(Box<CargoUbootRunnerArgs>),
+    /// Publish and run the built artifact via UEFI HTTP Boot.
+    Httpboot(Box<CargoHttpbootRunnerArgs>),
 }
 
 impl CargoRunnerKind {
@@ -89,6 +101,10 @@ impl CargoRunnerKind {
 
     pub fn new_uboot(args: CargoUbootRunnerArgs) -> Self {
         Self::Uboot(Box::new(args))
+    }
+
+    pub fn new_httpboot(args: CargoHttpbootRunnerArgs) -> Self {
+        Self::Httpboot(Box::new(args))
     }
 }
 
@@ -330,6 +346,19 @@ impl Tool {
                 self.run_uboot(
                     &uboot,
                     RunUbootOptions {
+                        show_output: args.show_output,
+                    },
+                )
+                .await?;
+            }
+            CargoRunnerKind::Httpboot(args) => {
+                let httpboot = match &args.httpboot {
+                    Some(config) => config.clone(),
+                    None => self.ensure_httpboot_config_for_cargo(config).await?,
+                };
+                self.run_httpboot(
+                    &httpboot,
+                    RunHttpBootOptions {
                         show_output: args.show_output,
                     },
                 )
