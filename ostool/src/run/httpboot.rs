@@ -29,6 +29,7 @@ pub struct HttpBootConfig {
     pub server: Option<String>,
     pub port: Option<u16>,
     pub remote_name: Option<String>,
+    pub efi_loader_path: Option<String>,
     pub kernel_load_addr: String,
     pub entry_point: String,
     #[serde(default = "default_power_cycle")]
@@ -63,6 +64,11 @@ impl HttpBootConfig {
             .as_deref()
             .map(|value| tool.replace_string(value))
             .transpose()?;
+        self.efi_loader_path = self
+            .efi_loader_path
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
         self.kernel_load_addr = tool.replace_string(&self.kernel_load_addr)?;
         self.entry_point = tool.replace_string(&self.entry_point)?;
         Ok(())
@@ -74,6 +80,7 @@ impl HttpBootConfig {
         normalize_required_string(&mut self.entry_point, "entry_point", config_name)?;
         normalize_optional_string(&mut self.server);
         normalize_optional_string(&mut self.remote_name);
+        normalize_optional_string(&mut self.efi_loader_path);
         Ok(())
     }
 }
@@ -312,26 +319,89 @@ async fn run_httpboot_session(
         entry_point: config.entry_point.clone(),
         arch,
     };
-    let manifest_file = client
-        .upload_http_boot_manifest(&session.session_id, &manifest)
-        .await
-        .context("failed to upload HTTP Boot manifest")?;
-
     let loader_file = profile
         .loader_file
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("uefi_http boot profile is missing `loader_file`"))?;
-    let loader_url = manifest_file
-        .http_url
-        .trim_end_matches("manifest.json")
-        .to_string()
-        + loader_file;
+    let uploaded_loader = upload_configured_loader(
+        client,
+        &session.session_id,
+        loader_file,
+        config.efi_loader_path.as_deref(),
+    )
+    .await?;
+    let manifest_file = client
+        .upload_http_boot_manifest(&session.session_id, &manifest)
+        .await
+        .context("failed to upload HTTP Boot manifest")?;
+    let loader_url = if let Some(loader) = uploaded_loader {
+        loader.http_url
+    } else {
+        let loader_url = sibling_http_boot_url(&manifest_file.http_url, loader_file)?;
+        verify_existing_loader_url(&loader_url).await?;
+        loader_url
+    };
 
     Ok(HttpBootPublishedUrls {
         loader_url,
         manifest_url: manifest_file.http_url,
         kernel_url: uploaded.http_url,
     })
+}
+
+async fn upload_configured_loader(
+    client: &BoardServerClient,
+    session_id: &str,
+    loader_file: &str,
+    efi_loader_path: Option<&str>,
+) -> anyhow::Result<Option<crate::board::client::HttpBootFileResponse>> {
+    let Some(efi_loader_path) = efi_loader_path else {
+        return Ok(None);
+    };
+
+    let loader_bytes = std::fs::read(efi_loader_path)
+        .with_context(|| format!("failed to read HTTP Boot loader {}", efi_loader_path))?;
+    let uploaded = client
+        .upload_http_boot_file(session_id, loader_file, loader_bytes)
+        .await
+        .with_context(|| {
+            format!("failed to upload HTTP Boot loader `{loader_file}` from `{efi_loader_path}`")
+        })?;
+    Ok(Some(uploaded))
+}
+
+async fn verify_existing_loader_url(loader_url: &str) -> anyhow::Result<()> {
+    let response = reqwest::get(loader_url)
+        .await
+        .with_context(|| format!("failed to verify HTTP Boot loader URL `{loader_url}`"))?;
+    let status = response.status();
+    if !status.is_success() {
+        anyhow::bail!(
+            "HTTP Boot loader URL `{loader_url}` returned {status}; set `efi_loader_path` in .httpboot.toml or pre-publish the loader"
+        );
+    }
+    Ok(())
+}
+
+fn sibling_http_boot_url(current_file_url: &str, relative_path: &str) -> anyhow::Result<String> {
+    if relative_path.trim().is_empty()
+        || relative_path.starts_with('/')
+        || relative_path
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
+    {
+        anyhow::bail!("invalid HTTP Boot relative path `{relative_path}`");
+    }
+    let base = reqwest::Url::parse(current_file_url)
+        .with_context(|| format!("invalid HTTP Boot URL `{current_file_url}`"))?
+        .join("./")
+        .with_context(|| {
+            format!("failed to resolve HTTP Boot base URL from `{current_file_url}`")
+        })?;
+    Ok(base
+        .join(relative_path)
+        .with_context(|| format!("failed to resolve HTTP Boot URL for `{relative_path}`"))?
+        .to_string())
 }
 
 fn uefi_boot_arch_name(arch: &UefiBootArch) -> &'static str {
@@ -372,7 +442,7 @@ fn normalize_optional_string(value: &mut Option<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::HttpBootConfig;
+    use super::{HttpBootConfig, sibling_http_boot_url};
 
     #[test]
     fn httpboot_config_normalizes_required_fields() {
@@ -381,6 +451,7 @@ mod tests {
             kernel_load_addr: " 0x200000 ".into(),
             entry_point: " 0x200000 ".into(),
             remote_name: Some(" kernel.bin ".into()),
+            efi_loader_path: Some(" BOOTX64.EFI ".into()),
             ..Default::default()
         };
 
@@ -390,5 +461,27 @@ mod tests {
         assert_eq!(config.kernel_load_addr, "0x200000");
         assert_eq!(config.entry_point, "0x200000");
         assert_eq!(config.remote_name.as_deref(), Some("kernel.bin"));
+        assert_eq!(config.efi_loader_path.as_deref(), Some("BOOTX64.EFI"));
+    }
+
+    #[test]
+    fn sibling_http_boot_url_resolves_loader_in_current_dir() {
+        let url = sibling_http_boot_url(
+            "http://127.0.0.1:2999/boot/boards/demo/current/manifest.json",
+            "BOOTX64.EFI",
+        )
+        .unwrap();
+
+        assert_eq!(
+            url,
+            "http://127.0.0.1:2999/boot/boards/demo/current/BOOTX64.EFI"
+        );
+    }
+
+    #[test]
+    fn sibling_http_boot_url_rejects_absolute_or_dot_paths() {
+        for path in ["/BOOTX64.EFI", "../BOOTX64.EFI", "boot/../BOOTX64.EFI"] {
+            assert!(sibling_http_boot_url("http://127.0.0.1/manifest.json", path).is_err());
+        }
     }
 }
