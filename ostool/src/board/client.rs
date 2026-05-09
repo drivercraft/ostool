@@ -49,6 +49,7 @@ pub struct HeartbeatResponse {
 pub enum BootConfig {
     Uboot(UbootProfile),
     Pxe(PxeProfile),
+    UefiHttp(UefiHttpProfile),
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -87,6 +88,34 @@ pub struct PxeProfile {
     pub notes: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UefiHttpStrategy {
+    BareBinLoader,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UefiBootArch {
+    X86_64,
+    Aarch64,
+    Loongarch64,
+    Riscv64,
+    Other,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UefiHttpProfile {
+    pub boot_arch: Option<UefiBootArch>,
+    pub strategy: UefiHttpStrategy,
+    pub loader_file: Option<String>,
+    pub kernel_file: Option<String>,
+    pub kernel_load_addr: Option<String>,
+    pub entry_point: Option<String>,
+    pub mac_address: Option<String>,
+    pub client_ip: Option<std::net::Ipv4Addr>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct BootProfileResponse {
     pub boot: BootConfig,
@@ -111,6 +140,24 @@ pub struct FileResponse {
     pub tftp_url: Option<String>,
     pub size: u64,
     pub uploaded_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HttpBootFileResponse {
+    pub filename: String,
+    pub relative_path: String,
+    pub http_url: String,
+    pub size: u64,
+    pub uploaded_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HttpBootManifest {
+    pub kernel_url: String,
+    pub kernel_size: u64,
+    pub kernel_load_addr: String,
+    pub entry_point: String,
+    pub arch: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -300,6 +347,38 @@ impl BoardServerClient {
             .put(self.endpoint(&format!("/api/v1/sessions/{session_id}/files")))
             .header("X-File-Path", relative_path)
             .body(bytes)
+            .send()
+            .await
+            .map_err(Self::request_error)?;
+        self.decode_json(response).await
+    }
+
+    pub async fn upload_http_boot_file(
+        &self,
+        session_id: &str,
+        relative_path: &str,
+        bytes: Vec<u8>,
+    ) -> Result<HttpBootFileResponse, BoardServerClientError> {
+        let response = self
+            .client
+            .put(self.endpoint(&format!("/api/v1/sessions/{session_id}/http-boot/files")))
+            .header("X-File-Path", relative_path)
+            .body(bytes)
+            .send()
+            .await
+            .map_err(Self::request_error)?;
+        self.decode_json(response).await
+    }
+
+    pub async fn upload_http_boot_manifest(
+        &self,
+        session_id: &str,
+        manifest: &HttpBootManifest,
+    ) -> Result<HttpBootFileResponse, BoardServerClientError> {
+        let response = self
+            .client
+            .put(self.endpoint(&format!("/api/v1/sessions/{session_id}/http-boot/manifest")))
+            .json(manifest)
             .send()
             .await
             .map_err(Self::request_error)?;
@@ -521,6 +600,38 @@ mod tests {
                 assert_eq!(profile.gatewayip.as_deref(), Some("192.168.10.1"));
             }
             BootConfig::Pxe(_) => panic!("expected uboot profile"),
+            BootConfig::UefiHttp(_) => panic!("expected uboot profile"),
+        }
+    }
+
+    #[test]
+    fn parse_uefi_http_boot_profile() {
+        let response: super::BootProfileResponse = serde_json::from_str(
+            r#"{
+                "boot": {
+                    "kind": "uefi_http",
+                    "boot_arch": "x86_64",
+                    "strategy": "bare_bin_loader",
+                    "loader_file": "BOOTX64.EFI",
+                    "kernel_file": "kernel.bin",
+                    "kernel_load_addr": "0x200000",
+                    "entry_point": "0x200000",
+                    "mac_address": null,
+                    "client_ip": null
+                },
+                "server_ip": null,
+                "netmask": null,
+                "interface": null
+            }"#,
+        )
+        .unwrap();
+
+        match response.boot {
+            BootConfig::UefiHttp(profile) => {
+                assert_eq!(profile.boot_arch, Some(super::UefiBootArch::X86_64));
+                assert_eq!(profile.loader_file.as_deref(), Some("BOOTX64.EFI"));
+            }
+            _ => panic!("expected uefi_http profile"),
         }
     }
 

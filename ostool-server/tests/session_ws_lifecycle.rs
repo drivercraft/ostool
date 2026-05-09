@@ -107,6 +107,7 @@ fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandl
     let board_dir = root.join("boards");
     let dtb_dir = root.join("dtbs");
     let tftp_root = root.join("tftp-root");
+    let http_boot_root = root.join("http-boot");
 
     std::fs::create_dir_all(&board_dir)
         .with_context(|| format!("failed to create {}", board_dir.display()))?;
@@ -119,6 +120,7 @@ fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandl
         board_dir: board_dir.clone(),
         dtb_dir,
         tftp: TftpConfig::Builtin(tftp),
+        http_boot: ostool_server::config::HttpBootConfig::default_with_root(http_boot_root),
         network: ostool_server::TftpNetworkConfig {
             interface: "lo".into(),
         },

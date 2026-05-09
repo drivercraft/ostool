@@ -20,6 +20,8 @@ pub struct ServerConfig {
     pub board_dir: PathBuf,
     pub dtb_dir: PathBuf,
     pub tftp: TftpConfig,
+    #[serde(default)]
+    pub http_boot: HttpBootConfig,
     pub network: TftpNetworkConfig,
     #[serde(default)]
     pub upload_limits: UploadLimitsConfig,
@@ -42,6 +44,7 @@ impl ServerConfig {
         };
         let board_dir = data_dir.join("boards");
         let dtb_dir = data_dir.join("dtbs");
+        let http_boot = HttpBootConfig::default_with_root(data_dir.join("http-boot"));
 
         #[cfg(target_os = "linux")]
         let tftp = TftpConfig::SystemTftpdHpa(SystemTftpdHpaConfig::default());
@@ -57,6 +60,7 @@ impl ServerConfig {
             board_dir,
             dtb_dir,
             tftp,
+            http_boot,
             network: TftpNetworkConfig::default(),
             upload_limits: UploadLimitsConfig::default(),
         }
@@ -148,6 +152,7 @@ impl ServerConfig {
         self.data_dir = absolutize_path(&config_dir, &self.data_dir);
         self.board_dir = absolutize_path(&config_dir, &self.board_dir);
         self.dtb_dir = absolutize_path(&config_dir, &self.dtb_dir);
+        self.http_boot.root_dir = absolutize_path(&config_dir, &self.http_boot.root_dir);
 
         match &mut self.tftp {
             TftpConfig::Builtin(cfg) => {
@@ -172,6 +177,29 @@ impl ServerConfig {
             bail!("upload_limits.session_file_max_mib must be greater than 0");
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HttpBootConfig {
+    pub enabled: bool,
+    pub root_dir: PathBuf,
+    pub public_base_url: Option<String>,
+}
+
+impl HttpBootConfig {
+    pub fn default_with_root(root_dir: PathBuf) -> Self {
+        Self {
+            enabled: true,
+            root_dir,
+            public_base_url: None,
+        }
+    }
+}
+
+impl Default for HttpBootConfig {
+    fn default() -> Self {
+        Self::default_with_root(PathBuf::from(".ostool-server/http-boot"))
     }
 }
 
@@ -412,6 +440,7 @@ pub struct VirtualPowerManagement {}
 pub enum BootConfig {
     Uboot(UbootProfile),
     Pxe(PxeProfile),
+    UefiHttp(UefiHttpProfile),
 }
 
 impl BootConfig {
@@ -419,6 +448,7 @@ impl BootConfig {
         match self {
             Self::Uboot(_) => "uboot",
             Self::Pxe(_) => "pxe",
+            Self::UefiHttp(_) => "uefi_http",
         }
     }
 }
@@ -487,6 +517,35 @@ pub struct PxeProfile {
     pub notes: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UefiHttpStrategy {
+    BareBinLoader,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UefiBootArch {
+    X86_64,
+    Aarch64,
+    Loongarch64,
+    Riscv64,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UefiHttpProfile {
+    pub boot_arch: Option<UefiBootArch>,
+    pub strategy: UefiHttpStrategy,
+    pub loader_file: Option<String>,
+    pub kernel_file: Option<String>,
+    pub kernel_load_addr: Option<String>,
+    pub entry_point: Option<String>,
+    pub mac_address: Option<String>,
+    pub client_ip: Option<Ipv4Addr>,
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -499,8 +558,8 @@ mod tests {
 
     use super::{
         BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, SerialPortKey,
-        SerialPortKeyKind, ServerConfig, UbootNetworkMode, UbootProfile, VirtualPowerManagement,
-        ZhongshengRelayPowerManagement,
+        SerialPortKeyKind, ServerConfig, UbootNetworkMode, UbootProfile, UefiBootArch,
+        UefiHttpProfile, UefiHttpStrategy, VirtualPowerManagement, ZhongshengRelayPowerManagement,
     };
 
     #[test]
@@ -512,6 +571,7 @@ mod tests {
         assert_eq!(decoded.network.interface, "");
         assert_eq!(decoded.upload_limits.session_file_max_mib, 64);
         assert!(decoded.dtb_dir.ends_with("dtbs"));
+        assert!(decoded.http_boot.root_dir.ends_with("http-boot"));
     }
 
     #[test]
@@ -547,6 +607,10 @@ interface = "eth0"
             PathBuf::from("/var/lib/ostool-server/boards")
         );
         assert_eq!(config.dtb_dir, PathBuf::from("/var/lib/ostool-server/dtbs"));
+        assert_eq!(
+            config.http_boot.root_dir,
+            PathBuf::from("/var/lib/ostool-server/http-boot")
+        );
     }
 
     #[tokio::test]
@@ -562,6 +626,7 @@ interface = "eth0"
         let content = std::fs::read_to_string(path).unwrap();
         assert!(content.contains("listen_addr = \"0.0.0.0:2999\""));
         assert!(content.contains("session_file_max_mib = 64"));
+        assert!(content.contains("[http_boot]"));
     }
 
     #[test]
@@ -776,6 +841,40 @@ bootm_addr = "0x82200000"
             decoded.power_management,
             PowerManagementConfig::Virtual(_)
         ));
+    }
+
+    #[test]
+    fn board_config_round_trip_supports_uefi_http_boot() {
+        let board = BoardConfig {
+            id: "uefi-http-01".into(),
+            board_type: "x86_64-uefi-http".into(),
+            tags: vec!["uefi-http".into()],
+            serial: None,
+            power_management: PowerManagementConfig::Virtual(VirtualPowerManagement::default()),
+            boot: BootConfig::UefiHttp(UefiHttpProfile {
+                boot_arch: Some(UefiBootArch::X86_64),
+                strategy: UefiHttpStrategy::BareBinLoader,
+                loader_file: Some("BOOTX64.EFI".into()),
+                kernel_file: Some("kernel.bin".into()),
+                kernel_load_addr: Some("0x200000".into()),
+                entry_point: Some("0x200000".into()),
+                mac_address: Some("52:54:00:12:34:56".into()),
+                client_ip: Some("10.3.10.215".parse().unwrap()),
+            }),
+            notes: None,
+            disabled: false,
+        };
+
+        let encoded = toml::to_string_pretty(&board).unwrap();
+        assert!(encoded.contains("kind = \"uefi_http\""));
+        assert!(encoded.contains("strategy = \"bare_bin_loader\""));
+
+        let decoded: BoardConfig = toml::from_str(&encoded).unwrap();
+        let BootConfig::UefiHttp(profile) = decoded.boot else {
+            panic!("expected uefi_http");
+        };
+        assert_eq!(profile.boot_arch, Some(UefiBootArch::X86_64));
+        assert_eq!(profile.loader_file.as_deref(), Some("BOOTX64.EFI"));
     }
 
     #[test]

@@ -9,7 +9,10 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use futures_util::future::join_all;
+use mime_guess::from_path;
 use serde_json::json;
+use std::sync::Arc;
+use tokio::fs;
 
 use crate::{
     api::{
@@ -20,9 +23,9 @@ use crate::{
             AdminSessionsResponse, AdminTftpConfigResponse, AdminTftpStatusResponse,
             BoardPowerAction, BoardPowerStatusResponse, BoardRuntimeStatusResponse,
             BoardTypeSummary, BootProfileResponse, CreateSessionRequest, DtbFileResponse,
-            FileResponse, NetworkInterfaceSummary, SerialPortSummary, SerialStatusResponse,
-            SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse, TftpSessionResponse,
-            UpdateServerConfigRequest,
+            FileResponse, HttpBootFileResponse, HttpBootManifest, NetworkInterfaceSummary,
+            SerialPortSummary, SerialStatusResponse, SessionCreatedResponse, SessionDetailResponse,
+            SessionDtbResponse, TftpSessionResponse, UpdateServerConfigRequest,
         },
     },
     board_pool::BoardAllocationStatus,
@@ -30,6 +33,7 @@ use crate::{
         BoardConfig, BootConfig, PowerManagementConfig, ServerConfig, TftpConfig, UbootNetworkMode,
     },
     dtb_store::normalize_dtb_name,
+    http_boot::files::{HttpBootFileRef, board_current_disk_path, put_board_current_file},
     power::{PowerAction, PowerActionError},
     serial::{
         discovery::list_serial_ports as discover_serial_ports,
@@ -40,6 +44,7 @@ use crate::{
         },
         ws::run_serial_ws,
     },
+    session::SessionState,
     session::SessionStopReason,
     state::{AppState, BoardLeaseState, TouchSessionError},
     tftp::{
@@ -62,6 +67,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/", get(serve_admin_index))
         .route("/admin/assets/{*path}", get(serve_admin_asset))
         .route("/admin/{*path}", get(serve_admin_history))
+        .route(
+            "/boot/boards/{board_id}/current/{*path}",
+            get(get_http_boot_file),
+        )
         .route("/api/v1/admin/overview", get(get_admin_overview))
         .route("/api/v1/admin/boards", get(list_boards).post(create_board))
         .route("/api/v1/admin/dtbs", get(list_dtbs).post(create_dtb))
@@ -114,6 +123,14 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/sessions/{session_id}/boot-profile",
             get(get_boot_profile),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/http-boot/files",
+            put(put_http_boot_file),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/http-boot/manifest",
+            put(put_http_boot_manifest),
         )
         .route("/api/v1/sessions/{session_id}/dtb", get(get_session_dtb))
         .route(
@@ -557,6 +574,13 @@ fn normalize_boot_config(boot: &mut BootConfig) -> Result<(), ApiError> {
         }
         BootConfig::Pxe(profile) => {
             normalize_optional_string(&mut profile.notes);
+        }
+        BootConfig::UefiHttp(profile) => {
+            normalize_optional_string(&mut profile.loader_file);
+            normalize_optional_string(&mut profile.kernel_file);
+            normalize_optional_string(&mut profile.kernel_load_addr);
+            normalize_optional_string(&mut profile.entry_point);
+            normalize_optional_string(&mut profile.mac_address);
         }
     }
     Ok(())
@@ -1111,6 +1135,96 @@ async fn power_off_board(
     run_board_power_action(&state, &session_id, false).await
 }
 
+async fn get_http_boot_file(
+    Path((board_id, path)): Path<(String, String)>,
+    State(state): State<AppState>,
+) -> Result<Response, ApiError> {
+    let relative_path = parse_relative_path(&path)?;
+    let config = state.config.read().await.clone();
+    if !config.http_boot.enabled {
+        return Err(ApiError::not_found("HTTP Boot is disabled"));
+    }
+    let disk_path = board_current_disk_path(&config.http_boot.root_dir, &board_id, &relative_path)
+        .map_err(|err| ApiError::bad_request(err.to_string()))?;
+    let body = fs::read(&disk_path).await.map_err(|err| match err.kind() {
+        std::io::ErrorKind::NotFound => {
+            ApiError::not_found(format!("HTTP Boot file `{relative_path}` not found"))
+        }
+        _ => ApiError::from(anyhow::Error::from(err)),
+    })?;
+    let content_type = from_path(&disk_path).first_or_octet_stream().to_string();
+    Ok((
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_str(&content_type).map_err(|err| {
+                ApiError::service_unavailable(format!(
+                    "invalid content type `{content_type}`: {err}"
+                ))
+            })?,
+        )],
+        body,
+    )
+        .into_response())
+}
+
+async fn put_http_boot_file(
+    Path(session_id): Path<String>,
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<(StatusCode, axum::Json<HttpBootFileResponse>), ApiError> {
+    let session = active_session_state_or_404(&state, &session_id).await?;
+    let board = session.board().clone();
+    ensure_uefi_http_board(&board)?;
+    let headers = request.headers();
+    let relative_path = headers
+        .get("X-File-Path")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| ApiError::bad_request("missing X-File-Path header"))?;
+    let relative_path = parse_relative_path(relative_path)?;
+    let max_mib = state.config.read().await.upload_limits.session_file_max_mib;
+    let body = read_limited_body(request, max_mib, "HTTP Boot file").await?;
+    let config = state.config.read().await.clone();
+    if !config.http_boot.enabled {
+        return Err(ApiError::conflict("HTTP Boot is disabled"));
+    }
+
+    let file = put_board_current_file(&config.http_boot.root_dir, &board.id, &relative_path, &body)
+        .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
+    let response = http_boot_file_response(&config, &board.id, file)?;
+    Ok((StatusCode::CREATED, axum::Json(response)))
+}
+
+async fn put_http_boot_manifest(
+    Path(session_id): Path<String>,
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<(StatusCode, axum::Json<HttpBootFileResponse>), ApiError> {
+    let session = active_session_state_or_404(&state, &session_id).await?;
+    let board = session.board().clone();
+    ensure_uefi_http_board(&board)?;
+    let max_mib = state.config.read().await.upload_limits.session_file_max_mib;
+    let body = read_limited_body(request, max_mib, "HTTP Boot manifest").await?;
+    let manifest: HttpBootManifest = serde_json::from_slice(&body)
+        .map_err(|err| ApiError::bad_request(format!("invalid HTTP Boot manifest JSON: {err}")))?;
+    let manifest = serde_json::to_vec_pretty(&manifest).map_err(|err| {
+        ApiError::service_unavailable(format!("failed to encode manifest: {err}"))
+    })?;
+    let config = state.config.read().await.clone();
+    if !config.http_boot.enabled {
+        return Err(ApiError::conflict("HTTP Boot is disabled"));
+    }
+
+    let file = put_board_current_file(
+        &config.http_boot.root_dir,
+        &board.id,
+        "manifest.json",
+        &manifest,
+    )
+    .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
+    let response = http_boot_file_response(&config, &board.id, file)?;
+    Ok((StatusCode::CREATED, axum::Json(response)))
+}
+
 async fn list_session_files(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
@@ -1322,6 +1436,65 @@ fn parse_relative_path(raw: &str) -> Result<String, ApiError> {
     normalize_relative_path(raw).map_err(|err| ApiError::bad_request(err.to_string()))
 }
 
+async fn active_session_state_or_404(
+    state: &AppState,
+    session_id: &str,
+) -> Result<Arc<SessionState>, ApiError> {
+    let session = state
+        .session_state(session_id)
+        .await
+        .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` not found")))?;
+    if session.is_releasing() {
+        return Err(ApiError::conflict(format!(
+            "session `{session_id}` is releasing"
+        )));
+    }
+    Ok(session)
+}
+
+fn ensure_uefi_http_board(board: &BoardConfig) -> Result<(), ApiError> {
+    if matches!(board.boot, BootConfig::UefiHttp(_)) {
+        Ok(())
+    } else {
+        Err(ApiError::bad_request(format!(
+            "board `{}` does not use `uefi_http` boot",
+            board.id
+        )))
+    }
+}
+
+fn http_boot_file_response(
+    config: &ServerConfig,
+    board_id: &str,
+    file: HttpBootFileRef,
+) -> Result<HttpBootFileResponse, ApiError> {
+    let prefix = format!("boards/{board_id}/current/");
+    let relative_path = file
+        .relative_path
+        .strip_prefix(&prefix)
+        .unwrap_or(file.filename.as_str());
+    let http_url = http_boot_url(config, board_id, relative_path)?;
+    Ok(HttpBootFileResponse::from_file(file, http_url))
+}
+
+fn http_boot_url(
+    config: &ServerConfig,
+    board_id: &str,
+    relative_path: &str,
+) -> Result<String, ApiError> {
+    let relative_path = normalize_relative_path(relative_path)
+        .map_err(|err| ApiError::bad_request(err.to_string()))?;
+    let base_url = config
+        .http_boot
+        .public_base_url
+        .clone()
+        .unwrap_or_else(|| format!("http://{}", config.listen_addr));
+    let base_url = base_url.trim_end_matches('/');
+    Ok(format!(
+        "{base_url}/boot/boards/{board_id}/current/{relative_path}"
+    ))
+}
+
 fn summarize_board_types(
     boards: &BTreeMap<String, BoardConfig>,
     runtimes: &BTreeMap<String, crate::state::BoardRuntimeState>,
@@ -1385,6 +1558,8 @@ fn readonly_server_config(config: &crate::config::ServerConfig) -> AdminServerCo
         data_dir: config.data_dir.display().to_string(),
         board_dir: config.board_dir.display().to_string(),
         dtb_dir: config.dtb_dir.display().to_string(),
+        http_boot_root_dir: config.http_boot.root_dir.display().to_string(),
+        http_boot_public_base_url: config.http_boot.public_base_url.clone(),
         dtb_upload_max_mib: DTB_UPLOAD_MAX_MIB,
     }
 }
@@ -1657,8 +1832,8 @@ mod tests {
         config::{
             BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
             PowerManagementConfig, SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig,
-            TftpConfig, UbootNetworkMode, UploadLimitsConfig, VirtualPowerManagement,
-            ZhongshengRelayPowerManagement,
+            TftpConfig, UbootNetworkMode, UefiBootArch, UefiHttpProfile, UefiHttpStrategy,
+            UploadLimitsConfig, VirtualPowerManagement, ZhongshengRelayPowerManagement,
         },
         session::SessionLifecycleState,
         state::BoardLeaseState,
@@ -1687,6 +1862,7 @@ mod tests {
             board_dir: root.join("boards"),
             dtb_dir: root.join("dtbs"),
             tftp: TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(root.join("tftp"))),
+            http_boot: crate::config::HttpBootConfig::default_with_root(root.join("http-boot")),
             network: crate::TftpNetworkConfig {
                 interface: "lo".into(),
             },
@@ -1792,6 +1968,23 @@ mod tests {
     fn sample_virtual_board(board_id: &str) -> BoardConfig {
         let mut board = sample_board(board_id);
         board.power_management = PowerManagementConfig::Virtual(VirtualPowerManagement::default());
+        board
+    }
+
+    fn sample_uefi_http_board(board_id: &str) -> BoardConfig {
+        let mut board = sample_virtual_board(board_id);
+        board.board_type = "x86_64-uefi-http".into();
+        board.tags = vec!["uefi-http".into()];
+        board.boot = BootConfig::UefiHttp(UefiHttpProfile {
+            boot_arch: Some(UefiBootArch::X86_64),
+            strategy: UefiHttpStrategy::BareBinLoader,
+            loader_file: Some("BOOTX64.EFI".into()),
+            kernel_file: Some("kernel.bin".into()),
+            kernel_load_addr: Some("0x200000".into()),
+            entry_point: Some("0x200000".into()),
+            mac_address: None,
+            client_ip: None,
+        });
         board
     }
 
@@ -1965,6 +2158,7 @@ mod tests {
         match board.boot {
             BootConfig::Uboot(profile) => assert!(profile.use_tftp),
             BootConfig::Pxe(_) => panic!("expected uboot"),
+            BootConfig::UefiHttp(_) => panic!("expected uboot"),
         }
     }
 
@@ -2992,6 +3186,7 @@ mod tests {
                 assert_eq!(profile.dtb_name.as_deref(), Some("board-renamed.dtb"))
             }
             BootConfig::Pxe(_) => panic!("expected uboot"),
+            BootConfig::UefiHttp(_) => panic!("expected uboot"),
         }
     }
 
@@ -3145,6 +3340,133 @@ mod tests {
         assert_eq!(value[0]["total"], 2);
         assert_eq!(value[0]["available"], 1);
         assert_eq!(value[0]["tags"], json!(["lab-a", "lab-b", "usbboot"]));
+    }
+
+    #[tokio::test]
+    async fn http_boot_upload_manifest_and_public_download_use_board_current_path() {
+        let app = test_router().await;
+        assert_eq!(
+            create_board(
+                &app,
+                serde_json::to_value(sample_uefi_http_board("uefi-http-01")).unwrap()
+            )
+            .await,
+            StatusCode::CREATED
+        );
+        let session_id = create_session(&app, "x86_64-uefi-http").await;
+
+        let upload = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/files"))
+                    .header("X-File-Path", "kernel.bin")
+                    .body(Body::from("kernel-image"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(upload.status(), StatusCode::CREATED);
+        let upload_body = to_bytes(upload.into_body(), usize::MAX).await.unwrap();
+        let uploaded: serde_json::Value = serde_json::from_slice(&upload_body).unwrap();
+        assert_eq!(uploaded["filename"], "kernel.bin");
+        assert_eq!(
+            uploaded["relative_path"],
+            "boards/uefi-http-01/current/kernel.bin"
+        );
+        assert_eq!(
+            uploaded["http_url"],
+            "http://127.0.0.1:0/boot/boards/uefi-http-01/current/kernel.bin"
+        );
+
+        let manifest = json!({
+            "kernel_url": uploaded["http_url"],
+            "kernel_size": 12,
+            "kernel_load_addr": "0x200000",
+            "entry_point": "0x200000",
+            "arch": "x86_64"
+        });
+        let manifest_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/manifest"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(manifest.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(manifest_response.status(), StatusCode::CREATED);
+        let manifest_body = to_bytes(manifest_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let manifest_uploaded: serde_json::Value = serde_json::from_slice(&manifest_body).unwrap();
+        assert_eq!(manifest_uploaded["filename"], "manifest.json");
+
+        let download_kernel = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/boot/boards/uefi-http-01/current/kernel.bin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(download_kernel.status(), StatusCode::OK);
+        let kernel_body = to_bytes(download_kernel.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(kernel_body.as_ref(), b"kernel-image");
+
+        let download_manifest = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/boot/boards/uefi-http-01/current/manifest.json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(download_manifest.status(), StatusCode::OK);
+        let downloaded_manifest = to_bytes(download_manifest.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&downloaded_manifest).unwrap();
+        assert_eq!(value["arch"], "x86_64");
+        assert_eq!(value["kernel_load_addr"], "0x200000");
+    }
+
+    #[tokio::test]
+    async fn http_boot_upload_rejects_non_uefi_http_board() {
+        let app = test_router().await;
+        assert_eq!(
+            create_board(
+                &app,
+                serde_json::to_value(sample_virtual_board("pxe-01")).unwrap()
+            )
+            .await,
+            StatusCode::CREATED
+        );
+        let session_id = create_session(&app, "rk3568").await;
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/files"))
+                    .header("X-File-Path", "kernel.bin")
+                    .body(Body::from("kernel-image"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

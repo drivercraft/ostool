@@ -340,6 +340,7 @@ impl AppState {
         tokio::fs::create_dir_all(&config.board_dir).await?;
         tokio::fs::create_dir_all(&config.dtb_dir).await?;
         tokio::fs::create_dir_all(config.tftp.root_dir()).await?;
+        tokio::fs::create_dir_all(&config.http_boot.root_dir).await?;
         Ok(())
     }
 

@@ -7,6 +7,7 @@ use crate::{
         TftpConfig, TftpNetworkConfig, UploadLimitsConfig,
     },
     dtb_store::DtbFile,
+    http_boot::files::HttpBootFileRef,
     session::Session,
     state::BoardLeaseState,
     tftp::{files::TftpFileRef, status::TftpStatus},
@@ -144,6 +145,36 @@ impl FileResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpBootFileResponse {
+    pub filename: String,
+    pub relative_path: String,
+    pub http_url: String,
+    pub size: u64,
+    pub uploaded_at: DateTime<Utc>,
+}
+
+impl HttpBootFileResponse {
+    pub fn from_file(file: HttpBootFileRef, http_url: String) -> Self {
+        Self {
+            filename: file.filename,
+            relative_path: file.relative_path,
+            http_url,
+            size: file.size,
+            uploaded_at: file.uploaded_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpBootManifest {
+    pub kernel_url: String,
+    pub kernel_size: u64,
+    pub kernel_load_addr: String,
+    pub entry_point: String,
+    pub arch: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TftpSessionResponse {
     pub available: bool,
     pub provider: String,
@@ -230,6 +261,8 @@ pub struct AdminServerConfigReadonly {
     pub data_dir: String,
     pub board_dir: String,
     pub dtb_dir: String,
+    pub http_boot_root_dir: String,
+    pub http_boot_public_base_url: Option<String>,
     pub dtb_upload_max_mib: u32,
 }
 
