@@ -1,6 +1,13 @@
 [workspace]
 exclude = ["assets/*", "fit_test"]
-members = ["ostool", "uboot-shell", "jkconfig", "fitimage", "ostool-server"]
+members = [
+    "ostool",
+    "uboot-shell",
+    "jkconfig",
+    "fitimage",
+    "ostool-server",
+    "httpboot-loader",
+]
 resolver = "3"
 
 [workspace.dependencies]

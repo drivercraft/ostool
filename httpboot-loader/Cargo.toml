@@ -1,0 +1,23 @@
+[package]
+name = "httpboot-loader"
+authors = ["柏乔森 <baiqiaosen@gmail.com>"]
+categories = ["command-line-interface", "config"]
+description = "UEFI HTTP Boot bare-bin loader for ostool"
+edition = "2024"
+keywords = ["ostool", "uefi", "http boot", "loader"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/drivercraft/ostool"
+version = "0.1.0"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "httpboot-loader"
+path = "src/main.rs"
+required-features = ["uefi-app"]
+
+[features]
+default = []
+uefi-app = []
