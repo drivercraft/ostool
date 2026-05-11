@@ -19,6 +19,14 @@ pub enum ManifestError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadError {
+    EmptyBody,
+    BodyTooLarge,
+    NonUtf8Body,
+    InvalidManifest(ManifestError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UrlError {
     EmptyUrl,
     MissingPathSeparator,
@@ -38,6 +46,21 @@ pub fn parse_manifest(input: &str) -> Result<BootManifest<'_>, ManifestError> {
             .map_err(|_| ManifestError::InvalidNumber("entry_point"))?,
         arch: json_string_field(input, "arch")?,
     })
+}
+
+pub fn parse_downloaded_manifest(
+    body: &[u8],
+    max_len: usize,
+) -> Result<BootManifest<'_>, DownloadError> {
+    if body.is_empty() {
+        return Err(DownloadError::EmptyBody);
+    }
+    if body.len() > max_len {
+        return Err(DownloadError::BodyTooLarge);
+    }
+
+    let manifest = str::from_utf8(body).map_err(|_| DownloadError::NonUtf8Body)?;
+    parse_manifest(manifest).map_err(DownloadError::InvalidManifest)
 }
 
 pub fn write_sibling_manifest_url<'a>(
@@ -213,8 +236,8 @@ extern crate std;
 #[cfg(test)]
 mod tests {
     use super::{
-        BootManifest, ManifestError, UrlError, parse_addr, parse_manifest, uri_from_device_path,
-        write_sibling_manifest_url,
+        BootManifest, DownloadError, ManifestError, UrlError, parse_addr,
+        parse_downloaded_manifest, parse_manifest, uri_from_device_path, write_sibling_manifest_url,
     };
 
     #[test]
@@ -268,6 +291,57 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err, ManifestError::InvalidJson("kernel_url"));
+    }
+
+    #[test]
+    fn parses_downloaded_manifest_bytes() {
+        let manifest = parse_downloaded_manifest(
+            br#"{
+                "kernel_url": "http://127.0.0.1:2999/kernel.bin",
+                "kernel_size": 4096,
+                "kernel_load_addr": "0x200000",
+                "entry_point": "0x200000",
+                "arch": "x86_64"
+            }"#,
+            1024,
+        )
+        .unwrap();
+
+        assert_eq!(manifest.kernel_url, "http://127.0.0.1:2999/kernel.bin");
+        assert_eq!(manifest.kernel_size, 4096);
+        assert_eq!(manifest.kernel_load_addr, 0x20_0000);
+        assert_eq!(manifest.entry_point, 0x20_0000);
+        assert_eq!(manifest.arch, "x86_64");
+    }
+
+    #[test]
+    fn rejects_empty_or_oversized_downloaded_manifest() {
+        assert_eq!(
+            parse_downloaded_manifest(b"", 1024),
+            Err(DownloadError::EmptyBody)
+        );
+        assert_eq!(
+            parse_downloaded_manifest(br#"{"kernel_size":1}"#, 4),
+            Err(DownloadError::BodyTooLarge)
+        );
+    }
+
+    #[test]
+    fn rejects_non_utf8_downloaded_manifest() {
+        assert_eq!(
+            parse_downloaded_manifest(&[0xff, 0xfe], 1024),
+            Err(DownloadError::NonUtf8Body)
+        );
+    }
+
+    #[test]
+    fn wraps_downloaded_manifest_parse_errors() {
+        assert_eq!(
+            parse_downloaded_manifest(br#"{"kernel_size":1}"#, 1024),
+            Err(DownloadError::InvalidManifest(
+                ManifestError::MissingField("kernel_url")
+            ))
+        );
     }
 
     #[test]

@@ -154,7 +154,7 @@ pub extern "efiapi" fn efi_main(image: EfiHandle, system_table: *mut EfiSystemTa
 
     write_console(
         console,
-        "HTTP download backend is not enabled in this build\r\n",
+        "HTTP download backend is pending; manifest bytes parser linked\r\n",
     );
 
     EFI_SUCCESS
