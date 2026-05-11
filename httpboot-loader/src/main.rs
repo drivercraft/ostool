@@ -8,17 +8,41 @@ compile_error!("the uefi-app feature must be built with a *-unknown-uefi target"
 use core::{ffi::c_void, panic::PanicInfo};
 
 #[cfg(target_os = "uefi")]
+use httpboot_loader::{uri_from_device_path, write_sibling_manifest_url};
+
+#[cfg(target_os = "uefi")]
 type EfiHandle = *mut c_void;
 
 #[cfg(target_os = "uefi")]
 #[repr(transparent)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct EfiStatus(usize);
 
 #[cfg(target_os = "uefi")]
 const EFI_SUCCESS: EfiStatus = EfiStatus(0);
 #[cfg(target_os = "uefi")]
 const EFI_UNSUPPORTED: EfiStatus = EfiStatus(3);
+#[cfg(target_os = "uefi")]
+const EFI_LOADED_IMAGE_PROTOCOL_GUID: EfiGuid = EfiGuid {
+    data1: 0x5b1b31a1,
+    data2: 0x9562,
+    data3: 0x11d2,
+    data4: [0x8e, 0x3f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b],
+};
+
+#[cfg(target_os = "uefi")]
+const DEVICE_PATH_BUFFER_SIZE: usize = 1024;
+#[cfg(target_os = "uefi")]
+const URL_BUFFER_SIZE: usize = 1024;
+
+#[cfg(target_os = "uefi")]
+#[repr(C)]
+struct EfiGuid {
+    data1: u32,
+    data2: u16,
+    data3: u16,
+    data4: [u8; 8],
+}
 
 #[cfg(target_os = "uefi")]
 #[repr(C)]
@@ -40,6 +64,36 @@ struct EfiSimpleTextOutputProtocol {
 
 #[cfg(target_os = "uefi")]
 #[repr(C)]
+struct EfiBootServices {
+    hdr: EfiTableHeader,
+    _reserved_before_handle_protocol: [usize; 16],
+    handle_protocol: extern "efiapi" fn(
+        handle: EfiHandle,
+        protocol: *const EfiGuid,
+        interface: *mut *mut c_void,
+    ) -> EfiStatus,
+}
+
+#[cfg(target_os = "uefi")]
+#[repr(C)]
+struct EfiDevicePathProtocol {
+    node_type: u8,
+    node_subtype: u8,
+    length: [u8; 2],
+}
+
+#[cfg(target_os = "uefi")]
+#[repr(C)]
+struct EfiLoadedImageProtocol {
+    revision: u32,
+    parent_handle: EfiHandle,
+    system_table: *mut EfiSystemTable,
+    device_handle: EfiHandle,
+    file_path: *const EfiDevicePathProtocol,
+}
+
+#[cfg(target_os = "uefi")]
+#[repr(C)]
 pub struct EfiSystemTable {
     hdr: EfiTableHeader,
     firmware_vendor: *mut u16,
@@ -48,11 +102,15 @@ pub struct EfiSystemTable {
     con_in: *mut c_void,
     console_out_handle: EfiHandle,
     con_out: *mut EfiSimpleTextOutputProtocol,
+    standard_error_handle: EfiHandle,
+    std_err: *mut EfiSimpleTextOutputProtocol,
+    runtime_services: *mut c_void,
+    boot_services: *mut EfiBootServices,
 }
 
 #[cfg(target_os = "uefi")]
 #[unsafe(no_mangle)]
-pub extern "efiapi" fn efi_main(_image: EfiHandle, system_table: *mut EfiSystemTable) -> EfiStatus {
+pub extern "efiapi" fn efi_main(image: EfiHandle, system_table: *mut EfiSystemTable) -> EfiStatus {
     let Some(console) = (unsafe { system_table.as_mut() }).and_then(|table| {
         let console = table.con_out;
         unsafe { console.as_mut() }
@@ -62,12 +120,123 @@ pub extern "efiapi" fn efi_main(_image: EfiHandle, system_table: *mut EfiSystemT
 
     write_console(console, "ostool HTTP Boot loader\r\n");
     write_console(console, "manifest parser core linked\r\n");
+
+    let mut device_path_buffer = [0u8; DEVICE_PATH_BUFFER_SIZE];
+    let mut manifest_url_buffer = [0u8; URL_BUFFER_SIZE];
+    match loader_url_from_loaded_image(image, system_table, &mut device_path_buffer) {
+        Ok(loader_url) => {
+            write_console(console, "loader_url: ");
+            write_console(console, loader_url);
+            write_console(console, "\r\n");
+
+            match write_sibling_manifest_url(loader_url, &mut manifest_url_buffer) {
+                Ok(manifest_url) => {
+                    write_console(console, "manifest_url: ");
+                    write_console(console, manifest_url);
+                    write_console(console, "\r\n");
+                }
+                Err(_) => write_console(console, "failed to build manifest URL\r\n"),
+            }
+        }
+        Err(LoaderError::ProtocolUnavailable) => {
+            write_console(console, "failed to open Loaded Image Protocol\r\n")
+        }
+        Err(LoaderError::MissingFilePath) => {
+            write_console(console, "loaded image has no file path\r\n")
+        }
+        Err(LoaderError::DevicePathTooLarge) => {
+            write_console(console, "loaded image device path is too large\r\n")
+        }
+        Err(LoaderError::InvalidDevicePath) => {
+            write_console(console, "loaded image device path has no URI\r\n")
+        }
+    }
+
     write_console(
         console,
-        "HTTP download and architecture jump backend are not enabled in this build\r\n",
+        "HTTP download backend is not enabled in this build\r\n",
     );
 
     EFI_SUCCESS
+}
+
+#[cfg(target_os = "uefi")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoaderError {
+    ProtocolUnavailable,
+    MissingFilePath,
+    DevicePathTooLarge,
+    InvalidDevicePath,
+}
+
+#[cfg(target_os = "uefi")]
+fn loader_url_from_loaded_image<'a>(
+    image: EfiHandle,
+    system_table: *mut EfiSystemTable,
+    buffer: &'a mut [u8],
+) -> Result<&'a str, LoaderError> {
+    let boot_services = (unsafe { system_table.as_mut() })
+        .map(|table| table.boot_services)
+        .and_then(|boot_services| unsafe { boot_services.as_mut() })
+        .ok_or(LoaderError::ProtocolUnavailable)?;
+
+    let mut interface = core::ptr::null_mut();
+    let status =
+        (boot_services.handle_protocol)(image, &EFI_LOADED_IMAGE_PROTOCOL_GUID, &mut interface);
+    if status.is_error() || interface.is_null() {
+        return Err(LoaderError::ProtocolUnavailable);
+    }
+
+    let loaded_image = unsafe { (interface as *mut EfiLoadedImageProtocol).as_ref() }
+        .ok_or(LoaderError::ProtocolUnavailable)?;
+    if loaded_image.file_path.is_null() {
+        return Err(LoaderError::MissingFilePath);
+    }
+
+    let size = copy_device_path_to_buffer(loaded_image.file_path, buffer)?;
+    uri_from_device_path(&buffer[..size]).map_err(|_| LoaderError::InvalidDevicePath)
+}
+
+#[cfg(target_os = "uefi")]
+fn copy_device_path_to_buffer(
+    device_path: *const EfiDevicePathProtocol,
+    buffer: &mut [u8],
+) -> Result<usize, LoaderError> {
+    let mut offset = 0;
+    let mut current = device_path;
+
+    loop {
+        let node = unsafe { current.as_ref() }.ok_or(LoaderError::MissingFilePath)?;
+        let node_len = u16::from_le_bytes(node.length) as usize;
+        if node_len < 4 {
+            return Err(LoaderError::InvalidDevicePath);
+        }
+        if offset + node_len > buffer.len() {
+            return Err(LoaderError::DevicePathTooLarge);
+        }
+
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                current as *const u8,
+                buffer.as_mut_ptr().add(offset),
+                node_len,
+            );
+        }
+        offset += node_len;
+
+        if node.node_type == 0x7f && node.node_subtype == 0xff {
+            return Ok(offset);
+        }
+
+        current = unsafe { (current as *const u8).add(node_len) as *const EfiDevicePathProtocol };
+    }
+}
+
+#[cfg(target_os = "uefi")]
+impl EfiStatus {
+    fn is_error(self) -> bool {
+        self.0 & (1usize << (usize::BITS - 1)) != 0
+    }
 }
 
 #[cfg(target_os = "uefi")]

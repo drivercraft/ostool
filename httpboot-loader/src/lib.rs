@@ -1,5 +1,7 @@
 #![no_std]
 
+use core::str;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BootManifest<'a> {
     pub kernel_url: &'a str,
@@ -16,6 +18,16 @@ pub enum ManifestError {
     InvalidNumber(&'static str),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UrlError {
+    EmptyUrl,
+    MissingPathSeparator,
+    OutputTooSmall,
+    MalformedDevicePath,
+    NonUtf8Uri,
+    UriNotFound,
+}
+
 pub fn parse_manifest(input: &str) -> Result<BootManifest<'_>, ManifestError> {
     Ok(BootManifest {
         kernel_url: json_string_field(input, "kernel_url")?,
@@ -26,6 +38,62 @@ pub fn parse_manifest(input: &str) -> Result<BootManifest<'_>, ManifestError> {
             .map_err(|_| ManifestError::InvalidNumber("entry_point"))?,
         arch: json_string_field(input, "arch")?,
     })
+}
+
+pub fn write_sibling_manifest_url<'a>(
+    loader_url: &str,
+    output: &'a mut [u8],
+) -> Result<&'a str, UrlError> {
+    let loader_url = loader_url.trim();
+    if loader_url.is_empty() {
+        return Err(UrlError::EmptyUrl);
+    }
+
+    let slash = loader_url
+        .rfind('/')
+        .ok_or(UrlError::MissingPathSeparator)?;
+    let prefix = &loader_url[..slash + 1];
+    let needed = prefix.len() + b"manifest.json".len();
+    if needed > output.len() {
+        return Err(UrlError::OutputTooSmall);
+    }
+
+    output[..prefix.len()].copy_from_slice(prefix.as_bytes());
+    output[prefix.len()..needed].copy_from_slice(b"manifest.json");
+
+    str::from_utf8(&output[..needed]).map_err(|_| UrlError::NonUtf8Uri)
+}
+
+pub fn uri_from_device_path(device_path: &[u8]) -> Result<&str, UrlError> {
+    const DEVICE_PATH_TYPE_MESSAGING: u8 = 0x03;
+    const DEVICE_PATH_TYPE_END: u8 = 0x7f;
+    const DEVICE_PATH_SUBTYPE_URI: u8 = 0x18;
+    const DEVICE_PATH_SUBTYPE_END_ENTIRE: u8 = 0xff;
+
+    let mut offset = 0;
+    let mut uri = None;
+
+    while offset + 4 <= device_path.len() {
+        let node_type = device_path[offset];
+        let node_subtype = device_path[offset + 1];
+        let node_len =
+            u16::from_le_bytes([device_path[offset + 2], device_path[offset + 3]]) as usize;
+        if node_len < 4 || offset + node_len > device_path.len() {
+            return Err(UrlError::MalformedDevicePath);
+        }
+
+        if node_type == DEVICE_PATH_TYPE_MESSAGING && node_subtype == DEVICE_PATH_SUBTYPE_URI {
+            let payload = trim_trailing_nul(&device_path[offset + 4..offset + node_len]);
+            uri = Some(str::from_utf8(payload).map_err(|_| UrlError::NonUtf8Uri)?);
+        }
+
+        offset += node_len;
+        if node_type == DEVICE_PATH_TYPE_END && node_subtype == DEVICE_PATH_SUBTYPE_END_ENTIRE {
+            return uri.ok_or(UrlError::UriNotFound);
+        }
+    }
+
+    Err(UrlError::MalformedDevicePath)
 }
 
 pub fn parse_addr(input: &str) -> Result<u64, ()> {
@@ -40,6 +108,13 @@ pub fn parse_addr(input: &str) -> Result<u64, ()> {
     };
 
     parse_u64_digits(digits, radix)
+}
+
+fn trim_trailing_nul(bytes: &[u8]) -> &[u8] {
+    match bytes.iter().rposition(|byte| *byte != 0) {
+        Some(last) => &bytes[..=last],
+        None => &[],
+    }
 }
 
 fn json_string_field<'a>(input: &'a str, key: &'static str) -> Result<&'a str, ManifestError> {
@@ -137,7 +212,10 @@ extern crate std;
 
 #[cfg(test)]
 mod tests {
-    use super::{BootManifest, ManifestError, parse_addr, parse_manifest};
+    use super::{
+        BootManifest, ManifestError, UrlError, parse_addr, parse_manifest, uri_from_device_path,
+        write_sibling_manifest_url,
+    };
 
     #[test]
     fn parses_server_manifest() {
@@ -190,5 +268,49 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err, ManifestError::InvalidJson("kernel_url"));
+    }
+
+    #[test]
+    fn builds_manifest_url_next_to_loader_url() {
+        let mut output = [0u8; 128];
+        let manifest_url = write_sibling_manifest_url(
+            "http://127.0.0.1:2999/boot/boards/demo/current/BOOTX64.EFI",
+            &mut output,
+        )
+        .unwrap();
+
+        assert_eq!(
+            manifest_url,
+            "http://127.0.0.1:2999/boot/boards/demo/current/manifest.json"
+        );
+    }
+
+    #[test]
+    fn rejects_manifest_url_output_that_is_too_small() {
+        let mut output = [0u8; 8];
+        let err = write_sibling_manifest_url("http://host/BOOTX64.EFI", &mut output).unwrap_err();
+        assert_eq!(err, UrlError::OutputTooSmall);
+    }
+
+    #[test]
+    fn extracts_uri_from_device_path() {
+        let uri = b"http://host/current/BOOTX64.EFI";
+        let uri_node_len = (4 + uri.len()) as u16;
+        let mut path = std::vec::Vec::new();
+        path.extend_from_slice(&[0x03, 0x18]);
+        path.extend_from_slice(&uri_node_len.to_le_bytes());
+        path.extend_from_slice(uri);
+        path.extend_from_slice(&[0x7f, 0xff, 0x04, 0x00]);
+
+        assert_eq!(
+            uri_from_device_path(&path),
+            Ok("http://host/current/BOOTX64.EFI")
+        );
+    }
+
+    #[test]
+    fn rejects_device_path_without_uri() {
+        let path = [0x7f, 0xff, 0x04, 0x00];
+        assert_eq!(uri_from_device_path(&path), Err(UrlError::UriNotFound));
     }
 }
