@@ -29,6 +29,20 @@ const EFI_LOADED_IMAGE_PROTOCOL_GUID: EfiGuid = EfiGuid {
     data3: 0x11d2,
     data4: [0x8e, 0x3f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b],
 };
+#[cfg(target_os = "uefi")]
+const EFI_HTTP_SERVICE_BINDING_PROTOCOL_GUID: EfiGuid = EfiGuid {
+    data1: 0xbdc8e6af,
+    data2: 0xd9bc,
+    data3: 0x4379,
+    data4: [0xa7, 0x2a, 0xe0, 0xc4, 0xe7, 0x5d, 0xae, 0x1c],
+};
+#[cfg(target_os = "uefi")]
+const EFI_HTTP_PROTOCOL_GUID: EfiGuid = EfiGuid {
+    data1: 0x7a59b29b,
+    data2: 0x910b,
+    data3: 0x4171,
+    data4: [0x82, 0x42, 0xa8, 0x5a, 0x0d, 0xf2, 0x5b, 0x5b],
+};
 
 #[cfg(target_os = "uefi")]
 const DEVICE_PATH_BUFFER_SIZE: usize = 1024;
@@ -66,11 +80,52 @@ struct EfiSimpleTextOutputProtocol {
 #[repr(C)]
 struct EfiBootServices {
     hdr: EfiTableHeader,
-    _reserved_before_handle_protocol: [usize; 16],
+    _raise_tpl: usize,
+    _restore_tpl: usize,
+    _allocate_pages: usize,
+    _free_pages: usize,
+    _get_memory_map: usize,
+    _allocate_pool: usize,
+    free_pool: extern "efiapi" fn(buffer: *mut c_void) -> EfiStatus,
+    _create_event: usize,
+    _set_timer: usize,
+    _wait_for_event: usize,
+    _signal_event: usize,
+    _close_event: usize,
+    _check_event: usize,
+    _install_protocol_interface: usize,
+    _reinstall_protocol_interface: usize,
+    _uninstall_protocol_interface: usize,
     handle_protocol: extern "efiapi" fn(
         handle: EfiHandle,
         protocol: *const EfiGuid,
         interface: *mut *mut c_void,
+    ) -> EfiStatus,
+    _reserved: usize,
+    _register_protocol_notify: usize,
+    _locate_handle: usize,
+    _locate_device_path: usize,
+    _install_configuration_table: usize,
+    _load_image: usize,
+    _start_image: usize,
+    _exit: usize,
+    _unload_image: usize,
+    _exit_boot_services: usize,
+    _get_next_monotonic_count: usize,
+    _stall: usize,
+    _set_watchdog_timer: usize,
+    _connect_controller: usize,
+    _disconnect_controller: usize,
+    _open_protocol: usize,
+    _close_protocol: usize,
+    _open_protocol_information: usize,
+    _protocols_per_handle: usize,
+    locate_handle_buffer: extern "efiapi" fn(
+        search_type: EfiLocateSearchType,
+        protocol: *const EfiGuid,
+        search_key: *mut c_void,
+        no_handles: *mut usize,
+        buffer: *mut *mut EfiHandle,
     ) -> EfiStatus,
 }
 
@@ -91,6 +146,11 @@ struct EfiLoadedImageProtocol {
     device_handle: EfiHandle,
     file_path: *const EfiDevicePathProtocol,
 }
+
+#[cfg(target_os = "uefi")]
+type EfiLocateSearchType = u32;
+#[cfg(target_os = "uefi")]
+const EFI_LOCATE_BY_PROTOCOL: EfiLocateSearchType = 2;
 
 #[cfg(target_os = "uefi")]
 #[repr(C)]
@@ -156,6 +216,7 @@ pub extern "efiapi" fn efi_main(image: EfiHandle, system_table: *mut EfiSystemTa
         console,
         "HTTP download backend is pending; manifest bytes parser linked\r\n",
     );
+    print_http_protocol_probe(console, system_table);
 
     EFI_SUCCESS
 }
@@ -170,15 +231,74 @@ enum LoaderError {
 }
 
 #[cfg(target_os = "uefi")]
+fn print_http_protocol_probe(
+    console: *mut EfiSimpleTextOutputProtocol,
+    system_table: *mut EfiSystemTable,
+) {
+    let Some(boot_services) = boot_services_from_system_table(system_table) else {
+        write_console(console, "failed to access Boot Services for HTTP probe\r\n");
+        return;
+    };
+
+    match count_protocol_handles(boot_services, &EFI_HTTP_SERVICE_BINDING_PROTOCOL_GUID) {
+        Ok(count) => {
+            write_console(console, "http_service_binding_handles: ");
+            write_usize(console, count);
+            write_console(console, "\r\n");
+        }
+        Err(_) => write_console(console, "failed to locate HTTP Service Binding Protocol\r\n"),
+    }
+
+    match count_protocol_handles(boot_services, &EFI_HTTP_PROTOCOL_GUID) {
+        Ok(count) => {
+            write_console(console, "http_protocol_handles: ");
+            write_usize(console, count);
+            write_console(console, "\r\n");
+        }
+        Err(_) => write_console(console, "failed to locate HTTP Protocol\r\n"),
+    }
+}
+
+#[cfg(target_os = "uefi")]
+fn boot_services_from_system_table(
+    system_table: *mut EfiSystemTable,
+) -> Option<&'static mut EfiBootServices> {
+    (unsafe { system_table.as_mut() })
+        .map(|table| table.boot_services)
+        .and_then(|boot_services| unsafe { boot_services.as_mut() })
+}
+
+#[cfg(target_os = "uefi")]
+fn count_protocol_handles(
+    boot_services: &mut EfiBootServices,
+    protocol: &EfiGuid,
+) -> Result<usize, EfiStatus> {
+    let mut handle_count = 0usize;
+    let mut handles = core::ptr::null_mut();
+    let status = (boot_services.locate_handle_buffer)(
+        EFI_LOCATE_BY_PROTOCOL,
+        protocol,
+        core::ptr::null_mut(),
+        &mut handle_count,
+        &mut handles,
+    );
+    if status.is_error() {
+        return Err(status);
+    }
+    if !handles.is_null() {
+        let _ = (boot_services.free_pool)(handles as *mut c_void);
+    }
+    Ok(handle_count)
+}
+
+#[cfg(target_os = "uefi")]
 fn loader_url_from_loaded_image<'a>(
     image: EfiHandle,
     system_table: *mut EfiSystemTable,
     buffer: &'a mut [u8],
 ) -> Result<&'a str, LoaderError> {
-    let boot_services = (unsafe { system_table.as_mut() })
-        .map(|table| table.boot_services)
-        .and_then(|boot_services| unsafe { boot_services.as_mut() })
-        .ok_or(LoaderError::ProtocolUnavailable)?;
+    let boot_services =
+        boot_services_from_system_table(system_table).ok_or(LoaderError::ProtocolUnavailable)?;
 
     let mut interface = core::ptr::null_mut();
     let status =
@@ -257,6 +377,30 @@ fn write_console(console: *mut EfiSimpleTextOutputProtocol, message: &str) {
     buffer[index] = 0;
 
     (console_ref.output_string)(console, buffer.as_ptr());
+}
+
+#[cfg(target_os = "uefi")]
+fn write_usize(console: *mut EfiSimpleTextOutputProtocol, mut value: usize) {
+    let mut digits = [0u8; 20];
+    let mut len = 0;
+
+    if value == 0 {
+        write_console(console, "0");
+        return;
+    }
+
+    while value > 0 && len < digits.len() {
+        digits[len] = b'0' + (value % 10) as u8;
+        value /= 10;
+        len += 1;
+    }
+
+    let mut output = [0u8; 20];
+    for index in 0..len {
+        output[index] = digits[len - index - 1];
+    }
+    let text = core::str::from_utf8(&output[..len]).unwrap_or("?");
+    write_console(console, text);
 }
 
 #[cfg(target_os = "uefi")]
