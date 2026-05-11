@@ -41,6 +41,7 @@ pub const EVT_NOTIFY_SIGNAL: u32 = 0x0000_0200;
 pub const TPL_CALLBACK: usize = 8;
 pub const HTTP_VERSION_11: u32 = 1;
 pub const HTTP_METHOD_GET: u32 = 0;
+pub const HTTP_STATUS_200_OK: u32 = 3;
 
 #[repr(C)]
 pub struct EfiGuid {
@@ -162,7 +163,8 @@ pub struct EfiHttpProtocol {
     pub request:
         extern "efiapi" fn(this: *mut EfiHttpProtocol, token: *mut EfiHttpToken) -> EfiStatus,
     pub cancel: usize,
-    pub response: usize,
+    pub response:
+        extern "efiapi" fn(this: *mut EfiHttpProtocol, token: *mut EfiHttpToken) -> EfiStatus,
     pub poll: extern "efiapi" fn(this: *mut EfiHttpProtocol) -> EfiStatus,
 }
 
@@ -192,7 +194,7 @@ pub struct EfiHttpv4AccessPoint {
 #[repr(C)]
 pub union EfiHttpMessageData {
     pub request: *mut EfiHttpRequestData,
-    pub response: *mut c_void,
+    pub response: *mut EfiHttpResponseData,
 }
 
 #[repr(C)]
@@ -202,10 +204,21 @@ pub struct EfiHttpRequestData {
 }
 
 #[repr(C)]
+pub struct EfiHttpResponseData {
+    pub status_code: u32,
+}
+
+#[repr(C)]
+pub struct EfiHttpHeader {
+    pub field_name: *mut u8,
+    pub field_value: *mut u8,
+}
+
+#[repr(C)]
 pub struct EfiHttpMessage {
     pub data: EfiHttpMessageData,
     pub header_count: usize,
-    pub headers: *mut c_void,
+    pub headers: *mut EfiHttpHeader,
     pub body_length: usize,
     pub body: *mut c_void,
 }
