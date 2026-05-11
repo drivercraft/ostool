@@ -148,6 +148,30 @@ struct EfiLoadedImageProtocol {
 }
 
 #[cfg(target_os = "uefi")]
+#[repr(C)]
+struct EfiServiceBindingProtocol {
+    create_child: extern "efiapi" fn(
+        this: *mut EfiServiceBindingProtocol,
+        child_handle: *mut EfiHandle,
+    ) -> EfiStatus,
+    destroy_child: extern "efiapi" fn(
+        this: *mut EfiServiceBindingProtocol,
+        child_handle: EfiHandle,
+    ) -> EfiStatus,
+}
+
+#[cfg(target_os = "uefi")]
+#[repr(C)]
+struct EfiHttpProtocol {
+    get_mode_data: usize,
+    configure: usize,
+    request: usize,
+    cancel: usize,
+    response: usize,
+    poll: usize,
+}
+
+#[cfg(target_os = "uefi")]
 type EfiLocateSearchType = u32;
 #[cfg(target_os = "uefi")]
 const EFI_LOCATE_BY_PROTOCOL: EfiLocateSearchType = 2;
@@ -246,7 +270,10 @@ fn print_http_protocol_probe(
             write_usize(console, count);
             write_console(console, "\r\n");
         }
-        Err(_) => write_console(console, "failed to locate HTTP Service Binding Protocol\r\n"),
+        Err(_) => write_console(
+            console,
+            "failed to locate HTTP Service Binding Protocol\r\n",
+        ),
     }
 
     match count_protocol_handles(boot_services, &EFI_HTTP_PROTOCOL_GUID) {
@@ -257,6 +284,8 @@ fn print_http_protocol_probe(
         }
         Err(_) => write_console(console, "failed to locate HTTP Protocol\r\n"),
     }
+
+    probe_http_child(console, boot_services);
 }
 
 #[cfg(target_os = "uefi")]
@@ -289,6 +318,111 @@ fn count_protocol_handles(
         let _ = (boot_services.free_pool)(handles as *mut c_void);
     }
     Ok(handle_count)
+}
+
+#[cfg(target_os = "uefi")]
+fn first_protocol_handle(
+    boot_services: &mut EfiBootServices,
+    protocol: &EfiGuid,
+) -> Result<EfiHandle, EfiStatus> {
+    let mut handle_count = 0usize;
+    let mut handles = core::ptr::null_mut();
+    let status = (boot_services.locate_handle_buffer)(
+        EFI_LOCATE_BY_PROTOCOL,
+        protocol,
+        core::ptr::null_mut(),
+        &mut handle_count,
+        &mut handles,
+    );
+    if status.is_error() {
+        return Err(status);
+    }
+
+    let first = if handle_count > 0 && !handles.is_null() {
+        Some(unsafe { *handles })
+    } else {
+        None
+    };
+    if !handles.is_null() {
+        let _ = (boot_services.free_pool)(handles as *mut c_void);
+    }
+    first.ok_or(EFI_UNSUPPORTED)
+}
+
+#[cfg(target_os = "uefi")]
+fn open_protocol_on_handle<T>(
+    boot_services: &mut EfiBootServices,
+    handle: EfiHandle,
+    protocol: &EfiGuid,
+) -> Result<*mut T, EfiStatus> {
+    let mut interface = core::ptr::null_mut();
+    let status = (boot_services.handle_protocol)(handle, protocol, &mut interface);
+    if status.is_error() || interface.is_null() {
+        return Err(status);
+    }
+    Ok(interface as *mut T)
+}
+
+#[cfg(target_os = "uefi")]
+fn probe_http_child(
+    console: *mut EfiSimpleTextOutputProtocol,
+    boot_services: &mut EfiBootServices,
+) {
+    let service_handle =
+        match first_protocol_handle(boot_services, &EFI_HTTP_SERVICE_BINDING_PROTOCOL_GUID) {
+            Ok(handle) => handle,
+            Err(status) => {
+                write_console(
+                    console,
+                    "http_create_child_skipped: service binding not found ",
+                );
+                write_status(console, status);
+                write_console(console, "\r\n");
+                return;
+            }
+        };
+
+    let service_binding = match open_protocol_on_handle::<EfiServiceBindingProtocol>(
+        boot_services,
+        service_handle,
+        &EFI_HTTP_SERVICE_BINDING_PROTOCOL_GUID,
+    ) {
+        Ok(service_binding) => service_binding,
+        Err(status) => {
+            write_console(console, "http_service_binding_open_failed: ");
+            write_status(console, status);
+            write_console(console, "\r\n");
+            return;
+        }
+    };
+
+    let mut child_handle = core::ptr::null_mut();
+    let create_status =
+        unsafe { ((*service_binding).create_child)(service_binding, &mut child_handle) };
+    write_console(console, "http_create_child_status: ");
+    write_status(console, create_status);
+    write_console(console, "\r\n");
+    if create_status.is_error() || child_handle.is_null() {
+        return;
+    }
+
+    let http_status = match open_protocol_on_handle::<EfiHttpProtocol>(
+        boot_services,
+        child_handle,
+        &EFI_HTTP_PROTOCOL_GUID,
+    ) {
+        Ok(_) => EFI_SUCCESS,
+        Err(status) => status,
+    };
+    write_console(console, "http_child_protocol_status: ");
+    write_status(console, http_status);
+    write_console(console, "\r\n");
+
+    let destroy_status =
+        unsafe { ((*service_binding).destroy_child)(service_binding, child_handle) };
+    write_console(console, "http_destroy_child_status: ");
+    write_status(console, destroy_status);
+    write_console(console, "\r\n");
 }
 
 #[cfg(target_os = "uefi")]
@@ -396,6 +530,40 @@ fn write_usize(console: *mut EfiSimpleTextOutputProtocol, mut value: usize) {
     }
 
     let mut output = [0u8; 20];
+    for index in 0..len {
+        output[index] = digits[len - index - 1];
+    }
+    let text = core::str::from_utf8(&output[..len]).unwrap_or("?");
+    write_console(console, text);
+}
+
+#[cfg(target_os = "uefi")]
+fn write_status(console: *mut EfiSimpleTextOutputProtocol, status: EfiStatus) {
+    write_console(console, "0x");
+    write_hex_usize(console, status.0);
+}
+
+#[cfg(target_os = "uefi")]
+fn write_hex_usize(console: *mut EfiSimpleTextOutputProtocol, mut value: usize) {
+    let mut digits = [0u8; 16];
+    let mut len = 0;
+
+    if value == 0 {
+        write_console(console, "0");
+        return;
+    }
+
+    while value > 0 && len < digits.len() {
+        let digit = (value & 0xf) as u8;
+        digits[len] = match digit {
+            0..=9 => b'0' + digit,
+            _ => b'a' + (digit - 10),
+        };
+        value >>= 4;
+        len += 1;
+    }
+
+    let mut output = [0u8; 16];
     for index in 0..len {
         output[index] = digits[len - index - 1];
     }

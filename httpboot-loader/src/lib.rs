@@ -237,7 +237,8 @@ extern crate std;
 mod tests {
     use super::{
         BootManifest, DownloadError, ManifestError, UrlError, parse_addr,
-        parse_downloaded_manifest, parse_manifest, uri_from_device_path, write_sibling_manifest_url,
+        parse_downloaded_manifest, parse_manifest, uri_from_device_path,
+        write_sibling_manifest_url,
     };
 
     #[test]
@@ -338,9 +339,9 @@ mod tests {
     fn wraps_downloaded_manifest_parse_errors() {
         assert_eq!(
             parse_downloaded_manifest(br#"{"kernel_size":1}"#, 1024),
-            Err(DownloadError::InvalidManifest(
-                ManifestError::MissingField("kernel_url")
-            ))
+            Err(DownloadError::InvalidManifest(ManifestError::MissingField(
+                "kernel_url"
+            )))
         );
     }
 
