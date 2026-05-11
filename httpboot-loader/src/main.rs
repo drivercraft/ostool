@@ -164,12 +164,44 @@ struct EfiServiceBindingProtocol {
 #[repr(C)]
 struct EfiHttpProtocol {
     get_mode_data: usize,
-    configure: usize,
+    configure: extern "efiapi" fn(
+        this: *mut EfiHttpProtocol,
+        http_config_data: *mut EfiHttpConfigData,
+    ) -> EfiStatus,
     request: usize,
     cancel: usize,
     response: usize,
     poll: usize,
 }
+
+#[cfg(target_os = "uefi")]
+#[repr(C)]
+struct EfiHttpConfigData {
+    http_version: u32,
+    timeout_millisec: u32,
+    local_address_is_ipv6: u8,
+    _padding: [u8; 7],
+    access_point: EfiHttpConfigAccessPoint,
+}
+
+#[cfg(target_os = "uefi")]
+#[repr(C)]
+union EfiHttpConfigAccessPoint {
+    ipv4_node: *mut EfiHttpv4AccessPoint,
+    ipv6_node: *mut c_void,
+}
+
+#[cfg(target_os = "uefi")]
+#[repr(C)]
+struct EfiHttpv4AccessPoint {
+    use_default_address: u8,
+    local_address: [u8; 4],
+    local_subnet: [u8; 4],
+    local_port: u16,
+}
+
+#[cfg(target_os = "uefi")]
+const HTTP_VERSION_11: u32 = 1;
 
 #[cfg(target_os = "uefi")]
 type EfiLocateSearchType = u32;
@@ -406,18 +438,67 @@ fn probe_http_child(
         return;
     }
 
-    let http_status = match open_protocol_on_handle::<EfiHttpProtocol>(
+    let http_protocol = match open_protocol_on_handle::<EfiHttpProtocol>(
         boot_services,
         child_handle,
         &EFI_HTTP_PROTOCOL_GUID,
     ) {
-        Ok(_) => EFI_SUCCESS,
-        Err(status) => status,
+        Ok(http_protocol) => {
+            write_console(console, "http_child_protocol_status: 0x0\r\n");
+            http_protocol
+        }
+        Err(status) => {
+            write_console(console, "http_child_protocol_status: ");
+            write_status(console, status);
+            write_console(console, "\r\n");
+            destroy_http_child(console, service_binding, child_handle);
+            return;
+        }
     };
-    write_console(console, "http_child_protocol_status: ");
-    write_status(console, http_status);
+
+    let configure_status = configure_http_ipv4_default(http_protocol);
+    write_console(console, "http_configure_status: ");
+    write_status(console, configure_status);
     write_console(console, "\r\n");
 
+    if !configure_status.is_error() {
+        let reset_status =
+            unsafe { ((*http_protocol).configure)(http_protocol, core::ptr::null_mut()) };
+        write_console(console, "http_reset_status: ");
+        write_status(console, reset_status);
+        write_console(console, "\r\n");
+    }
+
+    destroy_http_child(console, service_binding, child_handle);
+}
+
+#[cfg(target_os = "uefi")]
+fn configure_http_ipv4_default(http_protocol: *mut EfiHttpProtocol) -> EfiStatus {
+    let mut ipv4 = EfiHttpv4AccessPoint {
+        use_default_address: 1,
+        local_address: [0; 4],
+        local_subnet: [0; 4],
+        local_port: 0,
+    };
+    let mut config = EfiHttpConfigData {
+        http_version: HTTP_VERSION_11,
+        timeout_millisec: 10_000,
+        local_address_is_ipv6: 0,
+        _padding: [0; 7],
+        access_point: EfiHttpConfigAccessPoint {
+            ipv4_node: &mut ipv4,
+        },
+    };
+
+    unsafe { ((*http_protocol).configure)(http_protocol, &mut config) }
+}
+
+#[cfg(target_os = "uefi")]
+fn destroy_http_child(
+    console: *mut EfiSimpleTextOutputProtocol,
+    service_binding: *mut EfiServiceBindingProtocol,
+    child_handle: EfiHandle,
+) {
     let destroy_status =
         unsafe { ((*service_binding).destroy_child)(service_binding, child_handle) };
     write_console(console, "http_destroy_child_status: ");
