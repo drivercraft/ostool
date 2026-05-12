@@ -22,6 +22,8 @@ pub struct ServerConfig {
     pub tftp: TftpConfig,
     #[serde(default)]
     pub http_boot: HttpBootConfig,
+    #[serde(default)]
+    pub proxy_dhcp: ProxyDhcpConfig,
     pub network: TftpNetworkConfig,
     #[serde(default)]
     pub upload_limits: UploadLimitsConfig,
@@ -61,6 +63,7 @@ impl ServerConfig {
             dtb_dir,
             tftp,
             http_boot,
+            proxy_dhcp: ProxyDhcpConfig::default(),
             network: TftpNetworkConfig::default(),
             upload_limits: UploadLimitsConfig::default(),
         }
@@ -200,6 +203,23 @@ impl HttpBootConfig {
 impl Default for HttpBootConfig {
     fn default() -> Self {
         Self::default_with_root(PathBuf::from(".ostool-server/http-boot"))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProxyDhcpConfig {
+    pub enabled: bool,
+    pub bind_addr: SocketAddr,
+    pub board_id: Option<String>,
+}
+
+impl Default for ProxyDhcpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind_addr: SocketAddr::from(([0, 0, 0, 0], 67)),
+            board_id: None,
+        }
     }
 }
 

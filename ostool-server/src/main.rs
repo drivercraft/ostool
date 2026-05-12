@@ -4,7 +4,7 @@ use anyhow::Context;
 use clap::Parser;
 use log::info;
 use ostool_server::{
-    ServerConfig, build_app_state, build_router,
+    ServerConfig, build_app_state, build_router, proxy_dhcp,
     tftp::service::{BuiltinTftpManager, SystemTftpdHpaManager, TftpManager},
 };
 
@@ -43,6 +43,7 @@ async fn main() -> anyhow::Result<()> {
     {
         tftp_manager.reconcile().await?;
     }
+    let _proxy_dhcp_task = proxy_dhcp::spawn_proxy_dhcp(state.clone()).await?;
 
     let gc_state = state.clone();
     tokio::spawn(async move {
