@@ -1,12 +1,12 @@
 use core::ffi::c_void;
 
 use crate::uefi::abi::{
-    EFI_HTTP_PROTOCOL_GUID, EFI_HTTP_SERVICE_BINDING_PROTOCOL_GUID, EFI_LOCATE_BY_PROTOCOL,
-    EFI_NOT_READY, EFI_UNSUPPORTED, EVT_NOTIFY_SIGNAL, EfiBootServices, EfiEvent, EfiGuid,
-    EfiHandle, EfiHttpConfigAccessPoint, EfiHttpConfigData, EfiHttpMessage, EfiHttpMessageData,
-    EfiHttpProtocol, EfiHttpRequestData, EfiHttpResponseData, EfiHttpToken, EfiHttpv4AccessPoint,
-    EfiServiceBindingProtocol, EfiSimpleTextOutputProtocol, EfiStatus, EfiSystemTable,
-    HTTP_METHOD_GET, HTTP_STATUS_200_OK, HTTP_VERSION_11, TPL_CALLBACK,
+    EFI_HTTP_PROTOCOL_GUID, EFI_HTTP_SERVICE_BINDING_PROTOCOL_GUID, EFI_LOADER_DATA,
+    EFI_LOCATE_BY_PROTOCOL, EFI_NOT_READY, EFI_UNSUPPORTED, EVT_NOTIFY_SIGNAL, EfiBootServices,
+    EfiEvent, EfiGuid, EfiHandle, EfiHttpConfigAccessPoint, EfiHttpConfigData, EfiHttpMessage,
+    EfiHttpMessageData, EfiHttpProtocol, EfiHttpRequestData, EfiHttpResponseData, EfiHttpToken,
+    EfiHttpv4AccessPoint, EfiServiceBindingProtocol, EfiSimpleTextOutputProtocol, EfiStatus,
+    EfiSystemTable, HTTP_METHOD_GET, HTTP_STATUS_200_OK, HTTP_VERSION_11, TPL_CALLBACK,
     boot_services_from_system_table,
 };
 use crate::uefi::console::{write_console, write_status, write_usize, write_utf16_nul};
@@ -14,8 +14,9 @@ use httpboot::parse_downloaded_manifest;
 
 const UTF16_URL_BUFFER_SIZE: usize = 1024;
 const MANIFEST_BODY_BUFFER_SIZE: usize = 4096;
-const KERNEL_PROBE_BODY_BUFFER_SIZE: usize = 16 * 1024;
+const KERNEL_RESPONSE_CHUNK_SIZE: usize = 16 * 1024;
 const HTTP_COMPLETION_POLL_LIMIT: usize = 100_000;
+const MAX_KERNEL_DOWNLOAD_SIZE: usize = 256 * 1024 * 1024;
 
 pub fn print_http_protocol_probe(
     console: *mut EfiSimpleTextOutputProtocol,
@@ -467,7 +468,7 @@ fn request_kernel_probe(
         write_status(console, completion);
         write_console(console, "\r\n");
         if !completion.is_error() {
-            receive_kernel_probe_response(console, boot_services, http_protocol, kernel_size);
+            download_kernel_to_pool(console, boot_services, http_protocol, kernel_size);
         }
     }
 
@@ -477,12 +478,94 @@ fn request_kernel_probe(
     write_console(console, "\r\n");
 }
 
-fn receive_kernel_probe_response(
+fn download_kernel_to_pool(
     console: *mut EfiSimpleTextOutputProtocol,
     boot_services: &mut EfiBootServices,
     http_protocol: *mut EfiHttpProtocol,
     expected_kernel_size: u64,
 ) {
+    let Some(expected_size) = checked_kernel_size(console, expected_kernel_size) else {
+        return;
+    };
+
+    let mut kernel_buffer = core::ptr::null_mut();
+    let allocate_status =
+        (boot_services.allocate_pool)(EFI_LOADER_DATA, expected_size, &mut kernel_buffer);
+    write_console(console, "kernel_allocate_pool_status: ");
+    write_status(console, allocate_status);
+    write_console(console, "\r\n");
+    if allocate_status.is_error() || kernel_buffer.is_null() {
+        return;
+    }
+
+    let mut downloaded = 0usize;
+    let mut checksum = 0u32;
+    let mut complete = false;
+
+    while downloaded < expected_size {
+        let remaining = expected_size - downloaded;
+        let chunk_len = remaining.min(KERNEL_RESPONSE_CHUNK_SIZE);
+        let chunk = unsafe { (kernel_buffer as *mut u8).add(downloaded) };
+        let Some(received) =
+            receive_kernel_chunk(console, boot_services, http_protocol, chunk, chunk_len)
+        else {
+            break;
+        };
+
+        if received == 0 {
+            write_console(console, "kernel_download_stopped: zero length chunk\r\n");
+            break;
+        }
+
+        checksum = checksum_add(checksum, unsafe {
+            core::slice::from_raw_parts(chunk, received)
+        });
+        downloaded += received;
+        if downloaded == expected_size {
+            complete = true;
+        }
+    }
+
+    write_console(console, "kernel_downloaded_size: ");
+    write_usize(console, downloaded);
+    write_console(console, "\r\n");
+    write_console(console, "kernel_expected_size: ");
+    write_usize(console, expected_size);
+    write_console(console, "\r\n");
+    write_console(console, "kernel_download_complete: ");
+    write_console(console, if complete { "yes\r\n" } else { "no\r\n" });
+    write_console(console, "kernel_checksum32: 0x");
+    write_hex_u32(console, checksum);
+    write_console(console, "\r\n");
+
+    let free_status = (boot_services.free_pool)(kernel_buffer);
+    write_console(console, "kernel_free_pool_status: ");
+    write_status(console, free_status);
+    write_console(console, "\r\n");
+}
+
+fn checked_kernel_size(
+    console: *mut EfiSimpleTextOutputProtocol,
+    expected_kernel_size: u64,
+) -> Option<usize> {
+    if expected_kernel_size == 0 {
+        write_console(console, "kernel_download_skipped: zero size\r\n");
+        return None;
+    }
+    if expected_kernel_size > MAX_KERNEL_DOWNLOAD_SIZE as u64 {
+        write_console(console, "kernel_download_skipped: size too large\r\n");
+        return None;
+    }
+    Some(expected_kernel_size as usize)
+}
+
+fn receive_kernel_chunk(
+    console: *mut EfiSimpleTextOutputProtocol,
+    boot_services: &mut EfiBootServices,
+    http_protocol: *mut EfiHttpProtocol,
+    chunk: *mut u8,
+    chunk_len: usize,
+) -> Option<usize> {
     let mut event = core::ptr::null_mut();
     let event_status = (boot_services.create_event)(
         EVT_NOTIFY_SIGNAL,
@@ -495,19 +578,18 @@ fn receive_kernel_probe_response(
     write_status(console, event_status);
     write_console(console, "\r\n");
     if event_status.is_error() || event.is_null() {
-        return;
+        return None;
     }
 
     let mut response_data = EfiHttpResponseData { status_code: 0 };
-    let mut body = [0u8; KERNEL_PROBE_BODY_BUFFER_SIZE];
     let mut message = EfiHttpMessage {
         data: EfiHttpMessageData {
             response: &mut response_data,
         },
         header_count: 0,
         headers: core::ptr::null_mut(),
-        body_length: body.len(),
-        body: body.as_mut_ptr() as *mut c_void,
+        body_length: chunk_len,
+        body: chunk as *mut c_void,
     };
     let mut token = EfiHttpToken {
         event,
@@ -526,14 +608,7 @@ fn receive_kernel_probe_response(
         write_status(console, completion);
         write_console(console, "\r\n");
         if !completion.is_error() {
-            print_kernel_probe_response(
-                console,
-                boot_services,
-                &response_data,
-                &message,
-                &body,
-                expected_kernel_size,
-            );
+            print_kernel_chunk_response(console, boot_services, &response_data, &message);
         }
     }
 
@@ -541,15 +616,21 @@ fn receive_kernel_probe_response(
     write_console(console, "kernel_response_close_event_status: ");
     write_status(console, close_status);
     write_console(console, "\r\n");
+
+    if response_status.is_error() || token.status.is_error() {
+        return None;
+    }
+    if response_data.status_code != HTTP_STATUS_200_OK {
+        return None;
+    }
+    Some(message.body_length)
 }
 
-fn print_kernel_probe_response(
+fn print_kernel_chunk_response(
     console: *mut EfiSimpleTextOutputProtocol,
     boot_services: &mut EfiBootServices,
     response_data: &EfiHttpResponseData,
     message: &EfiHttpMessage,
-    body: &[u8],
-    expected_kernel_size: u64,
 ) {
     write_console(console, "kernel_response_status_enum: ");
     write_usize(console, response_data.status_code as usize);
@@ -563,19 +644,14 @@ fn print_kernel_probe_response(
     write_console(console, "kernel_response_body_length: ");
     write_usize(console, message.body_length);
     write_console(console, "\r\n");
-    write_console(console, "kernel_expected_size: ");
-    write_usize(console, expected_kernel_size as usize);
-    write_console(console, "\r\n");
-    write_console(console, "kernel_probe_buffer_size: ");
-    write_usize(console, body.len());
-    write_console(console, "\r\n");
 
     if response_data.status_code != HTTP_STATUS_200_OK {
-        write_console(console, "kernel_probe_skipped: HTTP status is not 200\r\n");
-    } else if message.body_length > body.len() {
-        write_console(console, "kernel_probe_skipped: body buffer too small\r\n");
+        write_console(
+            console,
+            "kernel_download_stopped: HTTP status is not 200\r\n",
+        );
     } else {
-        write_console(console, "kernel_probe_received_prefix\r\n");
+        write_console(console, "kernel_chunk_received\r\n");
     }
 
     free_response_headers(boot_services, message);
@@ -585,6 +661,28 @@ fn free_response_headers(boot_services: &mut EfiBootServices, message: &EfiHttpM
     if !message.headers.is_null() {
         let _ = (boot_services.free_pool)(message.headers as *mut c_void);
     }
+}
+
+fn checksum_add(mut checksum: u32, bytes: &[u8]) -> u32 {
+    for byte in bytes {
+        checksum = checksum.wrapping_add(*byte as u32);
+    }
+    checksum
+}
+
+fn write_hex_u32(console: *mut EfiSimpleTextOutputProtocol, value: u32) {
+    let mut output = [0u8; 8];
+    let mut shift = 28u32;
+    for byte in &mut output {
+        let digit = ((value >> shift) & 0xf) as u8;
+        *byte = match digit {
+            0..=9 => b'0' + digit,
+            _ => b'a' + (digit - 10),
+        };
+        shift = shift.saturating_sub(4);
+    }
+    let text = core::str::from_utf8(&output).unwrap_or("????????");
+    write_console(console, text);
 }
 
 fn write_http_status_code(console: *mut EfiSimpleTextOutputProtocol, status_code: u32) {
