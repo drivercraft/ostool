@@ -5,8 +5,11 @@ pub type EfiEvent = *mut c_void;
 pub type EfiLocateSearchType = u32;
 pub type EfiEventNotify = Option<extern "efiapi" fn(event: EfiEvent, context: *mut c_void)>;
 pub type EfiMemoryType = u32;
+pub type EfiAllocateType = u32;
+pub type EfiPhysicalAddress = u64;
 
 pub const EFI_LOCATE_BY_PROTOCOL: EfiLocateSearchType = 2;
+pub const EFI_ALLOCATE_ADDRESS: EfiAllocateType = 0;
 pub const EFI_LOADER_DATA: EfiMemoryType = 2;
 
 #[repr(transparent)]
@@ -74,8 +77,13 @@ pub struct EfiBootServices {
     pub hdr: EfiTableHeader,
     pub _raise_tpl: usize,
     pub _restore_tpl: usize,
-    pub _allocate_pages: usize,
-    pub _free_pages: usize,
+    pub allocate_pages: extern "efiapi" fn(
+        allocate_type: EfiAllocateType,
+        memory_type: EfiMemoryType,
+        pages: usize,
+        memory: *mut EfiPhysicalAddress,
+    ) -> EfiStatus,
+    pub free_pages: extern "efiapi" fn(memory: EfiPhysicalAddress, pages: usize) -> EfiStatus,
     pub _get_memory_map: usize,
     pub allocate_pool: extern "efiapi" fn(
         pool_type: EfiMemoryType,

@@ -1,13 +1,13 @@
 use core::ffi::c_void;
 
 use crate::uefi::abi::{
-    EFI_HTTP_PROTOCOL_GUID, EFI_HTTP_SERVICE_BINDING_PROTOCOL_GUID, EFI_LOADER_DATA,
-    EFI_LOCATE_BY_PROTOCOL, EFI_NOT_READY, EFI_UNSUPPORTED, EVT_NOTIFY_SIGNAL, EfiBootServices,
-    EfiEvent, EfiGuid, EfiHandle, EfiHttpConfigAccessPoint, EfiHttpConfigData, EfiHttpMessage,
-    EfiHttpMessageData, EfiHttpProtocol, EfiHttpRequestData, EfiHttpResponseData, EfiHttpToken,
-    EfiHttpv4AccessPoint, EfiServiceBindingProtocol, EfiSimpleTextOutputProtocol, EfiStatus,
-    EfiSystemTable, HTTP_METHOD_GET, HTTP_STATUS_200_OK, HTTP_VERSION_11, TPL_CALLBACK,
-    boot_services_from_system_table,
+    EFI_ALLOCATE_ADDRESS, EFI_HTTP_PROTOCOL_GUID, EFI_HTTP_SERVICE_BINDING_PROTOCOL_GUID,
+    EFI_LOADER_DATA, EFI_LOCATE_BY_PROTOCOL, EFI_NOT_READY, EFI_UNSUPPORTED, EVT_NOTIFY_SIGNAL,
+    EfiBootServices, EfiEvent, EfiGuid, EfiHandle, EfiHttpConfigAccessPoint, EfiHttpConfigData,
+    EfiHttpMessage, EfiHttpMessageData, EfiHttpProtocol, EfiHttpRequestData, EfiHttpResponseData,
+    EfiHttpToken, EfiHttpv4AccessPoint, EfiPhysicalAddress, EfiServiceBindingProtocol,
+    EfiSimpleTextOutputProtocol, EfiStatus, EfiSystemTable, HTTP_METHOD_GET, HTTP_STATUS_200_OK,
+    HTTP_VERSION_11, TPL_CALLBACK, boot_services_from_system_table,
 };
 use crate::uefi::console::{write_console, write_status, write_usize, write_utf16_nul};
 use httpboot::parse_downloaded_manifest;
@@ -17,6 +17,7 @@ const MANIFEST_BODY_BUFFER_SIZE: usize = 4096;
 const KERNEL_RESPONSE_CHUNK_SIZE: usize = 16 * 1024;
 const HTTP_COMPLETION_POLL_LIMIT: usize = 100_000;
 const MAX_KERNEL_DOWNLOAD_SIZE: usize = 256 * 1024 * 1024;
+const EFI_PAGE_SIZE: usize = 4096;
 
 pub fn print_http_protocol_probe(
     console: *mut EfiSimpleTextOutputProtocol,
@@ -399,6 +400,7 @@ fn print_manifest_response(
                 http_protocol,
                 manifest.kernel_url,
                 manifest.kernel_size,
+                manifest.kernel_load_addr,
             );
         }
         Err(_) => write_console(console, "manifest_parse_failed\r\n"),
@@ -413,6 +415,7 @@ fn request_kernel_probe(
     http_protocol: *mut EfiHttpProtocol,
     kernel_url: &str,
     kernel_size: u64,
+    kernel_load_addr: u64,
 ) {
     let mut url_buffer = [0u16; UTF16_URL_BUFFER_SIZE];
     let url = match write_utf16_nul(kernel_url, &mut url_buffer) {
@@ -468,7 +471,13 @@ fn request_kernel_probe(
         write_status(console, completion);
         write_console(console, "\r\n");
         if !completion.is_error() {
-            download_kernel_to_pool(console, boot_services, http_protocol, kernel_size);
+            download_kernel_to_load_addr(
+                console,
+                boot_services,
+                http_protocol,
+                kernel_size,
+                kernel_load_addr,
+            );
         }
     }
 
@@ -478,23 +487,38 @@ fn request_kernel_probe(
     write_console(console, "\r\n");
 }
 
-fn download_kernel_to_pool(
+fn download_kernel_to_load_addr(
     console: *mut EfiSimpleTextOutputProtocol,
     boot_services: &mut EfiBootServices,
     http_protocol: *mut EfiHttpProtocol,
     expected_kernel_size: u64,
+    kernel_load_addr: u64,
 ) {
     let Some(expected_size) = checked_kernel_size(console, expected_kernel_size) else {
         return;
     };
 
-    let mut kernel_buffer = core::ptr::null_mut();
-    let allocate_status =
-        (boot_services.allocate_pool)(EFI_LOADER_DATA, expected_size, &mut kernel_buffer);
-    write_console(console, "kernel_allocate_pool_status: ");
+    let Some(page_count) = kernel_page_count(console, kernel_load_addr, expected_size) else {
+        return;
+    };
+
+    let mut target = kernel_load_addr as EfiPhysicalAddress;
+    let allocate_status = (boot_services.allocate_pages)(
+        EFI_ALLOCATE_ADDRESS,
+        EFI_LOADER_DATA,
+        page_count,
+        &mut target,
+    );
+    write_console(console, "kernel_allocate_pages_status: ");
     write_status(console, allocate_status);
     write_console(console, "\r\n");
-    if allocate_status.is_error() || kernel_buffer.is_null() {
+    write_console(console, "kernel_target_addr: 0x");
+    write_hex_u64(console, target);
+    write_console(console, "\r\n");
+    write_console(console, "kernel_target_pages: ");
+    write_usize(console, page_count);
+    write_console(console, "\r\n");
+    if allocate_status.is_error() || target != kernel_load_addr {
         return;
     }
 
@@ -505,7 +529,7 @@ fn download_kernel_to_pool(
     while downloaded < expected_size {
         let remaining = expected_size - downloaded;
         let chunk_len = remaining.min(KERNEL_RESPONSE_CHUNK_SIZE);
-        let chunk = unsafe { (kernel_buffer as *mut u8).add(downloaded) };
+        let chunk = unsafe { (kernel_load_addr as *mut u8).add(downloaded) };
         let Some(received) =
             receive_kernel_chunk(console, boot_services, http_protocol, chunk, chunk_len)
         else {
@@ -538,8 +562,8 @@ fn download_kernel_to_pool(
     write_hex_u32(console, checksum);
     write_console(console, "\r\n");
 
-    let free_status = (boot_services.free_pool)(kernel_buffer);
-    write_console(console, "kernel_free_pool_status: ");
+    let free_status = (boot_services.free_pages)(kernel_load_addr, page_count);
+    write_console(console, "kernel_free_pages_status: ");
     write_status(console, free_status);
     write_console(console, "\r\n");
 }
@@ -557,6 +581,35 @@ fn checked_kernel_size(
         return None;
     }
     Some(expected_kernel_size as usize)
+}
+
+fn kernel_page_count(
+    console: *mut EfiSimpleTextOutputProtocol,
+    kernel_load_addr: u64,
+    expected_size: usize,
+) -> Option<usize> {
+    if kernel_load_addr as usize as u64 != kernel_load_addr {
+        write_console(
+            console,
+            "kernel_download_skipped: load address too large\r\n",
+        );
+        return None;
+    }
+    if kernel_load_addr as usize % EFI_PAGE_SIZE != 0 {
+        write_console(
+            console,
+            "kernel_download_skipped: load address is not page aligned\r\n",
+        );
+        return None;
+    }
+    expected_size
+        .checked_add(EFI_PAGE_SIZE - 1)
+        .map(|size| size / EFI_PAGE_SIZE)
+        .filter(|pages| *pages > 0)
+        .or_else(|| {
+            write_console(console, "kernel_download_skipped: page count overflow\r\n");
+            None
+        })
 }
 
 fn receive_kernel_chunk(
@@ -682,6 +735,21 @@ fn write_hex_u32(console: *mut EfiSimpleTextOutputProtocol, value: u32) {
         shift = shift.saturating_sub(4);
     }
     let text = core::str::from_utf8(&output).unwrap_or("????????");
+    write_console(console, text);
+}
+
+fn write_hex_u64(console: *mut EfiSimpleTextOutputProtocol, value: u64) {
+    let mut output = [0u8; 16];
+    let mut shift = 60u32;
+    for byte in &mut output {
+        let digit = ((value >> shift) & 0xf) as u8;
+        *byte = match digit {
+            0..=9 => b'0' + digit,
+            _ => b'a' + (digit - 10),
+        };
+        shift = shift.saturating_sub(4);
+    }
+    let text = core::str::from_utf8(&output).unwrap_or("????????????????");
     write_console(console, text);
 }
 
