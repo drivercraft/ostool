@@ -11,7 +11,7 @@ use crate::uefi::abi::{
     boot_services_from_system_table,
 };
 use crate::uefi::console::{write_console, write_status, write_usize, write_utf16_nul};
-use crate::uefi::entry::{EntryPlan, print_entry_plan};
+use crate::uefi::entry::{EntryPlan, call_entry_point, print_entry_plan};
 use httpboot::parse_downloaded_manifest;
 
 const UTF16_URL_BUFFER_SIZE: usize = 1024;
@@ -21,7 +21,7 @@ const HTTP_COMPLETION_POLL_LIMIT: usize = 100_000;
 const MAX_KERNEL_DOWNLOAD_SIZE: usize = 256 * 1024 * 1024;
 const EFI_PAGE_SIZE: usize = 4096;
 const MEMORY_MAP_BUFFER_SIZE: usize = 64 * 1024;
-const ENABLE_EXIT_BOOT_SERVICES: bool = false;
+const ENABLE_BOOT_JUMP: bool = false;
 
 pub fn print_http_protocol_probe(
     console: *mut EfiSimpleTextOutputProtocol,
@@ -751,9 +751,28 @@ fn print_jump_readiness(
             kernel_size,
         },
     );
+    write_console(console, "boot_jump_enabled: ");
+    write_console(
+        console,
+        if ENABLE_BOOT_JUMP {
+            "yes\r\n"
+        } else {
+            "no\r\n"
+        },
+    );
 
     probe_memory_map(console, boot_services, image);
-    maybe_exit_boot_services(console, boot_services, image);
+    maybe_exit_boot_services(
+        console,
+        boot_services,
+        image,
+        &EntryPlan {
+            arch,
+            load_addr: kernel_load_addr,
+            entry_point,
+            kernel_size,
+        },
+    );
     write_console(
         console,
         "jump_skipped: ExitBootServices and entry call pending\r\n",
@@ -839,6 +858,7 @@ fn maybe_exit_boot_services(
     console: *mut EfiSimpleTextOutputProtocol,
     boot_services: &mut EfiBootServices,
     image: EfiHandle,
+    entry_plan: &EntryPlan<'_>,
 ) {
     let mut memory_map = [0u8; MEMORY_MAP_BUFFER_SIZE];
     let mut probe = MemoryMapProbe::new();
@@ -863,8 +883,11 @@ fn maybe_exit_boot_services(
         return;
     }
 
-    if !ENABLE_EXIT_BOOT_SERVICES {
-        write_console(console, "exit_boot_services_skipped: disabled\r\n");
+    if !ENABLE_BOOT_JUMP {
+        write_console(
+            console,
+            "exit_boot_services_skipped: boot jump disabled\r\n",
+        );
         return;
     }
 
@@ -873,7 +896,9 @@ fn maybe_exit_boot_services(
     write_status(console, exit_status);
     write_console(console, "\r\n");
     if exit_status.is_error() {
-        retry_exit_boot_services(console, boot_services, image);
+        retry_exit_boot_services(console, boot_services, image, entry_plan);
+    } else {
+        unsafe { call_entry_point(entry_plan) };
     }
 }
 
@@ -881,6 +906,7 @@ fn retry_exit_boot_services(
     console: *mut EfiSimpleTextOutputProtocol,
     boot_services: &mut EfiBootServices,
     image: EfiHandle,
+    entry_plan: &EntryPlan<'_>,
 ) {
     let mut memory_map = [0u8; MEMORY_MAP_BUFFER_SIZE];
     let mut probe = MemoryMapProbe::new();
@@ -901,6 +927,9 @@ fn retry_exit_boot_services(
     write_console(console, "exit_retry_boot_services_status: ");
     write_status(console, exit_status);
     write_console(console, "\r\n");
+    if !exit_status.is_error() {
+        unsafe { call_entry_point(entry_plan) };
+    }
 }
 
 fn print_kernel_chunk_response(

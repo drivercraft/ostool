@@ -1,8 +1,6 @@
 use crate::uefi::abi::EfiSimpleTextOutputProtocol;
 use crate::uefi::console::{write_console, write_usize};
 
-pub const ENABLE_ENTRY_CALL: bool = false;
-
 pub struct EntryPlan<'a> {
     pub arch: &'a str,
     pub load_addr: u64,
@@ -29,30 +27,11 @@ pub fn print_entry_plan(console: *mut EfiSimpleTextOutputProtocol, plan: &EntryP
     write_console(console, "entry_call_kernel_size: ");
     write_usize(console, plan.kernel_size);
     write_console(console, "\r\n");
-    write_console(console, "entry_call_enabled: ");
-    write_console(
-        console,
-        if ENABLE_ENTRY_CALL {
-            "yes\r\n"
-        } else {
-            "no\r\n"
-        },
-    );
 }
 
 #[allow(dead_code)]
-pub unsafe fn maybe_call_entry(
-    console: *mut EfiSimpleTextOutputProtocol,
-    plan: &EntryPlan<'_>,
-) -> ! {
-    print_entry_plan(console, plan);
-    if ENABLE_ENTRY_CALL {
-        unsafe { call_entry(plan.entry_point) }
-    } else {
-        loop {
-            core::hint::spin_loop();
-        }
-    }
+pub unsafe fn call_entry_point(plan: &EntryPlan<'_>) -> ! {
+    unsafe { call_entry(plan.entry_point) }
 }
 
 #[cfg(target_arch = "x86_64")]
