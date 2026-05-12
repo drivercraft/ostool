@@ -77,7 +77,7 @@ pub extern "efiapi" fn efi_main(image: EfiHandle, system_table: *mut EfiSystemTa
         console,
         "HTTP download backend is pending; manifest bytes parser linked\r\n",
     );
-    print_http_protocol_probe(console, system_table, manifest_url);
+    print_http_protocol_probe(console, image, system_table, manifest_url);
 
     EFI_SUCCESS
 }

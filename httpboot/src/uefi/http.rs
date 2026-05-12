@@ -5,9 +5,10 @@ use crate::uefi::abi::{
     EFI_LOADER_DATA, EFI_LOCATE_BY_PROTOCOL, EFI_NOT_READY, EFI_UNSUPPORTED, EVT_NOTIFY_SIGNAL,
     EfiBootServices, EfiEvent, EfiGuid, EfiHandle, EfiHttpConfigAccessPoint, EfiHttpConfigData,
     EfiHttpMessage, EfiHttpMessageData, EfiHttpProtocol, EfiHttpRequestData, EfiHttpResponseData,
-    EfiHttpToken, EfiHttpv4AccessPoint, EfiPhysicalAddress, EfiServiceBindingProtocol,
-    EfiSimpleTextOutputProtocol, EfiStatus, EfiSystemTable, HTTP_METHOD_GET, HTTP_STATUS_200_OK,
-    HTTP_VERSION_11, TPL_CALLBACK, boot_services_from_system_table,
+    EfiHttpToken, EfiHttpv4AccessPoint, EfiMemoryDescriptor, EfiPhysicalAddress,
+    EfiServiceBindingProtocol, EfiSimpleTextOutputProtocol, EfiStatus, EfiSystemTable,
+    HTTP_METHOD_GET, HTTP_STATUS_200_OK, HTTP_VERSION_11, TPL_CALLBACK,
+    boot_services_from_system_table,
 };
 use crate::uefi::console::{write_console, write_status, write_usize, write_utf16_nul};
 use httpboot::parse_downloaded_manifest;
@@ -18,9 +19,11 @@ const KERNEL_RESPONSE_CHUNK_SIZE: usize = 16 * 1024;
 const HTTP_COMPLETION_POLL_LIMIT: usize = 100_000;
 const MAX_KERNEL_DOWNLOAD_SIZE: usize = 256 * 1024 * 1024;
 const EFI_PAGE_SIZE: usize = 4096;
+const MEMORY_MAP_BUFFER_SIZE: usize = 64 * 1024;
 
 pub fn print_http_protocol_probe(
     console: *mut EfiSimpleTextOutputProtocol,
+    image: EfiHandle,
     system_table: *mut EfiSystemTable,
     manifest_url: Option<&str>,
 ) {
@@ -50,7 +53,7 @@ pub fn print_http_protocol_probe(
         Err(_) => write_console(console, "failed to locate HTTP Protocol\r\n"),
     }
 
-    probe_http_child(console, boot_services, manifest_url);
+    probe_http_child(console, boot_services, image, manifest_url);
 }
 
 fn count_protocol_handles(
@@ -119,6 +122,7 @@ fn open_protocol_on_handle<T>(
 fn probe_http_child(
     console: *mut EfiSimpleTextOutputProtocol,
     boot_services: &mut EfiBootServices,
+    image: EfiHandle,
     manifest_url: Option<&str>,
 ) {
     let service_handle =
@@ -186,7 +190,7 @@ fn probe_http_child(
         if let Some(manifest_url) = manifest_url {
             let mut url_buffer = [0u16; UTF16_URL_BUFFER_SIZE];
             match write_utf16_nul(manifest_url, &mut url_buffer) {
-                Ok(url) => request_manifest(console, boot_services, http_protocol, url),
+                Ok(url) => request_manifest(console, boot_services, image, http_protocol, url),
                 Err(_) => write_console(console, "http_request_skipped: URL too long\r\n"),
             }
         } else {
@@ -209,6 +213,7 @@ fn probe_http_child(
 fn request_manifest(
     console: *mut EfiSimpleTextOutputProtocol,
     boot_services: &mut EfiBootServices,
+    image: EfiHandle,
     http_protocol: *mut EfiHttpProtocol,
     url: *mut u16,
 ) {
@@ -257,7 +262,7 @@ fn request_manifest(
         write_status(console, completion);
         write_console(console, "\r\n");
         if !completion.is_error() {
-            receive_manifest_response(console, boot_services, http_protocol);
+            receive_manifest_response(console, boot_services, image, http_protocol);
         }
     }
 
@@ -283,6 +288,7 @@ fn poll_http_token(http_protocol: *mut EfiHttpProtocol, token: &EfiHttpToken) ->
 fn receive_manifest_response(
     console: *mut EfiSimpleTextOutputProtocol,
     boot_services: &mut EfiBootServices,
+    image: EfiHandle,
     http_protocol: *mut EfiHttpProtocol,
 ) {
     let mut event = core::ptr::null_mut();
@@ -331,6 +337,7 @@ fn receive_manifest_response(
             print_manifest_response(
                 console,
                 boot_services,
+                image,
                 http_protocol,
                 &response_data,
                 &message,
@@ -348,6 +355,7 @@ fn receive_manifest_response(
 fn print_manifest_response(
     console: *mut EfiSimpleTextOutputProtocol,
     boot_services: &mut EfiBootServices,
+    image: EfiHandle,
     http_protocol: *mut EfiHttpProtocol,
     response_data: &EfiHttpResponseData,
     message: &EfiHttpMessage,
@@ -394,13 +402,21 @@ fn print_manifest_response(
             write_console(console, "manifest_kernel_size: ");
             write_usize(console, manifest.kernel_size as usize);
             write_console(console, "\r\n");
+            write_console(console, "manifest_kernel_load_addr: 0x");
+            write_hex_u64(console, manifest.kernel_load_addr);
+            write_console(console, "\r\n");
+            write_console(console, "manifest_entry_point: 0x");
+            write_hex_u64(console, manifest.entry_point);
+            write_console(console, "\r\n");
             request_kernel_probe(
                 console,
                 boot_services,
+                image,
                 http_protocol,
                 manifest.kernel_url,
                 manifest.kernel_size,
                 manifest.kernel_load_addr,
+                manifest.entry_point,
             );
         }
         Err(_) => write_console(console, "manifest_parse_failed\r\n"),
@@ -412,10 +428,12 @@ fn print_manifest_response(
 fn request_kernel_probe(
     console: *mut EfiSimpleTextOutputProtocol,
     boot_services: &mut EfiBootServices,
+    image: EfiHandle,
     http_protocol: *mut EfiHttpProtocol,
     kernel_url: &str,
     kernel_size: u64,
     kernel_load_addr: u64,
+    entry_point: u64,
 ) {
     let mut url_buffer = [0u16; UTF16_URL_BUFFER_SIZE];
     let url = match write_utf16_nul(kernel_url, &mut url_buffer) {
@@ -474,9 +492,11 @@ fn request_kernel_probe(
             download_kernel_to_load_addr(
                 console,
                 boot_services,
+                image,
                 http_protocol,
                 kernel_size,
                 kernel_load_addr,
+                entry_point,
             );
         }
     }
@@ -490,9 +510,11 @@ fn request_kernel_probe(
 fn download_kernel_to_load_addr(
     console: *mut EfiSimpleTextOutputProtocol,
     boot_services: &mut EfiBootServices,
+    image: EfiHandle,
     http_protocol: *mut EfiHttpProtocol,
     expected_kernel_size: u64,
     kernel_load_addr: u64,
+    entry_point: u64,
 ) {
     let Some(expected_size) = checked_kernel_size(console, expected_kernel_size) else {
         return;
@@ -562,10 +584,22 @@ fn download_kernel_to_load_addr(
     write_hex_u32(console, checksum);
     write_console(console, "\r\n");
 
-    let free_status = (boot_services.free_pages)(kernel_load_addr, page_count);
-    write_console(console, "kernel_free_pages_status: ");
-    write_status(console, free_status);
-    write_console(console, "\r\n");
+    if complete {
+        print_jump_readiness(
+            console,
+            boot_services,
+            image,
+            kernel_load_addr,
+            entry_point,
+            expected_size,
+            page_count,
+        );
+    } else {
+        let free_status = (boot_services.free_pages)(kernel_load_addr, page_count);
+        write_console(console, "kernel_free_pages_status: ");
+        write_status(console, free_status);
+        write_console(console, "\r\n");
+    }
 }
 
 fn checked_kernel_size(
@@ -679,6 +713,87 @@ fn receive_kernel_chunk(
     Some(message.body_length)
 }
 
+fn print_jump_readiness(
+    console: *mut EfiSimpleTextOutputProtocol,
+    boot_services: &mut EfiBootServices,
+    image: EfiHandle,
+    kernel_load_addr: u64,
+    entry_point: u64,
+    kernel_size: usize,
+    page_count: usize,
+) {
+    write_console(console, "jump_ready_load_addr: 0x");
+    write_hex_u64(console, kernel_load_addr);
+    write_console(console, "\r\n");
+    write_console(console, "jump_ready_entry_point: 0x");
+    write_hex_u64(console, entry_point);
+    write_console(console, "\r\n");
+    write_console(console, "jump_ready_kernel_size: ");
+    write_usize(console, kernel_size);
+    write_console(console, "\r\n");
+    write_console(console, "jump_ready_pages_retained: ");
+    write_usize(console, page_count);
+    write_console(console, "\r\n");
+
+    probe_memory_map(console, boot_services, image);
+    write_console(
+        console,
+        "jump_skipped: ExitBootServices and entry call pending\r\n",
+    );
+}
+
+fn probe_memory_map(
+    console: *mut EfiSimpleTextOutputProtocol,
+    boot_services: &mut EfiBootServices,
+    image: EfiHandle,
+) {
+    let mut memory_map_size = 0usize;
+    let mut map_key = 0usize;
+    let mut descriptor_size = 0usize;
+    let mut descriptor_version = 0u32;
+    let size_status = (boot_services.get_memory_map)(
+        &mut memory_map_size,
+        core::ptr::null_mut(),
+        &mut map_key,
+        &mut descriptor_size,
+        &mut descriptor_version,
+    );
+    write_console(console, "memory_map_size_status: ");
+    write_status(console, size_status);
+    write_console(console, "\r\n");
+    write_console(console, "memory_map_required_size: ");
+    write_usize(console, memory_map_size);
+    write_console(console, "\r\n");
+
+    let mut memory_map = [0u8; MEMORY_MAP_BUFFER_SIZE];
+    let mut buffer_size = memory_map.len();
+    let map_status = (boot_services.get_memory_map)(
+        &mut buffer_size,
+        memory_map.as_mut_ptr() as *mut EfiMemoryDescriptor,
+        &mut map_key,
+        &mut descriptor_size,
+        &mut descriptor_version,
+    );
+    write_console(console, "memory_map_status: ");
+    write_status(console, map_status);
+    write_console(console, "\r\n");
+    write_console(console, "memory_map_size: ");
+    write_usize(console, buffer_size);
+    write_console(console, "\r\n");
+    write_console(console, "memory_map_key: ");
+    write_usize(console, map_key);
+    write_console(console, "\r\n");
+    write_console(console, "memory_map_descriptor_size: ");
+    write_usize(console, descriptor_size);
+    write_console(console, "\r\n");
+    write_console(console, "memory_map_descriptor_version: ");
+    write_usize(console, descriptor_version as usize);
+    write_console(console, "\r\n");
+    write_console(console, "exit_boot_services_image: 0x");
+    write_hex_usize(console, image as usize);
+    write_console(console, "\r\n");
+}
+
 fn print_kernel_chunk_response(
     console: *mut EfiSimpleTextOutputProtocol,
     boot_services: &mut EfiBootServices,
@@ -751,6 +866,14 @@ fn write_hex_u64(console: *mut EfiSimpleTextOutputProtocol, value: u64) {
     }
     let text = core::str::from_utf8(&output).unwrap_or("????????????????");
     write_console(console, text);
+}
+
+fn write_hex_usize(console: *mut EfiSimpleTextOutputProtocol, value: usize) {
+    if usize::BITS == 64 {
+        write_hex_u64(console, value as u64);
+    } else {
+        write_hex_u32(console, value as u32);
+    }
 }
 
 fn write_http_status_code(console: *mut EfiSimpleTextOutputProtocol, status_code: u32) {

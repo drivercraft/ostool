@@ -84,7 +84,13 @@ pub struct EfiBootServices {
         memory: *mut EfiPhysicalAddress,
     ) -> EfiStatus,
     pub free_pages: extern "efiapi" fn(memory: EfiPhysicalAddress, pages: usize) -> EfiStatus,
-    pub _get_memory_map: usize,
+    pub get_memory_map: extern "efiapi" fn(
+        memory_map_size: *mut usize,
+        memory_map: *mut EfiMemoryDescriptor,
+        map_key: *mut usize,
+        descriptor_size: *mut usize,
+        descriptor_version: *mut u32,
+    ) -> EfiStatus,
     pub allocate_pool: extern "efiapi" fn(
         pool_type: EfiMemoryType,
         size: usize,
@@ -137,6 +143,15 @@ pub struct EfiBootServices {
         no_handles: *mut usize,
         buffer: *mut *mut EfiHandle,
     ) -> EfiStatus,
+}
+
+#[repr(C)]
+pub struct EfiMemoryDescriptor {
+    pub memory_type: u32,
+    pub physical_start: EfiPhysicalAddress,
+    pub virtual_start: u64,
+    pub number_of_pages: u64,
+    pub attribute: u64,
 }
 
 #[repr(C)]
