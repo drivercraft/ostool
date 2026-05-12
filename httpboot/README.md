@@ -14,13 +14,13 @@ Build the x86_64 stub after installing the target:
 
 ```bash
 rustup target add x86_64-unknown-uefi
-cargo build -p httpboot-loader --features uefi-app --target x86_64-unknown-uefi
-mkdir -p target/httpboot-loader
-cp target/x86_64-unknown-uefi/debug/httpboot-loader.efi target/httpboot-loader/BOOTX64.EFI
+cargo build -p httpboot --features uefi-app --target x86_64-unknown-uefi
+mkdir -p target/httpboot
+cp target/x86_64-unknown-uefi/debug/httpboot.efi target/httpboot/BOOTX64.EFI
 ```
 
 Then set:
 
 ```toml
-efi_loader_path = "target/httpboot-loader/BOOTX64.EFI"
+efi_loader_path = "target/httpboot/BOOTX64.EFI"
 ```

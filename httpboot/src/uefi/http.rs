@@ -10,7 +10,7 @@ use crate::uefi::abi::{
     boot_services_from_system_table,
 };
 use crate::uefi::console::{write_console, write_status, write_usize, write_utf16_nul};
-use httpboot_loader::parse_downloaded_manifest;
+use httpboot::parse_downloaded_manifest;
 
 const UTF16_URL_BUFFER_SIZE: usize = 1024;
 const MANIFEST_BODY_BUFFER_SIZE: usize = 4096;

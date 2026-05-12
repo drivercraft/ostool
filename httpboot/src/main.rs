@@ -8,7 +8,7 @@ compile_error!("the uefi-app feature must be built with a *-unknown-uefi target"
 use core::panic::PanicInfo;
 
 #[cfg(target_os = "uefi")]
-use httpboot_loader::write_sibling_manifest_url;
+use httpboot::write_sibling_manifest_url;
 
 #[cfg(target_os = "uefi")]
 mod uefi;
@@ -37,7 +37,7 @@ pub extern "efiapi" fn efi_main(image: EfiHandle, system_table: *mut EfiSystemTa
         return EFI_UNSUPPORTED;
     };
 
-    write_console(console, "ostool HTTP Boot loader\r\n");
+    write_console(console, "ostool HTTP Boot\r\n");
     write_console(console, "manifest parser core linked\r\n");
 
     let mut device_path_buffer = [0u8; DEVICE_PATH_BUFFER_SIZE];

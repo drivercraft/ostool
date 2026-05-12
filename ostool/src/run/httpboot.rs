@@ -360,12 +360,12 @@ async fn upload_configured_loader(
     };
 
     let loader_bytes = std::fs::read(efi_loader_path)
-        .with_context(|| format!("failed to read HTTP Boot loader {}", efi_loader_path))?;
+        .with_context(|| format!("failed to read HTTP Boot {}", efi_loader_path))?;
     let uploaded = client
         .upload_http_boot_file(session_id, loader_file, loader_bytes)
         .await
         .with_context(|| {
-            format!("failed to upload HTTP Boot loader `{loader_file}` from `{efi_loader_path}`")
+            format!("failed to upload HTTP Boot `{loader_file}` from `{efi_loader_path}`")
         })?;
     Ok(Some(uploaded))
 }
@@ -373,11 +373,11 @@ async fn upload_configured_loader(
 async fn verify_existing_loader_url(loader_url: &str) -> anyhow::Result<()> {
     let response = reqwest::get(loader_url)
         .await
-        .with_context(|| format!("failed to verify HTTP Boot loader URL `{loader_url}`"))?;
+        .with_context(|| format!("failed to verify HTTP Boot URL `{loader_url}`"))?;
     let status = response.status();
     if !status.is_success() {
         anyhow::bail!(
-            "HTTP Boot loader URL `{loader_url}` returned {status}; set `efi_loader_path` in .httpboot.toml or pre-publish the loader"
+            "HTTP Boot URL `{loader_url}` returned {status}; set `efi_loader_path` in .httpboot.toml or pre-publish the loader"
         );
     }
     Ok(())

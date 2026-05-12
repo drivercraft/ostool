@@ -6,7 +6,7 @@ members = [
     "jkconfig",
     "fitimage",
     "ostool-server",
-    "httpboot-loader",
+    "httpboot",
 ]
 resolver = "3"
 

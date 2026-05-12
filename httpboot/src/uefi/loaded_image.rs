@@ -1,4 +1,4 @@
-use httpboot_loader::uri_from_device_path;
+use httpboot::uri_from_device_path;
 
 use crate::uefi::abi::{
     EFI_LOADED_IMAGE_PROTOCOL_GUID, EfiDevicePathProtocol, EfiHandle, EfiLoadedImageProtocol,
