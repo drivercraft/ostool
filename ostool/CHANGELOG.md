@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/drivercraft/ostool/compare/ostool-v0.15.1...ostool-v0.16.0) - 2026-05-12
+
+### Added
+
+- *(ostool)* 添加 Cargo 二进制目标选择 ([#97](https://github.com/drivercraft/ostool/pull/97))
+- *(ostool)* 支持显式配置 Cargo 构建 profile ([#96](https://github.com/drivercraft/ostool/pull/96))
+
 ## [0.15.1](https://github.com/drivercraft/ostool/compare/ostool-v0.15.0...ostool-v0.15.1) - 2026-04-30
 
 ### Fixed
