@@ -211,6 +211,10 @@ pub struct ProxyDhcpConfig {
     pub enabled: bool,
     pub bind_addr: SocketAddr,
     pub board_id: Option<String>,
+    pub subnet_mask: Ipv4Addr,
+    pub router: Option<Ipv4Addr>,
+    pub dns_server: Option<Ipv4Addr>,
+    pub lease_time_secs: u32,
 }
 
 impl Default for ProxyDhcpConfig {
@@ -219,6 +223,10 @@ impl Default for ProxyDhcpConfig {
             enabled: false,
             bind_addr: SocketAddr::from(([0, 0, 0, 0], 67)),
             board_id: None,
+            subnet_mask: Ipv4Addr::new(255, 255, 255, 0),
+            router: None,
+            dns_server: None,
+            lease_time_secs: 3600,
         }
     }
 }

@@ -12,10 +12,14 @@ const DHCP_CLIENT_PORT: u16 = 68;
 const DHCP_MAGIC_COOKIE: [u8; 4] = [99, 130, 83, 99];
 const DHCP_DISCOVER: u8 = 1;
 const DHCP_OFFER: u8 = 2;
+const DHCP_REQUEST: u8 = 3;
+const DHCP_ACK: u8 = 5;
 const DHCP_OPTION_PAD: u8 = 0;
 const DHCP_OPTION_SUBNET_MASK: u8 = 1;
 const DHCP_OPTION_ROUTER: u8 = 3;
 const DHCP_OPTION_DNS: u8 = 6;
+const DHCP_OPTION_REQUESTED_IP: u8 = 50;
+const DHCP_OPTION_LEASE_TIME: u8 = 51;
 const DHCP_OPTION_MESSAGE_TYPE: u8 = 53;
 const DHCP_OPTION_SERVER_ID: u8 = 54;
 const DHCP_OPTION_VENDOR_CLASS: u8 = 60;
@@ -38,6 +42,7 @@ struct DhcpRequest<'a> {
     vendor_class: Option<&'a [u8]>,
     arch: Option<u16>,
     message_type: Option<u8>,
+    requested_ip: Option<Ipv4Addr>,
 }
 
 pub async fn spawn_proxy_dhcp(
@@ -87,24 +92,43 @@ pub async fn spawn_proxy_dhcp(
 
 async fn handle_packet(socket: &UdpSocket, packet: &[u8], plan: &BootPlan) -> anyhow::Result<()> {
     let request = parse_dhcp_request(packet)?;
-    if request.message_type != Some(DHCP_DISCOVER) {
-        bail!("not a DHCP Discover");
-    }
+    let response_type = match request.message_type {
+        Some(DHCP_DISCOVER) => DHCP_OFFER,
+        Some(DHCP_REQUEST) => DHCP_ACK,
+        _ => bail!("not a DHCP Discover/Request"),
+    };
     if !is_http_client(request.vendor_class) {
         bail!("not a UEFI HTTP client");
     }
     if !arch_matches(request.arch, plan.arch.as_ref()) {
         bail!("UEFI HTTP client arch does not match board");
     }
+    if let Some(mac) = plan.client_mac.as_deref() {
+        let request_mac = format_mac(&request.chaddr[..6]);
+        if !mac.eq_ignore_ascii_case(&request_mac) {
+            bail!("UEFI HTTP client MAC does not match board");
+        }
+    }
+    if request.message_type == Some(DHCP_REQUEST)
+        && let Some(requested_ip) = request.requested_ip
+        && requested_ip != plan.client_ip
+    {
+        bail!("DHCP Request is for a different client IP");
+    }
 
-    let response = build_proxy_offer(packet, &request, plan)?;
+    let response = build_dhcp_response(packet, &request, plan, response_type)?;
     socket
         .send_to(&response, (Ipv4Addr::BROADCAST, DHCP_CLIENT_PORT))
         .await
-        .context("failed to send ProxyDHCP offer")?;
+        .context("failed to send HTTP Boot DHCP response")?;
 
     log::info!(
-        "ProxyDHCP offered {} to {}",
+        "HTTP Boot DHCP sent {} with {} to {}",
+        if response_type == DHCP_ACK {
+            "ACK"
+        } else {
+            "OFFER"
+        },
         plan.boot_url,
         format_mac(&request.chaddr[..6])
     );
@@ -116,6 +140,12 @@ struct BootPlan {
     board_id: String,
     arch: Option<UefiBootArch>,
     server_ip: Ipv4Addr,
+    client_ip: Ipv4Addr,
+    client_mac: Option<String>,
+    subnet_mask: Ipv4Addr,
+    router: Ipv4Addr,
+    dns_server: Ipv4Addr,
+    lease_time_secs: u32,
     boot_url: String,
 }
 
@@ -136,11 +166,22 @@ async fn build_boot_plan(config: &ServerConfig, state: &AppState) -> anyhow::Res
         .unwrap_or_else(|| default_loader_file(profile.boot_arch.as_ref()));
     let boot_url = http_boot_url(config, board_id, &loader_file)?;
     let server_ip = proxy_server_ip(config)?;
+    let client_ip = profile.client_ip.ok_or_else(|| {
+        anyhow::anyhow!("ProxyDHCP requires boot.client_ip for board `{board_id}`")
+    })?;
+    let router = config.proxy_dhcp.router.unwrap_or(server_ip);
+    let dns_server = config.proxy_dhcp.dns_server.unwrap_or(router);
 
     Ok(BootPlan {
         board_id: board_id.to_string(),
         arch: profile.boot_arch.clone(),
         server_ip,
+        client_ip,
+        client_mac: profile.mac_address.clone(),
+        subnet_mask: config.proxy_dhcp.subnet_mask,
+        router,
+        dns_server,
+        lease_time_secs: config.proxy_dhcp.lease_time_secs,
         boot_url,
     })
 }
@@ -232,6 +273,7 @@ fn parse_dhcp_request(packet: &[u8]) -> anyhow::Result<DhcpRequest<'_>> {
         vendor_class: None,
         arch: None,
         message_type: None,
+        requested_ip: None,
     };
 
     for option in DhcpOptions::new(&packet[DHCP_OPTIONS_OFFSET..]) {
@@ -239,6 +281,9 @@ fn parse_dhcp_request(packet: &[u8]) -> anyhow::Result<DhcpRequest<'_>> {
         match code {
             DHCP_OPTION_MESSAGE_TYPE if value.len() == 1 => request.message_type = Some(value[0]),
             DHCP_OPTION_VENDOR_CLASS => request.vendor_class = Some(value),
+            DHCP_OPTION_REQUESTED_IP if value.len() == 4 => {
+                request.requested_ip = Some(Ipv4Addr::new(value[0], value[1], value[2], value[3]));
+            }
             DHCP_OPTION_ARCH if value.len() >= 2 => {
                 request.arch = Some(u16::from_be_bytes([value[0], value[1]]));
             }
@@ -305,10 +350,11 @@ fn arch_matches(request_arch: Option<u16>, board_arch: Option<&UefiBootArch>) ->
     }
 }
 
-fn build_proxy_offer(
+fn build_dhcp_response(
     request_packet: &[u8],
     request: &DhcpRequest<'_>,
     plan: &BootPlan,
+    response_type: u8,
 ) -> anyhow::Result<Vec<u8>> {
     if plan.boot_url.len() > BOOTFILE_LEN {
         bail!("ProxyDHCP boot URL is too long for BOOTP file field");
@@ -322,13 +368,20 @@ fn build_proxy_offer(
     response[4..8].copy_from_slice(&request.xid);
     response[8..10].copy_from_slice(&request.secs);
     response[10..12].copy_from_slice(&request.flags);
+    response[16..20].copy_from_slice(&plan.client_ip.octets());
     response[20..24].copy_from_slice(&plan.server_ip.octets());
     response[CHADDR_OFFSET..CHADDR_OFFSET + CHADDR_LEN].copy_from_slice(&request.chaddr);
     response[BOOTFILE_OFFSET..BOOTFILE_OFFSET + plan.boot_url.len()]
         .copy_from_slice(plan.boot_url.as_bytes());
     response[236..240].copy_from_slice(&DHCP_MAGIC_COOKIE);
 
-    push_option(&mut response, DHCP_OPTION_MESSAGE_TYPE, &[DHCP_OFFER])?;
+    push_option(&mut response, DHCP_OPTION_MESSAGE_TYPE, &[response_type])?;
+    if let Some(vendor_class) = request.vendor_class {
+        push_option(&mut response, DHCP_OPTION_VENDOR_CLASS, vendor_class)?;
+    }
+    if let Some(arch) = request.arch {
+        push_option(&mut response, DHCP_OPTION_ARCH, &arch.to_be_bytes())?;
+    }
     push_option(
         &mut response,
         DHCP_OPTION_SERVER_ID,
@@ -336,12 +389,21 @@ fn build_proxy_offer(
     )?;
     push_option(
         &mut response,
+        DHCP_OPTION_LEASE_TIME,
+        &plan.lease_time_secs.to_be_bytes(),
+    )?;
+    push_option(
+        &mut response,
         DHCP_OPTION_BOOTFILE_NAME,
         plan.boot_url.as_bytes(),
     )?;
-    push_option(&mut response, DHCP_OPTION_SUBNET_MASK, &[255, 255, 255, 0])?;
-    push_option(&mut response, DHCP_OPTION_ROUTER, &plan.server_ip.octets())?;
-    push_option(&mut response, DHCP_OPTION_DNS, &plan.server_ip.octets())?;
+    push_option(
+        &mut response,
+        DHCP_OPTION_SUBNET_MASK,
+        &plan.subnet_mask.octets(),
+    )?;
+    push_option(&mut response, DHCP_OPTION_ROUTER, &plan.router.octets())?;
+    push_option(&mut response, DHCP_OPTION_DNS, &plan.dns_server.octets())?;
     response.push(DHCP_OPTION_END);
     Ok(response)
 }
