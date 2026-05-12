@@ -126,7 +126,8 @@ pub struct EfiBootServices {
     pub _start_image: usize,
     pub _exit: usize,
     pub _unload_image: usize,
-    pub _exit_boot_services: usize,
+    pub exit_boot_services:
+        extern "efiapi" fn(image_handle: EfiHandle, map_key: usize) -> EfiStatus,
     pub _get_next_monotonic_count: usize,
     pub _stall: usize,
     pub _set_watchdog_timer: usize,

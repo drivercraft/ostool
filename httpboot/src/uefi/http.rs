@@ -20,6 +20,7 @@ const HTTP_COMPLETION_POLL_LIMIT: usize = 100_000;
 const MAX_KERNEL_DOWNLOAD_SIZE: usize = 256 * 1024 * 1024;
 const EFI_PAGE_SIZE: usize = 4096;
 const MEMORY_MAP_BUFFER_SIZE: usize = 64 * 1024;
+const ENABLE_EXIT_BOOT_SERVICES: bool = false;
 
 pub fn print_http_protocol_probe(
     console: *mut EfiSimpleTextOutputProtocol,
@@ -736,6 +737,7 @@ fn print_jump_readiness(
     write_console(console, "\r\n");
 
     probe_memory_map(console, boot_services, image);
+    maybe_exit_boot_services(console, boot_services, image);
     write_console(
         console,
         "jump_skipped: ExitBootServices and entry call pending\r\n",
@@ -747,50 +749,141 @@ fn probe_memory_map(
     boot_services: &mut EfiBootServices,
     image: EfiHandle,
 ) {
-    let mut memory_map_size = 0usize;
-    let mut map_key = 0usize;
-    let mut descriptor_size = 0usize;
-    let mut descriptor_version = 0u32;
-    let size_status = (boot_services.get_memory_map)(
-        &mut memory_map_size,
-        core::ptr::null_mut(),
-        &mut map_key,
-        &mut descriptor_size,
-        &mut descriptor_version,
-    );
+    let mut probe = MemoryMapProbe::new();
+    let size_status = get_memory_map(boot_services, &mut probe, core::ptr::null_mut(), 0);
     write_console(console, "memory_map_size_status: ");
     write_status(console, size_status);
     write_console(console, "\r\n");
     write_console(console, "memory_map_required_size: ");
-    write_usize(console, memory_map_size);
+    write_usize(console, probe.memory_map_size);
     write_console(console, "\r\n");
 
     let mut memory_map = [0u8; MEMORY_MAP_BUFFER_SIZE];
-    let mut buffer_size = memory_map.len();
-    let map_status = (boot_services.get_memory_map)(
-        &mut buffer_size,
+    let map_status = get_memory_map(
+        boot_services,
+        &mut probe,
         memory_map.as_mut_ptr() as *mut EfiMemoryDescriptor,
-        &mut map_key,
-        &mut descriptor_size,
-        &mut descriptor_version,
+        memory_map.len(),
     );
     write_console(console, "memory_map_status: ");
     write_status(console, map_status);
     write_console(console, "\r\n");
     write_console(console, "memory_map_size: ");
-    write_usize(console, buffer_size);
+    write_usize(console, probe.memory_map_size);
     write_console(console, "\r\n");
     write_console(console, "memory_map_key: ");
-    write_usize(console, map_key);
+    write_usize(console, probe.map_key);
     write_console(console, "\r\n");
     write_console(console, "memory_map_descriptor_size: ");
-    write_usize(console, descriptor_size);
+    write_usize(console, probe.descriptor_size);
     write_console(console, "\r\n");
     write_console(console, "memory_map_descriptor_version: ");
-    write_usize(console, descriptor_version as usize);
+    write_usize(console, probe.descriptor_version as usize);
     write_console(console, "\r\n");
     write_console(console, "exit_boot_services_image: 0x");
     write_hex_usize(console, image as usize);
+    write_console(console, "\r\n");
+}
+
+struct MemoryMapProbe {
+    memory_map_size: usize,
+    map_key: usize,
+    descriptor_size: usize,
+    descriptor_version: u32,
+}
+
+impl MemoryMapProbe {
+    fn new() -> Self {
+        Self {
+            memory_map_size: 0,
+            map_key: 0,
+            descriptor_size: 0,
+            descriptor_version: 0,
+        }
+    }
+}
+
+fn get_memory_map(
+    boot_services: &mut EfiBootServices,
+    probe: &mut MemoryMapProbe,
+    memory_map: *mut EfiMemoryDescriptor,
+    memory_map_capacity: usize,
+) -> EfiStatus {
+    probe.memory_map_size = memory_map_capacity;
+    (boot_services.get_memory_map)(
+        &mut probe.memory_map_size,
+        memory_map,
+        &mut probe.map_key,
+        &mut probe.descriptor_size,
+        &mut probe.descriptor_version,
+    )
+}
+
+fn maybe_exit_boot_services(
+    console: *mut EfiSimpleTextOutputProtocol,
+    boot_services: &mut EfiBootServices,
+    image: EfiHandle,
+) {
+    let mut memory_map = [0u8; MEMORY_MAP_BUFFER_SIZE];
+    let mut probe = MemoryMapProbe::new();
+    let map_status = get_memory_map(
+        boot_services,
+        &mut probe,
+        memory_map.as_mut_ptr() as *mut EfiMemoryDescriptor,
+        memory_map.len(),
+    );
+    write_console(console, "exit_memory_map_status: ");
+    write_status(console, map_status);
+    write_console(console, "\r\n");
+    write_console(console, "exit_memory_map_key: ");
+    write_usize(console, probe.map_key);
+    write_console(console, "\r\n");
+
+    if map_status.is_error() {
+        write_console(
+            console,
+            "exit_boot_services_skipped: memory map unavailable\r\n",
+        );
+        return;
+    }
+
+    if !ENABLE_EXIT_BOOT_SERVICES {
+        write_console(console, "exit_boot_services_skipped: disabled\r\n");
+        return;
+    }
+
+    let exit_status = (boot_services.exit_boot_services)(image, probe.map_key);
+    write_console(console, "exit_boot_services_status: ");
+    write_status(console, exit_status);
+    write_console(console, "\r\n");
+    if exit_status.is_error() {
+        retry_exit_boot_services(console, boot_services, image);
+    }
+}
+
+fn retry_exit_boot_services(
+    console: *mut EfiSimpleTextOutputProtocol,
+    boot_services: &mut EfiBootServices,
+    image: EfiHandle,
+) {
+    let mut memory_map = [0u8; MEMORY_MAP_BUFFER_SIZE];
+    let mut probe = MemoryMapProbe::new();
+    let map_status = get_memory_map(
+        boot_services,
+        &mut probe,
+        memory_map.as_mut_ptr() as *mut EfiMemoryDescriptor,
+        memory_map.len(),
+    );
+    write_console(console, "exit_retry_memory_map_status: ");
+    write_status(console, map_status);
+    write_console(console, "\r\n");
+    if map_status.is_error() {
+        return;
+    }
+
+    let exit_status = (boot_services.exit_boot_services)(image, probe.map_key);
+    write_console(console, "exit_retry_boot_services_status: ");
+    write_status(console, exit_status);
     write_console(console, "\r\n");
 }
 
