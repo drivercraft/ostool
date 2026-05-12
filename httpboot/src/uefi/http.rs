@@ -11,6 +11,7 @@ use crate::uefi::abi::{
     boot_services_from_system_table,
 };
 use crate::uefi::console::{write_console, write_status, write_usize, write_utf16_nul};
+use crate::uefi::entry::{EntryPlan, print_entry_plan};
 use httpboot::parse_downloaded_manifest;
 
 const UTF16_URL_BUFFER_SIZE: usize = 1024;
@@ -418,6 +419,7 @@ fn print_manifest_response(
                 manifest.kernel_size,
                 manifest.kernel_load_addr,
                 manifest.entry_point,
+                manifest.arch,
             );
         }
         Err(_) => write_console(console, "manifest_parse_failed\r\n"),
@@ -435,6 +437,7 @@ fn request_kernel_probe(
     kernel_size: u64,
     kernel_load_addr: u64,
     entry_point: u64,
+    arch: &str,
 ) {
     let mut url_buffer = [0u16; UTF16_URL_BUFFER_SIZE];
     let url = match write_utf16_nul(kernel_url, &mut url_buffer) {
@@ -498,6 +501,7 @@ fn request_kernel_probe(
                 kernel_size,
                 kernel_load_addr,
                 entry_point,
+                arch,
             );
         }
     }
@@ -516,6 +520,7 @@ fn download_kernel_to_load_addr(
     expected_kernel_size: u64,
     kernel_load_addr: u64,
     entry_point: u64,
+    arch: &str,
 ) {
     let Some(expected_size) = checked_kernel_size(console, expected_kernel_size) else {
         return;
@@ -592,6 +597,7 @@ fn download_kernel_to_load_addr(
             image,
             kernel_load_addr,
             entry_point,
+            arch,
             expected_size,
             page_count,
         );
@@ -720,6 +726,7 @@ fn print_jump_readiness(
     image: EfiHandle,
     kernel_load_addr: u64,
     entry_point: u64,
+    arch: &str,
     kernel_size: usize,
     page_count: usize,
 ) {
@@ -735,6 +742,15 @@ fn print_jump_readiness(
     write_console(console, "jump_ready_pages_retained: ");
     write_usize(console, page_count);
     write_console(console, "\r\n");
+    print_entry_plan(
+        console,
+        &EntryPlan {
+            arch,
+            load_addr: kernel_load_addr,
+            entry_point,
+            kernel_size,
+        },
+    );
 
     probe_memory_map(console, boot_services, image);
     maybe_exit_boot_services(console, boot_services, image);
