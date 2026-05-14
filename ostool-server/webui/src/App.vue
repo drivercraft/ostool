@@ -37,7 +37,7 @@ const navItems = computed(() => [
           <p>开发板管理台</p>
         </div>
       </div>
-      <nav class="nav-list">
+      <nav class="nav-list" aria-label="主导航">
         <RouterLink
           v-for="item in navItems"
           :key="item.to"
@@ -52,7 +52,6 @@ const navItems = computed(() => [
     <div class="app-content">
       <header class="topbar">
         <div>
-          <p class="eyebrow">控制面板</p>
           <h2>{{ ui.title }}</h2>
         </div>
       </header>

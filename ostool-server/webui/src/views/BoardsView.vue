@@ -212,11 +212,11 @@ onMounted(() => {
             <div class="board-card-meta-item">
               <span class="board-card-meta-label">串口</span>
               <div v-if="board.serial" class="board-card-serial-mini">
-                <span class="serial-key-badge" style="width: fit-content">{{ serialPrimaryLabel(board) }}</span>
-                <strong style="font-size: 0.88rem; line-break: anywhere">{{ board.serial.key.value }}</strong>
-                <span style="color: var(--muted); font-size: 0.8rem">@ {{ board.serial.baud_rate }}</span>
+                <span class="serial-key-badge">{{ serialPrimaryLabel(board) }}</span>
+                <strong class="board-card-serial-value">{{ board.serial.key.value }}</strong>
+                <span class="board-card-muted">@ {{ board.serial.baud_rate }}</span>
               </div>
-              <span v-else style="color: var(--muted); font-size: 0.85rem">未配置</span>
+              <span v-else class="board-card-muted">未配置</span>
             </div>
             <div class="board-card-meta-item">
               <span class="board-card-meta-label">启动方式</span>
@@ -236,32 +236,34 @@ onMounted(() => {
 
 <style scoped>
 .stats-strip {
-  display: flex;
-  gap: 14px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .stats-chip {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 20px;
-  border-radius: 16px;
+  min-width: 0;
+  padding: 12px 14px;
+  border-radius: 8px;
   background: var(--panel);
-  border: 1px solid rgba(96, 79, 53, 0.12);
+  border: 1px solid var(--line);
 }
 
 .stats-chip-good {
-  border-color: rgba(22, 97, 75, 0.18);
+  border-color: rgba(18, 97, 70, 0.18);
   background: var(--good-soft);
 }
 
 .stats-chip-warn {
-  border-color: rgba(185, 115, 22, 0.18);
+  border-color: rgba(157, 101, 15, 0.18);
   background: var(--warn-soft);
 }
 
 .stats-chip-neutral {
-  border-color: rgba(139, 127, 115, 0.18);
+  border-color: rgba(102, 115, 109, 0.18);
   background: var(--neutral-soft);
 }
 
@@ -276,17 +278,17 @@ onMounted(() => {
 }
 
 .filter-bar {
-  display: flex;
-  gap: 14px;
-  margin-bottom: 22px;
-  padding: 16px 20px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.4);
-  border: 1px solid rgba(96, 79, 53, 0.08);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 14px;
+  border-radius: 8px;
+  background: var(--surface-muted);
+  border: 1px solid rgba(217, 227, 223, 0.9);
 }
 
 .filter-field {
-  flex: 1;
   min-width: 0;
 }
 
@@ -299,18 +301,34 @@ onMounted(() => {
 
 .filter-field select,
 .filter-field input {
-  padding: 8px 12px;
-  border-radius: 10px;
   font-size: 0.88rem;
+}
+
+.board-card-serial-value {
+  min-width: 0;
+  font-size: 0.88rem;
+  line-break: anywhere;
+}
+
+.board-card-muted {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-break: anywhere;
 }
 
 @media (max-width: 860px) {
   .stats-strip {
-    flex-wrap: wrap;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .filter-bar {
-    flex-direction: column;
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 420px) {
+  .stats-strip {
+    grid-template-columns: 1fr;
   }
 }
 </style>
