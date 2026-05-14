@@ -97,10 +97,17 @@ export interface ZhongshengRelayPowerManagement {
 
 export type PowerManagementConfig = CustomPowerManagement | ZhongshengRelayPowerManagement;
 
+export type UbootNetworkMode = "dhcp" | "static_ip";
+
 export interface UbootProfile {
   kind: "uboot";
   use_tftp: boolean;
   dtb_name: string | null;
+  network_mode: UbootNetworkMode;
+  board_ip: string | null;
+  server_ip: string | null;
+  netmask: string | null;
+  gatewayip: string | null;
 }
 
 export interface PxeProfile {

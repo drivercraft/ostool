@@ -352,6 +352,15 @@ pub struct BoardConfig {
     pub disabled: bool,
 }
 
+impl BoardConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if let BootConfig::Uboot(profile) = &self.boot {
+            profile.validate()?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SerialConfig {
     pub key: SerialPortKey,
@@ -420,6 +429,51 @@ pub struct UbootProfile {
     #[serde(default)]
     pub use_tftp: bool,
     pub dtb_name: Option<String>,
+    #[serde(default)]
+    pub network_mode: UbootNetworkMode,
+    #[serde(default)]
+    pub board_ip: Option<String>,
+    #[serde(default)]
+    pub server_ip: Option<String>,
+    #[serde(default)]
+    pub netmask: Option<String>,
+    #[serde(default)]
+    pub gatewayip: Option<String>,
+}
+
+impl UbootProfile {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        for (field, value) in [
+            ("board_ip", self.board_ip.as_deref()),
+            ("server_ip", self.server_ip.as_deref()),
+            ("netmask", self.netmask.as_deref()),
+            ("gatewayip", self.gatewayip.as_deref()),
+        ] {
+            if let Some(value) = value {
+                ensure_ipv4(field, value)?;
+            }
+        }
+
+        if self.network_mode == UbootNetworkMode::StaticIp && self.board_ip.is_none() {
+            bail!("boot.board_ip must be configured when boot.network_mode is static_ip");
+        }
+
+        Ok(())
+    }
+}
+
+fn ensure_ipv4(field: &str, value: &str) -> anyhow::Result<Ipv4Addr> {
+    value
+        .parse::<Ipv4Addr>()
+        .with_context(|| format!("boot.{field} must be a valid IPv4 address"))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UbootNetworkMode {
+    #[default]
+    Dhcp,
+    StaticIp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -439,7 +493,7 @@ mod tests {
 
     use super::{
         BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, SerialPortKey,
-        SerialPortKeyKind, ServerConfig, UbootProfile, VirtualPowerManagement,
+        SerialPortKeyKind, ServerConfig, UbootNetworkMode, UbootProfile, VirtualPowerManagement,
         ZhongshengRelayPowerManagement,
     };
 
@@ -552,6 +606,92 @@ board_power_off_cmd = "shutdown"
     }
 
     #[test]
+    fn board_config_defaults_legacy_uboot_network_mode_to_dhcp() {
+        let config = r#"
+id = "demo"
+board_type = "demo"
+tags = []
+disabled = false
+
+[power_management]
+kind = "custom"
+power_on_cmd = "echo on"
+power_off_cmd = "echo off"
+
+[boot]
+kind = "uboot"
+use_tftp = true
+"#;
+
+        let decoded: BoardConfig = toml::from_str(config).unwrap();
+        let BootConfig::Uboot(profile) = decoded.boot else {
+            panic!("expected uboot profile");
+        };
+        assert_eq!(profile.network_mode, UbootNetworkMode::Dhcp);
+    }
+
+    #[test]
+    fn board_config_rejects_static_uboot_network_without_board_ip() {
+        let config = r#"
+id = "demo"
+board_type = "demo"
+tags = []
+disabled = false
+
+[power_management]
+kind = "custom"
+power_on_cmd = "echo on"
+power_off_cmd = "echo off"
+
+[boot]
+kind = "uboot"
+use_tftp = true
+network_mode = "static_ip"
+"#;
+
+        let decoded: BoardConfig = toml::from_str(config).unwrap();
+        let err = decoded.validate().unwrap_err();
+        assert!(err.to_string().contains("board_ip"));
+    }
+
+    #[test]
+    fn board_config_rejects_invalid_uboot_network_ipv4_fields() {
+        for field in ["board_ip", "server_ip", "netmask", "gatewayip"] {
+            let extra = if field == "board_ip" {
+                r#"board_ip = "not-an-ip""#.to_string()
+            } else {
+                format!("board_ip = \"192.168.10.20\"\n{field} = \"not-an-ip\"")
+            };
+            let config = format!(
+                r#"
+id = "demo"
+board_type = "demo"
+tags = []
+disabled = false
+
+[power_management]
+kind = "custom"
+power_on_cmd = "echo on"
+power_off_cmd = "echo off"
+
+[boot]
+kind = "uboot"
+use_tftp = true
+network_mode = "static_ip"
+{extra}
+"#
+            );
+
+            let decoded: BoardConfig = toml::from_str(&config).unwrap();
+            let err = decoded.validate().unwrap_err();
+            assert!(
+                err.to_string().contains(field),
+                "expected {field} in error, got {err:#}"
+            );
+        }
+    }
+
+    #[test]
     fn board_config_serialization_omits_removed_fields() {
         let board = BoardConfig {
             id: "demo-1".into(),
@@ -565,6 +705,7 @@ board_power_off_cmd = "shutdown"
             boot: BootConfig::Uboot(UbootProfile {
                 use_tftp: true,
                 dtb_name: Some("board.dtb".into()),
+                ..Default::default()
             }),
             notes: None,
             disabled: false,

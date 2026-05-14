@@ -92,6 +92,7 @@ fn sample_virtual_board(serial_port: String) -> BoardConfig {
         boot: BootConfig::Uboot(UbootProfile {
             use_tftp: false,
             dtb_name: None,
+            ..Default::default()
         }),
         notes: None,
         disabled: false,

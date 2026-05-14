@@ -26,7 +26,9 @@ use crate::{
         },
     },
     board_pool::BoardAllocationStatus,
-    config::{BoardConfig, BootConfig, PowerManagementConfig, ServerConfig, TftpConfig},
+    config::{
+        BoardConfig, BootConfig, PowerManagementConfig, ServerConfig, TftpConfig, UbootNetworkMode,
+    },
     dtb_store::normalize_dtb_name,
     power::{PowerAction, PowerActionError},
     serial::{
@@ -429,7 +431,7 @@ fn normalize_board_upsert_request(
     normalize_tags(&mut request.tags);
     normalize_serial_config(request.serial.as_mut())?;
     normalize_power_management_config(&mut request.power_management)?;
-    normalize_boot_config(&mut request.boot);
+    normalize_boot_config(&mut request.boot)?;
 
     if let Some(id) = request.id.as_ref()
         && (id.contains('/') || id.contains('\\'))
@@ -529,15 +531,32 @@ fn normalize_power_management_config(
     Ok(())
 }
 
-fn normalize_boot_config(boot: &mut BootConfig) {
+fn normalize_boot_config(boot: &mut BootConfig) -> Result<(), ApiError> {
     match boot {
         BootConfig::Uboot(profile) => {
             normalize_optional_string(&mut profile.dtb_name);
+            normalize_optional_string(&mut profile.board_ip);
+            normalize_optional_string(&mut profile.server_ip);
+            normalize_optional_string(&mut profile.netmask);
+            normalize_optional_string(&mut profile.gatewayip);
+            if !profile.use_tftp {
+                profile.network_mode = UbootNetworkMode::Dhcp;
+            }
+            if profile.network_mode == UbootNetworkMode::Dhcp {
+                profile.board_ip = None;
+                profile.server_ip = None;
+                profile.netmask = None;
+                profile.gatewayip = None;
+            }
+            profile
+                .validate()
+                .map_err(|err| ApiError::bad_request(format!("{err:#}")))?;
         }
         BootConfig::Pxe(profile) => {
             normalize_optional_string(&mut profile.notes);
         }
     }
+    Ok(())
 }
 
 fn allocate_board_id(boards: &BTreeMap<String, BoardConfig>, board_type: &str) -> String {
@@ -925,7 +944,7 @@ async fn get_boot_profile(
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
     let network = resolved_board_network(&state, &board).await?;
     Ok(axum::Json(BootProfileResponse {
-        boot: board.boot,
+        boot: boot_profile_with_resolved_network(board.boot, network.as_ref()),
         server_ip: network.as_ref().and_then(|item| item.server_ip.clone()),
         netmask: network.as_ref().and_then(|item| item.netmask.clone()),
         interface: network.as_ref().and_then(|item| item.interface.clone()),
@@ -1424,6 +1443,13 @@ fn resolve_server_network(config: &ServerConfig) -> Result<Option<ResolvedNetwor
     } else {
         Some(config.network.interface.trim().to_string())
     };
+    if interface.as_deref() == Some("lo") {
+        return Ok(Some(ResolvedNetwork {
+            interface,
+            server_ip: Some("127.0.0.1".into()),
+            netmask: Some("255.0.0.0".into()),
+        }));
+    }
     let interfaces = discover_network_interfaces().map_err(|err| {
         ApiError::service_unavailable(format!("failed to enumerate network interfaces: {err:#}"))
     })?;
@@ -1457,8 +1483,48 @@ async fn resolved_board_network(
         return Ok(None);
     }
 
+    if profile.network_mode == UbootNetworkMode::StaticIp
+        && profile.server_ip.is_some()
+        && profile.netmask.is_some()
+    {
+        return Ok(Some(ResolvedNetwork {
+            interface: None,
+            server_ip: profile.server_ip.clone(),
+            netmask: profile.netmask.clone(),
+        }));
+    }
+
     let config = state.config.read().await.clone();
-    resolve_server_network(&config)
+    let mut network = resolve_server_network(&config)?;
+    if profile.network_mode == UbootNetworkMode::StaticIp
+        && let Some(network) = network.as_mut()
+    {
+        if let Some(server_ip) = profile.server_ip.as_ref() {
+            network.server_ip = Some(server_ip.clone());
+        }
+        if let Some(netmask) = profile.netmask.as_ref() {
+            network.netmask = Some(netmask.clone());
+        }
+    }
+    Ok(network)
+}
+
+fn boot_profile_with_resolved_network(
+    boot: BootConfig,
+    network: Option<&ResolvedNetwork>,
+) -> BootConfig {
+    let BootConfig::Uboot(mut profile) = boot else {
+        return boot;
+    };
+    if profile.network_mode == UbootNetworkMode::StaticIp {
+        if profile.server_ip.is_none() {
+            profile.server_ip = network.and_then(|item| item.server_ip.clone());
+        }
+        if profile.netmask.is_none() {
+            profile.netmask = network.and_then(|item| item.netmask.clone());
+        }
+    }
+    BootConfig::Uboot(profile)
 }
 
 fn dtb_name_header(headers: &HeaderMap, name: &str) -> Result<String, ApiError> {
@@ -1575,7 +1641,10 @@ mod tests {
     };
     use tower::util::ServiceExt;
 
-    use super::{DTB_UPLOAD_MAX_MIB, build_router, mib_to_bytes, resolve_server_network};
+    use super::{
+        DTB_UPLOAD_MAX_MIB, ResolvedNetwork, boot_profile_with_resolved_network, build_router,
+        mib_to_bytes, resolve_server_network,
+    };
     use crate::{
         api::models::{
             BoardPowerStatusResponse, BoardRuntimeStatusResponse, SessionDetailResponse,
@@ -1584,7 +1653,8 @@ mod tests {
         config::{
             BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
             PowerManagementConfig, SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig,
-            TftpConfig, UploadLimitsConfig, VirtualPowerManagement, ZhongshengRelayPowerManagement,
+            TftpConfig, UbootNetworkMode, UploadLimitsConfig, VirtualPowerManagement,
+            ZhongshengRelayPowerManagement,
         },
         session::SessionLifecycleState,
         state::BoardLeaseState,
@@ -2691,6 +2761,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_board_rejects_invalid_static_uboot_network_config() {
+        let app = test_router().await;
+
+        for boot in [
+            json!({ "kind": "uboot", "use_tftp": true, "network_mode": "static_ip" }),
+            json!({
+                "kind": "uboot",
+                "use_tftp": true,
+                "network_mode": "static_ip",
+                "board_ip": "not-an-ip"
+            }),
+            json!({
+                "kind": "uboot",
+                "use_tftp": true,
+                "network_mode": "static_ip",
+                "board_ip": "192.168.10.20",
+                "server_ip": "not-an-ip"
+            }),
+            json!({
+                "kind": "uboot",
+                "use_tftp": true,
+                "network_mode": "static_ip",
+                "board_ip": "192.168.10.20",
+                "netmask": "not-an-ip"
+            }),
+            json!({
+                "kind": "uboot",
+                "use_tftp": true,
+                "network_mode": "static_ip",
+                "board_ip": "192.168.10.20",
+                "gatewayip": "not-an-ip"
+            }),
+        ] {
+            let status = create_board(
+                &app,
+                json!({
+                    "id": null,
+                    "board_type": "rk3568",
+                    "tags": [],
+                    "serial": null,
+                    "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
+                    "boot": boot,
+                    "notes": null,
+                    "disabled": false
+                }),
+            )
+            .await;
+
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[tokio::test]
     async fn admin_dtb_endpoints_support_create_rename_replace_and_delete() {
         let app = test_router().await;
 
@@ -3094,6 +3217,88 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn boot_profile_returns_static_uboot_network_with_resolved_fallbacks() {
+        let app = test_router().await;
+        assert_eq!(
+            create_board(
+                &app,
+                json!({
+                    "id": "static-profile",
+                    "board_type": "rk3568",
+                    "tags": [],
+                    "serial": null,
+                    "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
+                    "boot": {
+                        "kind": "uboot",
+                        "use_tftp": true,
+                        "network_mode": "static_ip",
+                        "board_ip": "192.168.10.20",
+                        "server_ip": "192.168.10.2",
+                        "netmask": "255.255.255.0",
+                        "gatewayip": "192.168.10.1"
+                    },
+                    "notes": null,
+                    "disabled": false
+                }),
+            )
+            .await,
+            StatusCode::CREATED
+        );
+        let session_id = create_session(&app, "rk3568").await;
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/sessions/{session_id}/boot-profile"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "response body: {}",
+            String::from_utf8_lossy(&body)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(value["boot"]["network_mode"], "static_ip");
+        assert_eq!(value["boot"]["board_ip"], "192.168.10.20");
+        assert_eq!(value["boot"]["server_ip"], "192.168.10.2");
+        assert_eq!(value["boot"]["netmask"], "255.255.255.0");
+        assert_eq!(value["boot"]["gatewayip"], "192.168.10.1");
+        assert_eq!(value["server_ip"], "192.168.10.2");
+        assert_eq!(value["netmask"], "255.255.255.0");
+    }
+
+    #[test]
+    fn boot_profile_fills_static_uboot_network_from_resolved_server_network() {
+        let boot = BootConfig::Uboot(crate::config::UbootProfile {
+            use_tftp: true,
+            network_mode: UbootNetworkMode::StaticIp,
+            board_ip: Some("192.168.10.20".into()),
+            ..Default::default()
+        });
+        let resolved = ResolvedNetwork {
+            interface: Some("eth0".into()),
+            server_ip: Some("192.168.10.2".into()),
+            netmask: Some("255.255.255.0".into()),
+        };
+
+        let BootConfig::Uboot(profile) = boot_profile_with_resolved_network(boot, Some(&resolved))
+        else {
+            panic!("expected uboot profile");
+        };
+
+        assert_eq!(profile.server_ip.as_deref(), Some("192.168.10.2"));
+        assert_eq!(profile.netmask.as_deref(), Some("255.255.255.0"));
     }
 
     #[tokio::test]

@@ -33,6 +33,7 @@ use crate::{
         client::{
             BoardServerClient, BootConfig as RemoteBootConfig, BootProfileResponse,
             SerialStatusResponse, SessionCreatedResponse, SessionDtbResponse, TftpSessionResponse,
+            UbootNetworkMode as RemoteUbootNetworkMode,
         },
         config::BoardRunConfig,
         serial_stream::{
@@ -418,7 +419,6 @@ struct Runner<'a, B> {
 struct NetworkBootRequest {
     bootfile: String,
     bootcmd: String,
-    ipaddr: Option<String>,
 }
 
 struct ConsoleTransport {
@@ -433,6 +433,7 @@ struct ResolvedRuntime {
     interface: Option<String>,
     gateway_ip: Option<String>,
     board_ip: Option<String>,
+    static_ip: bool,
     kernel_load_addr: Option<u64>,
     fit_load_addr: Option<u64>,
     use_tftp: bool,
@@ -580,6 +581,12 @@ impl RunnerBackend for LocalBackend {
                 .net
                 .as_ref()
                 .and_then(|net| net.board_ip.clone()),
+            static_ip: self
+                .config
+                .net
+                .as_ref()
+                .and_then(|net| net.board_ip.as_ref())
+                .is_some(),
             use_tftp: self.config.net.is_some(),
             ..Default::default()
         })
@@ -775,14 +782,19 @@ impl RunnerBackend for RemoteBackend {
             ));
         }
 
-        let server_ip = tftp_status
-            .server_ip
-            .clone()
-            .or_else(|| boot_profile.server_ip.clone());
-        let netmask = tftp_status
-            .netmask
-            .clone()
-            .or_else(|| boot_profile.netmask.clone());
+        let static_ip = profile.network_mode == RemoteUbootNetworkMode::StaticIp;
+        let server_ip = profile.server_ip.clone().or_else(|| {
+            tftp_status
+                .server_ip
+                .clone()
+                .or_else(|| boot_profile.server_ip.clone())
+        });
+        let netmask = profile.netmask.clone().or_else(|| {
+            tftp_status
+                .netmask
+                .clone()
+                .or_else(|| boot_profile.netmask.clone())
+        });
 
         self.boot_profile = Some(boot_profile.clone());
         self.serial_status = Some(serial_status);
@@ -792,6 +804,9 @@ impl RunnerBackend for RemoteBackend {
             server_ip,
             netmask,
             interface: boot_profile.interface.clone(),
+            gateway_ip: profile.gatewayip.clone(),
+            board_ip: profile.board_ip.clone(),
+            static_ip,
             use_tftp: profile.use_tftp,
             ..Default::default()
         })
@@ -1128,6 +1143,12 @@ where
             uboot.set_env("netmask", netmask).await?;
         }
 
+        if runtime.static_ip
+            && let Some(ref board_ip) = runtime.board_ip
+        {
+            uboot.set_env("ipaddr", board_ip).await?;
+        }
+
         if let Some(ref ip) = runtime.server_ip
             && let Ok(output) = uboot.cmd("net list").await
         {
@@ -1211,14 +1232,11 @@ where
 
         let bootcmd = if let Some(fitname) = prepared.bootfile.as_deref() {
             if let Some(request) = build_network_boot_request(
-                runtime.board_ip.as_deref(),
+                runtime.static_ip,
                 net_ok,
                 prepared.network_transfer_ready,
                 fitname,
             ) {
-                if let Some(ref board_ip) = request.ipaddr {
-                    uboot.set_env("ipaddr", board_ip).await?;
-                }
                 uboot.set_env("bootfile", &request.bootfile).await?;
                 request.bootcmd
             } else {
@@ -1429,7 +1447,7 @@ fn timeout_duration(timeout: Option<u64>) -> Option<Duration> {
 }
 
 fn build_network_boot_request(
-    board_ip: Option<&str>,
+    static_ip: bool,
     net_ok: bool,
     network_transfer_ready: bool,
     fitname: &str,
@@ -1438,11 +1456,10 @@ fn build_network_boot_request(
         return None;
     }
 
-    if let Some(board_ip) = board_ip {
+    if static_ip {
         return Some(NetworkBootRequest {
             bootfile: fitname.to_string(),
             bootcmd: format!("tftp {fitname} && bootm"),
-            ipaddr: Some(board_ip.to_string()),
         });
     }
 
@@ -1450,7 +1467,6 @@ fn build_network_boot_request(
         return Some(NetworkBootRequest {
             bootfile: fitname.to_string(),
             bootcmd: format!("dhcp {fitname} && bootm"),
-            ipaddr: None,
         });
     }
 
@@ -1471,7 +1487,7 @@ mod tests {
     #[test]
     fn network_boot_request_uses_same_filename_for_bootfile() {
         let request = build_network_boot_request(
-            Some("192.168.1.10"),
+            true,
             false,
             true,
             "ostool/home/user/workspace/target/image.fit",
@@ -1489,13 +1505,19 @@ mod tests {
     }
 
     #[test]
+    fn network_boot_request_uses_tftp_for_static_ip_mode() {
+        let request = build_network_boot_request(true, false, true, "image.fit").unwrap();
+
+        assert_eq!(request.bootcmd, "tftp image.fit && bootm");
+        assert_eq!(request.bootfile, "image.fit");
+    }
+
+    #[test]
     fn network_boot_request_requires_ready_transport() {
-        assert!(
-            build_network_boot_request(Some("192.168.1.10"), false, false, "image.fit").is_none()
-        );
-        assert!(build_network_boot_request(None, false, true, "image.fit").is_none());
+        assert!(build_network_boot_request(true, false, false, "image.fit").is_none());
+        assert!(build_network_boot_request(false, false, true, "image.fit").is_none());
         assert_eq!(
-            build_network_boot_request(None, true, true, "image.fit")
+            build_network_boot_request(false, true, true, "image.fit")
                 .unwrap()
                 .bootcmd,
             "dhcp image.fit && bootm"

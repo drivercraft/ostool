@@ -39,6 +39,9 @@ impl FileBoardStore {
                 .with_context(|| format!("failed to read {}", path.display()))?;
             let board: BoardConfig = toml::from_str(&content)
                 .with_context(|| format!("failed to parse {}", path.display()))?;
+            board
+                .validate()
+                .with_context(|| format!("failed to validate {}", path.display()))?;
 
             let stem = path
                 .file_stem()

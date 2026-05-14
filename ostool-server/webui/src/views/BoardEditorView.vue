@@ -12,6 +12,7 @@ import type {
   PowerManagementConfig,
   SerialPortKeyKind,
   SerialPortSummary,
+  UbootNetworkMode,
 } from "@/types/api";
 
 type PowerManagementKind = "custom" | "zhongsheng_relay";
@@ -35,6 +36,11 @@ interface BoardEditorFormState {
   boot_kind: BootKind;
   use_tftp: boolean;
   dtb_name: string;
+  network_mode: UbootNetworkMode;
+  board_ip: string;
+  server_ip: string;
+  netmask: string;
+  gatewayip: string;
   pxe_notes: string;
 }
 
@@ -55,6 +61,7 @@ const validationError = ref("");
 const form = ref<BoardEditorFormState>(defaultFormState());
 const serialPorts = ref<SerialPortSummary[]>([]);
 const dtbs = ref<DtbFileResponse[]>([]);
+const tftpStatus = ref<{ resolved_server_ip: string | null; resolved_netmask: string | null } | null>(null);
 const dtbUploadName = ref("");
 const dtbUploadFile = ref<File | null>(null);
 const dtbFileInput = ref<HTMLInputElement | null>(null);
@@ -89,6 +96,11 @@ function defaultFormState(): BoardEditorFormState {
     boot_kind: "uboot",
     use_tftp: false,
     dtb_name: "",
+    network_mode: "dhcp",
+    board_ip: "",
+    server_ip: "",
+    netmask: "",
+    gatewayip: "",
     pxe_notes: "",
   };
 }
@@ -122,6 +134,11 @@ function boardToFormState(board: BoardConfig): BoardEditorFormState {
     next.boot_kind = "uboot";
     next.use_tftp = board.boot.use_tftp;
     next.dtb_name = board.boot.dtb_name ?? "";
+    next.network_mode = board.boot.network_mode ?? "dhcp";
+    next.board_ip = board.boot.board_ip ?? "";
+    next.server_ip = board.boot.server_ip ?? "";
+    next.netmask = board.boot.netmask ?? "";
+    next.gatewayip = board.boot.gatewayip ?? "";
   } else {
     next.boot_kind = "pxe";
     next.pxe_notes = board.boot.notes ?? "";
@@ -144,10 +161,16 @@ function splitTags(tagsText: string): string[] {
 
 function buildBootConfig(): BootConfig {
   if (form.value.boot_kind === "uboot") {
+    const useStaticIp = form.value.use_tftp && form.value.network_mode === "static_ip";
     return {
       kind: "uboot",
       use_tftp: form.value.use_tftp,
       dtb_name: trimToNull(form.value.dtb_name),
+      network_mode: useStaticIp ? "static_ip" : "dhcp",
+      board_ip: useStaticIp ? trimToNull(form.value.board_ip) : null,
+      server_ip: useStaticIp ? trimToNull(form.value.server_ip) : null,
+      netmask: useStaticIp ? trimToNull(form.value.netmask) : null,
+      gatewayip: useStaticIp ? trimToNull(form.value.gatewayip) : null,
     };
   }
 
@@ -221,6 +244,11 @@ function validateForm(): string {
   }
   if (form.value.power_management_kind === "zhongsheng_relay" && !form.value.relay_serial_key_value.trim()) {
     errors.push("中盛继电模块必须选择串口设备");
+  }
+  if (form.value.boot_kind === "uboot" && form.value.use_tftp && form.value.network_mode === "static_ip") {
+    if (!form.value.board_ip.trim()) {
+      errors.push("静态 IP 模式必须填写开发板 IP");
+    }
   }
   return errors.join("\n");
 }
@@ -423,6 +451,14 @@ function dtbOptions(currentValue: string) {
   return Array.from(options.entries()).map(([value, label]) => ({ value, label }));
 }
 
+function resolvedServerIpHint() {
+  return tftpStatus.value?.resolved_server_ip ?? "当前 serverip";
+}
+
+function resolvedNetmaskHint() {
+  return tftpStatus.value?.resolved_netmask ?? "当前 netmask";
+}
+
 async function loadSerialPorts() {
   serialPorts.value = await api.listSerialPorts();
 }
@@ -445,13 +481,15 @@ async function loadEditor() {
   ui.clearMessages();
 
   try {
-    const [ports, dtbList, board] = await Promise.all([
+    const [ports, dtbList, statusResponse, board] = await Promise.all([
       api.listSerialPorts(),
       api.listDtbs(),
+      api.getTftpStatus().catch(() => null),
       isEditing.value && boardId.value ? api.getBoard(boardId.value) : Promise.resolve(null),
     ]);
     serialPorts.value = ports;
     dtbs.value = dtbList;
+    tftpStatus.value = statusResponse?.status ?? null;
     form.value = board ? boardToFormState(board) : defaultFormState();
   } catch (error) {
     ui.setError((error as Error).message);
@@ -760,12 +798,48 @@ onMounted(() => {
           <template v-if="form.boot_kind === 'uboot'">
             <label class="toggle-field" style="margin-top: 16px">
               <span class="toggle-switch">
-                <input v-model="form.use_tftp" type="checkbox" />
+                <input v-model="form.use_tftp" type="checkbox" aria-label="使用 TFTP 启动" />
                 <span class="toggle-track" />
                 <span class="toggle-knob" />
               </span>
               <span class="toggle-label">使用 TFTP 启动</span>
             </label>
+
+            <div v-if="form.use_tftp" class="form-grid two-columns" style="margin-top: 18px">
+              <label class="field">
+                <span>网络模式</span>
+                <select v-model="form.network_mode" aria-label="网络模式">
+                  <option value="dhcp">DHCP</option>
+                  <option value="static_ip">静态 IP</option>
+                </select>
+              </label>
+            </div>
+
+            <div
+              v-if="form.use_tftp && form.network_mode === 'static_ip'"
+              class="form-grid two-columns"
+              style="margin-top: 18px"
+            >
+              <label class="field">
+                <span>开发板 IP</span>
+                <input v-model="form.board_ip" placeholder="例如 192.168.10.20" />
+              </label>
+              <label class="field">
+                <span>serverip</span>
+                <input v-model="form.server_ip" placeholder="当前 serverip" />
+                <small class="field-hint">留空使用 {{ resolvedServerIpHint() }}</small>
+              </label>
+              <label class="field">
+                <span>netmask</span>
+                <input v-model="form.netmask" placeholder="当前 netmask" />
+                <small class="field-hint">留空使用 {{ resolvedNetmaskHint() }}</small>
+              </label>
+              <label class="field">
+                <span>gatewayip</span>
+                <input v-model="form.gatewayip" placeholder="未配置" />
+                <small class="field-hint">留空不设置 gatewayip</small>
+              </label>
+            </div>
 
             <div class="split-grid dtb-config-grid" style="margin-top: 18px">
               <section class="panel nested-panel dtb-selection-panel">

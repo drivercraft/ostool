@@ -10,6 +10,7 @@ const route = {
 const push = vi.fn();
 const listSerialPorts = vi.fn();
 const listDtbs = vi.fn();
+const getTftpStatus = vi.fn();
 const createDtb = vi.fn();
 const getBoard = vi.fn();
 const createBoard = vi.fn();
@@ -30,6 +31,7 @@ vi.mock("@/api/client", () => ({
   api: {
     listSerialPorts,
     listDtbs,
+    getTftpStatus,
     createDtb,
     getBoard,
     createBoard,
@@ -84,9 +86,30 @@ function makeBoard(id = "demo-board"): BoardConfig {
       kind: "uboot",
       use_tftp: true,
       dtb_name: null,
+      network_mode: "dhcp",
+      board_ip: null,
+      server_ip: null,
+      netmask: null,
+      gatewayip: null,
     },
     notes: "rack-a",
     disabled: false,
+  };
+}
+
+function makeStaticIpBoard(id = "static-board"): BoardConfig {
+  return {
+    ...makeBoard(id),
+    boot: {
+      kind: "uboot",
+      use_tftp: true,
+      dtb_name: null,
+      network_mode: "static_ip",
+      board_ip: "192.168.10.20",
+      server_ip: "192.168.10.2",
+      netmask: "255.255.255.0",
+      gatewayip: "192.168.10.1",
+    },
   };
 }
 
@@ -109,6 +132,7 @@ describe("BoardEditorView", () => {
     push.mockReset();
     listSerialPorts.mockReset();
     listDtbs.mockReset();
+    getTftpStatus.mockReset();
     createDtb.mockReset();
     getBoard.mockReset();
     createBoard.mockReset();
@@ -119,6 +143,20 @@ describe("BoardEditorView", () => {
     uiStore.setSuccess.mockReset();
     listSerialPorts.mockResolvedValue(makeSerialPorts());
     listDtbs.mockResolvedValue([]);
+    getTftpStatus.mockResolvedValue({
+      status: {
+        provider: "builtin",
+        enabled: true,
+        healthy: true,
+        writable: true,
+        resolved_server_ip: "10.0.0.2",
+        resolved_netmask: "255.255.255.0",
+        root_dir: "/srv/tftp",
+        bind_addr_or_address: ":69",
+        service_state: null,
+        last_error: null,
+      },
+    });
   });
 
   it("loads a new-board form and refreshes serial ports independently", async () => {
@@ -187,10 +225,98 @@ describe("BoardEditorView", () => {
         kind: "uboot",
         use_tftp: false,
         dtb_name: null,
+        network_mode: "dhcp",
+        board_ip: null,
+        server_ip: null,
+        netmask: null,
+        gatewayip: null,
       },
     });
     expect(uiStore.setSuccess).toHaveBeenCalledWith("已保存开发板 rk3568-1");
     expect(push).toHaveBeenCalledWith("/boards/rk3568-1");
+  });
+
+  it("blocks saving static IP mode without a board IP", async () => {
+    const BoardEditorView = (await import("./BoardEditorView.vue")).default;
+    const wrapper = mount(BoardEditorView);
+    await flushPromises();
+
+    await wrapper.get('input[placeholder="例如 rk3568"]').setValue("rk3568");
+    const textInputs = wrapper
+      .findAll('input:not([type="checkbox"]):not([type="number"]):not([type="file"])');
+    await textInputs[3].setValue("echo on");
+    await textInputs[4].setValue("echo off");
+    await wrapper.get('input[aria-label="使用 TFTP 启动"]').setValue(true);
+    await wrapper.get('select[aria-label="网络模式"]').setValue("static_ip");
+
+    const saveButton = wrapper.findAll("button").find((button) => button.text() === "保存配置");
+    await saveButton!.trigger("click");
+    await flushPromises();
+
+    expect(createBoard).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("静态 IP 模式必须填写开发板 IP");
+  });
+
+  it("saves static IP network fields in the board payload", async () => {
+    createBoard.mockResolvedValue(makeStaticIpBoard("rk3568-1"));
+
+    const BoardEditorView = (await import("./BoardEditorView.vue")).default;
+    const wrapper = mount(BoardEditorView);
+    await flushPromises();
+
+    await wrapper.get('input[placeholder="例如 rk3568"]').setValue("rk3568");
+    const textInputs = wrapper
+      .findAll('input:not([type="checkbox"]):not([type="number"]):not([type="file"])');
+    await textInputs[3].setValue("echo on");
+    await textInputs[4].setValue("echo off");
+    await wrapper.get('input[aria-label="使用 TFTP 启动"]').setValue(true);
+    await wrapper.get('select[aria-label="网络模式"]').setValue("static_ip");
+    await wrapper.get('input[placeholder="例如 192.168.10.20"]').setValue("192.168.10.20");
+    await wrapper.get('input[placeholder="当前 serverip"]').setValue("192.168.10.2");
+    await wrapper.get('input[placeholder="当前 netmask"]').setValue("255.255.255.0");
+    await wrapper.get('input[placeholder="未配置"]').setValue("192.168.10.1");
+
+    const saveButton = wrapper.findAll("button").find((button) => button.text() === "保存配置");
+    await saveButton!.trigger("click");
+    await flushPromises();
+
+    expect(createBoard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        boot: {
+          kind: "uboot",
+          use_tftp: true,
+          dtb_name: null,
+          network_mode: "static_ip",
+          board_ip: "192.168.10.20",
+          server_ip: "192.168.10.2",
+          netmask: "255.255.255.0",
+          gatewayip: "192.168.10.1",
+        },
+      }),
+    );
+  });
+
+  it("loads static IP network fields into the form", async () => {
+    route.params = { boardId: "static-board" };
+    getBoard.mockResolvedValue(makeStaticIpBoard("static-board"));
+
+    const BoardEditorView = (await import("./BoardEditorView.vue")).default;
+    const wrapper = mount(BoardEditorView);
+    await flushPromises();
+
+    expect((wrapper.get('select[aria-label="网络模式"]').element as HTMLSelectElement).value).toBe("static_ip");
+    expect((wrapper.get('input[placeholder="例如 192.168.10.20"]').element as HTMLInputElement).value).toBe(
+      "192.168.10.20",
+    );
+    expect((wrapper.get('input[placeholder="当前 serverip"]').element as HTMLInputElement).value).toBe(
+      "192.168.10.2",
+    );
+    expect((wrapper.get('input[placeholder="当前 netmask"]').element as HTMLInputElement).value).toBe(
+      "255.255.255.0",
+    );
+    expect((wrapper.get('input[placeholder="未配置"]').element as HTMLInputElement).value).toBe(
+      "192.168.10.1",
+    );
   });
 
   it("updates a board and keeps blank id as null in the payload", async () => {

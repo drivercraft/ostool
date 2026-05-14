@@ -56,6 +56,24 @@ pub struct UbootProfile {
     #[serde(default)]
     pub use_tftp: bool,
     pub dtb_name: Option<String>,
+    #[serde(default)]
+    pub network_mode: UbootNetworkMode,
+    #[serde(default)]
+    pub board_ip: Option<String>,
+    #[serde(default)]
+    pub server_ip: Option<String>,
+    #[serde(default)]
+    pub netmask: Option<String>,
+    #[serde(default)]
+    pub gatewayip: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UbootNetworkMode {
+    #[default]
+    Dhcp,
+    StaticIp,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -456,6 +474,39 @@ mod tests {
         match response.boot {
             BootConfig::Uboot(profile) => {
                 assert!(profile.use_tftp);
+            }
+            BootConfig::Pxe(_) => panic!("expected uboot profile"),
+        }
+    }
+
+    #[test]
+    fn parse_static_uboot_boot_profile() {
+        let response: super::BootProfileResponse = serde_json::from_str(
+            r#"{
+                "boot": {
+                    "kind": "uboot",
+                    "use_tftp": true,
+                    "network_mode": "static_ip",
+                    "board_ip": "192.168.10.20",
+                    "server_ip": "192.168.10.2",
+                    "netmask": "255.255.255.0",
+                    "gatewayip": "192.168.10.1"
+                },
+                "server_ip": "192.168.10.2",
+                "netmask": "255.255.255.0",
+                "interface": "eth0"
+            }"#,
+        )
+        .unwrap();
+
+        match response.boot {
+            BootConfig::Uboot(profile) => {
+                assert!(profile.use_tftp);
+                assert_eq!(profile.network_mode, super::UbootNetworkMode::StaticIp);
+                assert_eq!(profile.board_ip.as_deref(), Some("192.168.10.20"));
+                assert_eq!(profile.server_ip.as_deref(), Some("192.168.10.2"));
+                assert_eq!(profile.netmask.as_deref(), Some("255.255.255.0"));
+                assert_eq!(profile.gatewayip.as_deref(), Some("192.168.10.1"));
             }
             BootConfig::Pxe(_) => panic!("expected uboot profile"),
         }
