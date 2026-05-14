@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/drivercraft/ostool/compare/ostool-server-v0.1.8...ostool-server-v0.2.0) - 2026-05-14
+
+### Added
+
+- 添加 U-Boot 网络模式配置（DHCP/静态IP） ([#101](https://github.com/drivercraft/ostool/pull/101))
+
 ## [0.1.8](https://github.com/drivercraft/ostool/compare/ostool-server-v0.1.7...ostool-server-v0.1.8) - 2026-04-15
 
 ### Other
