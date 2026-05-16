@@ -1,3 +1,5 @@
+//! Legacy tool facade for workspace configuration, build, and run workflows.
+
 use std::{
     env::current_dir,
     ffi::OsStr,
@@ -1082,6 +1084,29 @@ mod tests {
         assert_eq!(replaced, std::env::temp_dir().display().to_string());
     }
 
+    /// Verifies that missing environment placeholders expand to an empty string.
+    #[test]
+    fn replace_string_uses_empty_string_for_missing_env() {
+        let temp = tempfile::tempdir().unwrap();
+        write_single_package(temp.path(), "sample");
+
+        let tool = Tool::new(ToolConfig {
+            manifest: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let missing = format!(
+            "__OSTOOL_TEST_ENV_SHOULD_NOT_EXIST_{}__",
+            std::process::id()
+        );
+
+        let replaced = tool
+            .replace_string(&format!("before-${{env:{missing}}}-after"))
+            .unwrap();
+        assert_eq!(replaced, "before--after");
+    }
+
     #[test]
     fn replace_string_uses_package_dir_from_build_config() {
         let temp = tempfile::tempdir().unwrap();
@@ -1195,6 +1220,41 @@ mod tests {
         assert!(
             envs.iter()
                 .any(|(k, v)| k == "PKG_DIR" && v == &temp.path().display().to_string())
+        );
+        assert!(
+            envs.iter()
+                .any(|(k, v)| k == "WORKSPACE_FOLDER" && v == &temp.path().display().to_string())
+        );
+    }
+
+    /// Verifies shell hooks receive the runtime kernel ELF path.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_run_cmd_injects_kernel_elf_when_runtime_elf_exists() {
+        let temp = tempfile::tempdir().unwrap();
+        write_single_package(temp.path(), "sample");
+
+        let source = std::env::current_exe().unwrap();
+        let copied = temp.path().join("sample-elf");
+        std::fs::copy(&source, &copied).unwrap();
+
+        let mut tool = Tool::new(ToolConfig {
+            manifest: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+        tool.set_elf_artifact_path(copied.clone()).await.unwrap();
+
+        let output = temp.path().join("kernel-env.txt");
+        tool.shell_run_cmd(&format!(
+            "printf '%s' \"$KERNEL_ELF\" > {}",
+            output.display()
+        ))
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(output).unwrap(),
+            copied.canonicalize().unwrap().display().to_string()
         );
     }
 
@@ -1384,5 +1444,16 @@ targets = "aarch64-unknown-none"
         fs::write(package_dir.join("Cargo.toml"), cargo_toml).unwrap();
         fs::write(package_dir.join("src/lib.rs"), "").unwrap();
         root.join("Cargo.toml")
+    }
+
+    /// Writes a minimal single-package Cargo project for tool tests.
+    fn write_single_package(root: &Path, package: &str) {
+        fs::write(
+            root.join("Cargo.toml"),
+            format!("[package]\nname = \"{package}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"),
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "").unwrap();
     }
 }

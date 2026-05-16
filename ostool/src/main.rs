@@ -1,3 +1,5 @@
+//! Main ostool CLI argument parsing and command dispatch.
+
 use std::{path::PathBuf, process::ExitCode};
 
 use anyhow::Result;
@@ -177,6 +179,7 @@ async fn main() -> ExitCode {
     }
 }
 
+/// Parses the CLI and dispatches the selected ostool subcommand.
 async fn try_main() -> Result<()> {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
@@ -335,6 +338,7 @@ async fn try_main() -> Result<()> {
     Ok(())
 }
 
+/// Creates the legacy tool facade from an optional manifest argument.
 fn init_tool(manifest_arg: Option<PathBuf>) -> Result<(Tool, ManifestContext)> {
     let manifest = resolve_manifest_context(manifest_arg.clone())?;
     info!("Using manifest {}", manifest.manifest_path.display());
@@ -346,6 +350,7 @@ fn init_tool(manifest_arg: Option<PathBuf>) -> Result<(Tool, ManifestContext)> {
     Ok((tool, manifest))
 }
 
+/// Loads the build config from an explicit path or workspace default.
 async fn load_build_config(
     tool: &mut Tool,
     manifest: &ManifestContext,
@@ -360,6 +365,7 @@ async fn load_build_config(
     }
 }
 
+/// Applies `--package` and `--bin` overrides to Cargo build configs.
 fn apply_cargo_selector(
     tool: &mut Tool,
     build_config: &mut build::config::BuildConfig,
@@ -384,6 +390,7 @@ fn apply_cargo_selector(
     Ok(())
 }
 
+/// Loads QEMU config from an explicit path or workspace default.
 async fn load_qemu_config(
     tool: &mut Tool,
     manifest: &ManifestContext,
@@ -398,6 +405,7 @@ async fn load_qemu_config(
     }
 }
 
+/// Loads U-Boot config from an explicit path or workspace default.
 async fn load_uboot_config(
     tool: &mut Tool,
     manifest: &ManifestContext,
@@ -412,6 +420,7 @@ async fn load_uboot_config(
     }
 }
 
+/// Loads board-run config from an explicit path or workspace default.
 async fn load_board_config(
     tool: &mut Tool,
     manifest: &ManifestContext,
@@ -426,6 +435,7 @@ async fn load_board_config(
     }
 }
 
+/// Prints CLI errors with a structured trace.
 fn report_error(err: &anyhow::Error) {
     log::error!("{err:#}");
     log::error!("Trace:\n{err:?}");
@@ -436,9 +446,15 @@ fn report_error(err: &anyhow::Error) {
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
+    use std::fs;
 
-    use super::{BoardArgs, BoardSubCommands, Cli, SubCommands};
+    use clap::Parser;
+    use ostool::{Tool, ToolConfig};
+
+    use super::{
+        BoardArgs, BoardSubCommands, CargoSelectorArgs, Cli, SubCommands, apply_cargo_selector,
+        build,
+    };
 
     #[test]
     fn parse_board_ls_with_server_args() {
@@ -563,6 +579,81 @@ mod tests {
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn apply_cargo_selector_overrides_cargo_build_config() {
+        let (_temp, mut tool) = test_tool();
+        let mut build_config = build::config::BuildConfig {
+            system: build::config::BuildSystem::Cargo(build::config::Cargo {
+                package: "default-package".into(),
+                bin: None,
+                ..Default::default()
+            }),
+        };
+
+        apply_cargo_selector(
+            &mut tool,
+            &mut build_config,
+            &CargoSelectorArgs {
+                package: Some("kernel".into()),
+                bin: Some("kernel-qemu".into()),
+            },
+        )
+        .unwrap();
+
+        match &build_config.system {
+            build::config::BuildSystem::Cargo(cargo) => {
+                assert_eq!(cargo.package, "kernel");
+                assert_eq!(cargo.bin.as_deref(), Some("kernel-qemu"));
+            }
+            other => panic!("unexpected build system: {other:?}"),
+        }
+        assert_eq!(tool.ctx().build_config.as_ref(), Some(&build_config));
+    }
+
+    #[test]
+    fn apply_cargo_selector_rejects_custom_build_config() {
+        let (_temp, mut tool) = test_tool();
+        let mut build_config = build::config::BuildConfig {
+            system: build::config::BuildSystem::Custom(build::config::Custom {
+                build_cmd: "make".into(),
+                elf_path: "target/kernel.elf".into(),
+                to_bin: true,
+            }),
+        };
+
+        let err = apply_cargo_selector(
+            &mut tool,
+            &mut build_config,
+            &CargoSelectorArgs {
+                package: Some("kernel".into()),
+                bin: None,
+            },
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("--package/--bin can only be used with system.Cargo")
+        );
+    }
+
+    fn test_tool() -> (tempfile::TempDir, Tool) {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("Cargo.toml"),
+            "[package]\nname = \"kernel\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(temp.path().join("src")).unwrap();
+        fs::write(temp.path().join("src/lib.rs"), "").unwrap();
+        let tool = Tool::new(ToolConfig {
+            manifest: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+        (temp, tool)
     }
 
     #[test]

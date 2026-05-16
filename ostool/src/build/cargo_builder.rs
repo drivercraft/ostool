@@ -290,6 +290,7 @@ impl<'a> CargoBuilder<'a> {
         Ok(cmd)
     }
 
+    /// Applies the resolved Cargo artifact to the legacy tool runtime state.
     async fn handle_output(&mut self) -> anyhow::Result<()> {
         let resolved = self.resolved_artifact.clone().ok_or_else(|| {
             anyhow!(
@@ -377,6 +378,7 @@ impl<'a> CargoBuilder<'a> {
         }
     }
 
+    /// Resolves an optional extra Cargo config from a local path or URL.
     async fn cargo_extra_config(&self) -> anyhow::Result<Option<PathBuf>> {
         let s = match self.config.extra_config.as_ref() {
             Some(s) => s,
@@ -559,4 +561,189 @@ fn select_executable_artifact(
     bail!(
         "package `{package}` has multiple binary targets ({bins}); pass system.Cargo.bin or --bin"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::HashMap,
+        fs,
+        path::{Path, PathBuf},
+    };
+
+    use super::{CargoBuilder, ResolvedCargoArtifact, select_executable_artifact};
+    use crate::{
+        Tool, ToolConfig,
+        build::config::{Cargo, CargoBuildProfile},
+    };
+
+    fn artifact(name: &str) -> ResolvedCargoArtifact {
+        let cargo_artifact_dir = PathBuf::from("/tmp/ostool-target/debug");
+        ResolvedCargoArtifact {
+            elf_path: cargo_artifact_dir.join(name),
+            cargo_artifact_dir,
+        }
+    }
+
+    fn select(
+        artifacts: &[(String, ResolvedCargoArtifact)],
+        explicit_bin: Option<&str>,
+        default_run: Option<&str>,
+        package: &str,
+    ) -> anyhow::Result<ResolvedCargoArtifact> {
+        select_executable_artifact(artifacts, explicit_bin, default_run, package)
+    }
+
+    #[test]
+    fn select_executable_artifact_uses_explicit_bin_first() {
+        let artifacts = vec![
+            ("kernel".to_string(), artifact("kernel")),
+            ("kernel-qemu".to_string(), artifact("kernel-qemu")),
+        ];
+
+        let selected = select(&artifacts, Some("kernel-qemu"), None, "kernel").unwrap();
+
+        assert_eq!(
+            selected.elf_path,
+            Path::new("/tmp/ostool-target/debug/kernel-qemu")
+        );
+    }
+
+    #[test]
+    fn select_executable_artifact_errors_when_explicit_bin_was_not_built() {
+        let artifacts = vec![("kernel".to_string(), artifact("kernel"))];
+
+        let err = select(&artifacts, Some("missing-bin"), None, "kernel").unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("binary target `missing-bin` was not built")
+        );
+    }
+
+    #[test]
+    fn select_executable_artifact_prefers_package_name_before_default_run() {
+        let artifacts = vec![
+            ("helper".to_string(), artifact("helper")),
+            ("kernel".to_string(), artifact("kernel")),
+        ];
+
+        let selected = select(&artifacts, None, Some("helper"), "kernel").unwrap();
+
+        assert_eq!(
+            selected.elf_path,
+            Path::new("/tmp/ostool-target/debug/kernel")
+        );
+    }
+
+    #[test]
+    fn select_executable_artifact_uses_default_run_without_package_name_binary() {
+        let artifacts = vec![
+            ("helper".to_string(), artifact("helper")),
+            ("boot-test".to_string(), artifact("boot-test")),
+        ];
+
+        let selected = select(&artifacts, None, Some("boot-test"), "kernel").unwrap();
+
+        assert_eq!(
+            selected.elf_path,
+            Path::new("/tmp/ostool-target/debug/boot-test")
+        );
+    }
+
+    #[test]
+    fn select_executable_artifact_uses_single_binary_as_fallback() {
+        let artifacts = vec![("helper".to_string(), artifact("helper"))];
+
+        let selected = select(&artifacts, None, None, "kernel").unwrap();
+
+        assert_eq!(
+            selected.elf_path,
+            Path::new("/tmp/ostool-target/debug/helper")
+        );
+    }
+
+    #[test]
+    fn select_executable_artifact_errors_on_empty_cargo_output() {
+        let err = select(&[], None, None, "kernel").unwrap_err();
+
+        assert!(err.to_string().contains("no executable bin artifact found"));
+    }
+
+    #[test]
+    fn select_executable_artifact_errors_on_ambiguous_multiple_binaries() {
+        let artifacts = vec![
+            ("kernel-qemu".to_string(), artifact("kernel-qemu")),
+            ("kernel-uboot".to_string(), artifact("kernel-uboot")),
+        ];
+
+        let err = select(&artifacts, None, None, "kernel").unwrap_err();
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("multiple binary targets"));
+        assert!(rendered.contains("kernel-qemu"));
+        assert!(rendered.contains("kernel-uboot"));
+    }
+
+    /// Verifies resolved Cargo artifacts are recorded into runtime state.
+    ///
+    /// This covers post-resolution Tool state, not serde/config loading.
+    #[tokio::test]
+    async fn handle_output_records_runtime_artifact_state_without_objcopy() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("Cargo.toml"),
+            "[package]\nname = \"kernel\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(temp.path().join("src")).unwrap();
+        fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let cargo_artifact_dir = temp.path().join("target/aarch64/debug");
+        fs::create_dir_all(&cargo_artifact_dir).unwrap();
+        let elf_path = cargo_artifact_dir.join("kernel");
+        fs::copy(std::env::current_exe().unwrap(), &elf_path).unwrap();
+
+        let config = Cargo {
+            env: HashMap::new(),
+            target: "aarch64-unknown-none".into(),
+            package: "kernel".into(),
+            bin: None,
+            features: vec![],
+            log: None,
+            extra_config: None,
+            profile: Some(CargoBuildProfile::Debug),
+            args: vec![],
+            pre_build_cmds: vec![],
+            post_build_cmds: vec![],
+            to_bin: true,
+        };
+
+        let mut tool = Tool::new(ToolConfig {
+            manifest: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let mut builder = CargoBuilder::build(&mut tool, &config, None).skip_objcopy(true);
+        builder.resolved_artifact = Some(ResolvedCargoArtifact {
+            elf_path: elf_path.clone(),
+            cargo_artifact_dir: cargo_artifact_dir.clone(),
+        });
+        builder.handle_output().await.unwrap();
+        drop(builder);
+
+        let expected_elf = elf_path.canonicalize().unwrap();
+        assert_eq!(tool.ctx.artifacts.elf.as_ref(), Some(&expected_elf));
+        assert!(tool.ctx.artifacts.bin.is_none());
+        assert_eq!(
+            tool.ctx.artifacts.cargo_artifact_dir.as_ref(),
+            Some(&cargo_artifact_dir)
+        );
+        assert_eq!(
+            tool.ctx.artifacts.runtime_artifact_dir.as_ref(),
+            Some(&cargo_artifact_dir)
+        );
+        assert!(tool.ctx.arch.is_some());
+    }
 }

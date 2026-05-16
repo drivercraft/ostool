@@ -1,3 +1,5 @@
+//! Cargo runner entrypoint that dispatches built ELF artifacts to QEMU or U-Boot.
+
 use std::{
     env,
     path::PathBuf,
@@ -91,6 +93,7 @@ async fn main() -> ExitCode {
     }
 }
 
+/// Parses Cargo runner arguments and starts the selected runtime backend.
 async fn try_main() -> anyhow::Result<()> {
     let args = RunnerArgs::parse();
     if env::var("CARGO").is_err() {
@@ -170,6 +173,7 @@ async fn try_main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Reports runner errors to logs, terminal output, and the file-log hint.
 fn report_error(err: &anyhow::Error) {
     log::error!("{err:#}");
     log::error!("Trace:\n{err:?}");

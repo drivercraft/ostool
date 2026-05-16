@@ -1,3 +1,4 @@
+//! Integration tests for serial WebSocket session lifecycle and virtual power state.
 #![cfg(unix)]
 
 use std::{
@@ -99,6 +100,7 @@ fn sample_virtual_board(serial_port: String) -> BoardConfig {
     }
 }
 
+/// Starts an in-process ostool-server with one virtual board and PTY serial port.
 fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandle> {
     let config_path = root.join("config.toml");
     let data_dir = root.join("data");
@@ -108,12 +110,15 @@ fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandl
 
     std::fs::create_dir_all(&board_dir)
         .with_context(|| format!("failed to create {}", board_dir.display()))?;
+    let mut tftp = BuiltinTftpConfig::default_with_root(tftp_root);
+    tftp.enabled = false;
+
     let config = ServerConfig {
         listen_addr: "127.0.0.1:0".parse().unwrap(),
         data_dir,
         board_dir: board_dir.clone(),
         dtb_dir,
-        tftp: TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(tftp_root)),
+        tftp: TftpConfig::Builtin(tftp),
         network: ostool_server::TftpNetworkConfig {
             interface: "lo".into(),
         },
@@ -239,6 +244,7 @@ fn run_ws_lifecycle_case(mode: ClientShutdownMode) -> Result<()> {
     shutdown_result
 }
 
+/// Drives one client session through power-on, serial I/O, and release assertions.
 async fn run_client_flow(
     base_url: &str,
     mode: ClientShutdownMode,
@@ -291,10 +297,7 @@ async fn run_client_flow(
                 .send(Message::Text(r#"{"type":"close"}"#.to_string().into()))
                 .await
                 .context("failed to send websocket close control message")?;
-            websocket
-                .send(Message::Close(None))
-                .await
-                .context("failed to send websocket close frame")?;
+            wait_for_closed(&mut websocket).await?;
         }
         ClientShutdownMode::AbruptDrop => {
             drop(websocket);
@@ -432,6 +435,7 @@ where
     }
 }
 
+/// Reads the first binary payload from the serial WebSocket.
 async fn read_binary_payload<S>(websocket: &mut S) -> Result<Vec<u8>>
 where
     S: futures_util::Stream<
@@ -453,6 +457,41 @@ where
                 bail!("received websocket error while waiting for serial payload: {text}");
             }
             Message::Close(frame) => bail!("websocket closed before serial payload: {frame:?}"),
+            _ => {}
+        }
+    }
+}
+
+/// Waits until the serial WebSocket reports closed or the connection closes.
+async fn wait_for_closed<S>(websocket: &mut S) -> Result<()>
+where
+    S: futures_util::Stream<
+            Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>,
+        > + Unpin,
+{
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut saw_closed_control = false;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let message =
+            tokio::time::timeout(remaining.max(Duration::from_millis(10)), websocket.next())
+                .await
+                .context("timed out waiting for websocket close")?;
+        let Some(message) = message else {
+            return if saw_closed_control {
+                Ok(())
+            } else {
+                Err(anyhow!("websocket closed before closed control message"))
+            };
+        };
+        match message.context("failed to read websocket close message")? {
+            Message::Text(text) if text.contains(r#""type":"closed""#) => {
+                saw_closed_control = true;
+            }
+            Message::Text(text) if text.contains(r#""type":"error""#) => {
+                bail!("received websocket error while waiting for close: {text}");
+            }
+            Message::Close(_) => return Ok(()),
             _ => {}
         }
     }
