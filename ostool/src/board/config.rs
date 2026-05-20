@@ -12,6 +12,9 @@ use crate::{
 pub struct BoardRunConfig {
     pub board_type: String,
     pub dtb_file: Option<String>,
+    pub kernel_load_addr: Option<String>,
+    pub fit_load_addr: Option<String>,
+    pub bootm_addr: Option<String>,
     #[serde(default)]
     pub success_regex: Vec<String>,
     #[serde(default)]
@@ -109,6 +112,21 @@ impl BoardRunConfig {
             .as_deref()
             .map(|value| tool.replace_string(value))
             .transpose()?;
+        self.kernel_load_addr = self
+            .kernel_load_addr
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        self.fit_load_addr = self
+            .fit_load_addr
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        self.bootm_addr = self
+            .bootm_addr
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
         self.success_regex = self
             .success_regex
             .iter()
@@ -157,6 +175,9 @@ impl BoardRunConfig {
                 *dtb_file = trimmed.to_string();
             }
         }
+        normalize_optional_string(&mut self.kernel_load_addr);
+        normalize_optional_string(&mut self.fit_load_addr);
+        normalize_optional_string(&mut self.bootm_addr);
         if let Some(commands) = self.uboot_cmd.as_mut() {
             commands.retain_mut(|command| {
                 let trimmed = command.trim();
@@ -184,6 +205,17 @@ impl BoardRunConfig {
     }
 }
 
+fn normalize_optional_string(value: &mut Option<String>) {
+    if let Some(inner) = value.as_mut() {
+        let trimmed = inner.trim();
+        if trimmed.is_empty() {
+            *value = None;
+        } else if trimmed.len() != inner.len() {
+            *inner = trimmed.to_string();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::BoardRunConfig;
@@ -200,6 +232,9 @@ mod tests {
             r#"
 board_type = " orangepi5plus "
 dtb_file = " ${workspace}/board.dtb "
+kernel_load_addr = " 0x80200000 "
+fit_load_addr = " 0x82200000 "
+bootm_addr = " 0x82200000 "
 success_regex = ["ok"]
 fail_regex = ["panic"]
 uboot_cmd = [" run bootcmd "]
@@ -216,6 +251,9 @@ port = 9000
 
         assert_eq!(config.board_type, "orangepi5plus");
         assert_eq!(config.dtb_file.as_deref(), Some("${workspace}/board.dtb"));
+        assert_eq!(config.kernel_load_addr.as_deref(), Some("0x80200000"));
+        assert_eq!(config.fit_load_addr.as_deref(), Some("0x82200000"));
+        assert_eq!(config.bootm_addr.as_deref(), Some("0x82200000"));
         assert_eq!(config.uboot_cmd, Some(vec!["run bootcmd".to_string()]));
         assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
         assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));

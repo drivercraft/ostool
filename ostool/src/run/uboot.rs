@@ -69,6 +69,9 @@ pub struct UbootConfig {
     /// Fit Image load address
     /// if not specified, use automatically calculated address
     pub fit_load_addr: Option<String>,
+    /// Address passed to `bootm` after serial FIT upload.
+    /// if not specified, use the FIT load address when configured.
+    pub bootm_addr: Option<String>,
     /// TFTP boot configuration
     pub net: Option<Net>,
     /// Board reset command
@@ -111,6 +114,9 @@ impl UbootConfig {
     pub fn from_board_run_config(config: &BoardRunConfig) -> Self {
         Self {
             dtb_file: config.dtb_file.clone(),
+            kernel_load_addr: config.kernel_load_addr.clone(),
+            fit_load_addr: config.fit_load_addr.clone(),
+            bootm_addr: config.bootm_addr.clone(),
             success_regex: config.success_regex.clone(),
             fail_regex: config.fail_regex.clone(),
             uboot_cmd: config.uboot_cmd.clone(),
@@ -134,6 +140,11 @@ impl UbootConfig {
             .transpose()?;
         self.fit_load_addr = self
             .fit_load_addr
+            .as_deref()
+            .map(|value| tool.replace_string(value))
+            .transpose()?;
+        self.bootm_addr = self
+            .bootm_addr
             .as_deref()
             .map(|value| tool.replace_string(value))
             .transpose()?;
@@ -187,6 +198,10 @@ impl UbootConfig {
 
     pub fn fit_load_addr_int(&self) -> Option<u64> {
         self.addr_int(self.fit_load_addr.as_ref())
+    }
+
+    pub fn bootm_addr_int(&self) -> Option<u64> {
+        self.addr_int(self.bootm_addr.as_ref())
     }
 
     fn addr_int(&self, addr_str: Option<&String>) -> Option<u64> {
@@ -1242,12 +1257,12 @@ where
             } else {
                 info!("No network boot request available, using loady to upload FIT image...");
                 Self::uboot_loady(&mut uboot, fit_loadaddr as usize, fitimage).await?;
-                "bootm".to_string()
+                self.serial_bootm_command(fit_loadaddr)
             }
         } else {
             info!("No TFTP config, using loady to upload FIT image...");
             Self::uboot_loady(&mut uboot, fit_loadaddr as usize, fitimage).await?;
-            "bootm".to_string()
+            self.serial_bootm_command(fit_loadaddr)
         };
 
         info!("Booting kernel with command: {}", bootcmd);
@@ -1373,6 +1388,16 @@ where
         self.success_regex = success;
         self.fail_regex = fail;
         Ok(())
+    }
+
+    fn serial_bootm_command(&self, fit_loadaddr: u64) -> String {
+        if let Some(addr) = self.config.bootm_addr_int() {
+            format!("bootm {addr:#x}")
+        } else if self.config.fit_load_addr_int().is_some() {
+            format!("bootm {fit_loadaddr:#x}")
+        } else {
+            "bootm".to_string()
+        }
     }
 
     async fn uboot_loady(
@@ -1622,6 +1647,7 @@ timeout = 0
             dtb_file: Some("${package}/board.dtb".into()),
             kernel_load_addr: Some("${workspaceFolder}".into()),
             fit_load_addr: Some("${package}".into()),
+            bootm_addr: Some("${workspace}".into()),
             success_regex: vec!["${workspace}".into()],
             fail_regex: vec!["${package}".into()],
             uboot_cmd: Some(vec!["setenv boot ${workspace}".into()]),
@@ -1657,6 +1683,7 @@ timeout = 0
         );
         assert_eq!(config.kernel_load_addr.as_deref(), Some(expected.as_str()));
         assert_eq!(config.fit_load_addr.as_deref(), Some(expected.as_str()));
+        assert_eq!(config.bootm_addr.as_deref(), Some(expected.as_str()));
         assert_eq!(
             config.local.board_reset_cmd.as_deref(),
             Some(expected.as_str())
@@ -1689,6 +1716,9 @@ timeout = 0
         let config = UbootConfig::from_board_run_config(&BoardRunConfig {
             board_type: "rk3568".into(),
             dtb_file: Some("/tmp/board.dtb".into()),
+            kernel_load_addr: Some("0x80200000".into()),
+            fit_load_addr: Some("0x82200000".into()),
+            bootm_addr: Some("0x82200000".into()),
             success_regex: vec!["ok".into()],
             fail_regex: vec!["fail".into()],
             uboot_cmd: Some(vec!["run ab_select_cmd".into(), "run avb_boot".into()]),
@@ -1700,6 +1730,9 @@ timeout = 0
         });
 
         assert_eq!(config.dtb_file.as_deref(), Some("/tmp/board.dtb"));
+        assert_eq!(config.kernel_load_addr.as_deref(), Some("0x80200000"));
+        assert_eq!(config.fit_load_addr.as_deref(), Some("0x82200000"));
+        assert_eq!(config.bootm_addr.as_deref(), Some("0x82200000"));
         assert_eq!(config.success_regex, vec!["ok"]);
         assert_eq!(config.timeout, Some(12));
         assert_eq!(
