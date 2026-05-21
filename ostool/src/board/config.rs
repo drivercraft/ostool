@@ -390,6 +390,7 @@ dtb_file = "${package}/board.dtb"
                 log: None,
                 extra_config: None,
                 profile: None,
+                disable_someboot_build_config: false,
                 args: vec![],
                 pre_build_cmds: vec![],
                 post_build_cmds: vec![],

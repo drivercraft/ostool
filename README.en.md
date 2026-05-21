@@ -189,6 +189,9 @@ env = { "RUSTFLAGS" = "-C link-arg=-Tlinker.ld" }
 # while other builds/runs use Release.
 profile = "Release"
 
+# To disable automatic Cargo argument injection from someboot build-info.toml, set this to true.
+# disable_someboot_build_config = true
+
 # Additional cargo arguments
 args = []
 

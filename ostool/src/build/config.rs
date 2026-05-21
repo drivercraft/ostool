@@ -21,6 +21,10 @@ use std::collections::HashMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Root build configuration structure.
 ///
 /// This is the top-level configuration that specifies which build system
@@ -96,6 +100,9 @@ pub struct Cargo {
     /// Cargo's dev profile, and normal builds/runs use Cargo's release profile.
     #[serde(default)]
     pub profile: Option<CargoBuildProfile>,
+    /// Disable automatic Cargo argument injection from someboot build metadata.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub disable_someboot_build_config: bool,
     /// Additional Cargo command-line arguments.
     pub args: Vec<String>,
     /// Shell commands to run before the build.
@@ -142,4 +149,67 @@ pub enum LogLevel {
     Warn,
     /// Error level logging.
     Error,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cargo;
+
+    #[test]
+    fn cargo_config_defaults_someboot_injection_to_enabled_when_field_is_absent() {
+        let cargo: Cargo = toml::from_str(
+            r#"
+env = {}
+target = "x86_64-unknown-none"
+package = "kernel"
+features = []
+args = []
+pre_build_cmds = []
+post_build_cmds = []
+to_bin = false
+"#,
+        )
+        .unwrap();
+
+        assert!(!cargo.disable_someboot_build_config);
+    }
+
+    #[test]
+    fn cargo_config_omits_someboot_disable_field_when_false() {
+        let cargo = Cargo {
+            env: Default::default(),
+            target: "x86_64-unknown-none".into(),
+            package: "kernel".into(),
+            features: Vec::new(),
+            args: Vec::new(),
+            pre_build_cmds: Vec::new(),
+            post_build_cmds: Vec::new(),
+            to_bin: false,
+            ..Cargo::default()
+        };
+
+        let rendered = toml::to_string(&cargo).unwrap();
+
+        assert!(!rendered.contains("disable_someboot_build_config"));
+    }
+
+    #[test]
+    fn cargo_config_serializes_someboot_disable_field_when_true() {
+        let cargo = Cargo {
+            env: Default::default(),
+            target: "x86_64-unknown-none".into(),
+            package: "kernel".into(),
+            features: Vec::new(),
+            disable_someboot_build_config: true,
+            args: Vec::new(),
+            pre_build_cmds: Vec::new(),
+            post_build_cmds: Vec::new(),
+            to_bin: false,
+            ..Cargo::default()
+        };
+
+        let rendered = toml::to_string(&cargo).unwrap();
+
+        assert!(rendered.contains("disable_someboot_build_config = true"));
+    }
 }

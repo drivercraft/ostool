@@ -38,6 +38,8 @@ pub struct ToolConfig {
     pub bin_dir: Option<PathBuf>,
     /// Whether debug mode is enabled.
     pub debug: bool,
+    /// Disable automatic Cargo argument injection from someboot build metadata.
+    pub disable_someboot_build_config: bool,
 }
 
 /// Main library object orchestrating build and run operations.
@@ -82,6 +84,15 @@ impl Tool {
 
     pub fn set_build_config_path(&mut self, path: Option<PathBuf>) {
         self.ctx.build_config_path = path;
+    }
+
+    /// Enables or disables automatic Cargo argument injection from someboot build metadata.
+    pub fn set_someboot_build_config_enabled(&mut self, enabled: bool) {
+        self.config.disable_someboot_build_config = !enabled;
+    }
+
+    pub(crate) fn someboot_build_config_enabled(&self, cargo: &Cargo) -> bool {
+        !self.config.disable_someboot_build_config && !cargo.disable_someboot_build_config
     }
 
     pub fn into_context(self) -> AppContext {
@@ -376,7 +387,9 @@ impl Tool {
             bail!("No build configuration obtained");
         };
 
-        if let BuildSystem::Cargo(cargo) = &mut c.system {
+        if let BuildSystem::Cargo(cargo) = &mut c.system
+            && self.someboot_build_config_enabled(cargo)
+        {
             let iter = self.someboot_cargo_args(cargo)?.into_iter();
             cargo.args.extend(iter);
         }
@@ -1039,6 +1052,74 @@ mod tests {
         assert_eq!(resolved, kernel_dir.join(".qemu-aarch64.toml"));
     }
 
+    #[tokio::test]
+    async fn prepare_build_config_skips_someboot_args_when_cargo_config_disables_them() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\", \"someboot\"]\nresolver = \"3\"\n",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join(".build.toml"),
+            r#"
+[system.Cargo]
+package = "app"
+target = "x86_64-unknown-none"
+disable_someboot_build_config = true
+env = {}
+features = []
+args = []
+pre_build_cmds = []
+post_build_cmds = []
+to_bin = false
+"#,
+        )
+        .unwrap();
+        let app_dir = temp.path().join("app");
+        fs::create_dir_all(app_dir.join("src")).unwrap();
+        fs::write(
+            app_dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nsomeboot = { path = \"../someboot\" }\n",
+        )
+        .unwrap();
+        fs::write(app_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        let someboot_dir = temp.path().join("someboot");
+        fs::create_dir_all(someboot_dir.join("src")).unwrap();
+        fs::write(
+            someboot_dir.join("Cargo.toml"),
+            "[package]\nname = \"someboot\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(someboot_dir.join("src/lib.rs"), "pub fn marker() {}\n").unwrap();
+        fs::write(
+            someboot_dir.join("build-info.toml"),
+            "[x86_64-unknown-none]\ncargoargs = [\"--someboot-cargoarg\"]\nrustflags = [\"-Cdebuginfo=2\"]\n",
+        )
+        .unwrap();
+
+        let mut tool = Tool::new(ToolConfig {
+            manifest: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+        let config = tool
+            .load_build_config_from_path(&temp.path().join(".build.toml"), false)
+            .await
+            .unwrap();
+
+        let BuildSystem::Cargo(cargo) = config.system else {
+            panic!("expected Cargo build config");
+        };
+        assert!(!cargo.args.iter().any(|arg| arg == "--someboot-cargoarg"));
+        assert!(
+            !cargo
+                .args
+                .iter()
+                .any(|arg| arg.contains("target.x86_64-unknown-none.rustflags"))
+        );
+    }
+
     #[test]
     fn replace_string_uses_workspace_and_legacy_workspacefolder() {
         let temp = tempfile::tempdir().unwrap();
@@ -1149,6 +1230,7 @@ mod tests {
                 log: None,
                 extra_config: None,
                 profile: None,
+                disable_someboot_build_config: false,
                 args: vec![],
                 pre_build_cmds: vec![],
                 post_build_cmds: vec![],

@@ -188,6 +188,9 @@ env = { "RUSTFLAGS" = "-C link-arg=-Tlinker.ld" }
 # 省略时保持兼容行为：QEMU --debug 使用 Debug，其它构建/运行使用 Release。
 profile = "Release"
 
+# 如需禁用从 someboot build-info.toml 自动注入 Cargo 参数，可显式设置为 true。
+# disable_someboot_build_config = true
+
 # 额外的 cargo 参数
 args = []
 

@@ -130,6 +130,7 @@ async fn try_main() -> anyhow::Result<()> {
         build_dir,
         bin_dir,
         debug: args.debug,
+        disable_someboot_build_config: false,
     })?;
 
     tool.prepare_elf_artifact(args.elf, args.to_bin).await?;

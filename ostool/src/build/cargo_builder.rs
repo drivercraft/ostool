@@ -256,7 +256,7 @@ impl<'a> CargoBuilder<'a> {
 
         // Auto-detected args from someboot/build-info.toml
         let workspace_manifest = self.tool.workspace_dir().join("Cargo.toml");
-        if workspace_manifest.exists() {
+        if self.tool.someboot_build_config_enabled(self.config) && workspace_manifest.exists() {
             let detected_args = someboot::detect_build_config_for_package(
                 &workspace_manifest,
                 &self.config.package,
@@ -594,6 +594,33 @@ mod tests {
         select_executable_artifact(artifacts, explicit_bin, default_run, package)
     }
 
+    fn write_someboot_workspace(root: &Path) {
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\", \"someboot\"]\nresolver = \"3\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("app/src")).unwrap();
+        fs::write(
+            root.join("app/Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nsomeboot = { path = \"../someboot\" }\n",
+        )
+        .unwrap();
+        fs::write(root.join("app/src/main.rs"), "fn main() {}\n").unwrap();
+        fs::create_dir_all(root.join("someboot/src")).unwrap();
+        fs::write(
+            root.join("someboot/Cargo.toml"),
+            "[package]\nname = \"someboot\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(root.join("someboot/src/lib.rs"), "pub fn marker() {}\n").unwrap();
+        fs::write(
+            root.join("someboot/build-info.toml"),
+            "[x86_64-unknown-none]\ncargoargs = [\"--someboot-cargoarg\"]\nrustflags = [\"-Cdebuginfo=2\"]\n",
+        )
+        .unwrap();
+    }
+
     #[test]
     fn select_executable_artifact_uses_explicit_bin_first() {
         let artifacts = vec![
@@ -685,6 +712,39 @@ mod tests {
         assert!(rendered.contains("kernel-uboot"));
     }
 
+    #[tokio::test]
+    async fn build_cargo_command_skips_someboot_args_when_cargo_config_disables_them() {
+        let temp = tempfile::tempdir().unwrap();
+        write_someboot_workspace(temp.path());
+
+        let config = Cargo {
+            package: "app".into(),
+            target: "x86_64-unknown-none".into(),
+            disable_someboot_build_config: true,
+            profile: Some(CargoBuildProfile::Debug),
+            ..Default::default()
+        };
+
+        let mut tool = Tool::new(ToolConfig {
+            manifest: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+        let mut builder = CargoBuilder::build(&mut tool, &config, None).skip_objcopy(true);
+        let cmd = builder.build_cargo_command().await.unwrap();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert!(!args.iter().any(|arg| arg == "--someboot-cargoarg"));
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg.contains("target.x86_64-unknown-none.rustflags"))
+        );
+    }
+
     /// Verifies resolved Cargo artifacts are recorded into runtime state.
     ///
     /// This covers post-resolution Tool state, not serde/config loading.
@@ -713,6 +773,7 @@ mod tests {
             log: None,
             extra_config: None,
             profile: Some(CargoBuildProfile::Debug),
+            disable_someboot_build_config: false,
             args: vec![],
             pre_build_cmds: vec![],
             post_build_cmds: vec![],

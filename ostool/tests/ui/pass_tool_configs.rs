@@ -8,9 +8,13 @@ use ostool::{
 };
 
 fn main() {
-    let tool = Tool::new(ToolConfig::default()).unwrap();
+    let mut tool = Tool::new(ToolConfig::default()).unwrap();
+    tool.set_someboot_build_config_enabled(false);
     let _: BuildConfig = tool.default_build_config();
-    let cargo = Cargo::default();
+    let cargo = Cargo {
+        disable_someboot_build_config: true,
+        ..Cargo::default()
+    };
     let qemu: QemuConfig = tool.default_qemu_config_for_cargo(&cargo);
     let _ = tool.default_qemu_config();
     let uboot: UbootConfig = tool.default_uboot_config();
