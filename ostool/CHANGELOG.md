@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0](https://github.com/drivercraft/ostool/compare/ostool-v0.17.0...ostool-v0.18.0) - 2026-05-21
+
+### Added
+
+- *(ostool)* support board-specific U-Boot load addresses ([#105](https://github.com/drivercraft/ostool/pull/105))
+
+### Other
+
+- 添加 AGENTS 指南 ([#95](https://github.com/drivercraft/ostool/pull/95))
+
 ## [0.17.0](https://github.com/drivercraft/ostool/compare/ostool-v0.16.0...ostool-v0.17.0) - 2026-05-14
 
 ### Added
