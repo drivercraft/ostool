@@ -6,7 +6,6 @@ use regex::Regex;
 
 pub(crate) const MATCH_DRAIN_DURATION: Duration = Duration::from_millis(500);
 const MAX_MATCH_WINDOW_BYTES: usize = 2048;
-const DEFAULT_FAIL_PATTERNS: &[&str] = &[r"(?i)\bpanic(?:ked)?\b", r"(?i)kernel panic"];
 const MATCH_EXCERPT_CONTEXT_CHARS: usize = 120;
 const MATCH_EXCERPT_MAX_CHARS: usize = 240;
 
@@ -46,17 +45,7 @@ pub(crate) fn compile_regexes(
         .map(|p| Regex::new(p).map_err(|e| anyhow!("success regex error: {e}")))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut merged_fail_patterns = fail_patterns.to_vec();
-    for pattern in DEFAULT_FAIL_PATTERNS {
-        if !merged_fail_patterns
-            .iter()
-            .any(|existing| existing == pattern)
-        {
-            merged_fail_patterns.push((*pattern).to_string());
-        }
-    }
-
-    let fail_regex = merged_fail_patterns
+    let fail_regex = fail_patterns
         .iter()
         .map(|p| Regex::new(p).map_err(|e| anyhow!("fail regex error: {e}")))
         .collect::<Result<Vec<_>, _>>()?;
@@ -295,17 +284,10 @@ mod tests {
     }
 
     #[test]
-    fn compile_regexes_appends_builtin_panic_patterns() {
+    fn compile_regexes_keeps_empty_fail_patterns_empty() {
         let (_success, fail) = compile_regexes(&[], &[]).unwrap();
 
-        assert!(
-            fail.iter()
-                .any(|regex| regex.as_str() == r"(?i)\bpanic(?:ked)?\b")
-        );
-        assert!(
-            fail.iter()
-                .any(|regex| regex.as_str() == r"(?i)kernel panic")
-        );
+        assert!(fail.is_empty());
     }
 
     #[test]
