@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0](https://github.com/drivercraft/ostool/compare/ostool-v0.18.0...ostool-v0.19.0) - 2026-05-21
+
+### Added
+
+- 添加禁用 someboot 自动注入 Cargo 参数的配置选项 ([#106](https://github.com/drivercraft/ostool/pull/106))
+
 ## [0.18.0](https://github.com/drivercraft/ostool/compare/ostool-v0.17.0...ostool-v0.18.0) - 2026-05-21
 
 ### Added
