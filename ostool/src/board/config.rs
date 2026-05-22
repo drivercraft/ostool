@@ -5,7 +5,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Tool, board::global_config::BoardGlobalConfig, run::shell_init::normalize_shell_init_config,
+    board::global_config::BoardGlobalConfig,
+    project::variables::{self, VariableScope},
+    run::shell_init::normalize_shell_init_config,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
@@ -37,7 +39,7 @@ impl BoardRunConfig {
     }
 
     pub(crate) async fn load_or_create(
-        tool: &Tool,
+        scope: &VariableScope,
         explicit_path: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
         let config_path = Self::default_path(explicit_path)?;
@@ -45,18 +47,18 @@ impl BoardRunConfig {
             .await
             .with_context(|| format!("failed to load board config: {}", config_path.display()))?
             .ok_or_else(|| anyhow!("No board configuration obtained"))?;
-        config.replace_strings(tool)?;
+        config.replace_strings(scope)?;
         config.normalize(&format!("board config {}", config_path.display()))?;
         Ok(config)
     }
 
-    pub(crate) fn read_from_path(tool: &Tool, path: PathBuf) -> anyhow::Result<Self> {
+    pub(crate) fn read_from_path(scope: &VariableScope, path: PathBuf) -> anyhow::Result<Self> {
         let mut config: Self = toml::from_str(
             &std::fs::read_to_string(&path)
                 .with_context(|| format!("failed to read board config: {}", path.display()))?,
         )
         .with_context(|| format!("failed to parse board config: {}", path.display()))?;
-        config.replace_strings(tool)?;
+        config.replace_strings(scope)?;
         config.normalize(&format!("board config {}", path.display()))?;
         Ok(config)
     }
@@ -77,17 +79,17 @@ impl BoardRunConfig {
 
     pub(crate) fn apply_overrides(
         &mut self,
-        tool: &Tool,
+        scope: &VariableScope,
         board_type: Option<&str>,
         server: Option<&str>,
         port: Option<u16>,
     ) -> anyhow::Result<()> {
         if let Some(board_type) = board_type {
-            self.board_type = tool.replace_string(board_type)?;
+            self.board_type = variables::expand_variables(board_type, scope)?;
         }
 
         if let Some(server) = server {
-            let server = tool.replace_string(server)?;
+            let server = variables::expand_variables(server, scope)?;
             let server = server.trim().to_string();
             if server.is_empty() {
                 anyhow::bail!("board server override must not be empty");
@@ -105,37 +107,37 @@ impl BoardRunConfig {
         self.normalize("board run arguments")
     }
 
-    fn replace_strings(&mut self, tool: &Tool) -> anyhow::Result<()> {
-        self.board_type = tool.replace_string(&self.board_type)?;
+    fn replace_strings(&mut self, scope: &VariableScope) -> anyhow::Result<()> {
+        self.board_type = variables::expand_variables(&self.board_type, scope)?;
         self.dtb_file = self
             .dtb_file
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.kernel_load_addr = self
             .kernel_load_addr
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.fit_load_addr = self
             .fit_load_addr
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.bootm_addr = self
             .bootm_addr
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.success_regex = self
             .success_regex
             .iter()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .collect::<anyhow::Result<Vec<_>>>()?;
         self.fail_regex = self
             .fail_regex
             .iter()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .collect::<anyhow::Result<Vec<_>>>()?;
         self.uboot_cmd = self
             .uboot_cmd
@@ -143,24 +145,24 @@ impl BoardRunConfig {
             .map(|values| {
                 values
                     .iter()
-                    .map(|value| tool.replace_string(value))
+                    .map(|value| variables::expand_variables(value, scope))
                     .collect::<anyhow::Result<Vec<_>>>()
             })
             .transpose()?;
         self.shell_prefix = self
             .shell_prefix
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.shell_init_cmd = self
             .shell_init_cmd
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.server = self
             .server
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         Ok(())
     }
@@ -293,7 +295,12 @@ port = 9000
         let tool = Tool::new(Default::default()).unwrap();
 
         config
-            .apply_overrides(&tool, Some(" rk3568 "), Some(" 127.0.0.1 "), Some(7000))
+            .apply_overrides(
+                &tool.variable_scope().unwrap(),
+                Some(" rk3568 "),
+                Some(" 127.0.0.1 "),
+                Some(7000),
+            )
             .unwrap();
 
         assert_eq!(config.board_type, "rk3568");

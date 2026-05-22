@@ -143,7 +143,8 @@ impl Tool {
     ///
     /// Returns an error if the configuration cannot be loaded or the build fails.
     pub(crate) fn build_custom(&mut self, config: &Custom) -> anyhow::Result<()> {
-        self.shell_run_cmd(&config.build_cmd)?;
+        let process_context = self.process_context()?;
+        crate::process::shell_run_cmd(&process_context, &config.build_cmd)?;
         Ok(())
     }
 

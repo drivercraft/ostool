@@ -20,6 +20,7 @@ use crate::board::{
 use crate::{
     Tool,
     build::config::{BuildConfig, BuildSystem, Cargo},
+    project::variables,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -185,8 +186,9 @@ impl Tool {
         path: &Path,
     ) -> anyhow::Result<BoardRunConfig> {
         self.sync_cargo_context(cargo);
-        let path = self.replace_path_variables(path.to_path_buf())?;
-        BoardRunConfig::read_from_path(self, path)
+        let scope = self.variable_scope()?;
+        let path = variables::expand_path_variables(path, &scope)?;
+        BoardRunConfig::read_from_path(&scope, path)
     }
 
     pub async fn ensure_board_run_config_in_dir_for_cargo(
@@ -195,24 +197,27 @@ impl Tool {
         dir: &Path,
     ) -> anyhow::Result<BoardRunConfig> {
         self.sync_cargo_context(cargo);
-        let dir = self.replace_path_variables(dir.to_path_buf())?;
-        BoardRunConfig::load_or_create(self, Some(dir.join(".board.toml"))).await
+        let scope = self.variable_scope()?;
+        let dir = variables::expand_path_variables(dir, &scope)?;
+        BoardRunConfig::load_or_create(&scope, Some(dir.join(".board.toml"))).await
     }
 
     pub async fn ensure_board_run_config_in_dir(
         &mut self,
         dir: &Path,
     ) -> anyhow::Result<BoardRunConfig> {
-        let dir = self.replace_path_variables(dir.to_path_buf())?;
-        BoardRunConfig::load_or_create(self, Some(dir.join(".board.toml"))).await
+        let scope = self.variable_scope()?;
+        let dir = variables::expand_path_variables(dir, &scope)?;
+        BoardRunConfig::load_or_create(&scope, Some(dir.join(".board.toml"))).await
     }
 
     pub async fn read_board_run_config_from_path(
         &mut self,
         path: &Path,
     ) -> anyhow::Result<BoardRunConfig> {
-        let path = self.replace_path_variables(path.to_path_buf())?;
-        BoardRunConfig::read_from_path(self, path)
+        let scope = self.variable_scope()?;
+        let path = variables::expand_path_variables(path, &scope)?;
+        BoardRunConfig::read_from_path(&scope, path)
     }
 
     pub async fn run_board(
@@ -259,8 +264,9 @@ impl Tool {
     ) -> anyhow::Result<()> {
         let global_config = load_board_global_config_with_notice()?;
         let mut board_config = board_config.clone();
+        let scope = self.variable_scope()?;
         board_config.apply_overrides(
-            self,
+            &scope,
             options.board_type.as_deref(),
             options.server.as_deref(),
             options.port,

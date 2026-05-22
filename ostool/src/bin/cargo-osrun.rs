@@ -11,7 +11,9 @@ use clap::{Parser, Subcommand};
 use colored::Colorize as _;
 use log::debug;
 use ostool::{
-    Tool, ToolConfig, logger, resolve_manifest_context,
+    ManifestContext, Tool,
+    invocation::{Invocation, InvocationOptions},
+    logger,
     run::{qemu::RunQemuOptions, uboot::RunUbootOptions},
 };
 
@@ -108,7 +110,31 @@ async fn try_main() -> anyhow::Result<()> {
 
     let manifest_dir: PathBuf = env::var("CARGO_MANIFEST_DIR")?.into();
     let manifest = manifest_dir.join("Cargo.toml");
-    let manifest = resolve_manifest_context(Some(manifest))?;
+    let parsed_args = format!("{args:#?}");
+
+    let RunnerArgs {
+        elf,
+        to_bin,
+        config,
+        show_output,
+        no_run,
+        debug,
+        command,
+        dtb_dump,
+        build_dir,
+        bin_dir,
+        ..
+    } = args;
+    let bin_dir: Option<PathBuf> = bin_dir.map(PathBuf::from);
+    let build_dir: Option<PathBuf> = build_dir.map(PathBuf::from);
+
+    let invocation = Invocation::new(InvocationOptions::new(
+        Some(manifest),
+        build_dir,
+        bin_dir,
+        debug,
+    ))?;
+    let manifest = ManifestContext::from_invocation(&invocation);
     let log_path = logger::init_file_logger(&manifest.workspace_dir)?;
     let _ = LOG_PATH.set(log_path.clone());
     debug!(
@@ -116,44 +142,30 @@ async fn try_main() -> anyhow::Result<()> {
         log_path.display(),
         manifest.manifest_path.display()
     );
-    debug!("Parsed arguments: {:#?}", args);
+    debug!("Parsed arguments: {parsed_args}");
 
-    if args.no_run {
+    if no_run {
         exit(0);
     }
 
-    let bin_dir: Option<PathBuf> = args.bin_dir.map(PathBuf::from);
-    let build_dir: Option<PathBuf> = args.build_dir.map(PathBuf::from);
+    let mut tool = Tool::from_invocation(invocation);
 
-    let mut tool = Tool::new(ToolConfig {
-        manifest: Some(manifest.manifest_path),
-        build_dir,
-        bin_dir,
-        debug: args.debug,
-        disable_someboot_build_config: false,
-    })?;
+    tool.prepare_elf_artifact(elf, to_bin).await?;
 
-    tool.prepare_elf_artifact(args.elf, args.to_bin).await?;
-
-    match args.command {
+    match command {
         Some(SubCommands::Uboot(_)) => {
-            let config = match args.config.as_deref() {
+            let config = match config.as_deref() {
                 Some(path) => tool.read_uboot_config_from_path(path).await?,
                 None => {
                     tool.ensure_uboot_config_in_dir(&manifest.workspace_dir)
                         .await?
                 }
             };
-            tool.run_uboot(
-                &config,
-                RunUbootOptions {
-                    show_output: args.show_output,
-                },
-            )
-            .await?;
+            tool.run_uboot(&config, RunUbootOptions { show_output })
+                .await?;
         }
         None => {
-            let config = match args.config.as_deref() {
+            let config = match config.as_deref() {
                 Some(path) => tool.read_qemu_config_from_path(path).await?,
                 None => {
                     tool.ensure_qemu_config_in_dir(&manifest.workspace_dir)
@@ -163,8 +175,8 @@ async fn try_main() -> anyhow::Result<()> {
             tool.run_qemu(
                 &config,
                 RunQemuOptions {
-                    dtb_dump: args.dtb_dump,
-                    show_output: args.show_output,
+                    dtb_dump,
+                    show_output,
                 },
             )
             .await?;
@@ -187,5 +199,68 @@ fn report_error(err: &anyhow::Error) {
             "{}",
             format!("Log file: {}", log_path.display()).yellow().bold()
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use clap::Parser;
+
+    use super::{RunnerArgs, SubCommands};
+
+    /// Verifies the default runner path parses QEMU-related flags.
+    #[test]
+    fn parse_default_qemu_runner_args() {
+        let args = RunnerArgs::try_parse_from([
+            "cargo-osrun",
+            "qemu-system-aarch64",
+            "target/kernel.elf",
+            "--to-bin",
+            "--config",
+            "qemu.toml",
+            "--show-output",
+            "--debug",
+            "--dtb-dump",
+            "--build-dir",
+            "target/custom",
+            "--bin-dir",
+            "dist",
+        ])
+        .unwrap();
+
+        assert_eq!(args.program, Path::new("qemu-system-aarch64"));
+        assert_eq!(args.elf, Path::new("target/kernel.elf"));
+        assert!(args.to_bin);
+        assert_eq!(args.config.as_deref(), Some(Path::new("qemu.toml")));
+        assert!(args.show_output);
+        assert!(args.debug);
+        assert!(args.dtb_dump);
+        assert_eq!(args.build_dir.as_deref(), Some("target/custom"));
+        assert_eq!(args.bin_dir.as_deref(), Some("dist"));
+        assert!(args.command.is_none());
+    }
+
+    /// Verifies the U-Boot subcommand owns arguments after `--`.
+    #[test]
+    fn parse_uboot_runner_subcommand() {
+        let args = RunnerArgs::try_parse_from([
+            "cargo-osrun",
+            "qemu-system-aarch64",
+            "target/kernel.elf",
+            "uboot",
+            "--",
+            "bootm",
+            "${kernel_addr_r}",
+        ])
+        .unwrap();
+
+        match args.command {
+            Some(SubCommands::Uboot(uboot)) => {
+                assert_eq!(uboot.runner_args, ["bootm", "${kernel_addr_r}"]);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 }

@@ -1,8 +1,6 @@
 //! Legacy tool facade for workspace configuration, build, and run workflows.
 
 use std::{
-    env::current_dir,
-    ffi::OsStr,
     path::{Path, PathBuf},
     process::Command,
     sync::Arc,
@@ -24,7 +22,10 @@ use crate::{
         someboot,
     },
     ctx::AppContext,
-    utils::{PathResultExt, replace_placeholders},
+    invocation::Invocation,
+    process::ProcessContext,
+    project::{ProjectLayout, metadata, resolve_project_layout, variables::VariableScope},
+    utils::PathResultExt,
 };
 
 /// Static configuration used to initialize a [`Tool`].
@@ -60,18 +61,57 @@ pub struct ManifestContext {
     pub workspace_dir: PathBuf,
 }
 
+impl ManifestContext {
+    pub fn from_invocation(invocation: &Invocation) -> Self {
+        Self {
+            manifest_path: invocation.manifest_path().to_path_buf(),
+            manifest_dir: invocation.manifest_dir().to_path_buf(),
+            workspace_dir: invocation.workspace_dir().to_path_buf(),
+        }
+    }
+
+    pub(crate) fn from_project_layout(layout: &ProjectLayout) -> Self {
+        Self {
+            manifest_path: layout.manifest_path().to_path_buf(),
+            manifest_dir: layout.manifest_dir().to_path_buf(),
+            workspace_dir: layout.workspace_dir().to_path_buf(),
+        }
+    }
+}
+
 impl Tool {
     /// Creates a new tool from the provided configuration.
     pub fn new(config: ToolConfig) -> anyhow::Result<Self> {
-        let manifest = resolve_manifest_context(config.manifest.clone())?;
+        let layout = resolve_project_layout(config.manifest.clone())?;
+        Ok(Self::from_project_layout(config, layout))
+    }
 
-        Ok(Self {
+    /// Creates the legacy tool facade from an already-resolved invocation.
+    ///
+    /// Invocation options are mapped into `ToolConfig` while the resolved project
+    /// layout is reused directly, so manifest/workspace discovery is not repeated.
+    /// Someboot build-config injection uses the same default as `Tool::new` and can
+    /// be changed afterward with `set_someboot_build_config_enabled`.
+    pub fn from_invocation(invocation: Invocation) -> Self {
+        let (options, layout) = invocation.into_parts();
+        let config = ToolConfig {
+            manifest: Some(layout.manifest_path().to_path_buf()),
+            build_dir: options.build_dir().map(PathBuf::from),
+            bin_dir: options.bin_dir().map(PathBuf::from),
+            debug: options.debug(),
+            ..Default::default()
+        };
+        Self::from_project_layout(config, layout)
+    }
+
+    pub(crate) fn from_project_layout(config: ToolConfig, layout: ProjectLayout) -> Self {
+        Self {
             config,
-            manifest_path: manifest.manifest_path,
-            manifest_dir: manifest.manifest_dir,
-            workspace_dir: manifest.workspace_dir,
+            manifest_path: layout.manifest_path().to_path_buf(),
+            manifest_dir: layout.manifest_dir().to_path_buf(),
+            workspace_dir: layout.workspace_dir().to_path_buf(),
             ctx: AppContext::default(),
-        })
+        }
     }
 
     pub fn ctx(&self) -> &AppContext {
@@ -140,74 +180,18 @@ impl Tool {
         }
     }
 
-    /// Executes a shell command in the current context.
-    pub(crate) fn shell_run_cmd(&self, cmd: &str) -> anyhow::Result<()> {
-        let mut command = match std::env::consts::OS {
-            "windows" => {
-                let mut command = self.command("powershell");
-                command.arg("-Command");
-                command
-            }
-            _ => {
-                let mut command = self.command("sh");
-                command.arg("-c");
-                command
-            }
-        };
-
-        command.arg(cmd);
-
-        if let Some(elf) = &self.ctx.artifacts.elf {
-            command.env("KERNEL_ELF", elf.display().to_string());
-        }
-
-        command.run()?;
-        Ok(())
-    }
-
     /// Creates a new command builder for the given program.
-    pub(crate) fn command(&self, program: &str) -> crate::utils::Command {
-        let tool = self.clone();
-        let mut command =
-            crate::utils::Command::new(program, &self.manifest_dir, move |s| tool.replace_value(s));
-        command.env("WORKSPACE_FOLDER", self.workspace_dir.display().to_string());
-        command
+    pub(crate) fn command(&self, program: &str) -> anyhow::Result<crate::utils::Command> {
+        Ok(crate::process::command(program, &self.process_context()?))
     }
 
     /// Gets the Cargo metadata for the current manifest.
     pub fn metadata(&self) -> anyhow::Result<Metadata> {
-        cargo_metadata::MetadataCommand::new()
-            .manifest_path(&self.manifest_path)
-            .no_deps()
-            .exec()
-            .with_context(|| {
-                format!(
-                    "failed to load cargo metadata from {}",
-                    self.manifest_path.display()
-                )
-            })
+        metadata::cargo_metadata(&self.project_layout())
     }
 
     pub(crate) fn resolve_package_manifest_dir(&self, package: &str) -> anyhow::Result<PathBuf> {
-        let metadata = self.metadata()?;
-        let Some(pkg) = metadata.packages.iter().find(|pkg| pkg.name == package) else {
-            bail!(
-                "package '{}' not found in cargo metadata under {}",
-                package,
-                self.manifest_dir().display()
-            );
-        };
-
-        pkg.manifest_path
-            .parent()
-            .map(|path| path.as_std_path().to_path_buf())
-            .ok_or_else(|| {
-                anyhow!(
-                    "package '{}' manifest has no parent: {}",
-                    package,
-                    pkg.manifest_path
-                )
-            })
+        metadata::package_manifest_dir(&self.project_layout(), package)
     }
 
     /// Sets the ELF artifact path and synchronizes derived runtime metadata.
@@ -280,7 +264,7 @@ impl Tool {
             .purple()
         );
 
-        let mut objcopy = self.command("rust-objcopy");
+        let mut objcopy = self.command("rust-objcopy")?;
         objcopy.arg(format!(
             "--binary-architecture={}",
             format!(
@@ -348,7 +332,7 @@ impl Tool {
             .purple()
         );
 
-        let mut objcopy = self.command("rust-objcopy");
+        let mut objcopy = self.command("rust-objcopy")?;
 
         if !self.debug_enabled() {
             objcopy.arg("--strip-all");
@@ -408,36 +392,6 @@ impl Tool {
         )
     }
 
-    pub(crate) fn replace_value<S>(&self, value: S) -> String
-    where
-        S: AsRef<OsStr>,
-    {
-        self.replace_string(&value.as_ref().to_string_lossy())
-            .unwrap_or_else(|_| value.as_ref().to_string_lossy().into_owned())
-    }
-
-    pub(crate) fn replace_string(&self, input: &str) -> anyhow::Result<String> {
-        let package_dir = self.package_root_for_variables()?;
-        let workspace_dir = self.workspace_dir.display().to_string();
-        let package_dir = package_dir.display().to_string();
-        let tmp_dir = std::env::temp_dir().display().to_string();
-
-        replace_placeholders(input, |placeholder| {
-            let value = match placeholder {
-                "workspace" | "workspaceFolder" => Some(workspace_dir.clone()),
-                "package" => Some(package_dir.clone()),
-                "tmpDir" => Some(tmp_dir.clone()),
-                p if p.starts_with("env:") => Some(std::env::var(&p[4..]).unwrap_or_default()),
-                _ => None,
-            };
-            Ok(value)
-        })
-    }
-
-    pub(crate) fn replace_path_variables(&self, path: PathBuf) -> anyhow::Result<PathBuf> {
-        Ok(PathBuf::from(self.replace_string(&path.to_string_lossy())?))
-    }
-
     fn package_root_for_variables(&self) -> anyhow::Result<PathBuf> {
         if let Some(BuildConfig {
             system: BuildSystem::Cargo(cargo),
@@ -447,6 +401,31 @@ impl Tool {
         }
 
         Ok(self.manifest_dir.clone())
+    }
+
+    fn project_layout(&self) -> ProjectLayout {
+        ProjectLayout::from_manifest_parts(
+            self.manifest_path.clone(),
+            self.manifest_dir.clone(),
+            self.workspace_dir.clone(),
+        )
+    }
+
+    pub(crate) fn variable_scope(&self) -> anyhow::Result<VariableScope> {
+        let package_dir = self.package_root_for_variables()?;
+        Ok(VariableScope::for_package(
+            &self.project_layout(),
+            package_dir,
+        ))
+    }
+
+    pub(crate) fn process_context(&self) -> anyhow::Result<ProcessContext> {
+        Ok(ProcessContext::new(
+            self.manifest_dir.clone(),
+            self.workspace_dir.clone(),
+            self.variable_scope()?,
+            self.ctx.artifacts.elf.clone(),
+        ))
     }
 
     pub(crate) fn ui_hooks(&self) -> Vec<ElementHook> {
@@ -841,56 +820,7 @@ fn build_target_options(candidates: TargetCandidateSet<'_>) -> Vec<HookOption> {
 }
 
 pub fn resolve_manifest_context(input: Option<PathBuf>) -> anyhow::Result<ManifestContext> {
-    let manifest_path = resolve_manifest_path(input)?;
-    let manifest_dir = manifest_path
-        .parent()
-        .ok_or_else(|| anyhow!("manifest has no parent: {}", manifest_path.display()))?
-        .to_path_buf();
-
-    let metadata = cargo_metadata::MetadataCommand::new()
-        .manifest_path(&manifest_path)
-        .no_deps()
-        .exec()
-        .with_context(|| {
-            format!(
-                "failed to load cargo metadata from {}",
-                manifest_path.display()
-            )
-        })?;
-
-    Ok(ManifestContext {
-        manifest_path,
-        manifest_dir,
-        workspace_dir: PathBuf::from(metadata.workspace_root.as_std_path()),
-    })
-}
-
-fn resolve_manifest_path(input: Option<PathBuf>) -> anyhow::Result<PathBuf> {
-    let path = match input {
-        Some(path) => path,
-        None => current_dir().context("failed to get current working directory")?,
-    };
-
-    let manifest_path = if path.is_dir() {
-        path.join("Cargo.toml")
-    } else {
-        path
-    };
-
-    if manifest_path.file_name().and_then(|name| name.to_str()) != Some("Cargo.toml") {
-        bail!(
-            "manifest must be a Cargo.toml file or a directory containing Cargo.toml: {}",
-            manifest_path.display()
-        );
-    }
-
-    if !manifest_path.exists() {
-        bail!("Cargo.toml not found: {}", manifest_path.display());
-    }
-
-    manifest_path
-        .canonicalize()
-        .with_path("failed to canonicalize manifest path", &manifest_path)
+    resolve_project_layout(input).map(|layout| ManifestContext::from_project_layout(&layout))
 }
 
 #[cfg(test)]
@@ -901,6 +831,7 @@ mod tests {
     };
     use crate::build::config::{BuildConfig, BuildSystem, Cargo};
     use crate::run::qemu::resolve_qemu_config_path_in_dir;
+    use crate::{process, project::variables};
     use jkconfig::data::ElementHook;
     use object::Architecture;
     use std::{
@@ -1121,7 +1052,7 @@ to_bin = false
     }
 
     #[test]
-    fn replace_string_uses_workspace_and_legacy_workspacefolder() {
+    fn expand_variables_uses_workspace_and_legacy_workspacefolder() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(
             temp.path().join("Cargo.toml"),
@@ -1137,15 +1068,15 @@ to_bin = false
         })
         .unwrap();
 
-        let replaced = tool
-            .replace_string("${workspace}:${workspaceFolder}")
-            .unwrap();
+        let scope = tool.variable_scope().unwrap();
+        let replaced =
+            variables::expand_variables("${workspace}:${workspaceFolder}", &scope).unwrap();
         let expected = temp.path().display().to_string();
         assert_eq!(replaced, format!("{expected}:{expected}"));
     }
 
     #[test]
-    fn replace_string_uses_cross_platform_tmpdir() {
+    fn expand_variables_uses_cross_platform_tmpdir() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(
             temp.path().join("Cargo.toml"),
@@ -1161,13 +1092,14 @@ to_bin = false
         })
         .unwrap();
 
-        let replaced = tool.replace_string("${tmpDir}").unwrap();
+        let scope = tool.variable_scope().unwrap();
+        let replaced = variables::expand_variables("${tmpDir}", &scope).unwrap();
         assert_eq!(replaced, std::env::temp_dir().display().to_string());
     }
 
     /// Verifies that missing environment placeholders expand to an empty string.
     #[test]
-    fn replace_string_uses_empty_string_for_missing_env() {
+    fn expand_variables_uses_empty_string_for_missing_env() {
         let temp = tempfile::tempdir().unwrap();
         write_single_package(temp.path(), "sample");
 
@@ -1182,14 +1114,15 @@ to_bin = false
             std::process::id()
         );
 
-        let replaced = tool
-            .replace_string(&format!("before-${{env:{missing}}}-after"))
-            .unwrap();
+        let scope = tool.variable_scope().unwrap();
+        let replaced =
+            variables::expand_variables(&format!("before-${{env:{missing}}}-after"), &scope)
+                .unwrap();
         assert_eq!(replaced, "before--after");
     }
 
     #[test]
-    fn replace_string_uses_package_dir_from_build_config() {
+    fn expand_variables_uses_package_dir_from_build_config() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(
             temp.path().join("Cargo.toml"),
@@ -1238,12 +1171,13 @@ to_bin = false
             }),
         });
 
-        let replaced = tool.replace_string("${package}").unwrap();
+        let scope = tool.variable_scope().unwrap();
+        let replaced = variables::expand_variables("${package}", &scope).unwrap();
         assert_eq!(replaced, kernel_dir.display().to_string());
     }
 
     #[test]
-    fn replace_string_falls_back_to_manifest_dir_for_package() {
+    fn variable_scope_uses_manifest_dir_for_package_without_build_config() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(
             temp.path().join("Cargo.toml"),
@@ -1259,8 +1193,44 @@ to_bin = false
         })
         .unwrap();
 
-        let replaced = tool.replace_string("${package}").unwrap();
+        let scope = tool.variable_scope().unwrap();
+        let replaced = variables::expand_variables("${package}", &scope).unwrap();
         assert_eq!(replaced, temp.path().display().to_string());
+    }
+
+    #[test]
+    fn variable_scope_errors_when_selected_package_is_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\"]\nresolver = \"3\"\n",
+        )
+        .unwrap();
+
+        let app_dir = temp.path().join("app");
+        std::fs::create_dir_all(app_dir.join("src")).unwrap();
+        std::fs::write(
+            app_dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(app_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let mut tool = Tool::new(ToolConfig {
+            manifest: Some(app_dir),
+            ..Default::default()
+        })
+        .unwrap();
+        tool.ctx.build_config = Some(BuildConfig {
+            system: BuildSystem::Cargo(Cargo {
+                package: "missing".into(),
+                target: "aarch64-unknown-none".into(),
+                ..Default::default()
+            }),
+        });
+
+        let err = tool.variable_scope().unwrap_err().to_string();
+        assert!(err.contains("package 'missing' not found"));
     }
 
     #[test]
@@ -1280,7 +1250,7 @@ to_bin = false
         })
         .unwrap();
 
-        let mut cmd = tool.command("echo");
+        let mut cmd = tool.command("echo").unwrap();
         cmd.arg("${workspace}");
         cmd.env("PKG_DIR", "${package}");
 
@@ -1328,10 +1298,11 @@ to_bin = false
         tool.set_elf_artifact_path(copied.clone()).await.unwrap();
 
         let output = temp.path().join("kernel-env.txt");
-        tool.shell_run_cmd(&format!(
-            "printf '%s' \"$KERNEL_ELF\" > {}",
-            output.display()
-        ))
+        let process_context = tool.process_context().unwrap();
+        process::shell_run_cmd(
+            &process_context,
+            &format!("printf '%s' \"$KERNEL_ELF\" > {}", output.display()),
+        )
         .unwrap();
 
         assert_eq!(

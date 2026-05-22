@@ -9,10 +9,10 @@ use env_logger::Env;
 
 use log::info;
 use ostool::{
-    ManifestContext, Tool, ToolConfig, board,
+    ManifestContext, Tool, board,
     build::{self, CargoQemuRunnerArgs, CargoRunnerKind, CargoUbootRunnerArgs},
+    invocation::{Invocation, InvocationOptions},
     menuconfig::{MenuConfigHandler, MenuConfigMode},
-    resolve_manifest_context,
     run::{
         qemu::{QemuConfig, RunQemuOptions},
         uboot::{RunUbootOptions, UbootConfig},
@@ -340,13 +340,16 @@ async fn try_main() -> Result<()> {
 
 /// Creates the legacy tool facade from an optional manifest argument.
 fn init_tool(manifest_arg: Option<PathBuf>) -> Result<(Tool, ManifestContext)> {
-    let manifest = resolve_manifest_context(manifest_arg.clone())?;
+    let invocation = Invocation::new(InvocationOptions::new(
+        manifest_arg.clone(),
+        None,
+        None,
+        false,
+    ))?;
+    let manifest = ManifestContext::from_invocation(&invocation);
     info!("Using manifest {}", manifest.manifest_path.display());
 
-    let tool = Tool::new(ToolConfig {
-        manifest: Some(manifest.manifest_path.clone()),
-        ..Default::default()
-    })?;
+    let tool = Tool::from_invocation(invocation);
     Ok((tool, manifest))
 }
 
@@ -452,9 +455,124 @@ mod tests {
     use ostool::{Tool, ToolConfig};
 
     use super::{
-        BoardArgs, BoardSubCommands, CargoSelectorArgs, Cli, SubCommands, apply_cargo_selector,
-        build,
+        BoardArgs, BoardSubCommands, CargoSelectorArgs, Cli, RunSubCommands, SubCommands,
+        apply_cargo_selector, build,
     };
+
+    /// Verifies build parsing accepts manifest, config, package, and bin overrides.
+    #[test]
+    fn parse_build_with_manifest_config_package_and_bin() {
+        let cli = Cli::try_parse_from([
+            "ostool",
+            "--manifest",
+            "examples/kernel/Cargo.toml",
+            "build",
+            "--config",
+            "kernel.build.toml",
+            "--package",
+            "kernel",
+            "--bin",
+            "kernel-qemu",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            cli.manifest.as_deref(),
+            Some(std::path::Path::new("examples/kernel/Cargo.toml"))
+        );
+        match cli.command {
+            SubCommands::Build {
+                config,
+                cargo_selector,
+            } => {
+                assert_eq!(
+                    config.as_deref(),
+                    Some(std::path::Path::new("kernel.build.toml"))
+                );
+                assert_eq!(cargo_selector.package.as_deref(), Some("kernel"));
+                assert_eq!(cargo_selector.bin.as_deref(), Some("kernel-qemu"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    /// Verifies QEMU run parsing accepts build, QEMU, and Cargo selector args.
+    #[test]
+    fn parse_run_qemu_with_build_qemu_and_cargo_selector_args() {
+        let cli = Cli::try_parse_from([
+            "ostool",
+            "run",
+            "qemu",
+            "--config",
+            "kernel.build.toml",
+            "--qemu-config",
+            "kernel.qemu.toml",
+            "--debug",
+            "--dtb-dump",
+            "--package",
+            "kernel",
+            "--bin",
+            "kernel-qemu",
+        ])
+        .unwrap();
+
+        match cli.command {
+            SubCommands::Run {
+                command: RunSubCommands::Qemu(args),
+            } => {
+                assert_eq!(
+                    args.config.as_deref(),
+                    Some(std::path::Path::new("kernel.build.toml"))
+                );
+                assert_eq!(args.cargo_selector.package.as_deref(), Some("kernel"));
+                assert_eq!(args.cargo_selector.bin.as_deref(), Some("kernel-qemu"));
+                assert_eq!(
+                    args.qemu.qemu_config.as_deref(),
+                    Some(std::path::Path::new("kernel.qemu.toml"))
+                );
+                assert!(args.qemu.debug);
+                assert!(args.qemu.dtb_dump);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    /// Verifies U-Boot run parsing accepts build, U-Boot, and Cargo selector args.
+    #[test]
+    fn parse_run_uboot_with_build_uboot_and_cargo_selector_args() {
+        let cli = Cli::try_parse_from([
+            "ostool",
+            "run",
+            "uboot",
+            "--config",
+            "kernel.build.toml",
+            "--uboot-config",
+            "kernel.uboot.toml",
+            "--package",
+            "kernel",
+            "--bin",
+            "kernel-uboot",
+        ])
+        .unwrap();
+
+        match cli.command {
+            SubCommands::Run {
+                command: RunSubCommands::Uboot(args),
+            } => {
+                assert_eq!(
+                    args.config.as_deref(),
+                    Some(std::path::Path::new("kernel.build.toml"))
+                );
+                assert_eq!(args.cargo_selector.package.as_deref(), Some("kernel"));
+                assert_eq!(args.cargo_selector.bin.as_deref(), Some("kernel-uboot"));
+                assert_eq!(
+                    args.uboot.uboot_config.as_deref(),
+                    Some(std::path::Path::new("kernel.uboot.toml"))
+                );
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
 
     #[test]
     fn parse_board_ls_with_server_args() {
@@ -542,6 +660,7 @@ mod tests {
         }
     }
 
+    /// Verifies board run parsing accepts build and board config overrides.
     #[test]
     fn parse_board_run_with_build_and_board_config() {
         let cli = Cli::try_parse_from([
@@ -573,9 +692,35 @@ mod tests {
                     args.board_config.as_deref(),
                     Some(std::path::Path::new("remote.board.toml"))
                 );
+                assert!(args.cargo_selector.is_empty());
                 assert_eq!(args.board_type.as_deref(), Some("rk3568"));
                 assert_eq!(args.server.server.as_deref(), Some("10.0.0.2"));
                 assert_eq!(args.server.port, Some(9000));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    /// Verifies board run parsing accepts Cargo package and bin selectors.
+    #[test]
+    fn parse_board_run_with_cargo_selector_args() {
+        let cli = Cli::try_parse_from([
+            "ostool",
+            "board",
+            "run",
+            "--package",
+            "kernel",
+            "--bin",
+            "kernel-board",
+        ])
+        .unwrap();
+
+        match cli.command {
+            SubCommands::Board(BoardArgs {
+                command: BoardSubCommands::Run(args),
+            }) => {
+                assert_eq!(args.cargo_selector.package.as_deref(), Some("kernel"));
+                assert_eq!(args.cargo_selector.bin.as_deref(), Some("kernel-board"));
             }
             other => panic!("unexpected command: {other:?}"),
         }

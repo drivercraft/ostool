@@ -40,6 +40,7 @@ use crate::{
             BoxedAsyncRead, BoxedAsyncWrite, SerialStreamTasks, connect_serial_stream,
         },
     },
+    project::variables::{self, VariableScope},
     run::{
         output_matcher::{
             ByteStreamMatcher, MATCH_DRAIN_DURATION, compile_regexes, print_match_event,
@@ -127,46 +128,46 @@ impl UbootConfig {
         }
     }
 
-    fn replace_strings(&mut self, tool: &Tool) -> anyhow::Result<()> {
+    fn replace_strings(&mut self, scope: &VariableScope) -> anyhow::Result<()> {
         self.dtb_file = self
             .dtb_file
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.kernel_load_addr = self
             .kernel_load_addr
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.fit_load_addr = self
             .fit_load_addr
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.bootm_addr = self
             .bootm_addr
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.board_reset_cmd = self
             .board_reset_cmd
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.board_power_off_cmd = self
             .board_power_off_cmd
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.success_regex = self
             .success_regex
             .iter()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .collect::<anyhow::Result<Vec<_>>>()?;
         self.fail_regex = self
             .fail_regex
             .iter()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .collect::<anyhow::Result<Vec<_>>>()?;
         self.uboot_cmd = self
             .uboot_cmd
@@ -174,21 +175,21 @@ impl UbootConfig {
             .map(|values| {
                 values
                     .iter()
-                    .map(|value| tool.replace_string(value))
+                    .map(|value| variables::expand_variables(value, scope))
                     .collect::<anyhow::Result<Vec<_>>>()
             })
             .transpose()?;
         self.shell_prefix = self
             .shell_prefix
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.shell_init_cmd = self
             .shell_init_cmd
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
-        self.local.replace_strings(tool)?;
+        self.local.replace_strings(scope)?;
         Ok(())
     }
 
@@ -228,29 +229,29 @@ impl UbootConfig {
 }
 
 impl LocalUbootConfig {
-    fn replace_strings(&mut self, tool: &Tool) -> anyhow::Result<()> {
+    fn replace_strings(&mut self, scope: &VariableScope) -> anyhow::Result<()> {
         self.serial = self
             .serial
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.baud_rate = self
             .baud_rate
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.board_reset_cmd = self
             .board_reset_cmd
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.board_power_off_cmd = self
             .board_power_off_cmd
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         if let Some(net) = &mut self.net {
-            net.replace_strings(tool)?;
+            net.replace_strings(scope)?;
         }
         Ok(())
     }
@@ -268,27 +269,27 @@ pub struct Net {
 }
 
 impl Net {
-    fn replace_strings(&mut self, tool: &Tool) -> anyhow::Result<()> {
-        self.interface = tool.replace_string(&self.interface)?;
+    fn replace_strings(&mut self, scope: &VariableScope) -> anyhow::Result<()> {
+        self.interface = variables::expand_variables(&self.interface, scope)?;
         self.board_ip = self
             .board_ip
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.gatewayip = self
             .gatewayip
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.netmask = self
             .netmask
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         self.tftp_dir = self
             .tftp_dir
             .as_deref()
-            .map(|value| tool.replace_string(value))
+            .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
         Ok(())
     }
@@ -317,8 +318,9 @@ impl Tool {
         path: &Path,
     ) -> anyhow::Result<UbootConfig> {
         self.sync_cargo_context(cargo);
-        let config_path = self.replace_path_variables(path.to_path_buf())?;
-        read_uboot_config_at_path(self, config_path).await
+        let scope = self.variable_scope()?;
+        let config_path = variables::expand_path_variables(path, &scope)?;
+        read_uboot_config_at_path(&scope, config_path).await
     }
 
     pub async fn ensure_uboot_config_for_cargo(
@@ -337,14 +339,16 @@ impl Tool {
         dir: &Path,
     ) -> anyhow::Result<UbootConfig> {
         self.sync_cargo_context(cargo);
-        let dir = self.replace_path_variables(dir.to_path_buf())?;
-        ensure_uboot_config_at_path(self, dir.join(".uboot.toml"), self.default_uboot_config())
+        let scope = self.variable_scope()?;
+        let dir = variables::expand_path_variables(dir, &scope)?;
+        ensure_uboot_config_at_path(&scope, dir.join(".uboot.toml"), self.default_uboot_config())
             .await
     }
 
     pub async fn ensure_uboot_config_in_dir(&mut self, dir: &Path) -> anyhow::Result<UbootConfig> {
-        let dir = self.replace_path_variables(dir.to_path_buf())?;
-        ensure_uboot_config_at_path(self, dir.join(".uboot.toml"), self.default_uboot_config())
+        let scope = self.variable_scope()?;
+        let dir = variables::expand_path_variables(dir, &scope)?;
+        ensure_uboot_config_at_path(&scope, dir.join(".uboot.toml"), self.default_uboot_config())
             .await
     }
 
@@ -352,8 +356,9 @@ impl Tool {
         &mut self,
         path: &Path,
     ) -> anyhow::Result<UbootConfig> {
-        let config_path = self.replace_path_variables(path.to_path_buf())?;
-        read_uboot_config_at_path(self, config_path).await
+        let scope = self.variable_scope()?;
+        let config_path = variables::expand_path_variables(path, &scope)?;
+        read_uboot_config_at_path(&scope, config_path).await
     }
 
     pub async fn run_uboot(
@@ -363,7 +368,8 @@ impl Tool {
     ) -> anyhow::Result<()> {
         let _ = options.show_output;
         let mut config = config.clone();
-        config.replace_strings(self)?;
+        let scope = self.variable_scope()?;
+        config.replace_strings(&scope)?;
         config.normalize("U-Boot runtime config")?;
         let backend = LocalBackend::new(config.local.clone());
         let mut runner = Runner::new(self, config, backend);
@@ -384,7 +390,7 @@ impl Tool {
 }
 
 async fn read_uboot_config_at_path(
-    tool: &Tool,
+    variables: &VariableScope,
     config_path: PathBuf,
 ) -> anyhow::Result<UbootConfig> {
     let mut config: UbootConfig = fs::read_to_string(&config_path)
@@ -395,18 +401,18 @@ async fn read_uboot_config_at_path(
                 format!("failed to parse U-Boot config: {}", config_path.display())
             })
         })?;
-    config.replace_strings(tool)?;
+    config.replace_strings(variables)?;
     config.normalize(&format!("U-Boot config {}", config_path.display()))?;
     Ok(config)
 }
 
 async fn ensure_uboot_config_at_path(
-    tool: &Tool,
+    variables: &VariableScope,
     config_path: PathBuf,
     default_config: UbootConfig,
 ) -> anyhow::Result<UbootConfig> {
     let mut config = match fs::read_to_string(&config_path).await {
-        Ok(_) => return read_uboot_config_at_path(tool, config_path).await,
+        Ok(_) => return read_uboot_config_at_path(variables, config_path).await,
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             let config = default_config;
             fs::write(&config_path, toml::to_string_pretty(&config)?)
@@ -417,7 +423,7 @@ async fn ensure_uboot_config_at_path(
         Err(err) => return Err(err.into()),
     };
 
-    config.replace_strings(tool)?;
+    config.replace_strings(variables)?;
     config.normalize(&format!("U-Boot config {}", config_path.display()))?;
     Ok(config)
 }
@@ -645,7 +651,8 @@ impl RunnerBackend for LocalBackend {
         if let Some(cmd) = self.config.board_reset_cmd.as_deref()
             && !cmd.trim().is_empty()
         {
-            tool.shell_run_cmd(cmd)?;
+            let process_context = tool.process_context()?;
+            crate::process::shell_run_cmd(&process_context, cmd)?;
         }
         Ok(())
     }
@@ -704,7 +711,9 @@ impl RunnerBackend for LocalBackend {
     async fn after_run(&mut self, tool: &Tool) -> anyhow::Result<()> {
         if let Some(cmd) = self.config.board_power_off_cmd.as_deref()
             && !cmd.trim().is_empty()
-            && let Err(err) = tool.shell_run_cmd(cmd)
+            && let Err(err) = tool
+                .process_context()
+                .and_then(|context| crate::process::shell_run_cmd(&context, cmd))
         {
             log::warn!("board power-off command failed: {err:#}");
         }
@@ -1670,7 +1679,9 @@ timeout = 0
             ..Default::default()
         };
 
-        config.replace_strings(&tool).unwrap();
+        config
+            .replace_strings(&tool.variable_scope().unwrap())
+            .unwrap();
 
         let expected = tmp.path().display().to_string();
         assert_eq!(
