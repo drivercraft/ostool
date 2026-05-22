@@ -36,6 +36,9 @@ interface BoardEditorFormState {
   boot_kind: BootKind;
   use_tftp: boolean;
   dtb_name: string;
+  kernel_load_addr: string;
+  fit_load_addr: string;
+  bootm_addr: string;
   network_mode: UbootNetworkMode;
   board_ip: string;
   server_ip: string;
@@ -96,6 +99,9 @@ function defaultFormState(): BoardEditorFormState {
     boot_kind: "uboot",
     use_tftp: false,
     dtb_name: "",
+    kernel_load_addr: "",
+    fit_load_addr: "",
+    bootm_addr: "",
     network_mode: "dhcp",
     board_ip: "",
     server_ip: "",
@@ -134,6 +140,9 @@ function boardToFormState(board: BoardConfig): BoardEditorFormState {
     next.boot_kind = "uboot";
     next.use_tftp = board.boot.use_tftp;
     next.dtb_name = board.boot.dtb_name ?? "";
+    next.kernel_load_addr = board.boot.kernel_load_addr ?? "";
+    next.fit_load_addr = board.boot.fit_load_addr ?? "";
+    next.bootm_addr = board.boot.bootm_addr ?? "";
     next.network_mode = board.boot.network_mode ?? "dhcp";
     next.board_ip = board.boot.board_ip ?? "";
     next.server_ip = board.boot.server_ip ?? "";
@@ -166,6 +175,9 @@ function buildBootConfig(): BootConfig {
       kind: "uboot",
       use_tftp: form.value.use_tftp,
       dtb_name: trimToNull(form.value.dtb_name),
+      kernel_load_addr: trimToNull(form.value.kernel_load_addr),
+      fit_load_addr: trimToNull(form.value.fit_load_addr),
+      bootm_addr: trimToNull(form.value.bootm_addr),
       network_mode: useStaticIp ? "static_ip" : "dhcp",
       board_ip: useStaticIp ? trimToNull(form.value.board_ip) : null,
       server_ip: useStaticIp ? trimToNull(form.value.server_ip) : null,
@@ -733,7 +745,7 @@ onMounted(() => {
           </div>
           <label class="field">
             <span>电源管理类型</span>
-            <select v-model="form.power_management_kind">
+            <select v-model="form.power_management_kind" aria-label="电源管理类型">
               <option value="custom">Custom</option>
               <option value="zhongsheng_relay">中盛继电模块</option>
             </select>
@@ -750,7 +762,7 @@ onMounted(() => {
             </label>
           </div>
 
-          <label v-else class="field" style="margin-top: 16px">
+          <label v-else-if="form.power_management_kind === 'zhongsheng_relay'" class="field" style="margin-top: 16px">
             <span>继电模块串口</span>
             <select
               :value="selectedRelaySerialOptionValue()"
@@ -838,6 +850,24 @@ onMounted(() => {
                 <span>gatewayip</span>
                 <input v-model="form.gatewayip" placeholder="未配置" />
                 <small class="field-hint">留空不设置 gatewayip</small>
+              </label>
+            </div>
+
+            <div class="form-grid three-columns" style="margin-top: 18px">
+              <label class="field">
+                <span>kernel load addr</span>
+                <input v-model="form.kernel_load_addr" placeholder="例如 0x80200000" />
+                <small class="field-hint">板级默认内核加载地址；本地 .board.toml 同名字段优先。留空时使用 kernel_addr_r 或 loadaddr。</small>
+              </label>
+              <label class="field">
+                <span>FIT load addr</span>
+                <input v-model="form.fit_load_addr" placeholder="例如 0x82200000" />
+                <small class="field-hint">板级默认 FIT 上传/下载地址；本地 .board.toml 同名字段优先。留空时从 U-Boot 环境推断或自动计算。</small>
+              </label>
+              <label class="field">
+                <span>bootm addr</span>
+                <input v-model="form.bootm_addr" placeholder="默认跟随 FIT load addr" />
+                <small class="field-hint">板级默认 bootm 参数；本地 .board.toml 同名字段优先。留空且配置了 FIT load addr 时使用 FIT 地址，否则执行不带参数的 bootm。</small>
               </label>
             </div>
 

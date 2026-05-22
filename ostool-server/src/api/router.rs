@@ -535,6 +535,9 @@ fn normalize_boot_config(boot: &mut BootConfig) -> Result<(), ApiError> {
     match boot {
         BootConfig::Uboot(profile) => {
             normalize_optional_string(&mut profile.dtb_name);
+            normalize_optional_string(&mut profile.kernel_load_addr);
+            normalize_optional_string(&mut profile.fit_load_addr);
+            normalize_optional_string(&mut profile.bootm_addr);
             normalize_optional_string(&mut profile.board_ip);
             normalize_optional_string(&mut profile.server_ip);
             normalize_optional_string(&mut profile.netmask);
@@ -1647,7 +1650,8 @@ mod tests {
     };
     use crate::{
         api::models::{
-            BoardPowerStatusResponse, BoardRuntimeStatusResponse, SessionDetailResponse,
+            AdminBoardUpsertRequest, BoardPowerStatusResponse, BoardRuntimeStatusResponse,
+            SessionDetailResponse,
         },
         build_app_state,
         config::{
@@ -3299,6 +3303,37 @@ mod tests {
 
         assert_eq!(profile.server_ip.as_deref(), Some("192.168.10.2"));
         assert_eq!(profile.netmask.as_deref(), Some("255.255.255.0"));
+    }
+
+    #[test]
+    fn normalize_board_upsert_request_trims_uboot_load_addresses() {
+        let request = AdminBoardUpsertRequest {
+            id: Some("demo".into()),
+            board_type: "demo".into(),
+            tags: vec![],
+            notes: None,
+            disabled: false,
+            serial: None,
+            power_management: PowerManagementConfig::Custom(CustomPowerManagement {
+                power_on_cmd: "echo on".into(),
+                power_off_cmd: "echo off".into(),
+            }),
+            boot: BootConfig::Uboot(crate::config::UbootProfile {
+                kernel_load_addr: Some(" 0x80200000 ".into()),
+                fit_load_addr: Some(" ".into()),
+                bootm_addr: Some(" 0x82200000 ".into()),
+                ..Default::default()
+            }),
+        };
+
+        let request = super::normalize_board_upsert_request(request).unwrap();
+        let BootConfig::Uboot(profile) = request.boot else {
+            panic!("expected uboot profile");
+        };
+
+        assert_eq!(profile.kernel_load_addr.as_deref(), Some("0x80200000"));
+        assert_eq!(profile.fit_load_addr, None);
+        assert_eq!(profile.bootm_addr.as_deref(), Some("0x82200000"));
     }
 
     #[tokio::test]

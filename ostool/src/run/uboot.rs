@@ -205,13 +205,7 @@ impl UbootConfig {
     }
 
     fn addr_int(&self, addr_str: Option<&String>) -> Option<u64> {
-        addr_str.as_ref().and_then(|addr_str| {
-            if addr_str.starts_with("0x") || addr_str.starts_with("0X") {
-                u64::from_str_radix(&addr_str[2..], 16).ok()
-            } else {
-                addr_str.parse::<u64>().ok()
-            }
-        })
+        parse_addr_int(addr_str)
     }
 
     fn normalize(&mut self, config_name: &str) -> anyhow::Result<()> {
@@ -225,6 +219,16 @@ impl UbootConfig {
     fn shell_auto_init(&self) -> Option<ShellAutoInitMatcher> {
         ShellAutoInitMatcher::new(self.shell_prefix.clone(), self.shell_init_cmd.clone())
     }
+}
+
+fn parse_addr_int(addr_str: Option<&String>) -> Option<u64> {
+    addr_str.as_ref().and_then(|addr_str| {
+        if addr_str.starts_with("0x") || addr_str.starts_with("0X") {
+            u64::from_str_radix(&addr_str[2..], 16).ok()
+        } else {
+            addr_str.parse::<u64>().ok()
+        }
+    })
 }
 
 impl LocalUbootConfig {
@@ -451,6 +455,7 @@ struct ResolvedRuntime {
     static_ip: bool,
     kernel_load_addr: Option<u64>,
     fit_load_addr: Option<u64>,
+    bootm_addr: Option<u64>,
     use_tftp: bool,
 }
 
@@ -822,8 +827,10 @@ impl RunnerBackend for RemoteBackend {
             gateway_ip: profile.gatewayip.clone(),
             board_ip: profile.board_ip.clone(),
             static_ip,
+            kernel_load_addr: parse_addr_int(profile.kernel_load_addr.as_ref()),
+            fit_load_addr: parse_addr_int(profile.fit_load_addr.as_ref()),
+            bootm_addr: parse_addr_int(profile.bootm_addr.as_ref()),
             use_tftp: profile.use_tftp,
-            ..Default::default()
         })
     }
 
@@ -1245,24 +1252,26 @@ where
 
         let prepared = self.backend.stage_fit_image(&fitimage, &runtime).await?;
 
+        let bootm_arg = self.resolved_bootm_arg(fit_loadaddr, &runtime);
         let bootcmd = if let Some(fitname) = prepared.bootfile.as_deref() {
             if let Some(request) = build_network_boot_request(
                 runtime.static_ip,
                 net_ok,
                 prepared.network_transfer_ready,
                 fitname,
+                bootm_arg,
             ) {
                 uboot.set_env("bootfile", &request.bootfile).await?;
                 request.bootcmd
             } else {
                 info!("No network boot request available, using loady to upload FIT image...");
                 Self::uboot_loady(&mut uboot, fit_loadaddr as usize, fitimage).await?;
-                self.serial_bootm_command(fit_loadaddr)
+                self.serial_bootm_command(bootm_arg)
             }
         } else {
             info!("No TFTP config, using loady to upload FIT image...");
             Self::uboot_loady(&mut uboot, fit_loadaddr as usize, fitimage).await?;
-            self.serial_bootm_command(fit_loadaddr)
+            self.serial_bootm_command(bootm_arg)
         };
 
         info!("Booting kernel with command: {}", bootcmd);
@@ -1390,14 +1399,20 @@ where
         Ok(())
     }
 
-    fn serial_bootm_command(&self, fit_loadaddr: u64) -> String {
-        if let Some(addr) = self.config.bootm_addr_int() {
-            format!("bootm {addr:#x}")
-        } else if self.config.fit_load_addr_int().is_some() {
-            format!("bootm {fit_loadaddr:#x}")
-        } else {
-            "bootm".to_string()
-        }
+    fn resolved_bootm_arg(&self, fit_loadaddr: u64, runtime: &ResolvedRuntime) -> Option<u64> {
+        self.config
+            .bootm_addr_int()
+            .or(runtime.bootm_addr)
+            .or_else(|| {
+                self.config
+                    .fit_load_addr_int()
+                    .or(runtime.fit_load_addr)
+                    .map(|_| fit_loadaddr)
+            })
+    }
+
+    fn serial_bootm_command(&self, bootm_arg: Option<u64>) -> String {
+        bootm_command(bootm_arg)
     }
 
     async fn uboot_loady(
@@ -1476,6 +1491,7 @@ fn build_network_boot_request(
     net_ok: bool,
     network_transfer_ready: bool,
     fitname: &str,
+    bootm_arg: Option<u64>,
 ) -> Option<NetworkBootRequest> {
     if !network_transfer_ready {
         return None;
@@ -1484,18 +1500,26 @@ fn build_network_boot_request(
     if static_ip {
         return Some(NetworkBootRequest {
             bootfile: fitname.to_string(),
-            bootcmd: format!("tftp {fitname} && bootm"),
+            bootcmd: format!("tftp {fitname} && {}", bootm_command(bootm_arg)),
         });
     }
 
     if net_ok {
         return Some(NetworkBootRequest {
             bootfile: fitname.to_string(),
-            bootcmd: format!("dhcp {fitname} && bootm"),
+            bootcmd: format!("dhcp {fitname} && {}", bootm_command(bootm_arg)),
         });
     }
 
     None
+}
+
+fn bootm_command(bootm_arg: Option<u64>) -> String {
+    if let Some(addr) = bootm_arg {
+        format!("bootm {addr:#x}")
+    } else {
+        "bootm".to_string()
+    }
 }
 
 #[cfg(test)]
@@ -1516,6 +1540,7 @@ mod tests {
             false,
             true,
             "ostool/home/user/workspace/target/image.fit",
+            None,
         )
         .unwrap();
 
@@ -1531,7 +1556,7 @@ mod tests {
 
     #[test]
     fn network_boot_request_uses_tftp_for_static_ip_mode() {
-        let request = build_network_boot_request(true, false, true, "image.fit").unwrap();
+        let request = build_network_boot_request(true, false, true, "image.fit", None).unwrap();
 
         assert_eq!(request.bootcmd, "tftp image.fit && bootm");
         assert_eq!(request.bootfile, "image.fit");
@@ -1539,14 +1564,22 @@ mod tests {
 
     #[test]
     fn network_boot_request_requires_ready_transport() {
-        assert!(build_network_boot_request(true, false, false, "image.fit").is_none());
-        assert!(build_network_boot_request(false, false, true, "image.fit").is_none());
+        assert!(build_network_boot_request(true, false, false, "image.fit", None).is_none());
+        assert!(build_network_boot_request(false, false, true, "image.fit", None).is_none());
         assert_eq!(
-            build_network_boot_request(false, true, true, "image.fit")
+            build_network_boot_request(false, true, true, "image.fit", None)
                 .unwrap()
                 .bootcmd,
             "dhcp image.fit && bootm"
         );
+    }
+
+    #[test]
+    fn network_boot_request_passes_configured_bootm_addr() {
+        let request =
+            build_network_boot_request(true, false, true, "image.fit", Some(0x82200000)).unwrap();
+
+        assert_eq!(request.bootcmd, "tftp image.fit && bootm 0x82200000");
     }
 
     #[test]

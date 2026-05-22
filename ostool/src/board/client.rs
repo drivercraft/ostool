@@ -57,6 +57,12 @@ pub struct UbootProfile {
     pub use_tftp: bool,
     pub dtb_name: Option<String>,
     #[serde(default)]
+    pub kernel_load_addr: Option<String>,
+    #[serde(default)]
+    pub fit_load_addr: Option<String>,
+    #[serde(default)]
+    pub bootm_addr: Option<String>,
+    #[serde(default)]
     pub network_mode: UbootNetworkMode,
     #[serde(default)]
     pub board_ip: Option<String>,
@@ -461,7 +467,10 @@ mod tests {
             r#"{
                 "boot": {
                     "kind": "uboot",
-                    "use_tftp": true
+                    "use_tftp": true,
+                    "kernel_load_addr": "0x80200000",
+                    "fit_load_addr": "0x82200000",
+                    "bootm_addr": "0x82200000"
                 },
                 "server_ip": "10.0.0.2",
                 "netmask": "255.255.255.0",
@@ -474,6 +483,9 @@ mod tests {
         match response.boot {
             BootConfig::Uboot(profile) => {
                 assert!(profile.use_tftp);
+                assert_eq!(profile.kernel_load_addr.as_deref(), Some("0x80200000"));
+                assert_eq!(profile.fit_load_addr.as_deref(), Some("0x82200000"));
+                assert_eq!(profile.bootm_addr.as_deref(), Some("0x82200000"));
             }
             BootConfig::Pxe(_) => panic!("expected uboot profile"),
         }

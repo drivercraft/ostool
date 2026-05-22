@@ -86,6 +86,9 @@ function makeBoard(id = "demo-board"): BoardConfig {
       kind: "uboot",
       use_tftp: true,
       dtb_name: null,
+      kernel_load_addr: null,
+      fit_load_addr: null,
+      bootm_addr: null,
       network_mode: "dhcp",
       board_ip: null,
       server_ip: null,
@@ -104,6 +107,9 @@ function makeStaticIpBoard(id = "static-board"): BoardConfig {
       kind: "uboot",
       use_tftp: true,
       dtb_name: null,
+      kernel_load_addr: "0x80200000",
+      fit_load_addr: "0x82200000",
+      bootm_addr: "0x82200000",
       network_mode: "static_ip",
       board_ip: "192.168.10.20",
       server_ip: "192.168.10.2",
@@ -225,6 +231,9 @@ describe("BoardEditorView", () => {
         kind: "uboot",
         use_tftp: false,
         dtb_name: null,
+        kernel_load_addr: null,
+        fit_load_addr: null,
+        bootm_addr: null,
         network_mode: "dhcp",
         board_ip: null,
         server_ip: null,
@@ -275,6 +284,9 @@ describe("BoardEditorView", () => {
     await wrapper.get('input[placeholder="当前 serverip"]').setValue("192.168.10.2");
     await wrapper.get('input[placeholder="当前 netmask"]').setValue("255.255.255.0");
     await wrapper.get('input[placeholder="未配置"]').setValue("192.168.10.1");
+    await wrapper.get('input[placeholder="例如 0x80200000"]').setValue("0x80200000");
+    await wrapper.get('input[placeholder="例如 0x82200000"]').setValue("0x82200000");
+    await wrapper.get('input[placeholder="默认跟随 FIT load addr"]').setValue("0x82200000");
 
     const saveButton = wrapper.findAll("button").find((button) => button.text() === "保存配置");
     await saveButton!.trigger("click");
@@ -286,6 +298,9 @@ describe("BoardEditorView", () => {
           kind: "uboot",
           use_tftp: true,
           dtb_name: null,
+          kernel_load_addr: "0x80200000",
+          fit_load_addr: "0x82200000",
+          bootm_addr: "0x82200000",
           network_mode: "static_ip",
           board_ip: "192.168.10.20",
           server_ip: "192.168.10.2",
@@ -317,6 +332,15 @@ describe("BoardEditorView", () => {
     expect((wrapper.get('input[placeholder="未配置"]').element as HTMLInputElement).value).toBe(
       "192.168.10.1",
     );
+    expect((wrapper.get('input[placeholder="例如 0x80200000"]').element as HTMLInputElement).value).toBe(
+      "0x80200000",
+    );
+    expect((wrapper.get('input[placeholder="例如 0x82200000"]').element as HTMLInputElement).value).toBe(
+      "0x82200000",
+    );
+    expect(
+      (wrapper.get('input[placeholder="默认跟随 FIT load addr"]').element as HTMLInputElement).value,
+    ).toBe("0x82200000");
   });
 
   it("updates a board and keeps blank id as null in the payload", async () => {

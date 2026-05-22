@@ -430,6 +430,12 @@ pub struct UbootProfile {
     pub use_tftp: bool,
     pub dtb_name: Option<String>,
     #[serde(default)]
+    pub kernel_load_addr: Option<String>,
+    #[serde(default)]
+    pub fit_load_addr: Option<String>,
+    #[serde(default)]
+    pub bootm_addr: Option<String>,
+    #[serde(default)]
     pub network_mode: UbootNetworkMode,
     #[serde(default)]
     pub board_ip: Option<String>,
@@ -720,6 +726,33 @@ network_mode = "static_ip"
         assert!(value["boot"].get("shell_prefix").is_none());
         assert!(value["boot"].get("shell_init_cmd").is_none());
         assert_eq!(value["boot"]["dtb_name"], json!("board.dtb"));
+    }
+
+    #[test]
+    fn board_config_uboot_profile_supports_load_addresses() {
+        let config = r#"
+id = "demo-1"
+board_type = "demo"
+
+[power_management]
+kind = "custom"
+power_on_cmd = "echo on"
+power_off_cmd = "echo off"
+
+[boot]
+kind = "uboot"
+kernel_load_addr = "0x80200000"
+fit_load_addr = "0x82200000"
+bootm_addr = "0x82200000"
+"#;
+
+        let decoded: BoardConfig = toml::from_str(config).unwrap();
+        let BootConfig::Uboot(profile) = decoded.boot else {
+            panic!("expected uboot profile");
+        };
+        assert_eq!(profile.kernel_load_addr.as_deref(), Some("0x80200000"));
+        assert_eq!(profile.fit_load_addr.as_deref(), Some("0x82200000"));
+        assert_eq!(profile.bootm_addr.as_deref(), Some("0x82200000"));
     }
 
     #[test]
