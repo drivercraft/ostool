@@ -14,7 +14,10 @@ use std::{
 
 use anyhow::anyhow;
 use crossterm::{
-    event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{
+        DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent,
+        KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    },
     terminal::{disable_raw_mode, enable_raw_mode},
 };
 use futures::StreamExt;
@@ -137,6 +140,9 @@ impl AsyncTerminal {
     {
         if interactive_input_enabled {
             enable_raw_mode().ok();
+            if let Err(e) = crossterm::execute!(io::stdout(), EnableMouseCapture) {
+                debug!("EnableMouseCapture failed: {e}");
+            }
         } else {
             debug!("keyboard input disabled because stdin/stdout are not TTY");
         }
@@ -152,6 +158,9 @@ impl AsyncTerminal {
             .await;
 
         if interactive_input_enabled {
+            if let Err(e) = crossterm::execute!(io::stdout(), DisableMouseCapture) {
+                debug!("DisableMouseCapture failed: {e}");
+            }
             restore_terminal_mode();
             println!();
             eprintln!("✓ 已退出串口终端模式");
@@ -227,6 +236,16 @@ impl AsyncTerminal {
                                     handle.stop();
                                 }
                                 TerminalAction::Noop => {}
+                            }
+                        }
+                        Some(Ok(Event::Mouse(mouse))) => {
+                            // Moved events fire on every pixel of cursor motion and
+                            // cause a full TUI redraw on every move, saturating the
+                            // UART output path and freezing the interface.
+                            if !matches!(mouse.kind, MouseEventKind::Moved)
+                                && let Some(bytes) = encode_mouse_event(mouse)
+                            {
+                                handle.send(bytes).ok();
                             }
                         }
                         Some(Ok(_)) => {}
@@ -657,6 +676,50 @@ pub fn restore_terminal_mode() {
     let _ = io::stdout().flush();
 }
 
+/// Encode a crossterm MouseEvent as SGR mouse escape bytes (`\x1b[<Cb;Cx;CyM/m`).
+///
+/// SGR (1006) mode is the de-facto standard for terminal emulators; crossterm enables
+/// it automatically when EventStream is active.  We re-encode the already-parsed
+/// MouseEvent back into the wire format so the QEMU guest receives correct sequences.
+pub fn encode_mouse_event(mouse: MouseEvent) -> Option<Vec<u8>> {
+    let button_bits: u8 = match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left) => 0,
+        MouseEventKind::Down(MouseButton::Middle) | MouseEventKind::Up(MouseButton::Middle) => 1,
+        MouseEventKind::Down(MouseButton::Right) | MouseEventKind::Up(MouseButton::Right) => 2,
+        MouseEventKind::Drag(MouseButton::Left) => 32,
+        MouseEventKind::Drag(MouseButton::Middle) => 33,
+        MouseEventKind::Drag(MouseButton::Right) => 34,
+        MouseEventKind::ScrollUp => 64,
+        MouseEventKind::ScrollDown => 65,
+        MouseEventKind::ScrollLeft => 66,
+        MouseEventKind::ScrollRight => 67,
+        // Moved events are filtered by the caller; this arm keeps the
+        // match exhaustive if the filter is ever removed.
+        MouseEventKind::Moved => return None,
+    };
+
+    let mut cb = button_bits;
+    if mouse.modifiers.contains(KeyModifiers::SHIFT) {
+        cb |= 4;
+    }
+    if mouse.modifiers.contains(KeyModifiers::ALT) {
+        cb |= 8;
+    }
+    if mouse.modifiers.contains(KeyModifiers::CONTROL) {
+        cb |= 16;
+    }
+
+    let cx = mouse.column + 1;
+    let cy = mouse.row + 1;
+
+    let final_byte = match mouse.kind {
+        MouseEventKind::Up(_) => b'm',
+        _ => b'M',
+    };
+
+    Some(format!("\x1b[<{cb};{cx};{cy}{}", final_byte as char).into_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -665,9 +728,12 @@ mod tests {
         time::Duration,
     };
 
-    use super::{KeyProcessor, TerminalAction, TerminalHandle, encode_key_event, write_output};
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
     use tokio::sync::mpsc;
+
+    use super::{KeyProcessor, TerminalAction, TerminalHandle, encode_key_event, write_output};
 
     struct FlushCountingWriter {
         buf: Vec<u8>,
@@ -831,5 +897,61 @@ mod tests {
             .unwrap_err();
 
         assert!(err.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn encode_scroll_up_mouse_event() {
+        let mouse = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        // SGR: \x1b[<Cb;Cx;CyM — ScrollUp=64, column+1=11, row+1=6
+        assert_eq!(
+            super::encode_mouse_event(mouse),
+            Some(b"\x1b[<64;11;6M".to_vec())
+        );
+    }
+
+    #[test]
+    fn encode_click_with_shift_modifier() {
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::SHIFT,
+        };
+        // button=0, SHIFT|=4, so Cb=4
+        assert_eq!(
+            super::encode_mouse_event(mouse),
+            Some(b"\x1b[<4;1;1M".to_vec())
+        );
+    }
+
+    #[test]
+    fn encode_mouse_up_uses_m_terminator() {
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 2,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        };
+        // Up events use 'm' terminator
+        assert_eq!(
+            super::encode_mouse_event(mouse),
+            Some(b"\x1b[<0;3;4m".to_vec())
+        );
+    }
+
+    #[test]
+    fn encode_moved_returns_none() {
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(super::encode_mouse_event(mouse), None);
     }
 }
