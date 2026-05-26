@@ -161,7 +161,7 @@ pub fn relative_tftp_filename(fitimage: &Path) -> anyhow::Result<String> {
 /// Starts a built-in TFTP server serving files from the build output directory.
 pub fn run_tftp_server(tool: &Tool) -> anyhow::Result<()> {
     let mut file_dir = tool.manifest_dir().clone();
-    if let Some(elf_path) = &tool.ctx().artifacts.elf {
+    if let Some(elf_path) = tool.runtime_artifacts().elf() {
         file_dir = elf_path
             .parent()
             .ok_or(anyhow!("{} no parent dir", elf_path.display()))?

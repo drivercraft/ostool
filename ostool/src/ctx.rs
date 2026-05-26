@@ -7,20 +7,8 @@ use std::path::PathBuf;
 
 use object::Architecture;
 
+pub use crate::artifact::state::OutputArtifacts;
 use crate::build::config::BuildConfig;
-
-/// Build artifacts generated during the build process.
-#[derive(Default, Clone, Debug)]
-pub struct OutputArtifacts {
-    /// Path to the built ELF file.
-    pub elf: Option<PathBuf>,
-    /// Path to the converted binary file.
-    pub bin: Option<PathBuf>,
-    /// Cargo-reported directory containing the original ELF artifact.
-    pub cargo_artifact_dir: Option<PathBuf>,
-    /// Directory containing the runtime artifact consumed by runners.
-    pub runtime_artifact_dir: Option<PathBuf>,
-}
 
 /// The runtime context holding transient and final execution state.
 #[derive(Default, Clone, Debug)]

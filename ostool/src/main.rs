@@ -378,17 +378,16 @@ fn apply_cargo_selector(
         return Ok(());
     }
 
-    let build::config::BuildSystem::Cargo(cargo) = &mut build_config.system else {
+    let build::config::BuildSystem::Cargo(cargo_config) = &mut build_config.system else {
         anyhow::bail!("--package/--bin can only be used with system.Cargo build configs");
     };
 
     if let Some(package) = &selector.package {
-        cargo.package = package.clone();
+        cargo_config.package = package.clone();
     }
     if let Some(bin) = &selector.bin {
-        cargo.bin = Some(bin.clone());
+        cargo_config.bin = Some(bin.clone());
     }
-
     tool.ctx_mut().build_config = Some(build_config.clone());
     Ok(())
 }
@@ -643,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_board_run_with_board_type() {
+    fn parse_board_run_defaults_to_no_overrides() {
         let cli = Cli::try_parse_from(["ostool", "board", "run"]).unwrap();
 
         match cli.command {
@@ -692,7 +691,8 @@ mod tests {
                     args.board_config.as_deref(),
                     Some(std::path::Path::new("remote.board.toml"))
                 );
-                assert!(args.cargo_selector.is_empty());
+                assert!(args.cargo_selector.package.is_none());
+                assert!(args.cargo_selector.bin.is_none());
                 assert_eq!(args.board_type.as_deref(), Some("rk3568"));
                 assert_eq!(args.server.server.as_deref(), Some("10.0.0.2"));
                 assert_eq!(args.server.port, Some(9000));

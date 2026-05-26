@@ -1,3 +1,9 @@
+//! Runtime artifact preparation helpers.
+//!
+//! The build pipeline may produce an executable in Cargo's artifact directory
+//! or receive a custom ELF path. This module normalizes that input into the ELF
+//! and optional BIN files consumed by QEMU, U-Boot, TFTP, and board runners.
+
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -9,16 +15,25 @@ use object::{Architecture, Object};
 
 use crate::{process::ProcessContext, utils::PathResultExt};
 
+/// Options controlling how an input ELF is prepared for runtime use.
 pub(crate) struct RuntimeArtifactOptions {
+    /// Input ELF path produced by Cargo or supplied by a custom build.
     pub(crate) elf_path: PathBuf,
+    /// Whether to also produce a raw BIN image.
     pub(crate) to_bin: bool,
+    /// Optional directory for the generated BIN image.
     pub(crate) bin_dir: Option<PathBuf>,
+    /// Whether to preserve debug information when producing a BIN image.
     pub(crate) debug: bool,
+    /// Cargo artifact directory reported by `--message-format=json`, when known.
     pub(crate) cargo_artifact_dir: Option<PathBuf>,
+    /// Whether to copy the input ELF into a stripped runtime `.elf` file first.
     pub(crate) strip_elf: bool,
+    /// Objcopy executable used for ELF/BIN materialization.
     pub(crate) objcopy_program: PathBuf,
 }
 
+/// Runtime artifacts prepared from a single input ELF.
 pub(crate) struct PreparedRuntimeArtifacts {
     elf: PathBuf,
     bin: Option<PathBuf>,
@@ -28,27 +43,33 @@ pub(crate) struct PreparedRuntimeArtifacts {
 }
 
 impl PreparedRuntimeArtifacts {
+    /// Returns the runtime ELF path.
     pub(crate) fn elf(&self) -> &Path {
         &self.elf
     }
 
+    /// Returns the runtime BIN path, when one was generated.
     pub(crate) fn bin(&self) -> Option<&Path> {
         self.bin.as_deref()
     }
 
+    /// Returns the Cargo artifact directory that produced the input ELF.
     pub(crate) fn cargo_artifact_dir(&self) -> Option<&Path> {
         self.cargo_artifact_dir.as_deref()
     }
 
+    /// Returns the directory containing the artifact consumed by runners.
     pub(crate) fn runtime_artifact_dir(&self) -> Option<&Path> {
         self.runtime_artifact_dir.as_deref()
     }
 
+    /// Returns the architecture detected from the input ELF.
     pub(crate) fn arch(&self) -> Option<Architecture> {
         self.arch
     }
 }
 
+/// Prepares runtime ELF/BIN artifacts from a Cargo or custom-build ELF.
 pub(crate) fn prepare_runtime_artifacts(
     context: &ProcessContext,
     options: RuntimeArtifactOptions,

@@ -623,9 +623,9 @@ mod tests {
             outcome.resolved_artifact().elf_path(),
             target_dir.join("kernel")
         );
-        assert!(tool.ctx.artifacts.elf.is_none());
-        assert!(tool.ctx.artifacts.bin.is_none());
-        assert!(tool.ctx.artifacts.cargo_artifact_dir.is_none());
-        assert!(tool.ctx.artifacts.runtime_artifact_dir.is_none());
+        assert!(tool.ctx.artifacts.elf().is_none());
+        assert!(tool.ctx.artifacts.bin().is_none());
+        assert!(tool.ctx.artifacts.cargo_artifact_dir().is_none());
+        assert!(tool.ctx.artifacts.runtime_artifact_dir().is_none());
     }
 }

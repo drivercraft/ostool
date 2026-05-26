@@ -15,7 +15,7 @@ use log::info;
 use tokio::fs;
 
 use crate::Tool;
-use crate::build::config::BuildConfig;
+use crate::build::{config::BuildConfig, config_hooks, config_loader};
 use crate::run::qemu::QemuConfig;
 use crate::run::uboot::UbootConfig;
 use crate::utils::PathResultExt;
@@ -60,10 +60,11 @@ impl MenuConfigHandler {
     }
 
     async fn handle_default_config(tool: &mut Tool) -> Result<()> {
-        let config_path = tool.resolve_build_config_path(None);
+        let config_path = config_loader::resolve_build_config_path(tool.workspace_dir(), None);
         tool.ctx_mut().build_config_path = Some(config_path.clone());
 
-        let config = jkconfig::run::<BuildConfig>(config_path.clone(), true, &tool.ui_hooks())
+        let hooks = config_hooks::build_config_hooks(tool.workspace_dir());
+        let config = jkconfig::run::<BuildConfig>(config_path.clone(), true, &hooks)
             .await
             .with_context(|| format!("failed to load build config: {}", config_path.display()))?;
 

@@ -902,10 +902,9 @@ impl RunnerBackend for RemoteBackend {
                 )
             })?;
         let output_dir = tool
-            .ctx()
-            .artifacts
-            .runtime_artifact_dir
-            .clone()
+            .runtime_artifacts()
+            .runtime_artifact_dir()
+            .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir);
         fs::create_dir_all(&output_dir)
             .await
@@ -1036,7 +1035,11 @@ where
             Byte::from(kernel_data.len())
         );
 
-        let arch = match self.tool.ctx.arch.as_ref().unwrap() {
+        let arch = self
+            .tool
+            .runtime_arch()
+            .ok_or_else(|| anyhow!("Cannot determine architecture for FIT image generation"))?;
+        let arch = match arch {
             object::Architecture::Aarch64 => "arm64",
             object::Architecture::Arm => "arm",
             object::Architecture::LoongArch64 => "loongarch64",
@@ -1129,16 +1132,13 @@ where
 
     async fn _run(&mut self) -> anyhow::Result<()> {
         self.prepare_regex()?;
-        self.tool.objcopy_output_bin()?;
+        self.tool.ensure_runtime_bin()?;
 
         let kernel = self
             .tool
-            .ctx
-            .artifacts
-            .bin
-            .as_ref()
-            .ok_or(anyhow!("bin not exist"))?
-            .clone();
+            .runtime_artifacts()
+            .require_bin("bin not exist")?
+            .to_path_buf();
 
         info!("Starting U-Boot runner...");
 

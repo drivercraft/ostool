@@ -34,6 +34,8 @@ use crate::{
 };
 
 mod artifact_selector;
+pub(crate) mod config_hooks;
+pub(crate) mod config_loader;
 
 /// Cargo pipeline implementation for building projects.
 mod cargo_pipeline;
@@ -131,20 +133,10 @@ impl Tool {
         Ok(())
     }
 
-    /// Builds the project from the specified configuration file path.
+    /// Runs the custom build command from a build configuration.
     ///
-    /// This is the main entry point for building projects. It loads the
-    /// configuration from the specified path (or default `.build.toml`)
-    /// and executes the build.
-    ///
-    /// # Arguments
-    ///
-    /// * `config_path` - Optional path to the build configuration file.
-    ///   Defaults to `.build.toml` in the workspace directory.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the configuration cannot be loaded or the build fails.
+    /// Custom builds use the same artifact preparation path as Cargo builds so
+    /// runners consume a single ELF/BIN artifact state model.
     pub(crate) fn build_custom(&mut self, config: &Custom) -> anyhow::Result<()> {
         let process_context = self.process_context()?;
         crate::process::shell_run_cmd(&process_context, &config.build_cmd)?;
@@ -170,6 +162,7 @@ impl Tool {
         Ok(())
     }
 
+    /// Builds or imports the configured artifact and prepares the runtime outputs.
     pub(crate) async fn prepare_runtime_artifacts(
         &mut self,
         config: &config::BuildConfig,
@@ -187,7 +180,7 @@ impl Tool {
 
     async fn prepare_custom_runtime_artifacts(&mut self, config: &Custom) -> anyhow::Result<()> {
         self.build_custom(config)?;
-        self.prepare_elf_artifact(config.elf_path.clone().into(), config.to_bin)
+        self.prepare_runtime_artifacts_from_elf(config.elf_path.clone().into(), config.to_bin)
             .await
     }
 
@@ -353,15 +346,15 @@ mod tests {
             .unwrap();
 
         let expected_elf = elf_path.canonicalize().unwrap();
-        assert_eq!(tool.ctx.artifacts.elf.as_ref(), Some(&expected_elf));
-        assert!(tool.ctx.artifacts.bin.is_none());
+        assert_eq!(tool.ctx.artifacts.elf(), Some(expected_elf.as_path()));
+        assert!(tool.ctx.artifacts.bin().is_none());
         assert_eq!(
-            tool.ctx.artifacts.cargo_artifact_dir.as_ref(),
-            Some(&cargo_artifact_dir)
+            tool.ctx.artifacts.cargo_artifact_dir(),
+            Some(cargo_artifact_dir.as_path())
         );
         assert_eq!(
-            tool.ctx.artifacts.runtime_artifact_dir.as_ref(),
-            Some(&cargo_artifact_dir)
+            tool.ctx.artifacts.runtime_artifact_dir(),
+            Some(cargo_artifact_dir.as_path())
         );
         assert!(tool.ctx.arch.is_some());
     }
