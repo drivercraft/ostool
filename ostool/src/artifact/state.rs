@@ -40,6 +40,14 @@ impl OutputArtifacts {
         self.runtime_artifact_dir.as_deref()
     }
 
+    /// Returns whether no runtime artifact has been recorded.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.elf.is_none()
+            && self.bin.is_none()
+            && self.cargo_artifact_dir.is_none()
+            && self.runtime_artifact_dir.is_none()
+    }
+
     /// Returns the preferred image path for runners that can load BIN or ELF.
     pub(crate) fn runtime_image(&self) -> Option<&Path> {
         self.bin().or_else(|| self.elf())

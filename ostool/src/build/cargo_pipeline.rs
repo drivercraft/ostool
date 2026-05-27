@@ -16,7 +16,6 @@ use cargo_metadata::{Message, PackageId};
 use colored::Colorize;
 
 use crate::{
-    Tool,
     build::{
         artifact_selector::{
             CargoExecutableArtifact, ResolvedCargoArtifact, select_executable_artifact,
@@ -24,8 +23,40 @@ use crate::{
         config::{Cargo, CargoBuildProfile},
         someboot,
     },
+    process::ProcessContext,
+    project::{ProjectLayout, metadata},
     utils::{Command, PathResultExt},
 };
+
+#[derive(Debug, Clone)]
+pub(super) struct CargoBuildInput {
+    project_layout: ProjectLayout,
+    process_context: ProcessContext,
+    build_dir: PathBuf,
+    config_path: Option<PathBuf>,
+    debug: bool,
+    enable_someboot_build_config: bool,
+}
+
+impl CargoBuildInput {
+    pub(super) fn new(
+        project_layout: ProjectLayout,
+        process_context: ProcessContext,
+        build_dir: PathBuf,
+        config_path: Option<PathBuf>,
+        debug: bool,
+        enable_someboot_build_config: bool,
+    ) -> Self {
+        Self {
+            project_layout,
+            process_context,
+            build_dir,
+            config_path,
+            debug,
+            enable_someboot_build_config,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct CargoBuildOutcome {
@@ -49,7 +80,7 @@ impl CargoBuildOutcome {
 ///
 /// This builder is an internal implementation detail used by [`Tool`].
 pub struct CargoBuildPipeline<'a> {
-    tool: &'a mut Tool,
+    input: CargoBuildInput,
     config: &'a Cargo,
     cargo_program: PathBuf,
     command: String,
@@ -57,7 +88,6 @@ pub struct CargoBuildPipeline<'a> {
     extra_envs: HashMap<String, String>,
     skip_objcopy: bool,
     resolve_artifact_from_json: bool,
-    config_path: Option<PathBuf>,
 }
 
 impl<'a> CargoBuildPipeline<'a> {
@@ -65,12 +95,11 @@ impl<'a> CargoBuildPipeline<'a> {
     ///
     /// # Arguments
     ///
-    /// * `tool` - The tool context.
+    /// * `input` - Invocation-scoped Cargo build inputs.
     /// * `config` - The Cargo build configuration.
-    /// * `config_path` - Optional path to the configuration file.
-    pub fn build(tool: &'a mut Tool, config: &'a Cargo, config_path: Option<PathBuf>) -> Self {
+    pub(super) fn build(input: CargoBuildInput, config: &'a Cargo) -> Self {
         Self {
-            tool,
+            input,
             config,
             cargo_program: PathBuf::from("cargo"),
             command: "build".to_string(),
@@ -78,22 +107,7 @@ impl<'a> CargoBuildPipeline<'a> {
             extra_envs: HashMap::new(),
             skip_objcopy: false,
             resolve_artifact_from_json: true,
-            config_path,
         }
-    }
-
-    /// Sets the debug mode for the build.
-    ///
-    /// When enabled, builds in debug mode and enables GDB server for QEMU.
-    pub fn debug(self, debug: bool) -> Self {
-        self.tool.config.debug = debug;
-        self
-    }
-
-    /// Creates a build command using the context's stored config path.
-    pub fn build_auto(tool: &'a mut Tool, config: &'a Cargo) -> Self {
-        let config_path = tool.ctx.build_config_path.clone();
-        Self::build(tool, config, config_path)
     }
 
     /// Sets whether to skip the objcopy step after building.
@@ -132,9 +146,8 @@ impl<'a> CargoBuildPipeline<'a> {
     }
 
     fn run_pre_build_cmds(&mut self) -> anyhow::Result<()> {
-        let process_context = self.tool.process_context()?;
         for cmd in &self.config.pre_build_cmds {
-            crate::process::shell_run_cmd(&process_context, cmd)?;
+            crate::process::shell_run_cmd(&self.input.process_context, cmd)?;
         }
         Ok(())
     }
@@ -216,8 +229,8 @@ impl<'a> CargoBuildPipeline<'a> {
     }
 
     async fn build_cargo_command(&mut self) -> anyhow::Result<Command> {
-        let process_context = self.tool.process_context()?;
-        let mut cmd = crate::process::command(self.cargo_program.as_os_str(), &process_context);
+        let mut cmd =
+            crate::process::command(self.cargo_program.as_os_str(), &self.input.process_context);
 
         cmd.arg(&self.command);
 
@@ -249,7 +262,7 @@ impl<'a> CargoBuildPipeline<'a> {
         cmd.arg("unstable-options");
 
         cmd.arg("--target-dir");
-        cmd.arg(self.tool.build_dir().display().to_string());
+        cmd.arg(self.input.build_dir.display().to_string());
 
         // Features
         let features = self.build_features();
@@ -264,8 +277,8 @@ impl<'a> CargoBuildPipeline<'a> {
         }
 
         // Auto-detected args from someboot/build-info.toml
-        let workspace_manifest = self.tool.workspace_dir().join("Cargo.toml");
-        if self.tool.someboot_build_config_enabled(self.config) && workspace_manifest.exists() {
+        let workspace_manifest = self.input.project_layout.workspace_dir().join("Cargo.toml");
+        if self.input.enable_someboot_build_config && workspace_manifest.exists() {
             let detected_args = someboot::detect_build_config_for_package(
                 &workspace_manifest,
                 &self.config.package,
@@ -300,7 +313,7 @@ impl<'a> CargoBuildPipeline<'a> {
     }
 
     fn target_package_info(&self) -> anyhow::Result<(PackageId, Option<String>)> {
-        let metadata = self.tool.metadata()?;
+        let metadata = metadata::cargo_metadata(&self.input.project_layout)?;
         let Some(package) = metadata
             .packages
             .iter()
@@ -309,7 +322,7 @@ impl<'a> CargoBuildPipeline<'a> {
             bail!(
                 "package '{}' not found in cargo metadata under {}",
                 self.config.package,
-                self.tool.manifest_dir().display()
+                self.input.project_layout.manifest_dir().display()
             );
         };
         Ok((package.id.clone(), package.default_run.clone()))
@@ -324,19 +337,18 @@ impl<'a> CargoBuildPipeline<'a> {
     }
 
     fn effective_profile(&self) -> CargoBuildProfile {
-        self.config.profile.unwrap_or_else(|| {
-            if self.tool.debug_enabled() {
-                CargoBuildProfile::Debug
-            } else {
-                CargoBuildProfile::Release
-            }
-        })
+        let default_profile = if self.input.debug {
+            CargoBuildProfile::Debug
+        } else {
+            CargoBuildProfile::Release
+        };
+        self.config.profile.unwrap_or(default_profile)
     }
 
     fn log_level_feature(&self) -> Option<String> {
         let level = self.config.log.clone()?;
 
-        let meta = self.tool.metadata().ok()?;
+        let meta = metadata::cargo_metadata(&self.input.project_layout).ok()?;
         let pkg = meta
             .packages
             .iter()
@@ -384,7 +396,7 @@ impl<'a> CargoBuildPipeline<'a> {
             let extra = Path::new(s);
 
             if extra.is_relative() {
-                if let Some(ref config_path) = self.config_path {
+                if let Some(ref config_path) = self.input.config_path {
                     let combined = config_path
                         .parent()
                         .ok_or_else(|| {
@@ -538,12 +550,13 @@ mod tests {
             ..Default::default()
         };
 
-        let mut tool = Tool::new(ToolConfig {
+        let tool = Tool::new(ToolConfig {
             manifest: Some(temp.path().to_path_buf()),
             ..Default::default()
         })
         .unwrap();
-        let mut builder = CargoBuildPipeline::build(&mut tool, &config, None).skip_objcopy(true);
+        let input = tool.cargo_build_input(&config, false).unwrap();
+        let mut builder = CargoBuildPipeline::build(input, &config).skip_objcopy(true);
         let cmd = builder.build_cargo_command().await.unwrap();
         let args: Vec<String> = cmd
             .get_args()
@@ -580,7 +593,7 @@ mod tests {
             ..Default::default()
         };
 
-        let mut tool = Tool::new(ToolConfig {
+        let tool = Tool::new(ToolConfig {
             manifest: Some(temp.path().to_path_buf()),
             ..Default::default()
         })
@@ -612,7 +625,8 @@ mod tests {
             fs::set_permissions(&cargo_bin, permissions).unwrap();
         }
 
-        let outcome = CargoBuildPipeline::build(&mut tool, &config, None)
+        let input = tool.cargo_build_input(&config, false).unwrap();
+        let outcome = CargoBuildPipeline::build(input, &config)
             .skip_objcopy(true)
             .cargo_program(&cargo_bin)
             .execute()

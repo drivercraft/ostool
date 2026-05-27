@@ -61,7 +61,7 @@ impl MenuConfigHandler {
 
     async fn handle_default_config(tool: &mut Tool) -> Result<()> {
         let config_path = config_loader::resolve_build_config_path(tool.workspace_dir(), None);
-        tool.ctx_mut().build_config_path = Some(config_path.clone());
+        tool.set_build_config_path(Some(config_path.clone()));
 
         let hooks = config_hooks::build_config_hooks(tool.workspace_dir());
         let config = jkconfig::run::<BuildConfig>(config_path.clone(), true, &hooks)
@@ -69,12 +69,16 @@ impl MenuConfigHandler {
             .with_context(|| format!("failed to load build config: {}", config_path.display()))?;
 
         if let Some(config) = config {
-            tool.ctx_mut().build_config = Some(config);
+            Self::record_default_build_config_edit(tool, config);
         } else {
             println!("\n未更改构建配置");
         }
 
         Ok(())
+    }
+
+    fn record_default_build_config_edit(tool: &mut Tool, config: BuildConfig) {
+        tool.ctx_mut().build_config = Some(config);
     }
 
     async fn handle_qemu_config(tool: &mut Tool) -> Result<()> {
@@ -140,7 +144,13 @@ impl MenuConfigHandler {
 
 #[cfg(test)]
 mod tests {
-    use crate::build::config::BuildConfig;
+    use std::fs;
+
+    use crate::{
+        Tool, ToolConfig,
+        build::config::{BuildConfig, BuildSystem, Cargo},
+        menuconfig::MenuConfigHandler,
+    };
     use jkconfig::data::menu::MenuRoot;
     use jkconfig::data::types::ElementType;
     use schemars::schema_for;
@@ -170,5 +180,34 @@ mod tests {
             }
             other => panic!("log should be Item(Enum), got: {:?}", other),
         }
+    }
+
+    #[test]
+    fn default_config_edit_records_config_without_validating_cargo_package() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(temp.path().join("src")).unwrap();
+        fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let mut tool = Tool::new(ToolConfig {
+            manifest: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+        let config = BuildConfig {
+            system: BuildSystem::Cargo(Cargo {
+                package: "missing".into(),
+                target: "x86_64-unknown-none".into(),
+                ..Default::default()
+            }),
+        };
+
+        MenuConfigHandler::record_default_build_config_edit(&mut tool, config.clone());
+
+        assert_eq!(tool.ctx().build_config.as_ref(), Some(&config));
     }
 }

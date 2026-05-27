@@ -388,6 +388,7 @@ fn apply_cargo_selector(
     if let Some(bin) = &selector.bin {
         cargo_config.bin = Some(bin.clone());
     }
+
     tool.ctx_mut().build_config = Some(build_config.clone());
     Ok(())
 }
@@ -451,11 +452,11 @@ mod tests {
     use std::fs;
 
     use clap::Parser;
-    use ostool::{Tool, ToolConfig};
+    use ostool::{Tool, ToolConfig, resolve_manifest_context};
 
     use super::{
         BoardArgs, BoardSubCommands, CargoSelectorArgs, Cli, RunSubCommands, SubCommands,
-        apply_cargo_selector, build,
+        apply_cargo_selector, build, load_board_config,
     };
 
     /// Verifies build parsing accepts manifest, config, package, and bin overrides.
@@ -782,6 +783,72 @@ mod tests {
             err.to_string()
                 .contains("--package/--bin can only be used with system.Cargo")
         );
+    }
+
+    #[tokio::test]
+    async fn cargo_selector_updates_scope_before_board_config_load() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\", \"kernel\"]\nresolver = \"3\"\n",
+        )
+        .unwrap();
+
+        let app_dir = temp.path().join("app");
+        fs::create_dir_all(app_dir.join("src")).unwrap();
+        fs::write(
+            app_dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(app_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let kernel_dir = temp.path().join("kernel");
+        fs::create_dir_all(kernel_dir.join("src/bin")).unwrap();
+        fs::write(
+            kernel_dir.join("Cargo.toml"),
+            "[package]\nname = \"kernel\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(kernel_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(kernel_dir.join("src/bin/kernel-board.rs"), "fn main() {}\n").unwrap();
+
+        fs::write(
+            temp.path().join(".board.toml"),
+            r#"
+board_type = "kernel-board"
+dtb_file = "${package}/board.dtb"
+"#,
+        )
+        .unwrap();
+
+        let mut tool = Tool::new(ToolConfig {
+            manifest: Some(app_dir.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+        let manifest = resolve_manifest_context(Some(app_dir)).unwrap();
+        let mut build_config = build::config::BuildConfig {
+            system: build::config::BuildSystem::Cargo(build::config::Cargo {
+                package: "app".into(),
+                target: "aarch64-unknown-none".into(),
+                ..Default::default()
+            }),
+        };
+
+        apply_cargo_selector(
+            &mut tool,
+            &mut build_config,
+            &CargoSelectorArgs {
+                package: Some("kernel".into()),
+                bin: Some("kernel-board".into()),
+            },
+        )
+        .unwrap();
+        let board_config = load_board_config(&mut tool, &manifest, None).await.unwrap();
+
+        let expected = kernel_dir.join("board.dtb").display().to_string();
+        assert_eq!(board_config.dtb_file.as_deref(), Some(expected.as_str()));
     }
 
     fn test_tool() -> (tempfile::TempDir, Tool) {

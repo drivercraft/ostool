@@ -46,8 +46,10 @@ pub mod board;
 /// Application context and state management.
 pub mod ctx;
 
-/// Invocation inputs and mutable runtime state.
+/// Invocation inputs and resolved project layout.
 pub mod invocation;
+
+mod legacy_context;
 
 /// Custom file logger for ostool.
 ///

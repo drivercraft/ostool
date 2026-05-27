@@ -1,0 +1,23 @@
+error[E0603]: enum `ActiveBuildContext` is private
+ --> tests/ui/fail_invocation_state.rs:1:26
+  |
+1 | use ostool::invocation::{ActiveBuildContext, InvocationState};
+  |                          ^^^^^^^^^^^^^^^^^^ private enum
+  |
+note: the enum `ActiveBuildContext` is defined here
+ --> src/invocation.rs
+  |
+  | pub(crate) enum ActiveBuildContext {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0603]: struct `InvocationState` is private
+ --> tests/ui/fail_invocation_state.rs:1:46
+  |
+1 | use ostool::invocation::{ActiveBuildContext, InvocationState};
+  |                                              ^^^^^^^^^^^^^^^ private struct
+  |
+note: the struct `InvocationState` is defined here
+ --> src/invocation.rs
+  |
+  | pub(crate) struct InvocationState {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

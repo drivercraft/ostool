@@ -168,7 +168,7 @@ impl Tool {
         cargo: &Cargo,
         path: &Path,
     ) -> anyhow::Result<QemuConfig> {
-        self.sync_cargo_context(cargo);
+        self.sync_cargo_context(cargo)?;
         let scope = self.variable_scope()?;
         let config_path = variables::expand_path_variables(path, &scope)?;
         read_qemu_config_at_path(&scope, config_path).await
@@ -178,7 +178,7 @@ impl Tool {
         &mut self,
         cargo: &Cargo,
     ) -> anyhow::Result<QemuConfig> {
-        self.sync_cargo_context(cargo);
+        self.sync_cargo_context(cargo)?;
         let package_dir = self.resolve_package_manifest_dir(&cargo.package)?;
         let arch = infer_target_arch(&cargo.target).or(self.runtime_arch());
         let config_path = resolve_qemu_config_path_in_dir(&package_dir, arch, None)?;
@@ -192,7 +192,7 @@ impl Tool {
         cargo: &Cargo,
         dir: &Path,
     ) -> anyhow::Result<QemuConfig> {
-        self.sync_cargo_context(cargo);
+        self.sync_cargo_context(cargo)?;
         let scope = self.variable_scope()?;
         let dir = variables::expand_path_variables(dir, &scope)?;
         let arch = infer_target_arch(&cargo.target).or(self.runtime_arch());

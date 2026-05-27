@@ -13,11 +13,13 @@ use crate::{
         state::OutputArtifacts,
     },
     build::{
+        CargoSelector, activate_build_context,
         config::{BuildConfig, BuildSystem, Cargo},
         config_hooks, config_loader,
     },
     ctx::AppContext,
-    invocation::Invocation,
+    invocation::{ActiveBuildContext, Invocation, InvocationState},
+    legacy_context,
     process::ProcessContext,
     project::{ProjectLayout, metadata, resolve_project_layout, variables::VariableScope},
 };
@@ -44,6 +46,7 @@ pub struct Tool {
     pub(crate) manifest_path: PathBuf,
     pub(crate) manifest_dir: PathBuf,
     pub(crate) workspace_dir: PathBuf,
+    pub(crate) state: InvocationState,
     pub(crate) ctx: AppContext,
 }
 
@@ -87,7 +90,7 @@ impl Tool {
     /// Someboot build-config injection uses the same default as `Tool::new` and can
     /// be changed afterward with `set_someboot_build_config_enabled`.
     pub fn from_invocation(invocation: Invocation) -> Self {
-        let (options, layout) = invocation.into_parts();
+        let (options, layout, state) = invocation.into_parts();
         let config = ToolConfig {
             manifest: Some(layout.manifest_path().to_path_buf()),
             build_dir: options.build_dir().map(PathBuf::from),
@@ -95,7 +98,10 @@ impl Tool {
             debug: options.debug(),
             ..Default::default()
         };
-        Self::from_project_layout(config, layout)
+        let mut tool = Self::from_project_layout(config, layout);
+        tool.state = state;
+        legacy_context::sync_context_from_state(&mut tool.ctx, &tool.state);
+        tool
     }
 
     pub(crate) fn from_project_layout(config: ToolConfig, layout: ProjectLayout) -> Self {
@@ -104,6 +110,7 @@ impl Tool {
             manifest_path: layout.manifest_path().to_path_buf(),
             manifest_dir: layout.manifest_dir().to_path_buf(),
             workspace_dir: layout.workspace_dir().to_path_buf(),
+            state: InvocationState::default(),
             ctx: AppContext::default(),
         }
     }
@@ -112,22 +119,26 @@ impl Tool {
         &self.ctx
     }
 
+    /// Returns mutable legacy context for compatibility callers.
+    ///
+    /// Prefer state-aware `Tool` methods for new code. Direct mutations here do
+    /// not update `InvocationState`, which is the current source of truth.
     pub fn ctx_mut(&mut self) -> &mut AppContext {
         &mut self.ctx
     }
 
     /// Returns the currently prepared runtime artifacts.
     pub(crate) fn runtime_artifacts(&self) -> &OutputArtifacts {
-        &self.ctx.artifacts
+        legacy_context::runtime_artifacts(&self.state, &self.ctx)
     }
 
     /// Returns the architecture detected from the current runtime artifact.
     pub(crate) fn runtime_arch(&self) -> Option<Architecture> {
-        self.ctx.arch
+        legacy_context::runtime_arch(&self.state, &self.ctx)
     }
 
     pub fn set_build_config_path(&mut self, path: Option<PathBuf>) {
-        self.ctx.build_config_path = path;
+        legacy_context::set_build_config_path(&mut self.state, &mut self.ctx, path);
     }
 
     /// Enables or disables automatic Cargo argument injection from someboot build metadata.
@@ -147,10 +158,28 @@ impl Tool {
         self.config.debug
     }
 
-    pub(crate) fn sync_cargo_context(&mut self, cargo: &Cargo) {
-        self.ctx.build_config = Some(BuildConfig {
+    pub(crate) fn sync_build_context(&mut self, build_config: &BuildConfig) -> anyhow::Result<()> {
+        let active_build = activate_build_context(
+            &self.project_layout(),
+            build_config.clone(),
+            self.state
+                .build_config_path()
+                .map(PathBuf::from)
+                .or_else(|| self.ctx.build_config_path.clone()),
+            &CargoSelector::default(),
+        )?;
+        self.apply_active_build_context(&active_build);
+        Ok(())
+    }
+
+    pub(crate) fn sync_cargo_context(&mut self, cargo: &Cargo) -> anyhow::Result<()> {
+        self.sync_build_context(&BuildConfig {
             system: BuildSystem::Cargo(cargo.clone()),
-        });
+        })
+    }
+
+    pub(crate) fn apply_active_build_context(&mut self, active_build: &ActiveBuildContext) {
+        legacy_context::set_active_build(&mut self.state, &mut self.ctx, active_build);
     }
 
     pub(crate) fn manifest_dir(&self) -> &PathBuf {
@@ -236,14 +265,13 @@ impl Tool {
 
     /// Converts the ELF file to raw binary format.
     fn objcopy_output_bin(&mut self) -> anyhow::Result<PathBuf> {
-        if let Some(bin) = self.ctx.artifacts.bin() {
+        if let Some(bin) = self.runtime_artifacts().bin() {
             debug!("BIN file already exists: {:?}", bin);
             return Ok(bin.to_path_buf());
         }
 
         let elf_path = self
-            .ctx
-            .artifacts
+            .runtime_artifacts()
             .elf()
             .ok_or_else(|| anyhow!("elf not exist"))?;
         let process_context = self.process_context()?;
@@ -254,7 +282,10 @@ impl Tool {
                 to_bin: true,
                 bin_dir: self.bin_dir(),
                 debug: self.debug_enabled(),
-                cargo_artifact_dir: self.ctx.artifacts.cargo_artifact_dir().map(PathBuf::from),
+                cargo_artifact_dir: self
+                    .runtime_artifacts()
+                    .cargo_artifact_dir()
+                    .map(PathBuf::from),
                 strip_elf: false,
                 objcopy_program: PathBuf::from("rust-objcopy"),
             },
@@ -269,10 +300,7 @@ impl Tool {
 
     /// Applies prepared runtime artifacts to legacy context state.
     pub(crate) fn apply_prepared_runtime_artifacts(&mut self, prepared: PreparedRuntimeArtifacts) {
-        self.ctx
-            .artifacts
-            .apply_prepared_runtime_artifacts(&prepared);
-        self.ctx.arch = prepared.arch();
+        legacy_context::apply_prepared_runtime_artifacts(&mut self.state, &mut self.ctx, &prepared);
     }
 
     /// Loads and prepares the build configuration.
@@ -291,13 +319,17 @@ impl Tool {
         )
         .await?;
 
-        self.ctx.build_config_path = Some(loaded.path().to_path_buf());
+        self.set_build_config_path(Some(loaded.path().to_path_buf()));
         let config = loaded.into_config();
         self.ctx.build_config = Some(config.clone());
         Ok(config)
     }
 
     fn package_root_for_variables(&self) -> anyhow::Result<PathBuf> {
+        if let Some(active_build) = self.state.active_build() {
+            return Ok(active_build.variable_scope().package_dir().to_path_buf());
+        }
+
         if let Some(BuildConfig {
             system: BuildSystem::Cargo(cargo),
         }) = &self.ctx.build_config
@@ -308,7 +340,7 @@ impl Tool {
         Ok(self.manifest_dir.clone())
     }
 
-    fn project_layout(&self) -> ProjectLayout {
+    pub(crate) fn project_layout(&self) -> ProjectLayout {
         ProjectLayout::from_manifest_parts(
             self.manifest_path.clone(),
             self.manifest_dir.clone(),
@@ -317,6 +349,10 @@ impl Tool {
     }
 
     pub(crate) fn variable_scope(&self) -> anyhow::Result<VariableScope> {
+        if let Some(active_build) = self.state.active_build() {
+            return Ok(active_build.variable_scope().clone());
+        }
+
         let package_dir = self.package_root_for_variables()?;
         Ok(VariableScope::for_package(
             &self.project_layout(),
@@ -329,7 +365,7 @@ impl Tool {
             self.manifest_dir.clone(),
             self.workspace_dir.clone(),
             self.variable_scope()?,
-            self.ctx.artifacts.elf().map(PathBuf::from),
+            self.runtime_artifacts().elf().map(PathBuf::from),
         ))
     }
 
@@ -395,6 +431,8 @@ mod tests {
         let expected_elf = copied.canonicalize().unwrap();
         let expected_dir = expected_elf.parent().unwrap().to_path_buf();
 
+        assert_eq!(tool.state.artifacts().elf(), Some(expected_elf.as_path()));
+        assert_eq!(tool.state.arch(), tool.ctx.arch);
         assert_eq!(tool.ctx.artifacts.elf(), Some(expected_elf.as_path()));
         assert_eq!(
             tool.ctx.artifacts.cargo_artifact_dir(),
@@ -468,6 +506,67 @@ mod tests {
 
         let resolved = tool.resolve_package_manifest_dir("kernel").unwrap();
         assert_eq!(resolved, kernel_dir);
+    }
+
+    #[test]
+    fn sync_build_context_records_invocation_state_and_legacy_context() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\", \"kernel\"]\nresolver = \"3\"\n",
+        )
+        .unwrap();
+
+        let app_dir = temp.path().join("app");
+        std::fs::create_dir_all(app_dir.join("src")).unwrap();
+        std::fs::write(
+            app_dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(app_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let kernel_dir = temp.path().join("kernel");
+        std::fs::create_dir_all(kernel_dir.join("src/bin")).unwrap();
+        std::fs::write(
+            kernel_dir.join("Cargo.toml"),
+            "[package]\nname = \"kernel\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(kernel_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(kernel_dir.join("src/bin/kernel-qemu.rs"), "fn main() {}\n").unwrap();
+
+        let config_path = temp.path().join(".build.toml");
+        let mut tool = Tool::new(ToolConfig {
+            manifest: Some(app_dir),
+            ..Default::default()
+        })
+        .unwrap();
+        tool.set_build_config_path(Some(config_path.clone()));
+        let build_config = BuildConfig {
+            system: BuildSystem::Cargo(Cargo {
+                package: "kernel".into(),
+                bin: Some("kernel-qemu".into()),
+                target: "aarch64-unknown-none".into(),
+                ..Default::default()
+            }),
+        };
+
+        tool.sync_build_context(&build_config).unwrap();
+
+        let Some(crate::invocation::ActiveBuildContext::Cargo(active)) = tool.state.active_build()
+        else {
+            panic!("active Cargo build missing");
+        };
+        assert_eq!(active.config().package, "kernel");
+        assert_eq!(active.config().bin.as_deref(), Some("kernel-qemu"));
+        assert_eq!(active.config_path(), Some(config_path.as_path()));
+        assert_eq!(active.variable_scope().package_dir(), kernel_dir.as_path());
+        assert_eq!(tool.ctx.build_config.as_ref(), Some(&build_config));
+        assert_eq!(
+            tool.variable_scope().unwrap().package_dir(),
+            kernel_dir.as_path()
+        );
     }
 
     #[test]

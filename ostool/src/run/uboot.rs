@@ -321,7 +321,7 @@ impl Tool {
         cargo: &crate::build::config::Cargo,
         path: &Path,
     ) -> anyhow::Result<UbootConfig> {
-        self.sync_cargo_context(cargo);
+        self.sync_cargo_context(cargo)?;
         let scope = self.variable_scope()?;
         let config_path = variables::expand_path_variables(path, &scope)?;
         read_uboot_config_at_path(&scope, config_path).await
@@ -331,7 +331,7 @@ impl Tool {
         &mut self,
         cargo: &crate::build::config::Cargo,
     ) -> anyhow::Result<UbootConfig> {
-        self.sync_cargo_context(cargo);
+        self.sync_cargo_context(cargo)?;
         let workspace_dir = self.workspace_dir().clone();
         self.ensure_uboot_config_in_dir_for_cargo(cargo, &workspace_dir)
             .await
@@ -342,7 +342,7 @@ impl Tool {
         cargo: &crate::build::config::Cargo,
         dir: &Path,
     ) -> anyhow::Result<UbootConfig> {
-        self.sync_cargo_context(cargo);
+        self.sync_cargo_context(cargo)?;
         let scope = self.variable_scope()?;
         let dir = variables::expand_path_variables(dir, &scope)?;
         ensure_uboot_config_at_path(&scope, dir.join(".uboot.toml"), self.default_uboot_config())

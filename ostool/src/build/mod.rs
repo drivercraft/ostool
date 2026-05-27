@@ -20,13 +20,17 @@
 
 use std::path::{Path, PathBuf};
 
+use anyhow::bail;
+
 use crate::{
     Tool,
     artifact::runtime::{RuntimeArtifactOptions, prepare_runtime_artifacts},
     build::{
-        cargo_pipeline::{CargoBuildOutcome, CargoBuildPipeline},
-        config::{Cargo, Custom},
+        cargo_pipeline::{CargoBuildInput, CargoBuildOutcome, CargoBuildPipeline},
+        config::{BuildConfig, BuildSystem, Cargo, Custom},
     },
+    invocation::{ActiveBuildContext, ActiveCargoBuild, ActiveCustomBuild},
+    project::{ProjectLayout, metadata, variables::VariableScope},
     run::{
         qemu::{QemuConfig, RunQemuOptions},
         uboot::{RunUbootOptions, UbootConfig},
@@ -88,6 +92,77 @@ impl CargoRunnerKind {
     }
 }
 
+/// CLI overrides for Cargo package and binary target selection.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct CargoSelector {
+    package: Option<String>,
+    bin: Option<String>,
+}
+
+impl CargoSelector {
+    /// Creates a Cargo selector from optional CLI overrides.
+    #[cfg(test)]
+    pub(crate) fn new(package: Option<String>, bin: Option<String>) -> Self {
+        Self { package, bin }
+    }
+
+    /// Returns whether no selector override was supplied.
+    fn is_empty(&self) -> bool {
+        self.package.is_none() && self.bin.is_none()
+    }
+}
+
+/// Applies Cargo selector overrides to a build configuration.
+fn apply_cargo_selector(
+    config: &mut config::BuildConfig,
+    selector: &CargoSelector,
+) -> anyhow::Result<()> {
+    if selector.is_empty() {
+        return Ok(());
+    }
+
+    let config::BuildSystem::Cargo(cargo_config) = &mut config.system else {
+        bail!("--package/--bin can only be used with system.Cargo build configs");
+    };
+
+    if let Some(package) = &selector.package {
+        cargo_config.package = package.clone();
+    }
+    if let Some(bin) = &selector.bin {
+        cargo_config.bin = Some(bin.clone());
+    }
+    Ok(())
+}
+
+pub(crate) fn activate_build_context(
+    layout: &ProjectLayout,
+    mut config: BuildConfig,
+    config_path: Option<PathBuf>,
+    selector: &CargoSelector,
+) -> anyhow::Result<ActiveBuildContext> {
+    apply_cargo_selector(&mut config, selector)?;
+    match config.system {
+        BuildSystem::Cargo(cargo) => {
+            let package_dir = metadata::package_manifest_dir(layout, &cargo.package)?;
+            let variable_scope = VariableScope::for_package(layout, package_dir.clone());
+            Ok(ActiveBuildContext::Cargo(Box::new(ActiveCargoBuild::new(
+                cargo,
+                config_path,
+                variable_scope,
+            ))))
+        }
+        BuildSystem::Custom(custom) => {
+            let variable_scope =
+                VariableScope::for_package(layout, layout.manifest_dir().to_path_buf());
+            Ok(ActiveBuildContext::Custom(ActiveCustomBuild::new(
+                custom,
+                config_path,
+                variable_scope,
+            )))
+        }
+    }
+}
+
 impl Tool {
     /// Returns the default build configuration template.
     pub fn default_build_config(&self) -> config::BuildConfig {
@@ -124,6 +199,7 @@ impl Tool {
     ///
     /// Returns an error if the build process fails.
     pub async fn build_with_config(&mut self, config: &config::BuildConfig) -> anyhow::Result<()> {
+        self.sync_build_context(config)?;
         match &config.system {
             config::BuildSystem::Custom(custom) => self.build_custom(custom)?,
             config::BuildSystem::Cargo(cargo) => {
@@ -153,11 +229,11 @@ impl Tool {
     ///
     /// Returns an error if the Cargo build fails.
     pub async fn cargo_build(&mut self, config: &Cargo) -> anyhow::Result<()> {
-        self.sync_cargo_context(config);
-        let outcome = cargo_pipeline::CargoBuildPipeline::build_auto(self, config)
-            .execute()
-            .await?;
-        self.apply_cargo_build_outcome(config, &outcome, false)?;
+        self.sync_cargo_context(config)?;
+        let debug = self.debug_enabled();
+        let input = self.cargo_build_input(config, debug)?;
+        let outcome = CargoBuildPipeline::build(input, config).execute().await?;
+        self.apply_cargo_build_outcome(config, &outcome, false, debug)?;
         self.run_cargo_post_build_cmds(config)?;
         Ok(())
     }
@@ -168,6 +244,7 @@ impl Tool {
         config: &config::BuildConfig,
         debug: bool,
     ) -> anyhow::Result<()> {
+        self.sync_build_context(config)?;
         match &config.system {
             config::BuildSystem::Custom(custom) => {
                 self.prepare_custom_runtime_artifacts(custom).await
@@ -189,14 +266,14 @@ impl Tool {
         config: &Cargo,
         debug: bool,
     ) -> anyhow::Result<()> {
-        let build_config_path = self.ctx.build_config_path.clone();
-        let outcome = CargoBuildPipeline::build(self, config, build_config_path)
-            .debug(debug)
+        self.config.debug = debug;
+        let input = self.cargo_build_input(config, debug)?;
+        let outcome = CargoBuildPipeline::build(input, config)
             .skip_objcopy(true)
             .resolve_artifact_from_json(true)
             .execute()
             .await?;
-        self.apply_cargo_build_outcome(config, &outcome, true)?;
+        self.apply_cargo_build_outcome(config, &outcome, true, debug)?;
         self.run_cargo_post_build_cmds(config)?;
         Ok(())
     }
@@ -216,18 +293,18 @@ impl Tool {
         config: &Cargo,
         runner: &CargoRunnerKind,
     ) -> anyhow::Result<()> {
-        self.sync_cargo_context(config);
-        let build_config_path = self.ctx.build_config_path.clone();
+        self.sync_cargo_context(config)?;
 
         let debug = matches!(runner, CargoRunnerKind::Qemu(args) if args.debug);
+        self.config.debug = debug;
 
-        let outcome = CargoBuildPipeline::build(self, config, build_config_path)
-            .debug(debug)
+        let input = self.cargo_build_input(config, debug)?;
+        let outcome = CargoBuildPipeline::build(input, config)
             .skip_objcopy(true)
             .resolve_artifact_from_json(true)
             .execute()
             .await?;
-        self.apply_cargo_build_outcome(config, &outcome, true)?;
+        self.apply_cargo_build_outcome(config, &outcome, true, debug)?;
         self.run_cargo_post_build_cmds(config)?;
 
         match runner {
@@ -263,11 +340,23 @@ impl Tool {
         Ok(())
     }
 
+    fn cargo_build_input(&self, config: &Cargo, debug: bool) -> anyhow::Result<CargoBuildInput> {
+        Ok(CargoBuildInput::new(
+            self.project_layout(),
+            self.process_context()?,
+            self.build_dir(),
+            self.ctx.build_config_path.clone(),
+            debug,
+            self.someboot_build_config_enabled(config),
+        ))
+    }
+
     fn apply_cargo_build_outcome(
         &mut self,
         config: &Cargo,
         outcome: &CargoBuildOutcome,
         skip_objcopy: bool,
+        debug: bool,
     ) -> anyhow::Result<()> {
         let resolved = outcome.resolved_artifact();
         let process_context = self.process_context()?;
@@ -277,7 +366,7 @@ impl Tool {
                 elf_path: resolved.elf_path().to_path_buf(),
                 to_bin: config.to_bin && !skip_objcopy,
                 bin_dir: self.bin_dir(),
-                debug: self.debug_enabled(),
+                debug,
                 cargo_artifact_dir: Some(resolved.cargo_artifact_dir().to_path_buf()),
                 strip_elf: false,
                 objcopy_program: PathBuf::from("rust-objcopy"),
@@ -305,9 +394,12 @@ mod tests {
         build::{
             artifact_selector::ResolvedCargoArtifact,
             cargo_pipeline::CargoBuildOutcome,
-            config::{Cargo, CargoBuildProfile},
+            config::{BuildConfig, BuildSystem, Cargo, CargoBuildProfile, Custom},
         },
+        project::resolve_project_layout,
     };
+
+    use super::{CargoSelector, activate_build_context};
 
     #[test]
     fn apply_cargo_build_outcome_records_runtime_artifact_state() {
@@ -342,7 +434,7 @@ mod tests {
             cargo_artifact_dir.clone(),
         ));
 
-        tool.apply_cargo_build_outcome(&config, &outcome, true)
+        tool.apply_cargo_build_outcome(&config, &outcome, true, false)
             .unwrap();
 
         let expected_elf = elf_path.canonicalize().unwrap();
@@ -357,5 +449,75 @@ mod tests {
             Some(cargo_artifact_dir.as_path())
         );
         assert!(tool.ctx.arch.is_some());
+    }
+
+    #[test]
+    fn activate_build_context_applies_cargo_selector_and_scope() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("Cargo.toml"),
+            "[package]\nname = \"kernel\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(temp.path().join("src/bin")).unwrap();
+        fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(temp.path().join("src/bin/kernel-qemu.rs"), "fn main() {}\n").unwrap();
+        let layout = resolve_project_layout(Some(temp.path().to_path_buf())).unwrap();
+        let config_path = temp.path().join(".build.toml");
+        let config = BuildConfig {
+            system: BuildSystem::Cargo(Cargo {
+                package: "placeholder".into(),
+                ..Default::default()
+            }),
+        };
+
+        let active = activate_build_context(
+            &layout,
+            config,
+            Some(config_path.clone()),
+            &CargoSelector::new(Some("kernel".into()), Some("kernel-qemu".into())),
+        )
+        .unwrap();
+
+        let crate::invocation::ActiveBuildContext::Cargo(active) = active else {
+            panic!("expected active Cargo build");
+        };
+        assert_eq!(active.config().package, "kernel");
+        assert_eq!(active.config().bin.as_deref(), Some("kernel-qemu"));
+        assert_eq!(active.config_path(), Some(config_path.as_path()));
+        assert_eq!(active.variable_scope().package_dir(), temp.path());
+    }
+
+    #[test]
+    fn activate_build_context_rejects_selector_for_custom_build() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("Cargo.toml"),
+            "[package]\nname = \"kernel\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(temp.path().join("src")).unwrap();
+        fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+        let layout = resolve_project_layout(Some(temp.path().to_path_buf())).unwrap();
+        let config = BuildConfig {
+            system: BuildSystem::Custom(Custom {
+                build_cmd: "make".into(),
+                elf_path: "target/kernel.elf".into(),
+                to_bin: true,
+            }),
+        };
+
+        let err = activate_build_context(
+            &layout,
+            config,
+            None,
+            &CargoSelector::new(Some("kernel".into()), None),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("--package/--bin can only be used with system.Cargo")
+        );
     }
 }

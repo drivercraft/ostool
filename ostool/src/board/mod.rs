@@ -185,7 +185,7 @@ impl Tool {
         cargo: &Cargo,
         path: &Path,
     ) -> anyhow::Result<BoardRunConfig> {
-        self.sync_cargo_context(cargo);
+        self.sync_cargo_context(cargo)?;
         let scope = self.variable_scope()?;
         let path = variables::expand_path_variables(path, &scope)?;
         BoardRunConfig::read_from_path(&scope, path)
@@ -196,7 +196,7 @@ impl Tool {
         cargo: &Cargo,
         dir: &Path,
     ) -> anyhow::Result<BoardRunConfig> {
-        self.sync_cargo_context(cargo);
+        self.sync_cargo_context(cargo)?;
         let scope = self.variable_scope()?;
         let dir = variables::expand_path_variables(dir, &scope)?;
         BoardRunConfig::load_or_create(&scope, Some(dir.join(".board.toml"))).await
@@ -236,7 +236,7 @@ impl Tool {
         board_config: &BoardRunConfig,
         options: RunBoardOptions,
     ) -> anyhow::Result<()> {
-        self.sync_cargo_context(cargo);
+        self.sync_cargo_context(cargo)?;
         self.run_board_with_build_config(
             &BuildConfig {
                 system: BuildSystem::Cargo(cargo.clone()),

@@ -1,0 +1,38 @@
+error[E0603]: struct `CargoSelector` is private
+ --> tests/ui/fail_build_activation_api.rs:4:9
+  |
+4 |         CargoSelector, apply_cargo_selector,
+  |         ^^^^^^^^^^^^^ private struct
+  |
+note: the struct `CargoSelector` is defined here
+ --> src/build/mod.rs
+  |
+  | pub(crate) struct CargoSelector {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0603]: function `apply_cargo_selector` is private
+ --> tests/ui/fail_build_activation_api.rs:4:24
+  |
+4 |         CargoSelector, apply_cargo_selector,
+  |                        ^^^^^^^^^^^^^^^^^^^^ private function
+  |
+note: the function `apply_cargo_selector` is defined here
+ --> src/build/mod.rs
+  |
+  | / fn apply_cargo_selector(
+  | |     config: &mut config::BuildConfig,
+  | |     selector: &CargoSelector,
+  | | ) -> anyhow::Result<()> {
+  | |_______________________^
+
+error[E0599]: no method named `activate_build_config` found for struct `Tool` in the current scope
+  --> tests/ui/fail_build_activation_api.rs:17:10
+   |
+17 |     tool.activate_build_config(&mut config, &selector).unwrap();
+   |          ^^^^^^^^^^^^^^^^^^^^^
+   |
+help: there is a method `default_build_config` with a similar name, but with different arguments
+  --> src/build/mod.rs
+   |
+   |     pub fn default_build_config(&self) -> config::BuildConfig {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
