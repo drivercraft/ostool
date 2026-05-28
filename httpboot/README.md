@@ -10,7 +10,7 @@ Current status:
 - The loader opens Loaded Image Protocol, reads its file path URI, and derives the sibling `manifest.json` URL.
 - The loader uses UEFI HTTP Protocol to download `manifest.json` and the kernel `.bin`.
 - The loader places the kernel at `kernel_load_addr`, prepares memory-map and `ExitBootServices` state, and prints the entry plan.
-- The final boot jump is behind a default-off compile-time safety switch.
+- The final boot jump is behind the default-off `boot-jump` feature.
 
 Build the x86_64 loader after installing the target:
 
@@ -19,6 +19,13 @@ rustup target add x86_64-unknown-uefi
 cargo build -p httpboot --features uefi-app --target x86_64-unknown-uefi
 mkdir -p target/httpboot
 cp target/x86_64-unknown-uefi/debug/httpboot.efi target/httpboot/BOOTX64.EFI
+```
+
+The default build downloads and loads the kernel, prints the jump plan, and stops before `ExitBootServices`.
+Build with `boot-jump` only after the x86_64 AxVisor direct-entry ABI is ready:
+
+```bash
+cargo build -p httpboot --features boot-jump --target x86_64-unknown-uefi
 ```
 
 Then set:
