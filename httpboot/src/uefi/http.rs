@@ -11,7 +11,7 @@ use crate::uefi::abi::{
     boot_services_from_system_table,
 };
 use crate::uefi::console::{write_console, write_status, write_usize, write_utf16_nul};
-use crate::uefi::entry::{EntryPlan, call_entry_point, print_entry_plan};
+use crate::uefi::entry::{EntryPlan, call_entry_point, print_entry_plan, target_matches_manifest};
 use httpboot::parse_downloaded_manifest;
 
 const UTF16_URL_BUFFER_SIZE: usize = 1024;
@@ -21,16 +21,27 @@ const HTTP_COMPLETION_POLL_LIMIT: usize = 100_000;
 const MAX_KERNEL_DOWNLOAD_SIZE: usize = 256 * 1024 * 1024;
 const EFI_PAGE_SIZE: usize = 4096;
 const MEMORY_MAP_BUFFER_SIZE: usize = 64 * 1024;
-const ENABLE_BOOT_JUMP: bool = false;
+const ENABLE_BOOT_JUMP: bool = cfg!(feature = "boot-jump");
 
-pub fn print_http_protocol_probe(
+pub fn run_http_boot_loader(
     console: *mut EfiSimpleTextOutputProtocol,
     image: EfiHandle,
     system_table: *mut EfiSystemTable,
     manifest_url: Option<&str>,
 ) {
+    write_console(console, "httpboot_loader_start\r\n");
+    write_console(console, "boot_jump_feature: ");
+    write_console(
+        console,
+        if ENABLE_BOOT_JUMP {
+            "enabled\r\n"
+        } else {
+            "disabled\r\n"
+        },
+    );
+
     let Some(boot_services) = boot_services_from_system_table(system_table) else {
-        write_console(console, "failed to access Boot Services for HTTP probe\r\n");
+        write_console(console, "failed to access Boot Services for HTTP Boot\r\n");
         return;
     };
 
@@ -55,7 +66,7 @@ pub fn print_http_protocol_probe(
         Err(_) => write_console(console, "failed to locate HTTP Protocol\r\n"),
     }
 
-    probe_http_child(console, boot_services, image, manifest_url);
+    run_http_child(console, boot_services, image, manifest_url);
 }
 
 fn count_protocol_handles(
@@ -121,7 +132,7 @@ fn open_protocol_on_handle<T>(
     Ok(interface as *mut T)
 }
 
-fn probe_http_child(
+fn run_http_child(
     console: *mut EfiSimpleTextOutputProtocol,
     boot_services: &mut EfiBootServices,
     image: EfiHandle,
@@ -398,6 +409,11 @@ fn print_manifest_response(
             write_console(console, "manifest_arch: ");
             write_console(console, manifest.arch);
             write_console(console, "\r\n");
+            if !target_matches_manifest(manifest.arch) {
+                write_console(console, "manifest_arch_rejected: target mismatch\r\n");
+                free_response_headers(boot_services, message);
+                return;
+            }
             write_console(console, "manifest_kernel_url: ");
             write_console(console, manifest.kernel_url);
             write_console(console, "\r\n");

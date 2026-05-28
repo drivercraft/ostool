@@ -18,7 +18,7 @@ use uefi::abi::{EFI_SUCCESS, EFI_UNSUPPORTED, EfiHandle, EfiStatus, EfiSystemTab
 #[cfg(target_os = "uefi")]
 use uefi::console::write_console;
 #[cfg(target_os = "uefi")]
-use uefi::http::print_http_protocol_probe;
+use uefi::http::run_http_boot_loader;
 #[cfg(target_os = "uefi")]
 use uefi::loaded_image::{LoaderError, loader_url_from_loaded_image};
 
@@ -91,11 +91,7 @@ pub extern "efiapi" fn efi_main(image: EfiHandle, system_table: *mut EfiSystemTa
         }
     }
 
-    write_console(
-        console,
-        "HTTP download backend is pending; manifest bytes parser linked\r\n",
-    );
-    print_http_protocol_probe(console, image, system_table, manifest_url);
+    run_http_boot_loader(console, image, system_table, manifest_url);
 
     EFI_SUCCESS
 }

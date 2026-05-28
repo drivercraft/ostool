@@ -29,6 +29,10 @@ pub fn print_entry_plan(console: *mut EfiSimpleTextOutputProtocol, plan: &EntryP
     write_console(console, "\r\n");
 }
 
+pub fn target_matches_manifest(manifest_arch: &str) -> bool {
+    target_arch_name() == manifest_arch
+}
+
 #[allow(dead_code)]
 pub unsafe fn call_entry_point(plan: &EntryPlan<'_>) -> ! {
     unsafe { call_entry(plan.entry_point) }
