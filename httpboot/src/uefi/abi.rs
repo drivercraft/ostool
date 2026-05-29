@@ -9,7 +9,7 @@ pub type EfiAllocateType = u32;
 pub type EfiPhysicalAddress = u64;
 
 pub const EFI_LOCATE_BY_PROTOCOL: EfiLocateSearchType = 2;
-pub const EFI_ALLOCATE_ADDRESS: EfiAllocateType = 0;
+pub const EFI_ALLOCATE_ADDRESS: EfiAllocateType = 2;
 pub const EFI_LOADER_DATA: EfiMemoryType = 2;
 
 #[repr(transparent)]
@@ -19,6 +19,8 @@ pub struct EfiStatus(pub usize);
 pub const EFI_SUCCESS: EfiStatus = EfiStatus(0);
 pub const EFI_ERROR_BIT: usize = 1usize << (usize::BITS - 1);
 pub const EFI_UNSUPPORTED: EfiStatus = EfiStatus(EFI_ERROR_BIT | 3);
+pub const EFI_NO_MAPPING: EfiStatus = EfiStatus(EFI_ERROR_BIT | 17);
+pub const EFI_TIMEOUT: EfiStatus = EfiStatus(EFI_ERROR_BIT | 18);
 pub const EFI_NOT_READY: EfiStatus = EfiStatus(EFI_ERROR_BIT | 6);
 
 pub const EFI_LOADED_IMAGE_PROTOCOL_GUID: EfiGuid = EfiGuid {
@@ -47,6 +49,7 @@ pub const TPL_CALLBACK: usize = 8;
 pub const HTTP_VERSION_11: u32 = 1;
 pub const HTTP_METHOD_GET: u32 = 0;
 pub const HTTP_STATUS_200_OK: u32 = 3;
+pub const HTTP_STATUS_206_PARTIAL_CONTENT: u32 = 9;
 
 #[repr(C)]
 pub struct EfiGuid {
@@ -129,7 +132,7 @@ pub struct EfiBootServices {
     pub exit_boot_services:
         extern "efiapi" fn(image_handle: EfiHandle, map_key: usize) -> EfiStatus,
     pub _get_next_monotonic_count: usize,
-    pub _stall: usize,
+    pub stall: extern "efiapi" fn(microseconds: usize) -> EfiStatus,
     pub _set_watchdog_timer: usize,
     pub _connect_controller: usize,
     pub _disconnect_controller: usize,
