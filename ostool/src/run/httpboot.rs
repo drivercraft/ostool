@@ -413,7 +413,6 @@ fn uefi_boot_arch_name(arch: &UefiBootArch) -> &'static str {
         UefiBootArch::Riscv64 => "riscv64",
         UefiBootArch::Other => "other",
     }
-    
 }
 
 fn normalize_required_string(

@@ -2,12 +2,13 @@ use core::ffi::c_void;
 
 use crate::uefi::abi::{
     EFI_ALLOCATE_ADDRESS, EFI_HTTP_PROTOCOL_GUID, EFI_HTTP_SERVICE_BINDING_PROTOCOL_GUID,
-    EFI_LOADER_DATA, EFI_LOCATE_BY_PROTOCOL, EFI_NOT_READY, EFI_UNSUPPORTED, EVT_NOTIFY_SIGNAL,
-    EfiBootServices, EfiEvent, EfiGuid, EfiHandle, EfiHttpConfigAccessPoint, EfiHttpConfigData,
-    EfiHttpMessage, EfiHttpMessageData, EfiHttpProtocol, EfiHttpRequestData, EfiHttpResponseData,
-    EfiHttpToken, EfiHttpv4AccessPoint, EfiMemoryDescriptor, EfiPhysicalAddress,
-    EfiServiceBindingProtocol, EfiSimpleTextOutputProtocol, EfiStatus, EfiSystemTable,
-    HTTP_METHOD_GET, HTTP_STATUS_200_OK, HTTP_VERSION_11, TPL_CALLBACK,
+    EFI_LOADER_DATA, EFI_LOCATE_BY_PROTOCOL, EFI_NO_MAPPING, EFI_NOT_READY, EFI_TIMEOUT,
+    EFI_UNSUPPORTED, EVT_NOTIFY_SIGNAL, EfiBootServices, EfiEvent, EfiGuid, EfiHandle,
+    EfiHttpConfigAccessPoint, EfiHttpConfigData, EfiHttpHeader, EfiHttpMessage, EfiHttpMessageData,
+    EfiHttpProtocol, EfiHttpRequestData, EfiHttpResponseData, EfiHttpToken, EfiHttpv4AccessPoint,
+    EfiMemoryDescriptor, EfiPhysicalAddress, EfiServiceBindingProtocol,
+    EfiSimpleTextOutputProtocol, EfiStatus, EfiSystemTable, HTTP_METHOD_GET, HTTP_STATUS_200_OK,
+    HTTP_STATUS_206_PARTIAL_CONTENT, HTTP_VERSION_11, TPL_CALLBACK,
     boot_services_from_system_table,
 };
 use crate::uefi::console::{write_console, write_status, write_usize, write_utf16_nul};
@@ -15,9 +16,13 @@ use crate::uefi::entry::{EntryPlan, call_entry_point, print_entry_plan, target_m
 use httpboot::parse_downloaded_manifest;
 
 const UTF16_URL_BUFFER_SIZE: usize = 1024;
+const HTTP_HOST_BUFFER_SIZE: usize = 256;
 const MANIFEST_BODY_BUFFER_SIZE: usize = 4096;
-const KERNEL_RESPONSE_CHUNK_SIZE: usize = 16 * 1024;
+const KERNEL_RANGE_CHUNK_SIZE: usize = 1024;
 const HTTP_COMPLETION_POLL_LIMIT: usize = 100_000;
+const HTTP_REQUEST_RETRY_LIMIT: usize = 8;
+const HTTP_REQUEST_RETRY_STALL_US: usize = 250_000;
+const KERNEL_PROGRESS_STEP: usize = 256 * 1024;
 const MAX_KERNEL_DOWNLOAD_SIZE: usize = 256 * 1024 * 1024;
 const EFI_PAGE_SIZE: usize = 4096;
 const MEMORY_MAP_BUFFER_SIZE: usize = 64 * 1024;
@@ -201,11 +206,7 @@ fn run_http_child(
 
     if !configure_status.is_error() {
         if let Some(manifest_url) = manifest_url {
-            let mut url_buffer = [0u16; UTF16_URL_BUFFER_SIZE];
-            match write_utf16_nul(manifest_url, &mut url_buffer) {
-                Ok(url) => request_manifest(console, boot_services, image, http_protocol, url),
-                Err(_) => write_console(console, "http_request_skipped: URL too long\r\n"),
-            }
+            request_manifest(console, boot_services, image, http_protocol, manifest_url);
         } else {
             write_console(
                 console,
@@ -228,8 +229,29 @@ fn request_manifest(
     boot_services: &mut EfiBootServices,
     image: EfiHandle,
     http_protocol: *mut EfiHttpProtocol,
-    url: *mut u16,
+    manifest_url: &str,
 ) {
+    let mut url_buffer = [0u16; UTF16_URL_BUFFER_SIZE];
+    let url = match write_utf16_nul(manifest_url, &mut url_buffer) {
+        Ok(url) => url,
+        Err(_) => {
+            write_console(console, "http_request_skipped: URL too long\r\n");
+            return;
+        }
+    };
+    let mut host_name = *b"Host\0";
+    let mut host_value = [0u8; HTTP_HOST_BUFFER_SIZE];
+    let host = match write_url_host_header_value(manifest_url, &mut host_value) {
+        Ok(host) => host,
+        Err(()) => {
+            write_console(console, "http_request_skipped: invalid URL host\r\n");
+            return;
+        }
+    };
+    write_console(console, "http_request_host: ");
+    write_console(console, host);
+    write_console(console, "\r\n");
+
     let mut event = core::ptr::null_mut();
     let event_status = (boot_services.create_event)(
         EVT_NOTIFY_SIGNAL,
@@ -245,6 +267,10 @@ fn request_manifest(
         return;
     }
 
+    let mut headers = [EfiHttpHeader {
+        field_name: host_name.as_mut_ptr(),
+        field_value: host_value.as_mut_ptr(),
+    }];
     let mut request_data = EfiHttpRequestData {
         method: HTTP_METHOD_GET,
         url,
@@ -253,8 +279,8 @@ fn request_manifest(
         data: EfiHttpMessageData {
             request: &mut request_data,
         },
-        header_count: 0,
-        headers: core::ptr::null_mut(),
+        header_count: headers.len(),
+        headers: headers.as_mut_ptr(),
         body_length: 0,
         body: core::ptr::null_mut(),
     };
@@ -264,7 +290,7 @@ fn request_manifest(
         message: &mut message,
     };
 
-    let request_status = unsafe { ((*http_protocol).request)(http_protocol, &mut token) };
+    let request_status = submit_request_with_retries(boot_services, http_protocol, &mut token);
     write_console(console, "http_request_status: ");
     write_status(console, request_status);
     write_console(console, "\r\n");
@@ -287,6 +313,31 @@ fn request_manifest(
 
 extern "efiapi" fn noop_event_notify(_event: EfiEvent, _context: *mut c_void) {}
 
+fn submit_request_with_retries(
+    boot_services: &mut EfiBootServices,
+    http_protocol: *mut EfiHttpProtocol,
+    token: &mut EfiHttpToken,
+) -> EfiStatus {
+    let mut status = EFI_NOT_READY;
+    for attempt in 0..HTTP_REQUEST_RETRY_LIMIT {
+        token.status = EFI_NOT_READY;
+        status = unsafe { ((*http_protocol).request)(http_protocol, token) };
+        if !is_transient_http_submit_status(status) {
+            return status;
+        }
+
+        for _ in 0..8 {
+            let _ = unsafe { ((*http_protocol).poll)(http_protocol) };
+        }
+        let _ = (boot_services.stall)(HTTP_REQUEST_RETRY_STALL_US * (attempt + 1));
+    }
+    status
+}
+
+fn is_transient_http_submit_status(status: EfiStatus) -> bool {
+    status == EFI_NO_MAPPING || status == EFI_NOT_READY || status == EFI_TIMEOUT
+}
+
 fn poll_http_token(http_protocol: *mut EfiHttpProtocol, token: &EfiHttpToken) -> EfiStatus {
     for _ in 0..HTTP_COMPLETION_POLL_LIMIT {
         let status = unsafe { core::ptr::read_volatile(&token.status) };
@@ -296,6 +347,23 @@ fn poll_http_token(http_protocol: *mut EfiHttpProtocol, token: &EfiHttpToken) ->
         let _ = unsafe { ((*http_protocol).poll)(http_protocol) };
     }
     unsafe { core::ptr::read_volatile(&token.status) }
+}
+
+fn write_url_host_header_value<'a>(url: &str, output: &'a mut [u8]) -> Result<&'a str, ()> {
+    let scheme_end = url.find("://").ok_or(())?;
+    let authority = &url[scheme_end + 3..];
+    let host_end = authority.find('/').unwrap_or(authority.len());
+    if host_end == 0 {
+        return Err(());
+    }
+
+    let host = &authority[..host_end];
+    if host.len() + 1 > output.len() {
+        return Err(());
+    }
+    output[..host.len()].copy_from_slice(host.as_bytes());
+    output[host.len()] = 0;
+    core::str::from_utf8(&output[..host.len()]).map_err(|_| ())
 }
 
 fn receive_manifest_response(
@@ -455,14 +523,55 @@ fn request_kernel_probe(
     entry_point: u64,
     arch: &str,
 ) {
+    download_kernel_to_load_addr(
+        console,
+        boot_services,
+        image,
+        http_protocol,
+        kernel_url,
+        kernel_size,
+        kernel_load_addr,
+        entry_point,
+        arch,
+    );
+}
+
+fn request_kernel_range(
+    console: *mut EfiSimpleTextOutputProtocol,
+    boot_services: &mut EfiBootServices,
+    http_protocol: *mut EfiHttpProtocol,
+    kernel_url: &str,
+    range_start: usize,
+    range_end: usize,
+    dst: *mut u8,
+    expected_len: usize,
+    first: bool,
+) -> Option<usize> {
     let mut url_buffer = [0u16; UTF16_URL_BUFFER_SIZE];
     let url = match write_utf16_nul(kernel_url, &mut url_buffer) {
         Ok(url) => url,
         Err(_) => {
             write_console(console, "kernel_request_skipped: URL too long\r\n");
-            return;
+            return None;
         }
     };
+    let mut host_name = *b"Host\0";
+    let mut host_value = [0u8; HTTP_HOST_BUFFER_SIZE];
+    let host = match write_url_host_header_value(kernel_url, &mut host_value) {
+        Ok(host) => host,
+        Err(()) => {
+            write_console(console, "kernel_request_skipped: invalid URL host\r\n");
+            return None;
+        }
+    };
+    let mut range_name = *b"Range\0";
+    let mut range_value = [0u8; 64];
+    write_range_header_value(range_start, range_end, &mut range_value)?;
+    if first {
+        write_console(console, "kernel_request_host: ");
+        write_console(console, host);
+        write_console(console, "\r\n");
+    }
 
     let mut event = core::ptr::null_mut();
     let event_status = (boot_services.create_event)(
@@ -472,13 +581,25 @@ fn request_kernel_probe(
         core::ptr::null_mut(),
         &mut event,
     );
-    write_console(console, "kernel_request_event_status: ");
-    write_status(console, event_status);
-    write_console(console, "\r\n");
+    if first {
+        write_console(console, "kernel_request_event_status: ");
+        write_status(console, event_status);
+        write_console(console, "\r\n");
+    }
     if event_status.is_error() || event.is_null() {
-        return;
+        return None;
     }
 
+    let mut headers = [
+        EfiHttpHeader {
+            field_name: host_name.as_mut_ptr(),
+            field_value: host_value.as_mut_ptr(),
+        },
+        EfiHttpHeader {
+            field_name: range_name.as_mut_ptr(),
+            field_value: range_value.as_mut_ptr(),
+        },
+    ];
     let mut request_data = EfiHttpRequestData {
         method: HTTP_METHOD_GET,
         url,
@@ -487,8 +608,8 @@ fn request_kernel_probe(
         data: EfiHttpMessageData {
             request: &mut request_data,
         },
-        header_count: 0,
-        headers: core::ptr::null_mut(),
+        header_count: headers.len(),
+        headers: headers.as_mut_ptr(),
         body_length: 0,
         body: core::ptr::null_mut(),
     };
@@ -498,34 +619,53 @@ fn request_kernel_probe(
         message: &mut message,
     };
 
-    let request_status = unsafe { ((*http_protocol).request)(http_protocol, &mut token) };
-    write_console(console, "kernel_request_status: ");
-    write_status(console, request_status);
-    write_console(console, "\r\n");
+    let request_status = submit_request_with_retries(boot_services, http_protocol, &mut token);
+    if first || request_status.is_error() {
+        write_console(console, "kernel_request_status: ");
+        write_status(console, request_status);
+        write_console(console, "\r\n");
+    }
 
     if !request_status.is_error() {
         let completion = poll_http_token(http_protocol, &token);
-        write_console(console, "kernel_request_completion: ");
-        write_status(console, completion);
-        write_console(console, "\r\n");
-        if !completion.is_error() {
-            download_kernel_to_load_addr(
-                console,
-                boot_services,
-                image,
-                http_protocol,
-                kernel_size,
-                kernel_load_addr,
-                entry_point,
-                arch,
-            );
+        if first || completion.is_error() {
+            write_console(console, "kernel_request_completion: ");
+            write_status(console, completion);
+            write_console(console, "\r\n");
         }
+        if completion.is_error() {
+            let close_status = (boot_services.close_event)(event);
+            if first {
+                write_console(console, "kernel_request_close_event_status: ");
+                write_status(console, close_status);
+                write_console(console, "\r\n");
+            }
+            return None;
+        }
+        let received = receive_kernel_range_body(
+            console,
+            boot_services,
+            http_protocol,
+            dst,
+            expected_len,
+            first,
+        );
+        let close_status = (boot_services.close_event)(event);
+        if first {
+            write_console(console, "kernel_request_close_event_status: ");
+            write_status(console, close_status);
+            write_console(console, "\r\n");
+        }
+        return received;
     }
 
     let close_status = (boot_services.close_event)(event);
-    write_console(console, "kernel_request_close_event_status: ");
-    write_status(console, close_status);
-    write_console(console, "\r\n");
+    if first {
+        write_console(console, "kernel_request_close_event_status: ");
+        write_status(console, close_status);
+        write_console(console, "\r\n");
+    }
+    None
 }
 
 fn download_kernel_to_load_addr(
@@ -533,6 +673,7 @@ fn download_kernel_to_load_addr(
     boot_services: &mut EfiBootServices,
     image: EfiHandle,
     http_protocol: *mut EfiHttpProtocol,
+    kernel_url: &str,
     expected_kernel_size: u64,
     kernel_load_addr: u64,
     entry_point: u64,
@@ -566,36 +707,21 @@ fn download_kernel_to_load_addr(
         return;
     }
 
-    let mut downloaded = 0usize;
-    let mut checksum = 0u32;
-    let mut complete = false;
-
-    while downloaded < expected_size {
-        let remaining = expected_size - downloaded;
-        let chunk_len = remaining.min(KERNEL_RESPONSE_CHUNK_SIZE);
-        let chunk = unsafe { (kernel_load_addr as *mut u8).add(downloaded) };
-        let Some(received) =
-            receive_kernel_chunk(console, boot_services, http_protocol, chunk, chunk_len)
-        else {
-            break;
-        };
-
-        if received == 0 {
-            write_console(console, "kernel_download_stopped: zero length chunk\r\n");
-            break;
-        }
-
-        checksum = checksum_add(checksum, unsafe {
-            core::slice::from_raw_parts(chunk, received)
-        });
-        downloaded += received;
-        if downloaded == expected_size {
-            complete = true;
-        }
-    }
+    let received = download_kernel_ranges(
+        console,
+        boot_services,
+        http_protocol,
+        kernel_url,
+        kernel_load_addr,
+        expected_size,
+    );
+    let checksum = checksum_add(0, unsafe {
+        core::slice::from_raw_parts(kernel_load_addr as *const u8, received)
+    });
+    let complete = received == expected_size;
 
     write_console(console, "kernel_downloaded_size: ");
-    write_usize(console, downloaded);
+    write_usize(console, received);
     write_console(console, "\r\n");
     write_console(console, "kernel_expected_size: ");
     write_usize(console, expected_size);
@@ -669,13 +795,152 @@ fn kernel_page_count(
         })
 }
 
-fn receive_kernel_chunk(
+fn download_kernel_ranges(
     console: *mut EfiSimpleTextOutputProtocol,
     boot_services: &mut EfiBootServices,
     http_protocol: *mut EfiHttpProtocol,
-    chunk: *mut u8,
-    chunk_len: usize,
+    kernel_url: &str,
+    kernel_load_addr: u64,
+    expected_size: usize,
+) -> usize {
+    let mut downloaded = 0usize;
+    let mut next_progress = KERNEL_PROGRESS_STEP;
+
+    while downloaded < expected_size {
+        let chunk_len = (expected_size - downloaded).min(KERNEL_RANGE_CHUNK_SIZE);
+        let range_start = downloaded;
+        let range_end = downloaded + chunk_len - 1;
+        let dst = unsafe { (kernel_load_addr as *mut u8).add(downloaded) };
+        let first = downloaded == 0;
+        let Some(received) = request_kernel_range(
+            console,
+            boot_services,
+            http_protocol,
+            kernel_url,
+            range_start,
+            range_end,
+            dst,
+            chunk_len,
+            first,
+        ) else {
+            write_console(console, "kernel_download_stopped_at: ");
+            write_usize(console, downloaded);
+            write_console(console, "\r\n");
+            break;
+        };
+        if received == 0 {
+            write_console(console, "kernel_download_stopped: zero length chunk\r\n");
+            break;
+        }
+        downloaded += received;
+        if downloaded >= next_progress || downloaded == expected_size {
+            write_console(console, "kernel_download_progress: ");
+            write_usize(console, downloaded);
+            write_console(console, "\r\n");
+            while next_progress <= downloaded {
+                next_progress += KERNEL_PROGRESS_STEP;
+            }
+        }
+    }
+
+    downloaded
+}
+
+fn write_range_header_value(start: usize, end: usize, output: &mut [u8]) -> Option<()> {
+    let mut writer = ByteWriter::new(output);
+    writer.write_bytes(b"bytes=")?;
+    writer.write_usize(start)?;
+    writer.write_byte(b'-')?;
+    writer.write_usize(end)?;
+    writer.finish()
+}
+
+struct ByteWriter<'a> {
+    output: &'a mut [u8],
+    len: usize,
+}
+
+impl<'a> ByteWriter<'a> {
+    fn new(output: &'a mut [u8]) -> Self {
+        Self { output, len: 0 }
+    }
+
+    fn write_byte(&mut self, byte: u8) -> Option<()> {
+        if self.len + 1 >= self.output.len() {
+            return None;
+        }
+        self.output[self.len] = byte;
+        self.len += 1;
+        Some(())
+    }
+
+    fn write_bytes(&mut self, bytes: &[u8]) -> Option<()> {
+        for byte in bytes {
+            self.write_byte(*byte)?;
+        }
+        Some(())
+    }
+
+    fn write_usize(&mut self, mut value: usize) -> Option<()> {
+        let mut digits = [0u8; 20];
+        let mut len = 0usize;
+        if value == 0 {
+            return self.write_byte(b'0');
+        }
+        while value > 0 && len < digits.len() {
+            digits[len] = b'0' + (value % 10) as u8;
+            value /= 10;
+            len += 1;
+        }
+        while len > 0 {
+            len -= 1;
+            self.write_byte(digits[len])?;
+        }
+        Some(())
+    }
+
+    fn finish(&mut self) -> Option<()> {
+        if self.len >= self.output.len() {
+            return None;
+        }
+        self.output[self.len] = 0;
+        Some(())
+    }
+}
+
+fn receive_kernel_range_body(
+    console: *mut EfiSimpleTextOutputProtocol,
+    boot_services: &mut EfiBootServices,
+    http_protocol: *mut EfiHttpProtocol,
+    body: *mut u8,
+    body_len: usize,
+    first: bool,
 ) -> Option<usize> {
+    let response =
+        receive_kernel_stream_chunk(console, boot_services, http_protocol, body, body_len, first)?;
+    if response.http_status != HTTP_STATUS_206_PARTIAL_CONTENT {
+        write_console(
+            console,
+            "kernel_download_stopped: HTTP status is not 206\r\n",
+        );
+        return None;
+    }
+    Some(response.received)
+}
+
+struct KernelChunkResponse {
+    received: usize,
+    http_status: u32,
+}
+
+fn receive_kernel_stream_chunk(
+    console: *mut EfiSimpleTextOutputProtocol,
+    boot_services: &mut EfiBootServices,
+    http_protocol: *mut EfiHttpProtocol,
+    body: *mut u8,
+    body_len: usize,
+    first: bool,
+) -> Option<KernelChunkResponse> {
     let mut event = core::ptr::null_mut();
     let event_status = (boot_services.create_event)(
         EVT_NOTIFY_SIGNAL,
@@ -684,22 +949,26 @@ fn receive_kernel_chunk(
         core::ptr::null_mut(),
         &mut event,
     );
-    write_console(console, "kernel_response_event_status: ");
-    write_status(console, event_status);
-    write_console(console, "\r\n");
+    if first {
+        write_console(console, "kernel_response_event_status: ");
+        write_status(console, event_status);
+        write_console(console, "\r\n");
+    }
     if event_status.is_error() || event.is_null() {
         return None;
     }
 
-    let mut response_data = EfiHttpResponseData { status_code: 0 };
+    let mut response_data = EfiHttpResponseData {
+        status_code: HTTP_STATUS_200_OK,
+    };
     let mut message = EfiHttpMessage {
         data: EfiHttpMessageData {
             response: &mut response_data,
         },
         header_count: 0,
         headers: core::ptr::null_mut(),
-        body_length: chunk_len,
-        body: chunk as *mut c_void,
+        body_length: body_len,
+        body: body as *mut c_void,
     };
     let mut token = EfiHttpToken {
         event,
@@ -708,32 +977,57 @@ fn receive_kernel_chunk(
     };
 
     let response_status = unsafe { ((*http_protocol).response)(http_protocol, &mut token) };
-    write_console(console, "kernel_response_status: ");
-    write_status(console, response_status);
-    write_console(console, "\r\n");
+    if first {
+        write_console(console, "kernel_response_status: ");
+        write_status(console, response_status);
+        write_console(console, "\r\n");
+    } else if response_status.is_error() {
+        write_console(console, "kernel_stream_response_status: ");
+        write_status(console, response_status);
+        write_console(console, "\r\n");
+    }
 
-    if !response_status.is_error() {
-        let completion = poll_http_token(http_protocol, &token);
+    if response_status.is_error() {
+        let close_status = (boot_services.close_event)(event);
+        if first {
+            write_console(console, "kernel_response_close_event_status: ");
+            write_status(console, close_status);
+            write_console(console, "\r\n");
+        }
+        return None;
+    }
+
+    let completion = poll_http_token(http_protocol, &token);
+    if first {
         write_console(console, "kernel_response_completion: ");
         write_status(console, completion);
         write_console(console, "\r\n");
         if !completion.is_error() {
             print_kernel_chunk_response(console, boot_services, &response_data, &message);
         }
+    } else {
+        if completion.is_error() {
+            write_console(console, "kernel_stream_response_completion: ");
+            write_status(console, completion);
+            write_console(console, "\r\n");
+        }
+        free_response_headers(boot_services, &message);
     }
 
     let close_status = (boot_services.close_event)(event);
-    write_console(console, "kernel_response_close_event_status: ");
-    write_status(console, close_status);
-    write_console(console, "\r\n");
+    if first {
+        write_console(console, "kernel_response_close_event_status: ");
+        write_status(console, close_status);
+        write_console(console, "\r\n");
+    }
 
-    if response_status.is_error() || token.status.is_error() {
+    if completion.is_error() {
         return None;
     }
-    if response_data.status_code != HTTP_STATUS_200_OK {
-        return None;
-    }
-    Some(message.body_length)
+    Some(KernelChunkResponse {
+        received: message.body_length,
+        http_status: response_data.status_code,
+    })
 }
 
 fn print_jump_readiness(
@@ -789,6 +1083,10 @@ fn print_jump_readiness(
             kernel_size,
         },
     );
+    let free_status = (boot_services.free_pages)(kernel_load_addr, page_count);
+    write_console(console, "jump_skip_free_pages_status: ");
+    write_status(console, free_status);
+    write_console(console, "\r\n");
     write_console(
         console,
         "jump_skipped: ExitBootServices and entry call pending\r\n",
@@ -876,29 +1174,6 @@ fn maybe_exit_boot_services(
     image: EfiHandle,
     entry_plan: &EntryPlan<'_>,
 ) {
-    let mut memory_map = [0u8; MEMORY_MAP_BUFFER_SIZE];
-    let mut probe = MemoryMapProbe::new();
-    let map_status = get_memory_map(
-        boot_services,
-        &mut probe,
-        memory_map.as_mut_ptr() as *mut EfiMemoryDescriptor,
-        memory_map.len(),
-    );
-    write_console(console, "exit_memory_map_status: ");
-    write_status(console, map_status);
-    write_console(console, "\r\n");
-    write_console(console, "exit_memory_map_key: ");
-    write_usize(console, probe.map_key);
-    write_console(console, "\r\n");
-
-    if map_status.is_error() {
-        write_console(
-            console,
-            "exit_boot_services_skipped: memory map unavailable\r\n",
-        );
-        return;
-    }
-
     if !ENABLE_BOOT_JUMP {
         write_console(
             console,
@@ -907,15 +1182,36 @@ fn maybe_exit_boot_services(
         return;
     }
 
-    let exit_status = (boot_services.exit_boot_services)(image, probe.map_key);
-    write_console(console, "exit_boot_services_status: ");
-    write_status(console, exit_status);
-    write_console(console, "\r\n");
-    if exit_status.is_error() {
+    let mut memory_map = [0u8; MEMORY_MAP_BUFFER_SIZE];
+    let mut probe = MemoryMapProbe::new();
+    let map_status = get_memory_map(
+        boot_services,
+        &mut probe,
+        memory_map.as_mut_ptr() as *mut EfiMemoryDescriptor,
+        memory_map.len(),
+    );
+    if !map_status.is_error() {
+        let exit_status = (boot_services.exit_boot_services)(image, probe.map_key);
+        if !exit_status.is_error() {
+            unsafe { call_entry_point(entry_plan) };
+        }
+        write_console(console, "exit_boot_services_status: ");
+        write_status(console, exit_status);
+        write_console(console, "\r\n");
         retry_exit_boot_services(console, boot_services, image, entry_plan);
-    } else {
-        unsafe { call_entry_point(entry_plan) };
+        return;
     }
+
+    write_console(console, "exit_memory_map_status: ");
+    write_status(console, map_status);
+    write_console(console, "\r\n");
+    write_console(console, "exit_memory_map_key: ");
+    write_usize(console, probe.map_key);
+    write_console(console, "\r\n");
+    write_console(
+        console,
+        "exit_boot_services_skipped: memory map unavailable\r\n",
+    );
 }
 
 fn retry_exit_boot_services(
@@ -932,20 +1228,20 @@ fn retry_exit_boot_services(
         memory_map.as_mut_ptr() as *mut EfiMemoryDescriptor,
         memory_map.len(),
     );
-    write_console(console, "exit_retry_memory_map_status: ");
-    write_status(console, map_status);
-    write_console(console, "\r\n");
     if map_status.is_error() {
+        write_console(console, "exit_retry_memory_map_status: ");
+        write_status(console, map_status);
+        write_console(console, "\r\n");
         return;
     }
 
     let exit_status = (boot_services.exit_boot_services)(image, probe.map_key);
-    write_console(console, "exit_retry_boot_services_status: ");
-    write_status(console, exit_status);
-    write_console(console, "\r\n");
     if !exit_status.is_error() {
         unsafe { call_entry_point(entry_plan) };
     }
+    write_console(console, "exit_retry_boot_services_status: ");
+    write_status(console, exit_status);
+    write_console(console, "\r\n");
 }
 
 fn print_kernel_chunk_response(
@@ -967,13 +1263,15 @@ fn print_kernel_chunk_response(
     write_usize(console, message.body_length);
     write_console(console, "\r\n");
 
-    if response_data.status_code != HTTP_STATUS_200_OK {
+    if response_data.status_code == HTTP_STATUS_200_OK
+        || response_data.status_code == HTTP_STATUS_206_PARTIAL_CONTENT
+    {
+        write_console(console, "kernel_chunk_received\r\n");
+    } else {
         write_console(
             console,
-            "kernel_download_stopped: HTTP status is not 200\r\n",
+            "kernel_download_stopped: unexpected HTTP status\r\n",
         );
-    } else {
-        write_console(console, "kernel_chunk_received\r\n");
     }
 
     free_response_headers(boot_services, message);

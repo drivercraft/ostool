@@ -1119,27 +1119,38 @@ async fn power_off_board(
 async fn get_http_boot_file(
     Path((board_id, path)): Path<(String, String)>,
     State(state): State<AppState>,
+    request: Request,
 ) -> Result<Response, ApiError> {
     let relative_path = parse_relative_path(&path)?;
-    read_http_boot_current_file(&state, &board_id, &relative_path).await
+    read_http_boot_current_file(&state, &board_id, &relative_path, request.headers()).await
 }
 
-async fn get_http_boot_short_loader(State(state): State<AppState>) -> Result<Response, ApiError> {
-    read_http_boot_current_file(&state, "l", "BOOTLOONGARCH64.EFI").await
+async fn get_http_boot_short_loader(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    read_http_boot_current_file(&state, "l", "BOOTLOONGARCH64.EFI", request.headers()).await
 }
 
-async fn get_http_boot_short_manifest(State(state): State<AppState>) -> Result<Response, ApiError> {
-    read_http_boot_current_file(&state, "l", "manifest.json").await
+async fn get_http_boot_short_manifest(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    read_http_boot_current_file(&state, "l", "manifest.json", request.headers()).await
 }
 
-async fn get_http_boot_short_kernel(State(state): State<AppState>) -> Result<Response, ApiError> {
-    read_http_boot_current_file(&state, "l", "kernel.bin").await
+async fn get_http_boot_short_kernel(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    read_http_boot_current_file(&state, "l", "kernel.bin", request.headers()).await
 }
 
 async fn read_http_boot_current_file(
     state: &AppState,
     board_id: &str,
     relative_path: &str,
+    headers: &HeaderMap,
 ) -> Result<Response, ApiError> {
     let config = state.config.read().await.clone();
     if !config.http_boot.enabled {
@@ -1154,18 +1165,62 @@ async fn read_http_boot_current_file(
         _ => ApiError::from(anyhow::Error::from(err)),
     })?;
     let content_type = from_path(&disk_path).first_or_octet_stream().to_string();
-    Ok((
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_str(&content_type).map_err(|err| {
-                ApiError::service_unavailable(format!(
-                    "invalid content type `{content_type}`: {err}"
-                ))
-            })?,
-        )],
-        body,
-    )
-        .into_response())
+    let content_type = HeaderValue::from_str(&content_type).map_err(|err| {
+        ApiError::service_unavailable(format!("invalid content type `{content_type}`: {err}"))
+    })?;
+    if let Some(range) = headers
+        .get(header::RANGE)
+        .and_then(|value| value.to_str().ok())
+    {
+        if let Some((start, end)) = parse_single_byte_range(range, body.len()) {
+            let chunk = body[start..=end].to_vec();
+            return Ok((
+                StatusCode::PARTIAL_CONTENT,
+                [
+                    (header::CONTENT_TYPE, content_type),
+                    (
+                        header::CONTENT_RANGE,
+                        HeaderValue::from_str(&format!("bytes {start}-{end}/{}", body.len()))
+                            .map_err(|err| {
+                                ApiError::service_unavailable(format!(
+                                    "invalid content range header: {err}"
+                                ))
+                            })?,
+                    ),
+                    (header::ACCEPT_RANGES, HeaderValue::from_static("bytes")),
+                ],
+                chunk,
+            )
+                .into_response());
+        }
+    }
+
+    Ok(([(header::CONTENT_TYPE, content_type)], body).into_response())
+}
+
+fn parse_single_byte_range(range: &str, len: usize) -> Option<(usize, usize)> {
+    let value = range.strip_prefix("bytes=")?;
+    if value.contains(',') {
+        return None;
+    }
+    let (start, end) = value.split_once('-')?;
+    if start.is_empty() {
+        return None;
+    }
+    let start = start.parse::<usize>().ok()?;
+    let mut end = if end.is_empty() {
+        len.checked_sub(1)?
+    } else {
+        end.parse::<usize>().ok()?
+    };
+    if start >= len {
+        return None;
+    }
+    end = end.min(len - 1);
+    if start > end {
+        return None;
+    }
+    Some((start, end))
 }
 
 async fn put_http_boot_file(
@@ -3321,6 +3376,27 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(kernel_body.as_ref(), b"kernel-image");
+
+        let range_kernel = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/boot/boards/uefi-http-01/current/kernel.bin")
+                    .header(header::RANGE, "bytes=0-5")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(range_kernel.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            range_kernel.headers()[header::CONTENT_RANGE],
+            "bytes 0-5/12"
+        );
+        let range_body = to_bytes(range_kernel.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(range_body.as_ref(), b"kernel");
 
         let download_manifest = app
             .clone()
