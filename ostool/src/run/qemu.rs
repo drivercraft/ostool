@@ -143,10 +143,26 @@ pub struct RunQemuOptions {
 
 #[derive(Clone, Debug)]
 pub(crate) struct QemuRunInput {
-    pub(crate) process_context: ProcessContext,
-    pub(crate) artifacts: OutputArtifacts,
-    pub(crate) arch: Option<Architecture>,
-    pub(crate) debug: bool,
+    process_context: ProcessContext,
+    artifacts: OutputArtifacts,
+    arch: Option<Architecture>,
+    debug: bool,
+}
+
+impl QemuRunInput {
+    pub(crate) fn new(
+        process_context: ProcessContext,
+        artifacts: OutputArtifacts,
+        arch: Option<Architecture>,
+        debug: bool,
+    ) -> Self {
+        Self {
+            process_context,
+            artifacts,
+            arch,
+            debug,
+        }
+    }
 }
 
 pub(crate) fn default_qemu_config(arch: Option<Architecture>) -> QemuConfig {
@@ -771,12 +787,12 @@ mod tests {
     }
 
     fn qemu_input(tool: &Tool) -> QemuRunInput {
-        QemuRunInput {
-            process_context: tool.process_context().unwrap(),
-            artifacts: tool.runtime_artifacts().clone(),
-            arch: tool.runtime_arch(),
-            debug: tool.debug_enabled(),
-        }
+        QemuRunInput::new(
+            tool.process_context().unwrap(),
+            tool.runtime_artifacts().clone(),
+            tool.runtime_arch(),
+            tool.debug_enabled(),
+        )
     }
 
     #[test]

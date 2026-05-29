@@ -465,12 +465,12 @@ impl Tool {
         if config.to_bin {
             self.ensure_runtime_bin()?;
         }
-        let input = crate::run::qemu::QemuRunInput {
-            process_context: self.process_context()?,
-            artifacts: self.runtime_artifacts().clone(),
-            arch: self.runtime_arch(),
-            debug: self.debug_enabled(),
-        };
+        let input = crate::run::qemu::QemuRunInput::new(
+            self.process_context()?,
+            self.runtime_artifacts().clone(),
+            self.runtime_arch(),
+            self.debug_enabled(),
+        );
         crate::run::qemu::run_qemu_with_config(input, options, config).await
     }
 
