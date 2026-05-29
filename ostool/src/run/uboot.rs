@@ -28,7 +28,7 @@ use tokio_util::compat::{
 use uboot_shell::UbootShell;
 
 use crate::{
-    Tool,
+    artifact::state::OutputArtifacts,
     board::{
         client::{
             BoardServerClient, BootConfig as RemoteBootConfig, BootProfileResponse,
@@ -40,6 +40,7 @@ use crate::{
             BoxedAsyncRead, BoxedAsyncWrite, SerialStreamTasks, connect_serial_stream,
         },
     },
+    process::ProcessContext,
     project::variables::{self, VariableScope},
     run::{
         output_matcher::{
@@ -304,96 +305,89 @@ pub struct RunUbootOptions {
     pub show_output: bool,
 }
 
-impl Tool {
-    pub fn default_uboot_config(&self) -> UbootConfig {
-        UbootConfig {
-            local: LocalUbootConfig {
-                serial: Some("/dev/ttyUSB0".to_string()),
-                baud_rate: Some("115200".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
+#[derive(Clone, Debug)]
+pub(crate) struct UbootRunInput {
+    process_context: ProcessContext,
+    artifacts: OutputArtifacts,
+    arch: Option<object::Architecture>,
+}
 
-    pub async fn read_uboot_config_from_path_for_cargo(
-        &mut self,
-        cargo: &crate::build::config::Cargo,
-        path: &Path,
-    ) -> anyhow::Result<UbootConfig> {
-        self.sync_cargo_context(cargo)?;
-        let scope = self.variable_scope()?;
-        let config_path = variables::expand_path_variables(path, &scope)?;
-        read_uboot_config_at_path(&scope, config_path).await
-    }
-
-    pub async fn ensure_uboot_config_for_cargo(
-        &mut self,
-        cargo: &crate::build::config::Cargo,
-    ) -> anyhow::Result<UbootConfig> {
-        self.sync_cargo_context(cargo)?;
-        let workspace_dir = self.workspace_dir().clone();
-        self.ensure_uboot_config_in_dir_for_cargo(cargo, &workspace_dir)
-            .await
-    }
-
-    pub async fn ensure_uboot_config_in_dir_for_cargo(
-        &mut self,
-        cargo: &crate::build::config::Cargo,
-        dir: &Path,
-    ) -> anyhow::Result<UbootConfig> {
-        self.sync_cargo_context(cargo)?;
-        let scope = self.variable_scope()?;
-        let dir = variables::expand_path_variables(dir, &scope)?;
-        ensure_uboot_config_at_path(&scope, dir.join(".uboot.toml"), self.default_uboot_config())
-            .await
-    }
-
-    pub async fn ensure_uboot_config_in_dir(&mut self, dir: &Path) -> anyhow::Result<UbootConfig> {
-        let scope = self.variable_scope()?;
-        let dir = variables::expand_path_variables(dir, &scope)?;
-        ensure_uboot_config_at_path(&scope, dir.join(".uboot.toml"), self.default_uboot_config())
-            .await
-    }
-
-    pub async fn read_uboot_config_from_path(
-        &mut self,
-        path: &Path,
-    ) -> anyhow::Result<UbootConfig> {
-        let scope = self.variable_scope()?;
-        let config_path = variables::expand_path_variables(path, &scope)?;
-        read_uboot_config_at_path(&scope, config_path).await
-    }
-
-    pub async fn run_uboot(
-        &mut self,
-        config: &UbootConfig,
-        options: RunUbootOptions,
-    ) -> anyhow::Result<()> {
-        let _ = options.show_output;
-        let mut config = config.clone();
-        let scope = self.variable_scope()?;
-        config.replace_strings(&scope)?;
-        config.normalize("U-Boot runtime config")?;
-        let backend = LocalBackend::new(config.local.clone());
-        let mut runner = Runner::new(self, config, backend);
-        runner.run().await
-    }
-
-    pub async fn run_uboot_remote(
-        &mut self,
-        board_config: &BoardRunConfig,
-        client: BoardServerClient,
-        session: SessionCreatedResponse,
-    ) -> anyhow::Result<()> {
-        let config = UbootConfig::from_board_run_config(board_config);
-        let backend = RemoteBackend::new(client, session);
-        let mut runner = Runner::new(self, config, backend);
-        runner.run().await
+impl UbootRunInput {
+    pub(crate) fn new(
+        process_context: ProcessContext,
+        artifacts: OutputArtifacts,
+        arch: Option<object::Architecture>,
+    ) -> anyhow::Result<Self> {
+        artifacts.require_bin("U-Boot runner requires a prepared BIN artifact")?;
+        Ok(Self {
+            process_context,
+            artifacts,
+            arch,
+        })
     }
 }
 
-async fn read_uboot_config_at_path(
+pub(crate) fn default_uboot_config() -> UbootConfig {
+    UbootConfig {
+        local: LocalUbootConfig {
+            serial: Some("/dev/ttyUSB0".to_string()),
+            baud_rate: Some("115200".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+pub(crate) async fn read_uboot_config_from_path(
+    variables: &VariableScope,
+    path: &Path,
+) -> anyhow::Result<UbootConfig> {
+    let config_path = variables::expand_path_variables(path, variables)?;
+    read_uboot_config_at_path(variables, config_path).await
+}
+
+pub(crate) async fn ensure_uboot_config_in_dir(
+    variables: &VariableScope,
+    dir: &Path,
+) -> anyhow::Result<UbootConfig> {
+    let dir = variables::expand_path_variables(dir, variables)?;
+    ensure_uboot_config_at_path(variables, dir.join(".uboot.toml"), default_uboot_config()).await
+}
+
+pub(crate) fn prepare_uboot_runtime_config(
+    variables: &VariableScope,
+    config: &UbootConfig,
+) -> anyhow::Result<UbootConfig> {
+    let mut config = config.clone();
+    config.replace_strings(variables)?;
+    config.normalize("U-Boot runtime config")?;
+    Ok(config)
+}
+
+pub(crate) async fn run_uboot_with_config(
+    input: UbootRunInput,
+    config: UbootConfig,
+    options: RunUbootOptions,
+) -> anyhow::Result<()> {
+    let _ = options.show_output;
+    let backend = LocalBackend::new(config.local.clone());
+    let mut runner = Runner::new(input, config, backend);
+    runner.run().await
+}
+
+pub(crate) async fn run_uboot_remote(
+    input: UbootRunInput,
+    board_config: &BoardRunConfig,
+    client: BoardServerClient,
+    session: SessionCreatedResponse,
+) -> anyhow::Result<()> {
+    let config = UbootConfig::from_board_run_config(board_config);
+    let backend = RemoteBackend::new(client, session);
+    let mut runner = Runner::new(input, config, backend);
+    runner.run().await
+}
+
+pub(crate) async fn read_uboot_config_at_path(
     variables: &VariableScope,
     config_path: PathBuf,
 ) -> anyhow::Result<UbootConfig> {
@@ -410,7 +404,7 @@ async fn read_uboot_config_at_path(
     Ok(config)
 }
 
-async fn ensure_uboot_config_at_path(
+pub(crate) async fn ensure_uboot_config_at_path(
     variables: &VariableScope,
     config_path: PathBuf,
     default_config: UbootConfig,
@@ -432,8 +426,8 @@ async fn ensure_uboot_config_at_path(
     Ok(config)
 }
 
-struct Runner<'a, B> {
-    tool: &'a mut Tool,
+struct Runner<B> {
+    input: UbootRunInput,
     config: UbootConfig,
     success_regex: Vec<regex::Regex>,
     fail_regex: Vec<regex::Regex>,
@@ -479,23 +473,23 @@ struct PreparedDtb {
 trait RunnerBackend {
     async fn resolve_runtime(
         &mut self,
-        tool: &mut Tool,
+        input: &UbootRunInput,
         config: &UbootConfig,
     ) -> anyhow::Result<ResolvedRuntime>;
     async fn prepare_dtb(
         &mut self,
-        tool: &Tool,
+        input: &UbootRunInput,
         config: &UbootConfig,
     ) -> anyhow::Result<PreparedDtb>;
     async fn open_console(&mut self) -> anyhow::Result<ConsoleTransport>;
-    async fn after_console_open(&mut self, tool: &Tool) -> anyhow::Result<()>;
+    async fn after_console_open(&mut self, context: &ProcessContext) -> anyhow::Result<()>;
     async fn stage_fit_image(
         &mut self,
         fitimage: &Path,
         runtime: &ResolvedRuntime,
     ) -> anyhow::Result<PreparedBootArtifact>;
     async fn finish_console(&mut self) -> anyhow::Result<()>;
-    async fn after_run(&mut self, tool: &Tool) -> anyhow::Result<()>;
+    async fn after_run(&mut self, context: &ProcessContext) -> anyhow::Result<()>;
 }
 
 struct LocalBackend {
@@ -522,7 +516,7 @@ impl LocalBackend {
 impl RunnerBackend for LocalBackend {
     async fn resolve_runtime(
         &mut self,
-        tool: &mut Tool,
+        input: &UbootRunInput,
         _config: &UbootConfig,
     ) -> anyhow::Result<ResolvedRuntime> {
         let baud_rate = self
@@ -571,7 +565,7 @@ impl RunnerBackend for LocalBackend {
                 && let Some(ip) = server_ip.as_ref()
             {
                 info!("TFTP server IP: {}", ip);
-                tftp::run_tftp_server(tool)?;
+                tftp::run_tftp_server(input.process_context.workdir(), &input.artifacts)?;
                 self.builtin_tftp_started = true;
             }
         }
@@ -583,7 +577,7 @@ impl RunnerBackend for LocalBackend {
                 && let Some(ip) = server_ip.as_ref()
             {
                 info!("TFTP server IP: {}", ip);
-                tftp::run_tftp_server(tool)?;
+                tftp::run_tftp_server(input.process_context.workdir(), &input.artifacts)?;
                 self.builtin_tftp_started = true;
             }
         }
@@ -620,7 +614,7 @@ impl RunnerBackend for LocalBackend {
 
     async fn prepare_dtb(
         &mut self,
-        _tool: &Tool,
+        _input: &UbootRunInput,
         config: &UbootConfig,
     ) -> anyhow::Result<PreparedDtb> {
         Ok(PreparedDtb {
@@ -651,13 +645,12 @@ impl RunnerBackend for LocalBackend {
         })
     }
 
-    async fn after_console_open(&mut self, tool: &Tool) -> anyhow::Result<()> {
+    async fn after_console_open(&mut self, context: &ProcessContext) -> anyhow::Result<()> {
         println!("Waiting for board on power or reset...");
         if let Some(cmd) = self.config.board_reset_cmd.as_deref()
             && !cmd.trim().is_empty()
         {
-            let process_context = tool.process_context()?;
-            crate::process::shell_run_cmd(&process_context, cmd)?;
+            crate::process::shell_run_cmd(context, cmd)?;
         }
         Ok(())
     }
@@ -713,12 +706,10 @@ impl RunnerBackend for LocalBackend {
         Ok(())
     }
 
-    async fn after_run(&mut self, tool: &Tool) -> anyhow::Result<()> {
+    async fn after_run(&mut self, context: &ProcessContext) -> anyhow::Result<()> {
         if let Some(cmd) = self.config.board_power_off_cmd.as_deref()
             && !cmd.trim().is_empty()
-            && let Err(err) = tool
-                .process_context()
-                .and_then(|context| crate::process::shell_run_cmd(&context, cmd))
+            && let Err(err) = crate::process::shell_run_cmd(context, cmd)
         {
             log::warn!("board power-off command failed: {err:#}");
         }
@@ -754,7 +745,7 @@ impl RemoteBackend {
 impl RunnerBackend for RemoteBackend {
     async fn resolve_runtime(
         &mut self,
-        _tool: &mut Tool,
+        _input: &UbootRunInput,
         _config: &UbootConfig,
     ) -> anyhow::Result<ResolvedRuntime> {
         let boot_profile = self
@@ -845,7 +836,7 @@ impl RunnerBackend for RemoteBackend {
 
     async fn prepare_dtb(
         &mut self,
-        tool: &Tool,
+        input: &UbootRunInput,
         config: &UbootConfig,
     ) -> anyhow::Result<PreparedDtb> {
         let session_dtb = self
@@ -901,8 +892,8 @@ impl RunnerBackend for RemoteBackend {
                     self.session.session_id
                 )
             })?;
-        let output_dir = tool
-            .runtime_artifacts()
+        let output_dir = input
+            .artifacts
             .runtime_artifact_dir()
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir);
@@ -935,7 +926,7 @@ impl RunnerBackend for RemoteBackend {
         Ok(ConsoleTransport { tx, rx })
     }
 
-    async fn after_console_open(&mut self, _tool: &Tool) -> anyhow::Result<()> {
+    async fn after_console_open(&mut self, _context: &ProcessContext) -> anyhow::Result<()> {
         println!("Waiting for remote board to power on through ostool-server...");
         Ok(())
     }
@@ -988,18 +979,18 @@ impl RunnerBackend for RemoteBackend {
         Ok(())
     }
 
-    async fn after_run(&mut self, _tool: &Tool) -> anyhow::Result<()> {
+    async fn after_run(&mut self, _context: &ProcessContext) -> anyhow::Result<()> {
         Ok(())
     }
 }
 
-impl<'a, B> Runner<'a, B>
+impl<B> Runner<B>
 where
     B: RunnerBackend,
 {
-    fn new(tool: &'a mut Tool, config: UbootConfig, backend: B) -> Self {
+    fn new(input: UbootRunInput, config: UbootConfig, backend: B) -> Self {
         Self {
-            tool,
+            input,
             config,
             success_regex: vec![],
             fail_regex: vec![],
@@ -1036,8 +1027,8 @@ where
         );
 
         let arch = self
-            .tool
-            .runtime_arch()
+            .input
+            .arch
             .ok_or_else(|| anyhow!("Cannot determine architecture for FIT image generation"))?;
         let arch = match arch {
             object::Architecture::Aarch64 => "arm64",
@@ -1120,7 +1111,7 @@ where
             log::warn!("backend console cleanup failed: {err:#}");
         }
 
-        if let Err(err) = self.backend.after_run(self.tool).await {
+        if let Err(err) = self.backend.after_run(&self.input.process_context).await {
             if run_result.is_ok() {
                 return Err(err);
             }
@@ -1132,11 +1123,10 @@ where
 
     async fn _run(&mut self) -> anyhow::Result<()> {
         self.prepare_regex()?;
-        self.tool.ensure_runtime_bin()?;
 
         let kernel = self
-            .tool
-            .runtime_artifacts()
+            .input
+            .artifacts
             .require_bin("bin not exist")?
             .to_path_buf();
 
@@ -1146,14 +1136,16 @@ where
 
         let runtime = self
             .backend
-            .resolve_runtime(self.tool, &self.config)
+            .resolve_runtime(&self.input, &self.config)
             .await?;
-        let prepared_dtb = self.backend.prepare_dtb(self.tool, &self.config).await?;
+        let prepared_dtb = self.backend.prepare_dtb(&self.input, &self.config).await?;
         if let Some(interface) = runtime.interface.as_deref() {
             info!("Using network interface hint: {interface}");
         }
         let ConsoleTransport { tx, rx } = self.backend.open_console().await?;
-        self.backend.after_console_open(self.tool).await?;
+        self.backend
+            .after_console_open(&self.input.process_context)
+            .await?;
 
         let mut net_ok = false;
         let mut uboot = UbootShell::new(tx, rx).await?;

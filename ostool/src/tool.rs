@@ -182,10 +182,6 @@ impl Tool {
         legacy_context::set_active_build(&mut self.state, &mut self.ctx, active_build);
     }
 
-    pub(crate) fn manifest_dir(&self) -> &PathBuf {
-        &self.manifest_dir
-    }
-
     pub(crate) fn workspace_dir(&self) -> &PathBuf {
         &self.workspace_dir
     }
@@ -372,6 +368,311 @@ impl Tool {
     pub(crate) fn ui_hooks(&self) -> Vec<ElementHook> {
         config_hooks::build_config_hooks(&self.workspace_dir)
     }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit QEMU module function.
+    /// Returns the default QEMU runtime configuration for the current tool context.
+    pub fn default_qemu_config(&self) -> crate::run::qemu::QemuConfig {
+        crate::run::qemu::default_qemu_config(self.runtime_arch())
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit QEMU module function.
+    /// Returns the default QEMU runtime configuration for a Cargo build config.
+    pub fn default_qemu_config_for_cargo(&self, cargo: &Cargo) -> crate::run::qemu::QemuConfig {
+        crate::run::qemu::default_qemu_config_for_cargo(cargo, self.runtime_arch())
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit QEMU module function.
+    pub async fn read_qemu_config_from_path_for_cargo(
+        &mut self,
+        cargo: &Cargo,
+        path: &std::path::Path,
+    ) -> anyhow::Result<crate::run::qemu::QemuConfig> {
+        self.sync_cargo_context(cargo)?;
+        let scope = self.variable_scope()?;
+        crate::run::qemu::read_qemu_config_from_path(&scope, path).await
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit QEMU module function.
+    pub async fn ensure_qemu_config_for_cargo(
+        &mut self,
+        cargo: &Cargo,
+    ) -> anyhow::Result<crate::run::qemu::QemuConfig> {
+        self.sync_cargo_context(cargo)?;
+        let scope = self.variable_scope()?;
+        crate::run::qemu::ensure_qemu_config_for_cargo(
+            &self.project_layout(),
+            &scope,
+            cargo,
+            self.runtime_arch(),
+        )
+        .await
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit QEMU module function.
+    pub async fn ensure_qemu_config_in_dir_for_cargo(
+        &mut self,
+        cargo: &Cargo,
+        dir: &std::path::Path,
+    ) -> anyhow::Result<crate::run::qemu::QemuConfig> {
+        self.sync_cargo_context(cargo)?;
+        let scope = self.variable_scope()?;
+        crate::run::qemu::ensure_qemu_config_in_dir_for_cargo(
+            &scope,
+            cargo,
+            dir,
+            self.runtime_arch(),
+        )
+        .await
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit QEMU module function.
+    /// Loads a QEMU configuration from a directory using the default filename search.
+    pub async fn ensure_qemu_config_in_dir(
+        &mut self,
+        dir: &std::path::Path,
+    ) -> anyhow::Result<crate::run::qemu::QemuConfig> {
+        let scope = self.variable_scope()?;
+        crate::run::qemu::ensure_qemu_config_in_dir(&scope, dir, self.runtime_arch()).await
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit QEMU module function.
+    /// Reads a QEMU configuration from an explicit path without creating defaults.
+    pub async fn read_qemu_config_from_path(
+        &mut self,
+        path: &std::path::Path,
+    ) -> anyhow::Result<crate::run::qemu::QemuConfig> {
+        let scope = self.variable_scope()?;
+        crate::run::qemu::read_qemu_config_from_path(&scope, path).await
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit QEMU module function.
+    /// Runs an already prepared artifact in QEMU using a fully materialized configuration.
+    pub async fn run_qemu(
+        &mut self,
+        config: &crate::run::qemu::QemuConfig,
+        options: crate::run::qemu::RunQemuOptions,
+    ) -> anyhow::Result<()> {
+        let scope = self.variable_scope()?;
+        let config = crate::run::qemu::prepare_qemu_runtime_config(&scope, config)?;
+        if config.to_bin {
+            self.ensure_runtime_bin()?;
+        }
+        let input = crate::run::qemu::QemuRunInput {
+            process_context: self.process_context()?,
+            artifacts: self.runtime_artifacts().clone(),
+            arch: self.runtime_arch(),
+            debug: self.debug_enabled(),
+        };
+        crate::run::qemu::run_qemu_with_config(input, options, config).await
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit U-Boot module function.
+    pub fn default_uboot_config(&self) -> crate::run::uboot::UbootConfig {
+        crate::run::uboot::default_uboot_config()
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit U-Boot module function.
+    pub async fn read_uboot_config_from_path_for_cargo(
+        &mut self,
+        cargo: &Cargo,
+        path: &std::path::Path,
+    ) -> anyhow::Result<crate::run::uboot::UbootConfig> {
+        self.sync_cargo_context(cargo)?;
+        let scope = self.variable_scope()?;
+        crate::run::uboot::read_uboot_config_from_path(&scope, path).await
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit U-Boot module function.
+    pub async fn ensure_uboot_config_for_cargo(
+        &mut self,
+        cargo: &Cargo,
+    ) -> anyhow::Result<crate::run::uboot::UbootConfig> {
+        self.sync_cargo_context(cargo)?;
+        let workspace_dir = self.workspace_dir().clone();
+        self.ensure_uboot_config_in_dir_for_cargo(cargo, &workspace_dir)
+            .await
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit U-Boot module function.
+    pub async fn ensure_uboot_config_in_dir_for_cargo(
+        &mut self,
+        cargo: &Cargo,
+        dir: &std::path::Path,
+    ) -> anyhow::Result<crate::run::uboot::UbootConfig> {
+        self.sync_cargo_context(cargo)?;
+        let scope = self.variable_scope()?;
+        crate::run::uboot::ensure_uboot_config_in_dir(&scope, dir).await
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit U-Boot module function.
+    pub async fn ensure_uboot_config_in_dir(
+        &mut self,
+        dir: &std::path::Path,
+    ) -> anyhow::Result<crate::run::uboot::UbootConfig> {
+        let scope = self.variable_scope()?;
+        crate::run::uboot::ensure_uboot_config_in_dir(&scope, dir).await
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit U-Boot module function.
+    pub async fn read_uboot_config_from_path(
+        &mut self,
+        path: &std::path::Path,
+    ) -> anyhow::Result<crate::run::uboot::UbootConfig> {
+        let scope = self.variable_scope()?;
+        crate::run::uboot::read_uboot_config_from_path(&scope, path).await
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit U-Boot module function.
+    pub async fn run_uboot(
+        &mut self,
+        config: &crate::run::uboot::UbootConfig,
+        options: crate::run::uboot::RunUbootOptions,
+    ) -> anyhow::Result<()> {
+        let scope = self.variable_scope()?;
+        let config = crate::run::uboot::prepare_uboot_runtime_config(&scope, config)?;
+        let input = self.prepared_uboot_run_input()?;
+        crate::run::uboot::run_uboot_with_config(input, config, options).await
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit U-Boot module function.
+    pub async fn run_uboot_remote(
+        &mut self,
+        board_config: &crate::board::config::BoardRunConfig,
+        client: crate::board::client::BoardServerClient,
+        session: crate::board::client::SessionCreatedResponse,
+    ) -> anyhow::Result<()> {
+        let input = self.prepared_uboot_run_input()?;
+        crate::run::uboot::run_uboot_remote(input, board_config, client, session).await
+    }
+
+    /// Compatibility helper for the legacy `Tool` API.
+    /// Remove this method when callers use explicit runner inputs.
+    pub(crate) fn uboot_run_input(&self) -> anyhow::Result<crate::run::uboot::UbootRunInput> {
+        crate::run::uboot::UbootRunInput::new(
+            self.process_context()?,
+            self.runtime_artifacts().clone(),
+            self.runtime_arch(),
+        )
+    }
+
+    /// Compatibility helper for the legacy `Tool` API.
+    /// Remove this method when callers use explicit runner inputs.
+    pub(crate) fn prepared_uboot_run_input(
+        &mut self,
+    ) -> anyhow::Result<crate::run::uboot::UbootRunInput> {
+        self.ensure_runtime_bin()?;
+        self.uboot_run_input()
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit board module function.
+    pub fn default_board_run_config(&self) -> crate::board::config::BoardRunConfig {
+        crate::board::config::BoardRunConfig::default()
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit board module function.
+    pub async fn read_board_run_config_from_path_for_cargo(
+        &mut self,
+        cargo: &Cargo,
+        path: &std::path::Path,
+    ) -> anyhow::Result<crate::board::config::BoardRunConfig> {
+        self.sync_cargo_context(cargo)?;
+        let scope = self.variable_scope()?;
+        crate::board::read_board_run_config_from_path(&scope, path).await
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit board module function.
+    pub async fn ensure_board_run_config_in_dir_for_cargo(
+        &mut self,
+        cargo: &Cargo,
+        dir: &std::path::Path,
+    ) -> anyhow::Result<crate::board::config::BoardRunConfig> {
+        self.sync_cargo_context(cargo)?;
+        let scope = self.variable_scope()?;
+        crate::board::ensure_board_run_config_in_dir(&scope, dir).await
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit board module function.
+    pub async fn ensure_board_run_config_in_dir(
+        &mut self,
+        dir: &std::path::Path,
+    ) -> anyhow::Result<crate::board::config::BoardRunConfig> {
+        let scope = self.variable_scope()?;
+        crate::board::ensure_board_run_config_in_dir(&scope, dir).await
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit board module function.
+    pub async fn read_board_run_config_from_path(
+        &mut self,
+        path: &std::path::Path,
+    ) -> anyhow::Result<crate::board::config::BoardRunConfig> {
+        let scope = self.variable_scope()?;
+        crate::board::read_board_run_config_from_path(&scope, path).await
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit board module function.
+    pub async fn run_board(
+        &mut self,
+        build_config: &BuildConfig,
+        board_config: &crate::board::config::BoardRunConfig,
+        options: crate::board::RunBoardOptions,
+    ) -> anyhow::Result<()> {
+        self.run_board_with_build_config(build_config, board_config, options)
+            .await
+    }
+
+    /// Compatibility wrapper for the legacy `Tool` API.
+    /// Remove this method when callers use the explicit board module function.
+    pub async fn cargo_run_board(
+        &mut self,
+        cargo: &Cargo,
+        board_config: &crate::board::config::BoardRunConfig,
+        options: crate::board::RunBoardOptions,
+    ) -> anyhow::Result<()> {
+        self.sync_cargo_context(cargo)?;
+        self.run_board_with_build_config(
+            &BuildConfig {
+                system: BuildSystem::Cargo(cargo.clone()),
+            },
+            board_config,
+            options,
+        )
+        .await
+    }
+
+    // Compatibility helper for the legacy `Tool` board wrappers; remove it with them.
+    async fn run_board_with_build_config(
+        &mut self,
+        build_config: &BuildConfig,
+        board_config: &crate::board::config::BoardRunConfig,
+        options: crate::board::RunBoardOptions,
+    ) -> anyhow::Result<()> {
+        self.prepare_runtime_artifacts(build_config, false).await?;
+        let input = self.prepared_uboot_run_input()?;
+        let scope = self.variable_scope()?;
+        crate::board::run_prepared_board(input, board_config, options, &scope).await
+    }
 }
 
 pub fn resolve_manifest_context(input: Option<PathBuf>) -> anyhow::Result<ManifestContext> {
@@ -391,6 +692,22 @@ mod tests {
         fs,
         path::{Path, PathBuf},
     };
+
+    #[cfg(unix)]
+    fn fake_objcopy(root: &Path) -> PathBuf {
+        let script = root.join("fake-rust-objcopy");
+        fs::write(
+            &script,
+            "#!/bin/sh\nlast=\"\"\nprev=\"\"\nfor arg in \"$@\"; do prev=\"$last\"; last=\"$arg\"; done\ncp \"$prev\" \"$last\"\n",
+        )
+        .unwrap();
+
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+        script
+    }
 
     #[tokio::test]
     async fn apply_prepared_runtime_artifacts_updates_dirs_and_arch() {
@@ -444,6 +761,76 @@ mod tests {
         );
         assert!(tool.ctx.arch.is_some());
         assert!(tool.ctx.artifacts.bin().is_none());
+    }
+
+    #[test]
+    fn uboot_run_input_rejects_artifacts_without_bin() {
+        let temp = tempfile::tempdir().unwrap();
+        write_single_package(temp.path(), "sample");
+        let source = std::env::current_exe().unwrap();
+        let copied = temp.path().join("sample-elf");
+        fs::copy(&source, &copied).unwrap();
+
+        let mut tool = Tool::new(ToolConfig {
+            manifest: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+        let process_context = tool.process_context().unwrap();
+        let prepared = prepare_runtime_artifacts(
+            &process_context,
+            RuntimeArtifactOptions {
+                elf_path: copied,
+                to_bin: false,
+                bin_dir: None,
+                debug: false,
+                cargo_artifact_dir: None,
+                strip_elf: false,
+                objcopy_program: PathBuf::from("rust-objcopy"),
+            },
+        )
+        .unwrap();
+        tool.apply_prepared_runtime_artifacts(prepared);
+
+        let err = tool.uboot_run_input().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("U-Boot runner requires a prepared BIN artifact")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_uboot_run_input_reuses_existing_bin() {
+        let temp = tempfile::tempdir().unwrap();
+        write_single_package(temp.path(), "sample");
+        let source = std::env::current_exe().unwrap();
+        let copied = temp.path().join("sample-elf");
+        fs::copy(&source, &copied).unwrap();
+
+        let mut tool = Tool::new(ToolConfig {
+            manifest: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+        let process_context = tool.process_context().unwrap();
+        let prepared = prepare_runtime_artifacts(
+            &process_context,
+            RuntimeArtifactOptions {
+                elf_path: copied,
+                to_bin: true,
+                bin_dir: None,
+                debug: false,
+                cargo_artifact_dir: None,
+                strip_elf: false,
+                objcopy_program: fake_objcopy(temp.path()),
+            },
+        )
+        .unwrap();
+        tool.apply_prepared_runtime_artifacts(prepared);
+
+        tool.prepared_uboot_run_input().unwrap();
+        assert!(tool.ctx.artifacts.bin().is_some());
     }
 
     #[test]

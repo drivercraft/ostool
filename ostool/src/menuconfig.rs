@@ -84,7 +84,11 @@ impl MenuConfigHandler {
     async fn handle_qemu_config(tool: &mut Tool) -> Result<()> {
         info!("配置 QEMU 运行参数");
 
-        let config_path = crate::run::qemu::resolve_qemu_config_path(tool, None)?;
+        let config_path = crate::run::qemu::resolve_qemu_config_path_in_dir(
+            tool.workspace_dir(),
+            tool.runtime_arch(),
+            None,
+        )?;
 
         if config_path.exists() {
             println!("\n当前 QEMU 配置文件: {}", config_path.display());

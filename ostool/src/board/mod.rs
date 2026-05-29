@@ -18,9 +18,8 @@ use crate::board::{
     session::BoardSession,
 };
 use crate::{
-    Tool,
-    build::config::{BuildConfig, BuildSystem, Cargo},
-    project::variables,
+    project::variables::{self, VariableScope},
+    run::uboot::UbootRunInput,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -175,120 +174,57 @@ async fn finalize_session(
     }
 }
 
-impl Tool {
-    pub fn default_board_run_config(&self) -> BoardRunConfig {
-        BoardRunConfig::default()
-    }
+pub(crate) async fn read_board_run_config_from_path(
+    scope: &VariableScope,
+    path: &Path,
+) -> anyhow::Result<BoardRunConfig> {
+    let path = variables::expand_path_variables(path, scope)?;
+    BoardRunConfig::read_from_path(scope, path)
+}
 
-    pub async fn read_board_run_config_from_path_for_cargo(
-        &mut self,
-        cargo: &Cargo,
-        path: &Path,
-    ) -> anyhow::Result<BoardRunConfig> {
-        self.sync_cargo_context(cargo)?;
-        let scope = self.variable_scope()?;
-        let path = variables::expand_path_variables(path, &scope)?;
-        BoardRunConfig::read_from_path(&scope, path)
-    }
+pub(crate) async fn ensure_board_run_config_in_dir(
+    scope: &VariableScope,
+    dir: &Path,
+) -> anyhow::Result<BoardRunConfig> {
+    let dir = variables::expand_path_variables(dir, scope)?;
+    BoardRunConfig::load_or_create(scope, Some(dir.join(".board.toml"))).await
+}
 
-    pub async fn ensure_board_run_config_in_dir_for_cargo(
-        &mut self,
-        cargo: &Cargo,
-        dir: &Path,
-    ) -> anyhow::Result<BoardRunConfig> {
-        self.sync_cargo_context(cargo)?;
-        let scope = self.variable_scope()?;
-        let dir = variables::expand_path_variables(dir, &scope)?;
-        BoardRunConfig::load_or_create(&scope, Some(dir.join(".board.toml"))).await
-    }
+pub(crate) async fn run_prepared_board(
+    input: UbootRunInput,
+    board_config: &BoardRunConfig,
+    options: RunBoardOptions,
+    scope: &VariableScope,
+) -> anyhow::Result<()> {
+    let global_config = load_board_global_config_with_notice()?;
+    let mut board_config = board_config.clone();
+    board_config.apply_overrides(
+        scope,
+        options.board_type.as_deref(),
+        options.server.as_deref(),
+        options.port,
+    )?;
 
-    pub async fn ensure_board_run_config_in_dir(
-        &mut self,
-        dir: &Path,
-    ) -> anyhow::Result<BoardRunConfig> {
-        let scope = self.variable_scope()?;
-        let dir = variables::expand_path_variables(dir, &scope)?;
-        BoardRunConfig::load_or_create(&scope, Some(dir.join(".board.toml"))).await
-    }
+    let (server, port) = board_config.resolve_server(None, None, &global_config.board);
+    let (client, session) = acquire_board_session(&server, port, &board_config.board_type).await?;
+    print_allocated_board_session(&session, &board_config.board_type);
 
-    pub async fn read_board_run_config_from_path(
-        &mut self,
-        path: &Path,
-    ) -> anyhow::Result<BoardRunConfig> {
-        let scope = self.variable_scope()?;
-        let path = variables::expand_path_variables(path, &scope)?;
-        BoardRunConfig::read_from_path(&scope, path)
-    }
-
-    pub async fn run_board(
-        &mut self,
-        build_config: &BuildConfig,
-        board_config: &BoardRunConfig,
-        options: RunBoardOptions,
-    ) -> anyhow::Result<()> {
-        self.run_board_with_build_config(build_config, board_config, options)
+    let run_result = match session.info().boot_mode.as_str() {
+        "uboot" => {
+            crate::run::uboot::run_uboot_remote(
+                input,
+                &board_config,
+                client,
+                session.info().clone(),
+            )
             .await
-    }
+        }
+        other => Err(anyhow!(
+            "unsupported board boot mode `{other}`; only `uboot` is supported"
+        )),
+    };
 
-    pub async fn cargo_run_board(
-        &mut self,
-        cargo: &Cargo,
-        board_config: &BoardRunConfig,
-        options: RunBoardOptions,
-    ) -> anyhow::Result<()> {
-        self.sync_cargo_context(cargo)?;
-        self.run_board_with_build_config(
-            &BuildConfig {
-                system: BuildSystem::Cargo(cargo.clone()),
-            },
-            board_config,
-            options,
-        )
-        .await
-    }
-
-    async fn run_board_with_build_config(
-        &mut self,
-        build_config: &BuildConfig,
-        board_config: &BoardRunConfig,
-        options: RunBoardOptions,
-    ) -> anyhow::Result<()> {
-        self.prepare_runtime_artifacts(build_config, false).await?;
-        self.run_prepared_board(board_config, options).await
-    }
-
-    async fn run_prepared_board(
-        &mut self,
-        board_config: &BoardRunConfig,
-        options: RunBoardOptions,
-    ) -> anyhow::Result<()> {
-        let global_config = load_board_global_config_with_notice()?;
-        let mut board_config = board_config.clone();
-        let scope = self.variable_scope()?;
-        board_config.apply_overrides(
-            &scope,
-            options.board_type.as_deref(),
-            options.server.as_deref(),
-            options.port,
-        )?;
-
-        let (server, port) = board_config.resolve_server(None, None, &global_config.board);
-        let (client, session) =
-            acquire_board_session(&server, port, &board_config.board_type).await?;
-        print_allocated_board_session(&session, &board_config.board_type);
-
-        let run_result = match session.info().boot_mode.as_str() {
-            "uboot" => {
-                self.run_uboot_remote(&board_config, client, session.info().clone())
-                    .await
-            }
-            other => Err(anyhow!(
-                "unsupported board boot mode `{other}`; only `uboot` is supported"
-            )),
-        };
-
-        finalize_session(session, run_result).await
-    }
+    finalize_session(session, run_result).await
 }
 
 #[cfg(test)]

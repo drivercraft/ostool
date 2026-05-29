@@ -44,9 +44,11 @@ use tokio::{
 };
 
 use crate::{
-    Tool,
+    artifact::state::OutputArtifacts,
     build::config::Cargo,
+    process::ProcessContext,
     project::variables::{self, VariableScope},
+    project::{ProjectLayout, metadata},
     run::{
         output_matcher::{ByteStreamMatcher, compile_regexes, print_match_event},
         ovmf_prebuilt::{Arch, FileType, Prebuilt, Source},
@@ -139,99 +141,96 @@ pub struct RunQemuOptions {
     pub show_output: bool,
 }
 
-/// Runs the operating system in QEMU.
-///
-/// This function configures and launches QEMU with the appropriate settings
-/// based on the detected architecture and configuration file.
-///
-/// # Arguments
-///
-/// * `tool` - The tool containing paths and build artifacts.
-/// * `args` - QEMU run arguments.
-///
-/// # Errors
-///
-/// Returns an error if QEMU fails to start or exits with an error.
-impl Tool {
-    /// Returns the default QEMU runtime configuration for the current tool context.
-    pub fn default_qemu_config(&self) -> QemuConfig {
-        build_default_qemu_config(self.runtime_arch())
-    }
-
-    /// Returns the default QEMU runtime configuration for a Cargo build config.
-    pub fn default_qemu_config_for_cargo(&self, cargo: &Cargo) -> QemuConfig {
-        build_default_qemu_config(infer_target_arch(&cargo.target).or(self.runtime_arch()))
-    }
-
-    pub async fn read_qemu_config_from_path_for_cargo(
-        &mut self,
-        cargo: &Cargo,
-        path: &Path,
-    ) -> anyhow::Result<QemuConfig> {
-        self.sync_cargo_context(cargo)?;
-        let scope = self.variable_scope()?;
-        let config_path = variables::expand_path_variables(path, &scope)?;
-        read_qemu_config_at_path(&scope, config_path).await
-    }
-
-    pub async fn ensure_qemu_config_for_cargo(
-        &mut self,
-        cargo: &Cargo,
-    ) -> anyhow::Result<QemuConfig> {
-        self.sync_cargo_context(cargo)?;
-        let package_dir = self.resolve_package_manifest_dir(&cargo.package)?;
-        let arch = infer_target_arch(&cargo.target).or(self.runtime_arch());
-        let config_path = resolve_qemu_config_path_in_dir(&package_dir, arch, None)?;
-        let default_config = self.default_qemu_config_for_cargo(cargo);
-        let scope = self.variable_scope()?;
-        ensure_qemu_config_at_path(&scope, config_path, default_config).await
-    }
-
-    pub async fn ensure_qemu_config_in_dir_for_cargo(
-        &mut self,
-        cargo: &Cargo,
-        dir: &Path,
-    ) -> anyhow::Result<QemuConfig> {
-        self.sync_cargo_context(cargo)?;
-        let scope = self.variable_scope()?;
-        let dir = variables::expand_path_variables(dir, &scope)?;
-        let arch = infer_target_arch(&cargo.target).or(self.runtime_arch());
-        let config_path = resolve_qemu_config_path_in_dir(&dir, arch, None)?;
-        let default_config = self.default_qemu_config_for_cargo(cargo);
-        ensure_qemu_config_at_path(&scope, config_path, default_config).await
-    }
-
-    /// Loads a QEMU configuration from a directory using the default filename search.
-    pub async fn ensure_qemu_config_in_dir(&mut self, dir: &Path) -> anyhow::Result<QemuConfig> {
-        let scope = self.variable_scope()?;
-        let dir = variables::expand_path_variables(dir, &scope)?;
-        let config_path = resolve_qemu_config_path_in_dir(&dir, self.runtime_arch(), None)?;
-        let default_config = self.default_qemu_config();
-        ensure_qemu_config_at_path(&scope, config_path, default_config).await
-    }
-
-    /// Reads a QEMU configuration from an explicit path without creating defaults.
-    pub async fn read_qemu_config_from_path(&mut self, path: &Path) -> anyhow::Result<QemuConfig> {
-        let scope = self.variable_scope()?;
-        let config_path = variables::expand_path_variables(path, &scope)?;
-        read_qemu_config_at_path(&scope, config_path).await
-    }
-
-    /// Runs an already prepared artifact in QEMU using a fully materialized configuration.
-    pub async fn run_qemu(
-        &mut self,
-        config: &QemuConfig,
-        options: RunQemuOptions,
-    ) -> anyhow::Result<()> {
-        let mut config = config.clone();
-        let scope = self.variable_scope()?;
-        config.replace_strings(&scope)?;
-        config.normalize("QEMU runtime config")?;
-        run_qemu_with_config(self, options, config).await
-    }
+#[derive(Clone, Debug)]
+pub(crate) struct QemuRunInput {
+    pub(crate) process_context: ProcessContext,
+    pub(crate) artifacts: OutputArtifacts,
+    pub(crate) arch: Option<Architecture>,
+    pub(crate) debug: bool,
 }
 
-async fn read_qemu_config_at_path(
+pub(crate) fn default_qemu_config(arch: Option<Architecture>) -> QemuConfig {
+    build_default_qemu_config(arch)
+}
+
+pub(crate) fn default_qemu_config_for_cargo(
+    cargo: &Cargo,
+    runtime_arch: Option<Architecture>,
+) -> QemuConfig {
+    build_default_qemu_config(infer_target_arch(&cargo.target).or(runtime_arch))
+}
+
+pub(crate) async fn read_qemu_config_from_path(
+    variables: &VariableScope,
+    path: &Path,
+) -> anyhow::Result<QemuConfig> {
+    let config_path = variables::expand_path_variables(path, variables)?;
+    read_qemu_config_at_path(variables, config_path).await
+}
+
+pub(crate) async fn ensure_qemu_config_for_cargo(
+    layout: &ProjectLayout,
+    variables: &VariableScope,
+    cargo: &Cargo,
+    runtime_arch: Option<Architecture>,
+) -> anyhow::Result<QemuConfig> {
+    let package_dir = metadata::package_manifest_dir(layout, &cargo.package)?;
+    let arch = infer_target_arch(&cargo.target).or(runtime_arch);
+    let config_path = resolve_qemu_config_path_in_dir(&package_dir, arch, None)?;
+    let default_config = default_qemu_config_for_cargo(cargo, runtime_arch);
+    ensure_qemu_config_at_path(variables, config_path, default_config).await
+}
+
+pub(crate) async fn ensure_qemu_config_in_dir_for_cargo(
+    variables: &VariableScope,
+    cargo: &Cargo,
+    dir: &Path,
+    runtime_arch: Option<Architecture>,
+) -> anyhow::Result<QemuConfig> {
+    let dir = variables::expand_path_variables(dir, variables)?;
+    let arch = infer_target_arch(&cargo.target).or(runtime_arch);
+    let config_path = resolve_qemu_config_path_in_dir(&dir, arch, None)?;
+    let default_config = default_qemu_config_for_cargo(cargo, runtime_arch);
+    ensure_qemu_config_at_path(variables, config_path, default_config).await
+}
+
+pub(crate) async fn ensure_qemu_config_in_dir(
+    variables: &VariableScope,
+    dir: &Path,
+    runtime_arch: Option<Architecture>,
+) -> anyhow::Result<QemuConfig> {
+    let dir = variables::expand_path_variables(dir, variables)?;
+    let config_path = resolve_qemu_config_path_in_dir(&dir, runtime_arch, None)?;
+    let default_config = default_qemu_config(runtime_arch);
+    ensure_qemu_config_at_path(variables, config_path, default_config).await
+}
+
+pub(crate) fn prepare_qemu_runtime_config(
+    variables: &VariableScope,
+    config: &QemuConfig,
+) -> anyhow::Result<QemuConfig> {
+    let mut config = config.clone();
+    config.replace_strings(variables)?;
+    config.normalize("QEMU runtime config")?;
+    Ok(config)
+}
+
+pub(crate) async fn run_qemu_with_config(
+    input: QemuRunInput,
+    run_args: RunQemuOptions,
+    config: QemuConfig,
+) -> anyhow::Result<()> {
+    let mut runner = QemuRunner {
+        input,
+        config,
+        dtbdump: run_args.dtb_dump,
+        success_regex: vec![],
+        fail_regex: vec![],
+    };
+    runner.run().await
+}
+
+pub(crate) async fn read_qemu_config_at_path(
     variables: &VariableScope,
     config_path: PathBuf,
 ) -> anyhow::Result<QemuConfig> {
@@ -247,7 +246,7 @@ async fn read_qemu_config_at_path(
     Ok(config)
 }
 
-async fn ensure_qemu_config_at_path(
+pub(crate) async fn ensure_qemu_config_at_path(
     variables: &VariableScope,
     config_path: PathBuf,
     default_config: QemuConfig,
@@ -309,38 +308,19 @@ pub(crate) fn infer_target_arch(target: &str) -> Option<Architecture> {
     }
 }
 
-async fn run_qemu_with_config(
-    tool: &mut Tool,
-    run_args: RunQemuOptions,
-    config: QemuConfig,
-) -> anyhow::Result<()> {
-    let mut runner = QemuRunner {
-        tool,
-        config,
-        dtbdump: run_args.dtb_dump,
-        success_regex: vec![],
-        fail_regex: vec![],
-    };
-    runner.run().await
-}
-
-struct QemuRunner<'a> {
-    tool: &'a mut Tool,
+struct QemuRunner {
+    input: QemuRunInput,
     config: QemuConfig,
     dtbdump: bool,
     success_regex: Vec<regex::Regex>,
     fail_regex: Vec<regex::Regex>,
 }
 
-impl QemuRunner<'_> {
+impl QemuRunner {
     async fn run(&mut self) -> anyhow::Result<()> {
         self.prepare_regex()?;
 
-        if self.config.to_bin {
-            self.tool.ensure_runtime_bin()?;
-        }
-
-        let detected_arch = self.tool.runtime_arch().ok_or_else(|| {
+        let detected_arch = self.input.arch.ok_or_else(|| {
             anyhow!("Please specify `arch` in QEMU config or provide a valid ELF file.")
         })?;
         let arch = format!("{detected_arch:?}").to_lowercase();
@@ -369,8 +349,7 @@ impl QemuRunner<'_> {
             }
         }
 
-        let process_context = self.tool.process_context()?;
-        let mut cmd = crate::process::command(&qemu_executable, &process_context);
+        let mut cmd = crate::process::command(&qemu_executable, &self.input.process_context);
 
         for arg in &self.config.args {
             if arg == "-machine" || arg == "-M" {
@@ -395,7 +374,7 @@ impl QemuRunner<'_> {
             cmd.arg("-machine").arg(machine);
         }
 
-        if self.tool.debug_enabled() {
+        if self.input.debug {
             cmd.arg("-s").arg("-S");
         }
 
@@ -422,9 +401,7 @@ impl QemuRunner<'_> {
             }
         }
 
-        if use_kernel_loader
-            && let Some(kernel_path) = self.tool.runtime_artifacts().runtime_image()
-        {
+        if use_kernel_loader && let Some(kernel_path) = self.input.artifacts.runtime_image() {
             cmd.arg("-kernel").arg(kernel_path);
         }
         cmd.stdin(Stdio::piped());
@@ -545,8 +522,8 @@ impl QemuRunner<'_> {
         }
 
         let arch = self
-            .tool
-            .runtime_arch()
+            .input
+            .arch
             .ok_or_else(|| anyhow::anyhow!("Cannot determine architecture for OVMF preparation"))?;
         let tmp = std::env::temp_dir();
         let bios_dir = tmp.join("ostool").join("ovmf");
@@ -580,8 +557,8 @@ impl QemuRunner<'_> {
 
     async fn prepare_uefi_esp(&self, arch: Arch) -> anyhow::Result<PathBuf> {
         let bin_path = self
-            .tool
-            .runtime_artifacts()
+            .input
+            .artifacts
             .require_bin("UEFI boot requires a BIN artifact")?
             .to_path_buf();
         let stem = bin_path
@@ -607,7 +584,7 @@ impl QemuRunner<'_> {
     }
 
     fn uefi_artifact_dir(&self, bin_path: &Path) -> anyhow::Result<PathBuf> {
-        if let Some(dir) = self.tool.runtime_artifacts().runtime_artifact_dir() {
+        if let Some(dir) = self.input.artifacts.runtime_artifact_dir() {
             return Ok(dir.to_path_buf());
         }
 
@@ -622,8 +599,8 @@ impl QemuRunner<'_> {
 
     async fn prepare_uefi_vars(&self, vars_template: &Path) -> anyhow::Result<PathBuf> {
         let bin_path = self
-            .tool
-            .runtime_artifacts()
+            .input
+            .artifacts
             .require_bin("UEFI boot requires a BIN artifact")?
             .to_path_buf();
         let stem = bin_path
@@ -671,13 +648,6 @@ impl QemuRunner<'_> {
 /// 2. workspace_dir: qemu-<arch>.toml → .qemu-<arch>.toml → qemu.toml → .qemu.toml
 ///
 /// When architecture is detected, architecture-specific files are checked first.
-pub(crate) fn resolve_qemu_config_path(
-    tool: &Tool,
-    explicit_path: Option<PathBuf>,
-) -> anyhow::Result<PathBuf> {
-    resolve_qemu_config_path_in_dir(tool.workspace_dir(), tool.runtime_arch(), explicit_path)
-}
-
 pub(crate) fn resolve_qemu_config_path_in_dir(
     search_dir: &Path,
     arch: Option<Architecture>,
@@ -751,8 +721,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        QemuConfig, QemuRunner, build_default_qemu_config, ensure_qemu_config_at_path,
-        infer_target_arch, read_qemu_config_at_path, resolve_qemu_config_path,
+        QemuConfig, QemuRunInput, QemuRunner, build_default_qemu_config,
+        ensure_qemu_config_at_path, infer_target_arch, read_qemu_config_at_path,
         resolve_qemu_config_path_in_dir, timeout_duration,
     };
     use object::Architecture;
@@ -791,6 +761,15 @@ mod tests {
             ..Default::default()
         })
         .unwrap()
+    }
+
+    fn qemu_input(tool: &Tool) -> QemuRunInput {
+        QemuRunInput {
+            process_context: tool.process_context().unwrap(),
+            artifacts: tool.runtime_artifacts().clone(),
+            arch: tool.runtime_arch(),
+            debug: tool.debug_enabled(),
+        }
     }
 
     #[test]
@@ -1056,9 +1035,10 @@ timeout = 0
         tool.ctx
             .artifacts
             .set_runtime_artifact_dir(runtime_dir.clone());
+        let input = qemu_input(&tool);
 
         let runner = QemuRunner {
-            tool: &mut tool,
+            input,
             config: QemuConfig::default(),
             dtbdump: false,
             success_regex: vec![],
@@ -1080,7 +1060,12 @@ timeout = 0
         let tool = make_tool(tmp.path());
 
         let explicit = tmp.path().join("custom.qemu.toml");
-        let result = resolve_qemu_config_path(&tool, Some(explicit.clone())).unwrap();
+        let result = resolve_qemu_config_path_in_dir(
+            tool.workspace_dir(),
+            tool.runtime_arch(),
+            Some(explicit.clone()),
+        )
+        .unwrap();
         assert_eq!(result, explicit);
     }
 
@@ -1093,7 +1078,9 @@ timeout = 0
         let mut tool = make_tool(tmp.path());
         tool.ctx.arch = Some(Architecture::Aarch64);
 
-        let result = resolve_qemu_config_path(&tool, None).unwrap();
+        let result =
+            resolve_qemu_config_path_in_dir(tool.workspace_dir(), tool.runtime_arch(), None)
+                .unwrap();
         assert_eq!(result, tmp.path().join("qemu-aarch64.toml"));
     }
 
@@ -1106,11 +1093,15 @@ timeout = 0
         tool.ctx.arch = Some(Architecture::Aarch64);
 
         std::fs::write(manifest.join("qemu.toml"), "").unwrap();
-        let result = resolve_qemu_config_path(&tool, None).unwrap();
+        let result =
+            resolve_qemu_config_path_in_dir(tool.workspace_dir(), tool.runtime_arch(), None)
+                .unwrap();
         assert_eq!(result, manifest.join("qemu.toml"));
 
         std::fs::write(manifest.join("qemu-aarch64.toml"), "").unwrap();
-        let result = resolve_qemu_config_path(&tool, None).unwrap();
+        let result =
+            resolve_qemu_config_path_in_dir(tool.workspace_dir(), tool.runtime_arch(), None)
+                .unwrap();
         assert_eq!(result, manifest.join("qemu-aarch64.toml"));
     }
 
@@ -1192,7 +1183,9 @@ fail_regex = []
         write_single_crate_manifest(tmp.path());
         let tool = make_tool(tmp.path());
 
-        let result = resolve_qemu_config_path(&tool, None).unwrap();
+        let result =
+            resolve_qemu_config_path_in_dir(tool.workspace_dir(), tool.runtime_arch(), None)
+                .unwrap();
         assert_eq!(result, tmp.path().join(".qemu.toml"));
     }
 
@@ -1203,7 +1196,9 @@ fail_regex = []
         let mut tool = make_tool(tmp.path());
         tool.ctx.arch = Some(Architecture::Aarch64);
 
-        let result = resolve_qemu_config_path(&tool, None).unwrap();
+        let result =
+            resolve_qemu_config_path_in_dir(tool.workspace_dir(), tool.runtime_arch(), None)
+                .unwrap();
         assert_eq!(result, tmp.path().join(".qemu-aarch64.toml"));
     }
 
@@ -1215,7 +1210,9 @@ fail_regex = []
         std::fs::write(tmp.path().join("qemu.toml"), "").unwrap();
 
         let tool = make_tool(tmp.path());
-        let result = resolve_qemu_config_path(&tool, None).unwrap();
+        let result =
+            resolve_qemu_config_path_in_dir(tool.workspace_dir(), tool.runtime_arch(), None)
+                .unwrap();
         assert_eq!(result, tmp.path().join("qemu.toml"));
     }
 
