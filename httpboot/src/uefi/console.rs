@@ -1,6 +1,20 @@
 use crate::uefi::abi::{EfiSimpleTextOutputProtocol, EfiStatus};
 
+const COM1_PORT: u16 = 0x3f8;
+const UART_RBR_THR: u16 = 0;
+const UART_IER: u16 = 1;
+const UART_FCR: u16 = 2;
+const UART_LCR: u16 = 3;
+const UART_MCR: u16 = 4;
+const UART_LSR: u16 = 5;
+const UART_DLL: u16 = 0;
+const UART_DLM: u16 = 1;
+const UART_LSR_THRE: u8 = 1 << 5;
+const UART_LCR_DLAB: u8 = 1 << 7;
+
 pub fn write_console(console: *mut EfiSimpleTextOutputProtocol, message: &str) {
+    write_serial(message.as_bytes());
+
     let Some(console_ref) = (unsafe { console.as_mut() }) else {
         return;
     };
@@ -17,6 +31,61 @@ pub fn write_console(console: *mut EfiSimpleTextOutputProtocol, message: &str) {
     buffer[index] = 0;
 
     (console_ref.output_string)(console, buffer.as_ptr());
+}
+
+fn write_serial(bytes: &[u8]) {
+    init_com1();
+    for byte in bytes {
+        if *byte == b'\n' {
+            serial_putc(b'\r');
+        }
+        serial_putc(*byte);
+    }
+}
+
+fn init_com1() {
+    unsafe {
+        outb(COM1_PORT + UART_IER, 0x00);
+        outb(COM1_PORT + UART_LCR, UART_LCR_DLAB);
+        outb(COM1_PORT + UART_DLL, 0x01);
+        outb(COM1_PORT + UART_DLM, 0x00);
+        outb(COM1_PORT + UART_LCR, 0x03);
+        outb(COM1_PORT + UART_FCR, 0xc7);
+        outb(COM1_PORT + UART_MCR, 0x0b);
+    }
+}
+
+fn serial_putc(byte: u8) {
+    for _ in 0..100_000 {
+        if unsafe { inb(COM1_PORT + UART_LSR) } & UART_LSR_THRE != 0 {
+            unsafe { outb(COM1_PORT + UART_RBR_THR, byte) };
+            return;
+        }
+    }
+}
+
+unsafe fn outb(port: u16, value: u8) {
+    unsafe {
+        core::arch::asm!(
+            "out dx, al",
+            in("dx") port,
+            in("al") value,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+}
+
+unsafe fn inb(port: u16) -> u8 {
+    let value: u8;
+    unsafe {
+        core::arch::asm!(
+            "in al, dx",
+            in("dx") port,
+            out("al") value,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    value
 }
 
 pub fn write_usize(console: *mut EfiSimpleTextOutputProtocol, mut value: usize) {
