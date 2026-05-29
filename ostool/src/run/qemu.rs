@@ -75,7 +75,7 @@ pub struct QemuConfig {
     pub args: Vec<String>,
     /// Whether to use UEFI boot via OVMF firmware.
     pub uefi: bool,
-    /// Whether to convert ELF to raw binary before loading.
+    /// Whether build orchestration should prepare a raw BIN before loading.
     pub to_bin: bool,
     /// Regex patterns that indicate successful execution.
     pub success_regex: Vec<String>,
@@ -220,6 +220,12 @@ pub(crate) async fn run_qemu_with_config(
     run_args: RunQemuOptions,
     config: QemuConfig,
 ) -> anyhow::Result<()> {
+    if config.to_bin {
+        input
+            .artifacts
+            .require_bin("QEMU config `to_bin = true` requires a prepared BIN artifact")?;
+    }
+
     let mut runner = QemuRunner {
         input,
         config,
@@ -721,9 +727,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        QemuConfig, QemuRunInput, QemuRunner, build_default_qemu_config,
+        QemuConfig, QemuRunInput, QemuRunner, RunQemuOptions, build_default_qemu_config,
         ensure_qemu_config_at_path, infer_target_arch, read_qemu_config_at_path,
-        resolve_qemu_config_path_in_dir, timeout_duration,
+        resolve_qemu_config_path_in_dir, run_qemu_with_config, timeout_duration,
     };
     use object::Architecture;
     use std::{
@@ -734,6 +740,7 @@ mod tests {
 
     use crate::{
         Tool, ToolConfig,
+        artifact::runtime::{RuntimeArtifactOptions, prepare_runtime_artifacts},
         build::{
             config::{BuildConfig, BuildSystem, Cargo},
             config_loader,
@@ -928,6 +935,51 @@ fail_regex = []
             .unwrap();
 
         assert_eq!(config.args, vec!["-custom"]);
+    }
+
+    #[tokio::test]
+    async fn run_qemu_with_to_bin_rejects_elf_only_artifacts() {
+        let tmp = TempDir::new().unwrap();
+        write_single_crate_manifest(tmp.path());
+        let source = std::env::current_exe().unwrap();
+        let copied = tmp.path().join("sample-elf");
+        std::fs::copy(&source, &copied).unwrap();
+
+        let mut tool = make_tool(tmp.path());
+        let prepared = prepare_runtime_artifacts(
+            &tool.process_context().unwrap(),
+            RuntimeArtifactOptions {
+                elf_path: copied,
+                to_bin: false,
+                bin_dir: None,
+                debug: false,
+                cargo_artifact_dir: None,
+                strip_elf: false,
+                objcopy_program: PathBuf::from("rust-objcopy"),
+            },
+        )
+        .unwrap();
+        tool.apply_prepared_runtime_artifacts(prepared);
+        let input = qemu_input(&tool);
+
+        assert!(input.artifacts.elf().is_some());
+        assert!(input.artifacts.bin().is_none());
+
+        let err = run_qemu_with_config(
+            input,
+            RunQemuOptions::default(),
+            QemuConfig {
+                to_bin: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("QEMU config `to_bin = true` requires a prepared BIN artifact")
+        );
     }
 
     #[test]

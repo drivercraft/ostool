@@ -545,7 +545,7 @@ impl Tool {
     ) -> anyhow::Result<()> {
         let scope = self.variable_scope()?;
         let config = crate::run::uboot::prepare_uboot_runtime_config(&scope, config)?;
-        let input = self.prepared_uboot_run_input()?;
+        let input = self.uboot_run_input()?;
         crate::run::uboot::run_uboot_with_config(input, config, options).await
     }
 
@@ -557,27 +557,18 @@ impl Tool {
         client: crate::board::client::BoardServerClient,
         session: crate::board::client::SessionCreatedResponse,
     ) -> anyhow::Result<()> {
-        let input = self.prepared_uboot_run_input()?;
+        let input = self.uboot_run_input()?;
         crate::run::uboot::run_uboot_remote(input, board_config, client, session).await
     }
 
     /// Compatibility helper for the legacy `Tool` API.
     /// Remove this method when callers use explicit runner inputs.
     pub(crate) fn uboot_run_input(&self) -> anyhow::Result<crate::run::uboot::UbootRunInput> {
-        crate::run::uboot::UbootRunInput::new(
+        Ok(crate::run::uboot::UbootRunInput::new(
             self.process_context()?,
             self.runtime_artifacts().clone(),
             self.runtime_arch(),
-        )
-    }
-
-    /// Compatibility helper for the legacy `Tool` API.
-    /// Remove this method when callers use explicit runner inputs.
-    pub(crate) fn prepared_uboot_run_input(
-        &mut self,
-    ) -> anyhow::Result<crate::run::uboot::UbootRunInput> {
-        self.ensure_runtime_bin()?;
-        self.uboot_run_input()
+        ))
     }
 
     /// Compatibility wrapper for the legacy `Tool` API.
@@ -669,7 +660,7 @@ impl Tool {
         options: crate::board::RunBoardOptions,
     ) -> anyhow::Result<()> {
         self.prepare_runtime_artifacts(build_config, false).await?;
-        let input = self.prepared_uboot_run_input()?;
+        let input = self.uboot_run_input()?;
         let scope = self.variable_scope()?;
         crate::board::run_prepared_board(input, board_config, options, &scope).await
     }
@@ -692,22 +683,6 @@ mod tests {
         fs,
         path::{Path, PathBuf},
     };
-
-    #[cfg(unix)]
-    fn fake_objcopy(root: &Path) -> PathBuf {
-        let script = root.join("fake-rust-objcopy");
-        fs::write(
-            &script,
-            "#!/bin/sh\nlast=\"\"\nprev=\"\"\nfor arg in \"$@\"; do prev=\"$last\"; last=\"$arg\"; done\ncp \"$prev\" \"$last\"\n",
-        )
-        .unwrap();
-
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(&script).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&script, permissions).unwrap();
-        script
-    }
 
     #[tokio::test]
     async fn apply_prepared_runtime_artifacts_updates_dirs_and_arch() {
@@ -764,7 +739,7 @@ mod tests {
     }
 
     #[test]
-    fn uboot_run_input_rejects_artifacts_without_bin() {
+    fn uboot_run_input_accepts_elf_only_artifacts() {
         let temp = tempfile::tempdir().unwrap();
         write_single_package(temp.path(), "sample");
         let source = std::env::current_exe().unwrap();
@@ -792,45 +767,32 @@ mod tests {
         .unwrap();
         tool.apply_prepared_runtime_artifacts(prepared);
 
-        let err = tool.uboot_run_input().unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("U-Boot runner requires a prepared BIN artifact")
-        );
+        tool.uboot_run_input().unwrap();
+        assert!(tool.ctx.artifacts.elf().is_some());
+        assert!(tool.ctx.artifacts.bin().is_none());
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn prepared_uboot_run_input_reuses_existing_bin() {
+    #[tokio::test]
+    async fn run_uboot_rejects_missing_runtime_image() {
         let temp = tempfile::tempdir().unwrap();
         write_single_package(temp.path(), "sample");
-        let source = std::env::current_exe().unwrap();
-        let copied = temp.path().join("sample-elf");
-        fs::copy(&source, &copied).unwrap();
-
         let mut tool = Tool::new(ToolConfig {
             manifest: Some(temp.path().to_path_buf()),
             ..Default::default()
         })
         .unwrap();
-        let process_context = tool.process_context().unwrap();
-        let prepared = prepare_runtime_artifacts(
-            &process_context,
-            RuntimeArtifactOptions {
-                elf_path: copied,
-                to_bin: true,
-                bin_dir: None,
-                debug: false,
-                cargo_artifact_dir: None,
-                strip_elf: false,
-                objcopy_program: fake_objcopy(temp.path()),
-            },
-        )
-        .unwrap();
-        tool.apply_prepared_runtime_artifacts(prepared);
 
-        tool.prepared_uboot_run_input().unwrap();
-        assert!(tool.ctx.artifacts.bin().is_some());
+        let err = tool
+            .run_uboot(
+                &crate::run::uboot::UbootConfig::default(),
+                crate::run::uboot::RunUbootOptions::default(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("U-Boot runner requires a prepared runtime image")
+        );
     }
 
     #[test]

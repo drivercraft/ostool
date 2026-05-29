@@ -317,13 +317,12 @@ impl UbootRunInput {
         process_context: ProcessContext,
         artifacts: OutputArtifacts,
         arch: Option<object::Architecture>,
-    ) -> anyhow::Result<Self> {
-        artifacts.require_bin("U-Boot runner requires a prepared BIN artifact")?;
-        Ok(Self {
+    ) -> Self {
+        Self {
             process_context,
             artifacts,
             arch,
-        })
+        }
     }
 }
 
@@ -1127,7 +1126,8 @@ where
         let kernel = self
             .input
             .artifacts
-            .require_bin("bin not exist")?
+            .runtime_image()
+            .ok_or_else(|| anyhow!("U-Boot runner requires a prepared runtime image"))?
             .to_path_buf();
 
         info!("Starting U-Boot runner...");

@@ -21,13 +21,13 @@ use ostool::{
 struct RunnerArgs {
     program: PathBuf,
 
-    /// Path to the binary to run on the device
+    /// Path to the Cargo-built ELF artifact.
     elf: PathBuf,
 
     /// Test name
     test_name: Option<String>,
 
-    /// Objcopy elf to binary before running
+    /// Convert the ELF to a raw binary before running.
     #[arg(long("to-bin"))]
     to_bin: bool,
 

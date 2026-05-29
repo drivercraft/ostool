@@ -1,8 +1,8 @@
 //! Runtime artifact preparation helpers.
 //!
 //! The build pipeline may produce an executable in Cargo's artifact directory
-//! or receive a custom ELF path. This module normalizes that input into the ELF
-//! and optional BIN files consumed by QEMU, U-Boot, TFTP, and board runners.
+//! or receive a custom ELF path. This module normalizes that input into a runtime
+//! ELF plus optional derived images consumed by QEMU, U-Boot, TFTP, and board runners.
 
 use std::{
     fs,
