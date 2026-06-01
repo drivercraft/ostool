@@ -36,6 +36,15 @@ pub fn write_console(console: *mut EfiSimpleTextOutputProtocol, message: &str) {
     (console_ref.output_string)(console, buffer.as_ptr());
 }
 
+pub fn set_progress_cursor_visible(console: *mut EfiSimpleTextOutputProtocol, visible: bool) {
+    write_serial(if visible { b"\x1b[?25h" } else { b"\x1b[?25l" });
+
+    let Some(console_ref) = (unsafe { console.as_mut() }) else {
+        return;
+    };
+    let _ = (console_ref.enable_cursor)(console, u8::from(visible));
+}
+
 fn write_serial(bytes: &[u8]) {
     init_com1();
     for byte in bytes {
