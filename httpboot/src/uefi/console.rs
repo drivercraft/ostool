@@ -1,4 +1,5 @@
 use crate::uefi::abi::{EfiSimpleTextOutputProtocol, EfiStatus};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 const COM1_PORT: u16 = 0x3f8;
 const UART_RBR_THR: u16 = 0;
@@ -10,7 +11,9 @@ const UART_LSR: u16 = 5;
 const UART_DLL: u16 = 0;
 const UART_DLM: u16 = 1;
 const UART_LSR_THRE: u8 = 1 << 5;
+const UART_LSR_TEMT: u8 = 1 << 6;
 const UART_LCR_DLAB: u8 = 1 << 7;
+static COM1_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 pub fn write_console(console: *mut EfiSimpleTextOutputProtocol, message: &str) {
     write_serial(message.as_bytes());
@@ -44,6 +47,9 @@ fn write_serial(bytes: &[u8]) {
 }
 
 fn init_com1() {
+    if COM1_INITIALIZED.swap(true, Ordering::AcqRel) {
+        return;
+    }
     unsafe {
         outb(COM1_PORT + UART_IER, 0x00);
         outb(COM1_PORT + UART_LCR, UART_LCR_DLAB);
@@ -59,6 +65,15 @@ fn serial_putc(byte: u8) {
     for _ in 0..100_000 {
         if unsafe { inb(COM1_PORT + UART_LSR) } & UART_LSR_THRE != 0 {
             unsafe { outb(COM1_PORT + UART_RBR_THR, byte) };
+            wait_serial_empty();
+            return;
+        }
+    }
+}
+
+fn wait_serial_empty() {
+    for _ in 0..100_000 {
+        if unsafe { inb(COM1_PORT + UART_LSR) } & UART_LSR_TEMT != 0 {
             return;
         }
     }

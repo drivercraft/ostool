@@ -11,6 +11,7 @@ pub type EfiPhysicalAddress = u64;
 pub const EFI_LOCATE_BY_PROTOCOL: EfiLocateSearchType = 2;
 pub const EFI_ALLOCATE_ADDRESS: EfiAllocateType = 2;
 pub const EFI_LOADER_DATA: EfiMemoryType = 2;
+pub const EFI_CONVENTIONAL_MEMORY: EfiMemoryType = 7;
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -2,11 +2,12 @@ use core::ffi::c_void;
 
 use crate::uefi::abi::{
     EFI_ALLOCATE_ADDRESS, EFI_HTTP_PROTOCOL_GUID, EFI_HTTP_SERVICE_BINDING_PROTOCOL_GUID,
-    EFI_LOADER_DATA, EFI_LOCATE_BY_PROTOCOL, EFI_NO_MAPPING, EFI_NOT_READY, EFI_TIMEOUT,
-    EFI_UNSUPPORTED, EVT_NOTIFY_SIGNAL, EfiBootServices, EfiEvent, EfiGuid, EfiHandle,
-    EfiHttpConfigAccessPoint, EfiHttpConfigData, EfiHttpHeader, EfiHttpMessage, EfiHttpMessageData,
-    EfiHttpProtocol, EfiHttpRequestData, EfiHttpResponseData, EfiHttpToken, EfiHttpv4AccessPoint,
-    EfiMemoryDescriptor, EfiPhysicalAddress, EfiServiceBindingProtocol,
+    EFI_CONVENTIONAL_MEMORY, EFI_LOADER_DATA, EFI_LOCATE_BY_PROTOCOL, EFI_NO_MAPPING,
+    EFI_NOT_READY, EFI_TIMEOUT, EFI_UNSUPPORTED, EVT_NOTIFY_SIGNAL, EfiBootServices, EfiEvent,
+    EfiGuid, EfiHandle, EfiHttpConfigAccessPoint, EfiHttpConfigData, EfiHttpHeader,
+    EfiHttpMessage, EfiHttpMessageData, EfiHttpProtocol, EfiHttpRequestData, EfiHttpResponseData,
+    EfiHttpToken, EfiHttpv4AccessPoint, EfiMemoryDescriptor, EfiPhysicalAddress,
+    EfiServiceBindingProtocol,
     EfiSimpleTextOutputProtocol, EfiStatus, EfiSystemTable, HTTP_METHOD_GET, HTTP_STATUS_200_OK,
     HTTP_STATUS_206_PARTIAL_CONTENT, HTTP_VERSION_11, TPL_CALLBACK,
     boot_services_from_system_table,
@@ -26,7 +27,36 @@ const KERNEL_PROGRESS_STEP: usize = 256 * 1024;
 const MAX_KERNEL_DOWNLOAD_SIZE: usize = 256 * 1024 * 1024;
 const EFI_PAGE_SIZE: usize = 4096;
 const MEMORY_MAP_BUFFER_SIZE: usize = 64 * 1024;
+const OSTOOL_BOOT_INFO_MAGIC: u64 = 0x4f53_544f_4f4c_4249;
+const OSTOOL_BOOT_INFO_VERSION: u32 = 1;
+const OSTOOL_BOOT_INFO_MAX_RAM_REGIONS: usize = 32;
 const ENABLE_BOOT_JUMP: bool = cfg!(feature = "boot-jump");
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct OstoolRamRegion {
+    start: u64,
+    size: u64,
+}
+
+#[repr(C)]
+struct OstoolBootInfo {
+    magic: u64,
+    version: u32,
+    region_count: u32,
+    regions: [OstoolRamRegion; OSTOOL_BOOT_INFO_MAX_RAM_REGIONS],
+}
+
+impl OstoolBootInfo {
+    fn new() -> Self {
+        Self {
+            magic: OSTOOL_BOOT_INFO_MAGIC,
+            version: OSTOOL_BOOT_INFO_VERSION,
+            region_count: 0,
+            regions: [OstoolRamRegion { start: 0, size: 0 }; OSTOOL_BOOT_INFO_MAX_RAM_REGIONS],
+        }
+    }
+}
 
 pub fn run_http_boot_loader(
     console: *mut EfiSimpleTextOutputProtocol,
@@ -1059,6 +1089,7 @@ fn print_jump_readiness(
             load_addr: kernel_load_addr,
             entry_point,
             kernel_size,
+            boot_info: 0,
         },
     );
     write_console(console, "boot_jump_enabled: ");
@@ -1081,6 +1112,7 @@ fn print_jump_readiness(
             load_addr: kernel_load_addr,
             entry_point,
             kernel_size,
+            boot_info: 0,
         },
     );
     let free_status = (boot_services.free_pages)(kernel_load_addr, page_count);
@@ -1191,14 +1223,20 @@ fn maybe_exit_boot_services(
         memory_map.len(),
     );
     if !map_status.is_error() {
+        let mut boot_info = OstoolBootInfo::new();
+        populate_boot_info_from_memory_map(&mut boot_info, &memory_map, &probe);
+        let entry_plan = EntryPlan {
+            boot_info: core::ptr::addr_of!(boot_info) as usize,
+            ..*entry_plan
+        };
         let exit_status = (boot_services.exit_boot_services)(image, probe.map_key);
         if !exit_status.is_error() {
-            unsafe { call_entry_point(entry_plan) };
+            unsafe { call_entry_point(&entry_plan) };
         }
         write_console(console, "exit_boot_services_status: ");
         write_status(console, exit_status);
         write_console(console, "\r\n");
-        retry_exit_boot_services(console, boot_services, image, entry_plan);
+        retry_exit_boot_services(console, boot_services, image, &entry_plan);
         return;
     }
 
@@ -1235,13 +1273,51 @@ fn retry_exit_boot_services(
         return;
     }
 
+    let mut boot_info = OstoolBootInfo::new();
+    populate_boot_info_from_memory_map(&mut boot_info, &memory_map, &probe);
+    let entry_plan = EntryPlan {
+        boot_info: core::ptr::addr_of!(boot_info) as usize,
+        ..*entry_plan
+    };
     let exit_status = (boot_services.exit_boot_services)(image, probe.map_key);
     if !exit_status.is_error() {
-        unsafe { call_entry_point(entry_plan) };
+        unsafe { call_entry_point(&entry_plan) };
     }
     write_console(console, "exit_retry_boot_services_status: ");
     write_status(console, exit_status);
     write_console(console, "\r\n");
+}
+
+fn populate_boot_info_from_memory_map(
+    boot_info: &mut OstoolBootInfo,
+    memory_map: &[u8],
+    probe: &MemoryMapProbe,
+) {
+    if probe.descriptor_size < core::mem::size_of::<EfiMemoryDescriptor>() {
+        return;
+    }
+
+    let mut offset = 0usize;
+    while offset + core::mem::size_of::<EfiMemoryDescriptor>() <= probe.memory_map_size
+        && offset + core::mem::size_of::<EfiMemoryDescriptor>() <= memory_map.len()
+    {
+        let descriptor = unsafe {
+            core::ptr::read_unaligned(
+                memory_map.as_ptr().add(offset) as *const EfiMemoryDescriptor
+            )
+        };
+        if descriptor.memory_type == EFI_CONVENTIONAL_MEMORY
+            && boot_info.region_count < OSTOOL_BOOT_INFO_MAX_RAM_REGIONS as u32
+        {
+            let index = boot_info.region_count as usize;
+            boot_info.regions[index] = OstoolRamRegion {
+                start: descriptor.physical_start,
+                size: descriptor.number_of_pages.saturating_mul(EFI_PAGE_SIZE as u64),
+            };
+            boot_info.region_count += 1;
+        }
+        offset += probe.descriptor_size;
+    }
 }
 
 fn print_kernel_chunk_response(
