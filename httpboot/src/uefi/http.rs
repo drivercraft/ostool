@@ -1,18 +1,17 @@
 use core::ffi::c_void;
 
 use crate::uefi::abi::{
-    EFI_ALLOCATE_ADDRESS, EFI_HTTP_PROTOCOL_GUID, EFI_HTTP_SERVICE_BINDING_PROTOCOL_GUID,
-    EFI_CONVENTIONAL_MEMORY, EFI_LOADER_DATA, EFI_LOCATE_BY_PROTOCOL, EFI_NO_MAPPING,
-    EFI_NOT_READY, EFI_TIMEOUT, EFI_UNSUPPORTED, EVT_NOTIFY_SIGNAL, EfiBootServices, EfiEvent,
-    EfiGuid, EfiHandle, EfiHttpConfigAccessPoint, EfiHttpConfigData, EfiHttpHeader,
-    EfiHttpMessage, EfiHttpMessageData, EfiHttpProtocol, EfiHttpRequestData, EfiHttpResponseData,
-    EfiHttpToken, EfiHttpv4AccessPoint, EfiMemoryDescriptor, EfiPhysicalAddress,
-    EfiServiceBindingProtocol,
-    EfiSimpleTextOutputProtocol, EfiStatus, EfiSystemTable, HTTP_METHOD_GET, HTTP_STATUS_200_OK,
-    HTTP_STATUS_206_PARTIAL_CONTENT, HTTP_VERSION_11, TPL_CALLBACK,
-    boot_services_from_system_table,
+    EFI_ALLOCATE_ADDRESS, EFI_CONVENTIONAL_MEMORY, EFI_HTTP_PROTOCOL_GUID,
+    EFI_HTTP_SERVICE_BINDING_PROTOCOL_GUID, EFI_LOADER_DATA, EFI_LOCATE_BY_PROTOCOL,
+    EFI_NO_MAPPING, EFI_NOT_READY, EFI_SUCCESS, EFI_TIMEOUT, EFI_UNSUPPORTED, EVT_NOTIFY_SIGNAL,
+    EfiBootServices, EfiEvent, EfiGuid, EfiHandle, EfiHttpConfigAccessPoint, EfiHttpConfigData,
+    EfiHttpHeader, EfiHttpMessage, EfiHttpMessageData, EfiHttpProtocol, EfiHttpRequestData,
+    EfiHttpResponseData, EfiHttpToken, EfiHttpv4AccessPoint, EfiMemoryDescriptor,
+    EfiPhysicalAddress, EfiServiceBindingProtocol, EfiSimpleTextOutputProtocol, EfiStatus,
+    EfiSystemTable, HTTP_METHOD_GET, HTTP_STATUS_200_OK, HTTP_STATUS_206_PARTIAL_CONTENT,
+    HTTP_VERSION_11, TPL_CALLBACK, boot_services_from_system_table,
 };
-use crate::uefi::console::{write_console, write_status, write_usize, write_utf16_nul};
+use crate::uefi::console::{write_console, write_usize, write_utf16_nul};
 use crate::uefi::entry::{EntryPlan, call_entry_point, print_entry_plan, target_matches_manifest};
 use httpboot::parse_downloaded_manifest;
 
@@ -23,7 +22,9 @@ const KERNEL_RANGE_CHUNK_SIZE: usize = 1024;
 const HTTP_COMPLETION_POLL_LIMIT: usize = 100_000;
 const HTTP_REQUEST_RETRY_LIMIT: usize = 8;
 const HTTP_REQUEST_RETRY_STALL_US: usize = 250_000;
-const KERNEL_PROGRESS_STEP: usize = 256 * 1024;
+const HTTP_BOOT_ROUND_RETRY_STALL_US: usize = 3_000_000;
+const KERNEL_PROGRESS_STEP_PERCENT: usize = 5;
+const KERNEL_PROGRESS_BAR_WIDTH: usize = 80;
 const MAX_KERNEL_DOWNLOAD_SIZE: usize = 256 * 1024 * 1024;
 const EFI_PAGE_SIZE: usize = 4096;
 const MEMORY_MAP_BUFFER_SIZE: usize = 64 * 1024;
@@ -63,67 +64,18 @@ pub fn run_http_boot_loader(
     image: EfiHandle,
     system_table: *mut EfiSystemTable,
     manifest_url: Option<&str>,
-) {
-    write_console(console, "httpboot_loader_start\r\n");
-    write_console(console, "boot_jump_feature: ");
-    write_console(
-        console,
-        if ENABLE_BOOT_JUMP {
-            "enabled\r\n"
-        } else {
-            "disabled\r\n"
-        },
-    );
-
+) -> EfiStatus {
     let Some(boot_services) = boot_services_from_system_table(system_table) else {
-        write_console(console, "failed to access Boot Services for HTTP Boot\r\n");
-        return;
+        write_console(console, "error: Boot Services unavailable\r\n");
+        return EFI_SUCCESS;
     };
 
-    match count_protocol_handles(boot_services, &EFI_HTTP_SERVICE_BINDING_PROTOCOL_GUID) {
-        Ok(count) => {
-            write_console(console, "http_service_binding_handles: ");
-            write_usize(console, count);
-            write_console(console, "\r\n");
-        }
-        Err(_) => write_console(
-            console,
-            "failed to locate HTTP Service Binding Protocol\r\n",
-        ),
+    let mut round = 0usize;
+    loop {
+        round += 1;
+        run_http_child(console, boot_services, image, manifest_url, round > 3);
+        let _ = (boot_services.stall)(HTTP_BOOT_ROUND_RETRY_STALL_US);
     }
-
-    match count_protocol_handles(boot_services, &EFI_HTTP_PROTOCOL_GUID) {
-        Ok(count) => {
-            write_console(console, "http_protocol_handles: ");
-            write_usize(console, count);
-            write_console(console, "\r\n");
-        }
-        Err(_) => write_console(console, "failed to locate HTTP Protocol\r\n"),
-    }
-
-    run_http_child(console, boot_services, image, manifest_url);
-}
-
-fn count_protocol_handles(
-    boot_services: &mut EfiBootServices,
-    protocol: &EfiGuid,
-) -> Result<usize, EfiStatus> {
-    let mut handle_count = 0usize;
-    let mut handles = core::ptr::null_mut();
-    let status = (boot_services.locate_handle_buffer)(
-        EFI_LOCATE_BY_PROTOCOL,
-        protocol,
-        core::ptr::null_mut(),
-        &mut handle_count,
-        &mut handles,
-    );
-    if status.is_error() {
-        return Err(status);
-    }
-    if !handles.is_null() {
-        let _ = (boot_services.free_pool)(handles as *mut c_void);
-    }
-    Ok(handle_count)
 }
 
 fn first_protocol_handle(
@@ -172,17 +124,15 @@ fn run_http_child(
     boot_services: &mut EfiBootServices,
     image: EfiHandle,
     manifest_url: Option<&str>,
+    show_errors: bool,
 ) {
     let service_handle =
         match first_protocol_handle(boot_services, &EFI_HTTP_SERVICE_BINDING_PROTOCOL_GUID) {
             Ok(handle) => handle,
-            Err(status) => {
-                write_console(
-                    console,
-                    "http_create_child_skipped: service binding not found ",
-                );
-                write_status(console, status);
-                write_console(console, "\r\n");
+            Err(_) => {
+                if show_errors {
+                    write_console(console, "error: HTTP service binding unavailable\r\n");
+                }
                 return;
             }
         };
@@ -193,10 +143,10 @@ fn run_http_child(
         &EFI_HTTP_SERVICE_BINDING_PROTOCOL_GUID,
     ) {
         Ok(service_binding) => service_binding,
-        Err(status) => {
-            write_console(console, "http_service_binding_open_failed: ");
-            write_status(console, status);
-            write_console(console, "\r\n");
+        Err(_) => {
+            if show_errors {
+                write_console(console, "error: failed to open HTTP service binding\r\n");
+            }
             return;
         }
     };
@@ -204,10 +154,10 @@ fn run_http_child(
     let mut child_handle = core::ptr::null_mut();
     let create_status =
         unsafe { ((*service_binding).create_child)(service_binding, &mut child_handle) };
-    write_console(console, "http_create_child_status: ");
-    write_status(console, create_status);
-    write_console(console, "\r\n");
     if create_status.is_error() || child_handle.is_null() {
+        if show_errors {
+            write_console(console, "error: failed to create HTTP child\r\n");
+        }
         return;
     }
 
@@ -216,39 +166,37 @@ fn run_http_child(
         child_handle,
         &EFI_HTTP_PROTOCOL_GUID,
     ) {
-        Ok(http_protocol) => {
-            write_console(console, "http_child_protocol_status: 0x0\r\n");
-            http_protocol
-        }
-        Err(status) => {
-            write_console(console, "http_child_protocol_status: ");
-            write_status(console, status);
-            write_console(console, "\r\n");
+        Ok(http_protocol) => http_protocol,
+        Err(_) => {
+            if show_errors {
+                write_console(console, "error: failed to open HTTP protocol\r\n");
+            }
             destroy_http_child(console, service_binding, child_handle);
             return;
         }
     };
 
     let configure_status = configure_http_ipv4_default(http_protocol);
-    write_console(console, "http_configure_status: ");
-    write_status(console, configure_status);
-    write_console(console, "\r\n");
 
     if !configure_status.is_error() {
         if let Some(manifest_url) = manifest_url {
-            request_manifest(console, boot_services, image, http_protocol, manifest_url);
-        } else {
-            write_console(
+            request_manifest(
                 console,
-                "http_request_skipped: manifest URL unavailable\r\n",
+                boot_services,
+                image,
+                http_protocol,
+                manifest_url,
+                show_errors,
             );
+        } else {
+            write_console(console, "error: manifest URL unavailable\r\n");
         }
 
-        let reset_status =
-            unsafe { ((*http_protocol).configure)(http_protocol, core::ptr::null_mut()) };
-        write_console(console, "http_reset_status: ");
-        write_status(console, reset_status);
-        write_console(console, "\r\n");
+        let _ = unsafe { ((*http_protocol).configure)(http_protocol, core::ptr::null_mut()) };
+    } else {
+        if show_errors {
+            write_console(console, "error: failed to configure HTTP IPv4\r\n");
+        }
     }
 
     destroy_http_child(console, service_binding, child_handle);
@@ -260,27 +208,29 @@ fn request_manifest(
     image: EfiHandle,
     http_protocol: *mut EfiHttpProtocol,
     manifest_url: &str,
+    show_errors: bool,
 ) {
     let mut url_buffer = [0u16; UTF16_URL_BUFFER_SIZE];
     let url = match write_utf16_nul(manifest_url, &mut url_buffer) {
         Ok(url) => url,
         Err(_) => {
-            write_console(console, "http_request_skipped: URL too long\r\n");
+            if show_errors {
+                write_console(console, "error: manifest URL too long\r\n");
+            }
             return;
         }
     };
     let mut host_name = *b"Host\0";
     let mut host_value = [0u8; HTTP_HOST_BUFFER_SIZE];
-    let host = match write_url_host_header_value(manifest_url, &mut host_value) {
-        Ok(host) => host,
+    match write_url_host_header_value(manifest_url, &mut host_value) {
+        Ok(_) => {}
         Err(()) => {
-            write_console(console, "http_request_skipped: invalid URL host\r\n");
+            if show_errors {
+                write_console(console, "error: invalid manifest URL host\r\n");
+            }
             return;
         }
     };
-    write_console(console, "http_request_host: ");
-    write_console(console, host);
-    write_console(console, "\r\n");
 
     let mut event = core::ptr::null_mut();
     let event_status = (boot_services.create_event)(
@@ -290,10 +240,13 @@ fn request_manifest(
         core::ptr::null_mut(),
         &mut event,
     );
-    write_console(console, "http_request_event_status: ");
-    write_status(console, event_status);
-    write_console(console, "\r\n");
     if event_status.is_error() || event.is_null() {
+        if show_errors {
+            write_console(
+                console,
+                "error: failed to create manifest request event\r\n",
+            );
+        }
         return;
     }
 
@@ -321,24 +274,19 @@ fn request_manifest(
     };
 
     let request_status = submit_request_with_retries(boot_services, http_protocol, &mut token);
-    write_console(console, "http_request_status: ");
-    write_status(console, request_status);
-    write_console(console, "\r\n");
 
     if !request_status.is_error() {
         let completion = poll_http_token(http_protocol, &token);
-        write_console(console, "http_request_completion: ");
-        write_status(console, completion);
-        write_console(console, "\r\n");
         if !completion.is_error() {
             receive_manifest_response(console, boot_services, image, http_protocol);
+        } else if show_errors {
+            write_console(console, "error: manifest request did not complete\r\n");
         }
+    } else if show_errors {
+        write_console(console, "error: failed to send manifest request\r\n");
     }
 
-    let close_status = (boot_services.close_event)(event);
-    write_console(console, "http_request_close_event_status: ");
-    write_status(console, close_status);
-    write_console(console, "\r\n");
+    let _ = (boot_services.close_event)(event);
 }
 
 extern "efiapi" fn noop_event_notify(_event: EfiEvent, _context: *mut c_void) {}
@@ -410,10 +358,11 @@ fn receive_manifest_response(
         core::ptr::null_mut(),
         &mut event,
     );
-    write_console(console, "http_response_event_status: ");
-    write_status(console, event_status);
-    write_console(console, "\r\n");
     if event_status.is_error() || event.is_null() {
+        write_console(
+            console,
+            "error: failed to create manifest response event\r\n",
+        );
         return;
     }
 
@@ -435,15 +384,9 @@ fn receive_manifest_response(
     };
 
     let response_status = unsafe { ((*http_protocol).response)(http_protocol, &mut token) };
-    write_console(console, "http_response_status: ");
-    write_status(console, response_status);
-    write_console(console, "\r\n");
 
     if !response_status.is_error() {
         let completion = poll_http_token(http_protocol, &token);
-        write_console(console, "http_response_completion: ");
-        write_status(console, completion);
-        write_console(console, "\r\n");
         if !completion.is_error() {
             print_manifest_response(
                 console,
@@ -454,13 +397,14 @@ fn receive_manifest_response(
                 &message,
                 &body,
             );
+        } else {
+            write_console(console, "error: manifest response did not complete\r\n");
         }
+    } else {
+        write_console(console, "error: failed to receive manifest response\r\n");
     }
 
-    let close_status = (boot_services.close_event)(event);
-    write_console(console, "http_response_close_event_status: ");
-    write_status(console, close_status);
-    write_console(console, "\r\n");
+    let _ = (boot_services.close_event)(event);
 }
 
 fn print_manifest_response(
@@ -472,56 +416,32 @@ fn print_manifest_response(
     message: &EfiHttpMessage,
     body: &[u8],
 ) {
-    write_console(console, "http_response_status_enum: ");
-    write_usize(console, response_data.status_code as usize);
-    write_console(console, "\r\n");
-    write_console(console, "http_response_status_code: ");
-    write_http_status_code(console, response_data.status_code);
-    write_console(console, "\r\n");
-
-    write_console(console, "http_response_header_count: ");
-    write_usize(console, message.header_count);
-    write_console(console, "\r\n");
-
-    write_console(console, "http_response_body_length: ");
-    write_usize(console, message.body_length);
-    write_console(console, "\r\n");
-
     if response_data.status_code != HTTP_STATUS_200_OK {
-        write_console(
-            console,
-            "manifest_parse_skipped: HTTP status is not 200\r\n",
-        );
+        write_console(console, "error: manifest HTTP status ");
+        write_http_status_code(console, response_data.status_code);
+        write_console(console, "\r\n");
         free_response_headers(boot_services, message);
         return;
     }
 
     if message.body_length > body.len() {
-        write_console(console, "manifest_parse_skipped: body buffer too small\r\n");
+        write_console(console, "error: manifest body too large\r\n");
         free_response_headers(boot_services, message);
         return;
     }
 
     match parse_downloaded_manifest(&body[..message.body_length], body.len()) {
         Ok(manifest) => {
-            write_console(console, "manifest_arch: ");
-            write_console(console, manifest.arch);
-            write_console(console, "\r\n");
             if !target_matches_manifest(manifest.arch) {
-                write_console(console, "manifest_arch_rejected: target mismatch\r\n");
+                write_console(console, "error: manifest arch mismatch\r\n");
                 free_response_headers(boot_services, message);
                 return;
             }
-            write_console(console, "manifest_kernel_url: ");
-            write_console(console, manifest.kernel_url);
-            write_console(console, "\r\n");
-            write_console(console, "manifest_kernel_size: ");
+            write_console(console, "kernel: ");
             write_usize(console, manifest.kernel_size as usize);
-            write_console(console, "\r\n");
-            write_console(console, "manifest_kernel_load_addr: 0x");
+            write_console(console, " bytes load=0x");
             write_hex_u64(console, manifest.kernel_load_addr);
-            write_console(console, "\r\n");
-            write_console(console, "manifest_entry_point: 0x");
+            write_console(console, " entry=0x");
             write_hex_u64(console, manifest.entry_point);
             write_console(console, "\r\n");
             request_kernel_probe(
@@ -536,7 +456,7 @@ fn print_manifest_response(
                 manifest.arch,
             );
         }
-        Err(_) => write_console(console, "manifest_parse_failed\r\n"),
+        Err(_) => write_console(console, "error: failed to parse manifest\r\n"),
     }
 
     free_response_headers(boot_services, message);
@@ -581,27 +501,22 @@ fn request_kernel_range(
     let url = match write_utf16_nul(kernel_url, &mut url_buffer) {
         Ok(url) => url,
         Err(_) => {
-            write_console(console, "kernel_request_skipped: URL too long\r\n");
+            write_console(console, "error: kernel URL too long\r\n");
             return None;
         }
     };
     let mut host_name = *b"Host\0";
     let mut host_value = [0u8; HTTP_HOST_BUFFER_SIZE];
-    let host = match write_url_host_header_value(kernel_url, &mut host_value) {
-        Ok(host) => host,
+    match write_url_host_header_value(kernel_url, &mut host_value) {
+        Ok(_) => {}
         Err(()) => {
-            write_console(console, "kernel_request_skipped: invalid URL host\r\n");
+            write_console(console, "error: invalid kernel URL host\r\n");
             return None;
         }
     };
     let mut range_name = *b"Range\0";
     let mut range_value = [0u8; 64];
     write_range_header_value(range_start, range_end, &mut range_value)?;
-    if first {
-        write_console(console, "kernel_request_host: ");
-        write_console(console, host);
-        write_console(console, "\r\n");
-    }
 
     let mut event = core::ptr::null_mut();
     let event_status = (boot_services.create_event)(
@@ -611,12 +526,8 @@ fn request_kernel_range(
         core::ptr::null_mut(),
         &mut event,
     );
-    if first {
-        write_console(console, "kernel_request_event_status: ");
-        write_status(console, event_status);
-        write_console(console, "\r\n");
-    }
     if event_status.is_error() || event.is_null() {
+        write_console(console, "error: failed to create kernel request event\r\n");
         return None;
     }
 
@@ -650,26 +561,12 @@ fn request_kernel_range(
     };
 
     let request_status = submit_request_with_retries(boot_services, http_protocol, &mut token);
-    if first || request_status.is_error() {
-        write_console(console, "kernel_request_status: ");
-        write_status(console, request_status);
-        write_console(console, "\r\n");
-    }
 
     if !request_status.is_error() {
         let completion = poll_http_token(http_protocol, &token);
-        if first || completion.is_error() {
-            write_console(console, "kernel_request_completion: ");
-            write_status(console, completion);
-            write_console(console, "\r\n");
-        }
         if completion.is_error() {
-            let close_status = (boot_services.close_event)(event);
-            if first {
-                write_console(console, "kernel_request_close_event_status: ");
-                write_status(console, close_status);
-                write_console(console, "\r\n");
-            }
+            write_console(console, "error: kernel request did not complete\r\n");
+            let _ = (boot_services.close_event)(event);
             return None;
         }
         let received = receive_kernel_range_body(
@@ -680,21 +577,12 @@ fn request_kernel_range(
             expected_len,
             first,
         );
-        let close_status = (boot_services.close_event)(event);
-        if first {
-            write_console(console, "kernel_request_close_event_status: ");
-            write_status(console, close_status);
-            write_console(console, "\r\n");
-        }
+        let _ = (boot_services.close_event)(event);
         return received;
     }
 
-    let close_status = (boot_services.close_event)(event);
-    if first {
-        write_console(console, "kernel_request_close_event_status: ");
-        write_status(console, close_status);
-        write_console(console, "\r\n");
-    }
+    write_console(console, "error: failed to send kernel request\r\n");
+    let _ = (boot_services.close_event)(event);
     None
 }
 
@@ -724,19 +612,12 @@ fn download_kernel_to_load_addr(
         page_count,
         &mut target,
     );
-    write_console(console, "kernel_allocate_pages_status: ");
-    write_status(console, allocate_status);
-    write_console(console, "\r\n");
-    write_console(console, "kernel_target_addr: 0x");
-    write_hex_u64(console, target);
-    write_console(console, "\r\n");
-    write_console(console, "kernel_target_pages: ");
-    write_usize(console, page_count);
-    write_console(console, "\r\n");
     if allocate_status.is_error() || target != kernel_load_addr {
+        write_console(console, "error: failed to allocate kernel pages\r\n");
         return;
     }
 
+    print_download_progress(console, 0, expected_size, 0);
     let received = download_kernel_ranges(
         console,
         boot_services,
@@ -745,24 +626,10 @@ fn download_kernel_to_load_addr(
         kernel_load_addr,
         expected_size,
     );
-    let checksum = checksum_add(0, unsafe {
-        core::slice::from_raw_parts(kernel_load_addr as *const u8, received)
-    });
     let complete = received == expected_size;
 
-    write_console(console, "kernel_downloaded_size: ");
-    write_usize(console, received);
-    write_console(console, "\r\n");
-    write_console(console, "kernel_expected_size: ");
-    write_usize(console, expected_size);
-    write_console(console, "\r\n");
-    write_console(console, "kernel_download_complete: ");
-    write_console(console, if complete { "yes\r\n" } else { "no\r\n" });
-    write_console(console, "kernel_checksum32: 0x");
-    write_hex_u32(console, checksum);
-    write_console(console, "\r\n");
-
     if complete {
+        write_console(console, "\r\n");
         print_jump_readiness(
             console,
             boot_services,
@@ -774,10 +641,9 @@ fn download_kernel_to_load_addr(
             page_count,
         );
     } else {
-        let free_status = (boot_services.free_pages)(kernel_load_addr, page_count);
-        write_console(console, "kernel_free_pages_status: ");
-        write_status(console, free_status);
         write_console(console, "\r\n");
+        write_console(console, "error: kernel download incomplete\r\n");
+        let _ = (boot_services.free_pages)(kernel_load_addr, page_count);
     }
 }
 
@@ -834,7 +700,7 @@ fn download_kernel_ranges(
     expected_size: usize,
 ) -> usize {
     let mut downloaded = 0usize;
-    let mut next_progress = KERNEL_PROGRESS_STEP;
+    let mut next_progress_percent = KERNEL_PROGRESS_STEP_PERCENT;
 
     while downloaded < expected_size {
         let chunk_len = (expected_size - downloaded).min(KERNEL_RANGE_CHUNK_SIZE);
@@ -853,27 +719,83 @@ fn download_kernel_ranges(
             chunk_len,
             first,
         ) else {
-            write_console(console, "kernel_download_stopped_at: ");
+            write_console(console, "\r\n");
+            write_console(console, "error: kernel download stopped at ");
             write_usize(console, downloaded);
             write_console(console, "\r\n");
             break;
         };
         if received == 0 {
-            write_console(console, "kernel_download_stopped: zero length chunk\r\n");
+            write_console(console, "\r\n");
+            write_console(console, "error: zero length kernel chunk\r\n");
             break;
         }
         downloaded += received;
-        if downloaded >= next_progress || downloaded == expected_size {
-            write_console(console, "kernel_download_progress: ");
-            write_usize(console, downloaded);
-            write_console(console, "\r\n");
-            while next_progress <= downloaded {
-                next_progress += KERNEL_PROGRESS_STEP;
+        let percent = download_percent(downloaded, expected_size);
+        if percent >= next_progress_percent || downloaded == expected_size {
+            print_download_progress(console, downloaded, expected_size, percent);
+            while next_progress_percent <= percent {
+                next_progress_percent += KERNEL_PROGRESS_STEP_PERCENT;
             }
         }
     }
 
     downloaded
+}
+
+fn download_percent(downloaded: usize, expected_size: usize) -> usize {
+    if expected_size == 0 {
+        return 0;
+    }
+    downloaded.saturating_mul(100) / expected_size
+}
+
+fn print_download_progress(
+    console: *mut EfiSimpleTextOutputProtocol,
+    downloaded: usize,
+    expected_size: usize,
+    percent: usize,
+) {
+    write_console(console, "\rdownload: [");
+    let filled = percent.saturating_mul(KERNEL_PROGRESS_BAR_WIDTH) / 100;
+    for index in 0..KERNEL_PROGRESS_BAR_WIDTH {
+        write_console(console, if index < filled { "#" } else { "-" });
+    }
+    write_console(console, "] ");
+    write_usize(console, percent);
+    write_console(console, "% ");
+    write_human_size(console, downloaded);
+    write_console(console, "/");
+    write_human_size(console, expected_size);
+    write_console(console, "    ");
+}
+
+fn write_human_size(console: *mut EfiSimpleTextOutputProtocol, bytes: usize) {
+    const KIB: usize = 1024;
+    const MIB: usize = 1024 * 1024;
+
+    if bytes >= MIB {
+        write_fixed_2(console, bytes, MIB);
+        write_console(console, " MiB");
+    } else if bytes >= KIB {
+        write_fixed_2(console, bytes, KIB);
+        write_console(console, " KiB");
+    } else {
+        write_usize(console, bytes);
+        write_console(console, " B");
+    }
+}
+
+fn write_fixed_2(console: *mut EfiSimpleTextOutputProtocol, value: usize, unit: usize) {
+    let whole = value / unit;
+    let frac = value % unit;
+    let hundredths = frac.saturating_mul(100) / unit;
+    write_usize(console, whole);
+    write_console(console, ".");
+    if hundredths < 10 {
+        write_console(console, "0");
+    }
+    write_usize(console, hundredths);
 }
 
 fn write_range_header_value(start: usize, end: usize, output: &mut [u8]) -> Option<()> {
@@ -949,10 +871,9 @@ fn receive_kernel_range_body(
     let response =
         receive_kernel_stream_chunk(console, boot_services, http_protocol, body, body_len, first)?;
     if response.http_status != HTTP_STATUS_206_PARTIAL_CONTENT {
-        write_console(
-            console,
-            "kernel_download_stopped: HTTP status is not 206\r\n",
-        );
+        write_console(console, "error: kernel HTTP status ");
+        write_http_status_code(console, response.http_status);
+        write_console(console, "\r\n");
         return None;
     }
     Some(response.received)
@@ -969,7 +890,7 @@ fn receive_kernel_stream_chunk(
     http_protocol: *mut EfiHttpProtocol,
     body: *mut u8,
     body_len: usize,
-    first: bool,
+    _first: bool,
 ) -> Option<KernelChunkResponse> {
     let mut event = core::ptr::null_mut();
     let event_status = (boot_services.create_event)(
@@ -979,12 +900,8 @@ fn receive_kernel_stream_chunk(
         core::ptr::null_mut(),
         &mut event,
     );
-    if first {
-        write_console(console, "kernel_response_event_status: ");
-        write_status(console, event_status);
-        write_console(console, "\r\n");
-    }
     if event_status.is_error() || event.is_null() {
+        write_console(console, "error: failed to create kernel response event\r\n");
         return None;
     }
 
@@ -1007,49 +924,22 @@ fn receive_kernel_stream_chunk(
     };
 
     let response_status = unsafe { ((*http_protocol).response)(http_protocol, &mut token) };
-    if first {
-        write_console(console, "kernel_response_status: ");
-        write_status(console, response_status);
-        write_console(console, "\r\n");
-    } else if response_status.is_error() {
-        write_console(console, "kernel_stream_response_status: ");
-        write_status(console, response_status);
-        write_console(console, "\r\n");
-    }
 
     if response_status.is_error() {
-        let close_status = (boot_services.close_event)(event);
-        if first {
-            write_console(console, "kernel_response_close_event_status: ");
-            write_status(console, close_status);
-            write_console(console, "\r\n");
-        }
+        write_console(console, "error: failed to receive kernel response\r\n");
+        let _ = (boot_services.close_event)(event);
         return None;
     }
 
     let completion = poll_http_token(http_protocol, &token);
-    if first {
-        write_console(console, "kernel_response_completion: ");
-        write_status(console, completion);
-        write_console(console, "\r\n");
-        if !completion.is_error() {
-            print_kernel_chunk_response(console, boot_services, &response_data, &message);
-        }
+    if !completion.is_error() {
+        free_response_headers(boot_services, &message);
     } else {
-        if completion.is_error() {
-            write_console(console, "kernel_stream_response_completion: ");
-            write_status(console, completion);
-            write_console(console, "\r\n");
-        }
+        write_console(console, "error: kernel response did not complete\r\n");
         free_response_headers(boot_services, &message);
     }
 
-    let close_status = (boot_services.close_event)(event);
-    if first {
-        write_console(console, "kernel_response_close_event_status: ");
-        write_status(console, close_status);
-        write_console(console, "\r\n");
-    }
+    let _ = (boot_services.close_event)(event);
 
     if completion.is_error() {
         return None;
@@ -1070,18 +960,6 @@ fn print_jump_readiness(
     kernel_size: usize,
     page_count: usize,
 ) {
-    write_console(console, "jump_ready_load_addr: 0x");
-    write_hex_u64(console, kernel_load_addr);
-    write_console(console, "\r\n");
-    write_console(console, "jump_ready_entry_point: 0x");
-    write_hex_u64(console, entry_point);
-    write_console(console, "\r\n");
-    write_console(console, "jump_ready_kernel_size: ");
-    write_usize(console, kernel_size);
-    write_console(console, "\r\n");
-    write_console(console, "jump_ready_pages_retained: ");
-    write_usize(console, page_count);
-    write_console(console, "\r\n");
     print_entry_plan(
         console,
         &EntryPlan {
@@ -1092,17 +970,7 @@ fn print_jump_readiness(
             boot_info: 0,
         },
     );
-    write_console(console, "boot_jump_enabled: ");
-    write_console(
-        console,
-        if ENABLE_BOOT_JUMP {
-            "yes\r\n"
-        } else {
-            "no\r\n"
-        },
-    );
 
-    probe_memory_map(console, boot_services, image);
     maybe_exit_boot_services(
         console,
         boot_services,
@@ -1115,55 +983,8 @@ fn print_jump_readiness(
             boot_info: 0,
         },
     );
-    let free_status = (boot_services.free_pages)(kernel_load_addr, page_count);
-    write_console(console, "jump_skip_free_pages_status: ");
-    write_status(console, free_status);
-    write_console(console, "\r\n");
-    write_console(
-        console,
-        "jump_skipped: ExitBootServices and entry call pending\r\n",
-    );
-}
-
-fn probe_memory_map(
-    console: *mut EfiSimpleTextOutputProtocol,
-    boot_services: &mut EfiBootServices,
-    image: EfiHandle,
-) {
-    let mut probe = MemoryMapProbe::new();
-    let size_status = get_memory_map(boot_services, &mut probe, core::ptr::null_mut(), 0);
-    write_console(console, "memory_map_size_status: ");
-    write_status(console, size_status);
-    write_console(console, "\r\n");
-    write_console(console, "memory_map_required_size: ");
-    write_usize(console, probe.memory_map_size);
-    write_console(console, "\r\n");
-
-    let mut memory_map = [0u8; MEMORY_MAP_BUFFER_SIZE];
-    let map_status = get_memory_map(
-        boot_services,
-        &mut probe,
-        memory_map.as_mut_ptr() as *mut EfiMemoryDescriptor,
-        memory_map.len(),
-    );
-    write_console(console, "memory_map_status: ");
-    write_status(console, map_status);
-    write_console(console, "\r\n");
-    write_console(console, "memory_map_size: ");
-    write_usize(console, probe.memory_map_size);
-    write_console(console, "\r\n");
-    write_console(console, "memory_map_key: ");
-    write_usize(console, probe.map_key);
-    write_console(console, "\r\n");
-    write_console(console, "memory_map_descriptor_size: ");
-    write_usize(console, probe.descriptor_size);
-    write_console(console, "\r\n");
-    write_console(console, "memory_map_descriptor_version: ");
-    write_usize(console, probe.descriptor_version as usize);
-    write_console(console, "\r\n");
-    write_console(console, "exit_boot_services_image: 0x");
-    write_hex_usize(console, image as usize);
-    write_console(console, "\r\n");
+    let _ = (boot_services.free_pages)(kernel_load_addr, page_count);
+    write_console(console, "error: jump returned unexpectedly\r\n");
 }
 
 struct MemoryMapProbe {
@@ -1207,10 +1028,7 @@ fn maybe_exit_boot_services(
     entry_plan: &EntryPlan<'_>,
 ) {
     if !ENABLE_BOOT_JUMP {
-        write_console(
-            console,
-            "exit_boot_services_skipped: boot jump disabled\r\n",
-        );
+        write_console(console, "error: boot jump disabled\r\n");
         return;
     }
 
@@ -1233,23 +1051,11 @@ fn maybe_exit_boot_services(
         if !exit_status.is_error() {
             unsafe { call_entry_point(&entry_plan) };
         }
-        write_console(console, "exit_boot_services_status: ");
-        write_status(console, exit_status);
-        write_console(console, "\r\n");
         retry_exit_boot_services(console, boot_services, image, &entry_plan);
         return;
     }
 
-    write_console(console, "exit_memory_map_status: ");
-    write_status(console, map_status);
-    write_console(console, "\r\n");
-    write_console(console, "exit_memory_map_key: ");
-    write_usize(console, probe.map_key);
-    write_console(console, "\r\n");
-    write_console(
-        console,
-        "exit_boot_services_skipped: memory map unavailable\r\n",
-    );
+    write_console(console, "error: memory map unavailable before jump\r\n");
 }
 
 fn retry_exit_boot_services(
@@ -1267,9 +1073,7 @@ fn retry_exit_boot_services(
         memory_map.len(),
     );
     if map_status.is_error() {
-        write_console(console, "exit_retry_memory_map_status: ");
-        write_status(console, map_status);
-        write_console(console, "\r\n");
+        write_console(console, "error: memory map retry failed\r\n");
         return;
     }
 
@@ -1283,9 +1087,7 @@ fn retry_exit_boot_services(
     if !exit_status.is_error() {
         unsafe { call_entry_point(&entry_plan) };
     }
-    write_console(console, "exit_retry_boot_services_status: ");
-    write_status(console, exit_status);
-    write_console(console, "\r\n");
+    write_console(console, "error: ExitBootServices failed\r\n");
 }
 
 fn populate_boot_info_from_memory_map(
@@ -1302,9 +1104,7 @@ fn populate_boot_info_from_memory_map(
         && offset + core::mem::size_of::<EfiMemoryDescriptor>() <= memory_map.len()
     {
         let descriptor = unsafe {
-            core::ptr::read_unaligned(
-                memory_map.as_ptr().add(offset) as *const EfiMemoryDescriptor
-            )
+            core::ptr::read_unaligned(memory_map.as_ptr().add(offset) as *const EfiMemoryDescriptor)
         };
         if descriptor.memory_type == EFI_CONVENTIONAL_MEMORY
             && boot_info.region_count < OSTOOL_BOOT_INFO_MAX_RAM_REGIONS as u32
@@ -1312,7 +1112,9 @@ fn populate_boot_info_from_memory_map(
             let index = boot_info.region_count as usize;
             boot_info.regions[index] = OstoolRamRegion {
                 start: descriptor.physical_start,
-                size: descriptor.number_of_pages.saturating_mul(EFI_PAGE_SIZE as u64),
+                size: descriptor
+                    .number_of_pages
+                    .saturating_mul(EFI_PAGE_SIZE as u64),
             };
             boot_info.region_count += 1;
         }
@@ -1320,65 +1122,10 @@ fn populate_boot_info_from_memory_map(
     }
 }
 
-fn print_kernel_chunk_response(
-    console: *mut EfiSimpleTextOutputProtocol,
-    boot_services: &mut EfiBootServices,
-    response_data: &EfiHttpResponseData,
-    message: &EfiHttpMessage,
-) {
-    write_console(console, "kernel_response_status_enum: ");
-    write_usize(console, response_data.status_code as usize);
-    write_console(console, "\r\n");
-    write_console(console, "kernel_response_status_code: ");
-    write_http_status_code(console, response_data.status_code);
-    write_console(console, "\r\n");
-    write_console(console, "kernel_response_header_count: ");
-    write_usize(console, message.header_count);
-    write_console(console, "\r\n");
-    write_console(console, "kernel_response_body_length: ");
-    write_usize(console, message.body_length);
-    write_console(console, "\r\n");
-
-    if response_data.status_code == HTTP_STATUS_200_OK
-        || response_data.status_code == HTTP_STATUS_206_PARTIAL_CONTENT
-    {
-        write_console(console, "kernel_chunk_received\r\n");
-    } else {
-        write_console(
-            console,
-            "kernel_download_stopped: unexpected HTTP status\r\n",
-        );
-    }
-
-    free_response_headers(boot_services, message);
-}
-
 fn free_response_headers(boot_services: &mut EfiBootServices, message: &EfiHttpMessage) {
     if !message.headers.is_null() {
         let _ = (boot_services.free_pool)(message.headers as *mut c_void);
     }
-}
-
-fn checksum_add(mut checksum: u32, bytes: &[u8]) -> u32 {
-    for byte in bytes {
-        checksum = checksum.wrapping_add(*byte as u32);
-    }
-    checksum
-}
-
-fn write_hex_u32(console: *mut EfiSimpleTextOutputProtocol, value: u32) {
-    let mut output = [0u8; 8];
-    let mut shift = 28u32;
-    for byte in &mut output {
-        let digit = ((value >> shift) & 0xf) as u8;
-        *byte = match digit {
-            0..=9 => b'0' + digit,
-            _ => b'a' + (digit - 10),
-        };
-        shift = shift.saturating_sub(4);
-    }
-    let text = core::str::from_utf8(&output).unwrap_or("????????");
-    write_console(console, text);
 }
 
 fn write_hex_u64(console: *mut EfiSimpleTextOutputProtocol, value: u64) {
@@ -1394,14 +1141,6 @@ fn write_hex_u64(console: *mut EfiSimpleTextOutputProtocol, value: u64) {
     }
     let text = core::str::from_utf8(&output).unwrap_or("????????????????");
     write_console(console, text);
-}
-
-fn write_hex_usize(console: *mut EfiSimpleTextOutputProtocol, value: usize) {
-    if usize::BITS == 64 {
-        write_hex_u64(console, value as u64);
-    } else {
-        write_hex_u32(console, value as u32);
-    }
 }
 
 fn write_http_status_code(console: *mut EfiSimpleTextOutputProtocol, status_code: u32) {
@@ -1479,13 +1218,9 @@ fn configure_http_ipv4_default(http_protocol: *mut EfiHttpProtocol) -> EfiStatus
 }
 
 fn destroy_http_child(
-    console: *mut EfiSimpleTextOutputProtocol,
+    _console: *mut EfiSimpleTextOutputProtocol,
     service_binding: *mut EfiServiceBindingProtocol,
     child_handle: EfiHandle,
 ) {
-    let destroy_status =
-        unsafe { ((*service_binding).destroy_child)(service_binding, child_handle) };
-    write_console(console, "http_destroy_child_status: ");
-    write_status(console, destroy_status);
-    write_console(console, "\r\n");
+    let _ = unsafe { ((*service_binding).destroy_child)(service_binding, child_handle) };
 }

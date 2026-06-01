@@ -46,14 +46,15 @@ pub extern "efiapi" fn efi_main(image: EfiHandle, system_table: *mut EfiSystemTa
     let mut manifest_url = None;
     let loaded_image_error =
         match loader_url_from_loaded_image(image, system_table, &mut device_path_buffer) {
-            Ok(loader_url) => match write_sibling_manifest_url(loader_url, &mut manifest_url_buffer)
-            {
-                Ok(manifest_url_text) => {
-                    manifest_url = Some(manifest_url_text);
-                    None
+            Ok(loader_url) => {
+                match write_sibling_manifest_url(loader_url, &mut manifest_url_buffer) {
+                    Ok(manifest_url_text) => {
+                        manifest_url = Some(manifest_url_text);
+                        None
+                    }
+                    Err(_) => Some("failed to build manifest URL"),
                 }
-                Err(_) => Some("failed to build manifest URL"),
-            },
+            }
             Err(LoaderError::ProtocolUnavailable) => Some("failed to open Loaded Image Protocol"),
             Err(LoaderError::MissingFilePath) => Some("loaded image has no file path"),
             Err(LoaderError::DevicePathTooLarge) => Some("loaded image device path is too large"),
