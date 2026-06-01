@@ -11,7 +11,9 @@ use crate::uefi::abi::{
     EfiSystemTable, HTTP_METHOD_GET, HTTP_STATUS_200_OK, HTTP_STATUS_206_PARTIAL_CONTENT,
     HTTP_VERSION_11, TPL_CALLBACK, boot_services_from_system_table,
 };
-use crate::uefi::console::{write_console, write_usize, write_utf16_nul};
+use crate::uefi::console::{
+    set_progress_cursor_visible, write_console, write_usize, write_utf16_nul,
+};
 use crate::uefi::entry::{EntryPlan, call_entry_point, print_entry_plan, target_matches_manifest};
 use httpboot::parse_downloaded_manifest;
 
@@ -23,7 +25,7 @@ const HTTP_COMPLETION_POLL_LIMIT: usize = 100_000;
 const HTTP_REQUEST_RETRY_LIMIT: usize = 8;
 const HTTP_REQUEST_RETRY_STALL_US: usize = 250_000;
 const HTTP_BOOT_ROUND_RETRY_STALL_US: usize = 3_000_000;
-const KERNEL_PROGRESS_STEP_PERCENT: usize = 5;
+const KERNEL_PROGRESS_STEP_PERCENT: usize = 1;
 const KERNEL_PROGRESS_BAR_WIDTH: usize = 80;
 const MAX_KERNEL_DOWNLOAD_SIZE: usize = 256 * 1024 * 1024;
 const EFI_PAGE_SIZE: usize = 4096;
@@ -617,6 +619,7 @@ fn download_kernel_to_load_addr(
         return;
     }
 
+    set_progress_cursor_visible(console, false);
     print_download_progress(console, 0, expected_size, 0);
     let received = download_kernel_ranges(
         console,
@@ -629,6 +632,7 @@ fn download_kernel_to_load_addr(
     let complete = received == expected_size;
 
     if complete {
+        set_progress_cursor_visible(console, true);
         write_console(console, "\r\n");
         print_jump_readiness(
             console,
@@ -641,6 +645,7 @@ fn download_kernel_to_load_addr(
             page_count,
         );
     } else {
+        set_progress_cursor_visible(console, true);
         write_console(console, "\r\n");
         write_console(console, "error: kernel download incomplete\r\n");
         let _ = (boot_services.free_pages)(kernel_load_addr, page_count);

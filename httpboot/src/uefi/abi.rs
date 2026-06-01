@@ -74,6 +74,14 @@ pub struct EfiSimpleTextOutputProtocol {
     pub reset: usize,
     pub output_string:
         extern "efiapi" fn(this: *mut EfiSimpleTextOutputProtocol, string: *const u16) -> EfiStatus,
+    pub test_string: usize,
+    pub query_mode: usize,
+    pub set_mode: usize,
+    pub set_attribute: usize,
+    pub clear_screen: usize,
+    pub set_cursor_position: usize,
+    pub enable_cursor:
+        extern "efiapi" fn(this: *mut EfiSimpleTextOutputProtocol, visible: u8) -> EfiStatus,
 }
 
 #[repr(C)]
