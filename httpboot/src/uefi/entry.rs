@@ -11,26 +11,14 @@ pub struct EntryPlan<'a> {
 }
 
 pub fn print_entry_plan(console: *mut EfiSimpleTextOutputProtocol, plan: &EntryPlan<'_>) {
-    write_console(console, "entry_call_arch: ");
-    write_console(console, plan.arch);
-    write_console(console, "\r\n");
-    write_console(console, "entry_call_target_arch: ");
-    write_console(console, target_arch_name());
-    write_console(console, "\r\n");
-    write_console(console, "entry_call_convention: ");
-    write_console(console, calling_convention_note(plan.arch));
-    write_console(console, "\r\n");
-    write_console(console, "entry_call_load_addr: 0x");
+    write_console(console, "jump: load=0x");
     write_hex_u64(console, plan.load_addr);
-    write_console(console, "\r\n");
-    write_console(console, "entry_call_entry_point: 0x");
+    write_console(console, " entry=0x");
     write_hex_u64(console, plan.entry_point);
-    write_console(console, "\r\n");
-    write_console(console, "entry_call_kernel_size: ");
+    write_console(console, " size=");
     write_usize(console, plan.kernel_size);
-    write_console(console, "\r\n");
-    write_console(console, "entry_call_boot_info: 0x");
-    write_hex_usize(console, plan.boot_info);
+    write_console(console, " arch=");
+    write_console(console, plan.arch);
     write_console(console, "\r\n");
 }
 
@@ -74,15 +62,6 @@ unsafe fn call_entry(_entry_point: u64, _boot_info: usize) -> ! {
     }
 }
 
-fn calling_convention_note(manifest_arch: &str) -> &'static str {
-    match (target_arch_name(), manifest_arch) {
-        ("x86_64", "x86_64") => "x86_64 extern sysv64 boot-info entry",
-        ("aarch64", "aarch64") => "aarch64 extern C boot-info entry",
-        ("riscv64", "riscv64") => "riscv64 extern C boot-info entry",
-        _ => "target/manifest arch mismatch or unvalidated entry ABI",
-    }
-}
-
 fn target_arch_name() -> &'static str {
     #[cfg(target_arch = "x86_64")]
     {
@@ -119,8 +98,4 @@ fn write_hex_u64(console: *mut EfiSimpleTextOutputProtocol, value: u64) {
     }
     let text = core::str::from_utf8(&output).unwrap_or("????????????????");
     write_console(console, text);
-}
-
-fn write_hex_usize(console: *mut EfiSimpleTextOutputProtocol, value: usize) {
-    write_hex_u64(console, value as u64);
 }

@@ -1,4 +1,4 @@
-use crate::uefi::abi::{EfiSimpleTextOutputProtocol, EfiStatus};
+use crate::uefi::abi::EfiSimpleTextOutputProtocol;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 const COM1_PORT: u16 = 0x3f8;
@@ -126,11 +126,6 @@ pub fn write_usize(console: *mut EfiSimpleTextOutputProtocol, mut value: usize) 
     write_console(console, text);
 }
 
-pub fn write_status(console: *mut EfiSimpleTextOutputProtocol, status: EfiStatus) {
-    write_console(console, "0x");
-    write_hex_usize(console, status.0);
-}
-
 pub fn write_utf16_nul<'a>(input: &str, output: &'a mut [u16]) -> Result<*mut u16, ()> {
     let mut index = 0;
     for unit in input.encode_utf16() {
@@ -142,31 +137,4 @@ pub fn write_utf16_nul<'a>(input: &str, output: &'a mut [u16]) -> Result<*mut u1
     }
     output[index] = 0;
     Ok(output.as_mut_ptr())
-}
-
-fn write_hex_usize(console: *mut EfiSimpleTextOutputProtocol, mut value: usize) {
-    let mut digits = [0u8; 16];
-    let mut len = 0;
-
-    if value == 0 {
-        write_console(console, "0");
-        return;
-    }
-
-    while value > 0 && len < digits.len() {
-        let digit = (value & 0xf) as u8;
-        digits[len] = match digit {
-            0..=9 => b'0' + digit,
-            _ => b'a' + (digit - 10),
-        };
-        value >>= 4;
-        len += 1;
-    }
-
-    let mut output = [0u8; 16];
-    for index in 0..len {
-        output[index] = digits[len - index - 1];
-    }
-    let text = core::str::from_utf8(&output[..len]).unwrap_or("?");
-    write_console(console, text);
 }

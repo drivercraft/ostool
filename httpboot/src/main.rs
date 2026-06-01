@@ -14,7 +14,7 @@ use httpboot::write_sibling_manifest_url;
 mod uefi;
 
 #[cfg(target_os = "uefi")]
-use uefi::abi::{EFI_SUCCESS, EFI_UNSUPPORTED, EfiHandle, EfiStatus, EfiSystemTable};
+use uefi::abi::{EFI_UNSUPPORTED, EfiHandle, EfiStatus, EfiSystemTable};
 #[cfg(target_os = "uefi")]
 use uefi::console::write_console;
 #[cfg(target_os = "uefi")]
@@ -40,60 +40,53 @@ pub extern "efiapi" fn efi_main(image: EfiHandle, system_table: *mut EfiSystemTa
     };
 
     write_console(console, "ostool HTTP Boot\r\n");
-    write_console(console, "manifest parser core linked\r\n");
 
     let mut device_path_buffer = [0u8; DEVICE_PATH_BUFFER_SIZE];
     let mut manifest_url_buffer = [0u8; URL_BUFFER_SIZE];
     let mut manifest_url = None;
-    match loader_url_from_loaded_image(image, system_table, &mut device_path_buffer) {
-        Ok(loader_url) => {
-            write_console(console, "loader_url: ");
-            write_console(console, loader_url);
-            write_console(console, "\r\n");
-
-            match write_sibling_manifest_url(loader_url, &mut manifest_url_buffer) {
-                Ok(manifest_url_text) => {
-                    write_console(console, "manifest_url: ");
-                    write_console(console, manifest_url_text);
-                    write_console(console, "\r\n");
-                    manifest_url = Some(manifest_url_text);
+    let loaded_image_error =
+        match loader_url_from_loaded_image(image, system_table, &mut device_path_buffer) {
+            Ok(loader_url) => {
+                match write_sibling_manifest_url(loader_url, &mut manifest_url_buffer) {
+                    Ok(manifest_url_text) => {
+                        manifest_url = Some(manifest_url_text);
+                        None
+                    }
+                    Err(_) => Some("failed to build manifest URL"),
                 }
-                Err(_) => write_console(console, "failed to build manifest URL\r\n"),
             }
-        }
-        Err(LoaderError::ProtocolUnavailable) => {
-            write_console(console, "failed to open Loaded Image Protocol\r\n")
-        }
-        Err(LoaderError::MissingFilePath) => {
-            write_console(console, "loaded image has no file path\r\n")
-        }
-        Err(LoaderError::DevicePathTooLarge) => {
-            write_console(console, "loaded image device path is too large\r\n")
-        }
-        Err(LoaderError::InvalidDevicePath) => {
-            write_console(console, "loaded image device path has no URI\r\n")
-        }
-    }
+            Err(LoaderError::ProtocolUnavailable) => Some("failed to open Loaded Image Protocol"),
+            Err(LoaderError::MissingFilePath) => Some("loaded image has no file path"),
+            Err(LoaderError::DevicePathTooLarge) => Some("loaded image device path is too large"),
+            Err(LoaderError::InvalidDevicePath) => Some("loaded image device path has no URI"),
+        };
 
     if manifest_url.is_none() {
         match embedded_manifest_url() {
             Some(url) => {
-                write_console(console, "embedded_manifest_url: ");
-                write_console(console, url);
-                write_console(console, "\r\n");
                 manifest_url = Some(url);
             }
             None => {
-                write_console(console, "embedded_manifest_url_unset: ");
+                write_console(console, "manifest: unavailable\r\n");
+                if let Some(error) = loaded_image_error {
+                    write_console(console, "reason: ");
+                    write_console(console, error);
+                    write_console(console, "\r\n");
+                }
+                write_console(console, "hint: set ");
                 write_console(console, EMBEDDED_MANIFEST_URL_ENV);
                 write_console(console, "\r\n");
             }
         }
     }
 
-    run_http_boot_loader(console, image, system_table, manifest_url);
+    if let Some(url) = manifest_url {
+        write_console(console, "manifest: ");
+        write_console(console, url);
+        write_console(console, "\r\n");
+    }
 
-    EFI_SUCCESS
+    run_http_boot_loader(console, image, system_table, manifest_url)
 }
 
 #[cfg(target_os = "uefi")]
