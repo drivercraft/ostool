@@ -20,6 +20,11 @@ use httpboot::parse_downloaded_manifest;
 const UTF16_URL_BUFFER_SIZE: usize = 1024;
 const HTTP_HOST_BUFFER_SIZE: usize = 256;
 const MANIFEST_BODY_BUFFER_SIZE: usize = 4096;
+// Keep kernel downloads range-based because the ASUS NUC15 UEFI HTTP stack can
+// time out when one large response body is drained through repeated Response()
+// calls. The NUC15 firmware currently completes 1 KiB range responses reliably,
+// while larger ranges may require draining one HTTP response with multiple
+// Response() calls and can fail in firmware.
 const KERNEL_RANGE_CHUNK_SIZE: usize = 1024;
 const HTTP_COMPLETION_POLL_LIMIT: usize = 100_000;
 const HTTP_REQUEST_RETRY_LIMIT: usize = 8;
@@ -873,8 +878,14 @@ fn receive_kernel_range_body(
     body_len: usize,
     first: bool,
 ) -> Option<usize> {
-    let response =
-        receive_kernel_stream_chunk(console, boot_services, http_protocol, body, body_len, first)?;
+    let response = receive_kernel_stream_chunk(
+        console,
+        boot_services,
+        http_protocol,
+        body,
+        body_len,
+        first,
+    )?;
     if response.http_status != HTTP_STATUS_206_PARTIAL_CONTENT {
         write_console(console, "error: kernel HTTP status ");
         write_http_status_code(console, response.http_status);
