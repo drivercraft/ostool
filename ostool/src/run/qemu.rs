@@ -195,22 +195,13 @@ pub async fn read_config_from_path(
 }
 
 /// Reads a QEMU configuration using the Cargo package variable scope.
-///
-/// `build_config_path` is the optional `.build.toml` source path for `cargo`.
 pub async fn read_config_from_path_for_cargo(
-    invocation: &mut Invocation,
+    invocation: &Invocation,
     cargo: &Cargo,
-    build_config_path: Option<&Path>,
     path: &Path,
 ) -> anyhow::Result<QemuConfig> {
-    crate::build::activate_build_config(
-        invocation,
-        &crate::build::config::BuildConfig {
-            system: crate::build::config::BuildSystem::Cargo(cargo.clone()),
-        },
-        build_config_path,
-    )?;
-    read_config_from_path(invocation, path).await
+    let scope = crate::build::cargo_variable_scope(invocation.project_layout(), cargo)?;
+    read_qemu_config_from_path(&scope, path).await
 }
 
 pub(crate) async fn read_qemu_config_from_path(
@@ -235,21 +226,11 @@ pub(crate) async fn ensure_qemu_config_for_cargo(
 }
 
 /// Loads or creates a QEMU configuration using the Cargo package directory.
-///
-/// `build_config_path` is the optional `.build.toml` source path for `cargo`.
 pub async fn ensure_config_for_cargo(
-    invocation: &mut Invocation,
+    invocation: &Invocation,
     cargo: &Cargo,
-    build_config_path: Option<&Path>,
 ) -> anyhow::Result<QemuConfig> {
-    crate::build::activate_build_config(
-        invocation,
-        &crate::build::config::BuildConfig {
-            system: crate::build::config::BuildSystem::Cargo(cargo.clone()),
-        },
-        build_config_path,
-    )?;
-    let scope = invocation.variable_scope()?;
+    let scope = crate::build::cargo_variable_scope(invocation.project_layout(), cargo)?;
     ensure_qemu_config_for_cargo(
         invocation.project_layout(),
         &scope,
@@ -1013,11 +994,11 @@ fail_regex = []
         )
         .unwrap();
 
-        let mut invocation =
+        let invocation =
             Invocation::new(InvocationOptions::new(Some(app_dir), None, None, false)).unwrap();
 
         let config = ensure_config_for_cargo(
-            &mut invocation,
+            &invocation,
             &Cargo {
                 env: HashMap::new(),
                 target: "aarch64-unknown-none".into(),
@@ -1033,7 +1014,6 @@ fail_regex = []
                 post_build_cmds: vec![],
                 to_bin: false,
             },
-            None,
         )
         .await
         .unwrap();

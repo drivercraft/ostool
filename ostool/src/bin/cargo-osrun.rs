@@ -42,9 +42,6 @@ struct RunnerArgs {
     #[arg(short, long)]
     config: Option<PathBuf>,
 
-    #[arg(long("show-output"))]
-    show_output: bool,
-
     #[arg(long)]
     no_run: bool,
 
@@ -210,7 +207,6 @@ mod tests {
             "--to-bin",
             "--config",
             "qemu.toml",
-            "--show-output",
             "--debug",
             "--dtb-dump",
             "--build-dir",
@@ -224,7 +220,6 @@ mod tests {
         assert_eq!(args.elf, Path::new("target/kernel.elf"));
         assert!(args.to_bin);
         assert_eq!(args.config.as_deref(), Some(Path::new("qemu.toml")));
-        assert!(args.show_output);
         assert!(args.debug);
         assert!(args.dtb_dump);
         assert_eq!(args.build_dir.as_deref(), Some("target/custom"));

@@ -139,8 +139,7 @@ pub(crate) fn activate_build_context(
     apply_cargo_selector(&mut config, selector)?;
     match config.system {
         BuildSystem::Cargo(cargo) => {
-            let package_dir = metadata::package_manifest_dir(layout, &cargo.package)?;
-            let variable_scope = VariableScope::for_package(layout, package_dir.clone());
+            let variable_scope = cargo_variable_scope(layout, &cargo)?;
             Ok(ActiveBuildContext::Cargo(Box::new(ActiveCargoBuild::new(
                 config_path,
                 variable_scope,
@@ -157,14 +156,25 @@ pub(crate) fn activate_build_context(
     }
 }
 
+pub(crate) fn cargo_variable_scope(
+    layout: &ProjectLayout,
+    cargo: &Cargo,
+) -> anyhow::Result<VariableScope> {
+    let package_dir = metadata::package_manifest_dir(layout, &cargo.package)?;
+    Ok(VariableScope::for_package(layout, package_dir))
+}
+
 /// Returns the default build configuration template.
 pub fn default_build_config() -> config::BuildConfig {
     config::BuildConfig::default()
 }
 
 /// Loads a build configuration from a workspace-like directory.
+///
+/// This only parses the config file. Apply caller overrides first, then call
+/// [`activate_build_config`] or a build/run helper with the final config.
 pub async fn load_build_config_from_dir(
-    invocation: &mut Invocation,
+    invocation: &Invocation,
     dir: &Path,
     menu: bool,
 ) -> anyhow::Result<config::BuildConfig> {
@@ -172,8 +182,11 @@ pub async fn load_build_config_from_dir(
 }
 
 /// Loads a build configuration from an explicit file path.
+///
+/// This only parses the config file. Apply caller overrides first, then call
+/// [`activate_build_config`] or a build/run helper with the final config.
 pub async fn load_build_config_from_path(
-    invocation: &mut Invocation,
+    invocation: &Invocation,
     path: &Path,
     menu: bool,
 ) -> anyhow::Result<config::BuildConfig> {
@@ -201,24 +214,12 @@ pub fn activate_build_config(
 }
 
 async fn prepare_build_config(
-    invocation: &mut Invocation,
+    invocation: &Invocation,
     config_path: Option<PathBuf>,
     menu: bool,
 ) -> anyhow::Result<BuildConfig> {
     let hooks = config_hooks::build_config_hooks(invocation.workspace_dir());
-    let loaded = config_loader::load_build_config(
-        invocation.workspace_dir(),
-        config_path,
-        menu,
-        &hooks,
-        true,
-    )
-    .await?;
-
-    let config_path = loaded.path().to_path_buf();
-    let config = loaded.into_config();
-    activate_build_config(invocation, &config, Some(&config_path))?;
-    Ok(config)
+    config_loader::load_build_config(invocation.workspace_dir(), config_path, menu, &hooks).await
 }
 
 /// Builds the project using the specified build configuration.
@@ -344,10 +345,7 @@ pub async fn cargo_run(
         CargoRunnerKind::Qemu(args) => {
             let qemu = match &args.qemu {
                 Some(config) => config.clone(),
-                None => {
-                    crate::run::qemu::ensure_config_for_cargo(invocation, config, config_path)
-                        .await?
-                }
+                None => crate::run::qemu::ensure_config_for_cargo(invocation, config).await?,
             };
             crate::run::qemu::run_qemu_with_debug(
                 invocation,
@@ -362,10 +360,7 @@ pub async fn cargo_run(
         CargoRunnerKind::Uboot(args) => {
             let uboot = match &args.uboot {
                 Some(config) => config.clone(),
-                None => {
-                    crate::run::uboot::ensure_config_for_cargo(invocation, config, config_path)
-                        .await?
-                }
+                None => crate::run::uboot::ensure_config_for_cargo(invocation, config).await?,
             };
             crate::run::uboot::run_uboot(invocation, &uboot).await?;
         }

@@ -205,6 +205,10 @@ post_build_cmds = ["make post-process"]
 to_bin = true
 ```
 
+Command-line `--package`/`--bin` overrides are applied to the final Cargo
+selection before `${package}` variable expansion and someboot `build-info.toml`
+argument injection.
+
 #### Custom Build System Example
 
 ```toml

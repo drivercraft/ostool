@@ -348,22 +348,13 @@ pub async fn read_config_from_path(
 }
 
 /// Reads a U-Boot configuration using the Cargo package variable scope.
-///
-/// `build_config_path` is the optional `.build.toml` source path for `cargo`.
 pub async fn read_config_from_path_for_cargo(
-    invocation: &mut Invocation,
+    invocation: &Invocation,
     cargo: &crate::build::config::Cargo,
-    build_config_path: Option<&Path>,
     path: &Path,
 ) -> anyhow::Result<UbootConfig> {
-    crate::build::activate_build_config(
-        invocation,
-        &crate::build::config::BuildConfig {
-            system: crate::build::config::BuildSystem::Cargo(cargo.clone()),
-        },
-        build_config_path,
-    )?;
-    read_config_from_path(invocation, path).await
+    let scope = crate::build::cargo_variable_scope(invocation.project_layout(), cargo)?;
+    read_uboot_config_from_path(&scope, path).await
 }
 
 pub(crate) async fn read_uboot_config_from_path(
@@ -392,21 +383,12 @@ pub async fn ensure_config_in_dir(
 }
 
 /// Loads or creates a U-Boot configuration using the workspace directory.
-///
-/// `build_config_path` is the optional `.build.toml` source path for `cargo`.
 pub async fn ensure_config_for_cargo(
-    invocation: &mut Invocation,
+    invocation: &Invocation,
     cargo: &crate::build::config::Cargo,
-    build_config_path: Option<&Path>,
 ) -> anyhow::Result<UbootConfig> {
-    crate::build::activate_build_config(
-        invocation,
-        &crate::build::config::BuildConfig {
-            system: crate::build::config::BuildSystem::Cargo(cargo.clone()),
-        },
-        build_config_path,
-    )?;
-    ensure_config_in_dir(invocation, invocation.workspace_dir()).await
+    let scope = crate::build::cargo_variable_scope(invocation.project_layout(), cargo)?;
+    ensure_uboot_config_in_dir(&scope, invocation.workspace_dir()).await
 }
 
 pub(crate) fn prepare_uboot_runtime_config(

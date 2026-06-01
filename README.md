@@ -204,6 +204,9 @@ post_build_cmds = ["make post-process"]
 to_bin = true
 ```
 
+命令行 `--package`/`--bin` 会先覆盖 `.build.toml` 中的 Cargo 包/二进制选择，再用于
+`${package}` 变量展开和 someboot `build-info.toml` 自动参数注入。
+
 #### 自定义构建系统示例
 
 ```toml

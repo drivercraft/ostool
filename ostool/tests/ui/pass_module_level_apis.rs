@@ -53,9 +53,9 @@ fn main() {
     let _ = board::RunBoardOptions::default();
 
     let _ = async {
-        let _ = build::load_build_config_from_dir(&mut invocation, Path::new("."), false).await;
+        let _ = build::load_build_config_from_dir(&invocation, Path::new("."), false).await;
         let _ =
-            build::load_build_config_from_path(&mut invocation, Path::new(".build.toml"), false)
+            build::load_build_config_from_path(&invocation, Path::new(".build.toml"), false)
                 .await;
         let _ = build::build_with_config(&mut invocation, &custom_build, None).await;
         let _ = build::cargo_build(&mut invocation, &cargo, None).await;
@@ -64,39 +64,36 @@ fn main() {
 
         let _ = qemu::read_config_from_path(&invocation, Path::new(".qemu.toml")).await;
         let _ = qemu::read_config_from_path_for_cargo(
-            &mut invocation,
+            &invocation,
             &cargo,
-            None,
             Path::new(".qemu.toml"),
         )
         .await;
         let _ = qemu::ensure_config_in_dir(&invocation, Path::new(".")).await;
-        let _ = qemu::ensure_config_for_cargo(&mut invocation, &cargo, None).await;
+        let _ = qemu::ensure_config_for_cargo(&invocation, &cargo).await;
         let _ = qemu::run_qemu(&mut invocation, &qemu_config, RunQemuOptions::default()).await;
 
         let _ = uboot::read_config_from_path(&invocation, Path::new(".uboot.toml")).await;
         let _ = uboot::read_config_from_path_for_cargo(
-            &mut invocation,
+            &invocation,
             &cargo,
-            None,
             Path::new(".uboot.toml"),
         )
         .await;
         let _ = uboot::ensure_config_in_dir(&invocation, Path::new(".")).await;
-        let _ = uboot::ensure_config_for_cargo(&mut invocation, &cargo, None).await;
+        let _ = uboot::ensure_config_for_cargo(&invocation, &cargo).await;
         let _ = uboot::run_uboot(&mut invocation, &uboot_config).await;
 
         let _ = board::read_run_config_from_path(&invocation, Path::new(".board.toml")).await;
         let _ = board::read_run_config_from_path_for_cargo(
-            &mut invocation,
+            &invocation,
             &cargo,
-            None,
             Path::new(".board.toml"),
         )
         .await;
         let _ = board::ensure_run_config_in_dir(&invocation, Path::new(".")).await;
         let _ =
-            board::ensure_run_config_in_dir_for_cargo(&mut invocation, &cargo, None, Path::new("."))
+            board::ensure_run_config_in_dir_for_cargo(&invocation, &cargo, Path::new("."))
                 .await;
         let _ = board::run_board(
             &mut invocation,
