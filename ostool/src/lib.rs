@@ -17,7 +17,7 @@
 //! ## Modules
 //!
 //! - [`build`] - Build system configuration and Cargo integration
-//! - [`ctx`] - Application context and state management
+//! - [`invocation`] - Invocation inputs and resolved project layout
 //! - [`menuconfig`] - TUI-based menu configuration
 //! - [`run`] - QEMU, TFTP, and U-Boot runners
 //! - [`sterm`] - Serial terminal implementation
@@ -43,21 +43,14 @@ pub mod build;
 /// ostool-server board client and remote terminal integration.
 pub mod board;
 
-/// Application context and state management.
-pub mod ctx;
-
 /// Invocation inputs and resolved project layout.
 pub mod invocation;
-
-mod legacy_context;
 
 /// Custom file logger for ostool.
 ///
 /// Provides a file-based logger that writes all log output to
 /// `{workspace_root}/target/ostool.ans`.
 pub mod logger;
-
-mod tool;
 
 /// TUI-based menu configuration system.
 ///
@@ -88,5 +81,3 @@ pub mod utils;
 extern crate log;
 #[macro_use]
 extern crate anyhow;
-
-pub use tool::{ManifestContext, Tool, ToolConfig, resolve_manifest_context};

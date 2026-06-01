@@ -2,11 +2,15 @@
 
 use std::path::{Path, PathBuf};
 
+use anyhow::anyhow;
 use object::Architecture;
 
 use crate::{
-    artifact::{runtime::PreparedRuntimeArtifacts, state::OutputArtifacts},
-    build::config::{BuildConfig, BuildSystem, Cargo, Custom},
+    artifact::{
+        runtime::{PreparedRuntimeArtifacts, RuntimeArtifactOptions, prepare_runtime_artifacts},
+        state::OutputArtifacts,
+    },
+    process::ProcessContext,
     project::{ProjectLayout, resolve_project_layout, variables::VariableScope},
 };
 
@@ -96,12 +100,127 @@ impl Invocation {
     }
 
     /// Returns the resolved project layout for this invocation.
-    pub fn project_layout(&self) -> &ProjectLayout {
+    pub(crate) fn project_layout(&self) -> &ProjectLayout {
         &self.project_layout
     }
 
-    pub(crate) fn into_parts(self) -> (InvocationOptions, ProjectLayout, InvocationState) {
-        (self.options, self.project_layout, self.state)
+    pub(crate) fn state(&self) -> &InvocationState {
+        &self.state
+    }
+
+    pub(crate) fn set_active_build(&mut self, active_build: ActiveBuildContext) {
+        self.state.set_active_build(active_build);
+    }
+
+    pub(crate) fn runtime_artifacts(&self) -> &OutputArtifacts {
+        self.state.artifacts()
+    }
+
+    pub(crate) fn runtime_arch(&self) -> Option<Architecture> {
+        self.state.arch()
+    }
+
+    pub(crate) fn build_dir(&self) -> PathBuf {
+        self.options
+            .build_dir()
+            .map(|dir| self.resolve_dir(dir))
+            .unwrap_or_else(|| self.manifest_dir().join("target"))
+    }
+
+    pub(crate) fn bin_dir(&self) -> Option<PathBuf> {
+        self.options.bin_dir().map(|dir| self.resolve_dir(dir))
+    }
+
+    fn resolve_dir(&self, dir: &Path) -> PathBuf {
+        if dir.is_relative() {
+            self.manifest_dir().join(dir)
+        } else {
+            dir.to_path_buf()
+        }
+    }
+
+    pub(crate) fn variable_scope(&self) -> anyhow::Result<VariableScope> {
+        let package_dir = self
+            .state
+            .active_build()
+            .map(|active| active.variable_scope().package_dir().to_path_buf())
+            .unwrap_or_else(|| self.manifest_dir().to_path_buf());
+        Ok(VariableScope::for_package(
+            self.project_layout(),
+            package_dir,
+        ))
+    }
+
+    pub(crate) fn process_context(&self) -> anyhow::Result<ProcessContext> {
+        Ok(ProcessContext::new(
+            self.manifest_dir().to_path_buf(),
+            self.workspace_dir().to_path_buf(),
+            self.variable_scope()?,
+            self.runtime_artifacts().elf().map(PathBuf::from),
+        ))
+    }
+
+    pub(crate) fn apply_prepared_runtime_artifacts(&mut self, prepared: PreparedRuntimeArtifacts) {
+        self.state.apply_prepared_runtime_artifacts(&prepared);
+    }
+
+    pub(crate) fn ensure_runtime_bin(&mut self) -> anyhow::Result<PathBuf> {
+        if let Some(bin) = self.runtime_artifacts().bin() {
+            debug!("BIN file already exists: {:?}", bin);
+            return Ok(bin.to_path_buf());
+        }
+
+        let elf_path = self
+            .runtime_artifacts()
+            .elf()
+            .ok_or_else(|| anyhow!("elf not exist"))?
+            .to_path_buf();
+        let process_context = self.process_context()?;
+        let prepared = prepare_runtime_artifacts(
+            &process_context,
+            RuntimeArtifactOptions {
+                elf_path,
+                to_bin: true,
+                bin_dir: self.bin_dir(),
+                debug: self.options.debug(),
+                cargo_artifact_dir: self
+                    .runtime_artifacts()
+                    .cargo_artifact_dir()
+                    .map(PathBuf::from),
+                strip_elf: false,
+                objcopy_program: PathBuf::from("rust-objcopy"),
+            },
+        )?;
+        let bin_path = prepared
+            .bin()
+            .ok_or_else(|| anyhow!("bin not exist after objcopy"))?
+            .to_path_buf();
+        self.apply_prepared_runtime_artifacts(prepared);
+        Ok(bin_path)
+    }
+
+    /// Imports an ELF artifact, strips it to a runtime `.elf`, and optionally
+    /// materializes a `.bin` image.
+    pub async fn prepare_elf_artifact(
+        &mut self,
+        path: PathBuf,
+        to_bin: bool,
+    ) -> anyhow::Result<()> {
+        let process_context = self.process_context()?;
+        let prepared = prepare_runtime_artifacts(
+            &process_context,
+            RuntimeArtifactOptions {
+                elf_path: path,
+                to_bin,
+                bin_dir: self.bin_dir(),
+                debug: self.options.debug(),
+                cargo_artifact_dir: None,
+                strip_elf: true,
+                objcopy_program: PathBuf::from("rust-objcopy"),
+            },
+        )?;
+        self.apply_prepared_runtime_artifacts(prepared);
+        Ok(())
     }
 }
 
@@ -110,7 +229,6 @@ impl Invocation {
 pub(crate) struct InvocationState {
     arch: Option<Architecture>,
     active_build: Option<ActiveBuildContext>,
-    build_config_path: Option<PathBuf>,
     artifacts: OutputArtifacts,
 }
 
@@ -127,18 +245,14 @@ impl InvocationState {
 
     /// Replaces the currently active build context.
     pub(crate) fn set_active_build(&mut self, active_build: ActiveBuildContext) {
-        self.build_config_path = active_build.config_path().map(PathBuf::from);
         self.active_build = Some(active_build);
     }
 
     /// Returns the path used to load the active build configuration.
     pub(crate) fn build_config_path(&self) -> Option<&Path> {
-        self.build_config_path.as_deref()
-    }
-
-    /// Records the path used to load the active build configuration.
-    pub(crate) fn set_build_config_path(&mut self, path: Option<PathBuf>) {
-        self.build_config_path = path;
+        self.active_build
+            .as_ref()
+            .and_then(ActiveBuildContext::config_path)
     }
 
     /// Returns prepared runtime artifacts.
@@ -178,45 +292,22 @@ impl ActiveBuildContext {
             Self::Custom(active) => active.variable_scope(),
         }
     }
-
-    /// Returns the activated build configuration.
-    pub(crate) fn build_config(&self) -> BuildConfig {
-        match self {
-            Self::Cargo(active) => BuildConfig {
-                system: BuildSystem::Cargo(active.config().clone()),
-            },
-            Self::Custom(active) => BuildConfig {
-                system: BuildSystem::Custom(active.config().clone()),
-            },
-        }
-    }
 }
 
 /// Activated Cargo build configuration.
 #[derive(Clone, Debug)]
 pub(crate) struct ActiveCargoBuild {
-    config: Cargo,
     config_path: Option<PathBuf>,
     variable_scope: VariableScope,
 }
 
 impl ActiveCargoBuild {
     /// Creates an activated Cargo build context.
-    pub(crate) fn new(
-        config: Cargo,
-        config_path: Option<PathBuf>,
-        variable_scope: VariableScope,
-    ) -> Self {
+    pub(crate) fn new(config_path: Option<PathBuf>, variable_scope: VariableScope) -> Self {
         Self {
-            config,
             config_path,
             variable_scope,
         }
-    }
-
-    /// Returns the final Cargo config after CLI selector overrides.
-    pub(crate) fn config(&self) -> &Cargo {
-        &self.config
     }
 
     /// Returns the build config path, if known.
@@ -233,28 +324,17 @@ impl ActiveCargoBuild {
 /// Activated custom build configuration.
 #[derive(Clone, Debug)]
 pub(crate) struct ActiveCustomBuild {
-    config: Custom,
     config_path: Option<PathBuf>,
     variable_scope: VariableScope,
 }
 
 impl ActiveCustomBuild {
     /// Creates an activated custom build context.
-    pub(crate) fn new(
-        config: Custom,
-        config_path: Option<PathBuf>,
-        variable_scope: VariableScope,
-    ) -> Self {
+    pub(crate) fn new(config_path: Option<PathBuf>, variable_scope: VariableScope) -> Self {
         Self {
-            config,
             config_path,
             variable_scope,
         }
-    }
-
-    /// Returns the final custom build config.
-    pub(crate) fn config(&self) -> &Custom {
-        &self.config
     }
 
     /// Returns the build config path, if known.
@@ -273,7 +353,6 @@ mod tests {
     use std::fs;
 
     use crate::{
-        build::config::{Cargo, CargoBuildProfile},
         invocation::{ActiveBuildContext, ActiveCargoBuild, Invocation, InvocationOptions},
         project::variables::VariableScope,
     };
@@ -319,19 +398,12 @@ mod tests {
         ))
         .unwrap();
         let config_path = temp.path().join(".build.toml");
-        let config = Cargo {
-            target: "x86_64-unknown-none".into(),
-            package: "kernel".into(),
-            profile: Some(CargoBuildProfile::Debug),
-            ..Default::default()
-        };
         let package_dir = invocation.manifest_dir().to_path_buf();
         let scope = VariableScope::for_package(invocation.project_layout(), package_dir.clone());
 
         invocation
             .state
             .set_active_build(ActiveBuildContext::Cargo(Box::new(ActiveCargoBuild::new(
-                config.clone(),
                 Some(config_path.clone()),
                 scope,
             ))));
@@ -343,7 +415,6 @@ mod tests {
         let Some(ActiveBuildContext::Cargo(active)) = invocation.state.active_build() else {
             panic!("active Cargo build missing");
         };
-        assert_eq!(active.config(), &config);
         assert_eq!(active.variable_scope().package_dir(), package_dir.as_path());
     }
 }

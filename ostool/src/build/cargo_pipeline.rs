@@ -78,7 +78,7 @@ impl CargoBuildOutcome {
 /// `CargoBuildPipeline` provides a fluent API for configuring Cargo build or run
 /// commands with custom arguments, environment variables, and build hooks.
 ///
-/// This builder is an internal implementation detail used by [`Tool`].
+/// This builder is an internal implementation detail used by build orchestration.
 pub struct CargoBuildPipeline<'a> {
     input: CargoBuildInput,
     config: &'a Cargo,
@@ -506,8 +506,12 @@ mod tests {
 
     use super::CargoBuildPipeline;
     use crate::{
-        Tool, ToolConfig,
-        build::config::{Cargo, CargoBuildProfile},
+        build::{
+            cargo_pipeline::CargoBuildInput,
+            config::{Cargo, CargoBuildProfile},
+        },
+        invocation::{Invocation, InvocationOptions},
+        project::metadata,
     };
 
     fn write_someboot_workspace(root: &Path) {
@@ -550,12 +554,24 @@ mod tests {
             ..Default::default()
         };
 
-        let tool = Tool::new(ToolConfig {
-            manifest: Some(temp.path().to_path_buf()),
-            ..Default::default()
-        })
+        let invocation = Invocation::new(InvocationOptions::new(
+            Some(temp.path().to_path_buf()),
+            None,
+            None,
+            false,
+        ))
         .unwrap();
-        let input = tool.cargo_build_input(&config, false).unwrap();
+        let input = CargoBuildInput::new(
+            invocation.project_layout().clone(),
+            invocation.process_context().unwrap(),
+            invocation.build_dir(),
+            invocation
+                .state()
+                .build_config_path()
+                .map(std::path::Path::to_path_buf),
+            false,
+            !config.disable_someboot_build_config,
+        );
         let mut builder = CargoBuildPipeline::build(input, &config).skip_objcopy(true);
         let cmd = builder.build_cargo_command().await.unwrap();
         let args: Vec<String> = cmd
@@ -593,13 +609,14 @@ mod tests {
             ..Default::default()
         };
 
-        let tool = Tool::new(ToolConfig {
-            manifest: Some(temp.path().to_path_buf()),
-            ..Default::default()
-        })
+        let invocation = Invocation::new(InvocationOptions::new(
+            Some(temp.path().to_path_buf()),
+            None,
+            None,
+            false,
+        ))
         .unwrap();
-        let package_id = tool
-            .metadata()
+        let package_id = metadata::cargo_metadata(invocation.project_layout())
             .unwrap()
             .packages
             .iter()
@@ -625,7 +642,17 @@ mod tests {
             fs::set_permissions(&cargo_bin, permissions).unwrap();
         }
 
-        let input = tool.cargo_build_input(&config, false).unwrap();
+        let input = CargoBuildInput::new(
+            invocation.project_layout().clone(),
+            invocation.process_context().unwrap(),
+            invocation.build_dir(),
+            invocation
+                .state()
+                .build_config_path()
+                .map(std::path::Path::to_path_buf),
+            false,
+            !config.disable_someboot_build_config,
+        );
         let outcome = CargoBuildPipeline::build(input, &config)
             .skip_objcopy(true)
             .cargo_program(&cargo_bin)
@@ -637,9 +664,19 @@ mod tests {
             outcome.resolved_artifact().elf_path(),
             target_dir.join("kernel")
         );
-        assert!(tool.ctx.artifacts.elf().is_none());
-        assert!(tool.ctx.artifacts.bin().is_none());
-        assert!(tool.ctx.artifacts.cargo_artifact_dir().is_none());
-        assert!(tool.ctx.artifacts.runtime_artifact_dir().is_none());
+        assert!(invocation.runtime_artifacts().elf().is_none());
+        assert!(invocation.runtime_artifacts().bin().is_none());
+        assert!(
+            invocation
+                .runtime_artifacts()
+                .cargo_artifact_dir()
+                .is_none()
+        );
+        assert!(
+            invocation
+                .runtime_artifacts()
+                .runtime_artifact_dir()
+                .is_none()
+        );
     }
 }

@@ -11,10 +11,9 @@ use clap::{Parser, Subcommand};
 use colored::Colorize as _;
 use log::debug;
 use ostool::{
-    ManifestContext, Tool,
     invocation::{Invocation, InvocationOptions},
     logger,
-    run::{qemu::RunQemuOptions, uboot::RunUbootOptions},
+    run::qemu::RunQemuOptions,
 };
 
 #[derive(Debug, Parser, Clone)]
@@ -116,7 +115,6 @@ async fn try_main() -> anyhow::Result<()> {
         elf,
         to_bin,
         config,
-        show_output,
         no_run,
         debug,
         command,
@@ -134,13 +132,12 @@ async fn try_main() -> anyhow::Result<()> {
         bin_dir,
         debug,
     ))?;
-    let manifest = ManifestContext::from_invocation(&invocation);
-    let log_path = logger::init_file_logger(&manifest.workspace_dir)?;
+    let log_path = logger::init_file_logger(invocation.workspace_dir())?;
     let _ = LOG_PATH.set(log_path.clone());
     debug!(
         "Logging initialized at {} for manifest {}",
         log_path.display(),
-        manifest.manifest_path.display()
+        invocation.manifest_path().display()
     );
     debug!("Parsed arguments: {parsed_args}");
 
@@ -148,38 +145,31 @@ async fn try_main() -> anyhow::Result<()> {
         exit(0);
     }
 
-    let mut tool = Tool::from_invocation(invocation);
+    let mut invocation = invocation;
 
-    tool.prepare_elf_artifact(elf, to_bin).await?;
+    invocation.prepare_elf_artifact(elf, to_bin).await?;
 
     match command {
         Some(SubCommands::Uboot(_)) => {
             let config = match config.as_deref() {
-                Some(path) => tool.read_uboot_config_from_path(path).await?,
+                Some(path) => ostool::run::uboot::read_config_from_path(&invocation, path).await?,
                 None => {
-                    tool.ensure_uboot_config_in_dir(&manifest.workspace_dir)
-                        .await?
+                    let workspace_dir = invocation.workspace_dir().to_path_buf();
+                    ostool::run::uboot::ensure_config_in_dir(&invocation, &workspace_dir).await?
                 }
             };
-            tool.run_uboot(&config, RunUbootOptions { show_output })
-                .await?;
+            ostool::run::uboot::run_uboot(&mut invocation, &config).await?;
         }
         None => {
             let config = match config.as_deref() {
-                Some(path) => tool.read_qemu_config_from_path(path).await?,
+                Some(path) => ostool::run::qemu::read_config_from_path(&invocation, path).await?,
                 None => {
-                    tool.ensure_qemu_config_in_dir(&manifest.workspace_dir)
-                        .await?
+                    let workspace_dir = invocation.workspace_dir().to_path_buf();
+                    ostool::run::qemu::ensure_config_in_dir(&invocation, &workspace_dir).await?
                 }
             };
-            tool.run_qemu(
-                &config,
-                RunQemuOptions {
-                    dtb_dump,
-                    show_output,
-                },
-            )
-            .await?;
+            ostool::run::qemu::run_qemu(&mut invocation, &config, RunQemuOptions { dtb_dump })
+                .await?;
         }
     }
 

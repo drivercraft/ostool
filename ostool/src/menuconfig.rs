@@ -14,8 +14,8 @@ use clap::ValueEnum;
 use log::info;
 use tokio::fs;
 
-use crate::Tool;
 use crate::build::{config::BuildConfig, config_hooks, config_loader};
+use crate::invocation::Invocation;
 use crate::run::qemu::QemuConfig;
 use crate::run::uboot::UbootConfig;
 use crate::utils::PathResultExt;
@@ -37,56 +37,53 @@ impl MenuConfigHandler {
     ///
     /// # Arguments
     ///
-    /// * `tool` - The tool instance.
+    /// * `invocation` - The invocation being configured.
     /// * `mode` - Optional mode specifying which configuration to edit.
     ///   If `None`, shows the default build configuration menu.
     ///
     /// # Errors
     ///
     /// Returns an error if the configuration cannot be loaded or saved.
-    pub async fn handle_menuconfig(tool: &mut Tool, mode: Option<MenuConfigMode>) -> Result<()> {
+    pub async fn handle_menuconfig(
+        invocation: &mut Invocation,
+        mode: Option<MenuConfigMode>,
+    ) -> Result<()> {
         match mode {
             Some(MenuConfigMode::Qemu) => {
-                Self::handle_qemu_config(tool).await?;
+                Self::handle_qemu_config(invocation).await?;
             }
             Some(MenuConfigMode::Uboot) => {
-                Self::handle_uboot_config(tool).await?;
+                Self::handle_uboot_config(invocation).await?;
             }
             None => {
-                Self::handle_default_config(tool).await?;
+                Self::handle_default_config(invocation).await?;
             }
         }
         Ok(())
     }
 
-    async fn handle_default_config(tool: &mut Tool) -> Result<()> {
-        let config_path = config_loader::resolve_build_config_path(tool.workspace_dir(), None);
-        tool.set_build_config_path(Some(config_path.clone()));
+    async fn handle_default_config(invocation: &mut Invocation) -> Result<()> {
+        let config_path =
+            config_loader::resolve_build_config_path(invocation.workspace_dir(), None);
 
-        let hooks = config_hooks::build_config_hooks(tool.workspace_dir());
+        let hooks = config_hooks::build_config_hooks(invocation.workspace_dir());
         let config = jkconfig::run::<BuildConfig>(config_path.clone(), true, &hooks)
             .await
             .with_context(|| format!("failed to load build config: {}", config_path.display()))?;
 
-        if let Some(config) = config {
-            Self::record_default_build_config_edit(tool, config);
-        } else {
+        if config.is_none() {
             println!("\n未更改构建配置");
         }
 
         Ok(())
     }
 
-    fn record_default_build_config_edit(tool: &mut Tool, config: BuildConfig) {
-        tool.ctx_mut().build_config = Some(config);
-    }
-
-    async fn handle_qemu_config(tool: &mut Tool) -> Result<()> {
+    async fn handle_qemu_config(invocation: &mut Invocation) -> Result<()> {
         info!("配置 QEMU 运行参数");
 
         let config_path = crate::run::qemu::resolve_qemu_config_path_in_dir(
-            tool.workspace_dir(),
-            tool.runtime_arch(),
+            invocation.workspace_dir(),
+            invocation.runtime_arch(),
             None,
         )?;
 
@@ -112,13 +109,13 @@ impl MenuConfigHandler {
         Ok(())
     }
 
-    async fn handle_uboot_config(tool: &mut Tool) -> Result<()> {
+    async fn handle_uboot_config(invocation: &mut Invocation) -> Result<()> {
         info!("配置 U-Boot 运行参数");
 
         println!("=== U-Boot 配置模式 ===");
 
         // 检查是否存在 U-Boot 配置文件
-        let uboot_config_path = tool.workspace_dir().join(".uboot.toml");
+        let uboot_config_path = invocation.workspace_dir().join(".uboot.toml");
         if uboot_config_path.exists() {
             println!("\n当前 U-Boot 配置文件: {}", uboot_config_path.display());
             // 这里可以读取并显示当前的 U-Boot 配置
@@ -148,13 +145,7 @@ impl MenuConfigHandler {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
-    use crate::{
-        Tool, ToolConfig,
-        build::config::{BuildConfig, BuildSystem, Cargo},
-        menuconfig::MenuConfigHandler,
-    };
+    use crate::build::config::BuildConfig;
     use jkconfig::data::menu::MenuRoot;
     use jkconfig::data::types::ElementType;
     use schemars::schema_for;
@@ -184,34 +175,5 @@ mod tests {
             }
             other => panic!("log should be Item(Enum), got: {:?}", other),
         }
-    }
-
-    #[test]
-    fn default_config_edit_records_config_without_validating_cargo_package() {
-        let temp = tempfile::tempdir().unwrap();
-        fs::write(
-            temp.path().join("Cargo.toml"),
-            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        fs::create_dir_all(temp.path().join("src")).unwrap();
-        fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
-
-        let mut tool = Tool::new(ToolConfig {
-            manifest: Some(temp.path().to_path_buf()),
-            ..Default::default()
-        })
-        .unwrap();
-        let config = BuildConfig {
-            system: BuildSystem::Cargo(Cargo {
-                package: "missing".into(),
-                target: "x86_64-unknown-none".into(),
-                ..Default::default()
-            }),
-        };
-
-        MenuConfigHandler::record_default_build_config_edit(&mut tool, config.clone());
-
-        assert_eq!(tool.ctx().build_config.as_ref(), Some(&config));
     }
 }
