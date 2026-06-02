@@ -586,7 +586,7 @@ mod tests {
                 assert_eq!(profile.fit_load_addr.as_deref(), Some("0x82200000"));
                 assert_eq!(profile.bootm_addr.as_deref(), Some("0x82200000"));
             }
-            BootConfig::Pxe(_) => panic!("expected uboot profile"),
+            BootConfig::Pxe(_) | BootConfig::UefiHttp(_) => panic!("expected uboot profile"),
         }
     }
 

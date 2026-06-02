@@ -878,14 +878,8 @@ fn receive_kernel_range_body(
     body_len: usize,
     first: bool,
 ) -> Option<usize> {
-    let response = receive_kernel_stream_chunk(
-        console,
-        boot_services,
-        http_protocol,
-        body,
-        body_len,
-        first,
-    )?;
+    let response =
+        receive_kernel_stream_chunk(console, boot_services, http_protocol, body, body_len, first)?;
     if response.http_status != HTTP_STATUS_206_PARTIAL_CONTENT {
         write_console(console, "error: kernel HTTP status ");
         write_http_status_code(console, response.http_status);
