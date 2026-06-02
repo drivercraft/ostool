@@ -363,7 +363,6 @@ async fn create_board(
         .await
         .insert(board.id.clone(), board.clone());
     state.sync_board_runtime_states().await;
-    state.sync_virtual_power_statuses().await;
     Ok((StatusCode::CREATED, axum::Json(board)))
 }
 
@@ -408,7 +407,6 @@ async fn update_board(
         boards.insert(board.id.clone(), board.clone());
     }
     state.sync_board_runtime_states().await;
-    state.sync_virtual_power_statuses().await;
 
     Ok(axum::Json(board))
 }
@@ -542,7 +540,6 @@ fn normalize_power_management_config(
         PowerManagementConfig::ZhongshengRelay(relay) => {
             normalize_serial_key_value(&mut relay.key, "power_management.key.value")?;
         }
-        PowerManagementConfig::Virtual(_) => {}
     }
 
     Ok(())
@@ -721,7 +718,6 @@ async fn delete_board(
         }
     }
     state.sync_board_runtime_states().await;
-    state.sync_virtual_power_statuses().await;
 
     state.board_store.delete_board(&board_id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -1228,7 +1224,7 @@ async fn put_http_boot_file(
 ) -> Result<(StatusCode, axum::Json<HttpBootFileResponse>), ApiError> {
     let session = active_session_state_or_404(&state, &session_id).await?;
     let board = session.board().clone();
-    ensure_uefi_http_board(&board)?;
+    ensure_httpboot_board(&board)?;
     let headers = request.headers();
     let relative_path = headers
         .get("X-File-Path")
@@ -1255,7 +1251,7 @@ async fn put_http_boot_manifest(
 ) -> Result<(StatusCode, axum::Json<HttpBootFileResponse>), ApiError> {
     let session = active_session_state_or_404(&state, &session_id).await?;
     let board = session.board().clone();
-    ensure_uefi_http_board(&board)?;
+    ensure_httpboot_board(&board)?;
     let max_mib = state.config.read().await.upload_limits.session_file_max_mib;
     let body = read_limited_body(request, max_mib, "HTTP Boot manifest").await?;
     let manifest: HttpBootManifest = serde_json::from_slice(&body)
@@ -1506,12 +1502,12 @@ async fn active_session_state_or_404(
     Ok(session)
 }
 
-fn ensure_uefi_http_board(board: &BoardConfig) -> Result<(), ApiError> {
+fn ensure_httpboot_board(board: &BoardConfig) -> Result<(), ApiError> {
     if matches!(board.boot, BootConfig::UefiHttp(_)) {
         Ok(())
     } else {
         Err(ApiError::bad_request(format!(
-            "board `{}` does not use `uefi_http` boot",
+            "board `{}` does not use `httpboot` boot",
             board.id
         )))
     }
@@ -1878,16 +1874,13 @@ mod tests {
         mib_to_bytes, resolve_server_network,
     };
     use crate::{
-        api::models::{
-            AdminBoardUpsertRequest, BoardPowerStatusResponse, BoardRuntimeStatusResponse,
-            SessionDetailResponse,
-        },
+        api::models::{AdminBoardUpsertRequest, BoardRuntimeStatusResponse, SessionDetailResponse},
         build_app_state,
         config::{
             BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
             PowerManagementConfig, SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig,
             TftpConfig, UbootNetworkMode, UefiBootArch, UefiHttpProfile, UefiHttpStrategy,
-            UploadLimitsConfig, VirtualPowerManagement, ZhongshengRelayPowerManagement,
+            UploadLimitsConfig, ZhongshengRelayPowerManagement,
         },
         session::SessionLifecycleState,
         state::BoardLeaseState,
@@ -1920,6 +1913,7 @@ mod tests {
             network: crate::TftpNetworkConfig {
                 interface: "lo".into(),
             },
+            proxy_dhcp: Default::default(),
             upload_limits: UploadLimitsConfig::default(),
         }
     }
@@ -2019,14 +2013,8 @@ mod tests {
         }
     }
 
-    fn sample_virtual_board(board_id: &str) -> BoardConfig {
+    fn sample_httpboot_board(board_id: &str) -> BoardConfig {
         let mut board = sample_board(board_id);
-        board.power_management = PowerManagementConfig::Virtual(VirtualPowerManagement::default());
-        board
-    }
-
-    fn sample_uefi_http_board(board_id: &str) -> BoardConfig {
-        let mut board = sample_virtual_board(board_id);
         board.board_type = "x86_64-uefi-http".into();
         board.tags = vec!["uefi-http".into()];
         board.boot = BootConfig::UefiHttp(UefiHttpProfile {
@@ -2449,61 +2437,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_board_accepts_virtual_power_management() {
-        let app = test_router().await;
-        let board = sample_board("demo-board");
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&board).unwrap()).await,
-            StatusCode::CREATED
-        );
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/api/v1/admin/boards/demo-board")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "id": "demo-board",
-                            "board_type": "rk3568",
-                            "tags": ["lab"],
-                            "serial": null,
-                            "power_management": { "kind": "virtual" },
-                            "boot": { "kind": "pxe", "notes": null },
-                            "notes": null,
-                            "disabled": false
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let status_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/admin/boards/demo-board/power-status")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(status_response.status(), StatusCode::OK);
-        let body = to_bytes(status_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let status: BoardPowerStatusResponse = serde_json::from_slice(&body).unwrap();
-        assert!(status.available);
-        assert_eq!(status.powered, Some(false));
-        assert!(status.last_action.is_none());
-    }
-
-    #[tokio::test]
     async fn power_actions_execute_custom_power_management_commands() {
         let app = test_router().await;
         let mut board = sample_board("power-board");
@@ -2558,117 +2491,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn virtual_power_status_reports_board_state_before_and_after_actions() {
-        let app = test_router().await;
-        let board = sample_virtual_board("virtual-board");
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&board).unwrap()).await,
-            StatusCode::CREATED
-        );
-
-        let initial = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/admin/boards/virtual-board/power-status")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(initial.status(), StatusCode::OK);
-        let initial_body = to_bytes(initial.into_body(), usize::MAX).await.unwrap();
-        let initial_status: BoardPowerStatusResponse =
-            serde_json::from_slice(&initial_body).unwrap();
-        assert!(initial_status.available);
-        assert_eq!(initial_status.powered, Some(false));
-        assert!(initial_status.last_action.is_none());
-        assert!(initial_status.updated_at.is_none());
-
-        let session_id = create_session(&app, "rk3568").await;
-        let power_on = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/api/v1/sessions/{session_id}/board/power-on"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(power_on.status(), StatusCode::OK);
-        let power_on_body = to_bytes(power_on.into_body(), usize::MAX).await.unwrap();
-        let power_on_value: serde_json::Value = serde_json::from_slice(&power_on_body).unwrap();
-        assert_eq!(
-            power_on_value["message"],
-            "recorded virtual power-on for board `virtual-board`"
-        );
-
-        let powered = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/admin/boards/virtual-board/power-status")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let powered_body = to_bytes(powered.into_body(), usize::MAX).await.unwrap();
-        let powered_status: BoardPowerStatusResponse =
-            serde_json::from_slice(&powered_body).unwrap();
-        assert_eq!(powered_status.powered, Some(true));
-        assert_eq!(
-            powered_status.last_action,
-            Some(crate::api::models::BoardPowerAction::PowerOn)
-        );
-        assert!(powered_status.updated_at.is_some());
-
-        let power_off = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/api/v1/sessions/{session_id}/board/power-off"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(power_off.status(), StatusCode::OK);
-        let power_off_body = to_bytes(power_off.into_body(), usize::MAX).await.unwrap();
-        let power_off_value: serde_json::Value = serde_json::from_slice(&power_off_body).unwrap();
-        assert_eq!(
-            power_off_value["message"],
-            "recorded virtual power-off for board `virtual-board`"
-        );
-
-        let powered_off = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/admin/boards/virtual-board/power-status")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let powered_off_body = to_bytes(powered_off.into_body(), usize::MAX).await.unwrap();
-        let powered_off_status: BoardPowerStatusResponse =
-            serde_json::from_slice(&powered_off_body).unwrap();
-        assert_eq!(powered_off_status.powered, Some(false));
-        assert_eq!(
-            powered_off_status.last_action,
-            Some(crate::api::models::BoardPowerAction::PowerOff)
-        );
-        assert!(powered_off_status.updated_at.is_some());
-    }
-
-    #[tokio::test]
     async fn board_runtime_status_reports_idle_board() {
         let app = test_router().await;
-        let board = sample_virtual_board("runtime-board");
+        let board = sample_board("runtime-board");
         assert_eq!(
             create_board(&app, serde_json::to_value(&board).unwrap()).await,
             StatusCode::CREATED
@@ -3402,7 +3227,7 @@ mod tests {
         assert_eq!(
             create_board(
                 &app,
-                serde_json::to_value(sample_uefi_http_board("uefi-http-01")).unwrap()
+                serde_json::to_value(sample_httpboot_board("uefi-http-01")).unwrap()
             )
             .await,
             StatusCode::CREATED
@@ -3517,14 +3342,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn http_boot_upload_rejects_non_uefi_http_board() {
+    async fn http_boot_upload_rejects_non_httpboot_board() {
         let app = test_router().await;
         assert_eq!(
-            create_board(
-                &app,
-                serde_json::to_value(sample_virtual_board("pxe-01")).unwrap()
-            )
-            .await,
+            create_board(&app, serde_json::to_value(sample_board("pxe-01")).unwrap()).await,
             StatusCode::CREATED
         );
         let session_id = create_session(&app, "rk3568").await;

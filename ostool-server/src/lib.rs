@@ -20,7 +20,7 @@ pub use config::{
     BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement, PowerManagementConfig,
     ProxyDhcpConfig, PxeProfile, SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig,
     SystemTftpdHpaConfig, TftpConfig, TftpNetworkConfig, UbootNetworkMode, UbootProfile,
-    UefiBootArch, UefiHttpProfile, UefiHttpStrategy, UploadLimitsConfig, VirtualPowerManagement,
+    UefiBootArch, UefiHttpProfile, UefiHttpStrategy, UploadLimitsConfig,
     ZhongshengRelayPowerManagement,
 };
 pub use dtb_store::{DtbFile, DtbStore};

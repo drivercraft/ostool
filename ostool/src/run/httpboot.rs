@@ -312,9 +312,9 @@ async fn run_httpboot_session(
     config: &HttpBootConfig,
     kernel_bin: &Path,
 ) -> anyhow::Result<HttpBootPublishedUrls> {
-    if session.boot_mode != "uefi_http" {
+    if session.boot_mode != "httpboot" {
         anyhow::bail!(
-            "unsupported remote boot mode `{}`; only `uefi_http` is supported",
+            "unsupported remote boot mode `{}`; only `httpboot` is supported",
             session.boot_mode
         );
     }
@@ -324,7 +324,7 @@ async fn run_httpboot_session(
         .await
         .context("failed to get HTTP Boot profile")?;
     let RemoteBootConfig::UefiHttp(profile) = boot_profile.boot else {
-        anyhow::bail!("server returned a non-uefi_http boot profile");
+        anyhow::bail!("server returned a non-httpboot boot profile");
     };
 
     let remote_name = config
@@ -363,7 +363,7 @@ async fn run_httpboot_session(
     let loader_file = profile
         .loader_file
         .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("uefi_http boot profile is missing `loader_file`"))?;
+        .ok_or_else(|| anyhow::anyhow!("httpboot boot profile is missing `loader_file`"))?;
     let uploaded_loader = upload_configured_loader(
         client,
         &session.session_id,

@@ -157,7 +157,7 @@ async fn build_boot_plan(config: &ServerConfig, state: &AppState) -> anyhow::Res
     let boards = state.boards.read().await;
     let (board_id, board) = select_board(config, &boards)?;
     let BootConfig::UefiHttp(profile) = &board.boot else {
-        bail!("ProxyDHCP board `{board_id}` is not a uefi_http board");
+        bail!("ProxyDHCP board `{board_id}` is not a httpboot board");
     };
 
     let loader_file = profile
@@ -201,10 +201,10 @@ fn select_board<'a>(
         .iter()
         .filter(|(_, board)| !board.disabled && matches!(board.boot, BootConfig::UefiHttp(_)));
     let Some((board_id, board)) = matches.next() else {
-        bail!("ProxyDHCP enabled but no enabled uefi_http board exists");
+        bail!("ProxyDHCP enabled but no enabled httpboot board exists");
     };
     if matches.next().is_some() {
-        bail!("ProxyDHCP needs proxy_dhcp.board_id when multiple uefi_http boards exist");
+        bail!("ProxyDHCP needs proxy_dhcp.board_id when multiple httpboot boards exist");
     }
     Ok((board_id, board))
 }

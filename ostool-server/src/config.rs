@@ -445,7 +445,6 @@ pub enum SerialPortKeyKind {
 pub enum PowerManagementConfig {
     Custom(CustomPowerManagement),
     ZhongshengRelay(ZhongshengRelayPowerManagement),
-    Virtual(VirtualPowerManagement),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -460,14 +459,12 @@ pub struct ZhongshengRelayPowerManagement {
     pub key: SerialPortKey,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
-pub struct VirtualPowerManagement {}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BootConfig {
     Uboot(UbootProfile),
     Pxe(PxeProfile),
+    #[serde(rename = "httpboot", alias = "uefi_http")]
     UefiHttp(UefiHttpProfile),
 }
 
@@ -476,7 +473,7 @@ impl BootConfig {
         match self {
             Self::Uboot(_) => "uboot",
             Self::Pxe(_) => "pxe",
-            Self::UefiHttp(_) => "uefi_http",
+            Self::UefiHttp(_) => "httpboot",
         }
     }
 }
@@ -587,7 +584,7 @@ mod tests {
     use super::{
         BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, SerialPortKey,
         SerialPortKeyKind, ServerConfig, UbootNetworkMode, UbootProfile, UefiBootArch,
-        UefiHttpProfile, UefiHttpStrategy, VirtualPowerManagement, ZhongshengRelayPowerManagement,
+        UefiHttpProfile, UefiHttpStrategy, ZhongshengRelayPowerManagement,
     };
 
     #[test]
@@ -849,36 +846,16 @@ bootm_addr = "0x82200000"
     }
 
     #[test]
-    fn board_config_round_trip_supports_virtual_power_management() {
-        let board = BoardConfig {
-            id: "demo-virtual".into(),
-            board_type: "demo".into(),
-            tags: vec![],
-            serial: None,
-            power_management: PowerManagementConfig::Virtual(VirtualPowerManagement::default()),
-            boot: BootConfig::Pxe(Default::default()),
-            notes: None,
-            disabled: false,
-        };
-
-        let encoded = toml::to_string_pretty(&board).unwrap();
-        assert!(encoded.contains("kind = \"virtual\""));
-
-        let decoded: BoardConfig = toml::from_str(&encoded).unwrap();
-        assert!(matches!(
-            decoded.power_management,
-            PowerManagementConfig::Virtual(_)
-        ));
-    }
-
-    #[test]
-    fn board_config_round_trip_supports_uefi_http_boot() {
+    fn board_config_round_trip_supports_httpboot_boot() {
         let board = BoardConfig {
             id: "uefi-http-01".into(),
             board_type: "x86_64-uefi-http".into(),
             tags: vec!["uefi-http".into()],
             serial: None,
-            power_management: PowerManagementConfig::Virtual(VirtualPowerManagement::default()),
+            power_management: PowerManagementConfig::Custom(CustomPowerManagement {
+                power_on_cmd: "true".into(),
+                power_off_cmd: "true".into(),
+            }),
             boot: BootConfig::UefiHttp(UefiHttpProfile {
                 boot_arch: Some(UefiBootArch::X86_64),
                 strategy: UefiHttpStrategy::BareBinLoader,
@@ -894,12 +871,12 @@ bootm_addr = "0x82200000"
         };
 
         let encoded = toml::to_string_pretty(&board).unwrap();
-        assert!(encoded.contains("kind = \"uefi_http\""));
+        assert!(encoded.contains("kind = \"httpboot\""));
         assert!(encoded.contains("strategy = \"bare_bin_loader\""));
 
         let decoded: BoardConfig = toml::from_str(&encoded).unwrap();
         let BootConfig::UefiHttp(profile) = decoded.boot else {
-            panic!("expected uefi_http");
+            panic!("expected httpboot");
         };
         assert_eq!(profile.boot_arch, Some(UefiBootArch::X86_64));
         assert_eq!(profile.loader_file.as_deref(), Some("BOOTX64.EFI"));
@@ -915,11 +892,11 @@ bootm_addr = "0x82200000"
         assert!(board.tags.iter().any(|tag| tag == "vmx"));
         assert!(matches!(
             board.power_management,
-            PowerManagementConfig::Virtual(_)
+            PowerManagementConfig::Custom(_)
         ));
 
         let BootConfig::UefiHttp(profile) = board.boot else {
-            panic!("expected uefi_http");
+            panic!("expected httpboot");
         };
         assert_eq!(profile.boot_arch, Some(UefiBootArch::X86_64));
         assert_eq!(profile.strategy, UefiHttpStrategy::BareBinLoader);

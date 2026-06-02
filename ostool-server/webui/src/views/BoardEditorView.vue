@@ -12,11 +12,12 @@ import type {
   PowerManagementConfig,
   SerialPortKeyKind,
   SerialPortSummary,
+  UefiBootArch,
   UbootNetworkMode,
 } from "@/types/api";
 
 type PowerManagementKind = "custom" | "zhongsheng_relay";
-type BootKind = "uboot" | "pxe";
+type BootKind = "uboot" | "pxe" | "httpboot";
 
 interface BoardEditorFormState {
   id: string;
@@ -45,6 +46,13 @@ interface BoardEditorFormState {
   netmask: string;
   gatewayip: string;
   pxe_notes: string;
+  uefi_boot_arch: UefiBootArch | "";
+  uefi_loader_file: string;
+  uefi_kernel_file: string;
+  uefi_kernel_load_addr: string;
+  uefi_entry_point: string;
+  uefi_mac_address: string;
+  uefi_client_ip: string;
 }
 
 const DEFAULT_SERIAL_BAUD_RATE = 115_200;
@@ -108,6 +116,13 @@ function defaultFormState(): BoardEditorFormState {
     netmask: "",
     gatewayip: "",
     pxe_notes: "",
+    uefi_boot_arch: "x86_64",
+    uefi_loader_file: "",
+    uefi_kernel_file: "",
+    uefi_kernel_load_addr: "",
+    uefi_entry_point: "",
+    uefi_mac_address: "",
+    uefi_client_ip: "",
   };
 }
 
@@ -148,9 +163,18 @@ function boardToFormState(board: BoardConfig): BoardEditorFormState {
     next.server_ip = board.boot.server_ip ?? "";
     next.netmask = board.boot.netmask ?? "";
     next.gatewayip = board.boot.gatewayip ?? "";
-  } else {
+  } else if (board.boot.kind === "pxe") {
     next.boot_kind = "pxe";
     next.pxe_notes = board.boot.notes ?? "";
+  } else {
+    next.boot_kind = "httpboot";
+    next.uefi_boot_arch = board.boot.boot_arch ?? "";
+    next.uefi_loader_file = board.boot.loader_file ?? "";
+    next.uefi_kernel_file = board.boot.kernel_file ?? "";
+    next.uefi_kernel_load_addr = board.boot.kernel_load_addr ?? "";
+    next.uefi_entry_point = board.boot.entry_point ?? "";
+    next.uefi_mac_address = board.boot.mac_address ?? "";
+    next.uefi_client_ip = board.boot.client_ip ?? "";
   }
 
   return next;
@@ -183,6 +207,20 @@ function buildBootConfig(): BootConfig {
       server_ip: useStaticIp ? trimToNull(form.value.server_ip) : null,
       netmask: useStaticIp ? trimToNull(form.value.netmask) : null,
       gatewayip: useStaticIp ? trimToNull(form.value.gatewayip) : null,
+    };
+  }
+
+  if (form.value.boot_kind === "httpboot") {
+    return {
+      kind: "httpboot",
+      boot_arch: form.value.uefi_boot_arch || null,
+      strategy: "bare_bin_loader",
+      loader_file: trimToNull(form.value.uefi_loader_file),
+      kernel_file: trimToNull(form.value.uefi_kernel_file),
+      kernel_load_addr: trimToNull(form.value.uefi_kernel_load_addr),
+      entry_point: trimToNull(form.value.uefi_entry_point),
+      mac_address: trimToNull(form.value.uefi_mac_address),
+      client_ip: trimToNull(form.value.uefi_client_ip),
     };
   }
 
@@ -261,6 +299,9 @@ function validateForm(): string {
     if (!form.value.board_ip.trim()) {
       errors.push("静态 IP 模式必须填写开发板 IP");
     }
+  }
+  if (form.value.boot_kind === "httpboot" && !form.value.uefi_kernel_file.trim()) {
+    errors.push("HTTPboot 必须填写 kernel 文件名");
   }
   return errors.join("\n");
 }
@@ -791,6 +832,7 @@ onMounted(() => {
               </p>
             </div>
           </label>
+
         </section>
 
         <!-- 启动方式 -->
@@ -804,6 +846,7 @@ onMounted(() => {
             <select v-model="form.boot_kind">
               <option value="uboot">U-Boot</option>
               <option value="pxe">PXE</option>
+              <option value="httpboot">HTTPboot</option>
             </select>
           </label>
 
@@ -908,6 +951,50 @@ onMounted(() => {
                   新增 DTB
                 </button>
               </section>
+            </div>
+          </template>
+
+          <template v-else-if="form.boot_kind === 'httpboot'">
+            <div class="form-grid two-columns" style="margin-top: 18px">
+              <label class="field">
+                <span>启动架构</span>
+                <select v-model="form.uefi_boot_arch">
+                  <option value="">未指定</option>
+                  <option value="x86_64">x86_64</option>
+                  <option value="aarch64">aarch64</option>
+                  <option value="loongarch64">loongarch64</option>
+                  <option value="riscv64">riscv64</option>
+                  <option value="other">other</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>启动策略</span>
+                <input value="bare_bin_loader" disabled />
+              </label>
+              <label class="field">
+                <span>loader 文件</span>
+                <input v-model="form.uefi_loader_file" placeholder="例如 BOOTX64.EFI" />
+              </label>
+              <label class="field">
+                <span>kernel 文件</span>
+                <input v-model="form.uefi_kernel_file" placeholder="例如 kernel.bin" />
+              </label>
+              <label class="field">
+                <span>kernel load addr</span>
+                <input v-model="form.uefi_kernel_load_addr" placeholder="例如 0x200000" />
+              </label>
+              <label class="field">
+                <span>entry point</span>
+                <input v-model="form.uefi_entry_point" placeholder="例如 0x200000" />
+              </label>
+              <label class="field">
+                <span>MAC 地址</span>
+                <input v-model="form.uefi_mac_address" placeholder="例如 1c:69:7a:dc:f3:47" />
+              </label>
+              <label class="field">
+                <span>客户端 IP</span>
+                <input v-model="form.uefi_client_ip" placeholder="例如 10.3.10.143" />
+              </label>
             </div>
           </template>
 

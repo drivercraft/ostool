@@ -1,4 +1,4 @@
-//! Integration tests for serial WebSocket session lifecycle and virtual power state.
+//! Integration tests for serial WebSocket session lifecycle.
 #![cfg(unix)]
 
 use std::{
@@ -13,9 +13,9 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
 use ostool_server::{
-    BoardConfig, BootConfig, BuiltinTftpConfig, PowerManagementConfig, SerialConfig, SerialPortKey,
-    SerialPortKeyKind, ServerConfig, TftpConfig, UbootProfile, UploadLimitsConfig,
-    VirtualPowerManagement, build_app_state, build_router,
+    BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement, PowerManagementConfig,
+    SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig, TftpConfig, UbootProfile,
+    UploadLimitsConfig, build_app_state, build_router,
     tftp::service::{TftpManager, build_tftp_manager},
 };
 use reqwest::StatusCode;
@@ -23,8 +23,8 @@ use serialport::{SerialPort, TTYPort};
 use tokio::sync::oneshot;
 use tokio_tungstenite::tungstenite::Message;
 
-const TEST_BOARD_ID: &str = "virtual-board-1";
-const TEST_BOARD_TYPE: &str = "virtual-demo";
+const TEST_BOARD_ID: &str = "custom-board-1";
+const TEST_BOARD_TYPE: &str = "custom-demo";
 const TEST_SERIAL_BAUD_RATE: u32 = 115_200;
 const EXPECTED_SERIAL_PAYLOAD: &[u8] = b"hello from board\n";
 const FAST_ASSERT_TIMEOUT: Duration = Duration::from_millis(800);
@@ -60,22 +60,7 @@ struct SessionCreatedResponse {
     ws_url: Option<String>,
 }
 
-#[derive(Debug, serde::Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum BoardPowerAction {
-    PowerOn,
-    PowerOff,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct BoardPowerStatusResponse {
-    available: bool,
-    powered: Option<bool>,
-    last_action: Option<BoardPowerAction>,
-    updated_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-fn sample_virtual_board(serial_port: String) -> BoardConfig {
+fn sample_board(serial_port: String) -> BoardConfig {
     BoardConfig {
         id: TEST_BOARD_ID.into(),
         board_type: TEST_BOARD_TYPE.into(),
@@ -89,7 +74,10 @@ fn sample_virtual_board(serial_port: String) -> BoardConfig {
             resolved_device_path: None,
             resolved_usb_path: None,
         }),
-        power_management: PowerManagementConfig::Virtual(VirtualPowerManagement::default()),
+        power_management: PowerManagementConfig::Custom(CustomPowerManagement {
+            power_on_cmd: "true".into(),
+            power_off_cmd: "true".into(),
+        }),
         boot: BootConfig::Uboot(UbootProfile {
             use_tftp: false,
             dtb_name: None,
@@ -100,7 +88,7 @@ fn sample_virtual_board(serial_port: String) -> BoardConfig {
     }
 }
 
-/// Starts an in-process ostool-server with one virtual board and PTY serial port.
+/// Starts an in-process ostool-server with one board and PTY serial port.
 fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandle> {
     let config_path = root.join("config.toml");
     let data_dir = root.join("data");
@@ -124,12 +112,13 @@ fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandl
         network: ostool_server::TftpNetworkConfig {
             interface: "lo".into(),
         },
+        proxy_dhcp: Default::default(),
         upload_limits: UploadLimitsConfig::default(),
     };
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)
         .with_context(|| format!("failed to write {}", config_path.display()))?;
 
-    let board = sample_virtual_board(serial_port);
+    let board = sample_board(serial_port);
     let board_path = board_dir.join(format!("{}.toml", board.id));
     std::fs::write(&board_path, toml::to_string_pretty(&board)?)
         .with_context(|| format!("failed to write {}", board_path.display()))?;
@@ -255,12 +244,6 @@ async fn run_client_flow(
     let client = reqwest::Client::new();
     wait_for_server_ready(&client, base_url).await?;
 
-    let initial_status = fetch_power_status(&client, base_url, TEST_BOARD_ID).await?;
-    assert!(initial_status.available);
-    assert_eq!(initial_status.powered, Some(false));
-    assert_eq!(initial_status.last_action, Some(BoardPowerAction::PowerOff));
-    assert!(initial_status.updated_at.is_some());
-
     let created = create_session(&client, base_url).await?;
     assert_eq!(created.board_id, TEST_BOARD_ID);
     let ws_url = resolve_ws_url(
@@ -272,20 +255,6 @@ async fn run_client_flow(
         .with_context(|| format!("failed to connect websocket {ws_url}"))?;
 
     wait_for_opened(&mut websocket).await?;
-
-    let powered_on = poll_power_status(
-        &client,
-        base_url,
-        TEST_BOARD_ID,
-        FAST_ASSERT_TIMEOUT,
-        |status| {
-            status.available
-                && status.powered == Some(true)
-                && status.last_action == Some(BoardPowerAction::PowerOn)
-        },
-    )
-    .await?;
-    let power_on_time = powered_on.updated_at;
 
     serial_ready_tx
         .send(())
@@ -307,34 +276,24 @@ async fn run_client_flow(
     }
 
     wait_for_session_release(&client, base_url, &created.session_id).await?;
-    let powered_off = poll_power_status(
-        &client,
-        base_url,
-        TEST_BOARD_ID,
-        FAST_ASSERT_TIMEOUT,
-        |status| {
-            status.available
-                && status.powered == Some(false)
-                && status.last_action == Some(BoardPowerAction::PowerOff)
-                && status.updated_at != power_on_time
-        },
-    )
-    .await?;
-    assert!(powered_off.updated_at.is_some());
-
     Ok(())
 }
 
 async fn wait_for_server_ready(client: &reqwest::Client, base_url: &str) -> Result<()> {
-    poll_power_status(
-        client,
-        base_url,
-        TEST_BOARD_ID,
-        Duration::from_secs(5),
-        |status| status.available && status.powered == Some(false),
-    )
-    .await
-    .map(|_| ())
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let response = client
+            .get(format!("{base_url}/api/v1/admin/overview"))
+            .send()
+            .await;
+        if matches!(response, Ok(response) if response.status() == StatusCode::OK) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            bail!("timed out waiting for test server readiness");
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
 }
 
 async fn create_session(
@@ -360,55 +319,6 @@ async fn create_session(
         bail!("unexpected create session status {status}: {body}");
     }
     serde_json::from_str(&body).context("failed to parse session response")
-}
-
-async fn fetch_power_status(
-    client: &reqwest::Client,
-    base_url: &str,
-    board_id: &str,
-) -> Result<BoardPowerStatusResponse> {
-    let response = client
-        .get(format!(
-            "{base_url}/api/v1/admin/boards/{board_id}/power-status"
-        ))
-        .send()
-        .await
-        .with_context(|| format!("failed to query power status for {board_id}"))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .context("failed to read power status body")?;
-    if status != StatusCode::OK {
-        bail!("unexpected power status {status}: {body}");
-    }
-    serde_json::from_str(&body).context("failed to parse power status")
-}
-
-async fn poll_power_status<F>(
-    client: &reqwest::Client,
-    base_url: &str,
-    board_id: &str,
-    timeout: Duration,
-    mut predicate: F,
-) -> Result<BoardPowerStatusResponse>
-where
-    F: FnMut(&BoardPowerStatusResponse) -> bool,
-{
-    let deadline = Instant::now() + timeout;
-    loop {
-        let status = fetch_power_status(client, base_url, board_id).await?;
-        if predicate(&status) {
-            return Ok(status);
-        }
-        if Instant::now() >= deadline {
-            bail!(
-                "timed out waiting for power status predicate, last status: {:?}",
-                status
-            );
-        }
-        tokio::time::sleep(POLL_INTERVAL).await;
-    }
 }
 
 async fn wait_for_opened<S>(websocket: &mut S) -> Result<()>

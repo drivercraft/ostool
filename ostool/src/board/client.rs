@@ -625,11 +625,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_uefi_http_boot_profile() {
+    fn parse_httpboot_boot_profile() {
         let response: super::BootProfileResponse = serde_json::from_str(
             r#"{
                 "boot": {
-                    "kind": "uefi_http",
+                    "kind": "httpboot",
                     "boot_arch": "x86_64",
                     "strategy": "bare_bin_loader",
                     "loader_file": "BOOTX64.EFI",
@@ -651,7 +651,7 @@ mod tests {
                 assert_eq!(profile.boot_arch, Some(super::UefiBootArch::X86_64));
                 assert_eq!(profile.loader_file.as_deref(), Some("BOOTX64.EFI"));
             }
-            _ => panic!("expected uefi_http profile"),
+            _ => panic!("expected httpboot profile"),
         }
     }
 

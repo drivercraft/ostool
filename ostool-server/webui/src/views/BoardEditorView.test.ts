@@ -132,6 +132,29 @@ function makeRelayBoard(id = "relay-board"): BoardConfig {
   };
 }
 
+function makeUefiHttpBoard(id = "uefi-http-board"): BoardConfig {
+  return {
+    ...makeBoard(id),
+    board_type: "Asus-nuc15-x86_64-vmx",
+    power_management: {
+      kind: "custom",
+      power_on_cmd: "true",
+      power_off_cmd: "true",
+    },
+    boot: {
+      kind: "httpboot",
+      boot_arch: "x86_64",
+      strategy: "bare_bin_loader",
+      loader_file: "BOOTX64.EFI",
+      kernel_file: "kernel.bin",
+      kernel_load_addr: "0x200000",
+      entry_point: "0x200000",
+      mac_address: "1c:69:7a:dc:f3:47",
+      client_ip: "10.3.10.143",
+    },
+  };
+}
+
 describe("BoardEditorView", () => {
   beforeEach(() => {
     route.params = {};
@@ -341,6 +364,53 @@ describe("BoardEditorView", () => {
     expect(
       (wrapper.get('input[placeholder="默认跟随 FIT load addr"]').element as HTMLInputElement).value,
     ).toBe("0x82200000");
+  });
+
+  it("loads and saves an HTTPboot board", async () => {
+    route.params = { boardId: "uefi-http-board" };
+    getBoard.mockResolvedValue(makeUefiHttpBoard("uefi-http-board"));
+    updateBoard.mockResolvedValue(makeUefiHttpBoard("uefi-http-board"));
+
+    const BoardEditorView = (await import("./BoardEditorView.vue")).default;
+    const wrapper = mount(BoardEditorView);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("HTTPboot");
+    expect((wrapper.get('input[placeholder="例如 BOOTX64.EFI"]').element as HTMLInputElement).value).toBe(
+      "BOOTX64.EFI",
+    );
+    expect((wrapper.get('input[placeholder="例如 kernel.bin"]').element as HTMLInputElement).value).toBe(
+      "kernel.bin",
+    );
+    expect((wrapper.get('input[placeholder="例如 1c:69:7a:dc:f3:47"]').element as HTMLInputElement).value).toBe(
+      "1c:69:7a:dc:f3:47",
+    );
+
+    const saveButton = wrapper.findAll("button").find((button) => button.text() === "保存配置");
+    await saveButton!.trigger("click");
+    await flushPromises();
+
+    expect(updateBoard).toHaveBeenCalledWith(
+      "uefi-http-board",
+      expect.objectContaining({
+        power_management: {
+          kind: "custom",
+          power_on_cmd: "true",
+          power_off_cmd: "true",
+        },
+        boot: {
+          kind: "httpboot",
+          boot_arch: "x86_64",
+          strategy: "bare_bin_loader",
+          loader_file: "BOOTX64.EFI",
+          kernel_file: "kernel.bin",
+          kernel_load_addr: "0x200000",
+          entry_point: "0x200000",
+          mac_address: "1c:69:7a:dc:f3:47",
+          client_ip: "10.3.10.143",
+        },
+      }),
+    );
   });
 
   it("updates a board and keeps blank id as null in the payload", async () => {
