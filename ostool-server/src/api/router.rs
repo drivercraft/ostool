@@ -1149,7 +1149,7 @@ async fn read_http_boot_current_file(
     if !config.http_boot.enabled {
         return Err(ApiError::not_found("HTTP Boot is disabled"));
     }
-    let disk_path = board_current_disk_path(&config.http_boot.root_dir, &board_id, &relative_path)
+    let disk_path = board_current_disk_path(&config.http_boot.root_dir, board_id, relative_path)
         .map_err(|err| ApiError::bad_request(err.to_string()))?;
     let body = fs::read(&disk_path).await.map_err(|err| match err.kind() {
         std::io::ErrorKind::NotFound => {
@@ -1164,28 +1164,28 @@ async fn read_http_boot_current_file(
     if let Some(range) = headers
         .get(header::RANGE)
         .and_then(|value| value.to_str().ok())
+        && let Some((start, end)) = parse_single_byte_range(range, body.len())
     {
-        if let Some((start, end)) = parse_single_byte_range(range, body.len()) {
-            let chunk = body[start..=end].to_vec();
-            return Ok((
-                StatusCode::PARTIAL_CONTENT,
-                [
-                    (header::CONTENT_TYPE, content_type),
-                    (
-                        header::CONTENT_RANGE,
-                        HeaderValue::from_str(&format!("bytes {start}-{end}/{}", body.len()))
-                            .map_err(|err| {
-                                ApiError::service_unavailable(format!(
-                                    "invalid content range header: {err}"
-                                ))
-                            })?,
-                    ),
-                    (header::ACCEPT_RANGES, HeaderValue::from_static("bytes")),
-                ],
-                chunk,
-            )
-                .into_response());
-        }
+        let chunk = body[start..=end].to_vec();
+        return Ok((
+            StatusCode::PARTIAL_CONTENT,
+            [
+                (header::CONTENT_TYPE, content_type),
+                (
+                    header::CONTENT_RANGE,
+                    HeaderValue::from_str(&format!("bytes {start}-{end}/{}", body.len())).map_err(
+                        |err| {
+                            ApiError::service_unavailable(format!(
+                                "invalid content range header: {err}"
+                            ))
+                        },
+                    )?,
+                ),
+                (header::ACCEPT_RANGES, HeaderValue::from_static("bytes")),
+            ],
+            chunk,
+        )
+            .into_response());
     }
 
     Ok(([(header::CONTENT_TYPE, content_type)], body).into_response())

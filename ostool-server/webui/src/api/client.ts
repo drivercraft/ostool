@@ -18,6 +18,9 @@ type RequestOptions = RequestInit & {
   bodyJson?: unknown;
 };
 
+const NETWORK_ERROR_MESSAGE =
+  "无法连接 ostool-server，服务可能正在安装、升级或重启，请稍后刷新页面。";
+
 async function readJsonBody<T>(response: Response): Promise<T | undefined> {
   const text = await response.text();
   if (!text.trim()) {
@@ -39,6 +42,8 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     ...options,
     headers,
     body,
+  }).catch(() => {
+    throw new Error(NETWORK_ERROR_MESSAGE);
   });
 
   if (!response.ok) {

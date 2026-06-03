@@ -19,4 +19,12 @@ describe("api client", () => {
 
     await expect(api.deleteSession("demo-session")).resolves.toBeUndefined();
   });
+
+  it("reports a service connection hint when fetch fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+
+    await expect(api.getOverview()).rejects.toThrow(
+      "无法连接 ostool-server，服务可能正在安装、升级或重启，请稍后刷新页面。",
+    );
+  });
 });

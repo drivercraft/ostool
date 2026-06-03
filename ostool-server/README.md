@@ -36,10 +36,12 @@ curl -fsSL https://raw.githubusercontent.com/drivercraft/ostool/main/ostool-serv
 
 The script will:
 
+- check that Node.js 18+ and pnpm are available for the embedded web UI build
 - install `ostool-server` with `cargo install`
 - install the binary to `/usr/local/bin/ostool-server`
 - stop an existing `ostool-server` systemd service if present
 - recreate `/etc/ostool-server`
+- create `/var/lib/ostool-server/http-boot` for UEFI HTTP Boot artifacts
 - install `/etc/systemd/system/ostool-server.service`
 - start the service if you confirm it
 
@@ -92,6 +94,19 @@ The default listen address is:
 ```text
 0.0.0.0:2999
 ```
+
+HTTP Boot is enabled by default. In the system installation layout, uploaded
+UEFI HTTP Boot files and manifests are stored under:
+
+```text
+/var/lib/ostool-server/http-boot
+```
+
+For x86_64 boards using the bare-bin HTTP Boot loader, configure the board boot
+profile with `kind = "httpboot"`, `strategy = "bare_bin_loader"`, and
+`loader_file = "BOOTX64.EFI"`. The client-side publish flow uploads
+`BOOTX64.EFI`, `kernel.bin`, and `manifest.json` into the board's current HTTP
+Boot directory.
 
 ## Useful Commands
 
