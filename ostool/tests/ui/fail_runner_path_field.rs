@@ -5,6 +5,5 @@ fn main() {
         qemu_config: None,
         debug: false,
         dtb_dump: false,
-        show_output: true,
     };
 }

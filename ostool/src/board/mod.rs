@@ -18,6 +18,8 @@ use crate::board::{
     session::BoardSession,
 };
 use crate::{
+    build::config::{BuildConfig, BuildSystem, Cargo},
+    invocation::Invocation,
     project::variables::{self, VariableScope},
     run::uboot::UbootRunInput,
 };
@@ -182,12 +184,89 @@ pub(crate) async fn read_board_run_config_from_path(
     BoardRunConfig::read_from_path(scope, path)
 }
 
+/// Reads a board-run configuration from an explicit path.
+pub async fn read_run_config_from_path(
+    invocation: &Invocation,
+    path: &Path,
+) -> anyhow::Result<BoardRunConfig> {
+    let scope = invocation.variable_scope()?;
+    read_board_run_config_from_path(&scope, path).await
+}
+
+/// Reads a board-run configuration using the Cargo package variable scope.
+pub async fn read_run_config_from_path_for_cargo(
+    invocation: &Invocation,
+    cargo: &Cargo,
+    path: &Path,
+) -> anyhow::Result<BoardRunConfig> {
+    let scope = crate::build::cargo_variable_scope(invocation.project_layout(), cargo)?;
+    read_board_run_config_from_path(&scope, path).await
+}
+
 pub(crate) async fn ensure_board_run_config_in_dir(
     scope: &VariableScope,
     dir: &Path,
 ) -> anyhow::Result<BoardRunConfig> {
     let dir = variables::expand_path_variables(dir, scope)?;
     BoardRunConfig::load_or_create(scope, Some(dir.join(".board.toml"))).await
+}
+
+/// Loads or creates a board-run configuration from a directory.
+pub async fn ensure_run_config_in_dir(
+    invocation: &Invocation,
+    dir: &Path,
+) -> anyhow::Result<BoardRunConfig> {
+    let scope = invocation.variable_scope()?;
+    ensure_board_run_config_in_dir(&scope, dir).await
+}
+
+/// Loads or creates a board-run configuration using the Cargo package variable scope.
+pub async fn ensure_run_config_in_dir_for_cargo(
+    invocation: &Invocation,
+    cargo: &Cargo,
+    dir: &Path,
+) -> anyhow::Result<BoardRunConfig> {
+    let scope = crate::build::cargo_variable_scope(invocation.project_layout(), cargo)?;
+    ensure_board_run_config_in_dir(&scope, dir).await
+}
+
+/// Builds/imports artifacts and runs them on a remote board.
+///
+/// `build_config_path` is the optional source path for `build_config`.
+pub async fn run_board(
+    invocation: &mut Invocation,
+    build_config: &BuildConfig,
+    build_config_path: Option<&Path>,
+    board_config: &BoardRunConfig,
+    options: RunBoardOptions,
+) -> anyhow::Result<()> {
+    crate::build::prepare_runtime_artifacts(invocation, build_config, build_config_path, false)
+        .await?;
+    let input = crate::run::uboot::uboot_run_input(invocation)?;
+    let scope = invocation.variable_scope()?;
+    run_prepared_board(input, board_config, options, &scope).await
+}
+
+/// Builds a Cargo artifact and runs it on a remote board.
+///
+/// `build_config_path` is the optional `.build.toml` source path for `cargo`.
+pub async fn cargo_run_board(
+    invocation: &mut Invocation,
+    cargo: &Cargo,
+    build_config_path: Option<&Path>,
+    board_config: &BoardRunConfig,
+    options: RunBoardOptions,
+) -> anyhow::Result<()> {
+    run_board(
+        invocation,
+        &BuildConfig {
+            system: BuildSystem::Cargo(cargo.clone()),
+        },
+        build_config_path,
+        board_config,
+        options,
+    )
+    .await
 }
 
 pub(crate) async fn run_prepared_board(

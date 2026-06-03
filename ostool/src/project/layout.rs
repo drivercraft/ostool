@@ -18,19 +18,6 @@ pub struct ProjectLayout {
 }
 
 impl ProjectLayout {
-    /// Creates a project layout from already-resolved manifest and workspace paths.
-    pub(crate) fn from_manifest_parts(
-        manifest_path: PathBuf,
-        manifest_dir: PathBuf,
-        workspace_dir: PathBuf,
-    ) -> Self {
-        Self {
-            manifest_path,
-            manifest_dir,
-            workspace_dir,
-        }
-    }
-
     /// Returns the canonical Cargo manifest path used by this invocation.
     pub fn manifest_path(&self) -> &Path {
         &self.manifest_path

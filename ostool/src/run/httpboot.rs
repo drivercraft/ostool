@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 
 use crate::{
-    Tool,
     artifact::state::OutputArtifacts,
     board::{
         acquire_board_session,
@@ -21,6 +20,8 @@ use crate::{
         session::BoardSession,
         terminal,
     },
+    build::config::Cargo,
+    invocation::Invocation,
     project::variables::{self, VariableScope},
     utils::PathResultExt,
 };
@@ -98,77 +99,71 @@ impl HttpBootConfig {
     }
 }
 
-impl Tool {
-    pub fn default_httpboot_config(&self) -> HttpBootConfig {
-        HttpBootConfig {
-            board_type: "x86_64-uefi-http".to_string(),
-            remote_name: Some("kernel.bin".to_string()),
-            kernel_load_addr: "0x200000".to_string(),
-            entry_point: "0x200000".to_string(),
-            power_cycle: true,
-            open_console: true,
-            ..Default::default()
-        }
+pub fn default_config() -> HttpBootConfig {
+    HttpBootConfig {
+        board_type: "x86_64-uefi-http".to_string(),
+        remote_name: Some("kernel.bin".to_string()),
+        kernel_load_addr: "0x200000".to_string(),
+        entry_point: "0x200000".to_string(),
+        power_cycle: true,
+        open_console: true,
+        ..Default::default()
     }
+}
 
-    pub async fn read_httpboot_config_from_path_for_cargo(
-        &mut self,
-        cargo: &crate::build::config::Cargo,
-        path: &Path,
-    ) -> anyhow::Result<HttpBootConfig> {
-        self.sync_cargo_context(cargo)?;
-        let scope = self.variable_scope()?;
-        read_httpboot_config_from_path(&scope, path).await
-    }
+pub async fn read_config_from_path_for_cargo(
+    invocation: &Invocation,
+    cargo: &Cargo,
+    path: &Path,
+) -> anyhow::Result<HttpBootConfig> {
+    let scope = crate::build::cargo_variable_scope(invocation.project_layout(), cargo)?;
+    read_httpboot_config_from_path(&scope, path).await
+}
 
-    pub async fn ensure_httpboot_config_for_cargo(
-        &mut self,
-        cargo: &crate::build::config::Cargo,
-    ) -> anyhow::Result<HttpBootConfig> {
-        self.sync_cargo_context(cargo)?;
-        let workspace_dir = self.workspace_dir().clone();
-        self.ensure_httpboot_config_in_dir_for_cargo(cargo, &workspace_dir)
-            .await
-    }
+pub async fn ensure_config_for_cargo(
+    invocation: &Invocation,
+    cargo: &Cargo,
+) -> anyhow::Result<HttpBootConfig> {
+    let workspace_dir = invocation.workspace_dir().to_path_buf();
+    ensure_config_in_dir_for_cargo(invocation, cargo, &workspace_dir).await
+}
 
-    pub async fn ensure_httpboot_config_in_dir_for_cargo(
-        &mut self,
-        cargo: &crate::build::config::Cargo,
-        dir: &Path,
-    ) -> anyhow::Result<HttpBootConfig> {
-        self.sync_cargo_context(cargo)?;
-        let scope = self.variable_scope()?;
-        ensure_httpboot_config_in_dir(&scope, dir, self.default_httpboot_config()).await
-    }
+pub async fn ensure_config_in_dir_for_cargo(
+    invocation: &Invocation,
+    cargo: &Cargo,
+    dir: &Path,
+) -> anyhow::Result<HttpBootConfig> {
+    let scope = crate::build::cargo_variable_scope(invocation.project_layout(), cargo)?;
+    ensure_httpboot_config_in_dir(&scope, dir, default_config()).await
+}
 
-    pub async fn ensure_httpboot_config_in_dir(
-        &mut self,
-        dir: &Path,
-    ) -> anyhow::Result<HttpBootConfig> {
-        let scope = self.variable_scope()?;
-        ensure_httpboot_config_in_dir(&scope, dir, self.default_httpboot_config()).await
-    }
+pub async fn ensure_config_in_dir(
+    invocation: &Invocation,
+    dir: &Path,
+) -> anyhow::Result<HttpBootConfig> {
+    let scope = invocation.variable_scope()?;
+    ensure_httpboot_config_in_dir(&scope, dir, default_config()).await
+}
 
-    pub async fn read_httpboot_config_from_path(
-        &mut self,
-        path: &Path,
-    ) -> anyhow::Result<HttpBootConfig> {
-        let scope = self.variable_scope()?;
-        read_httpboot_config_from_path(&scope, path).await
-    }
+pub async fn read_config_from_path(
+    invocation: &Invocation,
+    path: &Path,
+) -> anyhow::Result<HttpBootConfig> {
+    let scope = invocation.variable_scope()?;
+    read_httpboot_config_from_path(&scope, path).await
+}
 
-    pub async fn run_httpboot(
-        &mut self,
-        config: &HttpBootConfig,
-        options: RunHttpBootOptions,
-    ) -> anyhow::Result<()> {
-        let _ = options.show_output;
-        let scope = self.variable_scope()?;
-        let config = prepare_httpboot_runtime_config(&scope, config)?;
-        self.ensure_runtime_bin()?;
-        let input = HttpBootRunInput::new(self.runtime_artifacts().clone());
-        run_httpboot_with_config(input, config, options).await
-    }
+pub async fn run_httpboot(
+    invocation: &mut Invocation,
+    config: &HttpBootConfig,
+    options: RunHttpBootOptions,
+) -> anyhow::Result<()> {
+    let _ = options.show_output;
+    let scope = invocation.variable_scope()?;
+    let config = prepare_httpboot_runtime_config(&scope, config)?;
+    invocation.ensure_runtime_bin()?;
+    let input = HttpBootRunInput::new(invocation.runtime_artifacts().clone());
+    run_httpboot_with_config(input, config, options).await
 }
 
 pub(crate) async fn read_httpboot_config_from_path(
@@ -485,9 +480,19 @@ fn normalize_optional_string(value: &mut Option<String>) {
 mod tests {
     use super::{HttpBootConfig, read_httpboot_config_from_path, sibling_http_boot_url};
     use crate::{
+        invocation::{Invocation, InvocationOptions},
         run::httpboot::ensure_httpboot_config_in_dir,
-        tool::{Tool, ToolConfig},
     };
+
+    fn test_invocation(tmp: &tempfile::TempDir) -> Invocation {
+        Invocation::new(InvocationOptions::new(
+            Some(tmp.path().join("Cargo.toml")),
+            None,
+            None,
+            false,
+        ))
+        .unwrap()
+    }
 
     #[test]
     fn httpboot_config_normalizes_required_fields() {
@@ -552,12 +557,8 @@ entry_point = " 0x200000 "
         )
         .unwrap();
 
-        let tool = Tool::new(ToolConfig {
-            manifest: Some(tmp.path().to_path_buf()),
-            ..Default::default()
-        })
-        .unwrap();
-        let scope = tool.variable_scope().unwrap();
+        let invocation = test_invocation(&tmp);
+        let scope = invocation.variable_scope().unwrap();
         let config = read_httpboot_config_from_path(&scope, &config_path)
             .await
             .unwrap();
@@ -581,12 +582,8 @@ entry_point = " 0x200000 "
         std::fs::create_dir_all(tmp.path().join("src")).unwrap();
         std::fs::write(tmp.path().join("src/main.rs"), "").unwrap();
 
-        let tool = Tool::new(ToolConfig {
-            manifest: Some(tmp.path().to_path_buf()),
-            ..Default::default()
-        })
-        .unwrap();
-        let scope = tool.variable_scope().unwrap();
+        let invocation = test_invocation(&tmp);
+        let scope = invocation.variable_scope().unwrap();
         let default_config = HttpBootConfig {
             board_type: "x86_64-uefi-http".into(),
             remote_name: Some("kernel.bin".into()),

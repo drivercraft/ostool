@@ -222,11 +222,22 @@ fn normalize_optional_string(value: &mut Option<String>) {
 mod tests {
     use super::BoardRunConfig;
     use crate::{
-        Tool, ToolConfig,
         board::global_config::BoardGlobalConfig,
+        board::{ensure_run_config_in_dir, read_run_config_from_path},
         build::config::{BuildConfig, BuildSystem, Cargo},
+        invocation::{Invocation, InvocationOptions},
     };
     use std::collections::HashMap;
+
+    fn make_invocation(dir: &std::path::Path) -> Invocation {
+        Invocation::new(InvocationOptions::new(
+            Some(dir.to_path_buf()),
+            None,
+            None,
+            false,
+        ))
+        .unwrap()
+    }
 
     #[test]
     fn board_run_config_parses_and_normalizes_shell_fields() {
@@ -292,11 +303,19 @@ port = 9000
 "#,
         )
         .unwrap();
-        let tool = Tool::new(Default::default()).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("src/lib.rs"), "").unwrap();
+        let invocation = make_invocation(tmp.path());
 
         config
             .apply_overrides(
-                &tool.variable_scope().unwrap(),
+                &invocation.variable_scope().unwrap(),
                 Some(" rk3568 "),
                 Some(" 127.0.0.1 "),
                 Some(7000),
@@ -330,14 +349,9 @@ timeout = 8
         )
         .unwrap();
 
-        let mut tool = Tool::new(ToolConfig {
-            manifest: Some(tmp.path().to_path_buf()),
-            ..Default::default()
-        })
-        .unwrap();
+        let invocation = make_invocation(tmp.path());
 
-        let config = tool
-            .read_board_run_config_from_path(&config_path)
+        let config = read_run_config_from_path(&invocation, &config_path)
             .await
             .unwrap();
         assert_eq!(config.board_type, "rk3568");
@@ -382,31 +396,31 @@ dtb_file = "${package}/board.dtb"
         )
         .unwrap();
 
-        let mut tool = Tool::new(ToolConfig {
-            manifest: Some(app_dir),
-            ..Default::default()
-        })
+        let mut invocation = make_invocation(&app_dir);
+        crate::build::activate_build_config(
+            &mut invocation,
+            &BuildConfig {
+                system: BuildSystem::Cargo(Cargo {
+                    env: HashMap::new(),
+                    target: "aarch64-unknown-none".into(),
+                    package: "kernel".into(),
+                    bin: None,
+                    features: vec![],
+                    log: None,
+                    extra_config: None,
+                    profile: None,
+                    disable_someboot_build_config: false,
+                    args: vec![],
+                    pre_build_cmds: vec![],
+                    post_build_cmds: vec![],
+                    to_bin: false,
+                }),
+            },
+            None,
+        )
         .unwrap();
-        tool.ctx.build_config = Some(BuildConfig {
-            system: BuildSystem::Cargo(Cargo {
-                env: HashMap::new(),
-                target: "aarch64-unknown-none".into(),
-                package: "kernel".into(),
-                bin: None,
-                features: vec![],
-                log: None,
-                extra_config: None,
-                profile: None,
-                disable_someboot_build_config: false,
-                args: vec![],
-                pre_build_cmds: vec![],
-                post_build_cmds: vec![],
-                to_bin: false,
-            }),
-        });
 
-        let config = tool
-            .ensure_board_run_config_in_dir(tmp.path())
+        let config = ensure_run_config_in_dir(&invocation, tmp.path())
             .await
             .unwrap();
         let expected = kernel_dir.join("board.dtb").display().to_string();

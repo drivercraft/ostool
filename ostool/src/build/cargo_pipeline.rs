@@ -73,12 +73,124 @@ impl CargoBuildOutcome {
     }
 }
 
+#[derive(Debug, Clone)]
+struct CargoBuildPlan {
+    command: String,
+    envs: Vec<(String, String)>,
+    extra_envs: Vec<(String, String)>,
+    extra_config_path: Option<PathBuf>,
+    package: String,
+    bin: Option<String>,
+    target: String,
+    target_dir: PathBuf,
+    features: Vec<String>,
+    config_args: Vec<String>,
+    someboot_args: Vec<String>,
+    release: bool,
+    message_format: &'static str,
+    extra_args: Vec<String>,
+}
+
+impl CargoBuildPlan {
+    fn render(&self, cargo_program: &Path, context: &ProcessContext) -> Command {
+        let mut cmd = crate::process::command(cargo_program.as_os_str(), context);
+        cmd.arg(&self.command);
+
+        for (key, value) in &self.envs {
+            println!("{}", format!("{key}={value}").cyan());
+            cmd.env(key, value);
+        }
+        for (key, value) in &self.extra_envs {
+            println!("{}", format!("{key}={value}").cyan());
+            cmd.env(key, value);
+        }
+
+        if let Some(extra_config_path) = &self.extra_config_path {
+            cmd.arg("--config");
+            cmd.arg(extra_config_path.display().to_string());
+        }
+
+        cmd.arg("-p");
+        cmd.arg(&self.package);
+        if let Some(bin) = &self.bin {
+            cmd.arg("--bin");
+            cmd.arg(bin);
+        }
+        cmd.arg("--target");
+        cmd.arg(&self.target);
+        cmd.arg("-Z");
+        cmd.arg("unstable-options");
+        cmd.arg("--target-dir");
+        cmd.arg(self.target_dir.display().to_string());
+
+        if !self.features.is_empty() {
+            cmd.arg("--features");
+            cmd.arg(self.features.join(","));
+        }
+
+        for arg in &self.config_args {
+            cmd.arg(arg);
+        }
+        for arg in &self.someboot_args {
+            cmd.arg(arg);
+        }
+
+        if self.release {
+            cmd.arg("--release");
+        }
+
+        cmd.arg("--message-format");
+        cmd.arg(self.message_format);
+
+        for arg in &self.extra_args {
+            cmd.arg(arg);
+        }
+
+        cmd
+    }
+
+    #[cfg(test)]
+    fn args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        args.push(self.command.clone());
+        if let Some(extra_config_path) = &self.extra_config_path {
+            args.push("--config".into());
+            args.push(extra_config_path.display().to_string());
+        }
+        args.push("-p".into());
+        args.push(self.package.clone());
+        if let Some(bin) = &self.bin {
+            args.push("--bin".into());
+            args.push(bin.clone());
+        }
+        args.push("--target".into());
+        args.push(self.target.clone());
+        args.push("-Z".into());
+        args.push("unstable-options".into());
+        args.push("--target-dir".into());
+        args.push(self.target_dir.display().to_string());
+        if !self.features.is_empty() {
+            args.push("--features".into());
+            args.push(self.features.join(","));
+        }
+        args.extend(self.config_args.clone());
+        args.extend(self.someboot_args.clone());
+        if self.release {
+            args.push("--release".into());
+        }
+        args.push("--message-format".into());
+        args.push(self.message_format.into());
+        args.extend(self.extra_args.clone());
+        args
+    }
+}
+
 /// A builder for constructing and executing Cargo commands.
 ///
 /// `CargoBuildPipeline` provides a fluent API for configuring Cargo build or run
 /// commands with custom arguments, environment variables, and build hooks.
 ///
-/// This builder is an internal implementation detail used by [`Tool`].
+/// This builder is an internal implementation detail used by build orchestration.
 pub struct CargoBuildPipeline<'a> {
     input: CargoBuildInput,
     config: &'a Cargo,
@@ -229,60 +341,53 @@ impl<'a> CargoBuildPipeline<'a> {
     }
 
     async fn build_cargo_command(&mut self) -> anyhow::Result<Command> {
-        let mut cmd =
-            crate::process::command(self.cargo_program.as_os_str(), &self.input.process_context);
+        let plan = self.build_cargo_plan().await?;
+        Ok(plan.render(&self.cargo_program, &self.input.process_context))
+    }
 
-        cmd.arg(&self.command);
-
-        for (k, v) in &self.config.env {
-            println!("{}", format!("{k}={v}").cyan());
-            cmd.env(k, v);
-        }
-        for (k, v) in &self.extra_envs {
-            println!("{}", format!("{k}={v}").cyan());
-            cmd.env(k, v);
-        }
-
-        // Extra config
-        if let Some(extra_config_path) = self.cargo_extra_config().await? {
-            cmd.arg("--config");
-            cmd.arg(extra_config_path.display().to_string());
-        }
-
-        // Package and target
-        cmd.arg("-p");
-        cmd.arg(&self.config.package);
-        if let Some(bin) = &self.config.bin {
-            cmd.arg("--bin");
-            cmd.arg(bin);
-        }
-        cmd.arg("--target");
-        cmd.arg(&self.config.target);
-        cmd.arg("-Z");
-        cmd.arg("unstable-options");
-
-        cmd.arg("--target-dir");
-        cmd.arg(self.input.build_dir.display().to_string());
-
-        // Features
+    async fn build_cargo_plan(&mut self) -> anyhow::Result<CargoBuildPlan> {
         let features = self.build_features();
-        if !features.is_empty() {
-            cmd.arg("--features");
-            cmd.arg(features.join(","));
-        }
+        let extra_config_path = self.cargo_extra_config().await?;
+        let someboot_args = self.detect_someboot_args(&features)?;
+        let mut extra_envs = self
+            .extra_envs
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        extra_envs.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut envs = self
+            .config
+            .env
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        envs.sort_by(|left, right| left.0.cmp(&right.0));
 
-        // Config args
-        for arg in &self.config.args {
-            cmd.arg(arg);
-        }
+        Ok(CargoBuildPlan {
+            command: self.command.clone(),
+            envs,
+            extra_envs,
+            extra_config_path,
+            package: self.config.package.clone(),
+            bin: self.config.bin.clone(),
+            target: self.config.target.clone(),
+            target_dir: self.input.build_dir.clone(),
+            features,
+            config_args: self.config.args.clone(),
+            someboot_args,
+            release: self.effective_profile() == CargoBuildProfile::Release,
+            message_format: "json-render-diagnostics",
+            extra_args: self.extra_args.clone(),
+        })
+    }
 
-        // Auto-detected args from someboot/build-info.toml
+    fn detect_someboot_args(&self, features: &[String]) -> anyhow::Result<Vec<String>> {
         let workspace_manifest = self.input.project_layout.workspace_dir().join("Cargo.toml");
         if self.input.enable_someboot_build_config && workspace_manifest.exists() {
-            let detected_args = someboot::detect_build_config_for_package(
+            someboot::detect_build_config_for_package(
                 &workspace_manifest,
                 &self.config.package,
-                &features,
+                features,
                 &self.config.target,
             )
             .with_context(|| {
@@ -290,26 +395,10 @@ impl<'a> CargoBuildPipeline<'a> {
                     "failed to detect someboot build config from {}",
                     workspace_manifest.display()
                 )
-            })?;
-            for arg in detected_args {
-                cmd.arg(arg);
-            }
+            })
+        } else {
+            Ok(Vec::new())
         }
-
-        // Release mode
-        if self.effective_profile() == CargoBuildProfile::Release {
-            cmd.arg("--release");
-        }
-
-        cmd.arg("--message-format");
-        cmd.arg("json-render-diagnostics");
-
-        // Extra args
-        for arg in &self.extra_args {
-            cmd.arg(arg);
-        }
-
-        Ok(cmd)
     }
 
     fn target_package_info(&self) -> anyhow::Result<(PackageId, Option<String>)> {
@@ -506,8 +595,12 @@ mod tests {
 
     use super::CargoBuildPipeline;
     use crate::{
-        Tool, ToolConfig,
-        build::config::{Cargo, CargoBuildProfile},
+        build::{
+            cargo_pipeline::CargoBuildInput,
+            config::{Cargo, CargoBuildProfile, LogLevel},
+        },
+        invocation::{Invocation, InvocationOptions},
+        project::metadata,
     };
 
     fn write_someboot_workspace(root: &Path) {
@@ -537,6 +630,68 @@ mod tests {
         .unwrap();
     }
 
+    fn write_log_workspace(root: &Path, with_log_dependency: bool) {
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\", \"log\"]\nresolver = \"3\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("app/src")).unwrap();
+        let dependency = if with_log_dependency {
+            "\n[dependencies]\nlog = { path = \"../log\" }\n"
+        } else {
+            ""
+        };
+        fs::write(
+            root.join("app/Cargo.toml"),
+            format!(
+                "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n{dependency}"
+            ),
+        )
+        .unwrap();
+        fs::write(root.join("app/src/main.rs"), "fn main() {}\n").unwrap();
+        fs::create_dir_all(root.join("log/src")).unwrap();
+        fs::write(
+            root.join("log/Cargo.toml"),
+            "[package]\nname = \"log\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nmax_level_info = []\nrelease_max_level_info = []\n",
+        )
+        .unwrap();
+        fs::write(root.join("log/src/lib.rs"), "pub fn marker() {}\n").unwrap();
+    }
+
+    fn cargo_input_for(invocation: &Invocation, config: &Cargo, debug: bool) -> CargoBuildInput {
+        CargoBuildInput::new(
+            invocation.project_layout().clone(),
+            invocation.process_context().unwrap(),
+            invocation.build_dir(),
+            invocation
+                .state()
+                .build_config_path()
+                .map(std::path::Path::to_path_buf),
+            debug,
+            !config.disable_someboot_build_config,
+        )
+    }
+
+    async fn cargo_plan_args(root: &Path, config: &Cargo, debug: bool) -> Vec<String> {
+        let invocation = Invocation::new(InvocationOptions::new(
+            Some(root.to_path_buf()),
+            None,
+            None,
+            debug,
+        ))
+        .unwrap();
+        let input = cargo_input_for(&invocation, config, debug);
+        let mut builder = CargoBuildPipeline::build(input, config).skip_objcopy(true);
+        builder.build_cargo_plan().await.unwrap().args()
+    }
+
+    fn feature_arg(args: &[String]) -> Option<&str> {
+        args.windows(2)
+            .find(|window| window[0] == "--features")
+            .map(|window| window[1].as_str())
+    }
+
     #[tokio::test]
     async fn build_cargo_command_skips_someboot_args_when_cargo_config_disables_them() {
         let temp = tempfile::tempdir().unwrap();
@@ -550,12 +705,14 @@ mod tests {
             ..Default::default()
         };
 
-        let tool = Tool::new(ToolConfig {
-            manifest: Some(temp.path().to_path_buf()),
-            ..Default::default()
-        })
+        let invocation = Invocation::new(InvocationOptions::new(
+            Some(temp.path().to_path_buf()),
+            None,
+            None,
+            false,
+        ))
         .unwrap();
-        let input = tool.cargo_build_input(&config, false).unwrap();
+        let input = cargo_input_for(&invocation, &config, false);
         let mut builder = CargoBuildPipeline::build(input, &config).skip_objcopy(true);
         let cmd = builder.build_cargo_command().await.unwrap();
         let args: Vec<String> = cmd
@@ -569,6 +726,124 @@ mod tests {
                 .iter()
                 .any(|arg| arg.contains("target.x86_64-unknown-none.rustflags"))
         );
+    }
+
+    #[tokio::test]
+    async fn build_cargo_plan_injects_someboot_args_once() {
+        let temp = tempfile::tempdir().unwrap();
+        write_someboot_workspace(temp.path());
+
+        let config = Cargo {
+            package: "app".into(),
+            target: "x86_64-unknown-none".into(),
+            profile: Some(CargoBuildProfile::Debug),
+            ..Default::default()
+        };
+
+        let args = cargo_plan_args(temp.path(), &config, false).await;
+
+        assert_eq!(
+            args.iter()
+                .filter(|arg| arg.as_str() == "--someboot-cargoarg")
+                .count(),
+            1
+        );
+        assert_eq!(
+            args.iter()
+                .filter(|arg| arg.contains("target.x86_64-unknown-none.rustflags"))
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn build_cargo_plan_uses_debug_flag_as_default_profile() {
+        let temp = tempfile::tempdir().unwrap();
+        write_log_workspace(temp.path(), false);
+        let config = Cargo {
+            package: "app".into(),
+            target: "x86_64-unknown-none".into(),
+            ..Default::default()
+        };
+
+        let debug_args = cargo_plan_args(temp.path(), &config, true).await;
+        let release_args = cargo_plan_args(temp.path(), &config, false).await;
+
+        assert!(!debug_args.iter().any(|arg| arg == "--release"));
+        assert!(release_args.iter().any(|arg| arg == "--release"));
+    }
+
+    #[tokio::test]
+    async fn build_cargo_plan_profile_overrides_debug_flag() {
+        let temp = tempfile::tempdir().unwrap();
+        write_log_workspace(temp.path(), false);
+
+        let debug_profile = Cargo {
+            package: "app".into(),
+            target: "x86_64-unknown-none".into(),
+            profile: Some(CargoBuildProfile::Debug),
+            ..Default::default()
+        };
+        let release_profile = Cargo {
+            package: "app".into(),
+            target: "x86_64-unknown-none".into(),
+            profile: Some(CargoBuildProfile::Release),
+            ..Default::default()
+        };
+
+        let debug_args = cargo_plan_args(temp.path(), &debug_profile, false).await;
+        let release_args = cargo_plan_args(temp.path(), &release_profile, true).await;
+
+        assert!(!debug_args.iter().any(|arg| arg == "--release"));
+        assert!(release_args.iter().any(|arg| arg == "--release"));
+    }
+
+    #[tokio::test]
+    async fn build_cargo_plan_uses_effective_profile_for_log_feature() {
+        let temp = tempfile::tempdir().unwrap();
+        write_log_workspace(temp.path(), true);
+
+        let debug_config = Cargo {
+            package: "app".into(),
+            target: "x86_64-unknown-none".into(),
+            log: Some(LogLevel::Info),
+            profile: Some(CargoBuildProfile::Debug),
+            ..Default::default()
+        };
+        let release_config = Cargo {
+            package: "app".into(),
+            target: "x86_64-unknown-none".into(),
+            log: Some(LogLevel::Info),
+            profile: Some(CargoBuildProfile::Release),
+            ..Default::default()
+        };
+
+        let debug_args = cargo_plan_args(temp.path(), &debug_config, false).await;
+        let release_args = cargo_plan_args(temp.path(), &release_config, true).await;
+
+        assert_eq!(feature_arg(&debug_args), Some("log/max_level_info"));
+        assert_eq!(
+            feature_arg(&release_args),
+            Some("log/release_max_level_info")
+        );
+    }
+
+    #[tokio::test]
+    async fn build_cargo_plan_skips_log_feature_without_log_dependency() {
+        let temp = tempfile::tempdir().unwrap();
+        write_log_workspace(temp.path(), false);
+
+        let config = Cargo {
+            package: "app".into(),
+            target: "x86_64-unknown-none".into(),
+            log: Some(LogLevel::Info),
+            profile: Some(CargoBuildProfile::Debug),
+            ..Default::default()
+        };
+
+        let args = cargo_plan_args(temp.path(), &config, false).await;
+
+        assert!(feature_arg(&args).is_none());
     }
 
     #[tokio::test]
@@ -593,13 +868,14 @@ mod tests {
             ..Default::default()
         };
 
-        let tool = Tool::new(ToolConfig {
-            manifest: Some(temp.path().to_path_buf()),
-            ..Default::default()
-        })
+        let invocation = Invocation::new(InvocationOptions::new(
+            Some(temp.path().to_path_buf()),
+            None,
+            None,
+            false,
+        ))
         .unwrap();
-        let package_id = tool
-            .metadata()
+        let package_id = metadata::cargo_metadata(invocation.project_layout())
             .unwrap()
             .packages
             .iter()
@@ -625,7 +901,7 @@ mod tests {
             fs::set_permissions(&cargo_bin, permissions).unwrap();
         }
 
-        let input = tool.cargo_build_input(&config, false).unwrap();
+        let input = cargo_input_for(&invocation, &config, false);
         let outcome = CargoBuildPipeline::build(input, &config)
             .skip_objcopy(true)
             .cargo_program(&cargo_bin)
@@ -637,9 +913,19 @@ mod tests {
             outcome.resolved_artifact().elf_path(),
             target_dir.join("kernel")
         );
-        assert!(tool.ctx.artifacts.elf().is_none());
-        assert!(tool.ctx.artifacts.bin().is_none());
-        assert!(tool.ctx.artifacts.cargo_artifact_dir().is_none());
-        assert!(tool.ctx.artifacts.runtime_artifact_dir().is_none());
+        assert!(invocation.runtime_artifacts().elf().is_none());
+        assert!(invocation.runtime_artifacts().bin().is_none());
+        assert!(
+            invocation
+                .runtime_artifacts()
+                .cargo_artifact_dir()
+                .is_none()
+        );
+        assert!(
+            invocation
+                .runtime_artifacts()
+                .runtime_artifact_dir()
+                .is_none()
+        );
     }
 }

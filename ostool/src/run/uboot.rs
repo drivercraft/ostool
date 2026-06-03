@@ -40,6 +40,7 @@ use crate::{
             BoxedAsyncRead, BoxedAsyncWrite, SerialStreamTasks, connect_serial_stream,
         },
     },
+    invocation::Invocation,
     process::ProcessContext,
     project::variables::{self, VariableScope},
     run::{
@@ -300,11 +301,6 @@ impl Net {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RunUbootOptions {
-    pub show_output: bool,
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct UbootRunInput {
     process_context: ProcessContext,
@@ -337,6 +333,30 @@ pub(crate) fn default_uboot_config() -> UbootConfig {
     }
 }
 
+/// Returns the default U-Boot runtime configuration.
+pub fn default_config() -> UbootConfig {
+    default_uboot_config()
+}
+
+/// Reads a U-Boot configuration from an explicit path without creating defaults.
+pub async fn read_config_from_path(
+    invocation: &Invocation,
+    path: &Path,
+) -> anyhow::Result<UbootConfig> {
+    let scope = invocation.variable_scope()?;
+    read_uboot_config_from_path(&scope, path).await
+}
+
+/// Reads a U-Boot configuration using the Cargo package variable scope.
+pub async fn read_config_from_path_for_cargo(
+    invocation: &Invocation,
+    cargo: &crate::build::config::Cargo,
+    path: &Path,
+) -> anyhow::Result<UbootConfig> {
+    let scope = crate::build::cargo_variable_scope(invocation.project_layout(), cargo)?;
+    read_uboot_config_from_path(&scope, path).await
+}
+
 pub(crate) async fn read_uboot_config_from_path(
     variables: &VariableScope,
     path: &Path,
@@ -353,6 +373,24 @@ pub(crate) async fn ensure_uboot_config_in_dir(
     ensure_uboot_config_at_path(variables, dir.join(".uboot.toml"), default_uboot_config()).await
 }
 
+/// Loads or creates a U-Boot configuration from a directory.
+pub async fn ensure_config_in_dir(
+    invocation: &Invocation,
+    dir: &Path,
+) -> anyhow::Result<UbootConfig> {
+    let scope = invocation.variable_scope()?;
+    ensure_uboot_config_in_dir(&scope, dir).await
+}
+
+/// Loads or creates a U-Boot configuration using the workspace directory.
+pub async fn ensure_config_for_cargo(
+    invocation: &Invocation,
+    cargo: &crate::build::config::Cargo,
+) -> anyhow::Result<UbootConfig> {
+    let scope = crate::build::cargo_variable_scope(invocation.project_layout(), cargo)?;
+    ensure_uboot_config_in_dir(&scope, invocation.workspace_dir()).await
+}
+
 pub(crate) fn prepare_uboot_runtime_config(
     variables: &VariableScope,
     config: &UbootConfig,
@@ -366,12 +404,26 @@ pub(crate) fn prepare_uboot_runtime_config(
 pub(crate) async fn run_uboot_with_config(
     input: UbootRunInput,
     config: UbootConfig,
-    options: RunUbootOptions,
 ) -> anyhow::Result<()> {
-    let _ = options.show_output;
     let backend = LocalBackend::new(config.local.clone());
     let mut runner = Runner::new(input, config, backend);
     runner.run().await
+}
+
+/// Runs an already prepared artifact via U-Boot.
+pub async fn run_uboot(invocation: &mut Invocation, config: &UbootConfig) -> anyhow::Result<()> {
+    let scope = invocation.variable_scope()?;
+    let config = prepare_uboot_runtime_config(&scope, config)?;
+    let input = uboot_run_input(invocation)?;
+    run_uboot_with_config(input, config).await
+}
+
+pub(crate) fn uboot_run_input(invocation: &Invocation) -> anyhow::Result<UbootRunInput> {
+    Ok(UbootRunInput::new(
+        invocation.process_context()?,
+        invocation.runtime_artifacts().clone(),
+        invocation.runtime_arch(),
+    ))
 }
 
 pub(crate) async fn run_uboot_remote(
@@ -1034,7 +1086,7 @@ where
             object::Architecture::Arm => "arm",
             object::Architecture::LoongArch64 => "loongarch64",
             object::Architecture::Riscv64 => "riscv",
-            _ => todo!(),
+            other => anyhow::bail!("unsupported architecture for FIT image generation: {other:?}"),
         };
 
         let mut config = FitImageConfig::new("Various kernels, ramdisks and FDT blobs")
@@ -1527,12 +1579,25 @@ fn bootm_command(bootm_arg: Option<u64>) -> String {
 mod tests {
     use std::{collections::HashMap, time::Duration};
 
-    use super::{LocalUbootConfig, Net, UbootConfig, build_network_boot_request, timeout_duration};
+    use super::{
+        LocalUbootConfig, Net, UbootConfig, build_network_boot_request, ensure_config_in_dir,
+        timeout_duration,
+    };
     use crate::{
-        Tool, ToolConfig,
         board::config::BoardRunConfig,
         build::config::{BuildConfig, BuildSystem, Cargo},
+        invocation::{Invocation, InvocationOptions},
     };
+
+    fn make_invocation(dir: &std::path::Path) -> Invocation {
+        Invocation::new(InvocationOptions::new(
+            Some(dir.to_path_buf()),
+            None,
+            None,
+            false,
+        ))
+        .unwrap()
+    }
 
     #[test]
     fn network_boot_request_uses_same_filename_for_bootfile() {
@@ -1652,28 +1717,29 @@ timeout = 0
         std::fs::create_dir_all(tmp.path().join("src")).unwrap();
         std::fs::write(tmp.path().join("src/lib.rs"), "").unwrap();
 
-        let mut tool = Tool::new(ToolConfig {
-            manifest: Some(tmp.path().to_path_buf()),
-            ..Default::default()
-        })
+        let mut invocation = make_invocation(tmp.path());
+        crate::build::activate_build_config(
+            &mut invocation,
+            &BuildConfig {
+                system: BuildSystem::Cargo(Cargo {
+                    env: HashMap::new(),
+                    target: "aarch64-unknown-none".into(),
+                    package: "sample".into(),
+                    bin: None,
+                    features: vec![],
+                    log: None,
+                    extra_config: None,
+                    profile: None,
+                    disable_someboot_build_config: false,
+                    args: vec![],
+                    pre_build_cmds: vec![],
+                    post_build_cmds: vec![],
+                    to_bin: false,
+                }),
+            },
+            None,
+        )
         .unwrap();
-        tool.ctx.build_config = Some(BuildConfig {
-            system: BuildSystem::Cargo(Cargo {
-                env: HashMap::new(),
-                target: "aarch64-unknown-none".into(),
-                package: "sample".into(),
-                bin: None,
-                features: vec![],
-                log: None,
-                extra_config: None,
-                profile: None,
-                disable_someboot_build_config: false,
-                args: vec![],
-                pre_build_cmds: vec![],
-                post_build_cmds: vec![],
-                to_bin: false,
-            }),
-        });
         unsafe {
             std::env::set_var("OSTOOL_UBOOT_TEST_ENV", "env-ok");
         }
@@ -1705,7 +1771,7 @@ timeout = 0
         };
 
         config
-            .replace_strings(&tool.variable_scope().unwrap())
+            .replace_strings(&invocation.variable_scope().unwrap())
             .unwrap();
 
         let expected = tmp.path().display().to_string();
@@ -1792,13 +1858,9 @@ timeout = 0
         std::fs::create_dir_all(tmp.path().join("src")).unwrap();
         std::fs::write(tmp.path().join("src/lib.rs"), "").unwrap();
 
-        let mut tool = Tool::new(ToolConfig {
-            manifest: Some(tmp.path().to_path_buf()),
-            ..Default::default()
-        })
-        .unwrap();
+        let invocation = make_invocation(tmp.path());
 
-        let config = tool.ensure_uboot_config_in_dir(tmp.path()).await.unwrap();
+        let config = ensure_config_in_dir(&invocation, tmp.path()).await.unwrap();
 
         assert_eq!(config.local.serial.as_deref(), Some("/dev/ttyUSB0"));
         assert_eq!(config.local.baud_rate.as_deref(), Some("115200"));
@@ -1844,30 +1906,31 @@ baud_rate = "115200"
         )
         .unwrap();
 
-        let mut tool = Tool::new(ToolConfig {
-            manifest: Some(app_dir),
-            ..Default::default()
-        })
+        let mut invocation = make_invocation(&app_dir);
+        crate::build::activate_build_config(
+            &mut invocation,
+            &BuildConfig {
+                system: BuildSystem::Cargo(Cargo {
+                    env: HashMap::new(),
+                    target: "aarch64-unknown-none".into(),
+                    package: "kernel".into(),
+                    bin: None,
+                    features: vec![],
+                    log: None,
+                    extra_config: None,
+                    profile: None,
+                    disable_someboot_build_config: false,
+                    args: vec![],
+                    pre_build_cmds: vec![],
+                    post_build_cmds: vec![],
+                    to_bin: false,
+                }),
+            },
+            None,
+        )
         .unwrap();
-        tool.ctx.build_config = Some(BuildConfig {
-            system: BuildSystem::Cargo(Cargo {
-                env: HashMap::new(),
-                target: "aarch64-unknown-none".into(),
-                package: "kernel".into(),
-                bin: None,
-                features: vec![],
-                log: None,
-                extra_config: None,
-                profile: None,
-                disable_someboot_build_config: false,
-                args: vec![],
-                pre_build_cmds: vec![],
-                post_build_cmds: vec![],
-                to_bin: false,
-            }),
-        });
 
-        let config = tool.ensure_uboot_config_in_dir(tmp.path()).await.unwrap();
+        let config = ensure_config_in_dir(&invocation, tmp.path()).await.unwrap();
         let expected = kernel_dir.join("board.dtb").display().to_string();
         assert_eq!(config.dtb_file.as_deref(), Some(expected.as_str()));
     }

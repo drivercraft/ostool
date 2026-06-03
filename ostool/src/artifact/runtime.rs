@@ -37,6 +37,7 @@ pub(crate) struct RuntimeArtifactOptions {
 pub(crate) struct PreparedRuntimeArtifacts {
     elf: PathBuf,
     bin: Option<PathBuf>,
+    source_artifact_dir: PathBuf,
     cargo_artifact_dir: Option<PathBuf>,
     runtime_artifact_dir: Option<PathBuf>,
     arch: Option<Architecture>,
@@ -55,6 +56,13 @@ impl PreparedRuntimeArtifacts {
 
     /// Returns the Cargo artifact directory that produced the input ELF.
     pub(crate) fn cargo_artifact_dir(&self) -> Option<&Path> {
+        self.cargo_artifact_dir
+            .as_deref()
+            .or(Some(self.source_artifact_dir.as_path()))
+    }
+
+    /// Returns the Cargo-reported artifact directory, when the input came from Cargo.
+    pub(crate) fn cargo_source_artifact_dir(&self) -> Option<&Path> {
         self.cargo_artifact_dir.as_deref()
     }
 
@@ -93,7 +101,8 @@ pub(crate) fn prepare_runtime_artifacts(
     let mut prepared = PreparedRuntimeArtifacts {
         elf: runtime_elf.clone(),
         bin: None,
-        cargo_artifact_dir: options.cargo_artifact_dir.or(Some(input_dir)),
+        source_artifact_dir: input_dir,
+        cargo_artifact_dir: options.cargo_artifact_dir,
         runtime_artifact_dir: runtime_elf.parent().map(PathBuf::from),
         arch: Some(arch),
     };
@@ -282,6 +291,10 @@ mod tests {
             prepared.cargo_artifact_dir(),
             Some(temp.path().join("target/debug").as_path())
         );
+        assert_eq!(
+            prepared.cargo_source_artifact_dir(),
+            Some(temp.path().join("target/debug").as_path())
+        );
         assert_eq!(prepared.runtime_artifact_dir(), Some(temp.path()));
         assert!(prepared.arch().is_some());
         assert!(expected_elf.exists());
@@ -313,6 +326,8 @@ mod tests {
 
         let expected_bin = bin_dir.join("sample.bin");
         assert_eq!(prepared.bin(), Some(expected_bin.as_path()));
+        assert_eq!(prepared.cargo_artifact_dir(), Some(temp.path()));
+        assert!(prepared.cargo_source_artifact_dir().is_none());
         assert_eq!(prepared.runtime_artifact_dir(), Some(bin_dir.as_path()));
         assert!(expected_bin.exists());
     }
