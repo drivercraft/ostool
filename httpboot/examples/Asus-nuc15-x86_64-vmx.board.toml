@@ -1,0 +1,26 @@
+id = "Asus-nuc15-x86_64-vmx"
+board_type = "Asus-nuc15-x86_64-vmx"
+tags = ["x86_64", "uefi-http", "vmx", "asus-nuc15"]
+notes = "ASUS NUC15 x86_64 VMX HTTPBoot target. Client IP: 10.3.10.143. MAC: 1c:69:7a:dc:f3:47."
+disabled = false
+
+[serial]
+baud_rate = 115200
+
+[serial.key]
+kind = "usb_path"
+value = "/dev/ttyUSB0"
+
+[power_management]
+kind = "custom"
+power_on_cmd = "true"
+power_off_cmd = "true"
+
+[boot]
+kind = "httpboot"
+boot_arch = "x86_64"
+strategy = "bare_bin_loader"
+loader_file = "BOOTX64.EFI"
+kernel_file = "kernel.bin"
+kernel_load_addr = "0x200000"
+entry_point = "0x200000"

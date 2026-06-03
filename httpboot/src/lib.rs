@@ -36,6 +36,13 @@ pub enum UrlError {
     UriNotFound,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseNumberError {
+    InvalidDigit,
+    Empty,
+    Overflow,
+}
+
 pub fn parse_manifest(input: &str) -> Result<BootManifest<'_>, ManifestError> {
     Ok(BootManifest {
         kernel_url: json_string_field(input, "kernel_url")?,
@@ -119,7 +126,7 @@ pub fn uri_from_device_path(device_path: &[u8]) -> Result<&str, UrlError> {
     Err(UrlError::MalformedDevicePath)
 }
 
-pub fn parse_addr(input: &str) -> Result<u64, ()> {
+pub fn parse_addr(input: &str) -> Result<u64, ParseNumberError> {
     let value = input.trim();
     let (radix, digits) = if let Some(hex) = value
         .strip_prefix("0x")
@@ -203,7 +210,7 @@ fn parse_json_string(input: &str) -> Option<&str> {
     None
 }
 
-fn parse_u64_digits(input: &str, radix: u32) -> Result<u64, ()> {
+fn parse_u64_digits(input: &str, radix: u32) -> Result<u64, ParseNumberError> {
     let mut value = 0u64;
     let mut saw_digit = false;
 
@@ -215,19 +222,19 @@ fn parse_u64_digits(input: &str, radix: u32) -> Result<u64, ()> {
             b'0'..=b'9' => (byte - b'0') as u32,
             b'a'..=b'f' => (byte - b'a' + 10) as u32,
             b'A'..=b'F' => (byte - b'A' + 10) as u32,
-            _ => return Err(()),
+            _ => return Err(ParseNumberError::InvalidDigit),
         };
         if digit >= radix {
-            return Err(());
+            return Err(ParseNumberError::InvalidDigit);
         }
         value = value
             .checked_mul(radix as u64)
             .and_then(|value| value.checked_add(digit as u64))
-            .ok_or(())?;
+            .ok_or(ParseNumberError::Overflow)?;
         saw_digit = true;
     }
 
-    saw_digit.then_some(value).ok_or(())
+    saw_digit.then_some(value).ok_or(ParseNumberError::Empty)
 }
 
 #[cfg(test)]

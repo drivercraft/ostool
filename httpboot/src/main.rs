@@ -31,7 +31,13 @@ const EMBEDDED_MANIFEST_URL_ENV: &str = "OSTOOL_HTTPBOOT_MANIFEST_URL";
 
 #[cfg(target_os = "uefi")]
 #[unsafe(no_mangle)]
-pub extern "efiapi" fn efi_main(image: EfiHandle, system_table: *mut EfiSystemTable) -> EfiStatus {
+/// # Safety
+///
+/// The UEFI firmware must pass a valid image handle and system table pointer.
+pub unsafe extern "efiapi" fn efi_main(
+    image: EfiHandle,
+    system_table: *mut EfiSystemTable,
+) -> EfiStatus {
     let Some(console) = (unsafe { system_table.as_mut() }).and_then(|table| {
         let console = table.con_out;
         unsafe { console.as_mut() }

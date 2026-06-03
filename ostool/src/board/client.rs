@@ -49,6 +49,7 @@ pub struct HeartbeatResponse {
 pub enum BootConfig {
     Uboot(UbootProfile),
     Pxe(PxeProfile),
+    #[serde(rename = "httpboot", alias = "uefi_http")]
     UefiHttp(UefiHttpProfile),
 }
 

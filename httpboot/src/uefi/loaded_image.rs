@@ -13,11 +13,11 @@ pub enum LoaderError {
     InvalidDevicePath,
 }
 
-pub fn loader_url_from_loaded_image<'a>(
+pub fn loader_url_from_loaded_image(
     image: EfiHandle,
     system_table: *mut EfiSystemTable,
-    buffer: &'a mut [u8],
-) -> Result<&'a str, LoaderError> {
+    buffer: &mut [u8],
+) -> Result<&str, LoaderError> {
     let boot_services =
         boot_services_from_system_table(system_table).ok_or(LoaderError::ProtocolUnavailable)?;
 

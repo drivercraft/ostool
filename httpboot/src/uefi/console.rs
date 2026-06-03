@@ -135,7 +135,7 @@ pub fn write_usize(console: *mut EfiSimpleTextOutputProtocol, mut value: usize) 
     write_console(console, text);
 }
 
-pub fn write_utf16_nul<'a>(input: &str, output: &'a mut [u16]) -> Result<*mut u16, ()> {
+pub fn write_utf16_nul(input: &str, output: &mut [u16]) -> Result<*mut u16, ()> {
     let mut index = 0;
     for unit in input.encode_utf16() {
         if index + 1 >= output.len() {

@@ -55,6 +55,31 @@ struct OstoolBootInfo {
     regions: [OstoolRamRegion; OSTOOL_BOOT_INFO_MAX_RAM_REGIONS],
 }
 
+#[derive(Clone, Copy)]
+struct KernelDownload<'a> {
+    url: &'a str,
+    size: u64,
+    load_addr: u64,
+    entry_point: u64,
+    arch: &'a str,
+}
+
+struct KernelRangeRequest<'a> {
+    url: &'a str,
+    range_start: usize,
+    range_end: usize,
+    dst: *mut u8,
+    expected_len: usize,
+    first: bool,
+}
+
+struct JumpReadiness<'a> {
+    image: EfiHandle,
+    download: KernelDownload<'a>,
+    kernel_size: usize,
+    page_count: usize,
+}
+
 impl OstoolBootInfo {
     fn new() -> Self {
         Self {
@@ -200,10 +225,8 @@ fn run_http_child(
         }
 
         let _ = unsafe { ((*http_protocol).configure)(http_protocol, core::ptr::null_mut()) };
-    } else {
-        if show_errors {
-            write_console(console, "error: failed to configure HTTP IPv4\r\n");
-        }
+    } else if show_errors {
+        write_console(console, "error: failed to configure HTTP IPv4\r\n");
     }
 
     destroy_http_child(console, service_binding, child_handle);
@@ -456,11 +479,13 @@ fn print_manifest_response(
                 boot_services,
                 image,
                 http_protocol,
-                manifest.kernel_url,
-                manifest.kernel_size,
-                manifest.kernel_load_addr,
-                manifest.entry_point,
-                manifest.arch,
+                KernelDownload {
+                    url: manifest.kernel_url,
+                    size: manifest.kernel_size,
+                    load_addr: manifest.kernel_load_addr,
+                    entry_point: manifest.entry_point,
+                    arch: manifest.arch,
+                },
             );
         }
         Err(_) => write_console(console, "error: failed to parse manifest\r\n"),
@@ -474,38 +499,19 @@ fn request_kernel_probe(
     boot_services: &mut EfiBootServices,
     image: EfiHandle,
     http_protocol: *mut EfiHttpProtocol,
-    kernel_url: &str,
-    kernel_size: u64,
-    kernel_load_addr: u64,
-    entry_point: u64,
-    arch: &str,
+    download: KernelDownload<'_>,
 ) {
-    download_kernel_to_load_addr(
-        console,
-        boot_services,
-        image,
-        http_protocol,
-        kernel_url,
-        kernel_size,
-        kernel_load_addr,
-        entry_point,
-        arch,
-    );
+    download_kernel_to_load_addr(console, boot_services, image, http_protocol, download);
 }
 
 fn request_kernel_range(
     console: *mut EfiSimpleTextOutputProtocol,
     boot_services: &mut EfiBootServices,
     http_protocol: *mut EfiHttpProtocol,
-    kernel_url: &str,
-    range_start: usize,
-    range_end: usize,
-    dst: *mut u8,
-    expected_len: usize,
-    first: bool,
+    request: KernelRangeRequest<'_>,
 ) -> Option<usize> {
     let mut url_buffer = [0u16; UTF16_URL_BUFFER_SIZE];
-    let url = match write_utf16_nul(kernel_url, &mut url_buffer) {
+    let url = match write_utf16_nul(request.url, &mut url_buffer) {
         Ok(url) => url,
         Err(_) => {
             write_console(console, "error: kernel URL too long\r\n");
@@ -514,7 +520,7 @@ fn request_kernel_range(
     };
     let mut host_name = *b"Host\0";
     let mut host_value = [0u8; HTTP_HOST_BUFFER_SIZE];
-    match write_url_host_header_value(kernel_url, &mut host_value) {
+    match write_url_host_header_value(request.url, &mut host_value) {
         Ok(_) => {}
         Err(()) => {
             write_console(console, "error: invalid kernel URL host\r\n");
@@ -523,7 +529,7 @@ fn request_kernel_range(
     };
     let mut range_name = *b"Range\0";
     let mut range_value = [0u8; 64];
-    write_range_header_value(range_start, range_end, &mut range_value)?;
+    write_range_header_value(request.range_start, request.range_end, &mut range_value)?;
 
     let mut event = core::ptr::null_mut();
     let event_status = (boot_services.create_event)(
@@ -580,9 +586,9 @@ fn request_kernel_range(
             console,
             boot_services,
             http_protocol,
-            dst,
-            expected_len,
-            first,
+            request.dst,
+            request.expected_len,
+            request.first,
         );
         let _ = (boot_services.close_event)(event);
         return received;
@@ -598,28 +604,24 @@ fn download_kernel_to_load_addr(
     boot_services: &mut EfiBootServices,
     image: EfiHandle,
     http_protocol: *mut EfiHttpProtocol,
-    kernel_url: &str,
-    expected_kernel_size: u64,
-    kernel_load_addr: u64,
-    entry_point: u64,
-    arch: &str,
+    download: KernelDownload<'_>,
 ) {
-    let Some(expected_size) = checked_kernel_size(console, expected_kernel_size) else {
+    let Some(expected_size) = checked_kernel_size(console, download.size) else {
         return;
     };
 
-    let Some(page_count) = kernel_page_count(console, kernel_load_addr, expected_size) else {
+    let Some(page_count) = kernel_page_count(console, download.load_addr, expected_size) else {
         return;
     };
 
-    let mut target = kernel_load_addr as EfiPhysicalAddress;
+    let mut target = download.load_addr as EfiPhysicalAddress;
     let allocate_status = (boot_services.allocate_pages)(
         EFI_ALLOCATE_ADDRESS,
         EFI_LOADER_DATA,
         page_count,
         &mut target,
     );
-    if allocate_status.is_error() || target != kernel_load_addr {
+    if allocate_status.is_error() || target != download.load_addr {
         write_console(console, "error: failed to allocate kernel pages\r\n");
         return;
     }
@@ -630,8 +632,8 @@ fn download_kernel_to_load_addr(
         console,
         boot_services,
         http_protocol,
-        kernel_url,
-        kernel_load_addr,
+        download.url,
+        download.load_addr,
         expected_size,
     );
     let complete = received == expected_size;
@@ -642,18 +644,18 @@ fn download_kernel_to_load_addr(
         print_jump_readiness(
             console,
             boot_services,
-            image,
-            kernel_load_addr,
-            entry_point,
-            arch,
-            expected_size,
-            page_count,
+            JumpReadiness {
+                image,
+                download,
+                kernel_size: expected_size,
+                page_count,
+            },
         );
     } else {
         set_progress_cursor_visible(console, true);
         write_console(console, "\r\n");
         write_console(console, "error: kernel download incomplete\r\n");
-        let _ = (boot_services.free_pages)(kernel_load_addr, page_count);
+        let _ = (boot_services.free_pages)(download.load_addr, page_count);
     }
 }
 
@@ -722,12 +724,14 @@ fn download_kernel_ranges(
             console,
             boot_services,
             http_protocol,
-            kernel_url,
-            range_start,
-            range_end,
-            dst,
-            chunk_len,
-            first,
+            KernelRangeRequest {
+                url: kernel_url,
+                range_start,
+                range_end,
+                dst,
+                expected_len: chunk_len,
+                first,
+            },
         ) else {
             write_console(console, "\r\n");
             write_console(console, "error: kernel download stopped at ");
@@ -963,20 +967,15 @@ fn receive_kernel_stream_chunk(
 fn print_jump_readiness(
     console: *mut EfiSimpleTextOutputProtocol,
     boot_services: &mut EfiBootServices,
-    image: EfiHandle,
-    kernel_load_addr: u64,
-    entry_point: u64,
-    arch: &str,
-    kernel_size: usize,
-    page_count: usize,
+    readiness: JumpReadiness<'_>,
 ) {
     print_entry_plan(
         console,
         &EntryPlan {
-            arch,
-            load_addr: kernel_load_addr,
-            entry_point,
-            kernel_size,
+            arch: readiness.download.arch,
+            load_addr: readiness.download.load_addr,
+            entry_point: readiness.download.entry_point,
+            kernel_size: readiness.kernel_size,
             boot_info: 0,
         },
     );
@@ -984,16 +983,16 @@ fn print_jump_readiness(
     maybe_exit_boot_services(
         console,
         boot_services,
-        image,
+        readiness.image,
         &EntryPlan {
-            arch,
-            load_addr: kernel_load_addr,
-            entry_point,
-            kernel_size,
+            arch: readiness.download.arch,
+            load_addr: readiness.download.load_addr,
+            entry_point: readiness.download.entry_point,
+            kernel_size: readiness.kernel_size,
             boot_info: 0,
         },
     );
-    let _ = (boot_services.free_pages)(kernel_load_addr, page_count);
+    let _ = (boot_services.free_pages)(readiness.download.load_addr, readiness.page_count);
     write_console(console, "error: jump returned unexpectedly\r\n");
 }
 

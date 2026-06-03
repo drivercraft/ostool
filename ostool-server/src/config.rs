@@ -852,7 +852,7 @@ bootm_addr = "0x82200000"
 
     #[test]
     fn asus_nuc15_x86_64_vmx_example_board_config_parses() {
-        let content = include_str!("../../docs/examples/Asus-nuc15-x86_64-vmx.board.toml");
+        let content = include_str!("../../httpboot/examples/Asus-nuc15-x86_64-vmx.board.toml");
         let board: BoardConfig = toml::from_str(content).unwrap();
 
         assert_eq!(board.id, "Asus-nuc15-x86_64-vmx");
