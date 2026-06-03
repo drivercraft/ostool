@@ -1913,7 +1913,6 @@ mod tests {
             network: crate::TftpNetworkConfig {
                 interface: "lo".into(),
             },
-            proxy_dhcp: Default::default(),
             upload_limits: UploadLimitsConfig::default(),
         }
     }

@@ -112,7 +112,6 @@ fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandl
         network: ostool_server::TftpNetworkConfig {
             interface: "lo".into(),
         },
-        proxy_dhcp: Default::default(),
         upload_limits: UploadLimitsConfig::default(),
     };
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)
