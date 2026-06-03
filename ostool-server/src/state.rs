@@ -257,7 +257,9 @@ impl AppState {
     }
 
     pub async fn board_power_status(&self, board_id: &str) -> Option<BoardPowerStatusSnapshot> {
-        self.boards.read().await.get(board_id).cloned()?;
+        if !self.boards.read().await.contains_key(board_id) {
+            return None;
+        }
         Some(BoardPowerStatusSnapshot {
             available: false,
             powered: None,

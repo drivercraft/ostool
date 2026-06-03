@@ -1,5 +1,5 @@
 use crate::uefi::abi::EfiSimpleTextOutputProtocol;
-use crate::uefi::console::{write_console, write_usize};
+use crate::uefi::console::{write_console, write_hex_u64, write_usize};
 
 #[derive(Clone, Copy)]
 pub struct EntryPlan<'a> {
@@ -83,19 +83,4 @@ fn target_arch_name() -> &'static str {
     {
         "unknown"
     }
-}
-
-fn write_hex_u64(console: *mut EfiSimpleTextOutputProtocol, value: u64) {
-    let mut output = [0u8; 16];
-    let mut shift = 60u32;
-    for byte in &mut output {
-        let digit = ((value >> shift) & 0xf) as u8;
-        *byte = match digit {
-            0..=9 => b'0' + digit,
-            _ => b'a' + (digit - 10),
-        };
-        shift = shift.saturating_sub(4);
-    }
-    let text = core::str::from_utf8(&output).unwrap_or("????????????????");
-    write_console(console, text);
 }

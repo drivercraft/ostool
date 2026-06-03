@@ -1,18 +1,32 @@
 use crate::uefi::abi::EfiSimpleTextOutputProtocol;
+#[cfg(target_arch = "x86_64")]
 use core::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(target_arch = "x86_64")]
 const COM1_PORT: u16 = 0x3f8;
+#[cfg(target_arch = "x86_64")]
 const UART_RBR_THR: u16 = 0;
+#[cfg(target_arch = "x86_64")]
 const UART_IER: u16 = 1;
+#[cfg(target_arch = "x86_64")]
 const UART_FCR: u16 = 2;
+#[cfg(target_arch = "x86_64")]
 const UART_LCR: u16 = 3;
+#[cfg(target_arch = "x86_64")]
 const UART_MCR: u16 = 4;
+#[cfg(target_arch = "x86_64")]
 const UART_LSR: u16 = 5;
+#[cfg(target_arch = "x86_64")]
 const UART_DLL: u16 = 0;
+#[cfg(target_arch = "x86_64")]
 const UART_DLM: u16 = 1;
+#[cfg(target_arch = "x86_64")]
 const UART_LSR_THRE: u8 = 1 << 5;
+#[cfg(target_arch = "x86_64")]
 const UART_LSR_TEMT: u8 = 1 << 6;
+#[cfg(target_arch = "x86_64")]
 const UART_LCR_DLAB: u8 = 1 << 7;
+#[cfg(target_arch = "x86_64")]
 static COM1_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 pub fn write_console(console: *mut EfiSimpleTextOutputProtocol, message: &str) {
@@ -45,6 +59,7 @@ pub fn set_progress_cursor_visible(console: *mut EfiSimpleTextOutputProtocol, vi
     let _ = (console_ref.enable_cursor)(console, u8::from(visible));
 }
 
+#[cfg(target_arch = "x86_64")]
 fn write_serial(bytes: &[u8]) {
     init_com1();
     for byte in bytes {
@@ -55,6 +70,10 @@ fn write_serial(bytes: &[u8]) {
     }
 }
 
+#[cfg(not(target_arch = "x86_64"))]
+fn write_serial(_bytes: &[u8]) {}
+
+#[cfg(target_arch = "x86_64")]
 fn init_com1() {
     if COM1_INITIALIZED.swap(true, Ordering::AcqRel) {
         return;
@@ -70,6 +89,7 @@ fn init_com1() {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 fn serial_putc(byte: u8) {
     for _ in 0..100_000 {
         if unsafe { inb(COM1_PORT + UART_LSR) } & UART_LSR_THRE != 0 {
@@ -80,6 +100,7 @@ fn serial_putc(byte: u8) {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 fn wait_serial_empty() {
     for _ in 0..100_000 {
         if unsafe { inb(COM1_PORT + UART_LSR) } & UART_LSR_TEMT != 0 {
@@ -88,6 +109,7 @@ fn wait_serial_empty() {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 unsafe fn outb(port: u16, value: u8) {
     unsafe {
         core::arch::asm!(
@@ -99,6 +121,7 @@ unsafe fn outb(port: u16, value: u8) {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 unsafe fn inb(port: u16) -> u8 {
     let value: u8;
     unsafe {
@@ -132,6 +155,21 @@ pub fn write_usize(console: *mut EfiSimpleTextOutputProtocol, mut value: usize) 
         output[index] = digits[len - index - 1];
     }
     let text = core::str::from_utf8(&output[..len]).unwrap_or("?");
+    write_console(console, text);
+}
+
+pub fn write_hex_u64(console: *mut EfiSimpleTextOutputProtocol, value: u64) {
+    let mut output = [0u8; 16];
+    let mut shift = 60u32;
+    for byte in &mut output {
+        let digit = ((value >> shift) & 0xf) as u8;
+        *byte = match digit {
+            0..=9 => b'0' + digit,
+            _ => b'a' + (digit - 10),
+        };
+        shift = shift.saturating_sub(4);
+    }
+    let text = core::str::from_utf8(&output).unwrap_or("????????????????");
     write_console(console, text);
 }
 

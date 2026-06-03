@@ -12,7 +12,7 @@ use crate::uefi::abi::{
     HTTP_VERSION_11, TPL_CALLBACK, boot_services_from_system_table,
 };
 use crate::uefi::console::{
-    set_progress_cursor_visible, write_console, write_usize, write_utf16_nul,
+    set_progress_cursor_visible, write_console, write_hex_u64, write_usize, write_utf16_nul,
 };
 use crate::uefi::entry::{EntryPlan, call_entry_point, print_entry_plan, target_matches_manifest};
 use httpboot::parse_downloaded_manifest;
@@ -29,6 +29,7 @@ const KERNEL_RANGE_CHUNK_SIZE: usize = 1024;
 const HTTP_COMPLETION_POLL_LIMIT: usize = 100_000;
 const HTTP_REQUEST_RETRY_LIMIT: usize = 8;
 const HTTP_REQUEST_RETRY_STALL_US: usize = 250_000;
+const HTTP_BOOT_ROUND_RETRY_LIMIT: usize = 10;
 const HTTP_BOOT_ROUND_RETRY_STALL_US: usize = 3_000_000;
 const KERNEL_PROGRESS_STEP_PERCENT: usize = 1;
 const KERNEL_PROGRESS_BAR_WIDTH: usize = 80;
@@ -102,12 +103,13 @@ pub fn run_http_boot_loader(
         return EFI_SUCCESS;
     };
 
-    let mut round = 0usize;
-    loop {
-        round += 1;
+    for round in 1..=HTTP_BOOT_ROUND_RETRY_LIMIT {
         run_http_child(console, boot_services, image, manifest_url, round > 3);
         let _ = (boot_services.stall)(HTTP_BOOT_ROUND_RETRY_STALL_US);
     }
+
+    write_console(console, "error: HTTP Boot retry limit reached\r\n");
+    EFI_SUCCESS
 }
 
 fn first_protocol_handle(
@@ -1135,21 +1137,6 @@ fn free_response_headers(boot_services: &mut EfiBootServices, message: &EfiHttpM
     if !message.headers.is_null() {
         let _ = (boot_services.free_pool)(message.headers as *mut c_void);
     }
-}
-
-fn write_hex_u64(console: *mut EfiSimpleTextOutputProtocol, value: u64) {
-    let mut output = [0u8; 16];
-    let mut shift = 60u32;
-    for byte in &mut output {
-        let digit = ((value >> shift) & 0xf) as u8;
-        *byte = match digit {
-            0..=9 => b'0' + digit,
-            _ => b'a' + (digit - 10),
-        };
-        shift = shift.saturating_sub(4);
-    }
-    let text = core::str::from_utf8(&output).unwrap_or("????????????????");
-    write_console(console, text);
 }
 
 fn write_http_status_code(console: *mut EfiSimpleTextOutputProtocol, status_code: u32) {
