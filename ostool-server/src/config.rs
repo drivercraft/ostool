@@ -539,8 +539,6 @@ pub struct UefiHttpProfile {
     pub kernel_file: Option<String>,
     pub kernel_load_addr: Option<String>,
     pub entry_point: Option<String>,
-    pub mac_address: Option<String>,
-    pub client_ip: Option<Ipv4Addr>,
 }
 
 #[cfg(test)]
@@ -835,8 +833,6 @@ bootm_addr = "0x82200000"
                 kernel_file: Some("kernel.bin".into()),
                 kernel_load_addr: Some("0x200000".into()),
                 entry_point: Some("0x200000".into()),
-                mac_address: Some("52:54:00:12:34:56".into()),
-                client_ip: Some("10.3.10.215".parse().unwrap()),
             }),
             notes: None,
             disabled: false,
@@ -876,8 +872,6 @@ bootm_addr = "0x82200000"
         assert_eq!(profile.kernel_file.as_deref(), Some("kernel.bin"));
         assert_eq!(profile.kernel_load_addr.as_deref(), Some("0x200000"));
         assert_eq!(profile.entry_point.as_deref(), Some("0x200000"));
-        assert_eq!(profile.client_ip, Some("10.3.10.143".parse().unwrap()));
-        assert_eq!(profile.mac_address.as_deref(), Some("1c:69:7a:dc:f3:47"));
     }
 
     #[test]

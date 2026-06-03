@@ -112,8 +112,6 @@ pub struct UefiHttpProfile {
     pub kernel_file: Option<String>,
     pub kernel_load_addr: Option<String>,
     pub entry_point: Option<String>,
-    pub mac_address: Option<String>,
-    pub client_ip: Option<std::net::Ipv4Addr>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -635,9 +633,7 @@ mod tests {
                     "loader_file": "BOOTX64.EFI",
                     "kernel_file": "kernel.bin",
                     "kernel_load_addr": "0x200000",
-                    "entry_point": "0x200000",
-                    "mac_address": null,
-                    "client_ip": null
+                    "entry_point": "0x200000"
                 },
                 "server_ip": null,
                 "netmask": null,

@@ -131,8 +131,6 @@ export interface UefiHttpProfile {
   kernel_file: string | null;
   kernel_load_addr: string | null;
   entry_point: string | null;
-  mac_address: string | null;
-  client_ip: string | null;
 }
 
 export type BootConfig = UbootProfile | PxeProfile | UefiHttpProfile;

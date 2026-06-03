@@ -577,7 +577,6 @@ fn normalize_boot_config(boot: &mut BootConfig) -> Result<(), ApiError> {
             normalize_optional_string(&mut profile.kernel_file);
             normalize_optional_string(&mut profile.kernel_load_addr);
             normalize_optional_string(&mut profile.entry_point);
-            normalize_optional_string(&mut profile.mac_address);
         }
     }
     Ok(())
@@ -2023,8 +2022,6 @@ mod tests {
             kernel_file: Some("kernel.bin".into()),
             kernel_load_addr: Some("0x200000".into()),
             entry_point: Some("0x200000".into()),
-            mac_address: None,
-            client_ip: None,
         });
         board
     }

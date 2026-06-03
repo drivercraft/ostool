@@ -51,8 +51,6 @@ interface BoardEditorFormState {
   uefi_kernel_file: string;
   uefi_kernel_load_addr: string;
   uefi_entry_point: string;
-  uefi_mac_address: string;
-  uefi_client_ip: string;
 }
 
 const DEFAULT_SERIAL_BAUD_RATE = 115_200;
@@ -121,8 +119,6 @@ function defaultFormState(): BoardEditorFormState {
     uefi_kernel_file: "",
     uefi_kernel_load_addr: "",
     uefi_entry_point: "",
-    uefi_mac_address: "",
-    uefi_client_ip: "",
   };
 }
 
@@ -173,8 +169,6 @@ function boardToFormState(board: BoardConfig): BoardEditorFormState {
     next.uefi_kernel_file = board.boot.kernel_file ?? "";
     next.uefi_kernel_load_addr = board.boot.kernel_load_addr ?? "";
     next.uefi_entry_point = board.boot.entry_point ?? "";
-    next.uefi_mac_address = board.boot.mac_address ?? "";
-    next.uefi_client_ip = board.boot.client_ip ?? "";
   }
 
   return next;
@@ -219,8 +213,6 @@ function buildBootConfig(): BootConfig {
       kernel_file: trimToNull(form.value.uefi_kernel_file),
       kernel_load_addr: trimToNull(form.value.uefi_kernel_load_addr),
       entry_point: trimToNull(form.value.uefi_entry_point),
-      mac_address: trimToNull(form.value.uefi_mac_address),
-      client_ip: trimToNull(form.value.uefi_client_ip),
     };
   }
 
@@ -986,14 +978,6 @@ onMounted(() => {
               <label class="field">
                 <span>entry point</span>
                 <input v-model="form.uefi_entry_point" placeholder="例如 0x200000" />
-              </label>
-              <label class="field">
-                <span>MAC 地址</span>
-                <input v-model="form.uefi_mac_address" placeholder="例如 1c:69:7a:dc:f3:47" />
-              </label>
-              <label class="field">
-                <span>客户端 IP</span>
-                <input v-model="form.uefi_client_ip" placeholder="例如 10.3.10.143" />
               </label>
             </div>
           </template>

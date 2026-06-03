@@ -149,8 +149,6 @@ function makeUefiHttpBoard(id = "uefi-http-board"): BoardConfig {
       kernel_file: "kernel.bin",
       kernel_load_addr: "0x200000",
       entry_point: "0x200000",
-      mac_address: "1c:69:7a:dc:f3:47",
-      client_ip: "10.3.10.143",
     },
   };
 }
@@ -382,9 +380,7 @@ describe("BoardEditorView", () => {
     expect((wrapper.get('input[placeholder="例如 kernel.bin"]').element as HTMLInputElement).value).toBe(
       "kernel.bin",
     );
-    expect((wrapper.get('input[placeholder="例如 1c:69:7a:dc:f3:47"]').element as HTMLInputElement).value).toBe(
-      "1c:69:7a:dc:f3:47",
-    );
+    expect(wrapper.find('input[placeholder="例如 1c:69:7a:dc:f3:47"]').exists()).toBe(false);
 
     const saveButton = wrapper.findAll("button").find((button) => button.text() === "保存配置");
     await saveButton!.trigger("click");
@@ -406,8 +402,6 @@ describe("BoardEditorView", () => {
           kernel_file: "kernel.bin",
           kernel_load_addr: "0x200000",
           entry_point: "0x200000",
-          mac_address: "1c:69:7a:dc:f3:47",
-          client_ip: "10.3.10.143",
         },
       }),
     );
