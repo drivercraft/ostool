@@ -2,6 +2,7 @@ use std::fmt;
 
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
+use httpboot_protocol::HttpBootArtifactResponse;
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
@@ -148,15 +149,6 @@ pub struct HttpBootFileResponse {
     pub http_url: String,
     pub size: u64,
     pub uploaded_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct HttpBootManifest {
-    pub kernel_url: String,
-    pub kernel_size: u64,
-    pub kernel_load_addr: String,
-    pub entry_point: String,
-    pub arch: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -392,12 +384,35 @@ impl BoardServerClient {
     pub async fn upload_http_boot_manifest(
         &self,
         session_id: &str,
-        manifest: &HttpBootManifest,
+        manifest: &httpboot_protocol::HttpBootManifest,
     ) -> Result<HttpBootFileResponse, BoardServerClientError> {
         let response = self
             .client
             .put(self.endpoint(&format!("/api/v1/sessions/{session_id}/http-boot/manifest")))
             .json(manifest)
+            .send()
+            .await
+            .map_err(Self::request_error)?;
+        self.decode_json(response).await
+    }
+
+    pub async fn upload_http_boot_artifact(
+        &self,
+        session_id: &str,
+        remote_name: &str,
+        kernel_load_addr: &str,
+        entry_point: &str,
+        arch: &str,
+        bytes: Vec<u8>,
+    ) -> Result<HttpBootArtifactResponse, BoardServerClientError> {
+        let response = self
+            .client
+            .put(self.endpoint(&format!("/api/v1/sessions/{session_id}/http-boot/artifact")))
+            .header("X-HttpBoot-Remote-Name", remote_name)
+            .header("X-HttpBoot-Kernel-Load-Addr", kernel_load_addr)
+            .header("X-HttpBoot-Entry-Point", entry_point)
+            .header("X-HttpBoot-Arch", arch)
+            .body(bytes)
             .send()
             .await
             .map_err(Self::request_error)?;

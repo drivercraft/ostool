@@ -13,8 +13,7 @@ use crate::{
     board::{
         acquire_board_session,
         client::{
-            BoardServerClient, BootConfig as RemoteBootConfig, HttpBootManifest,
-            SessionCreatedResponse, UefiBootArch,
+            BoardServerClient, BootConfig as RemoteBootConfig, SessionCreatedResponse, UefiBootArch,
         },
         finalize_session, load_board_global_config_with_notice, print_allocated_board_session,
         session::BoardSession,
@@ -336,11 +335,6 @@ async fn run_httpboot_session(
 
     let kernel_bytes = std::fs::read(kernel_bin)
         .with_context(|| format!("failed to read {}", kernel_bin.display()))?;
-    let kernel_size = kernel_bytes.len() as u64;
-    let uploaded = client
-        .upload_http_boot_file(&session.session_id, &remote_name, kernel_bytes)
-        .await
-        .with_context(|| format!("failed to upload HTTP Boot file `{remote_name}`"))?;
 
     let arch = profile
         .boot_arch
@@ -348,13 +342,17 @@ async fn run_httpboot_session(
         .map(uefi_boot_arch_name)
         .unwrap_or("other")
         .to_string();
-    let manifest = HttpBootManifest {
-        kernel_url: uploaded.http_url.clone(),
-        kernel_size,
-        kernel_load_addr: config.kernel_load_addr.clone(),
-        entry_point: config.entry_point.clone(),
-        arch,
-    };
+    let artifact = client
+        .upload_http_boot_artifact(
+            &session.session_id,
+            &remote_name,
+            &config.kernel_load_addr,
+            &config.entry_point,
+            &arch,
+            kernel_bytes,
+        )
+        .await
+        .with_context(|| format!("failed to upload HTTP Boot artifact `{remote_name}`"))?;
     let loader_file = profile
         .loader_file
         .as_deref()
@@ -366,22 +364,18 @@ async fn run_httpboot_session(
         config.efi_loader_path.as_deref(),
     )
     .await?;
-    let manifest_file = client
-        .upload_http_boot_manifest(&session.session_id, &manifest)
-        .await
-        .context("failed to upload HTTP Boot manifest")?;
     let loader_url = if let Some(loader) = uploaded_loader {
         loader.http_url
     } else {
-        let loader_url = sibling_http_boot_url(&manifest_file.http_url, loader_file)?;
+        let loader_url = sibling_http_boot_url(&artifact.manifest_url, loader_file)?;
         verify_existing_loader_url(&loader_url).await?;
         loader_url
     };
 
     Ok(HttpBootPublishedUrls {
         loader_url,
-        manifest_url: manifest_file.http_url,
-        kernel_url: uploaded.http_url,
+        manifest_url: artifact.manifest_url,
+        kernel_url: artifact.kernel_url,
     })
 }
 
