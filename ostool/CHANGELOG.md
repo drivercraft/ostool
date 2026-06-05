@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0](https://github.com/drivercraft/ostool/compare/ostool-v0.21.0...ostool-v0.22.0) - 2026-06-05
+
+### Fixed
+
+- *(ostool)* add OVMF mirror fallback ([#124](https://github.com/drivercraft/ostool/pull/124))
+
+### Other
+
+- *(tool)* 抽出 U-Boot FIT 与 boot artifact 边界 ([#123](https://github.com/drivercraft/ostool/pull/123))
+- *(ostool)* 收敛 artifact 生命周期边界 ([#119](https://github.com/drivercraft/ostool/pull/119))
+- *(tool)* 移除旧 Tool 兼容 API ([#118](https://github.com/drivercraft/ostool/pull/118))
+- *(tool)* 拆分运行入口与 Tool facade ([#117](https://github.com/drivercraft/ostool/pull/117))
+- *(tool)* 接入 invocation 构建状态 ([#115](https://github.com/drivercraft/ostool/pull/115))
+
 ## [0.21.0](https://github.com/drivercraft/ostool/compare/ostool-v0.20.0...ostool-v0.21.0) - 2026-05-27
 
 ### Added
