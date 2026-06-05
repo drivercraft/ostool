@@ -407,6 +407,7 @@ pub(crate) async fn run_uboot_with_config(
 pub async fn run_uboot(invocation: &mut Invocation, config: &UbootConfig) -> anyhow::Result<()> {
     let scope = invocation.variable_scope()?;
     let config = prepare_uboot_runtime_config(&scope, config)?;
+    invocation.ensure_runtime_bin()?;
     let input = uboot_run_input(invocation)?;
     run_uboot_with_config(input, config).await
 }
@@ -1047,8 +1048,7 @@ where
         let kernel = self
             .input
             .artifacts
-            .runtime_image()
-            .ok_or_else(|| anyhow!("U-Boot runner requires a prepared runtime image"))?
+            .require_bin("U-Boot runner requires a prepared BIN artifact")?
             .to_path_buf();
 
         info!("Starting U-Boot runner...");
@@ -1469,6 +1469,10 @@ mod tests {
         timeout_duration,
     };
     use crate::{
+        artifact::{
+            object_tools::ObjectTools,
+            runtime::{RuntimeArtifactOptions, prepare_runtime_artifacts},
+        },
         board::{
             client::{BoardServerClient, SessionCreatedResponse, TftpSessionResponse},
             config::BoardRunConfig,
@@ -1489,6 +1493,16 @@ mod tests {
         .unwrap()
     }
 
+    fn write_single_crate_manifest(dir: &std::path::Path) {
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "").unwrap();
+    }
+
     fn local_backend() -> LocalBackend {
         LocalBackend {
             config: LocalUbootConfig::default(),
@@ -1504,6 +1518,31 @@ mod tests {
         std::fs::create_dir_all(fit_path.parent().unwrap()).unwrap();
         std::fs::write(&fit_path, [1_u8, 2, 3, 4]).unwrap();
         fit_path
+    }
+
+    fn prepare_elf_only_invocation(dir: &std::path::Path) -> Invocation {
+        let source = std::env::current_exe().unwrap();
+        let copied = dir.join("sample-elf");
+        std::fs::copy(source, &copied).unwrap();
+
+        let mut invocation = make_invocation(dir);
+        let prepared = prepare_runtime_artifacts(
+            &invocation.process_context().unwrap(),
+            RuntimeArtifactOptions {
+                elf_path: copied,
+                to_bin: false,
+                bin_dir: None,
+                debug: false,
+                cargo_artifact_dir: None,
+                strip_elf: false,
+                objcopy_program: ObjectTools.objcopy(),
+            },
+        )
+        .unwrap();
+        invocation.apply_prepared_runtime_artifacts(prepared);
+        assert!(invocation.runtime_artifacts().elf().is_some());
+        assert!(invocation.runtime_artifacts().bin().is_none());
+        invocation
     }
 
     #[test]
@@ -1563,6 +1602,37 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("expected FIT image boot artifact, got QemuDtbDump")
+        );
+    }
+
+    #[tokio::test]
+    async fn run_uboot_prepares_bin_for_elf_only_invocation() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_single_crate_manifest(tmp.path());
+        let mut invocation = prepare_elf_only_invocation(tmp.path());
+
+        let err = super::run_uboot(&mut invocation, &UbootConfig::default())
+            .await
+            .unwrap_err();
+
+        assert!(invocation.runtime_artifacts().bin().is_some());
+        assert!(err.to_string().contains("local U-Boot backend requires"));
+    }
+
+    #[tokio::test]
+    async fn run_uboot_with_config_rejects_elf_only_input() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_single_crate_manifest(tmp.path());
+        let invocation = prepare_elf_only_invocation(tmp.path());
+        let input = super::uboot_run_input(&invocation).unwrap();
+
+        let err = super::run_uboot_with_config(input, UbootConfig::default())
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("U-Boot runner requires a prepared BIN artifact")
         );
     }
 

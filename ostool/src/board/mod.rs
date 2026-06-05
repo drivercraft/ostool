@@ -242,6 +242,7 @@ pub async fn run_board(
 ) -> anyhow::Result<()> {
     crate::build::prepare_runtime_artifacts(invocation, build_config, build_config_path, false)
         .await?;
+    invocation.ensure_runtime_bin()?;
     let input = crate::run::uboot::uboot_run_input(invocation)?;
     let scope = invocation.variable_scope()?;
     run_prepared_board(input, board_config, options, &scope).await

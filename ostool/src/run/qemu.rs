@@ -15,6 +15,8 @@
 //! ```toml
 //! args = ["-nographic", "-cpu", "cortex-a53"]
 //! uefi = false
+//! # `to_bin` remains supported for explicit legacy configurations, but QEMU
+//! # UEFI boot prepares the required BIN artifact automatically.
 //! to_bin = true
 //! success_regex = ["All tests passed"]
 //! fail_regex = ["PANIC", "FAILED"]
@@ -77,7 +79,11 @@ pub struct QemuConfig {
     pub args: Vec<String>,
     /// Whether to use UEFI boot via OVMF firmware.
     pub uefi: bool,
-    /// Whether build orchestration should prepare a raw BIN before loading.
+    /// Legacy explicit request to prepare a raw BIN before loading.
+    ///
+    /// Runners that require BIN artifacts, such as UEFI boot, prepare them
+    /// automatically even when this is unset.
+    #[serde(default)]
     pub to_bin: bool,
     /// Regex patterns that indicate successful execution.
     pub success_regex: Vec<String>,
@@ -131,6 +137,10 @@ impl QemuConfig {
 
     fn shell_auto_init(&self) -> Option<ShellAutoInitMatcher> {
         ShellAutoInitMatcher::new(self.shell_prefix.clone(), self.shell_init_cmd.clone())
+    }
+
+    fn requires_bin_artifact(&self) -> bool {
+        self.uefi || self.to_bin
     }
 }
 
@@ -276,10 +286,10 @@ pub(crate) async fn run_qemu_with_config(
     run_args: RunQemuOptions,
     config: QemuConfig,
 ) -> anyhow::Result<()> {
-    if config.to_bin {
+    if config.requires_bin_artifact() {
         input
             .artifacts
-            .require_bin("QEMU config `to_bin = true` requires a prepared BIN artifact")?;
+            .require_bin("QEMU runtime requires a prepared BIN artifact")?;
     }
 
     let mut runner = QemuRunner {
@@ -309,7 +319,7 @@ pub(crate) async fn run_qemu_with_debug(
 ) -> anyhow::Result<()> {
     let scope = invocation.variable_scope()?;
     let config = prepare_qemu_runtime_config(&scope, config)?;
-    if config.to_bin {
+    if config.requires_bin_artifact() {
         invocation.ensure_runtime_bin()?;
     }
     let input = QemuRunInput::new(
@@ -840,7 +850,7 @@ mod tests {
     fn write_single_crate_manifest(dir: &std::path::Path) {
         std::fs::write(
             dir.join("Cargo.toml"),
-            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n",
         )
         .unwrap();
         std::fs::create_dir_all(dir.join("src")).unwrap();
@@ -1021,7 +1031,7 @@ fail_regex = []
     }
 
     #[tokio::test]
-    async fn run_qemu_with_to_bin_rejects_elf_only_artifacts() {
+    async fn run_qemu_with_config_rejects_missing_required_bin_artifact() {
         let tmp = TempDir::new().unwrap();
         write_single_crate_manifest(tmp.path());
         let source = std::env::current_exe().unwrap();
@@ -1061,7 +1071,35 @@ fail_regex = []
 
         assert!(
             err.to_string()
-                .contains("QEMU config `to_bin = true` requires a prepared BIN artifact")
+                .contains("QEMU runtime requires a prepared BIN artifact")
+        );
+    }
+
+    #[test]
+    fn qemu_config_marks_bin_required_for_uefi_and_legacy_to_bin() {
+        assert!(
+            QemuConfig {
+                uefi: true,
+                to_bin: false,
+                ..Default::default()
+            }
+            .requires_bin_artifact()
+        );
+        assert!(
+            QemuConfig {
+                uefi: false,
+                to_bin: true,
+                ..Default::default()
+            }
+            .requires_bin_artifact()
+        );
+        assert!(
+            !QemuConfig {
+                uefi: false,
+                to_bin: false,
+                ..Default::default()
+            }
+            .requires_bin_artifact()
         );
     }
 
@@ -1111,6 +1149,21 @@ timeout = 0
         .unwrap();
 
         assert_eq!(config.timeout, Some(0));
+    }
+
+    #[test]
+    fn qemu_config_defaults_to_bin_to_false_when_field_is_absent() {
+        let config: QemuConfig = toml::from_str(
+            r#"
+args = ["-nographic"]
+uefi = false
+success_regex = []
+fail_regex = []
+"#,
+        )
+        .unwrap();
+
+        assert!(!config.to_bin);
     }
 
     #[test]

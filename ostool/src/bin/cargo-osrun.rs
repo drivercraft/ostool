@@ -26,7 +26,9 @@ struct RunnerArgs {
     /// Test name
     test_name: Option<String>,
 
-    /// Convert the ELF to a raw binary before running.
+    /// Legacy explicit request to convert the ELF to a raw binary before running.
+    ///
+    /// Runners that require BIN artifacts prepare them automatically.
     #[arg(long("to-bin"))]
     to_bin: bool,
 
