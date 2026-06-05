@@ -1625,15 +1625,31 @@ fn http_boot_url(
 ) -> Result<String, ApiError> {
     let relative_path = normalize_relative_path(relative_path)
         .map_err(|err| ApiError::bad_request(err.to_string()))?;
-    let base_url = config
-        .http_boot
-        .public_base_url
-        .clone()
-        .unwrap_or_else(|| format!("http://{}", config.listen_addr));
+    let base_url = http_boot_public_base_url(config)?;
     let base_url = base_url.trim_end_matches('/');
     Ok(format!(
         "{base_url}/boot/boards/{board_id}/current/{relative_path}"
     ))
+}
+
+fn http_boot_public_base_url(config: &ServerConfig) -> Result<String, ApiError> {
+    if let Some(public_base_url) = config.http_boot.public_base_url.as_deref()
+        && !public_base_url.trim().is_empty()
+    {
+        return Ok(public_base_url.trim().to_string());
+    }
+
+    if let Some(network) = resolve_server_network(config)?
+        && let Some(server_ip) = network.server_ip
+    {
+        return Ok(format!(
+            "http://{}:{}",
+            server_ip,
+            config.listen_addr.port()
+        ));
+    }
+
+    Ok(format!("http://{}", config.listen_addr))
 }
 
 fn summarize_board_types(
@@ -1962,7 +1978,7 @@ mod tests {
 
     use super::{
         DTB_UPLOAD_MAX_MIB, ResolvedNetwork, boot_profile_with_resolved_network, build_router,
-        mib_to_bytes, resolve_server_network,
+        http_boot_url, mib_to_bytes, resolve_server_network,
     };
     use crate::{
         api::models::{AdminBoardUpsertRequest, BoardRuntimeStatusResponse, SessionDetailResponse},
@@ -2264,6 +2280,34 @@ mod tests {
 
         let resolved = resolve_server_network(&config).unwrap().unwrap();
         assert_eq!(resolved.interface.as_deref(), Some("lo"));
+    }
+
+    #[test]
+    fn http_boot_url_uses_configured_public_base_url_first() {
+        let mut config = ServerConfig::default();
+        config.listen_addr = "0.0.0.0:2999".parse().unwrap();
+        config.network.interface = "lo".into();
+        config.http_boot.public_base_url = Some("http://10.3.10.192:2999/".into());
+
+        let url = http_boot_url(&config, "asus-1", "kernel.bin").unwrap();
+        assert_eq!(
+            url,
+            "http://10.3.10.192:2999/boot/boards/asus-1/current/kernel.bin"
+        );
+    }
+
+    #[test]
+    fn http_boot_url_defaults_to_resolved_server_ip() {
+        let mut config = ServerConfig::default();
+        config.listen_addr = "0.0.0.0:2999".parse().unwrap();
+        config.network.interface = "lo".into();
+        config.http_boot.public_base_url = None;
+
+        let url = http_boot_url(&config, "asus-1", "manifest.json").unwrap();
+        assert_eq!(
+            url,
+            "http://127.0.0.1:2999/boot/boards/asus-1/current/manifest.json"
+        );
     }
 
     #[test]

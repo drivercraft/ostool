@@ -29,7 +29,7 @@ jobs:
       with:
         toolchain: ${{ matrix.rust-toolchain }}
         components: clippy, rustfmt
-        targets: ${{ matrix.targets }},x86_64-unknown-uefi
+        targets: ${{ matrix.targets }}
     - uses: Swatinem/rust-cache@v2.9.1
     - name: Install qemu
       run: |
@@ -43,17 +43,9 @@ jobs:
     - name: Check code format
       run: cargo fmt --all -- --check
     - name: Clippy
-      run: cargo clippy --workspace --exclude httpboot --target ${{ matrix.targets }} --all-features
-    - name: Clippy httpboot library
-      run: cargo clippy -p httpboot --target ${{ matrix.targets }}
-    - name: Clippy httpboot UEFI app
-      run: cargo clippy -p httpboot --target x86_64-unknown-uefi --features uefi-app
+      run: cargo clippy --target ${{ matrix.targets }} --all-features
     - name: Build
-      run: cargo build --workspace --exclude httpboot --target ${{ matrix.targets }} --all-features
-    - name: Build httpboot library
-      run: cargo build -p httpboot --target ${{ matrix.targets }}
-    - name: Build httpboot UEFI app
-      run: cargo build -p httpboot --target x86_64-unknown-uefi --features uefi-app
+      run: cargo build --target ${{ matrix.targets }} --all-features
     - name: Unit test
       if: ${{ matrix.targets == 'x86_64-unknown-linux-gnu' }}
       run: cargo test --target ${{ matrix.targets }} -- --nocapture
