@@ -6,7 +6,7 @@ members = [
     "jkconfig",
     "fitimage",
     "ostool-server",
-    "httpboot",
+    "httpboot-protocol",
 ]
 resolver = "3"
 
@@ -21,6 +21,8 @@ serde = {version = "1", features = ["derive"]}
 serde_json = "1"
 
 toml = "1.0"
+
+httpboot-protocol = { path = "httpboot-protocol" }
 
 # Error handling
 thiserror = "2"

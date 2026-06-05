@@ -31,6 +31,7 @@ chrono = {version = "0.4.44", features = ["serde"]}
 clap = {workspace = true, features = ["derive"]}
 env_logger = {workspace = true}
 futures-util = "0.3"
+httpboot-protocol = { workspace = true }
 log = {workspace = true}
 mime_guess = "2"
 network-interface = "2"

@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+pub use httpboot_protocol::{HttpBootArtifactRequest, HttpBootArtifactResponse, HttpBootManifest};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -163,15 +164,6 @@ impl HttpBootFileResponse {
             uploaded_at: file.uploaded_at,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HttpBootManifest {
-    pub kernel_url: String,
-    pub kernel_size: u64,
-    pub kernel_load_addr: String,
-    pub entry_point: String,
-    pub arch: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

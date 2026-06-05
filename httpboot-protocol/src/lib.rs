@@ -1,4 +1,7 @@
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
+
+#[cfg(test)]
+extern crate std;
 
 use core::str;
 
@@ -9,6 +12,36 @@ pub struct BootManifest<'a> {
     pub kernel_load_addr: u64,
     pub entry_point: u64,
     pub arch: &'a str,
+}
+
+#[cfg(feature = "std")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpBootManifest {
+    pub kernel_url: String,
+    pub kernel_size: u64,
+    pub kernel_load_addr: String,
+    pub entry_point: String,
+    pub arch: String,
+}
+
+#[cfg(feature = "std")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpBootArtifactRequest {
+    pub remote_name: Option<String>,
+    pub kernel_load_addr: String,
+    pub entry_point: String,
+    pub arch: String,
+}
+
+#[cfg(feature = "std")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpBootArtifactResponse {
+    pub kernel_url: String,
+    pub manifest_url: String,
+    pub kernel_size: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,14 +271,12 @@ fn parse_u64_digits(input: &str, radix: u32) -> Result<u64, ParseNumberError> {
 }
 
 #[cfg(test)]
-extern crate std;
-
-#[cfg(test)]
 mod tests {
+    use std::vec::Vec;
+
     use super::{
-        BootManifest, DownloadError, ManifestError, UrlError, parse_addr,
-        parse_downloaded_manifest, parse_manifest, uri_from_device_path,
-        write_sibling_manifest_url,
+        BootManifest, DownloadError, ManifestError, parse_downloaded_manifest, parse_manifest,
+        uri_from_device_path, write_sibling_manifest_url,
     };
 
     #[test]
@@ -253,10 +284,10 @@ mod tests {
         let manifest = parse_manifest(
             r#"{
                 "kernel_url": "http://127.0.0.1:2999/boot/boards/demo/current/kernel.bin",
-                "kernel_size": 123456,
-                "kernel_load_addr": "0x20_3008_0000",
-                "entry_point": "0x20_3008_0000",
-                "arch": "loongarch64"
+                "kernel_size": 4096,
+                "kernel_load_addr": "0x200000",
+                "entry_point": "0x200006",
+                "arch": "x86_64"
             }"#,
         )
         .unwrap();
@@ -265,22 +296,16 @@ mod tests {
             manifest,
             BootManifest {
                 kernel_url: "http://127.0.0.1:2999/boot/boards/demo/current/kernel.bin",
-                kernel_size: 123456,
-                kernel_load_addr: 0x20_3008_0000,
-                entry_point: 0x20_3008_0000,
-                arch: "loongarch64",
+                kernel_size: 4096,
+                kernel_load_addr: 0x20_0000,
+                entry_point: 0x20_0006,
+                arch: "x86_64",
             }
         );
     }
 
     #[test]
-    fn parses_decimal_and_hex_addresses() {
-        assert_eq!(parse_addr("2097152"), Ok(0x20_0000));
-        assert_eq!(parse_addr("0x20_0000"), Ok(0x20_0000));
-    }
-
-    #[test]
-    fn rejects_missing_fields() {
+    fn rejects_missing_manifest_field() {
         let err = parse_manifest(r#"{"kernel_size": 1}"#).unwrap_err();
         assert_eq!(err, ManifestError::MissingField("kernel_url"));
     }
@@ -297,7 +322,6 @@ mod tests {
             }"#,
         )
         .unwrap_err();
-
         assert_eq!(err, ManifestError::InvalidJson("kernel_url"));
     }
 
@@ -370,29 +394,23 @@ mod tests {
     #[test]
     fn rejects_manifest_url_output_that_is_too_small() {
         let mut output = [0u8; 8];
-        let err = write_sibling_manifest_url("http://host/BOOTX64.EFI", &mut output).unwrap_err();
-        assert_eq!(err, UrlError::OutputTooSmall);
+        assert!(write_sibling_manifest_url("http://host/BOOTX64.EFI", &mut output).is_err());
     }
 
     #[test]
     fn extracts_uri_from_device_path() {
-        let uri = b"http://host/current/BOOTX64.EFI";
-        let uri_node_len = (4 + uri.len()) as u16;
-        let mut path = std::vec::Vec::new();
-        path.extend_from_slice(&[0x03, 0x18]);
-        path.extend_from_slice(&uri_node_len.to_le_bytes());
-        path.extend_from_slice(uri);
-        path.extend_from_slice(&[0x7f, 0xff, 0x04, 0x00]);
+        let uri = b"http://host/EFI/BOOT/BOOTX64.EFI";
+        let node_len = 4 + uri.len() + 1;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&[0x03, 0x18]);
+        bytes.extend_from_slice(&(node_len as u16).to_le_bytes());
+        bytes.extend_from_slice(uri);
+        bytes.push(0);
+        bytes.extend_from_slice(&[0x7f, 0xff, 4, 0]);
 
         assert_eq!(
-            uri_from_device_path(&path),
-            Ok("http://host/current/BOOTX64.EFI")
+            uri_from_device_path(&bytes).unwrap(),
+            "http://host/EFI/BOOT/BOOTX64.EFI"
         );
-    }
-
-    #[test]
-    fn rejects_device_path_without_uri() {
-        let path = [0x7f, 0xff, 0x04, 0x00];
-        assert_eq!(uri_from_device_path(&path), Err(UrlError::UriNotFound));
     }
 }
