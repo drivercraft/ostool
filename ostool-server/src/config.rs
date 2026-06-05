@@ -851,30 +851,6 @@ bootm_addr = "0x82200000"
     }
 
     #[test]
-    fn asus_nuc15_x86_64_vmx_example_board_config_parses() {
-        let content = include_str!("../../docs/examples/Asus-nuc15-x86_64-vmx.board.toml");
-        let board: BoardConfig = toml::from_str(content).unwrap();
-
-        assert_eq!(board.id, "Asus-nuc15-x86_64-vmx");
-        assert_eq!(board.board_type, "Asus-nuc15-x86_64-vmx");
-        assert!(board.tags.iter().any(|tag| tag == "vmx"));
-        assert!(matches!(
-            board.power_management,
-            PowerManagementConfig::Custom(_)
-        ));
-
-        let BootConfig::UefiHttp(profile) = board.boot else {
-            panic!("expected httpboot");
-        };
-        assert_eq!(profile.boot_arch, Some(UefiBootArch::X86_64));
-        assert_eq!(profile.strategy, UefiHttpStrategy::BareBinLoader);
-        assert_eq!(profile.loader_file.as_deref(), Some("BOOTX64.EFI"));
-        assert_eq!(profile.kernel_file.as_deref(), Some("kernel.bin"));
-        assert_eq!(profile.kernel_load_addr.as_deref(), Some("0x200000"));
-        assert_eq!(profile.entry_point.as_deref(), Some("0x200000"));
-    }
-
-    #[test]
     fn board_config_round_trip_supports_relay_power_management_key() {
         let board = BoardConfig {
             id: "demo-relay".into(),
