@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.1](https://github.com/drivercraft/ostool/compare/ostool-v0.22.0...ostool-v0.22.1) - 2026-06-06
+
+### Fixed
+
+- *(ostool)* prepare raw bin for runtime runners ([#125](https://github.com/drivercraft/ostool/pull/125))
+
 ## [0.22.0](https://github.com/drivercraft/ostool/compare/ostool-v0.21.0...ostool-v0.22.0) - 2026-06-05
 
 ### Fixed
