@@ -16,3 +16,6 @@ std = []
 
 [dependencies]
 serde = { workspace = true, features = ["derive"], optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true

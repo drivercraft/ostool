@@ -41,6 +41,7 @@ schemars = {workspace = true, features = ["derive"]}
 serde = {workspace = true, features = ["derive"]}
 serde_json = {workspace = true}
 serialport = "4.6"
+sha2 = "0.10"
 tftpd = "0.5"
 thiserror = {workspace = true}
 tokio = {workspace = true, features = ["full"]}

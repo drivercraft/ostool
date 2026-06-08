@@ -144,11 +144,12 @@ function makeUefiHttpBoard(id = "uefi-http-board"): BoardConfig {
     boot: {
       kind: "httpboot",
       boot_arch: "x86_64",
-      strategy: "bare_bin_loader",
-      loader_file: "BOOTX64.EFI",
-      kernel_file: "kernel.bin",
-      kernel_load_addr: "0x200000",
-      entry_point: "0x200000",
+      strategy: "loader_discovery",
+      mac: "1c:69:7a:dc:f3:47",
+      loader_file: null,
+      kernel_file: null,
+      kernel_load_addr: null,
+      entry_point: null,
     },
   };
 }
@@ -374,13 +375,12 @@ describe("BoardEditorView", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("HTTPboot");
-    expect((wrapper.get('input[placeholder="例如 BOOTX64.EFI"]').element as HTMLInputElement).value).toBe(
-      "BOOTX64.EFI",
-    );
-    expect((wrapper.get('input[placeholder="例如 kernel.bin"]').element as HTMLInputElement).value).toBe(
-      "kernel.bin",
-    );
-    expect(wrapper.find('input[placeholder="例如 1c:69:7a:dc:f3:47"]').exists()).toBe(false);
+    expect(wrapper.find('input[placeholder="例如 BOOTX64.EFI"]').exists()).toBe(false);
+    expect(wrapper.find('input[placeholder="例如 kernel.bin"]').exists()).toBe(false);
+    expect(
+      (wrapper.get('input[placeholder="例如 1c:69:7a:dc:f3:47"]').element as HTMLInputElement)
+        .value,
+    ).toBe("1c:69:7a:dc:f3:47");
 
     const saveButton = wrapper.findAll("button").find((button) => button.text() === "保存配置");
     await saveButton!.trigger("click");
@@ -397,11 +397,12 @@ describe("BoardEditorView", () => {
         boot: {
           kind: "httpboot",
           boot_arch: "x86_64",
-          strategy: "bare_bin_loader",
-          loader_file: "BOOTX64.EFI",
-          kernel_file: "kernel.bin",
-          kernel_load_addr: "0x200000",
-          entry_point: "0x200000",
+          strategy: "loader_discovery",
+          mac: "1c:69:7a:dc:f3:47",
+          loader_file: null,
+          kernel_file: null,
+          kernel_load_addr: null,
+          entry_point: null,
         },
       }),
     );

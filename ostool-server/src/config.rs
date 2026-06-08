@@ -518,6 +518,7 @@ pub struct PxeProfile {
 #[serde(rename_all = "snake_case")]
 pub enum UefiHttpStrategy {
     BareBinLoader,
+    LoaderDiscovery,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -533,12 +534,26 @@ pub enum UefiBootArch {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UefiHttpProfile {
+    #[serde(default)]
     pub boot_arch: Option<UefiBootArch>,
+    #[serde(default)]
     pub strategy: UefiHttpStrategy,
+    #[serde(default)]
+    pub mac: Option<String>,
+    #[serde(default)]
     pub loader_file: Option<String>,
+    #[serde(default)]
     pub kernel_file: Option<String>,
+    #[serde(default)]
     pub kernel_load_addr: Option<String>,
+    #[serde(default)]
     pub entry_point: Option<String>,
+}
+
+impl Default for UefiHttpStrategy {
+    fn default() -> Self {
+        Self::BareBinLoader
+    }
 }
 
 #[cfg(test)]
@@ -828,11 +843,12 @@ bootm_addr = "0x82200000"
             }),
             boot: BootConfig::UefiHttp(UefiHttpProfile {
                 boot_arch: Some(UefiBootArch::X86_64),
-                strategy: UefiHttpStrategy::BareBinLoader,
-                loader_file: Some("BOOTX64.EFI".into()),
-                kernel_file: Some("kernel.bin".into()),
-                kernel_load_addr: Some("0x200000".into()),
-                entry_point: Some("0x200000".into()),
+                strategy: UefiHttpStrategy::LoaderDiscovery,
+                mac: Some("1c:69:7a:dc:f3:47".into()),
+                loader_file: None,
+                kernel_file: None,
+                kernel_load_addr: None,
+                entry_point: None,
             }),
             notes: None,
             disabled: false,
@@ -840,14 +856,17 @@ bootm_addr = "0x82200000"
 
         let encoded = toml::to_string_pretty(&board).unwrap();
         assert!(encoded.contains("kind = \"httpboot\""));
-        assert!(encoded.contains("strategy = \"bare_bin_loader\""));
+        assert!(encoded.contains("strategy = \"loader_discovery\""));
+        assert!(encoded.contains("mac = \"1c:69:7a:dc:f3:47\""));
 
         let decoded: BoardConfig = toml::from_str(&encoded).unwrap();
         let BootConfig::UefiHttp(profile) = decoded.boot else {
             panic!("expected httpboot");
         };
         assert_eq!(profile.boot_arch, Some(UefiBootArch::X86_64));
-        assert_eq!(profile.loader_file.as_deref(), Some("BOOTX64.EFI"));
+        assert_eq!(profile.strategy, UefiHttpStrategy::LoaderDiscovery);
+        assert_eq!(profile.mac.as_deref(), Some("1c:69:7a:dc:f3:47"));
+        assert_eq!(profile.loader_file, None);
     }
 
     #[test]

@@ -1,5 +1,8 @@
 use chrono::{DateTime, Utc};
-pub use httpboot_protocol::{HttpBootArtifactRequest, HttpBootArtifactResponse, HttpBootManifest};
+pub use httpboot_protocol::{
+    BootOfferResponse, HttpBootArtifactRequest, HttpBootArtifactResponse, HttpBootManifest,
+    KernelPublishResponse, LoaderHelloRequest, LoaderHelloResponse,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{

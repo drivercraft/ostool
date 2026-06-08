@@ -120,13 +120,14 @@ export interface PxeProfile {
   notes: string | null;
 }
 
-export type UefiHttpStrategy = "bare_bin_loader";
+export type UefiHttpStrategy = "bare_bin_loader" | "loader_discovery";
 export type UefiBootArch = "x86_64" | "aarch64" | "loongarch64" | "riscv64" | "other";
 
 export interface UefiHttpProfile {
   kind: "httpboot";
   boot_arch: UefiBootArch | null;
   strategy: UefiHttpStrategy;
+  mac: string | null;
   loader_file: string | null;
   kernel_file: string | null;
   kernel_load_addr: string | null;

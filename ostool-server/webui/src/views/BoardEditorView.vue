@@ -47,10 +47,8 @@ interface BoardEditorFormState {
   gatewayip: string;
   pxe_notes: string;
   uefi_boot_arch: UefiBootArch | "";
-  uefi_loader_file: string;
-  uefi_kernel_file: string;
-  uefi_kernel_load_addr: string;
-  uefi_entry_point: string;
+  uefi_strategy: "bare_bin_loader" | "loader_discovery";
+  uefi_mac: string;
 }
 
 const DEFAULT_SERIAL_BAUD_RATE = 115_200;
@@ -115,10 +113,8 @@ function defaultFormState(): BoardEditorFormState {
     gatewayip: "",
     pxe_notes: "",
     uefi_boot_arch: "x86_64",
-    uefi_loader_file: "",
-    uefi_kernel_file: "",
-    uefi_kernel_load_addr: "",
-    uefi_entry_point: "",
+    uefi_strategy: "loader_discovery",
+    uefi_mac: "",
   };
 }
 
@@ -165,10 +161,8 @@ function boardToFormState(board: BoardConfig): BoardEditorFormState {
   } else {
     next.boot_kind = "httpboot";
     next.uefi_boot_arch = board.boot.boot_arch ?? "";
-    next.uefi_loader_file = board.boot.loader_file ?? "";
-    next.uefi_kernel_file = board.boot.kernel_file ?? "";
-    next.uefi_kernel_load_addr = board.boot.kernel_load_addr ?? "";
-    next.uefi_entry_point = board.boot.entry_point ?? "";
+    next.uefi_strategy = board.boot.strategy;
+    next.uefi_mac = board.boot.mac ?? "";
   }
 
   return next;
@@ -208,11 +202,12 @@ function buildBootConfig(): BootConfig {
     return {
       kind: "httpboot",
       boot_arch: form.value.uefi_boot_arch || null,
-      strategy: "bare_bin_loader",
-      loader_file: trimToNull(form.value.uefi_loader_file),
-      kernel_file: trimToNull(form.value.uefi_kernel_file),
-      kernel_load_addr: trimToNull(form.value.uefi_kernel_load_addr),
-      entry_point: trimToNull(form.value.uefi_entry_point),
+      strategy: form.value.uefi_strategy,
+      mac: trimToNull(form.value.uefi_mac),
+      loader_file: null,
+      kernel_file: null,
+      kernel_load_addr: null,
+      entry_point: null,
     };
   }
 
@@ -292,8 +287,12 @@ function validateForm(): string {
       errors.push("静态 IP 模式必须填写开发板 IP");
     }
   }
-  if (form.value.boot_kind === "httpboot" && !form.value.uefi_kernel_file.trim()) {
-    errors.push("HTTPboot 必须填写 kernel 文件名");
+  if (
+    form.value.boot_kind === "httpboot" &&
+    form.value.uefi_strategy === "loader_discovery" &&
+    !form.value.uefi_mac.trim()
+  ) {
+    errors.push("HTTPboot loader discovery 必须填写 MAC 地址");
   }
   return errors.join("\n");
 }
@@ -961,23 +960,14 @@ onMounted(() => {
               </label>
               <label class="field">
                 <span>启动策略</span>
-                <input value="bare_bin_loader" disabled />
+                <select v-model="form.uefi_strategy">
+                  <option value="loader_discovery">loader_discovery</option>
+                  <option value="bare_bin_loader">bare_bin_loader</option>
+                </select>
               </label>
               <label class="field">
-                <span>loader 文件</span>
-                <input v-model="form.uefi_loader_file" placeholder="例如 BOOTX64.EFI" />
-              </label>
-              <label class="field">
-                <span>kernel 文件</span>
-                <input v-model="form.uefi_kernel_file" placeholder="例如 kernel.bin" />
-              </label>
-              <label class="field">
-                <span>kernel load addr</span>
-                <input v-model="form.uefi_kernel_load_addr" placeholder="例如 0x200000" />
-              </label>
-              <label class="field">
-                <span>entry point</span>
-                <input v-model="form.uefi_entry_point" placeholder="例如 0x200000" />
+                <span>MAC 地址</span>
+                <input v-model="form.uefi_mac" placeholder="例如 1c:69:7a:dc:f3:47" />
               </label>
             </div>
           </template>

@@ -94,6 +94,7 @@ pub struct PxeProfile {
 #[serde(rename_all = "snake_case")]
 pub enum UefiHttpStrategy {
     BareBinLoader,
+    LoaderDiscovery,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -110,6 +111,7 @@ pub enum UefiBootArch {
 pub struct UefiHttpProfile {
     pub boot_arch: Option<UefiBootArch>,
     pub strategy: UefiHttpStrategy,
+    pub mac: Option<String>,
     pub loader_file: Option<String>,
     pub kernel_file: Option<String>,
     pub kernel_load_addr: Option<String>,
@@ -645,11 +647,12 @@ mod tests {
                 "boot": {
                     "kind": "httpboot",
                     "boot_arch": "x86_64",
-                    "strategy": "bare_bin_loader",
-                    "loader_file": "BOOTX64.EFI",
-                    "kernel_file": "kernel.bin",
-                    "kernel_load_addr": "0x200000",
-                    "entry_point": "0x200000"
+                    "strategy": "loader_discovery",
+                    "mac": "1c:69:7a:dc:f3:47",
+                    "loader_file": null,
+                    "kernel_file": null,
+                    "kernel_load_addr": null,
+                    "entry_point": null
                 },
                 "server_ip": null,
                 "netmask": null,
@@ -661,7 +664,9 @@ mod tests {
         match response.boot {
             BootConfig::UefiHttp(profile) => {
                 assert_eq!(profile.boot_arch, Some(super::UefiBootArch::X86_64));
-                assert_eq!(profile.loader_file.as_deref(), Some("BOOTX64.EFI"));
+                assert_eq!(profile.strategy, super::UefiHttpStrategy::LoaderDiscovery);
+                assert_eq!(profile.mac.as_deref(), Some("1c:69:7a:dc:f3:47"));
+                assert_eq!(profile.loader_file, None);
             }
             _ => panic!("expected httpboot profile"),
         }
