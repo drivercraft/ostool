@@ -2,7 +2,7 @@ use std::fmt;
 
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
-use httpboot_protocol::HttpBootArtifactResponse;
+use httpboot_protocol::{HttpBootArtifactResponse, KernelPublishResponse};
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
@@ -88,6 +88,15 @@ pub enum UbootNetworkMode {
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct PxeProfile {
     pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HttpBootKernelUpload {
+    pub remote_name: String,
+    pub arch: String,
+    pub image_format: String,
+    pub entry_symbol: Option<String>,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -415,6 +424,28 @@ impl BoardServerClient {
             .header("X-HttpBoot-Entry-Point", entry_point)
             .header("X-HttpBoot-Arch", arch)
             .body(bytes)
+            .send()
+            .await
+            .map_err(Self::request_error)?;
+        self.decode_json(response).await
+    }
+
+    pub async fn upload_http_boot_kernel(
+        &self,
+        session_id: &str,
+        upload: HttpBootKernelUpload,
+    ) -> Result<KernelPublishResponse, BoardServerClientError> {
+        let mut request = self
+            .client
+            .put(self.endpoint(&format!("/api/v1/sessions/{session_id}/http-boot/kernel")))
+            .header("X-HttpBoot-Remote-Name", upload.remote_name)
+            .header("X-HttpBoot-Arch", upload.arch)
+            .header("X-HttpBoot-Image-Format", upload.image_format);
+        if let Some(entry_symbol) = upload.entry_symbol {
+            request = request.header("X-HttpBoot-Entry-Symbol", entry_symbol);
+        }
+        let response = request
+            .body(upload.bytes)
             .send()
             .await
             .map_err(Self::request_error)?;

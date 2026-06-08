@@ -34,6 +34,7 @@ crossterm = { workspace = true }
 env_logger = { workspace = true }
 fitimage = { version = "0.1", path = "../fitimage" }
 futures = "0.3"
+httpboot-protocol = { workspace = true }
 indicatif = "0.18"
 jkconfig = { version = "0.2", path = "../jkconfig", default-features = false }
 log = { workspace = true }
