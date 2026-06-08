@@ -7,6 +7,10 @@ use core::str;
 #[cfg(feature = "std")]
 use std::vec::Vec;
 
+pub const DISCOVERY_PROTOCOL_VERSION: u16 = 1;
+pub const DISCOVERY_ADVERTISE_TYPE: &str = "ostool_httpboot_advertise";
+pub const DISCOVERY_SOLICIT_TYPE: &str = "ostool_httpboot_solicit";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BootManifest<'a> {
     pub kernel_url: &'a str,

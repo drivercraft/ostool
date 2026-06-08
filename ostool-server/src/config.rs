@@ -185,6 +185,8 @@ pub struct HttpBootConfig {
     pub enabled: bool,
     pub root_dir: PathBuf,
     pub public_base_url: Option<String>,
+    #[serde(default)]
+    pub discovery: HttpBootDiscoveryConfig,
 }
 
 impl HttpBootConfig {
@@ -193,6 +195,7 @@ impl HttpBootConfig {
             enabled: true,
             root_dir,
             public_base_url: None,
+            discovery: HttpBootDiscoveryConfig::default(),
         }
     }
 }
@@ -200,6 +203,23 @@ impl HttpBootConfig {
 impl Default for HttpBootConfig {
     fn default() -> Self {
         Self::default_with_root(PathBuf::from(".ostool-server/http-boot"))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HttpBootDiscoveryConfig {
+    pub enabled: bool,
+    pub udp_port: u16,
+    pub advertise_interval_ms: u64,
+}
+
+impl Default for HttpBootDiscoveryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            udp_port: 2998,
+            advertise_interval_ms: 1000,
+        }
     }
 }
 
@@ -606,6 +626,36 @@ interface = "eth0"
         .unwrap();
 
         assert_eq!(decoded.upload_limits.session_file_max_mib, 64);
+    }
+
+    #[test]
+    fn server_config_defaults_http_boot_discovery_when_missing() {
+        let decoded: ServerConfig = toml::from_str(
+            r#"
+listen_addr = "0.0.0.0:2999"
+data_dir = ".ostool-server"
+board_dir = ".ostool-server/boards"
+dtb_dir = ".ostool-server/dtbs"
+
+[http_boot]
+enabled = true
+root_dir = ".ostool-server/http-boot"
+
+[tftp]
+provider = "builtin"
+enabled = true
+root_dir = ".ostool-server/tftp-root"
+bind_addr = "0.0.0.0:69"
+
+[network]
+interface = "eth0"
+"#,
+        )
+        .unwrap();
+
+        assert!(decoded.http_boot.discovery.enabled);
+        assert_eq!(decoded.http_boot.discovery.udp_port, 2998);
+        assert_eq!(decoded.http_boot.discovery.advertise_interval_ms, 1000);
     }
 
     #[test]
