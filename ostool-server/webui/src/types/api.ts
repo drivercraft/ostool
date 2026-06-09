@@ -128,10 +128,6 @@ export interface UefiHttpProfile {
   boot_arch: UefiBootArch | null;
   strategy: UefiHttpStrategy;
   mac: string | null;
-  loader_file: string | null;
-  kernel_file: string | null;
-  kernel_load_addr: string | null;
-  entry_point: string | null;
 }
 
 export type BootConfig = UbootProfile | PxeProfile | UefiHttpProfile;

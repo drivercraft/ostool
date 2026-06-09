@@ -146,10 +146,6 @@ function makeUefiHttpBoard(id = "uefi-http-board"): BoardConfig {
       boot_arch: "x86_64",
       strategy: "loader_discovery",
       mac: "1c:69:7a:dc:f3:47",
-      loader_file: null,
-      kernel_file: null,
-      kernel_load_addr: null,
-      entry_point: null,
     },
   };
 }
@@ -399,10 +395,6 @@ describe("BoardEditorView", () => {
           boot_arch: "x86_64",
           strategy: "loader_discovery",
           mac: "1c:69:7a:dc:f3:47",
-          loader_file: null,
-          kernel_file: null,
-          kernel_load_addr: null,
-          entry_point: null,
         },
       }),
     );

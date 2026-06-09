@@ -204,10 +204,6 @@ function buildBootConfig(): BootConfig {
       boot_arch: form.value.uefi_boot_arch || null,
       strategy: form.value.uefi_strategy,
       mac: trimToNull(form.value.uefi_mac),
-      loader_file: null,
-      kernel_file: null,
-      kernel_load_addr: null,
-      entry_point: null,
     };
   }
 

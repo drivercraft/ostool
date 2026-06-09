@@ -25,11 +25,10 @@ use crate::{
             AdminSessionsResponse, AdminTftpConfigResponse, AdminTftpStatusResponse,
             BoardPowerAction, BoardPowerStatusResponse, BoardRuntimeStatusResponse,
             BoardTypeSummary, BootOfferResponse, BootProfileResponse, CreateSessionRequest,
-            DtbFileResponse, FileResponse, HttpBootArtifactRequest, HttpBootArtifactResponse,
-            HttpBootFileResponse, HttpBootManifest, KernelPublishResponse, LoaderHelloRequest,
-            LoaderHelloResponse, NetworkInterfaceSummary, SerialPortSummary, SerialStatusResponse,
-            SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse, TftpSessionResponse,
-            UpdateServerConfigRequest,
+            DtbFileResponse, FileResponse, HttpBootFileResponse, KernelPublishResponse,
+            LoaderHelloRequest, LoaderHelloResponse, NetworkInterfaceSummary, SerialPortSummary,
+            SerialStatusResponse, SessionCreatedResponse, SessionDetailResponse,
+            SessionDtbResponse, TftpSessionResponse, UpdateServerConfigRequest,
         },
     },
     board_pool::BoardAllocationStatus,
@@ -134,14 +133,6 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/sessions/{session_id}/http-boot/files",
             put(put_http_boot_file),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/http-boot/manifest",
-            put(put_http_boot_manifest),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/http-boot/artifact",
-            put(put_http_boot_artifact),
         )
         .route(
             "/api/v1/sessions/{session_id}/http-boot/kernel",
@@ -624,10 +615,6 @@ fn normalize_boot_config(boot: &mut BootConfig) -> Result<(), ApiError> {
                     "boot.mac must be configured when boot.strategy is loader_discovery",
                 ));
             }
-            profile.loader_file = None;
-            profile.kernel_file = None;
-            profile.kernel_load_addr = None;
-            profile.entry_point = None;
         }
     }
     Ok(())
@@ -1294,92 +1281,6 @@ async fn put_http_boot_file(
     Ok((StatusCode::CREATED, axum::Json(response)))
 }
 
-async fn put_http_boot_manifest(
-    Path(session_id): Path<String>,
-    State(state): State<AppState>,
-    request: Request,
-) -> Result<(StatusCode, axum::Json<HttpBootFileResponse>), ApiError> {
-    let session = active_session_state_or_404(&state, &session_id).await?;
-    let board = session.board().clone();
-    ensure_httpboot_board(&board)?;
-    let max_mib = state.config.read().await.upload_limits.session_file_max_mib;
-    let body = read_limited_body(request, max_mib, "HTTP Boot manifest").await?;
-    let manifest: HttpBootManifest = serde_json::from_slice(&body)
-        .map_err(|err| ApiError::bad_request(format!("invalid HTTP Boot manifest JSON: {err}")))?;
-    let manifest = serde_json::to_vec_pretty(&manifest).map_err(|err| {
-        ApiError::service_unavailable(format!("failed to encode manifest: {err}"))
-    })?;
-    let config = state.config.read().await.clone();
-    if !config.http_boot.enabled {
-        return Err(ApiError::conflict("HTTP Boot is disabled"));
-    }
-
-    let file = put_board_current_file(
-        &config.http_boot.root_dir,
-        &board.id,
-        "manifest.json",
-        &manifest,
-    )
-    .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
-    let response = http_boot_file_response(&config, &board.id, file)?;
-    Ok((StatusCode::CREATED, axum::Json(response)))
-}
-
-async fn put_http_boot_artifact(
-    Path(session_id): Path<String>,
-    State(state): State<AppState>,
-    request: Request,
-) -> Result<(StatusCode, axum::Json<HttpBootArtifactResponse>), ApiError> {
-    let session = active_session_state_or_404(&state, &session_id).await?;
-    let board = session.board().clone();
-    ensure_httpboot_board(&board)?;
-    let metadata = http_boot_artifact_request_from_headers(request.headers())?;
-    let remote_name = metadata
-        .remote_name
-        .as_deref()
-        .unwrap_or("kernel.bin")
-        .to_string();
-    let remote_name = parse_relative_path(&remote_name)?;
-    let max_mib = state.config.read().await.upload_limits.session_file_max_mib;
-    let body = read_limited_body(request, max_mib, "HTTP Boot artifact").await?;
-    let config = state.config.read().await.clone();
-    if !config.http_boot.enabled {
-        return Err(ApiError::conflict("HTTP Boot is disabled"));
-    }
-
-    let kernel_file =
-        put_board_current_file(&config.http_boot.root_dir, &board.id, &remote_name, &body)
-            .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
-    let kernel_response = http_boot_file_response(&config, &board.id, kernel_file)?;
-    let manifest = HttpBootManifest {
-        kernel_url: kernel_response.http_url.clone(),
-        kernel_size: body.len() as u64,
-        kernel_load_addr: metadata.kernel_load_addr,
-        entry_point: metadata.entry_point,
-        arch: metadata.arch,
-    };
-    let manifest = serde_json::to_vec_pretty(&manifest).map_err(|err| {
-        ApiError::service_unavailable(format!("failed to encode manifest: {err}"))
-    })?;
-    let manifest_file = put_board_current_file(
-        &config.http_boot.root_dir,
-        &board.id,
-        "manifest.json",
-        &manifest,
-    )
-    .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
-    let manifest_response = http_boot_file_response(&config, &board.id, manifest_file)?;
-
-    Ok((
-        StatusCode::CREATED,
-        axum::Json(HttpBootArtifactResponse {
-            kernel_url: kernel_response.http_url,
-            manifest_url: manifest_response.http_url,
-            kernel_size: body.len() as u64,
-        }),
-    ))
-}
-
 async fn put_http_boot_kernel(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
@@ -1457,21 +1358,6 @@ async fn get_httpboot_boot_offer(
         .await
         .map_err(api_error_from_boot_offer_error)?;
     Ok(axum::Json(response))
-}
-
-fn http_boot_artifact_request_from_headers(
-    headers: &HeaderMap,
-) -> Result<HttpBootArtifactRequest, ApiError> {
-    let remote_name = optional_header(headers, "X-HttpBoot-Remote-Name")?;
-    let kernel_load_addr = required_header(headers, "X-HttpBoot-Kernel-Load-Addr")?;
-    let entry_point = required_header(headers, "X-HttpBoot-Entry-Point")?;
-    let arch = required_header(headers, "X-HttpBoot-Arch")?;
-    Ok(HttpBootArtifactRequest {
-        remote_name,
-        kernel_load_addr,
-        entry_point,
-        arch,
-    })
 }
 
 fn parse_httpboot_arch_header(headers: &HeaderMap) -> Result<BootArch, ApiError> {
@@ -2329,10 +2215,6 @@ mod tests {
             boot_arch: Some(UefiBootArch::X86_64),
             strategy: UefiHttpStrategy::BareBinLoader,
             mac: None,
-            loader_file: None,
-            kernel_file: None,
-            kernel_load_addr: None,
-            entry_point: None,
         });
         board
     }
@@ -2343,10 +2225,6 @@ mod tests {
             boot_arch: Some(UefiBootArch::X86_64),
             strategy: UefiHttpStrategy::LoaderDiscovery,
             mac: Some(mac.into()),
-            loader_file: None,
-            kernel_file: None,
-            kernel_load_addr: None,
-            entry_point: None,
         });
         board
     }
@@ -2520,10 +2398,10 @@ mod tests {
         config.network.interface = "lo".into();
         config.http_boot.public_base_url = None;
 
-        let url = http_boot_url(&config, "asus-1", "manifest.json").unwrap();
+        let url = http_boot_url(&config, "asus-1", "kernel.elf").unwrap();
         assert_eq!(
             url,
-            "http://127.0.0.1:2999/boot/boards/asus-1/current/manifest.json"
+            "http://127.0.0.1:2999/boot/boards/asus-1/current/kernel.elf"
         );
     }
 
@@ -3571,7 +3449,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn http_boot_upload_manifest_and_public_download_use_board_current_path() {
+    async fn http_boot_upload_file_and_public_download_use_board_current_path() {
         let app = test_router().await;
         assert_eq!(
             create_board(
@@ -3607,32 +3485,6 @@ mod tests {
             uploaded["http_url"],
             "http://127.0.0.1:0/boot/boards/uefi-http-01/current/kernel.bin"
         );
-
-        let manifest = json!({
-            "kernel_url": uploaded["http_url"],
-            "kernel_size": 12,
-            "kernel_load_addr": "0x200000",
-            "entry_point": "0x200000",
-            "arch": "x86_64"
-        });
-        let manifest_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/manifest"))
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(manifest.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(manifest_response.status(), StatusCode::CREATED);
-        let manifest_body = to_bytes(manifest_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let manifest_uploaded: serde_json::Value = serde_json::from_slice(&manifest_body).unwrap();
-        assert_eq!(manifest_uploaded["filename"], "manifest.json");
 
         let download_kernel = app
             .clone()
@@ -3670,87 +3522,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(range_body.as_ref(), b"kernel");
-
-        let download_manifest = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/boot/boards/uefi-http-01/current/manifest.json")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(download_manifest.status(), StatusCode::OK);
-        let downloaded_manifest = to_bytes(download_manifest.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&downloaded_manifest).unwrap();
-        assert_eq!(value["arch"], "x86_64");
-        assert_eq!(value["kernel_load_addr"], "0x200000");
-    }
-
-    #[tokio::test]
-    async fn http_boot_artifact_upload_generates_manifest() {
-        let app = test_router().await;
-        assert_eq!(
-            create_board(
-                &app,
-                serde_json::to_value(sample_httpboot_board("uefi-http-artifact")).unwrap()
-            )
-            .await,
-            StatusCode::CREATED
-        );
-        let session_id = create_session(&app, "x86_64-uefi-http").await;
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/artifact"))
-                    .header("X-HttpBoot-Remote-Name", "kernel.bin")
-                    .header("X-HttpBoot-Kernel-Load-Addr", "0x200000")
-                    .header("X-HttpBoot-Entry-Point", "0x200006")
-                    .header("X-HttpBoot-Arch", "x86_64")
-                    .body(Body::from("kernel-image"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let response_body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let artifact: serde_json::Value = serde_json::from_slice(&response_body).unwrap();
-        assert_eq!(artifact["kernel_size"], 12);
-        assert_eq!(
-            artifact["kernel_url"],
-            "http://127.0.0.1:0/boot/boards/uefi-http-artifact/current/kernel.bin"
-        );
-        assert_eq!(
-            artifact["manifest_url"],
-            "http://127.0.0.1:0/boot/boards/uefi-http-artifact/current/manifest.json"
-        );
-
-        let manifest_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/boot/boards/uefi-http-artifact/current/manifest.json")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(manifest_response.status(), StatusCode::OK);
-        let manifest_body = to_bytes(manifest_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let manifest: serde_json::Value = serde_json::from_slice(&manifest_body).unwrap();
-        assert_eq!(manifest["kernel_url"], artifact["kernel_url"]);
-        assert_eq!(manifest["kernel_size"], 12);
-        assert_eq!(manifest["kernel_load_addr"], "0x200000");
-        assert_eq!(manifest["entry_point"], "0x200006");
-        assert_eq!(manifest["arch"], "x86_64");
     }
 
     #[tokio::test]

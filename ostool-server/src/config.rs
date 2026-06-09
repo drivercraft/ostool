@@ -560,14 +560,6 @@ pub struct UefiHttpProfile {
     pub strategy: UefiHttpStrategy,
     #[serde(default)]
     pub mac: Option<String>,
-    #[serde(default)]
-    pub loader_file: Option<String>,
-    #[serde(default)]
-    pub kernel_file: Option<String>,
-    #[serde(default)]
-    pub kernel_load_addr: Option<String>,
-    #[serde(default)]
-    pub entry_point: Option<String>,
 }
 
 impl Default for UefiHttpStrategy {
@@ -895,10 +887,6 @@ bootm_addr = "0x82200000"
                 boot_arch: Some(UefiBootArch::X86_64),
                 strategy: UefiHttpStrategy::LoaderDiscovery,
                 mac: Some("1c:69:7a:dc:f3:47".into()),
-                loader_file: None,
-                kernel_file: None,
-                kernel_load_addr: None,
-                entry_point: None,
             }),
             notes: None,
             disabled: false,
@@ -916,7 +904,6 @@ bootm_addr = "0x82200000"
         assert_eq!(profile.boot_arch, Some(UefiBootArch::X86_64));
         assert_eq!(profile.strategy, UefiHttpStrategy::LoaderDiscovery);
         assert_eq!(profile.mac.as_deref(), Some("1c:69:7a:dc:f3:47"));
-        assert_eq!(profile.loader_file, None);
     }
 
     #[test]

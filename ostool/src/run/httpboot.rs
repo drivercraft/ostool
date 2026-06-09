@@ -9,42 +9,19 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 
 use crate::{
-    artifact::state::OutputArtifacts,
-    board::{
-        acquire_board_session,
-        client::{
-            BoardServerClient, BootConfig as RemoteBootConfig, SessionCreatedResponse, UefiBootArch,
-        },
-        finalize_session, load_board_global_config_with_notice, print_allocated_board_session,
-        session::BoardSession,
-        terminal,
-    },
     build::config::Cargo,
     invocation::Invocation,
     project::variables::{self, VariableScope},
     utils::PathResultExt,
 };
 
-#[derive(Debug, Clone)]
-pub(crate) struct HttpBootRunInput {
-    pub artifacts: OutputArtifacts,
-}
-
-impl HttpBootRunInput {
-    pub(crate) fn new(artifacts: OutputArtifacts) -> Self {
-        Self { artifacts }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(deny_unknown_fields)]
 pub struct HttpBootConfig {
     pub board_type: String,
     pub server: Option<String>,
     pub port: Option<u16>,
     pub remote_name: Option<String>,
-    pub efi_loader_path: Option<String>,
-    pub kernel_load_addr: String,
-    pub entry_point: String,
     #[serde(default = "default_power_cycle")]
     pub power_cycle: bool,
     #[serde(default = "default_open_console")]
@@ -77,23 +54,13 @@ impl HttpBootConfig {
             .as_deref()
             .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
-        self.efi_loader_path = self
-            .efi_loader_path
-            .as_deref()
-            .map(|value| variables::expand_variables(value, scope))
-            .transpose()?;
-        self.kernel_load_addr = variables::expand_variables(&self.kernel_load_addr, scope)?;
-        self.entry_point = variables::expand_variables(&self.entry_point, scope)?;
         Ok(())
     }
 
     fn normalize(&mut self, config_name: &str) -> anyhow::Result<()> {
         normalize_required_string(&mut self.board_type, "board_type", config_name)?;
-        normalize_required_string(&mut self.kernel_load_addr, "kernel_load_addr", config_name)?;
-        normalize_required_string(&mut self.entry_point, "entry_point", config_name)?;
         normalize_optional_string(&mut self.server);
         normalize_optional_string(&mut self.remote_name);
-        normalize_optional_string(&mut self.efi_loader_path);
         Ok(())
     }
 }
@@ -101,9 +68,7 @@ impl HttpBootConfig {
 pub fn default_config() -> HttpBootConfig {
     HttpBootConfig {
         board_type: "x86_64-uefi-http".to_string(),
-        remote_name: Some("kernel.bin".to_string()),
-        kernel_load_addr: "0x200000".to_string(),
-        entry_point: "0x200000".to_string(),
+        remote_name: Some("kernel.elf".to_string()),
         power_cycle: true,
         open_console: true,
         ..Default::default()
@@ -153,16 +118,14 @@ pub async fn read_config_from_path(
 }
 
 pub async fn run_httpboot(
-    invocation: &mut Invocation,
-    config: &HttpBootConfig,
-    options: RunHttpBootOptions,
+    _invocation: &mut Invocation,
+    _config: &HttpBootConfig,
+    _options: RunHttpBootOptions,
 ) -> anyhow::Result<()> {
-    let _ = options.show_output;
-    let scope = invocation.variable_scope()?;
-    let config = prepare_httpboot_runtime_config(&scope, config)?;
-    invocation.ensure_runtime_bin()?;
-    let input = HttpBootRunInput::new(invocation.runtime_artifacts().clone());
-    run_httpboot_with_config(input, config, options).await
+    anyhow::bail!(
+        "`ostool run httpboot` used the removed manifest-v1 HTTP Boot flow; use the \
+         discovery-based AxVisor HTTP Boot publisher instead"
+    )
 }
 
 pub(crate) async fn read_httpboot_config_from_path(
@@ -180,35 +143,6 @@ pub(crate) async fn ensure_httpboot_config_in_dir(
 ) -> anyhow::Result<HttpBootConfig> {
     let dir = variables::expand_path_variables(dir, scope)?;
     ensure_httpboot_config_at_path(scope, dir.join(".httpboot.toml"), default_config).await
-}
-
-pub(crate) fn prepare_httpboot_runtime_config(
-    scope: &VariableScope,
-    config: &HttpBootConfig,
-) -> anyhow::Result<HttpBootConfig> {
-    let mut config = config.clone();
-    config.replace_strings(scope)?;
-    config.normalize("HTTP Boot runtime config")?;
-    Ok(config)
-}
-
-pub(crate) async fn run_httpboot_with_config(
-    input: HttpBootRunInput,
-    config: HttpBootConfig,
-    options: RunHttpBootOptions,
-) -> anyhow::Result<()> {
-    let _ = options.show_output;
-    let kernel_bin = input.artifacts.require_bin(
-        "HTTP Boot requires a prepared BIN artifact; build the kernel before running HTTP Boot",
-    )?;
-    let global_config = load_board_global_config_with_notice()?;
-    let (server, port) = global_config.resolve_server(config.server.as_deref(), config.port);
-    let (client, session) = acquire_board_session(&server, port, &config.board_type).await?;
-    print_allocated_board_session(&session, &config.board_type);
-
-    let run_result = run_httpboot_session(&client, session.info(), &config, kernel_bin).await;
-    let run_result = finish_httpboot_session(&client, &session, &config, run_result).await;
-    finalize_session(session, run_result).await
 }
 
 async fn read_httpboot_config_at_path(
@@ -253,197 +187,6 @@ async fn ensure_httpboot_config_at_path(
     Ok(config)
 }
 
-struct HttpBootPublishedUrls {
-    loader_url: String,
-    manifest_url: String,
-    kernel_url: String,
-}
-
-async fn finish_httpboot_session(
-    client: &BoardServerClient,
-    session: &BoardSession,
-    config: &HttpBootConfig,
-    run_result: anyhow::Result<HttpBootPublishedUrls>,
-) -> anyhow::Result<()> {
-    let urls = run_result?;
-    println!("HTTP Boot artifacts published:");
-    println!("  loader_url: {}", urls.loader_url);
-    println!("  manifest_url: {}", urls.manifest_url);
-    println!("  kernel_url: {}", urls.kernel_url);
-
-    if config.power_cycle {
-        client
-            .power_off_board(&session.info().session_id)
-            .await
-            .context("failed to power off board")?;
-        client
-            .power_on_board(&session.info().session_id)
-            .await
-            .context("failed to power on board")?;
-    }
-
-    if !config.open_console {
-        return Ok(());
-    }
-
-    if session.info().serial_available {
-        let ws_path = session
-            .info()
-            .ws_url
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("server did not return a serial websocket URL"))?;
-        let ws_url = client.resolve_ws_url(ws_path)?;
-        terminal::run_serial_terminal(ws_url).await
-    } else {
-        println!("Board has no serial configuration; HTTP Boot artifacts are ready.");
-        Ok(())
-    }
-}
-
-async fn run_httpboot_session(
-    client: &BoardServerClient,
-    session: &SessionCreatedResponse,
-    config: &HttpBootConfig,
-    kernel_bin: &Path,
-) -> anyhow::Result<HttpBootPublishedUrls> {
-    if session.boot_mode != "httpboot" {
-        anyhow::bail!(
-            "unsupported remote boot mode `{}`; only `httpboot` is supported",
-            session.boot_mode
-        );
-    }
-
-    let boot_profile = client
-        .get_boot_profile(&session.session_id)
-        .await
-        .context("failed to get HTTP Boot profile")?;
-    let RemoteBootConfig::UefiHttp(profile) = boot_profile.boot else {
-        anyhow::bail!("server returned a non-httpboot boot profile");
-    };
-
-    let remote_name = config
-        .remote_name
-        .clone()
-        .or(profile.kernel_file.clone())
-        .or_else(|| {
-            kernel_bin
-                .file_name()
-                .and_then(|name| name.to_str())
-                .map(str::to_string)
-        })
-        .ok_or_else(|| anyhow::anyhow!("failed to determine remote kernel filename"))?;
-
-    let kernel_bytes = std::fs::read(kernel_bin)
-        .with_context(|| format!("failed to read {}", kernel_bin.display()))?;
-
-    let arch = profile
-        .boot_arch
-        .as_ref()
-        .map(uefi_boot_arch_name)
-        .unwrap_or("other")
-        .to_string();
-    let artifact = client
-        .upload_http_boot_artifact(
-            &session.session_id,
-            &remote_name,
-            &config.kernel_load_addr,
-            &config.entry_point,
-            &arch,
-            kernel_bytes,
-        )
-        .await
-        .with_context(|| format!("failed to upload HTTP Boot artifact `{remote_name}`"))?;
-    let loader_file = profile
-        .loader_file
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("httpboot boot profile is missing `loader_file`"))?;
-    let uploaded_loader = upload_configured_loader(
-        client,
-        &session.session_id,
-        loader_file,
-        config.efi_loader_path.as_deref(),
-    )
-    .await?;
-    let loader_url = if let Some(loader) = uploaded_loader {
-        loader.http_url
-    } else {
-        let loader_url = sibling_http_boot_url(&artifact.manifest_url, loader_file)?;
-        verify_existing_loader_url(&loader_url).await?;
-        loader_url
-    };
-
-    Ok(HttpBootPublishedUrls {
-        loader_url,
-        manifest_url: artifact.manifest_url,
-        kernel_url: artifact.kernel_url,
-    })
-}
-
-async fn upload_configured_loader(
-    client: &BoardServerClient,
-    session_id: &str,
-    loader_file: &str,
-    efi_loader_path: Option<&str>,
-) -> anyhow::Result<Option<crate::board::client::HttpBootFileResponse>> {
-    let Some(efi_loader_path) = efi_loader_path else {
-        return Ok(None);
-    };
-
-    let loader_bytes = std::fs::read(efi_loader_path)
-        .with_context(|| format!("failed to read HTTP Boot {}", efi_loader_path))?;
-    let uploaded = client
-        .upload_http_boot_file(session_id, loader_file, loader_bytes)
-        .await
-        .with_context(|| {
-            format!("failed to upload HTTP Boot `{loader_file}` from `{efi_loader_path}`")
-        })?;
-    Ok(Some(uploaded))
-}
-
-async fn verify_existing_loader_url(loader_url: &str) -> anyhow::Result<()> {
-    let response = reqwest::get(loader_url)
-        .await
-        .with_context(|| format!("failed to verify HTTP Boot URL `{loader_url}`"))?;
-    let status = response.status();
-    if !status.is_success() {
-        anyhow::bail!(
-            "HTTP Boot URL `{loader_url}` returned {status}; set `efi_loader_path` in .httpboot.toml or pre-publish the loader"
-        );
-    }
-    Ok(())
-}
-
-fn sibling_http_boot_url(current_file_url: &str, relative_path: &str) -> anyhow::Result<String> {
-    if relative_path.trim().is_empty()
-        || relative_path.starts_with('/')
-        || relative_path
-            .split('/')
-            .any(|component| component.is_empty() || component == "." || component == "..")
-    {
-        anyhow::bail!("invalid HTTP Boot relative path `{relative_path}`");
-    }
-    let base = reqwest::Url::parse(current_file_url)
-        .with_context(|| format!("invalid HTTP Boot URL `{current_file_url}`"))?
-        .join("./")
-        .with_context(|| {
-            format!("failed to resolve HTTP Boot base URL from `{current_file_url}`")
-        })?;
-    Ok(base
-        .join(relative_path)
-        .with_context(|| format!("failed to resolve HTTP Boot URL for `{relative_path}`"))?
-        .to_string())
-}
-
-fn uefi_boot_arch_name(arch: &UefiBootArch) -> &'static str {
-    match arch {
-        UefiBootArch::X86_64 => "x86_64",
-        UefiBootArch::Aarch64 => "aarch64",
-        UefiBootArch::Loongarch64 => "loongarch64",
-        UefiBootArch::Riscv64 => "riscv64",
-        UefiBootArch::Other => "other",
-    }
-}
-
 fn normalize_required_string(
     value: &mut String,
     field_name: &str,
@@ -472,117 +215,74 @@ fn normalize_optional_string(value: &mut Option<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{HttpBootConfig, read_httpboot_config_from_path, sibling_http_boot_url};
-    use crate::{
-        invocation::{Invocation, InvocationOptions},
-        run::httpboot::ensure_httpboot_config_in_dir,
-    };
+    use tempfile::tempdir;
 
-    fn test_invocation(tmp: &tempfile::TempDir) -> Invocation {
-        Invocation::new(InvocationOptions::new(
-            Some(tmp.path().join("Cargo.toml")),
-            None,
-            None,
-            false,
-        ))
-        .unwrap()
-    }
+    use super::{HttpBootConfig, ensure_httpboot_config_in_dir, read_httpboot_config_from_path};
+    use crate::project::variables::VariableScope;
 
     #[test]
-    fn httpboot_config_normalizes_required_fields() {
+    fn httpboot_config_normalizes_supported_fields() {
         let mut config = HttpBootConfig {
-            board_type: " x86_64-uefi-http ".into(),
-            kernel_load_addr: " 0x200000 ".into(),
-            entry_point: " 0x200000 ".into(),
-            remote_name: Some(" kernel.bin ".into()),
-            efi_loader_path: Some(" BOOTX64.EFI ".into()),
-            ..Default::default()
+            board_type: " x86-httpboot ".into(),
+            server: Some(" 10.3.10.192 ".into()),
+            port: Some(2999),
+            remote_name: Some(" kernel.elf ".into()),
+            power_cycle: true,
+            open_console: true,
         };
 
-        config.normalize("test").unwrap();
+        config.normalize("test config").unwrap();
 
-        assert_eq!(config.board_type, "x86_64-uefi-http");
-        assert_eq!(config.kernel_load_addr, "0x200000");
-        assert_eq!(config.entry_point, "0x200000");
-        assert_eq!(config.remote_name.as_deref(), Some("kernel.bin"));
-        assert_eq!(config.efi_loader_path.as_deref(), Some("BOOTX64.EFI"));
+        assert_eq!(config.board_type, "x86-httpboot");
+        assert_eq!(config.server.as_deref(), Some("10.3.10.192"));
+        assert_eq!(config.remote_name.as_deref(), Some("kernel.elf"));
     }
 
     #[test]
-    fn sibling_http_boot_url_resolves_loader_in_current_dir() {
-        let url = sibling_http_boot_url(
-            "http://127.0.0.1:2999/boot/boards/demo/current/manifest.json",
-            "BOOTX64.EFI",
-        )
-        .unwrap();
+    fn httpboot_config_rejects_empty_board_type() {
+        let mut config = HttpBootConfig {
+            board_type: " ".into(),
+            ..Default::default()
+        };
+        let tmp = tempdir().unwrap();
+        let scope = test_scope(tmp.path());
 
-        assert_eq!(
-            url,
-            "http://127.0.0.1:2999/boot/boards/demo/current/BOOTX64.EFI"
-        );
-    }
+        config.replace_strings(&scope).unwrap();
+        let err = config.normalize("test config").unwrap_err();
 
-    #[test]
-    fn sibling_http_boot_url_rejects_absolute_or_dot_paths() {
-        for path in ["/BOOTX64.EFI", "../BOOTX64.EFI", "boot/../BOOTX64.EFI"] {
-            assert!(sibling_http_boot_url("http://127.0.0.1/manifest.json", path).is_err());
-        }
+        assert!(err.to_string().contains("board_type"));
     }
 
     #[tokio::test]
-    async fn read_httpboot_config_replaces_package_variables() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("Cargo.toml"),
-            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
-        std::fs::write(tmp.path().join("src/main.rs"), "").unwrap();
+    async fn read_httpboot_config_rejects_removed_manifest_fields() {
+        let tmp = tempdir().unwrap();
         let config_path = tmp.path().join(".httpboot.toml");
         std::fs::write(
             &config_path,
             r#"
-board_type = " x86-board "
-efi_loader_path = "${package}/BOOTX64.EFI"
-kernel_load_addr = " 0x200000 "
-entry_point = " 0x200000 "
+board_type = "x86-httpboot"
+kernel_load_addr = "0x200000"
 "#,
         )
         .unwrap();
+        let scope = test_scope(tmp.path());
 
-        let invocation = test_invocation(&tmp);
-        let scope = invocation.variable_scope().unwrap();
-        let config = read_httpboot_config_from_path(&scope, &config_path)
+        let err = read_httpboot_config_from_path(&scope, &config_path)
             .await
-            .unwrap();
-        let expected_loader_path = format!("{}/BOOTX64.EFI", tmp.path().display());
+            .unwrap_err();
 
-        assert_eq!(config.board_type, "x86-board");
-        assert_eq!(
-            config.efi_loader_path.as_deref(),
-            Some(expected_loader_path.as_str())
-        );
+        let message = format!("{err:#}");
+        assert!(message.contains("unknown field"));
+        assert!(message.contains("kernel_load_addr"));
     }
 
     #[tokio::test]
     async fn ensure_httpboot_config_writes_minimal_default_file() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("Cargo.toml"),
-            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
-        std::fs::write(tmp.path().join("src/main.rs"), "").unwrap();
-
-        let invocation = test_invocation(&tmp);
-        let scope = invocation.variable_scope().unwrap();
+        let tmp = tempdir().unwrap();
+        let scope = test_scope(tmp.path());
         let default_config = HttpBootConfig {
-            board_type: "x86_64-uefi-http".into(),
-            remote_name: Some("kernel.bin".into()),
-            kernel_load_addr: "0x200000".into(),
-            entry_point: "0x200000".into(),
+            board_type: "demo-httpboot".into(),
+            remote_name: Some("kernel.elf".into()),
             power_cycle: true,
             open_console: true,
             ..Default::default()
@@ -593,8 +293,13 @@ entry_point = " 0x200000 "
             .unwrap();
         let content = std::fs::read_to_string(tmp.path().join(".httpboot.toml")).unwrap();
 
-        assert_eq!(config.board_type, "x86_64-uefi-http");
-        assert!(content.contains("board_type = \"x86_64-uefi-http\""));
-        assert!(!content.contains("efi_loader_path"));
+        assert_eq!(config.board_type, "demo-httpboot");
+        assert!(content.contains("board_type = \"demo-httpboot\""));
+        assert!(!content.contains("kernel_load_addr"));
+        assert!(!content.contains("entry_point"));
+    }
+
+    fn test_scope(path: &std::path::Path) -> VariableScope {
+        VariableScope::new(path.into(), path.into(), std::env::temp_dir())
     }
 }

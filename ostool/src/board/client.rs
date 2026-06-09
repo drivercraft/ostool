@@ -2,7 +2,7 @@ use std::fmt;
 
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
-use httpboot_protocol::{HttpBootArtifactResponse, KernelPublishResponse};
+use httpboot_protocol::KernelPublishResponse;
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
@@ -121,10 +121,6 @@ pub struct UefiHttpProfile {
     pub boot_arch: Option<UefiBootArch>,
     pub strategy: UefiHttpStrategy,
     pub mac: Option<String>,
-    pub loader_file: Option<String>,
-    pub kernel_file: Option<String>,
-    pub kernel_load_addr: Option<String>,
-    pub entry_point: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -392,44 +388,6 @@ impl BoardServerClient {
         self.decode_json(response).await
     }
 
-    pub async fn upload_http_boot_manifest(
-        &self,
-        session_id: &str,
-        manifest: &httpboot_protocol::HttpBootManifest,
-    ) -> Result<HttpBootFileResponse, BoardServerClientError> {
-        let response = self
-            .client
-            .put(self.endpoint(&format!("/api/v1/sessions/{session_id}/http-boot/manifest")))
-            .json(manifest)
-            .send()
-            .await
-            .map_err(Self::request_error)?;
-        self.decode_json(response).await
-    }
-
-    pub async fn upload_http_boot_artifact(
-        &self,
-        session_id: &str,
-        remote_name: &str,
-        kernel_load_addr: &str,
-        entry_point: &str,
-        arch: &str,
-        bytes: Vec<u8>,
-    ) -> Result<HttpBootArtifactResponse, BoardServerClientError> {
-        let response = self
-            .client
-            .put(self.endpoint(&format!("/api/v1/sessions/{session_id}/http-boot/artifact")))
-            .header("X-HttpBoot-Remote-Name", remote_name)
-            .header("X-HttpBoot-Kernel-Load-Addr", kernel_load_addr)
-            .header("X-HttpBoot-Entry-Point", entry_point)
-            .header("X-HttpBoot-Arch", arch)
-            .body(bytes)
-            .send()
-            .await
-            .map_err(Self::request_error)?;
-        self.decode_json(response).await
-    }
-
     pub async fn upload_http_boot_kernel(
         &self,
         session_id: &str,
@@ -679,11 +637,7 @@ mod tests {
                     "kind": "httpboot",
                     "boot_arch": "x86_64",
                     "strategy": "loader_discovery",
-                    "mac": "1c:69:7a:dc:f3:47",
-                    "loader_file": null,
-                    "kernel_file": null,
-                    "kernel_load_addr": null,
-                    "entry_point": null
+                    "mac": "1c:69:7a:dc:f3:47"
                 },
                 "server_ip": null,
                 "netmask": null,
@@ -697,7 +651,6 @@ mod tests {
                 assert_eq!(profile.boot_arch, Some(super::UefiBootArch::X86_64));
                 assert_eq!(profile.strategy, super::UefiHttpStrategy::LoaderDiscovery);
                 assert_eq!(profile.mac.as_deref(), Some("1c:69:7a:dc:f3:47"));
-                assert_eq!(profile.loader_file, None);
             }
             _ => panic!("expected httpboot profile"),
         }

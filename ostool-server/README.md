@@ -96,7 +96,7 @@ The default listen address is:
 ```
 
 HTTP Boot is enabled by default. In the system installation layout, uploaded
-UEFI HTTP Boot files and manifests are stored under:
+UEFI HTTP Boot files are stored under:
 
 ```text
 /var/lib/ostool-server/http-boot
@@ -106,8 +106,7 @@ For x86_64 boards using the discovery HTTP Boot loader, configure the board boot
 profile with `kind = "httpboot"`, `strategy = "loader_discovery"`, and the
 board NIC `mac`. The server uses the MAC address to match a loader to a concrete
 board/session and then uses that board's serial configuration for console
-output. Legacy manifest-based HTTP Boot endpoints are still available while the
-discovery loader is being rolled out.
+output.
 
 ## Useful Commands
 

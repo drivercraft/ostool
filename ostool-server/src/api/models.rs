@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 pub use httpboot_protocol::{
-    BootOfferResponse, HttpBootArtifactRequest, HttpBootArtifactResponse, HttpBootManifest,
-    KernelPublishResponse, LoaderHelloRequest, LoaderHelloResponse,
+    BootOfferResponse, KernelPublishResponse, LoaderHelloRequest, LoaderHelloResponse,
 };
 use serde::{Deserialize, Serialize};
 
