@@ -11,7 +11,7 @@ use httpboot_protocol::{
 };
 use tokio::sync::RwLock;
 
-use crate::config::{BoardConfig, BootConfig, UefiBootArch, UefiHttpStrategy};
+use crate::config::{BoardConfig, BootConfig, UefiBootArch};
 
 const DEFAULT_WAIT_AFTER_MS: u64 = 1_000;
 
@@ -260,9 +260,6 @@ fn match_httpboot_board<'a>(
             let BootConfig::UefiHttp(profile) = &board.boot else {
                 return None;
             };
-            if profile.strategy != UefiHttpStrategy::LoaderDiscovery {
-                return None;
-            }
             let board_mac = profile.mac.as_deref().and_then(normalize_mac)?;
             (board_mac == normalized_mac).then_some(board)
         })
@@ -340,7 +337,7 @@ mod tests {
 
     use crate::config::{
         BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, UefiBootArch,
-        UefiHttpProfile, UefiHttpStrategy,
+        UefiHttpProfile,
     };
 
     use super::{BootOfferError, LoaderRegistry, normalize_mac};
@@ -357,7 +354,6 @@ mod tests {
             }),
             boot: BootConfig::UefiHttp(UefiHttpProfile {
                 boot_arch: Some(UefiBootArch::X86_64),
-                strategy: UefiHttpStrategy::LoaderDiscovery,
                 mac: Some(mac.into()),
             }),
             notes: None,

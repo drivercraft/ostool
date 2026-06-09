@@ -101,13 +101,6 @@ pub struct HttpBootKernelUpload {
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum UefiHttpStrategy {
-    BareBinLoader,
-    LoaderDiscovery,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
 pub enum UefiBootArch {
     X86_64,
     Aarch64,
@@ -119,7 +112,6 @@ pub enum UefiBootArch {
 #[derive(Debug, Clone, Deserialize)]
 pub struct UefiHttpProfile {
     pub boot_arch: Option<UefiBootArch>,
-    pub strategy: UefiHttpStrategy,
     pub mac: Option<String>,
 }
 
@@ -636,7 +628,6 @@ mod tests {
                 "boot": {
                     "kind": "httpboot",
                     "boot_arch": "x86_64",
-                    "strategy": "loader_discovery",
                     "mac": "1c:69:7a:dc:f3:47"
                 },
                 "server_ip": null,
@@ -649,7 +640,6 @@ mod tests {
         match response.boot {
             BootConfig::UefiHttp(profile) => {
                 assert_eq!(profile.boot_arch, Some(super::UefiBootArch::X86_64));
-                assert_eq!(profile.strategy, super::UefiHttpStrategy::LoaderDiscovery);
                 assert_eq!(profile.mac.as_deref(), Some("1c:69:7a:dc:f3:47"));
             }
             _ => panic!("expected httpboot profile"),

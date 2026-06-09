@@ -606,13 +606,9 @@ fn normalize_boot_config(boot: &mut BootConfig) -> Result<(), ApiError> {
         }
         BootConfig::UefiHttp(profile) => {
             normalize_mac_address(&mut profile.mac, "boot.mac")?;
-            if matches!(
-                profile.strategy,
-                crate::config::UefiHttpStrategy::LoaderDiscovery
-            ) && profile.mac.is_none()
-            {
+            if profile.mac.is_none() {
                 return Err(ApiError::bad_request(
-                    "boot.mac must be configured when boot.strategy is loader_discovery",
+                    "boot.mac must be configured for HTTPBoot discovery",
                 ));
             }
         }
@@ -2074,8 +2070,8 @@ mod tests {
         config::{
             BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
             PowerManagementConfig, SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig,
-            TftpConfig, UbootNetworkMode, UefiBootArch, UefiHttpProfile, UefiHttpStrategy,
-            UploadLimitsConfig, ZhongshengRelayPowerManagement,
+            TftpConfig, UbootNetworkMode, UefiBootArch, UefiHttpProfile, UploadLimitsConfig,
+            ZhongshengRelayPowerManagement,
         },
         session::SessionLifecycleState,
         state::BoardLeaseState,
@@ -2213,8 +2209,7 @@ mod tests {
         board.tags = vec!["uefi-http".into()];
         board.boot = BootConfig::UefiHttp(UefiHttpProfile {
             boot_arch: Some(UefiBootArch::X86_64),
-            strategy: UefiHttpStrategy::BareBinLoader,
-            mac: None,
+            mac: Some("1c:69:7a:dc:f3:47".into()),
         });
         board
     }
@@ -2223,7 +2218,6 @@ mod tests {
         let mut board = sample_httpboot_board(board_id);
         board.boot = BootConfig::UefiHttp(UefiHttpProfile {
             boot_arch: Some(UefiBootArch::X86_64),
-            strategy: UefiHttpStrategy::LoaderDiscovery,
             mac: Some(mac.into()),
         });
         board

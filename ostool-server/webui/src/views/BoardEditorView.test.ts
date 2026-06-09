@@ -144,7 +144,6 @@ function makeUefiHttpBoard(id = "uefi-http-board"): BoardConfig {
     boot: {
       kind: "httpboot",
       boot_arch: "x86_64",
-      strategy: "loader_discovery",
       mac: "1c:69:7a:dc:f3:47",
     },
   };
@@ -393,7 +392,6 @@ describe("BoardEditorView", () => {
         boot: {
           kind: "httpboot",
           boot_arch: "x86_64",
-          strategy: "loader_discovery",
           mac: "1c:69:7a:dc:f3:47",
         },
       }),

@@ -536,13 +536,6 @@ pub struct PxeProfile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum UefiHttpStrategy {
-    BareBinLoader,
-    LoaderDiscovery,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
 pub enum UefiBootArch {
     X86_64,
     Aarch64,
@@ -557,15 +550,7 @@ pub struct UefiHttpProfile {
     #[serde(default)]
     pub boot_arch: Option<UefiBootArch>,
     #[serde(default)]
-    pub strategy: UefiHttpStrategy,
-    #[serde(default)]
     pub mac: Option<String>,
-}
-
-impl Default for UefiHttpStrategy {
-    fn default() -> Self {
-        Self::BareBinLoader
-    }
 }
 
 #[cfg(test)]
@@ -581,7 +566,7 @@ mod tests {
     use super::{
         BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, SerialPortKey,
         SerialPortKeyKind, ServerConfig, UbootNetworkMode, UbootProfile, UefiBootArch,
-        UefiHttpProfile, UefiHttpStrategy, ZhongshengRelayPowerManagement,
+        UefiHttpProfile, ZhongshengRelayPowerManagement,
     };
 
     #[test]
@@ -885,7 +870,6 @@ bootm_addr = "0x82200000"
             }),
             boot: BootConfig::UefiHttp(UefiHttpProfile {
                 boot_arch: Some(UefiBootArch::X86_64),
-                strategy: UefiHttpStrategy::LoaderDiscovery,
                 mac: Some("1c:69:7a:dc:f3:47".into()),
             }),
             notes: None,
@@ -894,7 +878,6 @@ bootm_addr = "0x82200000"
 
         let encoded = toml::to_string_pretty(&board).unwrap();
         assert!(encoded.contains("kind = \"httpboot\""));
-        assert!(encoded.contains("strategy = \"loader_discovery\""));
         assert!(encoded.contains("mac = \"1c:69:7a:dc:f3:47\""));
 
         let decoded: BoardConfig = toml::from_str(&encoded).unwrap();
@@ -902,8 +885,33 @@ bootm_addr = "0x82200000"
             panic!("expected httpboot");
         };
         assert_eq!(profile.boot_arch, Some(UefiBootArch::X86_64));
-        assert_eq!(profile.strategy, UefiHttpStrategy::LoaderDiscovery);
         assert_eq!(profile.mac.as_deref(), Some("1c:69:7a:dc:f3:47"));
+    }
+
+    #[test]
+    fn board_config_rejects_legacy_httpboot_strategy() {
+        let error = toml::from_str::<BoardConfig>(
+            r#"
+id = "uefi-http-01"
+board_type = "x86_64-uefi-http"
+tags = []
+disabled = false
+
+[power_management]
+kind = "custom"
+power_on_cmd = "true"
+power_off_cmd = "true"
+
+[boot]
+kind = "httpboot"
+boot_arch = "x86_64"
+strategy = "loader_discovery"
+mac = "1c:69:7a:dc:f3:47"
+"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("unknown field `strategy`"));
     }
 
     #[test]

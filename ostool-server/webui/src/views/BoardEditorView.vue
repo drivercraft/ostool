@@ -47,7 +47,6 @@ interface BoardEditorFormState {
   gatewayip: string;
   pxe_notes: string;
   uefi_boot_arch: UefiBootArch | "";
-  uefi_strategy: "bare_bin_loader" | "loader_discovery";
   uefi_mac: string;
 }
 
@@ -113,7 +112,6 @@ function defaultFormState(): BoardEditorFormState {
     gatewayip: "",
     pxe_notes: "",
     uefi_boot_arch: "x86_64",
-    uefi_strategy: "loader_discovery",
     uefi_mac: "",
   };
 }
@@ -161,7 +159,6 @@ function boardToFormState(board: BoardConfig): BoardEditorFormState {
   } else {
     next.boot_kind = "httpboot";
     next.uefi_boot_arch = board.boot.boot_arch ?? "";
-    next.uefi_strategy = board.boot.strategy;
     next.uefi_mac = board.boot.mac ?? "";
   }
 
@@ -202,7 +199,6 @@ function buildBootConfig(): BootConfig {
     return {
       kind: "httpboot",
       boot_arch: form.value.uefi_boot_arch || null,
-      strategy: form.value.uefi_strategy,
       mac: trimToNull(form.value.uefi_mac),
     };
   }
@@ -283,12 +279,8 @@ function validateForm(): string {
       errors.push("静态 IP 模式必须填写开发板 IP");
     }
   }
-  if (
-    form.value.boot_kind === "httpboot" &&
-    form.value.uefi_strategy === "loader_discovery" &&
-    !form.value.uefi_mac.trim()
-  ) {
-    errors.push("HTTPboot loader discovery 必须填写 MAC 地址");
+  if (form.value.boot_kind === "httpboot" && !form.value.uefi_mac.trim()) {
+    errors.push("HTTPboot 必须填写 MAC 地址");
   }
   return errors.join("\n");
 }
@@ -952,13 +944,6 @@ onMounted(() => {
                   <option value="loongarch64">loongarch64</option>
                   <option value="riscv64">riscv64</option>
                   <option value="other">other</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>启动策略</span>
-                <select v-model="form.uefi_strategy">
-                  <option value="loader_discovery">loader_discovery</option>
-                  <option value="bare_bin_loader">bare_bin_loader</option>
                 </select>
               </label>
               <label class="field">

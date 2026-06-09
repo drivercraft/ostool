@@ -103,10 +103,9 @@ UEFI HTTP Boot files are stored under:
 ```
 
 For x86_64 boards using the discovery HTTP Boot loader, configure the board boot
-profile with `kind = "httpboot"`, `strategy = "loader_discovery"`, and the
-board NIC `mac`. The server uses the MAC address to match a loader to a concrete
-board/session and then uses that board's serial configuration for console
-output.
+profile with `kind = "httpboot"` and the board NIC `mac`. The server uses the
+MAC address to match a loader to a concrete board/session and then uses that
+board's serial configuration for console output.
 
 ## Useful Commands
 
