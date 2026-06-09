@@ -33,9 +33,7 @@ async fn main() -> anyhow::Result<()> {
     state.ensure_data_dirs().await?;
     for (board_id, err) in state.power_off_all_boards_on_startup().await {
         log::warn!(
-            "failed to power off board `{}` during server startup; marking it disabled for this process: {}",
-            board_id,
-            err
+            "failed to power off board `{board_id}` during server startup; marking it disabled for this process: {err}"
         );
     }
     tftp_manager.start_if_needed().await?;
@@ -66,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(listen_addr)
         .await
         .with_context(|| format!("failed to bind {listen_addr}"))?;
-    info!("ostoold listening on {}", listen_addr);
+    info!("ostoold listening on {listen_addr}");
     axum::serve(listener, app).await?;
     Ok(())
 }

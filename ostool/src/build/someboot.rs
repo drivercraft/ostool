@@ -192,10 +192,7 @@ fn someboot_reachable_for_package(
     }
 
     let output = cmd.output().with_context(|| {
-        format!(
-            "failed to run `cargo tree` for package `{}` and target `{}`",
-            package, target
-        )
+        format!("failed to run `cargo tree` for package `{package}` and target `{target}`")
     })?;
 
     if !output.status.success() {

@@ -38,7 +38,10 @@ use crate::{
     dtb_store::normalize_dtb_name,
     http_boot::{
         files::{HttpBootFileRef, board_current_disk_path, put_board_current_file},
-        loaders::{BootOfferError, LoaderRegisterError, normalize_mac as normalize_httpboot_mac},
+        loaders::{
+            BootOfferError, LoaderRegisterError, PublishOfferRequest,
+            normalize_mac as normalize_httpboot_mac,
+        },
     },
     power::{PowerAction, PowerActionError},
     serial::{
@@ -1303,16 +1306,16 @@ async fn put_http_boot_kernel(
     let kernel_sha256 = Some(hex_sha256(&body));
     let response = state
         .http_boot_loaders
-        .publish_offer(
+        .publish_offer(PublishOfferRequest {
             session_id,
-            board.id,
-            kernel_response.http_url,
-            body.len() as u64,
+            board_id: board.id,
+            kernel_url: kernel_response.http_url,
+            kernel_size: body.len() as u64,
             kernel_sha256,
             arch,
             image_format,
             entry_symbol,
-        )
+        })
         .await;
 
     Ok((StatusCode::CREATED, axum::Json(response)))

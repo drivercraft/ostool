@@ -30,7 +30,7 @@ pub async fn connect_serial_stream(
 ) -> anyhow::Result<(BoxedAsyncWrite, BoxedAsyncRead, SerialStreamTasks)> {
     let (stream, _) = tokio_tungstenite::connect_async(ws_url.as_str())
         .await
-        .with_context(|| format!("failed to connect serial websocket {}", ws_url))?;
+        .with_context(|| format!("failed to connect serial websocket {ws_url}"))?;
     let (mut ws_sink, mut ws_stream) = stream.split();
     let locally_closed = Arc::new(AtomicBool::new(false));
 

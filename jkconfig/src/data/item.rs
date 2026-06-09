@@ -93,21 +93,21 @@ impl EnumItem {
                         Err(SchemaError::TypeMismatch {
                             path: path.to_string(),
                             expected: format!("index 0-{}", self.variants.len() - 1),
-                            actual: format!("{}", idx),
+                            actual: format!("{idx}"),
                         })
                     }
                 } else {
                     Err(SchemaError::TypeMismatch {
                         path: path.to_string(),
                         expected: "non-negative integer".to_string(),
-                        actual: format!("{}", n),
+                        actual: format!("{n}"),
                     })
                 }
             }
             _ => Err(SchemaError::TypeMismatch {
                 path: path.to_string(),
                 expected: "string or number".to_string(),
-                actual: format!("{}", value),
+                actual: format!("{value}"),
             }),
         }
     }
@@ -128,7 +128,7 @@ impl ItemType {
                 _ => Err(SchemaError::TypeMismatch {
                     path: path.to_string(),
                     expected: "string".to_string(),
-                    actual: format!("{}", value),
+                    actual: format!("{value}"),
                 }),
             },
             ItemType::Number {
@@ -143,14 +143,14 @@ impl ItemType {
                         Err(SchemaError::TypeMismatch {
                             path: path.to_string(),
                             expected: "number".to_string(),
-                            actual: format!("{}", n),
+                            actual: format!("{n}"),
                         })
                     }
                 }
                 _ => Err(SchemaError::TypeMismatch {
                     path: path.to_string(),
                     expected: "number".to_string(),
-                    actual: format!("{}", value),
+                    actual: format!("{value}"),
                 }),
             },
             ItemType::Integer {
@@ -165,14 +165,14 @@ impl ItemType {
                         Err(SchemaError::TypeMismatch {
                             path: path.to_string(),
                             expected: "integer".to_string(),
-                            actual: format!("{}", n),
+                            actual: format!("{n}"),
                         })
                     }
                 }
                 _ => Err(SchemaError::TypeMismatch {
                     path: path.to_string(),
                     expected: "integer".to_string(),
-                    actual: format!("{}", value),
+                    actual: format!("{value}"),
                 }),
             },
             ItemType::Boolean {
@@ -186,7 +186,7 @@ impl ItemType {
                 _ => Err(SchemaError::TypeMismatch {
                     path: path.to_string(),
                     expected: "boolean".to_string(),
-                    actual: format!("{}", value),
+                    actual: format!("{value}"),
                 }),
             },
             ItemType::Enum(enum_item) => enum_item.update_from_value(value, path),
@@ -202,7 +202,7 @@ impl ItemType {
                                 return Err(SchemaError::TypeMismatch {
                                     path: path.to_string(),
                                     expected: "string, number, or boolean".to_string(),
-                                    actual: format!("{}", item),
+                                    actual: format!("{item}"),
                                 });
                             }
                         }
@@ -213,7 +213,7 @@ impl ItemType {
                 _ => Err(SchemaError::TypeMismatch {
                     path: path.to_string(),
                     expected: "array".to_string(),
-                    actual: format!("{}", value),
+                    actual: format!("{value}"),
                 }),
             },
         }

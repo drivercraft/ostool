@@ -20,6 +20,18 @@ pub struct LoaderRegistry {
     inner: Arc<RwLock<LoaderRegistryInner>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PublishOfferRequest {
+    pub session_id: String,
+    pub board_id: String,
+    pub kernel_url: String,
+    pub kernel_size: u64,
+    pub kernel_sha256: Option<String>,
+    pub arch: BootArch,
+    pub image_format: ImageFormat,
+    pub entry_symbol: Option<String>,
+}
+
 impl LoaderRegistry {
     pub fn new() -> Self {
         Self {
@@ -72,28 +84,18 @@ impl LoaderRegistry {
         })
     }
 
-    pub async fn publish_offer(
-        &self,
-        session_id: String,
-        board_id: String,
-        kernel_url: String,
-        kernel_size: u64,
-        kernel_sha256: Option<String>,
-        arch: BootArch,
-        image_format: ImageFormat,
-        entry_symbol: Option<String>,
-    ) -> KernelPublishResponse {
+    pub async fn publish_offer(&self, request: PublishOfferRequest) -> KernelPublishResponse {
         let boot_id = uuid::Uuid::new_v4().to_string();
         let offer = BootOffer {
             boot_id: boot_id.clone(),
-            session_id,
-            board_id,
-            kernel_url: kernel_url.clone(),
-            kernel_size,
-            kernel_sha256: kernel_sha256.clone(),
-            arch,
-            image_format,
-            entry_symbol,
+            session_id: request.session_id,
+            board_id: request.board_id,
+            kernel_url: request.kernel_url.clone(),
+            kernel_size: request.kernel_size,
+            kernel_sha256: request.kernel_sha256.clone(),
+            arch: request.arch,
+            image_format: request.image_format,
+            entry_symbol: request.entry_symbol,
             published_at: Utc::now(),
         };
         self.inner
@@ -104,9 +106,9 @@ impl LoaderRegistry {
 
         KernelPublishResponse {
             boot_id,
-            kernel_url,
-            kernel_size,
-            kernel_sha256,
+            kernel_url: request.kernel_url,
+            kernel_size: request.kernel_size,
+            kernel_sha256: request.kernel_sha256,
         }
     }
 
@@ -383,7 +385,7 @@ mod tests {
         UefiHttpProfile,
     };
 
-    use super::{BootOfferError, LoaderRegistry, normalize_mac};
+    use super::{BootOfferError, LoaderRegistry, PublishOfferRequest, normalize_mac};
 
     fn httpboot_board(id: &str, mac: Option<&str>) -> BoardConfig {
         BoardConfig {
@@ -455,16 +457,16 @@ mod tests {
         );
 
         let published = registry
-            .publish_offer(
-                "session-1".into(),
-                "asus-1".into(),
-                "http://127.0.0.1/kernel.elf".into(),
-                4096,
-                Some("00".repeat(32)),
-                BootArch::X86_64,
-                ImageFormat::Elf64,
-                Some("httpboot_entry".into()),
-            )
+            .publish_offer(PublishOfferRequest {
+                session_id: "session-1".into(),
+                board_id: "asus-1".into(),
+                kernel_url: "http://127.0.0.1/kernel.elf".into(),
+                kernel_size: 4096,
+                kernel_sha256: Some("00".repeat(32)),
+                arch: BootArch::X86_64,
+                image_format: ImageFormat::Elf64,
+                entry_symbol: Some("httpboot_entry".into()),
+            })
             .await;
 
         let offer = registry
@@ -506,16 +508,16 @@ mod tests {
             .await
             .unwrap();
         registry
-            .publish_offer(
-                "session-1".into(),
-                "asus-2".into(),
-                "http://127.0.0.1/kernel.elf".into(),
-                4096,
-                None,
-                BootArch::X86_64,
-                ImageFormat::Elf64,
-                None,
-            )
+            .publish_offer(PublishOfferRequest {
+                session_id: "session-1".into(),
+                board_id: "asus-2".into(),
+                kernel_url: "http://127.0.0.1/kernel.elf".into(),
+                kernel_size: 4096,
+                kernel_sha256: None,
+                arch: BootArch::X86_64,
+                image_format: ImageFormat::Elf64,
+                entry_symbol: None,
+            })
             .await;
 
         let err = registry

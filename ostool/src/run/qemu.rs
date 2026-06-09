@@ -424,7 +424,7 @@ impl QemuRunner {
         let mut need_machine = true;
 
         #[allow(unused_mut)]
-        let mut qemu_executable = format!("qemu-system-{}", arch);
+        let mut qemu_executable = format!("qemu-system-{arch}");
 
         #[cfg(windows)]
         {
@@ -621,7 +621,7 @@ impl QemuRunner {
             .await
             .with_path("failed to create directory", &bios_dir)?;
 
-        println!("Preparing OVMF firmware for architecture: {:?}", arch);
+        println!("Preparing OVMF firmware for architecture: {arch:?}");
         let prebuilt = Prebuilt::fetch(Source::LATEST, &bios_dir)
             .with_context(|| format!("failed to prepare OVMF cache: {}", bios_dir.display()))?;
         let arch = match arch {
@@ -769,7 +769,7 @@ pub(crate) fn resolve_qemu_config_path_in_dir(
     }
 
     let default_filename = if let Some(ref arch) = arch_str {
-        format!(".qemu-{}.toml", arch)
+        format!(".qemu-{arch}.toml")
     } else {
         ".qemu.toml".to_string()
     };

@@ -54,7 +54,7 @@ pub(crate) fn classify_server_control_message(
 pub async fn run_serial_terminal(ws_url: reqwest::Url) -> anyhow::Result<()> {
     let (stream, _) = tokio_tungstenite::connect_async(ws_url.as_str())
         .await
-        .with_context(|| format!("failed to connect serial websocket {}", ws_url))?;
+        .with_context(|| format!("failed to connect serial websocket {ws_url}"))?;
     let (mut sink, mut stream) = stream.split();
     let locally_closed = Arc::new(AtomicBool::new(false));
 
