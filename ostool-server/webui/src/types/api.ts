@@ -125,7 +125,7 @@ export type UefiBootArch = "x86_64" | "aarch64" | "loongarch64" | "riscv64" | "o
 export interface UefiHttpProfile {
   kind: "httpboot";
   boot_arch: UefiBootArch | null;
-  mac: string | null;
+  mac?: string | null;
 }
 
 export type BootConfig = UbootProfile | PxeProfile | UefiHttpProfile;

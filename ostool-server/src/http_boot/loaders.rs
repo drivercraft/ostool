@@ -30,6 +30,7 @@ impl LoaderRegistry {
     pub async fn register_loader(
         &self,
         boards: &BTreeMap<String, BoardConfig>,
+        active_board_ids: &[String],
         request: LoaderHelloRequest,
         poll_url: String,
     ) -> Result<LoaderHelloResponse, LoaderRegisterError> {
@@ -40,7 +41,7 @@ impl LoaderRegistry {
         }
         let mac = normalize_mac(&request.mac)
             .ok_or_else(|| LoaderRegisterError::InvalidMac(request.mac.clone()))?;
-        let board = match_httpboot_board(boards, &mac)?;
+        let board = match_httpboot_board(boards, active_board_ids, &mac, request.arch)?;
         if let Some(board) = board.as_ref() {
             ensure_arch_compatible(request.arch, board)?;
         }
@@ -210,6 +211,10 @@ pub enum LoaderRegisterError {
     UnknownBoardMac(String),
     #[error("multiple HTTPBoot boards are configured for MAC `{0}`: {1:?}")]
     AmbiguousBoardMac(String, Vec<String>),
+    #[error("no active HTTPBoot board can accept loader MAC `{mac}`")]
+    UnknownActiveBoard { mac: String },
+    #[error("multiple active HTTPBoot boards can accept loader MAC `{mac}`: {board_ids:?}")]
+    AmbiguousActiveBoard { mac: String, board_ids: Vec<String> },
     #[error("board `{board_id}` boot arch is incompatible with loader arch `{loader_arch:?}`")]
     IncompatibleArch {
         board_id: String,
@@ -251,7 +256,9 @@ pub fn normalize_mac(input: &str) -> Option<String> {
 
 fn match_httpboot_board<'a>(
     boards: &'a BTreeMap<String, BoardConfig>,
+    active_board_ids: &[String],
     normalized_mac: &str,
+    loader_arch: BootArch,
 ) -> Result<Option<&'a BoardConfig>, LoaderRegisterError> {
     let mut matches = boards
         .values()
@@ -266,15 +273,51 @@ fn match_httpboot_board<'a>(
         .collect::<Vec<_>>();
 
     match matches.len() {
-        0 => Err(LoaderRegisterError::UnknownBoardMac(
-            normalized_mac.to_string(),
-        )),
+        0 => match_active_httpboot_board(boards, active_board_ids, normalized_mac, loader_arch),
         1 => Ok(matches.pop()),
         _ => Err(LoaderRegisterError::AmbiguousBoardMac(
             normalized_mac.to_string(),
             matches.iter().map(|board| board.id.clone()).collect(),
         )),
     }
+}
+
+fn match_active_httpboot_board<'a>(
+    boards: &'a BTreeMap<String, BoardConfig>,
+    active_board_ids: &[String],
+    normalized_mac: &str,
+    loader_arch: BootArch,
+) -> Result<Option<&'a BoardConfig>, LoaderRegisterError> {
+    let mut matches = active_board_ids
+        .iter()
+        .filter_map(|board_id| boards.get(board_id))
+        .filter(|board| !board.disabled)
+        .filter(
+            |board| matches!(&board.boot, BootConfig::UefiHttp(profile) if profile.mac.is_none()),
+        )
+        .filter(|board| is_arch_compatible(loader_arch, board))
+        .collect::<Vec<_>>();
+
+    match matches.len() {
+        0 => Err(LoaderRegisterError::UnknownActiveBoard {
+            mac: normalized_mac.to_string(),
+        }),
+        1 => Ok(matches.pop()),
+        _ => Err(LoaderRegisterError::AmbiguousActiveBoard {
+            mac: normalized_mac.to_string(),
+            board_ids: matches.iter().map(|board| board.id.clone()).collect(),
+        }),
+    }
+}
+
+fn is_arch_compatible(loader_arch: BootArch, board: &BoardConfig) -> bool {
+    let BootConfig::UefiHttp(profile) = &board.boot else {
+        return false;
+    };
+    profile
+        .boot_arch
+        .as_ref()
+        .is_none_or(|board_arch| uefi_arch_to_boot_arch(board_arch) == loader_arch)
 }
 
 fn ensure_arch_compatible(
@@ -342,7 +385,7 @@ mod tests {
 
     use super::{BootOfferError, LoaderRegistry, normalize_mac};
 
-    fn httpboot_board(id: &str, mac: &str) -> BoardConfig {
+    fn httpboot_board(id: &str, mac: Option<&str>) -> BoardConfig {
         BoardConfig {
             id: id.into(),
             board_type: "Asus-nuc15-x86_64-vmx".into(),
@@ -354,7 +397,7 @@ mod tests {
             }),
             boot: BootConfig::UefiHttp(UefiHttpProfile {
                 boot_arch: Some(UefiBootArch::X86_64),
-                mac: Some(mac.into()),
+                mac: mac.map(str::to_string),
             }),
             notes: None,
             disabled: false,
@@ -393,11 +436,11 @@ mod tests {
         let mut boards = BTreeMap::new();
         boards.insert(
             "asus-1".into(),
-            httpboot_board("asus-1", "1c:69:7a:dc:f3:47"),
+            httpboot_board("asus-1", Some("1c:69:7a:dc:f3:47")),
         );
 
         let response = registry
-            .register_loader(&boards, hello("1c:69:7a:dc:f3:47"), "/poll".into())
+            .register_loader(&boards, &[], hello("1c:69:7a:dc:f3:47"), "/poll".into())
             .await
             .unwrap();
         assert_eq!(response.board_id.as_deref(), Some("asus-1"));
@@ -433,15 +476,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn loader_can_match_active_httpboot_board_without_configured_mac() {
+        let registry = LoaderRegistry::new();
+        let mut boards = BTreeMap::new();
+        boards.insert("asus-1".into(), httpboot_board("asus-1", None));
+
+        let response = registry
+            .register_loader(
+                &boards,
+                &["asus-1".into()],
+                hello("1c:69:7a:dc:f3:47"),
+                "/poll".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.board_id.as_deref(), Some("asus-1"));
+    }
+
+    #[tokio::test]
     async fn offer_rejects_mismatched_board() {
         let registry = LoaderRegistry::new();
         let mut boards = BTreeMap::new();
         boards.insert(
             "asus-1".into(),
-            httpboot_board("asus-1", "1c:69:7a:dc:f3:47"),
+            httpboot_board("asus-1", Some("1c:69:7a:dc:f3:47")),
         );
         let response = registry
-            .register_loader(&boards, hello("1c:69:7a:dc:f3:47"), "/poll".into())
+            .register_loader(&boards, &[], hello("1c:69:7a:dc:f3:47"), "/poll".into())
             .await
             .unwrap();
         registry

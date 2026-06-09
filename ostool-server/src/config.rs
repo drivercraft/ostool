@@ -549,7 +549,7 @@ pub enum UefiBootArch {
 pub struct UefiHttpProfile {
     #[serde(default)]
     pub boot_arch: Option<UefiBootArch>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac: Option<String>,
 }
 
@@ -870,7 +870,7 @@ bootm_addr = "0x82200000"
             }),
             boot: BootConfig::UefiHttp(UefiHttpProfile {
                 boot_arch: Some(UefiBootArch::X86_64),
-                mac: Some("1c:69:7a:dc:f3:47".into()),
+                mac: None,
             }),
             notes: None,
             disabled: false,
@@ -878,14 +878,14 @@ bootm_addr = "0x82200000"
 
         let encoded = toml::to_string_pretty(&board).unwrap();
         assert!(encoded.contains("kind = \"httpboot\""));
-        assert!(encoded.contains("mac = \"1c:69:7a:dc:f3:47\""));
+        assert!(!encoded.contains("mac = "));
 
         let decoded: BoardConfig = toml::from_str(&encoded).unwrap();
         let BootConfig::UefiHttp(profile) = decoded.boot else {
             panic!("expected httpboot");
         };
         assert_eq!(profile.boot_arch, Some(UefiBootArch::X86_64));
-        assert_eq!(profile.mac.as_deref(), Some("1c:69:7a:dc:f3:47"));
+        assert_eq!(profile.mac, None);
     }
 
     #[test]

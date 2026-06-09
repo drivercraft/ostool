@@ -47,7 +47,6 @@ interface BoardEditorFormState {
   gatewayip: string;
   pxe_notes: string;
   uefi_boot_arch: UefiBootArch | "";
-  uefi_mac: string;
 }
 
 const DEFAULT_SERIAL_BAUD_RATE = 115_200;
@@ -112,7 +111,6 @@ function defaultFormState(): BoardEditorFormState {
     gatewayip: "",
     pxe_notes: "",
     uefi_boot_arch: "x86_64",
-    uefi_mac: "",
   };
 }
 
@@ -159,7 +157,6 @@ function boardToFormState(board: BoardConfig): BoardEditorFormState {
   } else {
     next.boot_kind = "httpboot";
     next.uefi_boot_arch = board.boot.boot_arch ?? "";
-    next.uefi_mac = board.boot.mac ?? "";
   }
 
   return next;
@@ -199,7 +196,6 @@ function buildBootConfig(): BootConfig {
     return {
       kind: "httpboot",
       boot_arch: form.value.uefi_boot_arch || null,
-      mac: trimToNull(form.value.uefi_mac),
     };
   }
 
@@ -278,9 +274,6 @@ function validateForm(): string {
     if (!form.value.board_ip.trim()) {
       errors.push("静态 IP 模式必须填写开发板 IP");
     }
-  }
-  if (form.value.boot_kind === "httpboot" && !form.value.uefi_mac.trim()) {
-    errors.push("HTTPboot 必须填写 MAC 地址");
   }
   return errors.join("\n");
 }
@@ -945,10 +938,6 @@ onMounted(() => {
                   <option value="riscv64">riscv64</option>
                   <option value="other">other</option>
                 </select>
-              </label>
-              <label class="field">
-                <span>MAC 地址</span>
-                <input v-model="form.uefi_mac" placeholder="例如 1c:69:7a:dc:f3:47" />
               </label>
             </div>
           </template>

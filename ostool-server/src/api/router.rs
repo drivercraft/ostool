@@ -606,11 +606,6 @@ fn normalize_boot_config(boot: &mut BootConfig) -> Result<(), ApiError> {
         }
         BootConfig::UefiHttp(profile) => {
             normalize_mac_address(&mut profile.mac, "boot.mac")?;
-            if profile.mac.is_none() {
-                return Err(ApiError::bad_request(
-                    "boot.mac must be configured for HTTPBoot discovery",
-                ));
-            }
         }
     }
     Ok(())
@@ -1328,10 +1323,11 @@ async fn post_httpboot_loader_hello(
     axum::Json(request): axum::Json<LoaderHelloRequest>,
 ) -> Result<axum::Json<LoaderHelloResponse>, ApiError> {
     let config = state.config.read().await.clone();
+    let active_board_ids = active_httpboot_board_ids(&state).await;
     let boards = state.boards.read().await;
     let mut response = state
         .http_boot_loaders
-        .register_loader(&boards, request, String::new())
+        .register_loader(&boards, &active_board_ids, request, String::new())
         .await
         .map_err(api_error_from_loader_register_error)?;
     response.poll_url = httpboot_loader_poll_url(&config, &response.loader_id)?;
@@ -1709,13 +1705,28 @@ async fn active_session_id_for_loader(
         .and_then(|runtime| runtime.active_session_id))
 }
 
+async fn active_httpboot_board_ids(state: &AppState) -> Vec<String> {
+    state
+        .board_runtimes
+        .read()
+        .await
+        .iter()
+        .filter(|(_, runtime)| {
+            runtime.lease_state == BoardLeaseState::Using && runtime.active_session_id.is_some()
+        })
+        .map(|(board_id, _)| board_id.clone())
+        .collect()
+}
+
 fn api_error_from_loader_register_error(err: LoaderRegisterError) -> ApiError {
     match err {
         LoaderRegisterError::UnsupportedProtocolVersion(_)
         | LoaderRegisterError::InvalidMac(_)
         | LoaderRegisterError::IncompatibleArch { .. } => ApiError::bad_request(err.to_string()),
-        LoaderRegisterError::UnknownBoardMac(_) => ApiError::not_found(err.to_string()),
-        LoaderRegisterError::AmbiguousBoardMac(_, _) => ApiError::conflict(err.to_string()),
+        LoaderRegisterError::UnknownBoardMac(_)
+        | LoaderRegisterError::UnknownActiveBoard { .. } => ApiError::not_found(err.to_string()),
+        LoaderRegisterError::AmbiguousBoardMac(_, _)
+        | LoaderRegisterError::AmbiguousActiveBoard { .. } => ApiError::conflict(err.to_string()),
     }
 }
 
@@ -2209,16 +2220,7 @@ mod tests {
         board.tags = vec!["uefi-http".into()];
         board.boot = BootConfig::UefiHttp(UefiHttpProfile {
             boot_arch: Some(UefiBootArch::X86_64),
-            mac: Some("1c:69:7a:dc:f3:47".into()),
-        });
-        board
-    }
-
-    fn sample_httpboot_discovery_board(board_id: &str, mac: &str) -> BoardConfig {
-        let mut board = sample_httpboot_board(board_id);
-        board.boot = BootConfig::UefiHttp(UefiHttpProfile {
-            boot_arch: Some(UefiBootArch::X86_64),
-            mac: Some(mac.into()),
+            mac: None,
         });
         board
     }
@@ -3524,15 +3526,12 @@ mod tests {
         assert_eq!(
             create_board(
                 &app,
-                serde_json::to_value(sample_httpboot_discovery_board(
-                    "uefi-http-loader",
-                    "1c:69:7a:dc:f3:47"
-                ))
-                .unwrap()
+                serde_json::to_value(sample_httpboot_board("uefi-http-loader")).unwrap()
             )
             .await,
             StatusCode::CREATED
         );
+        let session_id = create_session(&app, "x86_64-uefi-http").await;
 
         let hello = json!({
             "protocol_version": 1,
@@ -3568,7 +3567,6 @@ mod tests {
         let loader_id = hello_value["loader_id"].as_str().unwrap();
         assert_eq!(hello_value["board_id"], "uefi-http-loader");
 
-        let session_id = create_session(&app, "x86_64-uefi-http").await;
         let waiting = app
             .clone()
             .oneshot(

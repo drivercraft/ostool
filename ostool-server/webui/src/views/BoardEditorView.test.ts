@@ -144,7 +144,6 @@ function makeUefiHttpBoard(id = "uefi-http-board"): BoardConfig {
     boot: {
       kind: "httpboot",
       boot_arch: "x86_64",
-      mac: "1c:69:7a:dc:f3:47",
     },
   };
 }
@@ -372,10 +371,7 @@ describe("BoardEditorView", () => {
     expect(wrapper.text()).toContain("HTTPboot");
     expect(wrapper.find('input[placeholder="例如 BOOTX64.EFI"]').exists()).toBe(false);
     expect(wrapper.find('input[placeholder="例如 kernel.bin"]').exists()).toBe(false);
-    expect(
-      (wrapper.get('input[placeholder="例如 1c:69:7a:dc:f3:47"]').element as HTMLInputElement)
-        .value,
-    ).toBe("1c:69:7a:dc:f3:47");
+    expect(wrapper.find('input[placeholder="例如 1c:69:7a:dc:f3:47"]').exists()).toBe(false);
 
     const saveButton = wrapper.findAll("button").find((button) => button.text() === "保存配置");
     await saveButton!.trigger("click");
@@ -392,7 +388,6 @@ describe("BoardEditorView", () => {
         boot: {
           kind: "httpboot",
           boot_arch: "x86_64",
-          mac: "1c:69:7a:dc:f3:47",
         },
       }),
     );
