@@ -28,11 +28,6 @@ pub struct HttpBootConfig {
     pub open_console: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RunHttpBootOptions {
-    pub show_output: bool,
-}
-
 fn default_power_cycle() -> bool {
     true
 }
@@ -115,17 +110,6 @@ pub async fn read_config_from_path(
 ) -> anyhow::Result<HttpBootConfig> {
     let scope = invocation.variable_scope()?;
     read_httpboot_config_from_path(&scope, path).await
-}
-
-pub async fn run_httpboot(
-    _invocation: &mut Invocation,
-    _config: &HttpBootConfig,
-    _options: RunHttpBootOptions,
-) -> anyhow::Result<()> {
-    anyhow::bail!(
-        "`ostool run httpboot` used the removed manifest-v1 HTTP Boot flow; use the \
-         discovery-based AxVisor HTTP Boot publisher instead"
-    )
 }
 
 pub(crate) async fn read_httpboot_config_from_path(
