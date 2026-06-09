@@ -1,5 +1,16 @@
 use std::{io, path::PathBuf};
 
+/// A failed OVMF mirror download attempt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirrorAttempt {
+    /// Mirror display name.
+    pub mirror: String,
+    /// Full URL attempted for this mirror.
+    pub url: String,
+    /// Human-readable failure reason.
+    pub error: String,
+}
+
 /// Cache or fetch error.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -40,6 +51,13 @@ pub enum Error {
     /// Download failed.
     #[error("download failed")]
     Download(#[source] io::Error),
+
+    /// Every configured mirror failed.
+    #[error("all OVMF mirrors failed: {attempts:?}")]
+    AllMirrorsFailed {
+        /// Failure details for each attempted mirror.
+        attempts: Vec<MirrorAttempt>,
+    },
 
     /// Tarball decompression failed.
     #[error("tarball decompression failed")]

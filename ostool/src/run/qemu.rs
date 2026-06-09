@@ -15,6 +15,8 @@
 //! ```toml
 //! args = ["-nographic", "-cpu", "cortex-a53"]
 //! uefi = false
+//! # `to_bin` remains supported for explicit legacy configurations, but QEMU
+//! # UEFI boot prepares the required BIN artifact automatically.
 //! to_bin = true
 //! success_regex = ["All tests passed"]
 //! fail_regex = ["PANIC", "FAILED"]
@@ -27,7 +29,7 @@ use std::{
     path::PathBuf,
     process::Stdio,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::Instant,
 };
 
 use anyhow::{Context, anyhow};
@@ -45,14 +47,17 @@ use tokio::{
 
 use crate::{
     artifact::state::OutputArtifacts,
+    boot::artifacts::{default_qemu_dtb_dump_path, prepare_qemu_dtb_dump},
     build::config::Cargo,
     invocation::Invocation,
     process::ProcessContext,
     project::variables::{self, VariableScope},
     project::{ProjectLayout, metadata},
     run::{
+        execution::{RunnerExecutionSummary, RunnerExitStatus, timeout_duration},
         output_matcher::{ByteStreamMatcher, compile_regexes, print_match_event},
         ovmf_prebuilt::{Arch, FileType, Prebuilt, Source},
+        qemu_plan::{QemuBootSource, QemuCommandPlanInput, build_qemu_command_plan},
         shell_init::{SHELL_INIT_DELAY, ShellAutoInitMatcher, normalize_shell_init_config},
     },
     sterm::{AsyncTerminal, TerminalConfig},
@@ -76,7 +81,11 @@ pub struct QemuConfig {
     pub args: Vec<String>,
     /// Whether to use UEFI boot via OVMF firmware.
     pub uefi: bool,
-    /// Whether build orchestration should prepare a raw BIN before loading.
+    /// Legacy explicit request to prepare a raw BIN before loading.
+    ///
+    /// Runners that require BIN artifacts, such as UEFI boot, prepare them
+    /// automatically even when this is unset.
+    #[serde(default)]
     pub to_bin: bool,
     /// Regex patterns that indicate successful execution.
     pub success_regex: Vec<String>,
@@ -130,6 +139,10 @@ impl QemuConfig {
 
     fn shell_auto_init(&self) -> Option<ShellAutoInitMatcher> {
         ShellAutoInitMatcher::new(self.shell_prefix.clone(), self.shell_init_cmd.clone())
+    }
+
+    fn requires_bin_artifact(&self) -> bool {
+        self.uefi || self.to_bin
     }
 }
 
@@ -275,10 +288,10 @@ pub(crate) async fn run_qemu_with_config(
     run_args: RunQemuOptions,
     config: QemuConfig,
 ) -> anyhow::Result<()> {
-    if config.to_bin {
+    if config.requires_bin_artifact() {
         input
             .artifacts
-            .require_bin("QEMU config `to_bin = true` requires a prepared BIN artifact")?;
+            .require_bin("QEMU runtime requires a prepared BIN artifact")?;
     }
 
     let mut runner = QemuRunner {
@@ -308,7 +321,7 @@ pub(crate) async fn run_qemu_with_debug(
 ) -> anyhow::Result<()> {
     let scope = invocation.variable_scope()?;
     let config = prepare_qemu_runtime_config(&scope, config)?;
-    if config.to_bin {
+    if config.requires_bin_artifact() {
         invocation.ensure_runtime_bin()?;
     }
     let input = QemuRunInput::new(
@@ -421,8 +434,6 @@ impl QemuRunner {
         }
         .to_string();
 
-        let mut need_machine = true;
-
         #[allow(unused_mut)]
         let mut qemu_executable = format!("qemu-system-{arch}");
 
@@ -439,66 +450,47 @@ impl QemuRunner {
             }
         }
 
-        let mut cmd = crate::process::command(&qemu_executable, &self.input.process_context);
+        let dtb_dump_path = if self.dtbdump {
+            Some(
+                prepare_qemu_dtb_dump(default_qemu_dtb_dump_path())
+                    .await?
+                    .path()
+                    .to_path_buf(),
+            )
+        } else {
+            None
+        };
 
-        for arg in &self.config.args {
-            if arg == "-machine" || arg == "-M" {
-                need_machine = false;
-            }
-            cmd.arg(arg);
-        }
-
-        if self.dtbdump {
-            let dtb_dump_path = PathBuf::from("target/qemu.dtb");
-            if let Err(err) = fs::remove_file(&dtb_dump_path).await
-                && err.kind() != ErrorKind::NotFound
-            {
-                return Err(err).with_path("failed to remove file", &dtb_dump_path);
-            }
-            cmd.arg("-machine")
-                .arg(format!("dumpdtb={}", dtb_dump_path.display()));
-            // machine = format!("{},dumpdtb=target/qemu.dtb", machine);
-        }
-
-        if need_machine {
-            cmd.arg("-machine").arg(machine);
-        }
-
-        if self.input.debug {
-            cmd.arg("-s").arg("-S");
-        }
-
-        let mut use_kernel_loader = true;
-        if let Some(uefi) = self.prepare_uefi().await? {
+        let boot_source = if let Some(uefi) = self.prepare_uefi().await? {
             match uefi {
                 UefiBootConfig::Pflash {
                     code,
                     vars,
                     esp_dir,
-                } => {
-                    cmd.arg("-drive").arg(format!(
-                        "if=pflash,format=raw,unit=0,readonly=on,file={}",
-                        code.display()
-                    ));
-                    cmd.arg("-drive").arg(format!(
-                        "if=pflash,format=raw,unit=1,file={}",
-                        vars.display()
-                    ));
-                    cmd.arg("-drive")
-                        .arg(format!("format=raw,file=fat:rw:{}", esp_dir.display()));
-                    use_kernel_loader = false;
-                }
+                } => Some(QemuBootSource::uefi_pflash(code, vars, esp_dir)),
             }
-        }
+        } else {
+            self.input
+                .artifacts
+                .runtime_image()
+                .map(|path| QemuBootSource::direct_kernel_loader(path.to_path_buf()))
+        };
 
-        if use_kernel_loader && let Some(kernel_path) = self.input.artifacts.runtime_image() {
-            cmd.arg("-kernel").arg(kernel_path);
-        }
+        let plan = build_qemu_command_plan(QemuCommandPlanInput {
+            executable: qemu_executable,
+            config_args: self.config.args.iter().map(OsString::from).collect(),
+            default_machine: machine,
+            dtb_dump_path,
+            debug: self.input.debug,
+            boot_source,
+        });
+        let mut cmd = plan.render(&self.input.process_context);
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
         cmd.print_cmd();
         let mut child = TokioCommand::from(cmd.into_std()).spawn()?;
+        let started_at = Instant::now();
         let stdin = child.stdin.take().context("failed to capture QEMU stdin")?;
         let stdout = child
             .stdout
@@ -538,7 +530,7 @@ impl QemuRunner {
             self.fail_regex.clone(),
         )));
         let shell_auto_init = Arc::new(Mutex::new(self.config.shell_auto_init()));
-        let match_result = Arc::new(Mutex::new(None::<anyhow::Result<()>>));
+        let match_result = Arc::new(Mutex::new(None));
         let terminal = AsyncTerminal::new(TerminalConfig {
             intercept_exit_sequence: false,
             timeout: timeout_duration(self.config.timeout),
@@ -555,7 +547,7 @@ impl QemuRunner {
                     if let Some(matched) = matcher.observe_byte(byte) {
                         print_match_event(&matched);
                         let mut result = match_result.lock().unwrap();
-                        *result = Some(matched.kind.into_result(&matched));
+                        *result = Some(matched);
                         handle.stop_after(crate::run::output_matcher::MATCH_DRAIN_DURATION);
                     }
 
@@ -590,20 +582,16 @@ impl QemuRunner {
         let _ = stderr_task.await;
         let _ = write_task.await;
 
-        terminal_result?;
-
-        if let Some(result) = match_result.lock().unwrap().take() {
-            result?;
-        } else if !status.success() {
-            unsafe {
-                return Err(anyhow::anyhow!(
-                    "{}",
-                    OsString::from_encoded_bytes_unchecked(stderr_capture.lock().unwrap().clone())
-                        .to_string_lossy()
-                ));
-            }
-        }
-        Ok(())
+        let stderr = stderr_capture.lock().unwrap().clone();
+        RunnerExecutionSummary::new(
+            "QEMU",
+            RunnerExitStatus::process(status),
+            started_at.elapsed(),
+        )
+        .with_terminal_error(terminal_result.err())
+        .with_stream_match(match_result.lock().unwrap().take())
+        .with_stderr_log(&stderr)
+        .into_result()
     }
 
     async fn prepare_uefi(&self) -> anyhow::Result<Option<UefiBootConfig>> {
@@ -777,13 +765,6 @@ pub(crate) fn resolve_qemu_config_path_in_dir(
     Ok(search_dir.join(default_filename))
 }
 
-fn timeout_duration(timeout: Option<u64>) -> Option<Duration> {
-    match timeout {
-        Some(0) | None => None,
-        Some(secs) => Some(Duration::from_secs(secs)),
-    }
-}
-
 async fn read_child_stream<R>(
     mut reader: R,
     tx: mpsc::UnboundedSender<Vec<u8>>,
@@ -844,7 +825,7 @@ mod tests {
     fn write_single_crate_manifest(dir: &std::path::Path) {
         std::fs::write(
             dir.join("Cargo.toml"),
-            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n",
         )
         .unwrap();
         std::fs::create_dir_all(dir.join("src")).unwrap();
@@ -1025,7 +1006,7 @@ fail_regex = []
     }
 
     #[tokio::test]
-    async fn run_qemu_with_to_bin_rejects_elf_only_artifacts() {
+    async fn run_qemu_with_config_rejects_missing_required_bin_artifact() {
         let tmp = TempDir::new().unwrap();
         write_single_crate_manifest(tmp.path());
         let source = std::env::current_exe().unwrap();
@@ -1065,7 +1046,35 @@ fail_regex = []
 
         assert!(
             err.to_string()
-                .contains("QEMU config `to_bin = true` requires a prepared BIN artifact")
+                .contains("QEMU runtime requires a prepared BIN artifact")
+        );
+    }
+
+    #[test]
+    fn qemu_config_marks_bin_required_for_uefi_and_legacy_to_bin() {
+        assert!(
+            QemuConfig {
+                uefi: true,
+                to_bin: false,
+                ..Default::default()
+            }
+            .requires_bin_artifact()
+        );
+        assert!(
+            QemuConfig {
+                uefi: false,
+                to_bin: true,
+                ..Default::default()
+            }
+            .requires_bin_artifact()
+        );
+        assert!(
+            !QemuConfig {
+                uefi: false,
+                to_bin: false,
+                ..Default::default()
+            }
+            .requires_bin_artifact()
         );
     }
 
@@ -1115,6 +1124,21 @@ timeout = 0
         .unwrap();
 
         assert_eq!(config.timeout, Some(0));
+    }
+
+    #[test]
+    fn qemu_config_defaults_to_bin_to_false_when_field_is_absent() {
+        let config: QemuConfig = toml::from_str(
+            r#"
+args = ["-nographic"]
+uefi = false
+success_regex = []
+fail_regex = []
+"#,
+        )
+        .unwrap();
+
+        assert!(!config.to_bin);
     }
 
     #[test]

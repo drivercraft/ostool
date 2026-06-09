@@ -2,16 +2,14 @@ use std::{
     io,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 use async_trait::async_trait;
-use byte_unit::Byte;
 use colored::Colorize;
-use fitimage::{ComponentConfig, FitImageBuilder, FitImageConfig};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use log::{info, warn};
+use log::info;
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -28,7 +26,7 @@ use tokio_util::compat::{
 use uboot_shell::UbootShell;
 
 use crate::{
-    artifact::state::OutputArtifacts,
+    artifact::{object_tools::ObjectTools, state::OutputArtifacts},
     board::{
         client::{
             BoardServerClient, BootConfig as RemoteBootConfig, BootProfileResponse,
@@ -40,10 +38,15 @@ use crate::{
             BoxedAsyncRead, BoxedAsyncWrite, SerialStreamTasks, connect_serial_stream,
         },
     },
+    boot::{
+        artifacts::{BootArtifact, BootArtifactKind, StagedBootArtifact},
+        fit::{self, FitInput},
+    },
     invocation::Invocation,
     process::ProcessContext,
     project::variables::{self, VariableScope},
     run::{
+        execution::{RunnerExecutionSummary, RunnerExitStatus, timeout_duration},
         output_matcher::{
             ByteStreamMatcher, MATCH_DRAIN_DURATION, compile_regexes, print_match_event,
         },
@@ -53,15 +56,6 @@ use crate::{
     sterm::{AsyncTerminal, TerminalConfig},
     utils::PathResultExt,
 };
-
-/// FIT image 生成相关的错误消息常量
-mod errors {
-    pub const KERNEL_READ_ERROR: &str = "读取 kernel 文件失败";
-    pub const DTB_READ_ERROR: &str = "读取 DTB 文件失败";
-    pub const FIT_BUILD_ERROR: &str = "构建 FIT image 失败";
-    pub const FIT_SAVE_ERROR: &str = "保存 FIT image 失败";
-    pub const DIR_ERROR: &str = "无法获取 kernel 文件目录";
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct UbootConfig {
@@ -412,8 +406,17 @@ pub(crate) async fn run_uboot_with_config(
 
 /// Runs an already prepared artifact via U-Boot.
 pub async fn run_uboot(invocation: &mut Invocation, config: &UbootConfig) -> anyhow::Result<()> {
+    run_uboot_with_objcopy(invocation, config, ObjectTools.objcopy()).await
+}
+
+async fn run_uboot_with_objcopy(
+    invocation: &mut Invocation,
+    config: &UbootConfig,
+    objcopy_program: PathBuf,
+) -> anyhow::Result<()> {
     let scope = invocation.variable_scope()?;
     let config = prepare_uboot_runtime_config(&scope, config)?;
+    invocation.ensure_runtime_bin_with_objcopy(objcopy_program)?;
     let input = uboot_run_input(invocation)?;
     run_uboot_with_config(input, config).await
 }
@@ -510,11 +513,6 @@ struct ResolvedRuntime {
     use_tftp: bool,
 }
 
-struct PreparedBootArtifact {
-    bootfile: Option<String>,
-    network_transfer_ready: bool,
-}
-
 #[derive(Debug, Clone, Default)]
 struct PreparedDtb {
     fit_source: Option<PathBuf>,
@@ -536,9 +534,9 @@ trait RunnerBackend {
     async fn after_console_open(&mut self, context: &ProcessContext) -> anyhow::Result<()>;
     async fn stage_fit_image(
         &mut self,
-        fitimage: &Path,
+        fit_artifact: &BootArtifact,
         runtime: &ResolvedRuntime,
-    ) -> anyhow::Result<PreparedBootArtifact>;
+    ) -> anyhow::Result<StagedBootArtifact>;
     async fn finish_console(&mut self) -> anyhow::Result<()>;
     async fn after_run(&mut self, context: &ProcessContext) -> anyhow::Result<()>;
 }
@@ -708,9 +706,10 @@ impl RunnerBackend for LocalBackend {
 
     async fn stage_fit_image(
         &mut self,
-        fitimage: &Path,
+        fit_artifact: &BootArtifact,
         _runtime: &ResolvedRuntime,
-    ) -> anyhow::Result<PreparedBootArtifact> {
+    ) -> anyhow::Result<StagedBootArtifact> {
+        let fitimage = fit_artifact_path(fit_artifact)?;
         let Some(file_name) = fitimage.file_name().and_then(|name| name.to_str()) else {
             return Err(anyhow!("Invalid fitimage filename"));
         };
@@ -723,34 +722,22 @@ impl RunnerBackend for LocalBackend {
                     "Staged FIT image to: {}",
                     prepared.absolute_fit_path.display()
                 );
-                return Ok(PreparedBootArtifact {
-                    bootfile: Some(prepared.relative_filename),
-                    network_transfer_ready: true,
-                });
+                return Ok(StagedBootArtifact::network(prepared.relative_filename));
             }
         }
 
         if let Some(tftp_dir) = self.existing_tftp_dir.as_deref() {
             let tftp_path = PathBuf::from(tftp_dir).join(file_name);
             info!("Setting TFTP file path: {}", tftp_path.display());
-            return Ok(PreparedBootArtifact {
-                bootfile: Some(tftp_path.display().to_string()),
-                network_transfer_ready: true,
-            });
+            return Ok(StagedBootArtifact::network(tftp_path.display().to_string()));
         }
 
         if self.builtin_tftp_started {
             info!("Using fitimage filename: {file_name}");
-            return Ok(PreparedBootArtifact {
-                bootfile: Some(file_name.to_string()),
-                network_transfer_ready: true,
-            });
+            return Ok(StagedBootArtifact::network(file_name));
         }
 
-        Ok(PreparedBootArtifact {
-            bootfile: None,
-            network_transfer_ready: false,
-        })
+        Ok(StagedBootArtifact::no_network())
     }
 
     async fn finish_console(&mut self) -> anyhow::Result<()> {
@@ -977,18 +964,16 @@ impl RunnerBackend for RemoteBackend {
 
     async fn stage_fit_image(
         &mut self,
-        fitimage: &Path,
+        fit_artifact: &BootArtifact,
         runtime: &ResolvedRuntime,
-    ) -> anyhow::Result<PreparedBootArtifact> {
+    ) -> anyhow::Result<StagedBootArtifact> {
+        let fitimage = fit_artifact_path(fit_artifact)?;
         let tftp_status = self
             .tftp_status
             .as_ref()
             .ok_or_else(|| anyhow!("remote runtime not initialized"))?;
         if !runtime.use_tftp || !tftp_status.available {
-            return Ok(PreparedBootArtifact {
-                bootfile: None,
-                network_transfer_ready: false,
-            });
+            return Ok(StagedBootArtifact::no_network());
         }
 
         let fit_name = fitimage
@@ -1010,10 +995,7 @@ impl RunnerBackend for RemoteBackend {
                 )
             })?;
 
-        Ok(PreparedBootArtifact {
-            bootfile: Some(uploaded.relative_path),
-            network_transfer_ready: true,
-        })
+        Ok(StagedBootArtifact::network(uploaded.relative_path))
     }
 
     async fn finish_console(&mut self) -> anyhow::Result<()> {
@@ -1042,109 +1024,6 @@ where
         }
     }
 
-    /// 生成包含 kernel 和 FDT 的压缩 FIT image。
-    async fn generate_fit_image(
-        &self,
-        kernel_path: &Path,
-        dtb_path: Option<&Path>,
-        kernel_load_addr: u64,
-        kernel_entry_addr: u64,
-        fdt_load_addr: Option<u64>,
-        _ramfs_load_addr: Option<u64>,
-    ) -> anyhow::Result<PathBuf> {
-        info!("Making FIT image...");
-        // 生成压缩的 FIT image
-        let output_dir = kernel_path
-            .parent()
-            .and_then(|p| p.to_str())
-            .ok_or_else(|| anyhow!("{}: {}", errors::DIR_ERROR, kernel_path.display()))?;
-
-        // 读取 kernel 数据
-        let kernel_data = fs::read(kernel_path)
-            .await
-            .with_path(errors::KERNEL_READ_ERROR, kernel_path)?;
-
-        info!(
-            "kernel: {} (size: {:.2})",
-            kernel_path.display(),
-            Byte::from(kernel_data.len())
-        );
-
-        let arch = self
-            .input
-            .arch
-            .ok_or_else(|| anyhow!("Cannot determine architecture for FIT image generation"))?;
-        let arch = match arch {
-            object::Architecture::Aarch64 => "arm64",
-            object::Architecture::Arm => "arm",
-            object::Architecture::LoongArch64 => "loongarch64",
-            object::Architecture::Riscv64 => "riscv",
-            other => anyhow::bail!("unsupported architecture for FIT image generation: {other:?}"),
-        };
-
-        let mut config = FitImageConfig::new("Various kernels, ramdisks and FDT blobs")
-            .with_kernel(
-                ComponentConfig::new("kernel", kernel_data)
-                    .with_description("This kernel")
-                    .with_type("kernel")
-                    .with_arch(arch)
-                    .with_os("linux")
-                    .with_compression(false)
-                    .with_load_address(kernel_load_addr)
-                    .with_entry_point(kernel_entry_addr),
-            );
-        let mut fdt_name = None;
-
-        // 处理 DTB 文件
-        if let Some(dtb_path) = dtb_path {
-            let data = fs::read(dtb_path)
-                .await
-                .with_path(errors::DTB_READ_ERROR, dtb_path)?;
-            info!(
-                "已读取 DTB 文件: {} (大小: {:.2})",
-                dtb_path.display(),
-                Byte::from(data.len())
-            );
-            fdt_name = Some("fdt");
-
-            // U-Boot 不接受压缩的 DTB
-            let mut fdt_config = ComponentConfig::new("fdt", data.clone())
-                .with_description("This fdt")
-                .with_type("flat_dt")
-                .with_arch(arch);
-
-            if let Some(addr) = fdt_load_addr {
-                fdt_config = fdt_config.with_load_address(addr);
-            }
-
-            config = config.with_fdt(fdt_config);
-        } else {
-            warn!("未指定 DTB 文件，将生成仅包含 kernel 的 FIT image");
-        }
-
-        config = config
-            .with_default_config("config-ostool")
-            .with_configuration(
-                "config-ostool",
-                "ostool configuration",
-                Some("kernel"),
-                fdt_name,
-                None::<String>,
-            );
-
-        let mut builder = FitImageBuilder::new();
-        let fit_data = builder
-            .build(config)
-            .with_context(|| errors::FIT_BUILD_ERROR.to_string())?;
-        let output_path = Path::new(output_dir).join("image.fit");
-        fs::write(&output_path, fit_data)
-            .await
-            .with_path(errors::FIT_SAVE_ERROR, &output_path)?;
-
-        info!("FIT image ok: {}", output_path.display());
-        Ok(output_path)
-    }
-
     async fn run(&mut self) -> anyhow::Result<()> {
         let run_result = self._run().await;
 
@@ -1171,8 +1050,7 @@ where
         let kernel = self
             .input
             .artifacts
-            .runtime_image()
-            .ok_or_else(|| anyhow!("U-Boot runner requires a prepared runtime image"))?
+            .require_bin("U-Boot runner requires a prepared BIN artifact")?
             .to_path_buf();
 
         info!("Starting U-Boot runner...");
@@ -1233,15 +1111,11 @@ where
         }
 
         let mut fdt_load_addr = None;
-        let mut ramfs_load_addr = None;
-
         if let Ok(addr) = uboot.env_int("fdt_addr_r").await {
             fdt_load_addr = Some(addr as u64);
         }
 
-        if let Ok(addr) = uboot.env_int("ramdisk_addr_r").await {
-            ramfs_load_addr = Some(addr as u64);
-        }
+        let _ramfs_load_addr = uboot.env_int("ramdisk_addr_r").await.ok();
 
         let kernel_entry = if let Some(entry) = self
             .config
@@ -1285,25 +1159,33 @@ where
         if let Some(ref dtb_path) = prepared_dtb.fit_source {
             info!("Using DTB from: {}", dtb_path.display());
         }
-        let fitimage = self
-            .generate_fit_image(
-                &kernel,
-                prepared_dtb.fit_source.as_deref(),
-                kernel_entry,
-                kernel_entry,
-                fdt_load_addr,
-                ramfs_load_addr,
-            )
+        let arch = self
+            .input
+            .arch
+            .ok_or_else(|| anyhow!("Cannot determine architecture for FIT image generation"))?;
+        let generated_fit = fit::generate_fit_image(FitInput {
+            kernel_path: kernel.clone(),
+            dtb_path: prepared_dtb.fit_source.clone(),
+            arch,
+            kernel_load_addr: kernel_entry,
+            kernel_entry_addr: kernel_entry,
+            fdt_load_addr,
+            output_path: None,
+        })
+        .await?;
+        let fit_artifact = BootArtifact::fit_image(generated_fit.path());
+
+        let prepared = self
+            .backend
+            .stage_fit_image(&fit_artifact, &runtime)
             .await?;
 
-        let prepared = self.backend.stage_fit_image(&fitimage, &runtime).await?;
-
         let bootm_arg = self.resolved_bootm_arg(fit_loadaddr, &runtime);
-        let bootcmd = if let Some(fitname) = prepared.bootfile.as_deref() {
+        let bootcmd = if let Some(fitname) = prepared.bootfile() {
             if let Some(request) = build_network_boot_request(
                 runtime.static_ip,
                 net_ok,
-                prepared.network_transfer_ready,
+                prepared.network_transfer_ready(),
                 fitname,
                 bootm_arg,
             ) {
@@ -1311,12 +1193,12 @@ where
                 request.bootcmd
             } else {
                 info!("No network boot request available, using loady to upload FIT image...");
-                Self::uboot_loady(&mut uboot, fit_loadaddr as usize, fitimage).await?;
+                Self::uboot_loady(&mut uboot, fit_loadaddr as usize, fit_artifact.path()).await?;
                 self.serial_bootm_command(bootm_arg)
             }
         } else {
             info!("No TFTP config, using loady to upload FIT image...");
-            Self::uboot_loady(&mut uboot, fit_loadaddr as usize, fitimage).await?;
+            Self::uboot_loady(&mut uboot, fit_loadaddr as usize, fit_artifact.path()).await?;
             self.serial_bootm_command(bootm_arg)
         };
 
@@ -1330,7 +1212,7 @@ where
             self.fail_regex.clone(),
         )));
 
-        let res = Arc::new(Mutex::<Option<anyhow::Result<()>>>::new(None));
+        let res = Arc::new(Mutex::new(None));
         let res_clone = res.clone();
         let matcher_clone = matcher.clone();
         let shell_init = Arc::new(Mutex::new(self.config.shell_auto_init()));
@@ -1377,13 +1259,14 @@ where
             timeout: timeout_duration(self.config.timeout),
             timeout_label: "kernel boot".to_string(),
         });
-        terminal
+        let started_at = Instant::now();
+        let terminal_result = terminal
             .run(inbound_rx, outbound_tx, move |h, byte| {
                 let mut matcher = matcher_clone.lock().unwrap();
                 if let Some(matched) = matcher.observe_byte(byte) {
                     print_match_event(&matched);
                     let mut res_lock = res_clone.lock().unwrap();
-                    *res_lock = Some(matched.kind.into_result(&matched));
+                    *res_lock = Some(matched);
                     h.stop_after(MATCH_DRAIN_DURATION);
                 }
 
@@ -1398,7 +1281,7 @@ where
                     h.stop();
                 }
             })
-            .await?;
+            .await;
         let mut write_task = write_task;
         let write_join = tokio::time::timeout(Duration::from_secs(1), &mut write_task).await;
         match write_join {
@@ -1431,9 +1314,14 @@ where
 
         {
             let mut res_lock = res.lock().unwrap();
-            if let Some(result) = res_lock.take() {
-                result?;
-            }
+            RunnerExecutionSummary::new(
+                "kernel boot",
+                RunnerExitStatus::not_available(),
+                started_at.elapsed(),
+            )
+            .with_terminal_error(terminal_result.err())
+            .with_stream_match(res_lock.take())
+            .into_result()?;
         }
         Ok(())
     }
@@ -1525,11 +1413,15 @@ fn detect_tftp_ip(net: Option<&Net>) -> Option<String> {
     Some(ip_string)
 }
 
-fn timeout_duration(timeout: Option<u64>) -> Option<Duration> {
-    match timeout {
-        Some(0) | None => None,
-        Some(secs) => Some(Duration::from_secs(secs)),
+fn fit_artifact_path(fit_artifact: &BootArtifact) -> anyhow::Result<&Path> {
+    if fit_artifact.kind() != BootArtifactKind::FitImage {
+        return Err(anyhow!(
+            "expected FIT image boot artifact, got {:?}",
+            fit_artifact.kind()
+        ));
     }
+
+    Ok(fit_artifact.path())
 }
 
 fn build_network_boot_request(
@@ -1570,16 +1462,26 @@ fn bootm_command(bootm_arg: Option<u64>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, time::Duration};
+    use std::{collections::HashMap, path::Path, time::Duration};
 
     use super::{
-        LocalUbootConfig, Net, UbootConfig, build_network_boot_request, ensure_config_in_dir,
+        LocalBackend, LocalUbootConfig, Net, RemoteBackend, ResolvedRuntime, RunnerBackend,
+        UbootConfig, build_network_boot_request, ensure_config_in_dir, fit_artifact_path,
         timeout_duration,
     };
     use crate::{
-        board::config::BoardRunConfig,
+        artifact::{
+            object_tools::ObjectTools,
+            runtime::{RuntimeArtifactOptions, prepare_runtime_artifacts},
+        },
+        board::{
+            client::{BoardServerClient, SessionCreatedResponse, TftpSessionResponse},
+            config::BoardRunConfig,
+        },
+        boot::artifacts::BootArtifact,
         build::config::{BuildConfig, BuildSystem, Cargo},
         invocation::{Invocation, InvocationOptions},
+        run::tftp,
     };
 
     fn make_invocation(dir: &std::path::Path) -> Invocation {
@@ -1590,6 +1492,75 @@ mod tests {
             false,
         ))
         .unwrap()
+    }
+
+    fn write_single_crate_manifest(dir: &std::path::Path) {
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "").unwrap();
+    }
+
+    fn local_backend() -> LocalBackend {
+        LocalBackend {
+            config: LocalUbootConfig::default(),
+            baud_rate: None,
+            linux_system_tftp: None,
+            existing_tftp_dir: None,
+            builtin_tftp_started: false,
+        }
+    }
+
+    fn write_fit_image(root: &std::path::Path) -> std::path::PathBuf {
+        let fit_path = root.join("target").join("image.fit");
+        std::fs::create_dir_all(fit_path.parent().unwrap()).unwrap();
+        std::fs::write(&fit_path, [1_u8, 2, 3, 4]).unwrap();
+        fit_path
+    }
+
+    fn write_fake_rust_objcopy(dir: &Path) -> std::path::PathBuf {
+        let script = dir.join("fake-rust-objcopy");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nlast=\"\"\nprev=\"\"\nfor arg in \"$@\"; do prev=\"$last\"; last=\"$arg\"; done\ncp \"$prev\" \"$last\"\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&script, permissions).unwrap();
+        }
+        script
+    }
+
+    fn prepare_elf_only_invocation(dir: &std::path::Path) -> Invocation {
+        let source = std::env::current_exe().unwrap();
+        let copied = dir.join("sample-elf");
+        std::fs::copy(source, &copied).unwrap();
+
+        let mut invocation = make_invocation(dir);
+        let prepared = prepare_runtime_artifacts(
+            &invocation.process_context().unwrap(),
+            RuntimeArtifactOptions {
+                elf_path: copied,
+                to_bin: false,
+                bin_dir: None,
+                debug: false,
+                cargo_artifact_dir: None,
+                strip_elf: false,
+                objcopy_program: ObjectTools.objcopy(),
+            },
+        )
+        .unwrap();
+        invocation.apply_prepared_runtime_artifacts(prepared);
+        assert!(invocation.runtime_artifacts().elf().is_some());
+        assert!(invocation.runtime_artifacts().bin().is_none());
+        invocation
     }
 
     #[test]
@@ -1639,6 +1610,183 @@ mod tests {
             build_network_boot_request(true, false, true, "image.fit", Some(0x82200000)).unwrap();
 
         assert_eq!(request.bootcmd, "tftp image.fit && bootm 0x82200000");
+    }
+
+    #[test]
+    fn fit_artifact_path_rejects_non_fit_artifacts() {
+        let artifact = BootArtifact::qemu_dtb_dump("target/qemu.dtb");
+        let err = fit_artifact_path(&artifact).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("expected FIT image boot artifact, got QemuDtbDump")
+        );
+    }
+
+    #[tokio::test]
+    async fn run_uboot_prepares_bin_for_elf_only_invocation() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_single_crate_manifest(tmp.path());
+        let objcopy_program = write_fake_rust_objcopy(tmp.path());
+        let mut invocation = prepare_elf_only_invocation(tmp.path());
+
+        let err = super::run_uboot_with_objcopy(
+            &mut invocation,
+            &UbootConfig::default(),
+            objcopy_program,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(invocation.runtime_artifacts().bin().is_some());
+        assert!(err.to_string().contains("local U-Boot backend requires"));
+    }
+
+    #[tokio::test]
+    async fn run_uboot_with_config_rejects_elf_only_input() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_single_crate_manifest(tmp.path());
+        let invocation = prepare_elf_only_invocation(tmp.path());
+        let input = super::uboot_run_input(&invocation).unwrap();
+
+        let err = super::run_uboot_with_config(input, UbootConfig::default())
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("U-Boot runner requires a prepared BIN artifact")
+        );
+    }
+
+    #[tokio::test]
+    async fn local_stage_fit_image_without_network_disables_transfer() {
+        let temp = tempfile::tempdir().unwrap();
+        let fit_path = write_fit_image(temp.path());
+        let mut backend = local_backend();
+
+        let staged = backend
+            .stage_fit_image(
+                &BootArtifact::fit_image(&fit_path),
+                &ResolvedRuntime::default(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(staged.bootfile(), None);
+        assert!(!staged.network_transfer_ready());
+    }
+
+    #[tokio::test]
+    async fn local_stage_fit_image_uses_existing_tftp_dir_display_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let fit_path = write_fit_image(temp.path());
+        let tftp_dir = temp.path().join("tftp-root");
+        let mut backend = local_backend();
+        backend.existing_tftp_dir = Some(tftp_dir.clone());
+
+        let staged = backend
+            .stage_fit_image(
+                &BootArtifact::fit_image(&fit_path),
+                &ResolvedRuntime::default(),
+            )
+            .await
+            .unwrap();
+
+        let expected = tftp_dir.join("image.fit").display().to_string();
+        assert_eq!(staged.bootfile(), Some(expected.as_str()));
+        assert!(staged.network_transfer_ready());
+    }
+
+    #[tokio::test]
+    async fn local_stage_fit_image_uses_builtin_tftp_filename() {
+        let temp = tempfile::tempdir().unwrap();
+        let fit_path = write_fit_image(temp.path());
+        let mut backend = local_backend();
+        backend.builtin_tftp_started = true;
+
+        let staged = backend
+            .stage_fit_image(
+                &BootArtifact::fit_image(&fit_path),
+                &ResolvedRuntime::default(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(staged.bootfile(), Some("image.fit"));
+        assert!(staged.network_transfer_ready());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn local_stage_fit_image_copies_to_linux_tftp_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let fit_path = write_fit_image(temp.path());
+        let tftp_root = temp.path().join("srv-tftp");
+        let mut backend = local_backend();
+        backend.linux_system_tftp = Some(tftp::TftpdHpaConfig {
+            username: None,
+            directory: tftp_root.clone(),
+            address: None,
+            options: None,
+        });
+
+        let staged = backend
+            .stage_fit_image(
+                &BootArtifact::fit_image(&fit_path),
+                &ResolvedRuntime::default(),
+            )
+            .await
+            .unwrap();
+
+        let relative_filename = tftp::relative_tftp_filename(&fit_path).unwrap();
+        assert_eq!(staged.bootfile(), Some(relative_filename.as_str()));
+        assert!(staged.network_transfer_ready());
+        assert_eq!(
+            std::fs::read(tftp_root.join(relative_filename)).unwrap(),
+            [1_u8, 2, 3, 4]
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_stage_fit_image_without_tftp_disables_transfer() {
+        let temp = tempfile::tempdir().unwrap();
+        let fit_path = write_fit_image(temp.path());
+        let mut backend = RemoteBackend {
+            client: BoardServerClient::new("127.0.0.1", 8080).unwrap(),
+            session: SessionCreatedResponse {
+                session_id: "demo".into(),
+                board_id: "board-1".into(),
+                lease_expires_at: chrono::Utc::now(),
+                serial_available: true,
+                boot_mode: "uboot".into(),
+                ws_url: None,
+            },
+            boot_profile: None,
+            serial_status: None,
+            tftp_status: Some(TftpSessionResponse {
+                available: false,
+                provider: "none".into(),
+                server_ip: None,
+                netmask: None,
+                writable: false,
+                files: vec![],
+            }),
+            session_dtb: None,
+            console_tasks: None,
+        };
+        let runtime = ResolvedRuntime {
+            use_tftp: true,
+            ..Default::default()
+        };
+
+        let staged = backend
+            .stage_fit_image(&BootArtifact::fit_image(&fit_path), &runtime)
+            .await
+            .unwrap();
+
+        assert_eq!(staged.bootfile(), None);
+        assert!(!staged.network_transfer_ready());
     }
 
     #[test]

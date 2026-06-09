@@ -166,6 +166,13 @@ impl Invocation {
     }
 
     pub(crate) fn ensure_runtime_bin(&mut self) -> anyhow::Result<PathBuf> {
+        self.ensure_runtime_bin_with_objcopy(ObjectTools.objcopy())
+    }
+
+    pub(crate) fn ensure_runtime_bin_with_objcopy(
+        &mut self,
+        objcopy_program: PathBuf,
+    ) -> anyhow::Result<PathBuf> {
         if let Some(bin) = self.runtime_artifacts().bin() {
             debug!("BIN file already exists: {bin:?}");
             return Ok(bin.to_path_buf());
@@ -189,7 +196,7 @@ impl Invocation {
                     .cargo_source_artifact_dir()
                     .map(PathBuf::from),
                 strip_elf: false,
-                objcopy_program: ObjectTools.objcopy(),
+                objcopy_program,
             },
         )?;
         let bin_path = prepared

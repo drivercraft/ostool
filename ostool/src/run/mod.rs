@@ -14,6 +14,12 @@ pub mod httpboot;
 /// QEMU emulator runner with UEFI/OVMF support.
 pub mod qemu;
 
+/// Crate-private runner execution summaries.
+pub(crate) mod execution;
+
+/// Crate-private QEMU command planning.
+pub(crate) mod qemu_plan;
+
 /// TFTP server for network booting.
 pub(crate) mod tftp;
 

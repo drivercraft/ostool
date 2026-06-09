@@ -13,7 +13,9 @@
 //! bin = "my-kernel"
 //! features = ["feature1", "feature2"]
 //! profile = "Release"
-//! to_bin = true
+//! # Optional legacy override. Runners that require BIN artifacts prepare them
+//! # automatically.
+//! to_bin = false
 //! ```
 
 use std::collections::HashMap;
@@ -62,7 +64,10 @@ pub struct Custom {
     pub build_cmd: String,
     /// Path to the built ELF file.
     pub elf_path: String,
-    /// Whether to convert the ELF to raw binary format.
+    /// Legacy explicit request to convert the ELF to raw binary format.
+    ///
+    /// Runners that require BIN artifacts prepare them automatically.
+    #[serde(default)]
     pub to_bin: bool,
 }
 
@@ -111,7 +116,10 @@ pub struct Cargo {
     ///
     /// The `KERNEL_ELF` environment variable is set to the built ELF path.
     pub post_build_cmds: Vec<String>,
-    /// Whether to convert the ELF to raw binary format after building.
+    /// Legacy explicit request to convert the ELF to raw binary format after building.
+    ///
+    /// Runners that require BIN artifacts prepare them automatically.
+    #[serde(default)]
     pub to_bin: bool,
 }
 
@@ -153,7 +161,7 @@ pub enum LogLevel {
 
 #[cfg(test)]
 mod tests {
-    use super::Cargo;
+    use super::{Cargo, Custom};
 
     #[test]
     fn cargo_config_defaults_someboot_injection_to_enabled_when_field_is_absent() {
@@ -172,6 +180,37 @@ to_bin = false
         .unwrap();
 
         assert!(!cargo.disable_someboot_build_config);
+    }
+
+    #[test]
+    fn cargo_config_defaults_to_bin_to_false_when_field_is_absent() {
+        let cargo: Cargo = toml::from_str(
+            r#"
+env = {}
+target = "x86_64-unknown-none"
+package = "kernel"
+features = []
+args = []
+pre_build_cmds = []
+post_build_cmds = []
+"#,
+        )
+        .unwrap();
+
+        assert!(!cargo.to_bin);
+    }
+
+    #[test]
+    fn custom_config_defaults_to_bin_to_false_when_field_is_absent() {
+        let custom: Custom = toml::from_str(
+            r#"
+build_cmd = "make"
+elf_path = "target/kernel"
+"#,
+        )
+        .unwrap();
+
+        assert!(!custom.to_bin);
     }
 
     #[test]

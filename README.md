@@ -200,8 +200,8 @@ pre_build_cmds = ["make prepare"]
 # 构建后执行的命令
 post_build_cmds = ["make post-process"]
 
-# 是否输出为二进制文件
-to_bin = true
+# 可选兼容字段。U-Boot、board 和 UEFI QEMU 运行会自动准备所需 BIN。
+to_bin = false
 ```
 
 命令行 `--package`/`--bin` 会先覆盖 `.build.toml` 中的 Cargo 包/二进制选择，再用于
@@ -221,8 +221,8 @@ build_cmd = "make ARCH=aarch64 A=examples/helloworld"
 # 生成的 ELF 文件路径
 elf_path = "examples/helloworld/helloworld_aarch64-qemu-virt.elf"
 
-# 是否输出为二进制文件
-to_bin = true
+# 可选兼容字段。U-Boot、board 和 UEFI QEMU 运行会自动准备所需 BIN。
+to_bin = false
 ```
 
 ### QEMU 配置 (.qemu.toml)
@@ -236,8 +236,8 @@ args = ["-machine", "virt", "-cpu", "cortex-a57", "-nographic"]
 # 启用 UEFI 引导
 uefi = false
 
-# 输出为二进制文件
-to_bin = true
+# 可选兼容字段。UEFI QEMU 会自动准备所需 BIN。
+to_bin = false
 
 # 成功运行的正则表达式（用于自动检测）
 success_regex = ["Hello from my OS", "Kernel booted successfully"]
