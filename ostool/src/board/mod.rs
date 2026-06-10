@@ -299,8 +299,17 @@ pub(crate) async fn run_prepared_board(
             )
             .await
         }
+        "httpboot" | "uefi_http" => {
+            crate::run::httpboot_board::run_httpboot_remote(
+                input,
+                &board_config,
+                client,
+                session.info().clone(),
+            )
+            .await
+        }
         other => Err(anyhow!(
-            "unsupported board boot mode `{other}`; only `uboot` is supported"
+            "unsupported board boot mode `{other}`; supported modes are `uboot` and `httpboot`"
         )),
     };
 

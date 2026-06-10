@@ -11,6 +11,9 @@
 /// HTTPBoot configuration helpers for discovery-based publishers.
 pub mod httpboot;
 
+/// HTTPBoot board runner over an ostool-server serial session.
+pub(crate) mod httpboot_board;
+
 /// QEMU emulator runner with UEFI/OVMF support.
 pub mod qemu;
 

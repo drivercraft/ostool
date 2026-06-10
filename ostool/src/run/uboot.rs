@@ -314,6 +314,10 @@ impl UbootRunInput {
             arch,
         }
     }
+
+    pub(crate) fn artifacts(&self) -> &OutputArtifacts {
+        &self.artifacts
+    }
 }
 
 pub(crate) fn default_uboot_config() -> UbootConfig {
