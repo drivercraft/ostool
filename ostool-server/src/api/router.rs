@@ -38,10 +38,7 @@ use crate::{
     dtb_store::normalize_dtb_name,
     http_boot::{
         files::{HttpBootFileRef, board_current_disk_path, put_board_current_file},
-        loaders::{
-            BootOfferError, LoaderRegisterError, PublishOfferRequest,
-            normalize_mac as normalize_httpboot_mac,
-        },
+        loaders::{BootOfferError, LoaderRegisterError, PublishOfferRequest},
     },
     power::{PowerAction, PowerActionError},
     serial::{
@@ -546,24 +543,6 @@ fn normalize_serial_key_value(
     Ok(())
 }
 
-fn normalize_mac_address(value: &mut Option<String>, field: &str) -> Result<(), ApiError> {
-    let Some(raw) = value else {
-        return Ok(());
-    };
-    if raw.trim().is_empty() {
-        *value = None;
-        return Ok(());
-    }
-
-    let Some(normalized) = normalize_httpboot_mac(raw) else {
-        return Err(ApiError::bad_request(format!(
-            "{field} must be a MAC address like 1c:69:7a:dc:f3:47"
-        )));
-    };
-    *value = Some(normalized);
-    Ok(())
-}
-
 fn normalize_power_management_config(
     power_management: &mut PowerManagementConfig,
 ) -> Result<(), ApiError> {
@@ -608,7 +587,8 @@ fn normalize_boot_config(boot: &mut BootConfig) -> Result<(), ApiError> {
             normalize_optional_string(&mut profile.notes);
         }
         BootConfig::UefiHttp(profile) => {
-            normalize_mac_address(&mut profile.mac, "boot.mac")?;
+            profile.boot_arch = None;
+            profile.mac = None;
         }
     }
     Ok(())
@@ -2503,6 +2483,52 @@ mod tests {
             serial.key.value,
             "/dev/serial/by-path/pci-0000:00:14.0-usb-0:10.4:1.0-port0"
         );
+    }
+
+    #[tokio::test]
+    async fn create_httpboot_board_drops_manual_arch_and_mac_fields() {
+        let app = test_router().await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/admin/boards")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "id": "httpboot-create",
+                            "board_type": "Asus-nuc15-x86_64-vmx",
+                            "tags": ["httpboot"],
+                            "serial": null,
+                            "power_management": {
+                                "kind": "custom",
+                                "power_on_cmd": "true",
+                                "power_off_cmd": "true"
+                            },
+                            "boot": {
+                                "kind": "httpboot",
+                                "boot_arch": "x86_64",
+                                "mac": "1C-69-7A-DC-F3-47"
+                            },
+                            "notes": null,
+                            "disabled": false
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let board: BoardConfig = serde_json::from_slice(&body).unwrap();
+        let BootConfig::UefiHttp(profile) = board.boot else {
+            panic!("expected httpboot");
+        };
+        assert_eq!(profile.boot_arch, None);
+        assert_eq!(profile.mac, None);
     }
 
     #[tokio::test]

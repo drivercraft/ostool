@@ -12,7 +12,6 @@ import type {
   PowerManagementConfig,
   SerialPortKeyKind,
   SerialPortSummary,
-  UefiBootArch,
   UbootNetworkMode,
 } from "@/types/api";
 
@@ -46,7 +45,6 @@ interface BoardEditorFormState {
   netmask: string;
   gatewayip: string;
   pxe_notes: string;
-  uefi_boot_arch: UefiBootArch | "";
 }
 
 const DEFAULT_SERIAL_BAUD_RATE = 115_200;
@@ -110,7 +108,6 @@ function defaultFormState(): BoardEditorFormState {
     netmask: "",
     gatewayip: "",
     pxe_notes: "",
-    uefi_boot_arch: "x86_64",
   };
 }
 
@@ -156,7 +153,6 @@ function boardToFormState(board: BoardConfig): BoardEditorFormState {
     next.pxe_notes = board.boot.notes ?? "";
   } else {
     next.boot_kind = "httpboot";
-    next.uefi_boot_arch = board.boot.boot_arch ?? "";
   }
 
   return next;
@@ -195,7 +191,6 @@ function buildBootConfig(): BootConfig {
   if (form.value.boot_kind === "httpboot") {
     return {
       kind: "httpboot",
-      boot_arch: form.value.uefi_boot_arch || null,
     };
   }
 
@@ -926,23 +921,7 @@ onMounted(() => {
             </div>
           </template>
 
-          <template v-else-if="form.boot_kind === 'httpboot'">
-            <div class="form-grid two-columns" style="margin-top: 18px">
-              <label class="field">
-                <span>启动架构</span>
-                <select v-model="form.uefi_boot_arch">
-                  <option value="">未指定</option>
-                  <option value="x86_64">x86_64</option>
-                  <option value="aarch64">aarch64</option>
-                  <option value="loongarch64">loongarch64</option>
-                  <option value="riscv64">riscv64</option>
-                  <option value="other">other</option>
-                </select>
-              </label>
-            </div>
-          </template>
-
-          <label v-else class="field" style="margin-top: 16px">
+          <label v-else-if="form.boot_kind === 'pxe'" class="field" style="margin-top: 16px">
             <span>PXE 备注</span>
             <textarea v-model="form.pxe_notes" rows="4" />
           </label>

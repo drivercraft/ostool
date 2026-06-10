@@ -120,11 +120,9 @@ export interface PxeProfile {
   notes: string | null;
 }
 
-export type UefiBootArch = "x86_64" | "aarch64" | "loongarch64" | "riscv64" | "other";
-
 export interface UefiHttpProfile {
   kind: "httpboot";
-  boot_arch: UefiBootArch | null;
+  boot_arch?: string | null;
   mac?: string | null;
 }
 

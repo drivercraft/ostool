@@ -387,7 +387,6 @@ describe("BoardEditorView", () => {
         },
         boot: {
           kind: "httpboot",
-          boot_arch: "x86_64",
         },
       }),
     );
