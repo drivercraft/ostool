@@ -61,9 +61,6 @@ ureq = "3.0"
 chrono = { version = "0.4.44", features = ["serde"] }
 tokio-tungstenite = "0.28"
 tokio-serial = "5.4"
-# Keep cargo install --path from resolving zerocopy >=0.8.50 on older nightlies,
-# where stdarch_x86_avx512 is still unstable.
-zerocopy = "=0.8.27"
 
 [dev-dependencies]
 tempfile = "3"

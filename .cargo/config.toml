@@ -1,0 +1,7 @@
+[build]
+rustflags = [
+    "--cfg",
+    "no_zerocopy_simd_x86_avx12_1_89_0",
+    "--check-cfg",
+    "cfg(no_zerocopy_simd_x86_avx12_1_89_0)",
+]
