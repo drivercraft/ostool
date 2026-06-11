@@ -36,8 +36,10 @@ use crate::{
     sterm::{AsyncTerminal, TerminalConfig},
 };
 
-const READY_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
+const READY_WAIT_TIMEOUT: Duration = Duration::from_secs(180);
 const READY_LINE_LIMIT: usize = 4096;
+const BOOT_OFFER_SEND_DELAY: Duration = Duration::from_millis(200);
+const BOOT_OFFER_BYTE_DELAY: Duration = Duration::from_millis(2);
 
 pub(crate) async fn run_httpboot_remote(
     input: UbootRunInput,
@@ -129,6 +131,7 @@ impl HttpBootBoardRunner {
         let mut serial_rx = serial_rx.compat();
         let mut serial_tx = serial_tx.compat_write();
         wait_for_loader_ready(&mut serial_rx, arch).await?;
+        tokio::time::sleep(BOOT_OFFER_SEND_DELAY).await;
 
         let offer = SerialBootOfferMessage {
             protocol_version: SERIAL_PROTOCOL_VERSION,
@@ -140,10 +143,8 @@ impl HttpBootBoardRunner {
             entry_symbol: Some("httpboot_entry".into()),
         };
         let line = render_serial_boot_offer(&offer).context("failed to render boot offer")?;
-        serial_tx
-            .write_all(line.as_bytes())
-            .await
-            .context("failed to write HTTP Boot offer")?;
+        println!("{line}");
+        write_serial_line_slowly(&mut serial_tx, &line).await?;
         serial_tx
             .write_all(b"\n")
             .await
@@ -172,6 +173,24 @@ impl HttpBootBoardRunner {
         }
         result
     }
+}
+
+async fn write_serial_line_slowly<W>(serial_tx: &mut W, line: &str) -> anyhow::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    for byte in line.as_bytes() {
+        serial_tx
+            .write_all(core::slice::from_ref(byte))
+            .await
+            .context("failed to write HTTP Boot offer byte")?;
+        serial_tx
+            .flush()
+            .await
+            .context("failed to flush HTTP Boot offer byte")?;
+        tokio::time::sleep(BOOT_OFFER_BYTE_DELAY).await;
+    }
+    Ok(())
 }
 
 async fn wait_for_loader_ready<R>(serial_rx: &mut R, arch: BootArch) -> anyhow::Result<()>
@@ -213,6 +232,9 @@ where
         }
     }
 
+    if !line.is_empty() {
+        println!("{}", String::from_utf8_lossy(&line));
+    }
     bail!("timed out waiting for axloader ready on board serial")
 }
 
