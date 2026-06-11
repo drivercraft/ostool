@@ -14,7 +14,10 @@ use mime_guess::from_path;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tokio::fs;
+use tokio::{
+    fs::{self, File},
+    io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
+};
 
 use crate::{
     api::{
@@ -1154,11 +1157,16 @@ async fn read_http_boot_current_file(
     }
     let disk_path = board_current_disk_path(&config.http_boot.root_dir, board_id, relative_path)
         .map_err(|err| ApiError::bad_request(err.to_string()))?;
-    let body = fs::read(&disk_path).await.map_err(|err| match err.kind() {
-        std::io::ErrorKind::NotFound => {
-            ApiError::not_found(format!("HTTP Boot file `{relative_path}` not found"))
-        }
-        _ => ApiError::from(anyhow::Error::from(err)),
+    let metadata = fs::metadata(&disk_path)
+        .await
+        .map_err(|err| match err.kind() {
+            std::io::ErrorKind::NotFound => {
+                ApiError::not_found(format!("HTTP Boot file `{relative_path}` not found"))
+            }
+            _ => ApiError::from(anyhow::Error::from(err)),
+        })?;
+    let file_len = usize::try_from(metadata.len()).map_err(|_| {
+        ApiError::service_unavailable(format!("HTTP Boot file `{relative_path}` is too large"))
     })?;
     let content_type = from_path(&disk_path).first_or_octet_stream().to_string();
     let content_type = HeaderValue::from_str(&content_type).map_err(|err| {
@@ -1167,16 +1175,24 @@ async fn read_http_boot_current_file(
     if let Some(range) = headers
         .get(header::RANGE)
         .and_then(|value| value.to_str().ok())
-        && let Some((start, end)) = parse_single_byte_range(range, body.len())
+        && let Some((start, end)) = parse_single_byte_range(range, file_len)
     {
-        let chunk = body[start..=end].to_vec();
+        let chunk = read_file_range(&disk_path, start, end).await?;
         return Ok((
             StatusCode::PARTIAL_CONTENT,
             [
                 (header::CONTENT_TYPE, content_type),
                 (
+                    header::CONTENT_LENGTH,
+                    HeaderValue::from_str(&chunk.len().to_string()).map_err(|err| {
+                        ApiError::service_unavailable(format!(
+                            "invalid content length header: {err}"
+                        ))
+                    })?,
+                ),
+                (
                     header::CONTENT_RANGE,
-                    HeaderValue::from_str(&format!("bytes {start}-{end}/{}", body.len())).map_err(
+                    HeaderValue::from_str(&format!("bytes {start}-{end}/{file_len}")).map_err(
                         |err| {
                             ApiError::service_unavailable(format!(
                                 "invalid content range header: {err}"
@@ -1191,7 +1207,32 @@ async fn read_http_boot_current_file(
             .into_response());
     }
 
+    let body = fs::read(&disk_path)
+        .await
+        .map_err(|err| ApiError::from(anyhow::Error::from(err)))?;
     Ok(([(header::CONTENT_TYPE, content_type)], body).into_response())
+}
+
+async fn read_file_range(
+    path: &std::path::Path,
+    start: usize,
+    end: usize,
+) -> Result<Vec<u8>, ApiError> {
+    let len = end
+        .checked_sub(start)
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(|| ApiError::bad_request("invalid byte range"))?;
+    let mut file = File::open(path)
+        .await
+        .map_err(|err| ApiError::from(anyhow::Error::from(err)))?;
+    file.seek(SeekFrom::Start(start as u64))
+        .await
+        .map_err(|err| ApiError::from(anyhow::Error::from(err)))?;
+    let mut chunk = vec![0; len];
+    file.read_exact(&mut chunk)
+        .await
+        .map_err(|err| ApiError::from(anyhow::Error::from(err)))?;
+    Ok(chunk)
 }
 
 fn parse_single_byte_range(range: &str, len: usize) -> Option<(usize, usize)> {
