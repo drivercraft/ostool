@@ -200,6 +200,7 @@ impl BoardServerClient {
     pub fn new(server: &str, port: u16) -> anyhow::Result<Self> {
         Ok(Self {
             client: reqwest::Client::builder()
+                .no_proxy()
                 .build()
                 .context("failed to build HTTP client")?,
             base_url: build_base_url("http", server, port)?,
