@@ -144,20 +144,14 @@ impl HttpBootBoardRunner {
         };
         let line = render_serial_boot_offer(&offer).context("failed to render boot offer")?;
         println!("{line}");
-        write_serial_line_slowly(&mut serial_tx, &line).await?;
-        serial_tx
-            .write_all(b"\n")
-            .await
-            .context("failed to terminate HTTP Boot offer line")?;
-        serial_tx
-            .flush()
-            .await
-            .context("failed to flush HTTP Boot offer")?;
+        send_boot_offer_line(&mut serial_tx, &line).await?;
         println!("HTTP Boot offer sent, entering serial terminal...");
 
         let result = run_terminal(
             serial_rx,
             serial_tx,
+            line,
+            arch,
             self.board_config.success_regex,
             self.board_config.fail_regex,
             self.board_config.shell_prefix,
@@ -173,6 +167,22 @@ impl HttpBootBoardRunner {
         }
         result
     }
+}
+
+async fn send_boot_offer_line<W>(serial_tx: &mut W, line: &str) -> anyhow::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    write_serial_line_slowly(serial_tx, line).await?;
+    serial_tx
+        .write_all(b"\n")
+        .await
+        .context("failed to terminate HTTP Boot offer line")?;
+    serial_tx
+        .flush()
+        .await
+        .context("failed to flush HTTP Boot offer")?;
+    Ok(())
 }
 
 async fn write_serial_line_slowly<W>(serial_tx: &mut W, line: &str) -> anyhow::Result<()>
@@ -258,6 +268,8 @@ fn validate_ready(ready: &SerialReadyMessage, expected_arch: BootArch) -> anyhow
 async fn run_terminal<R, W>(
     serial_rx: R,
     serial_tx: W,
+    boot_offer_line: String,
+    arch: BootArch,
     success_regex: Vec<String>,
     fail_regex: Vec<String>,
     shell_prefix: Option<String>,
@@ -281,6 +293,9 @@ where
         shell_init_cmd,
     )));
     let shell_init_clone = shell_init.clone();
+    let ready_monitor = Arc::new(Mutex::new(LoaderReadyMonitor::new(arch)));
+    let ready_monitor_clone = ready_monitor.clone();
+    let boot_offer_bytes = boot_offer_line_bytes(&boot_offer_line);
 
     let (inbound_tx, inbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -344,6 +359,11 @@ where
             if matcher.should_stop() {
                 handle.stop();
             }
+
+            let mut ready_monitor = ready_monitor_clone.lock().unwrap();
+            if ready_monitor.observe_byte(byte) {
+                handle.send_after(BOOT_OFFER_SEND_DELAY, boot_offer_bytes.clone());
+            }
         })
         .await;
 
@@ -359,6 +379,51 @@ where
     .with_terminal_error(terminal_result.err())
     .with_stream_match(res_lock.take())
     .into_result()
+}
+
+fn boot_offer_line_bytes(line: &str) -> Vec<u8> {
+    let mut bytes = line.as_bytes().to_vec();
+    bytes.push(b'\n');
+    bytes
+}
+
+struct LoaderReadyMonitor {
+    arch: BootArch,
+    line: Vec<u8>,
+}
+
+impl LoaderReadyMonitor {
+    fn new(arch: BootArch) -> Self {
+        Self {
+            arch,
+            line: Vec::new(),
+        }
+    }
+
+    fn observe_byte(&mut self, byte: u8) -> bool {
+        match byte {
+            b'\r' => false,
+            b'\n' => {
+                let ready = self.observe_line();
+                self.line.clear();
+                ready
+            }
+            byte => {
+                if self.line.len() >= READY_LINE_LIMIT {
+                    self.line.clear();
+                }
+                self.line.push(byte);
+                false
+            }
+        }
+    }
+
+    fn observe_line(&self) -> bool {
+        let text = String::from_utf8_lossy(&self.line);
+        parse_serial_ready(&text)
+            .map(|ready| validate_ready(&ready, self.arch).is_ok())
+            .unwrap_or(false)
+    }
 }
 
 async fn shutdown_serial_task(
