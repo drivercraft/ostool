@@ -5,7 +5,6 @@ use clap::Parser;
 use log::info;
 use ostool_server::{
     ServerConfig, build_app_state, build_router,
-    http_boot::discovery::run_discovery_service,
     tftp::service::{BuiltinTftpManager, SystemTftpdHpaManager, TftpManager},
 };
 
@@ -49,13 +48,6 @@ async fn main() -> anyhow::Result<()> {
             if let Err(err) = gc_state.cleanup_expired_sessions().await {
                 log::warn!("failed to cleanup expired sessions: {err:#}");
             }
-        }
-    });
-
-    let discovery_state = state.clone();
-    tokio::spawn(async move {
-        if let Err(err) = run_discovery_service(discovery_state).await {
-            log::warn!("HTTP Boot discovery service stopped: {err:#}");
         }
     });
 

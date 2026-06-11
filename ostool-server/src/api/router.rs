@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use axum::{
     Router,
     body::{Bytes, to_bytes},
-    extract::{Path, Query, Request, State, WebSocketUpgrade},
+    extract::{Path, Request, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Redirect, Response},
     routing::{delete, get, post, put},
@@ -24,10 +24,9 @@ use crate::{
             AdminServerConfigEditable, AdminServerConfigReadonly, AdminServerConfigResponse,
             AdminSessionsResponse, AdminTftpConfigResponse, AdminTftpStatusResponse,
             BoardPowerAction, BoardPowerStatusResponse, BoardRuntimeStatusResponse,
-            BoardTypeSummary, BootOfferResponse, BootProfileResponse, CreateSessionRequest,
-            DtbFileResponse, FileResponse, HttpBootFileResponse, KernelPublishResponse,
-            LoaderHelloRequest, LoaderHelloResponse, NetworkInterfaceSummary, SerialPortSummary,
-            SerialStatusResponse, SessionCreatedResponse, SessionDetailResponse,
+            BoardTypeSummary, BootProfileResponse, CreateSessionRequest, DtbFileResponse,
+            FileResponse, HttpBootFileResponse, KernelPublishResponse, NetworkInterfaceSummary,
+            SerialPortSummary, SerialStatusResponse, SessionCreatedResponse, SessionDetailResponse,
             SessionDtbResponse, TftpSessionResponse, UpdateServerConfigRequest,
         },
     },
@@ -38,7 +37,7 @@ use crate::{
     dtb_store::normalize_dtb_name,
     http_boot::{
         files::{HttpBootFileRef, board_current_disk_path, put_board_current_file},
-        loaders::{BootOfferError, LoaderRegisterError, PublishOfferRequest},
+        publish::{KernelPublishInput, publish_kernel},
     },
     power::{PowerAction, PowerActionError},
     serial::{
@@ -137,14 +136,6 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/sessions/{session_id}/http-boot/kernel",
             put(put_http_boot_kernel),
-        )
-        .route(
-            "/api/v1/httpboot/loaders/hello",
-            post(post_httpboot_loader_hello),
-        )
-        .route(
-            "/api/v1/httpboot/loaders/{loader_id}/boot-offer",
-            get(get_httpboot_boot_offer),
         )
         .route("/api/v1/sessions/{session_id}/dtb", get(get_session_dtb))
         .route(
@@ -1267,9 +1258,9 @@ async fn put_http_boot_kernel(
     let remote_name = optional_header(headers, "X-HttpBoot-Remote-Name")?
         .unwrap_or_else(|| "kernel.elf".to_string());
     let remote_name = parse_relative_path(&remote_name)?;
-    let arch = parse_httpboot_arch_header(headers)?;
-    let image_format = parse_httpboot_image_format_header(headers)?;
-    let entry_symbol = optional_header(headers, "X-HttpBoot-Entry-Symbol")?
+    let _arch = parse_httpboot_arch_header(headers)?;
+    let _image_format = parse_httpboot_image_format_header(headers)?;
+    let _entry_symbol = optional_header(headers, "X-HttpBoot-Entry-Symbol")?
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let max_mib = state.config.read().await.upload_limits.session_file_max_mib;
@@ -1284,55 +1275,13 @@ async fn put_http_boot_kernel(
             .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
     let kernel_response = http_boot_file_response(&config, &board.id, kernel_file)?;
     let kernel_sha256 = Some(hex_sha256(&body));
-    let response = state
-        .http_boot_loaders
-        .publish_offer(PublishOfferRequest {
-            session_id,
-            board_id: board.id,
-            kernel_url: kernel_response.http_url,
-            kernel_size: body.len() as u64,
-            kernel_sha256,
-            arch,
-            image_format,
-            entry_symbol,
-        })
-        .await;
+    let response = publish_kernel(KernelPublishInput {
+        kernel_url: kernel_response.http_url,
+        kernel_size: body.len() as u64,
+        kernel_sha256,
+    });
 
     Ok((StatusCode::CREATED, axum::Json(response)))
-}
-
-async fn post_httpboot_loader_hello(
-    State(state): State<AppState>,
-    axum::Json(request): axum::Json<LoaderHelloRequest>,
-) -> Result<axum::Json<LoaderHelloResponse>, ApiError> {
-    let config = state.config.read().await.clone();
-    let active_board_ids = active_httpboot_board_ids(&state).await;
-    let boards = state.boards.read().await;
-    let mut response = state
-        .http_boot_loaders
-        .register_loader(&boards, &active_board_ids, request, String::new())
-        .await
-        .map_err(api_error_from_loader_register_error)?;
-    response.poll_url = httpboot_loader_poll_url(&config, &response.loader_id)?;
-    Ok(axum::Json(response))
-}
-
-async fn get_httpboot_boot_offer(
-    Path(loader_id): Path<String>,
-    Query(query): Query<BTreeMap<String, String>>,
-    State(state): State<AppState>,
-) -> Result<axum::Json<BootOfferResponse>, ApiError> {
-    let _wait_ms = query
-        .get("wait_ms")
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(0);
-    let active_session_id = active_session_id_for_loader(&state, &loader_id).await?;
-    let response = state
-        .http_boot_loaders
-        .boot_offer(&loader_id, active_session_id.as_deref())
-        .await
-        .map_err(api_error_from_boot_offer_error)?;
-    Ok(axum::Json(response))
 }
 
 fn parse_httpboot_arch_header(headers: &HeaderMap) -> Result<BootArch, ApiError> {
@@ -1642,14 +1591,6 @@ fn http_boot_url(
     ))
 }
 
-fn httpboot_loader_poll_url(config: &ServerConfig, loader_id: &str) -> Result<String, ApiError> {
-    let base_url = http_boot_public_base_url(config)?;
-    let base_url = base_url.trim_end_matches('/');
-    Ok(format!(
-        "{base_url}/api/v1/httpboot/loaders/{loader_id}/boot-offer"
-    ))
-}
-
 fn http_boot_public_base_url(config: &ServerConfig) -> Result<String, ApiError> {
     if let Some(public_base_url) = config.http_boot.public_base_url.as_deref()
         && !public_base_url.trim().is_empty()
@@ -1668,56 +1609,6 @@ fn http_boot_public_base_url(config: &ServerConfig) -> Result<String, ApiError> 
     }
 
     Ok(format!("http://{}", config.listen_addr))
-}
-
-async fn active_session_id_for_loader(
-    state: &AppState,
-    loader_id: &str,
-) -> Result<Option<String>, ApiError> {
-    let board_id = state
-        .http_boot_loaders
-        .loader_board_id(loader_id)
-        .await
-        .map_err(api_error_from_boot_offer_error)?;
-    let Some(board_id) = board_id else {
-        return Ok(None);
-    };
-    Ok(state
-        .board_runtime_status(&board_id)
-        .await
-        .and_then(|runtime| runtime.active_session_id))
-}
-
-async fn active_httpboot_board_ids(state: &AppState) -> Vec<String> {
-    state
-        .board_runtimes
-        .read()
-        .await
-        .iter()
-        .filter(|(_, runtime)| {
-            runtime.lease_state == BoardLeaseState::Using && runtime.active_session_id.is_some()
-        })
-        .map(|(board_id, _)| board_id.clone())
-        .collect()
-}
-
-fn api_error_from_loader_register_error(err: LoaderRegisterError) -> ApiError {
-    match err {
-        LoaderRegisterError::UnsupportedProtocolVersion(_)
-        | LoaderRegisterError::InvalidMac(_)
-        | LoaderRegisterError::IncompatibleArch { .. } => ApiError::bad_request(err.to_string()),
-        LoaderRegisterError::UnknownBoardMac(_)
-        | LoaderRegisterError::UnknownActiveBoard { .. } => ApiError::not_found(err.to_string()),
-        LoaderRegisterError::AmbiguousBoardMac(_, _)
-        | LoaderRegisterError::AmbiguousActiveBoard { .. } => ApiError::conflict(err.to_string()),
-    }
-}
-
-fn api_error_from_boot_offer_error(err: BootOfferError) -> ApiError {
-    match err {
-        BootOfferError::UnknownLoader => ApiError::not_found(err.to_string()),
-        BootOfferError::BoardSessionMismatch { .. } => ApiError::conflict(err.to_string()),
-    }
 }
 
 fn hex_sha256(bytes: &[u8]) -> String {
@@ -3550,68 +3441,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn httpboot_loader_gets_session_bound_boot_offer() {
+    async fn httpboot_kernel_upload_returns_download_offer_payload() {
         let app = test_router().await;
         assert_eq!(
             create_board(
                 &app,
-                serde_json::to_value(sample_httpboot_board("uefi-http-loader")).unwrap()
+                serde_json::to_value(sample_httpboot_board("uefi-http-kernel")).unwrap()
             )
             .await,
             StatusCode::CREATED
         );
         let session_id = create_session(&app, "x86_64-uefi-http").await;
-
-        let hello = json!({
-            "protocol_version": 1,
-            "nonce": "nonce-1",
-            "arch": "x86_64",
-            "board": "asus-nuc15crh",
-            "mac": "1C-69-7A-DC-F3-47",
-            "firmware_vendor": "UEFI",
-            "loader_version": "test",
-            "capabilities": {
-                "image_formats": ["elf64"],
-                "range_get": true,
-                "sha256": true
-            }
-        });
-        let hello_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/httpboot/loaders/hello")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(hello.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(hello_response.status(), StatusCode::OK);
-        let hello_body = to_bytes(hello_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let hello_value: serde_json::Value = serde_json::from_slice(&hello_body).unwrap();
-        let loader_id = hello_value["loader_id"].as_str().unwrap();
-        assert_eq!(hello_value["board_id"], "uefi-http-loader");
-
-        let waiting = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!(
-                        "/api/v1/httpboot/loaders/{loader_id}/boot-offer?wait_ms=1"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(waiting.status(), StatusCode::OK);
-        let waiting_body = to_bytes(waiting.into_body(), usize::MAX).await.unwrap();
-        let waiting_value: serde_json::Value = serde_json::from_slice(&waiting_body).unwrap();
-        assert_eq!(waiting_value["state"], "waiting");
 
         let published = app
             .clone()
@@ -3629,28 +3469,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(published.status(), StatusCode::CREATED);
-
-        let ready = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/api/v1/httpboot/loaders/{loader_id}/boot-offer"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(ready.status(), StatusCode::OK);
-        let ready_body = to_bytes(ready.into_body(), usize::MAX).await.unwrap();
-        let ready_value: serde_json::Value = serde_json::from_slice(&ready_body).unwrap();
-        assert_eq!(ready_value["state"], "ready");
+        let body = to_bytes(published.into_body(), usize::MAX).await.unwrap();
+        let ready_value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(ready_value["boot_id"].as_str().is_some());
         assert_eq!(
             ready_value["kernel_url"],
-            "http://127.0.0.1:0/boot/boards/uefi-http-loader/current/kernel.elf"
+            "http://127.0.0.1:0/boot/boards/uefi-http-kernel/current/kernel.elf"
         );
-        assert_eq!(ready_value["image_format"], "elf64");
-        assert_eq!(ready_value["arch"], "x86_64");
-        assert_eq!(ready_value["entry_symbol"], "httpboot_entry");
+        assert_eq!(ready_value["kernel_size"], 10);
         assert!(ready_value["kernel_sha256"].as_str().unwrap().len() == 64);
     }
 

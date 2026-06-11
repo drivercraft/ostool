@@ -15,7 +15,6 @@ use crate::{
     board_store::fs::FileBoardStore,
     config::{BoardConfig, PowerManagementConfig, ServerConfig},
     dtb_store::DtbStore,
-    http_boot::loaders::LoaderRegistry,
     power::{PowerAction, PowerActionError, execute_power_action_for_board},
     session::{Session, SessionState, SessionStopReason},
     tftp::service::TftpManager,
@@ -95,7 +94,6 @@ pub struct AppState {
     pub sessions: Arc<RwLock<BTreeMap<String, Arc<SessionState>>>>,
     pub board_store: Arc<FileBoardStore>,
     pub dtb_store: Arc<DtbStore>,
-    pub http_boot_loaders: LoaderRegistry,
     pub tftp_manager: Arc<RwLock<Arc<dyn TftpManager>>>,
     release_tx: mpsc::UnboundedSender<ReleaseJob>,
 }
@@ -121,7 +119,6 @@ pub async fn build_app_state(
         sessions: Arc::new(RwLock::new(BTreeMap::new())),
         board_store,
         dtb_store,
-        http_boot_loaders: LoaderRegistry::new(),
         tftp_manager: Arc::new(RwLock::new(tftp_manager)),
         release_tx,
     };
