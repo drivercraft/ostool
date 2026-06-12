@@ -39,7 +39,6 @@ use crate::{
 const READY_WAIT_TIMEOUT: Duration = Duration::from_secs(180);
 const READY_LINE_LIMIT: usize = 4096;
 const BOOT_OFFER_SEND_DELAY: Duration = Duration::from_millis(200);
-const BOOT_OFFER_BYTE_DELAY: Duration = Duration::from_millis(2);
 
 pub(crate) async fn run_httpboot_remote(
     input: UbootRunInput,
@@ -173,7 +172,10 @@ async fn send_boot_offer_line<W>(serial_tx: &mut W, line: &str) -> anyhow::Resul
 where
     W: tokio::io::AsyncWrite + Unpin,
 {
-    write_serial_line_slowly(serial_tx, line).await?;
+    serial_tx
+        .write_all(line.as_bytes())
+        .await
+        .context("failed to write HTTP Boot offer line")?;
     serial_tx
         .write_all(b"\n")
         .await
@@ -182,24 +184,6 @@ where
         .flush()
         .await
         .context("failed to flush HTTP Boot offer")?;
-    Ok(())
-}
-
-async fn write_serial_line_slowly<W>(serial_tx: &mut W, line: &str) -> anyhow::Result<()>
-where
-    W: tokio::io::AsyncWrite + Unpin,
-{
-    for byte in line.as_bytes() {
-        serial_tx
-            .write_all(core::slice::from_ref(byte))
-            .await
-            .context("failed to write HTTP Boot offer byte")?;
-        serial_tx
-            .flush()
-            .await
-            .context("failed to flush HTTP Boot offer byte")?;
-        tokio::time::sleep(BOOT_OFFER_BYTE_DELAY).await;
-    }
     Ok(())
 }
 
