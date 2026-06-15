@@ -211,11 +211,12 @@ where
                 b'\r' => {}
                 b'\n' => {
                     let text = String::from_utf8_lossy(&line).to_string();
-                    println!("{text}");
                     if let Ok(ready) = parse_serial_ready(&text) {
+                        println!("{text}");
                         validate_ready(&ready, arch)?;
                         return Ok(());
                     }
+                    log::debug!("serial output before axloader ready: {text}");
                     line.clear();
                 }
                 byte => {
@@ -229,7 +230,10 @@ where
     }
 
     if !line.is_empty() {
-        println!("{}", String::from_utf8_lossy(&line));
+        log::debug!(
+            "partial serial output before axloader ready: {}",
+            String::from_utf8_lossy(&line)
+        );
     }
     bail!("timed out waiting for axloader ready on board serial")
 }
