@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0](https://github.com/drivercraft/ostool/compare/ostool-v0.22.1...ostool-v0.23.0) - 2026-06-15
+
+### Added
+
+- Add UEFI HTTP boot support ([#121](https://github.com/drivercraft/ostool/pull/121))
+
+### Other
+
+- *(tool)* 抽出 QEMU command 与 runner 执行边界 ([#127](https://github.com/drivercraft/ostool/pull/127))
+
 ## [0.22.1](https://github.com/drivercraft/ostool/compare/ostool-v0.22.0...ostool-v0.22.1) - 2026-06-06
 
 ### Fixed

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/drivercraft/ostool/compare/ostool-server-v0.3.0...ostool-server-v0.4.0) - 2026-06-15
+
+### Added
+
+- Add UEFI HTTP boot support ([#121](https://github.com/drivercraft/ostool/pull/121))
+
 ## [0.3.0](https://github.com/drivercraft/ostool/compare/ostool-server-v0.2.1...ostool-server-v0.3.0) - 2026-05-22
 
 ### Other
