@@ -980,7 +980,7 @@ checksum = "9844ddc3a6e533d62bba727eb6c28b5d360921d5175e9ff0f1e621a5c590a4d5"
 
 [[package]]
 name = "fitimage"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -1662,7 +1662,7 @@ dependencies = [
 
 [[package]]
 name = "jkconfig"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -2197,7 +2197,7 @@ dependencies = [
 
 [[package]]
 name = "ostool"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2241,7 +2241,7 @@ dependencies = [
 
 [[package]]
 name = "ostool-server"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4061,7 +4061,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "uboot-shell"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "colored",
  "env_logger",
