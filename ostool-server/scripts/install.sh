@@ -17,7 +17,6 @@ CONFIG_DIR="/etc/${SERVICE_NAME}"
 DATA_DIR="/var/lib/${SERVICE_NAME}"
 CONFIG_FILE="${CONFIG_DIR}/config.toml"
 TFTP_ROOT_DIR="/srv/tftp"
-HTTP_BOOT_ROOT_DIR="${DATA_DIR}/http-boot"
 SYSTEM_BIN_DIR="/usr/local/bin"
 SYSTEM_BIN_PATH="${SYSTEM_BIN_DIR}/${SERVICE_NAME}"
 
@@ -305,14 +304,12 @@ echo "==> Creating directories..."
 run_cmd mkdir -p "${CONFIG_DIR}"
 run_cmd mkdir -p "${DATA_DIR}/boards"
 run_cmd mkdir -p "${DATA_DIR}/dtbs"
-run_cmd mkdir -p "${HTTP_BOOT_ROOT_DIR}"
 run_cmd mkdir -p "${TFTP_ROOT_DIR}"
 
 echo "Created:"
 echo "  ${CONFIG_DIR}"
 echo "  ${DATA_DIR}/boards"
 echo "  ${DATA_DIR}/dtbs"
-echo "  ${HTTP_BOOT_ROOT_DIR}"
 echo "  ${TFTP_ROOT_DIR}"
 
 # --- step 7: generate default config ---

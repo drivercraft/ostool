@@ -16,7 +16,6 @@ fi
 CONFIG_DIR="/etc/${SERVICE_NAME}"
 CONFIG_FILE="${CONFIG_DIR}/config.toml"
 DATA_DIR="/var/lib/${SERVICE_NAME}"
-HTTP_BOOT_ROOT_DIR="${DATA_DIR}/http-boot"
 SYSTEM_BIN_DIR="/usr/local/bin"
 SYSTEM_BIN_PATH="${SYSTEM_BIN_DIR}/${SERVICE_NAME}"
 
@@ -229,11 +228,6 @@ else
 fi
 
 echo "Will preserve data directory: ${DATA_DIR}"
-
-echo ""
-echo "==> Ensuring HTTP Boot data directories..."
-run_cmd mkdir -p "${HTTP_BOOT_ROOT_DIR}"
-echo "Ensured HTTP Boot root directory: ${HTTP_BOOT_ROOT_DIR}"
 
 echo ""
 echo "==> Checking system TFTP dependency..."

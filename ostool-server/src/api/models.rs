@@ -8,7 +8,6 @@ use crate::{
         TftpConfig, TftpNetworkConfig, UploadLimitsConfig,
     },
     dtb_store::DtbFile,
-    http_boot::files::HttpBootFileRef,
     session::Session,
     state::BoardLeaseState,
     tftp::{files::TftpFileRef, status::TftpStatus},
@@ -155,7 +154,7 @@ pub struct HttpBootFileResponse {
 }
 
 impl HttpBootFileResponse {
-    pub fn from_file(file: HttpBootFileRef, http_url: String) -> Self {
+    pub fn from_file(file: TftpFileRef, http_url: String) -> Self {
         Self {
             filename: file.filename,
             relative_path: file.relative_path,
@@ -253,7 +252,6 @@ pub struct AdminServerConfigReadonly {
     pub data_dir: String,
     pub board_dir: String,
     pub dtb_dir: String,
-    pub http_boot_root_dir: String,
     pub http_boot_public_base_url: Option<String>,
     pub dtb_upload_max_mib: u32,
 }

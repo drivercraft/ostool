@@ -38,10 +38,7 @@ use crate::{
         BoardConfig, BootConfig, PowerManagementConfig, ServerConfig, TftpConfig, UbootNetworkMode,
     },
     dtb_store::normalize_dtb_name,
-    http_boot::{
-        files::{HttpBootFileRef, board_current_disk_path, put_board_current_file},
-        publish::{KernelPublishInput, publish_kernel},
-    },
+    http_boot::publish::{KernelPublishInput, publish_kernel},
     power::{PowerAction, PowerActionError},
     serial::{
         discovery::list_serial_ports as discover_serial_ports,
@@ -76,7 +73,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/assets/{*path}", get(serve_admin_asset))
         .route("/admin/{*path}", get(serve_admin_history))
         .route(
-            "/boot/boards/{board_id}/current/{*path}",
+            "/boot/sessions/{session_id}/{*path}",
             get(get_http_boot_file),
         )
         .route("/api/v1/admin/overview", get(get_admin_overview))
@@ -1136,17 +1133,19 @@ async fn power_off_board(
 }
 
 async fn get_http_boot_file(
-    Path((board_id, path)): Path<(String, String)>,
+    Path((session_id, path)): Path<(String, String)>,
     State(state): State<AppState>,
     request: Request,
 ) -> Result<Response, ApiError> {
     let relative_path = parse_relative_path(&path)?;
-    read_http_boot_current_file(&state, &board_id, &relative_path, request.headers()).await
+    let session = active_session_state_or_404(&state, &session_id).await?;
+    ensure_httpboot_board(session.board())?;
+    read_http_boot_session_file(&state, &session_id, &relative_path, request.headers()).await
 }
 
-async fn read_http_boot_current_file(
+async fn read_http_boot_session_file(
     state: &AppState,
-    board_id: &str,
+    session_id: &str,
     relative_path: &str,
     headers: &HeaderMap,
 ) -> Result<Response, ApiError> {
@@ -1154,8 +1153,15 @@ async fn read_http_boot_current_file(
     if !config.http_boot.enabled {
         return Err(ApiError::not_found("HTTP Boot is disabled"));
     }
-    let disk_path = board_current_disk_path(&config.http_boot.root_dir, board_id, relative_path)
-        .map_err(|err| ApiError::bad_request(err.to_string()))?;
+    let manager = state.tftp_manager.read().await.clone();
+    let file = manager
+        .get_session_file(session_id, relative_path)
+        .await
+        .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?
+        .ok_or_else(|| {
+            ApiError::not_found(format!("HTTP Boot file `{relative_path}` not found"))
+        })?;
+    let disk_path = file.disk_path;
     let metadata = fs::metadata(&disk_path)
         .await
         .map_err(|err| match err.kind() {
@@ -1265,24 +1271,15 @@ async fn put_http_boot_file(
     request: Request,
 ) -> Result<(StatusCode, axum::Json<HttpBootFileResponse>), ApiError> {
     let session = active_session_state_or_404(&state, &session_id).await?;
-    let board = session.board().clone();
-    ensure_httpboot_board(&board)?;
-    let headers = request.headers();
-    let relative_path = headers
-        .get("X-File-Path")
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| ApiError::bad_request("missing X-File-Path header"))?;
-    let relative_path = parse_relative_path(relative_path)?;
-    let max_mib = state.config.read().await.upload_limits.session_file_max_mib;
-    let body = read_limited_body(request, max_mib, "HTTP Boot file").await?;
-    let config = state.config.read().await.clone();
-    if !config.http_boot.enabled {
+    ensure_httpboot_board(session.board())?;
+    if !state.config.read().await.http_boot.enabled {
         return Err(ApiError::conflict("HTTP Boot is disabled"));
     }
 
-    let file = put_board_current_file(&config.http_boot.root_dir, &board.id, &relative_path, &body)
-        .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
-    let response = http_boot_file_response(&config, &board.id, file)?;
+    let (relative_path, file) =
+        put_session_file_from_request(&state, &session_id, request, "HTTP Boot file").await?;
+    let config = state.config.read().await.clone();
+    let response = http_boot_file_response(&config, &session_id, &relative_path, file)?;
     Ok((StatusCode::CREATED, axum::Json(response)))
 }
 
@@ -1303,22 +1300,24 @@ async fn put_http_boot_kernel(
     let _entry_symbol = optional_header(headers, "X-HttpBoot-Entry-Symbol")?
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    let max_mib = state.config.read().await.upload_limits.session_file_max_mib;
-    let body = read_limited_body(request, max_mib, "HTTP Boot kernel").await?;
-    let config = state.config.read().await.clone();
-    if !config.http_boot.enabled {
+    if !state.config.read().await.http_boot.enabled {
         return Err(ApiError::conflict("HTTP Boot is disabled"));
     }
 
-    let kernel_file =
-        put_board_current_file(&config.http_boot.root_dir, &board.id, &remote_name, &body)
-            .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
-    let kernel_response = http_boot_file_response(&config, &board.id, kernel_file)?;
-    let kernel_sha256 = Some(hex_sha256(&body));
+    let (kernel_file, kernel_size, kernel_sha256) = put_session_file_bytes_from_request(
+        &state,
+        &session_id,
+        &remote_name,
+        request,
+        "HTTP Boot kernel",
+    )
+    .await?;
+    let config = state.config.read().await.clone();
+    let kernel_response = http_boot_file_response(&config, &session_id, &remote_name, kernel_file)?;
     let response = publish_kernel(KernelPublishInput {
         kernel_url: kernel_response.http_url,
-        kernel_size: body.len() as u64,
-        kernel_sha256,
+        kernel_size,
+        kernel_sha256: Some(kernel_sha256),
     });
 
     Ok((StatusCode::CREATED, axum::Json(response)))
@@ -1387,7 +1386,7 @@ async fn put_session_file(
         .session_state(&session_id)
         .await
         .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` not found")))?;
-    if session.is_releasing() {
+    if session.is_releasing() || session.is_stop_requested() {
         return Err(ApiError::conflict(format!(
             "session `{session_id}` is releasing"
         )));
@@ -1396,24 +1395,12 @@ async fn put_session_file(
         .session_board(&session_id)
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
-    let headers = request.headers();
-    let relative_path = headers
-        .get("X-File-Path")
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| ApiError::bad_request("missing X-File-Path header"))?;
-    let relative_path = parse_relative_path(relative_path)?;
-    let max_mib = state.config.read().await.upload_limits.session_file_max_mib;
-    let body = read_limited_body(request, max_mib, "session file").await?;
-
     if !state.config.read().await.tftp.enabled() {
         return Err(ApiError::conflict("TFTP provider is disabled"));
     }
 
-    let manager = state.tftp_manager.read().await.clone();
-    let file = manager
-        .put_session_file(&session_id, &relative_path, &body)
-        .await
-        .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
+    let (_relative_path, file) =
+        put_session_file_from_request(&state, &session_id, request, "session file").await?;
     let response = file_response_for_board(&state, &board, file).await?;
     Ok((StatusCode::CREATED, axum::Json(response)))
 }
@@ -1454,7 +1441,7 @@ async fn delete_session_file(
         .session_state(&session_id)
         .await
         .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` not found")))?;
-    if session.is_releasing() {
+    if session.is_releasing() || session.is_stop_requested() {
         return Err(ApiError::conflict(format!(
             "session `{session_id}` is releasing"
         )));
@@ -1500,6 +1487,49 @@ async fn get_session_or_404(
         .get_session(session_id)
         .await
         .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` not found")))
+}
+
+async fn put_session_file_from_request(
+    state: &AppState,
+    session_id: &str,
+    request: Request,
+    body_label: &'static str,
+) -> Result<(String, TftpFileRef), ApiError> {
+    let relative_path = required_relative_path_header(request.headers(), "X-File-Path")?;
+    let (file, _, _) =
+        put_session_file_bytes_from_request(state, session_id, &relative_path, request, body_label)
+            .await?;
+    Ok((relative_path, file))
+}
+
+async fn put_session_file_bytes_from_request(
+    state: &AppState,
+    session_id: &str,
+    relative_path: &str,
+    request: Request,
+    body_label: &'static str,
+) -> Result<(TftpFileRef, u64, String), ApiError> {
+    let max_mib = state.config.read().await.upload_limits.session_file_max_mib;
+    let body = read_limited_body(request, max_mib, body_label).await?;
+    let size = body.len() as u64;
+    let sha256 = hex_sha256(&body);
+    let manager = state.tftp_manager.read().await.clone();
+    let file = manager
+        .put_session_file(session_id, relative_path, &body)
+        .await
+        .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
+    Ok((file, size, sha256))
+}
+
+fn required_relative_path_header(
+    headers: &HeaderMap,
+    name: &'static str,
+) -> Result<String, ApiError> {
+    let relative_path = headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| ApiError::bad_request(format!("missing {name} header")))?;
+    parse_relative_path(relative_path)
 }
 
 async fn session_file_responses(
@@ -1584,7 +1614,7 @@ async fn active_session_state_or_404(
         .session_state(session_id)
         .await
         .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` not found")))?;
-    if session.is_releasing() {
+    if session.is_releasing() || session.is_stop_requested() {
         return Err(ApiError::conflict(format!(
             "session `{session_id}` is releasing"
         )));
@@ -1605,21 +1635,17 @@ fn ensure_httpboot_board(board: &BoardConfig) -> Result<(), ApiError> {
 
 fn http_boot_file_response(
     config: &ServerConfig,
-    board_id: &str,
-    file: HttpBootFileRef,
+    session_id: &str,
+    relative_path: &str,
+    file: TftpFileRef,
 ) -> Result<HttpBootFileResponse, ApiError> {
-    let prefix = format!("boards/{board_id}/current/");
-    let relative_path = file
-        .relative_path
-        .strip_prefix(&prefix)
-        .unwrap_or(file.filename.as_str());
-    let http_url = http_boot_url(config, board_id, relative_path)?;
+    let http_url = http_boot_url(config, session_id, relative_path)?;
     Ok(HttpBootFileResponse::from_file(file, http_url))
 }
 
 fn http_boot_url(
     config: &ServerConfig,
-    board_id: &str,
+    session_id: &str,
     relative_path: &str,
 ) -> Result<String, ApiError> {
     let relative_path = normalize_relative_path(relative_path)
@@ -1627,7 +1653,7 @@ fn http_boot_url(
     let base_url = http_boot_public_base_url(config)?;
     let base_url = base_url.trim_end_matches('/');
     Ok(format!(
-        "{base_url}/boot/boards/{board_id}/current/{relative_path}"
+        "{base_url}/boot/sessions/{session_id}/{relative_path}"
     ))
 }
 
@@ -1724,7 +1750,6 @@ fn readonly_server_config(config: &crate::config::ServerConfig) -> AdminServerCo
         data_dir: config.data_dir.display().to_string(),
         board_dir: config.board_dir.display().to_string(),
         dtb_dir: config.dtb_dir.display().to_string(),
-        http_boot_root_dir: config.http_boot.root_dir.display().to_string(),
         http_boot_public_base_url: config.http_boot.public_base_url.clone(),
         dtb_upload_max_mib: DTB_UPLOAD_MAX_MIB,
     }
@@ -2299,7 +2324,7 @@ mod tests {
         let url = http_boot_url(&config, "asus-1", "kernel.bin").unwrap();
         assert_eq!(
             url,
-            "http://10.3.10.192:2999/boot/boards/asus-1/current/kernel.bin"
+            "http://10.3.10.192:2999/boot/sessions/asus-1/kernel.bin"
         );
     }
 
@@ -2313,10 +2338,7 @@ mod tests {
         config.http_boot.public_base_url = None;
 
         let url = http_boot_url(&config, "asus-1", "kernel.elf").unwrap();
-        assert_eq!(
-            url,
-            "http://127.0.0.1:2999/boot/boards/asus-1/current/kernel.elf"
-        );
+        assert_eq!(url, "http://127.0.0.1:2999/boot/sessions/asus-1/kernel.elf");
     }
 
     #[test]
@@ -3409,7 +3431,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn http_boot_upload_file_and_public_download_use_board_current_path() {
+    async fn http_boot_upload_file_and_public_download_use_session_file_path() {
         let app = test_router().await;
         assert_eq!(
             create_board(
@@ -3439,18 +3461,18 @@ mod tests {
         assert_eq!(uploaded["filename"], "kernel.bin");
         assert_eq!(
             uploaded["relative_path"],
-            "boards/uefi-http-01/current/kernel.bin"
+            format!("ostool/sessions/{session_id}/kernel.bin")
         );
         assert_eq!(
             uploaded["http_url"],
-            "http://127.0.0.1:0/boot/boards/uefi-http-01/current/kernel.bin"
+            format!("http://127.0.0.1:0/boot/sessions/{session_id}/kernel.bin")
         );
 
         let download_kernel = app
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/boot/boards/uefi-http-01/current/kernel.bin")
+                    .uri(format!("/boot/sessions/{session_id}/kernel.bin"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -3466,7 +3488,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/boot/boards/uefi-http-01/current/kernel.bin")
+                    .uri(format!("/boot/sessions/{session_id}/kernel.bin"))
                     .header(header::RANGE, "bytes=0-5")
                     .body(Body::empty())
                     .unwrap(),
@@ -3482,6 +3504,30 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(range_body.as_ref(), b"kernel");
+
+        let delete_session = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/sessions/{session_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_session.status(), StatusCode::ACCEPTED);
+
+        let download_after_release = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/boot/sessions/{session_id}/kernel.bin"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(download_after_release.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
@@ -3518,7 +3564,7 @@ mod tests {
         assert!(ready_value["boot_id"].as_str().is_some());
         assert_eq!(
             ready_value["kernel_url"],
-            "http://127.0.0.1:0/boot/boards/uefi-http-kernel/current/kernel.elf"
+            format!("http://127.0.0.1:0/boot/sessions/{session_id}/kernel.elf")
         );
         assert_eq!(ready_value["kernel_size"], 10);
         assert!(ready_value["kernel_sha256"].as_str().unwrap().len() == 64);
