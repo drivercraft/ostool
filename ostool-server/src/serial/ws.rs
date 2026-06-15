@@ -17,6 +17,9 @@ use crate::{
     state::AppState,
 };
 
+const SERIAL_READ_BUFFER_SIZE: usize = 64;
+const SERIAL_READ_TIMEOUT: Duration = Duration::from_millis(20);
+
 #[derive(Debug, Deserialize)]
 struct ClientControlMessage {
     #[serde(rename = "type")]
@@ -50,7 +53,7 @@ async fn run_serial_ws_inner(
         .ok_or_else(|| anyhow::anyhow!("board has no serial configuration"))?;
     let resolved_serial = resolve_serial_config(serial)?;
     let port = tokio_serial::new(&resolved_serial.current_device_path, serial.baud_rate)
-        .timeout(Duration::from_millis(200))
+        .timeout(SERIAL_READ_TIMEOUT)
         .open_native_async()
         .with_context(|| {
             format!(
@@ -61,7 +64,7 @@ async fn run_serial_ws_inner(
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
     let (mut serial_rx, mut serial_tx) = tokio::io::split(port);
-    let mut serial_buffer = [0u8; 1024];
+    let mut serial_buffer = [0u8; SERIAL_READ_BUFFER_SIZE];
     let mut power_on_task = Some(spawn_power_action_task(
         state.clone(),
         board.clone(),

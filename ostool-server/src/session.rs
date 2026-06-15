@@ -182,6 +182,10 @@ impl SessionState {
         self.lifecycle_state() == SessionLifecycleState::Releasing
     }
 
+    pub fn is_stop_requested(&self) -> bool {
+        self.stop_requested.load(Ordering::Acquire)
+    }
+
     pub fn request_stop(&self, reason: SessionStopReason) {
         if self.is_releasing() {
             return;

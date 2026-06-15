@@ -453,7 +453,7 @@ impl<'a> CargoBuildPipeline<'a> {
                 } else {
                     "release_"
                 },
-                format!("{:?}", level).to_lowercase()
+                format!("{level:?}").to_lowercase()
             ))
         } else {
             None
@@ -476,7 +476,7 @@ impl<'a> CargoBuildPipeline<'a> {
             match self.download_config_to_temp(&download_url).await {
                 Ok(path) => Ok(Some(path)),
                 Err(e) => {
-                    eprintln!("Failed to download config from {}: {}", s, e);
+                    eprintln!("Failed to download config from {s}: {e}");
                     Err(e)
                 }
             }
@@ -521,7 +521,7 @@ impl<'a> CargoBuildPipeline<'a> {
             let converted = url
                 .replace("github.com", "raw.githubusercontent.com")
                 .replace("/blob/", "/");
-            println!("Converting GitHub URL to raw: {} -> {}", url, converted);
+            println!("Converting GitHub URL to raw: {url} -> {converted}");
             return converted;
         }
 
@@ -532,7 +532,7 @@ impl<'a> CargoBuildPipeline<'a> {
     async fn download_config_to_temp(&self, url: &str) -> anyhow::Result<PathBuf> {
         use std::time::SystemTime;
 
-        println!("Downloading cargo config from: {}", url);
+        println!("Downloading cargo config from: {url}");
 
         // Get system temp directory
         let temp_dir = std::env::temp_dir();
@@ -545,14 +545,14 @@ impl<'a> CargoBuildPipeline<'a> {
 
         // Extract filename from URL or use default
         let url_path = url.split('/').next_back().unwrap_or("config.toml");
-        let filename = format!("cargo_config_{}_{}", timestamp, url_path);
+        let filename = format!("cargo_config_{timestamp}_{url_path}");
         let target_path = temp_dir.join(filename);
 
         // Create reqwest client
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .map_err(|e| anyhow::anyhow!("Failed to create HTTP client: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to create HTTP client: {e}"))?;
 
         // Build request with User-Agent for GitHub
         let mut request = client.get(url);
@@ -566,7 +566,7 @@ impl<'a> CargoBuildPipeline<'a> {
         let response = request
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to download from {}: {}", url, e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to download from {url}: {e}"))?;
 
         if !response.status().is_success() {
             return Err(anyhow::anyhow!("HTTP error {}: {}", response.status(), url));
@@ -575,7 +575,7 @@ impl<'a> CargoBuildPipeline<'a> {
         let content = response
             .bytes()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to read response body: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to read response body: {e}"))?;
 
         // Write to temp file
         tokio::fs::write(&target_path, content)

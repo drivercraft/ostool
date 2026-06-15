@@ -26,6 +26,22 @@ fn main() {
         panic!("missing frontend directory: {}", webui_dir.display());
     }
 
+    if let Some(existing_dist_dir) = env::var_os(EMBED_WEB_DIR_ENV) {
+        let existing_dist_dir = PathBuf::from(existing_dist_dir);
+        let index_html = existing_dist_dir.join("index.html");
+        if !index_html.exists() {
+            panic!(
+                "{EMBED_WEB_DIR_ENV} is set but {} does not exist",
+                index_html.display()
+            );
+        }
+        println!(
+            "cargo:rustc-env={EMBED_WEB_DIR_ENV}={}",
+            existing_dist_dir.display()
+        );
+        return;
+    }
+
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("missing OUT_DIR"));
     let web_work_dir = out_dir.join("web-work");
     let web_dist_dir = out_dir.join("web-assets");

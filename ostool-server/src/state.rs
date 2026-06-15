@@ -62,13 +62,6 @@ pub struct BoardRuntimeStatusSnapshot {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct VirtualBoardPowerStatus {
-    pub powered: bool,
-    pub last_action: Option<PowerAction>,
-    pub updated_at: Option<DateTime<Utc>>,
-}
-
 #[derive(Debug, Clone)]
 pub struct BoardPowerStatusSnapshot {
     pub available: bool,
@@ -99,7 +92,6 @@ pub struct AppState {
     pub boards: Arc<RwLock<BTreeMap<String, BoardConfig>>>,
     pub board_runtimes: Arc<RwLock<BTreeMap<String, BoardRuntimeState>>>,
     pub sessions: Arc<RwLock<BTreeMap<String, Arc<SessionState>>>>,
-    pub virtual_power_statuses: Arc<RwLock<BTreeMap<String, VirtualBoardPowerStatus>>>,
     pub board_store: Arc<FileBoardStore>,
     pub dtb_store: Arc<DtbStore>,
     pub tftp_manager: Arc<RwLock<Arc<dyn TftpManager>>>,
@@ -117,7 +109,6 @@ pub async fn build_app_state(
     dtb_store.ensure_dir().await?;
     let boards = board_store.load_all().await?;
     let board_runtimes = initial_board_runtimes(&boards);
-    let virtual_power_statuses = initial_virtual_power_statuses(&boards);
     let (release_tx, release_rx) = mpsc::unbounded_channel();
 
     let state = AppState {
@@ -126,7 +117,6 @@ pub async fn build_app_state(
         boards: Arc::new(RwLock::new(boards)),
         board_runtimes: Arc::new(RwLock::new(board_runtimes)),
         sessions: Arc::new(RwLock::new(BTreeMap::new())),
-        virtual_power_statuses: Arc::new(RwLock::new(virtual_power_statuses)),
         board_store,
         dtb_store,
         tftp_manager: Arc::new(RwLock::new(tftp_manager)),
@@ -144,16 +134,6 @@ fn initial_board_runtimes(
     boards
         .keys()
         .map(|board_id| (board_id.clone(), BoardRuntimeState::default()))
-        .collect()
-}
-
-fn initial_virtual_power_statuses(
-    boards: &BTreeMap<String, BoardConfig>,
-) -> BTreeMap<String, VirtualBoardPowerStatus> {
-    boards
-        .iter()
-        .filter(|(_, board)| matches!(board.power_management, PowerManagementConfig::Virtual(_)))
-        .map(|(board_id, _)| (board_id.clone(), VirtualBoardPowerStatus::default()))
         .collect()
 }
 
@@ -277,25 +257,15 @@ impl AppState {
     }
 
     pub async fn board_power_status(&self, board_id: &str) -> Option<BoardPowerStatusSnapshot> {
-        let board = self.boards.read().await.get(board_id).cloned()?;
-        match board.power_management {
-            PowerManagementConfig::Virtual(_) => {
-                let statuses = self.virtual_power_statuses.read().await;
-                let status = statuses.get(board_id).cloned().unwrap_or_default();
-                Some(BoardPowerStatusSnapshot {
-                    available: true,
-                    powered: Some(status.powered),
-                    last_action: status.last_action,
-                    updated_at: status.updated_at,
-                })
-            }
-            _ => Some(BoardPowerStatusSnapshot {
-                available: false,
-                powered: None,
-                last_action: None,
-                updated_at: None,
-            }),
+        if !self.boards.read().await.contains_key(board_id) {
+            return None;
         }
+        Some(BoardPowerStatusSnapshot {
+            available: false,
+            powered: None,
+            last_action: None,
+            updated_at: None,
+        })
     }
 
     pub async fn board_runtime_status(&self, board_id: &str) -> Option<BoardRuntimeStatusSnapshot> {
@@ -313,21 +283,7 @@ impl AppState {
         board: &BoardConfig,
         action: PowerAction,
     ) -> Result<String, PowerActionError> {
-        match board.power_management {
-            PowerManagementConfig::Virtual(_) => {
-                let mut statuses = self.virtual_power_statuses.write().await;
-                let entry = statuses.entry(board.id.clone()).or_default();
-                entry.powered = matches!(action, PowerAction::On);
-                entry.last_action = Some(action);
-                entry.updated_at = Some(Utc::now());
-                Ok(format!(
-                    "recorded virtual {} for board `{}`",
-                    action.label(),
-                    board.id
-                ))
-            }
-            _ => execute_power_action_for_board(board, action).await,
-        }
+        execute_power_action_for_board(board, action).await
     }
 
     pub fn board_path(&self, board_id: &str) -> std::path::PathBuf {
@@ -383,19 +339,6 @@ impl AppState {
             next.insert(board_id.clone(), runtime);
         }
         *runtimes = next;
-    }
-
-    pub async fn sync_virtual_power_statuses(&self) {
-        let boards = self.boards.read().await;
-        let mut statuses = self.virtual_power_statuses.write().await;
-        let mut next = BTreeMap::new();
-        for (board_id, board) in boards.iter() {
-            if matches!(board.power_management, PowerManagementConfig::Virtual(_)) {
-                let status = statuses.remove(board_id).unwrap_or_default();
-                next.insert(board_id.clone(), status);
-            }
-        }
-        *statuses = next;
     }
 
     pub async fn claim_board_for_session(&self, board_id: &str, session_id: &str) -> bool {
@@ -679,10 +622,8 @@ mod tests {
         ServerConfig,
         config::{
             BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, PxeProfile,
-            SerialPortKey, SerialPortKeyKind, VirtualPowerManagement,
-            ZhongshengRelayPowerManagement,
+            SerialPortKey, SerialPortKeyKind, ZhongshengRelayPowerManagement,
         },
-        power::PowerAction,
         session::{SessionState, SessionStopReason},
         tftp::{
             files::TftpFileRef,
@@ -701,19 +642,6 @@ mod tests {
                 power_on_cmd: "echo on".into(),
                 power_off_cmd: "echo off".into(),
             }),
-            boot: BootConfig::Pxe(PxeProfile::default()),
-            notes: None,
-            disabled: false,
-        }
-    }
-
-    fn sample_virtual_board(board_id: &str) -> BoardConfig {
-        BoardConfig {
-            id: board_id.into(),
-            board_type: "demo".into(),
-            tags: vec![],
-            serial: None,
-            power_management: PowerManagementConfig::Virtual(VirtualPowerManagement::default()),
             boot: BootConfig::Pxe(PxeProfile::default()),
             notes: None,
             disabled: false,
@@ -1115,88 +1043,5 @@ mod tests {
 
         let _ = stop_tx.send(());
         let _ = server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn startup_power_off_sets_virtual_board_status() {
-        let temp = tempdir().unwrap();
-        let root = temp.path().to_path_buf();
-        let board_dir = root.join("boards");
-        std::fs::create_dir_all(&board_dir).unwrap();
-        std::fs::write(
-            board_dir.join("board-1.toml"),
-            r#"
-id = "board-1"
-board_type = "demo"
-tags = []
-disabled = false
-
-[power_management]
-kind = "virtual"
-
-[boot]
-kind = "pxe"
-"#,
-        )
-        .unwrap();
-
-        let config_path = root.join(".ostool-server.toml");
-        let config = ServerConfig {
-            listen_addr: "127.0.0.1:0".parse().unwrap(),
-            data_dir: root.join("data"),
-            board_dir,
-            dtb_dir: root.join("dtbs"),
-            network: crate::TftpNetworkConfig {
-                interface: "lo".into(),
-            },
-            ..ServerConfig::default()
-        };
-        let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
-        let state = build_app_state(config_path, config, manager).await.unwrap();
-
-        let failures = state.power_off_all_boards_on_startup().await;
-        assert!(failures.is_empty());
-        let status = state.board_power_status("board-1").await.unwrap();
-        assert_eq!(status.powered, Some(false));
-        assert_eq!(status.last_action, Some(PowerAction::Off));
-        assert!(status.updated_at.is_some());
-    }
-
-    #[tokio::test]
-    async fn remove_session_sets_virtual_board_power_status_to_off() {
-        let temp = tempdir().unwrap();
-        let root = temp.path().to_path_buf();
-        let state = test_state(&root).await;
-
-        let board = sample_virtual_board("board-1");
-        state
-            .boards
-            .write()
-            .await
-            .insert(board.id.clone(), board.clone());
-        state.sync_board_runtime_states().await;
-        state.sync_virtual_power_statuses().await;
-        let session =
-            SessionState::new_with_actor("session-1".into(), board.clone(), None, state.clone());
-        state.claim_board_for_session(&board.id, "session-1").await;
-        state
-            .sessions
-            .write()
-            .await
-            .insert("session-1".into(), session);
-
-        state
-            .execute_board_power_action(&board, PowerAction::On)
-            .await
-            .unwrap();
-        let removed = state.remove_session("session-1").await.unwrap();
-        assert!(removed.is_some());
-
-        let status = state.board_power_status("board-1").await.unwrap();
-        assert_eq!(status.powered, Some(false));
-        assert_eq!(status.last_action, Some(PowerAction::Off));
-        assert!(status.updated_at.is_some());
-        let runtime = state.board_runtime_status("board-1").await.unwrap();
-        assert_eq!(runtime.lease_state, BoardLeaseState::Idle);
     }
 }

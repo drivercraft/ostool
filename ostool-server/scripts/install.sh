@@ -21,6 +21,7 @@ SYSTEM_BIN_DIR="/usr/local/bin"
 SYSTEM_BIN_PATH="${SYSTEM_BIN_DIR}/${SERVICE_NAME}"
 
 LOCAL_PATH=""
+STAGING_DIR=""
 
 usage() {
     echo "Usage: $0 [--local <path>]"
@@ -118,6 +119,36 @@ render_unit_file() {
     load_unit_template | sed "s|__BIN_PATH__|${bin_path}|g"
 }
 
+install_tftpd_hpa() {
+    if command -v apt-get &>/dev/null; then
+        run_cmd apt-get install -y tftpd-hpa
+        return
+    fi
+
+    echo "Automatic tftpd-hpa installation is only supported on apt-based systems." >&2
+    echo "Please install tftpd-hpa manually, then re-run this script." >&2
+    exit 1
+}
+
+print_web_ui_hint() {
+    local host_ip
+    host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    if [[ -n "${host_ip}" ]]; then
+        echo "Web UI: http://${host_ip}:2999/admin/"
+    else
+        echo "Web UI: http://<server-ip>:2999/admin/"
+    fi
+    echo "If the Web UI was already open during installation, refresh the page after the service restarts."
+}
+
+cleanup() {
+    if [[ -n "${STAGING_DIR}" && -d "${STAGING_DIR}" ]]; then
+        rm -rf "${STAGING_DIR}"
+    fi
+}
+
+trap cleanup EXIT
+
 # --- step 1: check rust environment ---
 
 echo "==> Checking Rust environment..."
@@ -133,6 +164,42 @@ if ! command -v rustc &>/dev/null || ! command -v cargo &>/dev/null; then
 fi
 
 echo "Found rustc $(rustc --version), cargo $(cargo --version)"
+
+# --- step 1b: check web UI build environment ---
+
+echo ""
+echo "==> Checking web UI build environment..."
+
+if ! command -v node &>/dev/null; then
+    echo "Node.js is not installed."
+    echo ""
+    echo "ostool-server embeds the web UI at build time, and cargo install runs pnpm."
+    echo "Please install Node.js 18 or newer, then re-run this script."
+    exit 1
+fi
+
+NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+if [[ "${NODE_MAJOR}" -lt 18 ]]; then
+    echo "Node.js $(node --version) is too old; ostool-server web UI requires Node.js 18 or newer."
+    exit 1
+fi
+
+if ! command -v pnpm &>/dev/null; then
+    if command -v corepack &>/dev/null; then
+        echo "pnpm is missing; enabling pnpm through corepack..."
+        corepack enable
+        corepack prepare pnpm@10.33.0 --activate
+    else
+        echo "pnpm is not installed and corepack is unavailable."
+        echo ""
+        echo "Install pnpm with one of:"
+        echo "  corepack enable && corepack prepare pnpm@10.33.0 --activate"
+        echo "  npm install -g pnpm"
+        exit 1
+    fi
+fi
+
+echo "Found node $(node --version), pnpm $(pnpm --version)"
 
 # --- step 2: determine sudo usage ---
 
@@ -163,6 +230,23 @@ else
     echo "No existing ${SERVICE_NAME} service found."
 fi
 
+# --- step 3b: check system TFTP dependency ---
+
+echo ""
+echo "==> Checking system TFTP dependency..."
+
+if command -v in.tftpd &>/dev/null; then
+    echo "Found in.tftpd: $(command -v in.tftpd)"
+else
+    echo "tftpd-hpa is missing; installing it now..."
+    install_tftpd_hpa
+    if ! command -v in.tftpd &>/dev/null; then
+        echo "tftpd-hpa installation completed but in.tftpd is still not in PATH." >&2
+        exit 1
+    fi
+    echo "Found in.tftpd: $(command -v in.tftpd)"
+fi
+
 # --- step 4: clean previous configuration ---
 
 echo ""
@@ -183,6 +267,9 @@ echo "Prepared configuration directory: ${CONFIG_DIR}"
 echo ""
 echo "==> Installing ostool-server..."
 
+STAGING_DIR="$(mktemp -d)"
+STAGED_BIN_PATH="${STAGING_DIR}/bin/${SERVICE_NAME}"
+
 if [[ -n "$LOCAL_PATH" ]]; then
     if [[ ! -d "$LOCAL_PATH" ]]; then
         echo "Local source directory does not exist: ${LOCAL_PATH}" >&2
@@ -190,25 +277,23 @@ if [[ -n "$LOCAL_PATH" ]]; then
     fi
     LOCAL_PATH="$(cd "$LOCAL_PATH" && pwd)"
     echo "Installing from local source: ${LOCAL_PATH}"
-    cargo install --force --path "${LOCAL_PATH}"
+    cargo install --root "${STAGING_DIR}" --path "${LOCAL_PATH}"
 else
     echo "Installing from crates.io..."
-    cargo install --force "${SERVICE_NAME}"
+    cargo install --root "${STAGING_DIR}" "${SERVICE_NAME}"
 fi
 
-BIN_SOURCE="$(command -v "${SERVICE_NAME}" || true)"
-if [[ -z "${BIN_SOURCE}" ]]; then
-    echo "Failed to locate installed binary: ${SERVICE_NAME}" >&2
+if [[ ! -x "${STAGED_BIN_PATH}" ]]; then
+    echo "Failed to locate staged binary: ${STAGED_BIN_PATH}" >&2
     exit 1
 fi
 
-BIN_SOURCE="$(readlink -f "${BIN_SOURCE}")"
-echo "Cargo installed binary to: ${BIN_SOURCE}"
+echo "Built staged binary: ${STAGED_BIN_PATH}"
 
 echo ""
 echo "==> Installing system binary..."
 run_cmd mkdir -p "${SYSTEM_BIN_DIR}"
-run_cmd install -m 755 "${BIN_SOURCE}" "${SYSTEM_BIN_PATH}"
+run_cmd install -m 755 "${STAGED_BIN_PATH}" "${SYSTEM_BIN_PATH}"
 echo "Installed system binary to: ${SYSTEM_BIN_PATH}"
 
 # --- step 6: create FHS directories ---
@@ -284,3 +369,5 @@ echo "  systemctl status ${SERVICE_NAME}   # Check status"
 echo "  systemctl restart ${SERVICE_NAME}  # Restart service"
 echo "  journalctl -u ${SERVICE_NAME} -f   # View logs"
 echo "  vi ${CONFIG_FILE}                  # Edit config"
+echo ""
+print_web_ui_hint

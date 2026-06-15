@@ -36,10 +36,12 @@ curl -fsSL https://raw.githubusercontent.com/drivercraft/ostool/main/ostool-serv
 
 The script will:
 
+- check that Node.js 18+ and pnpm are available for the embedded web UI build
 - install `ostool-server` with `cargo install`
 - install the binary to `/usr/local/bin/ostool-server`
 - stop an existing `ostool-server` systemd service if present
 - recreate `/etc/ostool-server`
+- create the board, DTB, and TFTP/session artifact directories
 - install `/etc/systemd/system/ostool-server.service`
 - start the service if you confirm it
 
@@ -92,6 +94,16 @@ The default listen address is:
 ```text
 0.0.0.0:2999
 ```
+
+HTTP Boot is enabled by default. Uploaded UEFI HTTP Boot artifacts reuse the
+existing session file storage and lifecycle, so files are scoped to the active
+board session and are cleaned up with that session.
+
+For boards using the UEFI HTTP Boot loader, configure the board boot profile
+with `kind = "httpboot"` and, when needed, `boot_arch`. The server uses the
+allocated board session and that board's serial configuration to send the boot
+offer to axloader; the board NIC MAC address is not part of the current control
+flow.
 
 ## Useful Commands
 

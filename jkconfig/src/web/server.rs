@@ -16,7 +16,7 @@ pub async fn run_server(app_state: AppState, port: u16) -> anyhow::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     println!("🚀 Web服务器启动成功！");
-    println!("📍 访问地址: http://localhost:{}", port);
+    println!("📍 访问地址: http://localhost:{port}");
     println!("⏹️  按 Ctrl+C 停止服务器");
 
     // 启动服务器

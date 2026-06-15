@@ -2,6 +2,7 @@ use std::fmt;
 
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
+use httpboot_protocol::KernelPublishResponse;
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
@@ -49,6 +50,8 @@ pub struct HeartbeatResponse {
 pub enum BootConfig {
     Uboot(UbootProfile),
     Pxe(PxeProfile),
+    #[serde(rename = "httpboot", alias = "uefi_http")]
+    UefiHttp(UefiHttpProfile),
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -87,6 +90,31 @@ pub struct PxeProfile {
     pub notes: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct HttpBootKernelUpload {
+    pub remote_name: String,
+    pub arch: String,
+    pub image_format: String,
+    pub entry_symbol: Option<String>,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UefiBootArch {
+    X86_64,
+    Aarch64,
+    Loongarch64,
+    Riscv64,
+    Other,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UefiHttpProfile {
+    pub boot_arch: Option<UefiBootArch>,
+    pub mac: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct BootProfileResponse {
     pub boot: BootConfig,
@@ -109,6 +137,15 @@ pub struct FileResponse {
     pub filename: String,
     pub relative_path: String,
     pub tftp_url: Option<String>,
+    pub size: u64,
+    pub uploaded_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HttpBootFileResponse {
+    pub filename: String,
+    pub relative_path: String,
+    pub http_url: String,
     pub size: u64,
     pub uploaded_at: DateTime<Utc>,
 }
@@ -163,6 +200,7 @@ impl BoardServerClient {
     pub fn new(server: &str, port: u16) -> anyhow::Result<Self> {
         Ok(Self {
             client: reqwest::Client::builder()
+                .no_proxy()
                 .build()
                 .context("failed to build HTTP client")?,
             base_url: build_base_url("http", server, port)?,
@@ -289,6 +327,26 @@ impl BoardServerClient {
         self.decode_bytes(response).await
     }
 
+    pub async fn power_on_board(&self, session_id: &str) -> Result<(), BoardServerClientError> {
+        let response = self
+            .client
+            .post(self.endpoint(&format!("/api/v1/sessions/{session_id}/board/power-on")))
+            .send()
+            .await
+            .map_err(Self::request_error)?;
+        self.decode_empty(response).await
+    }
+
+    pub async fn power_off_board(&self, session_id: &str) -> Result<(), BoardServerClientError> {
+        let response = self
+            .client
+            .post(self.endpoint(&format!("/api/v1/sessions/{session_id}/board/power-off")))
+            .send()
+            .await
+            .map_err(Self::request_error)?;
+        self.decode_empty(response).await
+    }
+
     pub async fn upload_session_file(
         &self,
         session_id: &str,
@@ -300,6 +358,45 @@ impl BoardServerClient {
             .put(self.endpoint(&format!("/api/v1/sessions/{session_id}/files")))
             .header("X-File-Path", relative_path)
             .body(bytes)
+            .send()
+            .await
+            .map_err(Self::request_error)?;
+        self.decode_json(response).await
+    }
+
+    pub async fn upload_http_boot_file(
+        &self,
+        session_id: &str,
+        relative_path: &str,
+        bytes: Vec<u8>,
+    ) -> Result<HttpBootFileResponse, BoardServerClientError> {
+        let response = self
+            .client
+            .put(self.endpoint(&format!("/api/v1/sessions/{session_id}/http-boot/files")))
+            .header("X-File-Path", relative_path)
+            .body(bytes)
+            .send()
+            .await
+            .map_err(Self::request_error)?;
+        self.decode_json(response).await
+    }
+
+    pub async fn upload_http_boot_kernel(
+        &self,
+        session_id: &str,
+        upload: HttpBootKernelUpload,
+    ) -> Result<KernelPublishResponse, BoardServerClientError> {
+        let mut request = self
+            .client
+            .put(self.endpoint(&format!("/api/v1/sessions/{session_id}/http-boot/kernel")))
+            .header("X-HttpBoot-Remote-Name", upload.remote_name)
+            .header("X-HttpBoot-Arch", upload.arch)
+            .header("X-HttpBoot-Image-Format", upload.image_format);
+        if let Some(entry_symbol) = upload.entry_symbol {
+            request = request.header("X-HttpBoot-Entry-Symbol", entry_symbol);
+        }
+        let response = request
+            .body(upload.bytes)
             .send()
             .await
             .map_err(Self::request_error)?;
@@ -487,7 +584,7 @@ mod tests {
                 assert_eq!(profile.fit_load_addr.as_deref(), Some("0x82200000"));
                 assert_eq!(profile.bootm_addr.as_deref(), Some("0x82200000"));
             }
-            BootConfig::Pxe(_) => panic!("expected uboot profile"),
+            BootConfig::Pxe(_) | BootConfig::UefiHttp(_) => panic!("expected uboot profile"),
         }
     }
 
@@ -521,6 +618,32 @@ mod tests {
                 assert_eq!(profile.gatewayip.as_deref(), Some("192.168.10.1"));
             }
             BootConfig::Pxe(_) => panic!("expected uboot profile"),
+            BootConfig::UefiHttp(_) => panic!("expected uboot profile"),
+        }
+    }
+
+    #[test]
+    fn parse_httpboot_boot_profile() {
+        let response: super::BootProfileResponse = serde_json::from_str(
+            r#"{
+                "boot": {
+                    "kind": "httpboot",
+                    "boot_arch": "x86_64",
+                    "mac": "1c:69:7a:dc:f3:47"
+                },
+                "server_ip": null,
+                "netmask": null,
+                "interface": null
+            }"#,
+        )
+        .unwrap();
+
+        match response.boot {
+            BootConfig::UefiHttp(profile) => {
+                assert_eq!(profile.boot_arch, Some(super::UefiBootArch::X86_64));
+                assert_eq!(profile.mac.as_deref(), Some("1c:69:7a:dc:f3:47"));
+            }
+            _ => panic!("expected httpboot profile"),
         }
     }
 

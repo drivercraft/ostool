@@ -1027,6 +1027,18 @@ fail_regex = []
     }
 
     #[test]
+    fn parse_menuconfig_httpboot_command() {
+        let cli = Cli::try_parse_from(["ostool", "menuconfig", "httpboot"]).unwrap();
+
+        match cli.command {
+            SubCommands::Menuconfig { mode } => {
+                assert!(matches!(mode, Some(super::MenuConfigMode::Httpboot)));
+            }
+            other => panic!("expected menuconfig command, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn parse_board_config_command() {
         let cli = Cli::try_parse_from(["ostool", "board", "config"]).unwrap();
 

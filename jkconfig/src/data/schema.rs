@@ -54,7 +54,7 @@ impl WalkContext {
         self.get(field_name)
             .ok_or(SchemaError::SchemaConversionError {
                 path: self.path.clone(),
-                reason: format!("Missing required field '{}'", field_name),
+                reason: format!("Missing required field '{field_name}'"),
             })
     }
 
@@ -75,7 +75,7 @@ impl WalkContext {
             .map(|v| {
                 v.as_str().ok_or(SchemaError::SchemaConversionError {
                     path: self.path.clone(),
-                    reason: format!("Field '{}' is not a string", field_name),
+                    reason: format!("Field '{field_name}' is not a string"),
                 })
             })
             .transpose()

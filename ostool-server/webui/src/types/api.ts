@@ -95,7 +95,9 @@ export interface ZhongshengRelayPowerManagement {
   key: SerialPortKey;
 }
 
-export type PowerManagementConfig = CustomPowerManagement | ZhongshengRelayPowerManagement;
+export type PowerManagementConfig =
+  | CustomPowerManagement
+  | ZhongshengRelayPowerManagement;
 
 export type UbootNetworkMode = "dhcp" | "static_ip";
 
@@ -118,7 +120,12 @@ export interface PxeProfile {
   notes: string | null;
 }
 
-export type BootConfig = UbootProfile | PxeProfile;
+export interface UefiHttpProfile {
+  kind: "httpboot";
+  boot_arch?: string | null;
+}
+
+export type BootConfig = UbootProfile | PxeProfile | UefiHttpProfile;
 
 export interface BoardConfig {
   id: string;

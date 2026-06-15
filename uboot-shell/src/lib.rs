@@ -158,7 +158,7 @@ impl UbootShell {
     pub async fn wait_for_reply(&mut self, val: &str) -> Result<String> {
         let mut reply = Vec::new();
         let mut display = Vec::new();
-        debug!("wait for `{}`", val);
+        debug!("wait for `{val}`");
 
         loop {
             let byte = self.read_byte().await?;
@@ -224,7 +224,7 @@ impl UbootShell {
             match self._cmd(cmd).await {
                 Ok(res) => return Ok(res),
                 Err(err) => {
-                    warn!("cmd `{}` failed: {}, retrying...", cmd, err);
+                    warn!("cmd `{cmd}` failed: {err}, retrying...");
                     retry -= 1;
                     Delay::new(Duration::from_millis(100)).await;
                 }

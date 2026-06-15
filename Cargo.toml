@@ -1,6 +1,13 @@
 [workspace]
 exclude = ["assets/*", "fit_test"]
-members = ["ostool", "uboot-shell", "jkconfig", "fitimage", "ostool-server"]
+members = [
+    "ostool",
+    "uboot-shell",
+    "jkconfig",
+    "fitimage",
+    "ostool-server",
+    "httpboot-protocol",
+]
 resolver = "3"
 
 [workspace.dependencies]
@@ -14,6 +21,8 @@ serde = {version = "1", features = ["derive"]}
 serde_json = "1"
 
 toml = "1.0"
+
+httpboot-protocol = { path = "httpboot-protocol" }
 
 # Error handling
 thiserror = "2"

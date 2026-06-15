@@ -122,13 +122,13 @@ impl MkImageError {
 
 impl From<flate2::CompressError> for MkImageError {
     fn from(err: flate2::CompressError) -> Self {
-        Self::compression_error(format!("Gzip compression error: {}", err))
+        Self::compression_error(format!("Gzip compression error: {err}"))
     }
 }
 
 impl From<flate2::DecompressError> for MkImageError {
     fn from(err: flate2::DecompressError) -> Self {
-        Self::compression_error(format!("Gzip decompression error: {}", err))
+        Self::compression_error(format!("Gzip decompression error: {err}"))
     }
 }
 

@@ -7,6 +7,7 @@
 //! - Build settings (`.build.toml`)
 //! - QEMU settings (`.qemu.toml`)
 //! - U-Boot settings (`.uboot.toml`)
+//! - UEFI HTTP Boot settings (`.httpboot.toml`)
 
 use anyhow::Context;
 use anyhow::Result;
@@ -16,6 +17,7 @@ use tokio::fs;
 
 use crate::build::{config::BuildConfig, config_hooks, config_loader};
 use crate::invocation::Invocation;
+use crate::run::httpboot::HttpBootConfig;
 use crate::run::qemu::QemuConfig;
 use crate::run::uboot::UbootConfig;
 use crate::utils::PathResultExt;
@@ -27,6 +29,8 @@ pub enum MenuConfigMode {
     Qemu,
     /// Configure U-Boot runner settings.
     Uboot,
+    /// Configure UEFI HTTP Boot runner settings.
+    Httpboot,
 }
 
 /// Handler for menu configuration operations.
@@ -54,6 +58,9 @@ impl MenuConfigHandler {
             }
             Some(MenuConfigMode::Uboot) => {
                 Self::handle_uboot_config(invocation).await?;
+            }
+            Some(MenuConfigMode::Httpboot) => {
+                Self::handle_httpboot_config(invocation).await?;
             }
             None => {
                 Self::handle_default_config(invocation).await?;
@@ -141,6 +148,39 @@ impl MenuConfigHandler {
 
         Ok(())
     }
+
+    async fn handle_httpboot_config(invocation: &mut Invocation) -> Result<()> {
+        info!("配置 UEFI HTTP Boot 运行参数");
+
+        let httpboot_config_path = invocation.workspace_dir().join(".httpboot.toml");
+        if httpboot_config_path.exists() {
+            println!(
+                "\n当前 HTTP Boot 配置文件: {}",
+                httpboot_config_path.display()
+            );
+        } else {
+            println!("\n未找到 HTTP Boot 配置文件，将使用默认配置");
+        }
+
+        let config = jkconfig::run::<HttpBootConfig>(httpboot_config_path.clone(), true, &[])
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to load HTTP Boot config: {}",
+                    httpboot_config_path.display()
+                )
+            })?;
+        if let Some(c) = config {
+            fs::write(&httpboot_config_path, toml::to_string_pretty(&c)?)
+                .await
+                .with_path("failed to write file", &httpboot_config_path)?;
+            println!("\nHTTP Boot 配置已保存到 .httpboot.toml");
+        } else {
+            println!("\n未更改 HTTP Boot 配置");
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -173,7 +213,7 @@ mod tests {
                     item.item_type
                 );
             }
-            other => panic!("log should be Item(Enum), got: {:?}", other),
+            other => panic!("log should be Item(Enum), got: {other:?}"),
         }
     }
 }

@@ -1,0 +1,19 @@
+[package]
+authors = ["柏乔森 <baiqiaosen@gmail.com>"]
+categories = ["embedded", "development-tools"]
+description = "Shared HTTP Boot protocol types and parsers"
+edition = "2024"
+keywords = ["httpboot", "uefi", "bootloader"]
+license = "MIT OR Apache-2.0"
+name = "httpboot-protocol"
+repository = "https://github.com/drivercraft/ostool"
+version = "0.1.0"
+
+[features]
+default = ["std", "serde"]
+serde = ["dep:serde", "dep:serde_json"]
+std = []
+
+[dependencies]
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_json = { workspace = true, optional = true }

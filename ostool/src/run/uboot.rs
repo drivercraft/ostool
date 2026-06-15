@@ -314,6 +314,10 @@ impl UbootRunInput {
             arch,
         }
     }
+
+    pub(crate) fn artifacts(&self) -> &OutputArtifacts {
+        &self.artifacts
+    }
 }
 
 pub(crate) fn default_uboot_config() -> UbootConfig {
@@ -613,7 +617,7 @@ impl RunnerBackend for LocalBackend {
             if existing_tftp_dir.is_none()
                 && let Some(ip) = server_ip.as_ref()
             {
-                info!("TFTP server IP: {}", ip);
+                info!("TFTP server IP: {ip}");
                 tftp::run_tftp_server(input.process_context.workdir(), &input.artifacts)?;
                 self.builtin_tftp_started = true;
             }
@@ -625,7 +629,7 @@ impl RunnerBackend for LocalBackend {
                 && existing_tftp_dir.is_none()
                 && let Some(ip) = server_ip.as_ref()
             {
-                info!("TFTP server IP: {}", ip);
+                info!("TFTP server IP: {ip}");
                 tftp::run_tftp_server(input.process_context.workdir(), &input.artifacts)?;
                 self.builtin_tftp_started = true;
             }
@@ -681,7 +685,7 @@ impl RunnerBackend for LocalBackend {
             .baud_rate
             .ok_or_else(|| anyhow!("local U-Boot backend missing parsed baud rate"))?;
 
-        info!("Opening serial port: {} @ {}", serial, baud_rate);
+        info!("Opening serial port: {serial} @ {baud_rate}");
         let serial = tokio_serial::new(serial, baud_rate)
             .timeout(Duration::from_millis(200))
             .open_native_async()
@@ -733,7 +737,7 @@ impl RunnerBackend for LocalBackend {
         }
 
         if self.builtin_tftp_started {
-            info!("Using fitimage filename: {}", file_name);
+            info!("Using fitimage filename: {file_name}");
             return Ok(StagedBootArtifact::network(file_name));
         }
 
@@ -791,38 +795,31 @@ impl RunnerBackend for RemoteBackend {
             .get_boot_profile(&self.session.session_id)
             .await
             .with_context(|| {
-                format!(
-                    "failed to get boot profile for session `{}`",
-                    self.session.session_id
-                )
+                let session_id = &self.session.session_id;
+                format!("failed to get boot profile for session `{session_id}`")
             })?;
         let serial_status = self
             .client
             .get_serial_status(&self.session.session_id)
             .await
             .with_context(|| {
-                format!(
-                    "failed to get serial status for session `{}`",
-                    self.session.session_id
-                )
+                let session_id = &self.session.session_id;
+                format!("failed to get serial status for session `{session_id}`")
             })?;
         let tftp_status = self
             .client
             .get_tftp_status(&self.session.session_id)
             .await
             .with_context(|| {
-                format!(
-                    "failed to get tftp status for session `{}`",
-                    self.session.session_id
-                )
+                let session_id = &self.session.session_id;
+                format!("failed to get tftp status for session `{session_id}`")
             })?;
 
         let profile = match &boot_profile.boot {
             RemoteBootConfig::Uboot(profile) => profile.clone(),
             other => {
                 return Err(anyhow!(
-                    "unsupported remote boot mode `{:?}`; only `uboot` is supported",
-                    other
+                    "unsupported remote boot mode `{other:?}`; only `uboot` is supported"
                 ));
             }
         };
@@ -1083,7 +1080,7 @@ where
 
         if let Some(ref cmds) = self.config.uboot_cmd {
             for cmd in cmds.iter() {
-                info!("Running U-Boot command: {}", cmd);
+                info!("Running U-Boot command: {cmd}");
                 uboot.cmd(cmd).await?;
             }
         }
@@ -1158,7 +1155,7 @@ where
         }
 
         uboot
-            .set_env("loadaddr", format!("{:#x}", fit_loadaddr))
+            .set_env("loadaddr", format!("{fit_loadaddr:#x}"))
             .await?;
 
         info!("fitimage loadaddr: {fit_loadaddr:#x}");
@@ -1209,7 +1206,7 @@ where
             self.serial_bootm_command(bootm_arg)
         };
 
-        info!("Booting kernel with command: {}", bootcmd);
+        info!("Booting kernel with command: {bootcmd}");
         uboot.cmd_without_reply(&bootcmd).await?;
 
         println!("{}", "Interacting with U-Boot shell...".green());
@@ -1388,7 +1385,7 @@ where
 
         pb.finish_with_message("upload done");
 
-        println!("{}", res);
+        println!("{res}");
         println!("send ok");
         Ok(())
     }
@@ -1416,7 +1413,7 @@ fn detect_tftp_ip(net: Option<&Net>) -> Option<String> {
         return None;
     }
 
-    info!("TFTP : {}", ip_string);
+    info!("TFTP : {ip_string}");
     Some(ip_string)
 }
 

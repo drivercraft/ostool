@@ -16,7 +16,7 @@ import type {
 } from "@/types/api";
 
 type PowerManagementKind = "custom" | "zhongsheng_relay";
-type BootKind = "uboot" | "pxe";
+type BootKind = "uboot" | "pxe" | "httpboot";
 
 interface BoardEditorFormState {
   id: string;
@@ -34,6 +34,7 @@ interface BoardEditorFormState {
   relay_serial_key_kind: SerialPortKeyKind;
   relay_serial_key_value: string;
   boot_kind: BootKind;
+  boot_arch: string;
   use_tftp: boolean;
   dtb_name: string;
   kernel_load_addr: string;
@@ -97,6 +98,7 @@ function defaultFormState(): BoardEditorFormState {
     relay_serial_key_kind: "serial_number",
     relay_serial_key_value: "",
     boot_kind: "uboot",
+    boot_arch: "",
     use_tftp: false,
     dtb_name: "",
     kernel_load_addr: "",
@@ -148,9 +150,12 @@ function boardToFormState(board: BoardConfig): BoardEditorFormState {
     next.server_ip = board.boot.server_ip ?? "";
     next.netmask = board.boot.netmask ?? "";
     next.gatewayip = board.boot.gatewayip ?? "";
-  } else {
+  } else if (board.boot.kind === "pxe") {
     next.boot_kind = "pxe";
     next.pxe_notes = board.boot.notes ?? "";
+  } else {
+    next.boot_kind = "httpboot";
+    next.boot_arch = board.boot.boot_arch ?? "";
   }
 
   return next;
@@ -183,6 +188,13 @@ function buildBootConfig(): BootConfig {
       server_ip: useStaticIp ? trimToNull(form.value.server_ip) : null,
       netmask: useStaticIp ? trimToNull(form.value.netmask) : null,
       gatewayip: useStaticIp ? trimToNull(form.value.gatewayip) : null,
+    };
+  }
+
+  if (form.value.boot_kind === "httpboot") {
+    return {
+      kind: "httpboot",
+      boot_arch: trimToNull(form.value.boot_arch),
     };
   }
 
@@ -791,6 +803,7 @@ onMounted(() => {
               </p>
             </div>
           </label>
+
         </section>
 
         <!-- 启动方式 -->
@@ -804,6 +817,7 @@ onMounted(() => {
             <select v-model="form.boot_kind">
               <option value="uboot">U-Boot</option>
               <option value="pxe">PXE</option>
+              <option value="httpboot">HTTPboot</option>
             </select>
           </label>
 
@@ -911,9 +925,14 @@ onMounted(() => {
             </div>
           </template>
 
-          <label v-else class="field" style="margin-top: 16px">
+          <label v-else-if="form.boot_kind === 'pxe'" class="field" style="margin-top: 16px">
             <span>PXE 备注</span>
             <textarea v-model="form.pxe_notes" rows="4" />
+          </label>
+
+          <label v-else-if="form.boot_kind === 'httpboot'" class="field" style="margin-top: 16px">
+            <span>启动架构</span>
+            <input v-model="form.boot_arch" placeholder="例如 x86_64" />
           </label>
         </section>
 

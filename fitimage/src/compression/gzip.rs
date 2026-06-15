@@ -68,11 +68,11 @@ impl CompressionInterface for GzipCompressor {
         let mut encoder = GzEncoder::new(Vec::new(), self.get_compression_level());
 
         encoder.write_all(data).map_err(|e| {
-            crate::error::MkImageError::compression_error(format!("Gzip compression failed: {}", e))
+            crate::error::MkImageError::compression_error(format!("Gzip compression failed: {e}"))
         })?;
 
         encoder.finish().map_err(|e| {
-            crate::error::MkImageError::compression_error(format!("Gzip finish failed: {}", e))
+            crate::error::MkImageError::compression_error(format!("Gzip finish failed: {e}"))
         })
     }
 
@@ -86,10 +86,7 @@ impl CompressionInterface for GzipCompressor {
         let mut buffer = Vec::new();
 
         decoder.read_to_end(&mut buffer).map_err(|e| {
-            crate::error::MkImageError::compression_error(format!(
-                "Gzip decompression failed: {}",
-                e
-            ))
+            crate::error::MkImageError::compression_error(format!("Gzip decompression failed: {e}"))
         })?;
 
         Ok(buffer)

@@ -6,7 +6,7 @@
 //! - Configuring build options via TOML configuration files
 //! - Running pre-build and post-build shell commands
 //! - Automatic feature detection and configuration
-//! - Multiple runner types (QEMU, U-Boot)
+//! - Multiple runner types (QEMU and U-Boot)
 //!
 //! # Example
 //!
@@ -71,7 +71,7 @@ pub struct CargoUbootRunnerArgs {
 /// Specifies the type of runner to use after building.
 ///
 /// This enum determines how the built artifact will be executed,
-/// either through QEMU emulation or via U-Boot on real hardware.
+/// through QEMU emulation or U-Boot on real hardware.
 pub enum CargoRunnerKind {
     /// Run the built artifact in QEMU emulator.
     Qemu(Box<CargoQemuRunnerArgs>),

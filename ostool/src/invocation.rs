@@ -174,7 +174,7 @@ impl Invocation {
         objcopy_program: PathBuf,
     ) -> anyhow::Result<PathBuf> {
         if let Some(bin) = self.runtime_artifacts().bin() {
-            debug!("BIN file already exists: {:?}", bin);
+            debug!("BIN file already exists: {bin:?}");
             return Ok(bin.to_path_buf());
         }
 

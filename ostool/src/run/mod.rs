@@ -5,7 +5,14 @@
 //!
 //! - [`qemu`] - Running in QEMU emulator with UEFI support
 //! - [`tftp`] - TFTP server for network booting
+//! - [`httpboot`] - HTTPBoot configuration helpers
 //! - [`uboot`] - U-Boot bootloader integration via serial/YMODEM
+
+/// HTTPBoot configuration helpers.
+pub mod httpboot;
+
+/// HTTPBoot board runner over an ostool-server serial session.
+pub(crate) mod httpboot_board;
 
 /// QEMU emulator runner with UEFI/OVMF support.
 pub mod qemu;

@@ -21,7 +21,6 @@ use crate::{
     build::config::{BuildConfig, BuildSystem, Cargo},
     invocation::Invocation,
     project::variables::{self, VariableScope},
-    run::uboot::UbootRunInput,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -152,7 +151,7 @@ pub async fn connect_board(server: &str, port: u16, board_type: &str) -> anyhow:
     finalize_session(session, result).await
 }
 
-fn print_allocated_board_session(session: &BoardSession, board_type: &str) {
+pub(crate) fn print_allocated_board_session(session: &BoardSession, board_type: &str) {
     println!("Allocated board session:");
     println!("  board_type: {board_type}");
     println!("  board_id: {}", session.info().board_id);
@@ -161,7 +160,7 @@ fn print_allocated_board_session(session: &BoardSession, board_type: &str) {
     println!("  boot_mode: {}", session.info().boot_mode);
 }
 
-async fn finalize_session(
+pub(crate) async fn finalize_session(
     session: BoardSession,
     run_result: anyhow::Result<()>,
 ) -> anyhow::Result<()> {
@@ -242,10 +241,8 @@ pub async fn run_board(
 ) -> anyhow::Result<()> {
     crate::build::prepare_runtime_artifacts(invocation, build_config, build_config_path, false)
         .await?;
-    invocation.ensure_runtime_bin()?;
-    let input = crate::run::uboot::uboot_run_input(invocation)?;
     let scope = invocation.variable_scope()?;
-    run_prepared_board(input, board_config, options, &scope).await
+    run_prepared_board(invocation, board_config, options, &scope).await
 }
 
 /// Builds a Cargo artifact and runs it on a remote board.
@@ -271,7 +268,7 @@ pub async fn cargo_run_board(
 }
 
 pub(crate) async fn run_prepared_board(
-    input: UbootRunInput,
+    invocation: &mut Invocation,
     board_config: &BoardRunConfig,
     options: RunBoardOptions,
     scope: &VariableScope,
@@ -291,6 +288,8 @@ pub(crate) async fn run_prepared_board(
 
     let run_result = match session.info().boot_mode.as_str() {
         "uboot" => {
+            invocation.ensure_runtime_bin()?;
+            let input = crate::run::uboot::uboot_run_input(invocation)?;
             crate::run::uboot::run_uboot_remote(
                 input,
                 &board_config,
@@ -299,8 +298,18 @@ pub(crate) async fn run_prepared_board(
             )
             .await
         }
+        "httpboot" | "uefi_http" => {
+            let input = crate::run::uboot::uboot_run_input(invocation)?;
+            crate::run::httpboot_board::run_httpboot_remote(
+                input,
+                &board_config,
+                client,
+                session.info().clone(),
+            )
+            .await
+        }
         other => Err(anyhow!(
-            "unsupported board boot mode `{other}`; only `uboot` is supported"
+            "unsupported board boot mode `{other}`; supported modes are `uboot` and `httpboot`"
         )),
     };
 
