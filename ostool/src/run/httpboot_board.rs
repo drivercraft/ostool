@@ -149,13 +149,15 @@ impl HttpBootBoardRunner {
         let result = run_terminal(
             serial_rx,
             serial_tx,
-            line,
-            arch,
-            self.board_config.success_regex,
-            self.board_config.fail_regex,
-            self.board_config.shell_prefix,
-            self.board_config.shell_init_cmd,
-            self.board_config.timeout,
+            TerminalRunOptions {
+                boot_offer_line: line,
+                arch,
+                success_regex: self.board_config.success_regex,
+                fail_regex: self.board_config.fail_regex,
+                shell_prefix: self.board_config.shell_prefix,
+                shell_init_cmd: self.board_config.shell_init_cmd,
+                timeout: self.board_config.timeout,
+            },
         )
         .await;
         let shutdown_result = tasks.shutdown_with_timeout(Duration::from_secs(2)).await;
@@ -249,9 +251,7 @@ fn validate_ready(ready: &SerialReadyMessage, expected_arch: BootArch) -> anyhow
     Ok(())
 }
 
-async fn run_terminal<R, W>(
-    serial_rx: R,
-    serial_tx: W,
+struct TerminalRunOptions {
     boot_offer_line: String,
     arch: BootArch,
     success_regex: Vec<String>,
@@ -259,11 +259,26 @@ async fn run_terminal<R, W>(
     shell_prefix: Option<String>,
     shell_init_cmd: Option<String>,
     timeout: Option<u64>,
+}
+
+async fn run_terminal<R, W>(
+    serial_rx: R,
+    serial_tx: W,
+    options: TerminalRunOptions,
 ) -> anyhow::Result<()>
 where
     R: tokio::io::AsyncRead + Send + Unpin + 'static,
     W: tokio::io::AsyncWrite + Send + Unpin + 'static,
 {
+    let TerminalRunOptions {
+        boot_offer_line,
+        arch,
+        success_regex,
+        fail_regex,
+        shell_prefix,
+        shell_init_cmd,
+        timeout,
+    } = options;
     let (success_regex, fail_regex) = compile_regexes(&success_regex, &fail_regex)?;
     let matcher = Arc::new(Mutex::new(ByteStreamMatcher::new(
         success_regex,

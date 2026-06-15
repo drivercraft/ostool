@@ -213,7 +213,7 @@ mod tests {
                     item.item_type
                 );
             }
-            other => panic!("log should be Item(Enum), got: {:?}", other),
+            other => panic!("log should be Item(Enum), got: {other:?}"),
         }
     }
 }

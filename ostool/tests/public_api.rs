@@ -6,10 +6,7 @@ fn public_api_matches_invocation_runtime_construction() {
         unsafe {
             std::env::set_var(
                 "RUSTFLAGS",
-                [rustflags.as_str(), zerocopy_cfg]
-                    .join(" ")
-                    .trim()
-                    .to_string(),
+                [rustflags.as_str(), zerocopy_cfg].join(" ").trim(),
             );
         }
     }
