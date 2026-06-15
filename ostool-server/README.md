@@ -102,10 +102,11 @@ UEFI HTTP Boot files are stored under:
 /var/lib/ostool-server/http-boot
 ```
 
-For x86_64 boards using the discovery HTTP Boot loader, configure the board boot
-profile with `kind = "httpboot"` and the board NIC `mac`. The server uses the
-MAC address to match a loader to a concrete board/session and then uses that
-board's serial configuration for console output.
+For boards using the UEFI HTTP Boot loader, configure the board boot profile
+with `kind = "httpboot"` and, when needed, `boot_arch`. The server uses the
+allocated board session and that board's serial configuration to send the boot
+offer to axloader; the board NIC MAC address is not part of the current control
+flow.
 
 ## Useful Commands
 

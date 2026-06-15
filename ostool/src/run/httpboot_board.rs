@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     fs,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -6,8 +7,8 @@ use std::{
 
 use anyhow::{Context as _, anyhow, bail};
 use httpboot_protocol::{
-    BootArch, ImageFormat, SERIAL_PROTOCOL_VERSION, SerialBootOfferMessage, SerialReadyMessage,
-    parse_serial_ready, render_serial_boot_offer,
+    BootArch, ImageFormat, SERIAL_PROTOCOL_VERSION, SERIAL_READY_PREFIX, SerialBootOfferMessage,
+    SerialReadyMessage, parse_serial_ready, render_serial_boot_offer,
 };
 use sha2::{Digest, Sha256};
 use tokio::{
@@ -38,6 +39,7 @@ use crate::{
 
 const READY_WAIT_TIMEOUT: Duration = Duration::from_secs(180);
 const READY_LINE_LIMIT: usize = 4096;
+const READY_DIAGNOSTIC_LINES: usize = 8;
 const BOOT_OFFER_SEND_DELAY: Duration = Duration::from_millis(200);
 
 pub(crate) async fn run_httpboot_remote(
@@ -134,12 +136,12 @@ impl HttpBootBoardRunner {
 
         let offer = SerialBootOfferMessage {
             protocol_version: SERIAL_PROTOCOL_VERSION,
-            boot_id: upload.boot_id,
-            kernel_url: upload.kernel_url,
+            boot_id: &upload.boot_id,
+            kernel_url: &upload.kernel_url,
             kernel_size: upload.kernel_size,
             image_format: ImageFormat::Elf64,
             arch,
-            entry_symbol: Some("httpboot_entry".into()),
+            entry_symbol: Some("httpboot_entry"),
         };
         let line = render_serial_boot_offer(&offer).context("failed to render boot offer")?;
         println!("{line}");
@@ -194,6 +196,8 @@ where
     R: tokio::io::AsyncRead + Unpin,
 {
     let mut line = Vec::new();
+    let mut received_bytes = 0usize;
+    let mut recent_lines = VecDeque::with_capacity(READY_DIAGNOSTIC_LINES);
     let started = Instant::now();
     let mut buffer = [0u8; 256];
     while started.elapsed() < READY_WAIT_TIMEOUT {
@@ -206,17 +210,21 @@ where
         if read == 0 {
             continue;
         }
+        received_bytes += read;
         for byte in &buffer[..read] {
             match *byte {
                 b'\r' => {}
                 b'\n' => {
                     let text = String::from_utf8_lossy(&line).to_string();
-                    if let Ok(ready) = parse_serial_ready(&text) {
+                    if text.trim_start().starts_with(SERIAL_READY_PREFIX) {
                         println!("{text}");
+                        let ready = parse_serial_ready(&text)
+                            .with_context(|| format!("invalid axloader ready line: {text}"))?;
                         validate_ready(&ready, arch)?;
                         return Ok(());
                     }
                     log::debug!("serial output before axloader ready: {text}");
+                    remember_ready_diagnostic_line(&mut recent_lines, text);
                     line.clear();
                 }
                 byte => {
@@ -230,15 +238,36 @@ where
     }
 
     if !line.is_empty() {
-        log::debug!(
-            "partial serial output before axloader ready: {}",
-            String::from_utf8_lossy(&line)
-        );
+        let text = String::from_utf8_lossy(&line).to_string();
+        log::debug!("partial serial output before axloader ready: {text}");
+        remember_ready_diagnostic_line(&mut recent_lines, text);
     }
-    bail!("timed out waiting for axloader ready on board serial")
+    if received_bytes == 0 {
+        bail!("timed out waiting for axloader ready on board serial; no serial bytes received")
+    }
+    if recent_lines.is_empty() {
+        bail!(
+            "timed out waiting for axloader ready on board serial; received {received_bytes} bytes but no complete lines"
+        )
+    }
+    bail!(
+        "timed out waiting for axloader ready on board serial; received {received_bytes} bytes; recent serial lines:\n{}",
+        recent_lines
+            .into_iter()
+            .map(|line| format!("  {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
 }
 
-fn validate_ready(ready: &SerialReadyMessage, expected_arch: BootArch) -> anyhow::Result<()> {
+fn remember_ready_diagnostic_line(lines: &mut VecDeque<String>, line: String) {
+    if lines.len() == READY_DIAGNOSTIC_LINES {
+        lines.pop_front();
+    }
+    lines.push_back(line);
+}
+
+fn validate_ready(ready: &SerialReadyMessage<'_>, expected_arch: BootArch) -> anyhow::Result<()> {
     if ready.protocol_version != SERIAL_PROTOCOL_VERSION {
         bail!(
             "unsupported axloader serial protocol version `{}`",

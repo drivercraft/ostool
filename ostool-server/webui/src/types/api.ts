@@ -123,7 +123,6 @@ export interface PxeProfile {
 export interface UefiHttpProfile {
   kind: "httpboot";
   boot_arch?: string | null;
-  mac?: string | null;
 }
 
 export type BootConfig = UbootProfile | PxeProfile | UefiHttpProfile;

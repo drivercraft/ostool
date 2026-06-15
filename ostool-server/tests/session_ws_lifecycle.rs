@@ -141,9 +141,7 @@ fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandl
             state.ensure_data_dirs().await?;
             for (board_id, err) in state.power_off_all_boards_on_startup().await {
                 log::warn!(
-                    "failed to power off board `{}` during test server startup: {}",
-                    board_id,
-                    err
+                    "failed to power off board `{board_id}` during test server startup: {err}"
                 );
             }
             tftp_manager.start_if_needed().await?;
@@ -427,9 +425,7 @@ async fn wait_for_session_release(
         let body = response.text().await.unwrap_or_default();
         if Instant::now() >= deadline {
             bail!(
-                "timed out waiting for session `{session_id}` release, last status: {}, body: {}",
-                status,
-                body
+                "timed out waiting for session `{session_id}` release, last status: {status}, body: {body}"
             );
         }
         tokio::time::sleep(POLL_INTERVAL).await;

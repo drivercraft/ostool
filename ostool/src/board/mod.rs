@@ -21,7 +21,6 @@ use crate::{
     build::config::{BuildConfig, BuildSystem, Cargo},
     invocation::Invocation,
     project::variables::{self, VariableScope},
-    run::uboot::UbootRunInput,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -242,10 +241,8 @@ pub async fn run_board(
 ) -> anyhow::Result<()> {
     crate::build::prepare_runtime_artifacts(invocation, build_config, build_config_path, false)
         .await?;
-    invocation.ensure_runtime_bin()?;
-    let input = crate::run::uboot::uboot_run_input(invocation)?;
     let scope = invocation.variable_scope()?;
-    run_prepared_board(input, board_config, options, &scope).await
+    run_prepared_board(invocation, board_config, options, &scope).await
 }
 
 /// Builds a Cargo artifact and runs it on a remote board.
@@ -271,7 +268,7 @@ pub async fn cargo_run_board(
 }
 
 pub(crate) async fn run_prepared_board(
-    input: UbootRunInput,
+    invocation: &mut Invocation,
     board_config: &BoardRunConfig,
     options: RunBoardOptions,
     scope: &VariableScope,
@@ -291,6 +288,8 @@ pub(crate) async fn run_prepared_board(
 
     let run_result = match session.info().boot_mode.as_str() {
         "uboot" => {
+            invocation.ensure_runtime_bin()?;
+            let input = crate::run::uboot::uboot_run_input(invocation)?;
             crate::run::uboot::run_uboot_remote(
                 input,
                 &board_config,
@@ -300,6 +299,7 @@ pub(crate) async fn run_prepared_board(
             .await
         }
         "httpboot" | "uefi_http" => {
+            let input = crate::run::uboot::uboot_run_input(invocation)?;
             crate::run::httpboot_board::run_httpboot_remote(
                 input,
                 &board_config,

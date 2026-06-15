@@ -529,7 +529,8 @@ pub enum UefiBootArch {
 pub struct UefiHttpProfile {
     #[serde(default)]
     pub boot_arch: Option<UefiBootArch>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
+    #[schemars(skip)]
     pub mac: Option<String>,
 }
 

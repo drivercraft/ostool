@@ -581,7 +581,6 @@ fn normalize_boot_config(boot: &mut BootConfig) -> Result<(), ApiError> {
             normalize_optional_string(&mut profile.notes);
         }
         BootConfig::UefiHttp(profile) => {
-            profile.boot_arch = None;
             profile.mac = None;
         }
     }
@@ -2290,8 +2289,10 @@ mod tests {
 
     #[test]
     fn http_boot_url_uses_configured_public_base_url_first() {
-        let mut config = ServerConfig::default();
-        config.listen_addr = "0.0.0.0:2999".parse().unwrap();
+        let mut config = ServerConfig {
+            listen_addr: "0.0.0.0:2999".parse().unwrap(),
+            ..ServerConfig::default()
+        };
         config.network.interface = "lo".into();
         config.http_boot.public_base_url = Some("http://10.3.10.192:2999/".into());
 
@@ -2304,8 +2305,10 @@ mod tests {
 
     #[test]
     fn http_boot_url_defaults_to_resolved_server_ip() {
-        let mut config = ServerConfig::default();
-        config.listen_addr = "0.0.0.0:2999".parse().unwrap();
+        let mut config = ServerConfig {
+            listen_addr: "0.0.0.0:2999".parse().unwrap(),
+            ..ServerConfig::default()
+        };
         config.network.interface = "lo".into();
         config.http_boot.public_base_url = None;
 
@@ -2418,7 +2421,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_httpboot_board_drops_manual_arch_and_mac_fields() {
+    async fn create_httpboot_board_keeps_arch_and_drops_unused_mac_field() {
         let app = test_router().await;
         let response = app
             .clone()
@@ -2459,7 +2462,7 @@ mod tests {
         let BootConfig::UefiHttp(profile) = board.boot else {
             panic!("expected httpboot");
         };
-        assert_eq!(profile.boot_arch, None);
+        assert_eq!(profile.boot_arch, Some(UefiBootArch::X86_64));
         assert_eq!(profile.mac, None);
     }
 

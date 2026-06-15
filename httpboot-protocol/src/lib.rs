@@ -4,7 +4,6 @@ pub const SERIAL_PROTOCOL_VERSION: u16 = 1;
 pub const SERIAL_READY_PREFIX: &str = "AXLOADER READY ";
 pub const SERIAL_BOOT_PREFIX: &str = "AXLOADER BOOT ";
 
-#[cfg(feature = "std")]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
@@ -16,12 +15,32 @@ pub enum BootArch {
     Other,
 }
 
-#[cfg(feature = "std")]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum ImageFormat {
     Elf64,
+}
+
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SerialReadyMessage<'a> {
+    pub protocol_version: u16,
+    pub board: &'a str,
+    pub arch: BootArch,
+    pub loader_version: Option<&'a str>,
+}
+
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SerialBootOfferMessage<'a> {
+    pub protocol_version: u16,
+    pub boot_id: &'a str,
+    pub kernel_url: &'a str,
+    pub kernel_size: u64,
+    pub image_format: ImageFormat,
+    pub arch: BootArch,
+    pub entry_symbol: Option<&'a str>,
 }
 
 #[cfg(feature = "std")]
@@ -32,29 +51,6 @@ pub struct KernelPublishResponse {
     pub kernel_url: String,
     pub kernel_size: u64,
     pub kernel_sha256: Option<String>,
-}
-
-#[cfg(feature = "std")]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SerialReadyMessage {
-    pub protocol_version: u16,
-    pub board: String,
-    pub arch: BootArch,
-    pub loader_version: Option<String>,
-}
-
-#[cfg(feature = "std")]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SerialBootOfferMessage {
-    pub protocol_version: u16,
-    pub boot_id: String,
-    pub kernel_url: String,
-    pub kernel_size: u64,
-    pub image_format: ImageFormat,
-    pub arch: BootArch,
-    pub entry_symbol: Option<String>,
 }
 
 #[cfg(all(feature = "std", feature = "serde"))]
@@ -90,7 +86,7 @@ impl From<serde_json::Error> for SerialMessageError {
 }
 
 #[cfg(all(feature = "std", feature = "serde"))]
-pub fn render_serial_ready(message: &SerialReadyMessage) -> Result<String, serde_json::Error> {
+pub fn render_serial_ready(message: &SerialReadyMessage<'_>) -> Result<String, serde_json::Error> {
     Ok(format!(
         "{SERIAL_READY_PREFIX}{}",
         serde_json::to_string(message)?
@@ -98,7 +94,7 @@ pub fn render_serial_ready(message: &SerialReadyMessage) -> Result<String, serde
 }
 
 #[cfg(all(feature = "std", feature = "serde"))]
-pub fn parse_serial_ready(line: &str) -> Result<SerialReadyMessage, SerialMessageError> {
+pub fn parse_serial_ready(line: &str) -> Result<SerialReadyMessage<'_>, SerialMessageError> {
     let body = line
         .trim()
         .strip_prefix(SERIAL_READY_PREFIX)
@@ -108,7 +104,7 @@ pub fn parse_serial_ready(line: &str) -> Result<SerialReadyMessage, SerialMessag
 
 #[cfg(all(feature = "std", feature = "serde"))]
 pub fn render_serial_boot_offer(
-    message: &SerialBootOfferMessage,
+    message: &SerialBootOfferMessage<'_>,
 ) -> Result<String, serde_json::Error> {
     Ok(format!(
         "{SERIAL_BOOT_PREFIX}{}",
@@ -117,7 +113,9 @@ pub fn render_serial_boot_offer(
 }
 
 #[cfg(all(feature = "std", feature = "serde"))]
-pub fn parse_serial_boot_offer(line: &str) -> Result<SerialBootOfferMessage, SerialMessageError> {
+pub fn parse_serial_boot_offer(
+    line: &str,
+) -> Result<SerialBootOfferMessage<'_>, SerialMessageError> {
     let body = line
         .trim()
         .strip_prefix(SERIAL_BOOT_PREFIX)
@@ -137,12 +135,12 @@ mod tests {
     fn serializes_loader_control_messages() {
         let offer = SerialBootOfferMessage {
             protocol_version: SERIAL_PROTOCOL_VERSION,
-            boot_id: "boot-1".into(),
-            kernel_url: "http://127.0.0.1/kernel.elf".into(),
+            boot_id: "boot-1",
+            kernel_url: "http://127.0.0.1/kernel.elf",
             kernel_size: 4096,
             image_format: ImageFormat::Elf64,
             arch: BootArch::X86_64,
-            entry_symbol: Some("httpboot_entry".into()),
+            entry_symbol: Some("httpboot_entry"),
         };
         let value = serde_json::to_value(&offer).unwrap();
         assert_eq!(value["image_format"], "elf64");
@@ -152,9 +150,9 @@ mod tests {
     fn renders_and_parses_serial_ready_message() {
         let ready = SerialReadyMessage {
             protocol_version: SERIAL_PROTOCOL_VERSION,
-            board: "asus-nuc15crh".into(),
+            board: "asus-nuc15crh",
             arch: BootArch::X86_64,
-            loader_version: Some("axloader".into()),
+            loader_version: Some("axloader"),
         };
 
         let line = render_serial_ready(&ready).unwrap();
@@ -167,12 +165,12 @@ mod tests {
     fn renders_and_parses_serial_boot_offer_message() {
         let offer = SerialBootOfferMessage {
             protocol_version: SERIAL_PROTOCOL_VERSION,
-            boot_id: "boot-1".into(),
-            kernel_url: "http://10.3.10.192:2999/boot/kernel.elf".into(),
+            boot_id: "boot-1",
+            kernel_url: "http://10.3.10.192:2999/boot/kernel.elf",
             kernel_size: 4096,
             image_format: ImageFormat::Elf64,
             arch: BootArch::X86_64,
-            entry_symbol: Some("httpboot_entry".into()),
+            entry_symbol: Some("httpboot_entry"),
         };
 
         let line = render_serial_boot_offer(&offer).unwrap();
