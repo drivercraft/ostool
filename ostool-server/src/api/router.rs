@@ -1329,6 +1329,7 @@ fn parse_httpboot_arch_header(headers: &HeaderMap) -> Result<BootArch, ApiError>
         "aarch64" => Ok(BootArch::Aarch64),
         "loongarch64" => Ok(BootArch::Loongarch64),
         "riscv64" => Ok(BootArch::Riscv64),
+        "other" => Ok(BootArch::Other),
         other => Err(ApiError::bad_request(format!(
             "unsupported X-HttpBoot-Arch `{other}`"
         ))),
@@ -3568,6 +3569,37 @@ mod tests {
         );
         assert_eq!(ready_value["kernel_size"], 10);
         assert!(ready_value["kernel_sha256"].as_str().unwrap().len() == 64);
+    }
+
+    #[tokio::test]
+    async fn httpboot_kernel_upload_accepts_other_arch() {
+        let app = test_router().await;
+        assert_eq!(
+            create_board(
+                &app,
+                serde_json::to_value(sample_httpboot_board("uefi-http-other")).unwrap()
+            )
+            .await,
+            StatusCode::CREATED
+        );
+        let session_id = create_session(&app, "x86_64-uefi-http").await;
+
+        let published = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/kernel"))
+                    .header("X-HttpBoot-Remote-Name", "kernel.elf")
+                    .header("X-HttpBoot-Arch", "other")
+                    .header("X-HttpBoot-Image-Format", "elf64")
+                    .body(Body::from("kernel-elf"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(published.status(), StatusCode::CREATED);
     }
 
     #[tokio::test]

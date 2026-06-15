@@ -34,6 +34,7 @@ interface BoardEditorFormState {
   relay_serial_key_kind: SerialPortKeyKind;
   relay_serial_key_value: string;
   boot_kind: BootKind;
+  boot_arch: string;
   use_tftp: boolean;
   dtb_name: string;
   kernel_load_addr: string;
@@ -97,6 +98,7 @@ function defaultFormState(): BoardEditorFormState {
     relay_serial_key_kind: "serial_number",
     relay_serial_key_value: "",
     boot_kind: "uboot",
+    boot_arch: "",
     use_tftp: false,
     dtb_name: "",
     kernel_load_addr: "",
@@ -153,6 +155,7 @@ function boardToFormState(board: BoardConfig): BoardEditorFormState {
     next.pxe_notes = board.boot.notes ?? "";
   } else {
     next.boot_kind = "httpboot";
+    next.boot_arch = board.boot.boot_arch ?? "";
   }
 
   return next;
@@ -191,6 +194,7 @@ function buildBootConfig(): BootConfig {
   if (form.value.boot_kind === "httpboot") {
     return {
       kind: "httpboot",
+      boot_arch: trimToNull(form.value.boot_arch),
     };
   }
 
@@ -924,6 +928,11 @@ onMounted(() => {
           <label v-else-if="form.boot_kind === 'pxe'" class="field" style="margin-top: 16px">
             <span>PXE 备注</span>
             <textarea v-model="form.pxe_notes" rows="4" />
+          </label>
+
+          <label v-else-if="form.boot_kind === 'httpboot'" class="field" style="margin-top: 16px">
+            <span>启动架构</span>
+            <input v-model="form.boot_arch" placeholder="例如 x86_64" />
           </label>
         </section>
 

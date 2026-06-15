@@ -132,7 +132,7 @@ function makeRelayBoard(id = "relay-board"): BoardConfig {
   };
 }
 
-function makeUefiHttpBoard(id = "uefi-http-board"): BoardConfig {
+function makeUefiHttpBoard(id = "uefi-http-board", bootArch = "x86_64"): BoardConfig {
   return {
     ...makeBoard(id),
     board_type: "Asus-nuc15-x86_64-vmx",
@@ -143,7 +143,7 @@ function makeUefiHttpBoard(id = "uefi-http-board"): BoardConfig {
     },
     boot: {
       kind: "httpboot",
-      boot_arch: "x86_64",
+      boot_arch: bootArch,
     },
   };
 }
@@ -361,14 +361,15 @@ describe("BoardEditorView", () => {
 
   it("loads and saves an HTTPboot board", async () => {
     route.params = { boardId: "uefi-http-board" };
-    getBoard.mockResolvedValue(makeUefiHttpBoard("uefi-http-board"));
-    updateBoard.mockResolvedValue(makeUefiHttpBoard("uefi-http-board"));
+    getBoard.mockResolvedValue(makeUefiHttpBoard("uefi-http-board", "aarch64"));
+    updateBoard.mockResolvedValue(makeUefiHttpBoard("uefi-http-board", "aarch64"));
 
     const BoardEditorView = (await import("./BoardEditorView.vue")).default;
     const wrapper = mount(BoardEditorView);
     await flushPromises();
 
     expect(wrapper.text()).toContain("HTTPboot");
+    expect((wrapper.get('input[placeholder="例如 x86_64"]').element as HTMLInputElement).value).toBe("aarch64");
     expect(wrapper.find('input[placeholder="例如 BOOTX64.EFI"]').exists()).toBe(false);
     expect(wrapper.find('input[placeholder="例如 kernel.bin"]').exists()).toBe(false);
     expect(wrapper.find('input[placeholder="例如 1c:69:7a:dc:f3:47"]').exists()).toBe(false);
@@ -387,6 +388,7 @@ describe("BoardEditorView", () => {
         },
         boot: {
           kind: "httpboot",
+          boot_arch: "aarch64",
         },
       }),
     );
