@@ -23,8 +23,8 @@ use crate::{
 const RELEASE_RETRY_ATTEMPTS: usize = 3;
 const RELEASE_RETRY_DELAY: Duration = Duration::from_millis(200);
 const RELEASE_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
-const RELEASE_COMPLETION_TIMEOUT: Duration = Duration::from_secs(8);
-const ZHONGSHENG_RELEASE_SETTLE_DELAY: Duration = Duration::from_secs(2);
+const RELEASE_COMPLETION_TIMEOUT: Duration = Duration::from_secs(12);
+const ZHONGSHENG_RELEASE_SETTLE_DELAY: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -616,7 +616,8 @@ mod tests {
     };
 
     use super::{
-        BoardLeaseState, TouchSessionError, ZHONGSHENG_RELEASE_SETTLE_DELAY, build_app_state,
+        BoardLeaseState, RELEASE_COMPLETION_TIMEOUT, TouchSessionError,
+        ZHONGSHENG_RELEASE_SETTLE_DELAY, build_app_state, release_settle_delay,
     };
     use crate::{
         ServerConfig,
@@ -646,6 +647,25 @@ mod tests {
             notes: None,
             disabled: false,
         }
+    }
+
+    #[test]
+    fn zhongsheng_release_settle_delay_is_ten_seconds() {
+        let mut board = sample_board("relay-board");
+        board.power_management =
+            PowerManagementConfig::ZhongshengRelay(ZhongshengRelayPowerManagement {
+                key: SerialPortKey {
+                    kind: SerialPortKeyKind::UsbPath,
+                    value: "/dev/ttyUSB0".into(),
+                },
+            });
+
+        assert_eq!(release_settle_delay(&board), Some(Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn release_completion_timeout_covers_zhongsheng_settle_delay() {
+        assert!(RELEASE_COMPLETION_TIMEOUT > ZHONGSHENG_RELEASE_SETTLE_DELAY);
     }
 
     #[cfg(unix)]

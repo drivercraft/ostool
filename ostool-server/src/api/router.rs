@@ -2932,7 +2932,9 @@ mod tests {
             Some(session_id.as_str())
         );
 
-        tokio::time::sleep(std::time::Duration::from_millis(2300)).await;
+        let zhongsheng_release_settle_delay = std::time::Duration::from_secs(10);
+        tokio::time::sleep(zhongsheng_release_settle_delay + std::time::Duration::from_millis(300))
+            .await;
 
         let session_response = app
             .clone()
