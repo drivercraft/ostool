@@ -22,9 +22,12 @@ use std::path::{Path, PathBuf};
 use anyhow::bail;
 
 use crate::{
-    artifact::object_tools::ObjectTools,
-    artifact::runtime::{
-        RuntimeArtifactOptions, prepare_runtime_artifacts as prepare_runtime_artifact_outputs,
+    artifact::{
+        analysis::{AnalysisArtifactConfig, generate_analysis_artifacts},
+        object_tools::ObjectTools,
+        runtime::{
+            RuntimeArtifactOptions, prepare_runtime_artifacts as prepare_runtime_artifact_outputs,
+        },
     },
     build::{
         cargo_pipeline::{CargoBuildInput, CargoBuildOutcome, CargoBuildPipeline},
@@ -272,7 +275,7 @@ pub async fn cargo_build(
 }
 
 /// Builds or imports the configured artifact and prepares the runtime outputs.
-pub(crate) async fn prepare_runtime_artifacts(
+pub async fn prepare_runtime_artifacts(
     invocation: &mut Invocation,
     config: &config::BuildConfig,
     config_path: Option<&Path>,
@@ -296,7 +299,8 @@ async fn prepare_custom_runtime_artifacts(
     build_custom(invocation, config)?;
     invocation
         .prepare_elf_artifact(config.elf_path.clone().into(), config.to_bin)
-        .await
+        .await?;
+    prepare_configured_analysis_artifacts(invocation, &config.artifacts)
 }
 
 async fn prepare_cargo_runtime_artifacts(
@@ -410,6 +414,40 @@ fn apply_cargo_build_outcome(
         },
     )?;
     invocation.apply_prepared_runtime_artifacts(prepared);
+    prepare_configured_analysis_artifacts(invocation, &config.artifacts)?;
+    Ok(())
+}
+
+fn prepare_configured_analysis_artifacts(
+    invocation: &mut Invocation,
+    config: &AnalysisArtifactConfig,
+) -> anyhow::Result<()> {
+    if config.is_empty() {
+        return Ok(());
+    }
+
+    let elf_path = invocation
+        .runtime_artifacts()
+        .elf()
+        .ok_or_else(|| anyhow!("elf not exist"))?
+        .to_path_buf();
+    let output_dir = invocation
+        .runtime_artifacts()
+        .runtime_artifact_dir()
+        .or_else(|| elf_path.parent())
+        .ok_or_else(|| anyhow!("invalid ELF file path: {}", elf_path.display()))?
+        .to_path_buf();
+    let process_context = invocation.process_context()?;
+    let mut artifacts = invocation.runtime_artifacts().clone();
+    generate_analysis_artifacts(
+        &process_context,
+        &elf_path,
+        &output_dir,
+        config,
+        &ObjectTools,
+        &mut artifacts,
+    )?;
+    invocation.replace_runtime_artifacts(artifacts);
     Ok(())
 }
 
@@ -526,6 +564,7 @@ mod tests {
                 build_cmd: format!("printf built > {}", marker.display()),
                 elf_path: "target/kernel.elf".into(),
                 to_bin: true,
+                artifacts: Default::default(),
             }),
         };
 
@@ -625,6 +664,7 @@ mod tests {
                 build_cmd: "make".into(),
                 elf_path: "target/kernel.elf".into(),
                 to_bin: true,
+                artifacts: Default::default(),
             }),
         };
 

@@ -29,6 +29,7 @@ fn main() {
             build_cmd: "true".into(),
             elf_path: "target/kernel.elf".into(),
             to_bin: false,
+            artifacts: Default::default(),
         }),
     };
     let qemu_config: QemuConfig = qemu::default_config_for_cargo(&invocation, &cargo);

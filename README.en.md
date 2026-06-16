@@ -149,6 +149,28 @@ ostool board run --package paging-test --bin basic
 > Exit shortcut: In the serial terminal (e.g., `ostool run uboot`), press `Ctrl+A` then `x` to quit; the tool captures this sequence and exits gracefully instead of sending it to the target device.
 > For more keyboard mappings, see `ostool/src/sterm/mod.rs`.
 
+#### 5. Prepare Boot Artifacts
+
+```bash
+# Build the kernel and prepare a boot package under target/boot
+ostool boot prepare
+
+# Include a DTB and temporarily override Cargo package / binary target
+ostool boot prepare --dtb virt.dtb --package paging-test --bin basic
+
+# Override FIT addresses. Addresses accept decimal or 0x-prefixed hexadecimal.
+ostool boot prepare --kernel-load-addr 0x80200000 --kernel-entry-addr 0x80200000
+
+# Prepare the manifest, ELF metadata, boot script, and staging directories without FIT
+ostool boot prepare --no-fit
+```
+
+`boot prepare` treats the built ELF as the canonical source artifact and derives
+ELF entry/load metadata automatically. When FIT generation is enabled, the
+required BIN is derived automatically; users do not need to declare a binary
+artifact manually. The default output directory is the invocation's `target/boot`,
+and the command writes a stable `boot-artifacts.json` v1 manifest.
+
 ## ⚙️ Configuration Files
 
 ostool uses multiple independent TOML configuration files, each responsible for different functional modules:
@@ -201,8 +223,15 @@ pre_build_cmds = ["make prepare"]
 # Post-build commands
 post_build_cmds = ["make post-process"]
 
-# Output as binary file
-to_bin = true
+# Optional compatibility field. U-Boot, board, and UEFI QEMU runs prepare the
+# required BIN automatically.
+to_bin = false
+
+# Optional analysis artifacts. Field names describe artifacts, not tool names.
+[system.Cargo.artifacts]
+disassembly = false
+elf_info = false
+symbols = false
 ```
 
 Command-line `--package`/`--bin` overrides are applied to the final Cargo
@@ -223,8 +252,14 @@ build_cmd = "make ARCH=aarch64 A=examples/helloworld"
 # Generated ELF file path
 elf_path = "examples/helloworld/helloworld_aarch64-qemu-virt.elf"
 
-# Output as binary file
-to_bin = true
+# Optional compatibility field. U-Boot, board, and UEFI QEMU runs prepare the
+# required BIN automatically.
+to_bin = false
+
+[system.Custom.artifacts]
+disassembly = false
+elf_info = false
+symbols = false
 ```
 
 ### QEMU Configuration (.qemu.toml)
@@ -238,14 +273,21 @@ args = ["-machine", "virt", "-cpu", "cortex-a57", "-nographic"]
 # Enable UEFI boot
 uefi = false
 
-# Output as binary file
-to_bin = true
+# Optional compatibility field. UEFI QEMU prepares the required BIN automatically.
+to_bin = false
 
 # Success regex patterns (for auto-detection)
 success_regex = ["Hello from my OS", "Kernel booted successfully"]
 
 # Failure regex patterns (for auto-detection)
 fail_regex = ["panic", "error", "failed"]
+
+# Boot mode. direct is the default path; uboot is recognized and fails early
+# when firmware is missing.
+[boot]
+mode = "direct"
+# mode = "uboot"
+# firmware = "target/firmware/u-boot.bin"
 ```
 
 ### U-Boot Configuration (.uboot.toml)

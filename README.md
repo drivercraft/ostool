@@ -149,6 +149,26 @@ ostool board run --package paging-test --bin basic
 > 交互退出：在串口终端（如 `ostool run uboot`）中，按下 `Ctrl+A` 后再按 `x`，工具会检测到该序列并优雅退出，不会将按键发送到目标设备。
 > 更多键盘快捷键映射可参考源码 `ostool/src/sterm/mod.rs`。
 
+#### 5. 准备启动产物
+
+```bash
+# 构建内核并准备 target/boot 下的启动产物包
+ostool boot prepare
+
+# 附带 DTB，并临时覆盖 Cargo package / binary target
+ostool boot prepare --dtb virt.dtb --package paging-test --bin basic
+
+# 覆盖 FIT 地址，地址支持十进制或 0x 前缀十六进制
+ostool boot prepare --kernel-load-addr 0x80200000 --kernel-entry-addr 0x80200000
+
+# 只准备 manifest、ELF metadata、boot script 和 staging 目录，不生成 FIT
+ostool boot prepare --no-fit
+```
+
+`boot prepare` 以构建出的 ELF 作为唯一源产物，自动推导 ELF entry/load metadata；需要
+FIT 时会自动派生 BIN，不需要在配置中手动声明 binary。默认输出目录为当前 invocation 的
+`target/boot`，并写出 `boot-artifacts.json` v1 manifest。
+
 ## ⚙️ 配置文件
 
 ostool 使用多个独立的 TOML 配置文件，每个文件负责不同的功能模块：
@@ -202,6 +222,12 @@ post_build_cmds = ["make post-process"]
 
 # 可选兼容字段。U-Boot、board 和 UEFI QEMU 运行会自动准备所需 BIN。
 to_bin = false
+
+# 可选分析产物。字段名描述产物，不描述底层命令。
+[system.Cargo.artifacts]
+disassembly = false
+elf_info = false
+symbols = false
 ```
 
 命令行 `--package`/`--bin` 会先覆盖 `.build.toml` 中的 Cargo 包/二进制选择，再用于
@@ -223,6 +249,11 @@ elf_path = "examples/helloworld/helloworld_aarch64-qemu-virt.elf"
 
 # 可选兼容字段。U-Boot、board 和 UEFI QEMU 运行会自动准备所需 BIN。
 to_bin = false
+
+[system.Custom.artifacts]
+disassembly = false
+elf_info = false
+symbols = false
 ```
 
 ### QEMU 配置 (.qemu.toml)
@@ -244,6 +275,12 @@ success_regex = ["Hello from my OS", "Kernel booted successfully"]
 
 # 失败运行的正则表达式（用于自动检测）
 fail_regex = ["panic", "error", "failed"]
+
+# 启动模式。direct 为默认路径；uboot 目前只识别配置并在缺少 firmware 时提前报错。
+[boot]
+mode = "direct"
+# mode = "uboot"
+# firmware = "target/firmware/u-boot.bin"
 ```
 
 ### U-Boot 配置 (.uboot.toml)

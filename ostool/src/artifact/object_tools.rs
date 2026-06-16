@@ -35,6 +35,21 @@ impl ObjectTools {
     pub(crate) fn objcopy(&self) -> PathBuf {
         self.program(ObjectToolKind::Objcopy)
     }
+
+    #[allow(dead_code)]
+    pub(crate) fn objdump(&self) -> PathBuf {
+        self.program(ObjectToolKind::Objdump)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn readobj(&self) -> PathBuf {
+        self.program(ObjectToolKind::Readobj)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn nm(&self) -> PathBuf {
+        self.program(ObjectToolKind::Nm)
+    }
 }
 
 #[cfg(test)]

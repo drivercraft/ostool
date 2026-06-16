@@ -33,6 +33,7 @@ pub(crate) struct FitInput {
     pub(crate) kernel_load_addr: u64,
     pub(crate) kernel_entry_addr: u64,
     pub(crate) fdt_load_addr: Option<u64>,
+    pub(crate) kernel_os: Option<String>,
     pub(crate) output_path: Option<PathBuf>,
 }
 
@@ -83,6 +84,7 @@ pub(crate) async fn generate_fit_image(input: FitInput) -> anyhow::Result<Genera
         input.kernel_load_addr,
         input.kernel_entry_addr,
         input.fdt_load_addr,
+        input.kernel_os.as_deref().unwrap_or("linux"),
     );
 
     let mut builder = FitImageBuilder::new();
@@ -126,13 +128,14 @@ fn build_default_fit_config(
     kernel_load_addr: u64,
     kernel_entry_addr: u64,
     fdt_load_addr: Option<u64>,
+    kernel_os: &str,
 ) -> FitImageConfig {
     let mut config = FitImageConfig::new(FIT_DESCRIPTION).with_kernel(
         ComponentConfig::new(KERNEL_COMPONENT_NAME, kernel_data)
             .with_description("This kernel")
             .with_type("kernel")
             .with_arch(arch_name)
-            .with_os("linux")
+            .with_os(kernel_os)
             .with_compression(false)
             .with_load_address(kernel_load_addr)
             .with_entry_point(kernel_entry_addr),
@@ -200,7 +203,15 @@ mod tests {
 
     #[test]
     fn default_fit_config_keeps_linux_kernel_defaults_without_dtb() {
-        let config = build_default_fit_config("arm64", vec![1, 2, 3], None, 0x80000, 0x80000, None);
+        let config = build_default_fit_config(
+            "arm64",
+            vec![1, 2, 3],
+            None,
+            0x80000,
+            0x80000,
+            None,
+            "linux",
+        );
         let kernel = config.kernel.as_ref().unwrap();
 
         assert_eq!(
@@ -231,6 +242,7 @@ mod tests {
             0x8020_0000,
             0x8020_0000,
             Some(0x8800_0000),
+            "u-boot",
         );
         let fdt = config.fdt.as_ref().unwrap();
         let default_config = config.configurations.get("config-ostool").unwrap();
@@ -239,6 +251,10 @@ mod tests {
         assert_eq!(fdt.component_type.as_deref(), Some("flat_dt"));
         assert_eq!(fdt.arch.as_deref(), Some("riscv"));
         assert_eq!(fdt.load_address, Some(0x8800_0000));
+        assert_eq!(
+            config.kernel.as_ref().unwrap().os.as_deref(),
+            Some("u-boot")
+        );
         assert_eq!(default_config.fdt.as_deref(), Some("fdt"));
     }
 
@@ -257,6 +273,7 @@ mod tests {
             kernel_load_addr: 0x80000,
             kernel_entry_addr: 0x80000,
             fdt_load_addr: None,
+            kernel_os: None,
             output_path: None,
         })
         .await
@@ -286,6 +303,7 @@ mod tests {
             kernel_load_addr: 0x8020_0000,
             kernel_entry_addr: 0x8020_0000,
             fdt_load_addr: Some(0x8800_0000),
+            kernel_os: Some("linux".into()),
             output_path: Some(output_path.clone()),
         })
         .await

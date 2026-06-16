@@ -2,3 +2,4 @@
 
 pub(crate) mod artifacts;
 pub(crate) mod fit;
+pub mod prepare;

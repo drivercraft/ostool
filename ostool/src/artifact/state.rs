@@ -12,7 +12,6 @@ use crate::artifact::runtime::PreparedRuntimeArtifacts;
 pub struct OutputArtifacts {
     cargo: Option<CargoArtifactState>,
     runtime: RuntimeArtifactState,
-    #[allow(dead_code)]
     debug: DebugArtifactRegistry,
 }
 
@@ -31,20 +30,17 @@ struct RuntimeArtifactState {
     source_artifact_dir: Option<PathBuf>,
 }
 
-#[allow(dead_code)]
 #[derive(Default, Clone, Debug)]
 pub(crate) struct DebugArtifactRegistry {
     artifacts: BTreeMap<DebugArtifactKind, DebugArtifact>,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DebugArtifact {
     kind: DebugArtifactKind,
     path: PathBuf,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum DebugArtifactKind {
     Disassembly,
@@ -52,8 +48,8 @@ pub(crate) enum DebugArtifactKind {
     Symbols,
 }
 
-#[allow(dead_code)]
 impl DebugArtifactRegistry {
+    #[allow(dead_code)]
     pub(crate) fn is_empty(&self) -> bool {
         self.artifacts.is_empty()
     }
@@ -62,6 +58,7 @@ impl DebugArtifactRegistry {
         self.artifacts.insert(kind, DebugArtifact { kind, path });
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get(&self, kind: DebugArtifactKind) -> Option<&Path> {
         self.artifacts
             .get(&kind)
@@ -135,7 +132,6 @@ impl OutputArtifacts {
         &self.debug
     }
 
-    #[cfg(test)]
     pub(crate) fn register_debug_artifact(&mut self, kind: DebugArtifactKind, path: PathBuf) {
         self.debug.register(kind, path);
     }

@@ -414,6 +414,7 @@ dtb_file = "${package}/board.dtb"
                     pre_build_cmds: vec![],
                     post_build_cmds: vec![],
                     to_bin: false,
+                    artifacts: Default::default(),
                 }),
             },
             None,

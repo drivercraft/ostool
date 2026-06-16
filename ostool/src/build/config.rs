@@ -16,12 +16,19 @@
 //! # Optional legacy override. Runners that require BIN artifacts prepare them
 //! # automatically.
 //! to_bin = false
+//!
+//! [system.Cargo.artifacts]
+//! disassembly = false
+//! elf_info = false
+//! symbols = false
 //! ```
 
 use std::collections::HashMap;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+pub use crate::artifact::analysis::AnalysisArtifactConfig;
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -69,6 +76,9 @@ pub struct Custom {
     /// Runners that require BIN artifacts prepare them automatically.
     #[serde(default)]
     pub to_bin: bool,
+    /// Optional analysis artifacts derived from the prepared ELF.
+    #[serde(default)]
+    pub artifacts: AnalysisArtifactConfig,
 }
 
 /// Configuration for Cargo-based builds.
@@ -121,6 +131,9 @@ pub struct Cargo {
     /// Runners that require BIN artifacts prepare them automatically.
     #[serde(default)]
     pub to_bin: bool,
+    /// Optional analysis artifacts derived from the prepared ELF.
+    #[serde(default)]
+    pub artifacts: AnalysisArtifactConfig,
 }
 
 /// Cargo build profile selection.
@@ -180,6 +193,7 @@ to_bin = false
         .unwrap();
 
         assert!(!cargo.disable_someboot_build_config);
+        assert!(cargo.artifacts.is_empty());
     }
 
     #[test]
@@ -198,6 +212,7 @@ post_build_cmds = []
         .unwrap();
 
         assert!(!cargo.to_bin);
+        assert!(cargo.artifacts.is_empty());
     }
 
     #[test]
@@ -211,6 +226,7 @@ elf_path = "target/kernel"
         .unwrap();
 
         assert!(!custom.to_bin);
+        assert!(custom.artifacts.is_empty());
     }
 
     #[test]

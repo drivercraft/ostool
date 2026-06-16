@@ -165,6 +165,10 @@ impl Invocation {
         self.state.apply_prepared_runtime_artifacts(&prepared);
     }
 
+    pub(crate) fn replace_runtime_artifacts(&mut self, artifacts: OutputArtifacts) {
+        self.state.replace_runtime_artifacts(artifacts);
+    }
+
     pub(crate) fn ensure_runtime_bin(&mut self) -> anyhow::Result<PathBuf> {
         self.ensure_runtime_bin_with_objcopy(ObjectTools.objcopy())
     }
@@ -272,6 +276,10 @@ impl InvocationState {
     pub(crate) fn apply_prepared_runtime_artifacts(&mut self, prepared: &PreparedRuntimeArtifacts) {
         self.artifacts.apply_prepared_runtime_artifacts(prepared);
         self.arch = prepared.arch();
+    }
+
+    pub(crate) fn replace_runtime_artifacts(&mut self, artifacts: OutputArtifacts) {
+        self.artifacts = artifacts;
     }
 }
 

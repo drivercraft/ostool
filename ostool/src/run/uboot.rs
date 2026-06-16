@@ -1174,6 +1174,7 @@ where
             kernel_load_addr: kernel_entry,
             kernel_entry_addr: kernel_entry,
             fdt_load_addr,
+            kernel_os: None,
             output_path: None,
         })
         .await?;
@@ -1880,6 +1881,7 @@ timeout = 0
                     pre_build_cmds: vec![],
                     post_build_cmds: vec![],
                     to_bin: false,
+                    artifacts: Default::default(),
                 }),
             },
             None,
@@ -2069,6 +2071,7 @@ baud_rate = "115200"
                     pre_build_cmds: vec![],
                     post_build_cmds: vec![],
                     to_bin: false,
+                    artifacts: Default::default(),
                 }),
             },
             None,

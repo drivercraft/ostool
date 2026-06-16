@@ -10,6 +10,7 @@ use env_logger::Env;
 use log::info;
 use ostool::{
     board,
+    boot::prepare::{BootPrepareOptions, FitPrepareOptions, PreparedBootArtifacts},
     build::{self, CargoQemuRunnerArgs, CargoRunnerKind, CargoUbootRunnerArgs},
     invocation::{Invocation, InvocationOptions},
     menuconfig::{MenuConfigHandler, MenuConfigMode},
@@ -42,6 +43,7 @@ enum SubCommands {
         command: RunSubCommands,
     },
     Board(BoardArgs),
+    Boot(BootArgs),
     Menuconfig {
         /// Menu configuration mode (qemu or uboot)
         #[arg(value_enum)]
@@ -65,12 +67,77 @@ struct BoardArgs {
     command: BoardSubCommands,
 }
 
+#[derive(Args, Debug)]
+struct BootArgs {
+    #[command(subcommand)]
+    command: BootSubCommands,
+}
+
 #[derive(Subcommand, Debug)]
 enum BoardSubCommands {
     Ls(BoardServerArgs),
     Connect(BoardConnectArgs),
     Run(BoardRunArgs),
     Config,
+}
+
+#[derive(Subcommand, Debug)]
+enum BootSubCommands {
+    Prepare(BootPrepareCommand),
+}
+
+#[derive(Args, Debug)]
+struct BootPrepareCommand {
+    /// Path to the build configuration file
+    #[arg(short, long)]
+    config: Option<PathBuf>,
+    #[command(flatten)]
+    cargo_selector: CargoSelectorArgs,
+    /// Output directory for prepared boot artifacts. Defaults to target/boot.
+    #[arg(long)]
+    output_dir: Option<PathBuf>,
+    /// Optional DTB copied into the boot package and attached to FIT.
+    #[arg(long)]
+    dtb: Option<PathBuf>,
+    /// Disable FIT generation.
+    #[arg(long)]
+    no_fit: bool,
+    /// Disable rootfs staging directory generation.
+    #[arg(long)]
+    no_rootfs: bool,
+    /// Disable boot partition staging directory generation.
+    #[arg(long)]
+    no_boot_partition: bool,
+    /// Override the FIT kernel os property.
+    #[arg(long, default_value = "linux")]
+    fit_kernel_os: String,
+    /// Override the FIT kernel load address. Accepts decimal or 0x-prefixed hex.
+    #[arg(long, value_parser = parse_u64_arg)]
+    kernel_load_addr: Option<u64>,
+    /// Override the FIT kernel entry address. Accepts decimal or 0x-prefixed hex.
+    #[arg(long, value_parser = parse_u64_arg)]
+    kernel_entry_addr: Option<u64>,
+    /// Override the FIT FDT load address. Accepts decimal or 0x-prefixed hex.
+    #[arg(long, value_parser = parse_u64_arg)]
+    fdt_load_addr: Option<u64>,
+}
+
+impl BootPrepareCommand {
+    fn options(&self) -> BootPrepareOptions {
+        BootPrepareOptions {
+            output_dir: self.output_dir.clone(),
+            dtb_path: self.dtb.clone(),
+            fit: FitPrepareOptions {
+                enabled: !self.no_fit,
+                kernel_load_addr: self.kernel_load_addr,
+                kernel_entry_addr: self.kernel_entry_addr,
+                fdt_load_addr: self.fdt_load_addr,
+                kernel_os: self.fit_kernel_os.clone(),
+            },
+            rootfs: !self.no_rootfs,
+            boot_partition: !self.no_boot_partition,
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -228,6 +295,27 @@ async fn try_main() -> Result<()> {
                 board::config()?;
             }
         },
+        SubCommands::Boot(args) => match args.command {
+            BootSubCommands::Prepare(args) => {
+                let mut invocation = init_invocation(manifest)?;
+                let mut loaded_build_config =
+                    load_build_config(&invocation, args.config.as_deref()).await?;
+                apply_cargo_selector(
+                    &mut invocation,
+                    &mut loaded_build_config.config,
+                    loaded_build_config.path.as_path(),
+                    &args.cargo_selector,
+                )?;
+                let prepared = ostool::boot::prepare::build_and_prepare_boot_artifacts(
+                    &mut invocation,
+                    &loaded_build_config.config,
+                    Some(loaded_build_config.path.as_path()),
+                    args.options(),
+                )
+                .await?;
+                print_boot_prepare_summary(&prepared);
+            }
+        },
         SubCommands::Build {
             config,
             cargo_selector,
@@ -292,19 +380,14 @@ async fn try_main() -> Result<()> {
                         )
                         .await?;
                     }
-                    build::config::BuildSystem::Custom(custom_cfg) => {
-                        build::build_with_config(
+                    build::config::BuildSystem::Custom(_) => {
+                        build::prepare_runtime_artifacts(
                             &mut invocation,
                             &loaded_build_config.config,
                             Some(loaded_build_config.path.as_path()),
+                            debug,
                         )
                         .await?;
-                        invocation
-                            .prepare_elf_artifact(
-                                custom_cfg.elf_path.clone().into(),
-                                custom_cfg.to_bin,
-                            )
-                            .await?;
                         let qemu_config =
                             load_qemu_config(&mut invocation, qemu.qemu_config.as_deref()).await?;
                         ostool::run::qemu::run_qemu(
@@ -356,19 +439,14 @@ async fn try_main() -> Result<()> {
                         )
                         .await?;
                     }
-                    build::config::BuildSystem::Custom(custom_cfg) => {
-                        build::build_with_config(
+                    build::config::BuildSystem::Custom(_) => {
+                        build::prepare_runtime_artifacts(
                             &mut invocation,
                             &loaded_build_config.config,
                             Some(loaded_build_config.path.as_path()),
+                            false,
                         )
                         .await?;
-                        invocation
-                            .prepare_elf_artifact(
-                                custom_cfg.elf_path.clone().into(),
-                                custom_cfg.to_bin,
-                            )
-                            .await?;
                         let uboot_config =
                             load_uboot_config(&mut invocation, uboot.uboot_config.as_deref())
                                 .await?;
@@ -396,6 +474,33 @@ fn init_invocation(manifest_arg: Option<PathBuf>) -> Result<Invocation> {
     ))?;
     info!("Using manifest {}", invocation.manifest_path().display());
     Ok(invocation)
+}
+
+fn parse_u64_arg(value: &str) -> std::result::Result<u64, String> {
+    if let Some(hex) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        return u64::from_str_radix(hex, 16)
+            .map_err(|err| format!("invalid hexadecimal address `{value}`: {err}"));
+    }
+    value
+        .parse::<u64>()
+        .map_err(|err| format!("invalid address `{value}`: {err}"))
+}
+
+fn print_boot_prepare_summary(prepared: &PreparedBootArtifacts) {
+    println!(
+        "{}",
+        format!(
+            "Prepared boot artifacts:\n  manifest: {}\n  kernel elf: {}\n  artifacts: {}",
+            prepared.manifest_path().display(),
+            prepared.kernel_elf.display(),
+            prepared.artifacts.len()
+        )
+        .bold()
+        .green()
+    );
 }
 
 struct LoadedBuildConfig {
@@ -498,9 +603,9 @@ mod tests {
     use ostool::invocation::{Invocation, InvocationOptions};
 
     use super::{
-        BoardArgs, BoardSubCommands, CargoSelectorArgs, Cli, RunSubCommands, SubCommands,
-        apply_cargo_selector, build, load_board_config, load_build_config, load_qemu_config,
-        load_uboot_config,
+        BoardArgs, BoardSubCommands, BootSubCommands, CargoSelectorArgs, Cli, RunSubCommands,
+        SubCommands, apply_cargo_selector, build, load_board_config, load_build_config,
+        load_qemu_config, load_uboot_config, parse_u64_arg,
     };
 
     /// Verifies build parsing accepts manifest, config, package, and bin overrides.
@@ -616,6 +721,64 @@ mod tests {
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_boot_prepare_with_artifact_options() {
+        let cli = Cli::try_parse_from([
+            "ostool",
+            "boot",
+            "prepare",
+            "--config",
+            "kernel.build.toml",
+            "--package",
+            "kernel",
+            "--bin",
+            "kernel-boot",
+            "--output-dir",
+            "target/boot",
+            "--dtb",
+            "virt.dtb",
+            "--no-fit",
+            "--no-rootfs",
+            "--kernel-load-addr",
+            "0x80200000",
+            "--kernel-entry-addr",
+            "0x80200000",
+            "--fdt-load-addr",
+            "2147483648",
+        ])
+        .unwrap();
+
+        match cli.command {
+            SubCommands::Boot(args) => match args.command {
+                BootSubCommands::Prepare(args) => {
+                    assert_eq!(
+                        args.config.as_deref(),
+                        Some(std::path::Path::new("kernel.build.toml"))
+                    );
+                    assert_eq!(args.cargo_selector.package.as_deref(), Some("kernel"));
+                    assert_eq!(args.cargo_selector.bin.as_deref(), Some("kernel-boot"));
+                    assert_eq!(
+                        args.output_dir.as_deref(),
+                        Some(std::path::Path::new("target/boot"))
+                    );
+                    assert_eq!(args.dtb.as_deref(), Some(std::path::Path::new("virt.dtb")));
+                    assert!(args.no_fit);
+                    assert!(args.no_rootfs);
+                    assert_eq!(args.kernel_load_addr, Some(0x8020_0000));
+                    assert_eq!(args.kernel_entry_addr, Some(0x8020_0000));
+                    assert_eq!(args.fdt_load_addr, Some(2_147_483_648));
+                }
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_u64_arg_accepts_decimal_and_hex() {
+        assert_eq!(parse_u64_arg("42").unwrap(), 42);
+        assert_eq!(parse_u64_arg("0x2a").unwrap(), 42);
     }
 
     #[test]
@@ -810,6 +973,7 @@ mod tests {
                 build_cmd: "make".into(),
                 elf_path: "target/kernel.elf".into(),
                 to_bin: true,
+                artifacts: Default::default(),
             }),
         };
 

@@ -20,6 +20,9 @@
 //! to_bin = true
 //! success_regex = ["All tests passed"]
 //! fail_regex = ["PANIC", "FAILED"]
+//!
+//! [boot]
+//! mode = "direct"
 //! ```
 
 use std::{
@@ -97,6 +100,46 @@ pub struct QemuConfig {
     pub shell_init_cmd: Option<String>,
     /// Timeout in seconds. `None` or `0` disables the timeout.
     pub timeout: Option<u64>,
+    /// Boot mode selection. `uboot` is recognized but requires explicit firmware.
+    #[serde(default, skip_serializing_if = "QemuBootConfig::is_default")]
+    pub boot: QemuBootConfig,
+}
+
+/// QEMU boot-mode configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct QemuBootConfig {
+    /// Boot mode for QEMU.
+    #[serde(default)]
+    pub mode: QemuBootMode,
+    /// Explicit firmware path for boot modes that need firmware.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firmware: Option<String>,
+}
+
+impl Default for QemuBootConfig {
+    fn default() -> Self {
+        Self {
+            mode: QemuBootMode::Direct,
+            firmware: None,
+        }
+    }
+}
+
+impl QemuBootConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+/// QEMU boot mode.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum QemuBootMode {
+    /// Load the prepared runtime image directly with QEMU.
+    #[default]
+    Direct,
+    /// Boot through U-Boot firmware.
+    Uboot,
 }
 
 impl QemuConfig {
@@ -126,6 +169,12 @@ impl QemuConfig {
             .as_deref()
             .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
+        self.boot.firmware = self
+            .boot
+            .firmware
+            .as_deref()
+            .map(|value| variables::expand_variables(value, scope))
+            .transpose()?;
         Ok(())
     }
 
@@ -143,6 +192,18 @@ impl QemuConfig {
 
     fn requires_bin_artifact(&self) -> bool {
         self.uefi || self.to_bin
+    }
+
+    fn validate_boot_mode(&self) -> anyhow::Result<()> {
+        match self.boot.mode {
+            QemuBootMode::Direct => Ok(()),
+            QemuBootMode::Uboot if self.boot.firmware.is_none() => anyhow::bail!(
+                "QEMU U-Boot boot requires `boot.firmware`; firmware preparation is not implemented yet"
+            ),
+            QemuBootMode::Uboot => anyhow::bail!(
+                "QEMU U-Boot boot with explicit firmware is recognized but not wired into QEMU execution yet"
+            ),
+        }
     }
 }
 
@@ -288,6 +349,7 @@ pub(crate) async fn run_qemu_with_config(
     run_args: RunQemuOptions,
     config: QemuConfig,
 ) -> anyhow::Result<()> {
+    config.validate_boot_mode()?;
     if config.requires_bin_artifact() {
         input
             .artifacts
@@ -792,10 +854,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        QemuConfig, QemuRunInput, QemuRunner, RunQemuOptions, build_default_qemu_config,
-        default_qemu_config_for_cargo, ensure_config_for_cargo, ensure_qemu_config_at_path,
-        infer_target_arch, read_config_from_path, read_qemu_config_at_path,
-        resolve_qemu_config_path_in_dir, run_qemu_with_config, timeout_duration,
+        QemuBootConfig, QemuBootMode, QemuConfig, QemuRunInput, QemuRunner, RunQemuOptions,
+        build_default_qemu_config, default_qemu_config_for_cargo, ensure_config_for_cargo,
+        ensure_qemu_config_at_path, infer_target_arch, read_config_from_path,
+        read_qemu_config_at_path, resolve_qemu_config_path_in_dir, run_qemu_with_config,
+        timeout_duration,
     };
     use object::Architecture;
     use std::{
@@ -997,6 +1060,7 @@ fail_regex = []
                 pre_build_cmds: vec![],
                 post_build_cmds: vec![],
                 to_bin: false,
+                artifacts: Default::default(),
             },
         )
         .await
@@ -1079,6 +1143,52 @@ fail_regex = []
     }
 
     #[test]
+    fn qemu_config_parses_uboot_boot_mode() {
+        let config: QemuConfig = toml::from_str(
+            r#"
+args = ["-nographic"]
+uefi = false
+success_regex = []
+fail_regex = []
+
+[boot]
+mode = "uboot"
+firmware = "${workspace}/target/firmware/u-boot.bin"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.boot.mode, QemuBootMode::Uboot);
+        assert_eq!(
+            config.boot.firmware.as_deref(),
+            Some("${workspace}/target/firmware/u-boot.bin")
+        );
+    }
+
+    #[tokio::test]
+    async fn qemu_uboot_mode_rejects_missing_firmware_before_execution() {
+        let tmp = TempDir::new().unwrap();
+        write_single_crate_manifest(tmp.path());
+        let invocation = make_invocation(tmp.path());
+
+        let err = run_qemu_with_config(
+            qemu_input(&invocation),
+            RunQemuOptions::default(),
+            QemuConfig {
+                boot: QemuBootConfig {
+                    mode: QemuBootMode::Uboot,
+                    firmware: None,
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("boot.firmware"));
+    }
+
+    #[test]
     fn default_qemu_config_for_cargo_uses_target_arch() {
         let config = default_qemu_config_for_cargo(
             &Cargo {
@@ -1095,6 +1205,7 @@ fail_regex = []
                 pre_build_cmds: vec![],
                 post_build_cmds: vec![],
                 to_bin: false,
+                artifacts: Default::default(),
             },
             None,
         );
@@ -1303,6 +1414,7 @@ fail_regex = []
                     pre_build_cmds: vec![],
                     post_build_cmds: vec![],
                     to_bin: false,
+                    artifacts: Default::default(),
                 }),
             },
             None,
@@ -1318,6 +1430,10 @@ fail_regex = []
             fail_regex: vec!["${workspaceFolder}".into()],
             shell_prefix: Some("${workspace}".into()),
             shell_init_cmd: Some("${package}".into()),
+            boot: QemuBootConfig {
+                mode: QemuBootMode::Direct,
+                firmware: Some("${package}/firmware.bin".into()),
+            },
             ..Default::default()
         };
 
@@ -1331,6 +1447,11 @@ fail_regex = []
         assert_eq!(config.fail_regex, vec![expected.clone()]);
         assert_eq!(config.shell_prefix.as_deref(), Some(expected.as_str()));
         assert_eq!(config.shell_init_cmd.as_deref(), Some(expected.as_str()));
+        let expected_firmware = tmp.path().join("firmware.bin").display().to_string();
+        assert_eq!(
+            config.boot.firmware.as_deref(),
+            Some(expected_firmware.as_str())
+        );
     }
 
     #[tokio::test]

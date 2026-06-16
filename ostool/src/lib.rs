@@ -33,7 +33,7 @@
 #![cfg(not(target_os = "none"))]
 
 mod artifact;
-mod boot;
+pub mod boot;
 
 /// Build system configuration and Cargo integration.
 ///
