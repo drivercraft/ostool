@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/drivercraft/ostool/compare/ostool-server-v0.4.0...ostool-server-v0.4.1) - 2026-06-16
+
+### Fixed
+
+- *(ostool-server)* extend Zhongsheng release delay ([#134](https://github.com/drivercraft/ostool/pull/134))
+
 ## [0.4.0](https://github.com/drivercraft/ostool/compare/ostool-server-v0.3.0...ostool-server-v0.4.0) - 2026-06-15
 
 ### Added
