@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2](https://github.com/drivercraft/ostool/compare/ostool-server-v0.4.1...ostool-server-v0.4.2) - 2026-06-16
+
+### Fixed
+
+- *(ostool-server)* clear serial queue after session ([#135](https://github.com/drivercraft/ostool/pull/135))
+
 ## [0.4.1](https://github.com/drivercraft/ostool/compare/ostool-server-v0.4.0...ostool-server-v0.4.1) - 2026-06-16
 
 ### Fixed
