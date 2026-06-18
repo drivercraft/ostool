@@ -85,6 +85,39 @@ impl From<&CargoBuildOutcome> for CargoBuildOutput {
     }
 }
 
+/// Input for preparing runtime artifacts from an already built ELF.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeArtifactInput {
+    elf_path: PathBuf,
+    to_bin: bool,
+    cargo_artifact_dir: Option<PathBuf>,
+    strip_elf: bool,
+}
+
+impl RuntimeArtifactInput {
+    /// Creates a runtime artifact input from an ELF path.
+    pub fn new(elf_path: impl Into<PathBuf>, to_bin: bool) -> Self {
+        Self {
+            elf_path: elf_path.into(),
+            to_bin,
+            cargo_artifact_dir: None,
+            strip_elf: false,
+        }
+    }
+
+    /// Associates the input ELF with the Cargo artifact directory that produced it.
+    pub fn with_cargo_artifact_dir(mut self, cargo_artifact_dir: impl Into<PathBuf>) -> Self {
+        self.cargo_artifact_dir = Some(cargo_artifact_dir.into());
+        self
+    }
+
+    /// Copies the input ELF into a stripped runtime `.elf` before preparing outputs.
+    pub fn strip_elf(mut self, strip_elf: bool) -> Self {
+        self.strip_elf = strip_elf;
+        self
+    }
+}
+
 /// Parameters for running a built Cargo artifact in QEMU.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CargoQemuRunnerArgs {
@@ -283,6 +316,31 @@ pub(crate) fn build_custom(invocation: &mut Invocation, config: &Custom) -> anyh
     Ok(())
 }
 
+/// Prepares runtime ELF/BIN outputs from an already built artifact.
+///
+/// This is useful when a caller builds with [`cargo_build`], modifies the returned
+/// ELF in place, and then wants QEMU, U-Boot, or board runners to consume the
+/// updated artifact without rebuilding it.
+pub fn prepare_runtime_artifact(
+    invocation: &mut Invocation,
+    input: RuntimeArtifactInput,
+) -> anyhow::Result<()> {
+    let process_context = invocation.process_context()?;
+    let prepared = prepare_runtime_artifact_outputs(
+        &process_context,
+        RuntimeArtifactOptions {
+            elf_path: input.elf_path,
+            to_bin: input.to_bin,
+            bin_dir: invocation.bin_dir(),
+            debug: invocation.options().debug(),
+            cargo_artifact_dir: input.cargo_artifact_dir,
+            strip_elf: input.strip_elf,
+        },
+    )?;
+    invocation.apply_prepared_runtime_artifacts(prepared);
+    Ok(())
+}
+
 /// Builds the project using Cargo and returns the executable artifact selected from Cargo output.
 ///
 /// `config_path` is the optional `.build.toml` source path for `config`.
@@ -470,8 +528,9 @@ mod tests {
     };
 
     use super::{
-        CargoBuildOutput, CargoSelector, activate_build_config, activate_build_context,
-        apply_cargo_build_outcome, build_with_config,
+        CargoBuildOutput, CargoSelector, RuntimeArtifactInput, activate_build_config,
+        activate_build_context, apply_cargo_build_outcome, build_with_config,
+        prepare_runtime_artifact,
     };
 
     #[test]
@@ -550,6 +609,58 @@ mod tests {
 
         assert_eq!(output.elf_path(), elf_path.as_path());
         assert_eq!(output.cargo_artifact_dir(), cargo_artifact_dir.as_path());
+    }
+
+    #[test]
+    fn prepare_runtime_artifact_records_external_artifact_state() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("Cargo.toml"),
+            "[package]\nname = \"kernel\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(temp.path().join("src")).unwrap();
+        fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let cargo_artifact_dir = temp.path().join("target/aarch64/debug");
+        fs::create_dir_all(&cargo_artifact_dir).unwrap();
+        let elf_path = cargo_artifact_dir.join("kernel");
+        fs::copy(std::env::current_exe().unwrap(), &elf_path).unwrap();
+
+        let mut invocation = Invocation::new(InvocationOptions::new(
+            Some(temp.path().to_path_buf()),
+            None,
+            None,
+            false,
+        ))
+        .unwrap();
+
+        prepare_runtime_artifact(
+            &mut invocation,
+            RuntimeArtifactInput::new(&elf_path, false)
+                .with_cargo_artifact_dir(cargo_artifact_dir.clone()),
+        )
+        .unwrap();
+
+        let expected_elf = elf_path.canonicalize().unwrap();
+        assert_eq!(
+            invocation.runtime_artifacts().elf(),
+            Some(expected_elf.as_path())
+        );
+        assert!(invocation.runtime_artifacts().bin().is_none());
+        assert_eq!(
+            invocation.runtime_artifacts().cargo_artifact_dir(),
+            Some(cargo_artifact_dir.as_path())
+        );
+        assert_eq!(
+            invocation.runtime_artifacts().cargo_source_artifact_dir(),
+            Some(cargo_artifact_dir.as_path())
+        );
+        assert_eq!(
+            invocation.runtime_artifacts().cargo_source_elf(),
+            Some(expected_elf.as_path())
+        );
+        assert!(invocation.runtime_arch().is_some());
     }
 
     #[tokio::test]
