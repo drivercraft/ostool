@@ -22,7 +22,6 @@ use std::path::{Path, PathBuf};
 use anyhow::bail;
 
 use crate::{
-    artifact::object_tools::ObjectTools,
     artifact::runtime::{
         RuntimeArtifactOptions, prepare_runtime_artifacts as prepare_runtime_artifact_outputs,
     },
@@ -406,7 +405,6 @@ fn apply_cargo_build_outcome(
             debug,
             cargo_artifact_dir: Some(resolved.cargo_artifact_dir().to_path_buf()),
             strip_elf: false,
-            objcopy_program: ObjectTools.objcopy(),
         },
     )?;
     invocation.apply_prepared_runtime_artifacts(prepared);

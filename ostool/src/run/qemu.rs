@@ -806,7 +806,6 @@ mod tests {
 
     use crate::{
         artifact::{
-            object_tools::ObjectTools,
             runtime::{RuntimeArtifactOptions, prepare_runtime_artifacts},
             state::OutputArtifacts,
         },
@@ -1023,7 +1022,6 @@ fail_regex = []
                 debug: false,
                 cargo_artifact_dir: None,
                 strip_elf: false,
-                objcopy_program: ObjectTools.objcopy(),
             },
         )
         .unwrap();
