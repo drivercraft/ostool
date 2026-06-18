@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.3](https://github.com/drivercraft/ostool/compare/ostool-v0.23.2...ostool-v0.23.3) - 2026-06-18
+
+### Added
+
+- *(build)* expose Cargo build artifact output ([#139](https://github.com/drivercraft/ostool/pull/139))
+
+### Fixed
+
+- *(ostool)* use toolchain llvm-objcopy for bin artifacts ([#140](https://github.com/drivercraft/ostool/pull/140))
+
 ## [0.23.2](https://github.com/drivercraft/ostool/compare/ostool-v0.23.1...ostool-v0.23.2) - 2026-06-16
 
 ### Fixed
