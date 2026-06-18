@@ -13,7 +13,7 @@ use anyhow::{Context, anyhow};
 use colored::Colorize;
 use object::{Architecture, Object};
 
-use crate::{process::ProcessContext, utils::PathResultExt};
+use crate::{artifact::llvm_tools, process::ProcessContext, utils::PathResultExt};
 
 /// Options controlling how an input ELF is prepared for runtime use.
 pub(crate) struct RuntimeArtifactOptions {
@@ -29,8 +29,6 @@ pub(crate) struct RuntimeArtifactOptions {
     pub(crate) cargo_artifact_dir: Option<PathBuf>,
     /// Whether to copy the input ELF into a stripped runtime `.elf` file first.
     pub(crate) strip_elf: bool,
-    /// Objcopy executable used for ELF/BIN materialization.
-    pub(crate) objcopy_program: PathBuf,
 }
 
 /// Runtime artifacts prepared from a single input ELF.
@@ -93,7 +91,7 @@ pub(crate) fn prepare_runtime_artifacts(
     let arch = detect_architecture(&input_elf)?;
 
     let runtime_elf = if options.strip_elf {
-        strip_runtime_elf(context, &options.objcopy_program, &input_elf, arch)?
+        strip_runtime_elf(context, &input_elf, arch)?
     } else {
         input_elf
     };
@@ -108,13 +106,7 @@ pub(crate) fn prepare_runtime_artifacts(
     };
 
     if options.to_bin {
-        let bin_path = convert_runtime_bin(
-            context,
-            &options.objcopy_program,
-            &runtime_elf,
-            options.bin_dir,
-            options.debug,
-        )?;
+        let bin_path = convert_runtime_bin(context, &runtime_elf, options.bin_dir, options.debug)?;
         prepared.runtime_artifact_dir = bin_path.parent().map(PathBuf::from);
         prepared.bin = Some(bin_path);
     }
@@ -131,7 +123,6 @@ fn detect_architecture(path: &Path) -> anyhow::Result<Architecture> {
 
 fn strip_runtime_elf(
     context: &ProcessContext,
-    objcopy_program: &Path,
     elf_path: &Path,
     arch: Architecture,
 ) -> anyhow::Result<PathBuf> {
@@ -154,6 +145,7 @@ fn strip_runtime_elf(
         .purple()
     );
 
+    let objcopy_program = llvm_tools::llvm_objcopy()?;
     let mut objcopy = crate::process::command(objcopy_program, context);
     objcopy.arg(format!(
         "--binary-architecture={}",
@@ -168,7 +160,6 @@ fn strip_runtime_elf(
 
 fn convert_runtime_bin(
     context: &ProcessContext,
-    objcopy_program: &Path,
     elf_path: &Path,
     bin_dir: Option<PathBuf>,
     debug: bool,
@@ -204,6 +195,7 @@ fn convert_runtime_bin(
         .purple()
     );
 
+    let objcopy_program = llvm_tools::llvm_objcopy()?;
     let mut objcopy = crate::process::command(objcopy_program, context);
 
     if !debug {
@@ -222,7 +214,13 @@ fn convert_runtime_bin(
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::{
+        env,
+        ffi::OsString,
+        fs,
+        path::{Path, PathBuf},
+        process::Command,
+    };
 
     use crate::{
         artifact::runtime::{RuntimeArtifactOptions, prepare_runtime_artifacts},
@@ -244,31 +242,44 @@ mod tests {
         ProcessContext::new(root.to_path_buf(), root.to_path_buf(), scope, None)
     }
 
-    fn fake_objcopy(root: &std::path::Path) -> PathBuf {
-        let script = root.join("fake-rust-objcopy");
-        fs::write(
-            &script,
-            "#!/bin/sh\nlast=\"\"\nprev=\"\"\nfor arg in \"$@\"; do prev=\"$last\"; last=\"$arg\"; done\ncp \"$prev\" \"$last\"\n",
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = fs::metadata(&script).unwrap().permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(&script, permissions).unwrap();
-        }
-        script
+    fn copy_current_exe(root: &Path) -> PathBuf {
+        let source = std::env::current_exe().unwrap();
+        let input = root.join("sample");
+        fs::copy(&source, &input).unwrap();
+        input
+    }
+
+    fn rust_objcopy_program() -> OsString {
+        env::var_os("OSTOOL_TEST_RUST_OBJCOPY").unwrap_or_else(|| OsString::from("rust-objcopy"))
+    }
+
+    fn run_rust_objcopy(args: &[OsString]) {
+        let program = rust_objcopy_program();
+        let output = Command::new(&program)
+            .args(args)
+            .output()
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to execute {}; install cargo-binutils for this comparison test: {err}",
+                    program.to_string_lossy()
+                )
+            });
+
+        assert!(
+            output.status.success(),
+            "{} failed with status {}\nstdout:\n{}\nstderr:\n{}",
+            program.to_string_lossy(),
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
     fn prepares_stripped_elf_without_mutating_tool_state() {
         let temp = tempfile::tempdir().unwrap();
         let context = process_context(temp.path());
-        let source = std::env::current_exe().unwrap();
-        let input = temp.path().join("sample");
-        fs::copy(&source, &input).unwrap();
-        let objcopy_program = fake_objcopy(temp.path());
+        let input = copy_current_exe(temp.path());
 
         let prepared = prepare_runtime_artifacts(
             &context,
@@ -279,7 +290,6 @@ mod tests {
                 debug: false,
                 cargo_artifact_dir: Some(temp.path().join("target/debug")),
                 strip_elf: true,
-                objcopy_program,
             },
         )
         .unwrap();
@@ -304,11 +314,8 @@ mod tests {
     fn prepares_optional_bin_in_custom_output_dir() {
         let temp = tempfile::tempdir().unwrap();
         let context = process_context(temp.path());
-        let source = std::env::current_exe().unwrap();
-        let input = temp.path().join("sample");
-        fs::copy(&source, &input).unwrap();
+        let input = copy_current_exe(temp.path());
         let bin_dir = temp.path().join("bin-out");
-        let objcopy_program = fake_objcopy(temp.path());
 
         let prepared = prepare_runtime_artifacts(
             &context,
@@ -319,7 +326,6 @@ mod tests {
                 debug: false,
                 cargo_artifact_dir: None,
                 strip_elf: true,
-                objcopy_program,
             },
         )
         .unwrap();
@@ -330,5 +336,54 @@ mod tests {
         assert!(prepared.cargo_source_artifact_dir().is_none());
         assert_eq!(prepared.runtime_artifact_dir(), Some(bin_dir.as_path()));
         assert!(expected_bin.exists());
+    }
+
+    fn compare_to_rust_objcopy(debug: bool) {
+        let temp = tempfile::tempdir().unwrap();
+        let context = process_context(temp.path());
+        let input = copy_current_exe(temp.path());
+        let actual_dir = temp.path().join("actual");
+        let expected_dir = temp.path().join("expected");
+
+        let prepared = prepare_runtime_artifacts(
+            &context,
+            RuntimeArtifactOptions {
+                elf_path: input.clone(),
+                to_bin: true,
+                bin_dir: Some(actual_dir),
+                debug,
+                cargo_artifact_dir: None,
+                strip_elf: false,
+            },
+        )
+        .unwrap();
+
+        fs::create_dir_all(&expected_dir).unwrap();
+        let expected_bin = expected_dir.join("sample.bin");
+        let mut args = Vec::new();
+        if !debug {
+            args.push(OsString::from("--strip-all"));
+        }
+        args.push(OsString::from("-O"));
+        args.push(OsString::from("binary"));
+        args.push(input.as_os_str().to_os_string());
+        args.push(expected_bin.as_os_str().to_os_string());
+        run_rust_objcopy(&args);
+
+        let actual_bin = prepared.bin().unwrap();
+        assert_eq!(
+            fs::read(actual_bin).unwrap(),
+            fs::read(expected_bin).unwrap()
+        );
+    }
+
+    #[test]
+    fn to_bin_matches_rust_objcopy_without_debug() {
+        compare_to_rust_objcopy(false);
+    }
+
+    #[test]
+    fn to_bin_matches_rust_objcopy_with_debug() {
+        compare_to_rust_objcopy(true);
     }
 }

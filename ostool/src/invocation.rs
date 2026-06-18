@@ -7,7 +7,6 @@ use object::Architecture;
 
 use crate::{
     artifact::{
-        object_tools::ObjectTools,
         runtime::{PreparedRuntimeArtifacts, RuntimeArtifactOptions, prepare_runtime_artifacts},
         state::OutputArtifacts,
     },
@@ -166,13 +165,6 @@ impl Invocation {
     }
 
     pub(crate) fn ensure_runtime_bin(&mut self) -> anyhow::Result<PathBuf> {
-        self.ensure_runtime_bin_with_objcopy(ObjectTools.objcopy())
-    }
-
-    pub(crate) fn ensure_runtime_bin_with_objcopy(
-        &mut self,
-        objcopy_program: PathBuf,
-    ) -> anyhow::Result<PathBuf> {
         if let Some(bin) = self.runtime_artifacts().bin() {
             debug!("BIN file already exists: {bin:?}");
             return Ok(bin.to_path_buf());
@@ -196,12 +188,11 @@ impl Invocation {
                     .cargo_source_artifact_dir()
                     .map(PathBuf::from),
                 strip_elf: false,
-                objcopy_program,
             },
         )?;
         let bin_path = prepared
             .bin()
-            .ok_or_else(|| anyhow!("bin not exist after objcopy"))?
+            .ok_or_else(|| anyhow!("bin not exist after conversion"))?
             .to_path_buf();
         self.apply_prepared_runtime_artifacts(prepared);
         Ok(bin_path)
@@ -224,7 +215,6 @@ impl Invocation {
                 debug: self.options.debug(),
                 cargo_artifact_dir: None,
                 strip_elf: true,
-                objcopy_program: ObjectTools.objcopy(),
             },
         )?;
         self.apply_prepared_runtime_artifacts(prepared);

@@ -26,7 +26,7 @@ use tokio_util::compat::{
 use uboot_shell::UbootShell;
 
 use crate::{
-    artifact::{object_tools::ObjectTools, state::OutputArtifacts},
+    artifact::state::OutputArtifacts,
     board::{
         client::{
             BoardServerClient, BootConfig as RemoteBootConfig, BootProfileResponse,
@@ -410,17 +410,9 @@ pub(crate) async fn run_uboot_with_config(
 
 /// Runs an already prepared artifact via U-Boot.
 pub async fn run_uboot(invocation: &mut Invocation, config: &UbootConfig) -> anyhow::Result<()> {
-    run_uboot_with_objcopy(invocation, config, ObjectTools.objcopy()).await
-}
-
-async fn run_uboot_with_objcopy(
-    invocation: &mut Invocation,
-    config: &UbootConfig,
-    objcopy_program: PathBuf,
-) -> anyhow::Result<()> {
     let scope = invocation.variable_scope()?;
     let config = prepare_uboot_runtime_config(&scope, config)?;
-    invocation.ensure_runtime_bin_with_objcopy(objcopy_program)?;
+    invocation.ensure_runtime_bin()?;
     let input = uboot_run_input(invocation)?;
     run_uboot_with_config(input, config).await
 }
@@ -1466,7 +1458,7 @@ fn bootm_command(bootm_arg: Option<u64>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, path::Path, time::Duration};
+    use std::{collections::HashMap, time::Duration};
 
     use super::{
         LocalBackend, LocalUbootConfig, Net, RemoteBackend, ResolvedRuntime, RunnerBackend,
@@ -1474,10 +1466,7 @@ mod tests {
         timeout_duration,
     };
     use crate::{
-        artifact::{
-            object_tools::ObjectTools,
-            runtime::{RuntimeArtifactOptions, prepare_runtime_artifacts},
-        },
+        artifact::runtime::{RuntimeArtifactOptions, prepare_runtime_artifacts},
         board::{
             client::{BoardServerClient, SessionCreatedResponse, TftpSessionResponse},
             config::BoardRunConfig,
@@ -1525,23 +1514,6 @@ mod tests {
         fit_path
     }
 
-    fn write_fake_rust_objcopy(dir: &Path) -> std::path::PathBuf {
-        let script = dir.join("fake-rust-objcopy");
-        std::fs::write(
-            &script,
-            "#!/bin/sh\nlast=\"\"\nprev=\"\"\nfor arg in \"$@\"; do prev=\"$last\"; last=\"$arg\"; done\ncp \"$prev\" \"$last\"\n",
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = std::fs::metadata(&script).unwrap().permissions();
-            permissions.set_mode(0o755);
-            std::fs::set_permissions(&script, permissions).unwrap();
-        }
-        script
-    }
-
     fn prepare_elf_only_invocation(dir: &std::path::Path) -> Invocation {
         let source = std::env::current_exe().unwrap();
         let copied = dir.join("sample-elf");
@@ -1557,7 +1529,6 @@ mod tests {
                 debug: false,
                 cargo_artifact_dir: None,
                 strip_elf: false,
-                objcopy_program: ObjectTools.objcopy(),
             },
         )
         .unwrap();
@@ -1631,16 +1602,11 @@ mod tests {
     async fn run_uboot_prepares_bin_for_elf_only_invocation() {
         let tmp = tempfile::tempdir().unwrap();
         write_single_crate_manifest(tmp.path());
-        let objcopy_program = write_fake_rust_objcopy(tmp.path());
         let mut invocation = prepare_elf_only_invocation(tmp.path());
 
-        let err = super::run_uboot_with_objcopy(
-            &mut invocation,
-            &UbootConfig::default(),
-            objcopy_program,
-        )
-        .await
-        .unwrap_err();
+        let err = super::run_uboot(&mut invocation, &UbootConfig::default())
+            .await
+            .unwrap_err();
 
         assert!(invocation.runtime_artifacts().bin().is_some());
         assert!(err.to_string().contains("local U-Boot backend requires"));
