@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.4](https://github.com/drivercraft/ostool/compare/ostool-v0.23.3...ostool-v0.23.4) - 2026-06-18
+
+### Added
+
+- *(ostool)* expose prepared runtime board APIs ([#143](https://github.com/drivercraft/ostool/pull/143))
+
 ## [0.23.3](https://github.com/drivercraft/ostool/compare/ostool-v0.23.2...ostool-v0.23.3) - 2026-06-18
 
 ### Added
