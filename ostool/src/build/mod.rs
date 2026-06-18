@@ -49,6 +49,42 @@ pub mod config;
 
 pub mod someboot;
 
+/// Executable artifact information produced by a Cargo build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CargoBuildOutput {
+    elf_path: PathBuf,
+    cargo_artifact_dir: PathBuf,
+}
+
+impl CargoBuildOutput {
+    fn new(elf_path: PathBuf, cargo_artifact_dir: PathBuf) -> Self {
+        Self {
+            elf_path,
+            cargo_artifact_dir,
+        }
+    }
+
+    /// Path to the executable ELF reported by Cargo.
+    pub fn elf_path(&self) -> &Path {
+        &self.elf_path
+    }
+
+    /// Directory containing the executable artifact reported by Cargo.
+    pub fn cargo_artifact_dir(&self) -> &Path {
+        &self.cargo_artifact_dir
+    }
+}
+
+impl From<&CargoBuildOutcome> for CargoBuildOutput {
+    fn from(outcome: &CargoBuildOutcome) -> Self {
+        let resolved = outcome.resolved_artifact();
+        Self::new(
+            resolved.elf_path().to_path_buf(),
+            resolved.cargo_artifact_dir().to_path_buf(),
+        )
+    }
+}
+
 /// Parameters for running a built Cargo artifact in QEMU.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CargoQemuRunnerArgs {
@@ -247,14 +283,14 @@ pub(crate) fn build_custom(invocation: &mut Invocation, config: &Custom) -> anyh
     Ok(())
 }
 
-/// Builds the project using Cargo.
+/// Builds the project using Cargo and returns the executable artifact selected from Cargo output.
 ///
 /// `config_path` is the optional `.build.toml` source path for `config`.
 pub async fn cargo_build(
     invocation: &mut Invocation,
     config: &Cargo,
     config_path: Option<&Path>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<CargoBuildOutput> {
     activate_build_config(
         invocation,
         &BuildConfig {
@@ -267,7 +303,7 @@ pub async fn cargo_build(
     let outcome = CargoBuildPipeline::build(input, config).execute().await?;
     apply_cargo_build_outcome(invocation, config, &outcome, false, debug)?;
     run_cargo_post_build_cmds(invocation, config)?;
-    Ok(())
+    Ok(CargoBuildOutput::from(&outcome))
 }
 
 /// Builds or imports the configured artifact and prepares the runtime outputs.
@@ -421,7 +457,7 @@ fn run_cargo_post_build_cmds(invocation: &mut Invocation, config: &Cargo) -> any
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, path::PathBuf};
 
     use crate::{
         build::{
@@ -434,8 +470,8 @@ mod tests {
     };
 
     use super::{
-        CargoSelector, activate_build_config, activate_build_context, apply_cargo_build_outcome,
-        build_with_config,
+        CargoBuildOutput, CargoSelector, activate_build_config, activate_build_context,
+        apply_cargo_build_outcome, build_with_config,
     };
 
     #[test]
@@ -499,6 +535,21 @@ mod tests {
         );
         assert!(invocation.runtime_artifacts().debug_artifacts().is_empty());
         assert!(invocation.runtime_arch().is_some());
+    }
+
+    #[test]
+    fn cargo_build_output_exposes_resolved_artifact_paths() {
+        let cargo_artifact_dir = PathBuf::from("target/aarch64/release");
+        let elf_path = cargo_artifact_dir.join("kernel");
+        let outcome = CargoBuildOutcome::new(ResolvedCargoArtifact::new(
+            elf_path.clone(),
+            cargo_artifact_dir.clone(),
+        ));
+
+        let output = CargoBuildOutput::from(&outcome);
+
+        assert_eq!(output.elf_path(), elf_path.as_path());
+        assert_eq!(output.cargo_artifact_dir(), cargo_artifact_dir.as_path());
     }
 
     #[tokio::test]

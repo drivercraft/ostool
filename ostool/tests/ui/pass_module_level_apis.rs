@@ -3,7 +3,7 @@ use std::path::Path;
 use ostool::{
     board::{self, config::BoardRunConfig},
     build::{
-        self, CargoQemuRunnerArgs, CargoRunnerKind, CargoUbootRunnerArgs,
+        self, CargoBuildOutput, CargoQemuRunnerArgs, CargoRunnerKind, CargoUbootRunnerArgs,
         config::{BuildConfig, BuildSystem, Cargo, Custom},
     },
     invocation::{Invocation, InvocationOptions},
@@ -58,7 +58,8 @@ fn main() {
             build::load_build_config_from_path(&invocation, Path::new(".build.toml"), false)
                 .await;
         let _ = build::build_with_config(&mut invocation, &custom_build, None).await;
-        let _ = build::cargo_build(&mut invocation, &cargo, None).await;
+        let _: anyhow::Result<CargoBuildOutput> =
+            build::cargo_build(&mut invocation, &cargo, None).await;
         let _ = build::cargo_run(&mut invocation, &cargo, None, &qemu_runner).await;
         let _ = build::cargo_run(&mut invocation, &cargo, None, &uboot_runner).await;
 
