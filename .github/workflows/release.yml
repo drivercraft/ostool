@@ -1,17 +1,16 @@
 name: Release
 
 on:
-  workflow_run:
-    workflows: ["Quality Check"]
-    branches: [main]
-    types: [completed]
+  push:
+    branches:
+      - main
 
 permissions: {}
 
 jobs:
   release-plz-release:
     name: Release-plz release
-    if: &release_condition ${{ github.repository_owner == 'drivercraft' && github.event.workflow_run.conclusion == 'success' }}
+    if: &release_condition ${{ github.repository_owner == 'drivercraft' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
