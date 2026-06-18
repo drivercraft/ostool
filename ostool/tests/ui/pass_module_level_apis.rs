@@ -4,6 +4,7 @@ use ostool::{
     board::{self, config::BoardRunConfig},
     build::{
         self, CargoBuildOutput, CargoQemuRunnerArgs, CargoRunnerKind, CargoUbootRunnerArgs,
+        RuntimeArtifactInput,
         config::{BuildConfig, BuildSystem, Cargo, Custom},
     },
     invocation::{Invocation, InvocationOptions},
@@ -60,6 +61,12 @@ fn main() {
         let _ = build::build_with_config(&mut invocation, &custom_build, None).await;
         let _: anyhow::Result<CargoBuildOutput> =
             build::cargo_build(&mut invocation, &cargo, None).await;
+        let _ = build::prepare_runtime_artifact(
+            &mut invocation,
+            RuntimeArtifactInput::new("target/kernel", true)
+                .with_cargo_artifact_dir("target/aarch64/debug")
+                .strip_elf(false),
+        );
         let _ = build::cargo_run(&mut invocation, &cargo, None, &qemu_runner).await;
         let _ = build::cargo_run(&mut invocation, &cargo, None, &uboot_runner).await;
 
@@ -108,6 +115,12 @@ fn main() {
             &mut invocation,
             &cargo,
             None,
+            &board_config,
+            board::RunBoardOptions::default(),
+        )
+        .await;
+        let _ = board::run_prepared_board(
+            &mut invocation,
             &board_config,
             board::RunBoardOptions::default(),
         )

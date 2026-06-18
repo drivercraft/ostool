@@ -241,8 +241,7 @@ pub async fn run_board(
 ) -> anyhow::Result<()> {
     crate::build::prepare_runtime_artifacts(invocation, build_config, build_config_path, false)
         .await?;
-    let scope = invocation.variable_scope()?;
-    run_prepared_board(invocation, board_config, options, &scope).await
+    run_prepared_board(invocation, board_config, options).await
 }
 
 /// Builds a Cargo artifact and runs it on a remote board.
@@ -267,16 +266,20 @@ pub async fn cargo_run_board(
     .await
 }
 
-pub(crate) async fn run_prepared_board(
+/// Runs already prepared runtime artifacts on a remote board.
+///
+/// The invocation must have runtime artifacts prepared by a previous build or by
+/// `ostool::build::prepare_runtime_artifact`.
+pub async fn run_prepared_board(
     invocation: &mut Invocation,
     board_config: &BoardRunConfig,
     options: RunBoardOptions,
-    scope: &VariableScope,
 ) -> anyhow::Result<()> {
+    let scope = invocation.variable_scope()?;
     let global_config = load_board_global_config_with_notice()?;
     let mut board_config = board_config.clone();
     board_config.apply_overrides(
-        scope,
+        &scope,
         options.board_type.as_deref(),
         options.server.as_deref(),
         options.port,
