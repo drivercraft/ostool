@@ -25,15 +25,15 @@ defineProps<{
   >
     <defs>
       <linearGradient id="poolStroke" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stop-color="#0f6f53" />
-        <stop offset="1" stop-color="#0a5641" />
+        <stop offset="0" stop-color="#6366f1" />
+        <stop offset="1" stop-color="#4338ca" />
       </linearGradient>
       <linearGradient id="poolAccent" x1="0" y1="0" x2="1" y2="0">
-        <stop offset="0" stop-color="#1f6b4f" />
-        <stop offset="1" stop-color="#3a8f6e" />
+        <stop offset="0" stop-color="#6366f1" />
+        <stop offset="1" stop-color="#7c3aed" />
       </linearGradient>
       <pattern id="poolGrid" width="26" height="26" patternUnits="userSpaceOnUse">
-        <path d="M26 0H0V26" fill="none" stroke="rgba(15,111,83,0.07)" stroke-width="1" />
+        <path d="M26 0H0V26" fill="none" stroke="rgba(99,102,241,0.08)" stroke-width="1" />
       </pattern>
     </defs>
 
@@ -92,15 +92,15 @@ defineProps<{
   >
     <defs>
       <linearGradient id="wfStroke" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stop-color="#0f6f53" />
-        <stop offset="1" stop-color="#0a5641" />
+        <stop offset="0" stop-color="#6366f1" />
+        <stop offset="1" stop-color="#4338ca" />
       </linearGradient>
       <linearGradient id="wfAccent" x1="0" y1="0" x2="1" y2="0">
-        <stop offset="0" stop-color="#1f6b4f" />
-        <stop offset="1" stop-color="#3a8f6e" />
+        <stop offset="0" stop-color="#0ea5e9" />
+        <stop offset="1" stop-color="#6366f1" />
       </linearGradient>
       <pattern id="wfGrid" width="26" height="26" patternUnits="userSpaceOnUse">
-        <path d="M26 0H0V26" fill="none" stroke="rgba(15,111,83,0.07)" stroke-width="1" />
+        <path d="M26 0H0V26" fill="none" stroke="rgba(124,58,237,0.07)" stroke-width="1" />
       </pattern>
     </defs>
 

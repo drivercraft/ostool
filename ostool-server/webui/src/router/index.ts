@@ -9,6 +9,7 @@ const HomeView = () => import("@/views/public/HomeView.vue");
 const ResourcesView = () => import("@/views/public/ResourcesView.vue");
 const DocsView = () => import("@/views/public/DocsView.vue");
 const LoginView = () => import("@/views/public/LoginView.vue");
+const RegisterView = () => import("@/views/public/RegisterView.vue");
 const DashboardView = () => import("@/views/user/DashboardView.vue");
 const OverviewView = () => import("@/views/admin/OverviewView.vue");
 const BoardsView = () => import("@/views/admin/BoardsView.vue");
@@ -52,6 +53,12 @@ export const router = createRouter({
           name: "login",
           component: LoginView,
           meta: { title: "登录", publicOnly: true },
+        },
+        {
+          path: "register",
+          name: "register",
+          component: RegisterView,
+          meta: { title: "注册" },
         },
       ],
     },

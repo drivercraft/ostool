@@ -16,6 +16,8 @@ const failed = ref(false);
 const boardTypes = ref<BoardTypeSummary[]>([]);
 const search = ref("");
 const availabilityFilter = ref<"all" | "available" | "unavailable">("all");
+const sortKey = ref<"name" | "available" | "total">("name");
+const viewMode = ref<"grid" | "list">("grid");
 
 async function loadBoardTypes() {
   loading.value = true;
@@ -30,8 +32,8 @@ async function loadBoardTypes() {
   }
 }
 
-const filteredBoardTypes = computed(() =>
-  boardTypes.value.filter((item) => {
+const filteredBoardTypes = computed(() => {
+  const list = boardTypes.value.filter((item) => {
     if (search.value) {
       const query = search.value.toLowerCase();
       const haystack = [item.board_type, ...item.tags].join(" ").toLowerCase();
@@ -46,8 +48,15 @@ const filteredBoardTypes = computed(() =>
       return false;
     }
     return true;
-  }),
-);
+  });
+  const sorted = [...list];
+  sorted.sort((a, b) => {
+    if (sortKey.value === "available") return b.available - a.available;
+    if (sortKey.value === "total") return b.total - a.total;
+    return a.board_type.localeCompare(b.board_type);
+  });
+  return sorted;
+});
 
 const totals = computed(() => {
   const total = boardTypes.value.reduce((sum, item) => sum + item.total, 0);
@@ -91,35 +100,47 @@ onMounted(() => {
     </section>
 
     <section class="resource-toolbar">
-      <div class="panel-heading compact resource-toolbar-head">
-        <div>
-          <p class="eyebrow">筛选</p>
-          <h3>按需筛选型号</h3>
-        </div>
-        <div class="toolbar-actions">
-          <button class="ghost-button compact-button" @click="loadBoardTypes">
-            <Icon name="refresh" :size="14" class="btn-icon" />
-            刷新
-          </button>
-        </div>
-      </div>
-
-      <div class="filter-bar">
-        <label class="field filter-field">
-          <span>关键字</span>
+      <div class="resource-toolbar-left">
+        <label class="resource-search">
+          <Icon name="search" :size="16" />
           <input
             v-model="search"
-            placeholder="按型号或标签搜索，例如 rk3568、lab..."
+            type="search"
+            placeholder="搜索型号或标签，例如 rk3568、lab..."
           />
         </label>
-        <label class="field filter-field">
-          <span>可用状态</span>
-          <select v-model="availabilityFilter">
-            <option value="all">全部</option>
-            <option value="available">仅显示可用</option>
-            <option value="unavailable">仅显示已满</option>
-          </select>
-        </label>
+        <select v-model="availabilityFilter" aria-label="可用状态">
+          <option value="all">全部状态</option>
+          <option value="available">仅显示可用</option>
+          <option value="unavailable">仅显示已满</option>
+        </select>
+        <select v-model="sortKey" aria-label="排序方式">
+          <option value="name">按型号排序</option>
+          <option value="available">可用数优先</option>
+          <option value="total">总数优先</option>
+        </select>
+      </div>
+      <div class="toolbar-actions">
+        <div class="view-toggle" role="group" aria-label="排列方式">
+          <button
+            type="button"
+            :class="{ 'is-active': viewMode === 'grid' }"
+            @click="viewMode = 'grid'"
+          >
+            <Icon name="cube" :size="15" /> 卡片
+          </button>
+          <button
+            type="button"
+            :class="{ 'is-active': viewMode === 'list' }"
+            @click="viewMode = 'list'"
+          >
+            <Icon name="clipboard" :size="15" /> 列表
+          </button>
+        </div>
+        <button class="ghost-button compact-button" @click="loadBoardTypes">
+          <Icon name="refresh" :size="14" class="btn-icon" />
+          刷新
+        </button>
       </div>
     </section>
 
@@ -137,27 +158,29 @@ onMounted(() => {
       当前没有符合筛选条件的开发板型号。
     </div>
 
-    <div v-else class="resource-card-grid">
+    <div v-else-if="viewMode === 'grid'" class="board-grid">
       <article
         v-for="board in filteredBoardTypes"
         :key="board.board_type"
-        class="resource-card"
+        class="resource-card card--hover"
       >
         <div class="resource-card-header">
-          <div class="resource-card-title">
-            <span class="resource-card-icon"><Icon name="cpu-board" :size="22" /></span>
-            <code class="resource-card-type">{{ board.board_type }}</code>
+          <div class="resource-card-id">
+            <span class="resource-card-icon"><Icon name="cpu-board" :size="20" /></span>
+            <div>
+              <h3>{{ board.board_type }}</h3>
+              <span class="resource-card-meta">{{ board.tags.length ? board.tags.join(" · ") : "无标签" }}</span>
+            </div>
           </div>
           <StatusPill
             :tone="board.available > 0 ? 'good' : 'neutral'"
             :label="board.available > 0 ? '可租赁' : '已租满'"
           />
         </div>
-        <div class="resource-card-tags">
-          <span v-for="tag in board.tags" :key="tag" class="tag-chip">{{ tag }}</span>
-          <span v-if="board.tags.length === 0" class="resource-card-empty">无标签</span>
+        <div class="resource-card-bar">
+          <span :style="{ width: board.total ? (board.available / board.total) * 100 + '%' : '0%' }"></span>
         </div>
-        <dl class="resource-card-meta">
+        <dl class="resource-card-stats">
           <div>
             <dt>总数</dt>
             <dd>{{ board.total }}</dd>
@@ -187,6 +210,47 @@ onMounted(() => {
           </RouterLink>
         </div>
       </article>
+    </div>
+
+    <div v-else class="board-list">
+      <div
+        v-for="board in filteredBoardTypes"
+        :key="board.board_type"
+        class="board-row"
+      >
+        <div class="resource-card-id">
+          <span class="resource-card-icon"><Icon name="cpu-board" :size="18" /></span>
+          <div>
+            <strong>{{ board.board_type }}</strong>
+            <span class="resource-card-meta">{{ board.tags.length ? board.tags.join(" · ") : "无标签" }}</span>
+          </div>
+        </div>
+        <div>
+          <span class="row-label">可用 / 总数</span>
+          <div><strong>{{ board.available }}</strong> / {{ board.total }}</div>
+        </div>
+        <div>
+          <span class="row-label">使用中</span>
+          <div>{{ board.total - board.available }}</div>
+        </div>
+        <div>
+          <StatusPill
+            :tone="board.available > 0 ? 'good' : 'neutral'"
+            :label="board.available > 0 ? '可租赁' : '已租满'"
+          />
+        </div>
+        <div class="resource-card-actions">
+          <RouterLink
+            v-if="auth.isAuthenticated"
+            class="primary-button compact-button"
+            :class="{ 'is-disabled': board.available === 0 }"
+            :to="board.available > 0 ? '/dashboard?action=lease&board_type=' + encodeURIComponent(board.board_type) : '/dashboard'"
+          >
+            {{ board.available > 0 ? "申请" : "已满" }}
+          </RouterLink>
+          <RouterLink v-else class="ghost-button compact-button" to="/login">登录</RouterLink>
+        </div>
+      </div>
     </div>
   </div>
 </template>

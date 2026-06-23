@@ -27,6 +27,11 @@ const navItems = computed(() => [
   { to: "/docs", label: "文档", exact: false, icon: "book" as IconName },
 ]);
 
+// 登录/注册页在卡片内联展示消息，避免顶部条重复出现且不随表单滚动。
+const showTopNotice = computed(
+  () => route.name !== "login" && route.name !== "register",
+);
+
 function isExactActive(item: { to: string; exact: boolean }) {
   return item.exact ? route.path === item.to : route.path.startsWith(item.to);
 }
@@ -57,9 +62,20 @@ function isExactActive(item: { to: string; exact: boolean }) {
         </nav>
         <div class="public-actions">
           <template v-if="auth.isAuthenticated">
-            <RouterLink class="ghost-button compact-button" to="/dashboard">
-              <Icon name="user" :size="14" class="btn-icon" />
-              控制台
+            <RouterLink
+              v-if="auth.isAdmin"
+              class="ghost-button compact-button"
+              to="/admin/overview"
+            >
+              <Icon name="shield" :size="14" class="btn-icon" />
+              管理台
+            </RouterLink>
+            <RouterLink class="public-user-chip" to="/dashboard">
+              <span class="avatar-circle">
+                {{ (auth.user?.display_name ?? auth.user?.username ?? "?").slice(0, 1).toUpperCase() }}
+              </span>
+              <span class="public-user-name">{{ auth.user?.display_name ?? auth.user?.username }}</span>
+              <Icon name="chevron-right" :size="14" class="public-user-caret" />
             </RouterLink>
           </template>
           <template v-else>
@@ -67,21 +83,17 @@ function isExactActive(item: { to: string; exact: boolean }) {
               <Icon name="login" :size="14" class="btn-icon" />
               登录
             </RouterLink>
+            <RouterLink class="primary-button compact-button" to="/login?mode=admin">
+              <Icon name="shield" :size="14" class="btn-icon" />
+              管理员入口
+            </RouterLink>
           </template>
-          <RouterLink
-            v-if="auth.isAdmin"
-            class="primary-button compact-button"
-            to="/admin/overview"
-          >
-            <Icon name="shield" :size="14" class="btn-icon" />
-            管理台
-          </RouterLink>
         </div>
       </div>
     </header>
 
     <main class="public-main">
-      <div v-if="ui.successMessage || ui.errorMessage" class="public-notices">
+      <div v-if="showTopNotice && (ui.successMessage || ui.errorMessage)" class="public-notices">
         <NoticeBanner
           v-if="ui.successMessage"
           tone="success"
@@ -98,11 +110,20 @@ function isExactActive(item: { to: string; exact: boolean }) {
 
     <footer class="public-footer">
       <div class="public-footer-inner">
-        <span>© ostool 开发板租赁平台</span>
+        <div class="footer-brand">
+          <span class="brand-mark"><Icon name="circuit" :size="18" /></span>
+          <div>
+            <strong>ostool</strong>
+            <span>开发板租赁平台</span>
+          </div>
+        </div>
         <nav class="footer-nav">
-          <RouterLink to="/docs">使用文档</RouterLink>
+          <RouterLink to="/">首页</RouterLink>
           <RouterLink to="/resources">可用资源</RouterLink>
+          <RouterLink to="/docs">使用文档</RouterLink>
+          <RouterLink to="/login">登录</RouterLink>
         </nav>
+        <span class="footer-copy">© ostool 开发板租赁平台</span>
       </div>
     </footer>
   </div>

@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
-
 import Icon, { type IconName } from "@/components/Icon.vue";
 
 interface DocSection {
@@ -154,18 +152,6 @@ sterm 命令封装，可以直接通过会话 ID 启动终端。`,
     ],
   },
 ];
-
-const activeId = ref(groups[0]?.sections[0]?.id ?? "");
-
-const flatSections = computed(() => groups.flatMap((group) => group.sections));
-
-const activeSection = computed(
-  () => flatSections.value.find((section) => section.id === activeId.value) ?? null,
-);
-
-function selectSection(id: string) {
-  activeId.value = id;
-}
 </script>
 
 <template>
@@ -179,34 +165,46 @@ function selectSection(id: string) {
     </header>
 
     <div class="docs-layout">
-      <aside class="docs-toc" aria-label="文档目录">
-        <div v-for="group in groups" :key="group.id" class="docs-toc-group">
-          <div class="docs-toc-group-head">
-            <span class="docs-toc-group-icon"><Icon :name="group.icon" :size="16" /></span>
-            <h4>{{ group.title }}</h4>
-          </div>
-          <p class="docs-toc-group-desc">{{ group.description }}</p>
-          <ul>
-            <li v-for="section in group.sections" :key="section.id">
-              <button
-                type="button"
-                class="docs-toc-link"
-                :class="{ 'is-active': section.id === activeId }"
-                @click="selectSection(section.id)"
-              >
-                {{ section.title }}
-              </button>
-            </li>
-          </ul>
+      <aside class="docs-side" aria-label="文档目录">
+        <div v-for="group in groups" :key="group.id" class="docs-side-group">
+          <h4>
+            <span class="docs-side-icon"><Icon :name="group.icon" :size="14" /></span>
+            {{ group.title }}
+          </h4>
+          <a
+            v-for="section in group.sections"
+            :key="section.id"
+            class="docs-side-link"
+            :href="`#${section.id}`"
+          >
+            {{ section.title }}
+          </a>
         </div>
       </aside>
 
-      <article v-if="activeSection" class="docs-content">
-        <header class="docs-content-header">
-          <p class="eyebrow">{{ activeSection.summary }}</p>
-          <h3>{{ activeSection.title }}</h3>
-        </header>
-        <pre class="docs-pre">{{ activeSection.body }}</pre>
+      <article class="docs-content">
+        <template v-for="group in groups" :key="group.id">
+          <section
+            v-for="section in group.sections"
+            :id="section.id"
+            :key="section.id"
+            class="docs-section card"
+          >
+            <div class="docs-section-head">
+              <span class="feature-icon"><Icon :name="group.icon" :size="18" /></span>
+              <div>
+                <p class="feature-eyebrow">{{ group.title }}</p>
+                <h3>{{ section.title }}</h3>
+              </div>
+            </div>
+            <p class="docs-summary">{{ section.summary }}</p>
+            <pre>{{ section.body }}</pre>
+          </section>
+        </template>
+        <div class="docs-callout">
+          <strong>提示：</strong> 平台 API 与字段会持续迭代，遇到与文档不一致的地方请以服务端实际返回为准，
+          或联系平台管理员。
+        </div>
       </article>
     </div>
   </div>

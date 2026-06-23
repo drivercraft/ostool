@@ -3,7 +3,6 @@ import { RouterLink } from "vue-router";
 
 import HeroArt from "@/components/HeroArt.vue";
 import Icon, { type IconName } from "@/components/Icon.vue";
-import SectionArt from "@/components/SectionArt.vue";
 
 interface Feature {
   eyebrow: string;
@@ -152,7 +151,9 @@ const steps: Step[] = [
       <div class="hero-inner">
         <div class="hero-copy">
           <p class="eyebrow">Enterprise Hardware Lab Platform</p>
-          <h2 class="hero-title">面向团队的开发板租赁与远程调试平台</h2>
+          <h1 class="hero-title">
+            面向团队的<span class="gradient-text">开发板租赁</span>与远程调试平台
+          </h1>
           <div class="hero-art-wrap hero-art-wrap--inline" aria-hidden="true">
             <HeroArt />
           </div>
@@ -178,6 +179,9 @@ const steps: Step[] = [
             </div>
           </dl>
         </div>
+        <div class="hero-visual" aria-hidden="true">
+          <div class="hero-art-wrap"><HeroArt /></div>
+        </div>
       </div>
       <div class="hero-scroll-hint" aria-hidden="true">
         <Icon name="chevron-right" :size="16" />
@@ -188,73 +192,60 @@ const steps: Step[] = [
       v-for="(section, index) in sections"
       :key="section.id"
       class="home-section"
-      :class="{ 'home-section-alt': index % 2 === 1, 'home-section--reverse': index % 2 === 1 }"
+      :class="{ 'home-section-alt': index % 2 === 1 }"
     >
       <div class="home-section-inner">
         <header class="home-section-header">
-          <div>
-            <p class="eyebrow">{{ section.eyebrow }}</p>
-            <h3>{{ section.title }}</h3>
-          </div>
+          <p class="eyebrow">{{ section.eyebrow }}</p>
+          <h3>{{ section.title }}</h3>
           <p class="home-section-lead">{{ section.description }}</p>
         </header>
-        <div class="home-section-body">
-          <div class="home-section-art" aria-hidden="true">
-            <SectionArt :variant="section.art" />
-          </div>
-          <div class="feature-grid">
-            <article v-for="feature in section.features" :key="feature.title" class="feature-card">
-              <span class="feature-icon">
-                <Icon :name="feature.icon" :size="22" />
-              </span>
-              <p class="feature-eyebrow">{{ feature.eyebrow }}</p>
-              <h4>{{ feature.title }}</h4>
-              <p>{{ feature.description }}</p>
-            </article>
-          </div>
+        <div class="feature-grid">
+          <article v-for="feature in section.features" :key="feature.title" class="feature-card">
+            <span class="feature-icon">
+              <Icon :name="feature.icon" :size="22" />
+            </span>
+            <p class="feature-eyebrow">{{ feature.eyebrow }}</p>
+            <h4>{{ feature.title }}</h4>
+            <p>{{ feature.description }}</p>
+          </article>
         </div>
       </div>
     </section>
 
-    <section class="home-section">
+    <section class="home-section home-section-alt">
       <div class="home-section-inner">
         <header class="home-section-header">
-          <div>
-            <p class="eyebrow">Getting Started</p>
-            <h3>四步即可上手一块开发板</h3>
-          </div>
+          <p class="eyebrow">Getting Started</p>
+          <h3>四步即可上手一块开发板</h3>
           <p class="home-section-lead">
             从浏览资源到启动镜像，整套流程都在浏览器内完成，无需在工位之间切换。
           </p>
         </header>
-        <ol class="steps-grid">
-          <li v-for="step in steps" :key="step.step" class="step-card">
-            <div class="step-head">
-              <span class="step-icon">
-                <Icon :name="step.icon" :size="18" />
-              </span>
-              <span class="step-index">{{ step.step }}</span>
-            </div>
-            <div>
-              <h4>{{ step.title }}</h4>
-              <p>{{ step.description }}</p>
-            </div>
-          </li>
-        </ol>
+        <div class="steps">
+          <div v-for="step in steps" :key="step.step" class="step-card">
+            <span class="step-icon">
+              <Icon :name="step.icon" :size="20" />
+            </span>
+            <div class="step-num">{{ step.step }}</div>
+            <h4>{{ step.title }}</h4>
+            <p>{{ step.description }}</p>
+          </div>
+        </div>
       </div>
     </section>
 
-    <section class="home-cta">
-      <div class="home-cta-inner">
+    <section class="cta-band">
+      <div>
         <h3>准备好开始你的开发板项目了吗？</h3>
         <p>登录后即可在用户控制台中创建会话、上传镜像并连接开发板。</p>
-        <div class="hero-actions">
-          <RouterLink class="primary-button" to="/login">
-            立即登录
-            <Icon name="arrow-right" :size="16" class="btn-icon" />
-          </RouterLink>
-          <RouterLink class="ghost-button" to="/resources">查看资源</RouterLink>
-        </div>
+      </div>
+      <div class="cta-actions">
+        <RouterLink class="btn btn-light" to="/login">
+          立即登录
+          <Icon name="arrow-right" :size="16" class="btn-icon" />
+        </RouterLink>
+        <RouterLink class="btn btn-ghost-light" to="/register">注册账号</RouterLink>
       </div>
     </section>
   </div>
