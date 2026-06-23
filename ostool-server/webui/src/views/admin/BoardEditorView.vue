@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import { api } from "@/api/client";
+import { api } from "@/api";
 import { useUiStore } from "@/stores/ui";
 import type {
   AdminBoardUpsertRequest,
@@ -597,7 +597,7 @@ async function saveBoard() {
       : await api.createBoard(payload);
     form.value = boardToFormState(saved);
     ui.setSuccess(`已保存开发板 ${saved.id}`);
-    await router.push(`/boards/${saved.id}`);
+    await router.push(`/admin/resources/boards/${saved.id}`);
   } catch (error) {
     ui.setError((error as Error).message);
   } finally {
@@ -617,7 +617,7 @@ async function removeBoard() {
   try {
     await api.deleteBoard(boardId.value);
     ui.setSuccess(`已删除开发板 ${boardId.value}`);
-    await router.push("/boards");
+    await router.push("/admin/resources/boards");
   } catch (error) {
     ui.setError((error as Error).message);
   } finally {

@@ -41,7 +41,7 @@ The script will:
 - install the binary to `/usr/local/bin/ostool-server`
 - stop an existing `ostool-server` systemd service if present
 - recreate `/etc/ostool-server`
-- create the board, DTB, and TFTP/session artifact directories
+- create the DTB and TFTP/session artifact directories
 - install `/etc/systemd/system/ostool-server.service`
 - start the service if you confirm it
 
@@ -94,6 +94,112 @@ The default listen address is:
 ```text
 0.0.0.0:2999
 ```
+
+`ostool-server` stores platform users, RBAC roles and permissions, web login
+sessions, development board configuration, user-facing leases, DTB metadata,
+and audit logs in the configured database. MySQL and SQLite are supported;
+generated configs use MySQL by default for production-like deployments.
+
+The schema keeps one clear owner for each concept:
+
+- `users` stores account identity, display profile, contact fields, disabled
+  state, password hash, last login, and timestamps. `display_name` is the
+  canonical real/display name; `nickname` is optional and intentionally separate.
+- `roles`, `permissions`, `user_roles`, and `role_permissions` store RBAC
+  configuration without duplicating role names on user rows.
+- `auth_sessions` stores web login sessions and session audit context such as
+  token hash, IP address, user agent, last seen time, revocation time, and expiry.
+- `board_configs` stores the authoritative development board configuration JSON.
+  Query-facing inventory pages derive board metadata from this single source to
+  avoid duplicate board fields drifting apart.
+- `site_settings` stores website-level runtime settings such as site name,
+  branding URLs, announcements, maintenance mode, self-service rental policy,
+  support contacts, and lease duration defaults. Bootstrap settings such as
+  database URL, listen address, and data directories remain in the TOML config.
+- `leases` stores user-to-board allocations, state transitions, expiry, release
+  time, and failure details.
+- `dtb_files` stores DTB metadata only; `audit_logs` stores management actions
+  and request context.
+
+For MySQL, create the database and user before first start, then configure:
+
+```bash
+mysql -u root -p -e "
+CREATE DATABASE IF NOT EXISTS ostool CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'ostool'@'127.0.0.1' IDENTIFIED BY 'ostool';
+GRANT ALL PRIVILEGES ON ostool.* TO 'ostool'@'127.0.0.1';
+FLUSH PRIVILEGES;
+"
+```
+
+```toml
+[database]
+provider = "mysql"
+url = "mysql://ostool:ostool@127.0.0.1:3306/ostool"
+```
+
+For local development, the generated config uses the same local MySQL URL. MySQL
+databases are not created automatically by the server.
+
+For SQLite, no external database service is needed. Point the database URL at a
+local file; parent directories and the database file are created automatically:
+
+```toml
+[database]
+provider = "sqlite"
+url = "sqlite:.ostool-server/ostool.db"
+```
+
+DTB metadata is stored in the database. DTB binary files, TFTP files, and UEFI
+HTTP Boot artifacts are still stored on the file system because they are binary
+or session artifacts. DTB metadata records the filename, storage path, size,
+SHA-256 hash, uploader, and timestamps.
+
+Fresh databases are seeded with sample board resources and ordinary user
+accounts so the resource, dashboard, and admin pages have useful data
+immediately. The sample users are `alice`, `bob`, `carol`, and `dave`; their
+demo password is `ostool123`. Existing databases with sample data enabled will
+also backfill any missing sample users on startup. Disable this behavior when
+you need an empty inventory:
+
+```toml
+[sample_data]
+enabled = false
+```
+
+To reset local development data, stop the server and reset the selected
+database. For MySQL, recreate the database:
+
+```bash
+mysql -u root -p -e 'DROP DATABASE IF EXISTS ostool; CREATE DATABASE ostool CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;'
+```
+
+For SQLite, remove the database file:
+
+```bash
+rm -f .ostool-server/ostool.db
+```
+
+## Admin bootstrap
+
+After installing or before first login, create an administrator account:
+
+```bash
+ostool-server --config /etc/ostool-server/config.toml admin init \
+  --username admin \
+  --password 'change-me' \
+  --display-name 'Platform Admin' \
+  --email admin@ostool.local
+```
+
+Then open the platform UI:
+
+```text
+http://<server-ip>:2999/
+```
+
+The public pages are available without login. User dashboard pages require a
+normal user account, and `/admin/*` requires an administrator account.
 
 HTTP Boot is enabled by default. Uploaded UEFI HTTP Boot artifacts reuse the
 existing session file storage and lifecycle, so files are scoped to the active

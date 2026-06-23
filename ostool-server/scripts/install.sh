@@ -302,6 +302,7 @@ echo ""
 echo "==> Creating directories..."
 
 run_cmd mkdir -p "${CONFIG_DIR}"
+run_cmd mkdir -p "${DATA_DIR}"
 run_cmd mkdir -p "${DATA_DIR}/boards"
 run_cmd mkdir -p "${DATA_DIR}/dtbs"
 run_cmd mkdir -p "${TFTP_ROOT_DIR}"
@@ -311,6 +312,7 @@ echo "  ${CONFIG_DIR}"
 echo "  ${DATA_DIR}/boards"
 echo "  ${DATA_DIR}/dtbs"
 echo "  ${TFTP_ROOT_DIR}"
+echo "Note: the generated config uses MySQL by default; configure MySQL separately or switch [database] to sqlite."
 
 # --- step 7: generate default config ---
 
@@ -322,6 +324,8 @@ if run_cmd test -f "${CONFIG_FILE}"; then
 else
     echo "Configuration file will be created automatically on first start: ${CONFIG_FILE}"
 fi
+echo "After first install, create an administrator account with:"
+echo "  ${SYSTEM_BIN_PATH} --config ${CONFIG_FILE} admin init --username admin --password '<change-me>'"
 
 # --- step 8: install systemd service ---
 

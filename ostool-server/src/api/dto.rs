@@ -10,6 +10,7 @@ use crate::{
     dtb_store::DtbFile,
     session::Session,
     state::BoardLeaseState,
+    storage::{DtbMetadata, Lease, Permission, Role},
     tftp::{files::TftpFileRef, status::TftpStatus},
 };
 
@@ -18,6 +19,186 @@ pub struct ErrorResponse {
     pub code: String,
     pub message: String,
     pub details: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CurrentUserResponse {
+    pub id: String,
+    pub username: String,
+    pub display_name: String,
+    pub nickname: Option<String>,
+    pub avatar_url: Option<String>,
+    pub email: String,
+    pub phone: Option<String>,
+    pub department: Option<String>,
+    pub title: Option<String>,
+    pub last_login_at: Option<DateTime<Utc>>,
+    pub roles: Vec<AdminRoleResponse>,
+    pub permissions: Vec<AdminPermissionResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateLeaseRequest {
+    pub board_type: String,
+    #[serde(default)]
+    pub required_tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeaseResponse {
+    pub lease: Lease,
+    pub session: Option<Session>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeasesResponse {
+    pub leases: Vec<LeaseResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminUserResponse {
+    pub id: String,
+    pub username: String,
+    pub display_name: String,
+    pub nickname: Option<String>,
+    pub avatar_url: Option<String>,
+    pub email: String,
+    pub phone: Option<String>,
+    pub department: Option<String>,
+    pub title: Option<String>,
+    pub disabled: bool,
+    pub last_login_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminUsersResponse {
+    pub users: Vec<AdminUserResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminUserCreateRequest {
+    pub username: String,
+    pub display_name: String,
+    pub email: String,
+    pub nickname: Option<String>,
+    pub avatar_url: Option<String>,
+    pub phone: Option<String>,
+    pub department: Option<String>,
+    pub title: Option<String>,
+    pub password: String,
+    #[serde(default)]
+    pub role_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminUserUpdateRequest {
+    pub display_name: String,
+    pub email: String,
+    pub nickname: Option<String>,
+    pub avatar_url: Option<String>,
+    pub phone: Option<String>,
+    pub department: Option<String>,
+    pub title: Option<String>,
+    pub disabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminPasswordResetRequest {
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminPermissionResponse {
+    pub id: String,
+    pub code: String,
+    pub name: String,
+    pub description: String,
+}
+
+impl From<Permission> for AdminPermissionResponse {
+    fn from(value: Permission) -> Self {
+        Self {
+            id: value.id,
+            code: value.code,
+            name: value.name,
+            description: value.description,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminRoleResponse {
+    pub id: String,
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    pub system: bool,
+    pub permissions: Vec<AdminPermissionResponse>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl AdminRoleResponse {
+    pub fn new(role: Role, permissions: Vec<Permission>) -> Self {
+        Self {
+            id: role.id,
+            name: role.name,
+            display_name: role.display_name,
+            description: role.description,
+            system: role.system,
+            permissions: permissions
+                .into_iter()
+                .map(AdminPermissionResponse::from)
+                .collect(),
+            created_at: role.created_at,
+            updated_at: role.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminRolesResponse {
+    pub roles: Vec<AdminRoleResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminPermissionsResponse {
+    pub permissions: Vec<AdminPermissionResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminRoleCreateRequest {
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    #[serde(default)]
+    pub permission_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminRoleUpdateRequest {
+    pub display_name: String,
+    pub description: String,
+    #[serde(default)]
+    pub permission_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminUserRolesResponse {
+    pub roles: Vec<AdminRoleResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminUserRolesUpdateRequest {
+    pub role_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +280,8 @@ pub struct DtbFileResponse {
     pub name: String,
     pub size: u64,
     pub updated_at: DateTime<Utc>,
+    pub storage_path: Option<String>,
+    pub sha256: Option<String>,
     pub relative_tftp_path_template: String,
 }
 
@@ -110,6 +293,31 @@ impl DtbFileResponse {
             name,
             size: file.size,
             updated_at: file.updated_at,
+            storage_path: None,
+            sha256: None,
+        }
+    }
+
+    pub fn from_dtb_with_metadata(file: DtbFile, metadata: Option<DtbMetadata>) -> Self {
+        let mut response = Self::from_dtb(file);
+        if let Some(metadata) = metadata {
+            response.storage_path = Some(metadata.storage_path);
+            response.sha256 = Some(metadata.sha256);
+        }
+        response
+    }
+}
+
+impl From<DtbMetadata> for DtbFileResponse {
+    fn from(metadata: DtbMetadata) -> Self {
+        let name = metadata.name;
+        Self {
+            relative_tftp_path_template: format!("boot/dtb/{name}"),
+            name,
+            size: metadata.size_bytes.max(0) as u64,
+            updated_at: metadata.updated_at,
+            storage_path: Some(metadata.storage_path),
+            sha256: Some(metadata.sha256),
         }
     }
 }
@@ -266,10 +474,43 @@ pub struct AdminServerConfigEditable {
 pub struct AdminServerConfigResponse {
     pub readonly: AdminServerConfigReadonly,
     pub editable: AdminServerConfigEditable,
+    pub site: SiteSettingsResponse,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateServerConfigRequest {
     pub network: TftpNetworkConfig,
     pub upload_limits: UploadLimitsConfig,
+    pub site: SiteSettingsUpdateRequest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SiteSettingsResponse {
+    pub site_name: String,
+    pub site_subtitle: String,
+    pub logo_url: Option<String>,
+    pub favicon_url: Option<String>,
+    pub announcement: Option<String>,
+    pub maintenance_mode: bool,
+    pub self_service_enabled: bool,
+    pub default_lease_minutes: i64,
+    pub max_lease_minutes: i64,
+    pub support_email: Option<String>,
+    pub support_url: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SiteSettingsUpdateRequest {
+    pub site_name: String,
+    pub site_subtitle: String,
+    pub logo_url: Option<String>,
+    pub favicon_url: Option<String>,
+    pub announcement: Option<String>,
+    pub maintenance_mode: bool,
+    pub self_service_enabled: bool,
+    pub default_lease_minutes: i64,
+    pub max_lease_minutes: i64,
+    pub support_email: Option<String>,
+    pub support_url: Option<String>,
 }

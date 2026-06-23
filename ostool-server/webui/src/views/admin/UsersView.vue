@@ -1,0 +1,538 @@
+<script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref } from "vue";
+
+import Icon from "@/components/Icon.vue";
+import StatusPill from "@/components/StatusPill.vue";
+import { api } from "@/api";
+import { useUiStore } from "@/stores/ui";
+import type {
+  AdminRoleResponse,
+  AdminUserResponse,
+} from "@/types/api";
+
+type ModalMode = "create" | "edit" | "reset-password" | null;
+
+const ui = useUiStore();
+const users = ref<AdminUserResponse[]>([]);
+const roles = ref<AdminRoleResponse[]>([]);
+const userRoleIds = ref<Record<string, string[]>>({});
+const roleNamesById = computed(() =>
+  new Map(roles.value.map((role) => [role.id, role.display_name])),
+);
+
+const loading = ref(true);
+const submitting = ref(false);
+
+const search = ref("");
+const statusFilter = ref<"all" | "active" | "disabled">("all");
+const roleFilter = ref<string>("");
+
+const filteredUsers = computed(() =>
+  users.value.filter((user) => {
+    if (search.value) {
+      const q = search.value.toLowerCase();
+      const haystack =
+        `${user.username} ${user.display_name} ${user.email}`.toLowerCase();
+      if (!haystack.includes(q)) {
+        return false;
+      }
+    }
+    if (statusFilter.value === "active" && user.disabled) {
+      return false;
+    }
+    if (statusFilter.value === "disabled" && !user.disabled) {
+      return false;
+    }
+    if (roleFilter.value) {
+      const ids = userRoleIds.value[user.id] ?? [];
+      if (!ids.includes(roleFilter.value)) {
+        return false;
+      }
+    }
+    return true;
+  }),
+);
+
+/* ---- 更多操作下拉菜单 ---- */
+const openMenuUserId = ref<string | null>(null);
+function toggleMenu(userId: string) {
+  openMenuUserId.value = openMenuUserId.value === userId ? null : userId;
+}
+function closeMenu() {
+  openMenuUserId.value = null;
+}
+function onDocumentClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  if (target && !target.closest(".row-action-menu")) {
+    closeMenu();
+  }
+}
+onMounted(() => document.addEventListener("click", onDocumentClick));
+onUnmounted(() => document.removeEventListener("click", onDocumentClick));
+
+/* ---- 弹窗 ---- */
+const modalMode = ref<ModalMode>(null);
+const modalUser = ref<AdminUserResponse | null>(null);
+const form = ref({
+  username: "",
+  display_name: "",
+  email: "",
+  password: "",
+  role_ids: [] as string[],
+  disabled: false,
+});
+
+function openCreate() {
+  modalMode.value = "create";
+  modalUser.value = null;
+  form.value = {
+    username: "",
+    display_name: "",
+    email: "",
+    password: "",
+    role_ids: [],
+    disabled: false,
+  };
+}
+
+function openEdit(user: AdminUserResponse) {
+  modalMode.value = "edit";
+  modalUser.value = user;
+  form.value = {
+    username: user.username,
+    display_name: user.display_name,
+    email: user.email,
+    password: "",
+    role_ids: [...(userRoleIds.value[user.id] ?? [])],
+    disabled: user.disabled,
+  };
+  closeMenu();
+}
+
+function openResetPassword(user: AdminUserResponse) {
+  modalMode.value = "reset-password";
+  modalUser.value = user;
+  form.value.password = "";
+  closeMenu();
+}
+
+function closeModal() {
+  modalMode.value = null;
+  modalUser.value = null;
+}
+
+/* ---- 数据加载 ---- */
+async function loadUsers() {
+  loading.value = true;
+  try {
+    const [userResponse, roleResponse] = await Promise.all([
+      api.listAdminUsers(),
+      api.listAdminRoles(),
+    ]);
+    users.value = userResponse.users;
+    roles.value = roleResponse.roles;
+    const rolePairs = await Promise.all(
+      userResponse.users.map(async (user) => [
+        user.id,
+        (await api.getAdminUserRoles(user.id)).roles.map((role) => role.id),
+      ] as const),
+    );
+    userRoleIds.value = Object.fromEntries(rolePairs);
+  } catch (error) {
+    ui.setError((error as Error).message);
+  } finally {
+    loading.value = false;
+  }
+}
+
+/* ---- 提交 ---- */
+async function submitCreate() {
+  if (!form.value.username.trim() || !form.value.password) {
+    ui.setError("用户名和密码不能为空");
+    return;
+  }
+  submitting.value = true;
+  try {
+    const created = await api.createAdminUser({
+      username: form.value.username.trim(),
+      display_name: form.value.display_name.trim() || form.value.username.trim(),
+      email: form.value.email.trim(),
+      password: form.value.password,
+      role_ids: form.value.role_ids,
+    });
+    if (form.value.role_ids.length > 0) {
+      await api.updateAdminUserRoles(created.id, {
+        role_ids: form.value.role_ids,
+      });
+    }
+    ui.setSuccess(`已创建用户 ${created.username}`);
+    closeModal();
+    await loadUsers();
+  } catch (error) {
+    ui.setError((error as Error).message);
+  } finally {
+    submitting.value = false;
+  }
+}
+
+async function submitEdit() {
+  if (!modalUser.value) {
+    return;
+  }
+  submitting.value = true;
+  try {
+    const userId = modalUser.value.id;
+    await api.updateAdminUser(userId, {
+      display_name: form.value.display_name.trim() || modalUser.value.username,
+      email: form.value.email.trim(),
+      disabled: form.value.disabled,
+    });
+    await api.updateAdminUserRoles(userId, {
+      role_ids: form.value.role_ids,
+    });
+    ui.setSuccess(`已更新用户 ${modalUser.value.username}`);
+    closeModal();
+    await loadUsers();
+  } catch (error) {
+    ui.setError((error as Error).message);
+  } finally {
+    submitting.value = false;
+  }
+}
+
+async function submitResetPassword() {
+  if (!modalUser.value) {
+    return;
+  }
+  if (!form.value.password) {
+    ui.setError("新密码不能为空");
+    return;
+  }
+  submitting.value = true;
+  try {
+    await api.resetAdminUserPassword(modalUser.value.id, {
+      password: form.value.password,
+    });
+    ui.setSuccess(`已重置 ${modalUser.value.username} 的密码`);
+    closeModal();
+  } catch (error) {
+    ui.setError((error as Error).message);
+  } finally {
+    submitting.value = false;
+  }
+}
+
+async function toggleDisabled(user: AdminUserResponse) {
+  const action = user.disabled ? "启用" : "禁用";
+  if (!window.confirm(`确认${action}用户 ${user.username}？`)) {
+    return;
+  }
+  try {
+    if (user.disabled) {
+      await api.updateAdminUser(user.id, {
+        display_name: user.display_name,
+        email: user.email,
+        disabled: false,
+      });
+    } else {
+      await api.disableAdminUser(user.id);
+    }
+    ui.setSuccess(`已${action}用户 ${user.username}`);
+    await loadUsers();
+  } catch (error) {
+    ui.setError((error as Error).message);
+  }
+}
+
+function submitModal() {
+  if (modalMode.value === "create") {
+    void submitCreate();
+  } else if (modalMode.value === "edit") {
+    void submitEdit();
+  } else if (modalMode.value === "reset-password") {
+    void submitResetPassword();
+  }
+}
+
+function roleLabels(user: AdminUserResponse): string[] {
+  return (userRoleIds.value[user.id] ?? [])
+    .map((id) => roleNamesById.value.get(id))
+    .filter((v): v is string => Boolean(v));
+}
+
+onMounted(() => {
+  ui.clearMessages();
+  void loadUsers();
+});
+</script>
+
+<template>
+  <section class="page-grid users-page">
+    <div class="admin-toolbar">
+      <div class="admin-toolbar-left">
+        <button class="primary-button" @click="openCreate">
+          <Icon name="plus" :size="16" class="btn-icon-left" />
+          新增用户
+        </button>
+        <button class="ghost-button compact-button" @click="loadUsers">
+          <Icon name="refresh" :size="14" class="btn-icon-left" />
+          刷新
+        </button>
+      </div>
+      <div class="admin-toolbar-right">
+        <label class="search-field">
+          <Icon name="search" :size="16" />
+          <input
+            v-model="search"
+            placeholder="按用户名 / 显示名 / 邮箱搜索"
+          />
+        </label>
+        <label class="field filter-field">
+          <span>状态</span>
+          <select v-model="statusFilter">
+            <option value="all">全部</option>
+            <option value="active">启用</option>
+            <option value="disabled">已禁用</option>
+          </select>
+        </label>
+        <label class="field filter-field">
+          <span>角色</span>
+          <select v-model="roleFilter">
+            <option value="">全部</option>
+            <option v-for="role in roles" :key="role.id" :value="role.id">
+              {{ role.display_name }}
+            </option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <div class="panel admin-table-panel">
+      <div v-if="loading" class="empty-state">正在加载用户...</div>
+      <div v-else-if="filteredUsers.length === 0" class="empty-state">
+        当前没有符合筛选条件的用户。
+      </div>
+      <div v-else class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>用户</th>
+              <th>显示名</th>
+              <th>邮箱</th>
+              <th>角色</th>
+              <th>状态</th>
+              <th>创建时间</th>
+              <th class="col-actions">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="user in filteredUsers" :key="user.id">
+              <td>
+                <div class="user-cell">
+                  <span class="user-avatar" :class="{ 'is-disabled': user.disabled }">
+                    {{ (user.display_name || user.username).slice(0, 1).toUpperCase() }}
+                  </span>
+                  <div class="user-cell-main">
+                    <code class="user-cell-username">{{ user.username }}</code>
+                    <span class="user-cell-id">{{ user.id }}</span>
+                  </div>
+                </div>
+              </td>
+              <td>{{ user.display_name || "-" }}</td>
+              <td>{{ user.email || "-" }}</td>
+              <td>
+                <div class="role-chip-list">
+                  <span
+                    v-for="label in roleLabels(user)"
+                    :key="label"
+                    class="tag-chip"
+                  >
+                    {{ label }}
+                  </span>
+                  <span v-if="roleLabels(user).length === 0" class="muted">无</span>
+                </div>
+              </td>
+              <td>
+                <StatusPill
+                  :tone="user.disabled ? 'neutral' : 'good'"
+                  :label="user.disabled ? '已禁用' : '启用'"
+                />
+              </td>
+              <td class="muted">{{ new Date(user.created_at).toLocaleString() }}</td>
+              <td class="col-actions">
+                <div class="row-actions">
+                  <button
+                    class="icon-action"
+                    title="编辑"
+                    @click="openEdit(user)"
+                  >
+                    <Icon name="edit" :size="16" />
+                  </button>
+                  <button
+                    class="icon-action"
+                    :title="user.disabled ? '启用' : '禁用'"
+                    @click="toggleDisabled(user)"
+                  >
+                    <Icon :name="user.disabled ? 'check' : 'ban'" :size="16" />
+                  </button>
+                  <div class="row-action-menu">
+                    <button
+                      class="icon-action"
+                      title="更多"
+                      :aria-expanded="openMenuUserId === user.id"
+                      @click.stop="toggleMenu(user.id)"
+                    >
+                      <Icon name="more-vertical" :size="16" />
+                    </button>
+                    <div v-if="openMenuUserId === user.id" class="action-menu">
+                      <button
+                        class="action-menu-item"
+                        @click="openEdit(user)"
+                      >
+                        <Icon name="edit" :size="14" />
+                        编辑用户
+                      </button>
+                      <button
+                        class="action-menu-item"
+                        @click="openResetPassword(user)"
+                      >
+                        <Icon name="key-reset" :size="14" />
+                        重置密码
+                      </button>
+                      <button
+                        class="action-menu-item"
+                        @click="toggleDisabled(user)"
+                      >
+                        <Icon :name="user.disabled ? 'check' : 'ban'" :size="14" />
+                        {{ user.disabled ? "启用用户" : "禁用用户" }}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 创建 / 编辑 / 重置密码 弹窗 -->
+    <div v-if="modalMode" class="modal-overlay" @click.self="closeModal">
+      <div class="modal-card modal-card--narrow">
+        <header class="modal-header">
+          <div>
+            <p class="eyebrow">
+              {{
+                modalMode === "create"
+                  ? "New User"
+                  : modalMode === "edit"
+                    ? "Edit User"
+                    : "Reset Password"
+              }}
+            </p>
+            <h3>
+              {{
+                modalMode === "create"
+                  ? "新增用户"
+                  : modalMode === "edit"
+                    ? `编辑 ${modalUser?.username}`
+                    : `重置 ${modalUser?.username} 的密码`
+              }}
+            </h3>
+          </div>
+          <button class="icon-action" title="关闭" @click="closeModal">
+            <Icon name="logout" :size="16" />
+          </button>
+        </header>
+
+        <form class="modal-form" @submit.prevent="submitModal">
+          <template v-if="modalMode === 'create'">
+            <label class="field">
+              <span>用户名</span>
+              <input v-model="form.username" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>显示名</span>
+              <input v-model="form.display_name" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>邮箱</span>
+              <input v-model="form.email" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>密码</span>
+              <input v-model="form.password" type="password" autocomplete="new-password" />
+            </label>
+          </template>
+
+          <template v-else-if="modalMode === 'edit'">
+            <label class="field">
+              <span>用户名</span>
+              <input :value="form.username" disabled />
+            </label>
+            <label class="field">
+              <span>显示名</span>
+              <input v-model="form.display_name" />
+            </label>
+            <label class="field">
+              <span>邮箱</span>
+              <input v-model="form.email" />
+            </label>
+            <label class="toggle-field">
+              <span class="toggle-switch">
+                <input v-model="form.disabled" type="checkbox" />
+                <span class="toggle-track" />
+                <span class="toggle-knob" />
+              </span>
+              <span class="toggle-label">
+                {{ form.disabled ? "已禁用登录" : "允许登录" }}
+              </span>
+            </label>
+          </template>
+
+          <template v-else>
+            <p class="modal-hint">
+              为 <code>{{ modalUser?.username }}</code> 设置新密码，提交后立即生效。
+            </p>
+            <label class="field">
+              <span>新密码</span>
+              <input v-model="form.password" type="password" autocomplete="new-password" />
+            </label>
+          </template>
+
+          <div v-if="modalMode === 'create' || modalMode === 'edit'" class="field">
+            <span>RBAC 角色</span>
+            <div class="role-check-grid">
+              <label
+                v-for="role in roles"
+                :key="role.id"
+                class="checkbox-field"
+              >
+                <input
+                  v-model="form.role_ids"
+                  type="checkbox"
+                  :value="role.id"
+                />
+                <span>{{ role.display_name }}</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="modal-actions toolbar-actions">
+            <button
+              type="button"
+              class="ghost-button"
+              :disabled="submitting"
+              @click="closeModal"
+            >
+              取消
+            </button>
+            <button type="submit" class="primary-button" :disabled="submitting">
+              {{ submitting ? "提交中..." : "保存" }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </section>
+</template>

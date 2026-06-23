@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 
 import StatusPill from "@/components/StatusPill.vue";
-import { api } from "@/api/client";
+import { api } from "@/api";
 import { useUiStore } from "@/stores/ui";
 import type { BuiltinTftpConfig, SystemTftpdHpaConfig, TftpConfig, TftpStatus } from "@/types/api";
 import { describeTftpStatus } from "@/utils/tftpStatus";

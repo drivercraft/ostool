@@ -14,8 +14,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
 use ostool_server::{
     BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement, PowerManagementConfig,
-    SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig, TftpConfig, UbootProfile,
-    UploadLimitsConfig, build_app_state, build_router,
+    SampleDataConfig, SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig, TftpConfig,
+    UbootProfile, UploadLimitsConfig, build_app_state, build_router,
+    storage::BoardConfigRepository,
+    storage::sqlite::SqliteStorage,
     tftp::service::{TftpManager, build_tftp_manager},
 };
 use reqwest::StatusCode;
@@ -92,21 +94,21 @@ fn sample_board(serial_port: String) -> BoardConfig {
 fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandle> {
     let config_path = root.join("config.toml");
     let data_dir = root.join("data");
-    let board_dir = root.join("boards");
     let dtb_dir = root.join("dtbs");
     let tftp_root = root.join("tftp-root");
     let http_boot_root = root.join("http-boot");
 
-    std::fs::create_dir_all(&board_dir)
-        .with_context(|| format!("failed to create {}", board_dir.display()))?;
     let mut tftp = BuiltinTftpConfig::default_with_root(tftp_root);
     tftp.enabled = false;
+    let database = ostool_server::DatabaseConfig::sqlite_with_path(root.join("ostool.db"));
 
     let config = ServerConfig {
         listen_addr: "127.0.0.1:0".parse().unwrap(),
         data_dir,
-        board_dir: board_dir.clone(),
+        board_dir: root.join("boards"),
         dtb_dir,
+        database: database.clone(),
+        sample_data: SampleDataConfig { enabled: false },
         tftp: TftpConfig::Builtin(tftp),
         http_boot: ostool_server::config::HttpBootConfig::default_with_root(http_boot_root),
         network: ostool_server::TftpNetworkConfig {
@@ -118,9 +120,19 @@ fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandl
         .with_context(|| format!("failed to write {}", config_path.display()))?;
 
     let board = sample_board(serial_port);
-    let board_path = board_dir.join(format!("{}.toml", board.id));
-    std::fs::write(&board_path, toml::to_string_pretty(&board)?)
-        .with_context(|| format!("failed to write {}", board_path.display()))?;
+    let seed_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to build board seed runtime")?;
+    seed_runtime.block_on(async {
+        let storage = match database {
+            ostool_server::DatabaseConfig::Sqlite(sqlite) => {
+                SqliteStorage::connect(&sqlite.url).await?
+            }
+            ostool_server::DatabaseConfig::Mysql(_) => unreachable!("test uses SQLite"),
+        };
+        storage.create_board_config(board).await
+    })?;
 
     let (addr_tx, addr_rx) = mpsc::channel::<std::result::Result<SocketAddr, String>>();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();

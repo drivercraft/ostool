@@ -1,0 +1,187 @@
+<script setup lang="ts">
+import { computed, reactive, watch } from "vue";
+import { RouterLink, RouterView, useRoute } from "vue-router";
+
+import Icon, { type IconName } from "@/components/Icon.vue";
+import NoticeBanner from "@/components/NoticeBanner.vue";
+import { useAuthStore } from "@/stores/auth";
+import { useUiStore } from "@/stores/ui";
+
+const route = useRoute();
+const ui = useUiStore();
+const auth = useAuthStore();
+
+watch(
+  () => route.meta.title,
+  (title) => {
+    ui.setTitle((title as string | undefined) ?? "管理台");
+    document.title = `${ui.title} - ostool 平台`;
+  },
+  { immediate: true },
+);
+
+interface NavItem {
+  to: string;
+  label: string;
+}
+
+interface NavGroup {
+  id: string;
+  label: string;
+  icon: IconName;
+  items: NavItem[];
+}
+
+const navGroups = computed<NavGroup[]>(() => [
+  {
+    id: "overview",
+    label: "概览",
+    icon: "chart",
+    items: [{ to: "/admin/overview", label: "运行总览" }],
+  },
+  {
+    id: "resources",
+    label: "资源管理",
+    icon: "cpu-board",
+    items: [
+      { to: "/admin/resources/boards", label: "开发板配置" },
+      { to: "/admin/resources/dtbs", label: "DTB 配置" },
+      { to: "/admin/resources/tftp", label: "TFTP 配置" },
+    ],
+  },
+  {
+    id: "rentals",
+    label: "租赁管理",
+    icon: "clipboard",
+    items: [
+      { to: "/admin/rentals/leases", label: "租赁情况" },
+      { to: "/admin/rentals/sessions", label: "会话租约" },
+    ],
+  },
+  {
+    id: "users",
+    label: "用户管理",
+    icon: "users",
+    items: [
+      { to: "/admin/users/list", label: "用户列表" },
+      { to: "/admin/users/roles", label: "用户角色" },
+      { to: "/admin/users/permissions", label: "权限配置" },
+    ],
+  },
+]);
+
+const collapsedGroups = reactive<Record<string, boolean>>({});
+
+const displayName = computed(
+  () => auth.user?.display_name || auth.user?.username || "管理员",
+);
+
+const avatarText = computed(() => displayName.value.slice(0, 1).toUpperCase());
+
+function isNavItemActive(to: string) {
+  return route.path === to || route.path.startsWith(`${to}/`);
+}
+
+function isGroupActive(group: NavGroup) {
+  return group.items.some((item) => isNavItemActive(item.to));
+}
+
+function isGroupCollapsed(group: NavGroup) {
+  return collapsedGroups[group.id] ?? false;
+}
+
+function toggleGroup(group: NavGroup) {
+  collapsedGroups[group.id] = !isGroupCollapsed(group);
+}
+</script>
+
+<template>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark"><Icon name="circuit" :size="22" /></span>
+        <div>
+          <h1>ostool-server</h1>
+          <p>开发板管理台</p>
+        </div>
+      </div>
+      <nav class="nav-list" aria-label="管理导航">
+        <section v-for="group in navGroups" :key="group.label" class="nav-group">
+          <button
+            class="nav-group-trigger"
+            :class="{ 'is-active': isGroupActive(group) }"
+            type="button"
+            :aria-expanded="!isGroupCollapsed(group)"
+            @click="toggleGroup(group)"
+          >
+            <Icon :name="group.icon" :size="16" class="nav-link-icon" />
+            <span>{{ group.label }}</span>
+            <Icon
+              name="chevron-right"
+              :size="15"
+              class="nav-group-chevron"
+              :class="{ 'is-open': !isGroupCollapsed(group) }"
+            />
+          </button>
+          <div v-show="!isGroupCollapsed(group)" class="nav-sub-list">
+            <RouterLink
+              v-for="item in group.items"
+              :key="item.to"
+              :to="item.to"
+              class="nav-link"
+              :class="{ 'is-active': isNavItemActive(item.to) }"
+            >
+              <span class="nav-sub-marker" aria-hidden="true"></span>
+              <span>{{ item.label }}</span>
+            </RouterLink>
+          </div>
+        </section>
+      </nav>
+      <div class="sidebar-footer">
+        <RouterLink
+          class="nav-group-trigger nav-group-bottom-link"
+          :class="{ 'is-active': isNavItemActive('/admin/settings/server') }"
+          to="/admin/settings/server"
+        >
+          <Icon name="settings" :size="16" class="nav-link-icon" />
+          <span>系统设置</span>
+        </RouterLink>
+      </div>
+    </aside>
+    <div class="app-content">
+      <header class="topbar">
+        <div class="topbar-title">
+          <h2>{{ ui.title }}</h2>
+        </div>
+        <div class="topbar-actions" aria-label="管理台工具栏">
+          <button class="icon-button" type="button" title="消息">
+            <Icon name="bell" :size="18" />
+          </button>
+          <button class="icon-button" type="button" title="主题">
+            <Icon name="moon" :size="18" />
+          </button>
+          <button class="icon-button" type="button" title="语言">
+            <Icon name="globe" :size="18" />
+          </button>
+          <div class="admin-avatar" :title="displayName">
+            {{ avatarText }}
+          </div>
+        </div>
+      </header>
+
+      <main class="page-body">
+        <NoticeBanner
+          v-if="ui.successMessage"
+          tone="success"
+          :message="ui.successMessage"
+        />
+        <NoticeBanner
+          v-if="ui.errorMessage"
+          tone="error"
+          :message="ui.errorMessage"
+        />
+        <RouterView />
+      </main>
+    </div>
+  </div>
+</template>

@@ -1,0 +1,26 @@
+listen_addr = "127.0.0.1:2999"
+data_dir = "/home/zcs/WORKSPACE/ostool/.ostool-server"
+board_dir = "/home/zcs/WORKSPACE/ostool/.ostool-server/boards"
+dtb_dir = "/home/zcs/WORKSPACE/ostool/.ostool-server/dtbs"
+
+[database]
+# provider = "sqlite"
+# url = "sqlite:/home/zcs/WORKSPACE/ostool/.ostool-server/ostool.db"
+provider = "mysql"
+url = "mysql://ostool:Ostool%402026Strong%21@127.0.0.1:3306/ostool"
+
+[tftp]
+provider = "builtin"
+enabled = false
+root_dir = "/home/zcs/WORKSPACE/ostool/.ostool-server/tftp-root"
+bind_addr = "127.0.0.1:1069"
+
+[http_boot]
+enabled = true
+root_dir = "/home/zcs/WORKSPACE/ostool/.ostool-server/http-boot"
+
+[network]
+interface = "lo"
+
+[upload_limits]
+session_file_max_mib = 64

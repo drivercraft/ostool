@@ -5,7 +5,8 @@ use axum::{
     body::{Bytes, to_bytes},
     extract::{Path, Request, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode, header},
-    response::{IntoResponse, Redirect, Response},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
 use futures_util::future::join_all;
@@ -21,17 +22,28 @@ use tokio::{
 
 use crate::{
     api::{
-        error::ApiError,
-        models::{
+        dto::{
             ActionResponse, AdminBoardUpsertRequest, AdminOverviewResponse,
+            AdminPasswordResetRequest, AdminPermissionResponse, AdminPermissionsResponse,
+            AdminRoleCreateRequest, AdminRoleResponse, AdminRoleUpdateRequest, AdminRolesResponse,
             AdminServerConfigEditable, AdminServerConfigReadonly, AdminServerConfigResponse,
             AdminSessionsResponse, AdminTftpConfigResponse, AdminTftpStatusResponse,
+            AdminUserCreateRequest, AdminUserResponse, AdminUserRolesResponse,
+            AdminUserRolesUpdateRequest, AdminUserUpdateRequest, AdminUsersResponse,
             BoardPowerAction, BoardPowerStatusResponse, BoardRuntimeStatusResponse,
-            BoardTypeSummary, BootProfileResponse, CreateSessionRequest, DtbFileResponse,
-            FileResponse, HttpBootFileResponse, KernelPublishResponse, NetworkInterfaceSummary,
-            SerialPortSummary, SerialStatusResponse, SessionCreatedResponse, SessionDetailResponse,
-            SessionDtbResponse, TftpSessionResponse, UpdateServerConfigRequest,
+            BoardTypeSummary, BootProfileResponse, CreateLeaseRequest, CreateSessionRequest,
+            CurrentUserResponse, DtbFileResponse, FileResponse, HttpBootFileResponse,
+            KernelPublishResponse, LeaseResponse, LeasesResponse, LoginRequest,
+            NetworkInterfaceSummary, SerialPortSummary, SerialStatusResponse,
+            SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse,
+            SiteSettingsResponse, SiteSettingsUpdateRequest, TftpSessionResponse,
+            UpdateServerConfigRequest,
         },
+        error::ApiError,
+    },
+    auth::{
+        CurrentUser, clear_cookie_value, cookie_value, hash_password, set_cookie_header,
+        token_from_headers,
     },
     board_pool::BoardAllocationStatus,
     config::{
@@ -39,6 +51,7 @@ use crate::{
     },
     dtb_store::normalize_dtb_name,
     http_boot::publish::{KernelPublishInput, publish_kernel},
+    lease::{create_user_lease, release_lease},
     power::{PowerAction, PowerActionError},
     serial::{
         discovery::list_serial_ports as discover_serial_ports,
@@ -52,22 +65,24 @@ use crate::{
     session::SessionState,
     session::SessionStopReason,
     state::{AppState, BoardLeaseState, TouchSessionError},
+    storage::{Lease, NewAuditLog, NewRole, Role, SiteSettings, UpsertDtbMetadata, UserProfile},
     tftp::{
         files::{TftpFileRef, normalize_relative_path},
         service::build_tftp_manager,
         status::resolve_interface_ipv4,
     },
-    web::{serve_admin_asset, serve_admin_history, serve_admin_index},
+    web::{
+        serve_admin_asset, serve_admin_history, serve_admin_index, serve_asset,
+        serve_history_fallback, serve_index,
+    },
 };
 
 const DTB_UPLOAD_MAX_MIB: u32 = 10;
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
-        .route(
-            "/",
-            get(|| async { Redirect::temporary("/admin/overview") }),
-        )
+        .route("/", get(serve_index))
+        .route("/assets/{*path}", get(serve_asset))
         .route("/admin", get(serve_admin_index))
         .route("/admin/", get(serve_admin_index))
         .route("/admin/assets/{*path}", get(serve_admin_asset))
@@ -77,6 +92,50 @@ pub fn build_router(state: AppState) -> Router {
             get(get_http_boot_file),
         )
         .route("/api/v1/admin/overview", get(get_admin_overview))
+        .route("/api/v1/auth/login", post(login))
+        .route("/api/v1/auth/logout", post(logout))
+        .route("/api/v1/auth/me", get(get_current_user))
+        .route("/api/v1/user/profile", get(get_user_profile))
+        .route(
+            "/api/v1/user/leases",
+            get(list_user_leases).post(create_lease),
+        )
+        .route("/api/v1/user/leases/{lease_id}", delete(delete_user_lease))
+        .route(
+            "/api/v1/user/leases/{lease_id}/heartbeat",
+            post(heartbeat_user_lease),
+        )
+        .route(
+            "/api/v1/admin/users",
+            get(list_admin_users).post(create_admin_user),
+        )
+        .route("/api/v1/admin/users/{user_id}", put(update_admin_user))
+        .route(
+            "/api/v1/admin/users/{user_id}/roles",
+            get(get_admin_user_roles).put(update_admin_user_roles),
+        )
+        .route(
+            "/api/v1/admin/users/{user_id}/reset-password",
+            post(reset_admin_user_password),
+        )
+        .route(
+            "/api/v1/admin/users/{user_id}/disable",
+            post(disable_admin_user),
+        )
+        .route("/api/v1/admin/leases", get(list_admin_leases))
+        .route(
+            "/api/v1/admin/leases/{lease_id}",
+            delete(delete_admin_lease),
+        )
+        .route("/api/v1/admin/permissions", get(list_admin_permissions))
+        .route(
+            "/api/v1/admin/roles",
+            get(list_admin_roles).post(create_admin_role),
+        )
+        .route(
+            "/api/v1/admin/roles/{role_id}",
+            put(update_admin_role).delete(delete_admin_role),
+        )
         .route("/api/v1/admin/boards", get(list_boards).post(create_board))
         .route("/api/v1/admin/dtbs", get(list_dtbs).post(create_dtb))
         .route("/api/v1/admin/serial-ports", get(list_serial_ports))
@@ -114,6 +173,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/admin/server-config",
             get(get_server_config).put(update_server_config),
+        )
+        .route(
+            "/api/v1/admin/site-settings",
+            get(get_site_settings).put(update_site_settings),
         )
         .route("/api/v1/board-types", get(list_board_types))
         .route("/api/v1/sessions", post(create_session))
@@ -169,7 +232,493 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/sessions/{session_id}/tftp",
             get(get_session_tftp_status),
         )
+        .route("/{*path}", get(serve_history_fallback))
+        .layer(middleware::from_fn_with_state(state.clone(), auth_gate))
         .with_state(state)
+}
+
+async fn auth_gate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let path = request.uri().path();
+    if path.starts_with("/api/v1/admin/") {
+        if state.auth.user_count().await.map_err(ApiError::from)? == 0 {
+            return Ok(next.run(request).await);
+        }
+        let user = current_user_from_headers(&state, &headers).await?;
+        if !current_user_is_admin(&user) {
+            return Err(ApiError::forbidden("administrator role required"));
+        }
+    } else if path.starts_with("/api/v1/user/") {
+        let _ = current_user_from_headers(&state, &headers).await?;
+    }
+    Ok(next.run(request).await)
+}
+
+async fn current_user_from_headers(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<CurrentUser, ApiError> {
+    let token = token_from_headers(headers)
+        .ok_or_else(|| ApiError::unauthorized("authentication required"))?;
+    state
+        .auth
+        .user_for_token(&token)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::unauthorized("authentication required"))
+}
+
+fn user_response(user: CurrentUser) -> CurrentUserResponse {
+    let permissions = user
+        .permissions
+        .into_iter()
+        .map(AdminPermissionResponse::from)
+        .collect();
+    let roles = user
+        .roles
+        .into_iter()
+        .map(|role| AdminRoleResponse::new(role, Vec::new()))
+        .collect();
+    CurrentUserResponse {
+        id: user.id,
+        username: user.username,
+        display_name: user.display_name,
+        nickname: user.nickname,
+        avatar_url: user.avatar_url,
+        email: user.email,
+        phone: user.phone,
+        department: user.department,
+        title: user.title,
+        last_login_at: user.last_login_at,
+        roles,
+        permissions,
+    }
+}
+
+fn current_user_is_admin(user: &CurrentUser) -> bool {
+    user.roles.iter().any(|role| role.name == "admin")
+        || user
+            .permissions
+            .iter()
+            .any(|permission| permission.code == "settings.manage")
+}
+
+fn admin_user_response(user: crate::storage::User) -> AdminUserResponse {
+    AdminUserResponse {
+        id: user.id,
+        username: user.username,
+        display_name: user.display_name,
+        nickname: user.nickname,
+        avatar_url: user.avatar_url,
+        email: user.email,
+        phone: user.phone,
+        department: user.department,
+        title: user.title,
+        disabled: user.disabled,
+        last_login_at: user.last_login_at,
+        created_at: user.created_at,
+        updated_at: user.updated_at,
+    }
+}
+
+fn clean_optional(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        (!trimmed.is_empty()).then_some(trimmed)
+    })
+}
+
+fn request_profile(
+    nickname: Option<String>,
+    avatar_url: Option<String>,
+    phone: Option<String>,
+    department: Option<String>,
+    title: Option<String>,
+) -> UserProfile {
+    UserProfile {
+        nickname: clean_optional(nickname),
+        avatar_url: clean_optional(avatar_url),
+        phone: clean_optional(phone),
+        department: clean_optional(department),
+        title: clean_optional(title),
+    }
+}
+
+async fn admin_role_response(state: &AppState, role: Role) -> Result<AdminRoleResponse, ApiError> {
+    let permissions = state.storage.role_permissions(&role.id).await?;
+    Ok(AdminRoleResponse::new(role, permissions))
+}
+
+async fn role_names_for_ids(
+    state: &AppState,
+    role_ids: Vec<String>,
+) -> Result<Vec<String>, ApiError> {
+    if role_ids.is_empty() {
+        return Ok(vec!["user".to_string()]);
+    }
+    let roles = state.storage.list_roles().await?;
+    let mut names = Vec::new();
+    for role_id in role_ids {
+        let role = roles
+            .iter()
+            .find(|item| item.id == role_id)
+            .ok_or_else(|| ApiError::bad_request("unknown role id"))?;
+        names.push(role.name.clone());
+    }
+    Ok(names)
+}
+
+async fn lease_response(state: &AppState, lease: Lease) -> LeaseResponse {
+    let session = state.get_session(&lease.session_id).await;
+    LeaseResponse { lease, session }
+}
+
+async fn login(
+    State(state): State<AppState>,
+    axum::Json(request): axum::Json<LoginRequest>,
+) -> Result<Response, ApiError> {
+    let (user, token) = state
+        .auth
+        .login(request.username.trim(), &request.password)
+        .await
+        .map_err(|_| ApiError::unauthorized("invalid username or password"))?;
+    let mut response = axum::Json(user_response(user)).into_response();
+    set_cookie_header(response.headers_mut(), cookie_value(&token)).map_err(ApiError::from)?;
+    Ok(response)
+}
+
+async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
+    if let Some(token) = token_from_headers(&headers) {
+        state.auth.logout(&token).await.map_err(ApiError::from)?;
+    }
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    set_cookie_header(response.headers_mut(), clear_cookie_value()).map_err(ApiError::from)?;
+    Ok(response)
+}
+
+async fn get_current_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<axum::Json<CurrentUserResponse>, ApiError> {
+    Ok(axum::Json(user_response(
+        current_user_from_headers(&state, &headers).await?,
+    )))
+}
+
+async fn get_user_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<axum::Json<CurrentUserResponse>, ApiError> {
+    get_current_user(State(state), headers).await
+}
+
+async fn list_user_leases(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<axum::Json<LeasesResponse>, ApiError> {
+    let user = current_user_from_headers(&state, &headers).await?;
+    let leases = state.storage.list_leases_for_user(&user.id).await?;
+    let mut responses = Vec::new();
+    for lease in leases {
+        responses.push(lease_response(&state, lease).await);
+    }
+    Ok(axum::Json(LeasesResponse { leases: responses }))
+}
+
+async fn create_lease(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::Json(request): axum::Json<CreateLeaseRequest>,
+) -> Result<(StatusCode, axum::Json<LeaseResponse>), ApiError> {
+    let user = current_user_from_headers(&state, &headers).await?;
+    if request.board_type.trim().is_empty() {
+        return Err(ApiError::bad_request("board_type must not be empty"));
+    }
+    let lease = create_user_lease(&state, &user.id, &user.username, request)
+        .await
+        .map_err(|err| ApiError::conflict(err.to_string()))?;
+    let response = lease_response(&state, lease).await;
+    Ok((StatusCode::CREATED, axum::Json(response)))
+}
+
+async fn delete_user_lease(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(lease_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let user = current_user_from_headers(&state, &headers).await?;
+    let lease = state
+        .storage
+        .find_lease(&lease_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("lease not found"))?;
+    if lease.user_id != user.id {
+        return Err(ApiError::not_found("lease not found"));
+    }
+    release_lease(&state, lease, None).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+async fn heartbeat_user_lease(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(lease_id): Path<String>,
+) -> Result<axum::Json<LeaseResponse>, ApiError> {
+    let user = current_user_from_headers(&state, &headers).await?;
+    let lease = state
+        .storage
+        .find_lease(&lease_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("lease not found"))?;
+    if lease.user_id != user.id {
+        return Err(ApiError::not_found("lease not found"));
+    }
+    let session = state
+        .heartbeat_session(&lease.session_id)
+        .await
+        .map_err(|_| ApiError::not_found("session not found"))?;
+    state
+        .storage
+        .update_lease_expiry(&lease.id, session.expires_at)
+        .await?;
+    let lease = state
+        .storage
+        .find_lease(&lease_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("lease not found"))?;
+    Ok(axum::Json(lease_response(&state, lease).await))
+}
+
+async fn list_admin_users(
+    State(state): State<AppState>,
+) -> Result<axum::Json<AdminUsersResponse>, ApiError> {
+    let users = state
+        .storage
+        .list_users()
+        .await?
+        .into_iter()
+        .map(admin_user_response)
+        .collect();
+    Ok(axum::Json(AdminUsersResponse { users }))
+}
+
+async fn create_admin_user(
+    State(state): State<AppState>,
+    axum::Json(request): axum::Json<AdminUserCreateRequest>,
+) -> Result<(StatusCode, axum::Json<AdminUserResponse>), ApiError> {
+    if request.username.trim().is_empty() || request.password.is_empty() {
+        return Err(ApiError::bad_request("username and password are required"));
+    }
+    let user = state
+        .auth
+        .create_user(
+            request.username.trim().to_string(),
+            request.display_name.trim().to_string(),
+            request.email.trim().to_string(),
+            request.password,
+            request_profile(
+                request.nickname,
+                request.avatar_url,
+                request.phone,
+                request.department,
+                request.title,
+            ),
+            role_names_for_ids(&state, request.role_ids).await?,
+        )
+        .await
+        .map_err(|err| ApiError::conflict(err.to_string()))?;
+    Ok((StatusCode::CREATED, axum::Json(admin_user_response(user))))
+}
+
+async fn update_admin_user(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+    axum::Json(request): axum::Json<AdminUserUpdateRequest>,
+) -> Result<axum::Json<AdminUserResponse>, ApiError> {
+    let user = state
+        .storage
+        .update_user(
+            &user_id,
+            request.display_name,
+            request.email,
+            request_profile(
+                request.nickname,
+                request.avatar_url,
+                request.phone,
+                request.department,
+                request.title,
+            ),
+            request.disabled,
+        )
+        .await?
+        .ok_or_else(|| ApiError::not_found("user not found"))?;
+    Ok(axum::Json(admin_user_response(user)))
+}
+
+async fn reset_admin_user_password(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+    axum::Json(request): axum::Json<AdminPasswordResetRequest>,
+) -> Result<StatusCode, ApiError> {
+    if request.password.is_empty() {
+        return Err(ApiError::bad_request("password must not be empty"));
+    }
+    let password_hash = hash_password(&request.password).map_err(ApiError::from)?;
+    state
+        .storage
+        .update_password_hash(&user_id, password_hash)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn disable_admin_user(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.storage.set_user_disabled(&user_id, true).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_admin_permissions(
+    State(state): State<AppState>,
+) -> Result<axum::Json<AdminPermissionsResponse>, ApiError> {
+    let permissions = state
+        .storage
+        .list_permissions()
+        .await?
+        .into_iter()
+        .map(AdminPermissionResponse::from)
+        .collect();
+    Ok(axum::Json(AdminPermissionsResponse { permissions }))
+}
+
+async fn list_admin_roles(
+    State(state): State<AppState>,
+) -> Result<axum::Json<AdminRolesResponse>, ApiError> {
+    let mut roles = Vec::new();
+    for role in state.storage.list_roles().await? {
+        roles.push(admin_role_response(&state, role).await?);
+    }
+    Ok(axum::Json(AdminRolesResponse { roles }))
+}
+
+async fn create_admin_role(
+    State(state): State<AppState>,
+    axum::Json(request): axum::Json<AdminRoleCreateRequest>,
+) -> Result<(StatusCode, axum::Json<AdminRoleResponse>), ApiError> {
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("role name must not be empty"));
+    }
+    if !name
+        .chars()
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-')
+    {
+        return Err(ApiError::bad_request(
+            "role name must contain only lowercase letters, numbers, '_' or '-'",
+        ));
+    }
+    let role = state
+        .storage
+        .create_role(NewRole {
+            name: name.to_string(),
+            display_name: request.display_name.trim().to_string(),
+            description: request.description.trim().to_string(),
+            permission_ids: request.permission_ids,
+        })
+        .await
+        .map_err(|err| ApiError::conflict(err.to_string()))?;
+    Ok((
+        StatusCode::CREATED,
+        axum::Json(admin_role_response(&state, role).await?),
+    ))
+}
+
+async fn update_admin_role(
+    State(state): State<AppState>,
+    Path(role_id): Path<String>,
+    axum::Json(request): axum::Json<AdminRoleUpdateRequest>,
+) -> Result<axum::Json<AdminRoleResponse>, ApiError> {
+    let role = state
+        .storage
+        .update_role(
+            &role_id,
+            request.display_name.trim().to_string(),
+            request.description.trim().to_string(),
+            request.permission_ids,
+        )
+        .await?
+        .ok_or_else(|| ApiError::not_found("role not found"))?;
+    Ok(axum::Json(admin_role_response(&state, role).await?))
+}
+
+async fn delete_admin_role(
+    State(state): State<AppState>,
+    Path(role_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .storage
+        .delete_role(&role_id)
+        .await
+        .map_err(|err| ApiError::conflict(err.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_admin_user_roles(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> Result<axum::Json<AdminUserRolesResponse>, ApiError> {
+    if state.storage.find_user_by_id(&user_id).await?.is_none() {
+        return Err(ApiError::not_found("user not found"));
+    }
+    let mut roles = Vec::new();
+    for role in state.storage.user_roles(&user_id).await? {
+        roles.push(admin_role_response(&state, role).await?);
+    }
+    Ok(axum::Json(AdminUserRolesResponse { roles }))
+}
+
+async fn update_admin_user_roles(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+    axum::Json(request): axum::Json<AdminUserRolesUpdateRequest>,
+) -> Result<axum::Json<AdminUserRolesResponse>, ApiError> {
+    if state.storage.find_user_by_id(&user_id).await?.is_none() {
+        return Err(ApiError::not_found("user not found"));
+    }
+    state
+        .storage
+        .set_user_roles(&user_id, request.role_ids)
+        .await?;
+    get_admin_user_roles(State(state), Path(user_id)).await
+}
+
+async fn list_admin_leases(
+    State(state): State<AppState>,
+) -> Result<axum::Json<LeasesResponse>, ApiError> {
+    let leases = state.storage.list_leases().await?;
+    let mut responses = Vec::new();
+    for lease in leases {
+        responses.push(lease_response(&state, lease).await);
+    }
+    Ok(axum::Json(LeasesResponse { leases: responses }))
+}
+
+async fn delete_admin_lease(
+    State(state): State<AppState>,
+    Path(lease_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let lease = state
+        .storage
+        .find_lease(&lease_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("lease not found"))?;
+    release_lease(&state, lease, None).await?;
+    Ok(StatusCode::ACCEPTED)
 }
 
 async fn get_admin_overview(
@@ -240,10 +789,17 @@ async fn list_boards(
 async fn list_dtbs(
     State(state): State<AppState>,
 ) -> Result<axum::Json<Vec<DtbFileResponse>>, ApiError> {
+    let metadata = state.storage.list_dtb_metadata().await?;
+    if !metadata.is_empty() {
+        return Ok(axum::Json(metadata.into_iter().map(Into::into).collect()));
+    }
     let files = state.dtb_store.list_all().await?;
-    Ok(axum::Json(
-        files.into_iter().map(DtbFileResponse::from_dtb).collect(),
-    ))
+    let mut responses = Vec::new();
+    for file in files {
+        let metadata = state.storage.find_dtb_metadata_by_name(&file.name).await?;
+        responses.push(DtbFileResponse::from_dtb_with_metadata(file, metadata));
+    }
+    Ok(axum::Json(responses))
 }
 
 async fn list_network_interfaces() -> Result<axum::Json<Vec<NetworkInterfaceSummary>>, ApiError> {
@@ -319,7 +875,10 @@ async fn get_dtb(
         .get(&dtb_name)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("DTB `{dtb_name}` not found")))?;
-    Ok(axum::Json(DtbFileResponse::from_dtb(file)))
+    let metadata = state.storage.find_dtb_metadata_by_name(&dtb_name).await?;
+    Ok(axum::Json(DtbFileResponse::from_dtb_with_metadata(
+        file, metadata,
+    )))
 }
 
 async fn create_dtb(
@@ -339,9 +898,25 @@ async fn create_dtb(
     }
 
     let file = state.dtb_store.write(&dtb_name, &body).await?;
+    let metadata = sync_dtb_metadata(&state, &file, &body, None).await?;
+    write_audit_log(
+        &state,
+        "dtb.create",
+        "dtb_file",
+        Some(dtb_name.clone()),
+        json!({
+            "name": dtb_name,
+            "size_bytes": file.size,
+            "sha256": metadata.sha256,
+        }),
+    )
+    .await?;
     Ok((
         StatusCode::CREATED,
-        axum::Json(DtbFileResponse::from_dtb(file)),
+        axum::Json(DtbFileResponse::from_dtb_with_metadata(
+            file,
+            Some(metadata),
+        )),
     ))
 }
 
@@ -361,7 +936,7 @@ async fn create_board(
         }
     }
 
-    state.board_store.write_board(&board).await?;
+    state.storage.create_board_config(board.clone()).await?;
     state
         .boards
         .write()
@@ -401,10 +976,10 @@ async fn update_board(
         )));
     }
 
-    state.board_store.write_board(&board).await?;
-    if board.id != board_id {
-        state.board_store.delete_board(&board_id).await?;
-    }
+    state
+        .storage
+        .update_board_config(&board_id, board.clone())
+        .await?;
 
     {
         let mut boards = state.boards.write().await;
@@ -636,7 +1211,13 @@ async fn update_dtb(
             .get(&current_name)
             .await?
             .ok_or_else(|| ApiError::not_found(format!("DTB `{current_name}` not found")))?;
-        return Ok(axum::Json(DtbFileResponse::from_dtb(file)));
+        let metadata = state
+            .storage
+            .find_dtb_metadata_by_name(&current_name)
+            .await?;
+        return Ok(axum::Json(DtbFileResponse::from_dtb_with_metadata(
+            file, metadata,
+        )));
     }
 
     if let Some(new_name) = requested_name.as_deref()
@@ -657,11 +1238,39 @@ async fn update_dtb(
                 }
             })?;
         rewrite_board_dtb_references(&state, &current_name, new_name).await?;
+        state
+            .storage
+            .rename_dtb_metadata(&current_name, new_name)
+            .await?;
+        write_audit_log(
+            &state,
+            "dtb.rename",
+            "dtb_file",
+            Some(new_name.to_string()),
+            json!({
+                "from": current_name,
+                "to": new_name,
+            }),
+        )
+        .await?;
         effective_name = new_name.to_string();
     }
 
     if !body.is_empty() {
-        state.dtb_store.write(&effective_name, &body).await?;
+        let file = state.dtb_store.write(&effective_name, &body).await?;
+        let metadata = sync_dtb_metadata(&state, &file, &body, None).await?;
+        write_audit_log(
+            &state,
+            "dtb.update",
+            "dtb_file",
+            Some(effective_name.clone()),
+            json!({
+                "name": effective_name,
+                "size_bytes": file.size,
+                "sha256": metadata.sha256,
+            }),
+        )
+        .await?;
     } else if requested_name.is_none() {
         return Err(ApiError::bad_request(
             "DTB update requires a new name or replacement file body",
@@ -673,7 +1282,13 @@ async fn update_dtb(
         .get(&effective_name)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("DTB `{effective_name}` not found")))?;
-    Ok(axum::Json(DtbFileResponse::from_dtb(file)))
+    let metadata = state
+        .storage
+        .find_dtb_metadata_by_name(&effective_name)
+        .await?;
+    Ok(axum::Json(DtbFileResponse::from_dtb_with_metadata(
+        file, metadata,
+    )))
 }
 
 async fn delete_dtb(
@@ -695,6 +1310,17 @@ async fn delete_dtb(
         return Err(ApiError::not_found(format!("DTB `{dtb_name}` not found")));
     }
     state.dtb_store.delete(&dtb_name).await?;
+    state.storage.delete_dtb_metadata_by_name(&dtb_name).await?;
+    write_audit_log(
+        &state,
+        "dtb.delete",
+        "dtb_file",
+        Some(dtb_name.clone()),
+        json!({
+            "name": dtb_name,
+        }),
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -720,7 +1346,7 @@ async fn delete_board(
     }
     state.sync_board_runtime_states().await;
 
-    state.board_store.delete_board(&board_id).await?;
+    state.storage.delete_board_config(&board_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -806,10 +1432,12 @@ async fn get_server_config(
     State(state): State<AppState>,
 ) -> Result<axum::Json<AdminServerConfigResponse>, ApiError> {
     let config = state.config.read().await.clone();
-    Ok(axum::Json(server_config_response(&config)))
+    let site = state.storage.get_site_settings().await?;
+    Ok(axum::Json(server_config_response(&config, site)))
 }
 
 async fn update_server_config(
+    headers: HeaderMap,
     State(state): State<AppState>,
     axum::Json(request): axum::Json<UpdateServerConfigRequest>,
 ) -> Result<axum::Json<AdminServerConfigResponse>, ApiError> {
@@ -828,9 +1456,37 @@ async fn update_server_config(
         config.upload_limits = request.upload_limits;
     }
     state.save_config().await?;
+    let current_user = current_user_from_headers(&state, &headers).await?;
+    let site = state
+        .storage
+        .update_site_settings(
+            site_settings_from_request(request.site)?,
+            Some(current_user.id),
+        )
+        .await?;
 
     let config = state.config.read().await.clone();
-    Ok(axum::Json(server_config_response(&config)))
+    Ok(axum::Json(server_config_response(&config, site)))
+}
+
+async fn get_site_settings(
+    State(state): State<AppState>,
+) -> Result<axum::Json<SiteSettingsResponse>, ApiError> {
+    let settings = state.storage.get_site_settings().await?;
+    Ok(axum::Json(site_settings_response(settings)))
+}
+
+async fn update_site_settings(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    axum::Json(request): axum::Json<SiteSettingsUpdateRequest>,
+) -> Result<axum::Json<SiteSettingsResponse>, ApiError> {
+    let current_user = current_user_from_headers(&state, &headers).await?;
+    let settings = state
+        .storage
+        .update_site_settings(site_settings_from_request(request)?, Some(current_user.id))
+        .await?;
+    Ok(axum::Json(site_settings_response(settings)))
 }
 
 async fn reconcile_tftp(
@@ -1688,6 +2344,50 @@ fn hex_sha256(bytes: &[u8]) -> String {
     hex
 }
 
+async fn sync_dtb_metadata(
+    state: &AppState,
+    file: &crate::dtb_store::DtbFile,
+    bytes: &[u8],
+    uploaded_by: Option<String>,
+) -> Result<crate::storage::DtbMetadata, ApiError> {
+    Ok(state
+        .storage
+        .upsert_dtb_metadata(UpsertDtbMetadata {
+            name: file.name.clone(),
+            storage_path: file.name.clone(),
+            size_bytes: file.size as i64,
+            sha256: hex_sha256(bytes),
+            description: None,
+            uploaded_by,
+        })
+        .await?)
+}
+
+async fn write_audit_log(
+    state: &AppState,
+    action: &str,
+    target_type: &str,
+    target_id: Option<String>,
+    metadata: serde_json::Value,
+) -> Result<(), ApiError> {
+    state
+        .storage
+        .create_audit_log(NewAuditLog {
+            actor_user_id: None,
+            actor_username: None,
+            action: action.to_string(),
+            target_type: target_type.to_string(),
+            target_id,
+            outcome: "success".to_string(),
+            ip_address: None,
+            user_agent: None,
+            request_id: None,
+            metadata_json: metadata.to_string(),
+        })
+        .await?;
+    Ok(())
+}
+
 fn summarize_board_types(
     boards: &BTreeMap<String, BoardConfig>,
     runtimes: &BTreeMap<String, crate::state::BoardRuntimeState>,
@@ -1756,14 +2456,58 @@ fn readonly_server_config(config: &crate::config::ServerConfig) -> AdminServerCo
     }
 }
 
-fn server_config_response(config: &crate::config::ServerConfig) -> AdminServerConfigResponse {
+fn server_config_response(
+    config: &crate::config::ServerConfig,
+    site: SiteSettings,
+) -> AdminServerConfigResponse {
     AdminServerConfigResponse {
         readonly: readonly_server_config(config),
         editable: AdminServerConfigEditable {
             network: config.network.clone(),
             upload_limits: config.upload_limits.clone(),
         },
+        site: site_settings_response(site),
     }
+}
+
+fn site_settings_response(settings: SiteSettings) -> SiteSettingsResponse {
+    SiteSettingsResponse {
+        site_name: settings.site_name,
+        site_subtitle: settings.site_subtitle,
+        logo_url: settings.logo_url,
+        favicon_url: settings.favicon_url,
+        announcement: settings.announcement,
+        maintenance_mode: settings.maintenance_mode,
+        self_service_enabled: settings.self_service_enabled,
+        default_lease_minutes: settings.default_lease_minutes,
+        max_lease_minutes: settings.max_lease_minutes,
+        support_email: settings.support_email,
+        support_url: settings.support_url,
+        updated_at: settings.updated_at,
+    }
+}
+
+fn site_settings_from_request(
+    request: SiteSettingsUpdateRequest,
+) -> Result<SiteSettings, ApiError> {
+    let mut settings = SiteSettings {
+        site_name: request.site_name,
+        site_subtitle: request.site_subtitle,
+        logo_url: request.logo_url,
+        favicon_url: request.favicon_url,
+        announcement: request.announcement,
+        maintenance_mode: request.maintenance_mode,
+        self_service_enabled: request.self_service_enabled,
+        default_lease_minutes: request.default_lease_minutes,
+        max_lease_minutes: request.max_lease_minutes,
+        support_email: request.support_email,
+        support_url: request.support_url,
+        updated_at: chrono::Utc::now(),
+    };
+    settings
+        .validate()
+        .map_err(|err| ApiError::bad_request(err.to_string()))?;
+    Ok(settings)
 }
 
 fn mib_to_bytes(limit_mib: u32) -> usize {
@@ -1976,7 +2720,10 @@ async fn rewrite_board_dtb_references(
     };
 
     for board in &affected {
-        state.board_store.write_board(board).await?;
+        state
+            .storage
+            .update_board_config(&board.id, board.clone())
+            .await?;
     }
 
     if !affected.is_empty() {
@@ -1987,2165 +2734,4 @@ async fn rewrite_board_dtb_references(
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::future;
-    use std::sync::Arc;
-
-    use axum::{
-        Router,
-        body::{Body, to_bytes},
-        http::{Request, StatusCode, header},
-    };
-    use serde_json::json;
-    #[cfg(unix)]
-    use serialport::{SerialPort, TTYPort};
-    use tempfile::tempdir;
-    use tokio::sync::{mpsc, oneshot};
-    #[cfg(unix)]
-    use tokio_modbus::{
-        ExceptionCode, Request as ModbusRequest, Response as ModbusResponse, SlaveRequest,
-        server::{Service, rtu::Server},
-    };
-    use tower::util::ServiceExt;
-
-    use super::{
-        DTB_UPLOAD_MAX_MIB, ResolvedNetwork, boot_profile_with_resolved_network, build_router,
-        http_boot_url, mib_to_bytes, resolve_server_network,
-    };
-    use crate::{
-        api::models::{AdminBoardUpsertRequest, BoardRuntimeStatusResponse, SessionDetailResponse},
-        build_app_state,
-        config::{
-            BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
-            PowerManagementConfig, SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig,
-            TftpConfig, UbootNetworkMode, UefiBootArch, UefiHttpProfile, UploadLimitsConfig,
-            ZhongshengRelayPowerManagement,
-        },
-        session::SessionLifecycleState,
-        state::BoardLeaseState,
-        tftp::service::{TftpManager, build_tftp_manager},
-        web::first_asset_path,
-    };
-
-    #[cfg(unix)]
-    type RelayServerHandle =
-        tokio::task::JoinHandle<std::io::Result<tokio_modbus::server::Terminated>>;
-    #[cfg(unix)]
-    type RelayRequestRx = mpsc::UnboundedReceiver<(u8, u16, bool)>;
-    #[cfg(unix)]
-    type RelayTestServer = (
-        String,
-        TTYPort,
-        RelayServerHandle,
-        RelayRequestRx,
-        oneshot::Sender<()>,
-    );
-
-    fn test_server_config(root: &std::path::Path) -> ServerConfig {
-        ServerConfig {
-            listen_addr: "127.0.0.1:0".parse().unwrap(),
-            data_dir: root.join("data"),
-            board_dir: root.join("boards"),
-            dtb_dir: root.join("dtbs"),
-            tftp: TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(root.join("tftp"))),
-            http_boot: crate::config::HttpBootConfig::default_with_root(root.join("http-boot")),
-            network: crate::TftpNetworkConfig {
-                interface: "lo".into(),
-            },
-            upload_limits: UploadLimitsConfig::default(),
-        }
-    }
-
-    async fn test_router() -> Router {
-        let temp = tempdir().unwrap();
-        let root = temp.path().to_path_buf();
-        std::mem::forget(temp);
-        let config_path = root.join(".ostool-server.toml");
-        let config = test_server_config(&root);
-        let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
-        let state = build_app_state(config_path, config, manager).await.unwrap();
-        state.ensure_data_dirs().await.unwrap();
-        build_router(state)
-    }
-
-    async fn create_board(app: &Router, request: serde_json::Value) -> StatusCode {
-        app.clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/admin/boards")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(request.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap()
-            .status()
-    }
-
-    async fn create_session(app: &Router, board_type: &str) -> String {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/sessions")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "board_type": board_type,
-                            "required_tags": [],
-                            "client_name": "test",
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        value["session_id"].as_str().unwrap().to_string()
-    }
-
-    async fn upload_dtb(app: &Router, name: &str, body: &'static str) -> StatusCode {
-        app.clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/admin/dtbs")
-                    .header("X-Dtb-Name", name)
-                    .body(Body::from(body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap()
-            .status()
-    }
-
-    fn sample_board(board_id: &str) -> BoardConfig {
-        BoardConfig {
-            id: board_id.into(),
-            board_type: "rk3568".into(),
-            tags: vec!["lab".into(), "usb".into()],
-            serial: Some(SerialConfig {
-                key: SerialPortKey {
-                    kind: SerialPortKeyKind::UsbPath,
-                    value: "/dev/serial/by-path/pci-0000:00:14.0-usb-0:10.4:1.0-port0".into(),
-                },
-                baud_rate: 115_200,
-                resolved_device_path: None,
-                resolved_usb_path: None,
-            }),
-            power_management: PowerManagementConfig::Custom(CustomPowerManagement {
-                power_on_cmd: "echo on".into(),
-                power_off_cmd: "echo off".into(),
-            }),
-            boot: BootConfig::Uboot(crate::config::UbootProfile {
-                use_tftp: true,
-                ..Default::default()
-            }),
-            notes: Some("rack-a".into()),
-            disabled: false,
-        }
-    }
-
-    fn sample_httpboot_board(board_id: &str) -> BoardConfig {
-        let mut board = sample_board(board_id);
-        board.board_type = "x86_64-uefi-http".into();
-        board.tags = vec!["uefi-http".into()];
-        board.boot = BootConfig::UefiHttp(UefiHttpProfile {
-            boot_arch: Some(UefiBootArch::X86_64),
-            mac: None,
-        });
-        board
-    }
-
-    #[cfg(unix)]
-    #[derive(Clone)]
-    struct RecordingRelayService {
-        requests: mpsc::UnboundedSender<(u8, u16, bool)>,
-    }
-
-    #[cfg(unix)]
-    impl Service for RecordingRelayService {
-        type Request = SlaveRequest<'static>;
-        type Response = ModbusResponse;
-        type Exception = ExceptionCode;
-        type Future = future::Ready<std::result::Result<Self::Response, Self::Exception>>;
-
-        fn call(&self, req: Self::Request) -> Self::Future {
-            match req.request {
-                ModbusRequest::WriteSingleCoil(address, coil) => {
-                    self.requests.send((req.slave, address, coil)).unwrap();
-                    future::ready(Ok(ModbusResponse::WriteSingleCoil(address, coil)))
-                }
-                _ => future::ready(Err(ExceptionCode::IllegalFunction)),
-            }
-        }
-    }
-
-    #[cfg(unix)]
-    fn spawn_relay_test_server() -> RelayTestServer {
-        let (master, mut slave) = TTYPort::pair().unwrap();
-        slave.set_exclusive(false).unwrap();
-        let slave_path = slave.name().unwrap();
-
-        let server_stream = tokio_serial::SerialStream::try_from(master).unwrap();
-        let (request_tx, request_rx) = mpsc::unbounded_channel();
-        let (stop_tx, stop_rx) = oneshot::channel();
-        let task = tokio::spawn(async move {
-            Server::new(server_stream)
-                .serve_until(
-                    RecordingRelayService {
-                        requests: request_tx,
-                    },
-                    async move {
-                        let _ = stop_rx.await;
-                    },
-                )
-                .await
-        });
-
-        (slave_path, slave, task, request_rx, stop_tx)
-    }
-
-    #[tokio::test]
-    async fn admin_route_serves_embedded_index() {
-        let app: Router = test_router().await;
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/admin")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get(header::CONTENT_TYPE).unwrap(),
-            "text/html"
-        );
-
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let body = String::from_utf8(body.to_vec()).unwrap();
-        assert!(body.contains("ostool-server 管理台"));
-    }
-
-    #[tokio::test]
-    async fn admin_asset_route_serves_embedded_asset() {
-        let asset_path = first_asset_path().expect("missing built frontend asset");
-        let app: Router = test_router().await;
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/admin/{asset_path}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert!(response.headers().contains_key(header::CONTENT_TYPE));
-    }
-
-    #[tokio::test]
-    async fn admin_history_fallback_serves_index() {
-        let app: Router = test_router().await;
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/admin/boards/demo-board")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let body = String::from_utf8(body.to_vec()).unwrap();
-        assert!(body.contains("id=\"app\""));
-    }
-
-    #[tokio::test]
-    async fn server_config_endpoint_updates_only_network() {
-        let app: Router = test_router().await;
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/api/v1/admin/server-config")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"network":{"interface":"lo"},"upload_limits":{"session_file_max_mib":32}}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["editable"]["network"]["interface"], "lo");
-        assert_eq!(
-            value["editable"]["upload_limits"]["session_file_max_mib"],
-            32
-        );
-        assert_eq!(value["readonly"]["dtb_upload_max_mib"], DTB_UPLOAD_MAX_MIB);
-        assert!(value["readonly"]["listen_addr"].is_string());
-    }
-
-    #[test]
-    fn resolve_server_network_uses_configured_interface() {
-        let mut config = ServerConfig::default();
-        config.network.interface = "lo".into();
-
-        let resolved = resolve_server_network(&config).unwrap().unwrap();
-        assert_eq!(resolved.interface.as_deref(), Some("lo"));
-    }
-
-    #[test]
-    fn http_boot_url_uses_configured_public_base_url_first() {
-        let mut config = ServerConfig {
-            listen_addr: "0.0.0.0:2999".parse().unwrap(),
-            ..ServerConfig::default()
-        };
-        config.network.interface = "lo".into();
-        config.http_boot.public_base_url = Some("http://10.3.10.192:2999/".into());
-
-        let url = http_boot_url(&config, "asus-1", "kernel.bin").unwrap();
-        assert_eq!(
-            url,
-            "http://10.3.10.192:2999/boot/sessions/asus-1/kernel.bin"
-        );
-    }
-
-    #[test]
-    fn http_boot_url_defaults_to_resolved_server_ip() {
-        let mut config = ServerConfig {
-            listen_addr: "0.0.0.0:2999".parse().unwrap(),
-            ..ServerConfig::default()
-        };
-        config.network.interface = "lo".into();
-        config.http_boot.public_base_url = None;
-
-        let url = http_boot_url(&config, "asus-1", "kernel.elf").unwrap();
-        assert_eq!(url, "http://127.0.0.1:2999/boot/sessions/asus-1/kernel.elf");
-    }
-
-    #[test]
-    fn board_config_new_uboot_profile_supports_use_tftp() {
-        let board = BoardConfig {
-            id: "demo".into(),
-            board_type: "demo".into(),
-            tags: vec![],
-            serial: None,
-            power_management: PowerManagementConfig::Custom(CustomPowerManagement {
-                power_on_cmd: "echo on".into(),
-                power_off_cmd: "echo off".into(),
-            }),
-            boot: BootConfig::Uboot(crate::config::UbootProfile {
-                use_tftp: true,
-                ..Default::default()
-            }),
-            notes: None,
-            disabled: false,
-        };
-
-        match board.boot {
-            BootConfig::Uboot(profile) => assert!(profile.use_tftp),
-            BootConfig::Pxe(_) => panic!("expected uboot"),
-            BootConfig::UefiHttp(_) => panic!("expected uboot"),
-        }
-    }
-
-    #[tokio::test]
-    async fn get_serial_ports_endpoint_returns_ok() {
-        let app = test_router().await;
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/admin/serial-ports")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let _: Vec<crate::api::models::SerialPortSummary> = serde_json::from_slice(&body).unwrap();
-    }
-
-    #[tokio::test]
-    async fn get_board_returns_board_config() {
-        let app = test_router().await;
-        let board = sample_board("demo-board");
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&board).unwrap()).await,
-            StatusCode::CREATED
-        );
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/admin/boards/demo-board")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let returned: BoardConfig = serde_json::from_slice(&body).unwrap();
-        assert_eq!(returned.id, "demo-board");
-        assert_eq!(returned.board_type, "rk3568");
-    }
-
-    #[tokio::test]
-    async fn create_board_persists_request_payload_and_returns_board_config() {
-        let app = test_router().await;
-        let request = serde_json::to_value(sample_board("create-me")).unwrap();
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/admin/boards")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(serde_json::to_vec(&request).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let board: BoardConfig = serde_json::from_slice(&body).unwrap();
-        assert_eq!(board.id, "create-me");
-        let serial = board.serial.unwrap();
-        assert_eq!(serial.key.kind, SerialPortKeyKind::UsbPath);
-        assert_eq!(
-            serial.key.value,
-            "/dev/serial/by-path/pci-0000:00:14.0-usb-0:10.4:1.0-port0"
-        );
-    }
-
-    #[tokio::test]
-    async fn create_httpboot_board_keeps_arch_and_drops_unused_mac_field() {
-        let app = test_router().await;
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/admin/boards")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "id": "httpboot-create",
-                            "board_type": "Asus-nuc15-x86_64-vmx",
-                            "tags": ["httpboot"],
-                            "serial": null,
-                            "power_management": {
-                                "kind": "custom",
-                                "power_on_cmd": "true",
-                                "power_off_cmd": "true"
-                            },
-                            "boot": {
-                                "kind": "httpboot",
-                                "boot_arch": "x86_64",
-                                "mac": "1C-69-7A-DC-F3-47"
-                            },
-                            "notes": null,
-                            "disabled": false
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let board: BoardConfig = serde_json::from_slice(&body).unwrap();
-        let BootConfig::UefiHttp(profile) = board.boot else {
-            panic!("expected httpboot");
-        };
-        assert_eq!(profile.boot_arch, Some(UefiBootArch::X86_64));
-        assert_eq!(profile.mac, None);
-    }
-
-    #[tokio::test]
-    async fn create_board_assigns_next_available_id_when_id_is_blank() {
-        let app = test_router().await;
-        let board = sample_board("demo-board");
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&board).unwrap()).await,
-            StatusCode::CREATED
-        );
-        assert_eq!(
-            create_board(
-                &app,
-                json!({
-                    "id": "rk3568-1",
-                    "board_type": "rk3568",
-                    "tags": [],
-                    "serial": null,
-                    "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
-                    "boot": { "kind": "pxe", "notes": null },
-                    "notes": null,
-                    "disabled": false
-                }),
-            )
-            .await,
-            StatusCode::CREATED
-        );
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/admin/boards")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "id": "",
-                            "board_type": "rk3568",
-                            "tags": [" lab "],
-                            "serial": null,
-                            "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
-                            "boot": { "kind": "pxe", "notes": null },
-                            "notes": " ",
-                            "disabled": false
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let board: BoardConfig = serde_json::from_slice(&body).unwrap();
-        assert_eq!(board.id, "rk3568-2");
-        assert_eq!(board.tags, vec!["lab"]);
-        assert!(board.notes.is_none());
-    }
-
-    #[tokio::test]
-    async fn update_board_keeps_original_id_when_request_id_is_blank() {
-        let app = test_router().await;
-        let board = sample_board("demo-board");
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&board).unwrap()).await,
-            StatusCode::CREATED
-        );
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/api/v1/admin/boards/demo-board")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "id": " ",
-                            "board_type": "rk3568",
-                            "tags": ["usb"],
-                            "serial": null,
-                            "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
-                            "boot": { "kind": "uboot", "use_tftp": false },
-                            "notes": "updated",
-                            "disabled": true
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let updated: BoardConfig = serde_json::from_slice(&body).unwrap();
-        assert_eq!(updated.id, "demo-board");
-        assert!(updated.serial.is_none());
-        assert!(updated.disabled);
-    }
-
-    #[tokio::test]
-    async fn update_board_allows_explicit_rename() {
-        let app = test_router().await;
-        let board = sample_board("demo-board");
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&board).unwrap()).await,
-            StatusCode::CREATED
-        );
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/api/v1/admin/boards/demo-board")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "id": "demo-board-renamed",
-                            "board_type": "rk3568",
-                            "tags": ["lab"],
-                            "serial": null,
-                            "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
-                            "boot": { "kind": "pxe", "notes": "pxe" },
-                            "notes": null,
-                            "disabled": false
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let updated: BoardConfig = serde_json::from_slice(&body).unwrap();
-        assert_eq!(updated.id, "demo-board-renamed");
-
-        let boards_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/admin/boards")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let boards_body = to_bytes(boards_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let boards: Vec<BoardConfig> = serde_json::from_slice(&boards_body).unwrap();
-        assert_eq!(boards[0].id, "demo-board-renamed");
-    }
-
-    #[tokio::test]
-    async fn power_actions_execute_custom_power_management_commands() {
-        let app = test_router().await;
-        let mut board = sample_board("power-board");
-        board.power_management = PowerManagementConfig::Custom(CustomPowerManagement {
-            power_on_cmd: "printf power-on >/dev/null".into(),
-            power_off_cmd: "printf power-off >/dev/null".into(),
-        });
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&board).unwrap()).await,
-            StatusCode::CREATED
-        );
-
-        let session = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/sessions")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "board_type": "rk3568",
-                            "required_tags": [],
-                            "client_name": "test",
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let session_body = to_bytes(session.into_body(), usize::MAX).await.unwrap();
-        let session_value: serde_json::Value = serde_json::from_slice(&session_body).unwrap();
-        let session_id = session_value["session_id"].as_str().unwrap();
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/api/v1/sessions/{session_id}/board/power-on"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["message"], "executed `printf power-on >/dev/null`");
-    }
-
-    #[tokio::test]
-    async fn board_runtime_status_reports_idle_board() {
-        let app = test_router().await;
-        let board = sample_board("runtime-board");
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&board).unwrap()).await,
-            StatusCode::CREATED
-        );
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/admin/boards/runtime-board/runtime-status")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let status: BoardRuntimeStatusResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(status.lease_state, BoardLeaseState::Idle);
-        assert!(status.active_session_id.is_none());
-        assert!(status.last_release_error.is_none());
-    }
-
-    #[tokio::test]
-    async fn delete_session_returns_accepted_and_marks_session_releasing() {
-        let app = test_router().await;
-        let mut board = sample_board("release-board");
-        board.serial = None;
-        board.power_management = PowerManagementConfig::Custom(CustomPowerManagement {
-            power_on_cmd: "printf power-on >/dev/null".into(),
-            power_off_cmd: "sh -c 'sleep 1'".into(),
-        });
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&board).unwrap()).await,
-            StatusCode::CREATED
-        );
-
-        let session_id = create_session(&app, "rk3568").await;
-        let delete_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/api/v1/sessions/{session_id}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(delete_response.status(), StatusCode::ACCEPTED);
-
-        let mut state = SessionLifecycleState::Active;
-        for _ in 0..10 {
-            let session_response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .uri(format!("/api/v1/sessions/{session_id}"))
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(session_response.status(), StatusCode::OK);
-            let session_body = to_bytes(session_response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let detail: SessionDetailResponse = serde_json::from_slice(&session_body).unwrap();
-            state = detail.session.state;
-            if state == SessionLifecycleState::Releasing {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
-        assert_eq!(state, SessionLifecycleState::Releasing);
-    }
-
-    #[tokio::test]
-    #[cfg(unix)]
-    async fn power_actions_execute_zhongsheng_relay_via_modbus_rtu() {
-        let app = test_router().await;
-        let (relay_port, _relay_handle, server, mut requests, stop_tx) = spawn_relay_test_server();
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-
-        let mut board = sample_board("relay-board");
-        board.power_management =
-            PowerManagementConfig::ZhongshengRelay(ZhongshengRelayPowerManagement {
-                key: SerialPortKey {
-                    kind: SerialPortKeyKind::UsbPath,
-                    value: relay_port.clone(),
-                },
-            });
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&board).unwrap()).await,
-            StatusCode::CREATED
-        );
-
-        let session = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/sessions")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "board_type": "rk3568",
-                            "required_tags": [],
-                            "client_name": "test",
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let session_body = to_bytes(session.into_body(), usize::MAX).await.unwrap();
-        let session_value: serde_json::Value = serde_json::from_slice(&session_body).unwrap();
-        let session_id = session_value["session_id"].as_str().unwrap();
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/api/v1/sessions/{session_id}/board/power-off"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let status = response.status();
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
-            value["message"],
-            format!("executed Zhongsheng relay power-off via {relay_port}")
-        );
-
-        let request = tokio::time::timeout(std::time::Duration::from_secs(1), requests.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(request, (1, 0, false));
-
-        let _ = stop_tx.send(());
-        let _ = server.await.unwrap();
-    }
-
-    #[tokio::test]
-    #[cfg(unix)]
-    async fn delete_session_keeps_zhongsheng_session_releasing_before_final_removal() {
-        let app = test_router().await;
-        let (relay_port, _relay_handle, server, _requests, stop_tx) = spawn_relay_test_server();
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-
-        let mut board = sample_board("relay-release-board");
-        board.serial = None;
-        board.power_management =
-            PowerManagementConfig::ZhongshengRelay(ZhongshengRelayPowerManagement {
-                key: SerialPortKey {
-                    kind: SerialPortKeyKind::UsbPath,
-                    value: relay_port,
-                },
-            });
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&board).unwrap()).await,
-            StatusCode::CREATED
-        );
-
-        let session_id = create_session(&app, "rk3568").await;
-
-        let delete_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/api/v1/sessions/{session_id}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(delete_response.status(), StatusCode::ACCEPTED);
-
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        let session_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/api/v1/sessions/{session_id}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(session_response.status(), StatusCode::OK);
-        let session_body = to_bytes(session_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let detail: SessionDetailResponse = serde_json::from_slice(&session_body).unwrap();
-        assert_eq!(detail.session.state, SessionLifecycleState::Releasing);
-
-        let runtime_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/admin/boards/relay-release-board/runtime-status")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(runtime_response.status(), StatusCode::OK);
-        let runtime_body = to_bytes(runtime_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let runtime: BoardRuntimeStatusResponse = serde_json::from_slice(&runtime_body).unwrap();
-        assert_eq!(runtime.lease_state, BoardLeaseState::Releasing);
-        assert_eq!(
-            runtime.active_session_id.as_deref(),
-            Some(session_id.as_str())
-        );
-
-        let zhongsheng_release_settle_delay = std::time::Duration::from_secs(10);
-        tokio::time::sleep(zhongsheng_release_settle_delay + std::time::Duration::from_millis(300))
-            .await;
-
-        let session_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/api/v1/sessions/{session_id}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(session_response.status(), StatusCode::NOT_FOUND);
-
-        let runtime_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/admin/boards/relay-release-board/runtime-status")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(runtime_response.status(), StatusCode::OK);
-        let runtime_body = to_bytes(runtime_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let runtime: BoardRuntimeStatusResponse = serde_json::from_slice(&runtime_body).unwrap();
-        assert_eq!(runtime.lease_state, BoardLeaseState::Idle);
-        assert!(runtime.active_session_id.is_none());
-
-        let _ = stop_tx.send(());
-        let _ = server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn create_board_rejects_duplicate_ids_and_missing_required_fields() {
-        let app = test_router().await;
-        let board = sample_board("demo-board");
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&board).unwrap()).await,
-            StatusCode::CREATED
-        );
-
-        let duplicate_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/admin/boards")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(serde_json::to_vec(&board).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(duplicate_response.status(), StatusCode::CONFLICT);
-
-        let invalid_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/admin/boards")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "id": null,
-                            "board_type": " ",
-                            "tags": [],
-                            "serial": null,
-                            "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
-                            "boot": { "kind": "pxe", "notes": null },
-                            "notes": null,
-                            "disabled": false
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(invalid_response.status(), StatusCode::BAD_REQUEST);
-
-        let missing_power_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/admin/boards")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "id": null,
-                            "board_type": "rk3568",
-                            "tags": [],
-                            "serial": null,
-                            "power_management": null,
-                            "boot": { "kind": "pxe", "notes": null },
-                            "notes": null,
-                            "disabled": false
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            missing_power_response.status(),
-            StatusCode::UNPROCESSABLE_ENTITY
-        );
-    }
-
-    #[tokio::test]
-    async fn create_board_rejects_invalid_static_uboot_network_config() {
-        let app = test_router().await;
-
-        for boot in [
-            json!({ "kind": "uboot", "use_tftp": true, "network_mode": "static_ip" }),
-            json!({
-                "kind": "uboot",
-                "use_tftp": true,
-                "network_mode": "static_ip",
-                "board_ip": "not-an-ip"
-            }),
-            json!({
-                "kind": "uboot",
-                "use_tftp": true,
-                "network_mode": "static_ip",
-                "board_ip": "192.168.10.20",
-                "server_ip": "not-an-ip"
-            }),
-            json!({
-                "kind": "uboot",
-                "use_tftp": true,
-                "network_mode": "static_ip",
-                "board_ip": "192.168.10.20",
-                "netmask": "not-an-ip"
-            }),
-            json!({
-                "kind": "uboot",
-                "use_tftp": true,
-                "network_mode": "static_ip",
-                "board_ip": "192.168.10.20",
-                "gatewayip": "not-an-ip"
-            }),
-        ] {
-            let status = create_board(
-                &app,
-                json!({
-                    "id": null,
-                    "board_type": "rk3568",
-                    "tags": [],
-                    "serial": null,
-                    "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
-                    "boot": boot,
-                    "notes": null,
-                    "disabled": false
-                }),
-            )
-            .await;
-
-            assert_eq!(status, StatusCode::BAD_REQUEST);
-        }
-    }
-
-    #[tokio::test]
-    async fn admin_dtb_endpoints_support_create_rename_replace_and_delete() {
-        let app = test_router().await;
-
-        assert_eq!(
-            upload_dtb(&app, "board.dtb", "dtb-v1").await,
-            StatusCode::CREATED
-        );
-
-        let rename_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/api/v1/admin/dtbs/board.dtb")
-                    .header("X-Dtb-Name", "board-v2.dtb")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(rename_response.status(), StatusCode::OK);
-
-        let replace_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/api/v1/admin/dtbs/board-v2.dtb")
-                    .body(Body::from("dtb-v2"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(replace_response.status(), StatusCode::OK);
-        let replace_body = to_bytes(replace_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let file: crate::api::models::DtbFileResponse =
-            serde_json::from_slice(&replace_body).unwrap();
-        assert_eq!(file.name, "board-v2.dtb");
-        assert_eq!(file.size, 6);
-        assert_eq!(file.relative_tftp_path_template, "boot/dtb/board-v2.dtb");
-
-        let delete_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri("/api/v1/admin/dtbs/board-v2.dtb")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
-    }
-
-    #[tokio::test]
-    async fn admin_dtb_endpoints_enforce_upload_limit() {
-        let app = test_router().await;
-        let oversized = vec![b'x'; mib_to_bytes(DTB_UPLOAD_MAX_MIB) + 1];
-
-        let create_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/admin/dtbs")
-                    .header("X-Dtb-Name", "oversized.dtb")
-                    .body(Body::from(oversized.clone()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(create_response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-        let create_body = to_bytes(create_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let create_value: serde_json::Value = serde_json::from_slice(&create_body).unwrap();
-        assert_eq!(create_value["code"], "payload_too_large");
-        assert_eq!(
-            create_value["message"],
-            format!("DTB upload body exceeds limit of {DTB_UPLOAD_MAX_MIB} MiB")
-        );
-
-        assert_eq!(
-            upload_dtb(&app, "replace-me.dtb", "dtb-v1").await,
-            StatusCode::CREATED
-        );
-        let replace_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/api/v1/admin/dtbs/replace-me.dtb")
-                    .body(Body::from(oversized))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(replace_response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    }
-
-    #[tokio::test]
-    async fn renaming_dtb_updates_board_references_and_referenced_dtb_cannot_be_deleted() {
-        let app = test_router().await;
-        assert_eq!(
-            upload_dtb(&app, "board.dtb", "dtb").await,
-            StatusCode::CREATED
-        );
-        assert_eq!(
-            create_board(
-                &app,
-                json!({
-                    "id": "rk3568-dtb",
-                    "board_type": "rk3568",
-                    "tags": [],
-                    "serial": null,
-                    "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
-                    "boot": { "kind": "uboot", "use_tftp": true, "dtb_name": "board.dtb" },
-                    "notes": null,
-                    "disabled": false
-                }),
-            )
-            .await,
-            StatusCode::CREATED
-        );
-
-        let delete_referenced = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri("/api/v1/admin/dtbs/board.dtb")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(delete_referenced.status(), StatusCode::CONFLICT);
-
-        let rename_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/api/v1/admin/dtbs/board.dtb")
-                    .header("X-Dtb-Name", "board-renamed.dtb")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(rename_response.status(), StatusCode::OK);
-
-        let board_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/admin/boards/rk3568-dtb")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let board_body = to_bytes(board_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let board: BoardConfig = serde_json::from_slice(&board_body).unwrap();
-        match board.boot {
-            BootConfig::Uboot(profile) => {
-                assert_eq!(profile.dtb_name.as_deref(), Some("board-renamed.dtb"))
-            }
-            BootConfig::Pxe(_) => panic!("expected uboot"),
-            BootConfig::UefiHttp(_) => panic!("expected uboot"),
-        }
-    }
-
-    #[tokio::test]
-    async fn session_dtb_endpoint_stages_preset_file_and_supports_download() {
-        let app = test_router().await;
-        assert_eq!(
-            upload_dtb(&app, "board.dtb", "dtb-bytes").await,
-            StatusCode::CREATED
-        );
-        assert_eq!(
-            create_board(
-                &app,
-                json!({
-                    "id": "rk3568-dtb",
-                    "board_type": "rk3568",
-                    "tags": [],
-                    "serial": {
-                        "key": {
-                            "kind": "usb_path",
-                            "value": "/dev/serial/by-path/pci-0000:00:14.0-usb-0:10.4:1.0-port0"
-                        },
-                        "baud_rate": 115200
-                    },
-                    "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
-                    "boot": { "kind": "uboot", "use_tftp": true, "dtb_name": "board.dtb" },
-                    "notes": null,
-                    "disabled": false
-                }),
-            )
-            .await,
-            StatusCode::CREATED
-        );
-        let session_id = create_session(&app, "rk3568").await;
-
-        let dtb_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/api/v1/sessions/{session_id}/dtb"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(dtb_response.status(), StatusCode::OK);
-        let dtb_body = to_bytes(dtb_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let dtb: crate::api::models::SessionDtbResponse =
-            serde_json::from_slice(&dtb_body).unwrap();
-        assert_eq!(dtb.dtb_name.as_deref(), Some("board.dtb"));
-        assert_eq!(
-            dtb.relative_path.as_deref(),
-            Some(format!("ostool/sessions/{session_id}/boot/dtb/board.dtb").as_str())
-        );
-        assert_eq!(dtb.session_file_path.as_deref(), Some("boot/dtb/board.dtb"));
-
-        let download_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/api/v1/sessions/{session_id}/dtb/download"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(download_response.status(), StatusCode::OK);
-        let download_body = to_bytes(download_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        assert_eq!(download_body.as_ref(), b"dtb-bytes");
-    }
-
-    #[tokio::test]
-    async fn board_types_endpoint_returns_aggregated_counts() {
-        let app = test_router().await;
-        let board_a = json!({
-            "id": "rk3568-01",
-            "board_type": "rk3568",
-            "tags": ["lab-a", "usbboot"],
-            "serial": {
-                "key": {
-                    "kind": "usb_path",
-                    "value": "/dev/serial/by-path/pci-0000:00:14.0-usb-0:10.4:1.0-port0"
-                },
-                "baud_rate": 115200
-            },
-            "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
-            "boot": { "kind": "uboot", "use_tftp": false },
-            "notes": null,
-            "disabled": false
-        });
-        let board_b = json!({
-            "id": "rk3568-02",
-            "board_type": "rk3568",
-            "tags": ["lab-b"],
-            "serial": {
-                "key": {
-                    "kind": "serial_number",
-                    "value": "BG02M9TR"
-                },
-                "baud_rate": 115200
-            },
-            "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
-            "boot": { "kind": "uboot", "use_tftp": false },
-            "notes": null,
-            "disabled": false
-        });
-
-        assert_eq!(create_board(&app, board_a).await, StatusCode::CREATED);
-        assert_eq!(create_board(&app, board_b).await, StatusCode::CREATED);
-
-        let session_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/sessions")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "board_type": "rk3568",
-                            "required_tags": [],
-                            "client_name": "test",
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(session_response.status(), StatusCode::CREATED);
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/board-types")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value[0]["board_type"], "rk3568");
-        assert_eq!(value[0]["total"], 2);
-        assert_eq!(value[0]["available"], 1);
-        assert_eq!(value[0]["tags"], json!(["lab-a", "lab-b", "usbboot"]));
-    }
-
-    #[tokio::test]
-    async fn http_boot_upload_file_and_public_download_use_session_file_path() {
-        let app = test_router().await;
-        assert_eq!(
-            create_board(
-                &app,
-                serde_json::to_value(sample_httpboot_board("uefi-http-01")).unwrap()
-            )
-            .await,
-            StatusCode::CREATED
-        );
-        let session_id = create_session(&app, "x86_64-uefi-http").await;
-
-        let upload = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/files"))
-                    .header("X-File-Path", "kernel.bin")
-                    .body(Body::from("kernel-image"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(upload.status(), StatusCode::CREATED);
-        let upload_body = to_bytes(upload.into_body(), usize::MAX).await.unwrap();
-        let uploaded: serde_json::Value = serde_json::from_slice(&upload_body).unwrap();
-        assert_eq!(uploaded["filename"], "kernel.bin");
-        assert_eq!(
-            uploaded["relative_path"],
-            format!("ostool/sessions/{session_id}/kernel.bin")
-        );
-        assert_eq!(
-            uploaded["http_url"],
-            format!("http://127.0.0.1:0/boot/sessions/{session_id}/kernel.bin")
-        );
-
-        let download_kernel = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/boot/sessions/{session_id}/kernel.bin"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(download_kernel.status(), StatusCode::OK);
-        let kernel_body = to_bytes(download_kernel.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        assert_eq!(kernel_body.as_ref(), b"kernel-image");
-
-        let range_kernel = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/boot/sessions/{session_id}/kernel.bin"))
-                    .header(header::RANGE, "bytes=0-5")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(range_kernel.status(), StatusCode::PARTIAL_CONTENT);
-        assert_eq!(
-            range_kernel.headers()[header::CONTENT_RANGE],
-            "bytes 0-5/12"
-        );
-        let range_body = to_bytes(range_kernel.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        assert_eq!(range_body.as_ref(), b"kernel");
-
-        let delete_session = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/api/v1/sessions/{session_id}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(delete_session.status(), StatusCode::ACCEPTED);
-
-        let download_after_release = app
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/boot/sessions/{session_id}/kernel.bin"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(download_after_release.status(), StatusCode::CONFLICT);
-    }
-
-    #[tokio::test]
-    async fn httpboot_kernel_upload_returns_download_offer_payload() {
-        let app = test_router().await;
-        assert_eq!(
-            create_board(
-                &app,
-                serde_json::to_value(sample_httpboot_board("uefi-http-kernel")).unwrap()
-            )
-            .await,
-            StatusCode::CREATED
-        );
-        let session_id = create_session(&app, "x86_64-uefi-http").await;
-
-        let published = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/kernel"))
-                    .header("X-HttpBoot-Remote-Name", "kernel.elf")
-                    .header("X-HttpBoot-Arch", "x86_64")
-                    .header("X-HttpBoot-Image-Format", "elf64")
-                    .header("X-HttpBoot-Entry-Symbol", "httpboot_entry")
-                    .body(Body::from("kernel-elf"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(published.status(), StatusCode::CREATED);
-        let body = to_bytes(published.into_body(), usize::MAX).await.unwrap();
-        let ready_value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(ready_value["boot_id"].as_str().is_some());
-        assert_eq!(
-            ready_value["kernel_url"],
-            format!("http://127.0.0.1:0/boot/sessions/{session_id}/kernel.elf")
-        );
-        assert_eq!(ready_value["kernel_size"], 10);
-        assert!(ready_value["kernel_sha256"].as_str().unwrap().len() == 64);
-    }
-
-    #[tokio::test]
-    async fn httpboot_kernel_upload_accepts_other_arch() {
-        let app = test_router().await;
-        assert_eq!(
-            create_board(
-                &app,
-                serde_json::to_value(sample_httpboot_board("uefi-http-other")).unwrap()
-            )
-            .await,
-            StatusCode::CREATED
-        );
-        let session_id = create_session(&app, "x86_64-uefi-http").await;
-
-        let published = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/kernel"))
-                    .header("X-HttpBoot-Remote-Name", "kernel.elf")
-                    .header("X-HttpBoot-Arch", "other")
-                    .header("X-HttpBoot-Image-Format", "elf64")
-                    .body(Body::from("kernel-elf"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(published.status(), StatusCode::CREATED);
-    }
-
-    #[tokio::test]
-    async fn http_boot_upload_rejects_non_httpboot_board() {
-        let app = test_router().await;
-        assert_eq!(
-            create_board(&app, serde_json::to_value(sample_board("pxe-01")).unwrap()).await,
-            StatusCode::CREATED
-        );
-        let session_id = create_session(&app, "rk3568").await;
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/files"))
-                    .header("X-File-Path", "kernel.bin")
-                    .body(Body::from("kernel-image"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn session_file_endpoints_support_nested_paths() {
-        let app = test_router().await;
-        assert_eq!(
-            create_board(
-                &app,
-                serde_json::to_value(sample_board("nested-files")).unwrap()
-            )
-            .await,
-            StatusCode::CREATED
-        );
-        let session_id = create_session(&app, "rk3568").await;
-
-        let upload = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/v1/sessions/{session_id}/files"))
-                    .header("X-File-Path", "boot/Image")
-                    .body(Body::from("kernel-image"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(upload.status(), StatusCode::CREATED);
-        let upload_body = to_bytes(upload.into_body(), usize::MAX).await.unwrap();
-        let uploaded: serde_json::Value = serde_json::from_slice(&upload_body).unwrap();
-        assert_eq!(uploaded["filename"], "Image");
-        assert_eq!(
-            uploaded["relative_path"],
-            format!("ostool/sessions/{session_id}/boot/Image")
-        );
-        assert_eq!(
-            uploaded["tftp_url"],
-            format!("tftp://127.0.0.1/ostool/sessions/{session_id}/boot/Image")
-        );
-
-        let get_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/api/v1/sessions/{session_id}/files/boot/Image"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(get_response.status(), StatusCode::OK);
-
-        let delete_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/api/v1/sessions/{session_id}/files/boot/Image"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
-
-        let missing_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/api/v1/sessions/{session_id}/files/boot/Image"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(missing_response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn boot_profile_returns_static_uboot_network_with_resolved_fallbacks() {
-        let app = test_router().await;
-        assert_eq!(
-            create_board(
-                &app,
-                json!({
-                    "id": "static-profile",
-                    "board_type": "rk3568",
-                    "tags": [],
-                    "serial": null,
-                    "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
-                    "boot": {
-                        "kind": "uboot",
-                        "use_tftp": true,
-                        "network_mode": "static_ip",
-                        "board_ip": "192.168.10.20",
-                        "server_ip": "192.168.10.2",
-                        "netmask": "255.255.255.0",
-                        "gatewayip": "192.168.10.1"
-                    },
-                    "notes": null,
-                    "disabled": false
-                }),
-            )
-            .await,
-            StatusCode::CREATED
-        );
-        let session_id = create_session(&app, "rk3568").await;
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/api/v1/sessions/{session_id}/boot-profile"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let status = response.status();
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        assert_eq!(
-            status,
-            StatusCode::OK,
-            "response body: {}",
-            String::from_utf8_lossy(&body)
-        );
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(value["boot"]["network_mode"], "static_ip");
-        assert_eq!(value["boot"]["board_ip"], "192.168.10.20");
-        assert_eq!(value["boot"]["server_ip"], "192.168.10.2");
-        assert_eq!(value["boot"]["netmask"], "255.255.255.0");
-        assert_eq!(value["boot"]["gatewayip"], "192.168.10.1");
-        assert_eq!(value["server_ip"], "192.168.10.2");
-        assert_eq!(value["netmask"], "255.255.255.0");
-    }
-
-    #[test]
-    fn boot_profile_fills_static_uboot_network_from_resolved_server_network() {
-        let boot = BootConfig::Uboot(crate::config::UbootProfile {
-            use_tftp: true,
-            network_mode: UbootNetworkMode::StaticIp,
-            board_ip: Some("192.168.10.20".into()),
-            ..Default::default()
-        });
-        let resolved = ResolvedNetwork {
-            interface: Some("eth0".into()),
-            server_ip: Some("192.168.10.2".into()),
-            netmask: Some("255.255.255.0".into()),
-        };
-
-        let BootConfig::Uboot(profile) = boot_profile_with_resolved_network(boot, Some(&resolved))
-        else {
-            panic!("expected uboot profile");
-        };
-
-        assert_eq!(profile.server_ip.as_deref(), Some("192.168.10.2"));
-        assert_eq!(profile.netmask.as_deref(), Some("255.255.255.0"));
-    }
-
-    #[test]
-    fn normalize_board_upsert_request_trims_uboot_load_addresses() {
-        let request = AdminBoardUpsertRequest {
-            id: Some("demo".into()),
-            board_type: "demo".into(),
-            tags: vec![],
-            notes: None,
-            disabled: false,
-            serial: None,
-            power_management: PowerManagementConfig::Custom(CustomPowerManagement {
-                power_on_cmd: "echo on".into(),
-                power_off_cmd: "echo off".into(),
-            }),
-            boot: BootConfig::Uboot(crate::config::UbootProfile {
-                kernel_load_addr: Some(" 0x80200000 ".into()),
-                fit_load_addr: Some(" ".into()),
-                bootm_addr: Some(" 0x82200000 ".into()),
-                ..Default::default()
-            }),
-        };
-
-        let request = super::normalize_board_upsert_request(request).unwrap();
-        let BootConfig::Uboot(profile) = request.boot else {
-            panic!("expected uboot profile");
-        };
-
-        assert_eq!(profile.kernel_load_addr.as_deref(), Some("0x80200000"));
-        assert_eq!(profile.fit_load_addr, None);
-        assert_eq!(profile.bootm_addr.as_deref(), Some("0x82200000"));
-    }
-
-    #[tokio::test]
-    async fn session_file_list_supports_multiple_paths_and_overwrite() {
-        let app = test_router().await;
-        assert_eq!(
-            create_board(
-                &app,
-                serde_json::to_value(sample_board("list-files")).unwrap()
-            )
-            .await,
-            StatusCode::CREATED
-        );
-        let session_id = create_session(&app, "rk3568").await;
-
-        for (path, body) in [
-            ("boot/Image", "v1"),
-            ("boot/dtb/board.dtb", "dtb"),
-            ("boot/Image", "updated-kernel"),
-        ] {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("PUT")
-                        .uri(format!("/api/v1/sessions/{session_id}/files"))
-                        .header("X-File-Path", path)
-                        .body(Body::from(body))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::CREATED);
-        }
-
-        let list_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/api/v1/sessions/{session_id}/files"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(list_response.status(), StatusCode::OK);
-        let list_body = to_bytes(list_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let files: serde_json::Value = serde_json::from_slice(&list_body).unwrap();
-        assert_eq!(files.as_array().unwrap().len(), 2);
-        assert_eq!(
-            files[0]["relative_path"],
-            format!("ostool/sessions/{session_id}/boot/Image")
-        );
-        assert_eq!(files[0]["size"], "updated-kernel".len());
-        assert_eq!(
-            files[1]["relative_path"],
-            format!("ostool/sessions/{session_id}/boot/dtb/board.dtb")
-        );
-    }
-
-    #[tokio::test]
-    async fn session_file_upload_enforces_dynamic_limit() {
-        let app = test_router().await;
-        assert_eq!(
-            create_board(
-                &app,
-                serde_json::to_value(sample_board("limited-files")).unwrap()
-            )
-            .await,
-            StatusCode::CREATED
-        );
-        let session_id = create_session(&app, "rk3568").await;
-
-        let initial_upload = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/v1/sessions/{session_id}/files"))
-                    .header("X-File-Path", "boot/Image")
-                    .body(Body::from(vec![b'a'; 1024 * 1024]))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(initial_upload.status(), StatusCode::CREATED);
-
-        let update_limit = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/api/v1/admin/server-config")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"network":{"interface":"lo"},"upload_limits":{"session_file_max_mib":1}}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(update_limit.status(), StatusCode::OK);
-
-        let oversized = vec![b'b'; 1024 * 1024 + 1];
-        let oversized_upload = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/v1/sessions/{session_id}/files"))
-                    .header("X-File-Path", "boot/Image")
-                    .body(Body::from(oversized))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(oversized_upload.status(), StatusCode::PAYLOAD_TOO_LARGE);
-        let oversized_body = to_bytes(oversized_upload.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let oversized_value: serde_json::Value = serde_json::from_slice(&oversized_body).unwrap();
-        assert_eq!(oversized_value["code"], "payload_too_large");
-        assert_eq!(
-            oversized_value["message"],
-            "session file upload body exceeds limit of 1 MiB"
-        );
-    }
-
-    #[tokio::test]
-    async fn legacy_slot_file_route_is_removed() {
-        let app = test_router().await;
-        assert_eq!(
-            create_board(
-                &app,
-                serde_json::to_value(sample_board("legacy-files")).unwrap()
-            )
-            .await,
-            StatusCode::CREATED
-        );
-        let session_id = create_session(&app, "rk3568").await;
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/v1/sessions/{session_id}/files/kernel"))
-                    .body(Body::from("legacy"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn create_session_returns_created_when_board_is_available() {
-        let app = test_router().await;
-        let board = json!({
-            "id": "demo-01",
-            "board_type": "demo",
-            "tags": [],
-            "serial": {
-                "key": {
-                    "kind": "usb_path",
-                    "value": "/dev/serial/by-path/pci-0000:00:14.0-usb-0:10.4:1.0-port0"
-                },
-                "baud_rate": 115200
-            },
-            "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
-            "boot": { "kind": "uboot", "use_tftp": false },
-            "notes": null,
-            "disabled": false
-        });
-        assert_eq!(create_board(&app, board).await, StatusCode::CREATED);
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/sessions")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "board_type": "demo",
-                            "required_tags": [],
-                            "client_name": "test",
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["board_id"], "demo-01");
-        assert_eq!(value["serial_available"], true);
-    }
-
-    #[tokio::test]
-    async fn create_session_returns_conflict_without_waiting_when_pool_is_busy() {
-        let app = test_router().await;
-        let board = json!({
-            "id": "demo-01",
-            "board_type": "demo",
-            "tags": [],
-            "serial": {
-                "key": {
-                    "kind": "usb_path",
-                    "value": "/dev/serial/by-path/pci-0000:00:14.0-usb-0:10.4:1.0-port0"
-                },
-                "baud_rate": 115200
-            },
-            "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
-            "boot": { "kind": "uboot", "use_tftp": false },
-            "notes": null,
-            "disabled": false
-        });
-        assert_eq!(create_board(&app, board).await, StatusCode::CREATED);
-
-        let first = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/sessions")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "board_type": "demo",
-                            "required_tags": [],
-                            "client_name": "first",
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(first.status(), StatusCode::CREATED);
-
-        let second = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/sessions")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "board_type": "demo",
-                            "required_tags": [],
-                            "client_name": "second",
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(second.status(), StatusCode::CONFLICT);
-        let body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["code"], "conflict");
-        assert_eq!(value["message"], "no available board for type `demo`");
-    }
-
-    #[tokio::test]
-    async fn create_session_returns_not_found_when_board_type_is_missing() {
-        let app = test_router().await;
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/sessions")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "board_type": "missing-demo",
-                            "required_tags": [],
-                            "client_name": "test",
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["code"], "not_found");
-        assert_eq!(value["message"], "board type `missing-demo` not found");
-    }
-
-    #[tokio::test]
-    async fn create_session_rejects_empty_board_type() {
-        let app = test_router().await;
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/sessions")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "board_type": "",
-                            "required_tags": [],
-                            "client_name": "test",
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["code"], "bad_request");
-        assert_eq!(value["message"], "board_type must not be empty");
-    }
 }

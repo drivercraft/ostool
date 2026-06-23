@@ -24,6 +24,8 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = {workspace = true}
+argon2 = {version = "0.5", features = ["std"]}
+rand_core = {version = "0.6", features = ["getrandom"]}
 async-trait = "0.1"
 axum = {version = "0.8", features = ["ws"]}
 base64 = "0.22"
@@ -42,6 +44,7 @@ serde = {workspace = true, features = ["derive"]}
 serde_json = {workspace = true}
 serialport = "4.6"
 sha2 = "0.10"
+sqlx = {version = "0.8", default-features = false, features = ["runtime-tokio", "mysql", "sqlite"]}
 tftpd = "0.5"
 thiserror = {workspace = true}
 tokio = {workspace = true, features = ["full"]}

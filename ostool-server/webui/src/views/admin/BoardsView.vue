@@ -2,8 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { RouterLink } from "vue-router";
 
-import StatusPill from "@/components/StatusPill.vue";
-import { api } from "@/api/client";
+import { api } from "@/api";
 import { useUiStore } from "@/stores/ui";
 import type { BoardConfig, Session } from "@/types/api";
 
@@ -122,213 +121,97 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="page-grid">
-    <!-- Stats strip -->
-    <div class="stats-strip" v-if="!loading">
-      <div class="stats-chip">
-        <span class="stats-num">{{ boardStats.total }}</span>
-        <span class="stats-label">全部</span>
+  <div class="space-y-6">
+    <!-- Stats -->
+    <div v-if="!loading" class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div class="card p-4 text-center">
+        <div class="text-2xl font-bold text-slate-700">{{ boardStats.total }}</div>
+        <div class="text-xs text-slate-400 mt-0.5">全部</div>
       </div>
-      <div class="stats-chip stats-chip-good">
-        <span class="stats-num">{{ boardStats.available }}</span>
-        <span class="stats-label">可用</span>
+      <div class="card p-4 text-center border-emerald-200">
+        <div class="text-2xl font-bold text-emerald-600">{{ boardStats.available }}</div>
+        <div class="text-xs text-slate-400 mt-0.5">可用</div>
       </div>
-      <div class="stats-chip stats-chip-warn">
-        <span class="stats-num">{{ boardStats.leased }}</span>
-        <span class="stats-label">已租出</span>
+      <div class="card p-4 text-center border-amber-200">
+        <div class="text-2xl font-bold text-amber-600">{{ boardStats.leased }}</div>
+        <div class="text-xs text-slate-400 mt-0.5">已租出</div>
       </div>
-      <div class="stats-chip stats-chip-neutral">
-        <span class="stats-num">{{ boardStats.disabled }}</span>
-        <span class="stats-label">已禁用</span>
+      <div class="card p-4 text-center">
+        <div class="text-2xl font-bold text-slate-400">{{ boardStats.disabled }}</div>
+        <div class="text-xs text-slate-400 mt-0.5">已禁用</div>
+      </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
+      <div class="flex flex-wrap gap-2">
+        <select v-model="typeFilter" class="select-field w-auto min-w-[140px] text-sm py-2">
+          <option value="">全部型号</option>
+          <option v-for="type in boardTypes" :key="type" :value="type">{{ type }}</option>
+        </select>
+        <input v-model="tagFilter" type="text" placeholder="标签筛选..." class="input-field w-auto min-w-[120px] text-sm py-2" />
+        <select v-model="statusFilter" class="select-field w-auto min-w-[120px] text-sm py-2">
+          <option value="all">全部状态</option>
+          <option value="available">可用</option>
+          <option value="leased">已租出</option>
+          <option value="disabled">已禁用</option>
+        </select>
+      </div>
+      <div class="flex gap-2">
+        <button class="btn-secondary btn-sm" @click="loadBoards">刷新</button>
+        <RouterLink to="/admin/resources/boards/new" class="btn-primary btn-sm">新增开发板</RouterLink>
       </div>
     </div>
 
-    <div class="panel">
-      <div class="panel-heading">
-        <div>
-          <p class="eyebrow">配置目录</p>
-          <h3>开发板管理</h3>
-        </div>
-        <div class="toolbar-actions">
-          <button class="ghost-button" @click="loadBoards">刷新</button>
-          <RouterLink class="primary-button" to="/boards/new">新建开发板</RouterLink>
-        </div>
-      </div>
-
-      <!-- Filter bar -->
-      <div class="filter-bar">
-        <label class="field filter-field">
-          <span>板型</span>
-          <select v-model="typeFilter">
-            <option value="">全部</option>
-            <option v-for="boardType in boardTypes" :key="boardType" :value="boardType">
-              {{ boardType }}
-            </option>
-          </select>
-        </label>
-        <label class="field filter-field">
-          <span>标签</span>
-          <input v-model="tagFilter" placeholder="模糊搜索..." />
-        </label>
-        <label class="field filter-field">
-          <span>状态</span>
-          <select v-model="statusFilter">
-            <option value="all">全部</option>
-            <option value="available">可用</option>
-            <option value="leased">已租出</option>
-            <option value="disabled">已禁用</option>
-          </select>
-        </label>
-      </div>
-
-      <div v-if="loading" class="empty-state">
-        <div class="empty-state-icon">&#9641;</div>
-        正在加载开发板列表...
-      </div>
-      <div v-else-if="filteredBoards.length === 0" class="empty-state">
-        <div class="empty-state-icon">&#9641;</div>
-        当前没有符合筛选条件的开发板。
-      </div>
-
-      <!-- Board card grid -->
-      <div v-else class="board-card-grid">
-        <div v-for="board in filteredBoards" :key="board.id" class="board-card">
-          <div class="board-card-header">
-            <div class="board-card-id">
-              <span class="board-card-status-dot" :data-tone="boardTone(board)" />
-              <div>
-                <code>{{ board.id }}</code>
-                <div class="board-card-type">{{ board.board_type }}</div>
-              </div>
-            </div>
-            <StatusPill :tone="boardTone(board)" :label="boardStatus(board)" />
-          </div>
-
-          <div v-if="board.tags.length" class="board-card-tags">
-            <span v-for="tag in board.tags" :key="tag" class="tag-chip">{{ tag }}</span>
-          </div>
-
-          <div class="board-card-meta">
-            <div class="board-card-meta-item">
-              <span class="board-card-meta-label">串口</span>
-              <div v-if="board.serial" class="board-card-serial-mini">
-                <span class="serial-key-badge">{{ serialPrimaryLabel(board) }}</span>
-                <strong class="board-card-serial-value">{{ board.serial.key.value }}</strong>
-                <span class="board-card-muted">@ {{ board.serial.baud_rate }}</span>
-              </div>
-              <span v-else class="board-card-muted">未配置</span>
-            </div>
-            <div class="board-card-meta-item">
-              <span class="board-card-meta-label">启动方式</span>
-              <span>{{ board.boot.kind }}</span>
-            </div>
-          </div>
-
-          <div class="board-card-actions">
-            <RouterLink class="ghost-button compact-button" :to="`/boards/${board.id}`">编辑配置</RouterLink>
-            <button class="danger-button compact-button" @click="removeBoard(board.id)">删除</button>
-          </div>
-        </div>
-      </div>
+    <!-- Loading / Empty -->
+    <div v-if="loading" class="card p-12 flex flex-col items-center justify-center">
+      <div class="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mb-3" />
+      <p class="text-slate-400 text-sm">正在加载开发板列表...</p>
     </div>
-  </section>
+
+    <div v-else-if="filteredBoards.length === 0" class="card p-12 flex flex-col items-center justify-center text-center">
+      <div class="text-3xl mb-3 text-slate-300">&#9641;</div>
+      <p class="text-slate-500 text-sm">当前没有符合筛选条件的开发板</p>
+    </div>
+
+    <!-- Table -->
+    <div v-else class="table-container">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>开发板 ID</th>
+            <th>型号</th>
+            <th>标签</th>
+            <th>串口</th>
+            <th>状态</th>
+            <th class="text-right">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="board in filteredBoards" :key="board.id">
+            <td class="font-mono text-xs">{{ board.id }}</td>
+            <td class="font-medium">{{ board.board_type }}</td>
+            <td>
+              <div class="flex flex-wrap gap-1">
+                <span v-for="tag in board.tags" :key="tag" class="tag">{{ tag }}</span>
+                <span v-if="board.tags.length === 0" class="text-xs text-slate-400">-</span>
+              </div>
+            </td>
+            <td class="text-xs text-slate-500">{{ serialPrimaryLabel(board) || '-' }}</td>
+            <td>
+              <span :class="boardTone(board) === 'good' ? 'pill-success' : boardTone(board) === 'warn' ? 'pill-warning' : 'pill-neutral'">
+                {{ boardStatus(board) }}
+              </span>
+            </td>
+            <td class="text-right">
+              <div class="flex items-center justify-end gap-1">
+                <RouterLink :to="`/admin/resources/boards/${board.id}/edit`" class="btn-ghost btn-sm text-xs">编辑</RouterLink>
+                <button class="btn-ghost btn-sm text-xs text-red-500 hover:text-red-600 hover:bg-red-50" @click="removeBoard(board.id)">删除</button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
 </template>
-
-<style scoped>
-.stats-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.stats-chip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 12px 14px;
-  border-radius: 8px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-}
-
-.stats-chip-good {
-  border-color: rgba(18, 97, 70, 0.18);
-  background: var(--good-soft);
-}
-
-.stats-chip-warn {
-  border-color: rgba(157, 101, 15, 0.18);
-  background: var(--warn-soft);
-}
-
-.stats-chip-neutral {
-  border-color: rgba(102, 115, 109, 0.18);
-  background: var(--neutral-soft);
-}
-
-.stats-num {
-  font-size: 1.2rem;
-  font-weight: 700;
-}
-
-.stats-label {
-  font-size: 0.84rem;
-  color: var(--muted);
-}
-
-.filter-bar {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 18px;
-  padding: 14px;
-  border-radius: 8px;
-  background: var(--surface-muted);
-  border: 1px solid rgba(217, 227, 223, 0.9);
-}
-
-.filter-field {
-  min-width: 0;
-}
-
-.filter-field span {
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-}
-
-.filter-field select,
-.filter-field input {
-  font-size: 0.88rem;
-}
-
-.board-card-serial-value {
-  min-width: 0;
-  font-size: 0.88rem;
-  line-break: anywhere;
-}
-
-.board-card-muted {
-  color: var(--muted);
-  font-size: 0.82rem;
-  line-break: anywhere;
-}
-
-@media (max-width: 860px) {
-  .stats-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .filter-bar {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 420px) {
-  .stats-strip {
-    grid-template-columns: 1fr;
-  }
-}
-</style>

@@ -11,12 +11,13 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, mpsc};
 
 use crate::{
+    auth::{AuthService, SharedAuthService},
     board_pool::{BoardAllocationStatus, allocate_board},
-    board_store::fs::FileBoardStore,
-    config::{BoardConfig, PowerManagementConfig, ServerConfig},
+    config::{BoardConfig, DatabaseConfig, PowerManagementConfig, ServerConfig},
     dtb_store::DtbStore,
     power::{PowerAction, PowerActionError, execute_power_action_for_board},
     session::{Session, SessionState, SessionStopReason},
+    storage::{DynStorage, mysql::MysqlStorage, sqlite::SqliteStorage},
     tftp::service::TftpManager,
 };
 
@@ -92,9 +93,10 @@ pub struct AppState {
     pub boards: Arc<RwLock<BTreeMap<String, BoardConfig>>>,
     pub board_runtimes: Arc<RwLock<BTreeMap<String, BoardRuntimeState>>>,
     pub sessions: Arc<RwLock<BTreeMap<String, Arc<SessionState>>>>,
-    pub board_store: Arc<FileBoardStore>,
     pub dtb_store: Arc<DtbStore>,
     pub tftp_manager: Arc<RwLock<Arc<dyn TftpManager>>>,
+    pub storage: DynStorage,
+    pub auth: SharedAuthService,
     release_tx: mpsc::UnboundedSender<ReleaseJob>,
 }
 
@@ -103,13 +105,33 @@ pub async fn build_app_state(
     config: ServerConfig,
     tftp_manager: Arc<dyn TftpManager>,
 ) -> anyhow::Result<AppState> {
-    let board_store = Arc::new(FileBoardStore::new(config.board_dir.clone()));
-    board_store.ensure_dir().await?;
     let dtb_store = Arc::new(DtbStore::new(config.dtb_dir.clone()));
     dtb_store.ensure_dir().await?;
-    let boards = board_store.load_all().await?;
+    let storage: DynStorage = match &config.database {
+        DatabaseConfig::Mysql(mysql) => {
+            let storage = MysqlStorage::connect(&mysql.url).await?;
+            if config.sample_data.enabled {
+                storage.seed_sample_data().await?;
+            }
+            Arc::new(storage)
+        }
+        DatabaseConfig::Sqlite(sqlite) => {
+            let storage = SqliteStorage::connect(&sqlite.url).await?;
+            if config.sample_data.enabled {
+                storage.seed_sample_data().await?;
+            }
+            Arc::new(storage)
+        }
+    };
+    let boards = storage
+        .list_board_configs()
+        .await?
+        .into_iter()
+        .map(|board| (board.id.clone(), board))
+        .collect::<BTreeMap<_, _>>();
     let board_runtimes = initial_board_runtimes(&boards);
     let (release_tx, release_rx) = mpsc::unbounded_channel();
+    let auth = Arc::new(AuthService::new(storage.clone()));
 
     let state = AppState {
         config_path: Arc::new(config_path),
@@ -117,9 +139,10 @@ pub async fn build_app_state(
         boards: Arc::new(RwLock::new(boards)),
         board_runtimes: Arc::new(RwLock::new(board_runtimes)),
         sessions: Arc::new(RwLock::new(BTreeMap::new())),
-        board_store,
         dtb_store,
         tftp_manager: Arc::new(RwLock::new(tftp_manager)),
+        storage,
+        auth,
         release_tx,
     };
 
@@ -286,16 +309,19 @@ impl AppState {
         execute_power_action_for_board(board, action).await
     }
 
-    pub fn board_path(&self, board_id: &str) -> std::path::PathBuf {
-        self.board_store.path_for_id(board_id)
-    }
-
     pub async fn ensure_data_dirs(&self) -> anyhow::Result<()> {
         let config = self.config.read().await.clone();
         tokio::fs::create_dir_all(&config.data_dir).await?;
-        tokio::fs::create_dir_all(&config.board_dir).await?;
         tokio::fs::create_dir_all(&config.dtb_dir).await?;
         tokio::fs::create_dir_all(config.tftp.root_dir()).await?;
+        if let DatabaseConfig::Sqlite(sqlite) = &config.database
+            && let Some(path) = sqlite.url.strip_prefix("sqlite:")
+            && path != ":memory:"
+            && let Some(parent) = std::path::Path::new(path).parent()
+            && !parent.as_os_str().is_empty()
+        {
+            tokio::fs::create_dir_all(parent).await?;
+        }
         Ok(())
     }
 
@@ -805,6 +831,8 @@ mod tests {
             data_dir: root.join("data"),
             board_dir: root.join("boards"),
             dtb_dir: root.join("dtbs"),
+            database: crate::DatabaseConfig::sqlite_with_path(root.join("ostool.db")),
+            sample_data: crate::config::SampleDataConfig { enabled: false },
             network: crate::TftpNetworkConfig {
                 interface: "lo".into(),
             },
@@ -902,6 +930,8 @@ mod tests {
             data_dir: root.join("data"),
             board_dir: root.join("boards"),
             dtb_dir: root.join("dtbs"),
+            database: crate::DatabaseConfig::sqlite_with_path(root.join("ostool.db")),
+            sample_data: crate::config::SampleDataConfig { enabled: false },
             network: crate::TftpNetworkConfig {
                 interface: "lo".into(),
             },

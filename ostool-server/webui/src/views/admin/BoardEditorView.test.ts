@@ -27,7 +27,7 @@ vi.mock("vue-router", () => ({
   useRouter: () => ({ push }),
 }));
 
-vi.mock("@/api/client", () => ({
+vi.mock("@/api", () => ({
   api: {
     listSerialPorts,
     listDtbs,
@@ -258,7 +258,7 @@ describe("BoardEditorView", () => {
       },
     });
     expect(uiStore.setSuccess).toHaveBeenCalledWith("已保存开发板 rk3568-1");
-    expect(push).toHaveBeenCalledWith("/boards/rk3568-1");
+    expect(push).toHaveBeenCalledWith("/admin/resources/boards/rk3568-1");
   });
 
   it("blocks saving static IP mode without a board IP", async () => {
@@ -409,7 +409,7 @@ describe("BoardEditorView", () => {
     await flushPromises();
 
     expect(updateBoard).toHaveBeenCalledWith("demo-board", expect.objectContaining({ id: null }));
-    expect(push).toHaveBeenCalledWith("/boards/demo-board");
+    expect(push).toHaveBeenCalledWith("/admin/resources/boards/demo-board");
   });
 
   it("saves relay power management using a stable serial key", async () => {

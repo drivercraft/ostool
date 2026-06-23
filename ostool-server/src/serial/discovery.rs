@@ -7,7 +7,7 @@ use std::{
 use nusb::MaybeFuture;
 
 use crate::{
-    api::models::SerialPortSummary,
+    api::dto::SerialPortSummary,
     config::{SerialConfig, SerialPortKey, SerialPortKeyKind},
 };
 

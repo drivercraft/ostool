@@ -15,7 +15,7 @@ const uiStore = {
 
 vi.stubGlobal("confirm", vi.fn(() => true));
 
-vi.mock("@/api/client", () => ({
+vi.mock("@/api", () => ({
   api: {
     listDtbs,
     createDtb,

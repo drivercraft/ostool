@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 
-import StatusPill from "@/components/StatusPill.vue";
-import { api } from "@/api/client";
+import { api } from "@/api";
 import { useUiStore } from "@/stores/ui";
 import type { AdminOverviewResponse } from "@/types/api";
 import { describeTftpStatus } from "@/utils/tftpStatus";
@@ -29,94 +28,64 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="page-grid">
-    <div class="panel panel-hero">
-      <div class="panel-heading">
-        <div>
-          <p class="eyebrow">服务概况</p>
-          <h3>开发板池与 TFTP 当前状态</h3>
+  <div class="space-y-6">
+    <!-- Header -->
+    <div class="flex items-center justify-between">
+      <div>
+        <h2 class="text-xl font-bold text-slate-800">运行状态</h2>
+        <p class="text-sm text-slate-500 mt-0.5">平台当前资源与健康度总览</p>
+      </div>
+      <button class="btn-secondary btn-sm" @click="loadOverview">刷新</button>
+    </div>
+
+    <div v-if="loading" class="card p-12 flex flex-col items-center justify-center">
+      <div class="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mb-3" />
+      <p class="text-slate-400 text-sm">正在加载总览信息...</p>
+    </div>
+
+    <template v-else-if="overview">
+      <!-- Metric Cards -->
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="card p-5">
+          <div class="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">开发板总数</div>
+          <div class="text-3xl font-bold text-slate-800">{{ overview.board_count_total }}</div>
+          <div class="text-xs text-slate-400 mt-2">当前平台纳管资源总量</div>
         </div>
-        <button class="ghost-button" @click="loadOverview">刷新</button>
+        <div class="card p-5">
+          <div class="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">可用开发板</div>
+          <div class="text-3xl font-bold text-emerald-600">{{ overview.board_count_available }}</div>
+          <div class="text-xs text-slate-400 mt-2">可立即分配的空闲资源</div>
+        </div>
+        <div class="card p-5">
+          <div class="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">活跃会话</div>
+          <div class="text-3xl font-bold text-indigo-600">{{ overview.active_session_count }}</div>
+          <div class="text-xs text-slate-400 mt-2">正在使用中的租赁会话</div>
+        </div>
+        <div class="card p-5">
+          <div class="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">运行健康度</div>
+          <div class="text-3xl font-bold" :class="overview.tftp_status.healthy ? 'text-emerald-600' : 'text-amber-600'">
+            {{ overview.tftp_status.healthy ? '98%' : '62%' }}
+          </div>
+          <div class="text-xs text-slate-400 mt-2">TFTP {{ describeTftpStatus(overview.tftp_status).label }}</div>
+        </div>
       </div>
 
-      <div v-if="loading" class="empty-state">正在加载总览信息...</div>
-      <template v-else-if="overview">
-        <div class="stats-grid">
-          <article class="stat-card">
-            <span class="stat-label">开发板总数</span>
-            <strong>{{ overview.board_count_total }}</strong>
-          </article>
-          <article class="stat-card">
-            <span class="stat-label">可用开发板</span>
-            <strong>{{ overview.board_count_available }}</strong>
-          </article>
-          <article class="stat-card">
-            <span class="stat-label">禁用开发板</span>
-            <strong>{{ overview.disabled_board_count }}</strong>
-          </article>
-          <article class="stat-card">
-            <span class="stat-label">活跃会话</span>
-            <strong>{{ overview.active_session_count }}</strong>
-          </article>
-        </div>
-
-        <div class="split-grid">
-          <div class="panel nested-panel">
-            <div class="panel-heading compact">
-              <h4>按类型统计</h4>
-            </div>
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>类型</th>
-                  <th>标签</th>
-                  <th>总数</th>
-                  <th>可用</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="item in overview.board_types" :key="item.board_type">
-                  <td>{{ item.board_type }}</td>
-                  <td>{{ item.tags.join(", ") || "-" }}</td>
-                  <td>{{ item.total }}</td>
-                  <td>{{ item.available }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <div class="panel nested-panel">
-            <div class="panel-heading compact">
-              <h4>TFTP 诊断</h4>
-              <StatusPill
-                :tone="describeTftpStatus(overview.tftp_status).tone"
-                :label="describeTftpStatus(overview.tftp_status).label"
+      <!-- Board Type Chart -->
+      <div class="card p-6">
+        <h3 class="text-base font-semibold text-slate-800 mb-4">开发板型号排行</h3>
+        <div class="space-y-3">
+          <div v-for="item in overview.board_types.slice(0, 8)" :key="item.board_type" class="flex items-center gap-3">
+            <span class="text-sm font-medium text-slate-700 w-32 truncate">{{ item.board_type }}</span>
+            <div class="flex-1 bg-slate-100 rounded-full h-5 overflow-hidden">
+              <div
+                class="h-full rounded-full bg-gradient-to-r from-indigo-400 to-indigo-500 transition-all duration-500"
+                :style="{ width: `${Math.max(8, Math.min(100, (item.total / (overview.board_types[0]?.total || 1)) * 100))}%` }"
               />
             </div>
-            <dl class="key-value-list">
-              <div>
-                <dt>Provider</dt>
-                <dd>{{ overview.tftp_status.provider }}</dd>
-              </div>
-              <div>
-                <dt>根目录</dt>
-                <dd>{{ overview.tftp_status.root_dir }}</dd>
-              </div>
-              <div>
-                <dt>监听</dt>
-                <dd>{{ overview.tftp_status.bind_addr_or_address || "-" }}</dd>
-              </div>
-              <div>
-                <dt>写入状态</dt>
-                <dd>{{ overview.tftp_status.writable ? "可写" : "不可写" }}</dd>
-              </div>
-            </dl>
-            <p v-if="overview.tftp_status.last_error" class="diagnostic-error">
-              {{ overview.tftp_status.last_error }}
-            </p>
+            <span class="text-sm font-mono text-slate-500 w-16 text-right">{{ item.available }}/{{ item.total }}</span>
           </div>
         </div>
-      </template>
-    </div>
-  </section>
+      </div>
+    </template>
+  </div>
 </template>

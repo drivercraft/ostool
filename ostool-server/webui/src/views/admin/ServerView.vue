@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 
-import { api } from "@/api/client";
+import { api } from "@/api";
 import { useUiStore } from "@/stores/ui";
 import type { AdminServerConfigResponse, NetworkInterfaceSummary } from "@/types/api";
 
@@ -52,14 +52,25 @@ async function saveConfig() {
     return;
   }
   config.value.editable.upload_limits.session_file_max_mib = Math.trunc(sessionFileMaxMib);
+  config.value.site.default_lease_minutes = Math.trunc(Number(config.value.site.default_lease_minutes));
+  config.value.site.max_lease_minutes = Math.trunc(Number(config.value.site.max_lease_minutes));
+  if (config.value.site.default_lease_minutes < 1) {
+    ui.setError("默认租赁时长必须大于 0 分钟");
+    return;
+  }
+  if (config.value.site.max_lease_minutes < config.value.site.default_lease_minutes) {
+    ui.setError("最大租赁时长不能小于默认租赁时长");
+    return;
+  }
 
   saving.value = true;
   try {
     config.value = await api.updateServerConfig({
       network: config.value.editable.network,
       upload_limits: config.value.editable.upload_limits,
+      site: config.value.site,
     });
-    ui.setSuccess("已保存 Server 安全配置");
+    ui.setSuccess("已保存系统设置");
   } catch (error) {
     ui.setError((error as Error).message);
   } finally {
@@ -101,6 +112,66 @@ onMounted(() => {
       <div v-if="loading" class="empty-state">正在加载 server 配置...</div>
       <template v-else-if="config">
         <div class="split-grid">
+          <section class="panel nested-panel">
+            <div class="panel-heading compact">
+              <h4>站点配置</h4>
+            </div>
+            <div class="form-grid">
+              <label class="field">
+                <span>站点名称</span>
+                <input v-model="config.site.site_name" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>站点副标题</span>
+                <input v-model="config.site.site_subtitle" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Logo URL</span>
+                <input v-model="config.site.logo_url" placeholder="可选" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Favicon URL</span>
+                <input v-model="config.site.favicon_url" placeholder="可选" autocomplete="off" />
+              </label>
+              <label class="field wide-field">
+                <span>平台公告</span>
+                <textarea v-model="config.site.announcement" rows="3" placeholder="可选" />
+              </label>
+              <label class="check-row">
+                <input v-model="config.site.maintenance_mode" type="checkbox" />
+                <span>维护模式</span>
+              </label>
+            </div>
+          </section>
+
+          <section class="panel nested-panel">
+            <div class="panel-heading compact">
+              <h4>租赁策略</h4>
+            </div>
+            <div class="form-grid">
+              <label class="check-row">
+                <input v-model="config.site.self_service_enabled" type="checkbox" />
+                <span>允许普通用户自助租赁</span>
+              </label>
+              <label class="field">
+                <span>默认租赁时长（分钟）</span>
+                <input v-model.number="config.site.default_lease_minutes" type="number" min="1" step="1" />
+              </label>
+              <label class="field">
+                <span>最大租赁时长（分钟）</span>
+                <input v-model.number="config.site.max_lease_minutes" type="number" min="1" step="1" />
+              </label>
+              <label class="field">
+                <span>支持邮箱</span>
+                <input v-model="config.site.support_email" placeholder="可选" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>支持链接</span>
+                <input v-model="config.site.support_url" placeholder="可选" autocomplete="off" />
+              </label>
+            </div>
+          </section>
+
           <section class="panel nested-panel">
             <div class="panel-heading compact">
               <h4>只读信息</h4>

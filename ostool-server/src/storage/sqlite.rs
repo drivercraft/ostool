@@ -1,0 +1,1660 @@
+use std::path::Path;
+
+use anyhow::Context;
+use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use rand_core::OsRng;
+use sqlx::{Row, SqlitePool, sqlite::SqliteConnectOptions};
+use uuid::Uuid;
+
+use crate::storage::{
+    AuditLog, AuditLogRepository, AuthSession, AuthSessionRepository, BoardConfigRepository,
+    DtbMetadata, DtbMetadataRepository, Lease, LeaseRepository, LeaseState, NewAuditLog, NewLease,
+    NewRole, NewUser, Permission, RbacRepository, Role, SiteSettingValue, SiteSettings,
+    SiteSettingsRepository, UpsertDtbMetadata, User, UserProfile, UserRepository,
+    default_site_setting_rows, parse_time, site_settings_from_values, site_settings_to_values,
+};
+use crate::{
+    BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, PxeProfile,
+    UbootNetworkMode, UbootProfile, UefiBootArch, UefiHttpProfile,
+};
+
+const MIGRATION_RBAC_PLATFORM: &str = "0001_rbac_platform";
+const MIGRATION_BOARD_CONFIGS: &str = "0002_board_configs";
+const MIGRATION_DTB_AUDIT: &str = "0003_dtb_audit";
+const MIGRATION_STANDARD_FIELDS: &str = "0004_standard_profile_fields";
+const MIGRATION_SITE_SETTINGS: &str = "0005_site_settings";
+
+const BUILTIN_PERMISSIONS: &[(&str, &str, &str)] = &[
+    ("overview.read", "查看概览", "查看站点运行情况和统计数据"),
+    (
+        "resources.manage",
+        "管理资源",
+        "管理开发板、DTB 和 TFTP 配置",
+    ),
+    ("rentals.manage", "管理租赁", "查看和释放租赁、会话租约"),
+    ("users.manage", "管理用户", "创建、禁用、更新用户和重置密码"),
+    (
+        "roles.manage",
+        "管理角色权限",
+        "创建、修改和删除角色权限配置",
+    ),
+    ("settings.manage", "管理系统设置", "修改服务器运行配置"),
+];
+
+#[derive(Clone)]
+pub struct SqliteStorage {
+    pool: SqlitePool,
+}
+
+impl SqliteStorage {
+    pub async fn connect(url: &str) -> anyhow::Result<Self> {
+        ensure_sqlite_parent_dir(url)?;
+        let options = url
+            .parse::<SqliteConnectOptions>()
+            .with_context(|| format!("failed to parse SQLite database URL `{url}`"))?
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(options)
+            .await
+            .with_context(|| format!("failed to connect SQLite database `{url}`"))?;
+        let storage = Self { pool };
+        storage.migrate().await?;
+        Ok(storage)
+    }
+
+    async fn migrate(&self) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version TEXT PRIMARY KEY NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        if !self.is_migration_applied(MIGRATION_RBAC_PLATFORM).await? {
+            self.migrate_schema().await?;
+            self.mark_migration_applied(MIGRATION_RBAC_PLATFORM).await?;
+        }
+        if !self.is_migration_applied(MIGRATION_BOARD_CONFIGS).await? {
+            self.migrate_board_config_tables().await?;
+            self.mark_migration_applied(MIGRATION_BOARD_CONFIGS).await?;
+        }
+        if !self.is_migration_applied(MIGRATION_DTB_AUDIT).await? {
+            self.migrate_dtb_audit_tables().await?;
+            self.mark_migration_applied(MIGRATION_DTB_AUDIT).await?;
+        }
+        if !self.is_migration_applied(MIGRATION_STANDARD_FIELDS).await? {
+            self.migrate_standard_fields().await?;
+            self.mark_migration_applied(MIGRATION_STANDARD_FIELDS)
+                .await?;
+        }
+        if !self.is_migration_applied(MIGRATION_SITE_SETTINGS).await? {
+            self.migrate_site_settings().await?;
+            self.mark_migration_applied(MIGRATION_SITE_SETTINGS).await?;
+        }
+        Ok(())
+    }
+
+    async fn is_migration_applied(&self, version: &str) -> anyhow::Result<bool> {
+        let applied = sqlx::query("SELECT version FROM schema_migrations WHERE version = ?")
+            .bind(version)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(applied.is_some())
+    }
+
+    async fn mark_migration_applied(&self, version: &str) -> anyhow::Result<()> {
+        sqlx::query("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)")
+            .bind(version)
+            .bind(Utc::now().to_rfc3339())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn migrate_schema(&self) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY NOT NULL,
+                username TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                email TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                disabled INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        self.migrate_rbac_tables().await?;
+        self.migrate_board_config_tables().await?;
+        self.migrate_dtb_audit_tables().await?;
+        self.migrate_site_settings().await?;
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                id TEXT PRIMARY KEY NOT NULL,
+                user_id TEXT NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS leases (
+                id TEXT PRIMARY KEY NOT NULL,
+                user_id TEXT NOT NULL,
+                session_id TEXT NOT NULL UNIQUE,
+                board_id TEXT NOT NULL,
+                board_type TEXT NOT NULL,
+                required_tags_json TEXT NOT NULL,
+                state TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                released_at TEXT,
+                failure_message TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_leases_user_id ON leases(user_id)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_auth_sessions_token ON auth_sessions(token_hash)",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn migrate_board_config_tables(&self) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS board_configs (
+                id TEXT PRIMARY KEY NOT NULL,
+                board_type TEXT NOT NULL,
+                config_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_board_configs_board_type ON board_configs(board_type)",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn migrate_rbac_tables(&self) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS permissions (
+                id TEXT PRIMARY KEY NOT NULL,
+                code TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS roles (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                `system` INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS role_permissions (
+                role_id TEXT NOT NULL,
+                permission_id TEXT NOT NULL,
+                PRIMARY KEY(role_id, permission_id),
+                FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE,
+                FOREIGN KEY(permission_id) REFERENCES permissions(id) ON DELETE CASCADE
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS user_roles (
+                user_id TEXT NOT NULL,
+                role_id TEXT NOT NULL,
+                PRIMARY KEY(user_id, role_id),
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        self.seed_builtin_rbac().await?;
+        Ok(())
+    }
+
+    async fn migrate_dtb_audit_tables(&self) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS dtb_files (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL UNIQUE,
+                storage_path TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                sha256 TEXT NOT NULL,
+                description TEXT,
+                uploaded_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id TEXT PRIMARY KEY NOT NULL,
+                actor_user_id TEXT,
+                actor_username TEXT,
+                action TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                target_id TEXT,
+                outcome TEXT NOT NULL,
+                ip_address TEXT,
+                user_agent TEXT,
+                request_id TEXT,
+                metadata_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_type, target_id)",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn migrate_standard_fields(&self) -> anyhow::Result<()> {
+        self.add_column_if_missing("users", "nickname", "TEXT")
+            .await?;
+        self.add_column_if_missing("users", "avatar_url", "TEXT")
+            .await?;
+        self.add_column_if_missing("users", "phone", "TEXT").await?;
+        self.add_column_if_missing("users", "department", "TEXT")
+            .await?;
+        self.add_column_if_missing("users", "title", "TEXT").await?;
+        self.add_column_if_missing("users", "last_login_at", "TEXT")
+            .await?;
+        self.add_column_if_missing("auth_sessions", "ip_address", "TEXT")
+            .await?;
+        self.add_column_if_missing("auth_sessions", "user_agent", "TEXT")
+            .await?;
+        self.add_column_if_missing("auth_sessions", "last_seen_at", "TEXT")
+            .await?;
+        self.add_column_if_missing("auth_sessions", "revoked_at", "TEXT")
+            .await?;
+        self.add_column_if_missing("leases", "updated_at", "TEXT")
+            .await?;
+        sqlx::query("UPDATE leases SET updated_at = created_at WHERE updated_at IS NULL")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn migrate_site_settings(&self) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS site_settings (
+                key TEXT PRIMARY KEY NOT NULL,
+                value_json TEXT NOT NULL,
+                value_type TEXT NOT NULL,
+                group_name TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                readonly INTEGER NOT NULL DEFAULT 0,
+                sensitive INTEGER NOT NULL DEFAULT 0,
+                updated_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        self.seed_site_settings().await?;
+        Ok(())
+    }
+
+    async fn seed_site_settings(&self) -> anyhow::Result<()> {
+        for setting in default_site_setting_rows() {
+            sqlx::query(
+                r#"
+                INSERT OR IGNORE INTO site_settings
+                    (key, value_json, value_type, group_name, name, description, readonly, sensitive, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(setting.key)
+            .bind(setting.value_json)
+            .bind(setting.value_type)
+            .bind(setting.group_name)
+            .bind(setting.name)
+            .bind(setting.description)
+            .bind(if setting.readonly { 1 } else { 0 })
+            .bind(if setting.sensitive { 1 } else { 0 })
+            .bind(setting.created_at)
+            .bind(setting.updated_at)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn add_column_if_missing(
+        &self,
+        table: &str,
+        column: &str,
+        definition: &str,
+    ) -> anyhow::Result<()> {
+        let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
+            .fetch_all(&self.pool)
+            .await?;
+        let exists = rows.iter().any(|row| {
+            row.try_get::<String, _>("name")
+                .is_ok_and(|name| name == column)
+        });
+        if !exists {
+            sqlx::query(&format!(
+                "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            ))
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn seed_builtin_rbac(&self) -> anyhow::Result<()> {
+        let now = Utc::now().to_rfc3339();
+        for (code, name, description) in BUILTIN_PERMISSIONS {
+            sqlx::query(
+                r#"
+                INSERT OR IGNORE INTO permissions (id, code, name, description, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(code)
+            .bind(name)
+            .bind(description)
+            .bind(&now)
+            .bind(&now)
+            .execute(&self.pool)
+            .await?;
+        }
+
+        for (name, display_name, description, system) in [
+            ("admin", "管理员", "拥有平台全部管理权限", 1),
+            ("user", "普通用户", "可登录平台并租赁开发板", 1),
+        ] {
+            sqlx::query(
+                r#"
+                INSERT OR IGNORE INTO roles (id, name, display_name, description, `system`, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(name)
+            .bind(display_name)
+            .bind(description)
+            .bind(system)
+            .bind(&now)
+            .bind(&now)
+            .execute(&self.pool)
+            .await?;
+        }
+
+        let admin_role_id: String = sqlx::query("SELECT id FROM roles WHERE name = 'admin'")
+            .fetch_one(&self.pool)
+            .await?
+            .try_get("id")?;
+        let user_role_id: String = sqlx::query("SELECT id FROM roles WHERE name = 'user'")
+            .fetch_one(&self.pool)
+            .await?
+            .try_get("id")?;
+        let permissions = sqlx::query("SELECT id, code FROM permissions")
+            .fetch_all(&self.pool)
+            .await?;
+        for row in &permissions {
+            let permission_id: String = row.try_get("id")?;
+            sqlx::query(
+                "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+            )
+            .bind(&admin_role_id)
+            .bind(&permission_id)
+            .execute(&self.pool)
+            .await?;
+            let code: String = row.try_get("code")?;
+            if code == "overview.read" {
+                sqlx::query(
+                    "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                )
+                .bind(&user_role_id)
+                .bind(&permission_id)
+                .execute(&self.pool)
+                .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn seed_sample_data(&self) -> anyhow::Result<()> {
+        self.seed_sample_boards().await?;
+        self.seed_sample_users().await?;
+        Ok(())
+    }
+
+    async fn seed_sample_boards(&self) -> anyhow::Result<()> {
+        let row = sqlx::query("SELECT COUNT(*) AS count FROM board_configs")
+            .fetch_one(&self.pool)
+            .await?;
+        let count: i64 = row.try_get("count")?;
+        if count > 0 {
+            return Ok(());
+        }
+
+        for board in sample_boards() {
+            self.create_board_config(board).await?;
+        }
+        Ok(())
+    }
+
+    async fn seed_sample_users(&self) -> anyhow::Result<()> {
+        for user in sample_users() {
+            if self.find_user_by_username(user.username).await?.is_some() {
+                continue;
+            }
+            self.create_user(NewUser {
+                username: user.username.into(),
+                display_name: user.display_name.into(),
+                email: user.email.into(),
+                password_hash: sample_password_hash()?,
+                profile: UserProfile::default(),
+                role_names: vec!["user".into()],
+            })
+            .await?;
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl SiteSettingsRepository for SqliteStorage {
+    async fn get_site_settings(&self) -> anyhow::Result<SiteSettings> {
+        self.seed_site_settings().await?;
+        let rows = sqlx::query("SELECT key, value_json, updated_at FROM site_settings")
+            .fetch_all(&self.pool)
+            .await?;
+        let values = rows
+            .into_iter()
+            .map(|row| {
+                Ok(SiteSettingValue {
+                    key: row.try_get("key")?,
+                    value_json: row.try_get("value_json")?,
+                    updated_at: row.try_get("updated_at")?,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        site_settings_from_values(values)
+    }
+
+    async fn update_site_settings(
+        &self,
+        mut settings: SiteSettings,
+        updated_by: Option<String>,
+    ) -> anyhow::Result<SiteSettings> {
+        settings.validate()?;
+        settings.updated_at = Utc::now();
+        self.seed_site_settings().await?;
+        let updated_at = settings.updated_at.to_rfc3339();
+        for (key, value_json) in site_settings_to_values(&settings)? {
+            sqlx::query(
+                r#"
+                UPDATE site_settings
+                SET value_json = ?, updated_by = ?, updated_at = ?
+                WHERE key = ?
+                "#,
+            )
+            .bind(value_json)
+            .bind(&updated_by)
+            .bind(&updated_at)
+            .bind(key)
+            .execute(&self.pool)
+            .await?;
+        }
+        self.get_site_settings().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::storage::{AuditLogRepository, DtbMetadataRepository};
+
+    #[tokio::test]
+    async fn sqlite_dtb_metadata_and_audit_logs_round_trip() {
+        let dir = tempdir().unwrap();
+        let storage = SqliteStorage::connect(&format!(
+            "sqlite:{}",
+            dir.path().join("ostool.db").display()
+        ))
+        .await
+        .unwrap();
+
+        let dtb = storage
+            .upsert_dtb_metadata(UpsertDtbMetadata {
+                name: "board.dtb".into(),
+                storage_path: "board.dtb".into(),
+                size_bytes: 3,
+                sha256: "abc123".into(),
+                description: None,
+                uploaded_by: Some("admin".into()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(dtb.name, "board.dtb");
+        assert_eq!(dtb.sha256, "abc123");
+
+        storage
+            .create_audit_log(NewAuditLog {
+                actor_user_id: None,
+                actor_username: Some("admin".into()),
+                action: "dtb.create".into(),
+                target_type: "dtb_file".into(),
+                target_id: Some("board.dtb".into()),
+                outcome: "success".into(),
+                ip_address: None,
+                user_agent: None,
+                request_id: None,
+                metadata_json: "{}".into(),
+            })
+            .await
+            .unwrap();
+        let logs = storage.list_audit_logs(10).await.unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].action, "dtb.create");
+    }
+}
+
+#[async_trait]
+impl DtbMetadataRepository for SqliteStorage {
+    async fn upsert_dtb_metadata(
+        &self,
+        metadata: UpsertDtbMetadata,
+    ) -> anyhow::Result<DtbMetadata> {
+        let existing = self.find_dtb_metadata_by_name(&metadata.name).await?;
+        let now = Utc::now().to_rfc3339();
+        if let Some(existing) = existing {
+            sqlx::query(
+                r#"
+                UPDATE dtb_files
+                SET storage_path = ?, size_bytes = ?, sha256 = ?, description = ?, uploaded_by = ?, updated_at = ?
+                WHERE id = ?
+                "#,
+            )
+            .bind(metadata.storage_path)
+            .bind(metadata.size_bytes)
+            .bind(metadata.sha256)
+            .bind(metadata.description)
+            .bind(metadata.uploaded_by)
+            .bind(&now)
+            .bind(&existing.id)
+            .execute(&self.pool)
+            .await?;
+            self.find_dtb_metadata_by_name(&existing.name)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("updated DTB metadata `{}` disappeared", existing.name)
+                })
+        } else {
+            let id = Uuid::new_v4().to_string();
+            sqlx::query(
+                r#"
+                INSERT INTO dtb_files
+                    (id, name, storage_path, size_bytes, sha256, description, uploaded_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(&id)
+            .bind(metadata.name)
+            .bind(metadata.storage_path)
+            .bind(metadata.size_bytes)
+            .bind(metadata.sha256)
+            .bind(metadata.description)
+            .bind(metadata.uploaded_by)
+            .bind(&now)
+            .bind(&now)
+            .execute(&self.pool)
+            .await?;
+            let row = sqlx::query("SELECT * FROM dtb_files WHERE id = ?")
+                .bind(&id)
+                .fetch_one(&self.pool)
+                .await?;
+            dtb_metadata_from_row(&row)
+        }
+    }
+
+    async fn list_dtb_metadata(&self) -> anyhow::Result<Vec<DtbMetadata>> {
+        let rows = sqlx::query("SELECT * FROM dtb_files ORDER BY name ASC")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(dtb_metadata_from_row).collect()
+    }
+
+    async fn find_dtb_metadata_by_name(&self, name: &str) -> anyhow::Result<Option<DtbMetadata>> {
+        sqlx::query("SELECT * FROM dtb_files WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?
+            .as_ref()
+            .map(dtb_metadata_from_row)
+            .transpose()
+    }
+
+    async fn rename_dtb_metadata(&self, current_name: &str, new_name: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE dtb_files SET name = ?, storage_path = ?, updated_at = ? WHERE name = ?",
+        )
+        .bind(new_name)
+        .bind(new_name)
+        .bind(Utc::now().to_rfc3339())
+        .bind(current_name)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn delete_dtb_metadata_by_name(&self, name: &str) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM dtb_files WHERE name = ?")
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl AuditLogRepository for SqliteStorage {
+    async fn create_audit_log(&self, log: NewAuditLog) -> anyhow::Result<AuditLog> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"
+            INSERT INTO audit_logs
+                (id, actor_user_id, actor_username, action, target_type, target_id, outcome, ip_address, user_agent, request_id, metadata_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&id)
+        .bind(log.actor_user_id)
+        .bind(log.actor_username)
+        .bind(log.action)
+        .bind(log.target_type)
+        .bind(log.target_id)
+        .bind(log.outcome)
+        .bind(log.ip_address)
+        .bind(log.user_agent)
+        .bind(log.request_id)
+        .bind(log.metadata_json)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        let row = sqlx::query("SELECT * FROM audit_logs WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&self.pool)
+            .await?;
+        audit_log_from_row(&row)
+    }
+
+    async fn list_audit_logs(&self, limit: i64) -> anyhow::Result<Vec<AuditLog>> {
+        let rows = sqlx::query("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT ?")
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(audit_log_from_row).collect()
+    }
+}
+
+fn ensure_sqlite_parent_dir(url: &str) -> anyhow::Result<()> {
+    let Some(path) = url.strip_prefix("sqlite:") else {
+        anyhow::bail!("SQLite database URL must start with `sqlite:`");
+    };
+    if path == ":memory:" || path.trim().is_empty() {
+        return Ok(());
+    }
+    let path = Path::new(path);
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    Ok(())
+}
+
+fn user_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<User> {
+    Ok(User {
+        id: row.try_get("id")?,
+        username: row.try_get("username")?,
+        display_name: row.try_get("display_name")?,
+        nickname: row.try_get("nickname")?,
+        avatar_url: row.try_get("avatar_url")?,
+        email: row.try_get("email")?,
+        phone: row.try_get("phone")?,
+        department: row.try_get("department")?,
+        title: row.try_get("title")?,
+        password_hash: row.try_get("password_hash")?,
+        disabled: row.try_get::<i64, _>("disabled")? != 0,
+        last_login_at: row
+            .try_get::<Option<String>, _>("last_login_at")?
+            .map(|value| parse_time(&value))
+            .transpose()?,
+        created_at: parse_time(row.try_get::<String, _>("created_at")?.as_str())?,
+        updated_at: parse_time(row.try_get::<String, _>("updated_at")?.as_str())?,
+    })
+}
+
+fn auth_session_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<AuthSession> {
+    Ok(AuthSession {
+        id: row.try_get("id")?,
+        user_id: row.try_get("user_id")?,
+        token_hash: row.try_get("token_hash")?,
+        ip_address: row.try_get("ip_address")?,
+        user_agent: row.try_get("user_agent")?,
+        expires_at: parse_time(row.try_get::<String, _>("expires_at")?.as_str())?,
+        last_seen_at: row
+            .try_get::<Option<String>, _>("last_seen_at")?
+            .map(|value| parse_time(&value))
+            .transpose()?,
+        revoked_at: row
+            .try_get::<Option<String>, _>("revoked_at")?
+            .map(|value| parse_time(&value))
+            .transpose()?,
+        created_at: parse_time(row.try_get::<String, _>("created_at")?.as_str())?,
+    })
+}
+
+fn lease_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<Lease> {
+    let required_tags_json: String = row.try_get("required_tags_json")?;
+    let created_at = parse_time(row.try_get::<String, _>("created_at")?.as_str())?;
+    let updated_at = row
+        .try_get::<Option<String>, _>("updated_at")?
+        .map(|value| parse_time(&value))
+        .transpose()?
+        .unwrap_or(created_at);
+    Ok(Lease {
+        id: row.try_get("id")?,
+        user_id: row.try_get("user_id")?,
+        session_id: row.try_get("session_id")?,
+        board_id: row.try_get("board_id")?,
+        board_type: row.try_get("board_type")?,
+        required_tags: serde_json::from_str(&required_tags_json)
+            .context("failed to parse lease required_tags_json")?,
+        state: LeaseState::from_str(row.try_get::<String, _>("state")?.as_str())?,
+        created_at,
+        updated_at,
+        expires_at: parse_time(row.try_get::<String, _>("expires_at")?.as_str())?,
+        released_at: row
+            .try_get::<Option<String>, _>("released_at")?
+            .map(|value| parse_time(&value))
+            .transpose()?,
+        failure_message: row.try_get("failure_message")?,
+    })
+}
+
+fn board_config_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<BoardConfig> {
+    let config_json: String = row.try_get("config_json")?;
+    let board: BoardConfig =
+        serde_json::from_str(&config_json).context("failed to parse board config_json")?;
+    Ok(board)
+}
+
+fn dtb_metadata_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<DtbMetadata> {
+    Ok(DtbMetadata {
+        id: row.try_get("id")?,
+        name: row.try_get("name")?,
+        storage_path: row.try_get("storage_path")?,
+        size_bytes: row.try_get("size_bytes")?,
+        sha256: row.try_get("sha256")?,
+        description: row.try_get("description")?,
+        uploaded_by: row.try_get("uploaded_by")?,
+        created_at: parse_time(row.try_get::<String, _>("created_at")?.as_str())?,
+        updated_at: parse_time(row.try_get::<String, _>("updated_at")?.as_str())?,
+    })
+}
+
+fn audit_log_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<AuditLog> {
+    Ok(AuditLog {
+        id: row.try_get("id")?,
+        actor_user_id: row.try_get("actor_user_id")?,
+        actor_username: row.try_get("actor_username")?,
+        action: row.try_get("action")?,
+        target_type: row.try_get("target_type")?,
+        target_id: row.try_get("target_id")?,
+        outcome: row.try_get("outcome")?,
+        ip_address: row.try_get("ip_address")?,
+        user_agent: row.try_get("user_agent")?,
+        request_id: row.try_get("request_id")?,
+        metadata_json: row.try_get("metadata_json")?,
+        created_at: parse_time(row.try_get::<String, _>("created_at")?.as_str())?,
+    })
+}
+
+fn sample_boards() -> Vec<BoardConfig> {
+    vec![
+        sample_uboot_board(
+            "sample-rk3568-01",
+            "sample-rk3568",
+            &["sample", "arm64", "uboot", "tftp", "lab-a"],
+            true,
+            UbootNetworkMode::Dhcp,
+            None,
+        ),
+        sample_uboot_board(
+            "sample-rk3568-02",
+            "sample-rk3568",
+            &["sample", "arm64", "uboot", "static-ip", "lab-a"],
+            true,
+            UbootNetworkMode::StaticIp,
+            Some("192.168.10.42"),
+        ),
+        sample_uboot_board(
+            "sample-riscv64-01",
+            "sample-riscv64",
+            &["sample", "riscv64", "uboot", "tftp", "lab-b"],
+            true,
+            UbootNetworkMode::Dhcp,
+            None,
+        ),
+        sample_httpboot_board(
+            "sample-x86-httpboot-01",
+            "sample-x86-httpboot",
+            UefiBootArch::X86_64,
+            &["sample", "x86_64", "httpboot", "uefi", "lab-c"],
+            false,
+        ),
+        sample_httpboot_board(
+            "sample-aarch64-httpboot-01",
+            "sample-aarch64-httpboot",
+            UefiBootArch::Aarch64,
+            &["sample", "aarch64", "httpboot", "uefi", "lab-c"],
+            false,
+        ),
+        sample_httpboot_board(
+            "sample-loongarch64-httpboot-01",
+            "sample-loongarch64-httpboot",
+            UefiBootArch::Loongarch64,
+            &["sample", "loongarch64", "httpboot", "uefi", "lab-d"],
+            false,
+        ),
+        sample_pxe_board(
+            "sample-pxe-01",
+            "sample-pxe",
+            &["sample", "pxe", "x86_64", "legacy", "lab-d"],
+            false,
+        ),
+        sample_pxe_board(
+            "sample-maintenance-01",
+            "sample-maintenance",
+            &["sample", "reserved", "maintenance"],
+            true,
+        ),
+    ]
+}
+
+fn sample_uboot_board(
+    id: &str,
+    board_type: &str,
+    tags: &[&str],
+    use_tftp: bool,
+    network_mode: UbootNetworkMode,
+    board_ip: Option<&str>,
+) -> BoardConfig {
+    BoardConfig {
+        id: id.into(),
+        board_type: board_type.into(),
+        tags: tags.iter().map(|tag| (*tag).into()).collect(),
+        serial: None,
+        power_management: sample_power_management(),
+        boot: BootConfig::Uboot(UbootProfile {
+            use_tftp,
+            dtb_name: None,
+            network_mode,
+            board_ip: board_ip.map(str::to_string),
+            server_ip: Some("192.168.10.1".into()),
+            netmask: Some("255.255.255.0".into()),
+            gatewayip: Some("192.168.10.1".into()),
+            ..Default::default()
+        }),
+        notes: Some("示例开发板，可在管理后台复制后调整为真实硬件参数。".into()),
+        disabled: false,
+    }
+}
+
+fn sample_httpboot_board(
+    id: &str,
+    board_type: &str,
+    boot_arch: UefiBootArch,
+    tags: &[&str],
+    disabled: bool,
+) -> BoardConfig {
+    BoardConfig {
+        id: id.into(),
+        board_type: board_type.into(),
+        tags: tags.iter().map(|tag| (*tag).into()).collect(),
+        serial: None,
+        power_management: sample_power_management(),
+        boot: BootConfig::UefiHttp(UefiHttpProfile {
+            boot_arch: Some(boot_arch),
+            mac: None,
+        }),
+        notes: Some("UEFI HTTP Boot 示例资源。".into()),
+        disabled,
+    }
+}
+
+fn sample_pxe_board(id: &str, board_type: &str, tags: &[&str], disabled: bool) -> BoardConfig {
+    BoardConfig {
+        id: id.into(),
+        board_type: board_type.into(),
+        tags: tags.iter().map(|tag| (*tag).into()).collect(),
+        serial: None,
+        power_management: sample_power_management(),
+        boot: BootConfig::Pxe(PxeProfile {
+            notes: Some("PXE 启动示例".into()),
+        }),
+        notes: Some("PXE 示例资源。".into()),
+        disabled,
+    }
+}
+
+fn sample_power_management() -> PowerManagementConfig {
+    PowerManagementConfig::Custom(CustomPowerManagement {
+        power_on_cmd: "true".into(),
+        power_off_cmd: "true".into(),
+    })
+}
+
+struct SampleUser {
+    username: &'static str,
+    display_name: &'static str,
+    email: &'static str,
+}
+
+fn sample_users() -> Vec<SampleUser> {
+    vec![
+        SampleUser {
+            username: "alice",
+            display_name: "Alice Chen",
+            email: "alice@ostool.local",
+        },
+        SampleUser {
+            username: "bob",
+            display_name: "Bob Li",
+            email: "bob@ostool.local",
+        },
+        SampleUser {
+            username: "carol",
+            display_name: "Carol Wang",
+            email: "carol@ostool.local",
+        },
+        SampleUser {
+            username: "dave",
+            display_name: "Dave Zhang",
+            email: "dave@ostool.local",
+        },
+    ]
+}
+
+fn sample_password_hash() -> anyhow::Result<String> {
+    let salt = SaltString::generate(&mut OsRng);
+    Ok(Argon2::default()
+        .hash_password("ostool123".as_bytes(), &salt)
+        .map_err(|err| anyhow::anyhow!("failed to hash sample password: {err}"))?
+        .to_string())
+}
+
+fn permission_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<Permission> {
+    Ok(Permission {
+        id: row.try_get("id")?,
+        code: row.try_get("code")?,
+        name: row.try_get("name")?,
+        description: row.try_get("description")?,
+        created_at: parse_time(row.try_get::<String, _>("created_at")?.as_str())?,
+        updated_at: parse_time(row.try_get::<String, _>("updated_at")?.as_str())?,
+    })
+}
+
+fn role_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<Role> {
+    Ok(Role {
+        id: row.try_get("id")?,
+        name: row.try_get("name")?,
+        display_name: row.try_get("display_name")?,
+        description: row.try_get("description")?,
+        system: row.try_get::<i64, _>("system")? != 0,
+        created_at: parse_time(row.try_get::<String, _>("created_at")?.as_str())?,
+        updated_at: parse_time(row.try_get::<String, _>("updated_at")?.as_str())?,
+    })
+}
+
+#[async_trait]
+impl UserRepository for SqliteStorage {
+    async fn create_user(&self, user: NewUser) -> anyhow::Result<User> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let role_names = if user.role_names.is_empty() {
+            vec!["user".to_string()]
+        } else {
+            user.role_names
+        };
+        sqlx::query(
+            r#"
+            INSERT INTO users
+                (id, username, display_name, nickname, avatar_url, email, phone, department, title, password_hash, disabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            "#,
+        )
+        .bind(&id)
+        .bind(user.username)
+        .bind(user.display_name)
+        .bind(user.profile.nickname)
+        .bind(user.profile.avatar_url)
+        .bind(user.email)
+        .bind(user.profile.phone)
+        .bind(user.profile.department)
+        .bind(user.profile.title)
+        .bind(user.password_hash)
+        .bind(now.to_rfc3339())
+        .bind(now.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        self.set_user_role_names(&id, &role_names).await?;
+        self.find_user_by_id(&id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("created user `{id}` disappeared"))
+    }
+
+    async fn list_users(&self) -> anyhow::Result<Vec<User>> {
+        let rows = sqlx::query("SELECT * FROM users ORDER BY username ASC")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(user_from_row).collect()
+    }
+
+    async fn find_user_by_id(&self, user_id: &str) -> anyhow::Result<Option<User>> {
+        sqlx::query("SELECT * FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .as_ref()
+            .map(user_from_row)
+            .transpose()
+    }
+
+    async fn find_user_by_username(&self, username: &str) -> anyhow::Result<Option<User>> {
+        sqlx::query("SELECT * FROM users WHERE username = ?")
+            .bind(username)
+            .fetch_optional(&self.pool)
+            .await?
+            .as_ref()
+            .map(user_from_row)
+            .transpose()
+    }
+
+    async fn update_user(
+        &self,
+        user_id: &str,
+        display_name: String,
+        email: String,
+        profile: UserProfile,
+        disabled: bool,
+    ) -> anyhow::Result<Option<User>> {
+        sqlx::query(
+            r#"
+            UPDATE users
+            SET display_name = ?, email = ?, nickname = ?, avatar_url = ?, phone = ?, department = ?, title = ?, disabled = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(display_name)
+        .bind(email)
+        .bind(profile.nickname)
+        .bind(profile.avatar_url)
+        .bind(profile.phone)
+        .bind(profile.department)
+        .bind(profile.title)
+        .bind(if disabled { 1 } else { 0 })
+        .bind(Utc::now().to_rfc3339())
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+        self.find_user_by_id(user_id).await
+    }
+
+    async fn mark_user_login(&self, user_id: &str, at: DateTime<Utc>) -> anyhow::Result<()> {
+        sqlx::query("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?")
+            .bind(at.to_rfc3339())
+            .bind(at.to_rfc3339())
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn update_password_hash(
+        &self,
+        user_id: &str,
+        password_hash: String,
+    ) -> anyhow::Result<()> {
+        sqlx::query("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
+            .bind(password_hash)
+            .bind(Utc::now().to_rfc3339())
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn set_user_disabled(&self, user_id: &str, disabled: bool) -> anyhow::Result<()> {
+        sqlx::query("UPDATE users SET disabled = ?, updated_at = ? WHERE id = ?")
+            .bind(if disabled { 1 } else { 0 })
+            .bind(Utc::now().to_rfc3339())
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn user_count(&self) -> anyhow::Result<i64> {
+        let row = sqlx::query("SELECT COUNT(*) AS count FROM users")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.try_get("count")?)
+    }
+}
+
+#[async_trait]
+impl AuthSessionRepository for SqliteStorage {
+    async fn create_auth_session(&self, session: AuthSession) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO auth_sessions
+                (id, user_id, token_hash, ip_address, user_agent, expires_at, last_seen_at, revoked_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(session.id)
+        .bind(session.user_id)
+        .bind(session.token_hash)
+        .bind(session.ip_address)
+        .bind(session.user_agent)
+        .bind(session.expires_at.to_rfc3339())
+        .bind(session.last_seen_at.map(|value| value.to_rfc3339()))
+        .bind(session.revoked_at.map(|value| value.to_rfc3339()))
+        .bind(session.created_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn find_auth_session_by_token_hash(
+        &self,
+        token_hash: &str,
+    ) -> anyhow::Result<Option<AuthSession>> {
+        sqlx::query("SELECT * FROM auth_sessions WHERE token_hash = ?")
+            .bind(token_hash)
+            .fetch_optional(&self.pool)
+            .await?
+            .as_ref()
+            .map(auth_session_from_row)
+            .transpose()
+    }
+
+    async fn delete_auth_session_by_token_hash(&self, token_hash: &str) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM auth_sessions WHERE token_hash = ?")
+            .bind(token_hash)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_expired_auth_sessions(&self, now: DateTime<Utc>) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM auth_sessions WHERE expires_at <= ?")
+            .bind(now.to_rfc3339())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl LeaseRepository for SqliteStorage {
+    async fn create_lease(&self, lease: NewLease) -> anyhow::Result<Lease> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO leases
+                (id, user_id, session_id, board_id, board_type, required_tags_json, state, created_at, updated_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&id)
+        .bind(lease.user_id)
+        .bind(lease.session_id)
+        .bind(lease.board_id)
+        .bind(lease.board_type)
+        .bind(serde_json::to_string(&lease.required_tags)?)
+        .bind(LeaseState::Active.as_str())
+        .bind(now.to_rfc3339())
+        .bind(now.to_rfc3339())
+        .bind(lease.expires_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        self.find_lease(&id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("created lease `{id}` disappeared"))
+    }
+
+    async fn list_leases(&self) -> anyhow::Result<Vec<Lease>> {
+        let rows = sqlx::query("SELECT * FROM leases ORDER BY created_at DESC")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(lease_from_row).collect()
+    }
+
+    async fn list_leases_for_user(&self, user_id: &str) -> anyhow::Result<Vec<Lease>> {
+        let rows = sqlx::query("SELECT * FROM leases WHERE user_id = ? ORDER BY created_at DESC")
+            .bind(user_id)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(lease_from_row).collect()
+    }
+
+    async fn find_lease(&self, lease_id: &str) -> anyhow::Result<Option<Lease>> {
+        sqlx::query("SELECT * FROM leases WHERE id = ?")
+            .bind(lease_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .as_ref()
+            .map(lease_from_row)
+            .transpose()
+    }
+
+    async fn mark_lease_state(
+        &self,
+        lease_id: &str,
+        state: LeaseState,
+        released_at: Option<DateTime<Utc>>,
+        failure_message: Option<String>,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE leases SET state = ?, released_at = ?, failure_message = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(state.as_str())
+        .bind(released_at.map(|value| value.to_rfc3339()))
+        .bind(failure_message)
+        .bind(Utc::now().to_rfc3339())
+        .bind(lease_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn update_lease_expiry(
+        &self,
+        lease_id: &str,
+        expires_at: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        sqlx::query("UPDATE leases SET expires_at = ?, updated_at = ? WHERE id = ?")
+            .bind(expires_at.to_rfc3339())
+            .bind(Utc::now().to_rfc3339())
+            .bind(lease_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl BoardConfigRepository for SqliteStorage {
+    async fn create_board_config(&self, board: BoardConfig) -> anyhow::Result<BoardConfig> {
+        let now = Utc::now().to_rfc3339();
+        let config_json = serde_json::to_string(&board)?;
+        sqlx::query(
+            r#"
+            INSERT INTO board_configs (id, board_type, config_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&board.id)
+        .bind(&board.board_type)
+        .bind(config_json)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(board)
+    }
+
+    async fn list_board_configs(&self) -> anyhow::Result<Vec<BoardConfig>> {
+        let rows = sqlx::query("SELECT * FROM board_configs ORDER BY id ASC")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(board_config_from_row).collect()
+    }
+
+    async fn update_board_config(
+        &self,
+        current_board_id: &str,
+        board: BoardConfig,
+    ) -> anyhow::Result<BoardConfig> {
+        let now = Utc::now().to_rfc3339();
+        let config_json = serde_json::to_string(&board)?;
+        if current_board_id == board.id {
+            sqlx::query(
+                r#"
+                UPDATE board_configs
+                SET board_type = ?, config_json = ?, updated_at = ?
+                WHERE id = ?
+                "#,
+            )
+            .bind(&board.board_type)
+            .bind(config_json)
+            .bind(&now)
+            .bind(current_board_id)
+            .execute(&self.pool)
+            .await?;
+        } else {
+            let mut tx = self.pool.begin().await?;
+            sqlx::query("DELETE FROM board_configs WHERE id = ?")
+                .bind(current_board_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(
+                r#"
+                INSERT INTO board_configs (id, board_type, config_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(&board.id)
+            .bind(&board.board_type)
+            .bind(config_json)
+            .bind(&now)
+            .bind(&now)
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+        }
+        Ok(board)
+    }
+
+    async fn delete_board_config(&self, board_id: &str) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM board_configs WHERE id = ?")
+            .bind(board_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl RbacRepository for SqliteStorage {
+    async fn list_permissions(&self) -> anyhow::Result<Vec<Permission>> {
+        let rows = sqlx::query("SELECT * FROM permissions ORDER BY code ASC")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(permission_from_row).collect()
+    }
+
+    async fn list_roles(&self) -> anyhow::Result<Vec<Role>> {
+        let rows = sqlx::query("SELECT * FROM roles ORDER BY `system` DESC, name ASC")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(role_from_row).collect()
+    }
+
+    async fn create_role(&self, role: NewRole) -> anyhow::Result<Role> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"
+            INSERT INTO roles (id, name, display_name, description, `system`, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 0, ?, ?)
+            "#,
+        )
+        .bind(&id)
+        .bind(role.name)
+        .bind(role.display_name)
+        .bind(role.description)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        self.replace_role_permissions(&id, &role.permission_ids)
+            .await?;
+        self.find_role_by_id(&id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("created role `{id}` disappeared"))
+    }
+
+    async fn update_role(
+        &self,
+        role_id: &str,
+        display_name: String,
+        description: String,
+        permission_ids: Vec<String>,
+    ) -> anyhow::Result<Option<Role>> {
+        sqlx::query(
+            r#"
+            UPDATE roles
+            SET display_name = ?, description = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(display_name)
+        .bind(description)
+        .bind(Utc::now().to_rfc3339())
+        .bind(role_id)
+        .execute(&self.pool)
+        .await?;
+        self.replace_role_permissions(role_id, &permission_ids)
+            .await?;
+        self.find_role_by_id(role_id).await
+    }
+
+    async fn delete_role(&self, role_id: &str) -> anyhow::Result<()> {
+        let role = self.find_role_by_id(role_id).await?;
+        if role.as_ref().map(|item| item.system).unwrap_or(false) {
+            anyhow::bail!("system role cannot be deleted");
+        }
+        sqlx::query("DELETE FROM roles WHERE id = ?")
+            .bind(role_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn role_permissions(&self, role_id: &str) -> anyhow::Result<Vec<Permission>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT permissions.*
+            FROM permissions
+            INNER JOIN role_permissions ON role_permissions.permission_id = permissions.id
+            WHERE role_permissions.role_id = ?
+            ORDER BY permissions.code ASC
+            "#,
+        )
+        .bind(role_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(permission_from_row).collect()
+    }
+
+    async fn user_roles(&self, user_id: &str) -> anyhow::Result<Vec<Role>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT roles.*
+            FROM roles
+            INNER JOIN user_roles ON user_roles.role_id = roles.id
+            WHERE user_roles.user_id = ?
+            ORDER BY roles.`system` DESC, roles.name ASC
+            "#,
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(role_from_row).collect()
+    }
+
+    async fn set_user_roles(&self, user_id: &str, role_ids: Vec<String>) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM user_roles WHERE user_id = ?")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        for role_id in role_ids {
+            sqlx::query("INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)")
+                .bind(user_id)
+                .bind(role_id)
+                .execute(&self.pool)
+                .await?;
+        }
+        sqlx::query("UPDATE users SET updated_at = ? WHERE id = ?")
+            .bind(Utc::now().to_rfc3339())
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn user_permissions(&self, user_id: &str) -> anyhow::Result<Vec<Permission>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT permissions.*
+            FROM permissions
+            INNER JOIN role_permissions ON role_permissions.permission_id = permissions.id
+            INNER JOIN user_roles ON user_roles.role_id = role_permissions.role_id
+            WHERE user_roles.user_id = ?
+            ORDER BY permissions.code ASC
+            "#,
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(permission_from_row).collect()
+    }
+}
+
+impl SqliteStorage {
+    async fn set_user_role_names(
+        &self,
+        user_id: &str,
+        role_names: &[String],
+    ) -> anyhow::Result<()> {
+        let mut role_ids = Vec::new();
+        for role_name in role_names {
+            let role_id: Option<String> = sqlx::query("SELECT id FROM roles WHERE name = ?")
+                .bind(role_name)
+                .fetch_optional(&self.pool)
+                .await?
+                .map(|row| row.try_get("id"))
+                .transpose()?;
+            if let Some(role_id) = role_id {
+                role_ids.push(role_id);
+            }
+        }
+        self.set_user_roles(user_id, role_ids).await
+    }
+
+    async fn find_role_by_id(&self, role_id: &str) -> anyhow::Result<Option<Role>> {
+        sqlx::query("SELECT * FROM roles WHERE id = ?")
+            .bind(role_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .as_ref()
+            .map(role_from_row)
+            .transpose()
+    }
+
+    async fn replace_role_permissions(
+        &self,
+        role_id: &str,
+        permission_ids: &[String],
+    ) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM role_permissions WHERE role_id = ?")
+            .bind(role_id)
+            .execute(&self.pool)
+            .await?;
+        for permission_id in permission_ids {
+            sqlx::query(
+                "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+            )
+            .bind(role_id)
+            .bind(permission_id)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+}

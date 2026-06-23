@@ -4,6 +4,26 @@ export interface ErrorResponse {
   details?: unknown;
 }
 
+export interface CurrentUserResponse {
+  id: string;
+  username: string;
+  display_name: string;
+  nickname: string | null;
+  avatar_url: string | null;
+  email: string;
+  phone: string | null;
+  department: string | null;
+  title: string | null;
+  last_login_at: string | null;
+  roles: AdminRoleResponse[];
+  permissions: AdminPermissionResponse[];
+}
+
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
 export interface BuiltinTftpConfig {
   provider: "builtin";
   enabled: boolean;
@@ -172,6 +192,131 @@ export interface Session {
   state: "active" | "releasing";
 }
 
+export type LeaseState = "active" | "releasing" | "released" | "expired" | "failed";
+
+export interface Lease {
+  id: string;
+  user_id: string;
+  session_id: string;
+  board_id: string;
+  board_type: string;
+  required_tags: string[];
+  state: LeaseState;
+  created_at: string;
+  expires_at: string;
+  released_at: string | null;
+  failure_message: string | null;
+}
+
+export interface LeaseResponse {
+  lease: Lease;
+  session: Session | null;
+}
+
+export interface LeasesResponse {
+  leases: LeaseResponse[];
+}
+
+export interface CreateLeaseRequest {
+  board_type: string;
+  required_tags?: string[];
+}
+
+export interface AdminUserResponse {
+  id: string;
+  username: string;
+  display_name: string;
+  nickname: string | null;
+  avatar_url: string | null;
+  email: string;
+  phone: string | null;
+  department: string | null;
+  title: string | null;
+  disabled: boolean;
+  last_login_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminUsersResponse {
+  users: AdminUserResponse[];
+}
+
+export interface AdminUserCreateRequest {
+  username: string;
+  display_name: string;
+  email: string;
+  nickname?: string | null;
+  avatar_url?: string | null;
+  phone?: string | null;
+  department?: string | null;
+  title?: string | null;
+  password: string;
+  role_ids: string[];
+}
+
+export interface AdminUserUpdateRequest {
+  display_name: string;
+  email: string;
+  nickname?: string | null;
+  avatar_url?: string | null;
+  phone?: string | null;
+  department?: string | null;
+  title?: string | null;
+  disabled: boolean;
+}
+
+export interface AdminPasswordResetRequest {
+  password: string;
+}
+
+export interface AdminPermissionResponse {
+  id: string;
+  code: string;
+  name: string;
+  description: string;
+}
+
+export interface AdminPermissionsResponse {
+  permissions: AdminPermissionResponse[];
+}
+
+export interface AdminRoleResponse {
+  id: string;
+  name: string;
+  display_name: string;
+  description: string;
+  system: boolean;
+  permissions: AdminPermissionResponse[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminRolesResponse {
+  roles: AdminRoleResponse[];
+}
+
+export interface AdminRoleCreateRequest {
+  name: string;
+  display_name: string;
+  description: string;
+  permission_ids: string[];
+}
+
+export interface AdminRoleUpdateRequest {
+  display_name: string;
+  description: string;
+  permission_ids: string[];
+}
+
+export interface AdminUserRolesResponse {
+  roles: AdminRoleResponse[];
+}
+
+export interface AdminUserRolesUpdateRequest {
+  role_ids: string[];
+}
+
 export interface AdminSessionsResponse {
   sessions: Session[];
 }
@@ -210,12 +355,31 @@ export interface AdminServerConfigEditable {
 export interface AdminServerConfigResponse {
   readonly: AdminServerConfigReadonly;
   editable: AdminServerConfigEditable;
+  site: SiteSettingsResponse;
 }
 
 export interface UpdateServerConfigRequest {
   network: TftpNetworkConfig;
   upload_limits: UploadLimitsConfig;
+  site: SiteSettingsUpdateRequest;
 }
+
+export interface SiteSettingsResponse {
+  site_name: string;
+  site_subtitle: string;
+  logo_url: string | null;
+  favicon_url: string | null;
+  announcement: string | null;
+  maintenance_mode: boolean;
+  self_service_enabled: boolean;
+  default_lease_minutes: number;
+  max_lease_minutes: number;
+  support_email: string | null;
+  support_url: string | null;
+  updated_at: string;
+}
+
+export type SiteSettingsUpdateRequest = Omit<SiteSettingsResponse, "updated_at">;
 
 export interface BootProfileResponse {
   boot: BootConfig;
@@ -238,5 +402,28 @@ export interface TftpSessionResponse {
   server_ip: string | null;
   netmask: string | null;
   writable: boolean;
+  files: FileResponse[];
+}
+
+export interface CreateSessionRequest {
+  board_type: string;
+  required_tags?: string[];
+  client_name?: string | null;
+}
+
+export interface SessionCreatedResponse {
+  session_id: string;
+  board_id: string;
+  lease_expires_at: string;
+  serial_available: boolean;
+  boot_mode: string;
+  ws_url: string | null;
+}
+
+export interface SessionDetailResponse {
+  session: Session;
+  board: BoardConfig;
+  serial_available: boolean;
+  serial_connected: boolean;
   files: FileResponse[];
 }

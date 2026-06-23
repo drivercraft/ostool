@@ -1,6 +1,6 @@
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 
-use crate::api::models::NetworkInterfaceSummary;
+use crate::api::dto::NetworkInterfaceSummary;
 
 pub fn list_network_interfaces() -> anyhow::Result<Vec<NetworkInterfaceSummary>> {
     let mut interfaces = NetworkInterface::show()?

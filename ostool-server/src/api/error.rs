@@ -4,7 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::api::models::ErrorResponse;
+use crate::api::dto::ErrorResponse;
 
 #[derive(Debug)]
 pub struct ApiError {
@@ -24,6 +24,14 @@ impl ApiError {
 
     pub fn bad_request(message: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, "bad_request", message)
+    }
+
+    pub fn unauthorized(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::UNAUTHORIZED, "unauthorized", message)
+    }
+
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::FORBIDDEN, "forbidden", message)
     }
 
     pub fn payload_too_large(message: impl Into<String>) -> Self {

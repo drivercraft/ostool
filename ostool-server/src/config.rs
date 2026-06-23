@@ -19,6 +19,10 @@ pub struct ServerConfig {
     pub data_dir: PathBuf,
     pub board_dir: PathBuf,
     pub dtb_dir: PathBuf,
+    #[serde(default)]
+    pub database: DatabaseConfig,
+    #[serde(default, skip_serializing_if = "SampleDataConfig::is_default")]
+    pub sample_data: SampleDataConfig,
     pub tftp: TftpConfig,
     #[serde(default)]
     pub http_boot: HttpBootConfig,
@@ -45,6 +49,7 @@ impl ServerConfig {
         let board_dir = data_dir.join("boards");
         let dtb_dir = data_dir.join("dtbs");
         let http_boot = HttpBootConfig::default_with_root(data_dir.join("http-boot"));
+        let database = DatabaseConfig::default_mysql();
 
         #[cfg(target_os = "linux")]
         let tftp = TftpConfig::SystemTftpdHpa(SystemTftpdHpaConfig::default());
@@ -59,6 +64,8 @@ impl ServerConfig {
             data_dir,
             board_dir,
             dtb_dir,
+            database,
+            sample_data: SampleDataConfig::default(),
             tftp,
             http_boot,
             network: TftpNetworkConfig::default(),
@@ -153,6 +160,7 @@ impl ServerConfig {
         self.board_dir = absolutize_path(&config_dir, &self.board_dir);
         self.dtb_dir = absolutize_path(&config_dir, &self.dtb_dir);
         self.http_boot.root_dir = absolutize_path(&config_dir, &self.http_boot.root_dir);
+        self.database.normalize_paths(&config_dir);
 
         match &mut self.tftp {
             TftpConfig::Builtin(cfg) => {
@@ -178,6 +186,97 @@ impl ServerConfig {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(tag = "provider", rename_all = "snake_case")]
+pub enum DatabaseConfig {
+    Mysql(MysqlDatabaseConfig),
+    Sqlite(SqliteDatabaseConfig),
+}
+
+impl DatabaseConfig {
+    pub fn mysql_with_url(url: impl Into<String>) -> Self {
+        Self::Mysql(MysqlDatabaseConfig { url: url.into() })
+    }
+
+    pub fn default_mysql() -> Self {
+        Self::mysql_with_url("mysql://ostool:ostool@127.0.0.1:3306/ostool")
+    }
+
+    pub fn sqlite_with_path(path: PathBuf) -> Self {
+        Self::Sqlite(SqliteDatabaseConfig {
+            url: sqlite_url_from_path(&path),
+        })
+    }
+
+    pub fn url(&self) -> &str {
+        match self {
+            Self::Mysql(config) => &config.url,
+            Self::Sqlite(config) => &config.url,
+        }
+    }
+
+    fn normalize_paths(&mut self, config_dir: &Path) {
+        let Self::Sqlite(config) = self else {
+            return;
+        };
+        let Some(path) = config.url.strip_prefix("sqlite:") else {
+            return;
+        };
+        if path == ":memory:" {
+            return;
+        }
+        let path = Path::new(path);
+        if path.is_absolute() {
+            return;
+        }
+        config.url = sqlite_url_from_path(&absolutize_path(config_dir, path));
+    }
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self::default_mysql()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct MysqlDatabaseConfig {
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct SqliteDatabaseConfig {
+    pub url: String,
+}
+
+fn sqlite_url_from_path(path: &Path) -> String {
+    format!("sqlite:{}", path.display())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct SampleDataConfig {
+    #[serde(default = "default_sample_data_enabled")]
+    pub enabled: bool,
+}
+
+impl SampleDataConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+impl Default for SampleDataConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_sample_data_enabled(),
+        }
+    }
+}
+
+fn default_sample_data_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

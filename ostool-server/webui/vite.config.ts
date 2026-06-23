@@ -6,7 +6,7 @@ import { defineConfig } from "vite";
 const outDir = process.env.OSTOOL_SERVER_WEB_DIST_DIR ?? "../web/dist";
 
 export default defineConfig({
-  base: "/admin/",
+  base: "/",
   plugins: [vue()],
   resolve: {
     alias: {
@@ -19,5 +19,6 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    setupFiles: ["./src/test/setup.ts"],
   },
 });

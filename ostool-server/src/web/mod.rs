@@ -11,6 +11,18 @@ use rust_embed::RustEmbed;
 #[folder = "$OSTOOL_SERVER_WEB_DIST_DIR"]
 struct WebUiAssets;
 
+pub async fn serve_index() -> Response {
+    index_response()
+}
+
+pub async fn serve_history_fallback(Path(_path): Path<String>) -> Response {
+    index_response()
+}
+
+pub async fn serve_asset(Path(path): Path<String>) -> Response {
+    asset_response(format!("assets/{path}"))
+}
+
 pub async fn serve_admin_index() -> Response {
     index_response()
 }
@@ -21,13 +33,6 @@ pub async fn serve_admin_history(Path(_path): Path<String>) -> Response {
 
 pub async fn serve_admin_asset(Path(path): Path<String>) -> Response {
     asset_response(format!("assets/{path}"))
-}
-
-#[cfg(test)]
-pub(crate) fn first_asset_path() -> Option<String> {
-    WebUiAssets::iter()
-        .map(|name| name.to_string())
-        .find(|name| name.starts_with("assets/"))
 }
 
 fn index_response() -> Response {

@@ -513,6 +513,8 @@ mod tests {
             data_dir: root.join("data"),
             board_dir: root.join("boards"),
             dtb_dir: root.join("dtbs"),
+            database: crate::DatabaseConfig::sqlite_with_path(root.join("ostool.db")),
+            sample_data: crate::config::SampleDataConfig { enabled: false },
             tftp: TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(root.join("tftp"))),
             ..ServerConfig::default()
         };
