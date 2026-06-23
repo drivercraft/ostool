@@ -32,7 +32,13 @@ async function loadLeases() {
 }
 
 async function releaseLease(leaseId: string) {
-  if (!window.confirm(`确认释放租赁 ${leaseId}？`)) {
+  const confirmed = await ui.confirm({
+    tone: "danger",
+    title: "释放租赁",
+    message: `确认释放租赁 ${leaseId}？`,
+    confirmLabel: "释放",
+  });
+  if (!confirmed) {
     return;
   }
   try {
@@ -53,10 +59,9 @@ onMounted(() => {
   <section class="panel">
     <div class="panel-heading">
       <div>
-        <p class="eyebrow">租赁管理</p>
         <h3>平台租赁记录</h3>
       </div>
-      <button class="ghost-button compact-button" @click="loadLeases">刷新</button>
+      <button class="btn btn-ghost btn-sm" @click="loadLeases">刷新</button>
     </div>
 
     <div v-if="loading" class="empty-state">正在加载租赁...</div>
@@ -88,7 +93,7 @@ onMounted(() => {
             <td>{{ new Date(item.lease.expires_at).toLocaleString() }}</td>
             <td>
               <button
-                class="danger-button compact-button"
+                class="btn btn-danger btn-sm"
                 :disabled="item.lease.state !== 'active'"
                 @click="releaseLease(item.lease.id)"
               >

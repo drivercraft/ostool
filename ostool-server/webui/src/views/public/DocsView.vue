@@ -157,7 +157,6 @@ sterm 命令封装，可以直接通过会话 ID 启动终端。`,
 <template>
   <div class="page-body public-page-body">
     <header class="public-page-header">
-      <p class="eyebrow">文档中心</p>
       <h2>使用说明与常见操作</h2>
       <p class="public-page-subtitle">
         本页面汇总了 ostool 平台的核心使用说明，更多内容会随版本迭代持续更新。
@@ -193,7 +192,6 @@ sterm 命令封装，可以直接通过会话 ID 启动终端。`,
             <div class="docs-section-head">
               <span class="feature-icon"><Icon :name="group.icon" :size="18" /></span>
               <div>
-                <p class="feature-eyebrow">{{ group.title }}</p>
                 <h3>{{ section.title }}</h3>
               </div>
             </div>

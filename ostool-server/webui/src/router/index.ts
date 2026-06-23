@@ -19,12 +19,24 @@ const SessionsView = () => import("@/views/admin/SessionsView.vue");
 const LeasesView = () => import("@/views/admin/LeasesView.vue");
 const UsersView = () => import("@/views/admin/UsersView.vue");
 const RolesView = () => import("@/views/admin/RolesView.vue");
-const PermissionsView = () => import("@/views/admin/PermissionsView.vue");
 const TftpView = () => import("@/views/admin/TftpView.vue");
 const ServerView = () => import("@/views/admin/ServerView.vue");
 
 export const router = createRouter({
   history: createWebHistory("/"),
+  scrollBehavior(to, _from, savedPosition) {
+    if (savedPosition) {
+      return savedPosition;
+    }
+    if (to.hash) {
+      return {
+        el: to.hash,
+        top: 88,
+        behavior: "smooth",
+      };
+    }
+    return { top: 0 };
+  },
   routes: [
     {
       path: "/",
@@ -154,13 +166,11 @@ export const router = createRouter({
           path: "users/roles",
           name: "admin-user-roles",
           component: RolesView,
-          meta: { title: "用户管理 / 用户角色" },
+          meta: { title: "用户管理 / 角色与权限" },
         },
         {
           path: "users/permissions",
-          name: "admin-user-permissions",
-          component: PermissionsView,
-          meta: { title: "用户管理 / 权限配置" },
+          redirect: "/admin/users/roles",
         },
         {
           path: "settings",

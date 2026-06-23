@@ -61,8 +61,15 @@ const filteredBoardTypes = computed(() => {
 const totals = computed(() => {
   const total = boardTypes.value.reduce((sum, item) => sum + item.total, 0);
   const available = boardTypes.value.reduce((sum, item) => sum + item.available, 0);
-  return { total, available, leased: total - available };
+  const leased = total - available;
+  const availabilityRate = total ? Math.round((available / total) * 100) : 0;
+  return { total, available, leased, availabilityRate };
 });
+
+function availabilityPercent(board: BoardTypeSummary): number {
+  if (board.total === 0) return 0;
+  return Math.round((board.available / board.total) * 100);
+}
 
 onMounted(() => {
   ui.clearMessages();
@@ -71,37 +78,37 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page-body public-page-body">
-    <header class="public-page-header">
-      <p class="eyebrow">资源总览</p>
-      <h2>可租赁的开发板资源</h2>
-      <p class="public-page-subtitle">
-        下方为当前在管的全部开发板型号。登录后可在用户控制台中创建会话并申请使用。
-      </p>
-    </header>
-
-    <section class="stats-strip" v-if="!loading && !failed">
-      <div class="stats-chip">
-        <span class="stats-num">{{ boardTypes.length }}</span>
-        <span class="stats-label">型号</span>
+  <div class="page-body public-page-body resources-page">
+    <section class="resources-hero">
+      <div class="resources-hero-copy">
+        <h2>可租赁的开发板资源</h2>
+        <p class="public-page-subtitle">
+          下方为当前在管的全部开发板型号。登录后可在用户控制台中创建会话并申请使用。
+        </p>
       </div>
-      <div class="stats-chip">
-        <span class="stats-num">{{ totals.available }}</span>
-        <span class="stats-label">当前可用</span>
-      </div>
-      <div class="stats-chip">
-        <span class="stats-num">{{ totals.leased }}</span>
-        <span class="stats-label">使用中</span>
-      </div>
-      <div class="stats-chip">
-        <span class="stats-num">{{ totals.total }}</span>
-        <span class="stats-label">在管总数</span>
-      </div>
+      <section class="stats-strip resources-stats" v-if="!loading && !failed">
+        <div class="stats-chip">
+          <span class="stats-num">{{ boardTypes.length }}</span>
+          <span class="stats-label">型号</span>
+        </div>
+        <div class="stats-chip">
+          <span class="stats-num">{{ totals.available }}</span>
+          <span class="stats-label">当前可用</span>
+        </div>
+        <div class="stats-chip">
+          <span class="stats-num">{{ totals.leased }}</span>
+          <span class="stats-label">使用中</span>
+        </div>
+        <div class="stats-chip">
+          <span class="stats-num">{{ totals.total }}</span>
+          <span class="stats-label">在管总数</span>
+        </div>
+      </section>
     </section>
 
-    <section class="resource-toolbar">
-      <div class="resource-toolbar-left">
-        <label class="resource-search">
+    <section class="admin-toolbar">
+      <div class="admin-toolbar-left">
+        <label class="search-field">
           <Icon name="search" :size="16" />
           <input
             v-model="search"
@@ -109,18 +116,24 @@ onMounted(() => {
             placeholder="搜索型号或标签，例如 rk3568、lab..."
           />
         </label>
-        <select v-model="availabilityFilter" aria-label="可用状态">
-          <option value="all">全部状态</option>
-          <option value="available">仅显示可用</option>
-          <option value="unavailable">仅显示已满</option>
-        </select>
-        <select v-model="sortKey" aria-label="排序方式">
-          <option value="name">按型号排序</option>
-          <option value="available">可用数优先</option>
-          <option value="total">总数优先</option>
-        </select>
+        <label class="field filter-field">
+          <span>可用状态</span>
+          <select v-model="availabilityFilter" aria-label="可用状态">
+            <option value="all">全部状态</option>
+            <option value="available">仅显示可用</option>
+            <option value="unavailable">仅显示已满</option>
+          </select>
+        </label>
+        <label class="field filter-field">
+          <span>排序方式</span>
+          <select v-model="sortKey" aria-label="排序方式">
+            <option value="name">按型号排序</option>
+            <option value="available">可用数优先</option>
+            <option value="total">总数优先</option>
+          </select>
+        </label>
       </div>
-      <div class="toolbar-actions">
+      <div class="admin-toolbar-right">
         <div class="view-toggle" role="group" aria-label="排列方式">
           <button
             type="button"
@@ -137,12 +150,17 @@ onMounted(() => {
             <Icon name="clipboard" :size="15" /> 列表
           </button>
         </div>
-        <button class="ghost-button compact-button" @click="loadBoardTypes">
+        <button class="btn btn-ghost btn-sm" @click="loadBoardTypes">
           <Icon name="refresh" :size="14" class="btn-icon" />
           刷新
         </button>
       </div>
     </section>
+
+    <div v-if="!loading && !failed" class="resource-results-summary">
+      <span>显示 {{ filteredBoardTypes.length }} / {{ boardTypes.length }} 个型号</span>
+      <span>整体可用率 {{ totals.availabilityRate }}%</span>
+    </div>
 
     <div v-if="loading" class="empty-state">
       <div class="empty-state-icon">&#9641;</div>
@@ -151,7 +169,7 @@ onMounted(() => {
     <div v-else-if="failed" class="empty-state">
       <div class="empty-state-icon">&#9888;</div>
       加载失败，请稍后重试。
-      <button class="inline-link" @click="loadBoardTypes">重新加载</button>
+      <button class="btn btn-ghost btn-sm" @click="loadBoardTypes">重新加载</button>
     </div>
     <div v-else-if="filteredBoardTypes.length === 0" class="empty-state">
       <div class="empty-state-icon">&#9641;</div>
@@ -169,7 +187,7 @@ onMounted(() => {
             <span class="resource-card-icon"><Icon name="cpu-board" :size="20" /></span>
             <div>
               <h3>{{ board.board_type }}</h3>
-              <span class="resource-card-meta">{{ board.tags.length ? board.tags.join(" · ") : "无标签" }}</span>
+              <span class="resource-card-meta">Board type</span>
             </div>
           </div>
           <StatusPill
@@ -177,8 +195,19 @@ onMounted(() => {
             :label="board.available > 0 ? '可租赁' : '已租满'"
           />
         </div>
+        <div class="resource-card-tags">
+          <span v-for="tag in board.tags" :key="tag" class="resource-tag">{{ tag }}</span>
+          <span v-if="board.tags.length === 0" class="resource-tag resource-tag--muted">无标签</span>
+        </div>
+        <div class="resource-availability">
+          <div>
+            <span class="resource-availability-label">可用容量</span>
+            <strong>{{ availabilityPercent(board) }}%</strong>
+          </div>
+          <span>{{ board.available }} / {{ board.total }} idle</span>
+        </div>
         <div class="resource-card-bar">
-          <span :style="{ width: board.total ? (board.available / board.total) * 100 + '%' : '0%' }"></span>
+          <span :style="{ width: availabilityPercent(board) + '%' }"></span>
         </div>
         <dl class="resource-card-stats">
           <div>
@@ -197,14 +226,14 @@ onMounted(() => {
         <div class="resource-card-actions">
           <RouterLink
             v-if="auth.isAuthenticated"
-            class="primary-button compact-button"
+            class="btn btn-primary btn-sm"
             :class="{ 'is-disabled': board.available === 0 }"
             :to="board.available > 0 ? '/dashboard?action=lease&board_type=' + encodeURIComponent(board.board_type) : '/dashboard'"
           >
             {{ board.available > 0 ? "去申请会话" : "暂无空闲" }}
             <Icon v-if="board.available > 0" name="arrow-right" :size="14" class="btn-icon" />
           </RouterLink>
-          <RouterLink v-else class="ghost-button compact-button" to="/login">
+          <RouterLink v-else class="btn btn-ghost btn-sm" to="/login">
             登录后申请
             <Icon name="login" :size="14" class="btn-icon" />
           </RouterLink>
@@ -230,6 +259,10 @@ onMounted(() => {
           <div><strong>{{ board.available }}</strong> / {{ board.total }}</div>
         </div>
         <div>
+          <span class="row-label">可用率</span>
+          <div>{{ availabilityPercent(board) }}%</div>
+        </div>
+        <div>
           <span class="row-label">使用中</span>
           <div>{{ board.total - board.available }}</div>
         </div>
@@ -242,13 +275,13 @@ onMounted(() => {
         <div class="resource-card-actions">
           <RouterLink
             v-if="auth.isAuthenticated"
-            class="primary-button compact-button"
+            class="btn btn-primary btn-sm"
             :class="{ 'is-disabled': board.available === 0 }"
             :to="board.available > 0 ? '/dashboard?action=lease&board_type=' + encodeURIComponent(board.board_type) : '/dashboard'"
           >
             {{ board.available > 0 ? "申请" : "已满" }}
           </RouterLink>
-          <RouterLink v-else class="ghost-button compact-button" to="/login">登录</RouterLink>
+          <RouterLink v-else class="btn btn-ghost btn-sm" to="/login">登录</RouterLink>
         </div>
       </div>
     </div>

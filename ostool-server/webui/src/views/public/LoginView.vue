@@ -3,7 +3,6 @@ import { computed, onMounted, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import Icon from "@/components/Icon.vue";
-import NoticeBanner from "@/components/NoticeBanner.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 
@@ -81,17 +80,9 @@ onMounted(() => {
     <main class="auth-panel">
       <section class="auth-card">
         <header class="auth-header">
-          <p class="eyebrow">登录平台</p>
           <h2>欢迎回到 ostool</h2>
           <p>登录后即可申请会话、上传镜像并使用远程串口终端。</p>
         </header>
-
-        <NoticeBanner
-          v-if="ui.errorMessage"
-          tone="error"
-          :message="ui.errorMessage"
-          class="auth-notice"
-        />
 
         <form class="auth-form" @submit.prevent="submit">
           <label class="field">
@@ -117,7 +108,7 @@ onMounted(() => {
             <input v-model="asAdmin" type="checkbox" :disabled="submitting" />
             <span>以管理员身份登录（进入管理台）</span>
           </label>
-          <button class="primary-button" type="submit" :disabled="submitting">
+          <button class="btn btn-primary" type="submit" :disabled="submitting">
             {{ submitting ? "登录中..." : "登录" }}
             <Icon v-if="!submitting" name="arrow-right" :size="16" class="btn-icon" />
           </button>

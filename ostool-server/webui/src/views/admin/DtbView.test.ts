@@ -11,9 +11,8 @@ const uiStore = {
   clearMessages: vi.fn(),
   setError: vi.fn(),
   setSuccess: vi.fn(),
+  confirm: vi.fn(),
 };
-
-vi.stubGlobal("confirm", vi.fn(() => true));
 
 vi.mock("@/api", () => ({
   api: {
@@ -46,6 +45,8 @@ describe("DtbView", () => {
     uiStore.clearMessages.mockReset();
     uiStore.setError.mockReset();
     uiStore.setSuccess.mockReset();
+    uiStore.confirm.mockReset();
+    uiStore.confirm.mockResolvedValue(true);
     listDtbs.mockResolvedValue([makeDtb()]);
   });
 

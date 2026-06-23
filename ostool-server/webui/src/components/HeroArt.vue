@@ -129,6 +129,6 @@
   display: block;
   width: 100%;
   height: auto;
-  max-width: 520px;
+  max-width: 760px;
 }
 </style>

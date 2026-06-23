@@ -20,6 +20,7 @@ const MIGRATION_BOARD_CONFIGS: &str = "0002_board_configs";
 const MIGRATION_DTB_AUDIT: &str = "0003_dtb_audit";
 const MIGRATION_STANDARD_FIELDS: &str = "0004_standard_profile_fields";
 const MIGRATION_SITE_SETTINGS: &str = "0005_site_settings";
+const MIGRATION_PERFORMANCE_INDEXES: &str = "0006_performance_indexes";
 
 const BUILTIN_PERMISSIONS: &[(&str, &str, &str)] = &[
     ("overview.read", "查看概览", "查看站点运行情况和统计数据"),
@@ -90,6 +91,14 @@ impl SqliteStorage {
         if !self.is_migration_applied(MIGRATION_SITE_SETTINGS).await? {
             self.migrate_site_settings().await?;
             self.mark_migration_applied(MIGRATION_SITE_SETTINGS).await?;
+        }
+        if !self
+            .is_migration_applied(MIGRATION_PERFORMANCE_INDEXES)
+            .await?
+        {
+            self.migrate_performance_indexes().await?;
+            self.mark_migration_applied(MIGRATION_PERFORMANCE_INDEXES)
+                .await?;
         }
         Ok(())
     }
@@ -366,6 +375,30 @@ impl SqliteStorage {
         .execute(&self.pool)
         .await?;
         self.seed_site_settings().await?;
+        Ok(())
+    }
+
+    async fn migrate_performance_indexes(&self) -> anyhow::Result<()> {
+        for statement in [
+            "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions(expires_at)",
+            "CREATE INDEX IF NOT EXISTS idx_auth_sessions_revoked_at ON auth_sessions(revoked_at)",
+            "CREATE INDEX IF NOT EXISTS idx_leases_state ON leases(state)",
+            "CREATE INDEX IF NOT EXISTS idx_leases_expires_at ON leases(expires_at)",
+            "CREATE INDEX IF NOT EXISTS idx_leases_board_id ON leases(board_id)",
+            "CREATE INDEX IF NOT EXISTS idx_leases_user_state ON leases(user_id, state)",
+            "CREATE INDEX IF NOT EXISTS idx_user_roles_role_id ON user_roles(role_id)",
+            "CREATE INDEX IF NOT EXISTS idx_role_permissions_permission_id ON role_permissions(permission_id)",
+            "CREATE INDEX IF NOT EXISTS idx_roles_system_name ON roles(`system`, name)",
+            "CREATE INDEX IF NOT EXISTS idx_dtb_files_uploaded_by ON dtb_files(uploaded_by)",
+            "CREATE INDEX IF NOT EXISTS idx_dtb_files_sha256 ON dtb_files(sha256)",
+            "CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_user_id ON audit_logs(actor_user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_type, target_id)",
+            "CREATE INDEX IF NOT EXISTS idx_site_settings_group_name ON site_settings(group_name)",
+        ] {
+            sqlx::query(statement).execute(&self.pool).await?;
+        }
         Ok(())
     }
 
@@ -999,6 +1032,30 @@ impl AuthSessionRepository for SqliteStorage {
             .as_ref()
             .map(auth_session_from_row)
             .transpose()
+    }
+
+    async fn find_user_by_auth_token_hash(
+        &self,
+        token_hash: &str,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<Option<User>> {
+        sqlx::query(
+            r#"
+            SELECT users.*
+            FROM users
+            INNER JOIN auth_sessions ON auth_sessions.user_id = users.id
+            WHERE auth_sessions.token_hash = ?
+                AND auth_sessions.expires_at > ?
+                AND auth_sessions.revoked_at IS NULL
+            "#,
+        )
+        .bind(token_hash)
+        .bind(now.to_rfc3339())
+        .fetch_optional(&self.pool)
+        .await?
+        .as_ref()
+        .map(user_from_row)
+        .transpose()
     }
 
     async fn delete_auth_session_by_token_hash(&self, token_hash: &str) -> anyhow::Result<()> {

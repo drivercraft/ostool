@@ -73,6 +73,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
 /* ---- 弹窗 ---- */
 const modalMode = ref<ModalMode>(null);
 const modalUser = ref<AdminUserResponse | null>(null);
+const pointerDownOnModalOverlay = ref(false);
 const form = ref({
   username: "",
   display_name: "",
@@ -119,6 +120,17 @@ function openResetPassword(user: AdminUserResponse) {
 function closeModal() {
   modalMode.value = null;
   modalUser.value = null;
+}
+
+function onModalOverlayPointerDown(event: PointerEvent) {
+  pointerDownOnModalOverlay.value = event.target === event.currentTarget;
+}
+
+function onModalOverlayClick(event: MouseEvent) {
+  if (pointerDownOnModalOverlay.value && event.target === event.currentTarget) {
+    closeModal();
+  }
+  pointerDownOnModalOverlay.value = false;
 }
 
 /* ---- 数据加载 ---- */
@@ -224,7 +236,13 @@ async function submitResetPassword() {
 
 async function toggleDisabled(user: AdminUserResponse) {
   const action = user.disabled ? "启用" : "禁用";
-  if (!window.confirm(`确认${action}用户 ${user.username}？`)) {
+  const confirmed = await ui.confirm({
+    tone: user.disabled ? "info" : "danger",
+    title: `${action}用户`,
+    message: `确认${action}用户 ${user.username}？`,
+    confirmLabel: action,
+  });
+  if (!confirmed) {
     return;
   }
   try {
@@ -238,6 +256,30 @@ async function toggleDisabled(user: AdminUserResponse) {
       await api.disableAdminUser(user.id);
     }
     ui.setSuccess(`已${action}用户 ${user.username}`);
+    await loadUsers();
+  } catch (error) {
+    ui.setError((error as Error).message);
+  }
+}
+
+async function deleteUser(user: AdminUserResponse) {
+  if (user.disabled) {
+    closeMenu();
+    return;
+  }
+  const confirmed = await ui.confirm({
+    tone: "danger",
+    title: "删除用户",
+    message: `确认删除用户 ${user.username}？`,
+    confirmLabel: "删除",
+  });
+  if (!confirmed) {
+    return;
+  }
+  try {
+    await api.disableAdminUser(user.id);
+    ui.setSuccess(`已删除用户 ${user.username}`);
+    closeMenu();
     await loadUsers();
   } catch (error) {
     ui.setError((error as Error).message);
@@ -270,12 +312,12 @@ onMounted(() => {
   <section class="page-grid users-page">
     <div class="admin-toolbar">
       <div class="admin-toolbar-left">
-        <button class="primary-button" @click="openCreate">
-          <Icon name="plus" :size="16" class="btn-icon-left" />
+        <button class="btn btn-primary" @click="openCreate">
+          <Icon name="plus" :size="16" class="btn-icon" />
           新增用户
         </button>
-        <button class="ghost-button compact-button" @click="loadUsers">
-          <Icon name="refresh" :size="14" class="btn-icon-left" />
+        <button class="btn btn-ghost btn-sm" @click="loadUsers">
+          <Icon name="refresh" :size="14" class="btn-icon" />
           刷新
         </button>
       </div>
@@ -362,14 +404,14 @@ onMounted(() => {
               <td class="col-actions">
                 <div class="row-actions">
                   <button
-                    class="icon-action"
+                    class="btn-icon-only"
                     title="编辑"
                     @click="openEdit(user)"
                   >
                     <Icon name="edit" :size="16" />
                   </button>
                   <button
-                    class="icon-action"
+                    class="btn-icon-only"
                     :title="user.disabled ? '启用' : '禁用'"
                     @click="toggleDisabled(user)"
                   >
@@ -377,7 +419,7 @@ onMounted(() => {
                   </button>
                   <div class="row-action-menu">
                     <button
-                      class="icon-action"
+                      class="btn-icon-only"
                       title="更多"
                       :aria-expanded="openMenuUserId === user.id"
                       @click.stop="toggleMenu(user.id)"
@@ -401,10 +443,11 @@ onMounted(() => {
                       </button>
                       <button
                         class="action-menu-item"
-                        @click="toggleDisabled(user)"
+                        :disabled="user.disabled"
+                        @click="deleteUser(user)"
                       >
-                        <Icon :name="user.disabled ? 'check' : 'ban'" :size="14" />
-                        {{ user.disabled ? "启用用户" : "禁用用户" }}
+                        <Icon name="trash" :size="14" />
+                        删除用户
                       </button>
                     </div>
                   </div>
@@ -417,19 +460,18 @@ onMounted(() => {
     </div>
 
     <!-- 创建 / 编辑 / 重置密码 弹窗 -->
-    <div v-if="modalMode" class="modal-overlay" @click.self="closeModal">
-      <div class="modal-card modal-card--narrow">
+    <div
+      v-if="modalMode"
+      class="modal-overlay"
+      @pointerdown="onModalOverlayPointerDown"
+      @click="onModalOverlayClick"
+    >
+      <div
+        class="modal-card"
+        :class="modalMode === 'reset-password' ? 'modal-card--narrow' : 'modal-card--user-form'"
+      >
         <header class="modal-header">
           <div>
-            <p class="eyebrow">
-              {{
-                modalMode === "create"
-                  ? "New User"
-                  : modalMode === "edit"
-                    ? "Edit User"
-                    : "Reset Password"
-              }}
-            </p>
             <h3>
               {{
                 modalMode === "create"
@@ -440,95 +482,95 @@ onMounted(() => {
               }}
             </h3>
           </div>
-          <button class="icon-action" title="关闭" @click="closeModal">
-            <Icon name="logout" :size="16" />
-          </button>
+          <button class="btn-icon-only modal-close-button" title="关闭" @click="closeModal">×</button>
         </header>
 
         <form class="modal-form" @submit.prevent="submitModal">
-          <template v-if="modalMode === 'create'">
-            <label class="field">
-              <span>用户名</span>
-              <input v-model="form.username" autocomplete="off" />
-            </label>
-            <label class="field">
-              <span>显示名</span>
-              <input v-model="form.display_name" autocomplete="off" />
-            </label>
-            <label class="field">
-              <span>邮箱</span>
-              <input v-model="form.email" autocomplete="off" />
-            </label>
-            <label class="field">
-              <span>密码</span>
-              <input v-model="form.password" type="password" autocomplete="new-password" />
-            </label>
-          </template>
-
-          <template v-else-if="modalMode === 'edit'">
-            <label class="field">
-              <span>用户名</span>
-              <input :value="form.username" disabled />
-            </label>
-            <label class="field">
-              <span>显示名</span>
-              <input v-model="form.display_name" />
-            </label>
-            <label class="field">
-              <span>邮箱</span>
-              <input v-model="form.email" />
-            </label>
-            <label class="toggle-field">
-              <span class="toggle-switch">
-                <input v-model="form.disabled" type="checkbox" />
-                <span class="toggle-track" />
-                <span class="toggle-knob" />
-              </span>
-              <span class="toggle-label">
-                {{ form.disabled ? "已禁用登录" : "允许登录" }}
-              </span>
-            </label>
-          </template>
-
-          <template v-else>
-            <p class="modal-hint">
-              为 <code>{{ modalUser?.username }}</code> 设置新密码，提交后立即生效。
-            </p>
-            <label class="field">
-              <span>新密码</span>
-              <input v-model="form.password" type="password" autocomplete="new-password" />
-            </label>
-          </template>
-
-          <div v-if="modalMode === 'create' || modalMode === 'edit'" class="field">
-            <span>RBAC 角色</span>
-            <div class="role-check-grid">
-              <label
-                v-for="role in roles"
-                :key="role.id"
-                class="checkbox-field"
-              >
-                <input
-                  v-model="form.role_ids"
-                  type="checkbox"
-                  :value="role.id"
-                />
-                <span>{{ role.display_name }}</span>
+          <div class="modal-body modal-body-grid">
+            <template v-if="modalMode === 'create'">
+              <label class="field">
+                <span>用户名</span>
+                <input v-model="form.username" autocomplete="off" />
               </label>
+              <label class="field">
+                <span>显示名</span>
+                <input v-model="form.display_name" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>邮箱</span>
+                <input v-model="form.email" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>密码</span>
+                <input v-model="form.password" type="password" autocomplete="new-password" />
+              </label>
+            </template>
+
+            <template v-else-if="modalMode === 'edit'">
+              <label class="field">
+                <span>用户名</span>
+                <input :value="form.username" disabled />
+              </label>
+              <label class="field">
+                <span>显示名</span>
+                <input v-model="form.display_name" />
+              </label>
+              <label class="field">
+                <span>邮箱</span>
+                <input v-model="form.email" />
+              </label>
+              <label class="toggle-field">
+                <span class="toggle-switch">
+                  <input v-model="form.disabled" type="checkbox" />
+                  <span class="toggle-track" />
+                  <span class="toggle-knob" />
+                </span>
+                <span class="toggle-label">
+                  {{ form.disabled ? "已禁用登录" : "允许登录" }}
+                </span>
+              </label>
+            </template>
+
+            <template v-else>
+              <p class="modal-hint">
+                为 <code>{{ modalUser?.username }}</code> 设置新密码，提交后立即生效。
+              </p>
+              <label class="field modal-field-full">
+                <span>新密码</span>
+                <input v-model="form.password" type="password" autocomplete="new-password" />
+              </label>
+            </template>
+
+            <div v-if="modalMode === 'create' || modalMode === 'edit'" class="field modal-field-full">
+              <span>RBAC 角色</span>
+              <div class="role-check-grid">
+                <label
+                  v-for="role in roles"
+                  :key="role.id"
+                  class="checkbox-field"
+                >
+                  <input
+                    v-model="form.role_ids"
+                    type="checkbox"
+                    :value="role.id"
+                  />
+                  <span>{{ role.display_name }}</span>
+                </label>
+              </div>
             </div>
           </div>
 
           <div class="modal-actions toolbar-actions">
+            <button type="submit" class="btn btn-primary" :disabled="submitting">
+              {{ submitting ? "提交中..." : "保存" }}
+            </button>
             <button
               type="button"
-              class="ghost-button"
+              class="btn btn-ghost"
               :disabled="submitting"
               @click="closeModal"
             >
               取消
-            </button>
-            <button type="submit" class="primary-button" :disabled="submitting">
-              {{ submitting ? "提交中..." : "保存" }}
             </button>
           </div>
         </form>

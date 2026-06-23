@@ -10,9 +10,8 @@ const uiStore = {
   clearMessages: vi.fn(),
   setError: vi.fn(),
   setSuccess: vi.fn(),
+  confirm: vi.fn(),
 };
-
-vi.stubGlobal("confirm", vi.fn(() => true));
 
 vi.mock("@/api", () => ({
   api: {
@@ -75,6 +74,8 @@ describe("SessionsView", () => {
     uiStore.clearMessages.mockReset();
     uiStore.setError.mockReset();
     uiStore.setSuccess.mockReset();
+    uiStore.confirm.mockReset();
+    uiStore.confirm.mockResolvedValue(true);
     listBoards.mockResolvedValue([makeBoard()]);
     listSessions.mockResolvedValue({ sessions: [makeSession()] });
   });

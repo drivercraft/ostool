@@ -98,12 +98,11 @@ onMounted(() => {
     <div class="panel">
       <div class="panel-heading">
         <div>
-          <p class="eyebrow">安全配置优先</p>
           <h3>Server 顶层配置</h3>
         </div>
         <div class="toolbar-actions">
-          <button class="ghost-button" @click="loadConfig">刷新</button>
-          <button class="primary-button" :disabled="saving || !config" @click="saveConfig">
+          <button class="btn btn-ghost" @click="loadConfig">刷新</button>
+          <button class="btn btn-primary" :disabled="saving || !config" @click="saveConfig">
             {{ saving ? "保存中..." : "保存配置" }}
           </button>
         </div>
@@ -218,7 +217,7 @@ onMounted(() => {
                       {{ networkInterface.label }}
                     </option>
                   </select>
-                  <button class="ghost-button compact-button" type="button" @click="refreshNetworkInterfaces">
+                  <button class="btn btn-ghost btn-sm" type="button" @click="refreshNetworkInterfaces">
                     刷新网卡
                   </button>
                 </div>

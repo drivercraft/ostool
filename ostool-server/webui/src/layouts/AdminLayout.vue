@@ -2,8 +2,8 @@
 import { computed, reactive, watch } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
 
+import AppDialog from "@/components/AppDialog.vue";
 import Icon, { type IconName } from "@/components/Icon.vue";
-import NoticeBanner from "@/components/NoticeBanner.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 
@@ -64,8 +64,7 @@ const navGroups = computed<NavGroup[]>(() => [
     icon: "users",
     items: [
       { to: "/admin/users/list", label: "用户列表" },
-      { to: "/admin/users/roles", label: "用户角色" },
-      { to: "/admin/users/permissions", label: "权限配置" },
+      { to: "/admin/users/roles", label: "角色与权限" },
     ],
   },
 ]);
@@ -154,13 +153,13 @@ function toggleGroup(group: NavGroup) {
           <h2>{{ ui.title }}</h2>
         </div>
         <div class="topbar-actions" aria-label="管理台工具栏">
-          <button class="icon-button" type="button" title="消息">
+          <button class="btn-icon-only" type="button" title="消息">
             <Icon name="bell" :size="18" />
           </button>
-          <button class="icon-button" type="button" title="主题">
+          <button class="btn-icon-only" type="button" title="主题">
             <Icon name="moon" :size="18" />
           </button>
-          <button class="icon-button" type="button" title="语言">
+          <button class="btn-icon-only" type="button" title="语言">
             <Icon name="globe" :size="18" />
           </button>
           <div class="admin-avatar" :title="displayName">
@@ -170,18 +169,14 @@ function toggleGroup(group: NavGroup) {
       </header>
 
       <main class="page-body">
-        <NoticeBanner
-          v-if="ui.successMessage"
-          tone="success"
-          :message="ui.successMessage"
-        />
-        <NoticeBanner
-          v-if="ui.errorMessage"
-          tone="error"
-          :message="ui.errorMessage"
-        />
         <RouterView />
       </main>
     </div>
+    <AppDialog
+      v-if="ui.dialog"
+      :dialog="ui.dialog"
+      @confirm="ui.closeDialog(true)"
+      @cancel="ui.closeDialog(false)"
+    />
   </div>
 </template>

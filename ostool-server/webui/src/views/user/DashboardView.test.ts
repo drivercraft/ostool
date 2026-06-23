@@ -8,6 +8,7 @@ const uiStore = {
   clearMessages: vi.fn(),
   setError: vi.fn(),
   setSuccess: vi.fn(),
+  confirm: vi.fn(),
 };
 const routerPush = vi.fn();
 const routerReplace = vi.fn();
@@ -58,6 +59,8 @@ describe("DashboardView", () => {
     uiStore.clearMessages.mockReset();
     uiStore.setError.mockReset();
     uiStore.setSuccess.mockReset();
+    uiStore.confirm.mockReset();
+    uiStore.confirm.mockResolvedValue(true);
     routerPush.mockReset();
     routerReplace.mockReset();
 

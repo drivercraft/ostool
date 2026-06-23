@@ -44,7 +44,13 @@ async function loadSessions() {
 }
 
 async function releaseSession(sessionId: string) {
-  if (!window.confirm(`确认释放会话 ${sessionId} 吗？`)) {
+  const confirmed = await ui.confirm({
+    tone: "danger",
+    title: "释放会话",
+    message: `确认释放会话 ${sessionId} 吗？`,
+    confirmLabel: "释放",
+  });
+  if (!confirmed) {
     return;
   }
 
@@ -68,10 +74,9 @@ onMounted(() => {
     <div class="panel">
       <div class="panel-heading">
         <div>
-          <p class="eyebrow">租约与释放</p>
           <h3>当前活跃会话</h3>
         </div>
-        <button class="ghost-button" @click="loadSessions">刷新</button>
+        <button class="btn btn-ghost" @click="loadSessions">刷新</button>
       </div>
 
       <div v-if="loading" class="empty-state">正在加载会话列表...</div>
@@ -105,7 +110,7 @@ onMounted(() => {
             </td>
             <td>
               <button
-                class="inline-link danger-link"
+                class="btn btn-danger btn-sm"
                 :disabled="session.state === 'releasing'"
                 @click="releaseSession(session.id)"
               >

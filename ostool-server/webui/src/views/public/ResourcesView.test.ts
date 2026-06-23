@@ -6,6 +6,7 @@ const uiStore = {
   clearMessages: vi.fn(),
   setError: vi.fn(),
   setSuccess: vi.fn(),
+  confirm: vi.fn(),
 };
 
 vi.mock("@/api", () => ({
@@ -27,6 +28,8 @@ describe("ResourcesView", () => {
     uiStore.clearMessages.mockReset();
     uiStore.setError.mockReset();
     uiStore.setSuccess.mockReset();
+    uiStore.confirm.mockReset();
+    uiStore.confirm.mockResolvedValue(true);
 
     listBoardTypes.mockResolvedValue([
       {

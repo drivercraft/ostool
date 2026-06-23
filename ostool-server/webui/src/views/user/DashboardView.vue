@@ -104,7 +104,13 @@ async function createSession() {
 }
 
 async function releaseSession(leaseId: string) {
-  if (!window.confirm(`确认释放租赁 ${leaseId}？相关开发板将归还到资源池。`)) {
+  const confirmed = await ui.confirm({
+    tone: "danger",
+    title: "释放租赁",
+    message: `确认释放租赁 ${leaseId}？相关开发板将归还到资源池。`,
+    confirmLabel: "释放",
+  });
+  if (!confirmed) {
     return;
   }
   try {
@@ -114,11 +120,6 @@ async function releaseSession(leaseId: string) {
   } catch (error) {
     ui.setError((error as Error).message);
   }
-}
-
-async function logout() {
-  await auth.logoutUser();
-  void router.push("/");
 }
 
 onMounted(() => {
@@ -137,95 +138,99 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="public-page-body">
-    <header class="public-page-header">
-      <p class="eyebrow">用户控制台</p>
-      <h2>你好，{{ auth.user?.display_name ?? auth.user?.username }}</h2>
-      <p class="public-page-subtitle">在这里管理你的会话租约、查看分配的开发板并释放不再使用的资源。</p>
-    </header>
-
-    <div class="dashboard-grid">
-      <!-- Left Column -->
-      <div class="dashboard-sidebar">
-        <div class="profile-card card">
-          <div class="profile-avatar">{{ (auth.user?.display_name ?? auth.user?.username ?? '?').slice(0, 1).toUpperCase() }}</div>
-          <div class="profile-name">{{ auth.user?.display_name ?? auth.user?.username }}</div>
-          <span :class="auth.isAdmin ? 'pill pill-warning' : 'pill pill-success'">{{ auth.isAdmin ? '管理员' : '普通用户' }}</span>
-          <dl class="profile-dl">
-            <div><dt>用户名</dt><dd><code>{{ auth.user?.username }}</code></dd></div>
-            <div><dt>邮箱</dt><dd>{{ auth.user?.email }}</dd></div>
-            <div><dt>用户 ID</dt><dd><code>{{ auth.user?.id }}</code></dd></div>
-          </dl>
-          <button class="btn btn-ghost btn-sm" style="width:100%;color:var(--c-danger)" @click="logout">退出登录</button>
-        </div>
-
-        <div class="card">
-          <div class="panel-heading compact"><h3>申请新会话</h3></div>
-          <div class="dashboard-form">
-            <label class="form-group">
-              <span class="form-label">开发板型号</span>
-              <select v-model="selectedBoardType" :disabled="loading || submitting" class="input">
-                <option value="" disabled>请选择...</option>
-                <option v-for="board in boardTypes" :key="board.board_type" :value="board.board_type">
-                  {{ board.board_type }}（可用 {{ board.available }} / {{ board.total }}）
-                </option>
-              </select>
-            </label>
-            <label class="form-group">
-              <span class="form-label">必需标签（逗号分隔，可留空）</span>
-              <input v-model="requiredTags" placeholder="例如：lab, usb" :disabled="submitting" class="input" />
-            </label>
-            <button class="btn btn-primary" style="width:100%;justify-content:center" :disabled="submitting || loading" @click="createSession">
-              {{ submitting ? '申请中...' : '申请会话' }}
-            </button>
-            <button class="btn btn-ghost btn-sm" style="width:100%" :disabled="loading" @click="loadAll">刷新数据</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Right Column -->
+  <div class="dashboard-page">
+    <section id="overview" class="dashboard-welcome">
       <div>
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">我的会话</p>
-            <h3>当前持有的开发板租约 <span style="font-weight:400;font-size:.875rem;color:var(--c-text-muted)">{{ activeSessions.length }} 个活跃</span></h3>
-          </div>
+        <h2>你好，{{ auth.user?.display_name ?? auth.user?.username }}</h2>
+        <p class="public-page-subtitle">在这里申请开发板会话、查看分配资源并释放不再使用的租约。</p>
+      </div>
+      <div class="dashboard-kpis">
+        <div>
+          <span>{{ activeSessions.length }}</span>
+          <p>活跃租约</p>
         </div>
-
-        <div v-if="loading" class="empty-state"><div class="empty-state-icon">&#9641;</div>正在加载会话...</div>
-        <div v-else-if="activeSessions.length === 0" class="empty-state">
-          <div class="empty-state-icon">&#9641;</div>
-          当前没有活跃会话。选择型号后点击"申请会话"即可获得一块开发板。
-        </div>
-
-        <div v-else class="board-card-grid">
-          <article v-for="session in activeSessions" :key="session.lease.id" class="board-card">
-            <div class="board-card-header">
-              <div class="board-card-id">
-                <code>{{ session.lease.board_id }}</code>
-                <span class="board-card-meta">{{ session.lease.board_type }} &middot; {{ session.session?.state ?? session.lease.state }}</span>
-              </div>
-              <span class="pill pill-success">活跃</span>
-            </div>
-
-            <dl class="key-value-list lease-card-stats">
-              <div><dt>租赁 ID</dt><dd><code>{{ session.lease.id }}</code></dd></div>
-              <div><dt>会话 ID</dt><dd><code>{{ session.lease.session_id }}</code></dd></div>
-              <div><dt>到期时间</dt><dd>{{ formatTime(session.lease.expires_at) }}</dd></div>
-              <div><dt>剩余时长</dt><dd :style="{color: remainingLabel(session.lease.expires_at) === '已过期' ? 'var(--c-danger)' : 'var(--c-success)'}">{{ remainingLabel(session.lease.expires_at) }}</dd></div>
-            </dl>
-
-            <div v-if="session.lease.required_tags.length > 0" style="display:flex;gap:.375rem;align-items:center;margin-bottom:.75rem">
-              <span style="font-size:.75rem;color:var(--c-text-muted)">标签:</span>
-              <span v-for="tag in session.lease.required_tags" :key="tag" class="tag">{{ tag }}</span>
-            </div>
-
-            <div class="toolbar-actions" style="justify-content:flex-end">
-              <button class="btn btn-danger btn-sm" type="button" @click="releaseSession(session.lease.id)">释放租赁</button>
-            </div>
-          </article>
+        <div>
+          <span>{{ boardTypes.length }}</span>
+          <p>可选型号</p>
         </div>
       </div>
-    </div>
+    </section>
+
+    <section id="request" class="dashboard-request-panel card">
+      <div class="panel-heading compact"><h3>申请新会话</h3></div>
+      <div class="dashboard-form dashboard-form-inline">
+        <label class="form-group">
+          <span class="form-label">开发板型号</span>
+          <select v-model="selectedBoardType" :disabled="loading || submitting" class="input">
+            <option value="" disabled>请选择...</option>
+            <option v-for="board in boardTypes" :key="board.board_type" :value="board.board_type">
+              {{ board.board_type }}（可用 {{ board.available }} / {{ board.total }}）
+            </option>
+          </select>
+        </label>
+        <label class="form-group">
+          <span class="form-label">必需标签（逗号分隔，可留空）</span>
+          <input v-model="requiredTags" placeholder="例如：lab, usb" :disabled="submitting" class="input" />
+        </label>
+        <div class="dashboard-form-actions">
+          <button class="btn btn-primary" :disabled="submitting || loading" @click="createSession">
+            {{ submitting ? '申请中...' : '申请会话' }}
+          </button>
+          <button class="btn btn-ghost btn-sm" :disabled="loading" @click="loadAll">刷新数据</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="leases" class="dashboard-session-section">
+      <div class="panel-heading">
+        <div>
+          <h3>当前持有的开发板租约 <span>{{ activeSessions.length }} 个活跃</span></h3>
+        </div>
+      </div>
+
+      <div v-if="loading" class="empty-state"><div class="empty-state-icon">&#9641;</div>正在加载会话...</div>
+      <div v-else-if="activeSessions.length === 0" class="empty-state">
+        <div class="empty-state-icon">&#9641;</div>
+        当前没有活跃会话。选择型号后点击"申请会话"即可获得一块开发板。
+      </div>
+
+      <div v-else class="board-card-grid">
+        <article v-for="session in activeSessions" :key="session.lease.id" class="board-card">
+          <div class="board-card-header">
+            <div class="board-card-id">
+              <code>{{ session.lease.board_id }}</code>
+              <span class="board-card-meta">{{ session.lease.board_type }} &middot; {{ session.session?.state ?? session.lease.state }}</span>
+            </div>
+            <span class="pill pill-success">活跃</span>
+          </div>
+
+          <dl class="key-value-list lease-card-stats">
+            <div><dt>租赁 ID</dt><dd><code>{{ session.lease.id }}</code></dd></div>
+            <div><dt>会话 ID</dt><dd><code>{{ session.lease.session_id }}</code></dd></div>
+            <div><dt>到期时间</dt><dd>{{ formatTime(session.lease.expires_at) }}</dd></div>
+            <div><dt>剩余时长</dt><dd :style="{color: remainingLabel(session.lease.expires_at) === '已过期' ? 'var(--c-danger)' : 'var(--c-success)'}">{{ remainingLabel(session.lease.expires_at) }}</dd></div>
+          </dl>
+
+          <div v-if="session.lease.required_tags.length > 0" class="lease-tags">
+            <span>标签:</span>
+            <span v-for="tag in session.lease.required_tags" :key="tag" class="tag">{{ tag }}</span>
+          </div>
+
+          <div class="toolbar-actions">
+            <button class="btn btn-danger btn-sm" type="button" @click="releaseSession(session.lease.id)">释放租赁</button>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="account" class="dashboard-account-card card">
+      <div class="panel-heading compact"><h3>账号信息</h3></div>
+      <dl class="profile-dl dashboard-account-dl">
+        <div><dt>用户名</dt><dd><code>{{ auth.user?.username }}</code></dd></div>
+        <div><dt>邮箱</dt><dd>{{ auth.user?.email }}</dd></div>
+        <div><dt>用户 ID</dt><dd><code>{{ auth.user?.id }}</code></dd></div>
+        <div><dt>角色</dt><dd>{{ auth.isAdmin ? '管理员' : '普通用户' }}</dd></div>
+      </dl>
+    </section>
   </div>
 </template>

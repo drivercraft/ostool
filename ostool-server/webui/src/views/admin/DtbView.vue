@@ -18,6 +18,7 @@ const editingDtbName = ref<string | null>(null);
 const editDtbName = ref("");
 const editDtbFile = ref<File | null>(null);
 const editDtbFileInput = ref<HTMLInputElement | null>(null);
+const pointerDownOnModalOverlay = ref(false);
 const DTB_UPLOAD_MAX_MIB = 10;
 const DTB_UPLOAD_MAX_BYTES = DTB_UPLOAD_MAX_MIB * 1024 * 1024;
 
@@ -123,6 +124,17 @@ function closeEditDtb() {
   }
 }
 
+function onModalOverlayPointerDown(event: PointerEvent) {
+  pointerDownOnModalOverlay.value = event.target === event.currentTarget;
+}
+
+function onModalOverlayClick(event: MouseEvent) {
+  if (pointerDownOnModalOverlay.value && event.target === event.currentTarget) {
+    closeEditDtb();
+  }
+  pointerDownOnModalOverlay.value = false;
+}
+
 async function saveDtb() {
   const currentName = editingDtbName.value;
   if (!currentName) {
@@ -162,7 +174,13 @@ async function saveDtb() {
 }
 
 async function removeDtb(name: string) {
-  if (!window.confirm(`确认删除 DTB ${name} 吗？`)) {
+  const confirmed = await ui.confirm({
+    tone: "danger",
+    title: "删除 DTB",
+    message: `确认删除 DTB ${name} 吗？`,
+    confirmLabel: "删除",
+  });
+  if (!confirmed) {
     return;
   }
 
@@ -189,11 +207,10 @@ onMounted(() => {
     <div class="panel">
       <div class="panel-heading">
         <div>
-          <p class="eyebrow">独立 DTB 仓库</p>
           <h3>DTB 管理</h3>
         </div>
         <div class="toolbar-actions">
-          <button class="ghost-button" @click="loadDtbs">刷新</button>
+          <button class="btn btn-ghost" @click="loadDtbs">刷新</button>
         </div>
       </div>
 
@@ -216,7 +233,7 @@ onMounted(() => {
           </label>
           <div class="field action-field">
             <span>操作</span>
-            <button class="primary-button" :disabled="creating" @click="createDtb">
+            <button class="btn btn-primary" :disabled="creating" @click="createDtb">
               {{ creating ? "上传中..." : "上传 DTB" }}
             </button>
           </div>
@@ -244,14 +261,14 @@ onMounted(() => {
             <td>
               <div class="toolbar-actions">
                 <button
-                  class="ghost-button compact-button"
+                  class="btn btn-ghost btn-sm"
                   :disabled="updatingName === dtb.name"
                   @click="openEditDtb(dtb)"
                 >
                   修改
                 </button>
                 <button
-                  class="danger-button compact-button"
+                  class="btn btn-danger btn-sm"
                   :disabled="deletingName === dtb.name"
                   @click="removeDtb(dtb.name)"
                 >
@@ -268,39 +285,42 @@ onMounted(() => {
   <div
     v-if="editingDtbName"
     class="modal-overlay"
-    @click.self="closeEditDtb"
+    @pointerdown="onModalOverlayPointerDown"
+    @click="onModalOverlayClick"
   >
     <div class="modal-card">
-      <div class="panel-heading compact">
+      <header class="modal-header">
         <div>
-          <p class="eyebrow">编辑 DTB</p>
-          <h4>{{ editingDtbName }}</h4>
+          <h3>{{ editingDtbName }}</h3>
         </div>
-      </div>
+        <button class="btn-icon-only modal-close-button" title="关闭" @click="closeEditDtb">×</button>
+      </header>
 
-      <div class="form-grid two-columns">
-        <label class="field">
-          <span>文件名</span>
-          <input v-model="editDtbName" placeholder="例如 board.dtb" />
-        </label>
-        <label class="field">
-          <span>替换文件</span>
-          <input
-            ref="editDtbFileInput"
-            type="file"
-            accept=".dtb,application/octet-stream"
-            @change="onReplaceFileChange"
-          />
-        </label>
+      <div class="modal-body">
+        <div class="form-grid two-columns">
+          <label class="field">
+            <span>文件名</span>
+            <input v-model="editDtbName" placeholder="例如 board.dtb" />
+          </label>
+          <label class="field">
+            <span>替换文件</span>
+            <input
+              ref="editDtbFileInput"
+              type="file"
+              accept=".dtb,application/octet-stream"
+              @change="onReplaceFileChange"
+            />
+          </label>
+        </div>
+        <p class="muted">替换上传时同样受 {{ DTB_UPLOAD_MAX_MIB }} MiB 限制。</p>
       </div>
-      <p class="muted">替换上传时同样受 {{ DTB_UPLOAD_MAX_MIB }} MiB 限制。</p>
 
       <div class="toolbar-actions modal-actions">
-        <button class="ghost-button" :disabled="updatingName === editingDtbName" @click="closeEditDtb">
-          取消
-        </button>
-        <button class="primary-button" :disabled="updatingName === editingDtbName" @click="saveDtb">
+        <button class="btn btn-primary" :disabled="updatingName === editingDtbName" @click="saveDtb">
           {{ updatingName === editingDtbName ? "保存中..." : "保存修改" }}
+        </button>
+        <button class="btn btn-ghost" :disabled="updatingName === editingDtbName" @click="closeEditDtb">
+          取消
         </button>
       </div>
     </div>

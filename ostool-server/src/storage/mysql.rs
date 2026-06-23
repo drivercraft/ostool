@@ -18,6 +18,7 @@ const MIGRATION_BOARD_CONFIGS: &str = "0002_board_configs";
 const MIGRATION_DTB_AUDIT: &str = "0003_dtb_audit";
 const MIGRATION_STANDARD_FIELDS: &str = "0004_standard_profile_fields";
 const MIGRATION_SITE_SETTINGS: &str = "0005_site_settings";
+const MIGRATION_PERFORMANCE_INDEXES: &str = "0006_performance_indexes";
 
 const BUILTIN_PERMISSIONS: &[(&str, &str, &str)] = &[
     ("overview.read", "查看概览", "查看站点运行情况和统计数据"),
@@ -84,6 +85,14 @@ impl MysqlStorage {
         if !self.is_migration_applied(MIGRATION_SITE_SETTINGS).await? {
             self.migrate_site_settings().await?;
             self.mark_migration_applied(MIGRATION_SITE_SETTINGS).await?;
+        }
+        if !self
+            .is_migration_applied(MIGRATION_PERFORMANCE_INDEXES)
+            .await?
+        {
+            self.migrate_performance_indexes().await?;
+            self.mark_migration_applied(MIGRATION_PERFORMANCE_INDEXES)
+                .await?;
         }
         Ok(())
     }
@@ -346,6 +355,85 @@ impl MysqlStorage {
         Ok(())
     }
 
+    async fn migrate_performance_indexes(&self) -> anyhow::Result<()> {
+        for (table, index, statement) in [
+            (
+                "auth_sessions",
+                "idx_auth_sessions_expires_at",
+                "CREATE INDEX idx_auth_sessions_expires_at ON auth_sessions(expires_at)",
+            ),
+            (
+                "auth_sessions",
+                "idx_auth_sessions_revoked_at",
+                "CREATE INDEX idx_auth_sessions_revoked_at ON auth_sessions(revoked_at)",
+            ),
+            (
+                "leases",
+                "idx_leases_state",
+                "CREATE INDEX idx_leases_state ON leases(state)",
+            ),
+            (
+                "leases",
+                "idx_leases_expires_at",
+                "CREATE INDEX idx_leases_expires_at ON leases(expires_at)",
+            ),
+            (
+                "leases",
+                "idx_leases_board_id",
+                "CREATE INDEX idx_leases_board_id ON leases(board_id)",
+            ),
+            (
+                "leases",
+                "idx_leases_user_state",
+                "CREATE INDEX idx_leases_user_state ON leases(user_id, state)",
+            ),
+            (
+                "roles",
+                "idx_roles_system_name",
+                "CREATE INDEX idx_roles_system_name ON roles(`system`, name)",
+            ),
+            (
+                "board_configs",
+                "idx_board_configs_board_type",
+                "CREATE INDEX idx_board_configs_board_type ON board_configs(board_type)",
+            ),
+            (
+                "dtb_files",
+                "idx_dtb_files_uploaded_by",
+                "CREATE INDEX idx_dtb_files_uploaded_by ON dtb_files(uploaded_by)",
+            ),
+            (
+                "dtb_files",
+                "idx_dtb_files_sha256",
+                "CREATE INDEX idx_dtb_files_sha256 ON dtb_files(sha256)",
+            ),
+            (
+                "audit_logs",
+                "idx_audit_logs_actor_user_id",
+                "CREATE INDEX idx_audit_logs_actor_user_id ON audit_logs(actor_user_id)",
+            ),
+            (
+                "audit_logs",
+                "idx_audit_logs_created_at",
+                "CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at)",
+            ),
+            (
+                "audit_logs",
+                "idx_audit_logs_target",
+                "CREATE INDEX idx_audit_logs_target ON audit_logs(target_type, target_id)",
+            ),
+            (
+                "site_settings",
+                "idx_site_settings_group_name",
+                "CREATE INDEX idx_site_settings_group_name ON site_settings(group_name)",
+            ),
+        ] {
+            self.create_index_if_missing(table, index, statement)
+                .await?;
+        }
+        Ok(())
+    }
+
     async fn seed_site_settings(&self) -> anyhow::Result<()> {
         for setting in default_site_setting_rows() {
             sqlx::query(
@@ -471,6 +559,32 @@ impl MysqlStorage {
             }
         }
 
+        Ok(())
+    }
+
+    async fn create_index_if_missing(
+        &self,
+        table: &str,
+        index: &str,
+        statement: &str,
+    ) -> anyhow::Result<()> {
+        let exists: i64 = sqlx::query(
+            r#"
+            SELECT COUNT(*) AS count
+            FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+                AND TABLE_NAME = ?
+                AND INDEX_NAME = ?
+            "#,
+        )
+        .bind(table)
+        .bind(index)
+        .fetch_one(&self.pool)
+        .await?
+        .try_get("count")?;
+        if exists == 0 {
+            sqlx::query(statement).execute(&self.pool).await?;
+        }
         Ok(())
     }
 }
@@ -971,6 +1085,30 @@ impl AuthSessionRepository for MysqlStorage {
             .as_ref()
             .map(auth_session_from_row)
             .transpose()
+    }
+
+    async fn find_user_by_auth_token_hash(
+        &self,
+        token_hash: &str,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<Option<User>> {
+        sqlx::query(
+            r#"
+            SELECT users.*
+            FROM users
+            INNER JOIN auth_sessions ON auth_sessions.user_id = users.id
+            WHERE auth_sessions.token_hash = ?
+                AND auth_sessions.expires_at > ?
+                AND auth_sessions.revoked_at IS NULL
+            "#,
+        )
+        .bind(token_hash)
+        .bind(now.to_rfc3339())
+        .fetch_optional(&self.pool)
+        .await?
+        .as_ref()
+        .map(user_from_row)
+        .transpose()
     }
 
     async fn delete_auth_session_by_token_hash(&self, token_hash: &str) -> anyhow::Result<()> {

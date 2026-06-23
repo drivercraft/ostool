@@ -16,9 +16,8 @@ const uiStore = {
   clearMessages: vi.fn(),
   setError: vi.fn(),
   setSuccess: vi.fn(),
+  confirm: vi.fn(),
 };
-
-vi.stubGlobal("confirm", vi.fn(() => true));
 
 vi.mock("@/api", () => ({
   api: {
@@ -84,6 +83,8 @@ describe("UsersView", () => {
     uiStore.clearMessages.mockReset();
     uiStore.setError.mockReset();
     uiStore.setSuccess.mockReset();
+    uiStore.confirm.mockReset();
+    uiStore.confirm.mockResolvedValue(true);
 
     listAdminUsers.mockResolvedValue({
       users: [
@@ -125,7 +126,7 @@ describe("UsersView", () => {
     expect(rows.length).toBe(2);
     expect(rows[0].find(".user-cell-username").text()).toBe("alice");
     // 三组核心按钮：edit、toggle、more
-    expect(rows[0].findAll(".icon-action").length).toBe(3);
+    expect(rows[0].findAll(".btn-icon-only").length).toBe(3);
     expect(rows[0].find('button[title="编辑"]').exists()).toBe(true);
     expect(rows[0].find('button[title="禁用"]').exists()).toBe(true);
     expect(rows[0].find('button[title="更多"]').exists()).toBe(true);
@@ -158,7 +159,7 @@ describe("UsersView", () => {
 
     expect(wrapper.find(".modal-overlay").exists()).toBe(false);
 
-    await wrapper.find(".admin-toolbar-left .primary-button").trigger("click");
+    await wrapper.find(".admin-toolbar-left .btn.btn-primary").trigger("click");
 
     const modal = wrapper.find(".modal-overlay");
     expect(modal.exists()).toBe(true);

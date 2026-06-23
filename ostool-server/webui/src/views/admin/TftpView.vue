@@ -110,15 +110,14 @@ onMounted(() => {
     <div class="panel">
       <div class="panel-heading">
         <div>
-          <p class="eyebrow">Provider 与运行状态</p>
           <h3>TFTP 配置管理</h3>
         </div>
         <div class="toolbar-actions">
-          <button class="ghost-button" @click="loadTftp">刷新</button>
-          <button class="ghost-button" :disabled="reconciling" @click="reconcile">
+          <button class="btn btn-ghost" @click="loadTftp">刷新</button>
+          <button class="btn btn-ghost" :disabled="reconciling" @click="reconcile">
             {{ reconciling ? "执行中..." : "执行 Reconcile" }}
           </button>
-          <button class="primary-button" :disabled="saving || !tftpConfig" @click="saveConfig">
+          <button class="btn btn-primary" :disabled="saving || !tftpConfig" @click="saveConfig">
             {{ saving ? "保存中..." : "保存配置" }}
           </button>
         </div>

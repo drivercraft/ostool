@@ -164,6 +164,6 @@ defineProps<{
   display: block;
   width: 100%;
   height: auto;
-  max-width: 560px;
+  max-width: 680px;
 }
 </style>

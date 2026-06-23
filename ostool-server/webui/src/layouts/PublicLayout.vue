@@ -2,8 +2,8 @@
 import { computed, watch } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
 
+import AppDialog from "@/components/AppDialog.vue";
 import Icon, { type IconName } from "@/components/Icon.vue";
-import NoticeBanner from "@/components/NoticeBanner.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 
@@ -26,11 +26,6 @@ const navItems = computed(() => [
   { to: "/resources", label: "资源", exact: false, icon: "cpu-board" as IconName },
   { to: "/docs", label: "文档", exact: false, icon: "book" as IconName },
 ]);
-
-// 登录/注册页在卡片内联展示消息，避免顶部条重复出现且不随表单滚动。
-const showTopNotice = computed(
-  () => route.name !== "login" && route.name !== "register",
-);
 
 function isExactActive(item: { to: string; exact: boolean }) {
   return item.exact ? route.path === item.to : route.path.startsWith(item.to);
@@ -64,7 +59,7 @@ function isExactActive(item: { to: string; exact: boolean }) {
           <template v-if="auth.isAuthenticated">
             <RouterLink
               v-if="auth.isAdmin"
-              class="ghost-button compact-button"
+              class="btn btn-ghost btn-sm"
               to="/admin/overview"
             >
               <Icon name="shield" :size="14" class="btn-icon" />
@@ -79,13 +74,13 @@ function isExactActive(item: { to: string; exact: boolean }) {
             </RouterLink>
           </template>
           <template v-else>
-            <RouterLink class="ghost-button compact-button" to="/login">
+            <RouterLink class="btn btn-ghost btn-sm" to="/login">
               <Icon name="login" :size="14" class="btn-icon" />
               登录
             </RouterLink>
-            <RouterLink class="primary-button compact-button" to="/login?mode=admin">
-              <Icon name="shield" :size="14" class="btn-icon" />
-              管理员入口
+            <RouterLink class="btn btn-primary btn-sm" to="/register">
+              <Icon name="user" :size="14" class="btn-icon" />
+              注册
             </RouterLink>
           </template>
         </div>
@@ -93,18 +88,6 @@ function isExactActive(item: { to: string; exact: boolean }) {
     </header>
 
     <main class="public-main">
-      <div v-if="showTopNotice && (ui.successMessage || ui.errorMessage)" class="public-notices">
-        <NoticeBanner
-          v-if="ui.successMessage"
-          tone="success"
-          :message="ui.successMessage"
-        />
-        <NoticeBanner
-          v-if="ui.errorMessage"
-          tone="error"
-          :message="ui.errorMessage"
-        />
-      </div>
       <RouterView />
     </main>
 
@@ -126,5 +109,11 @@ function isExactActive(item: { to: string; exact: boolean }) {
         <span class="footer-copy">© ostool 开发板租赁平台</span>
       </div>
     </footer>
+    <AppDialog
+      v-if="ui.dialog"
+      :dialog="ui.dialog"
+      @confirm="ui.closeDialog(true)"
+      @cancel="ui.closeDialog(false)"
+    />
   </div>
 </template>

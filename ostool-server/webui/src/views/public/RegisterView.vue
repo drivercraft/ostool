@@ -3,7 +3,6 @@ import { computed, ref } from "vue";
 import { RouterLink } from "vue-router";
 
 import Icon from "@/components/Icon.vue";
-import NoticeBanner from "@/components/NoticeBanner.vue";
 import { useUiStore } from "@/stores/ui";
 
 const ui = useUiStore();
@@ -73,17 +72,9 @@ function submit() {
     <main class="auth-panel">
       <section class="auth-card">
         <header class="auth-header">
-          <p class="eyebrow">创建账号</p>
           <h2>注册 ostool 账号</h2>
           <p>填写下方信息提交注册申请，账号由平台管理员审核开通。</p>
         </header>
-
-        <NoticeBanner
-          v-if="ui.errorMessage || ui.successMessage"
-          :tone="ui.errorMessage ? 'error' : 'success'"
-          :message="ui.errorMessage || ui.successMessage || ''"
-          class="auth-notice"
-        />
 
         <form class="auth-form" @submit.prevent="submit">
           <label class="field">
@@ -140,7 +131,7 @@ function submit() {
             <input v-model="agreed" type="checkbox" :disabled="submitting" />
             <span>我已阅读并同意平台使用条款与资源调度规范</span>
           </label>
-          <button class="primary-button" type="submit" :disabled="submitting">
+          <button class="btn btn-primary" type="submit" :disabled="submitting">
             {{ submitting ? "提交中..." : "提交注册申请" }}
             <Icon v-if="!submitting" name="arrow-right" :size="16" class="btn-icon" />
           </button>

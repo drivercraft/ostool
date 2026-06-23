@@ -121,20 +121,11 @@ impl AuthService {
     }
 
     pub async fn user_for_token(&self, token: &str) -> anyhow::Result<Option<CurrentUser>> {
-        let Some(session) = self
+        let Some(user) = self
             .storage
-            .find_auth_session_by_token_hash(&token_hash(token))
+            .find_user_by_auth_token_hash(&token_hash(token), Utc::now())
             .await?
         else {
-            return Ok(None);
-        };
-        if session.expires_at <= Utc::now() {
-            self.storage
-                .delete_auth_session_by_token_hash(&token_hash(token))
-                .await?;
-            return Ok(None);
-        }
-        let Some(user) = self.storage.find_user_by_id(&session.user_id).await? else {
             return Ok(None);
         };
         if user.disabled {

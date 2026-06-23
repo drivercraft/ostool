@@ -70,6 +70,7 @@ const dtbUploadName = ref("");
 const dtbUploadFile = ref<File | null>(null);
 const dtbFileInput = ref<HTMLInputElement | null>(null);
 const showingDtbUploadModal = ref(false);
+const pointerDownOnModalOverlay = ref(false);
 const isEditing = computed(() => typeof route.params.boardId === "string");
 const boardId = computed(() => route.params.boardId as string | undefined);
 const selectedBoardSerialSummary = computed(() => {
@@ -551,6 +552,17 @@ function closeDtbUploadModal() {
   }
 }
 
+function onModalOverlayPointerDown(event: PointerEvent) {
+  pointerDownOnModalOverlay.value = event.target === event.currentTarget;
+}
+
+function onModalOverlayClick(event: MouseEvent) {
+  if (pointerDownOnModalOverlay.value && event.target === event.currentTarget) {
+    closeDtbUploadModal();
+  }
+  pointerDownOnModalOverlay.value = false;
+}
+
 async function uploadDtbAndSelect() {
   if (!dtbUploadFile.value) {
     ui.setError("请选择要上传的 DTB 文件");
@@ -609,7 +621,13 @@ async function removeBoard() {
   if (!boardId.value) {
     return;
   }
-  if (!window.confirm(`确认删除开发板 ${boardId.value} 吗？`)) {
+  const confirmed = await ui.confirm({
+    tone: "danger",
+    title: "删除开发板",
+    message: `确认删除开发板 ${boardId.value} 吗？`,
+    confirmLabel: "删除",
+  });
+  if (!confirmed) {
     return;
   }
 
@@ -635,15 +653,14 @@ onMounted(() => {
     <div class="panel">
       <div class="panel-heading">
         <div>
-          <p class="eyebrow">{{ isEditing ? "编辑现有开发板" : "创建新开发板" }}</p>
           <h3>{{ isEditing ? "开发板配置" : "新建开发板" }}</h3>
         </div>
         <div class="toolbar-actions">
-          <button class="ghost-button" @click="loadEditor">刷新表单</button>
-          <button class="ghost-button" :disabled="refreshingSerials" @click="refreshSerialPorts">
+          <button class="btn btn-ghost" @click="loadEditor">刷新表单</button>
+          <button class="btn btn-ghost" :disabled="refreshingSerials" @click="refreshSerialPorts">
             {{ refreshingSerials ? "刷新串口中..." : "刷新串口" }}
           </button>
-          <button class="primary-button" :disabled="saving || loading" @click="saveBoard">
+          <button class="btn btn-primary" :disabled="saving || loading" @click="saveBoard">
             {{ saving ? "保存中..." : "保存配置" }}
           </button>
         </div>
@@ -918,7 +935,7 @@ onMounted(() => {
                     <p class="field-hint">上传新的 DTB 后会自动加入列表，并直接选中。</p>
                   </div>
                 </div>
-                <button class="primary-button" type="button" @click="openDtbUploadModal">
+                <button class="btn btn-primary" type="button" @click="openDtbUploadModal">
                   新增 DTB
                 </button>
               </section>
@@ -939,7 +956,7 @@ onMounted(() => {
         <div class="danger-zone" v-if="isEditing">
           <h4>危险操作</h4>
           <p>删除会移除对应的单板配置文件，且需要先释放占用该板的 session。</p>
-          <button class="danger-button" :disabled="deleting" @click="removeBoard">
+          <button class="btn btn-danger" :disabled="deleting" @click="removeBoard">
             {{ deleting ? "删除中..." : "删除开发板" }}
           </button>
         </div>
@@ -950,39 +967,42 @@ onMounted(() => {
   <div
     v-if="showingDtbUploadModal"
     class="modal-overlay"
-    @click.self="closeDtbUploadModal"
+    @pointerdown="onModalOverlayPointerDown"
+    @click="onModalOverlayClick"
   >
     <div class="modal-card">
-      <div class="panel-heading compact">
+      <header class="modal-header">
         <div>
-          <p class="eyebrow">新增 DTB</p>
-          <h4>上传并绑定到当前开发板</h4>
+          <h3>上传并绑定到当前开发板</h3>
         </div>
-      </div>
+        <button class="btn-icon-only modal-close-button" title="关闭" @click="closeDtbUploadModal">×</button>
+      </header>
 
-      <div class="form-grid two-columns">
-        <label class="field">
-          <span>文件名</span>
-          <input v-model="dtbUploadName" placeholder="例如 board.dtb" />
-        </label>
-        <label class="field">
-          <span>选择文件</span>
-          <input
-            ref="dtbFileInput"
-            type="file"
-            accept=".dtb,application/octet-stream"
-            @change="onDtbFileChange"
-          />
-        </label>
+      <div class="modal-body">
+        <div class="form-grid two-columns">
+          <label class="field">
+            <span>文件名</span>
+            <input v-model="dtbUploadName" placeholder="例如 board.dtb" />
+          </label>
+          <label class="field">
+            <span>选择文件</span>
+            <input
+              ref="dtbFileInput"
+              type="file"
+              accept=".dtb,application/octet-stream"
+              @change="onDtbFileChange"
+            />
+          </label>
+        </div>
+        <p class="muted">DTB 上传上限固定为 {{ DTB_UPLOAD_MAX_MIB }} MiB。</p>
       </div>
-      <p class="muted">DTB 上传上限固定为 {{ DTB_UPLOAD_MAX_MIB }} MiB。</p>
 
       <div class="toolbar-actions modal-actions">
-        <button class="ghost-button" type="button" :disabled="uploadingDtb" @click="closeDtbUploadModal">
-          取消
-        </button>
-        <button class="primary-button" type="button" :disabled="uploadingDtb" @click="uploadDtbAndSelect">
+        <button class="btn btn-primary" type="button" :disabled="uploadingDtb" @click="uploadDtbAndSelect">
           {{ uploadingDtb ? "上传中..." : "上传并选中" }}
+        </button>
+        <button class="btn btn-ghost" type="button" :disabled="uploadingDtb" @click="closeDtbUploadModal">
+          取消
         </button>
       </div>
     </div>
