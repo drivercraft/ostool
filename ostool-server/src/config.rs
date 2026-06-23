@@ -259,11 +259,23 @@ fn sqlite_url_from_path(path: &Path) -> String {
 pub struct SampleDataConfig {
     #[serde(default = "default_sample_data_enabled")]
     pub enabled: bool,
+    #[serde(default)]
+    pub admin: AdminSeedConfig,
 }
 
 impl SampleDataConfig {
     fn is_default(&self) -> bool {
         self == &Self::default()
+    }
+
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            admin: AdminSeedConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        }
     }
 }
 
@@ -271,12 +283,54 @@ impl Default for SampleDataConfig {
     fn default() -> Self {
         Self {
             enabled: default_sample_data_enabled(),
+            admin: AdminSeedConfig::default(),
         }
     }
 }
 
 fn default_sample_data_enabled() -> bool {
     true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct AdminSeedConfig {
+    #[serde(default = "default_admin_seed_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_admin_seed_username")]
+    pub username: String,
+    #[serde(default = "default_admin_seed_password")]
+    pub password: String,
+    #[serde(default)]
+    pub reset_existing_password: bool,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+}
+
+impl Default for AdminSeedConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_admin_seed_enabled(),
+            username: default_admin_seed_username(),
+            password: default_admin_seed_password(),
+            reset_existing_password: false,
+            display_name: Some("平台管理员".to_string()),
+            email: Some("admin@ostool.local".to_string()),
+        }
+    }
+}
+
+fn default_admin_seed_enabled() -> bool {
+    true
+}
+
+fn default_admin_seed_username() -> String {
+    "admin".to_string()
+}
+
+fn default_admin_seed_password() -> String {
+    "admin".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

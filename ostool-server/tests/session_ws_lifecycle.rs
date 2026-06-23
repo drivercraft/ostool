@@ -108,7 +108,7 @@ fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandl
         board_dir: root.join("boards"),
         dtb_dir,
         database: database.clone(),
-        sample_data: SampleDataConfig { enabled: false },
+        sample_data: SampleDataConfig::disabled(),
         tftp: TftpConfig::Builtin(tftp),
         http_boot: ostool_server::config::HttpBootConfig::default_with_root(http_boot_root),
         network: ostool_server::TftpNetworkConfig {

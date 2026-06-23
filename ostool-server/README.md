@@ -167,6 +167,21 @@ you need an empty inventory:
 enabled = false
 ```
 
+The development config can also seed a default administrator when the account
+does not exist yet:
+
+```toml
+[sample_data.admin]
+enabled = true
+username = "admin"
+password = "admin"
+display_name = "平台管理员"
+email = "admin@ostool.local"
+```
+
+For production deployments, change the password or disable this seed and use the
+CLI bootstrap command below.
+
 To reset local development data, stop the server and reset the selected
 database. For MySQL, recreate the database:
 

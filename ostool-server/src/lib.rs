@@ -9,6 +9,7 @@ pub mod http_boot;
 pub mod lease;
 pub mod power;
 pub mod process;
+pub mod seed;
 pub mod serial;
 pub mod session;
 pub mod state;
@@ -18,11 +19,11 @@ pub mod web;
 
 pub use api::router::build_router;
 pub use config::{
-    BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement, DatabaseConfig,
-    PowerManagementConfig, PxeProfile, SampleDataConfig, SerialConfig, SerialPortKey,
-    SerialPortKeyKind, ServerConfig, SystemTftpdHpaConfig, TftpConfig, TftpNetworkConfig,
-    UbootNetworkMode, UbootProfile, UefiBootArch, UefiHttpProfile, UploadLimitsConfig,
-    ZhongshengRelayPowerManagement,
+    AdminSeedConfig, BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
+    DatabaseConfig, PowerManagementConfig, PxeProfile, SampleDataConfig, SerialConfig,
+    SerialPortKey, SerialPortKeyKind, ServerConfig, SystemTftpdHpaConfig, TftpConfig,
+    TftpNetworkConfig, UbootNetworkMode, UbootProfile, UefiBootArch, UefiHttpProfile,
+    UploadLimitsConfig, ZhongshengRelayPowerManagement,
 };
 pub use dtb_store::{DtbFile, DtbStore};
 pub use state::{AppState, BoardLeaseState, build_app_state};

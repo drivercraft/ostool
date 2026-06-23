@@ -16,6 +16,7 @@ use crate::{
     config::{BoardConfig, DatabaseConfig, PowerManagementConfig, ServerConfig},
     dtb_store::DtbStore,
     power::{PowerAction, PowerActionError, execute_power_action_for_board},
+    seed::seed_database,
     session::{Session, SessionState, SessionStopReason},
     storage::{DynStorage, mysql::MysqlStorage, sqlite::SqliteStorage},
     tftp::service::TftpManager,
@@ -110,19 +111,14 @@ pub async fn build_app_state(
     let storage: DynStorage = match &config.database {
         DatabaseConfig::Mysql(mysql) => {
             let storage = MysqlStorage::connect(&mysql.url).await?;
-            if config.sample_data.enabled {
-                storage.seed_sample_data().await?;
-            }
             Arc::new(storage)
         }
         DatabaseConfig::Sqlite(sqlite) => {
             let storage = SqliteStorage::connect(&sqlite.url).await?;
-            if config.sample_data.enabled {
-                storage.seed_sample_data().await?;
-            }
             Arc::new(storage)
         }
     };
+    seed_database(&storage, &config.sample_data).await?;
     let boards = storage
         .list_board_configs()
         .await?
@@ -832,7 +828,7 @@ mod tests {
             board_dir: root.join("boards"),
             dtb_dir: root.join("dtbs"),
             database: crate::DatabaseConfig::sqlite_with_path(root.join("ostool.db")),
-            sample_data: crate::config::SampleDataConfig { enabled: false },
+            sample_data: crate::config::SampleDataConfig::disabled(),
             network: crate::TftpNetworkConfig {
                 interface: "lo".into(),
             },
@@ -931,7 +927,7 @@ mod tests {
             board_dir: root.join("boards"),
             dtb_dir: root.join("dtbs"),
             database: crate::DatabaseConfig::sqlite_with_path(root.join("ostool.db")),
-            sample_data: crate::config::SampleDataConfig { enabled: false },
+            sample_data: crate::config::SampleDataConfig::disabled(),
             network: crate::TftpNetworkConfig {
                 interface: "lo".into(),
             },

@@ -1,21 +1,16 @@
 use anyhow::Context;
-use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use rand_core::OsRng;
 use sqlx::{MySqlPool, Row};
 use uuid::Uuid;
 
+use crate::BoardConfig;
 use crate::storage::{
     AuditLog, AuditLogRepository, AuthSession, AuthSessionRepository, BoardConfigRepository,
     DtbMetadata, DtbMetadataRepository, Lease, LeaseRepository, LeaseState, NewAuditLog, NewLease,
     NewRole, NewUser, Permission, RbacRepository, Role, SiteSettingValue, SiteSettings,
     SiteSettingsRepository, UpsertDtbMetadata, User, UserProfile, UserRepository,
     default_site_setting_rows, parse_time, site_settings_from_values, site_settings_to_values,
-};
-use crate::{
-    BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, PxeProfile,
-    UbootNetworkMode, UbootProfile, UefiBootArch, UefiHttpProfile,
 };
 
 const MIGRATION_RBAC_PLATFORM: &str = "0001_rbac_platform";
@@ -478,45 +473,6 @@ impl MysqlStorage {
 
         Ok(())
     }
-
-    pub async fn seed_sample_data(&self) -> anyhow::Result<()> {
-        self.seed_sample_boards().await?;
-        self.seed_sample_users().await?;
-        Ok(())
-    }
-
-    async fn seed_sample_boards(&self) -> anyhow::Result<()> {
-        let row = sqlx::query("SELECT COUNT(*) AS count FROM board_configs")
-            .fetch_one(&self.pool)
-            .await?;
-        let count: i64 = row.try_get("count")?;
-        if count > 0 {
-            return Ok(());
-        }
-
-        for board in sample_boards() {
-            self.create_board_config(board).await?;
-        }
-        Ok(())
-    }
-
-    async fn seed_sample_users(&self) -> anyhow::Result<()> {
-        for user in sample_users() {
-            if self.find_user_by_username(user.username).await?.is_some() {
-                continue;
-            }
-            self.create_user(NewUser {
-                username: user.username.into(),
-                display_name: user.display_name.into(),
-                email: user.email.into(),
-                password_hash: sample_password_hash()?,
-                profile: UserProfile::default(),
-                role_names: vec!["user".into()],
-            })
-            .await?;
-        }
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -819,180 +775,6 @@ fn audit_log_from_row(row: &sqlx::mysql::MySqlRow) -> anyhow::Result<AuditLog> {
         metadata_json: row.try_get("metadata_json")?,
         created_at: parse_time(row.try_get::<String, _>("created_at")?.as_str())?,
     })
-}
-
-fn sample_boards() -> Vec<BoardConfig> {
-    vec![
-        sample_uboot_board(
-            "sample-rk3568-01",
-            "sample-rk3568",
-            &["sample", "arm64", "uboot", "tftp", "lab-a"],
-            true,
-            UbootNetworkMode::Dhcp,
-            None,
-        ),
-        sample_uboot_board(
-            "sample-rk3568-02",
-            "sample-rk3568",
-            &["sample", "arm64", "uboot", "static-ip", "lab-a"],
-            true,
-            UbootNetworkMode::StaticIp,
-            Some("192.168.10.42"),
-        ),
-        sample_uboot_board(
-            "sample-riscv64-01",
-            "sample-riscv64",
-            &["sample", "riscv64", "uboot", "tftp", "lab-b"],
-            true,
-            UbootNetworkMode::Dhcp,
-            None,
-        ),
-        sample_httpboot_board(
-            "sample-x86-httpboot-01",
-            "sample-x86-httpboot",
-            UefiBootArch::X86_64,
-            &["sample", "x86_64", "httpboot", "uefi", "lab-c"],
-            false,
-        ),
-        sample_httpboot_board(
-            "sample-aarch64-httpboot-01",
-            "sample-aarch64-httpboot",
-            UefiBootArch::Aarch64,
-            &["sample", "aarch64", "httpboot", "uefi", "lab-c"],
-            false,
-        ),
-        sample_httpboot_board(
-            "sample-loongarch64-httpboot-01",
-            "sample-loongarch64-httpboot",
-            UefiBootArch::Loongarch64,
-            &["sample", "loongarch64", "httpboot", "uefi", "lab-d"],
-            false,
-        ),
-        sample_pxe_board(
-            "sample-pxe-01",
-            "sample-pxe",
-            &["sample", "pxe", "x86_64", "legacy", "lab-d"],
-            false,
-        ),
-        sample_pxe_board(
-            "sample-maintenance-01",
-            "sample-maintenance",
-            &["sample", "reserved", "maintenance"],
-            true,
-        ),
-    ]
-}
-
-fn sample_uboot_board(
-    id: &str,
-    board_type: &str,
-    tags: &[&str],
-    use_tftp: bool,
-    network_mode: UbootNetworkMode,
-    board_ip: Option<&str>,
-) -> BoardConfig {
-    BoardConfig {
-        id: id.into(),
-        board_type: board_type.into(),
-        tags: tags.iter().map(|tag| (*tag).into()).collect(),
-        serial: None,
-        power_management: sample_power_management(),
-        boot: BootConfig::Uboot(UbootProfile {
-            use_tftp,
-            dtb_name: None,
-            network_mode,
-            board_ip: board_ip.map(str::to_string),
-            server_ip: Some("192.168.10.1".into()),
-            netmask: Some("255.255.255.0".into()),
-            gatewayip: Some("192.168.10.1".into()),
-            ..Default::default()
-        }),
-        notes: Some("示例开发板，可在管理后台复制后调整为真实硬件参数。".into()),
-        disabled: false,
-    }
-}
-
-fn sample_httpboot_board(
-    id: &str,
-    board_type: &str,
-    boot_arch: UefiBootArch,
-    tags: &[&str],
-    disabled: bool,
-) -> BoardConfig {
-    BoardConfig {
-        id: id.into(),
-        board_type: board_type.into(),
-        tags: tags.iter().map(|tag| (*tag).into()).collect(),
-        serial: None,
-        power_management: sample_power_management(),
-        boot: BootConfig::UefiHttp(UefiHttpProfile {
-            boot_arch: Some(boot_arch),
-            mac: None,
-        }),
-        notes: Some("UEFI HTTP Boot 示例资源。".into()),
-        disabled,
-    }
-}
-
-fn sample_pxe_board(id: &str, board_type: &str, tags: &[&str], disabled: bool) -> BoardConfig {
-    BoardConfig {
-        id: id.into(),
-        board_type: board_type.into(),
-        tags: tags.iter().map(|tag| (*tag).into()).collect(),
-        serial: None,
-        power_management: sample_power_management(),
-        boot: BootConfig::Pxe(PxeProfile {
-            notes: Some("PXE 启动示例".into()),
-        }),
-        notes: Some("PXE 示例资源。".into()),
-        disabled,
-    }
-}
-
-fn sample_power_management() -> PowerManagementConfig {
-    PowerManagementConfig::Custom(CustomPowerManagement {
-        power_on_cmd: "true".into(),
-        power_off_cmd: "true".into(),
-    })
-}
-
-struct SampleUser {
-    username: &'static str,
-    display_name: &'static str,
-    email: &'static str,
-}
-
-fn sample_users() -> Vec<SampleUser> {
-    vec![
-        SampleUser {
-            username: "alice",
-            display_name: "Alice Chen",
-            email: "alice@ostool.local",
-        },
-        SampleUser {
-            username: "bob",
-            display_name: "Bob Li",
-            email: "bob@ostool.local",
-        },
-        SampleUser {
-            username: "carol",
-            display_name: "Carol Wang",
-            email: "carol@ostool.local",
-        },
-        SampleUser {
-            username: "dave",
-            display_name: "Dave Zhang",
-            email: "dave@ostool.local",
-        },
-    ]
-}
-
-fn sample_password_hash() -> anyhow::Result<String> {
-    let salt = SaltString::generate(&mut OsRng);
-    Ok(Argon2::default()
-        .hash_password("ostool123".as_bytes(), &salt)
-        .map_err(|err| anyhow::anyhow!("failed to hash sample password: {err}"))?
-        .to_string())
 }
 
 fn permission_from_row(row: &sqlx::mysql::MySqlRow) -> anyhow::Result<Permission> {
