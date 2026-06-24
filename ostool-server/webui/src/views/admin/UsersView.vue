@@ -568,7 +568,7 @@ onMounted(() => {
 
             <div v-if="modalMode === 'create' || modalMode === 'edit'" class="field modal-field-full">
               <span>RBAC 角色</span>
-              <div class="role-check-grid">
+              <div v-if="roles.length > 0" class="role-check-grid">
                 <label
                   v-for="role in roles"
                   :key="role.id"
@@ -582,6 +582,7 @@ onMounted(() => {
                   <span>{{ role.display_name }}</span>
                 </label>
               </div>
+              <p v-else class="field-hint">暂无可分配角色，请先在角色与权限中创建角色。</p>
             </div>
           </div>
 

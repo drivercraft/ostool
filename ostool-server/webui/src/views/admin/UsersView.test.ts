@@ -98,7 +98,10 @@ describe("UsersView", () => {
       ],
     });
     listAdminRoles.mockResolvedValue({
-      roles: [makeRole("r-1", "admin", "管理员")],
+      roles: [
+        makeRole("r-1", "lab-admin", "实验室管理员"),
+        makeRole("r-2", "developer", "开发人员"),
+      ],
     });
     getAdminUserRoles.mockResolvedValue({ roles: [] });
   });
@@ -182,6 +185,21 @@ describe("UsersView", () => {
     expect(modal.exists()).toBe(true);
     expect(modal.text()).toContain("新增用户");
     expect(modal.find('input[autocomplete="off"]').exists()).toBe(true);
+  });
+
+  it("renders assignable roles from the admin roles API in the create-user modal", async () => {
+    const UsersView = (await import("./UsersView.vue")).default;
+    const wrapper = mount(UsersView);
+
+    await flushPromises();
+    await wrapper.find(".admin-toolbar-left .btn.btn-primary").trigger("click");
+
+    const modal = wrapper.find(".modal-overlay");
+    expect(listAdminRoles).toHaveBeenCalled();
+    expect(modal.text()).toContain("实验室管理员");
+    expect(modal.text()).toContain("开发人员");
+    expect(modal.find('input[type="checkbox"][value="r-1"]').exists()).toBe(true);
+    expect(modal.find('input[type="checkbox"][value="r-2"]').exists()).toBe(true);
   });
 
   it("calls disableAdminUser when toggling an active user", async () => {
