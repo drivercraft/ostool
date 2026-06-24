@@ -71,6 +71,22 @@ function availabilityPercent(board: BoardTypeSummary): number {
   return Math.round((board.available / board.total) * 100);
 }
 
+function leaseCreateTarget(board: BoardTypeSummary) {
+  return {
+    name: "user-lease-new",
+    query: { board_type: board.board_type },
+  };
+}
+
+function loginTarget(board: BoardTypeSummary) {
+  return {
+    name: "login",
+    query: {
+      next: `/dashboard/leases/new?board_type=${encodeURIComponent(board.board_type)}`,
+    },
+  };
+}
+
 onMounted(() => {
   ui.clearMessages();
   void loadBoardTypes();
@@ -229,12 +245,12 @@ onMounted(() => {
             v-if="auth.isAuthenticated"
             class="btn btn-primary btn-sm"
             :class="{ 'is-disabled': board.available === 0 }"
-            :to="board.available > 0 ? '/dashboard?action=lease&board_type=' + encodeURIComponent(board.board_type) : '/dashboard'"
+            :to="board.available > 0 ? leaseCreateTarget(board) : '/dashboard'"
           >
-            {{ board.available > 0 ? "去申请会话" : "暂无空闲" }}
+            {{ board.available > 0 ? "申请租赁" : "暂无空闲" }}
             <Icon v-if="board.available > 0" name="arrow-right" :size="14" class="btn-icon" />
           </RouterLink>
-          <RouterLink v-else class="btn btn-ghost btn-sm" to="/login">
+          <RouterLink v-else class="btn btn-ghost btn-sm" :to="loginTarget(board)">
             登录后申请
             <Icon name="login" :size="14" class="btn-icon" />
           </RouterLink>
@@ -278,11 +294,11 @@ onMounted(() => {
             v-if="auth.isAuthenticated"
             class="btn btn-primary btn-sm"
             :class="{ 'is-disabled': board.available === 0 }"
-            :to="board.available > 0 ? '/dashboard?action=lease&board_type=' + encodeURIComponent(board.board_type) : '/dashboard'"
+            :to="board.available > 0 ? leaseCreateTarget(board) : '/dashboard'"
           >
-            {{ board.available > 0 ? "申请" : "已满" }}
+            {{ board.available > 0 ? "申请租赁" : "已满" }}
           </RouterLink>
-          <RouterLink v-else class="btn btn-ghost btn-sm" to="/login">登录</RouterLink>
+          <RouterLink v-else class="btn btn-ghost btn-sm" :to="loginTarget(board)">登录</RouterLink>
         </div>
       </div>
     </div>

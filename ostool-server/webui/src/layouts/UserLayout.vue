@@ -14,9 +14,9 @@ const auth = useAuthStore();
 
 const workspaceNavItems = [
   { to: "/dashboard#overview", hash: "#overview", label: "工作台总览", icon: "chart" as IconName },
-  { to: "/dashboard#request", hash: "#request", label: "申请会话", icon: "plus" as IconName },
+  { to: "/dashboard#account", hash: "#account", label: "账户信息", icon: "user" as IconName },
   { to: "/dashboard#leases", hash: "#leases", label: "我的租赁", icon: "clipboard" as IconName },
-  { to: "/dashboard#account", hash: "#account", label: "账号信息", icon: "user" as IconName },
+  { to: "/dashboard/leases/new", hash: "", label: "新增租赁", icon: "plus" as IconName },
 ];
 
 const topNavItems = [
@@ -44,6 +44,9 @@ async function logout() {
 }
 
 function isWorkspaceActive(item: { hash: string }) {
+  if (route.path === "/dashboard/leases/new" && item.hash === "") {
+    return true;
+  }
   if (route.path !== "/dashboard") {
     return false;
   }
@@ -58,6 +61,9 @@ function isTopActive(item: { to: string; exact: boolean }) {
 }
 
 function scrollToWorkspaceSection(hash: string) {
+  if (!hash) {
+    return;
+  }
   window.requestAnimationFrame(() => {
     document.querySelector(hash)?.scrollIntoView({
       behavior: "smooth",

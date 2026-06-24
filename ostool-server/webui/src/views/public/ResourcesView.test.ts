@@ -19,8 +19,29 @@ vi.mock("@/stores/ui", () => ({
 
 const RouterLinkStub = {
   name: "RouterLink",
+  props: ["to"],
   template: "<a><slot /></a>",
 };
+
+async function seedUser() {
+  const { useAuthStore } = await import("@/stores/auth");
+  const store = useAuthStore();
+  store.user = {
+    id: "user-demo",
+    username: "demo",
+    display_name: "Demo",
+    nickname: null,
+    avatar_url: null,
+    email: "demo@ostool.local",
+    phone: null,
+    department: null,
+    title: null,
+    last_login_at: null,
+    roles: [],
+    permissions: [],
+  };
+  store.loaded = true;
+}
 
 describe("ResourcesView", () => {
   beforeEach(() => {
@@ -82,5 +103,23 @@ describe("ResourcesView", () => {
 
     expect(wrapper.text()).toContain("rk3568");
     expect(wrapper.text()).not.toContain("stm32mp1");
+  });
+
+  it("links available resources to the standalone lease creation page", async () => {
+    await seedUser();
+    const ResourcesView = (await import("./ResourcesView.vue")).default;
+    const wrapper = mount(ResourcesView, {
+      global: { stubs: { RouterLink: RouterLinkStub } },
+    });
+    await flushPromises();
+
+    const leaseLink = wrapper
+      .findAllComponents(RouterLinkStub)
+      .find((link) => link.text().includes("申请租赁"));
+
+    expect(leaseLink?.props("to")).toEqual({
+      name: "user-lease-new",
+      query: { board_type: "rk3568" },
+    });
   });
 });

@@ -13,6 +13,7 @@ const RegisterView = () => import("@/views/public/RegisterView.vue");
 const TermsView = () => import("@/views/public/TermsView.vue");
 const PrivacyView = () => import("@/views/public/PrivacyView.vue");
 const DashboardView = () => import("@/views/user/DashboardView.vue");
+const UserLeaseCreateView = () => import("@/views/user/UserLeaseCreateView.vue");
 const OverviewView = () => import("@/views/admin/OverviewView.vue");
 const BoardsView = () => import("@/views/admin/BoardsView.vue");
 const BoardEditorView = () => import("@/views/admin/BoardEditorView.vue");
@@ -99,6 +100,12 @@ export const router = createRouter({
           name: "dashboard",
           component: DashboardView,
           meta: { title: "用户控制台", requiresUser: true },
+        },
+        {
+          path: "leases/new",
+          name: "user-lease-new",
+          component: UserLeaseCreateView,
+          meta: { title: "申请租赁", requiresUser: true },
         },
       ],
     },

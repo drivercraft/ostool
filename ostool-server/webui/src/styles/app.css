@@ -2876,6 +2876,12 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   display: grid;
   gap: 1.25rem;
 }
+.user-lease-create-page {
+  min-height: calc(100vh - var(--topbar-h) - 88px);
+}
+.user-lease-create-page .admin-editor-panel {
+  min-height: inherit;
+}
 .dashboard-page > section {
   scroll-margin-top: calc(var(--topbar-h) + 24px);
 }
@@ -2924,6 +2930,35 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 .dashboard-request-panel {
   padding: 1.25rem;
 }
+.dashboard-rentals-section {
+  display: grid;
+  gap: var(--content-gap);
+  padding: var(--content-pad);
+}
+.dashboard-section-heading,
+.dashboard-subsection-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--content-gap);
+}
+.dashboard-section-heading {
+  margin-bottom: 0;
+}
+.dashboard-subsection {
+  display: grid;
+  gap: var(--content-gap);
+  padding-top: var(--content-pad);
+  border-top: 1px solid var(--c-border-light);
+}
+.dashboard-subsection-head h4 {
+  font-size: 1rem;
+}
+.dashboard-subsection-head span {
+  color: var(--c-text-muted);
+  font-size: .82rem;
+  font-weight: 700;
+}
 .dashboard-form-inline {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
@@ -2956,6 +2991,29 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   border: 1px solid var(--c-border-light);
   border-radius: var(--radius-sm);
   background: var(--c-surface-2);
+}
+.lease-summary-list {
+  display: grid;
+  gap: .75rem;
+  margin: 0;
+}
+.lease-summary-list div {
+  display: grid;
+  gap: .2rem;
+  padding: .8rem;
+  border: 1px solid var(--c-border-light);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface-2);
+}
+.lease-summary-list dt {
+  color: var(--c-text-muted);
+  font-size: .78rem;
+  font-weight: 700;
+}
+.lease-summary-list dd {
+  margin: 0;
+  color: var(--c-text-soft);
+  font-size: .9rem;
 }
 .lease-tags {
   display: flex;
