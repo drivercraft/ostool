@@ -19,6 +19,7 @@ const BoardEditorView = () => import("@/views/admin/BoardEditorView.vue");
 const DtbView = () => import("@/views/admin/DtbView.vue");
 const SessionsView = () => import("@/views/admin/SessionsView.vue");
 const LeasesView = () => import("@/views/admin/LeasesView.vue");
+const LeaseEditorView = () => import("@/views/admin/LeaseEditorView.vue");
 const UsersView = () => import("@/views/admin/UsersView.vue");
 const RolesView = () => import("@/views/admin/RolesView.vue");
 const TftpView = () => import("@/views/admin/TftpView.vue");
@@ -161,6 +162,18 @@ export const router = createRouter({
           meta: { title: "租赁管理 / 租赁情况" },
         },
         {
+          path: "rentals/leases/new",
+          name: "admin-rental-lease-new",
+          component: LeaseEditorView,
+          meta: { title: "租赁管理 / 新增租赁" },
+        },
+        {
+          path: "rentals/leases/:leaseId",
+          name: "admin-rental-lease-edit",
+          component: LeaseEditorView,
+          meta: { title: "租赁管理 / 编辑租赁" },
+        },
+        {
           path: "rentals/sessions",
           name: "admin-rental-sessions",
           component: SessionsView,
@@ -231,6 +244,10 @@ export const router = createRouter({
         {
           path: "leases",
           redirect: "/admin/rentals/leases",
+        },
+        {
+          path: "leases/new",
+          redirect: "/admin/rentals/leases/new",
         },
         {
           path: "tftp",

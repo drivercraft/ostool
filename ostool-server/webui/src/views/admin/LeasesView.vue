@@ -5,12 +5,10 @@ import { useRouter } from "vue-router";
 import Icon from "@/components/Icon.vue";
 import StatusPill from "@/components/StatusPill.vue";
 import { api } from "@/api";
-import { VALIDATION_LIMITS } from "@/constants/validation";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import type { AdminUserResponse, BoardConfig, LeaseResponse } from "@/types/api";
 
-type LeaseModalMode = "create" | "edit" | null;
 type LeaseStateFilter = "all" | "active" | "releasing" | "released" | "expired" | "failed";
 
 const ui = useUiStore();
@@ -20,33 +18,11 @@ const leases = ref<LeaseResponse[]>([]);
 const users = ref<AdminUserResponse[]>([]);
 const boards = ref<BoardConfig[]>([]);
 const loading = ref(true);
-const saving = ref(false);
-const modalMode = ref<LeaseModalMode>(null);
-const editingLease = ref<LeaseResponse | null>(null);
-const pointerDownOnModalOverlay = ref(false);
 const openMenuLeaseId = ref<string | null>(null);
 const menuPosition = ref({ top: 0, left: 0 });
 const search = ref("");
 const stateFilter = ref<LeaseStateFilter>("all");
 const canDeleteLeases = computed(() => auth.hasPermission("leases.delete"));
-const form = ref({
-  user_id: "",
-  board_id: "",
-  client_name: "",
-  starts_at: "",
-  expires_at: "",
-  failure_message: "",
-});
-
-const availableBoards = computed(() => {
-  const activeBoardIds = new Set(
-    leases.value
-      .filter((item) => item.lease.state === "active" && windowsOverlap(item.lease.starts_at, item.lease.expires_at, form.value.starts_at, form.value.expires_at))
-      .map((item) => item.lease.board_id),
-  );
-  return boards.value.filter((board) => !board.disabled && !activeBoardIds.has(board.id));
-});
-
 const filteredLeases = computed(() =>
   leases.value.filter((item) => {
     if (stateFilter.value !== "all" && item.lease.state !== stateFilter.value) {
@@ -92,36 +68,6 @@ function formatDuration(start: string, end: string) {
   const hours = Math.floor(minutes / 60);
   const remain = minutes % 60;
   return remain ? `${hours} 小时 ${remain} 分钟` : `${hours} 小时`;
-}
-
-function toDatetimeLocal(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 16);
-}
-
-function fromDatetimeLocal(value: string) {
-  return new Date(value).toISOString();
-}
-
-function defaultStartsAt() {
-  return toDatetimeLocal(new Date().toISOString());
-}
-
-function defaultExpiresAt(startsAt: string) {
-  const startTime = startsAt ? new Date(startsAt).getTime() : Date.now();
-  return toDatetimeLocal(new Date(startTime + 60 * 60 * 1000).toISOString());
-}
-
-function windowsOverlap(startA: string, endA: string, startB: string, endB: string) {
-  if (!startB || !endB) {
-    return true;
-  }
-  return new Date(startA).getTime() < new Date(endB).getTime()
-    && new Date(endA).getTime() > new Date(startB).getTime();
 }
 
 function leaseTone(state: string) {
@@ -223,97 +169,12 @@ async function loadData() {
 }
 
 function openCreate() {
-  const startsAt = defaultStartsAt();
-  editingLease.value = null;
-  form.value = {
-    user_id: users.value.find((user) => !user.disabled)?.id ?? "",
-    board_id: "",
-    client_name: "",
-    starts_at: startsAt,
-    expires_at: defaultExpiresAt(startsAt),
-    failure_message: "",
-  };
-  form.value.board_id = availableBoards.value[0]?.id ?? "";
-  modalMode.value = "create";
+  void router.push({ name: "admin-rental-lease-new" });
 }
 
 function openEdit(item: LeaseResponse) {
   closeMenu();
-  editingLease.value = item;
-  form.value = {
-    user_id: item.lease.user_id,
-    board_id: item.lease.board_id,
-    client_name: item.session?.client_name ?? "",
-    starts_at: toDatetimeLocal(item.lease.starts_at),
-    expires_at: toDatetimeLocal(item.lease.expires_at),
-    failure_message: item.lease.failure_message ?? "",
-  };
-  modalMode.value = "edit";
-}
-
-function closeModal() {
-  modalMode.value = null;
-  editingLease.value = null;
-}
-
-function onModalOverlayPointerDown(event: PointerEvent) {
-  pointerDownOnModalOverlay.value = event.target === event.currentTarget;
-}
-
-function onModalOverlayClick(event: MouseEvent) {
-  if (pointerDownOnModalOverlay.value && event.target === event.currentTarget) {
-    closeModal();
-  }
-  pointerDownOnModalOverlay.value = false;
-}
-
-async function submitLease() {
-  if (!form.value.starts_at || !form.value.expires_at) {
-    ui.setError("请填写租赁开始和结束时间");
-    return;
-  }
-  if (new Date(form.value.expires_at).getTime() <= new Date(form.value.starts_at).getTime()) {
-    ui.setError("租赁结束时间必须晚于开始时间");
-    return;
-  }
-  if (form.value.client_name.trim().length > VALIDATION_LIMITS.clientNameMax) {
-    ui.setError(`会话名称不能超过 ${VALIDATION_LIMITS.clientNameMax} 个字符`);
-    return;
-  }
-  if (form.value.failure_message.trim().length > VALIDATION_LIMITS.longDescriptionMax) {
-    ui.setError(`备注 / 失败信息不能超过 ${VALIDATION_LIMITS.longDescriptionMax} 个字符`);
-    return;
-  }
-  saving.value = true;
-  try {
-    if (modalMode.value === "create") {
-      if (!form.value.user_id || !form.value.board_id) {
-        ui.setError("请选择用户和开发板");
-        return;
-      }
-      await api.createAdminLease({
-        user_id: form.value.user_id,
-        board_id: form.value.board_id,
-        client_name: form.value.client_name.trim() || null,
-        starts_at: fromDatetimeLocal(form.value.starts_at),
-        expires_at: fromDatetimeLocal(form.value.expires_at),
-      });
-      ui.setSuccess("租赁已创建");
-    } else if (modalMode.value === "edit" && editingLease.value) {
-      await api.updateAdminLease(editingLease.value.lease.id, {
-        starts_at: fromDatetimeLocal(form.value.starts_at),
-        expires_at: fromDatetimeLocal(form.value.expires_at),
-        failure_message: form.value.failure_message.trim() || null,
-      });
-      ui.setSuccess("租赁已更新");
-    }
-    closeModal();
-    await loadData();
-  } catch (error) {
-    ui.setError((error as Error).message);
-  } finally {
-    saving.value = false;
-  }
+  void router.push({ name: "admin-rental-lease-edit", params: { leaseId: item.lease.id } });
 }
 
 async function startLeaseSession(item: LeaseResponse) {
@@ -506,90 +367,4 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
       </div>
     </div>
   </section>
-
-  <div
-    v-if="modalMode"
-    class="modal-overlay"
-    @pointerdown="onModalOverlayPointerDown"
-    @click="onModalOverlayClick"
-  >
-    <div class="modal-card modal-card--user-form">
-      <header class="modal-header">
-        <div>
-          <h3>{{ modalMode === "create" ? "新增租赁" : `编辑租赁 ${editingLease?.lease.id}` }}</h3>
-        </div>
-        <button class="btn-icon-only modal-close-button" title="关闭" @click="closeModal">×</button>
-      </header>
-
-      <form class="modal-form" @submit.prevent="submitLease">
-        <div class="modal-body modal-body-grid">
-          <template v-if="modalMode === 'create'">
-            <label class="field is-required">
-              <span>用户</span>
-              <select v-model="form.user_id">
-                <option value="" disabled>请选择用户</option>
-                <option
-                  v-for="user in users.filter((item) => !item.disabled)"
-                  :key="user.id"
-                  :value="user.id"
-                >
-                  {{ user.display_name || user.username }} / {{ user.username }}
-                </option>
-              </select>
-            </label>
-            <label class="field is-required">
-              <span>开发板</span>
-              <select v-model="form.board_id">
-                <option value="" disabled>请选择空闲开发板</option>
-                <option v-for="board in availableBoards" :key="board.id" :value="board.id">
-                  {{ board.id }} / {{ board.board_type }}
-                </option>
-              </select>
-            </label>
-            <label class="field modal-field-full">
-              <span>会话名称（选填）</span>
-              <input
-                v-model="form.client_name"
-                :maxlength="VALIDATION_LIMITS.clientNameMax"
-                placeholder="例如 手动分配给 Alice"
-              />
-            </label>
-          </template>
-          <template v-else>
-            <label class="field">
-              <span>用户</span>
-              <input :value="userLabel(form.user_id)" disabled />
-            </label>
-            <label class="field">
-              <span>开发板</span>
-              <input :value="form.board_id" disabled />
-            </label>
-            <label class="field modal-field-full">
-              <span>备注 / 失败信息</span>
-              <input
-                v-model="form.failure_message"
-                :maxlength="VALIDATION_LIMITS.longDescriptionMax"
-                placeholder="可选"
-              />
-            </label>
-          </template>
-          <label class="field is-required">
-            <span>租赁开始时间</span>
-            <input v-model="form.starts_at" type="datetime-local" />
-          </label>
-          <label class="field is-required">
-            <span>租赁结束时间</span>
-            <input v-model="form.expires_at" type="datetime-local" />
-          </label>
-        </div>
-
-        <div class="modal-actions">
-          <button type="submit" class="btn btn-primary" :disabled="saving">
-            {{ saving ? "保存中..." : "保存" }}
-          </button>
-          <button type="button" class="btn btn-ghost" :disabled="saving" @click="closeModal">取消</button>
-        </div>
-      </form>
-    </div>
-  </div>
 </template>

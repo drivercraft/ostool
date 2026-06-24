@@ -251,6 +251,46 @@ hr { border: none; border-top: 1px solid var(--c-border); margin: 1.25rem 0; }
   border-color: var(--c-brand-soft);
   background: var(--c-brand-tint);
 }
+.segmented-control {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-h);
+  padding: 3px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  background: var(--c-bg-alt);
+  box-shadow: inset 0 1px 1px rgba(15, 23, 41, .03);
+}
+.segmented-control button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 38px;
+  min-height: calc(var(--control-h) - 8px);
+  padding: 0 .75rem;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 3px);
+  background: transparent;
+  color: var(--c-text-muted);
+  font: inherit;
+  font-size: .86rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color .15s ease, color .15s ease, box-shadow .15s ease;
+}
+.segmented-control button:hover {
+  color: var(--c-brand);
+}
+.segmented-control button.is-active {
+  background: var(--c-surface);
+  color: var(--c-brand);
+  box-shadow: var(--shadow-xs);
+}
+.segmented-control button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--c-brand) 40%, transparent);
+  outline-offset: 1px;
+}
 
 /* ----------------------------- surfaces ------------------------------ */
 .card,
@@ -2071,13 +2111,14 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 .roles-table td {
   vertical-align: middle;
 }
-.role-editor-page {
+
+/* Shared admin editor layout: titlebar, scrollable body, fixed footer actions. */
+.admin-editor-panel {
   display: flex;
   flex-direction: column;
-  gap: var(--content-gap);
   min-height: 0;
   max-height: 100%;
-  padding: var(--content-pad);
+  padding: 0;
 }
 .admin-editor-page > .panel {
   height: 100%;
@@ -2085,7 +2126,7 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   overflow: hidden;
   padding: 0;
 }
-.role-editor-titlebar {
+.admin-editor-header {
   flex: 0 0 auto;
   display: flex;
   justify-content: space-between;
@@ -2094,11 +2135,11 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   padding: var(--content-pad);
   border-bottom: 1px solid var(--c-border-light);
 }
-.role-editor-titlebar h3 {
+.admin-editor-header h3 {
   margin-bottom: .35rem;
   font-size: 1.25rem;
 }
-.role-editor-form {
+.admin-editor-form {
   flex: 1 1 0;
   display: flex;
   flex-direction: column;
@@ -2106,7 +2147,7 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   min-height: 0;
   overflow: hidden;
 }
-.role-editor-scroll {
+.admin-editor-body {
   flex: 1 1 0;
   display: grid;
   align-content: start;
@@ -2117,6 +2158,7 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   overscroll-behavior: contain;
   padding: var(--content-pad);
 }
+
 .role-basic-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2212,13 +2254,176 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   font-size: .76rem;
   line-height: 1.45;
 }
-.role-editor-actions {
+.admin-editor-actions {
   flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   gap: .75rem;
   padding: var(--content-pad);
   border-top: 1px solid var(--c-border-light);
+}
+.lease-editor-scroll {
+  grid-template-columns: minmax(360px, 1.1fr) minmax(320px, .9fr);
+  grid-template-rows: minmax(0, 1fr);
+  align-content: stretch;
+  align-items: stretch;
+  height: 100%;
+  overflow: hidden;
+}
+.lease-calendar-panel,
+.lease-config-panel {
+  min-width: 0;
+  min-height: 0;
+}
+.lease-calendar-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--content-gap);
+  min-height: 0;
+  height: 100%;
+}
+.lease-config-panel {
+  overflow: auto;
+}
+.lease-calendar-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--content-gap);
+  align-items: flex-start;
+}
+.lease-calendar-head h4 {
+  margin: 0 0 .25rem;
+  font-size: 1.05rem;
+}
+.lease-calendar-tools {
+  display: grid;
+  justify-items: end;
+  gap: .6rem;
+}
+.lease-calendar-tabs {
+  flex: 0 0 auto;
+  background: var(--c-surface-2);
+}
+.lease-calendar-nav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .5rem;
+}
+.lease-calendar-shell {
+  flex: 1 1 0;
+  min-height: 0;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface);
+  overflow: hidden;
+}
+.lease-calendar-grid {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  background: var(--c-border-light);
+  gap: 1px;
+  overflow: hidden;
+}
+.lease-calendar-hour {
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
+.lease-calendar-month {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
+.lease-calendar-day {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
+.lease-calendar-year {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
+.lease-calendar-cell {
+  display: flex;
+  flex-direction: column;
+  gap: .45rem;
+  min-width: 0;
+  min-height: 0;
+  padding: .65rem;
+  background: var(--c-surface);
+}
+.lease-calendar-cell.is-selected {
+  background: color-mix(in srgb, var(--c-brand-tint) 50%, var(--c-surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-brand) 36%, transparent);
+}
+.lease-calendar-cell.has-reservation {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--c-brand-tint) 56%, transparent), transparent 68%),
+    var(--c-surface);
+}
+.lease-calendar-cell header {
+  display: flex;
+  justify-content: space-between;
+  gap: .45rem;
+  color: var(--c-text-soft);
+  font-size: .82rem;
+  font-weight: 800;
+}
+.lease-calendar-cell header strong,
+.lease-calendar-cell header span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lease-calendar-cell header span {
+  flex: 0 0 auto;
+  color: var(--c-text-muted);
+  font-size: .74rem;
+}
+.lease-calendar-events {
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+  min-width: 0;
+  overflow: hidden;
+}
+.lease-calendar-event {
+  display: grid;
+  gap: .1rem;
+  min-width: 0;
+  padding: .4rem .5rem;
+  border-left: 3px solid var(--c-brand);
+  border-radius: var(--radius-xs);
+  background: var(--c-brand-ghost);
+  color: var(--c-brand);
+  box-shadow: var(--shadow-xs);
+}
+.lease-calendar-event.is-conflicting {
+  border-left-color: var(--c-danger);
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
+}
+.lease-calendar-event strong,
+.lease-calendar-event span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lease-calendar-event strong {
+  color: currentColor;
+  font-size: .75rem;
+}
+.lease-calendar-event span {
+  color: currentColor;
+  font-size: .72rem;
+  opacity: .82;
+}
+.lease-calendar-event.compact {
+  padding: .28rem .4rem;
+}
+.lease-calendar-more {
+  color: var(--c-text-muted);
+  font-size: .75rem;
+  font-weight: 700;
 }
 .permission-grid {
   display: grid;
@@ -3333,9 +3538,9 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   .modal-body-grid {
     grid-template-columns: 1fr;
   }
-  .role-editor-titlebar,
+  .admin-editor-header,
   .role-permission-section-head,
-  .role-editor-actions {
+  .admin-editor-actions {
     align-items: stretch;
     flex-direction: column;
   }

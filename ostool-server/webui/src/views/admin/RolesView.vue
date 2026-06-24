@@ -367,8 +367,8 @@ watch(
     :class="editing ? 'admin-editor-page' : 'admin-list-page'"
   >
     <template v-if="editing">
-      <div class="role-editor-page panel">
-        <div class="role-editor-titlebar">
+      <div class="admin-editor-panel panel">
+        <div class="admin-editor-header">
           <div>
             <h3>{{ selectedRole ? "编辑角色" : "新建角色" }}</h3>
             <p class="muted">配置角色基础信息，并为该角色勾选可访问的功能权限。</p>
@@ -376,8 +376,8 @@ watch(
           <button class="btn btn-ghost btn-sm" type="button" @click="cancelEdit">返回列表</button>
         </div>
 
-        <form class="role-editor-form" @submit.prevent="saveRole">
-          <div class="role-editor-scroll">
+        <form class="admin-editor-form" @submit.prevent="saveRole">
+          <div class="admin-editor-body">
             <div class="role-basic-fields">
               <label class="field is-required">
                 <span>角色名称</span>
@@ -464,7 +464,7 @@ watch(
             </div>
           </div>
 
-          <div class="role-editor-actions">
+          <div class="admin-editor-actions">
             <button type="submit" class="btn btn-primary" :disabled="saving">
               {{ saving ? "保存中..." : selectedRole ? "保存角色" : "创建角色" }}
             </button>

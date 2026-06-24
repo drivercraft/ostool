@@ -694,8 +694,8 @@ onMounted(() => {
 
 <template>
   <section class="page-grid admin-editor-page">
-    <div class="role-editor-page panel board-editor-page">
-      <div class="role-editor-titlebar">
+    <div class="admin-editor-panel panel board-editor-page">
+      <div class="admin-editor-header">
         <div>
           <h3>{{ isEditing ? "编辑开发板" : "新建开发板" }}</h3>
           <p class="muted">维护开发板基础信息、串口、电源与启动配置。</p>
@@ -707,8 +707,8 @@ onMounted(() => {
         <div class="empty-state-icon">&#9641;</div>
         正在加载开发板配置...
       </div>
-      <form v-else class="role-editor-form board-editor-form" @submit.prevent="saveBoard">
-        <div class="role-editor-scroll">
+      <form v-else class="admin-editor-form board-editor-form" @submit.prevent="saveBoard">
+        <div class="admin-editor-body">
           <p v-if="validationError" class="diagnostic-error">{{ validationError }}</p>
 
           <!-- 基本信息 -->
@@ -1036,7 +1036,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="role-editor-actions board-editor-actions">
+        <div class="admin-editor-actions board-editor-actions">
           <button type="button" class="btn btn-primary" :disabled="saving || loading" @click="saveBoard">
             {{ saving ? "保存中..." : "保存配置" }}
           </button>

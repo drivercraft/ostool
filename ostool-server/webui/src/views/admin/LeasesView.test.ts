@@ -158,30 +158,14 @@ describe("LeasesView", () => {
     expect(wrapper.text()).toContain("时长 2 小时");
   });
 
-  it("creates an admin lease for a selected user and board", async () => {
+  it("navigates to the standalone lease editor when creating a lease", async () => {
     const LeasesView = (await import("./LeasesView.vue")).default;
     const wrapper = mount(LeasesView);
     await flushPromises();
 
     await wrapper.find(".admin-toolbar-left .btn.btn-primary").trigger("click");
-    await flushPromises();
 
-    const modal = wrapper.get(".modal-card");
-    await modal.findAll("select")[0].setValue("u-1");
-    await modal.findAll("select")[1].setValue("board-2");
-    const dateInputs = modal.findAll('input[type="datetime-local"]');
-    await dateInputs[0].setValue("2026-01-01T01:00");
-    await dateInputs[1].setValue("2026-01-01T03:00");
-    await modal.get("form").trigger("submit");
-    await flushPromises();
-
-    expect(createAdminLease).toHaveBeenCalledWith({
-      user_id: "u-1",
-      board_id: "board-2",
-      client_name: null,
-      starts_at: new Date("2026-01-01T01:00").toISOString(),
-      expires_at: new Date("2026-01-01T03:00").toISOString(),
-    });
+    expect(routerPush).toHaveBeenCalledWith({ name: "admin-rental-lease-new" });
   });
 
   it("renders edit, enable/disable, and more row actions", async () => {
@@ -195,7 +179,7 @@ describe("LeasesView", () => {
     expect(firstRow.find('button[title="更多"]').exists()).toBe(true);
   });
 
-  it("updates an active lease and releases it from the disable action", async () => {
+  it("navigates to the standalone lease editor and releases from the disable action", async () => {
     const LeasesView = (await import("./LeasesView.vue")).default;
     const wrapper = mount(LeasesView);
     await flushPromises();
@@ -203,17 +187,9 @@ describe("LeasesView", () => {
     await wrapper.get('button[title="编辑"]').trigger("click");
     await flushPromises();
 
-    const modal = wrapper.get(".modal-card");
-    const dateInputs = modal.findAll('input[type="datetime-local"]');
-    await dateInputs[0].setValue("2026-01-01T01:00");
-    await dateInputs[1].setValue("2026-01-01T04:00");
-    await modal.get("form").trigger("submit");
-    await flushPromises();
-
-    expect(updateAdminLease).toHaveBeenCalledWith("lease-1", {
-      starts_at: new Date("2026-01-01T01:00").toISOString(),
-      expires_at: new Date("2026-01-01T04:00").toISOString(),
-      failure_message: null,
+    expect(routerPush).toHaveBeenCalledWith({
+      name: "admin-rental-lease-edit",
+      params: { leaseId: "lease-1" },
     });
 
     await wrapper.get('button[title="禁用"]').trigger("click");
