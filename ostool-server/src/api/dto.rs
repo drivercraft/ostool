@@ -65,12 +65,14 @@ pub struct LeasesResponse {
 pub struct AdminLeaseCreateRequest {
     pub user_id: String,
     pub board_id: String,
+    pub starts_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub client_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminLeaseUpdateRequest {
+    pub starts_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub failure_message: Option<String>,
 }
@@ -299,6 +301,7 @@ pub struct DtbFileResponse {
     pub boot_architecture: Option<String>,
     pub compatible: Option<String>,
     pub description: Option<String>,
+    pub disabled: bool,
     pub relative_tftp_path_template: String,
 }
 
@@ -315,6 +318,7 @@ impl DtbFileResponse {
             boot_architecture: None,
             compatible: None,
             description: None,
+            disabled: false,
         }
     }
 
@@ -326,6 +330,7 @@ impl DtbFileResponse {
             response.boot_architecture = metadata.boot_architecture;
             response.compatible = metadata.compatible;
             response.description = metadata.description;
+            response.disabled = metadata.disabled;
         }
         response
     }
@@ -343,6 +348,7 @@ impl From<DtbMetadata> for DtbFileResponse {
             sha256: Some(metadata.sha256),
             boot_architecture: metadata.boot_architecture,
             compatible: metadata.compatible,
+            disabled: metadata.disabled,
             description: metadata.description,
         }
     }

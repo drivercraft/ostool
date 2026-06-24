@@ -143,6 +143,7 @@ async fn seed_sample_dtbs(
                 boot_architecture: Some(sample.boot_architecture.to_string()),
                 compatible: Some(sample.compatible.to_string()),
                 description: Some(sample.description.to_string()),
+                disabled: false,
                 uploaded_by: Some("seed".to_string()),
             })
             .await?;
@@ -164,10 +165,11 @@ async fn seed_sample_historical_leases(storage: &DynStorage) -> anyhow::Result<(
     let released = storage
         .create_lease(NewLease {
             user_id: alice.id,
-            session_id: "sample-session-released".into(),
+            session_id: Some("sample-session-released".into()),
             board_id: "sample-pxe-01".into(),
             board_type: "sample-pxe".into(),
             required_tags: vec!["sample".into(), "pxe".into()],
+            starts_at: now - Duration::hours(20),
             expires_at: now - Duration::hours(18),
         })
         .await?;
@@ -183,10 +185,11 @@ async fn seed_sample_historical_leases(storage: &DynStorage) -> anyhow::Result<(
     let expired = storage
         .create_lease(NewLease {
             user_id: bob.id,
-            session_id: "sample-session-expired".into(),
+            session_id: Some("sample-session-expired".into()),
             board_id: "sample-aarch64-httpboot-01".into(),
             board_type: "sample-aarch64-httpboot".into(),
             required_tags: vec!["sample".into(), "httpboot".into()],
+            starts_at: now - Duration::hours(4),
             expires_at: now - Duration::hours(2),
         })
         .await?;
@@ -263,7 +266,8 @@ pub async fn seed_sample_runtime_leases(state: &AppState) -> anyhow::Result<()> 
     let Some(carol) = state.storage.find_user_by_username("carol").await? else {
         return Ok(());
     };
-    let expires_at = Utc::now() + Duration::hours(3);
+    let starts_at = Utc::now();
+    let expires_at = starts_at + Duration::hours(3);
     let Ok(session) = state
         .create_session_for_board("sample-rk3568-01", Some("Carol 示例租赁".into()))
         .await
@@ -279,10 +283,11 @@ pub async fn seed_sample_runtime_leases(state: &AppState) -> anyhow::Result<()> 
         .storage
         .create_lease(NewLease {
             user_id: carol.id,
-            session_id: session.id,
+            session_id: Some(session.id),
             board_id: board.id,
             board_type: board.board_type,
             required_tags: vec!["sample".into(), "arm64".into()],
+            starts_at,
             expires_at,
         })
         .await?;

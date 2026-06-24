@@ -24,7 +24,7 @@ const selectedBoardType = ref("");
 const requiredTags = ref("");
 
 const activeSessions = computed(() =>
-  leases.value.filter((item) => item.lease.state === "active"),
+  leases.value.filter((item) => item.lease.state === "active" && item.session),
 );
 
 function formatTime(iso: string): string {
@@ -206,7 +206,7 @@ onMounted(() => {
 
           <dl class="key-value-list lease-card-stats">
             <div><dt>租赁 ID</dt><dd><code>{{ session.lease.id }}</code></dd></div>
-            <div><dt>会话 ID</dt><dd><code>{{ session.lease.session_id }}</code></dd></div>
+            <div><dt>会话 ID</dt><dd><code>{{ session.lease.session_id || "未启用" }}</code></dd></div>
             <div><dt>到期时间</dt><dd>{{ formatTime(session.lease.expires_at) }}</dd></div>
             <div><dt>剩余时长</dt><dd :style="{color: remainingLabel(session.lease.expires_at) === '已过期' ? 'var(--c-danger)' : 'var(--c-success)'}">{{ remainingLabel(session.lease.expires_at) }}</dd></div>
           </dl>

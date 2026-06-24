@@ -138,6 +138,10 @@ pub fn build_router(state: AppState) -> Router {
                 .put(update_admin_lease)
                 .delete(delete_admin_lease),
         )
+        .route(
+            "/api/v1/admin/leases/{lease_id}/session",
+            post(start_admin_lease_session),
+        )
         .route("/api/v1/admin/permissions", get(list_admin_permissions))
         .route(
             "/api/v1/admin/roles",
@@ -350,6 +354,7 @@ struct DtbMetadataInput {
     boot_architecture: Option<String>,
     compatible: Option<String>,
     description: Option<String>,
+    disabled: Option<bool>,
 }
 
 impl DtbMetadataInput {
@@ -357,6 +362,7 @@ impl DtbMetadataInput {
         self.boot_architecture.is_some()
             || self.compatible.is_some()
             || self.description.is_some()
+            || self.disabled.is_some()
     }
 }
 
@@ -401,7 +407,10 @@ async fn role_names_for_ids(
 }
 
 async fn lease_response(state: &AppState, lease: Lease) -> LeaseResponse {
-    let session = state.get_session(&lease.session_id).await;
+    let session = match lease.session_id.as_deref() {
+        Some(session_id) => state.get_session(session_id).await,
+        None => None,
+    };
     LeaseResponse { lease, session }
 }
 
@@ -505,8 +514,11 @@ async fn heartbeat_user_lease(
     if lease.user_id != user.id {
         return Err(ApiError::not_found("lease not found"));
     }
+    let Some(session_id) = lease.session_id.as_deref() else {
+        return Err(ApiError::conflict("lease session has not started"));
+    };
     let session = state
-        .heartbeat_session(&lease.session_id)
+        .heartbeat_session(session_id)
         .await
         .map_err(|_| ApiError::not_found("session not found"))?;
     state
@@ -783,48 +795,33 @@ async fn create_admin_lease(
     if user.disabled {
         return Err(ApiError::conflict("user is disabled"));
     }
-    let expires_at = request.expires_at;
-    if expires_at <= chrono::Utc::now() {
-        return Err(ApiError::bad_request("expires_at must be in the future"));
-    }
+    validate_lease_window(request.starts_at, request.expires_at)?;
     let board_id = request.board_id.trim();
     if board_id.is_empty() {
         return Err(ApiError::bad_request("board_id must not be empty"));
     }
-
-    let session = state
-        .create_session_for_board(
-            board_id,
-            Some(
-                request
-                    .client_name
-                    .and_then(|value| clean_optional(Some(value)))
-                    .unwrap_or_else(|| user.username.clone()),
-            ),
-        )
-        .await
-        .map_err(|err| match err {
-            BoardAllocationStatus::BoardTypeNotFound => {
-                ApiError::not_found(format!("board `{board_id}` not found"))
-            }
-            BoardAllocationStatus::NoAvailableBoard => {
-                ApiError::conflict(format!("board `{board_id}` is not available"))
-            }
-        })?;
-    state.update_session_expiry(&session.id, expires_at).await;
     let board = state
-        .session_board(&session.id)
+        .boards
+        .read()
         .await
-        .ok_or_else(|| ApiError::not_found("allocated board disappeared"))?;
+        .get(board_id)
+        .cloned()
+        .ok_or_else(|| ApiError::not_found(format!("board `{board_id}` not found")))?;
+    if board.disabled {
+        return Err(ApiError::conflict(format!("board `{board_id}` is disabled")));
+    }
+    ensure_lease_window_available(&state, board_id, request.starts_at, request.expires_at, None)
+        .await?;
     let lease = state
         .storage
         .create_lease(crate::storage::NewLease {
             user_id: user.id,
-            session_id: session.id,
+            session_id: None,
             board_id: board.id,
             board_type: board.board_type,
             required_tags: Vec::new(),
-            expires_at,
+            starts_at: request.starts_at,
+            expires_at: request.expires_at,
         })
         .await?;
     let response = lease_response(&state, lease).await;
@@ -856,21 +853,43 @@ async fn update_admin_lease(
     if existing.state != crate::storage::LeaseState::Active {
         return Err(ApiError::conflict("only active leases can be updated"));
     }
-    if request.expires_at <= existing.created_at {
-        return Err(ApiError::bad_request("expires_at must be after lease start time"));
-    }
+    validate_lease_window(request.starts_at, request.expires_at)?;
+    ensure_lease_window_available(
+        &state,
+        &existing.board_id,
+        request.starts_at,
+        request.expires_at,
+        Some(&existing.id),
+    )
+    .await?;
     let updated = state
         .storage
         .update_lease(
             &lease_id,
+            request.starts_at,
             request.expires_at,
             clean_optional(request.failure_message),
         )
         .await?
         .ok_or_else(|| ApiError::not_found("lease not found"))?;
-    state
-        .update_session_expiry(&updated.session_id, updated.expires_at)
-        .await;
+    if let Some(session_id) = updated.session_id.as_deref() {
+        state
+            .update_session_expiry(session_id, updated.expires_at)
+            .await;
+    }
+    Ok(axum::Json(lease_response(&state, updated).await))
+}
+
+async fn start_admin_lease_session(
+    State(state): State<AppState>,
+    Path(lease_id): Path<String>,
+) -> Result<axum::Json<LeaseResponse>, ApiError> {
+    let lease = state
+        .storage
+        .find_lease(&lease_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("lease not found"))?;
+    let updated = start_lease_session(&state, lease).await?;
     Ok(axum::Json(lease_response(&state, updated).await))
 }
 
@@ -885,6 +904,79 @@ async fn delete_admin_lease(
         .ok_or_else(|| ApiError::not_found("lease not found"))?;
     release_lease(&state, lease, None).await?;
     Ok(StatusCode::ACCEPTED)
+}
+
+fn validate_lease_window(
+    starts_at: chrono::DateTime<chrono::Utc>,
+    expires_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), ApiError> {
+    if expires_at <= starts_at {
+        return Err(ApiError::bad_request("expires_at must be after starts_at"));
+    }
+    if expires_at <= chrono::Utc::now() {
+        return Err(ApiError::bad_request("expires_at must be in the future"));
+    }
+    Ok(())
+}
+
+async fn ensure_lease_window_available(
+    state: &AppState,
+    board_id: &str,
+    starts_at: chrono::DateTime<chrono::Utc>,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    exclude_lease_id: Option<&str>,
+) -> Result<(), ApiError> {
+    let leases = state.storage.list_leases().await?;
+    let overlaps = leases.into_iter().any(|lease| {
+        lease.board_id == board_id
+            && lease.state == crate::storage::LeaseState::Active
+            && exclude_lease_id != Some(lease.id.as_str())
+            && starts_at < lease.expires_at
+            && expires_at > lease.starts_at
+    });
+    if overlaps {
+        return Err(ApiError::conflict(format!(
+            "board `{board_id}` already has a lease in that time window"
+        )));
+    }
+    Ok(())
+}
+
+async fn start_lease_session(state: &AppState, lease: Lease) -> Result<Lease, ApiError> {
+    if lease.state != crate::storage::LeaseState::Active {
+        return Err(ApiError::conflict("only active leases can start a session"));
+    }
+    let now = chrono::Utc::now();
+    if now < lease.starts_at {
+        return Err(ApiError::conflict("lease time window has not started"));
+    }
+    if now >= lease.expires_at {
+        return Err(ApiError::conflict("lease time window has expired"));
+    }
+    if let Some(session_id) = lease.session_id.as_deref()
+        && state.get_session(session_id).await.is_some()
+    {
+        return Ok(lease);
+    }
+
+    let session = state
+        .create_session_for_board(&lease.board_id, Some(lease.user_id.clone()))
+        .await
+        .map_err(|err| match err {
+            BoardAllocationStatus::BoardTypeNotFound => {
+                ApiError::not_found(format!("board `{}` not found", lease.board_id))
+            }
+            BoardAllocationStatus::NoAvailableBoard => {
+                ApiError::conflict(format!("board `{}` is not available", lease.board_id))
+            }
+        })?;
+    state.update_session_expiry(&session.id, lease.expires_at).await;
+    state.storage.bind_lease_session(&lease.id, &session.id).await?;
+    state
+        .storage
+        .find_lease(&lease.id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("lease not found"))
 }
 
 async fn get_admin_overview(
@@ -2197,11 +2289,22 @@ fn optional_clean_header(headers: &HeaderMap, name: &'static str) -> Result<Opti
     Ok(clean_optional(optional_header(headers, name)?))
 }
 
+fn optional_bool_header(headers: &HeaderMap, name: &'static str) -> Result<Option<bool>, ApiError> {
+    optional_header(headers, name)?
+        .map(|value| match value.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => Ok(true),
+            "false" | "0" | "no" | "off" => Ok(false),
+            _ => Err(ApiError::bad_request(format!("invalid {name} header"))),
+        })
+        .transpose()
+}
+
 fn dtb_metadata_headers(headers: &HeaderMap) -> Result<DtbMetadataInput, ApiError> {
     Ok(DtbMetadataInput {
         boot_architecture: optional_clean_header(headers, "X-Dtb-Architecture")?,
         compatible: optional_clean_header(headers, "X-Dtb-Compatible")?,
         description: optional_clean_header(headers, "X-Dtb-Description")?,
+        disabled: optional_bool_header(headers, "X-Dtb-Disabled")?,
     })
 }
 
@@ -2535,6 +2638,7 @@ async fn sync_dtb_metadata(
     metadata: DtbMetadataInput,
     uploaded_by: Option<String>,
 ) -> Result<crate::storage::DtbMetadata, ApiError> {
+    let existing = state.storage.find_dtb_metadata_by_name(&file.name).await?;
     Ok(state
         .storage
         .upsert_dtb_metadata(UpsertDtbMetadata {
@@ -2545,6 +2649,9 @@ async fn sync_dtb_metadata(
             boot_architecture: metadata.boot_architecture,
             compatible: metadata.compatible,
             description: metadata.description,
+            disabled: metadata
+                .disabled
+                .unwrap_or_else(|| existing.as_ref().is_some_and(|item| item.disabled)),
             uploaded_by,
         })
         .await?)

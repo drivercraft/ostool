@@ -6,20 +6,31 @@ import type { AdminUserResponse, BoardConfig, LeaseResponse } from "@/types/api"
 const listAdminLeases = vi.fn();
 const createAdminLease = vi.fn();
 const updateAdminLease = vi.fn();
+const startAdminLeaseSession = vi.fn();
 const deleteAdminLease = vi.fn();
 const listAdminUsers = vi.fn();
 const listBoards = vi.fn();
+const routerPush = vi.fn();
 const uiStore = {
   setError: vi.fn(),
   setSuccess: vi.fn(),
   confirm: vi.fn(),
 };
 
+vi.mock("vue-router", async () => {
+  const actual = await vi.importActual<typeof import("vue-router")>("vue-router");
+  return {
+    ...actual,
+    useRouter: () => ({ push: routerPush }),
+  };
+});
+
 vi.mock("@/api", () => ({
   api: {
     listAdminLeases,
     createAdminLease,
     updateAdminLease,
+    startAdminLeaseSession,
     deleteAdminLease,
     listAdminUsers,
     listBoards,
@@ -73,6 +84,7 @@ function makeLease(): LeaseResponse {
       state: "active",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
+      starts_at: "2026-01-01T00:00:00Z",
       expires_at: "2026-01-01T02:00:00Z",
       released_at: null,
       failure_message: null,
@@ -90,8 +102,9 @@ function makeLease(): LeaseResponse {
 
 describe("LeasesView", () => {
   beforeEach(() => {
-    [listAdminLeases, createAdminLease, updateAdminLease, deleteAdminLease, listAdminUsers, listBoards]
+    [listAdminLeases, createAdminLease, updateAdminLease, startAdminLeaseSession, deleteAdminLease, listAdminUsers, listBoards]
       .forEach((fn) => fn.mockReset());
+    routerPush.mockReset();
     uiStore.setError.mockReset();
     uiStore.setSuccess.mockReset();
     uiStore.confirm.mockReset();
@@ -101,6 +114,7 @@ describe("LeasesView", () => {
     listBoards.mockResolvedValue([makeBoard("board-1"), makeBoard("board-2")]);
     createAdminLease.mockResolvedValue(makeLease());
     updateAdminLease.mockResolvedValue(makeLease());
+    startAdminLeaseSession.mockResolvedValue(makeLease());
     deleteAdminLease.mockResolvedValue(undefined);
   });
 
@@ -127,7 +141,9 @@ describe("LeasesView", () => {
     const modal = wrapper.get(".modal-card");
     await modal.findAll("select")[0].setValue("u-1");
     await modal.findAll("select")[1].setValue("board-2");
-    await modal.get('input[type="datetime-local"]').setValue("2026-01-01T03:00");
+    const dateInputs = modal.findAll('input[type="datetime-local"]');
+    await dateInputs[0].setValue("2026-01-01T01:00");
+    await dateInputs[1].setValue("2026-01-01T03:00");
     await modal.get("form").trigger("submit");
     await flushPromises();
 
@@ -135,11 +151,23 @@ describe("LeasesView", () => {
       user_id: "u-1",
       board_id: "board-2",
       client_name: null,
+      starts_at: new Date("2026-01-01T01:00").toISOString(),
       expires_at: new Date("2026-01-01T03:00").toISOString(),
     });
   });
 
-  it("updates an active lease and releases it", async () => {
+  it("renders edit, enable/disable, and more row actions", async () => {
+    const LeasesView = (await import("./LeasesView.vue")).default;
+    const wrapper = mount(LeasesView);
+    await flushPromises();
+
+    const firstRow = wrapper.find("tbody tr");
+    expect(firstRow.find('button[title="编辑"]').exists()).toBe(true);
+    expect(firstRow.find('button[title="禁用"]').exists()).toBe(true);
+    expect(firstRow.find('button[title="更多"]').exists()).toBe(true);
+  });
+
+  it("updates an active lease and releases it from the disable action", async () => {
     const LeasesView = (await import("./LeasesView.vue")).default;
     const wrapper = mount(LeasesView);
     await flushPromises();
@@ -148,18 +176,59 @@ describe("LeasesView", () => {
     await flushPromises();
 
     const modal = wrapper.get(".modal-card");
-    await modal.get('input[type="datetime-local"]').setValue("2026-01-01T04:00");
+    const dateInputs = modal.findAll('input[type="datetime-local"]');
+    await dateInputs[0].setValue("2026-01-01T01:00");
+    await dateInputs[1].setValue("2026-01-01T04:00");
     await modal.get("form").trigger("submit");
     await flushPromises();
 
     expect(updateAdminLease).toHaveBeenCalledWith("lease-1", {
+      starts_at: new Date("2026-01-01T01:00").toISOString(),
       expires_at: new Date("2026-01-01T04:00").toISOString(),
       failure_message: null,
     });
 
-    await wrapper.get('button[title="释放"]').trigger("click");
+    await wrapper.get('button[title="禁用"]').trigger("click");
     await flushPromises();
 
     expect(deleteAdminLease).toHaveBeenCalledWith("lease-1");
+  });
+
+  it("opens more actions, navigates to the session, and deletes the lease", async () => {
+    const LeasesView = (await import("./LeasesView.vue")).default;
+    const wrapper = mount(LeasesView, {
+      attachTo: document.body,
+    });
+    await flushPromises();
+
+    await wrapper.find('button[title="更多"]').trigger("click");
+    await flushPromises();
+
+    const menu = document.body.querySelector(".action-menu.action-menu--floating");
+    expect(menu).not.toBeNull();
+    const items = Array.from(menu!.querySelectorAll(".action-menu-item"));
+    expect(items.map((item) => item.textContent ?? "").some((text) => text.includes("转到会话"))).toBe(true);
+    expect(items.map((item) => item.textContent ?? "").some((text) => text.includes("删除租赁"))).toBe(true);
+
+    (items[0] as HTMLButtonElement).click();
+    await flushPromises();
+
+    expect(routerPush).toHaveBeenCalledWith({
+      path: "/admin/rentals/sessions",
+      query: { q: "session-1" },
+    });
+
+    await wrapper.find('button[title="更多"]').trigger("click");
+    await flushPromises();
+
+    const deleteItem = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>(".action-menu.action-menu--floating .action-menu-item"),
+    ).find((item) => item.textContent?.includes("删除租赁"));
+    expect(deleteItem).toBeTruthy();
+    deleteItem!.click();
+    await flushPromises();
+
+    expect(deleteAdminLease).toHaveBeenCalledWith("lease-1");
+    wrapper.unmount();
   });
 });

@@ -5,13 +5,14 @@ import { RouterLink, useRouter } from "vue-router";
 import Icon from "@/components/Icon.vue";
 import { api } from "@/api";
 import { useUiStore } from "@/stores/ui";
-import type { BoardConfig, Session } from "@/types/api";
+import type { BoardConfig, LeaseResponse, Session } from "@/types/api";
 
 const ui = useUiStore();
 const router = useRouter();
 const loading = ref(true);
 const boards = ref<BoardConfig[]>([]);
 const sessions = ref<Session[]>([]);
+const leases = ref<LeaseResponse[]>([]);
 const typeFilter = ref("");
 const tagFilter = ref("");
 const statusFilter = ref<"all" | "available" | "leased" | "disabled">("all");
@@ -19,9 +20,12 @@ const openMenuBoardId = ref<string | null>(null);
 const menuPosition = ref({ top: 0, left: 0 });
 
 const leasedBoardIds = computed(() => new Set(sessions.value.map((session) => session.board_id)));
-const sessionByBoardId = computed(() =>
-  new Map(sessions.value.map((session) => [session.board_id, session])),
-);
+const leaseByBoardId = computed(() => {
+  const entries = leases.value
+    .filter((item) => item.lease.state === "active" || item.lease.state === "releasing")
+    .map((item) => [item.lease.board_id, item.lease] as const);
+  return new Map(entries);
+});
 const boardTypes = computed(() =>
   Array.from(new Set(boards.value.map((board) => board.board_type))).sort(),
 );
@@ -138,15 +142,15 @@ async function toggleDisabled(board: BoardConfig) {
   }
 }
 
-function goToBoardSession(boardId: string) {
-  const session = sessionByBoardId.value.get(boardId);
-  if (!session) {
+function goToBoardLease(boardId: string) {
+  const lease = leaseByBoardId.value.get(boardId);
+  if (!lease) {
     return;
   }
   closeMenu();
   void router.push({
-    path: "/admin/rentals/sessions",
-    query: { q: session.id },
+    path: "/admin/rentals/leases",
+    query: { q: lease.id },
   });
 }
 
@@ -173,9 +177,14 @@ async function removeBoard(boardId: string) {
 async function loadBoards() {
   loading.value = true;
   try {
-    const [boardList, sessionList] = await Promise.all([api.listBoards(), api.listSessions()]);
+    const [boardList, sessionList, leaseList] = await Promise.all([
+      api.listBoards(),
+      api.listSessions(),
+      api.listAdminLeases(),
+    ]);
     boards.value = boardList;
     sessions.value = sessionList.sessions;
+    leases.value = leaseList.leases;
   } catch (error) {
     ui.setError((error as Error).message);
   } finally {
@@ -308,11 +317,11 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
                   >
                     <button
                       class="action-menu-item"
-                      :disabled="!sessionByBoardId.has(board.id)"
-                      @click="goToBoardSession(board.id)"
+                      :disabled="!leaseByBoardId.has(board.id)"
+                      @click="goToBoardLease(board.id)"
                     >
-                      <Icon name="terminal" :size="14" />
-                      转到会话
+                      <Icon name="link" :size="14" />
+                      转到租赁
                     </button>
                     <button
                       class="action-menu-item"

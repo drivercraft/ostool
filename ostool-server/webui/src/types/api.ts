@@ -185,6 +185,7 @@ export interface DtbFileResponse {
   boot_architecture?: string | null;
   compatible?: string | null;
   description?: string | null;
+  disabled: boolean;
   relative_tftp_path_template: string;
 }
 
@@ -192,6 +193,7 @@ export interface DtbMetadataInput {
   boot_architecture?: string | null;
   compatible?: string | null;
   description?: string | null;
+  disabled?: boolean | null;
 }
 
 export interface Session {
@@ -208,13 +210,14 @@ export type LeaseState = "active" | "releasing" | "released" | "expired" | "fail
 export interface Lease {
   id: string;
   user_id: string;
-  session_id: string;
+  session_id: string | null;
   board_id: string;
   board_type: string;
   required_tags: string[];
   state: LeaseState;
   created_at: string;
   updated_at: string;
+  starts_at: string;
   expires_at: string;
   released_at: string | null;
   failure_message: string | null;
@@ -232,11 +235,13 @@ export interface LeasesResponse {
 export interface AdminLeaseCreateRequest {
   user_id: string;
   board_id: string;
+  starts_at: string;
   expires_at: string;
   client_name?: string | null;
 }
 
 export interface AdminLeaseUpdateRequest {
+  starts_at: string;
   expires_at: string;
   failure_message?: string | null;
 }

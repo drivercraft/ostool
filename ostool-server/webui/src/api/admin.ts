@@ -48,6 +48,9 @@ function dtbHeaders(dtbName?: string | null, metadata?: DtbMetadataInput) {
   if (metadata?.description) {
     headers.set("X-Dtb-Description", metadata.description);
   }
+  if (typeof metadata?.disabled === "boolean") {
+    headers.set("X-Dtb-Disabled", metadata.disabled ? "true" : "false");
+  }
   return headers;
 }
 
@@ -251,6 +254,14 @@ export const adminApi = {
       {
         method: "PUT",
         bodyJson: payload,
+      },
+    );
+  },
+  startAdminLeaseSession(leaseId: string) {
+    return request<LeaseResponse>(
+      `/api/v1/admin/leases/${encodeURIComponent(leaseId)}/session`,
+      {
+        method: "POST",
       },
     );
   },

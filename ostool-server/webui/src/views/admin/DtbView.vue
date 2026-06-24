@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 
 import Icon from "@/components/Icon.vue";
 import { api } from "@/api";
@@ -20,6 +20,9 @@ const newDtbDescription = ref("");
 const newDtbFile = ref<File | null>(null);
 const newDtbInput = ref<HTMLInputElement | null>(null);
 const editingDtbName = ref<string | null>(null);
+const togglingName = ref<string | null>(null);
+const openMenuDtbName = ref<string | null>(null);
+const menuPosition = ref({ top: 0, left: 0 });
 const editDtbName = ref("");
 const editDtbArchitecture = ref("");
 const editDtbCompatible = ref("");
@@ -180,6 +183,7 @@ async function createDtb() {
 }
 
 function openEditDtb(dtb: DtbFileResponse) {
+  closeMenu();
   editingDtbName.value = dtb.name;
   editDtbName.value = dtb.name;
   editDtbArchitecture.value = dtb.boot_architecture ?? "";
@@ -188,6 +192,30 @@ function openEditDtb(dtb: DtbFileResponse) {
   editDtbFile.value = null;
   if (editDtbFileInput.value) {
     editDtbFileInput.value.value = "";
+  }
+}
+
+function toggleMenu(dtbName: string, event: MouseEvent) {
+  if (openMenuDtbName.value === dtbName) {
+    closeMenu();
+    return;
+  }
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  menuPosition.value = {
+    top: rect.bottom + 6,
+    left: Math.max(12, rect.right - 180),
+  };
+  openMenuDtbName.value = dtbName;
+}
+
+function closeMenu() {
+  openMenuDtbName.value = null;
+}
+
+function onDocumentClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  if (target && !target.closest(".row-action-menu") && !target.closest(".action-menu")) {
+    closeMenu();
   }
 }
 
@@ -266,7 +294,27 @@ async function saveDtb() {
   }
 }
 
+async function toggleDtbDisabled(dtb: DtbFileResponse) {
+  closeMenu();
+  togglingName.value = dtb.name;
+  try {
+    const updated = await api.updateDtb(dtb.name, null, null, {
+      boot_architecture: dtb.boot_architecture ?? null,
+      compatible: dtb.compatible ?? null,
+      description: dtb.description ?? null,
+      disabled: !dtb.disabled,
+    });
+    dtbs.value = dtbs.value.map((item) => (item.name === dtb.name ? updated : item));
+    ui.setSuccess(updated.disabled ? `已禁用 DTB ${updated.name}` : `已启用 DTB ${updated.name}`);
+  } catch (error) {
+    ui.setError((error as Error).message);
+  } finally {
+    togglingName.value = null;
+  }
+}
+
 async function removeDtb(name: string) {
+  closeMenu();
   const confirmed = await ui.confirm({
     tone: "danger",
     title: "删除 DTB",
@@ -291,8 +339,11 @@ async function removeDtb(name: string) {
 
 onMounted(() => {
   ui.clearMessages();
+  document.addEventListener("click", onDocumentClick);
   void loadDtbs();
 });
+
+onUnmounted(() => document.removeEventListener("click", onDocumentClick));
 </script>
 
 <template>
@@ -335,6 +386,7 @@ onMounted(() => {
               <th>架构</th>
               <th>Compatible</th>
               <th>大小</th>
+              <th>状态</th>
               <th>更新时间</th>
               <th>说明</th>
               <th class="col-actions">操作</th>
@@ -352,6 +404,14 @@ onMounted(() => {
               <td>{{ dtb.boot_architecture || "-" }}</td>
               <td><code>{{ dtb.compatible || "-" }}</code></td>
               <td>{{ formatSize(dtb.size) }}</td>
+              <td>
+                <span
+                  class="pill"
+                  :class="dtb.disabled ? 'pill-neutral' : 'pill-success'"
+                >
+                  {{ dtb.disabled ? "已禁用" : "启用" }}
+                </span>
+              </td>
               <td>{{ formatTime(dtb.updated_at) }}</td>
               <td class="muted">{{ dtb.description || "无说明" }}</td>
               <td class="col-actions">
@@ -366,12 +426,38 @@ onMounted(() => {
                   </button>
                   <button
                     class="btn-icon-only"
-                    title="删除"
-                    :disabled="deletingName === dtb.name"
-                    @click="removeDtb(dtb.name)"
+                    :title="dtb.disabled ? '启用' : '禁用'"
+                    :disabled="togglingName === dtb.name"
+                    @click="toggleDtbDisabled(dtb)"
                   >
-                    <Icon name="trash" :size="16" />
+                    <Icon :name="dtb.disabled ? 'check' : 'ban'" :size="16" />
                   </button>
+                  <div class="row-action-menu">
+                    <button
+                      class="btn-icon-only"
+                      title="更多"
+                      :aria-expanded="openMenuDtbName === dtb.name"
+                      @click.stop="toggleMenu(dtb.name, $event)"
+                    >
+                      <Icon name="more-vertical" :size="16" />
+                    </button>
+                  </div>
+                  <Teleport to="body">
+                    <div
+                      v-if="openMenuDtbName === dtb.name"
+                      class="action-menu action-menu--floating"
+                      :style="{ top: `${menuPosition.top}px`, left: `${menuPosition.left}px` }"
+                    >
+                      <button
+                        class="action-menu-item"
+                        :disabled="deletingName === dtb.name"
+                        @click="removeDtb(dtb.name)"
+                      >
+                        <Icon name="trash" :size="14" />
+                        删除 DTB
+                      </button>
+                    </div>
+                  </Teleport>
                 </div>
               </td>
             </tr>

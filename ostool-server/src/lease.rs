@@ -16,6 +16,8 @@ pub async fn create_user_lease(
     if !site.self_service_enabled {
         anyhow::bail!("self-service rental is disabled");
     }
+    let now = Utc::now();
+    let expires_at = now + Duration::minutes(site.default_lease_minutes);
     let session = state
         .create_session(
             &request.board_type,
@@ -28,13 +30,15 @@ pub async fn create_user_lease(
         .storage
         .create_lease(NewLease {
             user_id: user_id.to_string(),
-            session_id: session.id,
+            session_id: Some(session.id.clone()),
             board_id: session.board_id,
             board_type: request.board_type,
             required_tags: request.required_tags,
-            expires_at: Utc::now() + Duration::minutes(site.default_lease_minutes),
+            starts_at: now,
+            expires_at,
         })
         .await?;
+    state.update_session_expiry(&session.id, expires_at).await;
     Ok(lease)
 }
 
@@ -52,7 +56,14 @@ pub async fn release_lease(
             failure_message.clone(),
         )
         .await?;
-    let result = state.remove_session(&lease.session_id).await;
+    let Some(session_id) = lease.session_id.as_deref() else {
+        state
+            .storage
+            .mark_lease_state(&lease.id, LeaseState::Released, Some(Utc::now()), None)
+            .await?;
+        return Ok(());
+    };
+    let result = state.remove_session(session_id).await;
     match result {
         Ok(_) => {
             state

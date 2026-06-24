@@ -127,13 +127,14 @@ impl LeaseState {
 pub struct Lease {
     pub id: String,
     pub user_id: String,
-    pub session_id: String,
+    pub session_id: Option<String>,
     pub board_id: String,
     pub board_type: String,
     pub required_tags: Vec<String>,
     pub state: LeaseState,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub starts_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub released_at: Option<DateTime<Utc>>,
     pub failure_message: Option<String>,
@@ -142,10 +143,11 @@ pub struct Lease {
 #[derive(Debug, Clone)]
 pub struct NewLease {
     pub user_id: String,
-    pub session_id: String,
+    pub session_id: Option<String>,
     pub board_id: String,
     pub board_type: String,
     pub required_tags: Vec<String>,
+    pub starts_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }
 
@@ -159,6 +161,7 @@ pub struct DtbMetadata {
     pub boot_architecture: Option<String>,
     pub compatible: Option<String>,
     pub description: Option<String>,
+    pub disabled: bool,
     pub uploaded_by: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -173,6 +176,7 @@ pub struct UpsertDtbMetadata {
     pub boot_architecture: Option<String>,
     pub compatible: Option<String>,
     pub description: Option<String>,
+    pub disabled: bool,
     pub uploaded_by: Option<String>,
 }
 
@@ -572,9 +576,11 @@ pub trait LeaseRepository: Send + Sync {
         lease_id: &str,
         expires_at: DateTime<Utc>,
     ) -> anyhow::Result<()>;
+    async fn bind_lease_session(&self, lease_id: &str, session_id: &str) -> anyhow::Result<()>;
     async fn update_lease(
         &self,
         lease_id: &str,
+        starts_at: DateTime<Utc>,
         expires_at: DateTime<Utc>,
         failure_message: Option<String>,
     ) -> anyhow::Result<Option<Lease>>;

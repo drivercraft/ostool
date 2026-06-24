@@ -162,12 +162,13 @@ impl SqliteStorage {
             CREATE TABLE IF NOT EXISTS leases (
                 id TEXT PRIMARY KEY NOT NULL,
                 user_id TEXT NOT NULL,
-                session_id TEXT NOT NULL UNIQUE,
+                session_id TEXT UNIQUE,
                 board_id TEXT NOT NULL,
                 board_type TEXT NOT NULL,
                 required_tags_json TEXT NOT NULL,
                 state TEXT NOT NULL,
                 created_at TEXT NOT NULL,
+                starts_at TEXT NOT NULL,
                 expires_at TEXT NOT NULL,
                 released_at TEXT,
                 failure_message TEXT,
@@ -287,6 +288,7 @@ impl SqliteStorage {
                 boot_architecture TEXT,
                 compatible TEXT,
                 description TEXT,
+                disabled INTEGER NOT NULL DEFAULT 0,
                 uploaded_by TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -588,7 +590,7 @@ impl DtbMetadataRepository for SqliteStorage {
             sqlx::query(
                 r#"
                 UPDATE dtb_files
-                SET storage_path = ?, size_bytes = ?, sha256 = ?, boot_architecture = ?, compatible = ?, description = ?, uploaded_by = ?, updated_at = ?
+                SET storage_path = ?, size_bytes = ?, sha256 = ?, boot_architecture = ?, compatible = ?, description = ?, disabled = ?, uploaded_by = ?, updated_at = ?
                 WHERE id = ?
                 "#,
             )
@@ -598,6 +600,7 @@ impl DtbMetadataRepository for SqliteStorage {
             .bind(metadata.boot_architecture)
             .bind(metadata.compatible)
             .bind(metadata.description)
+            .bind(metadata.disabled)
             .bind(metadata.uploaded_by)
             .bind(&now)
             .bind(&existing.id)
@@ -613,8 +616,8 @@ impl DtbMetadataRepository for SqliteStorage {
             sqlx::query(
                 r#"
                 INSERT INTO dtb_files
-                    (id, name, storage_path, size_bytes, sha256, boot_architecture, compatible, description, uploaded_by, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, name, storage_path, size_bytes, sha256, boot_architecture, compatible, description, disabled, uploaded_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&id)
@@ -625,6 +628,7 @@ impl DtbMetadataRepository for SqliteStorage {
             .bind(metadata.boot_architecture)
             .bind(metadata.compatible)
             .bind(metadata.description)
+            .bind(metadata.disabled)
             .bind(metadata.uploaded_by)
             .bind(&now)
             .bind(&now)
@@ -797,6 +801,7 @@ fn lease_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<Lease> {
         state: LeaseState::from_str(row.try_get::<String, _>("state")?.as_str())?,
         created_at,
         updated_at,
+        starts_at: parse_time(row.try_get::<String, _>("starts_at")?.as_str())?,
         expires_at: parse_time(row.try_get::<String, _>("expires_at")?.as_str())?,
         released_at: row
             .try_get::<Option<String>, _>("released_at")?
@@ -823,6 +828,7 @@ fn dtb_metadata_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<DtbMet
         boot_architecture: row.try_get("boot_architecture")?,
         compatible: row.try_get("compatible")?,
         description: row.try_get("description")?,
+        disabled: row.try_get("disabled")?,
         uploaded_by: row.try_get("uploaded_by")?,
         created_at: parse_time(row.try_get::<String, _>("created_at")?.as_str())?,
         updated_at: parse_time(row.try_get::<String, _>("updated_at")?.as_str())?,
@@ -1091,8 +1097,8 @@ impl LeaseRepository for SqliteStorage {
         sqlx::query(
             r#"
             INSERT INTO leases
-                (id, user_id, session_id, board_id, board_type, required_tags_json, state, created_at, updated_at, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, user_id, session_id, board_id, board_type, required_tags_json, state, created_at, updated_at, starts_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&id)
@@ -1104,6 +1110,7 @@ impl LeaseRepository for SqliteStorage {
         .bind(LeaseState::Active.as_str())
         .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
+        .bind(lease.starts_at.to_rfc3339())
         .bind(lease.expires_at.to_rfc3339())
         .execute(&self.pool)
         .await?;
@@ -1171,15 +1178,27 @@ impl LeaseRepository for SqliteStorage {
         Ok(())
     }
 
+    async fn bind_lease_session(&self, lease_id: &str, session_id: &str) -> anyhow::Result<()> {
+        sqlx::query("UPDATE leases SET session_id = ?, updated_at = ? WHERE id = ?")
+            .bind(session_id)
+            .bind(Utc::now().to_rfc3339())
+            .bind(lease_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     async fn update_lease(
         &self,
         lease_id: &str,
+        starts_at: DateTime<Utc>,
         expires_at: DateTime<Utc>,
         failure_message: Option<String>,
     ) -> anyhow::Result<Option<Lease>> {
         sqlx::query(
-            "UPDATE leases SET expires_at = ?, failure_message = ?, updated_at = ? WHERE id = ?",
+            "UPDATE leases SET starts_at = ?, expires_at = ?, failure_message = ?, updated_at = ? WHERE id = ?",
         )
+        .bind(starts_at.to_rfc3339())
         .bind(expires_at.to_rfc3339())
         .bind(failure_message)
         .bind(Utc::now().to_rfc3339())

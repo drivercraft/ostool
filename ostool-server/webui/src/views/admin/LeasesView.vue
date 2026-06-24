@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
+import { useRouter } from "vue-router";
 
 import Icon from "@/components/Icon.vue";
 import StatusPill from "@/components/StatusPill.vue";
@@ -11,6 +12,7 @@ type LeaseModalMode = "create" | "edit" | null;
 type LeaseStateFilter = "all" | "active" | "releasing" | "released" | "expired" | "failed";
 
 const ui = useUiStore();
+const router = useRouter();
 const leases = ref<LeaseResponse[]>([]);
 const users = ref<AdminUserResponse[]>([]);
 const boards = ref<BoardConfig[]>([]);
@@ -19,12 +21,15 @@ const saving = ref(false);
 const modalMode = ref<LeaseModalMode>(null);
 const editingLease = ref<LeaseResponse | null>(null);
 const pointerDownOnModalOverlay = ref(false);
+const openMenuLeaseId = ref<string | null>(null);
+const menuPosition = ref({ top: 0, left: 0 });
 const search = ref("");
 const stateFilter = ref<LeaseStateFilter>("all");
 const form = ref({
   user_id: "",
   board_id: "",
   client_name: "",
+  starts_at: "",
   expires_at: "",
   failure_message: "",
 });
@@ -32,7 +37,7 @@ const form = ref({
 const availableBoards = computed(() => {
   const activeBoardIds = new Set(
     leases.value
-      .filter((item) => item.lease.state === "active")
+      .filter((item) => item.lease.state === "active" && windowsOverlap(item.lease.starts_at, item.lease.expires_at, form.value.starts_at, form.value.expires_at))
       .map((item) => item.lease.board_id),
   );
   return boards.value.filter((board) => !board.disabled && !activeBoardIds.has(board.id));
@@ -53,7 +58,7 @@ const filteredLeases = computed(() =>
       userLabel(item.lease.user_id),
       item.lease.board_id,
       item.lease.board_type,
-      item.lease.session_id,
+      item.lease.session_id ?? "",
       item.session?.client_name ?? "",
     ].some((value) => value.toLowerCase().includes(query));
   }),
@@ -98,9 +103,21 @@ function fromDatetimeLocal(value: string) {
   return new Date(value).toISOString();
 }
 
-function defaultExpiresAt() {
-  const date = new Date(Date.now() + 60 * 60 * 1000);
-  return toDatetimeLocal(date.toISOString());
+function defaultStartsAt() {
+  return toDatetimeLocal(new Date().toISOString());
+}
+
+function defaultExpiresAt(startsAt: string) {
+  const startTime = startsAt ? new Date(startsAt).getTime() : Date.now();
+  return toDatetimeLocal(new Date(startTime + 60 * 60 * 1000).toISOString());
+}
+
+function windowsOverlap(startA: string, endA: string, startB: string, endB: string) {
+  if (!startB || !endB) {
+    return true;
+  }
+  return new Date(startA).getTime() < new Date(endB).getTime()
+    && new Date(endA).getTime() > new Date(startB).getTime();
 }
 
 function leaseTone(state: string) {
@@ -111,6 +128,64 @@ function leaseTone(state: string) {
     return "danger";
   }
   return "neutral";
+}
+
+function isActiveLease(item: LeaseResponse) {
+  return item.lease.state === "active";
+}
+
+function canStartLeaseSession(item: LeaseResponse) {
+  const now = Date.now();
+  return isActiveLease(item)
+    && !item.session
+    && new Date(item.lease.starts_at).getTime() <= now
+    && now < new Date(item.lease.expires_at).getTime();
+}
+
+function canToggleLease(item: LeaseResponse) {
+  return Boolean(item.session) || canStartLeaseSession(item);
+}
+
+function toggleLeaseTitle(item: LeaseResponse) {
+  if (item.session) {
+    return "禁用";
+  }
+  return "启用";
+}
+
+function toggleMenu(leaseId: string, event: MouseEvent) {
+  if (openMenuLeaseId.value === leaseId) {
+    closeMenu();
+    return;
+  }
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  menuPosition.value = {
+    top: rect.bottom + 6,
+    left: Math.max(12, rect.right - 180),
+  };
+  openMenuLeaseId.value = leaseId;
+}
+
+function closeMenu() {
+  openMenuLeaseId.value = null;
+}
+
+function onDocumentClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  if (target && !target.closest(".row-action-menu") && !target.closest(".action-menu")) {
+    closeMenu();
+  }
+}
+
+function goToSession(item: LeaseResponse) {
+  if (!item.session) {
+    return;
+  }
+  closeMenu();
+  void router.push({
+    path: "/admin/rentals/sessions",
+    query: { q: item.session.id },
+  });
 }
 
 async function loadData() {
@@ -132,23 +207,28 @@ async function loadData() {
 }
 
 function openCreate() {
+  const startsAt = defaultStartsAt();
   editingLease.value = null;
   form.value = {
     user_id: users.value.find((user) => !user.disabled)?.id ?? "",
-    board_id: availableBoards.value[0]?.id ?? "",
+    board_id: "",
     client_name: "",
-    expires_at: defaultExpiresAt(),
+    starts_at: startsAt,
+    expires_at: defaultExpiresAt(startsAt),
     failure_message: "",
   };
+  form.value.board_id = availableBoards.value[0]?.id ?? "";
   modalMode.value = "create";
 }
 
 function openEdit(item: LeaseResponse) {
+  closeMenu();
   editingLease.value = item;
   form.value = {
     user_id: item.lease.user_id,
     board_id: item.lease.board_id,
     client_name: item.session?.client_name ?? "",
+    starts_at: toDatetimeLocal(item.lease.starts_at),
     expires_at: toDatetimeLocal(item.lease.expires_at),
     failure_message: item.lease.failure_message ?? "",
   };
@@ -172,8 +252,12 @@ function onModalOverlayClick(event: MouseEvent) {
 }
 
 async function submitLease() {
-  if (!form.value.expires_at) {
-    ui.setError("请填写租赁结束时间");
+  if (!form.value.starts_at || !form.value.expires_at) {
+    ui.setError("请填写租赁开始和结束时间");
+    return;
+  }
+  if (new Date(form.value.expires_at).getTime() <= new Date(form.value.starts_at).getTime()) {
+    ui.setError("租赁结束时间必须晚于开始时间");
     return;
   }
   saving.value = true;
@@ -187,11 +271,13 @@ async function submitLease() {
         user_id: form.value.user_id,
         board_id: form.value.board_id,
         client_name: form.value.client_name.trim() || null,
+        starts_at: fromDatetimeLocal(form.value.starts_at),
         expires_at: fromDatetimeLocal(form.value.expires_at),
       });
       ui.setSuccess("租赁已创建");
     } else if (modalMode.value === "edit" && editingLease.value) {
       await api.updateAdminLease(editingLease.value.lease.id, {
+        starts_at: fromDatetimeLocal(form.value.starts_at),
         expires_at: fromDatetimeLocal(form.value.expires_at),
         failure_message: form.value.failure_message.trim() || null,
       });
@@ -206,28 +292,52 @@ async function submitLease() {
   }
 }
 
-async function releaseLease(leaseId: string) {
+async function startLeaseSession(item: LeaseResponse) {
+  closeMenu();
+  try {
+    const updated = await api.startAdminLeaseSession(item.lease.id);
+    leases.value = leases.value.map((lease) => (lease.lease.id === item.lease.id ? updated : lease));
+    ui.setSuccess(`已启用租赁 ${item.lease.id}`);
+  } catch (error) {
+    ui.setError((error as Error).message);
+  }
+}
+
+async function confirmLeaseRemoval(leaseId: string, action: "disable" | "delete") {
+  closeMenu();
+  const actionLabel = action === "disable" ? "禁用" : "删除";
   const confirmed = await ui.confirm({
     tone: "danger",
-    title: "释放租赁",
-    message: `确认释放租赁 ${leaseId}？`,
-    confirmLabel: "释放",
+    title: `${actionLabel}租赁`,
+    message: `确认${actionLabel}租赁 ${leaseId}？`,
+    confirmLabel: actionLabel,
   });
   if (!confirmed) {
     return;
   }
   try {
     await api.deleteAdminLease(leaseId);
-    ui.setSuccess(`已发起释放租赁 ${leaseId}`);
+    ui.setSuccess(`已发起${actionLabel}租赁 ${leaseId}`);
     await loadData();
   } catch (error) {
     ui.setError((error as Error).message);
   }
 }
 
+async function disableLease(leaseId: string) {
+  await confirmLeaseRemoval(leaseId, "disable");
+}
+
+async function deleteLease(leaseId: string) {
+  await confirmLeaseRemoval(leaseId, "delete");
+}
+
 onMounted(() => {
+  document.addEventListener("click", onDocumentClick);
   void loadData();
 });
+
+onUnmounted(() => document.removeEventListener("click", onDocumentClick));
 </script>
 
 <template>
@@ -290,33 +400,67 @@ onMounted(() => {
                 <code>{{ item.lease.board_id }}</code>
                 <div class="muted">{{ item.lease.board_type }}</div>
               </td>
-              <td><code>{{ item.lease.session_id }}</code></td>
+              <td><code>{{ item.lease.session_id || "-" }}</code></td>
               <td>
                 <StatusPill :tone="leaseTone(item.lease.state)" :label="item.lease.state" />
               </td>
               <td>
-                <div>{{ formatDateTime(item.lease.created_at) }}</div>
+                <div>{{ formatDateTime(item.lease.starts_at) }}</div>
                 <div class="muted">至 {{ formatDateTime(item.lease.expires_at) }}</div>
               </td>
-              <td>{{ formatDuration(item.lease.created_at, item.lease.expires_at) }}</td>
+              <td>{{ formatDuration(item.lease.starts_at, item.lease.expires_at) }}</td>
               <td class="col-actions">
                 <div class="row-actions">
                   <button
                     class="btn-icon-only"
                     title="编辑"
-                    :disabled="item.lease.state !== 'active'"
+                    :disabled="!isActiveLease(item)"
                     @click="openEdit(item)"
                   >
                     <Icon name="edit" :size="16" />
                   </button>
                   <button
                     class="btn-icon-only"
-                    title="释放"
-                    :disabled="item.lease.state !== 'active'"
-                    @click="releaseLease(item.lease.id)"
+                    :title="toggleLeaseTitle(item)"
+                    :disabled="!canToggleLease(item)"
+                    @click="item.session ? disableLease(item.lease.id) : startLeaseSession(item)"
                   >
-                    <Icon name="trash" :size="16" />
+                    <Icon :name="item.session ? 'ban' : 'check'" :size="16" />
                   </button>
+                  <div class="row-action-menu">
+                    <button
+                      class="btn-icon-only"
+                      title="更多"
+                      :aria-expanded="openMenuLeaseId === item.lease.id"
+                      @click.stop="toggleMenu(item.lease.id, $event)"
+                    >
+                      <Icon name="more-vertical" :size="16" />
+                    </button>
+                  </div>
+                  <Teleport to="body">
+                    <div
+                      v-if="openMenuLeaseId === item.lease.id"
+                      class="action-menu action-menu--floating"
+                      :style="{ top: `${menuPosition.top}px`, left: `${menuPosition.left}px` }"
+                    >
+                      <button
+                        class="action-menu-item"
+                        :disabled="!item.session"
+                        @click="goToSession(item)"
+                      >
+                        <Icon name="terminal" :size="14" />
+                        转到会话
+                      </button>
+                      <button
+                        class="action-menu-item"
+                        :disabled="!isActiveLease(item)"
+                        @click="deleteLease(item.lease.id)"
+                      >
+                        <Icon name="trash" :size="14" />
+                        删除租赁
+                      </button>
+                    </div>
+                  </Teleport>
                 </div>
               </td>
             </tr>
@@ -390,7 +534,11 @@ onMounted(() => {
               <input v-model="form.failure_message" placeholder="可选" />
             </label>
           </template>
-          <label class="field modal-field-full">
+          <label class="field">
+            <span>租赁开始时间</span>
+            <input v-model="form.starts_at" type="datetime-local" />
+          </label>
+          <label class="field">
             <span>租赁结束时间</span>
             <input v-model="form.expires_at" type="datetime-local" />
           </label>

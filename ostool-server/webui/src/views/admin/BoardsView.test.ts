@@ -1,10 +1,11 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BoardConfig, Session } from "@/types/api";
+import type { BoardConfig, LeaseResponse, Session } from "@/types/api";
 
 const listBoards = vi.fn();
 const listSessions = vi.fn();
+const listAdminLeases = vi.fn();
 const updateBoard = vi.fn();
 const deleteBoard = vi.fn();
 const routerPush = vi.fn();
@@ -27,6 +28,7 @@ vi.mock("@/api", () => ({
   api: {
     listBoards,
     listSessions,
+    listAdminLeases,
     updateBoard,
     deleteBoard,
   },
@@ -76,10 +78,32 @@ function makeSession(boardId = "rk3568-1"): Session {
   };
 }
 
+function makeLease(boardId = "rk3568-1"): LeaseResponse {
+  return {
+    lease: {
+      id: "lease-1",
+      user_id: "user-1",
+      session_id: "session-1",
+      board_id: boardId,
+      board_type: "rk3568",
+      required_tags: [],
+      state: "active",
+      created_at: "2026-04-08T00:00:00Z",
+      updated_at: "2026-04-08T00:00:00Z",
+      starts_at: "2026-04-08T00:00:00Z",
+      expires_at: "2026-04-08T00:05:00Z",
+      released_at: null,
+      failure_message: null,
+    },
+    session: makeSession(boardId),
+  };
+}
+
 describe("BoardsView", () => {
   beforeEach(() => {
     listBoards.mockReset();
     listSessions.mockReset();
+    listAdminLeases.mockReset();
     updateBoard.mockReset();
     deleteBoard.mockReset();
     routerPush.mockReset();
@@ -90,6 +114,7 @@ describe("BoardsView", () => {
     uiStore.confirm.mockResolvedValue(true);
     listBoards.mockResolvedValue([makeBoard()]);
     listSessions.mockResolvedValue({ sessions: [] });
+    listAdminLeases.mockResolvedValue({ leases: [] });
   });
 
   it("links board edit actions to the registered edit route", async () => {
@@ -191,8 +216,9 @@ describe("BoardsView", () => {
     expect(uiStore.setSuccess).toHaveBeenCalledWith("已禁用开发板 rk3568-1");
   });
 
-  it("opens more actions and navigates to the active board session", async () => {
+  it("opens more actions and navigates to the active board lease", async () => {
     listSessions.mockResolvedValue({ sessions: [makeSession()] });
+    listAdminLeases.mockResolvedValue({ leases: [makeLease()] });
 
     const BoardsView = (await import("./BoardsView.vue")).default;
     const wrapper = mount(BoardsView, {
@@ -216,13 +242,13 @@ describe("BoardsView", () => {
     const menu = document.body.querySelector(".action-menu.action-menu--floating");
     expect(menu).not.toBeNull();
     const items = Array.from(menu!.querySelectorAll(".action-menu-item"));
-    expect(items.map((item) => item.textContent ?? "").some((text) => text.includes("转到会话"))).toBe(true);
+    expect(items.map((item) => item.textContent ?? "").some((text) => text.includes("转到租赁"))).toBe(true);
     (items[0] as HTMLButtonElement).click();
     await flushPromises();
 
     expect(routerPush).toHaveBeenCalledWith({
-      path: "/admin/rentals/sessions",
-      query: { q: "session-1" },
+      path: "/admin/rentals/leases",
+      query: { q: "lease-1" },
     });
 
     wrapper.unmount();

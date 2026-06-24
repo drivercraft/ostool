@@ -97,6 +97,8 @@ describe("DashboardView", () => {
         required_tags: [],
         state: "active",
         created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        starts_at: "2026-01-01T00:00:00Z",
         expires_at: new Date(Date.now() + 1800_000).toISOString(),
         released_at: null,
         failure_message: null,

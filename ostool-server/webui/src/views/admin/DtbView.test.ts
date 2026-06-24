@@ -36,6 +36,7 @@ function makeDtb(name = "board.dtb"): DtbFileResponse {
     boot_architecture: "arm64",
     compatible: "test,board",
     description: "测试开发板 DTB",
+    disabled: false,
   };
 }
 
@@ -122,9 +123,22 @@ describe("DtbView", () => {
     expect((nameInput.element as HTMLInputElement).value).toBe("auto-name.dtb");
   });
 
-  it("renames and deletes an existing DTB", async () => {
+  it("renders edit, enable/disable, and more row actions", async () => {
     const DtbView = (await import("./DtbView.vue")).default;
     const wrapper = mount(DtbView);
+    await flushPromises();
+
+    const firstRow = wrapper.find("tbody tr");
+    expect(firstRow.find('button[title="编辑"]').exists()).toBe(true);
+    expect(firstRow.find('button[title="禁用"]').exists()).toBe(true);
+    expect(firstRow.find('button[title="更多"]').exists()).toBe(true);
+  });
+
+  it("renames, disables, and deletes an existing DTB", async () => {
+    const DtbView = (await import("./DtbView.vue")).default;
+    const wrapper = mount(DtbView, {
+      attachTo: document.body,
+    });
     await flushPromises();
 
     await wrapper.get('button[title="编辑"]').trigger("click");
@@ -144,10 +158,26 @@ describe("DtbView", () => {
       description: "测试开发板 DTB",
     });
 
-    await wrapper.get('button[title="删除"]').trigger("click");
+    await wrapper.get('button[title="禁用"]').trigger("click");
     await flushPromises();
 
-    expect(deleteDtb).toHaveBeenCalledWith("board.dtb");
+    expect(updateDtb).toHaveBeenCalledWith("board.dtb", null, null, {
+      boot_architecture: "arm64",
+      compatible: "test,board",
+      description: "测试开发板 DTB",
+      disabled: true,
+    });
+
+    await wrapper.get('button[title="更多"]').trigger("click");
+    await flushPromises();
+
+    const deleteItem = document.body.querySelector<HTMLButtonElement>(".action-menu .action-menu-item");
+    expect(deleteItem?.textContent).toContain("删除 DTB");
+    deleteItem!.click();
+    await flushPromises();
+
+    expect(deleteDtb).toHaveBeenCalledWith("board-v2.dtb");
+    wrapper.unmount();
   });
 
   it("fills rename draft automatically after choosing a replacement file", async () => {

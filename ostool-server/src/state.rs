@@ -179,13 +179,26 @@ impl AppState {
         loop {
             let boards = self.boards.read().await;
             let runtimes = self.board_runtimes.read().await;
-            let unavailable_board_ids = runtimes
+            let mut unavailable_board_ids = runtimes
                 .iter()
                 .filter(|(_, runtime)| runtime.lease_state != BoardLeaseState::Idle)
                 .map(|(board_id, _)| board_id.clone())
                 .collect::<BTreeSet<_>>();
-            let board = allocate_board(&boards, &unavailable_board_ids, board_type, required_tags)?;
             drop(runtimes);
+            if let Ok(leases) = self.storage.list_leases().await {
+                let now = chrono::Utc::now();
+                unavailable_board_ids.extend(
+                    leases
+                        .into_iter()
+                        .filter(|lease| {
+                            lease.state == crate::storage::LeaseState::Active
+                                && lease.starts_at <= now
+                                && now < lease.expires_at
+                        })
+                        .map(|lease| lease.board_id),
+                );
+            }
+            let board = allocate_board(&boards, &unavailable_board_ids, board_type, required_tags)?;
             drop(boards);
 
             let session_id = uuid::Uuid::new_v4().to_string();
