@@ -200,7 +200,12 @@ onMounted(() => {
             </td>
             <td>
               <div class="row-actions">
-                <RouterLink :to="`/admin/resources/boards/${board.id}/edit`" class="btn btn-ghost btn-sm">编辑</RouterLink>
+                <RouterLink
+                  :to="{ name: 'admin-resource-board-edit', params: { boardId: board.id } }"
+                  class="btn btn-ghost btn-sm"
+                >
+                  编辑
+                </RouterLink>
                 <button class="btn btn-danger btn-sm" @click="removeBoard(board.id)">删除</button>
               </div>
             </td>
