@@ -58,6 +58,7 @@ function makeRole(permission = makePermission()): AdminRoleResponse {
     display_name: "管理员",
     description: "平台管理员",
     system: true,
+    user_count: 2,
     permissions: [permission],
     created_at: "2026-04-01T00:00:00Z",
     updated_at: "2026-04-01T00:00:00Z",
@@ -107,6 +108,19 @@ describe("RolesView", () => {
     expect(wrapper.find(".admin-toolbar-left").text()).toContain("新增角色");
     expect(wrapper.find(".admin-toolbar-right .search-field").exists()).toBe(true);
     expect(wrapper.findAll(".admin-toolbar-right .filter-field").length).toBe(1);
+  });
+
+  it("renders the role table without permission chips by default", async () => {
+    const RolesView = (await import("./RolesView.vue")).default;
+    const wrapper = mount(RolesView);
+    await flushPromises();
+
+    const headers = wrapper.findAll("thead th").map((item) => item.text());
+    expect(headers).toEqual(["序号", "角色", "标识", "类型", "用户数量", "描述", "操作"]);
+    expect(wrapper.text()).toContain("管理员");
+    expect(wrapper.text()).toContain("admin");
+    expect(wrapper.text()).toContain("2");
+    expect(wrapper.find("tbody").text()).not.toContain("boards.read");
   });
 
   it("routes to the new role editor when creating a role", async () => {

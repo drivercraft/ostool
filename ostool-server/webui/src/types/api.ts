@@ -339,6 +339,7 @@ export interface AdminRoleResponse {
   display_name: string;
   description: string;
   system: boolean;
+  user_count: number;
   permissions: AdminPermissionResponse[];
   created_at: string;
   updated_at: string;

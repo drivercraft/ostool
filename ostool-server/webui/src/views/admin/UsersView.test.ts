@@ -64,6 +64,7 @@ function makeRole(id: string, name: string, display: string): AdminRoleResponse 
     display_name: display,
     description: "",
     system: false,
+    user_count: 0,
     permissions: [],
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",

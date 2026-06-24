@@ -157,19 +157,21 @@ pub struct AdminRoleResponse {
     pub display_name: String,
     pub description: String,
     pub system: bool,
+    pub user_count: u64,
     pub permissions: Vec<AdminPermissionResponse>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 impl AdminRoleResponse {
-    pub fn new(role: Role, permissions: Vec<Permission>) -> Self {
+    pub fn new(role: Role, permissions: Vec<Permission>, user_count: u64) -> Self {
         Self {
             id: role.id,
             name: role.name,
             display_name: role.display_name,
             description: role.description,
             system: role.system,
+            user_count,
             permissions: permissions
                 .into_iter()
                 .map(AdminPermissionResponse::from)

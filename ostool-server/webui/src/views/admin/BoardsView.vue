@@ -272,7 +272,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
             <th>标签</th>
             <th>串口</th>
             <th>状态</th>
-            <th>操作</th>
+            <th class="col-actions">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -287,7 +287,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
               </div>
             </td>
             <td class="muted">{{ serialPrimaryLabel(board) || '-' }}</td>
-            <td>
+            <td class="col-actions">
               <span
                 class="pill"
                 :class="boardTone(board) === 'good' ? 'pill-success' : boardTone(board) === 'warn' ? 'pill-warning' : 'pill-neutral'"

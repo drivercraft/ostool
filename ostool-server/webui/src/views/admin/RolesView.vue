@@ -95,7 +95,16 @@ const permissionGroups = computed<PermissionGroup[]>(() => {
     "network_interfaces",
     "permissions",
   ];
-  const actionOrder = ["read", "create", "update", "start", "release", "reconcile", "delete"];
+  const actionOrder = [
+    "read",
+    "create",
+    "update",
+    "start",
+    "release",
+    "heartbeat",
+    "reconcile",
+    "delete",
+  ];
   const map = new Map<string, AdminPermissionResponse[]>();
   for (const permission of permissions.value) {
     const key = permission.code.split(".")[0] || "other";
@@ -457,7 +466,7 @@ watch(
           <div class="admin-toolbar-right">
             <label class="search-field">
               <Icon name="search" :size="16" />
-              <input v-model="search" type="search" placeholder="搜索角色 / 权限" />
+              <input v-model="search" type="search" placeholder="搜索角色 / 标识 / 描述" />
             </label>
             <label class="field filter-field">
               <span>类型</span>
@@ -479,7 +488,7 @@ watch(
                 <th>角色</th>
                 <th>标识</th>
                 <th>类型</th>
-                <th>权限</th>
+                <th>用户数量</th>
                 <th>描述</th>
                 <th class="col-actions">操作</th>
               </tr>
@@ -495,18 +504,7 @@ watch(
                     :label="role.system ? '系统角色' : '自定义角色'"
                   />
                 </td>
-                <td>
-                  <div class="role-chip-list">
-                    <span
-                      v-for="permission in role.permissions"
-                      :key="permission.id"
-                      class="tag-chip"
-                    >
-                      {{ permission.code }}
-                    </span>
-                    <span v-if="role.permissions.length === 0" class="muted">无</span>
-                  </div>
-                </td>
+                <td>{{ role.user_count }}</td>
                 <td class="muted">{{ role.description || "无描述" }}</td>
                 <td class="col-actions">
                   <div class="row-actions">

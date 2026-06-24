@@ -27,7 +27,7 @@ const demoUser = {
   department: null,
   title: null,
   last_login_at: null,
-  roles: [{ id: "role-user", name: "user", display_name: "普通用户", description: "", system: true, permissions: [], created_at: "", updated_at: "" }],
+  roles: [{ id: "role-user", name: "user", display_name: "普通用户", description: "", system: true, user_count: 0, permissions: [], created_at: "", updated_at: "" }],
   permissions: [],
 };
 
@@ -35,7 +35,7 @@ const adminUser = {
   ...demoUser,
   id: "user-admin",
   username: "admin",
-  roles: [{ id: "role-admin", name: "admin", display_name: "管理员", description: "", system: true, permissions: [], created_at: "", updated_at: "" }],
+  roles: [{ id: "role-admin", name: "admin", display_name: "管理员", description: "", system: true, user_count: 0, permissions: [], created_at: "", updated_at: "" }],
   permissions: [{ id: "perm-server", code: "server.update", name: "编辑服务器配置", description: "" }],
 };
 
@@ -44,6 +44,18 @@ const rentalOperatorUser = {
   id: "user-rentals",
   username: "rental-operator",
   permissions: [{ id: "perm-leases-delete", code: "leases.delete", name: "删除租赁", description: "" }],
+};
+
+const defaultRentalUser = {
+  ...demoUser,
+  id: "user-default-rentals",
+  username: "default-rental-user",
+  permissions: [
+    { id: "perm-leases-read", code: "leases.read", name: "查看租赁", description: "" },
+    { id: "perm-leases-create", code: "leases.create", name: "新增租赁", description: "" },
+    { id: "perm-sessions-read", code: "sessions.read", name: "查看会话租约", description: "" },
+    { id: "perm-sessions-create", code: "sessions.create", name: "新增会话租约", description: "" },
+  ],
 };
 
 describe("useAuthStore", () => {
@@ -94,6 +106,20 @@ describe("useAuthStore", () => {
     expect(store.hasPermission("leases.delete")).toBe(true);
     expect(store.hasPermission("sessions.delete")).toBe(false);
     expect(store.hasPermission("users.delete")).toBe(false);
+  });
+
+  it("does not expose admin area for default rental permissions", async () => {
+    mocks.login.mockResolvedValue(defaultRentalUser);
+    const store = useAuthStore();
+
+    await store.login("default-rental-user", "secret");
+
+    expect(store.isAuthenticated).toBe(true);
+    expect(store.isAdmin).toBe(false);
+    expect(store.hasPermission("leases.read")).toBe(true);
+    expect(store.hasPermission("leases.create")).toBe(true);
+    expect(store.hasPermission("sessions.read")).toBe(true);
+    expect(store.hasPermission("sessions.create")).toBe(true);
   });
 
   it("logs out through the backend and clears user state", async () => {

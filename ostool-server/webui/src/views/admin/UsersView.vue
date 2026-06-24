@@ -381,9 +381,6 @@ onMounted(() => {
               <td class="col-index">{{ index + 1 }}</td>
               <td>
                 <div class="user-cell">
-                  <span class="user-avatar" :class="{ 'is-disabled': user.disabled }">
-                    {{ (user.display_name || user.username).slice(0, 1).toUpperCase() }}
-                  </span>
                   <div class="user-cell-main">
                     <span class="user-cell-username">{{ user.username }}</span>
                     <span class="user-cell-id">{{ user.id }}</span>

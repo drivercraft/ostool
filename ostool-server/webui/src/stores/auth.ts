@@ -22,6 +22,17 @@ const adminPermissionModules = new Set([
   "permissions",
 ]);
 
+const defaultUserPermissions = new Set([
+  "leases.read",
+  "leases.create",
+  "leases.start",
+  "leases.release",
+  "leases.heartbeat",
+  "sessions.read",
+  "sessions.create",
+  "sessions.update",
+]);
+
 export const useAuthStore = defineStore("auth", () => {
   const user = ref<AuthUser | null>(null);
   const loaded = ref(false);
@@ -32,7 +43,7 @@ export const useAuthStore = defineStore("auth", () => {
       user.value?.roles.some((role) => role.name === "admin") ||
       user.value?.permissions.some((permission) => {
         const [moduleName] = permission.code.split(".");
-        return adminPermissionModules.has(moduleName);
+        return adminPermissionModules.has(moduleName) && !defaultUserPermissions.has(permission.code);
       }) ||
       false,
   );

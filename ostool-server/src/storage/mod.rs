@@ -1,7 +1,7 @@
 pub mod mysql;
 pub mod sqlite;
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -94,8 +94,19 @@ pub const BUILTIN_PERMISSIONS: &[(&str, &str, &str)] = &[
     ("leases.update", "编辑租赁", "修改租赁时间段和状态信息"),
     ("leases.start", "启用租赁", "为有效租赁启动会话"),
     ("leases.release", "释放租赁", "释放租赁占用的会话"),
+    ("leases.heartbeat", "租赁心跳", "续约自己持有的活跃租赁"),
     ("leases.delete", "删除租赁", "删除租赁记录"),
     ("sessions.read", "查看会话租约", "查看会话租约和历史记录"),
+    (
+        "sessions.create",
+        "新增会话租约",
+        "为可用开发板创建会话租约",
+    ),
+    (
+        "sessions.update",
+        "更新会话租约",
+        "更新会话租约心跳和运行状态",
+    ),
     ("sessions.delete", "删除会话租约", "删除会话租约记录"),
     ("tftp.read", "查看 TFTP 配置", "查看 TFTP 配置和运行状态"),
     ("tftp.update", "编辑 TFTP 配置", "修改 TFTP 配置"),
@@ -116,6 +127,20 @@ pub const BUILTIN_PERMISSIONS: &[(&str, &str, &str)] = &[
     ),
     ("permissions.read", "查看权限", "查看系统内置权限列表"),
 ];
+
+pub fn default_user_permission(code: &str) -> bool {
+    matches!(
+        code,
+        "leases.read"
+            | "leases.create"
+            | "leases.start"
+            | "leases.release"
+            | "leases.heartbeat"
+            | "sessions.read"
+            | "sessions.create"
+            | "sessions.update"
+    )
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Role {
@@ -723,6 +748,7 @@ pub trait RbacRepository: Send + Sync {
     ) -> anyhow::Result<Option<Role>>;
     async fn delete_role(&self, role_id: &str) -> anyhow::Result<()>;
     async fn role_permissions(&self, role_id: &str) -> anyhow::Result<Vec<Permission>>;
+    async fn role_user_counts(&self) -> anyhow::Result<BTreeMap<String, u64>>;
     async fn user_roles(&self, user_id: &str) -> anyhow::Result<Vec<Role>>;
     async fn set_user_roles(&self, user_id: &str, role_ids: Vec<String>) -> anyhow::Result<()>;
     async fn user_permissions(&self, user_id: &str) -> anyhow::Result<Vec<Permission>>;

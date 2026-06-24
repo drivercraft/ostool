@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -12,8 +12,8 @@ use crate::storage::{
     BoardConfigRepository, DtbMetadata, DtbMetadataRepository, Lease, LeaseRepository, LeaseState,
     NewAuditLog, NewLease, NewRole, NewSessionRecord, NewUser, Permission, RbacRepository, Role,
     SessionRecord, SessionRecordRepository, SiteSettingValue, SiteSettings, SiteSettingsRepository,
-    UpsertDtbMetadata, User, UserProfile, UserRepository, default_site_setting_rows, parse_time,
-    site_settings_from_values, site_settings_to_values,
+    UpsertDtbMetadata, User, UserProfile, UserRepository, default_site_setting_rows,
+    default_user_permission, parse_time, site_settings_from_values, site_settings_to_values,
 };
 
 const MIGRATION_RBAC_PLATFORM: &str = "0001_rbac_platform";
@@ -511,11 +511,16 @@ impl SqliteStorage {
             .fetch_one(&self.pool)
             .await?
             .try_get("id")?;
+        let user_role_id: String = sqlx::query("SELECT id FROM roles WHERE name = 'user'")
+            .fetch_one(&self.pool)
+            .await?
+            .try_get("id")?;
         let permissions = sqlx::query("SELECT id, code FROM permissions")
             .fetch_all(&self.pool)
             .await?;
         for row in &permissions {
             let permission_id: String = row.try_get("id")?;
+            let code: String = row.try_get("code")?;
             sqlx::query(
                 "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
             )
@@ -523,6 +528,15 @@ impl SqliteStorage {
             .bind(&permission_id)
             .execute(&self.pool)
             .await?;
+            if default_user_permission(&code) {
+                sqlx::query(
+                    "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                )
+                .bind(&user_role_id)
+                .bind(&permission_id)
+                .execute(&self.pool)
+                .await?;
+            }
         }
 
         Ok(())
@@ -1496,6 +1510,25 @@ impl RbacRepository for SqliteStorage {
         .fetch_all(&self.pool)
         .await?;
         rows.iter().map(permission_from_row).collect()
+    }
+
+    async fn role_user_counts(&self) -> anyhow::Result<BTreeMap<String, u64>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT role_id, COUNT(*) AS user_count
+            FROM user_roles
+            GROUP BY role_id
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut counts = BTreeMap::new();
+        for row in rows {
+            let role_id: String = row.try_get("role_id")?;
+            let user_count: i64 = row.try_get("user_count")?;
+            counts.insert(role_id, user_count.max(0) as u64);
+        }
+        Ok(counts)
     }
 
     async fn user_roles(&self, user_id: &str) -> anyhow::Result<Vec<Role>> {

@@ -69,7 +69,10 @@ use crate::{
     session::SessionState,
     session::SessionStopReason,
     state::{AppState, BoardLeaseState, TouchSessionError},
-    storage::{Lease, NewAuditLog, NewRole, Role, SiteSettings, UpsertDtbMetadata, UserProfile},
+    storage::{
+        Lease, NewAuditLog, NewRole, Role, SiteSettings, UpsertDtbMetadata, UserProfile,
+        default_user_permission,
+    },
     tftp::{
         files::{TftpFileRef, normalize_relative_path},
         service::build_tftp_manager,
@@ -280,7 +283,10 @@ async fn auth_gate(
             require_permission(&user, permission_code)?;
         }
     } else if path.starts_with("/api/v1/user/") {
-        let _ = current_user_from_headers(&state, &headers).await?;
+        let user = current_user_from_headers(&state, &headers).await?;
+        if let Some(permission_code) = user_permission_for_request(request.method(), path) {
+            require_permission(&user, permission_code)?;
+        }
     }
     Ok(next.run(request).await)
 }
@@ -308,7 +314,7 @@ fn user_response(user: CurrentUser) -> CurrentUserResponse {
     let roles = user
         .roles
         .into_iter()
-        .map(|role| AdminRoleResponse::new(role, Vec::new()))
+        .map(|role| AdminRoleResponse::new(role, Vec::new(), 0))
         .collect();
     CurrentUserResponse {
         id: user.id,
@@ -329,25 +335,29 @@ fn user_response(user: CurrentUser) -> CurrentUserResponse {
 fn current_user_is_admin(user: &CurrentUser) -> bool {
     user.roles.iter().any(|role| role.name == "admin")
         || user.permissions.iter().any(|permission| {
-            permission.code.split_once('.').is_some_and(|(module, _)| {
-                matches!(
-                    module,
-                    "overview"
-                        | "users"
-                        | "roles"
-                        | "boards"
-                        | "dtbs"
-                        | "leases"
-                        | "sessions"
-                        | "tftp"
-                        | "server"
-                        | "site"
-                        | "serial_ports"
-                        | "network_interfaces"
-                        | "permissions"
-                )
-            })
+            is_admin_permission(&permission.code) && !default_user_permission(&permission.code)
         })
+}
+
+fn is_admin_permission(permission_code: &str) -> bool {
+    permission_code.split_once('.').is_some_and(|(module, _)| {
+        matches!(
+            module,
+            "overview"
+                | "users"
+                | "roles"
+                | "boards"
+                | "dtbs"
+                | "leases"
+                | "sessions"
+                | "tftp"
+                | "server"
+                | "site"
+                | "serial_ports"
+                | "network_interfaces"
+                | "permissions"
+        )
+    })
 }
 
 fn user_has_permission(user: &CurrentUser, permission_code: &str) -> bool {
@@ -389,6 +399,20 @@ fn admin_permission_for_request(method: &Method, path: &str) -> Option<&'static 
         "tftp" => admin_tftp_permission(method, &segments),
         "server-config" => read_update_permission(method, "server"),
         "site-settings" => read_update_permission(method, "site"),
+        _ => None,
+    }
+}
+
+fn user_permission_for_request(method: &Method, path: &str) -> Option<&'static str> {
+    let segments = path
+        .trim_start_matches("/api/v1/user/")
+        .split('/')
+        .collect::<Vec<_>>();
+    match (method.as_str(), segments.as_slice()) {
+        ("GET", ["leases"]) => Some("leases.read"),
+        ("POST", ["leases"]) => Some("leases.create"),
+        ("DELETE", ["leases", _]) => Some("leases.release"),
+        ("POST", ["leases", _, "heartbeat"]) => Some("leases.heartbeat"),
         _ => None,
     }
 }
@@ -551,7 +575,14 @@ fn request_profile(
 
 async fn admin_role_response(state: &AppState, role: Role) -> Result<AdminRoleResponse, ApiError> {
     let permissions = state.storage.role_permissions(&role.id).await?;
-    Ok(AdminRoleResponse::new(role, permissions))
+    let user_count = state
+        .storage
+        .role_user_counts()
+        .await?
+        .get(&role.id)
+        .copied()
+        .unwrap_or(0);
+    Ok(AdminRoleResponse::new(role, permissions, user_count))
 }
 
 async fn role_names_for_ids(
@@ -836,9 +867,12 @@ async fn list_admin_permissions(
 async fn list_admin_roles(
     State(state): State<AppState>,
 ) -> Result<axum::Json<AdminRolesResponse>, ApiError> {
+    let user_counts = state.storage.role_user_counts().await?;
     let mut roles = Vec::new();
     for role in state.storage.list_roles().await? {
-        roles.push(admin_role_response(&state, role).await?);
+        let permissions = state.storage.role_permissions(&role.id).await?;
+        let user_count = user_counts.get(&role.id).copied().unwrap_or(0);
+        roles.push(AdminRoleResponse::new(role, permissions, user_count));
     }
     Ok(axum::Json(AdminRolesResponse { roles }))
 }
@@ -3352,10 +3386,11 @@ mod tests {
 
     #[test]
     fn exact_permission_does_not_cover_other_actions() {
-        let user = current_user(vec![role("operator")], vec![permission("leases.read")]);
+        let user = current_user(vec![role("operator")], vec![permission("leases.update")]);
 
         assert!(current_user_is_admin(&user));
-        assert!(user_has_permission(&user, "leases.read"));
+        assert!(user_has_permission(&user, "leases.update"));
+        assert!(!user_has_permission(&user, "leases.read"));
         assert!(!user_has_permission(&user, "leases.delete"));
         assert!(!user_has_permission(&user, "leases.release"));
     }
@@ -3366,6 +3401,28 @@ mod tests {
 
         assert!(!current_user_is_admin(&user));
         assert!(!user_has_permission(&user, "leases.delete"));
+    }
+
+    #[test]
+    fn default_user_permissions_do_not_allow_admin_area_access() {
+        let user = current_user(
+            vec![role("user")],
+            vec![
+                permission("leases.read"),
+                permission("leases.create"),
+                permission("leases.start"),
+                permission("leases.release"),
+                permission("leases.heartbeat"),
+                permission("sessions.read"),
+                permission("sessions.create"),
+                permission("sessions.update"),
+            ],
+        );
+
+        assert!(!current_user_is_admin(&user));
+        assert!(user_has_permission(&user, "leases.create"));
+        assert!(user_has_permission(&user, "sessions.create"));
+        assert!(!user_has_permission(&user, "sessions.delete"));
     }
 
     #[test]
@@ -3405,6 +3462,26 @@ mod tests {
         assert_eq!(
             admin_permission_for_request(&Method::POST, "/api/v1/admin/tftp/reconcile"),
             Some("tftp.reconcile")
+        );
+    }
+
+    #[test]
+    fn user_request_permissions_use_resource_actions() {
+        assert_eq!(
+            user_permission_for_request(&Method::GET, "/api/v1/user/leases"),
+            Some("leases.read")
+        );
+        assert_eq!(
+            user_permission_for_request(&Method::POST, "/api/v1/user/leases"),
+            Some("leases.create")
+        );
+        assert_eq!(
+            user_permission_for_request(&Method::DELETE, "/api/v1/user/leases/lease-1"),
+            Some("leases.release")
+        );
+        assert_eq!(
+            user_permission_for_request(&Method::POST, "/api/v1/user/leases/lease-1/heartbeat"),
+            Some("leases.heartbeat")
         );
     }
 }

@@ -559,11 +559,14 @@ table.data-table th {
 }
 table.tbl td,
 table.data-table td {
+  max-width: var(--table-cell-max-width, 280px);
   padding: .85rem 1rem;
   border-bottom: 1px solid var(--c-border-light);
   color: var(--c-text-soft);
   text-align: center;
   vertical-align: middle;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 table.tbl tbody tr:last-child td,
 table.data-table tbody tr:last-child td { border-bottom: none; }
@@ -582,12 +585,24 @@ table.data-table td > .user-cell .user-cell-main {
   justify-items: center;
 }
 
-.data-table .col-index {
+table.tbl .col-index,
+table.data-table .col-index {
   width: 64px;
   min-width: 64px;
   color: var(--c-text-muted);
   font-variant-numeric: tabular-nums;
   text-align: center;
+  white-space: nowrap;
+}
+
+table.tbl .col-actions,
+table.tbl th.col-actions,
+table.tbl td.col-actions,
+table.data-table .col-actions,
+table.data-table th.col-actions,
+table.data-table td.col-actions {
+  width: 156px;
+  min-width: 156px;
   white-space: nowrap;
 }
 
@@ -1893,9 +1908,6 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 .table-statusbar span {
   white-space: nowrap;
 }
-.users-page .data-table {
-  min-width: 960px;
-}
 .users-page .data-table th,
 .users-page .data-table td {
   vertical-align: middle;
@@ -1903,23 +1915,7 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 .user-cell {
   display: flex;
   align-items: center;
-  gap: .75rem;
-}
-.user-avatar {
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  color: #fff;
-  font-weight: 800;
-  background: linear-gradient(135deg, var(--c-brand), var(--c-violet));
-}
-.user-avatar.is-disabled {
-  background: var(--c-border-strong);
-  color: var(--c-text-muted);
 }
 .user-cell-main {
   display: grid;
@@ -2065,9 +2061,6 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 }
 .permission-catalog-panel {
   padding: var(--content-pad);
-}
-.roles-table {
-  min-width: 980px;
 }
 .roles-table td {
   vertical-align: middle;
