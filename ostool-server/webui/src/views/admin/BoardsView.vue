@@ -156,19 +156,20 @@ onMounted(() => {
     </section>
 
     <!-- Loading / Empty -->
-    <div v-if="loading" class="empty-state">
-      <div class="spinner"></div>
-      正在加载开发板列表...
-    </div>
+    <div class="panel admin-table-panel">
+      <div v-if="loading" class="empty-state">
+        <div class="spinner"></div>
+        正在加载开发板列表...
+      </div>
 
-    <div v-else-if="filteredBoards.length === 0" class="empty-state">
-      <div class="empty-state-icon">&#9641;</div>
-      当前没有符合筛选条件的开发板
-    </div>
+      <div v-else-if="filteredBoards.length === 0" class="empty-state">
+        <div class="empty-state-icon">&#9641;</div>
+        当前没有符合筛选条件的开发板
+      </div>
 
-    <!-- Table -->
-    <div v-else class="table-container">
-      <table class="data-table">
+      <!-- Table -->
+      <div v-else class="table-scroll">
+        <table class="data-table">
         <thead>
           <tr>
             <th>开发板 ID</th>
@@ -211,7 +212,8 @@ onMounted(() => {
             </td>
           </tr>
         </tbody>
-      </table>
+        </table>
+      </div>
     </div>
   </div>
 </template>
