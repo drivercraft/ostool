@@ -16,7 +16,7 @@ use crate::{
     config::{BoardConfig, DatabaseConfig, PowerManagementConfig, ServerConfig},
     dtb_store::DtbStore,
     power::{PowerAction, PowerActionError, execute_power_action_for_board},
-    seed::seed_database,
+    seed::{seed_database, seed_sample_runtime_leases},
     session::{Session, SessionState, SessionStopReason},
     storage::{DynStorage, mysql::MysqlStorage, sqlite::SqliteStorage},
     tftp::service::TftpManager,
@@ -118,7 +118,7 @@ pub async fn build_app_state(
             Arc::new(storage)
         }
     };
-    seed_database(&storage, &config.sample_data).await?;
+    seed_database(&storage, &dtb_store, &config.sample_data).await?;
     let boards = storage
         .list_board_configs()
         .await?
@@ -143,6 +143,7 @@ pub async fn build_app_state(
     };
 
     tokio::spawn(run_release_coordinator(state.clone(), release_rx));
+    seed_sample_runtime_leases(&state).await?;
 
     Ok(state)
 }
@@ -200,9 +201,46 @@ impl AppState {
         }
     }
 
+    pub async fn create_session_for_board(
+        &self,
+        board_id: &str,
+        client_name: Option<String>,
+    ) -> Result<Session, BoardAllocationStatus> {
+        let board = {
+            let boards = self.boards.read().await;
+            let Some(board) = boards.get(board_id).cloned() else {
+                return Err(BoardAllocationStatus::BoardTypeNotFound);
+            };
+            if board.disabled {
+                return Err(BoardAllocationStatus::NoAvailableBoard);
+            }
+            board
+        };
+
+        let session_id = uuid::Uuid::new_v4().to_string();
+        if !self.claim_board_for_session(&board.id, &session_id).await {
+            return Err(BoardAllocationStatus::NoAvailableBoard);
+        }
+
+        let session =
+            SessionState::new_with_actor(session_id, board, client_name, self.clone());
+        let info = session.snapshot().await;
+        self.sessions.write().await.insert(info.id.clone(), session);
+        Ok(info)
+    }
+
     pub async fn get_session(&self, session_id: &str) -> Option<Session> {
         let session = self.sessions.read().await.get(session_id).cloned()?;
         Some(session.snapshot().await)
+    }
+
+    pub async fn update_session_expiry(
+        &self,
+        session_id: &str,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Option<Session> {
+        let session = self.sessions.read().await.get(session_id).cloned()?;
+        Some(session.set_expires_at(expires_at).await)
     }
 
     pub async fn heartbeat_session(&self, session_id: &str) -> Result<Session, TouchSessionError> {

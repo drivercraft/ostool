@@ -28,6 +28,7 @@ use crate::{
             AdminRoleCreateRequest, AdminRoleResponse, AdminRoleUpdateRequest, AdminRolesResponse,
             AdminServerConfigEditable, AdminServerConfigReadonly, AdminServerConfigResponse,
             AdminSessionsResponse, AdminTftpConfigResponse, AdminTftpStatusResponse,
+            AdminLeaseCreateRequest, AdminLeaseUpdateRequest,
             AdminUserCreateRequest, AdminUserResponse, AdminUserRolesResponse,
             AdminUserRolesUpdateRequest, AdminUserUpdateRequest, AdminUsersResponse,
             BoardPowerAction, BoardPowerStatusResponse, BoardRuntimeStatusResponse,
@@ -127,10 +128,15 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/admin/users/{user_id}/disable",
             post(disable_admin_user),
         )
-        .route("/api/v1/admin/leases", get(list_admin_leases))
+        .route(
+            "/api/v1/admin/leases",
+            get(list_admin_leases).post(create_admin_lease),
+        )
         .route(
             "/api/v1/admin/leases/{lease_id}",
-            delete(delete_admin_lease),
+            get(get_admin_lease)
+                .put(update_admin_lease)
+                .delete(delete_admin_lease),
         )
         .route("/api/v1/admin/permissions", get(list_admin_permissions))
         .route(
@@ -763,6 +769,109 @@ async fn list_admin_leases(
         responses.push(lease_response(&state, lease).await);
     }
     Ok(axum::Json(LeasesResponse { leases: responses }))
+}
+
+async fn create_admin_lease(
+    State(state): State<AppState>,
+    axum::Json(request): axum::Json<AdminLeaseCreateRequest>,
+) -> Result<(StatusCode, axum::Json<LeaseResponse>), ApiError> {
+    let user = state
+        .storage
+        .find_user_by_id(request.user_id.trim())
+        .await?
+        .ok_or_else(|| ApiError::not_found("user not found"))?;
+    if user.disabled {
+        return Err(ApiError::conflict("user is disabled"));
+    }
+    let expires_at = request.expires_at;
+    if expires_at <= chrono::Utc::now() {
+        return Err(ApiError::bad_request("expires_at must be in the future"));
+    }
+    let board_id = request.board_id.trim();
+    if board_id.is_empty() {
+        return Err(ApiError::bad_request("board_id must not be empty"));
+    }
+
+    let session = state
+        .create_session_for_board(
+            board_id,
+            Some(
+                request
+                    .client_name
+                    .and_then(|value| clean_optional(Some(value)))
+                    .unwrap_or_else(|| user.username.clone()),
+            ),
+        )
+        .await
+        .map_err(|err| match err {
+            BoardAllocationStatus::BoardTypeNotFound => {
+                ApiError::not_found(format!("board `{board_id}` not found"))
+            }
+            BoardAllocationStatus::NoAvailableBoard => {
+                ApiError::conflict(format!("board `{board_id}` is not available"))
+            }
+        })?;
+    state.update_session_expiry(&session.id, expires_at).await;
+    let board = state
+        .session_board(&session.id)
+        .await
+        .ok_or_else(|| ApiError::not_found("allocated board disappeared"))?;
+    let lease = state
+        .storage
+        .create_lease(crate::storage::NewLease {
+            user_id: user.id,
+            session_id: session.id,
+            board_id: board.id,
+            board_type: board.board_type,
+            required_tags: Vec::new(),
+            expires_at,
+        })
+        .await?;
+    let response = lease_response(&state, lease).await;
+    Ok((StatusCode::CREATED, axum::Json(response)))
+}
+
+async fn get_admin_lease(
+    State(state): State<AppState>,
+    Path(lease_id): Path<String>,
+) -> Result<axum::Json<LeaseResponse>, ApiError> {
+    let lease = state
+        .storage
+        .find_lease(&lease_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("lease not found"))?;
+    Ok(axum::Json(lease_response(&state, lease).await))
+}
+
+async fn update_admin_lease(
+    State(state): State<AppState>,
+    Path(lease_id): Path<String>,
+    axum::Json(request): axum::Json<AdminLeaseUpdateRequest>,
+) -> Result<axum::Json<LeaseResponse>, ApiError> {
+    let existing = state
+        .storage
+        .find_lease(&lease_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("lease not found"))?;
+    if existing.state != crate::storage::LeaseState::Active {
+        return Err(ApiError::conflict("only active leases can be updated"));
+    }
+    if request.expires_at <= existing.created_at {
+        return Err(ApiError::bad_request("expires_at must be after lease start time"));
+    }
+    let updated = state
+        .storage
+        .update_lease(
+            &lease_id,
+            request.expires_at,
+            clean_optional(request.failure_message),
+        )
+        .await?
+        .ok_or_else(|| ApiError::not_found("lease not found"))?;
+    state
+        .update_session_expiry(&updated.session_id, updated.expires_at)
+        .await;
+    Ok(axum::Json(lease_response(&state, updated).await))
 }
 
 async fn delete_admin_lease(

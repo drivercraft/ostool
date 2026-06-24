@@ -62,6 +62,20 @@ pub struct LeasesResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminLeaseCreateRequest {
+    pub user_id: String,
+    pub board_id: String,
+    pub expires_at: DateTime<Utc>,
+    pub client_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminLeaseUpdateRequest {
+    pub expires_at: DateTime<Utc>,
+    pub failure_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminUserResponse {
     pub id: String,
     pub username: String,

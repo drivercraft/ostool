@@ -327,10 +327,6 @@ impl MysqlStorage {
             .await?;
         self.add_column_if_missing("leases", "updated_at", "VARCHAR(255)")
             .await?;
-        self.add_column_if_missing("dtb_files", "boot_architecture", "VARCHAR(255)")
-            .await?;
-        self.add_column_if_missing("dtb_files", "compatible", "VARCHAR(512)")
-            .await?;
         sqlx::query("UPDATE leases SET updated_at = created_at WHERE updated_at IS NULL")
             .execute(&self.pool)
             .await?;
@@ -1226,6 +1222,24 @@ impl LeaseRepository for MysqlStorage {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    async fn update_lease(
+        &self,
+        lease_id: &str,
+        expires_at: DateTime<Utc>,
+        failure_message: Option<String>,
+    ) -> anyhow::Result<Option<Lease>> {
+        sqlx::query(
+            "UPDATE leases SET expires_at = ?, failure_message = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(expires_at.to_rfc3339())
+        .bind(failure_message)
+        .bind(Utc::now().to_rfc3339())
+        .bind(lease_id)
+        .execute(&self.pool)
+        .await?;
+        self.find_lease(lease_id).await
     }
 }
 

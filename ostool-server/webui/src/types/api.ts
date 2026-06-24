@@ -214,6 +214,7 @@ export interface Lease {
   required_tags: string[];
   state: LeaseState;
   created_at: string;
+  updated_at: string;
   expires_at: string;
   released_at: string | null;
   failure_message: string | null;
@@ -226,6 +227,18 @@ export interface LeaseResponse {
 
 export interface LeasesResponse {
   leases: LeaseResponse[];
+}
+
+export interface AdminLeaseCreateRequest {
+  user_id: string;
+  board_id: string;
+  expires_at: string;
+  client_name?: string | null;
+}
+
+export interface AdminLeaseUpdateRequest {
+  expires_at: string;
+  failure_message?: string | null;
 }
 
 export interface CreateLeaseRequest {

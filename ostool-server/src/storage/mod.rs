@@ -572,6 +572,12 @@ pub trait LeaseRepository: Send + Sync {
         lease_id: &str,
         expires_at: DateTime<Utc>,
     ) -> anyhow::Result<()>;
+    async fn update_lease(
+        &self,
+        lease_id: &str,
+        expires_at: DateTime<Utc>,
+        failure_message: Option<String>,
+    ) -> anyhow::Result<Option<Lease>>;
 }
 
 #[async_trait]

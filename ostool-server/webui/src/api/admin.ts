@@ -1,5 +1,7 @@
 import type {
   AdminBoardUpsertRequest,
+  AdminLeaseCreateRequest,
+  AdminLeaseUpdateRequest,
   AdminOverviewResponse,
   AdminPasswordResetRequest,
   AdminPermissionsResponse,
@@ -22,6 +24,7 @@ import type {
   BoardConfig,
   DtbMetadataInput,
   DtbFileResponse,
+  LeaseResponse,
   LeasesResponse,
   NetworkInterfaceSummary,
   SerialPortSummary,
@@ -230,6 +233,26 @@ export const adminApi = {
   },
   listAdminLeases() {
     return request<LeasesResponse>("/api/v1/admin/leases");
+  },
+  createAdminLease(payload: AdminLeaseCreateRequest) {
+    return request<LeaseResponse>("/api/v1/admin/leases", {
+      method: "POST",
+      bodyJson: payload,
+    });
+  },
+  getAdminLease(leaseId: string) {
+    return request<LeaseResponse>(
+      `/api/v1/admin/leases/${encodeURIComponent(leaseId)}`,
+    );
+  },
+  updateAdminLease(leaseId: string, payload: AdminLeaseUpdateRequest) {
+    return request<LeaseResponse>(
+      `/api/v1/admin/leases/${encodeURIComponent(leaseId)}`,
+      {
+        method: "PUT",
+        bodyJson: payload,
+      },
+    );
   },
   deleteAdminLease(leaseId: string) {
     return request<void>(`/api/v1/admin/leases/${encodeURIComponent(leaseId)}`, {

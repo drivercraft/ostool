@@ -167,6 +167,14 @@ impl SessionState {
         info.clone()
     }
 
+    pub async fn set_expires_at(&self, expires_at: DateTime<Utc>) -> Session {
+        let mut info = self.info.write().await;
+        info.expires_at = expires_at;
+        info.serial_connected = self.serial_connected.load(Ordering::Acquire);
+        info.state = self.lifecycle_state();
+        info.clone()
+    }
+
     pub fn begin_release(&self) -> bool {
         self.lifecycle_state
             .compare_exchange(

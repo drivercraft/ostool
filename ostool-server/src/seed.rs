@@ -1,21 +1,30 @@
+use std::sync::Arc;
+
 use anyhow::Context;
+use chrono::{Duration, Utc};
+use sha2::{Digest, Sha256};
 
 use crate::{
     BootConfig, CustomPowerManagement, PowerManagementConfig, PxeProfile, UbootNetworkMode,
     UbootProfile, UefiBootArch, UefiHttpProfile,
     auth::hash_password,
     config::{AdminSeedConfig, BoardConfig, SampleDataConfig},
-    storage::{DynStorage, NewUser, UserProfile},
+    dtb_store::DtbStore,
+    state::AppState,
+    storage::{DynStorage, LeaseState, NewLease, NewUser, UpsertDtbMetadata, UserProfile},
 };
 
 pub async fn seed_database(
     storage: &DynStorage,
+    dtb_store: &Arc<DtbStore>,
     sample_data: &SampleDataConfig,
 ) -> anyhow::Result<()> {
     seed_admin_user(storage, &sample_data.admin).await?;
     if sample_data.enabled {
         seed_sample_boards(storage).await?;
         seed_sample_users(storage).await?;
+        seed_sample_dtbs(storage, dtb_store).await?;
+        seed_sample_historical_leases(storage).await?;
     }
     Ok(())
 }
@@ -110,6 +119,173 @@ async fn seed_sample_users(storage: &DynStorage) -> anyhow::Result<()> {
             })
             .await?;
     }
+    Ok(())
+}
+
+async fn seed_sample_dtbs(
+    storage: &DynStorage,
+    dtb_store: &Arc<DtbStore>,
+) -> anyhow::Result<()> {
+    for sample in sample_dtbs() {
+        if dtb_store.get(sample.name).await?.is_none() {
+            dtb_store.write(sample.name, sample.bytes).await?;
+        }
+        let file = dtb_store
+            .get(sample.name)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("sample DTB `{}` disappeared", sample.name))?;
+        storage
+            .upsert_dtb_metadata(UpsertDtbMetadata {
+                name: file.name.clone(),
+                storage_path: file.name,
+                size_bytes: file.size as i64,
+                sha256: sample.sha256.to_string(),
+                boot_architecture: Some(sample.boot_architecture.to_string()),
+                compatible: Some(sample.compatible.to_string()),
+                description: Some(sample.description.to_string()),
+                uploaded_by: Some("seed".to_string()),
+            })
+            .await?;
+    }
+    Ok(())
+}
+
+async fn seed_sample_historical_leases(storage: &DynStorage) -> anyhow::Result<()> {
+    if !storage.list_leases().await?.is_empty() {
+        return Ok(());
+    }
+    let Some(alice) = storage.find_user_by_username("alice").await? else {
+        return Ok(());
+    };
+    let Some(bob) = storage.find_user_by_username("bob").await? else {
+        return Ok(());
+    };
+    let now = Utc::now();
+    let released = storage
+        .create_lease(NewLease {
+            user_id: alice.id,
+            session_id: "sample-session-released".into(),
+            board_id: "sample-pxe-01".into(),
+            board_type: "sample-pxe".into(),
+            required_tags: vec!["sample".into(), "pxe".into()],
+            expires_at: now - Duration::hours(18),
+        })
+        .await?;
+    storage
+        .mark_lease_state(
+            &released.id,
+            LeaseState::Released,
+            Some(now - Duration::hours(18)),
+            None,
+        )
+        .await?;
+
+    let expired = storage
+        .create_lease(NewLease {
+            user_id: bob.id,
+            session_id: "sample-session-expired".into(),
+            board_id: "sample-aarch64-httpboot-01".into(),
+            board_type: "sample-aarch64-httpboot".into(),
+            required_tags: vec!["sample".into(), "httpboot".into()],
+            expires_at: now - Duration::hours(2),
+        })
+        .await?;
+    storage
+        .mark_lease_state(
+            &expired.id,
+            LeaseState::Expired,
+            Some(now - Duration::hours(2)),
+            Some("示例租赁已过期".into()),
+        )
+        .await?;
+    Ok(())
+}
+
+struct SampleDtb {
+    name: &'static str,
+    bytes: &'static [u8],
+    boot_architecture: &'static str,
+    compatible: &'static str,
+    description: &'static str,
+    sha256: String,
+}
+
+fn sample_dtbs() -> Vec<SampleDtb> {
+    [
+        (
+            "sample-rk3568-evb.dtb",
+            b"/dts-v1/; // sample rk3568 dtb placeholder\n".as_slice(),
+            "arm64",
+            "rockchip,rk3568-evb",
+            "RK3568 U-Boot 示例设备树，用于演示 DTB 管理和开发板绑定。",
+        ),
+        (
+            "sample-riscv64-virt.dtb",
+            b"/dts-v1/; // sample riscv64 dtb placeholder\n".as_slice(),
+            "riscv64",
+            "riscv-virtio,qemu",
+            "RISC-V 示例设备树，用于演示多架构 DTB 资源。",
+        ),
+    ]
+    .into_iter()
+    .map(|(name, bytes, boot_architecture, compatible, description)| SampleDtb {
+        name,
+        bytes,
+        boot_architecture,
+        compatible,
+        description,
+        sha256: hex_sha256(bytes),
+    })
+    .collect()
+}
+
+fn hex_sha256(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+pub async fn seed_sample_runtime_leases(state: &AppState) -> anyhow::Result<()> {
+    let sample_enabled = state.config.read().await.sample_data.enabled;
+    if !sample_enabled {
+        return Ok(());
+    }
+    if state
+        .storage
+        .list_leases()
+        .await?
+        .iter()
+        .any(|lease| {
+            lease.state == LeaseState::Active && lease.board_id == "sample-rk3568-01"
+        })
+    {
+        return Ok(());
+    }
+    let Some(carol) = state.storage.find_user_by_username("carol").await? else {
+        return Ok(());
+    };
+    let expires_at = Utc::now() + Duration::hours(3);
+    let Ok(session) = state
+        .create_session_for_board("sample-rk3568-01", Some("Carol 示例租赁".into()))
+        .await
+    else {
+        return Ok(());
+    };
+    state.update_session_expiry(&session.id, expires_at).await;
+    let board = state
+        .session_board(&session.id)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("sample lease board disappeared"))?;
+    state
+        .storage
+        .create_lease(NewLease {
+            user_id: carol.id,
+            session_id: session.id,
+            board_id: board.id,
+            board_type: board.board_type,
+            required_tags: vec!["sample".into(), "arm64".into()],
+            expires_at,
+        })
+        .await?;
     Ok(())
 }
 
