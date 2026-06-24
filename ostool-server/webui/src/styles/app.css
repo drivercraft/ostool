@@ -2393,6 +2393,38 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   color: var(--c-text-soft);
 }
 
+.legal-page .public-page-header {
+  max-width: 820px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.legal-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  max-width: 920px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.legal-section {
+  padding: 1.3rem 1.45rem;
+}
+.legal-section h3 {
+  font-size: 1.08rem;
+  margin-bottom: .75rem;
+}
+.legal-section p,
+.legal-section li {
+  color: var(--c-text-soft);
+  line-height: 1.8;
+}
+.legal-section ul {
+  padding-left: 1.2rem;
+}
+.legal-section li + li {
+  margin-top: .45rem;
+}
+
 /* ===================================================================== */
 /*  Auth (login / register)                                              */
 /* ===================================================================== */
@@ -2464,6 +2496,13 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   text-align: center;
   font-size: .88rem;
   color: var(--c-text-muted);
+}
+.auth-legal {
+  margin-top: 1rem;
+  color: var(--c-text-muted);
+  font-size: .8rem;
+  line-height: 1.7;
+  text-align: center;
 }
 .inline-link { color: var(--c-brand); font-weight: 600; }
 .inline-link:hover { color: var(--c-brand-dark); }

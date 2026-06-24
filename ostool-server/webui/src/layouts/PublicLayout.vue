@@ -104,6 +104,8 @@ function isExactActive(item: { to: string; exact: boolean }) {
           <RouterLink to="/">首页</RouterLink>
           <RouterLink to="/resources">可用资源</RouterLink>
           <RouterLink to="/docs">使用文档</RouterLink>
+          <RouterLink to="/terms">用户协议</RouterLink>
+          <RouterLink to="/privacy">隐私政策</RouterLink>
           <RouterLink to="/login">登录</RouterLink>
         </nav>
         <span class="footer-copy">© ostool 开发板租赁平台</span>

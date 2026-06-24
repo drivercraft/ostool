@@ -129,7 +129,12 @@ function submit() {
           <p v-if="passwordsMismatch" class="auth-hint">两次输入的密码不一致</p>
           <label class="checkbox-field">
             <input v-model="agreed" type="checkbox" :disabled="submitting" />
-            <span>我已阅读并同意平台使用条款与资源调度规范</span>
+            <span>
+              我已阅读并同意
+              <RouterLink class="inline-link" to="/terms">用户协议</RouterLink>
+              和
+              <RouterLink class="inline-link" to="/privacy">隐私政策</RouterLink>
+            </span>
           </label>
           <button class="btn btn-primary" type="submit" :disabled="submitting">
             {{ submitting ? "提交中..." : "提交注册申请" }}

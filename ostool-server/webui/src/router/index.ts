@@ -10,6 +10,8 @@ const ResourcesView = () => import("@/views/public/ResourcesView.vue");
 const DocsView = () => import("@/views/public/DocsView.vue");
 const LoginView = () => import("@/views/public/LoginView.vue");
 const RegisterView = () => import("@/views/public/RegisterView.vue");
+const TermsView = () => import("@/views/public/TermsView.vue");
+const PrivacyView = () => import("@/views/public/PrivacyView.vue");
 const DashboardView = () => import("@/views/user/DashboardView.vue");
 const OverviewView = () => import("@/views/admin/OverviewView.vue");
 const BoardsView = () => import("@/views/admin/BoardsView.vue");
@@ -71,6 +73,18 @@ export const router = createRouter({
           name: "register",
           component: RegisterView,
           meta: { title: "注册" },
+        },
+        {
+          path: "terms",
+          name: "terms",
+          component: TermsView,
+          meta: { title: "用户协议" },
+        },
+        {
+          path: "privacy",
+          name: "privacy",
+          component: PrivacyView,
+          meta: { title: "隐私政策" },
         },
       ],
     },

@@ -107,6 +107,12 @@ onMounted(() => {
         <div class="auth-footer">
           还没有账号？<RouterLink class="inline-link" to="/register">立即注册</RouterLink>
         </div>
+        <p class="auth-legal">
+          登录即表示你已阅读并同意
+          <RouterLink class="inline-link" to="/terms">用户协议</RouterLink>
+          和
+          <RouterLink class="inline-link" to="/privacy">隐私政策</RouterLink>
+        </p>
       </section>
     </main>
   </div>
