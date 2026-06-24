@@ -79,6 +79,12 @@ pub struct CaptchaChallenge {
 }
 
 #[derive(Debug, Clone)]
+pub struct RateLimitWindow {
+    pub count: u32,
+    pub reset_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
 struct ReleaseJob {
     session: Arc<SessionState>,
     reason: SessionStopReason,
@@ -105,6 +111,7 @@ pub struct AppState {
     pub storage: DynStorage,
     pub auth: SharedAuthService,
     pub captchas: Arc<RwLock<BTreeMap<String, CaptchaChallenge>>>,
+    pub rate_limits: Arc<RwLock<BTreeMap<String, RateLimitWindow>>>,
     release_tx: mpsc::UnboundedSender<ReleaseJob>,
 }
 
@@ -147,6 +154,7 @@ pub async fn build_app_state(
         storage,
         auth,
         captchas: Arc::new(RwLock::new(BTreeMap::new())),
+        rate_limits: Arc::new(RwLock::new(BTreeMap::new())),
         release_tx,
     };
 

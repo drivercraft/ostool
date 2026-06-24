@@ -80,12 +80,9 @@ describe("ResourcesView", () => {
     expect(wrapper.text()).toContain("stm32mp1");
     expect(wrapper.text()).toContain("型号");
     expect(wrapper.text()).toContain("在管总数");
-    expect(wrapper.findAll(".stats-num").map((el) => el.text())).toEqual([
-      "2",
-      "2",
-      "4",
-      "6",
-    ]);
+    // 新版统计卡按 label/value 结构展示，按顺序取每张卡的数值
+    const statValues = wrapper.findAll(".resource-stat-value").map((el) => el.text());
+    expect(statValues).toEqual(["2 款", "2 块", "4 块", "6 块"]);
   });
 
   it("filters out unavailable boards when toggling availability filter", async () => {

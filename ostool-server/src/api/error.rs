@@ -38,6 +38,10 @@ impl ApiError {
         Self::new(StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large", message)
     }
 
+    pub fn too_many_requests(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::TOO_MANY_REQUESTS, "too_many_requests", message)
+    }
+
     pub fn not_found(message: impl Into<String>) -> Self {
         Self::new(StatusCode::NOT_FOUND, "not_found", message)
     }

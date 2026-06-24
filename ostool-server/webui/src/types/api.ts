@@ -333,8 +333,9 @@ export interface AdminPasswordResetRequest {
 }
 
 export interface UserPasswordUpdateRequest {
-  password: string;
-  confirm_password: string;
+  current_password: string;
+  new_password: string;
+  confirm_new_password: string;
 }
 
 export interface AdminPermissionResponse {

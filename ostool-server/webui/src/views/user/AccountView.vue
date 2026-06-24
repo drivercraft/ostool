@@ -13,8 +13,9 @@ const auth = useAuthStore();
 const router = useRouter();
 const submittingPassword = ref(false);
 const passwordForm = ref({
-  password: "",
-  confirm_password: "",
+  current_password: "",
+  new_password: "",
+  confirm_new_password: "",
 });
 
 const accountFields = computed(() => [
@@ -28,12 +29,13 @@ const accountFields = computed(() => [
   ["角色", auth.user?.roles.map((role) => role.display_name || role.name).join("、") || "普通用户"],
 ]);
 const passwordMismatch = computed(() =>
-  passwordForm.value.confirm_password.length > 0
-    && passwordForm.value.password !== passwordForm.value.confirm_password,
+  passwordForm.value.confirm_new_password.length > 0
+    && passwordForm.value.new_password !== passwordForm.value.confirm_new_password,
 );
 const passwordReady = computed(() =>
-  passwordForm.value.password.length >= 8
-    && passwordForm.value.confirm_password.length >= 8
+  passwordForm.value.current_password.length >= 8
+    && passwordForm.value.new_password.length >= 8
+    && passwordForm.value.confirm_new_password.length >= 8
     && !passwordMismatch.value,
 );
 
@@ -45,11 +47,13 @@ async function submitPasswordChange() {
   submittingPassword.value = true;
   try {
     await api.updateUserPassword({
-      password: passwordForm.value.password,
-      confirm_password: passwordForm.value.confirm_password,
+      current_password: passwordForm.value.current_password,
+      new_password: passwordForm.value.new_password,
+      confirm_new_password: passwordForm.value.confirm_new_password,
     });
-    passwordForm.value.password = "";
-    passwordForm.value.confirm_password = "";
+    passwordForm.value.current_password = "";
+    passwordForm.value.new_password = "";
+    passwordForm.value.confirm_new_password = "";
     ui.setSuccess("密码已修改");
   } catch (error) {
     ui.setError((error as Error).message);
@@ -94,10 +98,22 @@ onMounted(() => {
         <h4>账号安全</h4>
       </div>
       <form class="dashboard-password-form" @submit.prevent="submitPasswordChange">
+        <label class="field is-required form-grid-wide">
+          <span>当前密码</span>
+          <input
+            v-model="passwordForm.current_password"
+            type="password"
+            minlength="8"
+            maxlength="128"
+            autocomplete="current-password"
+            :disabled="submittingPassword"
+            placeholder="请输入当前登录密码"
+          />
+        </label>
         <label class="field is-required">
           <span>新密码</span>
           <input
-            v-model="passwordForm.password"
+            v-model="passwordForm.new_password"
             type="password"
             minlength="8"
             maxlength="128"
@@ -109,7 +125,7 @@ onMounted(() => {
         <label class="field is-required">
           <span>确认新密码</span>
           <input
-            v-model="passwordForm.confirm_password"
+            v-model="passwordForm.confirm_new_password"
             type="password"
             minlength="8"
             maxlength="128"

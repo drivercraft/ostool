@@ -7,7 +7,7 @@ use axum::{
     Router,
     body::{Bytes, to_bytes},
     extract::{ConnectInfo, Path, Request, State, WebSocketUpgrade},
-    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
@@ -50,7 +50,7 @@ use crate::{
     },
     auth::{
         CurrentUser, clear_cookie_value, cookie_value, hash_password, set_cookie_header,
-        token_from_headers,
+        token_from_headers, verify_password,
     },
     board_pool::BoardAllocationStatus,
     config::{
@@ -71,7 +71,7 @@ use crate::{
     },
     session::SessionState,
     session::SessionStopReason,
-    state::{AppState, BoardLeaseState, CaptchaChallenge, TouchSessionError},
+    state::{AppState, BoardLeaseState, CaptchaChallenge, RateLimitWindow, TouchSessionError},
     storage::{
         Lease, NewAuditLog, NewRole, Role, SiteSettings, UpsertDtbMetadata, UserProfile,
         default_user_permission,
@@ -271,7 +271,182 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/{*path}", get(serve_history_fallback))
         .layer(middleware::from_fn_with_state(state.clone(), auth_gate))
+        .layer(middleware::from_fn_with_state(state.clone(), security_gate))
         .with_state(state)
+}
+
+async fn security_gate(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    enforce_same_origin(&headers, &request)?;
+    enforce_rate_limit(
+        &state,
+        addr,
+        &headers,
+        request.method(),
+        request.uri().path(),
+    )
+    .await?;
+    let mut response = next.run(request).await;
+    set_security_headers(response.headers_mut());
+    Ok(response)
+}
+
+#[derive(Clone, Copy)]
+struct RateLimitRule {
+    name: &'static str,
+    max_requests: u32,
+    window_seconds: i64,
+}
+
+fn rate_limit_rule(method: &Method, path: &str) -> Option<RateLimitRule> {
+    if !path.starts_with("/api/") {
+        return None;
+    }
+    if method == Method::GET && path == "/api/v1/auth/captcha" {
+        return Some(RateLimitRule {
+            name: "captcha",
+            max_requests: 20,
+            window_seconds: 60,
+        });
+    }
+    if method == Method::POST && path == "/api/v1/auth/login" {
+        return Some(RateLimitRule {
+            name: "login",
+            max_requests: 10,
+            window_seconds: 60,
+        });
+    }
+    if method == Method::POST && path == "/api/v1/user/password" {
+        return Some(RateLimitRule {
+            name: "password",
+            max_requests: 10,
+            window_seconds: 60,
+        });
+    }
+    if matches!(method.as_str(), "POST" | "PUT")
+        && (path.starts_with("/api/v1/admin/dtbs")
+            || path.contains("/http-boot/")
+            || path.contains("/files"))
+    {
+        return Some(RateLimitRule {
+            name: "upload",
+            max_requests: 20,
+            window_seconds: 60,
+        });
+    }
+    Some(RateLimitRule {
+        name: "api",
+        max_requests: 300,
+        window_seconds: 60,
+    })
+}
+
+async fn enforce_rate_limit(
+    state: &AppState,
+    addr: SocketAddr,
+    headers: &HeaderMap,
+    method: &Method,
+    path: &str,
+) -> Result<(), ApiError> {
+    let Some(rule) = rate_limit_rule(method, path) else {
+        return Ok(());
+    };
+    let key = format!(
+        "{}:{}:{}",
+        addr.ip(),
+        rule.name,
+        token_from_headers(headers).unwrap_or_default()
+    );
+    let now = Utc::now();
+    let mut limits = state.rate_limits.write().await;
+    limits.retain(|_, window| window.reset_at > now);
+    let window = limits.entry(key).or_insert_with(|| RateLimitWindow {
+        count: 0,
+        reset_at: now + chrono::Duration::seconds(rule.window_seconds),
+    });
+    if window.count >= rule.max_requests {
+        return Err(ApiError::too_many_requests("请求过于频繁，请稍后再试"));
+    }
+    window.count += 1;
+    Ok(())
+}
+
+fn enforce_same_origin(headers: &HeaderMap, request: &Request) -> Result<(), ApiError> {
+    if matches!(
+        *request.method(),
+        Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE
+    ) {
+        return Ok(());
+    }
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return Ok(());
+    };
+    if let Some(origin) = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    {
+        if host_matches_origin(host, origin) {
+            return Ok(());
+        }
+        return Err(ApiError::forbidden("跨站请求被拒绝"));
+    }
+    if let Some(referer) = headers
+        .get(header::REFERER)
+        .and_then(|value| value.to_str().ok())
+        && !host_matches_origin(host, referer)
+    {
+        return Err(ApiError::forbidden("跨站请求被拒绝"));
+    }
+    Ok(())
+}
+
+fn host_matches_origin(host: &str, value: &str) -> bool {
+    let origin_host = value
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(value)
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    origin_host.eq_ignore_ascii_case(host)
+}
+
+fn set_security_headers(headers: &mut HeaderMap) {
+    let values = [
+        (
+            HeaderName::from_static("x-content-type-options"),
+            HeaderValue::from_static("nosniff"),
+        ),
+        (
+            HeaderName::from_static("x-frame-options"),
+            HeaderValue::from_static("DENY"),
+        ),
+        (
+            HeaderName::from_static("referrer-policy"),
+            HeaderValue::from_static("strict-origin-when-cross-origin"),
+        ),
+        (
+            HeaderName::from_static("permissions-policy"),
+            HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+        ),
+        (
+            HeaderName::from_static("content-security-policy"),
+            HeaderValue::from_static(
+                "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; base-uri 'self'; frame-ancestors 'none'",
+            ),
+        ),
+    ];
+    for (name, value) in values {
+        headers.entry(name).or_insert(value);
+    }
 }
 
 async fn auth_gate(
@@ -834,17 +1009,31 @@ async fn update_user_password(
     axum::Json(request): axum::Json<UserPasswordUpdateRequest>,
 ) -> Result<StatusCode, ApiError> {
     let user = current_user_from_headers(&state, &headers).await?;
-    if request.password != request.confirm_password {
+    if request.new_password != request.confirm_new_password {
         return Err(ApiError::bad_request(
             "password confirmation does not match",
         ));
     }
-    validate_password(&request.password)?;
-    let password_hash = hash_password(&request.password).map_err(ApiError::from)?;
+    validate_password(&request.new_password)?;
+    let stored_user = state
+        .storage
+        .find_user_by_id(&user.id)
+        .await?
+        .ok_or_else(|| ApiError::unauthorized("authentication required"))?;
+    verify_password(&request.current_password, &stored_user.password_hash)
+        .map_err(|_| ApiError::unauthorized("current password is incorrect"))?;
+    let password_hash = hash_password(&request.new_password).map_err(ApiError::from)?;
     state
         .storage
         .update_password_hash(&user.id, password_hash)
         .await?;
+    if let Some(token) = token_from_headers(&headers) {
+        state
+            .auth
+            .revoke_other_sessions(&user.id, &token)
+            .await
+            .map_err(ApiError::from)?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -3955,5 +4144,36 @@ mod tests {
             captcha_answer_hash(" AB12CD "),
             captcha_answer_hash("ab12cd")
         );
+    }
+
+    #[test]
+    fn rate_limit_rules_cover_sensitive_endpoints() {
+        let captcha = rate_limit_rule(&Method::GET, "/api/v1/auth/captcha").unwrap();
+        assert_eq!(captcha.name, "captcha");
+        assert_eq!(captcha.max_requests, 20);
+
+        let login = rate_limit_rule(&Method::POST, "/api/v1/auth/login").unwrap();
+        assert_eq!(login.name, "login");
+        assert_eq!(login.max_requests, 10);
+
+        let password = rate_limit_rule(&Method::POST, "/api/v1/user/password").unwrap();
+        assert_eq!(password.name, "password");
+        assert_eq!(password.max_requests, 10);
+
+        let asset = rate_limit_rule(&Method::GET, "/assets/app.js");
+        assert!(asset.is_none());
+    }
+
+    #[test]
+    fn host_origin_matching_uses_request_host() {
+        assert!(host_matches_origin(
+            "127.0.0.1:2999",
+            "http://127.0.0.1:2999"
+        ));
+        assert!(host_matches_origin(
+            "example.com",
+            "https://example.com/dashboard"
+        ));
+        assert!(!host_matches_origin("example.com", "https://evil.example"));
     }
 }

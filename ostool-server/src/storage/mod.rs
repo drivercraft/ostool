@@ -665,6 +665,11 @@ pub trait AuthSessionRepository: Send + Sync {
         now: DateTime<Utc>,
     ) -> anyhow::Result<Option<User>>;
     async fn delete_auth_session_by_token_hash(&self, token_hash: &str) -> anyhow::Result<()>;
+    async fn delete_auth_sessions_for_user_except(
+        &self,
+        user_id: &str,
+        token_hash: &str,
+    ) -> anyhow::Result<()>;
     async fn delete_expired_auth_sessions(&self, now: DateTime<Utc>) -> anyhow::Result<()>;
 }
 

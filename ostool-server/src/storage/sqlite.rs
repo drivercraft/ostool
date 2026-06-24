@@ -1157,6 +1157,19 @@ impl AuthSessionRepository for SqliteStorage {
         Ok(())
     }
 
+    async fn delete_auth_sessions_for_user_except(
+        &self,
+        user_id: &str,
+        token_hash: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM auth_sessions WHERE user_id = ? AND token_hash <> ?")
+            .bind(user_id)
+            .bind(token_hash)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     async fn delete_expired_auth_sessions(&self, now: DateTime<Utc>) -> anyhow::Result<()> {
         sqlx::query("DELETE FROM auth_sessions WHERE expires_at <= ?")
             .bind(now.to_rfc3339())

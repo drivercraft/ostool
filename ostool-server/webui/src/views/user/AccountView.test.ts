@@ -66,7 +66,7 @@ describe("AccountView", () => {
     expect(wrapper.text()).toContain("Demo");
     expect(wrapper.text()).toContain("demo@ostool.local");
     expect(wrapper.text()).toContain("修改密码");
-    expect(wrapper.findAll('input[type="password"]')).toHaveLength(2);
+    expect(wrapper.findAll('input[type="password"]')).toHaveLength(3);
   });
 
   it("validates repeated password input before changing password", async () => {
@@ -76,8 +76,9 @@ describe("AccountView", () => {
     await flushPromises();
 
     const inputs = wrapper.findAll('input[type="password"]');
-    await inputs[0].setValue("new-password-1");
-    await inputs[1].setValue("new-password-2");
+    await inputs[0].setValue("old-password-1");
+    await inputs[1].setValue("new-password-1");
+    await inputs[2].setValue("new-password-2");
 
     expect(wrapper.text()).toContain("两次输入的新密码不一致");
   });
@@ -89,14 +90,16 @@ describe("AccountView", () => {
     await flushPromises();
 
     const inputs = wrapper.findAll('input[type="password"]');
-    await inputs[0].setValue("new-password-1");
+    await inputs[0].setValue("old-password-1");
     await inputs[1].setValue("new-password-1");
+    await inputs[2].setValue("new-password-1");
     await wrapper.get("form").trigger("submit");
     await flushPromises();
 
     expect(updateUserPassword).toHaveBeenCalledWith({
-      password: "new-password-1",
-      confirm_password: "new-password-1",
+      current_password: "old-password-1",
+      new_password: "new-password-1",
+      confirm_new_password: "new-password-1",
     });
     expect(uiStore.setSuccess).toHaveBeenCalledWith("密码已修改");
   });

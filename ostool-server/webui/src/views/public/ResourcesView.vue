@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { RouterLink } from "vue-router";
 
-import Icon from "@/components/Icon.vue";
+import Icon, { type IconName } from "@/components/Icon.vue";
 import StatusPill from "@/components/StatusPill.vue";
 import { api } from "@/api";
 import { useAuthStore } from "@/stores/auth";
@@ -66,6 +66,22 @@ const totals = computed(() => {
   return { total, available, leased, availabilityRate };
 });
 
+interface StatCard {
+  key: string;
+  label: string;
+  value: number | string;
+  suffix?: string;
+  icon: IconName;
+  tone: "brand" | "success" | "violet" | "sky";
+}
+
+const heroStats = computed<StatCard[]>(() => [
+  { key: "models", label: "开发板型号", value: boardTypes.value.length, suffix: " 款", icon: "cpu-board", tone: "brand" },
+  { key: "available", label: "当前可用", value: totals.value.available, suffix: " 块", icon: "check", tone: "success" },
+  { key: "leased", label: "使用中", value: totals.value.leased, suffix: " 块", icon: "pulse", tone: "violet" },
+  { key: "total", label: "在管总数", value: totals.value.total, suffix: " 块", icon: "cube", tone: "sky" },
+]);
+
 function availabilityPercent(board: BoardTypeSummary): number {
   if (board.total === 0) return 0;
   return Math.round((board.available / board.total) * 100);
@@ -97,28 +113,27 @@ onMounted(() => {
   <div class="page-body public-page-body resources-page">
     <section class="resources-hero">
       <div class="resources-hero-copy">
+        <p class="eyebrow">资源总览</p>
         <h2>可租赁的开发板资源</h2>
         <p class="public-page-subtitle">
-          下方为当前在管的全部开发板型号。登录后可在用户控制台中创建会话并申请使用。
+          下方为平台当前纳管的全部开发板型号。登录后可在用户控制台中创建会话并申请使用，平台会自动从空闲池中为你分配设备。
         </p>
       </div>
-      <section class="stats-strip resources-stats" v-if="!loading && !failed">
-        <div class="stats-chip">
-          <span class="stats-num">{{ boardTypes.length }}</span>
-          <span class="stats-label">型号</span>
-        </div>
-        <div class="stats-chip">
-          <span class="stats-num">{{ totals.available }}</span>
-          <span class="stats-label">当前可用</span>
-        </div>
-        <div class="stats-chip">
-          <span class="stats-num">{{ totals.leased }}</span>
-          <span class="stats-label">使用中</span>
-        </div>
-        <div class="stats-chip">
-          <span class="stats-num">{{ totals.total }}</span>
-          <span class="stats-label">在管总数</span>
-        </div>
+      <section class="resources-stats" v-if="!loading && !failed">
+        <article
+          v-for="stat in heroStats"
+          :key="stat.key"
+          class="resource-stat"
+          :data-tone="stat.tone"
+        >
+          <span class="resource-stat-icon"><Icon :name="stat.icon" :size="20" /></span>
+          <div class="resource-stat-body">
+            <div class="resource-stat-value">
+              {{ stat.value }}<span v-if="stat.suffix" class="resource-stat-suffix">{{ stat.suffix }}</span>
+            </div>
+            <div class="resource-stat-label">{{ stat.label }}</div>
+          </div>
+        </article>
       </section>
     </section>
 
@@ -193,90 +208,92 @@ onMounted(() => {
         v-for="board in filteredBoardTypes"
         :key="board.board_type"
         class="resource-card card--hover"
+        :class="{ 'resource-card--empty': board.available === 0 }"
       >
-        <div class="resource-card-header">
+        <header class="resource-card-header">
           <div class="resource-card-id">
-            <span class="resource-card-icon"><Icon name="cpu-board" :size="20" /></span>
+            <span class="resource-card-icon"><Icon name="cpu-board" :size="22" /></span>
             <div>
               <h3>{{ board.board_type }}</h3>
-              <span class="resource-card-meta">Board type</span>
+              <span class="resource-card-subtitle">
+                {{ board.total }} 块在管 · {{ board.available }} 可用
+              </span>
             </div>
           </div>
           <StatusPill
             :tone="board.available > 0 ? 'good' : 'neutral'"
             :label="board.available > 0 ? '可租赁' : '已租满'"
           />
-        </div>
-        <div class="resource-card-tags">
+        </header>
+
+        <div v-if="board.tags.length > 0" class="resource-card-tags">
           <span v-for="tag in board.tags" :key="tag" class="resource-tag">{{ tag }}</span>
-          <span v-if="board.tags.length === 0" class="resource-tag resource-tag--muted">无标签</span>
         </div>
-        <div class="resource-availability">
-          <div>
-            <span class="resource-availability-label">可用容量</span>
-            <strong>{{ availabilityPercent(board) }}%</strong>
+
+        <div class="resource-capacity">
+          <div class="resource-capacity-head">
+            <span class="resource-capacity-label">空闲容量</span>
+            <span class="resource-capacity-num">
+              <strong>{{ board.available }}</strong> / {{ board.total }}
+            </span>
           </div>
-          <span>{{ board.available }} / {{ board.total }} idle</span>
+          <div class="resource-card-bar">
+            <span :style="{ width: availabilityPercent(board) + '%' }"></span>
+          </div>
         </div>
-        <div class="resource-card-bar">
-          <span :style="{ width: availabilityPercent(board) + '%' }"></span>
-        </div>
-        <dl class="resource-card-stats">
-          <div>
-            <dt>总数</dt>
-            <dd>{{ board.total }}</dd>
-          </div>
-          <div>
-            <dt>可用</dt>
-            <dd>{{ board.available }}</dd>
-          </div>
-          <div>
-            <dt>使用中</dt>
-            <dd>{{ board.total - board.available }}</dd>
-          </div>
-        </dl>
-        <div class="resource-card-actions">
+
+        <footer class="resource-card-actions">
           <RouterLink
             v-if="auth.isAuthenticated"
-            class="btn btn-primary btn-sm"
+            class="btn btn-primary"
             :class="{ 'is-disabled': board.available === 0 }"
             :to="board.available > 0 ? leaseCreateTarget(board) : '/dashboard'"
           >
+            <Icon :name="board.available > 0 ? 'arrow-right' : 'ban'" :size="15" class="btn-icon" />
             {{ board.available > 0 ? "申请租赁" : "暂无空闲" }}
-            <Icon v-if="board.available > 0" name="arrow-right" :size="14" class="btn-icon" />
           </RouterLink>
-          <RouterLink v-else class="btn btn-ghost btn-sm" :to="loginTarget(board)">
+          <RouterLink v-else class="btn btn-ghost" :to="loginTarget(board)">
+            <Icon name="login" :size="15" class="btn-icon" />
             登录后申请
-            <Icon name="login" :size="14" class="btn-icon" />
           </RouterLink>
-        </div>
+        </footer>
       </article>
     </div>
 
     <div v-else class="board-list">
+      <div class="board-row board-row-head">
+        <div class="row-label">型号 / 标签</div>
+        <div class="row-label">可用 / 总数</div>
+        <div class="row-label">可用率</div>
+        <div class="row-label">状态</div>
+        <div class="row-label text-right">操作</div>
+      </div>
       <div
         v-for="board in filteredBoardTypes"
         :key="board.board_type"
         class="board-row"
       >
         <div class="resource-card-id">
-          <span class="resource-card-icon"><Icon name="cpu-board" :size="18" /></span>
+          <span class="resource-card-icon resource-card-icon--sm"><Icon name="cpu-board" :size="18" /></span>
           <div>
             <strong>{{ board.board_type }}</strong>
-            <span class="resource-card-meta">{{ board.tags.length ? board.tags.join(" · ") : "无标签" }}</span>
+            <span class="resource-card-tags-inline">
+              <span v-if="board.tags.length === 0" class="resource-tag resource-tag--muted">无标签</span>
+              <span v-for="tag in board.tags" :key="tag" class="resource-tag">{{ tag }}</span>
+            </span>
           </div>
         </div>
         <div>
-          <span class="row-label">可用 / 总数</span>
-          <div><strong>{{ board.available }}</strong> / {{ board.total }}</div>
+          <strong class="row-num">{{ board.available }}</strong>
+          <span class="row-sep"> / </span>{{ board.total }}
         </div>
         <div>
-          <span class="row-label">可用率</span>
-          <div>{{ availabilityPercent(board) }}%</div>
-        </div>
-        <div>
-          <span class="row-label">使用中</span>
-          <div>{{ board.total - board.available }}</div>
+          <div class="row-rate">
+            <div class="resource-card-bar resource-card-bar--sm">
+              <span :style="{ width: availabilityPercent(board) + '%' }"></span>
+            </div>
+            <span>{{ availabilityPercent(board) }}%</span>
+          </div>
         </div>
         <div>
           <StatusPill

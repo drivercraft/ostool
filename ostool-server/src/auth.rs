@@ -120,6 +120,16 @@ impl AuthService {
             .await
     }
 
+    pub async fn revoke_other_sessions(
+        &self,
+        user_id: &str,
+        current_token: &str,
+    ) -> anyhow::Result<()> {
+        self.storage
+            .delete_auth_sessions_for_user_except(user_id, &token_hash(current_token))
+            .await
+    }
+
     pub async fn user_for_token(&self, token: &str) -> anyhow::Result<Option<CurrentUser>> {
         let Some(user) = self
             .storage
@@ -147,7 +157,7 @@ pub fn hash_password(password: &str) -> anyhow::Result<String> {
         .to_string())
 }
 
-fn verify_password(password: &str, hash: &str) -> anyhow::Result<()> {
+pub fn verify_password(password: &str, hash: &str) -> anyhow::Result<()> {
     let parsed = PasswordHash::new(hash)
         .map_err(|err| anyhow::anyhow!("failed to parse password hash: {err}"))?;
     Argon2::default()
