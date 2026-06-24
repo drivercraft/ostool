@@ -174,7 +174,7 @@ does not exist yet:
 [sample_data.admin]
 enabled = true
 username = "admin"
-password = "admin"
+password = "ostool123"
 display_name = "平台管理员"
 email = "admin@ostool.local"
 ```

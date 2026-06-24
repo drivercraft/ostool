@@ -77,7 +77,7 @@ async fn run_command(config: ServerConfig, command: Command) -> anyhow::Result<(
             if storage.find_user_by_username(&username).await?.is_some() {
                 anyhow::bail!("user `{username}` already exists");
             }
-            let password = password.unwrap_or_else(|| "admin".to_string());
+            let password = password.unwrap_or_else(|| "ostool123".to_string());
             let user = auth
                 .create_user(
                     username.clone(),

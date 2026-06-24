@@ -31,7 +31,7 @@ enabled = true
 [sample_data.admin]
 enabled = true
 username = "admin"
-password = "admin"
+password = "ostool123"
 reset_existing_password = true
 display_name = "平台管理员"
 email = "admin@ostool.local"

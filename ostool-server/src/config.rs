@@ -330,7 +330,7 @@ fn default_admin_seed_username() -> String {
 }
 
 fn default_admin_seed_password() -> String {
-    "admin".to_string()
+    "ostool123".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
