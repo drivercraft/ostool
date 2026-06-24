@@ -239,8 +239,8 @@ function buildHourSlots(anchor: Date) {
 function buildDaySlots(anchor: Date) {
   const start = new Date(anchor);
   start.setHours(0, 0, 0, 0);
-  start.setMonth(start.getMonth() - 1);
-  return Array.from({ length: 63 }, (_, index) => {
+  start.setDate(start.getDate() - 17);
+  return Array.from({ length: 35 }, (_, index) => {
     const slotStart = new Date(start);
     slotStart.setDate(start.getDate() + index);
     const current = new Date(slotStart);

@@ -111,6 +111,7 @@ describe("DashboardView", () => {
     expect(wrapper.text()).toContain("我的租赁");
     expect(wrapper.text()).toContain("当前会话");
     expect(wrapper.text()).toContain("账户信息");
+    expect(wrapper.text()).toContain("租约会话");
     expect(wrapper.text()).toContain("资源申请");
   });
 });

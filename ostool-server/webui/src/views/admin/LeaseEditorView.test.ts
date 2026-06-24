@@ -161,7 +161,7 @@ describe("LeaseEditorView", () => {
     await wrapper.findAll(".lease-calendar-tabs button")[1].trigger("click");
     await flushPromises();
     expect(wrapper.find(".lease-calendar-day").exists()).toBe(true);
-    expect(wrapper.findAll(".lease-calendar-cell")).toHaveLength(63);
+    expect(wrapper.findAll(".lease-calendar-cell")).toHaveLength(35);
     expect(wrapper.find(".lease-calendar-event").exists()).toBe(true);
 
     await wrapper.findAll(".lease-calendar-tabs button")[2].trigger("click");

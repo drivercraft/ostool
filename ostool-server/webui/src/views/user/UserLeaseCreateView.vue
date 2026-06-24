@@ -44,9 +44,6 @@ const selectedBoardLeases = computed(() =>
     .filter((item) => item.lease.board_type === selectedBoardType.value && item.lease.state === "active")
     .sort((left, right) => new Date(left.lease.starts_at).getTime() - new Date(right.lease.starts_at).getTime()),
 );
-const mySelectedBoardLeases = computed(() =>
-  selectedBoardLeases.value.filter((item) => item.lease.user_id === auth.user?.id),
-);
 const selectedWindowConflict = computed(() =>
   selectedBoardLeases.value.find((item) =>
     windowsOverlap(
@@ -118,26 +115,6 @@ function defaultExpiresAt() {
   return toDatetimeLocal(date.toISOString());
 }
 
-function formatDuration(startIso: string, endIso: string) {
-  const start = new Date(startIso).getTime();
-  const end = new Date(endIso).getTime();
-  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) {
-    return "-";
-  }
-  const minutes = Math.round((end - start) / 60000);
-  if (minutes >= 1440) {
-    const days = Math.floor(minutes / 1440);
-    const hours = Math.round((minutes % 1440) / 60);
-    return hours > 0 ? `${days} 天 ${hours} 小时` : `${days} 天`;
-  }
-  if (minutes >= 60) {
-    const hours = Math.floor(minutes / 60);
-    const rest = minutes % 60;
-    return rest > 0 ? `${hours} 小时 ${rest} 分钟` : `${hours} 小时`;
-  }
-  return `${minutes} 分钟`;
-}
-
 function leasesForRange(startIso: string, endIso: string) {
   return selectedBoardLeases.value.filter((item) =>
     windowsOverlap(item.lease.starts_at, item.lease.expires_at, startIso, endIso),
@@ -190,8 +167,8 @@ function buildHourSlots(anchor: Date) {
 function buildDaySlots(anchor: Date) {
   const start = new Date(anchor);
   start.setHours(0, 0, 0, 0);
-  start.setMonth(start.getMonth() - 1);
-  return Array.from({ length: 63 }, (_, index) => {
+  start.setDate(start.getDate() - 17);
+  return Array.from({ length: 35 }, (_, index) => {
     const slotStart = new Date(start);
     slotStart.setDate(start.getDate() + index);
     const current = new Date(slotStart);
@@ -501,36 +478,6 @@ onMounted(() => {
                   所选时间段已被占用：{{ formatDateTime(selectedWindowConflict.lease.starts_at) }} ~ {{ formatDateTime(selectedWindowConflict.lease.expires_at) }}
                 </p>
               </div>
-            </div>
-
-            <div class="form-section">
-              <div class="form-section-header">
-                <span class="form-section-icon boot"><Icon name="pulse" :size="16" /></span>
-                <h4>租赁说明</h4>
-              </div>
-
-              <dl class="lease-summary-list">
-                <div>
-                  <dt>租赁方式</dt>
-                  <dd>提交后按所选时间段预约可用开发板。</dd>
-                </div>
-                <div>
-                  <dt>时间段</dt>
-                  <dd>{{ formatDateTime(fromDatetimeLocal(form.starts_at)) }} ~ {{ formatDateTime(fromDatetimeLocal(form.expires_at)) }}</dd>
-                </div>
-                <div>
-                  <dt>时长</dt>
-                  <dd>{{ formatDuration(fromDatetimeLocal(form.starts_at), fromDatetimeLocal(form.expires_at)) }}</dd>
-                </div>
-                <div>
-                  <dt>当前型号</dt>
-                  <dd>{{ selectedBoard ? `${selectedBoard.available} / ${selectedBoard.total} 可用` : "-" }}</dd>
-                </div>
-                <div>
-                  <dt>我的租赁</dt>
-                  <dd>{{ mySelectedBoardLeases.length }} 条</dd>
-                </div>
-              </dl>
             </div>
           </section>
         </div>

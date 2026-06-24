@@ -1683,6 +1683,9 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   overflow: hidden;
 }
 .board-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-md); border-color: var(--c-brand-soft); }
+.lease-card {
+  gap: .85rem;
+}
 .resource-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; }
 .board-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; }
 .resource-card-id {
@@ -1785,6 +1788,32 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 .lease-card-stats dt { font-size: .72rem; color: var(--c-text-muted); }
 .resource-card-stats dd,
 .lease-card-stats dd { font-size: 1.15rem; font-weight: 700; margin: 0; color: var(--c-text); }
+.lease-card-stats {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+.lease-card-stats dd {
+  font-size: .98rem;
+  overflow-wrap: anywhere;
+}
+.lease-card-window {
+  display: grid;
+  gap: .2rem;
+  padding: .85rem;
+  border: 1px solid var(--c-border-light);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, var(--c-brand-tint), var(--c-surface));
+}
+.lease-card-window span,
+.lease-card-window small {
+  color: var(--c-text-muted);
+  font-size: .78rem;
+  font-weight: 700;
+}
+.lease-card-window strong {
+  color: var(--c-text);
+  font-size: .98rem;
+  overflow-wrap: anywhere;
+}
 .resource-card-actions,
 .board-card-actions { margin-top: auto; display: flex; justify-content: flex-end; }
 
@@ -1808,6 +1837,9 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 }
 .board-row:hover { border-color: var(--c-brand-soft); box-shadow: var(--shadow-sm); transform: translateY(-1px); }
 .board-row .row-label { font-size: .74rem; color: var(--c-text-muted); }
+.lease-row {
+  grid-template-columns: minmax(220px, 1.25fr) minmax(180px, 1fr) minmax(180px, 1fr) minmax(110px, .7fr) minmax(90px, .55fr) auto;
+}
 
 /* ===================================================================== */
 /*  Admin page layouts (restored for admin views)                        */
@@ -2365,7 +2397,7 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 }
 .lease-calendar-day {
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  grid-template-rows: repeat(9, minmax(0, 1fr));
+  grid-template-rows: repeat(5, minmax(0, 1fr));
   grid-auto-rows: minmax(0, 1fr);
 }
 .lease-calendar-year {

@@ -16,6 +16,7 @@ const workspaceNavItems = [
   { to: "/dashboard", label: "工作台总览", icon: "chart" as IconName, exact: true },
   { to: "/dashboard/account", label: "账户信息", icon: "user" as IconName, exact: true },
   { to: "/dashboard/leases", label: "我的租赁", icon: "clipboard" as IconName, exact: true },
+  { to: "/dashboard/sessions", label: "租约会话", icon: "terminal" as IconName, exact: true },
 ];
 
 const topNavItems = [

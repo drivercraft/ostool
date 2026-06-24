@@ -141,7 +141,7 @@ describe("UserLeaseCreateView", () => {
     await wrapper.findAll(".lease-calendar-tabs button")[1].trigger("click");
     await flushPromises();
     expect(wrapper.find(".lease-calendar-day").exists()).toBe(true);
-    expect(wrapper.findAll(".lease-calendar-cell")).toHaveLength(63);
+    expect(wrapper.findAll(".lease-calendar-cell")).toHaveLength(35);
 
     await wrapper.find('input[placeholder="多个标签用英文逗号分隔，例如 lab, usb"]').setValue("lab");
     await wrapper.find('input[type="datetime-local"]').setValue("2027-01-01T03:00");

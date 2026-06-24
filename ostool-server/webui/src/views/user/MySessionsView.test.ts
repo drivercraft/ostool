@@ -1,8 +1,6 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { LeaseResponse } from "@/types/api";
-
 const listUserLeases = vi.fn();
 const deleteLease = vi.fn();
 const uiStore = {
@@ -52,7 +50,7 @@ async function seedUser() {
   store.loaded = true;
 }
 
-function makeLease(): LeaseResponse {
+function makeLease() {
   return {
     lease: {
       id: "lease-1",
@@ -81,14 +79,7 @@ function makeLease(): LeaseResponse {
   };
 }
 
-function makeLeaseWithoutSession() {
-  const item = makeLease();
-  item.lease.session_id = null;
-  item.session = null;
-  return item;
-}
-
-describe("MyLeasesView", () => {
+describe("MySessionsView", () => {
   beforeEach(() => {
     [listUserLeases, deleteLease, uiStore.clearMessages, uiStore.setError, uiStore.setSuccess, uiStore.confirm, routerReplace]
       .forEach((fn) => fn.mockReset());
@@ -96,37 +87,16 @@ describe("MyLeasesView", () => {
     listUserLeases.mockResolvedValue({ leases: [makeLease()] });
   });
 
-  it("renders leases with grid/list modes, then releases a lease", async () => {
+  it("renders current lease sessions and releases a lease", async () => {
     await seedUser();
-    const MyLeasesView = (await import("./MyLeasesView.vue")).default;
-    const wrapper = mount(MyLeasesView);
+    const MySessionsView = (await import("./MySessionsView.vue")).default;
+    const wrapper = mount(MySessionsView);
     await flushPromises();
 
-    expect(wrapper.text()).toContain("我的租赁");
-    expect(wrapper.text()).toContain("我的预约日历");
-    expect(wrapper.text()).toContain("租赁情况");
+    expect(wrapper.text()).toContain("租约会话");
+    expect(wrapper.text()).toContain("当前会话");
     expect(wrapper.text()).toContain("rk3568-1");
-    expect(wrapper.find(".lease-calendar-month").exists()).toBe(true);
-
-    await wrapper.findAll(".lease-calendar-tabs button")[0].trigger("click");
-    await flushPromises();
-    expect(wrapper.find(".lease-calendar-hour").exists()).toBe(true);
-    expect(wrapper.findAll(".lease-calendar-cell")).toHaveLength(24);
-
-    await wrapper.findAll(".lease-calendar-tabs button")[1].trigger("click");
-    await flushPromises();
-    expect(wrapper.find(".lease-calendar-day").exists()).toBe(true);
-    expect(wrapper.findAll(".lease-calendar-cell")).toHaveLength(35);
-    expect(wrapper.find(".board-card-grid").exists()).toBe(true);
-
-    const listToggle = wrapper
-      .findAll(".view-toggle button")
-      .find((btn) => btn.text().includes("列表"));
-    await listToggle!.trigger("click");
-    await flushPromises();
-    expect(wrapper.find(".lease-list").exists()).toBe(true);
-    expect(wrapper.findAll(".lease-row")).toHaveLength(1);
-    expect(wrapper.text()).toContain("转到会话");
+    expect(wrapper.text()).toContain("session-2");
 
     const button = wrapper
       .findAll("button")
@@ -136,18 +106,5 @@ describe("MyLeasesView", () => {
 
     expect(deleteLease).toHaveBeenCalledWith("lease-1");
     expect(uiStore.setSuccess).toHaveBeenCalled();
-  });
-
-  it("disables the session link when a lease has not started a session", async () => {
-    await seedUser();
-    listUserLeases.mockResolvedValue({ leases: [makeLeaseWithoutSession()] });
-    const MyLeasesView = (await import("./MyLeasesView.vue")).default;
-    const wrapper = mount(MyLeasesView);
-    await flushPromises();
-
-    const sessionLink = wrapper
-      .findAll("a")
-      .find((link) => link.text() === "转到会话");
-    expect(sessionLink?.classes()).toContain("is-disabled");
   });
 });
