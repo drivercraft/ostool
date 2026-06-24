@@ -96,28 +96,28 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="page-grid">
-    <div class="admin-toolbar">
-      <div class="admin-toolbar-left">
-        <button class="btn btn-ghost btn-sm" @click="loadSessions">刷新</button>
-      </div>
-      <div class="admin-toolbar-right">
-        <label class="search-field">
-          <Icon name="search" :size="16" />
-          <input v-model="search" placeholder="搜索会话 / 开发板 / 客户端" />
-        </label>
-        <label class="field filter-field">
-          <span>状态</span>
-          <select v-model="stateFilter">
-            <option value="all">全部状态</option>
-            <option value="active">占用中</option>
-            <option value="releasing">释放中</option>
-          </select>
-        </label>
-      </div>
-    </div>
-
+  <section class="page-grid admin-list-page">
     <div class="panel admin-table-panel">
+      <div class="admin-toolbar">
+        <div class="admin-toolbar-left">
+          <button class="btn btn-ghost btn-sm" @click="loadSessions">刷新</button>
+        </div>
+        <div class="admin-toolbar-right">
+          <label class="search-field">
+            <Icon name="search" :size="16" />
+            <input v-model="search" placeholder="搜索会话 / 开发板 / 客户端" />
+          </label>
+          <label class="field filter-field">
+            <span>状态</span>
+            <select v-model="stateFilter">
+              <option value="all">全部状态</option>
+              <option value="active">占用中</option>
+              <option value="releasing">释放中</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
       <div v-if="loading" class="empty-state">正在加载会话列表...</div>
       <div v-else-if="sessions.length === 0" class="empty-state">当前没有活跃会话。</div>
       <div v-else-if="filteredSessions.length === 0" class="empty-state">没有符合条件的会话。</div>
@@ -163,6 +163,12 @@ onMounted(() => {
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <div v-if="!loading" class="table-statusbar">
+        <span>{{ filteredSessions.length === 0 ? "暂无分页" : "第 1 / 共 1 页" }}</span>
+        <span>本页 {{ filteredSessions.length }} 条</span>
+        <span>筛选后 {{ filteredSessions.length }} 条 / 共 {{ sessions.length }} 条</span>
       </div>
     </div>
   </section>

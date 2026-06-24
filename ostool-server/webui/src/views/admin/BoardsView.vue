@@ -183,43 +183,42 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="boards-page page-grid">
-    <section class="admin-toolbar">
-      <div class="admin-toolbar-left">
-        <RouterLink to="/admin/resources/boards/new" class="btn btn-primary btn-sm">新增开发板</RouterLink>
-        <button class="btn btn-secondary btn-sm" @click="loadBoards">刷新</button>
-      </div>
-      <div class="admin-toolbar-right">
-        <label class="search-field">
-          <Icon name="search" :size="16" />
-          <input
-            v-model="tagFilter"
-            type="search"
-            placeholder="搜索标签..."
-            aria-label="标签筛选"
-          />
-        </label>
-        <label class="field filter-field">
-          <span>开发板型号</span>
-          <select v-model="typeFilter" aria-label="开发板型号">
-            <option value="">全部型号</option>
-            <option v-for="type in boardTypes" :key="type" :value="type">{{ type }}</option>
-          </select>
-        </label>
-        <label class="field filter-field">
-          <span>开发板状态</span>
-          <select v-model="statusFilter" aria-label="开发板状态">
-            <option value="all">全部状态</option>
-            <option value="available">可用</option>
-            <option value="leased">已租出</option>
-            <option value="disabled">已禁用</option>
-          </select>
-        </label>
-      </div>
-    </section>
-
-    <!-- Loading / Empty -->
+  <div class="boards-page page-grid admin-list-page">
     <div class="panel admin-table-panel">
+      <section class="admin-toolbar">
+        <div class="admin-toolbar-left">
+          <RouterLink to="/admin/resources/boards/new" class="btn btn-primary btn-sm">新增开发板</RouterLink>
+          <button class="btn btn-secondary btn-sm" @click="loadBoards">刷新</button>
+        </div>
+        <div class="admin-toolbar-right">
+          <label class="search-field">
+            <Icon name="search" :size="16" />
+            <input
+              v-model="tagFilter"
+              type="search"
+              placeholder="搜索标签..."
+              aria-label="标签筛选"
+            />
+          </label>
+          <label class="field filter-field">
+            <span>开发板型号</span>
+            <select v-model="typeFilter" aria-label="开发板型号">
+              <option value="">全部型号</option>
+              <option v-for="type in boardTypes" :key="type" :value="type">{{ type }}</option>
+            </select>
+          </label>
+          <label class="field filter-field">
+            <span>开发板状态</span>
+            <select v-model="statusFilter" aria-label="开发板状态">
+              <option value="all">全部状态</option>
+              <option value="available">可用</option>
+              <option value="leased">已租出</option>
+              <option value="disabled">已禁用</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
       <div v-if="loading" class="empty-state">
         <div class="spinner"></div>
         正在加载开发板列表...
@@ -319,6 +318,12 @@ onMounted(() => {
           </tr>
         </tbody>
         </table>
+      </div>
+
+      <div v-if="!loading" class="table-statusbar">
+        <span>{{ filteredBoards.length === 0 ? "暂无分页" : "第 1 / 共 1 页" }}</span>
+        <span>本页 {{ filteredBoards.length }} 条</span>
+        <span>筛选后 {{ filteredBoards.length }} 条 / 共 {{ boards.length }} 条</span>
       </div>
     </div>
   </div>

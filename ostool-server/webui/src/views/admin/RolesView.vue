@@ -238,7 +238,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
 </script>
 
 <template>
-  <section class="page-grid user-management-page roles-page">
+  <section class="page-grid user-management-page roles-page admin-list-page">
     <template v-if="editing">
       <div class="role-editor-page panel">
         <div class="role-editor-titlebar">
@@ -320,31 +320,31 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
     </template>
 
     <template v-else>
-      <div class="admin-toolbar">
-        <div class="admin-toolbar-left">
-          <button class="btn btn-primary" @click="openCreate">新增角色</button>
-          <button class="btn btn-ghost btn-sm" @click="togglePermissionInfo">
-            {{ showPermissionInfo ? "隐藏权限说明" : "权限说明" }}
-          </button>
-          <button class="btn btn-ghost btn-sm" @click="loadRbac">刷新</button>
-        </div>
-        <div class="admin-toolbar-right">
-          <label class="search-field">
-            <Icon name="search" :size="16" />
-            <input v-model="search" type="search" placeholder="搜索角色 / 权限" />
-          </label>
-          <label class="field filter-field">
-            <span>类型</span>
-            <select v-model="typeFilter">
-              <option value="all">全部类型</option>
-              <option value="system">系统角色</option>
-              <option value="custom">自定义角色</option>
-            </select>
-          </label>
-        </div>
-      </div>
-
       <div class="panel admin-table-panel role-table-panel">
+        <div class="admin-toolbar">
+          <div class="admin-toolbar-left">
+            <button class="btn btn-primary" @click="openCreate">新增角色</button>
+            <button class="btn btn-ghost btn-sm" @click="togglePermissionInfo">
+              {{ showPermissionInfo ? "隐藏权限说明" : "权限说明" }}
+            </button>
+            <button class="btn btn-ghost btn-sm" @click="loadRbac">刷新</button>
+          </div>
+          <div class="admin-toolbar-right">
+            <label class="search-field">
+              <Icon name="search" :size="16" />
+              <input v-model="search" type="search" placeholder="搜索角色 / 权限" />
+            </label>
+            <label class="field filter-field">
+              <span>类型</span>
+              <select v-model="typeFilter">
+                <option value="all">全部类型</option>
+                <option value="system">系统角色</option>
+                <option value="custom">自定义角色</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
         <div v-if="loading" class="empty-state">正在加载角色...</div>
         <div v-else-if="filteredRoles.length === 0" class="empty-state">没有符合条件的角色。</div>
         <div v-else class="table-scroll">
@@ -438,6 +438,12 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
               </tr>
             </tbody>
           </table>
+        </div>
+
+        <div v-if="!loading" class="table-statusbar">
+          <span>{{ filteredRoles.length === 0 ? "暂无分页" : "第 1 / 共 1 页" }}</span>
+          <span>本页 {{ filteredRoles.length }} 条</span>
+          <span>筛选后 {{ filteredRoles.length }} 条 / 共 {{ roles.length }} 条</span>
         </div>
       </div>
 

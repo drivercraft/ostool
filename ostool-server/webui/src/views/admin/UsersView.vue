@@ -319,48 +319,48 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="page-grid users-page">
-    <div class="admin-toolbar">
-      <div class="admin-toolbar-left">
-        <button class="btn btn-primary" @click="openCreate">
-          <Icon name="plus" :size="16" class="btn-icon" />
-          新增用户
-        </button>
-        <button class="btn btn-ghost btn-sm" @click="loadUsers">
-          <Icon name="refresh" :size="14" class="btn-icon" />
-          刷新
-        </button>
-      </div>
-      <div class="admin-toolbar-right">
-        <label class="search-field">
-          <Icon name="search" :size="16" />
-          <input
-            v-model="search"
-            type="search"
-            placeholder="按用户名 / 显示名 / 邮箱搜索"
-          />
-        </label>
-        <label class="field filter-field">
-          <span>状态</span>
-          <select v-model="statusFilter">
-            <option value="all">全部状态</option>
-            <option value="active">启用</option>
-            <option value="disabled">已禁用</option>
-          </select>
-        </label>
-        <label class="field filter-field">
-          <span>角色</span>
-          <select v-model="roleFilter">
-            <option value="">全部角色</option>
-            <option v-for="role in roles" :key="role.id" :value="role.id">
-              {{ role.display_name }}
-            </option>
-          </select>
-        </label>
-      </div>
-    </div>
-
+  <section class="page-grid users-page admin-list-page">
     <div class="panel admin-table-panel">
+      <div class="admin-toolbar">
+        <div class="admin-toolbar-left">
+          <button class="btn btn-primary" @click="openCreate">
+            <Icon name="plus" :size="16" class="btn-icon" />
+            新增用户
+          </button>
+          <button class="btn btn-ghost btn-sm" @click="loadUsers">
+            <Icon name="refresh" :size="14" class="btn-icon" />
+            刷新
+          </button>
+        </div>
+        <div class="admin-toolbar-right">
+          <label class="search-field">
+            <Icon name="search" :size="16" />
+            <input
+              v-model="search"
+              type="search"
+              placeholder="按用户名 / 显示名 / 邮箱搜索"
+            />
+          </label>
+          <label class="field filter-field">
+            <span>状态</span>
+            <select v-model="statusFilter">
+              <option value="all">全部状态</option>
+              <option value="active">启用</option>
+              <option value="disabled">已禁用</option>
+            </select>
+          </label>
+          <label class="field filter-field">
+            <span>角色</span>
+            <select v-model="roleFilter">
+              <option value="">全部角色</option>
+              <option v-for="role in roles" :key="role.id" :value="role.id">
+                {{ role.display_name }}
+              </option>
+            </select>
+          </label>
+        </div>
+      </div>
+
       <div v-if="loading" class="empty-state">正在加载用户...</div>
       <div v-else-if="filteredUsers.length === 0" class="empty-state">
         当前没有符合筛选条件的用户。
@@ -475,6 +475,12 @@ onMounted(() => {
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <div v-if="!loading" class="table-statusbar">
+        <span>{{ filteredUsers.length === 0 ? "暂无分页" : "第 1 / 共 1 页" }}</span>
+        <span>本页 {{ filteredUsers.length }} 条</span>
+        <span>筛选后 {{ filteredUsers.length }} 条 / 共 {{ users.length }} 条</span>
       </div>
     </div>
 

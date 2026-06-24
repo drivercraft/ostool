@@ -79,31 +79,31 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="page-grid">
-    <div class="admin-toolbar">
-      <div class="admin-toolbar-left">
-        <button class="btn btn-ghost btn-sm" @click="loadLeases">刷新</button>
-      </div>
-      <div class="admin-toolbar-right">
-        <label class="search-field">
-          <Icon name="search" :size="16" />
-          <input v-model="search" placeholder="搜索租赁 / 用户 / 开发板" />
-        </label>
-        <label class="field filter-field">
-          <span>状态</span>
-          <select v-model="stateFilter">
-            <option value="all">全部状态</option>
-            <option value="active">active</option>
-            <option value="releasing">releasing</option>
-            <option value="released">released</option>
-            <option value="expired">expired</option>
-            <option value="failed">failed</option>
-          </select>
-        </label>
-      </div>
-    </div>
-
+  <section class="page-grid admin-list-page">
     <div class="panel admin-table-panel">
+      <div class="admin-toolbar">
+        <div class="admin-toolbar-left">
+          <button class="btn btn-ghost btn-sm" @click="loadLeases">刷新</button>
+        </div>
+        <div class="admin-toolbar-right">
+          <label class="search-field">
+            <Icon name="search" :size="16" />
+            <input v-model="search" placeholder="搜索租赁 / 用户 / 开发板" />
+          </label>
+          <label class="field filter-field">
+            <span>状态</span>
+            <select v-model="stateFilter">
+              <option value="all">全部状态</option>
+              <option value="active">active</option>
+              <option value="releasing">releasing</option>
+              <option value="released">released</option>
+              <option value="expired">expired</option>
+              <option value="failed">failed</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
       <div v-if="loading" class="empty-state">正在加载租赁...</div>
       <div v-else-if="leases.length === 0" class="empty-state">暂无租赁记录。</div>
       <div v-else-if="filteredLeases.length === 0" class="empty-state">没有符合条件的租赁记录。</div>
@@ -146,6 +146,12 @@ onMounted(() => {
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <div v-if="!loading" class="table-statusbar">
+        <span>{{ filteredLeases.length === 0 ? "暂无分页" : "第 1 / 共 1 页" }}</span>
+        <span>本页 {{ filteredLeases.length }} 条</span>
+        <span>筛选后 {{ filteredLeases.length }} 条 / 共 {{ leases.length }} 条</span>
       </div>
     </div>
   </section>

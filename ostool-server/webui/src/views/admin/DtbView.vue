@@ -217,19 +217,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="page-grid">
-    <div class="admin-toolbar">
-      <div class="admin-toolbar-left">
-        <button class="btn btn-ghost btn-sm" @click="loadDtbs">刷新</button>
-      </div>
-      <div class="admin-toolbar-right">
-        <label class="search-field">
-          <Icon name="search" :size="16" />
-          <input v-model="search" placeholder="搜索 DTB / TFTP 路径" />
-        </label>
-      </div>
-    </div>
-
+  <section class="page-grid admin-list-page dtb-page">
     <div class="panel">
       <div class="panel-heading">
         <div>
@@ -262,6 +250,18 @@ onMounted(() => {
     </div>
 
     <div class="panel admin-table-panel">
+      <div class="admin-toolbar">
+        <div class="admin-toolbar-left">
+          <button class="btn btn-ghost btn-sm" @click="loadDtbs">刷新</button>
+        </div>
+        <div class="admin-toolbar-right">
+          <label class="search-field">
+            <Icon name="search" :size="16" />
+            <input v-model="search" placeholder="搜索 DTB / TFTP 路径" />
+          </label>
+        </div>
+      </div>
+
       <div v-if="loading" class="empty-state">正在加载 DTB 列表...</div>
       <div v-else-if="dtbs.length === 0" class="empty-state">当前还没有上传任何 DTB。</div>
       <div v-else-if="filteredDtbs.length === 0" class="empty-state">没有符合条件的 DTB。</div>
@@ -305,6 +305,12 @@ onMounted(() => {
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <div v-if="!loading" class="table-statusbar">
+        <span>{{ filteredDtbs.length === 0 ? "暂无分页" : "第 1 / 共 1 页" }}</span>
+        <span>本页 {{ filteredDtbs.length }} 条</span>
+        <span>筛选后 {{ filteredDtbs.length }} 条 / 共 {{ dtbs.length }} 条</span>
       </div>
     </div>
   </section>
