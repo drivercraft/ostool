@@ -21,10 +21,28 @@ const menuPosition = ref({ top: 0, left: 0 });
 
 const leasedBoardIds = computed(() => new Set(sessions.value.map((session) => session.board_id)));
 const leaseByBoardId = computed(() => {
-  const entries = leases.value
-    .filter((item) => item.lease.state === "active" || item.lease.state === "releasing")
-    .map((item) => [item.lease.board_id, item.lease] as const);
-  return new Map(entries);
+  const map = new Map<string, LeaseResponse["lease"]>();
+  const score = (lease: LeaseResponse["lease"]) => {
+    if (lease.state === "active") {
+      return 3;
+    }
+    if (lease.state === "releasing") {
+      return 2;
+    }
+    return 1;
+  };
+  for (const item of leases.value) {
+    const current = map.get(item.lease.board_id);
+    if (
+      !current
+      || score(item.lease) > score(current)
+      || (score(item.lease) === score(current)
+        && new Date(item.lease.starts_at).getTime() > new Date(current.starts_at).getTime())
+    ) {
+      map.set(item.lease.board_id, item.lease);
+    }
+  }
+  return map;
 });
 const boardTypes = computed(() =>
   Array.from(new Set(boards.value.map((board) => board.board_type))).sort(),

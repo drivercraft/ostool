@@ -130,6 +130,17 @@ function leaseTone(state: string) {
   return "neutral";
 }
 
+function leaseStateLabel(state: string) {
+  const labels: Record<string, string> = {
+    active: "生效中",
+    releasing: "释放中",
+    released: "已释放",
+    expired: "已过期",
+    failed: "失败",
+  };
+  return labels[state] ?? state;
+}
+
 function isActiveLease(item: LeaseResponse) {
   return item.lease.state === "active";
 }
@@ -384,7 +395,6 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
               <th>会话</th>
               <th>状态</th>
               <th>租赁时间段</th>
-              <th>时长</th>
               <th class="col-actions">操作</th>
             </tr>
           </thead>
@@ -402,13 +412,14 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
               </td>
               <td><code>{{ item.lease.session_id || "-" }}</code></td>
               <td>
-                <StatusPill :tone="leaseTone(item.lease.state)" :label="item.lease.state" />
+                <StatusPill :tone="leaseTone(item.lease.state)" :label="leaseStateLabel(item.lease.state)" />
               </td>
               <td>
-                <div>{{ formatDateTime(item.lease.starts_at) }}</div>
-                <div class="muted">至 {{ formatDateTime(item.lease.expires_at) }}</div>
+                <div>{{ formatDateTime(item.lease.starts_at) }} ~ {{ formatDateTime(item.lease.expires_at) }}</div>
+                <div class="muted">
+                  时长 {{ formatDuration(item.lease.starts_at, item.lease.expires_at) }}
+                </div>
               </td>
-              <td>{{ formatDuration(item.lease.starts_at, item.lease.expires_at) }}</td>
               <td class="col-actions">
                 <div class="row-actions">
                   <button

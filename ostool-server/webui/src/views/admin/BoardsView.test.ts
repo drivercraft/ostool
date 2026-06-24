@@ -78,24 +78,24 @@ function makeSession(boardId = "rk3568-1"): Session {
   };
 }
 
-function makeLease(boardId = "rk3568-1"): LeaseResponse {
+function makeLease(boardId = "rk3568-1", state: LeaseResponse["lease"]["state"] = "active"): LeaseResponse {
   return {
     lease: {
       id: "lease-1",
       user_id: "user-1",
-      session_id: "session-1",
+      session_id: state === "active" ? "session-1" : null,
       board_id: boardId,
       board_type: "rk3568",
       required_tags: [],
-      state: "active",
+      state,
       created_at: "2026-04-08T00:00:00Z",
       updated_at: "2026-04-08T00:00:00Z",
       starts_at: "2026-04-08T00:00:00Z",
       expires_at: "2026-04-08T00:05:00Z",
-      released_at: null,
+      released_at: state === "released" ? "2026-04-08T00:05:00Z" : null,
       failure_message: null,
     },
-    session: makeSession(boardId),
+    session: state === "active" ? makeSession(boardId) : null,
   };
 }
 
@@ -250,6 +250,36 @@ describe("BoardsView", () => {
       path: "/admin/rentals/leases",
       query: { q: "lease-1" },
     });
+
+    wrapper.unmount();
+  });
+
+  it("enables board lease navigation when only a historical lease exists", async () => {
+    listAdminLeases.mockResolvedValue({ leases: [makeLease("rk3568-1", "released")] });
+
+    const BoardsView = (await import("./BoardsView.vue")).default;
+    const wrapper = mount(BoardsView, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          RouterLink: {
+            name: "RouterLink",
+            props: ["to"],
+            template: "<a><slot /></a>",
+          },
+        },
+      },
+    });
+    await flushPromises();
+
+    await wrapper.find('button[title="更多"]').trigger("click");
+    await flushPromises();
+
+    const menu = document.body.querySelector(".action-menu.action-menu--floating");
+    const leaseItem = Array.from(menu!.querySelectorAll<HTMLButtonElement>(".action-menu-item"))
+      .find((item) => item.textContent?.includes("转到租赁"));
+    expect(leaseItem).toBeTruthy();
+    expect(leaseItem!.disabled).toBe(false);
 
     wrapper.unmount();
   });

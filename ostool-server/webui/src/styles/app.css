@@ -546,7 +546,7 @@ table.data-table {
 }
 table.tbl th,
 table.data-table th {
-  text-align: left;
+  text-align: center;
   font-size: .74rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -562,6 +562,7 @@ table.data-table td {
   padding: .85rem 1rem;
   border-bottom: 1px solid var(--c-border-light);
   color: var(--c-text-soft);
+  text-align: center;
   vertical-align: middle;
 }
 table.tbl tbody tr:last-child td,
@@ -2040,7 +2041,7 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 .row-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
   gap: .5rem;
   white-space: nowrap;
 }

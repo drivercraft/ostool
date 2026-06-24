@@ -128,6 +128,9 @@ describe("LeasesView", () => {
     expect(wrapper.find(".admin-toolbar-right .search-field").exists()).toBe(true);
     expect(wrapper.findAll(".admin-toolbar-right .filter-field").length).toBe(1);
     expect(wrapper.text()).toContain("租赁时间段");
+    expect(wrapper.find("thead").text()).not.toContain("时长");
+    expect(wrapper.text()).toContain("生效中");
+    expect(wrapper.text()).toContain("时长 2 小时");
   });
 
   it("creates an admin lease for a selected user and board", async () => {
