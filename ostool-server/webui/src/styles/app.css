@@ -3094,7 +3094,24 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   color: var(--c-text-muted);
 }
 .dashboard-account-card {
-  padding: 1.25rem;
+  display: grid;
+  gap: var(--content-gap);
+  padding: var(--content-pad);
+}
+.dashboard-account-section {
+  display: grid;
+  gap: var(--content-gap);
+  padding-top: var(--content-pad);
+  border-top: 1px solid var(--c-border-light);
+}
+.dashboard-account-section:first-of-type {
+  padding-top: 0;
+  border-top: 0;
+}
+.dashboard-account-section .form-section-header {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 .dashboard-account-dl {
   display: grid;
@@ -3109,6 +3126,11 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   border: 1px solid var(--c-border-light);
   border-radius: var(--radius-sm);
   background: var(--c-surface-2);
+}
+.dashboard-password-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
 }
 .lease-summary-list {
   display: grid;
@@ -3669,7 +3691,8 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   .dashboard-form-inline,
   .dashboard-welcome,
   .dashboard-kpis,
-  .dashboard-account-dl {
+  .dashboard-account-dl,
+  .dashboard-password-form {
     grid-template-columns: 1fr;
   }
   .dashboard-welcome {

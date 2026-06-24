@@ -44,7 +44,7 @@ use crate::{
             LeasesResponse, LoginRequest, NetworkInterfaceSummary, SerialPortSummary,
             SerialStatusResponse, SessionCreatedResponse, SessionDetailResponse,
             SessionDtbResponse, SiteSettingsResponse, SiteSettingsUpdateRequest,
-            TftpSessionResponse, UpdateServerConfigRequest,
+            TftpSessionResponse, UpdateServerConfigRequest, UserPasswordUpdateRequest,
         },
         error::ApiError,
     },
@@ -108,6 +108,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/me", get(get_current_user))
         .route("/api/v1/user/profile", get(get_user_profile))
+        .route("/api/v1/user/password", post(update_user_password))
         .route(
             "/api/v1/user/leases/availability",
             get(list_user_lease_availability),
@@ -418,6 +419,7 @@ fn user_permission_for_request(method: &Method, path: &str) -> Option<&'static s
         .split('/')
         .collect::<Vec<_>>();
     match (method.as_str(), segments.as_slice()) {
+        ("POST", ["password"]) => Some("profile.update"),
         ("GET", ["leases"]) => Some("leases.read"),
         ("GET", ["leases", "availability"]) => Some("leases.read"),
         ("POST", ["leases"]) => Some("leases.create"),
@@ -824,6 +826,26 @@ async fn get_user_profile(
     headers: HeaderMap,
 ) -> Result<axum::Json<CurrentUserResponse>, ApiError> {
     get_current_user(State(state), headers).await
+}
+
+async fn update_user_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::Json(request): axum::Json<UserPasswordUpdateRequest>,
+) -> Result<StatusCode, ApiError> {
+    let user = current_user_from_headers(&state, &headers).await?;
+    if request.password != request.confirm_password {
+        return Err(ApiError::bad_request(
+            "password confirmation does not match",
+        ));
+    }
+    validate_password(&request.password)?;
+    let password_hash = hash_password(&request.password).map_err(ApiError::from)?;
+    state
+        .storage
+        .update_password_hash(&user.id, password_hash)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_user_leases(
@@ -3901,6 +3923,10 @@ mod tests {
 
     #[test]
     fn user_request_permissions_use_resource_actions() {
+        assert_eq!(
+            user_permission_for_request(&Method::POST, "/api/v1/user/password"),
+            Some("profile.update")
+        );
         assert_eq!(
             user_permission_for_request(&Method::GET, "/api/v1/user/leases"),
             Some("leases.read")

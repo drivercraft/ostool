@@ -143,6 +143,12 @@ pub struct AdminPasswordResetRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserPasswordUpdateRequest {
+    pub password: String,
+    pub confirm_password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminPermissionResponse {
     pub id: String,
     pub code: String,

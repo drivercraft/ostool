@@ -332,6 +332,11 @@ export interface AdminPasswordResetRequest {
   password: string;
 }
 
+export interface UserPasswordUpdateRequest {
+  password: string;
+  confirm_password: string;
+}
+
 export interface AdminPermissionResponse {
   id: string;
   code: string;

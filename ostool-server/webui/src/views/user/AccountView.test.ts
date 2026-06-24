@@ -1,10 +1,19 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const updateUserPassword = vi.fn();
 const uiStore = {
   clearMessages: vi.fn(),
+  setError: vi.fn(),
+  setSuccess: vi.fn(),
 };
 const routerReplace = vi.fn();
+
+vi.mock("@/api", () => ({
+  api: {
+    updateUserPassword,
+  },
+}));
 
 vi.mock("@/stores/ui", () => ({
   useUiStore: () => uiStore,
@@ -36,8 +45,12 @@ async function seedUser() {
 
 describe("AccountView", () => {
   beforeEach(() => {
+    updateUserPassword.mockReset();
     uiStore.clearMessages.mockReset();
+    uiStore.setError.mockReset();
+    uiStore.setSuccess.mockReset();
     routerReplace.mockReset();
+    updateUserPassword.mockResolvedValue(undefined);
   });
 
   it("renders the current user's account information", async () => {
@@ -47,9 +60,44 @@ describe("AccountView", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("账户信息");
+    expect(wrapper.text()).toContain("基本资料");
+    expect(wrapper.text()).toContain("账号安全");
     expect(wrapper.text()).toContain("demo");
     expect(wrapper.text()).toContain("Demo");
     expect(wrapper.text()).toContain("demo@ostool.local");
     expect(wrapper.text()).toContain("修改密码");
+    expect(wrapper.findAll('input[type="password"]')).toHaveLength(2);
+  });
+
+  it("validates repeated password input before changing password", async () => {
+    await seedUser();
+    const AccountView = (await import("./AccountView.vue")).default;
+    const wrapper = mount(AccountView);
+    await flushPromises();
+
+    const inputs = wrapper.findAll('input[type="password"]');
+    await inputs[0].setValue("new-password-1");
+    await inputs[1].setValue("new-password-2");
+
+    expect(wrapper.text()).toContain("两次输入的新密码不一致");
+  });
+
+  it("updates the current user's password", async () => {
+    await seedUser();
+    const AccountView = (await import("./AccountView.vue")).default;
+    const wrapper = mount(AccountView);
+    await flushPromises();
+
+    const inputs = wrapper.findAll('input[type="password"]');
+    await inputs[0].setValue("new-password-1");
+    await inputs[1].setValue("new-password-1");
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+
+    expect(updateUserPassword).toHaveBeenCalledWith({
+      password: "new-password-1",
+      confirm_password: "new-password-1",
+    });
+    expect(uiStore.setSuccess).toHaveBeenCalledWith("密码已修改");
   });
 });
