@@ -156,6 +156,8 @@ pub struct DtbMetadata {
     pub storage_path: String,
     pub size_bytes: i64,
     pub sha256: String,
+    pub boot_architecture: Option<String>,
+    pub compatible: Option<String>,
     pub description: Option<String>,
     pub uploaded_by: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -168,6 +170,8 @@ pub struct UpsertDtbMetadata {
     pub storage_path: String,
     pub size_bytes: i64,
     pub sha256: String,
+    pub boot_architecture: Option<String>,
+    pub compatible: Option<String>,
     pub description: Option<String>,
     pub uploaded_by: Option<String>,
 }

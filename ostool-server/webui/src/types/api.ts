@@ -180,7 +180,18 @@ export interface DtbFileResponse {
   name: string;
   size: number;
   updated_at: string;
+  storage_path?: string | null;
+  sha256?: string | null;
+  boot_architecture?: string | null;
+  compatible?: string | null;
+  description?: string | null;
   relative_tftp_path_template: string;
+}
+
+export interface DtbMetadataInput {
+  boot_architecture?: string | null;
+  compatible?: string | null;
+  description?: string | null;
 }
 
 export interface Session {

@@ -12,29 +12,59 @@ const creating = ref(false);
 const updatingName = ref<string | null>(null);
 const deletingName = ref<string | null>(null);
 const dtbs = ref<DtbFileResponse[]>([]);
+const creatingDtb = ref(false);
 const newDtbName = ref("");
+const newDtbArchitecture = ref("");
+const newDtbCompatible = ref("");
+const newDtbDescription = ref("");
 const newDtbFile = ref<File | null>(null);
 const newDtbInput = ref<HTMLInputElement | null>(null);
 const editingDtbName = ref<string | null>(null);
 const editDtbName = ref("");
+const editDtbArchitecture = ref("");
+const editDtbCompatible = ref("");
+const editDtbDescription = ref("");
 const editDtbFile = ref<File | null>(null);
 const editDtbFileInput = ref<HTMLInputElement | null>(null);
 const pointerDownOnModalOverlay = ref(false);
 const search = ref("");
+const sizeFilter = ref<"all" | "small" | "medium" | "large">("all");
 const DTB_UPLOAD_MAX_MIB = 10;
 const DTB_UPLOAD_MAX_BYTES = DTB_UPLOAD_MAX_MIB * 1024 * 1024;
 
 const filteredDtbs = computed(() => {
   const query = search.value.trim().toLowerCase();
-  if (!query) {
-    return dtbs.value;
-  }
   return dtbs.value.filter((dtb) =>
-    [dtb.name, dtb.relative_tftp_path_template].some((value) =>
-      value.toLowerCase().includes(query),
-    ),
+    matchesDtbSize(dtb) && matchesDtbSearch(dtb, query),
   );
 });
+
+function matchesDtbSize(dtb: DtbFileResponse) {
+  if (sizeFilter.value === "small") {
+    return dtb.size <= 64 * 1024;
+  }
+  if (sizeFilter.value === "medium") {
+    return dtb.size > 64 * 1024 && dtb.size <= 1024 * 1024;
+  }
+  if (sizeFilter.value === "large") {
+    return dtb.size > 1024 * 1024;
+  }
+  return true;
+}
+
+function matchesDtbSearch(dtb: DtbFileResponse, query: string) {
+  if (!query) {
+    return true;
+  }
+  return [
+    dtb.name,
+    dtb.relative_tftp_path_template,
+    dtb.boot_architecture ?? "",
+    dtb.compatible ?? "",
+    dtb.description ?? "",
+    dtb.sha256 ?? "",
+  ].some((value) => value.toLowerCase().includes(query));
+}
 
 function formatSize(size: number): string {
   if (size < 1024) {
@@ -78,6 +108,35 @@ function onNewFileChange(event: Event) {
   }
 }
 
+function dtbMetadata(architecture: string, compatible: string, description: string) {
+  return {
+    boot_architecture: architecture.trim() || null,
+    compatible: compatible.trim() || null,
+    description: description.trim() || null,
+  };
+}
+
+function resetCreateForm() {
+  newDtbName.value = "";
+  newDtbArchitecture.value = "";
+  newDtbCompatible.value = "";
+  newDtbDescription.value = "";
+  newDtbFile.value = null;
+  if (newDtbInput.value) {
+    newDtbInput.value.value = "";
+  }
+}
+
+function openCreateDtb() {
+  resetCreateForm();
+  creatingDtb.value = true;
+}
+
+function closeCreateDtb() {
+  creatingDtb.value = false;
+  resetCreateForm();
+}
+
 function onReplaceFileChange(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0] ?? null;
@@ -105,12 +164,12 @@ async function createDtb() {
 
   creating.value = true;
   try {
-    await api.createDtb(name, newDtbFile.value);
-    newDtbName.value = "";
-    newDtbFile.value = null;
-    if (newDtbInput.value) {
-      newDtbInput.value.value = "";
-    }
+    await api.createDtb(
+      name,
+      newDtbFile.value,
+      dtbMetadata(newDtbArchitecture.value, newDtbCompatible.value, newDtbDescription.value),
+    );
+    closeCreateDtb();
     ui.setSuccess(`已上传 DTB ${name}`);
     await loadDtbs();
   } catch (error) {
@@ -123,6 +182,9 @@ async function createDtb() {
 function openEditDtb(dtb: DtbFileResponse) {
   editingDtbName.value = dtb.name;
   editDtbName.value = dtb.name;
+  editDtbArchitecture.value = dtb.boot_architecture ?? "";
+  editDtbCompatible.value = dtb.compatible ?? "";
+  editDtbDescription.value = dtb.description ?? "";
   editDtbFile.value = null;
   if (editDtbFileInput.value) {
     editDtbFileInput.value.value = "";
@@ -132,6 +194,9 @@ function openEditDtb(dtb: DtbFileResponse) {
 function closeEditDtb() {
   editingDtbName.value = null;
   editDtbName.value = "";
+  editDtbArchitecture.value = "";
+  editDtbCompatible.value = "";
+  editDtbDescription.value = "";
   editDtbFile.value = null;
   if (editDtbFileInput.value) {
     editDtbFileInput.value.value = "";
@@ -144,7 +209,11 @@ function onModalOverlayPointerDown(event: PointerEvent) {
 
 function onModalOverlayClick(event: MouseEvent) {
   if (pointerDownOnModalOverlay.value && event.target === event.currentTarget) {
-    closeEditDtb();
+    if (creatingDtb.value) {
+      closeCreateDtb();
+    } else {
+      closeEditDtb();
+    }
   }
   pointerDownOnModalOverlay.value = false;
 }
@@ -165,8 +234,17 @@ async function saveDtb() {
     ui.setError("DTB 文件名不能为空");
     return;
   }
-  if (nextName === currentName && !replaceFile) {
-    ui.setError("请修改文件名或选择新的 DTB 文件");
+  const metadata = dtbMetadata(
+    editDtbArchitecture.value,
+    editDtbCompatible.value,
+    editDtbDescription.value,
+  );
+  if (
+    nextName === currentName
+    && !replaceFile
+    && JSON.stringify(metadata) === JSON.stringify(dtbMetadata("", "", ""))
+  ) {
+    ui.setError("请修改文件名、元信息或选择新的 DTB 文件");
     return;
   }
 
@@ -176,6 +254,7 @@ async function saveDtb() {
       currentName,
       nextName === currentName ? null : nextName,
       replaceFile,
+      metadata,
     );
     ui.setSuccess(`已更新 DTB ${updated.name}`);
     closeEditDtb();
@@ -218,46 +297,28 @@ onMounted(() => {
 
 <template>
   <section class="page-grid admin-list-page dtb-page">
-    <div class="panel">
-      <div class="panel-heading">
-        <div>
-          <h3>上传新 DTB</h3>
-          <p>单个 DTB 文件最大支持 {{ DTB_UPLOAD_MAX_MIB }} MiB。</p>
-        </div>
-      </div>
-
-      <div class="form-grid three-columns">
-        <label class="field">
-          <span>文件名</span>
-          <input v-model="newDtbName" placeholder="例如 board.dtb" />
-        </label>
-        <label class="field">
-          <span>文件</span>
-          <input
-            ref="newDtbInput"
-            type="file"
-            accept=".dtb,application/octet-stream"
-            @change="onNewFileChange"
-          />
-        </label>
-        <div class="field action-field">
-          <span>操作</span>
-          <button class="btn btn-primary" :disabled="creating" @click="createDtb">
-            {{ creating ? "上传中..." : "上传 DTB" }}
-          </button>
-        </div>
-      </div>
-    </div>
-
     <div class="panel admin-table-panel">
       <div class="admin-toolbar">
         <div class="admin-toolbar-left">
+          <button class="btn btn-primary" @click="openCreateDtb">
+            <Icon name="plus" :size="16" class="btn-icon" />
+            上传 DTB
+          </button>
           <button class="btn btn-ghost btn-sm" @click="loadDtbs">刷新</button>
         </div>
         <div class="admin-toolbar-right">
           <label class="search-field">
             <Icon name="search" :size="16" />
-            <input v-model="search" placeholder="搜索 DTB / TFTP 路径" />
+            <input v-model="search" type="search" placeholder="搜索名称 / 架构 / compatible / 路径" />
+          </label>
+          <label class="field filter-field">
+            <span>大小</span>
+            <select v-model="sizeFilter">
+              <option value="all">全部大小</option>
+              <option value="small">小于 64 KiB</option>
+              <option value="medium">64 KiB - 1 MiB</option>
+              <option value="large">大于 1 MiB</option>
+            </select>
           </label>
         </div>
       </div>
@@ -271,34 +332,45 @@ onMounted(() => {
             <tr>
               <th class="col-index">序号</th>
               <th>名称</th>
+              <th>架构</th>
+              <th>Compatible</th>
               <th>大小</th>
               <th>更新时间</th>
-              <th>TFTP 路径模板</th>
-              <th>操作</th>
+              <th>说明</th>
+              <th class="col-actions">操作</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="(dtb, index) in filteredDtbs" :key="dtb.name">
               <td class="col-index">{{ index + 1 }}</td>
-              <td><code>{{ dtb.name }}</code></td>
+              <td>
+                <div class="dtb-name-cell">
+                  <code>{{ dtb.name }}</code>
+                  <span>{{ dtb.relative_tftp_path_template }}</span>
+                </div>
+              </td>
+              <td>{{ dtb.boot_architecture || "-" }}</td>
+              <td><code>{{ dtb.compatible || "-" }}</code></td>
               <td>{{ formatSize(dtb.size) }}</td>
               <td>{{ formatTime(dtb.updated_at) }}</td>
-              <td><code>{{ dtb.relative_tftp_path_template }}</code></td>
-              <td>
-                <div class="toolbar-actions">
+              <td class="muted">{{ dtb.description || "无说明" }}</td>
+              <td class="col-actions">
+                <div class="row-actions">
                   <button
-                    class="btn btn-ghost btn-sm"
+                    class="btn-icon-only"
+                    title="编辑"
                     :disabled="updatingName === dtb.name"
                     @click="openEditDtb(dtb)"
                   >
-                    修改
+                    <Icon name="edit" :size="16" />
                   </button>
                   <button
-                    class="btn btn-danger btn-sm"
+                    class="btn-icon-only"
+                    title="删除"
                     :disabled="deletingName === dtb.name"
                     @click="removeDtb(dtb.name)"
                   >
-                    {{ deletingName === dtb.name ? "删除中..." : "删除" }}
+                    <Icon name="trash" :size="16" />
                   </button>
                 </div>
               </td>
@@ -316,26 +388,94 @@ onMounted(() => {
   </section>
 
   <div
+    v-if="creatingDtb"
+    class="modal-overlay"
+    @pointerdown="onModalOverlayPointerDown"
+    @click="onModalOverlayClick"
+  >
+    <div class="modal-card modal-card--dtb-form">
+      <header class="modal-header">
+        <div>
+          <h3>上传 DTB</h3>
+          <p class="muted">补充架构、compatible 和说明，方便后续按板型选择。</p>
+        </div>
+        <button class="btn-icon-only modal-close-button" title="关闭" @click="closeCreateDtb">×</button>
+      </header>
+
+      <form class="modal-form" @submit.prevent="createDtb">
+        <div class="modal-body modal-body-grid">
+          <label class="field">
+            <span>文件名</span>
+            <input v-model="newDtbName" placeholder="例如 rk3568-evb.dtb" />
+          </label>
+          <label class="field">
+            <span>架构描述</span>
+            <input v-model="newDtbArchitecture" placeholder="例如 arm64 / riscv64" />
+          </label>
+          <label class="field modal-field-full">
+            <span>Compatible</span>
+            <input v-model="newDtbCompatible" placeholder="例如 rockchip,rk3568-evb" />
+          </label>
+          <label class="field modal-field-full">
+            <span>说明</span>
+            <textarea v-model="newDtbDescription" placeholder="记录适用开发板、内核版本或维护说明" />
+          </label>
+          <label class="field modal-field-full">
+            <span>DTB 文件</span>
+            <input
+              ref="newDtbInput"
+              type="file"
+              accept=".dtb,application/octet-stream"
+              @change="onNewFileChange"
+            />
+          </label>
+          <p class="modal-hint muted">单个 DTB 文件最大支持 {{ DTB_UPLOAD_MAX_MIB }} MiB。</p>
+        </div>
+
+        <div class="modal-actions">
+          <button type="submit" class="btn btn-primary" :disabled="creating">
+            {{ creating ? "上传中..." : "上传 DTB" }}
+          </button>
+          <button type="button" class="btn btn-ghost" :disabled="creating" @click="closeCreateDtb">取消</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div
     v-if="editingDtbName"
     class="modal-overlay"
     @pointerdown="onModalOverlayPointerDown"
     @click="onModalOverlayClick"
   >
-    <div class="modal-card">
+    <div class="modal-card modal-card--dtb-form">
       <header class="modal-header">
         <div>
           <h3>{{ editingDtbName }}</h3>
+          <p class="muted">修改 DTB 名称、元信息，或选择文件替换内容。</p>
         </div>
         <button class="btn-icon-only modal-close-button" title="关闭" @click="closeEditDtb">×</button>
       </header>
 
-      <div class="modal-body">
-        <div class="form-grid two-columns">
+      <form class="modal-form" @submit.prevent="saveDtb">
+        <div class="modal-body modal-body-grid">
           <label class="field">
             <span>文件名</span>
-            <input v-model="editDtbName" placeholder="例如 board.dtb" />
+            <input v-model="editDtbName" placeholder="例如 rk3568-evb.dtb" />
           </label>
           <label class="field">
+            <span>架构描述</span>
+            <input v-model="editDtbArchitecture" placeholder="例如 arm64 / riscv64" />
+          </label>
+          <label class="field modal-field-full">
+            <span>Compatible</span>
+            <input v-model="editDtbCompatible" placeholder="例如 rockchip,rk3568-evb" />
+          </label>
+          <label class="field modal-field-full">
+            <span>说明</span>
+            <textarea v-model="editDtbDescription" placeholder="记录适用开发板、内核版本或维护说明" />
+          </label>
+          <label class="field modal-field-full">
             <span>替换文件</span>
             <input
               ref="editDtbFileInput"
@@ -344,18 +484,18 @@ onMounted(() => {
               @change="onReplaceFileChange"
             />
           </label>
+          <p class="modal-hint muted">替换上传时同样受 {{ DTB_UPLOAD_MAX_MIB }} MiB 限制。</p>
         </div>
-        <p class="muted">替换上传时同样受 {{ DTB_UPLOAD_MAX_MIB }} MiB 限制。</p>
-      </div>
 
-      <div class="toolbar-actions modal-actions">
-        <button class="btn btn-primary" :disabled="updatingName === editingDtbName" @click="saveDtb">
-          {{ updatingName === editingDtbName ? "保存中..." : "保存修改" }}
-        </button>
-        <button class="btn btn-ghost" :disabled="updatingName === editingDtbName" @click="closeEditDtb">
-          取消
-        </button>
-      </div>
+        <div class="modal-actions">
+          <button type="submit" class="btn btn-primary" :disabled="updatingName === editingDtbName">
+            {{ updatingName === editingDtbName ? "保存中..." : "保存修改" }}
+          </button>
+          <button type="button" class="btn btn-ghost" :disabled="updatingName === editingDtbName" @click="closeEditDtb">
+            取消
+          </button>
+        </div>
+      </form>
     </div>
   </div>
 </template>

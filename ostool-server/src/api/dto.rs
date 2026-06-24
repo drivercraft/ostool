@@ -282,6 +282,9 @@ pub struct DtbFileResponse {
     pub updated_at: DateTime<Utc>,
     pub storage_path: Option<String>,
     pub sha256: Option<String>,
+    pub boot_architecture: Option<String>,
+    pub compatible: Option<String>,
+    pub description: Option<String>,
     pub relative_tftp_path_template: String,
 }
 
@@ -295,6 +298,9 @@ impl DtbFileResponse {
             updated_at: file.updated_at,
             storage_path: None,
             sha256: None,
+            boot_architecture: None,
+            compatible: None,
+            description: None,
         }
     }
 
@@ -303,6 +309,9 @@ impl DtbFileResponse {
         if let Some(metadata) = metadata {
             response.storage_path = Some(metadata.storage_path);
             response.sha256 = Some(metadata.sha256);
+            response.boot_architecture = metadata.boot_architecture;
+            response.compatible = metadata.compatible;
+            response.description = metadata.description;
         }
         response
     }
@@ -318,6 +327,9 @@ impl From<DtbMetadata> for DtbFileResponse {
             updated_at: metadata.updated_at,
             storage_path: Some(metadata.storage_path),
             sha256: Some(metadata.sha256),
+            boot_architecture: metadata.boot_architecture,
+            compatible: metadata.compatible,
+            description: metadata.description,
         }
     }
 }

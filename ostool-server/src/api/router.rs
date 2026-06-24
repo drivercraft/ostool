@@ -339,6 +339,21 @@ fn clean_optional(value: Option<String>) -> Option<String> {
     })
 }
 
+#[derive(Clone, Default)]
+struct DtbMetadataInput {
+    boot_architecture: Option<String>,
+    compatible: Option<String>,
+    description: Option<String>,
+}
+
+impl DtbMetadataInput {
+    fn has_updates(&self) -> bool {
+        self.boot_architecture.is_some()
+            || self.compatible.is_some()
+            || self.description.is_some()
+    }
+}
+
 fn request_profile(
     nickname: Option<String>,
     avatar_url: Option<String>,
@@ -929,6 +944,7 @@ async fn create_dtb(
 ) -> Result<(StatusCode, axum::Json<DtbFileResponse>), ApiError> {
     let headers = request.headers();
     let dtb_name = dtb_name_header(headers, "X-Dtb-Name")?;
+    let dtb_metadata = dtb_metadata_headers(headers)?;
     let body = read_limited_body(request, DTB_UPLOAD_MAX_MIB, "DTB").await?;
     if body.is_empty() {
         return Err(ApiError::bad_request("DTB upload body must not be empty"));
@@ -940,7 +956,7 @@ async fn create_dtb(
     }
 
     let file = state.dtb_store.write(&dtb_name, &body).await?;
-    let metadata = sync_dtb_metadata(&state, &file, &body, None).await?;
+    let metadata = sync_dtb_metadata(&state, &file, &body, dtb_metadata, None).await?;
     write_audit_log(
         &state,
         "dtb.create",
@@ -1233,6 +1249,7 @@ async fn update_dtb(
     request: Request,
 ) -> Result<axum::Json<DtbFileResponse>, ApiError> {
     let headers = request.headers();
+    let dtb_metadata = dtb_metadata_headers(headers)?;
     let current_name =
         normalize_dtb_name(&dtb_name).map_err(|err| ApiError::bad_request(err.to_string()))?;
     let requested_name = headers
@@ -1246,21 +1263,6 @@ async fn update_dtb(
         .transpose()?;
     let mut effective_name = current_name.clone();
     let body = read_limited_body(request, DTB_UPLOAD_MAX_MIB, "DTB").await?;
-
-    if requested_name.as_deref() == Some(current_name.as_str()) && body.is_empty() {
-        let file = state
-            .dtb_store
-            .get(&current_name)
-            .await?
-            .ok_or_else(|| ApiError::not_found(format!("DTB `{current_name}` not found")))?;
-        let metadata = state
-            .storage
-            .find_dtb_metadata_by_name(&current_name)
-            .await?;
-        return Ok(axum::Json(DtbFileResponse::from_dtb_with_metadata(
-            file, metadata,
-        )));
-    }
 
     if let Some(new_name) = requested_name.as_deref()
         && new_name != current_name
@@ -1300,7 +1302,7 @@ async fn update_dtb(
 
     if !body.is_empty() {
         let file = state.dtb_store.write(&effective_name, &body).await?;
-        let metadata = sync_dtb_metadata(&state, &file, &body, None).await?;
+        let metadata = sync_dtb_metadata(&state, &file, &body, dtb_metadata, None).await?;
         write_audit_log(
             &state,
             "dtb.update",
@@ -1313,9 +1315,28 @@ async fn update_dtb(
             }),
         )
         .await?;
+    } else if dtb_metadata.has_updates() {
+        let file = state
+            .dtb_store
+            .get(&effective_name)
+            .await?
+            .ok_or_else(|| ApiError::not_found(format!("DTB `{effective_name}` not found")))?;
+        let bytes = state.dtb_store.read(&effective_name).await.map_err(ApiError::from)?;
+        let metadata = sync_dtb_metadata(&state, &file, &bytes, dtb_metadata, None).await?;
+        write_audit_log(
+            &state,
+            "dtb.update_metadata",
+            "dtb_file",
+            Some(effective_name.clone()),
+            json!({
+                "name": effective_name,
+                "sha256": metadata.sha256,
+            }),
+        )
+        .await?;
     } else if requested_name.is_none() {
         return Err(ApiError::bad_request(
-            "DTB update requires a new name or replacement file body",
+            "DTB update requires a new name, metadata, or replacement file body",
         ));
     }
 
@@ -2063,6 +2084,18 @@ fn optional_header(headers: &HeaderMap, name: &'static str) -> Result<Option<Str
         .transpose()
 }
 
+fn optional_clean_header(headers: &HeaderMap, name: &'static str) -> Result<Option<String>, ApiError> {
+    Ok(clean_optional(optional_header(headers, name)?))
+}
+
+fn dtb_metadata_headers(headers: &HeaderMap) -> Result<DtbMetadataInput, ApiError> {
+    Ok(DtbMetadataInput {
+        boot_architecture: optional_clean_header(headers, "X-Dtb-Architecture")?,
+        compatible: optional_clean_header(headers, "X-Dtb-Compatible")?,
+        description: optional_clean_header(headers, "X-Dtb-Description")?,
+    })
+}
+
 async fn list_session_files(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
@@ -2390,6 +2423,7 @@ async fn sync_dtb_metadata(
     state: &AppState,
     file: &crate::dtb_store::DtbFile,
     bytes: &[u8],
+    metadata: DtbMetadataInput,
     uploaded_by: Option<String>,
 ) -> Result<crate::storage::DtbMetadata, ApiError> {
     Ok(state
@@ -2399,7 +2433,9 @@ async fn sync_dtb_metadata(
             storage_path: file.name.clone(),
             size_bytes: file.size as i64,
             sha256: hex_sha256(bytes),
-            description: None,
+            boot_architecture: metadata.boot_architecture,
+            compatible: metadata.compatible,
+            description: metadata.description,
             uploaded_by,
         })
         .await?)

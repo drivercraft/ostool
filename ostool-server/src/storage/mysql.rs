@@ -267,6 +267,8 @@ impl MysqlStorage {
                 storage_path VARCHAR(1024) NOT NULL,
                 size_bytes BIGINT NOT NULL,
                 sha256 VARCHAR(255) NOT NULL,
+                boot_architecture VARCHAR(255),
+                compatible VARCHAR(512),
                 description TEXT,
                 uploaded_by VARCHAR(255),
                 created_at VARCHAR(255) NOT NULL,
@@ -324,6 +326,10 @@ impl MysqlStorage {
         self.add_column_if_missing("auth_sessions", "revoked_at", "VARCHAR(255)")
             .await?;
         self.add_column_if_missing("leases", "updated_at", "VARCHAR(255)")
+            .await?;
+        self.add_column_if_missing("dtb_files", "boot_architecture", "VARCHAR(255)")
+            .await?;
+        self.add_column_if_missing("dtb_files", "compatible", "VARCHAR(512)")
             .await?;
         sqlx::query("UPDATE leases SET updated_at = created_at WHERE updated_at IS NULL")
             .execute(&self.pool)
@@ -649,13 +655,15 @@ impl DtbMetadataRepository for MysqlStorage {
             sqlx::query(
                 r#"
                 UPDATE dtb_files
-                SET storage_path = ?, size_bytes = ?, sha256 = ?, description = ?, uploaded_by = ?, updated_at = ?
+                SET storage_path = ?, size_bytes = ?, sha256 = ?, boot_architecture = ?, compatible = ?, description = ?, uploaded_by = ?, updated_at = ?
                 WHERE id = ?
                 "#,
             )
             .bind(metadata.storage_path)
             .bind(metadata.size_bytes)
             .bind(metadata.sha256)
+            .bind(metadata.boot_architecture)
+            .bind(metadata.compatible)
             .bind(metadata.description)
             .bind(metadata.uploaded_by)
             .bind(&now)
@@ -672,8 +680,8 @@ impl DtbMetadataRepository for MysqlStorage {
             sqlx::query(
                 r#"
                 INSERT INTO dtb_files
-                    (id, name, storage_path, size_bytes, sha256, description, uploaded_by, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, name, storage_path, size_bytes, sha256, boot_architecture, compatible, description, uploaded_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&id)
@@ -681,6 +689,8 @@ impl DtbMetadataRepository for MysqlStorage {
             .bind(metadata.storage_path)
             .bind(metadata.size_bytes)
             .bind(metadata.sha256)
+            .bind(metadata.boot_architecture)
+            .bind(metadata.compatible)
             .bind(metadata.description)
             .bind(metadata.uploaded_by)
             .bind(&now)
@@ -867,6 +877,8 @@ fn dtb_metadata_from_row(row: &sqlx::mysql::MySqlRow) -> anyhow::Result<DtbMetad
         storage_path: row.try_get("storage_path")?,
         size_bytes: row.try_get("size_bytes")?,
         sha256: row.try_get("sha256")?,
+        boot_architecture: row.try_get("boot_architecture")?,
+        compatible: row.try_get("compatible")?,
         description: row.try_get("description")?,
         uploaded_by: row.try_get("uploaded_by")?,
         created_at: parse_time(row.try_get::<String, _>("created_at")?.as_str())?,

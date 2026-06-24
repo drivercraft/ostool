@@ -284,6 +284,8 @@ impl SqliteStorage {
                 storage_path TEXT NOT NULL,
                 size_bytes INTEGER NOT NULL,
                 sha256 TEXT NOT NULL,
+                boot_architecture TEXT,
+                compatible TEXT,
                 description TEXT,
                 uploaded_by TEXT,
                 created_at TEXT NOT NULL,
@@ -347,6 +349,10 @@ impl SqliteStorage {
         self.add_column_if_missing("auth_sessions", "revoked_at", "TEXT")
             .await?;
         self.add_column_if_missing("leases", "updated_at", "TEXT")
+            .await?;
+        self.add_column_if_missing("dtb_files", "boot_architecture", "TEXT")
+            .await?;
+        self.add_column_if_missing("dtb_files", "compatible", "TEXT")
             .await?;
         sqlx::query("UPDATE leases SET updated_at = created_at WHERE updated_at IS NULL")
             .execute(&self.pool)
@@ -586,13 +592,15 @@ impl DtbMetadataRepository for SqliteStorage {
             sqlx::query(
                 r#"
                 UPDATE dtb_files
-                SET storage_path = ?, size_bytes = ?, sha256 = ?, description = ?, uploaded_by = ?, updated_at = ?
+                SET storage_path = ?, size_bytes = ?, sha256 = ?, boot_architecture = ?, compatible = ?, description = ?, uploaded_by = ?, updated_at = ?
                 WHERE id = ?
                 "#,
             )
             .bind(metadata.storage_path)
             .bind(metadata.size_bytes)
             .bind(metadata.sha256)
+            .bind(metadata.boot_architecture)
+            .bind(metadata.compatible)
             .bind(metadata.description)
             .bind(metadata.uploaded_by)
             .bind(&now)
@@ -609,8 +617,8 @@ impl DtbMetadataRepository for SqliteStorage {
             sqlx::query(
                 r#"
                 INSERT INTO dtb_files
-                    (id, name, storage_path, size_bytes, sha256, description, uploaded_by, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, name, storage_path, size_bytes, sha256, boot_architecture, compatible, description, uploaded_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&id)
@@ -618,6 +626,8 @@ impl DtbMetadataRepository for SqliteStorage {
             .bind(metadata.storage_path)
             .bind(metadata.size_bytes)
             .bind(metadata.sha256)
+            .bind(metadata.boot_architecture)
+            .bind(metadata.compatible)
             .bind(metadata.description)
             .bind(metadata.uploaded_by)
             .bind(&now)
@@ -814,6 +824,8 @@ fn dtb_metadata_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<DtbMet
         storage_path: row.try_get("storage_path")?,
         size_bytes: row.try_get("size_bytes")?,
         sha256: row.try_get("sha256")?,
+        boot_architecture: row.try_get("boot_architecture")?,
+        compatible: row.try_get("compatible")?,
         description: row.try_get("description")?,
         uploaded_by: row.try_get("uploaded_by")?,
         created_at: parse_time(row.try_get::<String, _>("created_at")?.as_str())?,

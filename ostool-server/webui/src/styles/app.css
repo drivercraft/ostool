@@ -1743,13 +1743,9 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   height: 100%;
   min-height: 0;
 }
-.admin-list-page > .admin-table-panel:only-child,
-.dtb-page > .admin-table-panel {
+.admin-list-page > .admin-table-panel:only-child {
   height: 100%;
   min-height: 0;
-}
-.dtb-page {
-  grid-template-rows: auto minmax(0, 1fr);
 }
 .split-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.4rem; align-items: start; }
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .75rem; margin-bottom: 1.5rem; }
@@ -2254,6 +2250,16 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 .upload-zone:hover { border-color: var(--c-brand); background: var(--c-brand-tint); }
 .upload-zone-icon { font-size: 2rem; color: var(--c-text-ghost); margin-bottom: .5rem; }
 .upload-zone-text { font-size: .88rem; color: var(--c-text-muted); }
+.dtb-name-cell {
+  display: grid;
+  gap: .25rem;
+  min-width: 0;
+}
+.dtb-name-cell span {
+  color: var(--c-text-muted);
+  font-size: .78rem;
+  overflow-wrap: anywhere;
+}
 
 .tag-chip { display: inline-flex; align-items: center; padding: .15rem .55rem; font-size: .74rem; font-weight: 500; color: var(--c-text-soft); background: var(--c-bg-alt); border-radius: var(--radius-sm); }
 
@@ -2897,6 +2903,9 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 }
 .modal-card.modal-card--user-form {
   max-width: min(820px, calc(100vw - 3rem));
+}
+.modal-card.modal-card--dtb-form {
+  max-width: min(760px, calc(100vw - 3rem));
 }
 .modal-header {
   display: flex;

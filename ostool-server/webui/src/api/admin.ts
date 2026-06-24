@@ -20,6 +20,7 @@ import type {
   AdminUsersResponse,
   AdminUserUpdateRequest,
   BoardConfig,
+  DtbMetadataInput,
   DtbFileResponse,
   LeasesResponse,
   NetworkInterfaceSummary,
@@ -29,6 +30,23 @@ import type {
 } from "@/types/api";
 
 import { request } from "./http";
+
+function dtbHeaders(dtbName?: string | null, metadata?: DtbMetadataInput) {
+  const headers = new Headers();
+  if (dtbName) {
+    headers.set("X-Dtb-Name", dtbName);
+  }
+  if (metadata?.boot_architecture) {
+    headers.set("X-Dtb-Architecture", metadata.boot_architecture);
+  }
+  if (metadata?.compatible) {
+    headers.set("X-Dtb-Compatible", metadata.compatible);
+  }
+  if (metadata?.description) {
+    headers.set("X-Dtb-Description", metadata.description);
+  }
+  return headers;
+}
 
 export const adminApi = {
   getOverview() {
@@ -63,23 +81,22 @@ export const adminApi = {
   getDtb(dtbName: string) {
     return request<DtbFileResponse>(`/api/v1/admin/dtbs/${encodeURIComponent(dtbName)}`);
   },
-  createDtb(dtbName: string, file: Blob) {
+  createDtb(dtbName: string, file: Blob, metadata?: DtbMetadataInput) {
     return request<DtbFileResponse>("/api/v1/admin/dtbs", {
       method: "POST",
-      headers: {
-        "X-Dtb-Name": dtbName,
-      },
+      headers: dtbHeaders(dtbName, metadata),
       body: file,
     });
   },
-  updateDtb(currentName: string, nextName?: string | null, file?: Blob | null) {
-    const headers = new Headers();
-    if (nextName) {
-      headers.set("X-Dtb-Name", nextName);
-    }
+  updateDtb(
+    currentName: string,
+    nextName?: string | null,
+    file?: Blob | null,
+    metadata?: DtbMetadataInput,
+  ) {
     return request<DtbFileResponse>(`/api/v1/admin/dtbs/${encodeURIComponent(currentName)}`, {
       method: "PUT",
-      headers,
+      headers: dtbHeaders(nextName, metadata),
       body: file ?? undefined,
     });
   },
