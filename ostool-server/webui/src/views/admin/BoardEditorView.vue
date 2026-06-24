@@ -649,7 +649,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="page-grid">
+  <section class="page-grid admin-editor-page">
     <div class="role-editor-page panel board-editor-page">
       <div class="role-editor-titlebar">
         <div>
@@ -664,10 +664,11 @@ onMounted(() => {
         正在加载开发板配置...
       </div>
       <form v-else class="role-editor-form board-editor-form" @submit.prevent="saveBoard">
-        <p v-if="validationError" class="diagnostic-error">{{ validationError }}</p>
+        <div class="role-editor-scroll">
+          <p v-if="validationError" class="diagnostic-error">{{ validationError }}</p>
 
-        <!-- 基本信息 -->
-        <section class="form-section">
+          <!-- 基本信息 -->
+          <section class="form-section">
           <div class="form-section-header">
             <span class="form-section-icon info">&#9776;</span>
             <h4>基本信息</h4>
@@ -958,12 +959,13 @@ onMounted(() => {
           </label>
         </section>
 
-        <div class="danger-zone" v-if="isEditing">
-          <h4>危险操作</h4>
-          <p>删除会移除对应的单板配置文件，且需要先释放占用该板的 session。</p>
-          <button class="btn btn-danger" type="button" :disabled="deleting" @click="removeBoard">
-            {{ deleting ? "删除中..." : "删除开发板" }}
-          </button>
+          <div class="danger-zone" v-if="isEditing">
+            <h4>危险操作</h4>
+            <p>删除会移除对应的单板配置文件，且需要先释放占用该板的 session。</p>
+            <button class="btn btn-danger" type="button" :disabled="deleting" @click="removeBoard">
+              {{ deleting ? "删除中..." : "删除开发板" }}
+            </button>
+          </div>
         </div>
 
         <div class="role-editor-actions board-editor-actions">

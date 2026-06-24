@@ -8,6 +8,12 @@ const listAdminPermissions = vi.fn();
 const createAdminRole = vi.fn();
 const updateAdminRole = vi.fn();
 const deleteAdminRole = vi.fn();
+const routerPush = vi.fn();
+const routerReplace = vi.fn();
+const routeState = {
+  name: "admin-user-roles" as string,
+  params: {} as Record<string, string>,
+};
 const uiStore = {
   setError: vi.fn(),
   setSuccess: vi.fn(),
@@ -26,6 +32,14 @@ vi.mock("@/api", () => ({
 
 vi.mock("@/stores/ui", () => ({
   useUiStore: () => uiStore,
+}));
+
+vi.mock("vue-router", () => ({
+  useRoute: () => routeState,
+  useRouter: () => ({
+    push: routerPush,
+    replace: routerReplace,
+  }),
 }));
 
 function makePermission(): AdminPermissionResponse {
@@ -57,6 +71,10 @@ describe("RolesView", () => {
     createAdminRole.mockReset();
     updateAdminRole.mockReset();
     deleteAdminRole.mockReset();
+    routerPush.mockReset();
+    routerReplace.mockReset();
+    routeState.name = "admin-user-roles";
+    routeState.params = {};
     uiStore.setError.mockReset();
     uiStore.setSuccess.mockReset();
     uiStore.confirm.mockReset();
@@ -74,5 +92,28 @@ describe("RolesView", () => {
     expect(wrapper.find(".admin-toolbar-left").text()).toContain("新增角色");
     expect(wrapper.find(".admin-toolbar-right .search-field").exists()).toBe(true);
     expect(wrapper.findAll(".admin-toolbar-right .filter-field").length).toBe(1);
+  });
+
+  it("routes to the new role editor when creating a role", async () => {
+    const RolesView = (await import("./RolesView.vue")).default;
+    const wrapper = mount(RolesView);
+    await flushPromises();
+
+    await wrapper.find(".admin-toolbar-left .btn.btn-primary").trigger("click");
+
+    expect(routerPush).toHaveBeenCalledWith({ name: "admin-user-role-new" });
+  });
+
+  it("routes to the role editor when editing a role", async () => {
+    const RolesView = (await import("./RolesView.vue")).default;
+    const wrapper = mount(RolesView);
+    await flushPromises();
+
+    await wrapper.find('button[title="编辑"]').trigger("click");
+
+    expect(routerPush).toHaveBeenCalledWith({
+      name: "admin-user-role-edit",
+      params: { roleId: "r-1" },
+    });
   });
 });

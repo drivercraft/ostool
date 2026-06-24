@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
 import Icon from "@/components/Icon.vue";
 import StatusPill from "@/components/StatusPill.vue";
@@ -15,12 +16,13 @@ interface PermissionGroup {
 }
 
 const ui = useUiStore();
+const route = useRoute();
+const router = useRouter();
 const loading = ref(true);
 const saving = ref(false);
 const roles = ref<AdminRoleResponse[]>([]);
 const permissions = ref<AdminPermissionResponse[]>([]);
 const selectedRoleId = ref<string | null>(null);
-const editing = ref(false);
 const showPermissionInfo = ref(false);
 const openMenuRoleId = ref<string | null>(null);
 const menuPosition = ref({ top: 0, left: 0 });
@@ -36,6 +38,10 @@ const form = ref({
 const selectedRole = computed(
   () => roles.value.find((role) => role.id === selectedRoleId.value) ?? null,
 );
+const editing = computed(() =>
+  route.name === "admin-user-role-new" || route.name === "admin-user-role-edit",
+);
+const editingExistingRole = computed(() => route.name === "admin-user-role-edit");
 
 const filteredRoles = computed(() =>
   roles.value.filter((role) => {
@@ -88,7 +94,6 @@ function rolesForPermission(permissionId: string) {
 
 function resetForm() {
   selectedRoleId.value = null;
-  editing.value = false;
   form.value = {
     name: "",
     display_name: "",
@@ -98,13 +103,16 @@ function resetForm() {
 }
 
 function openCreate() {
-  resetForm();
   closeMenu();
-  editing.value = true;
-  void nextTick(scrollEditorIntoView);
+  void router.push({ name: "admin-user-role-new" });
 }
 
 function editRole(role: AdminRoleResponse) {
+  closeMenu();
+  void router.push({ name: "admin-user-role-edit", params: { roleId: role.id } });
+}
+
+function fillRoleForm(role: AdminRoleResponse) {
   selectedRoleId.value = role.id;
   form.value = {
     name: role.name,
@@ -112,21 +120,15 @@ function editRole(role: AdminRoleResponse) {
     description: role.description,
     permission_ids: role.permissions.map((permission) => permission.id),
   };
-  closeMenu();
-  editing.value = true;
-  void nextTick(scrollEditorIntoView);
 }
 
 function cancelEdit() {
   resetForm();
+  void router.push({ name: "admin-user-roles" });
 }
 
 function togglePermissionInfo() {
   showPermissionInfo.value = !showPermissionInfo.value;
-}
-
-function scrollEditorIntoView() {
-  document.querySelector(".role-editor-page")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function toggleMenu(roleId: string, event: MouseEvent) {
@@ -153,6 +155,29 @@ function onDocumentClick(event: MouseEvent) {
   }
 }
 
+function syncEditorFromRoute() {
+  if (route.name === "admin-user-role-new") {
+    resetForm();
+    closeMenu();
+    return;
+  }
+  if (route.name === "admin-user-role-edit") {
+    const roleId = typeof route.params.roleId === "string" ? route.params.roleId : "";
+    const role = roles.value.find((item) => item.id === roleId);
+    if (role) {
+      fillRoleForm(role);
+      closeMenu();
+      return;
+    }
+    if (!loading.value) {
+      ui.setError("未找到要编辑的角色");
+      void router.replace({ name: "admin-user-roles" });
+    }
+    return;
+  }
+  resetForm();
+}
+
 async function loadRbac() {
   loading.value = true;
   try {
@@ -169,12 +194,17 @@ async function loadRbac() {
     ui.setError((error as Error).message);
   } finally {
     loading.value = false;
+    syncEditorFromRoute();
   }
 }
 
 async function saveRole() {
   if (!form.value.name.trim() || !form.value.display_name.trim()) {
     ui.setError("角色标识和显示名不能为空");
+    return;
+  }
+  if (editingExistingRole.value && !selectedRole.value) {
+    ui.setError("未找到要编辑的角色");
     return;
   }
   saving.value = true;
@@ -196,6 +226,7 @@ async function saveRole() {
       ui.setSuccess("角色已创建");
     }
     resetForm();
+    await router.push({ name: "admin-user-roles" });
     await loadRbac();
   } catch (error) {
     ui.setError((error as Error).message);
@@ -235,10 +266,18 @@ onMounted(() => {
   void loadRbac();
 });
 onUnmounted(() => document.removeEventListener("click", onDocumentClick));
+
+watch(
+  () => [route.name, route.params.roleId],
+  () => syncEditorFromRoute(),
+);
 </script>
 
 <template>
-  <section class="page-grid user-management-page roles-page admin-list-page">
+  <section
+    class="page-grid user-management-page roles-page"
+    :class="editing ? 'admin-editor-page' : 'admin-list-page'"
+  >
     <template v-if="editing">
       <div class="role-editor-page panel">
         <div class="role-editor-titlebar">
@@ -250,62 +289,64 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
         </div>
 
         <form class="role-editor-form" @submit.prevent="saveRole">
-          <div class="role-basic-fields">
-            <label class="field">
-              <span>角色名称</span>
-              <input v-model="form.display_name" placeholder="例如 开发人员" />
-            </label>
-            <label class="field">
-              <span>角色标识</span>
-              <input
-                v-model="form.name"
-                :disabled="Boolean(selectedRole)"
-                placeholder="例如 developer"
-              />
-            </label>
-            <label class="field role-field-full">
-              <span>角色描述（选填）</span>
-              <input v-model="form.description" placeholder="说明该角色的使用范围" />
-            </label>
-          </div>
-
-          <div class="role-permission-section">
-            <div class="role-permission-section-head">
-              <div>
-                <h4>功能模块</h4>
-                <p class="muted">按模块勾选权限，保存后立即影响该角色下的用户访问范围。</p>
-              </div>
-              <span class="muted">已选择 {{ form.permission_ids.length }} / {{ permissions.length }}</span>
+          <div class="role-editor-scroll">
+            <div class="role-basic-fields">
+              <label class="field">
+                <span>角色名称</span>
+                <input v-model="form.display_name" placeholder="例如 开发人员" />
+              </label>
+              <label class="field">
+                <span>角色标识</span>
+                <input
+                  v-model="form.name"
+                  :disabled="Boolean(selectedRole)"
+                  placeholder="例如 developer"
+                />
+              </label>
+              <label class="field role-field-full">
+                <span>角色描述（选填）</span>
+                <input v-model="form.description" placeholder="说明该角色的使用范围" />
+              </label>
             </div>
 
-            <div class="permission-matrix">
-              <section
-                v-for="group in permissionGroups"
-                :key="group.key"
-                class="permission-matrix-row"
-              >
-                <div class="permission-matrix-module">
-                  <strong>{{ group.title }}</strong>
-                  <span>{{ group.description }}</span>
+            <div class="role-permission-section">
+              <div class="role-permission-section-head">
+                <div>
+                  <h4>功能模块</h4>
+                  <p class="muted">按模块勾选权限，保存后立即影响该角色下的用户访问范围。</p>
                 </div>
-                <div class="permission-matrix-options">
-                  <label
-                    v-for="permission in group.permissions"
-                    :key="permission.id"
-                    class="permission-option"
-                  >
-                    <input
-                      v-model="form.permission_ids"
-                      type="checkbox"
-                      :value="permission.id"
-                    />
-                    <span>
-                      <strong>{{ permission.name }}</strong>
-                      <small>{{ permission.description || permission.code }}</small>
-                    </span>
-                  </label>
-                </div>
-              </section>
+                <span class="muted">已选择 {{ form.permission_ids.length }} / {{ permissions.length }}</span>
+              </div>
+
+              <div class="permission-matrix">
+                <section
+                  v-for="group in permissionGroups"
+                  :key="group.key"
+                  class="permission-matrix-row"
+                >
+                  <div class="permission-matrix-module">
+                    <strong>{{ group.title }}</strong>
+                    <span>{{ group.description }}</span>
+                  </div>
+                  <div class="permission-matrix-options">
+                    <label
+                      v-for="permission in group.permissions"
+                      :key="permission.id"
+                      class="permission-option"
+                    >
+                      <input
+                        v-model="form.permission_ids"
+                        type="checkbox"
+                        :value="permission.id"
+                      />
+                      <span>
+                        <strong>{{ permission.name }}</strong>
+                        <small>{{ permission.description || permission.code }}</small>
+                      </span>
+                    </label>
+                  </div>
+                </section>
+              </div>
             </div>
           </div>
 

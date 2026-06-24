@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 
 import Icon from "@/components/Icon.vue";
@@ -117,6 +117,13 @@ function closeMenu() {
   openMenuBoardId.value = null;
 }
 
+function onDocumentClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  if (target && !target.closest(".row-action-menu") && !target.closest(".action-menu")) {
+    closeMenu();
+  }
+}
+
 async function toggleDisabled(board: BoardConfig) {
   if (leasedBoardIds.value.has(board.id)) {
     return;
@@ -178,8 +185,11 @@ async function loadBoards() {
 
 onMounted(() => {
   ui.clearMessages();
+  document.addEventListener("click", onDocumentClick);
   void loadBoards();
 });
+
+onUnmounted(() => document.removeEventListener("click", onDocumentClick));
 </script>
 
 <template>
@@ -247,7 +257,7 @@ onMounted(() => {
           <tr v-for="(board, index) in filteredBoards" :key="board.id">
             <td class="col-index">{{ index + 1 }}</td>
             <td><code>{{ board.id }}</code></td>
-            <td><strong>{{ board.board_type }}</strong></td>
+            <td>{{ board.board_type }}</td>
             <td>
               <div class="tag-list">
                 <span v-for="tag in board.tags" :key="tag" class="tag">{{ tag }}</span>

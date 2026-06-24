@@ -169,6 +169,18 @@ export const router = createRouter({
           meta: { title: "用户管理 / 角色与权限" },
         },
         {
+          path: "users/roles/new",
+          name: "admin-user-role-new",
+          component: RolesView,
+          meta: { title: "用户管理 / 新建角色" },
+        },
+        {
+          path: "users/roles/:roleId",
+          name: "admin-user-role-edit",
+          component: RolesView,
+          meta: { title: "用户管理 / 编辑角色" },
+        },
+        {
           path: "users/permissions",
           redirect: "/admin/users/roles",
         },

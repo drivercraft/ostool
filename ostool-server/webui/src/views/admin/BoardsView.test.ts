@@ -227,4 +227,31 @@ describe("BoardsView", () => {
 
     wrapper.unmount();
   });
+
+  it("closes the floating action menu when clicking outside", async () => {
+    const BoardsView = (await import("./BoardsView.vue")).default;
+    const wrapper = mount(BoardsView, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          RouterLink: {
+            name: "RouterLink",
+            props: ["to"],
+            template: "<a><slot /></a>",
+          },
+        },
+      },
+    });
+    await flushPromises();
+
+    await wrapper.find('button[title="更多"]').trigger("click");
+    await flushPromises();
+    expect(document.body.querySelector(".action-menu.action-menu--floating")).not.toBeNull();
+
+    document.body.click();
+    await flushPromises();
+
+    expect(document.body.querySelector(".action-menu.action-menu--floating")).toBeNull();
+    wrapper.unmount();
+  });
 });

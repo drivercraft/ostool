@@ -79,6 +79,10 @@
   --wide-width: 1680px;
   --topbar-h: 64px;
   --sidebar-w: 256px;
+  --content-pad: clamp(10px, 1.2vw, 16px);
+  --content-gap: var(--content-pad);
+  --control-h: 40px;
+  --control-compact-h: var(--control-h);
   --ease-out: cubic-bezier(.16, 1, .3, 1);
   --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
 
@@ -161,8 +165,8 @@ hr { border: none; border-top: 1px solid var(--c-border); margin: 1.25rem 0; }
   font-weight: 600;
   font-size: .9rem;
   line-height: 1.2;
-  min-height: 38px;
-  padding: .58rem 1rem;
+  min-height: var(--control-h);
+  padding: 0 1rem;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   cursor: pointer;
@@ -223,16 +227,16 @@ hr { border: none; border-top: 1px solid var(--c-border); margin: 1.25rem 0; }
 }
 .btn-success:hover { background: var(--c-success); color: #fff; }
 .btn-sm {
-  min-height: 34px;
-  padding: .42rem .75rem;
-  font-size: .84rem;
+  min-height: var(--control-h);
+  padding: 0 .8rem;
+  font-size: .86rem;
 }
 .btn-icon-only {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: var(--control-compact-h);
+  height: var(--control-compact-h);
   padding: 0;
   border-radius: var(--radius-sm);
   border: 1px solid var(--c-border);
@@ -256,8 +260,8 @@ hr { border: none; border-top: 1px solid var(--c-border); margin: 1.25rem 0; }
   border-radius: var(--radius);
   box-shadow: var(--shadow-xs);
 }
-.card { padding: 1.5rem; }
-.panel { padding: 1.6rem; }
+.card { padding: var(--content-pad); }
+.panel { padding: var(--content-pad); }
 .card--pad-lg { padding: 2rem; }
 .card--flush { padding: 0; }
 .card--hover { transition: transform .2s var(--ease-out), box-shadow .25s ease, border-color .2s ease; }
@@ -333,12 +337,12 @@ textarea {
   width: 100%;
   font: inherit;
   font-size: .93rem;
-  min-height: 40px;
+  min-height: var(--control-h);
   color: var(--c-text);
   background: var(--c-surface);
   border: 1px solid var(--c-border-strong);
   border-radius: var(--radius-sm);
-  padding: .62rem .8rem;
+  padding: 0 .8rem;
   transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
 }
 textarea {
@@ -397,7 +401,7 @@ textarea:disabled {
   pointer-events: none;
 }
 .search-field input {
-  min-height: 40px;
+  min-height: var(--control-h);
   padding-left: 2.35rem;
   border: 1px solid var(--c-border);
   background: var(--c-surface-2);
@@ -436,7 +440,7 @@ textarea:disabled {
 .filter-field select {
   width: auto;
   min-width: 150px;
-  min-height: 40px;
+  min-height: var(--control-h);
   padding-right: 2.1rem;
   border: 1px solid var(--c-border);
   background: var(--c-surface-2);
@@ -1714,14 +1718,28 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   width: 100%;
   padding: 0;
   display: grid;
-  gap: 1.4rem;
+  gap: var(--content-gap);
 }
 .admin-list-page {
   flex: 1 1 auto;
   min-height: 0;
   align-content: stretch;
 }
+.admin-editor-page {
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  align-content: stretch;
+  overflow: hidden;
+}
+.page-body:has(> .admin-editor-page) {
+  overflow: hidden;
+}
 .page-body > .admin-list-page {
+  height: 100%;
+  min-height: 0;
+}
+.page-body > .admin-editor-page {
   height: 100%;
   min-height: 0;
 }
@@ -1772,7 +1790,10 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   width: 100%;
 }
 .page-grid > .panel {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
 }
 .page-grid > .panel > .panel-heading:first-child {
   min-height: 40px;
@@ -1781,8 +1802,8 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
-  padding: 1rem;
+  gap: var(--content-gap);
+  padding: var(--content-pad);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-lg);
   background: var(--c-surface);
@@ -1820,7 +1841,7 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   overflow: hidden;
 }
 .admin-table-panel > .panel-heading {
-  padding: 1rem 1rem 0;
+  padding: var(--content-pad) var(--content-pad) 0;
 }
 .admin-table-panel > .empty-state {
   flex: 1 1 auto;
@@ -1849,9 +1870,9 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 1rem;
+  gap: var(--content-gap);
   min-height: 44px;
-  padding: .65rem 1rem;
+  padding: var(--content-pad);
   border-top: 1px solid var(--c-border-light);
   background: var(--c-surface-2);
   color: var(--c-text-muted);
@@ -2032,7 +2053,7 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   width: 100%;
 }
 .permission-catalog-panel {
-  padding: 1.25rem;
+  padding: var(--content-pad);
 }
 .roles-table {
   min-width: 980px;
@@ -2041,41 +2062,68 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   vertical-align: middle;
 }
 .role-editor-page {
-  display: grid;
-  gap: 1.25rem;
-  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--content-gap);
+  min-height: 0;
+  max-height: 100%;
+  padding: var(--content-pad);
+}
+.admin-editor-page > .panel {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
 }
 .role-editor-titlebar {
+  flex: 0 0 auto;
   display: flex;
   justify-content: space-between;
-  gap: 1rem;
+  gap: var(--content-gap);
   align-items: flex-start;
+  padding: var(--content-pad);
+  border-bottom: 1px solid var(--c-border-light);
 }
 .role-editor-titlebar h3 {
   margin-bottom: .35rem;
   font-size: 1.25rem;
 }
 .role-editor-form {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--content-gap);
+  min-height: 0;
+  overflow: hidden;
+}
+.role-editor-scroll {
+  flex: 1 1 0;
   display: grid;
-  gap: 1.25rem;
+  align-content: start;
+  gap: var(--content-gap);
+  min-height: 0;
+  max-height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--content-pad);
 }
 .role-basic-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
+  gap: var(--content-gap);
 }
 .role-field-full {
   grid-column: 1 / -1;
 }
 .role-permission-section {
   display: grid;
-  gap: 1rem;
+  gap: var(--content-gap);
 }
 .role-permission-section-head {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 1rem;
+  gap: var(--content-gap);
 }
 .role-permission-section-head h4 {
   margin-bottom: .25rem;
@@ -2149,10 +2197,11 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   line-height: 1.45;
 }
 .role-editor-actions {
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   gap: .75rem;
-  padding-top: 1rem;
+  padding: var(--content-pad);
   border-top: 1px solid var(--c-border-light);
 }
 .permission-grid {
@@ -2646,6 +2695,11 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   grid-template-columns: var(--sidebar-w) 1fr;
   min-height: 100vh;
 }
+.app-shell:has(.admin-editor-page) {
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+}
 .sidebar {
   background: #0f1729;
   color: #cbd5e1;
@@ -2726,6 +2780,11 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 .nav-group-bottom-link { width: 100%; }
 
 .app-content { display: flex; flex-direction: column; min-width: 0; min-height: 100vh; }
+.app-content:has(.admin-editor-page) {
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+}
 .topbar {
   height: var(--topbar-h);
   background: rgba(255,255,255,.82);
@@ -2759,10 +2818,10 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   width: 100%;
   max-width: none;
   margin: 0;
-  padding: clamp(12px, 1.6vw, 20px);
+  padding: var(--content-pad);
   display: flex;
   flex-direction: column;
-  gap: 1.4rem;
+  gap: var(--content-gap);
 }
 
 /* admin content helpers */
@@ -3101,7 +3160,7 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
     flex-direction: column;
   }
   .admin-table-panel > .panel-heading {
-    padding: 1rem 1rem 0;
+    padding: var(--content-pad) var(--content-pad) 0;
   }
   .view-toggle {
     width: 100%;
@@ -3127,7 +3186,7 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
     grid-template-columns: 1fr;
   }
   .user-content-shell {
-    padding: 1rem;
+    padding: var(--content-pad);
   }
   .dashboard-welcome {
     flex-direction: column;
