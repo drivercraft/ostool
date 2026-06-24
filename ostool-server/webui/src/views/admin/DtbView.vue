@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 
 import Icon from "@/components/Icon.vue";
 import { api } from "@/api";
+import { VALIDATION_LIMITS } from "@/constants/validation";
 import { useUiStore } from "@/stores/ui";
 import type { DtbFileResponse } from "@/types/api";
 
@@ -119,6 +120,25 @@ function dtbMetadata(architecture: string, compatible: string, description: stri
   };
 }
 
+function validateDtbFields(name: string, architecture: string, compatible: string, description: string) {
+  if (!name.trim()) {
+    return "请填写 DTB 文件名";
+  }
+  if (name.trim().length > VALIDATION_LIMITS.dtbNameMax) {
+    return `DTB 文件名不能超过 ${VALIDATION_LIMITS.dtbNameMax} 个字符`;
+  }
+  if (architecture.trim().length > VALIDATION_LIMITS.bootArchMax) {
+    return `架构描述不能超过 ${VALIDATION_LIMITS.bootArchMax} 个字符`;
+  }
+  if (compatible.trim().length > VALIDATION_LIMITS.compatibleMax) {
+    return `Compatible 不能超过 ${VALIDATION_LIMITS.compatibleMax} 个字符`;
+  }
+  if (description.trim().length > VALIDATION_LIMITS.longDescriptionMax) {
+    return `说明不能超过 ${VALIDATION_LIMITS.longDescriptionMax} 个字符`;
+  }
+  return "";
+}
+
 function resetCreateForm() {
   newDtbName.value = "";
   newDtbArchitecture.value = "";
@@ -162,6 +182,16 @@ async function createDtb() {
   const name = newDtbName.value.trim() || newDtbFile.value.name;
   if (!name) {
     ui.setError("请填写 DTB 文件名");
+    return;
+  }
+  const fieldError = validateDtbFields(
+    name,
+    newDtbArchitecture.value,
+    newDtbCompatible.value,
+    newDtbDescription.value,
+  );
+  if (fieldError) {
+    ui.setError(fieldError);
     return;
   }
 
@@ -262,6 +292,16 @@ async function saveDtb() {
     ui.setError("DTB 文件名不能为空");
     return;
   }
+  const fieldError = validateDtbFields(
+    nextName,
+    editDtbArchitecture.value,
+    editDtbCompatible.value,
+    editDtbDescription.value,
+  );
+  if (fieldError) {
+    ui.setError(fieldError);
+    return;
+  }
   const metadata = dtbMetadata(
     editDtbArchitecture.value,
     editDtbCompatible.value,
@@ -360,7 +400,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
         <div class="admin-toolbar-right">
           <label class="search-field">
             <Icon name="search" :size="16" />
-            <input v-model="search" type="search" placeholder="搜索名称 / 架构 / compatible / 路径" />
+            <input v-model="search" type="search" maxlength="128" placeholder="搜索名称 / 架构 / compatible / 路径" />
           </label>
           <label class="field filter-field">
             <span>大小</span>
@@ -490,19 +530,35 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
         <div class="modal-body modal-body-grid">
           <label class="field is-required">
             <span>文件名</span>
-            <input v-model="newDtbName" placeholder="例如 rk3568-evb.dtb" />
+            <input
+              v-model="newDtbName"
+              :maxlength="VALIDATION_LIMITS.dtbNameMax"
+              placeholder="例如 rk3568-evb.dtb"
+            />
           </label>
           <label class="field is-required">
             <span>架构描述</span>
-            <input v-model="newDtbArchitecture" placeholder="例如 arm64 / riscv64" />
+            <input
+              v-model="newDtbArchitecture"
+              :maxlength="VALIDATION_LIMITS.bootArchMax"
+              placeholder="例如 arm64 / riscv64"
+            />
           </label>
           <label class="field modal-field-full">
             <span>Compatible</span>
-            <input v-model="newDtbCompatible" placeholder="例如 rockchip,rk3568-evb" />
+            <input
+              v-model="newDtbCompatible"
+              :maxlength="VALIDATION_LIMITS.compatibleMax"
+              placeholder="例如 rockchip,rk3568-evb"
+            />
           </label>
           <label class="field modal-field-full">
             <span>说明</span>
-            <textarea v-model="newDtbDescription" placeholder="记录适用开发板、内核版本或维护说明" />
+            <textarea
+              v-model="newDtbDescription"
+              :maxlength="VALIDATION_LIMITS.longDescriptionMax"
+              placeholder="记录适用开发板、内核版本或维护说明"
+            />
           </label>
           <label class="field modal-field-full is-required">
             <span>DTB 文件</span>
@@ -545,19 +601,35 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
         <div class="modal-body modal-body-grid">
           <label class="field">
             <span>文件名</span>
-            <input v-model="editDtbName" placeholder="例如 rk3568-evb.dtb" />
+            <input
+              v-model="editDtbName"
+              :maxlength="VALIDATION_LIMITS.dtbNameMax"
+              placeholder="例如 rk3568-evb.dtb"
+            />
           </label>
           <label class="field">
             <span>架构描述</span>
-            <input v-model="editDtbArchitecture" placeholder="例如 arm64 / riscv64" />
+            <input
+              v-model="editDtbArchitecture"
+              :maxlength="VALIDATION_LIMITS.bootArchMax"
+              placeholder="例如 arm64 / riscv64"
+            />
           </label>
           <label class="field modal-field-full">
             <span>Compatible</span>
-            <input v-model="editDtbCompatible" placeholder="例如 rockchip,rk3568-evb" />
+            <input
+              v-model="editDtbCompatible"
+              :maxlength="VALIDATION_LIMITS.compatibleMax"
+              placeholder="例如 rockchip,rk3568-evb"
+            />
           </label>
           <label class="field modal-field-full">
             <span>说明</span>
-            <textarea v-model="editDtbDescription" placeholder="记录适用开发板、内核版本或维护说明" />
+            <textarea
+              v-model="editDtbDescription"
+              :maxlength="VALIDATION_LIMITS.longDescriptionMax"
+              placeholder="记录适用开发板、内核版本或维护说明"
+            />
           </label>
           <label class="field modal-field-full">
             <span>替换文件</span>

@@ -1,0 +1,32 @@
+export const VALIDATION_LIMITS = {
+  idMax: 64,
+  usernameMin: 3,
+  usernameMax: 64,
+  displayNameMin: 1,
+  displayNameMax: 64,
+  emailMin: 5,
+  emailMax: 254,
+  passwordMin: 8,
+  passwordMax: 128,
+  roleNameMin: 2,
+  roleNameMax: 64,
+  descriptionMax: 255,
+  longDescriptionMax: 500,
+  urlMax: 512,
+  phoneMax: 32,
+  boardTypeMax: 64,
+  tagMax: 32,
+  tagsTextMax: 256,
+  serialKeyMax: 128,
+  commandMax: 255,
+  ipMax: 45,
+  loadAddrMax: 32,
+  dtbNameMax: 128,
+  bootArchMax: 64,
+  compatibleMax: 255,
+  clientNameMax: 128,
+  captchaMax: 8,
+} as const;
+
+export const USERNAME_PATTERN = "[A-Za-z0-9_-]{3,64}";
+export const ROLE_NAME_PATTERN = "[a-z0-9_-]{2,64}";

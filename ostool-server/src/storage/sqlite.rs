@@ -108,14 +108,14 @@ impl SqliteStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY NOT NULL,
-                username TEXT NOT NULL UNIQUE,
-                display_name TEXT NOT NULL,
-                email TEXT NOT NULL,
-                password_hash TEXT NOT NULL,
+                id TEXT PRIMARY KEY NOT NULL CHECK(length(id) BETWEEN 1 AND 64),
+                username TEXT NOT NULL UNIQUE CHECK(length(username) BETWEEN 3 AND 64),
+                display_name TEXT NOT NULL CHECK(length(display_name) BETWEEN 1 AND 64),
+                email TEXT NOT NULL CHECK(length(email) BETWEEN 5 AND 254),
+                password_hash TEXT NOT NULL CHECK(length(password_hash) BETWEEN 1 AND 255),
                 disabled INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                created_at TEXT NOT NULL CHECK(length(created_at) BETWEEN 1 AND 64),
+                updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64)
             )
             "#,
         )
@@ -129,11 +129,11 @@ impl SqliteStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS auth_sessions (
-                id TEXT PRIMARY KEY NOT NULL,
-                user_id TEXT NOT NULL,
-                token_hash TEXT NOT NULL UNIQUE,
-                expires_at TEXT NOT NULL,
-                created_at TEXT NOT NULL,
+                id TEXT PRIMARY KEY NOT NULL CHECK(length(id) BETWEEN 1 AND 64),
+                user_id TEXT NOT NULL CHECK(length(user_id) BETWEEN 1 AND 64),
+                token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash) BETWEEN 1 AND 255),
+                expires_at TEXT NOT NULL CHECK(length(expires_at) BETWEEN 1 AND 64),
+                created_at TEXT NOT NULL CHECK(length(created_at) BETWEEN 1 AND 64),
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
             "#,
@@ -144,18 +144,18 @@ impl SqliteStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS leases (
-                id TEXT PRIMARY KEY NOT NULL,
-                user_id TEXT NOT NULL,
-                session_id TEXT UNIQUE,
-                board_id TEXT NOT NULL,
-                board_type TEXT NOT NULL,
+                id TEXT PRIMARY KEY NOT NULL CHECK(length(id) BETWEEN 1 AND 64),
+                user_id TEXT NOT NULL CHECK(length(user_id) BETWEEN 1 AND 64),
+                session_id TEXT UNIQUE CHECK(session_id IS NULL OR length(session_id) BETWEEN 1 AND 64),
+                board_id TEXT NOT NULL CHECK(length(board_id) BETWEEN 1 AND 64),
+                board_type TEXT NOT NULL CHECK(length(board_type) BETWEEN 1 AND 64),
                 required_tags_json TEXT NOT NULL,
-                state TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                starts_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                released_at TEXT,
-                failure_message TEXT,
+                state TEXT NOT NULL CHECK(length(state) BETWEEN 1 AND 32),
+                created_at TEXT NOT NULL CHECK(length(created_at) BETWEEN 1 AND 64),
+                starts_at TEXT NOT NULL CHECK(length(starts_at) BETWEEN 1 AND 64),
+                expires_at TEXT NOT NULL CHECK(length(expires_at) BETWEEN 1 AND 64),
+                released_at TEXT CHECK(released_at IS NULL OR length(released_at) BETWEEN 1 AND 64),
+                failure_message TEXT CHECK(failure_message IS NULL OR length(failure_message) <= 500),
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
             "#,
@@ -166,16 +166,16 @@ impl SqliteStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS session_records (
-                id TEXT PRIMARY KEY NOT NULL,
-                board_id TEXT NOT NULL,
-                client_name TEXT,
-                source_ip TEXT,
-                state TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                last_heartbeat_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                ended_at TEXT,
-                failure_message TEXT
+                id TEXT PRIMARY KEY NOT NULL CHECK(length(id) BETWEEN 1 AND 64),
+                board_id TEXT NOT NULL CHECK(length(board_id) BETWEEN 1 AND 64),
+                client_name TEXT CHECK(client_name IS NULL OR length(client_name) <= 128),
+                source_ip TEXT CHECK(source_ip IS NULL OR length(source_ip) <= 45),
+                state TEXT NOT NULL CHECK(length(state) BETWEEN 1 AND 32),
+                created_at TEXT NOT NULL CHECK(length(created_at) BETWEEN 1 AND 64),
+                last_heartbeat_at TEXT NOT NULL CHECK(length(last_heartbeat_at) BETWEEN 1 AND 64),
+                expires_at TEXT NOT NULL CHECK(length(expires_at) BETWEEN 1 AND 64),
+                ended_at TEXT CHECK(ended_at IS NULL OR length(ended_at) BETWEEN 1 AND 64),
+                failure_message TEXT CHECK(failure_message IS NULL OR length(failure_message) <= 500)
             )
             "#,
         )
@@ -207,11 +207,11 @@ impl SqliteStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS board_configs (
-                id TEXT PRIMARY KEY NOT NULL,
-                board_type TEXT NOT NULL,
+                id TEXT PRIMARY KEY NOT NULL CHECK(length(id) BETWEEN 1 AND 64),
+                board_type TEXT NOT NULL CHECK(length(board_type) BETWEEN 1 AND 64),
                 config_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                created_at TEXT NOT NULL CHECK(length(created_at) BETWEEN 1 AND 64),
+                updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64)
             )
             "#,
         )
@@ -229,12 +229,12 @@ impl SqliteStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS permissions (
-                id TEXT PRIMARY KEY NOT NULL,
-                code TEXT NOT NULL UNIQUE,
-                name TEXT NOT NULL,
-                description TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                id TEXT PRIMARY KEY NOT NULL CHECK(length(id) BETWEEN 1 AND 64),
+                code TEXT NOT NULL UNIQUE CHECK(length(code) BETWEEN 1 AND 128),
+                name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 64),
+                description TEXT NOT NULL CHECK(length(description) <= 255),
+                created_at TEXT NOT NULL CHECK(length(created_at) BETWEEN 1 AND 64),
+                updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64)
             )
             "#,
         )
@@ -244,13 +244,13 @@ impl SqliteStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS roles (
-                id TEXT PRIMARY KEY NOT NULL,
-                name TEXT NOT NULL UNIQUE,
-                display_name TEXT NOT NULL,
-                description TEXT NOT NULL,
+                id TEXT PRIMARY KEY NOT NULL CHECK(length(id) BETWEEN 1 AND 64),
+                name TEXT NOT NULL UNIQUE CHECK(length(name) BETWEEN 2 AND 64),
+                display_name TEXT NOT NULL CHECK(length(display_name) BETWEEN 1 AND 64),
+                description TEXT NOT NULL CHECK(length(description) <= 255),
                 `system` INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                created_at TEXT NOT NULL CHECK(length(created_at) BETWEEN 1 AND 64),
+                updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64)
             )
             "#,
         )
@@ -260,8 +260,8 @@ impl SqliteStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS role_permissions (
-                role_id TEXT NOT NULL,
-                permission_id TEXT NOT NULL,
+                role_id TEXT NOT NULL CHECK(length(role_id) BETWEEN 1 AND 64),
+                permission_id TEXT NOT NULL CHECK(length(permission_id) BETWEEN 1 AND 64),
                 PRIMARY KEY(role_id, permission_id),
                 FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE,
                 FOREIGN KEY(permission_id) REFERENCES permissions(id) ON DELETE CASCADE
@@ -274,8 +274,8 @@ impl SqliteStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS user_roles (
-                user_id TEXT NOT NULL,
-                role_id TEXT NOT NULL,
+                user_id TEXT NOT NULL CHECK(length(user_id) BETWEEN 1 AND 64),
+                role_id TEXT NOT NULL CHECK(length(role_id) BETWEEN 1 AND 64),
                 PRIMARY KEY(user_id, role_id),
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE
@@ -293,18 +293,18 @@ impl SqliteStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS dtb_files (
-                id TEXT PRIMARY KEY NOT NULL,
-                name TEXT NOT NULL UNIQUE,
-                storage_path TEXT NOT NULL,
+                id TEXT PRIMARY KEY NOT NULL CHECK(length(id) BETWEEN 1 AND 64),
+                name TEXT NOT NULL UNIQUE CHECK(length(name) BETWEEN 1 AND 128),
+                storage_path TEXT NOT NULL CHECK(length(storage_path) BETWEEN 1 AND 255),
                 size_bytes INTEGER NOT NULL,
-                sha256 TEXT NOT NULL,
-                boot_architecture TEXT,
-                compatible TEXT,
-                description TEXT,
+                sha256 TEXT NOT NULL CHECK(length(sha256) = 64),
+                boot_architecture TEXT CHECK(boot_architecture IS NULL OR length(boot_architecture) <= 64),
+                compatible TEXT CHECK(compatible IS NULL OR length(compatible) <= 255),
+                description TEXT CHECK(description IS NULL OR length(description) <= 500),
                 disabled INTEGER NOT NULL DEFAULT 0,
-                uploaded_by TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                uploaded_by TEXT CHECK(uploaded_by IS NULL OR length(uploaded_by) <= 64),
+                created_at TEXT NOT NULL CHECK(length(created_at) BETWEEN 1 AND 64),
+                updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64)
             )
             "#,
         )
@@ -314,18 +314,18 @@ impl SqliteStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS audit_logs (
-                id TEXT PRIMARY KEY NOT NULL,
-                actor_user_id TEXT,
-                actor_username TEXT,
-                action TEXT NOT NULL,
-                target_type TEXT NOT NULL,
-                target_id TEXT,
-                outcome TEXT NOT NULL,
-                ip_address TEXT,
-                user_agent TEXT,
-                request_id TEXT,
+                id TEXT PRIMARY KEY NOT NULL CHECK(length(id) BETWEEN 1 AND 64),
+                actor_user_id TEXT CHECK(actor_user_id IS NULL OR length(actor_user_id) <= 64),
+                actor_username TEXT CHECK(actor_username IS NULL OR length(actor_username) <= 64),
+                action TEXT NOT NULL CHECK(length(action) BETWEEN 1 AND 64),
+                target_type TEXT NOT NULL CHECK(length(target_type) BETWEEN 1 AND 64),
+                target_id TEXT CHECK(target_id IS NULL OR length(target_id) <= 128),
+                outcome TEXT NOT NULL CHECK(length(outcome) BETWEEN 1 AND 32),
+                ip_address TEXT CHECK(ip_address IS NULL OR length(ip_address) <= 45),
+                user_agent TEXT CHECK(user_agent IS NULL OR length(user_agent) <= 512),
+                request_id TEXT CHECK(request_id IS NULL OR length(request_id) <= 128),
                 metadata_json TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL CHECK(length(created_at) BETWEEN 1 AND 64)
             )
             "#,
         )
@@ -345,26 +345,72 @@ impl SqliteStorage {
     }
 
     async fn migrate_standard_fields(&self) -> anyhow::Result<()> {
-        self.add_column_if_missing("users", "nickname", "TEXT")
-            .await?;
-        self.add_column_if_missing("users", "avatar_url", "TEXT")
-            .await?;
-        self.add_column_if_missing("users", "phone", "TEXT").await?;
-        self.add_column_if_missing("users", "department", "TEXT")
-            .await?;
-        self.add_column_if_missing("users", "title", "TEXT").await?;
-        self.add_column_if_missing("users", "last_login_at", "TEXT")
-            .await?;
-        self.add_column_if_missing("auth_sessions", "ip_address", "TEXT")
-            .await?;
-        self.add_column_if_missing("auth_sessions", "user_agent", "TEXT")
-            .await?;
-        self.add_column_if_missing("auth_sessions", "last_seen_at", "TEXT")
-            .await?;
-        self.add_column_if_missing("auth_sessions", "revoked_at", "TEXT")
-            .await?;
-        self.add_column_if_missing("leases", "updated_at", "TEXT")
-            .await?;
+        self.add_column_if_missing(
+            "users",
+            "nickname",
+            "TEXT CHECK(nickname IS NULL OR length(nickname) <= 64)",
+        )
+        .await?;
+        self.add_column_if_missing(
+            "users",
+            "avatar_url",
+            "TEXT CHECK(avatar_url IS NULL OR length(avatar_url) <= 512)",
+        )
+        .await?;
+        self.add_column_if_missing(
+            "users",
+            "phone",
+            "TEXT CHECK(phone IS NULL OR length(phone) <= 32)",
+        )
+        .await?;
+        self.add_column_if_missing(
+            "users",
+            "department",
+            "TEXT CHECK(department IS NULL OR length(department) <= 64)",
+        )
+        .await?;
+        self.add_column_if_missing(
+            "users",
+            "title",
+            "TEXT CHECK(title IS NULL OR length(title) <= 64)",
+        )
+        .await?;
+        self.add_column_if_missing(
+            "users",
+            "last_login_at",
+            "TEXT CHECK(last_login_at IS NULL OR length(last_login_at) BETWEEN 1 AND 64)",
+        )
+        .await?;
+        self.add_column_if_missing(
+            "auth_sessions",
+            "ip_address",
+            "TEXT CHECK(ip_address IS NULL OR length(ip_address) <= 45)",
+        )
+        .await?;
+        self.add_column_if_missing(
+            "auth_sessions",
+            "user_agent",
+            "TEXT CHECK(user_agent IS NULL OR length(user_agent) <= 512)",
+        )
+        .await?;
+        self.add_column_if_missing(
+            "auth_sessions",
+            "last_seen_at",
+            "TEXT CHECK(last_seen_at IS NULL OR length(last_seen_at) BETWEEN 1 AND 64)",
+        )
+        .await?;
+        self.add_column_if_missing(
+            "auth_sessions",
+            "revoked_at",
+            "TEXT CHECK(revoked_at IS NULL OR length(revoked_at) BETWEEN 1 AND 64)",
+        )
+        .await?;
+        self.add_column_if_missing(
+            "leases",
+            "updated_at",
+            "TEXT CHECK(updated_at IS NULL OR length(updated_at) BETWEEN 1 AND 64)",
+        )
+        .await?;
         sqlx::query("UPDATE leases SET updated_at = created_at WHERE updated_at IS NULL")
             .execute(&self.pool)
             .await?;
@@ -375,17 +421,17 @@ impl SqliteStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS site_settings (
-                key TEXT PRIMARY KEY NOT NULL,
+                key TEXT PRIMARY KEY NOT NULL CHECK(length(key) BETWEEN 1 AND 128),
                 value_json TEXT NOT NULL,
-                value_type TEXT NOT NULL,
-                group_name TEXT NOT NULL,
-                name TEXT NOT NULL,
-                description TEXT NOT NULL,
+                value_type TEXT NOT NULL CHECK(length(value_type) BETWEEN 1 AND 64),
+                group_name TEXT NOT NULL CHECK(length(group_name) BETWEEN 1 AND 64),
+                name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 64),
+                description TEXT NOT NULL CHECK(length(description) <= 255),
                 readonly INTEGER NOT NULL DEFAULT 0,
                 sensitive INTEGER NOT NULL DEFAULT 0,
-                updated_by TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_by TEXT CHECK(updated_by IS NULL OR length(updated_by) <= 64),
+                created_at TEXT NOT NULL CHECK(length(created_at) BETWEEN 1 AND 64),
+                updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64)
             )
             "#,
         )

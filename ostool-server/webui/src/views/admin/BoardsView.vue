@@ -233,6 +233,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
             <input
               v-model="tagFilter"
               type="search"
+              maxlength="128"
               placeholder="搜索标签..."
               aria-label="标签筛选"
             />

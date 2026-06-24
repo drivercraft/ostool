@@ -4,6 +4,7 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import Icon from "@/components/Icon.vue";
 import { api } from "@/api";
+import { USERNAME_PATTERN, VALIDATION_LIMITS } from "@/constants/validation";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import type { CaptchaResponse } from "@/types/api";
@@ -112,6 +113,9 @@ onMounted(() => {
             <input
               v-model="username"
               autocomplete="username"
+              :minlength="VALIDATION_LIMITS.usernameMin"
+              :maxlength="VALIDATION_LIMITS.usernameMax"
+              :pattern="USERNAME_PATTERN"
               placeholder="请输入账号用户名"
               :disabled="submitting"
             />
@@ -122,6 +126,8 @@ onMounted(() => {
               v-model="password"
               type="password"
               autocomplete="current-password"
+              :minlength="VALIDATION_LIMITS.passwordMin"
+              :maxlength="VALIDATION_LIMITS.passwordMax"
               placeholder="请输入账号密码"
               :disabled="submitting"
             />
@@ -133,6 +139,7 @@ onMounted(() => {
                 v-model="captchaAnswer"
                 autocomplete="off"
                 inputmode="text"
+                :maxlength="VALIDATION_LIMITS.captchaMax"
                 placeholder="输入右侧验证码"
                 :disabled="submitting || captchaLoading"
               />

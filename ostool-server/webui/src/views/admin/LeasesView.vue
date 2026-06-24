@@ -5,6 +5,7 @@ import { useRouter } from "vue-router";
 import Icon from "@/components/Icon.vue";
 import StatusPill from "@/components/StatusPill.vue";
 import { api } from "@/api";
+import { VALIDATION_LIMITS } from "@/constants/validation";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import type { AdminUserResponse, BoardConfig, LeaseResponse } from "@/types/api";
@@ -275,6 +276,14 @@ async function submitLease() {
     ui.setError("租赁结束时间必须晚于开始时间");
     return;
   }
+  if (form.value.client_name.trim().length > VALIDATION_LIMITS.clientNameMax) {
+    ui.setError(`会话名称不能超过 ${VALIDATION_LIMITS.clientNameMax} 个字符`);
+    return;
+  }
+  if (form.value.failure_message.trim().length > VALIDATION_LIMITS.longDescriptionMax) {
+    ui.setError(`备注 / 失败信息不能超过 ${VALIDATION_LIMITS.longDescriptionMax} 个字符`);
+    return;
+  }
   saving.value = true;
   try {
     if (modalMode.value === "create") {
@@ -378,17 +387,17 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
         <div class="admin-toolbar-right">
           <label class="search-field">
             <Icon name="search" :size="16" />
-            <input v-model="search" type="search" placeholder="搜索租赁 / 用户 / 开发板" />
+            <input v-model="search" type="search" maxlength="128" placeholder="搜索租赁 / 用户 / 开发板" />
           </label>
           <label class="field filter-field">
             <span>状态</span>
             <select v-model="stateFilter">
               <option value="all">全部状态</option>
-              <option value="active">active</option>
-              <option value="releasing">releasing</option>
-              <option value="released">released</option>
-              <option value="expired">expired</option>
-              <option value="failed">failed</option>
+              <option value="active">占用中</option>
+              <option value="releasing">释放中</option>
+              <option value="released">已释放</option>
+              <option value="expired">已过期</option>
+              <option value="failed">失败</option>
             </select>
           </label>
         </div>
@@ -539,7 +548,11 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
             </label>
             <label class="field modal-field-full">
               <span>会话名称（选填）</span>
-              <input v-model="form.client_name" placeholder="例如 手动分配给 Alice" />
+              <input
+                v-model="form.client_name"
+                :maxlength="VALIDATION_LIMITS.clientNameMax"
+                placeholder="例如 手动分配给 Alice"
+              />
             </label>
           </template>
           <template v-else>
@@ -553,7 +566,11 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
             </label>
             <label class="field modal-field-full">
               <span>备注 / 失败信息</span>
-              <input v-model="form.failure_message" placeholder="可选" />
+              <input
+                v-model="form.failure_message"
+                :maxlength="VALIDATION_LIMITS.longDescriptionMax"
+                placeholder="可选"
+              />
             </label>
           </template>
           <label class="field is-required">

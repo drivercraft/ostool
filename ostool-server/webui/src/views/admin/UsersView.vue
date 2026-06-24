@@ -4,6 +4,7 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import Icon from "@/components/Icon.vue";
 import StatusPill from "@/components/StatusPill.vue";
 import { api } from "@/api";
+import { USERNAME_PATTERN, VALIDATION_LIMITS } from "@/constants/validation";
 import { useUiStore } from "@/stores/ui";
 import type {
   AdminRoleResponse,
@@ -169,8 +170,12 @@ async function loadUsers() {
 
 /* ---- 提交 ---- */
 async function submitCreate() {
-  if (!form.value.username.trim() || !form.value.password) {
-    ui.setError("用户名和密码不能为空");
+  if (!form.value.username.trim() || !form.value.display_name.trim() || !form.value.email.trim() || !form.value.password) {
+    ui.setError("请填写用户名、显示名、邮箱和密码");
+    return;
+  }
+  if (form.value.password.length < VALIDATION_LIMITS.passwordMin) {
+    ui.setError(`密码至少需要 ${VALIDATION_LIMITS.passwordMin} 位`);
     return;
   }
   submitting.value = true;
@@ -201,6 +206,10 @@ async function submitEdit() {
   if (!modalUser.value) {
     return;
   }
+  if (!form.value.display_name.trim() || !form.value.email.trim()) {
+    ui.setError("请填写显示名和邮箱");
+    return;
+  }
   submitting.value = true;
   try {
     const userId = modalUser.value.id;
@@ -226,8 +235,8 @@ async function submitResetPassword() {
   if (!modalUser.value) {
     return;
   }
-  if (!form.value.password) {
-    ui.setError("新密码不能为空");
+  if (form.value.password.length < VALIDATION_LIMITS.passwordMin) {
+    ui.setError(`新密码至少需要 ${VALIDATION_LIMITS.passwordMin} 位`);
     return;
   }
   submitting.value = true;
@@ -338,6 +347,7 @@ onMounted(() => {
             <input
               v-model="search"
               type="search"
+              maxlength="128"
               placeholder="按用户名 / 显示名 / 邮箱搜索"
             />
           </label>
@@ -512,15 +522,20 @@ onMounted(() => {
                 <input
                   v-model="form.username"
                   autocomplete="off"
+                  :minlength="VALIDATION_LIMITS.usernameMin"
+                  :maxlength="VALIDATION_LIMITS.usernameMax"
+                  :pattern="USERNAME_PATTERN"
                   placeholder="登录账号，必须唯一"
                 />
               </label>
-              <label class="field">
+              <label class="field is-required">
                 <span>显示名</span>
                 <input
                   v-model="form.display_name"
                   autocomplete="off"
-                  placeholder="页面展示名称，留空默认使用用户名"
+                  :minlength="VALIDATION_LIMITS.displayNameMin"
+                  :maxlength="VALIDATION_LIMITS.displayNameMax"
+                  placeholder="页面展示名称，例如 张三"
                 />
               </label>
               <label class="field is-required">
@@ -529,6 +544,8 @@ onMounted(() => {
                   v-model="form.email"
                   type="email"
                   autocomplete="off"
+                  :minlength="VALIDATION_LIMITS.emailMin"
+                  :maxlength="VALIDATION_LIMITS.emailMax"
                   placeholder="用户联系邮箱，例如 user@example.com"
                 />
               </label>
@@ -538,6 +555,8 @@ onMounted(() => {
                   v-model="form.password"
                   type="password"
                   autocomplete="new-password"
+                  :minlength="VALIDATION_LIMITS.passwordMin"
+                  :maxlength="VALIDATION_LIMITS.passwordMax"
                   placeholder="初始密码，建议至少 8 位"
                 />
               </label>
@@ -548,15 +567,22 @@ onMounted(() => {
                 <span>用户名</span>
                 <input :value="form.username" disabled />
               </label>
-              <label class="field">
+              <label class="field is-required">
                 <span>显示名</span>
-                <input v-model="form.display_name" placeholder="页面展示名称" />
+                <input
+                  v-model="form.display_name"
+                  :minlength="VALIDATION_LIMITS.displayNameMin"
+                  :maxlength="VALIDATION_LIMITS.displayNameMax"
+                  placeholder="页面展示名称"
+                />
               </label>
               <label class="field is-required">
                 <span>邮箱</span>
                 <input
                   v-model="form.email"
                   type="email"
+                  :minlength="VALIDATION_LIMITS.emailMin"
+                  :maxlength="VALIDATION_LIMITS.emailMax"
                   placeholder="用户联系邮箱，例如 user@example.com"
                 />
               </label>
@@ -582,6 +608,8 @@ onMounted(() => {
                   v-model="form.password"
                   type="password"
                   autocomplete="new-password"
+                  :minlength="VALIDATION_LIMITS.passwordMin"
+                  :maxlength="VALIDATION_LIMITS.passwordMax"
                   placeholder="输入新的登录密码"
                 />
               </label>

@@ -152,7 +152,7 @@ onMounted(() => {
         <div class="admin-toolbar-right">
           <label class="search-field">
             <Icon name="search" :size="16" />
-            <input v-model="search" type="search" placeholder="搜索会话 / 用户 / 开发板 / 源 IP" />
+            <input v-model="search" type="search" maxlength="128" placeholder="搜索会话 / 用户 / 开发板 / 源 IP" />
           </label>
           <label class="field filter-field">
             <span>状态</span>

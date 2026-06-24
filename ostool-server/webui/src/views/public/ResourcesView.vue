@@ -113,6 +113,7 @@ onMounted(() => {
           <input
             v-model="search"
             type="search"
+            maxlength="128"
             placeholder="搜索型号或标签，例如 rk3568、lab..."
           />
         </label>

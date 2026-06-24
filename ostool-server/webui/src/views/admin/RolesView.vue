@@ -5,6 +5,7 @@ import { useRoute, useRouter } from "vue-router";
 import Icon from "@/components/Icon.vue";
 import StatusPill from "@/components/StatusPill.vue";
 import { api } from "@/api";
+import { ROLE_NAME_PATTERN, VALIDATION_LIMITS } from "@/constants/validation";
 import { useUiStore } from "@/stores/ui";
 import type { AdminPermissionResponse, AdminRoleResponse } from "@/types/api";
 
@@ -282,6 +283,14 @@ async function saveRole() {
     ui.setError("角色标识和显示名不能为空");
     return;
   }
+  if (form.value.name.trim().length < VALIDATION_LIMITS.roleNameMin) {
+    ui.setError(`角色标识至少需要 ${VALIDATION_LIMITS.roleNameMin} 个字符`);
+    return;
+  }
+  if (form.value.description.trim().length > VALIDATION_LIMITS.descriptionMax) {
+    ui.setError(`角色描述不能超过 ${VALIDATION_LIMITS.descriptionMax} 个字符`);
+    return;
+  }
   if (editingExistingRole.value && !selectedRole.value) {
     ui.setError("未找到要编辑的角色");
     return;
@@ -372,19 +381,31 @@ watch(
             <div class="role-basic-fields">
               <label class="field is-required">
                 <span>角色名称</span>
-                <input v-model="form.display_name" placeholder="例如 开发人员" />
+                <input
+                  v-model="form.display_name"
+                  :minlength="VALIDATION_LIMITS.displayNameMin"
+                  :maxlength="VALIDATION_LIMITS.displayNameMax"
+                  placeholder="例如 开发人员"
+                />
               </label>
               <label class="field is-required">
                 <span>角色标识</span>
                 <input
                   v-model="form.name"
                   :disabled="Boolean(selectedRole)"
+                  :minlength="VALIDATION_LIMITS.roleNameMin"
+                  :maxlength="VALIDATION_LIMITS.roleNameMax"
+                  :pattern="ROLE_NAME_PATTERN"
                   placeholder="仅小写字母、数字、_ 或 -，例如 developer"
                 />
               </label>
               <label class="field role-field-full">
                 <span>角色描述（选填）</span>
-                <input v-model="form.description" placeholder="说明该角色的使用范围" />
+                <input
+                  v-model="form.description"
+                  :maxlength="VALIDATION_LIMITS.descriptionMax"
+                  placeholder="说明该角色的使用范围"
+                />
               </label>
             </div>
 
@@ -466,7 +487,7 @@ watch(
           <div class="admin-toolbar-right">
             <label class="search-field">
               <Icon name="search" :size="16" />
-              <input v-model="search" type="search" placeholder="搜索角色 / 标识 / 描述" />
+              <input v-model="search" type="search" maxlength="128" placeholder="搜索角色 / 标识 / 描述" />
             </label>
             <label class="field filter-field">
               <span>类型</span>

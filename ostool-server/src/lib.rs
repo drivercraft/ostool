@@ -15,6 +15,7 @@ pub mod session;
 pub mod state;
 pub mod storage;
 pub mod tftp;
+pub mod validation;
 pub mod web;
 
 pub use api::router::build_router;

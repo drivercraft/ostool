@@ -104,14 +104,14 @@ impl MysqlStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS users (
-                id VARCHAR(255) PRIMARY KEY NOT NULL,
-                username VARCHAR(255) NOT NULL UNIQUE,
-                display_name VARCHAR(255) NOT NULL,
-                email VARCHAR(255) NOT NULL,
+                id VARCHAR(64) PRIMARY KEY NOT NULL,
+                username VARCHAR(64) NOT NULL UNIQUE,
+                display_name VARCHAR(64) NOT NULL,
+                email VARCHAR(254) NOT NULL,
                 password_hash VARCHAR(255) NOT NULL,
                 disabled TINYINT NOT NULL DEFAULT 0,
-                created_at VARCHAR(255) NOT NULL,
-                updated_at VARCHAR(255) NOT NULL
+                created_at VARCHAR(64) NOT NULL,
+                updated_at VARCHAR(64) NOT NULL
             )
             "#,
         )
@@ -126,11 +126,11 @@ impl MysqlStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS auth_sessions (
-                id VARCHAR(255) PRIMARY KEY NOT NULL,
-                user_id VARCHAR(255) NOT NULL,
+                id VARCHAR(64) PRIMARY KEY NOT NULL,
+                user_id VARCHAR(64) NOT NULL,
                 token_hash VARCHAR(255) NOT NULL UNIQUE,
-                expires_at VARCHAR(255) NOT NULL,
-                created_at VARCHAR(255) NOT NULL,
+                expires_at VARCHAR(64) NOT NULL,
+                created_at VARCHAR(64) NOT NULL,
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
             "#,
@@ -141,18 +141,18 @@ impl MysqlStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS leases (
-                id VARCHAR(255) PRIMARY KEY NOT NULL,
-                user_id VARCHAR(255) NOT NULL,
-                session_id VARCHAR(255) UNIQUE,
-                board_id VARCHAR(255) NOT NULL,
-                board_type VARCHAR(255) NOT NULL,
+                id VARCHAR(64) PRIMARY KEY NOT NULL,
+                user_id VARCHAR(64) NOT NULL,
+                session_id VARCHAR(64) UNIQUE,
+                board_id VARCHAR(64) NOT NULL,
+                board_type VARCHAR(64) NOT NULL,
                 required_tags_json TEXT NOT NULL,
-                state VARCHAR(255) NOT NULL,
-                created_at VARCHAR(255) NOT NULL,
-                starts_at VARCHAR(255) NOT NULL,
-                expires_at VARCHAR(255) NOT NULL,
-                released_at VARCHAR(255),
-                failure_message TEXT,
+                state VARCHAR(32) NOT NULL,
+                created_at VARCHAR(64) NOT NULL,
+                starts_at VARCHAR(64) NOT NULL,
+                expires_at VARCHAR(64) NOT NULL,
+                released_at VARCHAR(64),
+                failure_message VARCHAR(500),
                 INDEX idx_leases_user_id (user_id),
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
@@ -164,16 +164,16 @@ impl MysqlStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS session_records (
-                id VARCHAR(255) PRIMARY KEY NOT NULL,
-                board_id VARCHAR(255) NOT NULL,
-                client_name VARCHAR(255),
-                source_ip VARCHAR(255),
-                state VARCHAR(255) NOT NULL,
-                created_at VARCHAR(255) NOT NULL,
-                last_heartbeat_at VARCHAR(255) NOT NULL,
-                expires_at VARCHAR(255) NOT NULL,
-                ended_at VARCHAR(255),
-                failure_message TEXT,
+                id VARCHAR(64) PRIMARY KEY NOT NULL,
+                board_id VARCHAR(64) NOT NULL,
+                client_name VARCHAR(128),
+                source_ip VARCHAR(45),
+                state VARCHAR(32) NOT NULL,
+                created_at VARCHAR(64) NOT NULL,
+                last_heartbeat_at VARCHAR(64) NOT NULL,
+                expires_at VARCHAR(64) NOT NULL,
+                ended_at VARCHAR(64),
+                failure_message VARCHAR(500),
                 INDEX idx_session_records_board_id (board_id),
                 INDEX idx_session_records_created_at (created_at)
             )
@@ -188,11 +188,11 @@ impl MysqlStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS board_configs (
-                id VARCHAR(255) PRIMARY KEY NOT NULL,
-                board_type VARCHAR(255) NOT NULL,
+                id VARCHAR(64) PRIMARY KEY NOT NULL,
+                board_type VARCHAR(64) NOT NULL,
                 config_json TEXT NOT NULL,
-                created_at VARCHAR(255) NOT NULL,
-                updated_at VARCHAR(255) NOT NULL,
+                created_at VARCHAR(64) NOT NULL,
+                updated_at VARCHAR(64) NOT NULL,
                 INDEX idx_board_configs_board_type (board_type)
             )
             "#,
@@ -206,12 +206,12 @@ impl MysqlStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS permissions (
-                id VARCHAR(255) PRIMARY KEY NOT NULL,
-                code VARCHAR(255) NOT NULL UNIQUE,
-                name VARCHAR(255) NOT NULL,
+                id VARCHAR(64) PRIMARY KEY NOT NULL,
+                code VARCHAR(128) NOT NULL UNIQUE,
+                name VARCHAR(64) NOT NULL,
                 description VARCHAR(255) NOT NULL,
-                created_at VARCHAR(255) NOT NULL,
-                updated_at VARCHAR(255) NOT NULL
+                created_at VARCHAR(64) NOT NULL,
+                updated_at VARCHAR(64) NOT NULL
             )
             "#,
         )
@@ -221,13 +221,13 @@ impl MysqlStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS roles (
-                id VARCHAR(255) PRIMARY KEY NOT NULL,
-                name VARCHAR(255) NOT NULL UNIQUE,
-                display_name VARCHAR(255) NOT NULL,
+                id VARCHAR(64) PRIMARY KEY NOT NULL,
+                name VARCHAR(64) NOT NULL UNIQUE,
+                display_name VARCHAR(64) NOT NULL,
                 description VARCHAR(255) NOT NULL,
                 `system` TINYINT NOT NULL DEFAULT 0,
-                created_at VARCHAR(255) NOT NULL,
-                updated_at VARCHAR(255) NOT NULL
+                created_at VARCHAR(64) NOT NULL,
+                updated_at VARCHAR(64) NOT NULL
             )
             "#,
         )
@@ -237,8 +237,8 @@ impl MysqlStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS role_permissions (
-                role_id VARCHAR(255) NOT NULL,
-                permission_id VARCHAR(255) NOT NULL,
+                role_id VARCHAR(64) NOT NULL,
+                permission_id VARCHAR(64) NOT NULL,
                 PRIMARY KEY(role_id, permission_id),
                 FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE,
                 FOREIGN KEY(permission_id) REFERENCES permissions(id) ON DELETE CASCADE
@@ -251,8 +251,8 @@ impl MysqlStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS user_roles (
-                user_id VARCHAR(255) NOT NULL,
-                role_id VARCHAR(255) NOT NULL,
+                user_id VARCHAR(64) NOT NULL,
+                role_id VARCHAR(64) NOT NULL,
                 PRIMARY KEY(user_id, role_id),
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE
@@ -270,18 +270,18 @@ impl MysqlStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS dtb_files (
-                id VARCHAR(255) PRIMARY KEY NOT NULL,
-                name VARCHAR(255) NOT NULL UNIQUE,
-                storage_path VARCHAR(1024) NOT NULL,
+                id VARCHAR(64) PRIMARY KEY NOT NULL,
+                name VARCHAR(128) NOT NULL UNIQUE,
+                storage_path VARCHAR(255) NOT NULL,
                 size_bytes BIGINT NOT NULL,
-                sha256 VARCHAR(255) NOT NULL,
-                boot_architecture VARCHAR(255),
-                compatible VARCHAR(512),
-                description TEXT,
+                sha256 CHAR(64) NOT NULL,
+                boot_architecture VARCHAR(64),
+                compatible VARCHAR(255),
+                description VARCHAR(500),
                 disabled BOOLEAN NOT NULL DEFAULT FALSE,
-                uploaded_by VARCHAR(255),
-                created_at VARCHAR(255) NOT NULL,
-                updated_at VARCHAR(255) NOT NULL
+                uploaded_by VARCHAR(64),
+                created_at VARCHAR(64) NOT NULL,
+                updated_at VARCHAR(64) NOT NULL
             )
             "#,
         )
@@ -291,18 +291,18 @@ impl MysqlStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS audit_logs (
-                id VARCHAR(255) PRIMARY KEY NOT NULL,
-                actor_user_id VARCHAR(255),
-                actor_username VARCHAR(255),
-                action VARCHAR(255) NOT NULL,
-                target_type VARCHAR(255) NOT NULL,
-                target_id VARCHAR(255),
-                outcome VARCHAR(255) NOT NULL,
-                ip_address VARCHAR(255),
+                id VARCHAR(64) PRIMARY KEY NOT NULL,
+                actor_user_id VARCHAR(64),
+                actor_username VARCHAR(64),
+                action VARCHAR(64) NOT NULL,
+                target_type VARCHAR(64) NOT NULL,
+                target_id VARCHAR(128),
+                outcome VARCHAR(32) NOT NULL,
+                ip_address VARCHAR(45),
                 user_agent VARCHAR(512),
-                request_id VARCHAR(255),
+                request_id VARCHAR(128),
                 metadata_json TEXT NOT NULL,
-                created_at VARCHAR(255) NOT NULL,
+                created_at VARCHAR(64) NOT NULL,
                 INDEX idx_audit_logs_created_at (created_at),
                 INDEX idx_audit_logs_target (target_type, target_id)
             )
@@ -314,27 +314,27 @@ impl MysqlStorage {
     }
 
     async fn migrate_standard_fields(&self) -> anyhow::Result<()> {
-        self.add_column_if_missing("users", "nickname", "VARCHAR(255)")
+        self.add_column_if_missing("users", "nickname", "VARCHAR(64)")
             .await?;
-        self.add_column_if_missing("users", "avatar_url", "VARCHAR(1024)")
+        self.add_column_if_missing("users", "avatar_url", "VARCHAR(512)")
             .await?;
-        self.add_column_if_missing("users", "phone", "VARCHAR(255)")
+        self.add_column_if_missing("users", "phone", "VARCHAR(32)")
             .await?;
-        self.add_column_if_missing("users", "department", "VARCHAR(255)")
+        self.add_column_if_missing("users", "department", "VARCHAR(64)")
             .await?;
-        self.add_column_if_missing("users", "title", "VARCHAR(255)")
+        self.add_column_if_missing("users", "title", "VARCHAR(64)")
             .await?;
-        self.add_column_if_missing("users", "last_login_at", "VARCHAR(255)")
+        self.add_column_if_missing("users", "last_login_at", "VARCHAR(64)")
             .await?;
-        self.add_column_if_missing("auth_sessions", "ip_address", "VARCHAR(255)")
+        self.add_column_if_missing("auth_sessions", "ip_address", "VARCHAR(45)")
             .await?;
         self.add_column_if_missing("auth_sessions", "user_agent", "VARCHAR(512)")
             .await?;
-        self.add_column_if_missing("auth_sessions", "last_seen_at", "VARCHAR(255)")
+        self.add_column_if_missing("auth_sessions", "last_seen_at", "VARCHAR(64)")
             .await?;
-        self.add_column_if_missing("auth_sessions", "revoked_at", "VARCHAR(255)")
+        self.add_column_if_missing("auth_sessions", "revoked_at", "VARCHAR(64)")
             .await?;
-        self.add_column_if_missing("leases", "updated_at", "VARCHAR(255)")
+        self.add_column_if_missing("leases", "updated_at", "VARCHAR(64)")
             .await?;
         sqlx::query("UPDATE leases SET updated_at = created_at WHERE updated_at IS NULL")
             .execute(&self.pool)
@@ -346,17 +346,17 @@ impl MysqlStorage {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS site_settings (
-                `key` VARCHAR(255) PRIMARY KEY NOT NULL,
+                `key` VARCHAR(128) PRIMARY KEY NOT NULL,
                 value_json TEXT NOT NULL,
-                value_type VARCHAR(255) NOT NULL,
-                group_name VARCHAR(255) NOT NULL,
-                name VARCHAR(255) NOT NULL,
-                description VARCHAR(1024) NOT NULL,
+                value_type VARCHAR(64) NOT NULL,
+                group_name VARCHAR(64) NOT NULL,
+                name VARCHAR(64) NOT NULL,
+                description VARCHAR(255) NOT NULL,
                 readonly TINYINT NOT NULL DEFAULT 0,
                 `sensitive` TINYINT NOT NULL DEFAULT 0,
-                updated_by VARCHAR(255),
-                created_at VARCHAR(255) NOT NULL,
-                updated_at VARCHAR(255) NOT NULL
+                updated_by VARCHAR(64),
+                created_at VARCHAR(64) NOT NULL,
+                updated_at VARCHAR(64) NOT NULL
             )
             "#,
         )

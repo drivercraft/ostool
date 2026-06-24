@@ -5,6 +5,7 @@ import { RouterLink } from "vue-router";
 
 import Icon from "@/components/Icon.vue";
 import { api } from "@/api";
+import { USERNAME_PATTERN, VALIDATION_LIMITS } from "@/constants/validation";
 import { useUiStore } from "@/stores/ui";
 import type { CaptchaResponse } from "@/types/api";
 
@@ -110,6 +111,9 @@ onMounted(() => {
             <input
               v-model="username"
               autocomplete="username"
+              :minlength="VALIDATION_LIMITS.usernameMin"
+              :maxlength="VALIDATION_LIMITS.usernameMax"
+              :pattern="USERNAME_PATTERN"
               placeholder="登录用账号，建议小写字母、数字或 -/_"
               :disabled="submitting"
             />
@@ -118,6 +122,8 @@ onMounted(() => {
             <span>姓名 / 显示名</span>
             <input
               v-model="displayName"
+              :minlength="VALIDATION_LIMITS.displayNameMin"
+              :maxlength="VALIDATION_LIMITS.displayNameMax"
               placeholder="用于页面展示，例如：张三"
               :disabled="submitting"
             />
@@ -128,6 +134,8 @@ onMounted(() => {
               v-model="email"
               type="email"
               autocomplete="email"
+              :minlength="VALIDATION_LIMITS.emailMin"
+              :maxlength="VALIDATION_LIMITS.emailMax"
               placeholder="用于联系和账号通知，例如 you@example.com"
               :disabled="submitting"
             />
@@ -138,6 +146,8 @@ onMounted(() => {
               v-model="password"
               type="password"
               autocomplete="new-password"
+              :minlength="VALIDATION_LIMITS.passwordMin"
+              :maxlength="VALIDATION_LIMITS.passwordMax"
               placeholder="必填，建议至少 8 位并包含字母和数字"
               :disabled="submitting"
             />
@@ -148,6 +158,8 @@ onMounted(() => {
               v-model="confirmPassword"
               type="password"
               autocomplete="new-password"
+              :minlength="VALIDATION_LIMITS.passwordMin"
+              :maxlength="VALIDATION_LIMITS.passwordMax"
               placeholder="再次输入相同密码"
               :disabled="submitting"
             />
@@ -160,6 +172,7 @@ onMounted(() => {
                 v-model="captchaAnswer"
                 autocomplete="off"
                 inputmode="text"
+                :maxlength="VALIDATION_LIMITS.captchaMax"
                 placeholder="输入右侧验证码"
                 :disabled="submitting || captchaLoading"
               />

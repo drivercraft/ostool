@@ -81,6 +81,7 @@ use crate::{
         service::build_tftp_manager,
         status::resolve_interface_ipv4,
     },
+    validation,
     web::{
         serve_admin_asset, serve_admin_history, serve_admin_index, serve_asset,
         serve_history_fallback, serve_index,
@@ -544,6 +545,105 @@ fn clean_optional(value: Option<String>) -> Option<String> {
     })
 }
 
+fn validate_len(value: &str, field_name: &str, min: usize, max: usize) -> Result<(), ApiError> {
+    let len = validation::char_len(value);
+    if len < min || len > max {
+        return Err(ApiError::bad_request(format!(
+            "{field_name} length must be between {min} and {max} characters"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_max_len(value: &str, field_name: &str, max: usize) -> Result<(), ApiError> {
+    let len = validation::char_len(value);
+    if len > max {
+        return Err(ApiError::bad_request(format!(
+            "{field_name} length must be at most {max} characters"
+        )));
+    }
+    Ok(())
+}
+
+fn clean_required_len(
+    value: String,
+    field_name: &str,
+    min: usize,
+    max: usize,
+) -> Result<String, ApiError> {
+    let value = value.trim().to_string();
+    validate_len(&value, field_name, min, max)?;
+    Ok(value)
+}
+
+fn clean_optional_len(
+    value: Option<String>,
+    field_name: &str,
+    max: usize,
+) -> Result<Option<String>, ApiError> {
+    let value = clean_optional(value);
+    if let Some(value) = value.as_deref() {
+        validate_max_len(value, field_name, max)?;
+    }
+    Ok(value)
+}
+
+fn validate_username(value: &str) -> Result<(), ApiError> {
+    validate_len(
+        value,
+        "username",
+        validation::USERNAME_MIN_LEN,
+        validation::USERNAME_MAX_LEN,
+    )?;
+    if !validation::valid_username(value) {
+        return Err(ApiError::bad_request(
+            "username must contain only letters, numbers, '_' or '-'",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_email(value: &str) -> Result<(), ApiError> {
+    validate_len(
+        value,
+        "email",
+        validation::EMAIL_MIN_LEN,
+        validation::EMAIL_MAX_LEN,
+    )?;
+    let Some((local, domain)) = value.split_once('@') else {
+        return Err(ApiError::bad_request("email must be a valid email address"));
+    };
+    if local.is_empty() || !domain.contains('.') || domain.ends_with('.') {
+        return Err(ApiError::bad_request("email must be a valid email address"));
+    }
+    Ok(())
+}
+
+fn validate_password(value: &str) -> Result<(), ApiError> {
+    validate_len(
+        value,
+        "password",
+        validation::PASSWORD_MIN_LEN,
+        validation::PASSWORD_MAX_LEN,
+    )
+}
+
+fn request_profile_checked(
+    nickname: Option<String>,
+    avatar_url: Option<String>,
+    phone: Option<String>,
+    department: Option<String>,
+    title: Option<String>,
+) -> Result<UserProfile, ApiError> {
+    Ok(UserProfile {
+        nickname: clean_optional_len(nickname, "nickname", validation::DISPLAY_NAME_MAX_LEN)?,
+        avatar_url: clean_optional_len(avatar_url, "avatar_url", validation::URL_MAX_LEN)?,
+        phone: clean_optional_len(phone, "phone", validation::PHONE_MAX_LEN)?,
+        department: clean_optional_len(department, "department", validation::DISPLAY_NAME_MAX_LEN)?,
+        title: clean_optional_len(title, "title", validation::DISPLAY_NAME_MAX_LEN)?,
+    })
+}
+
 #[derive(Clone, Default)]
 struct DtbMetadataInput {
     boot_architecture: Option<String>,
@@ -558,22 +658,6 @@ impl DtbMetadataInput {
             || self.compatible.is_some()
             || self.description.is_some()
             || self.disabled.is_some()
-    }
-}
-
-fn request_profile(
-    nickname: Option<String>,
-    avatar_url: Option<String>,
-    phone: Option<String>,
-    department: Option<String>,
-    title: Option<String>,
-) -> UserProfile {
-    UserProfile {
-        nickname: clean_optional(nickname),
-        avatar_url: clean_optional(avatar_url),
-        phone: clean_optional(phone),
-        department: clean_optional(department),
-        title: clean_optional(title),
     }
 }
 
@@ -757,8 +841,14 @@ async fn create_lease(
     axum::Json(request): axum::Json<CreateLeaseRequest>,
 ) -> Result<(StatusCode, axum::Json<LeaseResponse>), ApiError> {
     let user = current_user_from_headers(&state, &headers).await?;
-    if request.board_type.trim().is_empty() {
-        return Err(ApiError::bad_request("board_type must not be empty"));
+    validate_len(
+        request.board_type.trim(),
+        "board_type",
+        1,
+        validation::BOARD_TYPE_MAX_LEN,
+    )?;
+    for tag in &request.required_tags {
+        validate_max_len(tag.trim(), "required_tags", validation::TAG_MAX_LEN)?;
     }
     let lease = create_user_lease(
         &state,
@@ -841,23 +931,47 @@ async fn create_admin_user(
     State(state): State<AppState>,
     axum::Json(request): axum::Json<AdminUserCreateRequest>,
 ) -> Result<(StatusCode, axum::Json<AdminUserResponse>), ApiError> {
-    if request.username.trim().is_empty() || request.password.is_empty() {
-        return Err(ApiError::bad_request("username and password are required"));
-    }
+    let username = clean_required_len(
+        request.username,
+        "username",
+        validation::USERNAME_MIN_LEN,
+        validation::USERNAME_MAX_LEN,
+    )?;
+    validate_username(&username)?;
+    let display_name = clean_optional_len(
+        Some(request.display_name),
+        "display_name",
+        validation::DISPLAY_NAME_MAX_LEN,
+    )?
+    .unwrap_or_else(|| username.clone());
+    validate_len(
+        &display_name,
+        "display_name",
+        validation::DISPLAY_NAME_MIN_LEN,
+        validation::DISPLAY_NAME_MAX_LEN,
+    )?;
+    let email = clean_required_len(
+        request.email,
+        "email",
+        validation::EMAIL_MIN_LEN,
+        validation::EMAIL_MAX_LEN,
+    )?;
+    validate_email(&email)?;
+    validate_password(&request.password)?;
     let user = state
         .auth
         .create_user(
-            request.username.trim().to_string(),
-            request.display_name.trim().to_string(),
-            request.email.trim().to_string(),
+            username,
+            display_name,
+            email,
             request.password,
-            request_profile(
+            request_profile_checked(
                 request.nickname,
                 request.avatar_url,
                 request.phone,
                 request.department,
                 request.title,
-            ),
+            )?,
             role_names_for_ids(&state, request.role_ids).await?,
         )
         .await
@@ -882,19 +996,32 @@ async fn update_admin_user(
     Path(user_id): Path<String>,
     axum::Json(request): axum::Json<AdminUserUpdateRequest>,
 ) -> Result<axum::Json<AdminUserResponse>, ApiError> {
+    let display_name = clean_required_len(
+        request.display_name,
+        "display_name",
+        validation::DISPLAY_NAME_MIN_LEN,
+        validation::DISPLAY_NAME_MAX_LEN,
+    )?;
+    let email = clean_required_len(
+        request.email,
+        "email",
+        validation::EMAIL_MIN_LEN,
+        validation::EMAIL_MAX_LEN,
+    )?;
+    validate_email(&email)?;
     let user = state
         .storage
         .update_user(
             &user_id,
-            request.display_name,
-            request.email,
-            request_profile(
+            display_name,
+            email,
+            request_profile_checked(
                 request.nickname,
                 request.avatar_url,
                 request.phone,
                 request.department,
                 request.title,
-            ),
+            )?,
             request.disabled,
         )
         .await?
@@ -907,9 +1034,7 @@ async fn reset_admin_user_password(
     Path(user_id): Path<String>,
     axum::Json(request): axum::Json<AdminPasswordResetRequest>,
 ) -> Result<StatusCode, ApiError> {
-    if request.password.is_empty() {
-        return Err(ApiError::bad_request("password must not be empty"));
-    }
+    validate_password(&request.password)?;
     let password_hash = hash_password(&request.password).map_err(ApiError::from)?;
     state
         .storage
@@ -967,24 +1092,35 @@ async fn create_admin_role(
     State(state): State<AppState>,
     axum::Json(request): axum::Json<AdminRoleCreateRequest>,
 ) -> Result<(StatusCode, axum::Json<AdminRoleResponse>), ApiError> {
-    let name = request.name.trim();
-    if name.is_empty() {
-        return Err(ApiError::bad_request("role name must not be empty"));
-    }
-    if !name
-        .chars()
-        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-')
-    {
+    let name = clean_required_len(
+        request.name,
+        "role name",
+        validation::ROLE_NAME_MIN_LEN,
+        validation::ROLE_NAME_MAX_LEN,
+    )?;
+    if !validation::valid_role_name(&name) {
         return Err(ApiError::bad_request(
             "role name must contain only lowercase letters, numbers, '_' or '-'",
         ));
     }
+    let display_name = clean_required_len(
+        request.display_name,
+        "role display_name",
+        validation::DISPLAY_NAME_MIN_LEN,
+        validation::DISPLAY_NAME_MAX_LEN,
+    )?;
+    let description = clean_optional_len(
+        Some(request.description),
+        "role description",
+        validation::DESCRIPTION_MAX_LEN,
+    )?
+    .unwrap_or_default();
     let role = state
         .storage
         .create_role(NewRole {
-            name: name.to_string(),
-            display_name: request.display_name.trim().to_string(),
-            description: request.description.trim().to_string(),
+            name,
+            display_name,
+            description,
             permission_ids: request.permission_ids,
         })
         .await
@@ -1012,14 +1148,21 @@ async fn update_admin_role(
     Path(role_id): Path<String>,
     axum::Json(request): axum::Json<AdminRoleUpdateRequest>,
 ) -> Result<axum::Json<AdminRoleResponse>, ApiError> {
+    let display_name = clean_required_len(
+        request.display_name,
+        "role display_name",
+        validation::DISPLAY_NAME_MIN_LEN,
+        validation::DISPLAY_NAME_MAX_LEN,
+    )?;
+    let description = clean_optional_len(
+        Some(request.description),
+        "role description",
+        validation::DESCRIPTION_MAX_LEN,
+    )?
+    .unwrap_or_default();
     let role = state
         .storage
-        .update_role(
-            &role_id,
-            request.display_name.trim().to_string(),
-            request.description.trim().to_string(),
-            request.permission_ids,
-        )
+        .update_role(&role_id, display_name, description, request.permission_ids)
         .await?
         .ok_or_else(|| ApiError::not_found("role not found"))?;
     Ok(axum::Json(admin_role_response(&state, role).await?))
@@ -1081,24 +1224,29 @@ async fn create_admin_lease(
     State(state): State<AppState>,
     axum::Json(request): axum::Json<AdminLeaseCreateRequest>,
 ) -> Result<(StatusCode, axum::Json<LeaseResponse>), ApiError> {
+    let user_id = clean_required_len(request.user_id, "user_id", 1, validation::ID_MAX_LEN)?;
+    let board_id = clean_required_len(request.board_id, "board_id", 1, validation::ID_MAX_LEN)?;
+    if let Some(client_name) = request.client_name.as_deref() {
+        validate_max_len(
+            client_name.trim(),
+            "client_name",
+            validation::CLIENT_NAME_MAX_LEN,
+        )?;
+    }
     let user = state
         .storage
-        .find_user_by_id(request.user_id.trim())
+        .find_user_by_id(&user_id)
         .await?
         .ok_or_else(|| ApiError::not_found("user not found"))?;
     if user.disabled {
         return Err(ApiError::conflict("user is disabled"));
     }
     validate_lease_window(request.starts_at, request.expires_at)?;
-    let board_id = request.board_id.trim();
-    if board_id.is_empty() {
-        return Err(ApiError::bad_request("board_id must not be empty"));
-    }
     let board = state
         .boards
         .read()
         .await
-        .get(board_id)
+        .get(&board_id)
         .cloned()
         .ok_or_else(|| ApiError::not_found(format!("board `{board_id}` not found")))?;
     if board.disabled {
@@ -1108,7 +1256,7 @@ async fn create_admin_lease(
     }
     ensure_lease_window_available(
         &state,
-        board_id,
+        &board_id,
         request.starts_at,
         request.expires_at,
         None,
@@ -1147,6 +1295,13 @@ async fn update_admin_lease(
     Path(lease_id): Path<String>,
     axum::Json(request): axum::Json<AdminLeaseUpdateRequest>,
 ) -> Result<axum::Json<LeaseResponse>, ApiError> {
+    if let Some(failure_message) = request.failure_message.as_deref() {
+        validate_max_len(
+            failure_message.trim(),
+            "failure_message",
+            validation::LONG_DESCRIPTION_MAX_LEN,
+        )?;
+    }
     let existing = state
         .storage
         .find_lease(&lease_id)
@@ -1614,8 +1769,20 @@ fn normalize_board_upsert_request(
 ) -> Result<AdminBoardUpsertRequest, ApiError> {
     normalize_optional_string(&mut request.id);
     normalize_required_string(&mut request.board_type, "board_type")?;
+    validate_max_len(
+        &request.board_type,
+        "board_type",
+        validation::BOARD_TYPE_MAX_LEN,
+    )?;
     normalize_optional_string(&mut request.notes);
+    if let Some(id) = request.id.as_deref() {
+        validate_max_len(id, "board id", validation::ID_MAX_LEN)?;
+    }
+    if let Some(notes) = request.notes.as_deref() {
+        validate_max_len(notes, "notes", validation::LONG_DESCRIPTION_MAX_LEN)?;
+    }
     normalize_tags(&mut request.tags);
+    validate_tags(&request.tags)?;
     normalize_serial_config(request.serial.as_mut())?;
     normalize_power_management_config(&mut request.power_management)?;
     normalize_boot_config(&mut request.boot)?;
@@ -1669,6 +1836,24 @@ fn normalize_tags(tags: &mut Vec<String>) {
         .collect();
 }
 
+fn validate_tags(tags: &[String]) -> Result<(), ApiError> {
+    let joined_len = tags
+        .iter()
+        .map(|tag| validation::char_len(tag))
+        .sum::<usize>()
+        + tags.len().saturating_sub(1);
+    if joined_len > validation::TAGS_TEXT_MAX_LEN {
+        return Err(ApiError::bad_request(format!(
+            "tags length must be at most {} characters",
+            validation::TAGS_TEXT_MAX_LEN
+        )));
+    }
+    for tag in tags {
+        validate_max_len(tag, "tag", validation::TAG_MAX_LEN)?;
+    }
+    Ok(())
+}
+
 fn normalize_serial_config(
     serial: Option<&mut crate::config::SerialConfig>,
 ) -> Result<(), ApiError> {
@@ -1677,6 +1862,11 @@ fn normalize_serial_config(
     };
 
     normalize_serial_key_value(&mut serial.key, "serial.key.value")?;
+    validate_max_len(
+        &serial.key.value,
+        "serial.key.value",
+        validation::SERIAL_KEY_MAX_LEN,
+    )?;
     if serial.baud_rate == 0 {
         return Err(ApiError::bad_request(
             "serial.baud_rate must be > 0 when serial is configured",
@@ -1708,9 +1898,24 @@ fn normalize_power_management_config(
         PowerManagementConfig::Custom(custom) => {
             normalize_required_string(&mut custom.power_on_cmd, "power_management.power_on_cmd")?;
             normalize_required_string(&mut custom.power_off_cmd, "power_management.power_off_cmd")?;
+            validate_max_len(
+                &custom.power_on_cmd,
+                "power_management.power_on_cmd",
+                validation::COMMAND_MAX_LEN,
+            )?;
+            validate_max_len(
+                &custom.power_off_cmd,
+                "power_management.power_off_cmd",
+                validation::COMMAND_MAX_LEN,
+            )?;
         }
         PowerManagementConfig::ZhongshengRelay(relay) => {
             normalize_serial_key_value(&mut relay.key, "power_management.key.value")?;
+            validate_max_len(
+                &relay.key.value,
+                "power_management.key.value",
+                validation::SERIAL_KEY_MAX_LEN,
+            )?;
         }
     }
 
@@ -1728,6 +1933,50 @@ fn normalize_boot_config(boot: &mut BootConfig) -> Result<(), ApiError> {
             normalize_optional_string(&mut profile.server_ip);
             normalize_optional_string(&mut profile.netmask);
             normalize_optional_string(&mut profile.gatewayip);
+            if let Some(dtb_name) = profile.dtb_name.as_deref() {
+                validate_max_len(dtb_name, "boot.dtb_name", validation::DTB_NAME_MAX_LEN)?;
+            }
+            for (field, value, max) in [
+                (
+                    "boot.kernel_load_addr",
+                    profile.kernel_load_addr.as_deref(),
+                    validation::LOAD_ADDR_MAX_LEN,
+                ),
+                (
+                    "boot.fit_load_addr",
+                    profile.fit_load_addr.as_deref(),
+                    validation::LOAD_ADDR_MAX_LEN,
+                ),
+                (
+                    "boot.bootm_addr",
+                    profile.bootm_addr.as_deref(),
+                    validation::LOAD_ADDR_MAX_LEN,
+                ),
+                (
+                    "boot.board_ip",
+                    profile.board_ip.as_deref(),
+                    validation::IP_MAX_LEN,
+                ),
+                (
+                    "boot.server_ip",
+                    profile.server_ip.as_deref(),
+                    validation::IP_MAX_LEN,
+                ),
+                (
+                    "boot.netmask",
+                    profile.netmask.as_deref(),
+                    validation::IP_MAX_LEN,
+                ),
+                (
+                    "boot.gatewayip",
+                    profile.gatewayip.as_deref(),
+                    validation::IP_MAX_LEN,
+                ),
+            ] {
+                if let Some(value) = value {
+                    validate_max_len(value, field, max)?;
+                }
+            }
             if !profile.use_tftp {
                 profile.network_mode = UbootNetworkMode::Dhcp;
             }
@@ -1743,6 +1992,9 @@ fn normalize_boot_config(boot: &mut BootConfig) -> Result<(), ApiError> {
         }
         BootConfig::Pxe(profile) => {
             normalize_optional_string(&mut profile.notes);
+            if let Some(notes) = profile.notes.as_deref() {
+                validate_max_len(notes, "boot.notes", validation::LONG_DESCRIPTION_MAX_LEN)?;
+            }
         }
         BootConfig::UefiHttp(profile) => {
             profile.mac = None;
@@ -1792,7 +2044,10 @@ async fn update_dtb(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| {
-            normalize_dtb_name(value).map_err(|err| ApiError::bad_request(err.to_string()))
+            let value =
+                normalize_dtb_name(value).map_err(|err| ApiError::bad_request(err.to_string()))?;
+            validate_max_len(&value, "X-Dtb-Name", validation::DTB_NAME_MAX_LEN)?;
+            Ok::<String, ApiError>(value)
         })
         .transpose()?;
     let mut effective_name = current_name.clone();
@@ -2157,8 +2412,21 @@ async fn create_session(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     axum::Json(request): axum::Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, axum::Json<SessionCreatedResponse>), ApiError> {
-    if request.board_type.trim().is_empty() {
-        return Err(ApiError::bad_request("board_type must not be empty"));
+    validate_len(
+        request.board_type.trim(),
+        "board_type",
+        1,
+        validation::BOARD_TYPE_MAX_LEN,
+    )?;
+    for tag in &request.required_tags {
+        validate_max_len(tag.trim(), "required_tags", validation::TAG_MAX_LEN)?;
+    }
+    if let Some(client_name) = request.client_name.as_deref() {
+        validate_max_len(
+            client_name.trim(),
+            "client_name",
+            validation::CLIENT_NAME_MAX_LEN,
+        )?;
     }
 
     let session = state
@@ -2672,6 +2940,18 @@ fn optional_clean_header(
     Ok(clean_optional(optional_header(headers, name)?))
 }
 
+fn optional_clean_header_len(
+    headers: &HeaderMap,
+    name: &'static str,
+    max: usize,
+) -> Result<Option<String>, ApiError> {
+    let value = optional_clean_header(headers, name)?;
+    if let Some(value) = value.as_deref() {
+        validate_max_len(value, name, max)?;
+    }
+    Ok(value)
+}
+
 fn optional_bool_header(headers: &HeaderMap, name: &'static str) -> Result<Option<bool>, ApiError> {
     optional_header(headers, name)?
         .map(|value| match value.trim().to_ascii_lowercase().as_str() {
@@ -2684,9 +2964,21 @@ fn optional_bool_header(headers: &HeaderMap, name: &'static str) -> Result<Optio
 
 fn dtb_metadata_headers(headers: &HeaderMap) -> Result<DtbMetadataInput, ApiError> {
     Ok(DtbMetadataInput {
-        boot_architecture: optional_clean_header(headers, "X-Dtb-Architecture")?,
-        compatible: optional_clean_header(headers, "X-Dtb-Compatible")?,
-        description: optional_clean_header(headers, "X-Dtb-Description")?,
+        boot_architecture: optional_clean_header_len(
+            headers,
+            "X-Dtb-Architecture",
+            validation::BOOT_ARCH_MAX_LEN,
+        )?,
+        compatible: optional_clean_header_len(
+            headers,
+            "X-Dtb-Compatible",
+            validation::COMPATIBLE_MAX_LEN,
+        )?,
+        description: optional_clean_header_len(
+            headers,
+            "X-Dtb-Description",
+            validation::LONG_DESCRIPTION_MAX_LEN,
+        )?,
         disabled: optional_bool_header(headers, "X-Dtb-Disabled")?,
     })
 }
@@ -3323,7 +3615,9 @@ fn dtb_name_header(headers: &HeaderMap, name: &str) -> Result<String, ApiError> 
         .get(name)
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| ApiError::bad_request(format!("missing {name} header")))?;
-    normalize_dtb_name(value).map_err(|err| ApiError::bad_request(err.to_string()))
+    let value = normalize_dtb_name(value).map_err(|err| ApiError::bad_request(err.to_string()))?;
+    validate_max_len(&value, name, validation::DTB_NAME_MAX_LEN)?;
+    Ok(value)
 }
 
 fn board_preset_dtb_name(board: &BoardConfig) -> Option<&str> {

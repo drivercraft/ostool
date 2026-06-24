@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import { api } from "@/api";
+import { VALIDATION_LIMITS } from "@/constants/validation";
 import { useUiStore } from "@/stores/ui";
 import type {
   AdminBoardUpsertRequest,
@@ -250,6 +251,24 @@ function validateForm(): string {
   if (!form.value.board_type.trim()) {
     errors.push("board_type 不能为空");
   }
+  if (form.value.board_type.trim().length > VALIDATION_LIMITS.boardTypeMax) {
+    errors.push(`板型不能超过 ${VALIDATION_LIMITS.boardTypeMax} 个字符`);
+  }
+  if (form.value.id.trim().length > VALIDATION_LIMITS.idMax) {
+    errors.push(`板子 ID 不能超过 ${VALIDATION_LIMITS.idMax} 个字符`);
+  }
+  if (form.value.tags_text.trim().length > VALIDATION_LIMITS.tagsTextMax) {
+    errors.push(`标签总长度不能超过 ${VALIDATION_LIMITS.tagsTextMax} 个字符`);
+  }
+  for (const tag of splitTags(form.value.tags_text)) {
+    if (tag.length > VALIDATION_LIMITS.tagMax) {
+      errors.push(`单个标签不能超过 ${VALIDATION_LIMITS.tagMax} 个字符`);
+      break;
+    }
+  }
+  if (form.value.notes.trim().length > VALIDATION_LIMITS.longDescriptionMax) {
+    errors.push(`备注不能超过 ${VALIDATION_LIMITS.longDescriptionMax} 个字符`);
+  }
   if (form.value.id.includes("/") || form.value.id.includes("\\")) {
     errors.push("板子 ID 不能包含路径分隔符");
   }
@@ -266,6 +285,12 @@ function validateForm(): string {
     if (!form.value.power_off_cmd.trim()) {
       errors.push("Custom 电源管理必须填写关机命令");
     }
+    if (form.value.power_on_cmd.trim().length > VALIDATION_LIMITS.commandMax) {
+      errors.push(`开机命令不能超过 ${VALIDATION_LIMITS.commandMax} 个字符`);
+    }
+    if (form.value.power_off_cmd.trim().length > VALIDATION_LIMITS.commandMax) {
+      errors.push(`关机命令不能超过 ${VALIDATION_LIMITS.commandMax} 个字符`);
+    }
   }
   if (form.value.power_management_kind === "zhongsheng_relay" && !form.value.relay_serial_key_value.trim()) {
     errors.push("中盛继电模块必须选择串口设备");
@@ -273,6 +298,21 @@ function validateForm(): string {
   if (form.value.boot_kind === "uboot" && form.value.use_tftp && form.value.network_mode === "static_ip") {
     if (!form.value.board_ip.trim()) {
       errors.push("静态 IP 模式必须填写开发板 IP");
+    }
+  }
+  for (const [label, value, max] of [
+    ["开发板 IP", form.value.board_ip, VALIDATION_LIMITS.ipMax],
+    ["serverip", form.value.server_ip, VALIDATION_LIMITS.ipMax],
+    ["netmask", form.value.netmask, VALIDATION_LIMITS.ipMax],
+    ["gatewayip", form.value.gatewayip, VALIDATION_LIMITS.ipMax],
+    ["kernel load addr", form.value.kernel_load_addr, VALIDATION_LIMITS.loadAddrMax],
+    ["FIT load addr", form.value.fit_load_addr, VALIDATION_LIMITS.loadAddrMax],
+    ["bootm addr", form.value.bootm_addr, VALIDATION_LIMITS.loadAddrMax],
+    ["PXE 备注", form.value.pxe_notes, VALIDATION_LIMITS.longDescriptionMax],
+    ["启动架构", form.value.boot_arch, VALIDATION_LIMITS.bootArchMax],
+  ] as const) {
+    if (value.trim().length > max) {
+      errors.push(`${label} 不能超过 ${max} 个字符`);
     }
   }
   return errors.join("\n");
@@ -578,6 +618,10 @@ async function uploadDtbAndSelect() {
     ui.setError("请填写 DTB 文件名");
     return;
   }
+  if (dtbName.length > VALIDATION_LIMITS.dtbNameMax) {
+    ui.setError(`DTB 文件名不能超过 ${VALIDATION_LIMITS.dtbNameMax} 个字符`);
+    return;
+  }
 
   uploadingDtb.value = true;
   try {
@@ -676,11 +720,19 @@ onMounted(() => {
           <div class="form-grid two-columns">
             <label class="field is-required">
               <span>板型</span>
-              <input v-model="form.board_type" placeholder="例如 rk3568" />
+              <input
+                v-model="form.board_type"
+                :maxlength="VALIDATION_LIMITS.boardTypeMax"
+                placeholder="例如 rk3568"
+              />
             </label>
             <label class="field">
               <span>板子 ID</span>
-              <input v-model="form.id" placeholder="留空则自动分配 {board type}-{num}" />
+              <input
+                v-model="form.id"
+                :maxlength="VALIDATION_LIMITS.idMax"
+                placeholder="留空则自动分配 {board type}-{num}"
+              />
               <small class="field-hint">
                 编辑已有开发板时留空会保留当前 ID。
               </small>
@@ -690,7 +742,11 @@ onMounted(() => {
           <div class="form-grid two-columns" style="margin-top: 16px">
             <label class="field">
               <span>标签</span>
-              <input v-model="form.tags_text" placeholder="lab, usb" />
+              <input
+                v-model="form.tags_text"
+                :maxlength="VALIDATION_LIMITS.tagsTextMax"
+                placeholder="lab, usb"
+              />
             </label>
             <label class="toggle-field">
               <span class="toggle-switch">
@@ -704,7 +760,7 @@ onMounted(() => {
 
           <label class="field" style="margin-top: 16px">
             <span>备注</span>
-            <textarea v-model="form.notes" rows="4" />
+            <textarea v-model="form.notes" rows="4" :maxlength="VALIDATION_LIMITS.longDescriptionMax" />
           </label>
         </section>
 
@@ -767,7 +823,7 @@ onMounted(() => {
             </label>
             <label class="field is-required">
               <span>波特率</span>
-              <input v-model.number="form.serial_baud_rate" type="number" min="1" />
+              <input v-model.number="form.serial_baud_rate" type="number" min="1" max="4000000" />
             </label>
           </div>
         </section>
@@ -789,11 +845,11 @@ onMounted(() => {
           <div v-if="form.power_management_kind === 'custom'" class="form-grid two-columns" style="margin-top: 16px">
             <label class="field">
               <span>开机命令</span>
-              <input v-model="form.power_on_cmd" />
+              <input v-model="form.power_on_cmd" :maxlength="VALIDATION_LIMITS.commandMax" />
             </label>
             <label class="field">
               <span>关机命令</span>
-              <input v-model="form.power_off_cmd" />
+              <input v-model="form.power_off_cmd" :maxlength="VALIDATION_LIMITS.commandMax" />
             </label>
           </div>
 
@@ -871,21 +927,21 @@ onMounted(() => {
             >
               <label class="field">
                 <span>开发板 IP</span>
-                <input v-model="form.board_ip" placeholder="例如 192.168.10.20" />
+                <input v-model="form.board_ip" :maxlength="VALIDATION_LIMITS.ipMax" placeholder="例如 192.168.10.20" />
               </label>
               <label class="field">
                 <span>serverip</span>
-                <input v-model="form.server_ip" placeholder="当前 serverip" />
+                <input v-model="form.server_ip" :maxlength="VALIDATION_LIMITS.ipMax" placeholder="当前 serverip" />
                 <small class="field-hint">留空使用 {{ resolvedServerIpHint() }}</small>
               </label>
               <label class="field">
                 <span>netmask</span>
-                <input v-model="form.netmask" placeholder="当前 netmask" />
+                <input v-model="form.netmask" :maxlength="VALIDATION_LIMITS.ipMax" placeholder="当前 netmask" />
                 <small class="field-hint">留空使用 {{ resolvedNetmaskHint() }}</small>
               </label>
               <label class="field">
                 <span>gatewayip</span>
-                <input v-model="form.gatewayip" placeholder="未配置" />
+                <input v-model="form.gatewayip" :maxlength="VALIDATION_LIMITS.ipMax" placeholder="未配置" />
                 <small class="field-hint">留空不设置 gatewayip</small>
               </label>
             </div>
@@ -893,17 +949,29 @@ onMounted(() => {
             <div class="form-grid three-columns" style="margin-top: 18px">
               <label class="field">
                 <span>kernel load addr</span>
-                <input v-model="form.kernel_load_addr" placeholder="例如 0x80200000" />
+                <input
+                  v-model="form.kernel_load_addr"
+                  :maxlength="VALIDATION_LIMITS.loadAddrMax"
+                  placeholder="例如 0x80200000"
+                />
                 <small class="field-hint">板级默认内核加载地址；本地 .board.toml 同名字段优先。留空时使用 kernel_addr_r 或 loadaddr。</small>
               </label>
               <label class="field">
                 <span>FIT load addr</span>
-                <input v-model="form.fit_load_addr" placeholder="例如 0x82200000" />
+                <input
+                  v-model="form.fit_load_addr"
+                  :maxlength="VALIDATION_LIMITS.loadAddrMax"
+                  placeholder="例如 0x82200000"
+                />
                 <small class="field-hint">板级默认 FIT 上传/下载地址；本地 .board.toml 同名字段优先。留空时从 U-Boot 环境推断或自动计算。</small>
               </label>
               <label class="field">
                 <span>bootm addr</span>
-                <input v-model="form.bootm_addr" placeholder="默认跟随 FIT load addr" />
+                <input
+                  v-model="form.bootm_addr"
+                  :maxlength="VALIDATION_LIMITS.loadAddrMax"
+                  placeholder="默认跟随 FIT load addr"
+                />
                 <small class="field-hint">板级默认 bootm 参数；本地 .board.toml 同名字段优先。留空且配置了 FIT load addr 时使用 FIT 地址，否则执行不带参数的 bootm。</small>
               </label>
             </div>
@@ -950,12 +1018,12 @@ onMounted(() => {
 
           <label v-else-if="form.boot_kind === 'pxe'" class="field" style="margin-top: 16px">
             <span>PXE 备注</span>
-            <textarea v-model="form.pxe_notes" rows="4" />
+            <textarea v-model="form.pxe_notes" rows="4" :maxlength="VALIDATION_LIMITS.longDescriptionMax" />
           </label>
 
           <label v-else-if="form.boot_kind === 'httpboot'" class="field" style="margin-top: 16px">
             <span>启动架构</span>
-            <input v-model="form.boot_arch" placeholder="例如 x86_64" />
+            <input v-model="form.boot_arch" :maxlength="VALIDATION_LIMITS.bootArchMax" placeholder="例如 x86_64" />
           </label>
         </section>
 
@@ -996,7 +1064,11 @@ onMounted(() => {
         <div class="form-grid two-columns">
           <label class="field">
             <span>文件名</span>
-            <input v-model="dtbUploadName" placeholder="例如 board.dtb" />
+            <input
+              v-model="dtbUploadName"
+              :maxlength="VALIDATION_LIMITS.dtbNameMax"
+              placeholder="例如 board.dtb"
+            />
           </label>
           <label class="field">
             <span>选择文件</span>
