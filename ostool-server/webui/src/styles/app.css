@@ -298,6 +298,27 @@ hr { border: none; border-top: 1px solid var(--c-border); margin: 1.25rem 0; }
   font-weight: 600;
   color: var(--c-text-soft);
 }
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+}
+.inline-control-row {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  min-width: 0;
+}
+.inline-control-row > input,
+.inline-control-row > select,
+.inline-control-row > textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.inline-control-row > .btn {
+  flex: 0 0 auto;
+}
 .input,
 .field input,
 .field select,
@@ -360,6 +381,77 @@ textarea:disabled {
   cursor: pointer;
 }
 .checkbox-field input { width: 16px; height: 16px; accent-color: var(--c-brand); }
+
+.search-field {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 320px;
+  min-width: 220px;
+  max-width: 420px;
+}
+.search-field .icon {
+  position: absolute;
+  left: .75rem;
+  color: var(--c-text-ghost);
+  pointer-events: none;
+}
+.search-field input {
+  min-height: 40px;
+  padding-left: 2.35rem;
+  border: 1px solid var(--c-border);
+  background: var(--c-surface-2);
+  box-shadow: none;
+  appearance: none;
+}
+.search-field input:hover {
+  border-color: var(--c-border-strong);
+  background: var(--c-surface);
+}
+.search-field input:focus {
+  border-color: var(--c-brand-light);
+  background: var(--c-surface);
+  box-shadow: 0 0 0 3px var(--c-brand-ghost);
+}
+.filter-field {
+  position: relative;
+  min-width: 150px;
+  width: auto;
+}
+.filter-field > span {
+  display: none;
+}
+.filter-field::after {
+  content: "";
+  position: absolute;
+  right: .8rem;
+  top: 50%;
+  width: .45rem;
+  height: .45rem;
+  border-right: 1.5px solid var(--c-text-muted);
+  border-bottom: 1.5px solid var(--c-text-muted);
+  pointer-events: none;
+  transform: translateY(-65%) rotate(45deg);
+}
+.filter-field select {
+  width: auto;
+  min-width: 150px;
+  min-height: 40px;
+  padding-right: 2.1rem;
+  border: 1px solid var(--c-border);
+  background: var(--c-surface-2);
+  box-shadow: none;
+  appearance: none;
+}
+.filter-field select:hover {
+  border-color: var(--c-border-strong);
+  background: var(--c-surface);
+}
+.filter-field select:focus {
+  border-color: var(--c-brand-light);
+  background: var(--c-surface);
+  box-shadow: 0 0 0 3px var(--c-brand-ghost);
+}
 
 .toolbar-actions {
   display: flex;
@@ -474,6 +566,15 @@ table.tbl tbody tr,
 table.data-table tbody tr { transition: background-color .12s ease; }
 table.tbl tbody tr:hover,
 table.data-table tbody tr:hover { background: var(--c-brand-tint); }
+
+.data-table .col-index {
+  width: 64px;
+  min-width: 64px;
+  color: var(--c-text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+}
 
 /* ----------------------------- key value ----------------------------- */
 .key-value-list {
@@ -1418,10 +1519,6 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   font-size: .86rem;
   font-weight: 600;
 }
-.filter-field {
-  min-width: 150px;
-  width: auto;
-}
 .view-toggle {
   display: inline-flex;
   border: 1px solid var(--c-border);
@@ -1631,7 +1728,10 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 .form-section:first-of-type { padding-top: 0; margin-top: 0; border-top: none; }
 .form-section h4 { font-size: .94rem; font-weight: 700; margin: 0 0 .75rem; padding-bottom: .5rem; border-bottom: 1px solid var(--c-border-light); }
 .form-section-header { display: flex; align-items: center; gap: .6rem; margin-bottom: .75rem; padding-bottom: .5rem; border-bottom: 1px solid var(--c-border-light); }
+.form-section-header.has-trailing-control { justify-content: space-between; gap: .75rem; }
+.form-section-title { display: flex; align-items: center; gap: .6rem; min-width: 0; }
 .form-section-header h4 { margin: 0; padding: 0; border: none; }
+.form-section-toggle { flex: 0 0 auto; }
 .form-section-icon { width: 30px; height: 30px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; font-size: .82rem; flex-shrink: 0; }
 .form-section-icon.serial, .form-section-icon.info { background: var(--c-brand-ghost); color: var(--c-brand); }
 .form-section-icon.power { background: var(--c-warning-bg); color: var(--c-warning); }
@@ -1678,42 +1778,19 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   display: flex;
   align-items: center;
   gap: .75rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 .admin-toolbar-left {
-  flex: 1;
-  flex-shrink: 0;
+  flex: 0 0 auto;
   min-width: 0;
 }
 .admin-toolbar-right {
+  flex: 1 1 auto;
   justify-content: flex-end;
   min-width: 0;
 }
-.search-field {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  flex: 1;
-  min-width: min(100%, 240px);
-  max-width: 420px;
-}
-.search-field .icon {
-  position: absolute;
-  left: .75rem;
-  color: var(--c-text-ghost);
-  pointer-events: none;
-}
-.search-field input {
-  padding-left: 2.35rem;
-  min-height: 40px;
-}
-.admin-toolbar .filter-field > span {
-  display: none;
-}
-.admin-toolbar .filter-field select {
-  width: auto;
-  min-width: 150px;
-  min-height: 40px;
+.admin-toolbar-right .filter-field:first-of-type {
+  margin-left: auto;
 }
 .admin-table-panel {
   padding: 0;
@@ -2927,11 +3004,35 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
     align-items: stretch;
     flex-direction: column;
   }
+  .admin-toolbar-left,
+  .admin-toolbar-right {
+    flex-wrap: wrap;
+  }
+  .admin-toolbar-left,
+  .admin-toolbar-right,
+  .admin-toolbar-left .btn,
+  .admin-toolbar-right .btn {
+    width: 100%;
+  }
   .search-field,
   .filter-field,
-  .admin-toolbar .filter-field select {
+  .filter-field select {
     max-width: none;
     width: 100%;
+  }
+  .inline-control-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .inline-control-row > .btn {
+    width: 100%;
+  }
+  .form-section-header.has-trailing-control {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .form-section-toggle {
+    justify-content: space-between;
   }
   .panel-heading,
   .admin-table-panel > .panel-heading {

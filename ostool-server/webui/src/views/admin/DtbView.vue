@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 
+import Icon from "@/components/Icon.vue";
 import { api } from "@/api";
 import { useUiStore } from "@/stores/ui";
 import type { DtbFileResponse } from "@/types/api";
@@ -19,8 +20,21 @@ const editDtbName = ref("");
 const editDtbFile = ref<File | null>(null);
 const editDtbFileInput = ref<HTMLInputElement | null>(null);
 const pointerDownOnModalOverlay = ref(false);
+const search = ref("");
 const DTB_UPLOAD_MAX_MIB = 10;
 const DTB_UPLOAD_MAX_BYTES = DTB_UPLOAD_MAX_MIB * 1024 * 1024;
+
+const filteredDtbs = computed(() => {
+  const query = search.value.trim().toLowerCase();
+  if (!query) {
+    return dtbs.value;
+  }
+  return dtbs.value.filter((dtb) =>
+    [dtb.name, dtb.relative_tftp_path_template].some((value) =>
+      value.toLowerCase().includes(query),
+    ),
+  );
+});
 
 function formatSize(size: number): string {
   if (size < 1024) {
@@ -204,81 +218,94 @@ onMounted(() => {
 
 <template>
   <section class="page-grid">
+    <div class="admin-toolbar">
+      <div class="admin-toolbar-left">
+        <button class="btn btn-ghost btn-sm" @click="loadDtbs">刷新</button>
+      </div>
+      <div class="admin-toolbar-right">
+        <label class="search-field">
+          <Icon name="search" :size="16" />
+          <input v-model="search" placeholder="搜索 DTB / TFTP 路径" />
+        </label>
+      </div>
+    </div>
+
     <div class="panel">
       <div class="panel-heading">
         <div>
-          <h3>DTB 管理</h3>
-        </div>
-        <div class="toolbar-actions">
-          <button class="btn btn-ghost" @click="loadDtbs">刷新</button>
+          <h3>上传新 DTB</h3>
+          <p>单个 DTB 文件最大支持 {{ DTB_UPLOAD_MAX_MIB }} MiB。</p>
         </div>
       </div>
 
-      <section class="form-section">
-        <h4>上传新 DTB</h4>
-        <p class="muted">单个 DTB 文件最大支持 {{ DTB_UPLOAD_MAX_MIB }} MiB。</p>
-        <div class="form-grid three-columns">
-          <label class="field">
-            <span>文件名</span>
-            <input v-model="newDtbName" placeholder="例如 board.dtb" />
-          </label>
-          <label class="field">
-            <span>文件</span>
-            <input
-              ref="newDtbInput"
-              type="file"
-              accept=".dtb,application/octet-stream"
-              @change="onNewFileChange"
-            />
-          </label>
-          <div class="field action-field">
-            <span>操作</span>
-            <button class="btn btn-primary" :disabled="creating" @click="createDtb">
-              {{ creating ? "上传中..." : "上传 DTB" }}
-            </button>
-          </div>
+      <div class="form-grid three-columns">
+        <label class="field">
+          <span>文件名</span>
+          <input v-model="newDtbName" placeholder="例如 board.dtb" />
+        </label>
+        <label class="field">
+          <span>文件</span>
+          <input
+            ref="newDtbInput"
+            type="file"
+            accept=".dtb,application/octet-stream"
+            @change="onNewFileChange"
+          />
+        </label>
+        <div class="field action-field">
+          <span>操作</span>
+          <button class="btn btn-primary" :disabled="creating" @click="createDtb">
+            {{ creating ? "上传中..." : "上传 DTB" }}
+          </button>
         </div>
-      </section>
+      </div>
+    </div>
 
+    <div class="panel admin-table-panel">
       <div v-if="loading" class="empty-state">正在加载 DTB 列表...</div>
       <div v-else-if="dtbs.length === 0" class="empty-state">当前还没有上传任何 DTB。</div>
-      <table v-else class="data-table">
-        <thead>
-          <tr>
-            <th>名称</th>
-            <th>大小</th>
-            <th>更新时间</th>
-            <th>TFTP 路径模板</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="dtb in dtbs" :key="dtb.name">
-            <td><code>{{ dtb.name }}</code></td>
-            <td>{{ formatSize(dtb.size) }}</td>
-            <td>{{ formatTime(dtb.updated_at) }}</td>
-            <td><code>{{ dtb.relative_tftp_path_template }}</code></td>
-            <td>
-              <div class="toolbar-actions">
-                <button
-                  class="btn btn-ghost btn-sm"
-                  :disabled="updatingName === dtb.name"
-                  @click="openEditDtb(dtb)"
-                >
-                  修改
-                </button>
-                <button
-                  class="btn btn-danger btn-sm"
-                  :disabled="deletingName === dtb.name"
-                  @click="removeDtb(dtb.name)"
-                >
-                  {{ deletingName === dtb.name ? "删除中..." : "删除" }}
-                </button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-else-if="filteredDtbs.length === 0" class="empty-state">没有符合条件的 DTB。</div>
+      <div v-else class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th class="col-index">序号</th>
+              <th>名称</th>
+              <th>大小</th>
+              <th>更新时间</th>
+              <th>TFTP 路径模板</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(dtb, index) in filteredDtbs" :key="dtb.name">
+              <td class="col-index">{{ index + 1 }}</td>
+              <td><code>{{ dtb.name }}</code></td>
+              <td>{{ formatSize(dtb.size) }}</td>
+              <td>{{ formatTime(dtb.updated_at) }}</td>
+              <td><code>{{ dtb.relative_tftp_path_template }}</code></td>
+              <td>
+                <div class="toolbar-actions">
+                  <button
+                    class="btn btn-ghost btn-sm"
+                    :disabled="updatingName === dtb.name"
+                    @click="openEditDtb(dtb)"
+                  >
+                    修改
+                  </button>
+                  <button
+                    class="btn btn-danger btn-sm"
+                    :disabled="deletingName === dtb.name"
+                    @click="removeDtb(dtb.name)"
+                  >
+                    {{ deletingName === dtb.name ? "删除中..." : "删除" }}
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </section>
 

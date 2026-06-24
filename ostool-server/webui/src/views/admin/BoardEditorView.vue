@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import { api } from "@/api";
 import { useUiStore } from "@/stores/ui";
@@ -650,27 +650,20 @@ onMounted(() => {
 
 <template>
   <section class="page-grid">
-    <div class="panel">
-      <div class="panel-heading">
+    <div class="role-editor-page panel board-editor-page">
+      <div class="role-editor-titlebar">
         <div>
-          <h3>{{ isEditing ? "开发板配置" : "新建开发板" }}</h3>
+          <h3>{{ isEditing ? "编辑开发板" : "新建开发板" }}</h3>
+          <p class="muted">维护开发板基础信息、串口、电源与启动配置。</p>
         </div>
-        <div class="toolbar-actions">
-          <button class="btn btn-ghost" @click="loadEditor">刷新表单</button>
-          <button class="btn btn-ghost" :disabled="refreshingSerials" @click="refreshSerialPorts">
-            {{ refreshingSerials ? "刷新串口中..." : "刷新串口" }}
-          </button>
-          <button class="btn btn-primary" :disabled="saving || loading" @click="saveBoard">
-            {{ saving ? "保存中..." : "保存配置" }}
-          </button>
-        </div>
+        <RouterLink class="btn btn-ghost btn-sm" to="/admin/resources/boards">返回列表</RouterLink>
       </div>
 
       <div v-if="loading" class="empty-state">
         <div class="empty-state-icon">&#9641;</div>
         正在加载开发板配置...
       </div>
-      <template v-else>
+      <form v-else class="role-editor-form board-editor-form" @submit.prevent="saveBoard">
         <p v-if="validationError" class="diagnostic-error">{{ validationError }}</p>
 
         <!-- 基本信息 -->
@@ -716,36 +709,48 @@ onMounted(() => {
 
         <!-- 串口配置 -->
         <section class="form-section">
-          <div class="form-section-header">
-            <span class="form-section-icon serial">&#8982;</span>
-            <h4>串口配置</h4>
+          <div class="form-section-header has-trailing-control">
+            <div class="form-section-title">
+              <span class="form-section-icon serial">&#8982;</span>
+              <h4>串口配置</h4>
+            </div>
+            <label class="toggle-field form-section-toggle">
+              <span class="toggle-label">启用串口</span>
+              <span class="toggle-switch">
+                <input v-model="form.serial_enabled" type="checkbox" />
+                <span class="toggle-track" />
+                <span class="toggle-knob" />
+              </span>
+            </label>
           </div>
-          <label class="toggle-field">
-            <span class="toggle-switch">
-              <input v-model="form.serial_enabled" type="checkbox" />
-              <span class="toggle-track" />
-              <span class="toggle-knob" />
-            </span>
-            <span class="toggle-label">启用串口</span>
-          </label>
 
-          <div v-if="form.serial_enabled" class="form-grid two-columns" style="margin-top: 18px">
+          <div v-if="form.serial_enabled" class="form-grid two-columns">
             <label class="field">
               <span>串口设备</span>
-              <select
-                :value="selectedBoardSerialOptionValue()"
-                @change="parseBoardSerialSelection(($event.target as HTMLSelectElement).value)"
-              >
-                <option value="">请选择串口设备</option>
-                <option
-                  v-for="option in boardSerialOptions(selectedBoardSerialOptionValue())"
-                  :key="option.value"
-                  :value="option.value"
-                  :disabled="option.disabled"
+              <div class="inline-control-row">
+                <select
+                  :value="selectedBoardSerialOptionValue()"
+                  @change="parseBoardSerialSelection(($event.target as HTMLSelectElement).value)"
                 >
-                  {{ option.label }}
-                </option>
-              </select>
+                  <option value="">请选择串口设备</option>
+                  <option
+                    v-for="option in boardSerialOptions(selectedBoardSerialOptionValue())"
+                    :key="option.value"
+                    :value="option.value"
+                    :disabled="option.disabled"
+                  >
+                    {{ option.label }}
+                  </option>
+                </select>
+                <button
+                  class="btn btn-ghost btn-sm"
+                  type="button"
+                  :disabled="refreshingSerials"
+                  @click="refreshSerialPorts"
+                >
+                  {{ refreshingSerials ? "刷新中..." : "刷新串口" }}
+                </button>
+              </div>
               <div v-if="selectedBoardSerialDescription()" class="serial-key-card">
                 <span class="serial-key-badge">{{ selectedBoardSerialDescription()!.primaryLabel }}</span>
                 <strong>{{ selectedBoardSerialDescription()!.primaryValue }}</strong>
@@ -956,11 +961,18 @@ onMounted(() => {
         <div class="danger-zone" v-if="isEditing">
           <h4>危险操作</h4>
           <p>删除会移除对应的单板配置文件，且需要先释放占用该板的 session。</p>
-          <button class="btn btn-danger" :disabled="deleting" @click="removeBoard">
+          <button class="btn btn-danger" type="button" :disabled="deleting" @click="removeBoard">
             {{ deleting ? "删除中..." : "删除开发板" }}
           </button>
         </div>
-      </template>
+
+        <div class="role-editor-actions board-editor-actions">
+          <button type="button" class="btn btn-primary" :disabled="saving || loading" @click="saveBoard">
+            {{ saving ? "保存中..." : "保存配置" }}
+          </button>
+          <RouterLink class="btn btn-ghost" to="/admin/resources/boards">取消</RouterLink>
+        </div>
+      </form>
     </div>
   </section>
 

@@ -6,6 +6,9 @@ import type { BoardConfig, Session } from "@/types/api";
 const listBoards = vi.fn();
 const listSessions = vi.fn();
 const deleteSession = vi.fn();
+const route = {
+  query: {} as Record<string, string>,
+};
 const uiStore = {
   clearMessages: vi.fn(),
   setError: vi.fn(),
@@ -23,6 +26,10 @@ vi.mock("@/api", () => ({
 
 vi.mock("@/stores/ui", () => ({
   useUiStore: () => uiStore,
+}));
+
+vi.mock("vue-router", () => ({
+  useRoute: () => route,
 }));
 
 function makeBoard(id = "orangepi5plus-1"): BoardConfig {
@@ -76,6 +83,7 @@ describe("SessionsView", () => {
     uiStore.setSuccess.mockReset();
     uiStore.confirm.mockReset();
     uiStore.confirm.mockResolvedValue(true);
+    route.query = {};
     listBoards.mockResolvedValue([makeBoard()]);
     listSessions.mockResolvedValue({ sessions: [makeSession()] });
   });
@@ -98,6 +106,26 @@ describe("SessionsView", () => {
     expect(uiStore.setSuccess).toHaveBeenCalledWith("已发起释放会话 session-1");
     expect(listSessions).toHaveBeenCalledTimes(2);
     expect(wrapper.text()).toContain("释放中");
+  });
+
+  it("renders refresh actions on the left and search/filter controls on the right", async () => {
+    const SessionsView = (await import("./SessionsView.vue")).default;
+    const wrapper = mount(SessionsView);
+    await flushPromises();
+
+    expect(wrapper.find(".admin-toolbar-left").text()).toContain("刷新");
+    expect(wrapper.find(".admin-toolbar-right .search-field").exists()).toBe(true);
+    expect(wrapper.findAll(".admin-toolbar-right .filter-field").length).toBe(1);
+  });
+
+  it("initializes search from the route query", async () => {
+    route.query = { q: "session-1" };
+
+    const SessionsView = (await import("./SessionsView.vue")).default;
+    const wrapper = mount(SessionsView);
+    await flushPromises();
+
+    expect((wrapper.find(".search-field input").element as HTMLInputElement).value).toBe("session-1");
   });
 
   it("disables the force release button for releasing sessions", async () => {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 
+import Icon from "@/components/Icon.vue";
 import StatusPill from "@/components/StatusPill.vue";
 import { api } from "@/api";
 import { useUiStore } from "@/stores/ui";
@@ -9,6 +10,28 @@ import type { LeaseResponse } from "@/types/api";
 const ui = useUiStore();
 const leases = ref<LeaseResponse[]>([]);
 const loading = ref(true);
+const search = ref("");
+const stateFilter = ref<"all" | "active" | "releasing" | "released" | "expired" | "failed">("all");
+
+const filteredLeases = computed(() =>
+  leases.value.filter((item) => {
+    if (stateFilter.value !== "all" && item.lease.state !== stateFilter.value) {
+      return false;
+    }
+    const query = search.value.trim().toLowerCase();
+    if (!query) {
+      return true;
+    }
+    return [
+      item.lease.id,
+      item.lease.user_id,
+      item.lease.board_id,
+      item.lease.board_type,
+      item.lease.session_id,
+      item.session?.client_name ?? "",
+    ].some((value) => value.toLowerCase().includes(query));
+  }),
+);
 
 function leaseTone(state: string) {
   if (state === "active") {
@@ -57,20 +80,38 @@ onMounted(() => {
 
 <template>
   <section class="page-grid">
-    <div class="panel admin-table-panel">
-      <div class="panel-heading">
-        <div>
-          <h3>平台租赁记录</h3>
-        </div>
+    <div class="admin-toolbar">
+      <div class="admin-toolbar-left">
         <button class="btn btn-ghost btn-sm" @click="loadLeases">刷新</button>
       </div>
+      <div class="admin-toolbar-right">
+        <label class="search-field">
+          <Icon name="search" :size="16" />
+          <input v-model="search" placeholder="搜索租赁 / 用户 / 开发板" />
+        </label>
+        <label class="field filter-field">
+          <span>状态</span>
+          <select v-model="stateFilter">
+            <option value="all">全部状态</option>
+            <option value="active">active</option>
+            <option value="releasing">releasing</option>
+            <option value="released">released</option>
+            <option value="expired">expired</option>
+            <option value="failed">failed</option>
+          </select>
+        </label>
+      </div>
+    </div>
 
+    <div class="panel admin-table-panel">
       <div v-if="loading" class="empty-state">正在加载租赁...</div>
       <div v-else-if="leases.length === 0" class="empty-state">暂无租赁记录。</div>
+      <div v-else-if="filteredLeases.length === 0" class="empty-state">没有符合条件的租赁记录。</div>
       <div v-else class="table-scroll">
         <table class="data-table">
           <thead>
             <tr>
+              <th class="col-index">序号</th>
               <th>租赁 ID</th>
               <th>用户 ID</th>
               <th>开发板</th>
@@ -82,7 +123,8 @@ onMounted(() => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="item in leases" :key="item.lease.id">
+            <tr v-for="(item, index) in filteredLeases" :key="item.lease.id">
+              <td class="col-index">{{ index + 1 }}</td>
               <td><code>{{ item.lease.id }}</code></td>
               <td><code>{{ item.lease.user_id }}</code></td>
               <td><code>{{ item.lease.board_id }}</code></td>

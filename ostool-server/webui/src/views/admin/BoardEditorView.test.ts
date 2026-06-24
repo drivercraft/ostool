@@ -24,6 +24,11 @@ const uiStore = {
 };
 
 vi.mock("vue-router", () => ({
+  RouterLink: {
+    name: "RouterLink",
+    props: ["to"],
+    template: "<a><slot /></a>",
+  },
   useRoute: () => route,
   useRouter: () => ({ push }),
 }));
@@ -191,10 +196,13 @@ describe("BoardEditorView", () => {
 
     expect(listSerialPorts).toHaveBeenCalledTimes(1);
     expect(getBoard).not.toHaveBeenCalled();
+
+    const serialToggle = wrapper.findAll(".toggle-field").find((field) => field.text().includes("启用串口"));
+    await serialToggle!.get('input[type="checkbox"]').setValue(true);
     expect(wrapper.text()).toContain("刷新串口");
 
-    const buttons = wrapper.findAll("button");
-    const refreshSerialButton = buttons.find((button) => button.text() === "刷新串口");
+    const serialField = wrapper.findAll(".field").find((field) => field.text().includes("串口设备"));
+    const refreshSerialButton = serialField?.findAll("button").find((button) => button.text() === "刷新串口");
     expect(refreshSerialButton).toBeTruthy();
 
     await refreshSerialButton!.trigger("click");

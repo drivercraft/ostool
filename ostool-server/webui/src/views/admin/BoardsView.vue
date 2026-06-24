@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { RouterLink } from "vue-router";
+import { RouterLink, useRouter } from "vue-router";
 
 import Icon from "@/components/Icon.vue";
 import { api } from "@/api";
@@ -8,14 +8,20 @@ import { useUiStore } from "@/stores/ui";
 import type { BoardConfig, Session } from "@/types/api";
 
 const ui = useUiStore();
+const router = useRouter();
 const loading = ref(true);
 const boards = ref<BoardConfig[]>([]);
 const sessions = ref<Session[]>([]);
 const typeFilter = ref("");
 const tagFilter = ref("");
 const statusFilter = ref<"all" | "available" | "leased" | "disabled">("all");
+const openMenuBoardId = ref<string | null>(null);
+const menuPosition = ref({ top: 0, left: 0 });
 
 const leasedBoardIds = computed(() => new Set(sessions.value.map((session) => session.board_id)));
+const sessionByBoardId = computed(() =>
+  new Map(sessions.value.map((session) => [session.board_id, session])),
+);
 const boardTypes = computed(() =>
   Array.from(new Set(boards.value.map((board) => board.board_type))).sort(),
 );
@@ -81,7 +87,64 @@ function serialSecondaryLines(board: BoardConfig): string[] {
     .filter((value, index, items) => items.indexOf(value) === index);
 }
 
+function boardToUpsertRequest(board: BoardConfig, disabled = board.disabled) {
+  return {
+    id: board.id,
+    board_type: board.board_type,
+    tags: board.tags,
+    notes: board.notes,
+    disabled,
+    serial: board.serial,
+    power_management: board.power_management,
+    boot: board.boot,
+  };
+}
+
+function toggleMenu(boardId: string, event: MouseEvent) {
+  if (openMenuBoardId.value === boardId) {
+    closeMenu();
+    return;
+  }
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  menuPosition.value = {
+    top: rect.bottom + 6,
+    left: Math.max(12, rect.right - 180),
+  };
+  openMenuBoardId.value = boardId;
+}
+
+function closeMenu() {
+  openMenuBoardId.value = null;
+}
+
+async function toggleDisabled(board: BoardConfig) {
+  if (leasedBoardIds.value.has(board.id)) {
+    return;
+  }
+  closeMenu();
+  try {
+    const updated = await api.updateBoard(board.id, boardToUpsertRequest(board, !board.disabled));
+    boards.value = boards.value.map((item) => (item.id === board.id ? updated : item));
+    ui.setSuccess(updated.disabled ? `已禁用开发板 ${updated.id}` : `已启用开发板 ${updated.id}`);
+  } catch (error) {
+    ui.setError((error as Error).message);
+  }
+}
+
+function goToBoardSession(boardId: string) {
+  const session = sessionByBoardId.value.get(boardId);
+  if (!session) {
+    return;
+  }
+  closeMenu();
+  void router.push({
+    path: "/admin/rentals/sessions",
+    query: { q: session.id },
+  });
+}
+
 async function removeBoard(boardId: string) {
+  closeMenu();
   const confirmed = await ui.confirm({
     tone: "danger",
     title: "删除开发板",
@@ -123,13 +186,10 @@ onMounted(() => {
   <div class="boards-page page-grid">
     <section class="admin-toolbar">
       <div class="admin-toolbar-left">
-        <label class="field filter-field">
-          <span>开发板型号</span>
-          <select v-model="typeFilter" aria-label="开发板型号">
-            <option value="">全部型号</option>
-            <option v-for="type in boardTypes" :key="type" :value="type">{{ type }}</option>
-          </select>
-        </label>
+        <RouterLink to="/admin/resources/boards/new" class="btn btn-primary btn-sm">新增开发板</RouterLink>
+        <button class="btn btn-secondary btn-sm" @click="loadBoards">刷新</button>
+      </div>
+      <div class="admin-toolbar-right">
         <label class="search-field">
           <Icon name="search" :size="16" />
           <input
@@ -140,6 +200,13 @@ onMounted(() => {
           />
         </label>
         <label class="field filter-field">
+          <span>开发板型号</span>
+          <select v-model="typeFilter" aria-label="开发板型号">
+            <option value="">全部型号</option>
+            <option v-for="type in boardTypes" :key="type" :value="type">{{ type }}</option>
+          </select>
+        </label>
+        <label class="field filter-field">
           <span>开发板状态</span>
           <select v-model="statusFilter" aria-label="开发板状态">
             <option value="all">全部状态</option>
@@ -148,10 +215,6 @@ onMounted(() => {
             <option value="disabled">已禁用</option>
           </select>
         </label>
-      </div>
-      <div class="admin-toolbar-right">
-        <button class="btn btn-secondary btn-sm" @click="loadBoards">刷新</button>
-        <RouterLink to="/admin/resources/boards/new" class="btn btn-primary btn-sm">新增开发板</RouterLink>
       </div>
     </section>
 
@@ -172,6 +235,7 @@ onMounted(() => {
         <table class="data-table">
         <thead>
           <tr>
+            <th class="col-index">序号</th>
             <th>开发板 ID</th>
             <th>型号</th>
             <th>标签</th>
@@ -181,7 +245,8 @@ onMounted(() => {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="board in filteredBoards" :key="board.id">
+          <tr v-for="(board, index) in filteredBoards" :key="board.id">
+            <td class="col-index">{{ index + 1 }}</td>
             <td><code>{{ board.id }}</code></td>
             <td><strong>{{ board.board_type }}</strong></td>
             <td>
@@ -203,11 +268,52 @@ onMounted(() => {
               <div class="row-actions">
                 <RouterLink
                   :to="{ name: 'admin-resource-board-edit', params: { boardId: board.id } }"
-                  class="btn btn-ghost btn-sm"
+                  class="btn-icon-only"
+                  title="编辑"
                 >
-                  编辑
+                  <Icon name="edit" :size="16" />
                 </RouterLink>
-                <button class="btn btn-danger btn-sm" @click="removeBoard(board.id)">删除</button>
+                <button
+                  class="btn-icon-only"
+                  :title="board.disabled ? '启用' : '禁用'"
+                  :disabled="leasedBoardIds.has(board.id)"
+                  @click="toggleDisabled(board)"
+                >
+                  <Icon :name="board.disabled ? 'check' : 'ban'" :size="16" />
+                </button>
+                <div class="row-action-menu">
+                  <button
+                    class="btn-icon-only"
+                    title="更多"
+                    :aria-expanded="openMenuBoardId === board.id"
+                    @click.stop="toggleMenu(board.id, $event)"
+                  >
+                    <Icon name="more-vertical" :size="16" />
+                  </button>
+                </div>
+                <Teleport to="body">
+                  <div
+                    v-if="openMenuBoardId === board.id"
+                    class="action-menu action-menu--floating"
+                    :style="{ top: `${menuPosition.top}px`, left: `${menuPosition.left}px` }"
+                  >
+                    <button
+                      class="action-menu-item"
+                      :disabled="!sessionByBoardId.has(board.id)"
+                      @click="goToBoardSession(board.id)"
+                    >
+                      <Icon name="terminal" :size="14" />
+                      转到会话
+                    </button>
+                    <button
+                      class="action-menu-item"
+                      @click="removeBoard(board.id)"
+                    >
+                      <Icon name="trash" :size="14" />
+                      删除开发板
+                    </button>
+                  </div>
+                </Teleport>
               </div>
             </td>
           </tr>

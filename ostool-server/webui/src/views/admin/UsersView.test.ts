@@ -132,6 +132,23 @@ describe("UsersView", () => {
     expect(rows[0].find('button[title="更多"]').exists()).toBe(true);
   });
 
+  it("renders the row action menu outside the table scroll container", async () => {
+    const UsersView = (await import("./UsersView.vue")).default;
+    const wrapper = mount(UsersView, {
+      attachTo: document.body,
+    });
+
+    await flushPromises();
+
+    await wrapper.find('button[title="更多"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find(".table-scroll .action-menu").exists()).toBe(false);
+    expect(document.body.querySelector(".action-menu.action-menu--floating")).not.toBeNull();
+
+    wrapper.unmount();
+  });
+
   it("filters users by status (disabled)", async () => {
     const UsersView = (await import("./UsersView.vue")).default;
     const wrapper = mount(UsersView);
@@ -183,7 +200,9 @@ describe("UsersView", () => {
 
   it("reveals the more menu with 编辑用户 / 重置密码 entries", async () => {
     const UsersView = (await import("./UsersView.vue")).default;
-    const wrapper = mount(UsersView);
+    const wrapper = mount(UsersView, {
+      attachTo: document.body,
+    });
 
     await flushPromises();
 
@@ -193,10 +212,14 @@ describe("UsersView", () => {
     await firstRow.find('button[title="更多"]').trigger("click");
     await flushPromises();
 
-    const menu = wrapper.find(".action-menu");
-    expect(menu.exists()).toBe(true);
-    const labels = menu.findAll(".action-menu-item").map((b) => b.text());
+    const menu = document.body.querySelector(".action-menu");
+    expect(menu).not.toBeNull();
+    const labels = Array.from(menu!.querySelectorAll(".action-menu-item")).map(
+      (button) => button.textContent ?? "",
+    );
     expect(labels.some((t) => t.includes("编辑用户"))).toBe(true);
     expect(labels.some((t) => t.includes("重置密码"))).toBe(true);
+
+    wrapper.unmount();
   });
 });

@@ -24,6 +24,8 @@ const editing = ref(false);
 const showPermissionInfo = ref(false);
 const openMenuRoleId = ref<string | null>(null);
 const menuPosition = ref({ top: 0, left: 0 });
+const search = ref("");
+const typeFilter = ref<"all" | "system" | "custom">("all");
 const form = ref({
   name: "",
   display_name: "",
@@ -33,6 +35,27 @@ const form = ref({
 
 const selectedRole = computed(
   () => roles.value.find((role) => role.id === selectedRoleId.value) ?? null,
+);
+
+const filteredRoles = computed(() =>
+  roles.value.filter((role) => {
+    if (typeFilter.value === "system" && !role.system) {
+      return false;
+    }
+    if (typeFilter.value === "custom" && role.system) {
+      return false;
+    }
+    const query = search.value.trim().toLowerCase();
+    if (!query) {
+      return true;
+    }
+    return [
+      role.display_name,
+      role.name,
+      role.description,
+      ...role.permissions.map((permission) => permission.code),
+    ].some((value) => value.toLowerCase().includes(query));
+  }),
 );
 
 const permissionGroups = computed<PermissionGroup[]>(() => {
@@ -299,23 +322,36 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
     <template v-else>
       <div class="admin-toolbar">
         <div class="admin-toolbar-left">
+          <button class="btn btn-primary" @click="openCreate">新增角色</button>
           <button class="btn btn-ghost btn-sm" @click="togglePermissionInfo">
             {{ showPermissionInfo ? "隐藏权限说明" : "权限说明" }}
           </button>
-          <button class="btn btn-primary" @click="openCreate">新增角色</button>
           <button class="btn btn-ghost btn-sm" @click="loadRbac">刷新</button>
         </div>
         <div class="admin-toolbar-right">
-          <span class="muted">共 {{ roles.length }} 个角色，{{ permissions.length }} 个权限</span>
+          <label class="search-field">
+            <Icon name="search" :size="16" />
+            <input v-model="search" type="search" placeholder="搜索角色 / 权限" />
+          </label>
+          <label class="field filter-field">
+            <span>类型</span>
+            <select v-model="typeFilter">
+              <option value="all">全部类型</option>
+              <option value="system">系统角色</option>
+              <option value="custom">自定义角色</option>
+            </select>
+          </label>
         </div>
       </div>
 
       <div class="panel admin-table-panel role-table-panel">
         <div v-if="loading" class="empty-state">正在加载角色...</div>
+        <div v-else-if="filteredRoles.length === 0" class="empty-state">没有符合条件的角色。</div>
         <div v-else class="table-scroll">
           <table class="data-table roles-table">
             <thead>
               <tr>
+                <th class="col-index">序号</th>
                 <th>角色</th>
                 <th>标识</th>
                 <th>类型</th>
@@ -325,7 +361,8 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
               </tr>
             </thead>
             <tbody>
-              <tr v-for="role in roles" :key="role.id">
+              <tr v-for="(role, index) in filteredRoles" :key="role.id">
+                <td class="col-index">{{ index + 1 }}</td>
                 <td><strong>{{ role.display_name }}</strong></td>
                 <td><code>{{ role.name }}</code></td>
                 <td>

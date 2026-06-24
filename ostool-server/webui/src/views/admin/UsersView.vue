@@ -55,15 +55,25 @@ const filteredUsers = computed(() =>
 
 /* ---- 更多操作下拉菜单 ---- */
 const openMenuUserId = ref<string | null>(null);
-function toggleMenu(userId: string) {
-  openMenuUserId.value = openMenuUserId.value === userId ? null : userId;
+const menuPosition = ref({ top: 0, left: 0 });
+function toggleMenu(userId: string, event: MouseEvent) {
+  if (openMenuUserId.value === userId) {
+    closeMenu();
+    return;
+  }
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  menuPosition.value = {
+    top: rect.bottom + 6,
+    left: Math.max(12, rect.right - 180),
+  };
+  openMenuUserId.value = userId;
 }
 function closeMenu() {
   openMenuUserId.value = null;
 }
 function onDocumentClick(event: MouseEvent) {
   const target = event.target as HTMLElement | null;
-  if (target && !target.closest(".row-action-menu")) {
+  if (target && !target.closest(".row-action-menu") && !target.closest(".action-menu")) {
     closeMenu();
   }
 }
@@ -326,13 +336,14 @@ onMounted(() => {
           <Icon name="search" :size="16" />
           <input
             v-model="search"
+            type="search"
             placeholder="按用户名 / 显示名 / 邮箱搜索"
           />
         </label>
         <label class="field filter-field">
           <span>状态</span>
           <select v-model="statusFilter">
-            <option value="all">全部</option>
+            <option value="all">全部状态</option>
             <option value="active">启用</option>
             <option value="disabled">已禁用</option>
           </select>
@@ -340,7 +351,7 @@ onMounted(() => {
         <label class="field filter-field">
           <span>角色</span>
           <select v-model="roleFilter">
-            <option value="">全部</option>
+            <option value="">全部角色</option>
             <option v-for="role in roles" :key="role.id" :value="role.id">
               {{ role.display_name }}
             </option>
@@ -358,6 +369,7 @@ onMounted(() => {
         <table class="data-table">
           <thead>
             <tr>
+              <th class="col-index">序号</th>
               <th>用户</th>
               <th>显示名</th>
               <th>邮箱</th>
@@ -368,7 +380,8 @@ onMounted(() => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="user in filteredUsers" :key="user.id">
+            <tr v-for="(user, index) in filteredUsers" :key="user.id">
+              <td class="col-index">{{ index + 1 }}</td>
               <td>
                 <div class="user-cell">
                   <span class="user-avatar" :class="{ 'is-disabled': user.disabled }">
@@ -422,11 +435,17 @@ onMounted(() => {
                       class="btn-icon-only"
                       title="更多"
                       :aria-expanded="openMenuUserId === user.id"
-                      @click.stop="toggleMenu(user.id)"
+                      @click.stop="toggleMenu(user.id, $event)"
                     >
                       <Icon name="more-vertical" :size="16" />
                     </button>
-                    <div v-if="openMenuUserId === user.id" class="action-menu">
+                  </div>
+                  <Teleport to="body">
+                    <div
+                      v-if="openMenuUserId === user.id"
+                      class="action-menu action-menu--floating"
+                      :style="{ top: `${menuPosition.top}px`, left: `${menuPosition.left}px` }"
+                    >
                       <button
                         class="action-menu-item"
                         @click="openEdit(user)"
@@ -450,7 +469,7 @@ onMounted(() => {
                         删除用户
                       </button>
                     </div>
-                  </div>
+                  </Teleport>
                 </div>
               </td>
             </tr>
