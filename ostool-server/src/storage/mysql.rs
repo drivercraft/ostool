@@ -23,19 +23,60 @@ const MIGRATION_PERFORMANCE_INDEXES: &str = "0006_performance_indexes";
 
 const BUILTIN_PERMISSIONS: &[(&str, &str, &str)] = &[
     ("overview.read", "查看概览", "查看站点运行情况和统计数据"),
+    ("resources.read", "查看资源", "查看开发板、DTB 和 TFTP 配置"),
+    ("resources.create", "新增资源", "新增开发板和 DTB 资源"),
+    (
+        "resources.update",
+        "编辑资源",
+        "编辑开发板、DTB 和 TFTP 配置",
+    ),
+    ("resources.delete", "删除资源", "删除开发板和 DTB 资源"),
     (
         "resources.manage",
-        "管理资源",
+        "管理资源（全部）",
         "管理开发板、DTB 和 TFTP 配置",
     ),
-    ("rentals.manage", "管理租赁", "查看和释放租赁、会话租约"),
-    ("users.manage", "管理用户", "创建、禁用、更新用户和重置密码"),
+    ("rentals.read", "查看租赁", "查看租赁情况和会话租约"),
+    ("rentals.create", "新增租赁", "为用户创建开发板租赁"),
+    ("rentals.update", "编辑租赁", "修改租赁时间段和状态信息"),
+    ("rentals.start", "启用租赁", "为有效租赁启动会话"),
+    ("rentals.release", "释放租赁", "释放租赁或会话"),
+    (
+        "rentals.delete",
+        "删除租赁数据",
+        "删除租赁记录和会话租约记录",
+    ),
+    (
+        "rentals.manage",
+        "管理租赁（全部）",
+        "管理租赁、会话租约和释放动作",
+    ),
+    ("users.read", "查看用户", "查看用户列表和用户详情"),
+    ("users.create", "新增用户", "创建用户账号"),
+    ("users.update", "编辑用户", "编辑用户资料、角色和密码"),
+    ("users.disable", "禁用用户", "禁用用户登录"),
+    ("users.delete", "删除用户", "删除或停用用户账号"),
+    (
+        "users.manage",
+        "管理用户（全部）",
+        "创建、禁用、更新用户和重置密码",
+    ),
+    ("roles.read", "查看角色权限", "查看角色、权限和分配情况"),
+    ("roles.create", "新增角色", "创建角色并分配权限"),
+    ("roles.update", "编辑角色", "修改角色信息和权限"),
+    ("roles.delete", "删除角色", "删除自定义角色"),
     (
         "roles.manage",
-        "管理角色权限",
+        "管理角色权限（全部）",
         "创建、修改和删除角色权限配置",
     ),
-    ("settings.manage", "管理系统设置", "修改服务器运行配置"),
+    ("settings.read", "查看系统设置", "查看服务器运行配置"),
+    ("settings.update", "编辑系统设置", "修改服务器运行配置"),
+    (
+        "settings.manage",
+        "管理系统设置（全部）",
+        "修改服务器运行配置",
+    ),
 ];
 
 #[derive(Clone)]
@@ -1281,6 +1322,14 @@ impl LeaseRepository for MysqlStorage {
         Ok(())
     }
 
+    async fn delete_lease(&self, lease_id: &str) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM leases WHERE id = ?")
+            .bind(lease_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     async fn update_lease(
         &self,
         lease_id: &str,
@@ -1375,6 +1424,14 @@ impl SessionRecordRepository for MysqlStorage {
         .bind(session_id)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    async fn delete_session_record(&self, session_id: &str) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM session_records WHERE id = ?")
+            .bind(session_id)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 }

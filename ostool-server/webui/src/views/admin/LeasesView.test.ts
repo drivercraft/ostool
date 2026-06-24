@@ -7,6 +7,7 @@ const listAdminLeases = vi.fn();
 const createAdminLease = vi.fn();
 const updateAdminLease = vi.fn();
 const startAdminLeaseSession = vi.fn();
+const releaseAdminLease = vi.fn();
 const deleteAdminLease = vi.fn();
 const listAdminUsers = vi.fn();
 const listBoards = vi.fn();
@@ -15,6 +16,9 @@ const uiStore = {
   setError: vi.fn(),
   setSuccess: vi.fn(),
   confirm: vi.fn(),
+};
+const authStore = {
+  hasPermission: vi.fn(),
 };
 
 vi.mock("vue-router", async () => {
@@ -31,6 +35,7 @@ vi.mock("@/api", () => ({
     createAdminLease,
     updateAdminLease,
     startAdminLeaseSession,
+    releaseAdminLease,
     deleteAdminLease,
     listAdminUsers,
     listBoards,
@@ -39,6 +44,10 @@ vi.mock("@/api", () => ({
 
 vi.mock("@/stores/ui", () => ({
   useUiStore: () => uiStore,
+}));
+
+vi.mock("@/stores/auth", () => ({
+  useAuthStore: () => authStore,
 }));
 
 function makeUser(): AdminUserResponse {
@@ -101,10 +110,24 @@ function makeLease(): LeaseResponse {
   };
 }
 
+function makeLeaseWithHistoricalSession(): LeaseResponse {
+  const item = makeLease();
+  return {
+    lease: {
+      ...item.lease,
+      state: "released",
+      released_at: "2026-01-01T02:00:00Z",
+    },
+    session: null,
+  };
+}
+
 describe("LeasesView", () => {
   beforeEach(() => {
-    [listAdminLeases, createAdminLease, updateAdminLease, startAdminLeaseSession, deleteAdminLease, listAdminUsers, listBoards]
+    [listAdminLeases, createAdminLease, updateAdminLease, startAdminLeaseSession, releaseAdminLease, deleteAdminLease, listAdminUsers, listBoards]
       .forEach((fn) => fn.mockReset());
+    authStore.hasPermission.mockReset();
+    authStore.hasPermission.mockReturnValue(true);
     routerPush.mockReset();
     uiStore.setError.mockReset();
     uiStore.setSuccess.mockReset();
@@ -116,6 +139,7 @@ describe("LeasesView", () => {
     createAdminLease.mockResolvedValue(makeLease());
     updateAdminLease.mockResolvedValue(makeLease());
     startAdminLeaseSession.mockResolvedValue(makeLease());
+    releaseAdminLease.mockResolvedValue(undefined);
     deleteAdminLease.mockResolvedValue(undefined);
   });
 
@@ -195,7 +219,7 @@ describe("LeasesView", () => {
     await wrapper.get('button[title="禁用"]').trigger("click");
     await flushPromises();
 
-    expect(deleteAdminLease).toHaveBeenCalledWith("lease-1");
+    expect(releaseAdminLease).toHaveBeenCalledWith("lease-1");
   });
 
   it("opens more actions, navigates to the session, and deletes the lease", async () => {
@@ -233,6 +257,56 @@ describe("LeasesView", () => {
     await flushPromises();
 
     expect(deleteAdminLease).toHaveBeenCalledWith("lease-1");
+    wrapper.unmount();
+  });
+
+  it("disables lease deletion without rentals.delete permission", async () => {
+    authStore.hasPermission.mockReturnValue(false);
+
+    const LeasesView = (await import("./LeasesView.vue")).default;
+    const wrapper = mount(LeasesView, {
+      attachTo: document.body,
+    });
+    await flushPromises();
+
+    await wrapper.find('button[title="更多"]').trigger("click");
+    await flushPromises();
+
+    const deleteItem = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>(".action-menu.action-menu--floating .action-menu-item"),
+    ).find((item) => item.textContent?.includes("删除租赁"));
+    expect(deleteItem).toBeTruthy();
+    expect(deleteItem!.disabled).toBe(true);
+
+    wrapper.unmount();
+  });
+
+  it("navigates to a historical session when the lease only has session_id", async () => {
+    listAdminLeases.mockResolvedValue({ leases: [makeLeaseWithHistoricalSession()] });
+
+    const LeasesView = (await import("./LeasesView.vue")).default;
+    const wrapper = mount(LeasesView, {
+      attachTo: document.body,
+    });
+    await flushPromises();
+
+    await wrapper.find('button[title="更多"]').trigger("click");
+    await flushPromises();
+
+    const sessionItem = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>(".action-menu.action-menu--floating .action-menu-item"),
+    ).find((item) => item.textContent?.includes("转到会话"));
+    expect(sessionItem).toBeTruthy();
+    expect(sessionItem!.disabled).toBe(false);
+
+    sessionItem!.click();
+    await flushPromises();
+
+    expect(routerPush).toHaveBeenCalledWith({
+      path: "/admin/rentals/sessions",
+      query: { q: "session-1" },
+    });
+
     wrapper.unmount();
   });
 });

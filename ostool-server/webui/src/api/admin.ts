@@ -265,6 +265,14 @@ export const adminApi = {
       },
     );
   },
+  releaseAdminLease(leaseId: string) {
+    return request<void>(
+      `/api/v1/admin/leases/${encodeURIComponent(leaseId)}/release`,
+      {
+        method: "POST",
+      },
+    );
+  },
   deleteAdminLease(leaseId: string) {
     return request<void>(`/api/v1/admin/leases/${encodeURIComponent(leaseId)}`, {
       method: "DELETE",

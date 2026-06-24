@@ -5,6 +5,7 @@ import { useRouter } from "vue-router";
 import Icon from "@/components/Icon.vue";
 import StatusPill from "@/components/StatusPill.vue";
 import { api } from "@/api";
+import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import type { AdminUserResponse, BoardConfig, LeaseResponse } from "@/types/api";
 
@@ -12,6 +13,7 @@ type LeaseModalMode = "create" | "edit" | null;
 type LeaseStateFilter = "all" | "active" | "releasing" | "released" | "expired" | "failed";
 
 const ui = useUiStore();
+const auth = useAuthStore();
 const router = useRouter();
 const leases = ref<LeaseResponse[]>([]);
 const users = ref<AdminUserResponse[]>([]);
@@ -25,6 +27,7 @@ const openMenuLeaseId = ref<string | null>(null);
 const menuPosition = ref({ top: 0, left: 0 });
 const search = ref("");
 const stateFilter = ref<LeaseStateFilter>("all");
+const canDeleteRentals = computed(() => auth.hasPermission("rentals.delete"));
 const form = ref({
   user_id: "",
   board_id: "",
@@ -189,13 +192,14 @@ function onDocumentClick(event: MouseEvent) {
 }
 
 function goToSession(item: LeaseResponse) {
-  if (!item.session) {
+  const sessionId = item.session?.id || item.lease.session_id;
+  if (!sessionId) {
     return;
   }
   closeMenu();
   void router.push({
     path: "/admin/rentals/sessions",
-    query: { q: item.session.id },
+    query: { q: sessionId },
   });
 }
 
@@ -316,6 +320,10 @@ async function startLeaseSession(item: LeaseResponse) {
 
 async function confirmLeaseRemoval(leaseId: string, action: "disable" | "delete") {
   closeMenu();
+  if (action === "delete" && !canDeleteRentals.value) {
+    ui.setError("缺少删除租赁数据权限");
+    return;
+  }
   const actionLabel = action === "disable" ? "禁用" : "删除";
   const confirmed = await ui.confirm({
     tone: "danger",
@@ -327,8 +335,13 @@ async function confirmLeaseRemoval(leaseId: string, action: "disable" | "delete"
     return;
   }
   try {
-    await api.deleteAdminLease(leaseId);
-    ui.setSuccess(`已发起${actionLabel}租赁 ${leaseId}`);
+    if (action === "disable") {
+      await api.releaseAdminLease(leaseId);
+      ui.setSuccess(`已发起${actionLabel}租赁 ${leaseId}`);
+    } else {
+      await api.deleteAdminLease(leaseId);
+      ui.setSuccess(`已${actionLabel}租赁 ${leaseId}`);
+    }
     await loadData();
   } catch (error) {
     ui.setError((error as Error).message);
@@ -454,7 +467,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
                     >
                       <button
                         class="action-menu-item"
-                        :disabled="!item.session"
+                        :disabled="!item.lease.session_id && !item.session"
                         @click="goToSession(item)"
                       >
                         <Icon name="terminal" :size="14" />
@@ -462,7 +475,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
                       </button>
                       <button
                         class="action-menu-item"
-                        :disabled="!isActiveLease(item)"
+                        :disabled="!canDeleteRentals"
                         @click="deleteLease(item.lease.id)"
                       >
                         <Icon name="trash" :size="14" />

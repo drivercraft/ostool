@@ -178,11 +178,14 @@ fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandl
                 .send(Ok(local_addr))
                 .map_err(|_| anyhow!("failed to publish test server listen address"))?;
 
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    let _ = shutdown_rx.await;
-                })
-                .await?;
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await?;
             Ok(())
         });
 

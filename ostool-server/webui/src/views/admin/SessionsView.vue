@@ -5,11 +5,13 @@ import { useRoute } from "vue-router";
 import Icon from "@/components/Icon.vue";
 import StatusPill from "@/components/StatusPill.vue";
 import { api } from "@/api";
+import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import type { AdminSessionResponse, AdminUserResponse, BoardConfig, SessionRecord } from "@/types/api";
 import { formatLeaseRemaining } from "@/utils/time";
 
 const ui = useUiStore();
+const auth = useAuthStore();
 const route = useRoute();
 const loading = ref(true);
 const boards = ref<BoardConfig[]>([]);
@@ -18,6 +20,7 @@ const sessions = ref<AdminSessionResponse[]>([]);
 const initialQuery = typeof route.query.q === "string" ? route.query.q : "";
 const search = ref(initialQuery);
 const stateFilter = ref<"all" | "active" | "releasing" | "released" | "expired" | "failed">("all");
+const canDeleteRentals = computed(() => auth.hasPermission("rentals.delete"));
 
 const boardMap = computed(() =>
   new Map(boards.value.map((board) => [board.id, board])),
@@ -87,8 +90,8 @@ function sessionDurationLabel(session: SessionRecord) {
   return "-";
 }
 
-function canReleaseSession(session: SessionRecord) {
-  return session.state === "active";
+function canDeleteSession(session: SessionRecord) {
+  return canDeleteRentals.value && session.state !== "releasing";
 }
 
 async function loadSessions() {
@@ -109,12 +112,16 @@ async function loadSessions() {
   }
 }
 
-async function releaseSession(sessionId: string) {
+async function deleteSessionRecord(sessionId: string) {
+  if (!canDeleteRentals.value) {
+    ui.setError("缺少删除租赁数据权限");
+    return;
+  }
   const confirmed = await ui.confirm({
     tone: "danger",
-    title: "释放会话",
-    message: `确认释放会话 ${sessionId} 吗？`,
-    confirmLabel: "释放",
+    title: "删除会话租约",
+    message: `确认删除会话租约 ${sessionId} 吗？`,
+    confirmLabel: "删除",
   });
   if (!confirmed) {
     return;
@@ -122,7 +129,7 @@ async function releaseSession(sessionId: string) {
 
   try {
     await api.deleteSession(sessionId);
-    ui.setSuccess(`已发起释放会话 ${sessionId}`);
+    ui.setSuccess(`已删除会话租约 ${sessionId}`);
     await loadSessions();
   } catch (error) {
     ui.setError((error as Error).message);
@@ -205,8 +212,8 @@ onMounted(() => {
                   <button
                     class="btn-icon-only"
                     title="删除"
-                    :disabled="!canReleaseSession(item.session)"
-                    @click="releaseSession(item.session.id)"
+                    :disabled="!canDeleteSession(item.session)"
+                    @click="deleteSessionRecord(item.session.id)"
                   >
                     <Icon name="trash" :size="16" />
                   </button>

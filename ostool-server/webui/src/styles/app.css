@@ -572,6 +572,16 @@ table.data-table tbody tr { transition: background-color .12s ease; }
 table.tbl tbody tr:hover,
 table.data-table tbody tr:hover { background: var(--c-brand-tint); }
 
+table.tbl td > :is(.tag-list, .role-chip-list, .user-cell),
+table.data-table td > :is(.tag-list, .role-chip-list, .user-cell) {
+  justify-content: center;
+}
+
+table.tbl td > .user-cell .user-cell-main,
+table.data-table td > .user-cell .user-cell-main {
+  justify-items: center;
+}
+
 .data-table .col-index {
   width: 64px;
   min-width: 64px;

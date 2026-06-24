@@ -145,6 +145,10 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/admin/leases/{lease_id}/session",
             post(start_admin_lease_session),
         )
+        .route(
+            "/api/v1/admin/leases/{lease_id}/release",
+            post(release_admin_lease),
+        )
         .route("/api/v1/admin/permissions", get(list_admin_permissions))
         .route(
             "/api/v1/admin/roles",
@@ -321,10 +325,39 @@ fn user_response(user: CurrentUser) -> CurrentUserResponse {
 
 fn current_user_is_admin(user: &CurrentUser) -> bool {
     user.roles.iter().any(|role| role.name == "admin")
-        || user
-            .permissions
-            .iter()
-            .any(|permission| permission.code == "settings.manage")
+        || user.permissions.iter().any(|permission| {
+            permission.code.split_once('.').is_some_and(|(module, _)| {
+                matches!(
+                    module,
+                    "resources" | "rentals" | "users" | "roles" | "settings"
+                )
+            })
+        })
+}
+
+fn user_has_permission(user: &CurrentUser, permission_code: &str) -> bool {
+    if user.roles.iter().any(|role| role.name == "admin") {
+        return true;
+    }
+    let Some((module, action)) = permission_code.split_once('.') else {
+        return false;
+    };
+    let manage_permission = format!("{module}.manage");
+    user.permissions.iter().any(|permission| {
+        permission.code == permission_code
+            || permission.code == manage_permission
+            || (action == "read" && permission.code == "settings.manage")
+    })
+}
+
+fn require_permission(user: &CurrentUser, permission_code: &str) -> Result<(), ApiError> {
+    if user_has_permission(user, permission_code) {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden(format!(
+            "permission `{permission_code}` required"
+        )))
+    }
 }
 
 fn admin_user_response(user: crate::storage::User) -> AdminUserResponse {
@@ -912,7 +945,7 @@ async fn start_admin_lease_session(
     Ok(axum::Json(lease_response(&state, updated).await))
 }
 
-async fn delete_admin_lease(
+async fn release_admin_lease(
     State(state): State<AppState>,
     Path(lease_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
@@ -923,6 +956,27 @@ async fn delete_admin_lease(
         .ok_or_else(|| ApiError::not_found("lease not found"))?;
     release_lease(&state, lease, None).await?;
     Ok(StatusCode::ACCEPTED)
+}
+
+async fn delete_admin_lease(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(lease_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let user = current_user_from_headers(&state, &headers).await?;
+    require_permission(&user, "rentals.delete")?;
+    let lease = state
+        .storage
+        .find_lease(&lease_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("lease not found"))?;
+    if let Some(session_id) = lease.session_id.as_deref() {
+        let _ = state
+            .request_session_stop(session_id, SessionStopReason::ApiDelete)
+            .await;
+    }
+    state.storage.delete_lease(&lease_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn validate_lease_window(
@@ -1699,16 +1753,15 @@ async fn list_admin_sessions(
 async fn delete_admin_session(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
-    let removed = state
+    let user = current_user_from_headers(&state, &headers).await?;
+    require_permission(&user, "rentals.delete")?;
+    let _ = state
         .request_session_stop(&session_id, SessionStopReason::ApiDelete)
         .await;
-    if removed.is_none() {
-        return Err(ApiError::not_found(format!(
-            "session `{session_id}` not found"
-        )));
-    }
-    Ok(StatusCode::ACCEPTED)
+    state.storage.delete_session_record(&session_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_tftp_config(
@@ -3107,4 +3160,78 @@ async fn rewrite_board_dtb_references(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use super::*;
+    use crate::storage::{Permission, Role};
+
+    fn permission(code: &str) -> Permission {
+        Permission {
+            id: format!("perm-{code}"),
+            code: code.to_string(),
+            name: code.to_string(),
+            description: String::new(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn role(name: &str) -> Role {
+        Role {
+            id: format!("role-{name}"),
+            name: name.to_string(),
+            display_name: name.to_string(),
+            description: String::new(),
+            system: false,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn current_user(roles: Vec<Role>, permissions: Vec<Permission>) -> CurrentUser {
+        CurrentUser {
+            id: "user-1".to_string(),
+            username: "operator".to_string(),
+            display_name: "Operator".to_string(),
+            nickname: None,
+            avatar_url: None,
+            email: "operator@example.com".to_string(),
+            phone: None,
+            department: None,
+            title: None,
+            last_login_at: None,
+            roles,
+            permissions,
+        }
+    }
+
+    #[test]
+    fn scoped_admin_permission_allows_admin_area_access() {
+        let user = current_user(vec![role("operator")], vec![permission("rentals.delete")]);
+
+        assert!(current_user_is_admin(&user));
+        assert!(user_has_permission(&user, "rentals.delete"));
+        assert!(!user_has_permission(&user, "users.delete"));
+    }
+
+    #[test]
+    fn manage_permission_covers_module_actions() {
+        let user = current_user(vec![role("operator")], vec![permission("rentals.manage")]);
+
+        assert!(current_user_is_admin(&user));
+        assert!(user_has_permission(&user, "rentals.delete"));
+        assert!(user_has_permission(&user, "rentals.release"));
+    }
+
+    #[test]
+    fn overview_only_user_has_no_admin_area_access() {
+        let user = current_user(vec![role("user")], vec![permission("overview.read")]);
+
+        assert!(!current_user_is_admin(&user));
+        assert!(!user_has_permission(&user, "rentals.delete"));
+    }
 }

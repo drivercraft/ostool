@@ -6,6 +6,8 @@ import type { CurrentUserResponse } from "@/types/api";
 
 export type AuthUser = CurrentUserResponse;
 
+const adminPermissionModules = new Set(["resources", "rentals", "users", "roles", "settings"]);
+
 export const useAuthStore = defineStore("auth", () => {
   const user = ref<AuthUser | null>(null);
   const loaded = ref(false);
@@ -14,11 +16,26 @@ export const useAuthStore = defineStore("auth", () => {
   const isAdmin = computed(
     () =>
       user.value?.roles.some((role) => role.name === "admin") ||
-      user.value?.permissions.some((permission) => permission.code === "settings.manage") ||
+      user.value?.permissions.some((permission) => {
+        const [moduleName] = permission.code.split(".");
+        return adminPermissionModules.has(moduleName);
+      }) ||
       false,
   );
   const currentUser = computed(() => user.value);
   const admin = computed(() => (isAdmin.value ? user.value : null));
+
+  function hasPermission(permissionCode: string) {
+    if (user.value?.roles.some((role) => role.name === "admin")) {
+      return true;
+    }
+    const [moduleName] = permissionCode.split(".");
+    return Boolean(
+      user.value?.permissions.some((permission) =>
+        permission.code === permissionCode || permission.code === `${moduleName}.manage`,
+      ),
+    );
+  }
 
   async function loadCurrentUser() {
     try {
@@ -56,6 +73,7 @@ export const useAuthStore = defineStore("auth", () => {
     isAuthenticated,
     isAdmin,
     currentUser,
+    hasPermission,
     loadCurrentUser,
     login,
     logoutUser,

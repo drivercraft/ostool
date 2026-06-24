@@ -39,6 +39,13 @@ const adminUser = {
   permissions: [{ id: "perm-settings", code: "settings.manage", name: "管理系统设置", description: "" }],
 };
 
+const rentalOperatorUser = {
+  ...demoUser,
+  id: "user-rentals",
+  username: "rental-operator",
+  permissions: [{ id: "perm-rentals-delete", code: "rentals.delete", name: "删除租赁数据", description: "" }],
+};
+
 describe("useAuthStore", () => {
   beforeEach(() => {
     mocks.getCurrentUser.mockReset();
@@ -75,6 +82,17 @@ describe("useAuthStore", () => {
     expect(mocks.login).toHaveBeenCalledWith({ username: "admin", password: "secret" });
     expect(store.isAuthenticated).toBe(true);
     expect(store.isAdmin).toBe(true);
+  });
+
+  it("allows admin area access for users with scoped admin permissions", async () => {
+    mocks.login.mockResolvedValue(rentalOperatorUser);
+    const store = useAuthStore();
+
+    await store.login("rental-operator", "secret");
+
+    expect(store.isAdmin).toBe(true);
+    expect(store.hasPermission("rentals.delete")).toBe(true);
+    expect(store.hasPermission("users.delete")).toBe(false);
   });
 
   it("logs out through the backend and clears user state", async () => {

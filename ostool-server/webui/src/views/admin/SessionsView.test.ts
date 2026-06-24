@@ -16,6 +16,9 @@ const uiStore = {
   setSuccess: vi.fn(),
   confirm: vi.fn(),
 };
+const authStore = {
+  hasPermission: vi.fn(),
+};
 
 vi.mock("@/api", () => ({
   api: {
@@ -28,6 +31,10 @@ vi.mock("@/api", () => ({
 
 vi.mock("@/stores/ui", () => ({
   useUiStore: () => uiStore,
+}));
+
+vi.mock("@/stores/auth", () => ({
+  useAuthStore: () => authStore,
 }));
 
 vi.mock("vue-router", () => ({
@@ -127,6 +134,8 @@ describe("SessionsView", () => {
     listSessions.mockReset();
     listAdminUsers.mockReset();
     deleteSession.mockReset();
+    authStore.hasPermission.mockReset();
+    authStore.hasPermission.mockReturnValue(true);
     uiStore.clearMessages.mockReset();
     uiStore.setError.mockReset();
     uiStore.setSuccess.mockReset();
@@ -138,7 +147,7 @@ describe("SessionsView", () => {
     listSessions.mockResolvedValue({ sessions: [makeAdminSession()] });
   });
 
-  it("accepts force release responses without throwing and refreshes the list", async () => {
+  it("deletes session lease records and refreshes the list", async () => {
     deleteSession.mockResolvedValue(undefined);
     listSessions
       .mockResolvedValueOnce({ sessions: [makeAdminSession()] })
@@ -153,7 +162,7 @@ describe("SessionsView", () => {
     await flushPromises();
 
     expect(deleteSession).toHaveBeenCalledWith("session-1");
-    expect(uiStore.setSuccess).toHaveBeenCalledWith("已发起释放会话 session-1");
+    expect(uiStore.setSuccess).toHaveBeenCalledWith("已删除会话租约 session-1");
     expect(listSessions).toHaveBeenCalledTimes(2);
     expect(wrapper.text()).toContain("释放中");
   });
@@ -226,7 +235,7 @@ describe("SessionsView", () => {
     expect(wrapper.text()).toContain("释放中");
   });
 
-  it("renders released session history without enabling deletion", async () => {
+  it("renders released session history and enables deletion for authorized users", async () => {
     listSessions.mockResolvedValue({
       sessions: [makeAdminSession({ state: "released", ended_at: "2026-04-08T00:04:00Z" })],
     });
@@ -236,6 +245,17 @@ describe("SessionsView", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("已释放");
+    const releaseButton = wrapper.find('button[title="删除"]');
+    expect((releaseButton.element as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("disables session deletion without rentals.delete permission", async () => {
+    authStore.hasPermission.mockReturnValue(false);
+
+    const SessionsView = (await import("./SessionsView.vue")).default;
+    const wrapper = mount(SessionsView);
+    await flushPromises();
+
     const releaseButton = wrapper.find('button[title="删除"]');
     expect((releaseButton.element as HTMLButtonElement).disabled).toBe(true);
   });
