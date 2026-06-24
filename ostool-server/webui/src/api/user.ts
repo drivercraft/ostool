@@ -6,6 +6,9 @@ export const userApi = {
   listUserLeases() {
     return request<LeasesResponse>("/api/v1/user/leases");
   },
+  listUserLeaseAvailability() {
+    return request<LeasesResponse>("/api/v1/user/leases/availability");
+  },
   createLease(payload: CreateLeaseRequest) {
     return request<LeaseResponse>("/api/v1/user/leases", {
       method: "POST",

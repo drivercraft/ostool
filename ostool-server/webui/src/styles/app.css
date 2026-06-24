@@ -25,6 +25,10 @@
   --c-bg-alt: #eef1f7;
   --c-surface: #ffffff;
   --c-surface-2: #fbfcfe;
+  --c-disabled-bg: #e5e7eb;
+  --c-disabled-soft: #f1f3f6;
+  --c-disabled-border: #cbd5e1;
+  --c-disabled-text: #64748b;
   --c-border: #e6e8f0;
   --c-border-light: #eef0f5;
   --c-border-strong: #d6dae5;
@@ -347,6 +351,15 @@ hr { border: none; border-top: 1px solid var(--c-border); margin: 1.25rem 0; }
   content: " *";
   color: var(--c-danger);
   font-weight: 800;
+}
+.field-error {
+  margin: 0;
+  color: var(--c-danger);
+  font-size: .82rem;
+  line-height: 1.5;
+}
+.form-grid-wide {
+  grid-column: 1 / -1;
 }
 .field-label-row {
   display: flex;
@@ -825,7 +838,7 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 .public-actions { margin-left: auto; display: flex; align-items: center; gap: .75rem; }
 
 .public-main { flex: 1; }
-.public-main.user-main { padding: clamp(24px, 4vw, 44px) var(--space-page); }
+.public-main.user-main { padding: var(--content-pad); }
 
 .public-footer {
   border-top: 1px solid var(--c-border);
@@ -2272,10 +2285,12 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   border-top: 1px solid var(--c-border-light);
 }
 .lease-editor-scroll {
-  grid-template-columns: minmax(360px, 1.1fr) minmax(320px, .9fr);
+  grid-template-columns: minmax(420px, 1.08fr) minmax(360px, .92fr);
   grid-template-rows: minmax(0, 1fr);
   align-content: stretch;
   align-items: stretch;
+  column-gap: clamp(24px, 2.4vw, 40px);
+  row-gap: var(--content-gap);
   height: 100%;
   overflow: hidden;
 }
@@ -2305,7 +2320,9 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   font-size: 1.05rem;
 }
 .lease-calendar-tools {
-  display: grid;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   justify-items: end;
   gap: .6rem;
 }
@@ -2316,8 +2333,10 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 .lease-calendar-nav {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
   gap: .5rem;
+  flex: 0 0 auto;
+  padding-top: .35rem;
 }
 .lease-calendar-shell {
   flex: 1 1 0;
@@ -2336,7 +2355,8 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   overflow: hidden;
 }
 .lease-calendar-hour {
-  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-rows: repeat(4, minmax(0, 1fr));
   grid-auto-rows: minmax(0, 1fr);
 }
 .lease-calendar-month {
@@ -2345,6 +2365,7 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 }
 .lease-calendar-day {
   grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-rows: repeat(9, minmax(0, 1fr));
   grid-auto-rows: minmax(0, 1fr);
 }
 .lease-calendar-year {
@@ -2366,7 +2387,25 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 }
 .lease-calendar-cell.has-reservation {
   background:
-    linear-gradient(135deg, color-mix(in srgb, var(--c-brand-tint) 56%, transparent), transparent 68%),
+    linear-gradient(135deg, color-mix(in srgb, var(--c-disabled-bg) 76%, transparent), transparent 68%),
+    var(--c-surface);
+}
+.lease-calendar-cell.has-own-reservation {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--c-brand-tint) 58%, transparent), transparent 68%),
+    var(--c-surface);
+}
+.lease-calendar-cell.is-disabled {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--c-disabled-bg) 86%, transparent), transparent 70%),
+    var(--c-surface);
+  box-shadow: inset 0 0 0 1px var(--c-disabled-border);
+  color: var(--c-disabled-text);
+}
+.lease-calendar-cell.is-disabled.has-own-reservation {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--c-brand-tint) 42%, transparent), transparent 64%),
+    linear-gradient(315deg, color-mix(in srgb, var(--c-disabled-bg) 78%, transparent), transparent 62%),
     var(--c-surface);
 }
 .lease-calendar-cell header {
@@ -2391,8 +2430,11 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 .lease-calendar-events {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: .35rem;
+  flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 .lease-calendar-event {
@@ -2400,6 +2442,7 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   gap: .1rem;
   min-width: 0;
   padding: .4rem .5rem;
+  text-align: center;
   border-left: 3px solid var(--c-brand);
   border-radius: var(--radius-xs);
   background: var(--c-brand-ghost);
@@ -2410,6 +2453,17 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   border-left-color: var(--c-danger);
   background: var(--c-danger-bg);
   color: var(--c-danger);
+}
+.lease-calendar-event.is-unavailable {
+  border-left-color: var(--c-disabled-text);
+  background: var(--c-disabled-bg);
+  color: var(--c-disabled-text);
+  box-shadow: none;
+}
+.lease-calendar-event.is-own {
+  border-left-color: var(--c-brand);
+  background: var(--c-brand-ghost);
+  color: var(--c-brand);
 }
 .lease-calendar-event strong,
 .lease-calendar-event span {
@@ -2770,12 +2824,10 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 /* ===================================================================== */
 .user-shell { min-height: 100vh; display: flex; flex-direction: column; }
 .user-app-shell {
-  max-width: var(--wide-width);
   width: 100%;
-  margin: 0 auto;
   display: grid;
   grid-template-columns: 272px minmax(0, 1fr);
-  gap: 1.5rem;
+  gap: var(--content-gap);
   align-items: start;
 }
 .user-sidebar {
@@ -2886,10 +2938,13 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   gap: 1.25rem;
 }
 .user-lease-create-page {
+  width: 100%;
   min-height: calc(100vh - var(--topbar-h) - 88px);
+  padding: 0;
 }
 .user-lease-create-page .admin-editor-panel {
   min-height: inherit;
+  overflow: hidden;
 }
 .dashboard-page > section {
   scroll-margin-top: calc(var(--topbar-h) + 24px);
@@ -2936,6 +2991,32 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   font-size: .82rem;
   font-weight: 600;
 }
+.dashboard-quick-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--content-gap);
+}
+.dashboard-quick-card {
+  display: grid;
+  gap: .55rem;
+  padding: var(--content-pad);
+  color: var(--c-text-soft);
+  transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+.dashboard-quick-card:hover {
+  color: var(--c-text-soft);
+  border-color: var(--c-brand-soft);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+.dashboard-quick-card strong {
+  color: var(--c-text);
+  font-size: 1rem;
+}
+.dashboard-quick-card span:last-child {
+  color: var(--c-text-muted);
+  font-size: .86rem;
+}
 .dashboard-request-panel {
   padding: 1.25rem;
 }
@@ -2959,6 +3040,10 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   gap: var(--content-gap);
   padding-top: var(--content-pad);
   border-top: 1px solid var(--c-border-light);
+}
+.dashboard-lease-calendar-shell {
+  height: min(58vh, 560px);
+  min-height: 420px;
 }
 .dashboard-subsection-head h4 {
   font-size: 1rem;
@@ -3461,6 +3546,14 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   .user-nav {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+  .lease-editor-scroll {
+    grid-template-columns: 1fr;
+    height: auto;
+    overflow: auto;
+  }
+  .lease-calendar-panel {
+    min-height: 520px;
+  }
   .dashboard-form-inline {
     grid-template-columns: 1fr 1fr;
   }
@@ -3555,9 +3648,6 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   .dashboard-kpis,
   .dashboard-account-dl {
     grid-template-columns: 1fr;
-  }
-  .user-content-shell {
-    padding: var(--content-pad);
   }
   .dashboard-welcome {
     flex-direction: column;

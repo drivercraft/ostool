@@ -82,7 +82,7 @@ function loginTarget(board: BoardTypeSummary) {
   return {
     name: "login",
     query: {
-      next: `/dashboard/leases/new?board_type=${encodeURIComponent(board.board_type)}`,
+      next: `/leases/new?board_type=${encodeURIComponent(board.board_type)}`,
     },
   };
 }

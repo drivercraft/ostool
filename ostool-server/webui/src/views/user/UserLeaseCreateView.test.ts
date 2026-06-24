@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const listBoardTypes = vi.fn();
 const listUserLeases = vi.fn();
+const listUserLeaseAvailability = vi.fn();
 const createLease = vi.fn();
 const routerPush = vi.fn();
 let routeMock = {
@@ -18,6 +19,7 @@ vi.mock("@/api", () => ({
   api: {
     listBoardTypes,
     listUserLeases,
+    listUserLeaseAvailability,
     createLease,
   },
 }));
@@ -64,13 +66,23 @@ describe("UserLeaseCreateView", () => {
     routeMock = {
       query: { board_type: "rk3568" },
     };
-    [listBoardTypes, listUserLeases, createLease, routerPush, uiStore.clearMessages, uiStore.setError, uiStore.setSuccess]
+    [
+      listBoardTypes,
+      listUserLeases,
+      listUserLeaseAvailability,
+      createLease,
+      routerPush,
+      uiStore.clearMessages,
+      uiStore.setError,
+      uiStore.setSuccess,
+    ]
       .forEach((fn) => fn.mockReset());
     listBoardTypes.mockResolvedValue([
       { board_type: "rk3568", tags: ["lab"], total: 2, available: 1 },
       { board_type: "stm32mp1", tags: [], total: 1, available: 0 },
     ]);
-    listUserLeases.mockResolvedValue({
+    listUserLeases.mockResolvedValue({ leases: [] });
+    listUserLeaseAvailability.mockResolvedValue({
       leases: [
         {
           lease: {
@@ -121,15 +133,28 @@ describe("UserLeaseCreateView", () => {
     expect(wrapper.text()).toContain("申请租赁");
     expect(wrapper.find(".lease-calendar-month").exists()).toBe(true);
     expect((wrapper.find("select").element as HTMLSelectElement).value).toBe("rk3568");
+    await wrapper.findAll(".lease-calendar-tabs button")[0].trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".lease-calendar-hour").exists()).toBe(true);
+    expect(wrapper.findAll(".lease-calendar-cell")).toHaveLength(24);
+
+    await wrapper.findAll(".lease-calendar-tabs button")[1].trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".lease-calendar-day").exists()).toBe(true);
+    expect(wrapper.findAll(".lease-calendar-cell")).toHaveLength(63);
 
     await wrapper.find('input[placeholder="多个标签用英文逗号分隔，例如 lab, usb"]').setValue("lab");
+    await wrapper.find('input[type="datetime-local"]').setValue("2027-01-01T03:00");
+    await wrapper.findAll('input[type="datetime-local"]')[1].setValue("2027-01-01T04:00");
     await wrapper.get("form").trigger("submit");
     await flushPromises();
 
     expect(createLease).toHaveBeenCalledWith({
       board_type: "rk3568",
       required_tags: ["lab"],
+      starts_at: new Date("2027-01-01T03:00").toISOString(),
+      expires_at: new Date("2027-01-01T04:00").toISOString(),
     });
-    expect(routerPush).toHaveBeenCalledWith("/dashboard#leases");
+    expect(routerPush).toHaveBeenCalledWith("/dashboard/leases");
   });
 });

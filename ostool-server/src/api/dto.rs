@@ -57,6 +57,8 @@ pub struct CreateLeaseRequest {
     pub board_type: String,
     #[serde(default)]
     pub required_tags: Vec<String>,
+    pub starts_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

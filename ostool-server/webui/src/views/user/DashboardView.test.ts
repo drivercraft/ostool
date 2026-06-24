@@ -1,22 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const listBoardTypes = vi.fn();
 const listUserLeases = vi.fn();
-const deleteLease = vi.fn();
 const uiStore = {
   clearMessages: vi.fn(),
   setError: vi.fn(),
   setSuccess: vi.fn(),
-  confirm: vi.fn(),
 };
 const routerPush = vi.fn();
 const routerReplace = vi.fn();
 
 vi.mock("@/api", () => ({
   api: {
-    listBoardTypes,
     listUserLeases,
-    deleteLease,
   },
 }));
 
@@ -54,25 +49,13 @@ async function seedUser() {
 
 describe("DashboardView", () => {
   beforeEach(() => {
-    listBoardTypes.mockReset();
     listUserLeases.mockReset();
-    deleteLease.mockReset();
     uiStore.clearMessages.mockReset();
     uiStore.setError.mockReset();
     uiStore.setSuccess.mockReset();
-    uiStore.confirm.mockReset();
-    uiStore.confirm.mockResolvedValue(true);
     routerPush.mockReset();
     routerReplace.mockReset();
 
-    listBoardTypes.mockResolvedValue([
-      {
-        board_type: "rk3568",
-        tags: ["lab"],
-        total: 2,
-        available: 1,
-      },
-    ]);
     listUserLeases.mockResolvedValue({ leases: [] });
   });
 
@@ -84,7 +67,7 @@ describe("DashboardView", () => {
     expect(routerReplace).toHaveBeenCalledWith("/login");
   });
 
-  it("renders account information, leases, and current lease sessions", async () => {
+  it("renders the user dashboard overview", async () => {
     await seedUser();
     const { flushPromises, mount } = await import("@vue/test-utils");
     const DashboardView = (await import("./DashboardView.vue")).default;
@@ -124,19 +107,10 @@ describe("DashboardView", () => {
 
     expect(listUserLeases).toHaveBeenCalled();
     expect(wrapper.text()).toContain("Demo");
-    expect(wrapper.text()).toContain("账户信息");
+    expect(wrapper.text()).toContain("工作台");
     expect(wrapper.text()).toContain("我的租赁");
-    expect(wrapper.text()).toContain("租赁情况");
-    expect(wrapper.text()).toContain("租约会话");
-    expect(wrapper.text()).toContain("rk3568-1");
-
-    const button = wrapper
-      .findAll("button")
-      .find((btn) => btn.text() === "释放租赁");
-    await button!.trigger("click");
-    await flushPromises();
-
-    expect(deleteLease).toHaveBeenCalledWith("lease-1");
-    expect(uiStore.setSuccess).toHaveBeenCalled();
+    expect(wrapper.text()).toContain("当前会话");
+    expect(wrapper.text()).toContain("账户信息");
+    expect(wrapper.text()).toContain("资源申请");
   });
 });

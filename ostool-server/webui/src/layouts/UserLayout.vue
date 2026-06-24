@@ -13,10 +13,9 @@ const ui = useUiStore();
 const auth = useAuthStore();
 
 const workspaceNavItems = [
-  { to: "/dashboard#overview", hash: "#overview", label: "工作台总览", icon: "chart" as IconName },
-  { to: "/dashboard#account", hash: "#account", label: "账户信息", icon: "user" as IconName },
-  { to: "/dashboard#leases", hash: "#leases", label: "我的租赁", icon: "clipboard" as IconName },
-  { to: "/dashboard/leases/new", hash: "", label: "新增租赁", icon: "plus" as IconName },
+  { to: "/dashboard", label: "工作台总览", icon: "chart" as IconName, exact: true },
+  { to: "/dashboard/account", label: "账户信息", icon: "user" as IconName, exact: true },
+  { to: "/dashboard/leases", label: "我的租赁", icon: "clipboard" as IconName, exact: true },
 ];
 
 const topNavItems = [
@@ -43,33 +42,12 @@ async function logout() {
   void router.push("/");
 }
 
-function isWorkspaceActive(item: { hash: string }) {
-  if (route.path === "/dashboard/leases/new" && item.hash === "") {
-    return true;
-  }
-  if (route.path !== "/dashboard") {
-    return false;
-  }
-  if (item.hash === "#overview") {
-    return route.hash === "" || route.hash === item.hash;
-  }
-  return route.hash === item.hash;
-}
-
 function isTopActive(item: { to: string; exact: boolean }) {
   return item.exact ? route.path === item.to : route.path.startsWith(item.to);
 }
 
-function scrollToWorkspaceSection(hash: string) {
-  if (!hash) {
-    return;
-  }
-  window.requestAnimationFrame(() => {
-    document.querySelector(hash)?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
-  });
+function isWorkspaceActive(item: { to: string; exact: boolean }) {
+  return item.exact ? route.path === item.to : route.path.startsWith(item.to);
 }
 </script>
 
@@ -129,7 +107,6 @@ function scrollToWorkspaceSection(hash: string) {
               class="user-nav-link"
               :class="{ 'is-active': isWorkspaceActive(item) }"
               :to="item.to"
-              @click="scrollToWorkspaceSection(item.hash)"
             >
               <Icon :name="item.icon" :size="17" class="nav-link-icon" />
               <span>{{ item.label }}</span>

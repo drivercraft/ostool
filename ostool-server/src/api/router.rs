@@ -109,6 +109,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/auth/me", get(get_current_user))
         .route("/api/v1/user/profile", get(get_user_profile))
         .route(
+            "/api/v1/user/leases/availability",
+            get(list_user_lease_availability),
+        )
+        .route(
             "/api/v1/user/leases",
             get(list_user_leases).post(create_lease),
         )
@@ -415,6 +419,7 @@ fn user_permission_for_request(method: &Method, path: &str) -> Option<&'static s
         .collect::<Vec<_>>();
     match (method.as_str(), segments.as_slice()) {
         ("GET", ["leases"]) => Some("leases.read"),
+        ("GET", ["leases", "availability"]) => Some("leases.read"),
         ("POST", ["leases"]) => Some("leases.create"),
         ("DELETE", ["leases", _]) => Some("leases.release"),
         ("POST", ["leases", _, "heartbeat"]) => Some("leases.heartbeat"),
@@ -834,6 +839,22 @@ async fn list_user_leases(
     Ok(axum::Json(LeasesResponse { leases: responses }))
 }
 
+async fn list_user_lease_availability(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<axum::Json<LeasesResponse>, ApiError> {
+    current_user_from_headers(&state, &headers).await?;
+    let leases = state.storage.list_leases().await?;
+    let mut responses = Vec::new();
+    for lease in leases
+        .into_iter()
+        .filter(|lease| lease.state == crate::storage::LeaseState::Active)
+    {
+        responses.push(lease_response(&state, lease).await);
+    }
+    Ok(axum::Json(LeasesResponse { leases: responses }))
+}
+
 async fn create_lease(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -850,6 +871,7 @@ async fn create_lease(
     for tag in &request.required_tags {
         validate_max_len(tag.trim(), "required_tags", validation::TAG_MAX_LEN)?;
     }
+    validate_lease_window(request.starts_at, request.expires_at)?;
     let lease = create_user_lease(
         &state,
         &user.id,
@@ -3849,6 +3871,10 @@ mod tests {
     fn user_request_permissions_use_resource_actions() {
         assert_eq!(
             user_permission_for_request(&Method::GET, "/api/v1/user/leases"),
+            Some("leases.read")
+        );
+        assert_eq!(
+            user_permission_for_request(&Method::GET, "/api/v1/user/leases/availability"),
             Some("leases.read")
         );
         assert_eq!(

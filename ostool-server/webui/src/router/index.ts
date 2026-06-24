@@ -13,6 +13,8 @@ const RegisterView = () => import("@/views/public/RegisterView.vue");
 const TermsView = () => import("@/views/public/TermsView.vue");
 const PrivacyView = () => import("@/views/public/PrivacyView.vue");
 const DashboardView = () => import("@/views/user/DashboardView.vue");
+const AccountView = () => import("@/views/user/AccountView.vue");
+const MyLeasesView = () => import("@/views/user/MyLeasesView.vue");
 const UserLeaseCreateView = () => import("@/views/user/UserLeaseCreateView.vue");
 const OverviewView = () => import("@/views/admin/OverviewView.vue");
 const BoardsView = () => import("@/views/admin/BoardsView.vue");
@@ -88,6 +90,12 @@ export const router = createRouter({
           component: PrivacyView,
           meta: { title: "隐私政策" },
         },
+        {
+          path: "leases/new",
+          name: "user-lease-new",
+          component: UserLeaseCreateView,
+          meta: { title: "申请租赁", requiresUser: true },
+        },
       ],
     },
     {
@@ -102,10 +110,16 @@ export const router = createRouter({
           meta: { title: "用户控制台", requiresUser: true },
         },
         {
-          path: "leases/new",
-          name: "user-lease-new",
-          component: UserLeaseCreateView,
-          meta: { title: "申请租赁", requiresUser: true },
+          path: "account",
+          name: "user-account",
+          component: AccountView,
+          meta: { title: "账户信息", requiresUser: true },
+        },
+        {
+          path: "leases",
+          name: "user-leases",
+          component: MyLeasesView,
+          meta: { title: "我的租赁", requiresUser: true },
         },
       ],
     },

@@ -280,6 +280,8 @@ export interface AdminLeaseUpdateRequest {
 export interface CreateLeaseRequest {
   board_type: string;
   required_tags?: string[];
+  starts_at: string;
+  expires_at: string;
 }
 
 export interface AdminUserResponse {

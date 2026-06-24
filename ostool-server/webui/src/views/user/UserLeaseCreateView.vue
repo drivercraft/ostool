@@ -31,6 +31,10 @@ const selectedBoardType = ref("");
 const requiredTags = ref("");
 const calendarView = ref<CalendarViewMode>("month");
 const calendarCursorIso = ref(new Date().toISOString());
+const form = ref({
+  starts_at: toDatetimeLocal(new Date().toISOString()),
+  expires_at: defaultExpiresAt(),
+});
 
 const selectedBoard = computed(() =>
   boardTypes.value.find((board) => board.board_type === selectedBoardType.value) ?? null,
@@ -40,6 +44,24 @@ const selectedBoardLeases = computed(() =>
     .filter((item) => item.lease.board_type === selectedBoardType.value && item.lease.state === "active")
     .sort((left, right) => new Date(left.lease.starts_at).getTime() - new Date(right.lease.starts_at).getTime()),
 );
+const mySelectedBoardLeases = computed(() =>
+  selectedBoardLeases.value.filter((item) => item.lease.user_id === auth.user?.id),
+);
+const selectedWindowConflict = computed(() =>
+  selectedBoardLeases.value.find((item) =>
+    windowsOverlap(
+      item.lease.starts_at,
+      item.lease.expires_at,
+      fromDatetimeLocal(form.value.starts_at),
+      fromDatetimeLocal(form.value.expires_at),
+    ),
+  ) ?? null,
+);
+const selectedWindowInvalid = computed(() => {
+  const start = new Date(fromDatetimeLocal(form.value.starts_at)).getTime();
+  const end = new Date(fromDatetimeLocal(form.value.expires_at)).getTime();
+  return Number.isNaN(start) || Number.isNaN(end) || end <= start || end <= Date.now();
+});
 const calendarAnchor = computed(() => {
   const date = new Date(calendarCursorIso.value);
   return Number.isNaN(date.getTime()) ? new Date() : date;
@@ -79,10 +101,59 @@ function windowsOverlap(startA: string, endA: string, startB: string, endB: stri
     && new Date(endA).getTime() > new Date(startB).getTime();
 }
 
+function toDatetimeLocal(value: string) {
+  const date = new Date(value);
+  const pad = (part: number) => `${part}`.padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function fromDatetimeLocal(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function defaultExpiresAt() {
+  const date = new Date();
+  date.setHours(date.getHours() + 2);
+  return toDatetimeLocal(date.toISOString());
+}
+
+function formatDuration(startIso: string, endIso: string) {
+  const start = new Date(startIso).getTime();
+  const end = new Date(endIso).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) {
+    return "-";
+  }
+  const minutes = Math.round((end - start) / 60000);
+  if (minutes >= 1440) {
+    const days = Math.floor(minutes / 1440);
+    const hours = Math.round((minutes % 1440) / 60);
+    return hours > 0 ? `${days} 天 ${hours} 小时` : `${days} 天`;
+  }
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return rest > 0 ? `${hours} 小时 ${rest} 分钟` : `${hours} 小时`;
+  }
+  return `${minutes} 分钟`;
+}
+
 function leasesForRange(startIso: string, endIso: string) {
   return selectedBoardLeases.value.filter((item) =>
     windowsOverlap(item.lease.starts_at, item.lease.expires_at, startIso, endIso),
   );
+}
+
+function isMyLease(item: LeaseResponse) {
+  return item.lease.user_id === auth.user?.id;
+}
+
+function hasMyLease(slot: CalendarSlot) {
+  return slot.leases.some(isMyLease);
+}
+
+function hasOtherLease(slot: CalendarSlot) {
+  return slot.leases.some((item) => !isMyLease(item));
 }
 
 function makeCalendarSlot(label: string, caption: string, start: Date, end: Date): CalendarSlot {
@@ -120,17 +191,14 @@ function buildDaySlots(anchor: Date) {
   const start = new Date(anchor);
   start.setHours(0, 0, 0, 0);
   start.setMonth(start.getMonth() - 1);
-  const end = new Date(anchor);
-  end.setHours(0, 0, 0, 0);
-  end.setMonth(end.getMonth() + 1);
-  const slots: CalendarSlot[] = [];
-  for (const slotStart = new Date(start); slotStart <= end; slotStart.setDate(slotStart.getDate() + 1)) {
+  return Array.from({ length: 63 }, (_, index) => {
+    const slotStart = new Date(start);
+    slotStart.setDate(start.getDate() + index);
     const current = new Date(slotStart);
     const slotEnd = new Date(current);
     slotEnd.setDate(current.getDate() + 1);
-    slots.push(makeCalendarSlot(formatShortDate(current.toISOString()), "", current, slotEnd));
-  }
-  return slots;
+    return makeCalendarSlot(formatShortDate(current.toISOString()), "", current, slotEnd);
+  });
 }
 
 function buildMonthSlots(anchor: Date) {
@@ -182,7 +250,8 @@ function formatTime(value: string) {
 }
 
 function formatDateTime(value: string) {
-  return new Date(value).toLocaleString("zh-CN", { hour12: false });
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString("zh-CN", { hour12: false });
 }
 
 function formatDate(value: string) {
@@ -231,7 +300,7 @@ function eventLabelForSlot(item: LeaseResponse, slot: CalendarSlot) {
 }
 
 function userLabel(item: LeaseResponse) {
-  return item.lease.user_id === auth.user?.id ? "我的租赁" : item.lease.user_id;
+  return isMyLease(item) ? "我的租赁" : "已占用";
 }
 
 function parseRequiredTags() {
@@ -246,7 +315,7 @@ async function loadData() {
   try {
     const [types, leaseList] = await Promise.all([
       api.listBoardTypes(),
-      api.listUserLeases(),
+      api.listUserLeaseAvailability(),
     ]);
     boardTypes.value = types;
     leases.value = leaseList.leases;
@@ -266,14 +335,26 @@ async function createLease() {
     ui.setError("请选择开发板型号");
     return;
   }
+  if (selectedWindowInvalid.value) {
+    ui.setError("请选择有效的租赁时间段");
+    return;
+  }
+  if (selectedWindowConflict.value) {
+    ui.setError("所选时间段已被占用，请调整租赁时间");
+    return;
+  }
   submitting.value = true;
   try {
+    const startsAt = fromDatetimeLocal(form.value.starts_at);
+    const expiresAt = fromDatetimeLocal(form.value.expires_at);
     const created = await api.createLease({
       board_type: selectedBoardType.value,
       required_tags: parseRequiredTags(),
+      starts_at: startsAt,
+      expires_at: expiresAt,
     });
     ui.setSuccess(`已创建租赁 ${created.lease.id}，开发板 ${created.lease.board_id} 已分配`);
-    await router.push("/dashboard#leases");
+    await router.push("/dashboard/leases");
   } catch (error) {
     ui.setError((error as Error).message);
   } finally {
@@ -296,12 +377,12 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="page-grid admin-editor-page user-lease-create-page">
+  <section class="page-grid user-lease-create-page">
     <div class="admin-editor-panel panel">
       <div class="admin-editor-header">
         <div>
           <h3>申请租赁</h3>
-          <p class="muted">选择开发板型号后查看我的相关占用情况，再创建即时租赁会话。</p>
+          <p class="muted">选择开发板型号和租赁时间，已被占用的时间段会在日历中标出。</p>
         </div>
         <RouterLink class="btn btn-ghost btn-sm" to="/resources">返回资源</RouterLink>
       </div>
@@ -312,7 +393,7 @@ onMounted(() => {
             <div class="lease-calendar-head">
               <div>
                 <h4>{{ selectedBoardType || "请选择开发板型号" }}</h4>
-                <p class="muted">{{ calendarPeriodLabel }} 的我的租赁占用情况</p>
+                <p class="muted">{{ calendarPeriodLabel }} 的租赁占用情况</p>
               </div>
               <div class="lease-calendar-tools">
                 <div class="segmented-control lease-calendar-tabs" role="group" aria-label="日历视图">
@@ -320,15 +401,6 @@ onMounted(() => {
                   <button type="button" :class="{ 'is-active': calendarView === 'day' }" @click="calendarView = 'day'">日</button>
                   <button type="button" :class="{ 'is-active': calendarView === 'month' }" @click="calendarView = 'month'">月</button>
                   <button type="button" :class="{ 'is-active': calendarView === 'year' }" @click="calendarView = 'year'">年</button>
-                </div>
-                <div class="lease-calendar-nav">
-                  <button class="btn-icon-only" type="button" title="上一页" @click="moveCalendar(-1)">
-                    <Icon name="arrow-left" :size="15" />
-                  </button>
-                  <button class="btn btn-ghost btn-sm" type="button" @click="focusNow">定位当前</button>
-                  <button class="btn-icon-only" type="button" title="下一页" @click="moveCalendar(1)">
-                    <Icon name="arrow-right" :size="15" />
-                  </button>
                 </div>
               </div>
             </div>
@@ -341,7 +413,12 @@ onMounted(() => {
                   v-for="slot in calendarSlots"
                   :key="slot.key"
                   class="lease-calendar-cell"
-                  :class="{ 'has-reservation': slot.leases.length > 0 }"
+                  :class="{
+                    'has-own-reservation': hasMyLease(slot),
+                    'has-reservation': hasOtherLease(slot),
+                    'is-disabled': hasOtherLease(slot),
+                    'is-selected': windowsOverlap(slot.startIso, slot.endIso, fromDatetimeLocal(form.starts_at), fromDatetimeLocal(form.expires_at)),
+                  }"
                 >
                   <header>
                     <strong>{{ slot.label }}</strong>
@@ -352,6 +429,7 @@ onMounted(() => {
                       v-for="item in slot.leases.slice(0, calendarView === 'hour' ? 2 : 3)"
                       :key="item.lease.id"
                       class="lease-calendar-event compact"
+                      :class="{ 'is-own': isMyLease(item), 'is-unavailable': !isMyLease(item) }"
                       :title="`${formatDateTime(item.lease.starts_at)} ~ ${formatDateTime(item.lease.expires_at)}`"
                     >
                       <strong>{{ eventLabelForSlot(item, slot) }}</strong>
@@ -366,6 +444,15 @@ onMounted(() => {
                   </div>
                 </article>
               </div>
+            </div>
+            <div v-if="!loading && selectedBoard" class="lease-calendar-nav">
+              <button class="btn-icon-only" type="button" title="上一页" @click="moveCalendar(-1)">
+                <Icon name="arrow-left" :size="15" />
+              </button>
+              <button class="btn btn-ghost btn-sm" type="button" @click="focusNow">定位当前</button>
+              <button class="btn-icon-only" type="button" title="下一页" @click="moveCalendar(1)">
+                <Icon name="arrow-right" :size="15" />
+              </button>
             </div>
           </section>
 
@@ -396,6 +483,23 @@ onMounted(() => {
                     placeholder="多个标签用英文逗号分隔，例如 lab, usb"
                   />
                 </label>
+
+                <label class="field is-required">
+                  <span>开始时间</span>
+                  <input v-model="form.starts_at" type="datetime-local" :disabled="submitting" />
+                </label>
+
+                <label class="field is-required">
+                  <span>结束时间</span>
+                  <input v-model="form.expires_at" type="datetime-local" :disabled="submitting" />
+                </label>
+
+                <p v-if="selectedWindowInvalid" class="field-error form-grid-wide">
+                  结束时间必须晚于开始时间，且租赁结束时间必须在当前时间之后。
+                </p>
+                <p v-else-if="selectedWindowConflict" class="field-error form-grid-wide">
+                  所选时间段已被占用：{{ formatDateTime(selectedWindowConflict.lease.starts_at) }} ~ {{ formatDateTime(selectedWindowConflict.lease.expires_at) }}
+                </p>
               </div>
             </div>
 
@@ -407,16 +511,24 @@ onMounted(() => {
 
               <dl class="lease-summary-list">
                 <div>
-                  <dt>创建方式</dt>
-                  <dd>提交后立即分配当前空闲开发板并创建会话。</dd>
+                  <dt>租赁方式</dt>
+                  <dd>提交后按所选时间段预约可用开发板。</dd>
                 </div>
                 <div>
                   <dt>时间段</dt>
-                  <dd>普通用户租期由系统默认租赁策略决定。</dd>
+                  <dd>{{ formatDateTime(fromDatetimeLocal(form.starts_at)) }} ~ {{ formatDateTime(fromDatetimeLocal(form.expires_at)) }}</dd>
+                </div>
+                <div>
+                  <dt>时长</dt>
+                  <dd>{{ formatDuration(fromDatetimeLocal(form.starts_at), fromDatetimeLocal(form.expires_at)) }}</dd>
                 </div>
                 <div>
                   <dt>当前型号</dt>
                   <dd>{{ selectedBoard ? `${selectedBoard.available} / ${selectedBoard.total} 可用` : "-" }}</dd>
+                </div>
+                <div>
+                  <dt>我的租赁</dt>
+                  <dd>{{ mySelectedBoardLeases.length }} 条</dd>
                 </div>
               </dl>
             </div>
@@ -424,7 +536,11 @@ onMounted(() => {
         </div>
 
         <div class="admin-editor-actions">
-          <button type="submit" class="btn btn-primary" :disabled="submitting || loading || !selectedBoardType">
+          <button
+            type="submit"
+            class="btn btn-primary"
+            :disabled="submitting || loading || !selectedBoardType || selectedWindowInvalid || Boolean(selectedWindowConflict)"
+          >
             {{ submitting ? "申请中..." : "创建租赁" }}
           </button>
           <RouterLink class="btn btn-ghost" to="/resources">取消</RouterLink>

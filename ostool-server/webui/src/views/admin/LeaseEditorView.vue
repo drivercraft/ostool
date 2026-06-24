@@ -240,22 +240,19 @@ function buildDaySlots(anchor: Date) {
   const start = new Date(anchor);
   start.setHours(0, 0, 0, 0);
   start.setMonth(start.getMonth() - 1);
-  const end = new Date(anchor);
-  end.setHours(0, 0, 0, 0);
-  end.setMonth(end.getMonth() + 1);
-  const slots: CalendarSlot[] = [];
-  for (const slotStart = new Date(start); slotStart <= end; slotStart.setDate(slotStart.getDate() + 1)) {
+  return Array.from({ length: 63 }, (_, index) => {
+    const slotStart = new Date(start);
+    slotStart.setDate(start.getDate() + index);
     const current = new Date(slotStart);
     const slotEnd = new Date(current);
     slotEnd.setDate(current.getDate() + 1);
-    slots.push(makeCalendarSlot(
+    return makeCalendarSlot(
       formatShortDate(current.toISOString()),
       "",
       current,
       slotEnd,
-    ));
-  }
-  return slots;
+    );
+  });
 }
 
 function buildMonthSlots(anchor: Date) {
@@ -499,15 +496,6 @@ onMounted(() => {
                   <button type="button" :class="{ 'is-active': calendarView === 'month' }" @click="calendarView = 'month'">月</button>
                   <button type="button" :class="{ 'is-active': calendarView === 'year' }" @click="calendarView = 'year'">年</button>
                 </div>
-                <div class="lease-calendar-nav">
-                  <button class="btn-icon-only" type="button" title="上一页" @click="moveCalendar(-1)">
-                    <Icon name="arrow-left" :size="15" />
-                  </button>
-                  <button class="btn btn-ghost btn-sm" type="button" @click="focusReservationDate">定位预约</button>
-                  <button class="btn-icon-only" type="button" title="下一页" @click="moveCalendar(1)">
-                    <Icon name="arrow-right" :size="15" />
-                  </button>
-                </div>
               </div>
             </div>
 
@@ -551,6 +539,15 @@ onMounted(() => {
                   </div>
                 </article>
               </div>
+            </div>
+            <div v-if="!loading && selectedBoard" class="lease-calendar-nav">
+              <button class="btn-icon-only" type="button" title="上一页" @click="moveCalendar(-1)">
+                <Icon name="arrow-left" :size="15" />
+              </button>
+              <button class="btn btn-ghost btn-sm" type="button" @click="focusReservationDate">定位预约</button>
+              <button class="btn-icon-only" type="button" title="下一页" @click="moveCalendar(1)">
+                <Icon name="arrow-right" :size="15" />
+              </button>
             </div>
           </section>
 
