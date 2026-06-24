@@ -22,6 +22,14 @@ export interface CurrentUserResponse {
 export interface LoginRequest {
   username: string;
   password: string;
+  captcha_token: string;
+  captcha_answer: string;
+}
+
+export interface CaptchaResponse {
+  token: string;
+  image_svg: string;
+  expires_in_seconds: number;
 }
 
 export interface BuiltinTftpConfig {

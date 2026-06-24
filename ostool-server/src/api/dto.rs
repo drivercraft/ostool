@@ -25,6 +25,15 @@ pub struct ErrorResponse {
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
+    pub captcha_token: String,
+    pub captcha_answer: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaptchaResponse {
+    pub token: String,
+    pub image_svg: String,
+    pub expires_in_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

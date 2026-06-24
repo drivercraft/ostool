@@ -12,9 +12,11 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
+use chrono::Utc;
 use futures_util::future::join_all;
 use httpboot_protocol::{BootArch, ImageFormat};
 use mime_guess::from_path;
+use rand_core::{OsRng, RngCore};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -22,6 +24,7 @@ use tokio::{
     fs::{self, File},
     io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
 };
+use uuid::Uuid;
 
 use crate::{
     api::{
@@ -35,13 +38,13 @@ use crate::{
             AdminTftpStatusResponse, AdminUserCreateRequest, AdminUserResponse,
             AdminUserRolesResponse, AdminUserRolesUpdateRequest, AdminUserUpdateRequest,
             AdminUsersResponse, BoardPowerAction, BoardPowerStatusResponse,
-            BoardRuntimeStatusResponse, BoardTypeSummary, BootProfileResponse, CreateLeaseRequest,
-            CreateSessionRequest, CurrentUserResponse, DtbFileResponse, FileResponse,
-            HttpBootFileResponse, KernelPublishResponse, LeaseResponse, LeasesResponse,
-            LoginRequest, NetworkInterfaceSummary, SerialPortSummary, SerialStatusResponse,
-            SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse,
-            SiteSettingsResponse, SiteSettingsUpdateRequest, TftpSessionResponse,
-            UpdateServerConfigRequest,
+            BoardRuntimeStatusResponse, BoardTypeSummary, BootProfileResponse, CaptchaResponse,
+            CreateLeaseRequest, CreateSessionRequest, CurrentUserResponse, DtbFileResponse,
+            FileResponse, HttpBootFileResponse, KernelPublishResponse, LeaseResponse,
+            LeasesResponse, LoginRequest, NetworkInterfaceSummary, SerialPortSummary,
+            SerialStatusResponse, SessionCreatedResponse, SessionDetailResponse,
+            SessionDtbResponse, SiteSettingsResponse, SiteSettingsUpdateRequest,
+            TftpSessionResponse, UpdateServerConfigRequest,
         },
         error::ApiError,
     },
@@ -68,7 +71,7 @@ use crate::{
     },
     session::SessionState,
     session::SessionStopReason,
-    state::{AppState, BoardLeaseState, TouchSessionError},
+    state::{AppState, BoardLeaseState, CaptchaChallenge, TouchSessionError},
     storage::{
         Lease, NewAuditLog, NewRole, Role, SiteSettings, UpsertDtbMetadata, UserProfile,
         default_user_permission,
@@ -100,6 +103,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/v1/admin/overview", get(get_admin_overview))
         .route("/api/v1/auth/login", post(login))
+        .route("/api/v1/auth/captcha", get(get_captcha))
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/me", get(get_current_user))
         .route("/api/v1/user/profile", get(get_user_profile))
@@ -612,10 +616,34 @@ async fn lease_response(state: &AppState, lease: Lease) -> LeaseResponse {
     LeaseResponse { lease, session }
 }
 
+const CAPTCHA_EXPIRES_IN_SECONDS: i64 = 300;
+
+async fn get_captcha(
+    State(state): State<AppState>,
+) -> Result<axum::Json<CaptchaResponse>, ApiError> {
+    remove_expired_captchas(&state).await;
+    let token = Uuid::new_v4().to_string();
+    let answer = captcha_answer();
+    let image_svg = captcha_svg(&answer);
+    state.captchas.write().await.insert(
+        token.clone(),
+        CaptchaChallenge {
+            answer_hash: captcha_answer_hash(&answer),
+            expires_at: Utc::now() + chrono::Duration::seconds(CAPTCHA_EXPIRES_IN_SECONDS),
+        },
+    );
+    Ok(axum::Json(CaptchaResponse {
+        token,
+        image_svg,
+        expires_in_seconds: CAPTCHA_EXPIRES_IN_SECONDS as u64,
+    }))
+}
+
 async fn login(
     State(state): State<AppState>,
     axum::Json(request): axum::Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
+    verify_captcha(&state, &request.captcha_token, &request.captcha_answer).await?;
     let (user, token) = state
         .auth
         .login(request.username.trim(), &request.password)
@@ -624,6 +652,64 @@ async fn login(
     let mut response = axum::Json(user_response(user)).into_response();
     set_cookie_header(response.headers_mut(), cookie_value(&token)).map_err(ApiError::from)?;
     Ok(response)
+}
+
+async fn remove_expired_captchas(state: &AppState) {
+    let now = Utc::now();
+    state
+        .captchas
+        .write()
+        .await
+        .retain(|_, challenge| challenge.expires_at > now);
+}
+
+async fn verify_captcha(state: &AppState, token: &str, answer: &str) -> Result<(), ApiError> {
+    remove_expired_captchas(state).await;
+    let Some(challenge) = state.captchas.write().await.remove(token) else {
+        return Err(ApiError::bad_request("验证码已过期，请刷新后重试"));
+    };
+    if captcha_answer_hash(answer) == challenge.answer_hash {
+        Ok(())
+    } else {
+        Err(ApiError::bad_request("验证码不正确，请刷新后重试"))
+    }
+}
+
+fn captcha_answer() -> String {
+    const ALPHABET: &[u8] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+    let mut bytes = [0_u8; 6];
+    OsRng.fill_bytes(&mut bytes);
+    bytes
+        .into_iter()
+        .map(|byte| ALPHABET[(byte as usize) % ALPHABET.len()] as char)
+        .collect()
+}
+
+fn captcha_answer_hash(answer: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(answer.trim().to_ascii_uppercase().as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn captcha_svg(answer: &str) -> String {
+    let chars = answer.chars().collect::<Vec<_>>();
+    let mut text = String::new();
+    for (index, ch) in chars.iter().enumerate() {
+        let x = 20 + index * 20;
+        let y = 31 + ((index % 2) * 4);
+        text.push_str(&format!(
+            r#"<text x="{x}" y="{y}" transform="rotate({rotate} {x} {y})">{ch}</text>"#,
+            rotate = if index % 2 == 0 { -8 } else { 7 },
+        ));
+    }
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="148" height="46" viewBox="0 0 148 46" role="img" aria-label="验证码">
+<rect width="148" height="46" rx="8" fill="#f8fafc"/>
+<path d="M8 32 C38 16, 74 42, 140 17" fill="none" stroke="#93c5fd" stroke-width="2" opacity=".65"/>
+<path d="M12 15 C42 38, 88 8, 136 31" fill="none" stroke="#c4b5fd" stroke-width="2" opacity=".55"/>
+<g fill="#0f172a" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="22" font-weight="800" letter-spacing="3">{text}</g>
+</svg>"##
+    )
 }
 
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
@@ -3482,6 +3568,14 @@ mod tests {
         assert_eq!(
             user_permission_for_request(&Method::POST, "/api/v1/user/leases/lease-1/heartbeat"),
             Some("leases.heartbeat")
+        );
+    }
+
+    #[test]
+    fn captcha_hash_ignores_case_and_surrounding_whitespace() {
+        assert_eq!(
+            captcha_answer_hash(" AB12CD "),
+            captcha_answer_hash("ab12cd")
         );
     }
 }

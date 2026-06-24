@@ -2476,7 +2476,7 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 }
 .auth-card {
   width: 100%;
-  max-width: 400px;
+  max-width: 480px;
   background: var(--c-surface);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-xl);
@@ -2489,8 +2489,39 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 .auth-form { display: flex; flex-direction: column; gap: 1.05rem; }
 .auth-form > button { width: 100%; }
 .auth-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: .9rem; }
+.captcha-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 148px;
+  align-items: end;
+  gap: .75rem;
+}
+.captcha-image {
+  width: 148px;
+  height: var(--control-h);
+  padding: 0;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface-2);
+  color: var(--c-text-muted);
+  overflow: hidden;
+  cursor: pointer;
+}
+.captcha-image:hover {
+  border-color: var(--c-border-strong);
+  background: var(--c-surface);
+}
+.captcha-image svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 .auth-hint { font-size: .8rem; color: var(--c-danger); margin-top: -.4rem; }
-@media (max-width: 480px) { .auth-form-row { grid-template-columns: 1fr; } }
+@media (max-width: 480px) {
+  .auth-form-row,
+  .captcha-row {
+    grid-template-columns: 1fr;
+  }
+}
 .auth-footer {
   margin-top: 1.4rem;
   text-align: center;

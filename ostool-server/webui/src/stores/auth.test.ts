@@ -89,9 +89,14 @@ describe("useAuthStore", () => {
     mocks.login.mockResolvedValue(adminUser);
     const store = useAuthStore();
 
-    await store.login("admin", "secret");
+    await store.login("admin", "secret", "captcha-token", "captcha-answer");
 
-    expect(mocks.login).toHaveBeenCalledWith({ username: "admin", password: "secret" });
+    expect(mocks.login).toHaveBeenCalledWith({
+      username: "admin",
+      password: "secret",
+      captcha_token: "captcha-token",
+      captcha_answer: "captcha-answer",
+    });
     expect(store.isAuthenticated).toBe(true);
     expect(store.isAdmin).toBe(true);
   });
@@ -100,7 +105,7 @@ describe("useAuthStore", () => {
     mocks.login.mockResolvedValue(rentalOperatorUser);
     const store = useAuthStore();
 
-    await store.login("rental-operator", "secret");
+    await store.login("rental-operator", "secret", "captcha-token", "captcha-answer");
 
     expect(store.isAdmin).toBe(true);
     expect(store.hasPermission("leases.delete")).toBe(true);
@@ -112,7 +117,7 @@ describe("useAuthStore", () => {
     mocks.login.mockResolvedValue(defaultRentalUser);
     const store = useAuthStore();
 
-    await store.login("default-rental-user", "secret");
+    await store.login("default-rental-user", "secret", "captcha-token", "captcha-answer");
 
     expect(store.isAuthenticated).toBe(true);
     expect(store.isAdmin).toBe(false);
@@ -126,7 +131,7 @@ describe("useAuthStore", () => {
     mocks.login.mockResolvedValue(demoUser);
     mocks.logout.mockResolvedValue(undefined);
     const store = useAuthStore();
-    await store.login("demo", "secret");
+    await store.login("demo", "secret", "captcha-token", "captcha-answer");
 
     await store.logoutUser();
 

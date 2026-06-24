@@ -73,6 +73,12 @@ pub struct BoardPowerStatusSnapshot {
 }
 
 #[derive(Debug, Clone)]
+pub struct CaptchaChallenge {
+    pub answer_hash: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
 struct ReleaseJob {
     session: Arc<SessionState>,
     reason: SessionStopReason,
@@ -98,6 +104,7 @@ pub struct AppState {
     pub tftp_manager: Arc<RwLock<Arc<dyn TftpManager>>>,
     pub storage: DynStorage,
     pub auth: SharedAuthService,
+    pub captchas: Arc<RwLock<BTreeMap<String, CaptchaChallenge>>>,
     release_tx: mpsc::UnboundedSender<ReleaseJob>,
 }
 
@@ -139,6 +146,7 @@ pub async fn build_app_state(
         tftp_manager: Arc::new(RwLock::new(tftp_manager)),
         storage,
         auth,
+        captchas: Arc::new(RwLock::new(BTreeMap::new())),
         release_tx,
     };
 

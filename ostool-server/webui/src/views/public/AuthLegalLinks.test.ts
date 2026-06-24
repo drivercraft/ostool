@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const route = { query: {} };
 const routerPush = vi.fn();
+const getCaptcha = vi.fn();
 const authStore = {
   isAdmin: false,
   login: vi.fn(),
@@ -32,9 +33,21 @@ vi.mock("@/stores/ui", () => ({
   useUiStore: () => uiStore,
 }));
 
+vi.mock("@/api", () => ({
+  api: {
+    getCaptcha,
+  },
+}));
+
 describe("auth legal links", () => {
   beforeEach(() => {
     routerPush.mockReset();
+    getCaptcha.mockReset();
+    getCaptcha.mockResolvedValue({
+      token: "captcha-token",
+      image_svg: "<svg></svg>",
+      expires_in_seconds: 300,
+    });
     authStore.login.mockReset();
     uiStore.clearMessages.mockReset();
     uiStore.setError.mockReset();
@@ -47,6 +60,8 @@ describe("auth legal links", () => {
 
     expect(wrapper.find('a[href="/terms"]').text()).toBe("用户协议");
     expect(wrapper.find('a[href="/privacy"]').text()).toBe("隐私政策");
+    expect(wrapper.text()).toContain("验证码");
+    expect(getCaptcha).toHaveBeenCalledTimes(1);
   });
 
   it("shows terms and privacy links on register agreement", async () => {
@@ -55,5 +70,7 @@ describe("auth legal links", () => {
 
     expect(wrapper.find('a[href="/terms"]').text()).toBe("用户协议");
     expect(wrapper.find('a[href="/privacy"]').text()).toBe("隐私政策");
+    expect(wrapper.text()).toContain("验证码");
+    expect(getCaptcha).toHaveBeenCalledTimes(1);
   });
 });

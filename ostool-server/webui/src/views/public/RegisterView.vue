@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { onMounted } from "vue";
 import { RouterLink } from "vue-router";
 
 import Icon from "@/components/Icon.vue";
+import { api } from "@/api";
 import { useUiStore } from "@/stores/ui";
+import type { CaptchaResponse } from "@/types/api";
 
 const ui = useUiStore();
 
@@ -13,6 +16,9 @@ const email = ref("");
 const password = ref("");
 const confirmPassword = ref("");
 const agreed = ref(false);
+const captchaAnswer = ref("");
+const captcha = ref<CaptchaResponse | null>(null);
+const captchaLoading = ref(false);
 const submitting = ref(false);
 
 const passwordsMismatch = computed(
@@ -36,6 +42,10 @@ function submit() {
     ui.setError("两次输入的密码不一致");
     return;
   }
+  if (!captcha.value || !captchaAnswer.value.trim()) {
+    ui.setError("请输入验证码");
+    return;
+  }
   if (!agreed.value) {
     ui.setError("请先阅读并同意平台使用条款");
     return;
@@ -45,9 +55,27 @@ function submit() {
   // 在此给出明确反馈，避免调用不存在的后端接口。
   window.setTimeout(() => {
     submitting.value = false;
+    captchaAnswer.value = "";
+    void loadCaptcha();
     ui.setSuccess("注册申请已记录。当前账号由平台管理员统一开通，请联平台管理员完成激活。");
   }, 400);
 }
+
+async function loadCaptcha() {
+  captchaLoading.value = true;
+  try {
+    captcha.value = await api.getCaptcha();
+    captchaAnswer.value = "";
+  } catch (error) {
+    ui.setError((error as Error).message);
+  } finally {
+    captchaLoading.value = false;
+  }
+}
+
+onMounted(() => {
+  void loadCaptcha();
+});
 </script>
 
 <template>
@@ -104,29 +132,50 @@ function submit() {
               :disabled="submitting"
             />
           </label>
-          <div class="auth-form-row">
-            <label class="field">
-              <span>密码</span>
-              <input
-                v-model="password"
-                type="password"
-                autocomplete="new-password"
-                placeholder="至少 8 位"
-                :disabled="submitting"
-              />
-            </label>
-            <label class="field">
-              <span>确认密码</span>
-              <input
-                v-model="confirmPassword"
-                type="password"
-                autocomplete="new-password"
-                placeholder="再次输入密码"
-                :disabled="submitting"
-              />
-            </label>
-          </div>
+          <label class="field">
+            <span>密码</span>
+            <input
+              v-model="password"
+              type="password"
+              autocomplete="new-password"
+              placeholder="至少 8 位"
+              :disabled="submitting"
+            />
+          </label>
+          <label class="field">
+            <span>确认密码</span>
+            <input
+              v-model="confirmPassword"
+              type="password"
+              autocomplete="new-password"
+              placeholder="再次输入密码"
+              :disabled="submitting"
+            />
+          </label>
           <p v-if="passwordsMismatch" class="auth-hint">两次输入的密码不一致</p>
+          <div class="captcha-row">
+            <label class="field captcha-input">
+              <span>验证码</span>
+              <input
+                v-model="captchaAnswer"
+                autocomplete="off"
+                inputmode="text"
+                placeholder="输入右侧验证码"
+                :disabled="submitting || captchaLoading"
+              />
+            </label>
+            <button
+              class="captcha-image"
+              type="button"
+              :disabled="submitting || captchaLoading"
+              title="刷新验证码"
+              @click="loadCaptcha"
+            >
+              <span v-if="captchaLoading">加载中</span>
+              <span v-else-if="captcha" v-html="captcha.image_svg"></span>
+              <span v-else>刷新</span>
+            </button>
+          </div>
           <label class="checkbox-field">
             <input v-model="agreed" type="checkbox" :disabled="submitting" />
             <span>

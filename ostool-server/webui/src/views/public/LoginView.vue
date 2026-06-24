@@ -3,8 +3,10 @@ import { computed, onMounted, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import Icon from "@/components/Icon.vue";
+import { api } from "@/api";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
+import type { CaptchaResponse } from "@/types/api";
 
 const ui = useUiStore();
 const auth = useAuthStore();
@@ -13,6 +15,9 @@ const route = useRoute();
 
 const username = ref("");
 const password = ref("");
+const captchaAnswer = ref("");
+const captcha = ref<CaptchaResponse | null>(null);
+const captchaLoading = ref(false);
 const submitting = ref(false);
 
 const nextPath = computed(() => {
@@ -28,11 +33,22 @@ async function submit() {
     ui.setError("请输入用户名和密码");
     return;
   }
+  if (!captcha.value || !captchaAnswer.value.trim()) {
+    ui.setError("请输入验证码");
+    return;
+  }
   submitting.value = true;
   try {
-    await auth.login(username.value.trim(), password.value);
+    await auth.login(
+      username.value.trim(),
+      password.value,
+      captcha.value.token,
+      captchaAnswer.value.trim(),
+    );
   } catch (error) {
     submitting.value = false;
+    captchaAnswer.value = "";
+    void loadCaptcha();
     ui.setError((error as Error).message);
     return;
   }
@@ -46,8 +62,21 @@ async function submit() {
   void router.push(nextPath.value ?? fallback);
 }
 
+async function loadCaptcha() {
+  captchaLoading.value = true;
+  try {
+    captcha.value = await api.getCaptcha();
+    captchaAnswer.value = "";
+  } catch (error) {
+    ui.setError((error as Error).message);
+  } finally {
+    captchaLoading.value = false;
+  }
+}
+
 onMounted(() => {
   ui.clearMessages();
+  void loadCaptcha();
 });
 </script>
 
@@ -97,6 +126,29 @@ onMounted(() => {
               :disabled="submitting"
             />
           </label>
+          <div class="captcha-row">
+            <label class="field captcha-input">
+              <span>验证码</span>
+              <input
+                v-model="captchaAnswer"
+                autocomplete="off"
+                inputmode="text"
+                placeholder="输入右侧验证码"
+                :disabled="submitting || captchaLoading"
+              />
+            </label>
+            <button
+              class="captcha-image"
+              type="button"
+              :disabled="submitting || captchaLoading"
+              title="刷新验证码"
+              @click="loadCaptcha"
+            >
+              <span v-if="captchaLoading">加载中</span>
+              <span v-else-if="captcha" v-html="captcha.image_svg"></span>
+              <span v-else>刷新</span>
+            </button>
+          </div>
           <button class="btn btn-primary" type="submit" :disabled="submitting">
             {{ submitting ? "登录中..." : "登录" }}
             <Icon v-if="!submitting" name="arrow-right" :size="16" class="btn-icon" />

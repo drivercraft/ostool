@@ -67,8 +67,18 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
-  async function login(username: string, password: string) {
-    user.value = await api.login({ username, password });
+  async function login(
+    username: string,
+    password: string,
+    captchaToken: string,
+    captchaAnswer: string,
+  ) {
+    user.value = await api.login({
+      username,
+      password,
+      captcha_token: captchaToken,
+      captcha_answer: captchaAnswer,
+    });
     loaded.value = true;
   }
 
