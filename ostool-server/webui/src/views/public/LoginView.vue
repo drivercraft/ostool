@@ -13,10 +13,8 @@ const route = useRoute();
 
 const username = ref("");
 const password = ref("");
-const asAdmin = ref(false);
 const submitting = ref(false);
 
-const requestedAdmin = computed(() => route.query.mode === "admin");
 const nextPath = computed(() => {
   const next = route.query.next;
   return typeof next === "string" && next.startsWith("/") ? next : null;
@@ -31,7 +29,6 @@ async function submit() {
     return;
   }
   submitting.value = true;
-  const adminMode = asAdmin.value || requestedAdmin.value;
   try {
     await auth.login(username.value.trim(), password.value);
   } catch (error) {
@@ -39,22 +36,18 @@ async function submit() {
     ui.setError((error as Error).message);
     return;
   }
-  if (adminMode && !auth.isAdmin) {
-    submitting.value = false;
-    await auth.logoutUser();
-    ui.setError("该账号没有管理员权限");
+  if (nextPath.value?.startsWith("/admin") && !auth.isAdmin) {
+    ui.setError("当前账号无权访问管理台");
+    void router.push("/dashboard");
     return;
   }
-  ui.setSuccess(adminMode ? "已进入管理员会话" : "登录成功");
-  const fallback = adminMode ? "/admin/overview" : "/dashboard";
+  ui.setSuccess("登录成功");
+  const fallback = auth.isAdmin ? "/admin/overview" : "/dashboard";
   void router.push(nextPath.value ?? fallback);
 }
 
 onMounted(() => {
   ui.clearMessages();
-  if (requestedAdmin.value) {
-    asAdmin.value = true;
-  }
 });
 </script>
 
@@ -103,10 +96,6 @@ onMounted(() => {
               placeholder="例如：demo"
               :disabled="submitting"
             />
-          </label>
-          <label class="checkbox-field">
-            <input v-model="asAdmin" type="checkbox" :disabled="submitting" />
-            <span>以管理员身份登录（进入管理台）</span>
           </label>
           <button class="btn btn-primary" type="submit" :disabled="submitting">
             {{ submitting ? "登录中..." : "登录" }}

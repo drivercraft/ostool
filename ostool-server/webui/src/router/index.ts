@@ -229,7 +229,7 @@ router.beforeEach(async (to) => {
     await auth.loadCurrentUser();
   }
   if (to.meta.requiresAdmin && !auth.isAdmin) {
-    return { name: "login", query: { next: to.fullPath, mode: "admin" } };
+    return { name: "login", query: { next: to.fullPath } };
   }
   if (to.meta.requiresUser && !auth.isAuthenticated) {
     return { name: "login", query: { next: to.fullPath } };
