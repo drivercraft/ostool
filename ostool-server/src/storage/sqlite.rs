@@ -10,9 +10,10 @@ use crate::BoardConfig;
 use crate::storage::{
     AuditLog, AuditLogRepository, AuthSession, AuthSessionRepository, BoardConfigRepository,
     DtbMetadata, DtbMetadataRepository, Lease, LeaseRepository, LeaseState, NewAuditLog, NewLease,
-    NewRole, NewUser, Permission, RbacRepository, Role, SiteSettingValue, SiteSettings,
-    SiteSettingsRepository, UpsertDtbMetadata, User, UserProfile, UserRepository,
-    default_site_setting_rows, parse_time, site_settings_from_values, site_settings_to_values,
+    NewRole, NewSessionRecord, NewUser, Permission, RbacRepository, Role, SessionRecord,
+    SessionRecordRepository, SiteSettingValue, SiteSettings, SiteSettingsRepository,
+    UpsertDtbMetadata, User, UserProfile, UserRepository, default_site_setting_rows, parse_time,
+    site_settings_from_values, site_settings_to_values,
 };
 
 const MIGRATION_RBAC_PLATFORM: &str = "0001_rbac_platform";
@@ -175,6 +176,35 @@ impl SqliteStorage {
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
             "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS session_records (
+                id TEXT PRIMARY KEY NOT NULL,
+                board_id TEXT NOT NULL,
+                client_name TEXT,
+                source_ip TEXT,
+                state TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_heartbeat_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                ended_at TEXT,
+                failure_message TEXT
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_session_records_board_id ON session_records(board_id)",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_session_records_created_at ON session_records(created_at)",
         )
         .execute(&self.pool)
         .await?;
@@ -811,6 +841,24 @@ fn lease_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<Lease> {
     })
 }
 
+fn session_record_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<SessionRecord> {
+    Ok(SessionRecord {
+        id: row.try_get("id")?,
+        board_id: row.try_get("board_id")?,
+        client_name: row.try_get("client_name")?,
+        source_ip: row.try_get("source_ip")?,
+        state: row.try_get("state")?,
+        created_at: parse_time(row.try_get::<String, _>("created_at")?.as_str())?,
+        last_heartbeat_at: parse_time(row.try_get::<String, _>("last_heartbeat_at")?.as_str())?,
+        expires_at: parse_time(row.try_get::<String, _>("expires_at")?.as_str())?,
+        ended_at: row
+            .try_get::<Option<String>, _>("ended_at")?
+            .map(|value| parse_time(&value))
+            .transpose()?,
+        failure_message: row.try_get("failure_message")?,
+    })
+}
+
 fn board_config_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<BoardConfig> {
     let config_json: String = row.try_get("config_json")?;
     let board: BoardConfig =
@@ -1206,6 +1254,83 @@ impl LeaseRepository for SqliteStorage {
         .execute(&self.pool)
         .await?;
         self.find_lease(lease_id).await
+    }
+}
+
+#[async_trait]
+impl SessionRecordRepository for SqliteStorage {
+    async fn create_session_record(
+        &self,
+        record: NewSessionRecord,
+    ) -> anyhow::Result<SessionRecord> {
+        sqlx::query(
+            r#"
+            INSERT INTO session_records
+                (id, board_id, client_name, source_ip, state, created_at, last_heartbeat_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&record.id)
+        .bind(record.board_id)
+        .bind(record.client_name)
+        .bind(record.source_ip)
+        .bind(record.state)
+        .bind(record.created_at.to_rfc3339())
+        .bind(record.last_heartbeat_at.to_rfc3339())
+        .bind(record.expires_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+
+        let row = sqlx::query("SELECT * FROM session_records WHERE id = ?")
+            .bind(&record.id)
+            .fetch_one(&self.pool)
+            .await?;
+        session_record_from_row(&row)
+    }
+
+    async fn list_session_records(&self) -> anyhow::Result<Vec<SessionRecord>> {
+        let rows = sqlx::query("SELECT * FROM session_records ORDER BY created_at DESC")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(session_record_from_row).collect()
+    }
+
+    async fn update_session_record_runtime(
+        &self,
+        session_id: &str,
+        state: String,
+        last_heartbeat_at: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE session_records SET state = ?, last_heartbeat_at = ?, expires_at = ? WHERE id = ?",
+        )
+        .bind(state)
+        .bind(last_heartbeat_at.to_rfc3339())
+        .bind(expires_at.to_rfc3339())
+        .bind(session_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn finish_session_record(
+        &self,
+        session_id: &str,
+        state: String,
+        ended_at: DateTime<Utc>,
+        failure_message: Option<String>,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE session_records SET state = ?, ended_at = ?, failure_message = ? WHERE id = ?",
+        )
+        .bind(state)
+        .bind(ended_at.to_rfc3339())
+        .bind(failure_message)
+        .bind(session_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }
 

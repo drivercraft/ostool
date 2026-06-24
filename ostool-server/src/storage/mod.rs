@@ -152,6 +152,32 @@ pub struct NewLease {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRecord {
+    pub id: String,
+    pub board_id: String,
+    pub client_name: Option<String>,
+    pub source_ip: Option<String>,
+    pub state: String,
+    pub created_at: DateTime<Utc>,
+    pub last_heartbeat_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub failure_message: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewSessionRecord {
+    pub id: String,
+    pub board_id: String,
+    pub client_name: Option<String>,
+    pub source_ip: Option<String>,
+    pub state: String,
+    pub created_at: DateTime<Utc>,
+    pub last_heartbeat_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DtbMetadata {
     pub id: String,
     pub name: String,
@@ -587,6 +613,29 @@ pub trait LeaseRepository: Send + Sync {
 }
 
 #[async_trait]
+pub trait SessionRecordRepository: Send + Sync {
+    async fn create_session_record(
+        &self,
+        record: NewSessionRecord,
+    ) -> anyhow::Result<SessionRecord>;
+    async fn list_session_records(&self) -> anyhow::Result<Vec<SessionRecord>>;
+    async fn update_session_record_runtime(
+        &self,
+        session_id: &str,
+        state: String,
+        last_heartbeat_at: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> anyhow::Result<()>;
+    async fn finish_session_record(
+        &self,
+        session_id: &str,
+        state: String,
+        ended_at: DateTime<Utc>,
+        failure_message: Option<String>,
+    ) -> anyhow::Result<()>;
+}
+
+#[async_trait]
 pub trait BoardConfigRepository: Send + Sync {
     async fn create_board_config(&self, board: BoardConfig) -> anyhow::Result<BoardConfig>;
     async fn list_board_configs(&self) -> anyhow::Result<Vec<BoardConfig>>;
@@ -648,6 +697,7 @@ pub trait Storage:
     UserRepository
     + AuthSessionRepository
     + LeaseRepository
+    + SessionRecordRepository
     + BoardConfigRepository
     + RbacRepository
     + DtbMetadataRepository
@@ -663,6 +713,7 @@ impl<T> Storage for T where
     T: UserRepository
         + AuthSessionRepository
         + LeaseRepository
+        + SessionRecordRepository
         + BoardConfigRepository
         + RbacRepository
         + DtbMetadataRepository

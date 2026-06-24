@@ -93,6 +93,7 @@ function makeLease(): LeaseResponse {
       id: "session-1",
       board_id: "board-1",
       client_name: "Alice",
+      source_ip: null,
       created_at: "2026-01-01T00:00:00Z",
       expires_at: "2026-01-01T02:00:00Z",
       state: "active",

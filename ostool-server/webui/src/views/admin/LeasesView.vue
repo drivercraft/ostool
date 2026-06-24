@@ -382,8 +382,6 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
       </div>
 
       <div v-if="loading" class="empty-state">正在加载租赁...</div>
-      <div v-else-if="leases.length === 0" class="empty-state">暂无租赁记录。</div>
-      <div v-else-if="filteredLeases.length === 0" class="empty-state">没有符合条件的租赁记录。</div>
       <div v-else class="table-scroll">
         <table class="data-table">
           <thead>
@@ -401,16 +399,16 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
           <tbody>
             <tr v-for="(item, index) in filteredLeases" :key="item.lease.id">
               <td class="col-index">{{ index + 1 }}</td>
-              <td><code>{{ item.lease.id }}</code></td>
+              <td>{{ item.lease.id }}</td>
               <td>
                 <strong>{{ userLabel(item.lease.user_id) }}</strong>
-                <div><code>{{ item.lease.user_id }}</code></div>
+                <div>{{ item.lease.user_id }}</div>
               </td>
               <td>
-                <code>{{ item.lease.board_id }}</code>
+                <span>{{ item.lease.board_id }}</span>
                 <div class="muted">{{ item.lease.board_type }}</div>
               </td>
-              <td><code>{{ item.lease.session_id || "-" }}</code></td>
+              <td>{{ item.lease.session_id || "-" }}</td>
               <td>
                 <StatusPill :tone="leaseTone(item.lease.state)" :label="leaseStateLabel(item.lease.state)" />
               </td>

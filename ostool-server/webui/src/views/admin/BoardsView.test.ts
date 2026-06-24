@@ -1,7 +1,7 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BoardConfig, LeaseResponse, Session } from "@/types/api";
+import type { AdminSessionResponse, BoardConfig, LeaseResponse, Session, SessionRecord } from "@/types/api";
 
 const listBoards = vi.fn();
 const listSessions = vi.fn();
@@ -72,9 +72,26 @@ function makeSession(boardId = "rk3568-1"): Session {
     id: "session-1",
     board_id: boardId,
     client_name: "web-ui",
+    source_ip: null,
     created_at: "2026-04-08T00:00:00Z",
     expires_at: "2026-04-08T00:05:00Z",
     state: "active",
+  };
+}
+
+function makeAdminSession(boardId = "rk3568-1"): AdminSessionResponse {
+  const runtime = makeSession(boardId);
+  const session: SessionRecord = {
+    ...runtime,
+    last_heartbeat_at: runtime.created_at,
+    ended_at: null,
+    failure_message: null,
+  };
+  return {
+    session,
+    lease: null,
+    user_id: null,
+    source_ip: null,
   };
 }
 
@@ -217,7 +234,7 @@ describe("BoardsView", () => {
   });
 
   it("opens more actions and navigates to the active board lease", async () => {
-    listSessions.mockResolvedValue({ sessions: [makeSession()] });
+    listSessions.mockResolvedValue({ sessions: [makeAdminSession()] });
     listAdminLeases.mockResolvedValue({ leases: [makeLease()] });
 
     const BoardsView = (await import("./BoardsView.vue")).default;

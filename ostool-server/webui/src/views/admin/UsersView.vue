@@ -362,9 +362,6 @@ onMounted(() => {
       </div>
 
       <div v-if="loading" class="empty-state">正在加载用户...</div>
-      <div v-else-if="filteredUsers.length === 0" class="empty-state">
-        当前没有符合筛选条件的用户。
-      </div>
       <div v-else class="table-scroll">
         <table class="data-table">
           <thead>
@@ -388,7 +385,7 @@ onMounted(() => {
                     {{ (user.display_name || user.username).slice(0, 1).toUpperCase() }}
                   </span>
                   <div class="user-cell-main">
-                    <code class="user-cell-username">{{ user.username }}</code>
+                    <span class="user-cell-username">{{ user.username }}</span>
                     <span class="user-cell-id">{{ user.id }}</span>
                   </div>
                 </div>

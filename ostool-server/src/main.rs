@@ -131,6 +131,10 @@ async fn serve(config_path: PathBuf, config: ServerConfig) -> anyhow::Result<()>
         .await
         .with_context(|| format!("failed to bind {listen_addr}"))?;
     info!("ostoold listening on {listen_addr}");
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }

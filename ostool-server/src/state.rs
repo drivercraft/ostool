@@ -18,7 +18,7 @@ use crate::{
     power::{PowerAction, PowerActionError, execute_power_action_for_board},
     seed::{seed_database, seed_sample_runtime_leases},
     session::{Session, SessionState, SessionStopReason},
-    storage::{DynStorage, mysql::MysqlStorage, sqlite::SqliteStorage},
+    storage::{DynStorage, NewSessionRecord, mysql::MysqlStorage, sqlite::SqliteStorage},
     tftp::service::TftpManager,
 };
 
@@ -175,6 +175,7 @@ impl AppState {
         board_type: &str,
         required_tags: &[String],
         client_name: Option<String>,
+        source_ip: Option<String>,
     ) -> Result<Session, BoardAllocationStatus> {
         loop {
             let boards = self.boards.read().await;
@@ -206,9 +207,17 @@ impl AppState {
                 continue;
             }
 
-            let session =
-                SessionState::new_with_actor(session_id, board, client_name.clone(), self.clone());
+            let session = SessionState::new_with_actor(
+                session_id,
+                board,
+                client_name.clone(),
+                source_ip.clone(),
+                self.clone(),
+            );
             let info = session.snapshot().await;
+            if let Err(err) = self.create_session_record(&info).await {
+                log::warn!("failed to record session `{}`: {err:#}", info.id);
+            }
             self.sessions.write().await.insert(info.id.clone(), session);
             return Ok(info);
         }
@@ -218,6 +227,7 @@ impl AppState {
         &self,
         board_id: &str,
         client_name: Option<String>,
+        source_ip: Option<String>,
     ) -> Result<Session, BoardAllocationStatus> {
         let board = {
             let boards = self.boards.read().await;
@@ -236,10 +246,29 @@ impl AppState {
         }
 
         let session =
-            SessionState::new_with_actor(session_id, board, client_name, self.clone());
+            SessionState::new_with_actor(session_id, board, client_name, source_ip, self.clone());
         let info = session.snapshot().await;
+        if let Err(err) = self.create_session_record(&info).await {
+            log::warn!("failed to record session `{}`: {err:#}", info.id);
+        }
         self.sessions.write().await.insert(info.id.clone(), session);
         Ok(info)
+    }
+
+    async fn create_session_record(&self, session: &Session) -> anyhow::Result<()> {
+        self.storage
+            .create_session_record(NewSessionRecord {
+                id: session.id.clone(),
+                board_id: session.board_id.clone(),
+                client_name: session.client_name.clone(),
+                source_ip: session.source_ip.clone(),
+                state: session.state.as_str().to_string(),
+                created_at: session.created_at,
+                last_heartbeat_at: session.last_heartbeat_at,
+                expires_at: session.expires_at,
+            })
+            .await?;
+        Ok(())
     }
 
     pub async fn get_session(&self, session_id: &str) -> Option<Session> {
@@ -253,7 +282,9 @@ impl AppState {
         expires_at: chrono::DateTime<chrono::Utc>,
     ) -> Option<Session> {
         let session = self.sessions.read().await.get(session_id).cloned()?;
-        Some(session.set_expires_at(expires_at).await)
+        let updated = session.set_expires_at(expires_at).await;
+        self.update_session_record_runtime(&updated).await;
+        Some(updated)
     }
 
     pub async fn heartbeat_session(&self, session_id: &str) -> Result<Session, TouchSessionError> {
@@ -267,7 +298,9 @@ impl AppState {
         if session.is_releasing() {
             return Err(TouchSessionError::Releasing);
         }
-        Ok(session.heartbeat().await)
+        let updated = session.heartbeat().await;
+        self.update_session_record_runtime(&updated).await;
+        Ok(updated)
     }
 
     pub async fn request_session_stop(
@@ -277,7 +310,24 @@ impl AppState {
     ) -> Option<Session> {
         let session = self.sessions.read().await.get(session_id).cloned()?;
         session.request_stop(reason);
-        Some(session.snapshot().await)
+        let snapshot = session.snapshot().await;
+        self.update_session_record_runtime(&snapshot).await;
+        Some(snapshot)
+    }
+
+    async fn update_session_record_runtime(&self, session: &Session) {
+        if let Err(err) = self
+            .storage
+            .update_session_record_runtime(
+                &session.id,
+                session.state.as_str().to_string(),
+                session.last_heartbeat_at,
+                session.expires_at,
+            )
+            .await
+        {
+            log::warn!("failed to update session record `{}`: {err:#}", session.id);
+        }
     }
 
     pub async fn remove_session(&self, session_id: &str) -> anyhow::Result<Option<Session>> {
@@ -591,6 +641,9 @@ impl AppState {
             errors.push(format!("tftp cleanup failed: {err}"));
         }
 
+        let mut final_state = "released".to_string();
+        let mut failure_message = None;
+
         if errors.is_empty() {
             if let Err(err) = self.mark_board_idle(&snapshot.board_id, &snapshot.id).await {
                 log::warn!(
@@ -601,6 +654,8 @@ impl AppState {
             }
         } else {
             let message = errors.join("; ");
+            final_state = "failed".to_string();
+            failure_message = Some(message.clone());
             if let Err(err) = self
                 .mark_board_error(&snapshot.board_id, &snapshot.id, message.clone())
                 .await
@@ -618,6 +673,16 @@ impl AppState {
             );
         }
 
+        if let Err(err) = self
+            .storage
+            .finish_session_record(&snapshot.id, final_state, Utc::now(), failure_message)
+            .await
+        {
+            log::warn!(
+                "failed to finish session record `{}` after release: {err:#}",
+                snapshot.id
+            );
+        }
         self.remove_session_runtime(&snapshot.id).await;
     }
 
@@ -901,7 +966,7 @@ mod tests {
             .insert("board-1".into(), sample_board("board-1"));
         state.sync_board_runtime_states().await;
 
-        let session = state.create_session("demo", &[], None).await.unwrap();
+        let session = state.create_session("demo", &[], None, None).await.unwrap();
         let runtime = state.board_runtime_status("board-1").await.unwrap();
         assert_eq!(runtime.lease_state, BoardLeaseState::Using);
         assert_eq!(
@@ -921,7 +986,7 @@ mod tests {
             .await
             .insert("board-1".into(), sample_board("board-1"));
         state.sync_board_runtime_states().await;
-        let session = state.create_session("demo", &[], None).await.unwrap();
+        let session = state.create_session("demo", &[], None, None).await.unwrap();
         let handle = state.session_state(&session.id).await.unwrap();
         handle.set_serial_connected(true);
 
@@ -950,8 +1015,13 @@ mod tests {
             .await
             .insert(board.id.clone(), board.clone());
         state.sync_board_runtime_states().await;
-        let session =
-            SessionState::new_with_actor("session-1".into(), board.clone(), None, state.clone());
+        let session = SessionState::new_with_actor(
+            "session-1".into(),
+            board.clone(),
+            None,
+            None,
+            state.clone(),
+        );
         let mut shutdown = session.subscribe_shutdown();
         state.claim_board_for_session(&board.id, "session-1").await;
         state
@@ -1009,8 +1079,13 @@ mod tests {
             .await
             .insert(board.id.clone(), board.clone());
         state.sync_board_runtime_states().await;
-        let session =
-            SessionState::new_with_actor("session-1".into(), board.clone(), None, state.clone());
+        let session = SessionState::new_with_actor(
+            "session-1".into(),
+            board.clone(),
+            None,
+            None,
+            state.clone(),
+        );
         state.claim_board_for_session(&board.id, "session-1").await;
         state
             .sessions
@@ -1058,8 +1133,13 @@ mod tests {
             .await
             .insert(board.id.clone(), board.clone());
         state.sync_board_runtime_states().await;
-        let session =
-            SessionState::new_with_actor("session-1".into(), board.clone(), None, state.clone());
+        let session = SessionState::new_with_actor(
+            "session-1".into(),
+            board.clone(),
+            None,
+            None,
+            state.clone(),
+        );
         state.claim_board_for_session(&board.id, "session-1").await;
         state
             .sessions
@@ -1106,8 +1186,13 @@ mod tests {
             .await
             .insert(board.id.clone(), board.clone());
         state.sync_board_runtime_states().await;
-        let session =
-            SessionState::new_with_actor("session-1".into(), board.clone(), None, state.clone());
+        let session = SessionState::new_with_actor(
+            "session-1".into(),
+            board.clone(),
+            None,
+            None,
+            state.clone(),
+        );
         state.claim_board_for_session(&board.id, "session-1").await;
         state
             .sessions

@@ -6,24 +6,29 @@ import Icon from "@/components/Icon.vue";
 import StatusPill from "@/components/StatusPill.vue";
 import { api } from "@/api";
 import { useUiStore } from "@/stores/ui";
-import type { BoardConfig, Session } from "@/types/api";
+import type { AdminSessionResponse, AdminUserResponse, BoardConfig, SessionRecord } from "@/types/api";
 import { formatLeaseRemaining } from "@/utils/time";
 
 const ui = useUiStore();
 const route = useRoute();
 const loading = ref(true);
 const boards = ref<BoardConfig[]>([]);
-const sessions = ref<Session[]>([]);
+const users = ref<AdminUserResponse[]>([]);
+const sessions = ref<AdminSessionResponse[]>([]);
 const initialQuery = typeof route.query.q === "string" ? route.query.q : "";
 const search = ref(initialQuery);
-const stateFilter = ref<"all" | "active" | "releasing">("all");
+const stateFilter = ref<"all" | "active" | "releasing" | "released" | "expired" | "failed">("all");
 
 const boardMap = computed(() =>
   new Map(boards.value.map((board) => [board.id, board])),
 );
+const userMap = computed(() =>
+  new Map(users.value.map((user) => [user.id, user])),
+);
 
 const filteredSessions = computed(() =>
-  sessions.value.filter((session) => {
+  sessions.value.filter((item) => {
+    const session = item.session;
     if (stateFilter.value !== "all" && session.state !== stateFilter.value) {
       return false;
     }
@@ -34,6 +39,10 @@ const filteredSessions = computed(() =>
     const board = boardMap.value.get(session.board_id);
     return [
       session.id,
+      item.lease?.id ?? "",
+      item.user_id ?? "",
+      userLabel(item.user_id),
+      sessionSourceIp(item),
       session.board_id,
       board?.id ?? "",
       board?.board_type ?? "",
@@ -42,25 +51,56 @@ const filteredSessions = computed(() =>
   }),
 );
 
-function sessionStatus(session: Session) {
-  if (session.state === "releasing") {
-    return {
-      tone: "neutral" as const,
-      label: "释放中",
-    };
+function userLabel(userId: string | null | undefined) {
+  if (!userId) {
+    return "-";
   }
+  const user = userMap.value.get(userId);
+  if (!user) {
+    return userId;
+  }
+  return user.display_name || user.username;
+}
 
-  return {
-    tone: "warn" as const,
-    label: "占用中",
+function sessionSourceIp(item: AdminSessionResponse) {
+  return item.source_ip || item.session.source_ip || "-";
+}
+
+function sessionStatus(session: SessionRecord) {
+  const labels = {
+    active: { tone: "warn" as const, label: "占用中" },
+    releasing: { tone: "neutral" as const, label: "释放中" },
+    released: { tone: "good" as const, label: "已释放" },
+    expired: { tone: "neutral" as const, label: "已过期" },
+    failed: { tone: "danger" as const, label: "失败" },
   };
+  return labels[session.state] ?? { tone: "neutral" as const, label: session.state };
+}
+
+function sessionDurationLabel(session: SessionRecord) {
+  if (session.state === "active" || session.state === "releasing") {
+    return formatLeaseRemaining(session.expires_at);
+  }
+  if (session.ended_at) {
+    return new Date(session.ended_at).toLocaleString();
+  }
+  return "-";
+}
+
+function canReleaseSession(session: SessionRecord) {
+  return session.state === "active";
 }
 
 async function loadSessions() {
   loading.value = true;
   try {
-    const [boardList, sessionList] = await Promise.all([api.listBoards(), api.listSessions()]);
+    const [boardList, sessionList, userList] = await Promise.all([
+      api.listBoards(),
+      api.listSessions(),
+      api.listAdminUsers(),
+    ]);
     boards.value = boardList;
+    users.value = userList.users;
     sessions.value = sessionList.sessions;
   } catch (error) {
     ui.setError((error as Error).message);
@@ -105,7 +145,7 @@ onMounted(() => {
         <div class="admin-toolbar-right">
           <label class="search-field">
             <Icon name="search" :size="16" />
-            <input v-model="search" placeholder="搜索会话 / 开发板 / 客户端" />
+            <input v-model="search" type="search" placeholder="搜索会话 / 用户 / 开发板 / 源 IP" />
           </label>
           <label class="field filter-field">
             <span>状态</span>
@@ -113,52 +153,64 @@ onMounted(() => {
               <option value="all">全部状态</option>
               <option value="active">占用中</option>
               <option value="releasing">释放中</option>
+              <option value="released">已释放</option>
+              <option value="expired">已过期</option>
+              <option value="failed">失败</option>
             </select>
           </label>
         </div>
       </div>
 
       <div v-if="loading" class="empty-state">正在加载会话列表...</div>
-      <div v-else-if="sessions.length === 0" class="empty-state">当前没有活跃会话。</div>
-      <div v-else-if="filteredSessions.length === 0" class="empty-state">没有符合条件的会话。</div>
       <div v-else class="table-scroll">
         <table class="data-table">
           <thead>
             <tr>
               <th class="col-index">序号</th>
-              <th>Session ID</th>
+              <th>会话 ID</th>
+              <th>源 IP</th>
+              <th>用户</th>
               <th>开发板</th>
               <th>客户端</th>
-              <th>创建时间</th>
-              <th>剩余租约</th>
+              <th>开始时间</th>
+              <th>剩余/结束时间</th>
               <th>状态</th>
-              <th>操作</th>
+              <th class="col-actions">操作</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(session, index) in filteredSessions" :key="session.id">
+            <tr v-for="(item, index) in filteredSessions" :key="item.session.id">
               <td class="col-index">{{ index + 1 }}</td>
-              <td><code>{{ session.id }}</code></td>
+              <td>{{ item.session.id }}</td>
+              <td>{{ sessionSourceIp(item) }}</td>
               <td>
-                {{ boardMap.get(session.board_id)?.id || session.board_id }}
+                <strong>{{ userLabel(item.user_id) }}</strong>
+                <div>{{ item.user_id || "-" }}</div>
               </td>
-              <td>{{ session.client_name || "-" }}</td>
-              <td>{{ new Date(session.created_at).toLocaleString() }}</td>
-              <td>{{ formatLeaseRemaining(session.expires_at) }}</td>
+              <td>
+                <span>{{ boardMap.get(item.session.board_id)?.id || item.session.board_id }}</span>
+                <div class="muted">{{ boardMap.get(item.session.board_id)?.board_type || "-" }}</div>
+              </td>
+              <td>{{ item.session.client_name || "-" }}</td>
+              <td>{{ new Date(item.session.created_at).toLocaleString() }}</td>
+              <td>{{ sessionDurationLabel(item.session) }}</td>
               <td>
                 <StatusPill
-                  :tone="sessionStatus(session).tone"
-                  :label="sessionStatus(session).label"
+                  :tone="sessionStatus(item.session).tone"
+                  :label="sessionStatus(item.session).label"
                 />
               </td>
-              <td>
-                <button
-                  class="btn btn-danger btn-sm"
-                  :disabled="session.state === 'releasing'"
-                  @click="releaseSession(session.id)"
-                >
-                  强制释放
-                </button>
+              <td class="col-actions">
+                <div class="row-actions">
+                  <button
+                    class="btn-icon-only"
+                    title="删除"
+                    :disabled="!canReleaseSession(item.session)"
+                    @click="releaseSession(item.session.id)"
+                  >
+                    <Icon name="trash" :size="16" />
+                  </button>
+                </div>
               </td>
             </tr>
           </tbody>

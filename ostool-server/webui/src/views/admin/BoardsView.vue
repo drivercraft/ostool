@@ -5,13 +5,13 @@ import { RouterLink, useRouter } from "vue-router";
 import Icon from "@/components/Icon.vue";
 import { api } from "@/api";
 import { useUiStore } from "@/stores/ui";
-import type { BoardConfig, LeaseResponse, Session } from "@/types/api";
+import type { AdminSessionResponse, BoardConfig, LeaseResponse } from "@/types/api";
 
 const ui = useUiStore();
 const router = useRouter();
 const loading = ref(true);
 const boards = ref<BoardConfig[]>([]);
-const sessions = ref<Session[]>([]);
+const sessions = ref<AdminSessionResponse[]>([]);
 const leases = ref<LeaseResponse[]>([]);
 const typeFilter = ref("");
 const tagFilter = ref("");
@@ -19,7 +19,7 @@ const statusFilter = ref<"all" | "available" | "leased" | "disabled">("all");
 const openMenuBoardId = ref<string | null>(null);
 const menuPosition = ref({ top: 0, left: 0 });
 
-const leasedBoardIds = computed(() => new Set(sessions.value.map((session) => session.board_id)));
+const leasedBoardIds = computed(() => new Set(sessions.value.map((item) => item.session.board_id)));
 const leaseByBoardId = computed(() => {
   const map = new Map<string, LeaseResponse["lease"]>();
   const score = (lease: LeaseResponse["lease"]) => {
@@ -261,11 +261,6 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
         正在加载开发板列表...
       </div>
 
-      <div v-else-if="filteredBoards.length === 0" class="empty-state">
-        <div class="empty-state-icon">&#9641;</div>
-        当前没有符合筛选条件的开发板
-      </div>
-
       <!-- Table -->
       <div v-else class="table-scroll">
         <table class="data-table">
@@ -283,7 +278,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
         <tbody>
           <tr v-for="(board, index) in filteredBoards" :key="board.id">
             <td class="col-index">{{ index + 1 }}</td>
-            <td><code>{{ board.id }}</code></td>
+            <td>{{ board.id }}</td>
             <td>{{ board.board_type }}</td>
             <td>
               <div class="tag-list">

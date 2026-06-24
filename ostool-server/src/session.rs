@@ -26,6 +26,13 @@ fn default_session_state() -> SessionLifecycleState {
 }
 
 impl SessionLifecycleState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Releasing => "releasing",
+        }
+    }
+
     fn as_u8(self) -> u8 {
         match self {
             Self::Active => SESSION_STATE_ACTIVE,
@@ -59,6 +66,7 @@ pub struct Session {
     pub id: String,
     pub board_id: String,
     pub client_name: Option<String>,
+    pub source_ip: Option<String>,
     pub created_at: DateTime<Utc>,
     pub last_heartbeat_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
@@ -70,15 +78,26 @@ pub struct Session {
 
 impl Session {
     pub fn new(board_id: String, client_name: Option<String>) -> Self {
-        Self::new_with_id(uuid::Uuid::new_v4().to_string(), board_id, client_name)
+        Self::new_with_id(
+            uuid::Uuid::new_v4().to_string(),
+            board_id,
+            client_name,
+            None,
+        )
     }
 
-    pub fn new_with_id(id: String, board_id: String, client_name: Option<String>) -> Self {
+    pub fn new_with_id(
+        id: String,
+        board_id: String,
+        client_name: Option<String>,
+        source_ip: Option<String>,
+    ) -> Self {
         let now = Utc::now();
         Self {
             id,
             board_id,
             client_name,
+            source_ip,
             created_at: now,
             last_heartbeat_at: now,
             expires_at: now + SESSION_TTL,
@@ -107,17 +126,24 @@ pub struct SessionState {
 
 impl SessionState {
     pub fn new(board: BoardConfig, client_name: Option<String>) -> Arc<Self> {
-        Self::new_inner(uuid::Uuid::new_v4().to_string(), board, client_name, None)
+        Self::new_inner(
+            uuid::Uuid::new_v4().to_string(),
+            board,
+            client_name,
+            None,
+            None,
+        )
     }
 
     pub fn new_with_actor(
         session_id: String,
         board: BoardConfig,
         client_name: Option<String>,
+        source_ip: Option<String>,
         app_state: AppState,
     ) -> Arc<Self> {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
-        let session = Self::new_inner(session_id, board, client_name, Some(command_tx));
+        let session = Self::new_inner(session_id, board, client_name, source_ip, Some(command_tx));
         tokio::spawn(run_session_actor(app_state, session.clone(), command_rx));
         session
     }
@@ -126,6 +152,7 @@ impl SessionState {
         session_id: String,
         board: BoardConfig,
         client_name: Option<String>,
+        source_ip: Option<String>,
         command_tx: Option<mpsc::UnboundedSender<SessionCommand>>,
     ) -> Arc<Self> {
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
@@ -134,6 +161,7 @@ impl SessionState {
                 session_id,
                 board.id.clone(),
                 client_name,
+                source_ip,
             )),
             board,
             shutdown_tx,

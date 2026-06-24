@@ -10,7 +10,7 @@ use crate::{
     dtb_store::DtbFile,
     session::Session,
     state::BoardLeaseState,
-    storage::{DtbMetadata, Lease, Permission, Role},
+    storage::{DtbMetadata, Lease, Permission, Role, SessionRecord},
     tftp::{files::TftpFileRef, status::TftpStatus},
 };
 
@@ -253,6 +253,14 @@ pub struct SessionDetailResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminSessionResponse {
+    pub session: SessionRecord,
+    pub lease: Option<Lease>,
+    pub user_id: Option<String>,
+    pub source_ip: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerialStatusResponse {
     pub available: bool,
     pub connected: bool,
@@ -464,7 +472,7 @@ pub struct AdminTftpStatusResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminSessionsResponse {
-    pub sessions: Vec<Session>,
+    pub sessions: Vec<AdminSessionResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

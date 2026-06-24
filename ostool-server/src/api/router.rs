@@ -1,9 +1,12 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::SocketAddr,
+};
 
 use axum::{
     Router,
     body::{Bytes, to_bytes},
-    extract::{Path, Request, State, WebSocketUpgrade},
+    extract::{ConnectInfo, Path, Request, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -23,19 +26,19 @@ use tokio::{
 use crate::{
     api::{
         dto::{
-            ActionResponse, AdminBoardUpsertRequest, AdminOverviewResponse,
-            AdminPasswordResetRequest, AdminPermissionResponse, AdminPermissionsResponse,
-            AdminRoleCreateRequest, AdminRoleResponse, AdminRoleUpdateRequest, AdminRolesResponse,
+            ActionResponse, AdminBoardUpsertRequest, AdminLeaseCreateRequest,
+            AdminLeaseUpdateRequest, AdminOverviewResponse, AdminPasswordResetRequest,
+            AdminPermissionResponse, AdminPermissionsResponse, AdminRoleCreateRequest,
+            AdminRoleResponse, AdminRoleUpdateRequest, AdminRolesResponse,
             AdminServerConfigEditable, AdminServerConfigReadonly, AdminServerConfigResponse,
-            AdminSessionsResponse, AdminTftpConfigResponse, AdminTftpStatusResponse,
-            AdminLeaseCreateRequest, AdminLeaseUpdateRequest,
-            AdminUserCreateRequest, AdminUserResponse, AdminUserRolesResponse,
-            AdminUserRolesUpdateRequest, AdminUserUpdateRequest, AdminUsersResponse,
-            BoardPowerAction, BoardPowerStatusResponse, BoardRuntimeStatusResponse,
-            BoardTypeSummary, BootProfileResponse, CreateLeaseRequest, CreateSessionRequest,
-            CurrentUserResponse, DtbFileResponse, FileResponse, HttpBootFileResponse,
-            KernelPublishResponse, LeaseResponse, LeasesResponse, LoginRequest,
-            NetworkInterfaceSummary, SerialPortSummary, SerialStatusResponse,
+            AdminSessionResponse, AdminSessionsResponse, AdminTftpConfigResponse,
+            AdminTftpStatusResponse, AdminUserCreateRequest, AdminUserResponse,
+            AdminUserRolesResponse, AdminUserRolesUpdateRequest, AdminUserUpdateRequest,
+            AdminUsersResponse, BoardPowerAction, BoardPowerStatusResponse,
+            BoardRuntimeStatusResponse, BoardTypeSummary, BootProfileResponse, CreateLeaseRequest,
+            CreateSessionRequest, CurrentUserResponse, DtbFileResponse, FileResponse,
+            HttpBootFileResponse, KernelPublishResponse, LeaseResponse, LeasesResponse,
+            LoginRequest, NetworkInterfaceSummary, SerialPortSummary, SerialStatusResponse,
             SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse,
             SiteSettingsResponse, SiteSettingsUpdateRequest, TftpSessionResponse,
             UpdateServerConfigRequest,
@@ -468,6 +471,7 @@ async fn list_user_leases(
 
 async fn create_lease(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     axum::Json(request): axum::Json<CreateLeaseRequest>,
 ) -> Result<(StatusCode, axum::Json<LeaseResponse>), ApiError> {
@@ -475,9 +479,15 @@ async fn create_lease(
     if request.board_type.trim().is_empty() {
         return Err(ApiError::bad_request("board_type must not be empty"));
     }
-    let lease = create_user_lease(&state, &user.id, &user.username, request)
-        .await
-        .map_err(|err| ApiError::conflict(err.to_string()))?;
+    let lease = create_user_lease(
+        &state,
+        &user.id,
+        &user.username,
+        request,
+        Some(addr.ip().to_string()),
+    )
+    .await
+    .map_err(|err| ApiError::conflict(err.to_string()))?;
     let response = lease_response(&state, lease).await;
     Ok((StatusCode::CREATED, axum::Json(response)))
 }
@@ -808,10 +818,18 @@ async fn create_admin_lease(
         .cloned()
         .ok_or_else(|| ApiError::not_found(format!("board `{board_id}` not found")))?;
     if board.disabled {
-        return Err(ApiError::conflict(format!("board `{board_id}` is disabled")));
+        return Err(ApiError::conflict(format!(
+            "board `{board_id}` is disabled"
+        )));
     }
-    ensure_lease_window_available(&state, board_id, request.starts_at, request.expires_at, None)
-        .await?;
+    ensure_lease_window_available(
+        &state,
+        board_id,
+        request.starts_at,
+        request.expires_at,
+        None,
+    )
+    .await?;
     let lease = state
         .storage
         .create_lease(crate::storage::NewLease {
@@ -882,6 +900,7 @@ async fn update_admin_lease(
 
 async fn start_admin_lease_session(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(lease_id): Path<String>,
 ) -> Result<axum::Json<LeaseResponse>, ApiError> {
     let lease = state
@@ -889,7 +908,7 @@ async fn start_admin_lease_session(
         .find_lease(&lease_id)
         .await?
         .ok_or_else(|| ApiError::not_found("lease not found"))?;
-    let updated = start_lease_session(&state, lease).await?;
+    let updated = start_lease_session(&state, lease, Some(addr.ip().to_string())).await?;
     Ok(axum::Json(lease_response(&state, updated).await))
 }
 
@@ -942,7 +961,11 @@ async fn ensure_lease_window_available(
     Ok(())
 }
 
-async fn start_lease_session(state: &AppState, lease: Lease) -> Result<Lease, ApiError> {
+async fn start_lease_session(
+    state: &AppState,
+    lease: Lease,
+    source_ip: Option<String>,
+) -> Result<Lease, ApiError> {
     if lease.state != crate::storage::LeaseState::Active {
         return Err(ApiError::conflict("only active leases can start a session"));
     }
@@ -960,7 +983,7 @@ async fn start_lease_session(state: &AppState, lease: Lease) -> Result<Lease, Ap
     }
 
     let session = state
-        .create_session_for_board(&lease.board_id, Some(lease.user_id.clone()))
+        .create_session_for_board(&lease.board_id, Some(lease.user_id.clone()), source_ip)
         .await
         .map_err(|err| match err {
             BoardAllocationStatus::BoardTypeNotFound => {
@@ -970,8 +993,13 @@ async fn start_lease_session(state: &AppState, lease: Lease) -> Result<Lease, Ap
                 ApiError::conflict(format!("board `{}` is not available", lease.board_id))
             }
         })?;
-    state.update_session_expiry(&session.id, lease.expires_at).await;
-    state.storage.bind_lease_session(&lease.id, &session.id).await?;
+    state
+        .update_session_expiry(&session.id, lease.expires_at)
+        .await;
+    state
+        .storage
+        .bind_lease_session(&lease.id, &session.id)
+        .await?;
     state
         .storage
         .find_lease(&lease.id)
@@ -1522,7 +1550,11 @@ async fn update_dtb(
             .get(&effective_name)
             .await?
             .ok_or_else(|| ApiError::not_found(format!("DTB `{effective_name}` not found")))?;
-        let bytes = state.dtb_store.read(&effective_name).await.map_err(ApiError::from)?;
+        let bytes = state
+            .dtb_store
+            .read(&effective_name)
+            .await
+            .map_err(ApiError::from)?;
         let metadata = sync_dtb_metadata(&state, &file, &bytes, dtb_metadata, None).await?;
         write_audit_log(
             &state,
@@ -1617,8 +1649,50 @@ async fn delete_board(
 async fn list_admin_sessions(
     State(state): State<AppState>,
 ) -> Result<axum::Json<AdminSessionsResponse>, ApiError> {
+    let active_sessions = session_snapshots(&state)
+        .await
+        .into_iter()
+        .map(|session| (session.id.clone(), session))
+        .collect::<BTreeMap<_, _>>();
+    let sessions = state
+        .storage
+        .list_session_records()
+        .await?
+        .into_iter()
+        .map(|mut record| {
+            if let Some(active) = active_sessions.get(&record.id) {
+                record.state = active.state.as_str().to_string();
+                record.last_heartbeat_at = active.last_heartbeat_at;
+                record.expires_at = active.expires_at;
+                record.source_ip = active.source_ip.clone();
+            }
+            record
+        })
+        .collect::<Vec<_>>();
+    let leases = state.storage.list_leases().await?;
+    let lease_by_session_id = leases
+        .into_iter()
+        .filter_map(|lease| {
+            lease
+                .session_id
+                .clone()
+                .map(|session_id| (session_id, lease))
+        })
+        .collect::<BTreeMap<_, _>>();
+
     Ok(axum::Json(AdminSessionsResponse {
-        sessions: session_snapshots(&state).await,
+        sessions: sessions
+            .into_iter()
+            .map(|session| {
+                let lease = lease_by_session_id.get(&session.id).cloned();
+                AdminSessionResponse {
+                    user_id: lease.as_ref().map(|item| item.user_id.clone()),
+                    lease,
+                    source_ip: session.source_ip.clone(),
+                    session,
+                }
+            })
+            .collect(),
     }))
 }
 
@@ -1776,6 +1850,7 @@ async fn list_board_types(
 
 async fn create_session(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     axum::Json(request): axum::Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, axum::Json<SessionCreatedResponse>), ApiError> {
     if request.board_type.trim().is_empty() {
@@ -1787,6 +1862,7 @@ async fn create_session(
             &request.board_type,
             &request.required_tags,
             request.client_name.clone(),
+            Some(addr.ip().to_string()),
         )
         .await
         .map_err(|err| match err {
@@ -2285,7 +2361,10 @@ fn optional_header(headers: &HeaderMap, name: &'static str) -> Result<Option<Str
         .transpose()
 }
 
-fn optional_clean_header(headers: &HeaderMap, name: &'static str) -> Result<Option<String>, ApiError> {
+fn optional_clean_header(
+    headers: &HeaderMap,
+    name: &'static str,
+) -> Result<Option<String>, ApiError> {
     Ok(clean_optional(optional_header(headers, name)?))
 }
 

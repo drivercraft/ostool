@@ -387,7 +387,6 @@ watch(
         </div>
 
         <div v-if="loading" class="empty-state">正在加载角色...</div>
-        <div v-else-if="filteredRoles.length === 0" class="empty-state">没有符合条件的角色。</div>
         <div v-else class="table-scroll">
           <table class="data-table roles-table">
             <thead>
@@ -405,7 +404,7 @@ watch(
               <tr v-for="(role, index) in filteredRoles" :key="role.id">
                 <td class="col-index">{{ index + 1 }}</td>
                 <td><strong>{{ role.display_name }}</strong></td>
-                <td><code>{{ role.name }}</code></td>
+                <td>{{ role.name }}</td>
                 <td>
                   <StatusPill
                     :tone="role.system ? 'neutral' : 'good'"

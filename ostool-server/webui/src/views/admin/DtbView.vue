@@ -375,8 +375,6 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
       </div>
 
       <div v-if="loading" class="empty-state">正在加载 DTB 列表...</div>
-      <div v-else-if="dtbs.length === 0" class="empty-state">当前还没有上传任何 DTB。</div>
-      <div v-else-if="filteredDtbs.length === 0" class="empty-state">没有符合条件的 DTB。</div>
       <div v-else class="table-scroll">
         <table class="data-table">
           <thead>
@@ -397,12 +395,12 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
               <td class="col-index">{{ index + 1 }}</td>
               <td>
                 <div class="dtb-name-cell">
-                  <code>{{ dtb.name }}</code>
+                  <span>{{ dtb.name }}</span>
                   <span>{{ dtb.relative_tftp_path_template }}</span>
                 </div>
               </td>
               <td>{{ dtb.boot_architecture || "-" }}</td>
-              <td><code>{{ dtb.compatible || "-" }}</code></td>
+              <td>{{ dtb.compatible || "-" }}</td>
               <td>{{ formatSize(dtb.size) }}</td>
               <td>
                 <span

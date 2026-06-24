@@ -11,7 +11,9 @@ use crate::{
     config::{AdminSeedConfig, BoardConfig, SampleDataConfig},
     dtb_store::DtbStore,
     state::AppState,
-    storage::{DynStorage, LeaseState, NewLease, NewUser, UpsertDtbMetadata, UserProfile},
+    storage::{
+        DynStorage, LeaseState, NewLease, NewSessionRecord, NewUser, UpsertDtbMetadata, UserProfile,
+    },
 };
 
 pub async fn seed_database(
@@ -122,10 +124,7 @@ async fn seed_sample_users(storage: &DynStorage) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn seed_sample_dtbs(
-    storage: &DynStorage,
-    dtb_store: &Arc<DtbStore>,
-) -> anyhow::Result<()> {
+async fn seed_sample_dtbs(storage: &DynStorage, dtb_store: &Arc<DtbStore>) -> anyhow::Result<()> {
     for sample in sample_dtbs() {
         if dtb_store.get(sample.name).await?.is_none() {
             dtb_store.write(sample.name, sample.bytes).await?;
@@ -181,6 +180,18 @@ async fn seed_sample_historical_leases(storage: &DynStorage) -> anyhow::Result<(
             None,
         )
         .await?;
+    storage
+        .create_session_record(NewSessionRecord {
+            id: "sample-session-released".into(),
+            board_id: "sample-pxe-01".into(),
+            client_name: Some("Alice 示例历史会话".into()),
+            source_ip: Some("192.168.10.101".into()),
+            state: "released".into(),
+            created_at: now - Duration::hours(20),
+            last_heartbeat_at: now - Duration::hours(18),
+            expires_at: now - Duration::hours(18),
+        })
+        .await?;
 
     let expired = storage
         .create_lease(NewLease {
@@ -200,6 +211,18 @@ async fn seed_sample_historical_leases(storage: &DynStorage) -> anyhow::Result<(
             Some(now - Duration::hours(2)),
             Some("示例租赁已过期".into()),
         )
+        .await?;
+    storage
+        .create_session_record(NewSessionRecord {
+            id: "sample-session-expired".into(),
+            board_id: "sample-aarch64-httpboot-01".into(),
+            client_name: Some("Bob 示例过期会话".into()),
+            source_ip: Some("192.168.10.102".into()),
+            state: "expired".into(),
+            created_at: now - Duration::hours(4),
+            last_heartbeat_at: now - Duration::hours(2),
+            expires_at: now - Duration::hours(2),
+        })
         .await?;
     Ok(())
 }
@@ -231,14 +254,16 @@ fn sample_dtbs() -> Vec<SampleDtb> {
         ),
     ]
     .into_iter()
-    .map(|(name, bytes, boot_architecture, compatible, description)| SampleDtb {
-        name,
-        bytes,
-        boot_architecture,
-        compatible,
-        description,
-        sha256: hex_sha256(bytes),
-    })
+    .map(
+        |(name, bytes, boot_architecture, compatible, description)| SampleDtb {
+            name,
+            bytes,
+            boot_architecture,
+            compatible,
+            description,
+            sha256: hex_sha256(bytes),
+        },
+    )
     .collect()
 }
 
@@ -257,9 +282,7 @@ pub async fn seed_sample_runtime_leases(state: &AppState) -> anyhow::Result<()> 
         .list_leases()
         .await?
         .iter()
-        .any(|lease| {
-            lease.state == LeaseState::Active && lease.board_id == "sample-rk3568-01"
-        })
+        .any(|lease| lease.state == LeaseState::Active && lease.board_id == "sample-rk3568-01")
     {
         return Ok(());
     }
@@ -269,7 +292,7 @@ pub async fn seed_sample_runtime_leases(state: &AppState) -> anyhow::Result<()> 
     let starts_at = Utc::now();
     let expires_at = starts_at + Duration::hours(3);
     let Ok(session) = state
-        .create_session_for_board("sample-rk3568-01", Some("Carol 示例租赁".into()))
+        .create_session_for_board("sample-rk3568-01", Some("Carol 示例租赁".into()), None)
         .await
     else {
         return Ok(());

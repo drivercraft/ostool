@@ -200,9 +200,32 @@ export interface Session {
   id: string;
   board_id: string;
   client_name: string | null;
+  source_ip: string | null;
   created_at: string;
   expires_at: string;
   state: "active" | "releasing";
+}
+
+export type SessionRecordState = "active" | "releasing" | "released" | "expired" | "failed";
+
+export interface SessionRecord {
+  id: string;
+  board_id: string;
+  client_name: string | null;
+  source_ip: string | null;
+  state: SessionRecordState;
+  created_at: string;
+  last_heartbeat_at: string;
+  expires_at: string;
+  ended_at: string | null;
+  failure_message: string | null;
+}
+
+export interface AdminSessionResponse {
+  session: SessionRecord;
+  lease: Lease | null;
+  user_id: string | null;
+  source_ip: string | null;
 }
 
 export type LeaseState = "active" | "releasing" | "released" | "expired" | "failed";
@@ -347,7 +370,7 @@ export interface AdminUserRolesUpdateRequest {
 }
 
 export interface AdminSessionsResponse {
-  sessions: Session[];
+  sessions: AdminSessionResponse[];
 }
 
 export interface AdminTftpConfigResponse {

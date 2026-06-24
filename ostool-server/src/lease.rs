@@ -11,6 +11,7 @@ pub async fn create_user_lease(
     user_id: &str,
     username: &str,
     request: CreateLeaseRequest,
+    source_ip: Option<String>,
 ) -> anyhow::Result<Lease> {
     let site = state.storage.get_site_settings().await?;
     if !site.self_service_enabled {
@@ -23,6 +24,7 @@ pub async fn create_user_lease(
             &request.board_type,
             &request.required_tags,
             Some(username.to_string()),
+            source_ip,
         )
         .await
         .map_err(|status| anyhow::anyhow!("failed to allocate board: {status:?}"))?;
