@@ -163,7 +163,7 @@ async fn seed_sample_historical_leases(storage: &DynStorage) -> anyhow::Result<(
     let now = Utc::now();
     let released = storage
         .create_lease(NewLease {
-            user_id: alice.id,
+            user_id: alice.id.clone(),
             session_id: Some("sample-session-released".into()),
             board_id: "sample-pxe-01".into(),
             board_type: "sample-pxe".into(),
@@ -190,6 +190,18 @@ async fn seed_sample_historical_leases(storage: &DynStorage) -> anyhow::Result<(
             created_at: now - Duration::hours(20),
             last_heartbeat_at: now - Duration::hours(18),
             expires_at: now - Duration::hours(18),
+        })
+        .await?;
+
+    storage
+        .create_lease(NewLease {
+            user_id: alice.id.clone(),
+            session_id: None,
+            board_id: "sample-loongarch64-httpboot-01".into(),
+            board_type: "sample-loongarch64-httpboot".into(),
+            required_tags: vec!["sample".into(), "loongarch64".into(), "httpboot".into()],
+            starts_at: now + Duration::hours(1),
+            expires_at: now + Duration::hours(5),
         })
         .await?;
 

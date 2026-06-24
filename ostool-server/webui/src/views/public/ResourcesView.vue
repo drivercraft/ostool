@@ -174,11 +174,6 @@ onMounted(() => {
       </div>
     </section>
 
-    <div v-if="!loading && !failed" class="resource-results-summary">
-      <span>显示 {{ filteredBoardTypes.length }} / {{ boardTypes.length }} 个型号</span>
-      <span>整体可用率 {{ totals.availabilityRate }}%</span>
-    </div>
-
     <div v-if="loading" class="empty-state">
       <div class="empty-state-icon">&#9641;</div>
       正在加载开发板资源...

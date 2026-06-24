@@ -845,12 +845,44 @@ async fn list_user_lease_availability(
 ) -> Result<axum::Json<LeasesResponse>, ApiError> {
     current_user_from_headers(&state, &headers).await?;
     let leases = state.storage.list_leases().await?;
+    let mut leased_session_ids = BTreeSet::new();
     let mut responses = Vec::new();
     for lease in leases
         .into_iter()
         .filter(|lease| lease.state == crate::storage::LeaseState::Active)
     {
+        if let Some(session_id) = lease.session_id.as_deref() {
+            leased_session_ids.insert(session_id.to_string());
+        }
         responses.push(lease_response(&state, lease).await);
+    }
+
+    let boards = state.boards.read().await.clone();
+    for session in session_snapshots(&state).await {
+        if leased_session_ids.contains(&session.id) {
+            continue;
+        }
+        let Some(board) = boards.get(&session.board_id) else {
+            continue;
+        };
+        responses.push(LeaseResponse {
+            lease: Lease {
+                id: format!("runtime-session-{}", session.id),
+                user_id: "runtime-session".to_string(),
+                session_id: Some(session.id.clone()),
+                board_id: session.board_id.clone(),
+                board_type: board.board_type.clone(),
+                required_tags: board.tags.clone(),
+                state: crate::storage::LeaseState::Active,
+                created_at: session.created_at,
+                updated_at: session.last_heartbeat_at,
+                starts_at: session.created_at,
+                expires_at: session.expires_at,
+                released_at: None,
+                failure_message: None,
+            },
+            session: Some(session),
+        });
     }
     Ok(axum::Json(LeasesResponse { leases: responses }))
 }

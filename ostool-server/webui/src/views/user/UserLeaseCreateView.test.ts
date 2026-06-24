@@ -157,4 +157,51 @@ describe("UserLeaseCreateView", () => {
     });
     expect(routerPush).toHaveBeenCalledWith("/dashboard/leases");
   });
+
+  it("marks other users' occupied slots as unavailable", async () => {
+    const occupiedStart = new Date();
+    occupiedStart.setMinutes(0, 0, 0);
+    const occupiedEnd = new Date(occupiedStart);
+    occupiedEnd.setHours(occupiedStart.getHours() + 2);
+    routeMock = {
+      query: { board_type: "sample-loongarch64-httpboot" },
+    };
+    listBoardTypes.mockResolvedValue([
+      { board_type: "sample-loongarch64-httpboot", tags: ["sample"], total: 1, available: 0 },
+    ]);
+    listUserLeaseAvailability.mockResolvedValue({
+      leases: [
+        {
+          lease: {
+            id: "lease-other",
+            user_id: "other-user",
+            session_id: null,
+            board_id: "sample-loongarch64-httpboot-01",
+            board_type: "sample-loongarch64-httpboot",
+            required_tags: [],
+            state: "active",
+            created_at: occupiedStart.toISOString(),
+            updated_at: occupiedStart.toISOString(),
+            starts_at: occupiedStart.toISOString(),
+            expires_at: occupiedEnd.toISOString(),
+            released_at: null,
+            failure_message: null,
+          },
+          session: null,
+        },
+      ],
+    });
+
+    await seedUser();
+    const UserLeaseCreateView = (await import("./UserLeaseCreateView.vue")).default;
+    const wrapper = mount(UserLeaseCreateView);
+    await flushPromises();
+    await wrapper.findAll(".lease-calendar-tabs button")[0].trigger("click");
+    await flushPromises();
+
+    const disabledCells = wrapper.findAll(".lease-calendar-cell.is-disabled");
+    expect(disabledCells.length).toBeGreaterThan(0);
+    expect(wrapper.find(".lease-calendar-event.is-unavailable").exists()).toBe(true);
+    expect(wrapper.text()).toContain("已占用");
+  });
 });
