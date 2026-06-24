@@ -20,6 +20,55 @@ describe("api", () => {
     await expect(api.deleteSession("demo-session")).resolves.toBeUndefined();
   });
 
+  it("uses REST resource endpoints for admin user read and delete", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          id: "u/1",
+          username: "alice",
+          display_name: "Alice",
+          nickname: null,
+          avatar_url: null,
+          email: "alice@example.com",
+          phone: null,
+          department: null,
+          title: null,
+          disabled: false,
+          last_login_at: null,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 204,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.getAdminUser("u/1")).resolves.toMatchObject({
+      id: "u/1",
+      username: "alice",
+    });
+    await expect(api.deleteAdminUser("u/1")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/admin/users/u%2F1",
+      expect.objectContaining({
+        credentials: "same-origin",
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/admin/users/u%2F1",
+      expect.objectContaining({
+        method: "DELETE",
+        credentials: "same-origin",
+      }),
+    );
+  });
+
   it("reports a service connection hint when fetch fails", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
 

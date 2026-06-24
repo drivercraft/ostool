@@ -109,7 +109,12 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/admin/users",
             get(list_admin_users).post(create_admin_user),
         )
-        .route("/api/v1/admin/users/{user_id}", put(update_admin_user))
+        .route(
+            "/api/v1/admin/users/{user_id}",
+            get(get_admin_user)
+                .put(update_admin_user)
+                .delete(delete_admin_user),
+        )
         .route(
             "/api/v1/admin/users/{user_id}/roles",
             get(get_admin_user_roles).put(update_admin_user_roles),
@@ -134,7 +139,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/admin/roles/{role_id}",
-            put(update_admin_role).delete(delete_admin_role),
+            get(get_admin_role)
+                .put(update_admin_role)
+                .delete(delete_admin_role),
         )
         .route("/api/v1/admin/boards", get(list_boards).post(create_board))
         .route("/api/v1/admin/dtbs", get(list_dtbs).post(create_dtb))
@@ -534,6 +541,18 @@ async fn create_admin_user(
     Ok((StatusCode::CREATED, axum::Json(admin_user_response(user))))
 }
 
+async fn get_admin_user(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> Result<axum::Json<AdminUserResponse>, ApiError> {
+    let user = state
+        .storage
+        .find_user_by_id(&user_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("user not found"))?;
+    Ok(axum::Json(admin_user_response(user)))
+}
+
 async fn update_admin_user(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
@@ -579,6 +598,17 @@ async fn disable_admin_user(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    state.storage.set_user_disabled(&user_id, true).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_admin_user(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if state.storage.find_user_by_id(&user_id).await?.is_none() {
+        return Err(ApiError::not_found("user not found"));
+    }
     state.storage.set_user_disabled(&user_id, true).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -636,6 +666,18 @@ async fn create_admin_role(
         StatusCode::CREATED,
         axum::Json(admin_role_response(&state, role).await?),
     ))
+}
+
+async fn get_admin_role(
+    State(state): State<AppState>,
+    Path(role_id): Path<String>,
+) -> Result<axum::Json<AdminRoleResponse>, ApiError> {
+    let role = state
+        .storage
+        .find_role_by_id(&role_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("role not found"))?;
+    Ok(axum::Json(admin_role_response(&state, role).await?))
 }
 
 async fn update_admin_role(

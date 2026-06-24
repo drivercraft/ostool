@@ -8,6 +8,7 @@ const listAdminRoles = vi.fn();
 const getAdminUserRoles = vi.fn();
 const createAdminUser = vi.fn();
 const updateAdminUser = vi.fn();
+const deleteAdminUser = vi.fn();
 const disableAdminUser = vi.fn();
 const resetAdminUserPassword = vi.fn();
 const updateAdminUserRoles = vi.fn();
@@ -26,6 +27,7 @@ vi.mock("@/api", () => ({
     getAdminUserRoles,
     createAdminUser,
     updateAdminUser,
+    deleteAdminUser,
     disableAdminUser,
     resetAdminUserPassword,
     updateAdminUserRoles,
@@ -76,6 +78,7 @@ describe("UsersView", () => {
       getAdminUserRoles,
       createAdminUser,
       updateAdminUser,
+      deleteAdminUser,
       disableAdminUser,
       resetAdminUserPassword,
       updateAdminUserRoles,
@@ -237,6 +240,32 @@ describe("UsersView", () => {
     );
     expect(labels.some((t) => t.includes("编辑用户"))).toBe(true);
     expect(labels.some((t) => t.includes("重置密码"))).toBe(true);
+
+    wrapper.unmount();
+  });
+
+  it("deletes users through the REST user resource endpoint wrapper", async () => {
+    const UsersView = (await import("./UsersView.vue")).default;
+    const wrapper = mount(UsersView, {
+      attachTo: document.body,
+    });
+
+    await flushPromises();
+
+    const firstRow = wrapper.findAll("tbody tr")[0];
+    await firstRow.find('button[title="更多"]').trigger("click");
+    await flushPromises();
+
+    const deleteButton = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>(".action-menu-item"),
+    ).find((button) => button.textContent?.includes("删除用户"));
+    expect(deleteButton).toBeTruthy();
+
+    deleteButton!.click();
+    await flushPromises();
+
+    expect(deleteAdminUser).toHaveBeenCalledWith("u-1");
+    expect(disableAdminUser).not.toHaveBeenCalled();
 
     wrapper.unmount();
   });

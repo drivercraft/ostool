@@ -1262,6 +1262,10 @@ impl RbacRepository for SqliteStorage {
         rows.iter().map(role_from_row).collect()
     }
 
+    async fn find_role_by_id(&self, role_id: &str) -> anyhow::Result<Option<Role>> {
+        self.find_role_by_id_inner(role_id).await
+    }
+
     async fn create_role(&self, role: NewRole) -> anyhow::Result<Role> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
@@ -1281,7 +1285,7 @@ impl RbacRepository for SqliteStorage {
         .await?;
         self.replace_role_permissions(&id, &role.permission_ids)
             .await?;
-        self.find_role_by_id(&id)
+        self.find_role_by_id_inner(&id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("created role `{id}` disappeared"))
     }
@@ -1308,11 +1312,11 @@ impl RbacRepository for SqliteStorage {
         .await?;
         self.replace_role_permissions(role_id, &permission_ids)
             .await?;
-        self.find_role_by_id(role_id).await
+        self.find_role_by_id_inner(role_id).await
     }
 
     async fn delete_role(&self, role_id: &str) -> anyhow::Result<()> {
-        let role = self.find_role_by_id(role_id).await?;
+        let role = self.find_role_by_id_inner(role_id).await?;
         if role.as_ref().map(|item| item.system).unwrap_or(false) {
             anyhow::bail!("system role cannot be deleted");
         }
@@ -1414,7 +1418,7 @@ impl SqliteStorage {
         self.set_user_roles(user_id, role_ids).await
     }
 
-    async fn find_role_by_id(&self, role_id: &str) -> anyhow::Result<Option<Role>> {
+    async fn find_role_by_id_inner(&self, role_id: &str) -> anyhow::Result<Option<Role>> {
         sqlx::query("SELECT * FROM roles WHERE id = ?")
             .bind(role_id)
             .fetch_optional(&self.pool)

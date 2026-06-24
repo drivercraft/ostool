@@ -287,7 +287,7 @@ async function deleteUser(user: AdminUserResponse) {
     return;
   }
   try {
-    await api.disableAdminUser(user.id);
+    await api.deleteAdminUser(user.id);
     ui.setSuccess(`已删除用户 ${user.username}`);
     closeMenu();
     await loadUsers();

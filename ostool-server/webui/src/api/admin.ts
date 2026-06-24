@@ -146,10 +146,18 @@ export const adminApi = {
       bodyJson: payload,
     });
   },
+  getAdminUser(userId: string) {
+    return request<AdminUserResponse>(`/api/v1/admin/users/${encodeURIComponent(userId)}`);
+  },
   updateAdminUser(userId: string, payload: AdminUserUpdateRequest) {
     return request<AdminUserResponse>(`/api/v1/admin/users/${encodeURIComponent(userId)}`, {
       method: "PUT",
       bodyJson: payload,
+    });
+  },
+  deleteAdminUser(userId: string) {
+    return request<void>(`/api/v1/admin/users/${encodeURIComponent(userId)}`, {
+      method: "DELETE",
     });
   },
   resetAdminUserPassword(userId: string, payload: AdminPasswordResetRequest) {
@@ -182,6 +190,9 @@ export const adminApi = {
   },
   listAdminRoles() {
     return request<AdminRolesResponse>("/api/v1/admin/roles");
+  },
+  getAdminRole(roleId: string) {
+    return request<AdminRoleResponse>(`/api/v1/admin/roles/${encodeURIComponent(roleId)}`);
   },
   createAdminRole(payload: AdminRoleCreateRequest) {
     return request<AdminRoleResponse>("/api/v1/admin/roles", {

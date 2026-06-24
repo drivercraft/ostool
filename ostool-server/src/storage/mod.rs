@@ -586,6 +586,7 @@ pub trait BoardConfigRepository: Send + Sync {
 pub trait RbacRepository: Send + Sync {
     async fn list_permissions(&self) -> anyhow::Result<Vec<Permission>>;
     async fn list_roles(&self) -> anyhow::Result<Vec<Role>>;
+    async fn find_role_by_id(&self, role_id: &str) -> anyhow::Result<Option<Role>>;
     async fn create_role(&self, role: NewRole) -> anyhow::Result<Role>;
     async fn update_role(
         &self,
