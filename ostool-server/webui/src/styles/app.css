@@ -2171,6 +2171,12 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   font-size: .78rem;
   line-height: 1.45;
 }
+.permission-group-toggle {
+  align-items: center;
+  justify-content: flex-start;
+  gap: .5rem;
+  margin-top: .5rem;
+}
 .permission-matrix-options {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));

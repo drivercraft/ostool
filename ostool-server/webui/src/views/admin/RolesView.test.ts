@@ -42,12 +42,12 @@ vi.mock("vue-router", () => ({
   }),
 }));
 
-function makePermission(): AdminPermissionResponse {
+function makePermission(overrides: Partial<AdminPermissionResponse> = {}): AdminPermissionResponse {
   return {
-    id: "p-1",
-    code: "resources.manage",
-    name: "资源管理",
-    description: "管理开发板资源",
+    id: overrides.id ?? "p-1",
+    code: overrides.code ?? "boards.update",
+    name: overrides.name ?? "编辑开发板",
+    description: overrides.description ?? "编辑开发板配置",
   };
 }
 
@@ -79,9 +79,24 @@ describe("RolesView", () => {
     uiStore.setSuccess.mockReset();
     uiStore.confirm.mockReset();
     uiStore.confirm.mockResolvedValue(true);
-    const permission = makePermission();
-    listAdminRoles.mockResolvedValue({ roles: [makeRole(permission)] });
-    listAdminPermissions.mockResolvedValue({ permissions: [permission] });
+    const permissions = [
+      makePermission({ id: "p-1", code: "boards.read", name: "查看开发板" }),
+      makePermission(),
+      makePermission({
+        id: "p-3",
+        code: "leases.delete",
+        name: "删除租赁",
+        description: "删除租赁记录",
+      }),
+      makePermission({
+        id: "p-4",
+        code: "sessions.delete",
+        name: "删除会话租约",
+        description: "删除会话租约记录",
+      }),
+    ];
+    listAdminRoles.mockResolvedValue({ roles: [makeRole(permissions[0])] });
+    listAdminPermissions.mockResolvedValue({ permissions });
   });
 
   it("renders action buttons on the left and search/filter controls on the right", async () => {
@@ -115,5 +130,45 @@ describe("RolesView", () => {
       name: "admin-user-role-edit",
       params: { roleId: "r-1" },
     });
+  });
+
+  it("renders fine-grained permission groups in the role editor", async () => {
+    routeState.name = "admin-user-role-new";
+
+    const RolesView = (await import("./RolesView.vue")).default;
+    const wrapper = mount(RolesView);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("开发板管理");
+    expect(wrapper.text()).toContain("boards.update");
+    expect(wrapper.text()).toContain("租赁情况");
+    expect(wrapper.text()).toContain("leases.delete");
+    expect(wrapper.text()).toContain("会话租约");
+    expect(wrapper.text()).toContain("sessions.delete");
+  });
+
+  it("toggles all permissions in a group from the module switch", async () => {
+    routeState.name = "admin-user-role-new";
+
+    const RolesView = (await import("./RolesView.vue")).default;
+    const wrapper = mount(RolesView);
+    await flushPromises();
+
+    const boardGroup = wrapper.findAll(".permission-matrix-row")
+      .find((row) => row.text().includes("开发板管理"));
+    expect(boardGroup).toBeTruthy();
+
+    const groupToggle = boardGroup!.find(".permission-group-toggle input");
+    const permissionCheckboxes = boardGroup!.findAll(".permission-matrix-options input");
+    expect(permissionCheckboxes).toHaveLength(2);
+    expect(permissionCheckboxes.every((item) => (item.element as HTMLInputElement).checked)).toBe(false);
+
+    await groupToggle.setValue(true);
+
+    expect(permissionCheckboxes.every((item) => (item.element as HTMLInputElement).checked)).toBe(true);
+
+    await groupToggle.setValue(false);
+
+    expect(permissionCheckboxes.every((item) => (item.element as HTMLInputElement).checked)).toBe(false);
   });
 });

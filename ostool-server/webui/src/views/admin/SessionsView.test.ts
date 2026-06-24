@@ -249,7 +249,7 @@ describe("SessionsView", () => {
     expect((releaseButton.element as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("disables session deletion without rentals.delete permission", async () => {
+  it("disables session deletion without sessions.delete permission", async () => {
     authStore.hasPermission.mockReturnValue(false);
 
     const SessionsView = (await import("./SessionsView.vue")).default;

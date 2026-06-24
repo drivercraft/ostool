@@ -260,7 +260,7 @@ describe("LeasesView", () => {
     wrapper.unmount();
   });
 
-  it("disables lease deletion without rentals.delete permission", async () => {
+  it("disables lease deletion without leases.delete permission", async () => {
     authStore.hasPermission.mockReturnValue(false);
 
     const LeasesView = (await import("./LeasesView.vue")).default;

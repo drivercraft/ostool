@@ -67,29 +67,99 @@ const filteredRoles = computed(() =>
 const permissionGroups = computed<PermissionGroup[]>(() => {
   const labels: Record<string, { title: string; description: string }> = {
     overview: { title: "概览", description: "运行总览与平台统计" },
-    resources: { title: "资源管理", description: "开发板、DTB 与 TFTP 配置" },
-    rentals: { title: "租赁管理", description: "租赁情况与会话租约" },
     users: { title: "用户管理", description: "用户账号与角色分配" },
     roles: { title: "角色与权限", description: "角色创建、编辑与权限配置" },
-    settings: { title: "系统设置", description: "服务运行配置" },
+    boards: { title: "开发板管理", description: "开发板配置与运行状态" },
+    dtbs: { title: "DTB 管理", description: "DTB 文件与元数据" },
+    leases: { title: "租赁情况", description: "租赁记录、预约时间段与会话启动" },
+    sessions: { title: "会话租约", description: "会话租约记录与历史数据" },
+    tftp: { title: "TFTP 配置", description: "TFTP 配置、状态与同步" },
+    server: { title: "服务器配置", description: "服务运行参数" },
+    site: { title: "站点设置", description: "站点展示与租赁策略" },
+    serial_ports: { title: "串口资源", description: "服务器可用串口" },
+    network_interfaces: { title: "网络接口", description: "服务器网络接口" },
+    permissions: { title: "权限目录", description: "系统内置权限列表" },
   };
+  const order = [
+    "overview",
+    "users",
+    "roles",
+    "boards",
+    "dtbs",
+    "leases",
+    "sessions",
+    "tftp",
+    "server",
+    "site",
+    "serial_ports",
+    "network_interfaces",
+    "permissions",
+  ];
+  const actionOrder = ["read", "create", "update", "start", "release", "reconcile", "delete"];
   const map = new Map<string, AdminPermissionResponse[]>();
   for (const permission of permissions.value) {
     const key = permission.code.split(".")[0] || "other";
     map.set(key, [...(map.get(key) ?? []), permission]);
   }
-  return Array.from(map.entries()).map(([key, items]) => ({
-    key,
-    title: labels[key]?.title ?? key,
-    description: labels[key]?.description ?? "系统权限",
-    permissions: items,
-  }));
+  return Array.from(map.entries())
+    .sort(([left], [right]) => {
+      const leftIndex = order.indexOf(left);
+      const rightIndex = order.indexOf(right);
+      return (leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex)
+        - (rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex)
+        || left.localeCompare(right);
+    })
+    .map(([key, items]) => ({
+      key,
+      title: labels[key]?.title ?? key,
+      description: labels[key]?.description ?? "系统权限",
+      permissions: [...items].sort((left, right) => {
+        const leftAction = left.code.split(".").slice(1).join(".");
+        const rightAction = right.code.split(".").slice(1).join(".");
+        const leftIndex = actionOrder.indexOf(leftAction);
+        const rightIndex = actionOrder.indexOf(rightAction);
+        return (leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex)
+          - (rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex)
+          || left.code.localeCompare(right.code);
+      }),
+    }));
 });
 
 function rolesForPermission(permissionId: string) {
   return roles.value.filter((role) =>
     role.permissions.some((permission) => permission.id === permissionId),
   );
+}
+
+function groupPermissionIds(group: PermissionGroup) {
+  return group.permissions.map((permission) => permission.id);
+}
+
+function selectedPermissionCount(group: PermissionGroup) {
+  const selected = new Set(form.value.permission_ids);
+  return groupPermissionIds(group).filter((permissionId) => selected.has(permissionId)).length;
+}
+
+function isPermissionGroupSelected(group: PermissionGroup) {
+  return group.permissions.length > 0 && selectedPermissionCount(group) === group.permissions.length;
+}
+
+function isPermissionGroupPartial(group: PermissionGroup) {
+  const count = selectedPermissionCount(group);
+  return count > 0 && count < group.permissions.length;
+}
+
+function togglePermissionGroup(group: PermissionGroup, checked: boolean) {
+  const groupIds = new Set(groupPermissionIds(group));
+  const next = new Set(form.value.permission_ids);
+  if (checked) {
+    groupIds.forEach((permissionId) => next.add(permissionId));
+  } else {
+    groupIds.forEach((permissionId) => next.delete(permissionId));
+  }
+  form.value.permission_ids = permissions.value
+    .filter((permission) => next.has(permission.id))
+    .map((permission) => permission.id);
 }
 
 function resetForm() {
@@ -327,6 +397,19 @@ watch(
                   <div class="permission-matrix-module">
                     <strong>{{ group.title }}</strong>
                     <span>{{ group.description }}</span>
+                    <label class="toggle-field permission-group-toggle">
+                      <span class="toggle-switch">
+                        <input
+                          type="checkbox"
+                          :aria-label="`${group.title}权限全选`"
+                          :checked="isPermissionGroupSelected(group)"
+                          :indeterminate="isPermissionGroupPartial(group)"
+                          @change="togglePermissionGroup(group, ($event.target as HTMLInputElement).checked)"
+                        />
+                        <span class="toggle-track" />
+                        <span class="toggle-knob" />
+                      </span>
+                    </label>
                   </div>
                   <div class="permission-matrix-options">
                     <label
@@ -341,7 +424,8 @@ watch(
                       />
                       <span>
                         <strong>{{ permission.name }}</strong>
-                        <small>{{ permission.description || permission.code }}</small>
+                        <small>{{ permission.code }}</small>
+                        <small>{{ permission.description }}</small>
                       </span>
                     </label>
                   </div>

@@ -20,7 +20,7 @@ const sessions = ref<AdminSessionResponse[]>([]);
 const initialQuery = typeof route.query.q === "string" ? route.query.q : "";
 const search = ref(initialQuery);
 const stateFilter = ref<"all" | "active" | "releasing" | "released" | "expired" | "failed">("all");
-const canDeleteRentals = computed(() => auth.hasPermission("rentals.delete"));
+const canDeleteSessions = computed(() => auth.hasPermission("sessions.delete"));
 
 const boardMap = computed(() =>
   new Map(boards.value.map((board) => [board.id, board])),
@@ -91,7 +91,7 @@ function sessionDurationLabel(session: SessionRecord) {
 }
 
 function canDeleteSession(session: SessionRecord) {
-  return canDeleteRentals.value && session.state !== "releasing";
+  return canDeleteSessions.value && session.state !== "releasing";
 }
 
 async function loadSessions() {
@@ -113,7 +113,7 @@ async function loadSessions() {
 }
 
 async function deleteSessionRecord(sessionId: string) {
-  if (!canDeleteRentals.value) {
+  if (!canDeleteSessions.value) {
     ui.setError("缺少删除租赁数据权限");
     return;
   }

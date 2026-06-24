@@ -27,7 +27,7 @@ const openMenuLeaseId = ref<string | null>(null);
 const menuPosition = ref({ top: 0, left: 0 });
 const search = ref("");
 const stateFilter = ref<LeaseStateFilter>("all");
-const canDeleteRentals = computed(() => auth.hasPermission("rentals.delete"));
+const canDeleteLeases = computed(() => auth.hasPermission("leases.delete"));
 const form = ref({
   user_id: "",
   board_id: "",
@@ -320,7 +320,7 @@ async function startLeaseSession(item: LeaseResponse) {
 
 async function confirmLeaseRemoval(leaseId: string, action: "disable" | "delete") {
   closeMenu();
-  if (action === "delete" && !canDeleteRentals.value) {
+  if (action === "delete" && !canDeleteLeases.value) {
     ui.setError("缺少删除租赁数据权限");
     return;
   }
@@ -475,7 +475,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
                       </button>
                       <button
                         class="action-menu-item"
-                        :disabled="!canDeleteRentals"
+                        :disabled="!canDeleteLeases"
                         @click="deleteLease(item.lease.id)"
                       >
                         <Icon name="trash" :size="14" />

@@ -36,14 +36,14 @@ const adminUser = {
   id: "user-admin",
   username: "admin",
   roles: [{ id: "role-admin", name: "admin", display_name: "管理员", description: "", system: true, permissions: [], created_at: "", updated_at: "" }],
-  permissions: [{ id: "perm-settings", code: "settings.manage", name: "管理系统设置", description: "" }],
+  permissions: [{ id: "perm-server", code: "server.update", name: "编辑服务器配置", description: "" }],
 };
 
 const rentalOperatorUser = {
   ...demoUser,
   id: "user-rentals",
   username: "rental-operator",
-  permissions: [{ id: "perm-rentals-delete", code: "rentals.delete", name: "删除租赁数据", description: "" }],
+  permissions: [{ id: "perm-leases-delete", code: "leases.delete", name: "删除租赁", description: "" }],
 };
 
 describe("useAuthStore", () => {
@@ -91,7 +91,8 @@ describe("useAuthStore", () => {
     await store.login("rental-operator", "secret");
 
     expect(store.isAdmin).toBe(true);
-    expect(store.hasPermission("rentals.delete")).toBe(true);
+    expect(store.hasPermission("leases.delete")).toBe(true);
+    expect(store.hasPermission("sessions.delete")).toBe(false);
     expect(store.hasPermission("users.delete")).toBe(false);
   });
 

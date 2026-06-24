@@ -7,7 +7,7 @@ use axum::{
     Router,
     body::{Bytes, to_bytes},
     extract::{ConnectInfo, Path, Request, State, WebSocketUpgrade},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
@@ -276,6 +276,9 @@ async fn auth_gate(
         if !current_user_is_admin(&user) {
             return Err(ApiError::forbidden("administrator role required"));
         }
+        if let Some(permission_code) = admin_permission_for_request(request.method(), path) {
+            require_permission(&user, permission_code)?;
+        }
     } else if path.starts_with("/api/v1/user/") {
         let _ = current_user_from_headers(&state, &headers).await?;
     }
@@ -329,7 +332,19 @@ fn current_user_is_admin(user: &CurrentUser) -> bool {
             permission.code.split_once('.').is_some_and(|(module, _)| {
                 matches!(
                     module,
-                    "resources" | "rentals" | "users" | "roles" | "settings"
+                    "overview"
+                        | "users"
+                        | "roles"
+                        | "boards"
+                        | "dtbs"
+                        | "leases"
+                        | "sessions"
+                        | "tftp"
+                        | "server"
+                        | "site"
+                        | "serial_ports"
+                        | "network_interfaces"
+                        | "permissions"
                 )
             })
         })
@@ -339,15 +354,9 @@ fn user_has_permission(user: &CurrentUser, permission_code: &str) -> bool {
     if user.roles.iter().any(|role| role.name == "admin") {
         return true;
     }
-    let Some((module, action)) = permission_code.split_once('.') else {
-        return false;
-    };
-    let manage_permission = format!("{module}.manage");
-    user.permissions.iter().any(|permission| {
-        permission.code == permission_code
-            || permission.code == manage_permission
-            || (action == "read" && permission.code == "settings.manage")
-    })
+    user.permissions
+        .iter()
+        .any(|permission| permission.code == permission_code)
 }
 
 fn require_permission(user: &CurrentUser, permission_code: &str) -> Result<(), ApiError> {
@@ -357,6 +366,128 @@ fn require_permission(user: &CurrentUser, permission_code: &str) -> Result<(), A
         Err(ApiError::forbidden(format!(
             "permission `{permission_code}` required"
         )))
+    }
+}
+
+fn admin_permission_for_request(method: &Method, path: &str) -> Option<&'static str> {
+    let segments = path
+        .trim_start_matches("/api/v1/admin/")
+        .split('/')
+        .collect::<Vec<_>>();
+    let first = *segments.first()?;
+    match first {
+        "overview" if method == Method::GET => Some("overview.read"),
+        "permissions" if method == Method::GET => Some("permissions.read"),
+        "users" => admin_users_permission(method, &segments),
+        "roles" => crud_permission(method, "roles"),
+        "leases" => admin_leases_permission(method, &segments),
+        "sessions" => admin_sessions_permission(method),
+        "boards" => admin_boards_permission(method, &segments),
+        "dtbs" => crud_permission(method, "dtbs"),
+        "serial-ports" if method == Method::GET => Some("serial_ports.read"),
+        "network-interfaces" if method == Method::GET => Some("network_interfaces.read"),
+        "tftp" => admin_tftp_permission(method, &segments),
+        "server-config" => read_update_permission(method, "server"),
+        "site-settings" => read_update_permission(method, "site"),
+        _ => None,
+    }
+}
+
+fn crud_permission(method: &Method, resource: &'static str) -> Option<&'static str> {
+    match method.as_str() {
+        "GET" => Some(match resource {
+            "roles" => "roles.read",
+            "dtbs" => "dtbs.read",
+            _ => return None,
+        }),
+        "POST" => Some(match resource {
+            "roles" => "roles.create",
+            "dtbs" => "dtbs.create",
+            _ => return None,
+        }),
+        "PUT" => Some(match resource {
+            "roles" => "roles.update",
+            "dtbs" => "dtbs.update",
+            _ => return None,
+        }),
+        "DELETE" => Some(match resource {
+            "roles" => "roles.delete",
+            "dtbs" => "dtbs.delete",
+            _ => return None,
+        }),
+        _ => None,
+    }
+}
+
+fn read_update_permission(method: &Method, resource: &'static str) -> Option<&'static str> {
+    match method.as_str() {
+        "GET" => Some(match resource {
+            "server" => "server.read",
+            "site" => "site.read",
+            _ => return None,
+        }),
+        "PUT" => Some(match resource {
+            "server" => "server.update",
+            "site" => "site.update",
+            _ => return None,
+        }),
+        _ => None,
+    }
+}
+
+fn admin_users_permission(method: &Method, segments: &[&str]) -> Option<&'static str> {
+    match (method.as_str(), segments) {
+        ("GET", ["users"]) | ("GET", ["users", _]) => Some("users.read"),
+        ("POST", ["users"]) => Some("users.create"),
+        ("PUT", ["users", _]) => Some("users.update"),
+        ("DELETE", ["users", _]) => Some("users.delete"),
+        ("GET", ["users", _, "roles"]) => Some("users.read"),
+        ("PUT", ["users", _, "roles"]) => Some("users.update"),
+        ("POST", ["users", _, "reset-password"]) => Some("users.password.update"),
+        ("POST", ["users", _, "disable"]) => Some("users.update"),
+        _ => None,
+    }
+}
+
+fn admin_leases_permission(method: &Method, segments: &[&str]) -> Option<&'static str> {
+    match (method.as_str(), segments) {
+        ("GET", ["leases"]) | ("GET", ["leases", _]) => Some("leases.read"),
+        ("POST", ["leases"]) => Some("leases.create"),
+        ("PUT", ["leases", _]) => Some("leases.update"),
+        ("DELETE", ["leases", _]) => Some("leases.delete"),
+        ("POST", ["leases", _, "session"]) => Some("leases.start"),
+        ("POST", ["leases", _, "release"]) => Some("leases.release"),
+        _ => None,
+    }
+}
+
+fn admin_sessions_permission(method: &Method) -> Option<&'static str> {
+    match method.as_str() {
+        "GET" => Some("sessions.read"),
+        "DELETE" => Some("sessions.delete"),
+        _ => None,
+    }
+}
+
+fn admin_boards_permission(method: &Method, segments: &[&str]) -> Option<&'static str> {
+    match (method.as_str(), segments) {
+        ("GET", ["boards"])
+        | ("GET", ["boards", _])
+        | ("GET", ["boards", _, "power-status"])
+        | ("GET", ["boards", _, "runtime-status"]) => Some("boards.read"),
+        ("POST", ["boards"]) => Some("boards.create"),
+        ("PUT", ["boards", _]) => Some("boards.update"),
+        ("DELETE", ["boards", _]) => Some("boards.delete"),
+        _ => None,
+    }
+}
+
+fn admin_tftp_permission(method: &Method, segments: &[&str]) -> Option<&'static str> {
+    match (method.as_str(), segments) {
+        ("GET", ["tftp"]) | ("GET", ["tftp", "status"]) => Some("tftp.read"),
+        ("PUT", ["tftp"]) => Some("tftp.update"),
+        ("POST", ["tftp", "reconcile"]) => Some("tftp.reconcile"),
+        _ => None,
     }
 }
 
@@ -964,7 +1095,7 @@ async fn delete_admin_lease(
     Path(lease_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let user = current_user_from_headers(&state, &headers).await?;
-    require_permission(&user, "rentals.delete")?;
+    require_permission(&user, "leases.delete")?;
     let lease = state
         .storage
         .find_lease(&lease_id)
@@ -1756,7 +1887,7 @@ async fn delete_admin_session(
     headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
     let user = current_user_from_headers(&state, &headers).await?;
-    require_permission(&user, "rentals.delete")?;
+    require_permission(&user, "sessions.delete")?;
     let _ = state
         .request_session_stop(&session_id, SessionStopReason::ApiDelete)
         .await;
@@ -3211,27 +3342,69 @@ mod tests {
 
     #[test]
     fn scoped_admin_permission_allows_admin_area_access() {
-        let user = current_user(vec![role("operator")], vec![permission("rentals.delete")]);
+        let user = current_user(vec![role("operator")], vec![permission("leases.delete")]);
 
         assert!(current_user_is_admin(&user));
-        assert!(user_has_permission(&user, "rentals.delete"));
+        assert!(user_has_permission(&user, "leases.delete"));
+        assert!(!user_has_permission(&user, "sessions.delete"));
         assert!(!user_has_permission(&user, "users.delete"));
     }
 
     #[test]
-    fn manage_permission_covers_module_actions() {
-        let user = current_user(vec![role("operator")], vec![permission("rentals.manage")]);
+    fn exact_permission_does_not_cover_other_actions() {
+        let user = current_user(vec![role("operator")], vec![permission("leases.read")]);
 
         assert!(current_user_is_admin(&user));
-        assert!(user_has_permission(&user, "rentals.delete"));
-        assert!(user_has_permission(&user, "rentals.release"));
+        assert!(user_has_permission(&user, "leases.read"));
+        assert!(!user_has_permission(&user, "leases.delete"));
+        assert!(!user_has_permission(&user, "leases.release"));
     }
 
     #[test]
     fn overview_only_user_has_no_admin_area_access() {
-        let user = current_user(vec![role("user")], vec![permission("overview.read")]);
+        let user = current_user(vec![role("user")], Vec::new());
 
         assert!(!current_user_is_admin(&user));
-        assert!(!user_has_permission(&user, "rentals.delete"));
+        assert!(!user_has_permission(&user, "leases.delete"));
+    }
+
+    #[test]
+    fn admin_request_permissions_are_resource_scoped() {
+        assert_eq!(
+            admin_permission_for_request(&Method::GET, "/api/v1/admin/boards"),
+            Some("boards.read")
+        );
+        assert_eq!(
+            admin_permission_for_request(&Method::POST, "/api/v1/admin/boards"),
+            Some("boards.create")
+        );
+        assert_eq!(
+            admin_permission_for_request(&Method::PUT, "/api/v1/admin/boards/board-1"),
+            Some("boards.update")
+        );
+        assert_eq!(
+            admin_permission_for_request(&Method::DELETE, "/api/v1/admin/boards/board-1"),
+            Some("boards.delete")
+        );
+        assert_eq!(
+            admin_permission_for_request(&Method::POST, "/api/v1/admin/leases/lease-1/session"),
+            Some("leases.start")
+        );
+        assert_eq!(
+            admin_permission_for_request(&Method::POST, "/api/v1/admin/leases/lease-1/release"),
+            Some("leases.release")
+        );
+        assert_eq!(
+            admin_permission_for_request(&Method::DELETE, "/api/v1/admin/leases/lease-1"),
+            Some("leases.delete")
+        );
+        assert_eq!(
+            admin_permission_for_request(&Method::DELETE, "/api/v1/admin/sessions/session-1"),
+            Some("sessions.delete")
+        );
+        assert_eq!(
+            admin_permission_for_request(&Method::POST, "/api/v1/admin/tftp/reconcile"),
+            Some("tftp.reconcile")
+        );
     }
 }

@@ -58,6 +58,65 @@ pub struct Permission {
     pub updated_at: DateTime<Utc>,
 }
 
+pub const BUILTIN_PERMISSIONS: &[(&str, &str, &str)] = &[
+    ("overview.read", "查看概览", "查看站点运行情况和统计数据"),
+    ("users.read", "查看用户", "查看用户列表、用户详情和用户角色"),
+    ("users.create", "新增用户", "创建用户账号"),
+    ("users.update", "编辑用户", "编辑用户资料、状态和分配角色"),
+    ("users.delete", "删除用户", "删除或停用用户账号"),
+    (
+        "users.password.update",
+        "重置用户密码",
+        "为用户重置登录密码",
+    ),
+    ("roles.read", "查看角色权限", "查看角色、权限和分配情况"),
+    ("roles.create", "新增角色", "创建角色并分配权限"),
+    ("roles.update", "编辑角色", "修改角色信息和权限"),
+    ("roles.delete", "删除角色", "删除自定义角色"),
+    ("boards.read", "查看开发板", "查看开发板配置和运行状态"),
+    ("boards.create", "新增开发板", "新增开发板配置"),
+    (
+        "boards.update",
+        "编辑开发板",
+        "编辑开发板配置、串口、电源和启动参数",
+    ),
+    ("boards.delete", "删除开发板", "删除开发板配置"),
+    ("dtbs.read", "查看 DTB", "查看 DTB 文件和元数据"),
+    ("dtbs.create", "上传 DTB", "上传新的 DTB 文件"),
+    (
+        "dtbs.update",
+        "编辑 DTB",
+        "编辑 DTB 元数据、重命名或替换文件",
+    ),
+    ("dtbs.delete", "删除 DTB", "删除 DTB 文件"),
+    ("leases.read", "查看租赁", "查看租赁情况"),
+    ("leases.create", "新增租赁", "为用户创建开发板租赁"),
+    ("leases.update", "编辑租赁", "修改租赁时间段和状态信息"),
+    ("leases.start", "启用租赁", "为有效租赁启动会话"),
+    ("leases.release", "释放租赁", "释放租赁占用的会话"),
+    ("leases.delete", "删除租赁", "删除租赁记录"),
+    ("sessions.read", "查看会话租约", "查看会话租约和历史记录"),
+    ("sessions.delete", "删除会话租约", "删除会话租约记录"),
+    ("tftp.read", "查看 TFTP 配置", "查看 TFTP 配置和运行状态"),
+    ("tftp.update", "编辑 TFTP 配置", "修改 TFTP 配置"),
+    (
+        "tftp.reconcile",
+        "同步 TFTP 配置",
+        "同步 TFTP provider 的运行配置",
+    ),
+    ("server.read", "查看服务器配置", "查看服务器运行配置"),
+    ("server.update", "编辑服务器配置", "修改服务器运行配置"),
+    ("site.read", "查看站点设置", "查看站点展示和租赁策略设置"),
+    ("site.update", "编辑站点设置", "修改站点展示和租赁策略设置"),
+    ("serial_ports.read", "查看串口", "查看服务器可用串口"),
+    (
+        "network_interfaces.read",
+        "查看网络接口",
+        "查看服务器网络接口",
+    ),
+    ("permissions.read", "查看权限", "查看系统内置权限列表"),
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Role {
     pub id: String,
