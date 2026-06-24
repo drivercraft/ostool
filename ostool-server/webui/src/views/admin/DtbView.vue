@@ -488,11 +488,11 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
 
       <form class="modal-form" @submit.prevent="createDtb">
         <div class="modal-body modal-body-grid">
-          <label class="field">
+          <label class="field is-required">
             <span>文件名</span>
             <input v-model="newDtbName" placeholder="例如 rk3568-evb.dtb" />
           </label>
-          <label class="field">
+          <label class="field is-required">
             <span>架构描述</span>
             <input v-model="newDtbArchitecture" placeholder="例如 arm64 / riscv64" />
           </label>
@@ -504,7 +504,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
             <span>说明</span>
             <textarea v-model="newDtbDescription" placeholder="记录适用开发板、内核版本或维护说明" />
           </label>
-          <label class="field modal-field-full">
+          <label class="field modal-field-full is-required">
             <span>DTB 文件</span>
             <input
               ref="newDtbInput"

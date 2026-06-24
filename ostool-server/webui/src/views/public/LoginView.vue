@@ -107,27 +107,27 @@ onMounted(() => {
         </header>
 
         <form class="auth-form" @submit.prevent="submit">
-          <label class="field">
+          <label class="field is-required">
             <span>用户名</span>
             <input
               v-model="username"
               autocomplete="username"
-              placeholder="例如：demo"
+              placeholder="请输入账号用户名"
               :disabled="submitting"
             />
           </label>
-          <label class="field">
+          <label class="field is-required">
             <span>密码</span>
             <input
               v-model="password"
               type="password"
               autocomplete="current-password"
-              placeholder="例如：demo"
+              placeholder="请输入账号密码"
               :disabled="submitting"
             />
           </label>
           <div class="captcha-row">
-            <label class="field captcha-input">
+            <label class="field captcha-input is-required">
               <span>验证码</span>
               <input
                 v-model="captchaAnswer"

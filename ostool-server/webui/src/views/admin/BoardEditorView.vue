@@ -674,7 +674,7 @@ onMounted(() => {
             <h4>基本信息</h4>
           </div>
           <div class="form-grid two-columns">
-            <label class="field">
+            <label class="field is-required">
               <span>板型</span>
               <input v-model="form.board_type" placeholder="例如 rk3568" />
             </label>
@@ -726,7 +726,7 @@ onMounted(() => {
           </div>
 
           <div v-if="form.serial_enabled" class="form-grid two-columns">
-            <label class="field">
+            <label class="field is-required">
               <span>串口设备</span>
               <div class="inline-control-row">
                 <select
@@ -765,7 +765,7 @@ onMounted(() => {
                 </p>
               </div>
             </label>
-            <label class="field">
+            <label class="field is-required">
               <span>波特率</span>
               <input v-model.number="form.serial_baud_rate" type="number" min="1" />
             </label>

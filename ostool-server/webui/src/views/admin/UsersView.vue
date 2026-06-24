@@ -507,21 +507,39 @@ onMounted(() => {
         <form class="modal-form" @submit.prevent="submitModal">
           <div class="modal-body modal-body-grid">
             <template v-if="modalMode === 'create'">
-              <label class="field">
+              <label class="field is-required">
                 <span>用户名</span>
-                <input v-model="form.username" autocomplete="off" />
+                <input
+                  v-model="form.username"
+                  autocomplete="off"
+                  placeholder="登录账号，必须唯一"
+                />
               </label>
               <label class="field">
                 <span>显示名</span>
-                <input v-model="form.display_name" autocomplete="off" />
+                <input
+                  v-model="form.display_name"
+                  autocomplete="off"
+                  placeholder="页面展示名称，留空默认使用用户名"
+                />
               </label>
-              <label class="field">
+              <label class="field is-required">
                 <span>邮箱</span>
-                <input v-model="form.email" autocomplete="off" />
+                <input
+                  v-model="form.email"
+                  type="email"
+                  autocomplete="off"
+                  placeholder="用户联系邮箱，例如 user@example.com"
+                />
               </label>
-              <label class="field">
+              <label class="field is-required">
                 <span>密码</span>
-                <input v-model="form.password" type="password" autocomplete="new-password" />
+                <input
+                  v-model="form.password"
+                  type="password"
+                  autocomplete="new-password"
+                  placeholder="初始密码，建议至少 8 位"
+                />
               </label>
             </template>
 
@@ -532,11 +550,15 @@ onMounted(() => {
               </label>
               <label class="field">
                 <span>显示名</span>
-                <input v-model="form.display_name" />
+                <input v-model="form.display_name" placeholder="页面展示名称" />
               </label>
-              <label class="field">
+              <label class="field is-required">
                 <span>邮箱</span>
-                <input v-model="form.email" />
+                <input
+                  v-model="form.email"
+                  type="email"
+                  placeholder="用户联系邮箱，例如 user@example.com"
+                />
               </label>
               <label class="toggle-field">
                 <span class="toggle-switch">
@@ -554,9 +576,14 @@ onMounted(() => {
               <p class="modal-hint">
                 为 <code>{{ modalUser?.username }}</code> 设置新密码，提交后立即生效。
               </p>
-              <label class="field modal-field-full">
+              <label class="field modal-field-full is-required">
                 <span>新密码</span>
-                <input v-model="form.password" type="password" autocomplete="new-password" />
+                <input
+                  v-model="form.password"
+                  type="password"
+                  autocomplete="new-password"
+                  placeholder="输入新的登录密码"
+                />
               </label>
             </template>
 

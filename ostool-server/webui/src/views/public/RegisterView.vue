@@ -105,56 +105,56 @@ onMounted(() => {
         </header>
 
         <form class="auth-form" @submit.prevent="submit">
-          <label class="field">
+          <label class="field is-required">
             <span>用户名</span>
             <input
               v-model="username"
               autocomplete="username"
-              placeholder="登录用用户名"
+              placeholder="登录用账号，建议小写字母、数字或 -/_"
               :disabled="submitting"
             />
           </label>
-          <label class="field">
+          <label class="field is-required">
             <span>姓名 / 显示名</span>
             <input
               v-model="displayName"
-              placeholder="例如：张三"
+              placeholder="用于页面展示，例如：张三"
               :disabled="submitting"
             />
           </label>
-          <label class="field">
+          <label class="field is-required">
             <span>邮箱</span>
             <input
               v-model="email"
               type="email"
               autocomplete="email"
-              placeholder="you@example.com"
+              placeholder="用于联系和账号通知，例如 you@example.com"
               :disabled="submitting"
             />
           </label>
-          <label class="field">
+          <label class="field is-required">
             <span>密码</span>
             <input
               v-model="password"
               type="password"
               autocomplete="new-password"
-              placeholder="至少 8 位"
+              placeholder="必填，建议至少 8 位并包含字母和数字"
               :disabled="submitting"
             />
           </label>
-          <label class="field">
+          <label class="field is-required">
             <span>确认密码</span>
             <input
               v-model="confirmPassword"
               type="password"
               autocomplete="new-password"
-              placeholder="再次输入密码"
+              placeholder="再次输入相同密码"
               :disabled="submitting"
             />
           </label>
           <p v-if="passwordsMismatch" class="auth-hint">两次输入的密码不一致</p>
           <div class="captcha-row">
-            <label class="field captcha-input">
+            <label class="field captcha-input is-required">
               <span>验证码</span>
               <input
                 v-model="captchaAnswer"

@@ -370,16 +370,16 @@ watch(
         <form class="role-editor-form" @submit.prevent="saveRole">
           <div class="role-editor-scroll">
             <div class="role-basic-fields">
-              <label class="field">
+              <label class="field is-required">
                 <span>角色名称</span>
                 <input v-model="form.display_name" placeholder="例如 开发人员" />
               </label>
-              <label class="field">
+              <label class="field is-required">
                 <span>角色标识</span>
                 <input
                   v-model="form.name"
                   :disabled="Boolean(selectedRole)"
-                  placeholder="例如 developer"
+                  placeholder="仅小写字母、数字、_ 或 -，例如 developer"
                 />
               </label>
               <label class="field role-field-full">

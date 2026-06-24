@@ -515,7 +515,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
       <form class="modal-form" @submit.prevent="submitLease">
         <div class="modal-body modal-body-grid">
           <template v-if="modalMode === 'create'">
-            <label class="field">
+            <label class="field is-required">
               <span>用户</span>
               <select v-model="form.user_id">
                 <option value="" disabled>请选择用户</option>
@@ -528,7 +528,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
                 </option>
               </select>
             </label>
-            <label class="field">
+            <label class="field is-required">
               <span>开发板</span>
               <select v-model="form.board_id">
                 <option value="" disabled>请选择空闲开发板</option>
@@ -556,11 +556,11 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
               <input v-model="form.failure_message" placeholder="可选" />
             </label>
           </template>
-          <label class="field">
+          <label class="field is-required">
             <span>租赁开始时间</span>
             <input v-model="form.starts_at" type="datetime-local" />
           </label>
-          <label class="field">
+          <label class="field is-required">
             <span>租赁结束时间</span>
             <input v-model="form.expires_at" type="datetime-local" />
           </label>
