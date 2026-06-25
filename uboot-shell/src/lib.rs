@@ -282,7 +282,6 @@ impl UbootShell {
         on_progress: impl Fn(usize, usize),
     ) -> Result<String> {
         let file = file.into();
-        let mut last_err = None;
 
         for attempt in 1..=LOADY_MAX_ATTEMPTS {
             match self.loady_once(addr, &file, &on_progress).await {
@@ -291,7 +290,6 @@ impl UbootShell {
                     warn!(
                         "loady attempt {attempt}/{LOADY_MAX_ATTEMPTS} failed: {err}; retrying..."
                     );
-                    last_err = Some(err);
                     self.wait_for_shell().await.map_err(|recover_err| {
                         Error::other(format!(
                             "loady attempt {attempt} failed and shell recovery failed: {recover_err}",
@@ -299,16 +297,15 @@ impl UbootShell {
                     })?;
                     Delay::new(LOADY_RETRY_DELAY).await;
                 }
-                Err(err) => last_err = Some(err),
+                Err(err) => {
+                    return Err(Error::other(format!(
+                        "loady failed after {LOADY_MAX_ATTEMPTS} attempts: {err}"
+                    )));
+                }
             }
         }
 
-        Err(Error::other(format!(
-            "loady failed after {LOADY_MAX_ATTEMPTS} attempts: {}",
-            last_err
-                .map(|err| err.to_string())
-                .unwrap_or_else(|| "unknown error".to_string())
-        )))
+        unreachable!("LOADY_MAX_ATTEMPTS must be greater than zero")
     }
 
     async fn loady_once(
@@ -485,11 +482,11 @@ mod tests {
         fn queue_loady_response(&mut self) {
             match self.loady_count {
                 1 => {
-                    self.queue_read([b'C']);
+                    self.queue_read(*b"C");
                     self.queue_read([ymodem::CRC; ymodem::DEFAULT_BLOCK_RETRIES]);
                 }
                 2 => {
-                    self.queue_read([b'C']);
+                    self.queue_read(*b"C");
                     self.queue_read([ymodem::ACK, ymodem::ACK, ymodem::ACK, ymodem::ACK, b'C']);
                     self.queue_read(b"done\n=> ");
                 }
