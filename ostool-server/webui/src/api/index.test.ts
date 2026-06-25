@@ -20,6 +20,52 @@ describe("api", () => {
     await expect(api.deleteSession("demo-session")).resolves.toBeUndefined();
   });
 
+  it("uses REST endpoints for admin session updates and close actions", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          session: {
+            id: "demo/session",
+            board_id: "board-1",
+            client_name: "web-ui",
+            source_ip: "127.0.0.1",
+            state: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            last_heartbeat_at: "2026-01-01T00:00:00Z",
+            expires_at: "2026-01-01T00:01:00Z",
+            ended_at: null,
+            failure_message: null,
+          },
+          lease: null,
+          user_id: null,
+          source_ip: "127.0.0.1",
+        }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.updateSession("demo/session", {
+      client_name: "web-ui",
+      failure_message: null,
+    })).resolves.toMatchObject({ session: { id: "demo/session" } });
+    await expect(api.closeSession("demo/session")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/admin/sessions/demo%2Fsession",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ client_name: "web-ui", failure_message: null }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/admin/sessions/demo%2Fsession/close",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("uses REST resource endpoints for admin user read and delete", async () => {
     const fetchMock = vi
       .fn()

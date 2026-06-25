@@ -15,11 +15,38 @@ const sessions = ref<AdminSessionResponse[]>([]);
 const leases = ref<LeaseResponse[]>([]);
 const typeFilter = ref("");
 const tagFilter = ref("");
-const statusFilter = ref<"all" | "available" | "leased" | "disabled">("all");
+const statusFilter = ref<"all" | "idle" | "leased" | "in_use" | "disabled">("all");
 const openMenuBoardId = ref<string | null>(null);
 const menuPosition = ref({ top: 0, left: 0 });
 
-const leasedBoardIds = computed(() => new Set(sessions.value.map((item) => item.session.board_id)));
+const activeSessionBoardIds = computed(() =>
+  new Set(
+    sessions.value
+      .filter((item) => {
+        const expiresAt = new Date(item.session.expires_at).getTime();
+        return (item.session.state === "active" || item.session.state === "releasing")
+          && Number.isFinite(expiresAt)
+          && Date.now() < expiresAt;
+      })
+      .map((item) => item.session.board_id),
+  ),
+);
+const currentLeaseBoardIds = computed(() => {
+  const now = Date.now();
+  return new Set(
+    leases.value
+      .filter((item) => {
+        const start = new Date(item.lease.starts_at).getTime();
+        const end = new Date(item.lease.expires_at).getTime();
+        return (item.lease.state === "active" || item.lease.state === "releasing")
+          && Number.isFinite(start)
+          && Number.isFinite(end)
+          && start <= now
+          && now < end;
+      })
+      .map((item) => item.lease.board_id),
+  );
+});
 const leaseByBoardId = computed(() => {
   const map = new Map<string, LeaseResponse["lease"]>();
   const score = (lease: LeaseResponse["lease"]) => {
@@ -50,7 +77,7 @@ const boardTypes = computed(() =>
 
 const filteredBoards = computed(() =>
   boards.value.filter((board) => {
-    const leased = leasedBoardIds.value.has(board.id);
+    const status = boardStatusState(board);
     if (typeFilter.value && board.board_type !== typeFilter.value) {
       return false;
     }
@@ -60,37 +87,48 @@ const filteredBoards = computed(() =>
         return false;
       }
     }
-    if (statusFilter.value === "available" && (leased || board.disabled)) {
-      return false;
-    }
-    if (statusFilter.value === "leased" && !leased) {
-      return false;
-    }
-    if (statusFilter.value === "disabled" && !board.disabled) {
+    if (statusFilter.value !== "all" && status !== statusFilter.value) {
       return false;
     }
     return true;
   }),
 );
 
-function boardTone(board: BoardConfig): "good" | "warn" | "danger" | "neutral" {
+function boardStatusState(board: BoardConfig): "idle" | "leased" | "in_use" | "disabled" {
   if (board.disabled) {
-    return "neutral";
+    return "disabled";
   }
-  if (leasedBoardIds.value.has(board.id)) {
+  if (activeSessionBoardIds.value.has(board.id)) {
+    return "in_use";
+  }
+  if (currentLeaseBoardIds.value.has(board.id)) {
+    return "leased";
+  }
+  return "idle";
+}
+
+function boardTone(board: BoardConfig): "good" | "warn" | "danger" | "neutral" {
+  const status = boardStatusState(board);
+  if (status === "idle") {
+    return "good";
+  }
+  if (status === "leased") {
     return "warn";
   }
-  return "good";
+  if (status === "in_use") {
+    return "danger";
+  }
+  return "neutral";
 }
 
 function boardStatus(board: BoardConfig): string {
-  if (board.disabled) {
-    return "已禁用";
-  }
-  if (leasedBoardIds.value.has(board.id)) {
-    return "已租出";
-  }
-  return "可用";
+  const labels = {
+    idle: "空闲中",
+    leased: "已租赁",
+    in_use: "使用中",
+    disabled: "已禁用",
+  };
+  return labels[boardStatusState(board)];
 }
 
 function serialPrimaryLabel(board: BoardConfig): string {
@@ -147,7 +185,7 @@ function onDocumentClick(event: MouseEvent) {
 }
 
 async function toggleDisabled(board: BoardConfig) {
-  if (leasedBoardIds.value.has(board.id)) {
+  if (activeSessionBoardIds.value.has(board.id)) {
     return;
   }
   closeMenu();
@@ -248,8 +286,9 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
             <span>开发板状态</span>
             <select v-model="statusFilter" aria-label="开发板状态">
               <option value="all">全部状态</option>
-              <option value="available">可用</option>
-              <option value="leased">已租出</option>
+              <option value="idle">空闲中</option>
+              <option value="leased">已租赁</option>
+              <option value="in_use">使用中</option>
               <option value="disabled">已禁用</option>
             </select>
           </label>
@@ -307,7 +346,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
                 <button
                   class="btn-icon-only"
                   :title="board.disabled ? '启用' : '禁用'"
-                  :disabled="leasedBoardIds.has(board.id)"
+                  :disabled="activeSessionBoardIds.has(board.id)"
                   @click="toggleDisabled(board)"
                 >
                   <Icon :name="board.disabled ? 'check' : 'ban'" :size="16" />

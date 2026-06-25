@@ -8,6 +8,7 @@ import { api } from "@/api";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import type { AdminUserResponse, BoardConfig, LeaseResponse } from "@/types/api";
+import { getLeaseDisplayStatus } from "@/utils/leaseStatus";
 
 type LeaseStateFilter = "all" | "active" | "releasing" | "released" | "expired" | "failed";
 
@@ -70,29 +71,13 @@ function formatDuration(start: string, end: string) {
   return remain ? `${hours} 小时 ${remain} 分钟` : `${hours} 小时`;
 }
 
-function leaseTone(state: string) {
-  if (state === "active") {
-    return "good";
-  }
-  if (state === "failed") {
-    return "danger";
-  }
-  return "neutral";
-}
-
-function leaseStateLabel(state: string) {
-  const labels: Record<string, string> = {
-    active: "生效中",
-    releasing: "释放中",
-    released: "已释放",
-    expired: "已过期",
-    failed: "失败",
-  };
-  return labels[state] ?? state;
-}
-
 function isActiveLease(item: LeaseResponse) {
-  return item.lease.state === "active";
+  return getLeaseDisplayStatus(item.lease).effectiveState === "active";
+}
+
+function isEditableLease(item: LeaseResponse) {
+  const state = getLeaseDisplayStatus(item.lease).effectiveState;
+  return state === "pending" || state === "active";
 }
 
 function canStartLeaseSession(item: LeaseResponse) {
@@ -253,9 +238,9 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
             <span>状态</span>
             <select v-model="stateFilter">
               <option value="all">全部状态</option>
-              <option value="active">占用中</option>
+              <option value="active">有效租赁</option>
               <option value="releasing">释放中</option>
-              <option value="released">已释放</option>
+              <option value="released">已取消</option>
               <option value="expired">已过期</option>
               <option value="failed">失败</option>
             </select>
@@ -300,7 +285,10 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
               </td>
               <td>{{ item.lease.session_id || "-" }}</td>
               <td>
-                <StatusPill :tone="leaseTone(item.lease.state)" :label="leaseStateLabel(item.lease.state)" />
+                <StatusPill
+                  :tone="getLeaseDisplayStatus(item.lease).tone"
+                  :label="getLeaseDisplayStatus(item.lease).label"
+                />
               </td>
               <td>
                 <div class="table-cell-stack">
@@ -315,7 +303,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
                   <button
                     class="btn-icon-only"
                     title="编辑"
-                    :disabled="!isActiveLease(item)"
+                    :disabled="!isEditableLease(item)"
                     @click="openEdit(item)"
                   >
                     <Icon name="edit" :size="16" />

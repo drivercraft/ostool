@@ -281,6 +281,12 @@ pub struct AdminSessionResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminSessionUpdateRequest {
+    pub client_name: Option<String>,
+    pub failure_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerialStatusResponse {
     pub available: bool,
     pub connected: bool,

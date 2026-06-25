@@ -1,5 +1,5 @@
 import { flushPromises, mount } from "@vue/test-utils";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AdminSessionResponse, AdminUserResponse, BoardConfig, SessionRecord } from "@/types/api";
 
@@ -7,6 +7,9 @@ const listBoards = vi.fn();
 const listSessions = vi.fn();
 const listAdminUsers = vi.fn();
 const deleteSession = vi.fn();
+const updateSession = vi.fn();
+const closeSession = vi.fn();
+const routerPush = vi.fn();
 const route = {
   query: {} as Record<string, string>,
 };
@@ -26,6 +29,8 @@ vi.mock("@/api", () => ({
     listSessions,
     listAdminUsers,
     deleteSession,
+    updateSession,
+    closeSession,
   },
 }));
 
@@ -39,6 +44,7 @@ vi.mock("@/stores/auth", () => ({
 
 vi.mock("vue-router", () => ({
   useRoute: () => route,
+  useRouter: () => ({ push: routerPush }),
 }));
 
 function makeBoard(id = "orangepi5plus-1"): BoardConfig {
@@ -129,11 +135,18 @@ function makeUser(): AdminUserResponse {
 }
 
 describe("SessionsView", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
   beforeEach(() => {
     listBoards.mockReset();
     listSessions.mockReset();
     listAdminUsers.mockReset();
     deleteSession.mockReset();
+    updateSession.mockReset();
+    closeSession.mockReset();
+    routerPush.mockReset();
     authStore.hasPermission.mockReset();
     authStore.hasPermission.mockReturnValue(true);
     uiStore.clearMessages.mockReset();
@@ -145,9 +158,11 @@ describe("SessionsView", () => {
     listBoards.mockResolvedValue([makeBoard()]);
     listAdminUsers.mockResolvedValue({ users: [makeUser()] });
     listSessions.mockResolvedValue({ sessions: [makeAdminSession()] });
+    updateSession.mockResolvedValue(makeAdminSession({ client_name: "updated-client" }));
+    closeSession.mockResolvedValue(undefined);
   });
 
-  it("deletes session lease records and refreshes the list", async () => {
+  it("deletes session records and refreshes the list", async () => {
     deleteSession.mockResolvedValue(undefined);
     listSessions
       .mockResolvedValueOnce({ sessions: [makeAdminSession()] })
@@ -157,14 +172,16 @@ describe("SessionsView", () => {
     const wrapper = mount(SessionsView);
     await flushPromises();
 
-    const releaseButton = wrapper.find('button[title="删除"]');
-    await releaseButton!.trigger("click");
+    await wrapper.find('button[title="更多"]').trigger("click");
+    await flushPromises();
+    const deleteButton = document.body.querySelectorAll<HTMLButtonElement>(".action-menu-item")[1];
+    deleteButton.click();
     await flushPromises();
 
     expect(deleteSession).toHaveBeenCalledWith("session-1");
-    expect(uiStore.setSuccess).toHaveBeenCalledWith("已删除会话租约 session-1");
+    expect(uiStore.setSuccess).toHaveBeenCalledWith("已删除会话记录 session-1");
     expect(listSessions).toHaveBeenCalledTimes(2);
-    expect(wrapper.text()).toContain("释放中");
+    expect(wrapper.text()).toContain("断开中");
   });
 
   it("renders refresh actions on the left and search/filter controls on the right", async () => {
@@ -197,7 +214,9 @@ describe("SessionsView", () => {
     ]);
     expect(wrapper.text()).toContain("192.168.1.10");
     expect(wrapper.text()).toContain("Alice");
-    expect(wrapper.find(".col-actions .row-actions button[title=\"删除\"]").exists()).toBe(true);
+    expect(wrapper.find(".col-actions .row-actions button[title=\"编辑\"]").exists()).toBe(true);
+    expect(wrapper.find(".col-actions .row-actions button[title=\"关闭\"]").exists()).toBe(true);
+    expect(wrapper.find(".col-actions .row-actions button[title=\"更多\"]").exists()).toBe(true);
   });
 
   it("keeps the table header visible when there are no sessions", async () => {
@@ -223,19 +242,19 @@ describe("SessionsView", () => {
     expect((wrapper.find(".search-field input").element as HTMLInputElement).value).toBe("session-1");
   });
 
-  it("disables the force release button for releasing sessions", async () => {
+  it("disables the close button for releasing sessions", async () => {
     listSessions.mockResolvedValue({ sessions: [makeAdminSession({ state: "releasing" })] });
 
     const SessionsView = (await import("./SessionsView.vue")).default;
     const wrapper = mount(SessionsView);
     await flushPromises();
 
-    const releaseButton = wrapper.find('button[title="删除"]');
-    expect((releaseButton.element as HTMLButtonElement).disabled).toBe(true);
-    expect(wrapper.text()).toContain("释放中");
+    const closeButton = wrapper.find('button[title="关闭"]');
+    expect((closeButton.element as HTMLButtonElement).disabled).toBe(true);
+    expect(wrapper.text()).toContain("断开中");
   });
 
-  it("renders released session history and enables deletion for authorized users", async () => {
+  it("renders released session history and leaves record deletion in the menu", async () => {
     listSessions.mockResolvedValue({
       sessions: [makeAdminSession({ state: "released", ended_at: "2026-04-08T00:04:00Z" })],
     });
@@ -244,19 +263,77 @@ describe("SessionsView", () => {
     const wrapper = mount(SessionsView);
     await flushPromises();
 
-    expect(wrapper.text()).toContain("已释放");
-    const releaseButton = wrapper.find('button[title="删除"]');
-    expect((releaseButton.element as HTMLButtonElement).disabled).toBe(false);
+    expect(wrapper.text()).toContain("已断开");
+    await wrapper.find('button[title="更多"]').trigger("click");
+    await flushPromises();
+    const deleteButton = document.body.querySelectorAll<HTMLButtonElement>(".action-menu-item")[1];
+    expect(deleteButton.disabled).toBe(false);
   });
 
   it("disables session deletion without sessions.delete permission", async () => {
-    authStore.hasPermission.mockReturnValue(false);
+    authStore.hasPermission.mockImplementation((permission: string) => permission === "sessions.update");
 
     const SessionsView = (await import("./SessionsView.vue")).default;
     const wrapper = mount(SessionsView);
     await flushPromises();
 
-    const releaseButton = wrapper.find('button[title="删除"]');
-    expect((releaseButton.element as HTMLButtonElement).disabled).toBe(true);
+    expect((wrapper.find('button[title="关闭"]').element as HTMLButtonElement).disabled).toBe(true);
+    await wrapper.find('button[title="更多"]').trigger("click");
+    await flushPromises();
+    const deleteButton = document.body.querySelectorAll<HTMLButtonElement>(".action-menu-item")[1];
+    expect(deleteButton.disabled).toBe(true);
+  });
+
+  it("edits session records", async () => {
+    const SessionsView = (await import("./SessionsView.vue")).default;
+    const wrapper = mount(SessionsView);
+    await flushPromises();
+
+    await wrapper.find('button[title="编辑"]').trigger("click");
+    await flushPromises();
+    const clientInput = wrapper.find<HTMLInputElement>('input[placeholder="客户端名称"]');
+    await clientInput.setValue("updated-client");
+    await wrapper.find("form.modal-form").trigger("submit");
+    await flushPromises();
+
+    expect(updateSession).toHaveBeenCalledWith("session-1", {
+      client_name: "updated-client",
+      failure_message: null,
+    });
+    expect(uiStore.setSuccess).toHaveBeenCalledWith("已保存会话记录 session-1");
+  });
+
+  it("closes active sessions", async () => {
+    listSessions
+      .mockResolvedValueOnce({ sessions: [makeAdminSession()] })
+      .mockResolvedValueOnce({ sessions: [makeAdminSession({ state: "releasing" })] });
+
+    const SessionsView = (await import("./SessionsView.vue")).default;
+    const wrapper = mount(SessionsView);
+    await flushPromises();
+
+    await wrapper.find('button[title="关闭"]').trigger("click");
+    await flushPromises();
+
+    expect(closeSession).toHaveBeenCalledWith("session-1");
+    expect(uiStore.setSuccess).toHaveBeenCalledWith("已发起关闭会话 session-1");
+    expect(listSessions).toHaveBeenCalledTimes(2);
+  });
+
+  it("navigates to the related lease from the more menu", async () => {
+    const SessionsView = (await import("./SessionsView.vue")).default;
+    const wrapper = mount(SessionsView);
+    await flushPromises();
+
+    await wrapper.find('button[title="更多"]').trigger("click");
+    await flushPromises();
+    const leaseButton = document.body.querySelectorAll<HTMLButtonElement>(".action-menu-item")[0];
+    leaseButton.click();
+    await flushPromises();
+
+    expect(routerPush).toHaveBeenCalledWith({
+      name: "admin-rental-lease-edit",
+      params: { leaseId: "lease-1" },
+    });
   });
 });

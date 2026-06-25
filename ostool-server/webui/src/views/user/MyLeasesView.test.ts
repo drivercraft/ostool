@@ -130,7 +130,7 @@ describe("MyLeasesView", () => {
 
     const button = wrapper
       .findAll("button")
-      .find((btn) => btn.text() === "释放租赁");
+      .find((btn) => btn.text() === "取消租赁");
     await button!.trigger("click");
     await flushPromises();
 

@@ -82,6 +82,8 @@ function makeBoard(id = "board-1"): BoardConfig {
 }
 
 function makeLease(): LeaseResponse {
+  const startsAt = new Date(Date.now() - 3_600_000).toISOString();
+  const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
   return {
     lease: {
       id: "lease-1",
@@ -93,8 +95,8 @@ function makeLease(): LeaseResponse {
       state: "active",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
-      starts_at: "2026-01-01T00:00:00Z",
-      expires_at: "2026-01-01T02:00:00Z",
+      starts_at: startsAt,
+      expires_at: expiresAt,
       released_at: null,
       failure_message: null,
     },
@@ -103,8 +105,8 @@ function makeLease(): LeaseResponse {
       board_id: "board-1",
       client_name: "Alice",
       source_ip: null,
-      created_at: "2026-01-01T00:00:00Z",
-      expires_at: "2026-01-01T02:00:00Z",
+      created_at: startsAt,
+      expires_at: expiresAt,
       state: "active",
     },
   };
@@ -156,6 +158,16 @@ describe("LeasesView", () => {
     expect(wrapper.find("thead").text()).not.toContain("时长");
     expect(wrapper.text()).toContain("生效中");
     expect(wrapper.text()).toContain("时长 2 小时");
+  });
+
+  it("shows released leases as canceled", async () => {
+    listAdminLeases.mockResolvedValue({ leases: [makeLeaseWithHistoricalSession()] });
+
+    const LeasesView = (await import("./LeasesView.vue")).default;
+    const wrapper = mount(LeasesView);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("已取消");
   });
 
   it("navigates to the standalone lease editor when creating a lease", async () => {

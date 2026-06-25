@@ -1254,6 +1254,20 @@ impl LeaseRepository for SqliteStorage {
         Ok(())
     }
 
+    async fn expire_leases_before(&self, now: DateTime<Utc>) -> anyhow::Result<u64> {
+        let result = sqlx::query(
+            "UPDATE leases SET state = ?, updated_at = ? WHERE state IN (?, ?) AND expires_at <= ?",
+        )
+        .bind(LeaseState::Expired.as_str())
+        .bind(now.to_rfc3339())
+        .bind(LeaseState::Active.as_str())
+        .bind(LeaseState::Releasing.as_str())
+        .bind(now.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     async fn update_lease_expiry(
         &self,
         lease_id: &str,
@@ -1381,6 +1395,26 @@ impl SessionRecordRepository for SqliteStorage {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn update_session_record(
+        &self,
+        session_id: &str,
+        client_name: Option<String>,
+        failure_message: Option<String>,
+    ) -> anyhow::Result<Option<SessionRecord>> {
+        sqlx::query("UPDATE session_records SET client_name = ?, failure_message = ? WHERE id = ?")
+            .bind(client_name)
+            .bind(failure_message)
+            .bind(session_id)
+            .execute(&self.pool)
+            .await?;
+
+        let row = sqlx::query("SELECT * FROM session_records WHERE id = ?")
+            .bind(session_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(session_record_from_row).transpose()
     }
 
     async fn delete_session_record(&self, session_id: &str) -> anyhow::Result<()> {

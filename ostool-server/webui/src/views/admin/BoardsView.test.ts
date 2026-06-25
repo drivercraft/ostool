@@ -181,6 +181,73 @@ describe("BoardsView", () => {
     expect(rightControls[2].classList.contains("filter-field")).toBe(true);
   });
 
+  it("renders idle, leased, in-use, and disabled board states", async () => {
+    listBoards.mockResolvedValue([
+      makeBoard("idle-board"),
+      makeBoard("leased-board"),
+      makeBoard("in-use-board"),
+      { ...makeBoard("disabled-board"), disabled: true },
+    ]);
+    listSessions.mockResolvedValue({ sessions: [makeAdminSession("in-use-board")] });
+    const now = new Date();
+    const start = new Date(now.getTime() - 60_000).toISOString();
+    const end = new Date(now.getTime() + 60_000).toISOString();
+    const leased = makeLease("leased-board");
+    leased.lease.session_id = null;
+    leased.session = null;
+    leased.lease.starts_at = start;
+    leased.lease.expires_at = end;
+    listAdminLeases.mockResolvedValue({ leases: [leased] });
+
+    const BoardsView = (await import("./BoardsView.vue")).default;
+    const wrapper = mount(BoardsView, {
+      global: {
+        stubs: {
+          RouterLink: {
+            name: "RouterLink",
+            props: ["to"],
+            template: "<a><slot /></a>",
+          },
+        },
+      },
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("空闲中");
+    expect(wrapper.text()).toContain("已租赁");
+    expect(wrapper.text()).toContain("使用中");
+    expect(wrapper.text()).toContain("已禁用");
+  });
+
+  it("treats expired leases and sessions as idle", async () => {
+    const expiredLease = makeLease("rk3568-1");
+    expiredLease.lease.starts_at = "2026-01-01T00:00:00Z";
+    expiredLease.lease.expires_at = "2026-01-01T01:00:00Z";
+    const expiredSession = makeAdminSession("rk3568-1");
+    expiredSession.session.expires_at = "2026-01-01T01:00:00Z";
+    listAdminLeases.mockResolvedValue({ leases: [expiredLease] });
+    listSessions.mockResolvedValue({ sessions: [expiredSession] });
+
+    const BoardsView = (await import("./BoardsView.vue")).default;
+    const wrapper = mount(BoardsView, {
+      global: {
+        stubs: {
+          RouterLink: {
+            name: "RouterLink",
+            props: ["to"],
+            template: "<a><slot /></a>",
+          },
+        },
+      },
+    });
+    await flushPromises();
+
+    const statusCell = wrapper.find("tbody tr td:nth-child(6)");
+    expect(statusCell.text()).toContain("空闲中");
+    expect(statusCell.text()).not.toContain("已租赁");
+    expect(statusCell.text()).not.toContain("使用中");
+  });
+
   it("renders edit, enable/disable, and more row actions", async () => {
     const BoardsView = (await import("./BoardsView.vue")).default;
     const wrapper = mount(BoardsView, {

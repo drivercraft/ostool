@@ -56,16 +56,16 @@ export function useUserLeases() {
   async function releaseLease(leaseId: string) {
     const confirmed = await ui.confirm({
       tone: "danger",
-      title: "释放租赁",
-      message: `确认释放租赁 ${leaseId}？相关开发板将归还到资源池。`,
-      confirmLabel: "释放",
+      title: "取消租赁",
+      message: `确认取消租赁 ${leaseId}？相关开发板将归还到资源池。`,
+      confirmLabel: "取消",
     });
     if (!confirmed) {
       return;
     }
     try {
       await api.deleteLease(leaseId);
-      ui.setSuccess(`已释放租赁 ${leaseId}`);
+      ui.setSuccess(`已取消租赁 ${leaseId}`);
       await loadLeases();
     } catch (error) {
       ui.setError((error as Error).message);

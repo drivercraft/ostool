@@ -6,6 +6,7 @@ import Icon from "@/components/Icon.vue";
 import StatusPill from "@/components/StatusPill.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
+import { getSessionDisplayStatus } from "@/utils/sessionStatus";
 import { formatLeaseTime, remainingLeaseLabel, useUserLeases } from "./useUserLeases";
 
 const ui = useUiStore();
@@ -62,7 +63,10 @@ onMounted(() => {
               <strong>{{ session.lease.board_id }}</strong>
               <span class="board-card-meta">{{ session.lease.board_type }}</span>
             </div>
-            <StatusPill tone="good" :label="session.session?.state ?? '活跃'" />
+            <StatusPill
+              :tone="getSessionDisplayStatus(session.session?.state).tone"
+              :label="getSessionDisplayStatus(session.session?.state).label"
+            />
           </div>
 
           <div class="lease-card-window">

@@ -297,8 +297,7 @@ async function loadData() {
     boardTypes.value = types;
     leases.value = leaseList.leases;
     if (!selectedBoardType.value && types.length > 0) {
-      const candidate = types.find((item) => item.available > 0);
-      selectedBoardType.value = candidate?.board_type ?? types[0].board_type;
+      selectedBoardType.value = types[0].board_type;
     }
   } catch (error) {
     ui.setError((error as Error).message);
@@ -383,7 +382,7 @@ onMounted(() => {
             </div>
 
             <div v-if="loading" class="empty-state">正在加载租赁日历...</div>
-            <div v-else-if="!selectedBoard" class="empty-state">请选择可租赁的开发板型号。</div>
+            <div v-else-if="!selectedBoard" class="empty-state">请选择开发板型号。</div>
             <div v-else class="lease-calendar-shell">
               <div class="lease-calendar-grid" :class="`lease-calendar-${calendarView}`">
                 <article
@@ -446,7 +445,7 @@ onMounted(() => {
                   <select v-model="selectedBoardType" :disabled="loading || submitting">
                     <option value="" disabled>请选择开发板型号</option>
                     <option v-for="board in boardTypes" :key="board.board_type" :value="board.board_type">
-                      {{ board.board_type }} / 可用 {{ board.available }} / {{ board.total }}
+                      {{ board.board_type }} / 当前空闲 {{ board.available }} / 在管 {{ board.total }}
                     </option>
                   </select>
                 </label>

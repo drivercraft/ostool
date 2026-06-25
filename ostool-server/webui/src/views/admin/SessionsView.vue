@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import { useRoute } from "vue-router";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
 import Icon from "@/components/Icon.vue";
 import StatusPill from "@/components/StatusPill.vue";
@@ -8,11 +8,13 @@ import { api } from "@/api";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import type { AdminSessionResponse, AdminUserResponse, BoardConfig, SessionRecord } from "@/types/api";
+import { getSessionDisplayStatus } from "@/utils/sessionStatus";
 import { formatLeaseRemaining } from "@/utils/time";
 
 const ui = useUiStore();
 const auth = useAuthStore();
 const route = useRoute();
+const router = useRouter();
 const loading = ref(true);
 const boards = ref<BoardConfig[]>([]);
 const users = ref<AdminUserResponse[]>([]);
@@ -20,7 +22,16 @@ const sessions = ref<AdminSessionResponse[]>([]);
 const initialQuery = typeof route.query.q === "string" ? route.query.q : "";
 const search = ref(initialQuery);
 const stateFilter = ref<"all" | "active" | "releasing" | "released" | "expired" | "failed">("all");
+const openMenuSessionId = ref<string | null>(null);
+const menuPosition = ref({ top: 0, left: 0 });
+const editingSession = ref<SessionRecord | null>(null);
+const submitting = ref(false);
+const editForm = reactive({
+  client_name: "",
+  failure_message: "",
+});
 const canDeleteSessions = computed(() => auth.hasPermission("sessions.delete"));
+const canUpdateSessions = computed(() => auth.hasPermission("sessions.update"));
 
 const boardMap = computed(() =>
   new Map(boards.value.map((board) => [board.id, board])),
@@ -69,17 +80,6 @@ function sessionSourceIp(item: AdminSessionResponse) {
   return item.source_ip || item.session.source_ip || "-";
 }
 
-function sessionStatus(session: SessionRecord) {
-  const labels = {
-    active: { tone: "warn" as const, label: "占用中" },
-    releasing: { tone: "neutral" as const, label: "释放中" },
-    released: { tone: "good" as const, label: "已释放" },
-    expired: { tone: "neutral" as const, label: "已过期" },
-    failed: { tone: "danger" as const, label: "失败" },
-  };
-  return labels[session.state] ?? { tone: "neutral" as const, label: session.state };
-}
-
 function sessionDurationLabel(session: SessionRecord) {
   if (session.state === "active" || session.state === "releasing") {
     return formatLeaseRemaining(session.expires_at);
@@ -90,8 +90,106 @@ function sessionDurationLabel(session: SessionRecord) {
   return "-";
 }
 
-function canDeleteSession(session: SessionRecord) {
-  return canDeleteSessions.value && session.state !== "releasing";
+function canCloseSession(session: SessionRecord) {
+  return canDeleteSessions.value && session.state === "active";
+}
+
+function canDeleteSession() {
+  return canDeleteSessions.value;
+}
+
+function toggleMenu(sessionId: string, event: MouseEvent) {
+  if (openMenuSessionId.value === sessionId) {
+    closeMenu();
+    return;
+  }
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  menuPosition.value = {
+    top: rect.bottom + 6,
+    left: Math.max(12, rect.right - 180),
+  };
+  openMenuSessionId.value = sessionId;
+}
+
+function closeMenu() {
+  openMenuSessionId.value = null;
+}
+
+function onDocumentClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  if (target && !target.closest(".row-action-menu") && !target.closest(".action-menu")) {
+    closeMenu();
+  }
+}
+
+function goToLease(item: AdminSessionResponse) {
+  if (!item.lease?.id) {
+    return;
+  }
+  closeMenu();
+  void router.push({ name: "admin-rental-lease-edit", params: { leaseId: item.lease.id } });
+}
+
+function openEdit(session: SessionRecord) {
+  closeMenu();
+  editingSession.value = session;
+  editForm.client_name = session.client_name ?? "";
+  editForm.failure_message = session.failure_message ?? "";
+}
+
+function closeEdit() {
+  if (submitting.value) {
+    return;
+  }
+  editingSession.value = null;
+}
+
+async function submitEdit() {
+  if (!editingSession.value || !canUpdateSessions.value) {
+    ui.setError("缺少编辑会话数据权限");
+    return;
+  }
+  submitting.value = true;
+  try {
+    const updated = await api.updateSession(editingSession.value.id, {
+      client_name: editForm.client_name.trim() || null,
+      failure_message: editForm.failure_message.trim() || null,
+    });
+    sessions.value = sessions.value.map((item) => (
+      item.session.id === updated.session.id ? updated : item
+    ));
+    ui.setSuccess(`已保存会话记录 ${updated.session.id}`);
+    editingSession.value = null;
+  } catch (error) {
+    ui.setError((error as Error).message);
+  } finally {
+    submitting.value = false;
+  }
+}
+
+async function closeSessionRecord(session: SessionRecord) {
+  closeMenu();
+  if (!canDeleteSessions.value) {
+    ui.setError("缺少删除会话数据权限");
+    return;
+  }
+  const confirmed = await ui.confirm({
+    tone: "danger",
+    title: "关闭会话",
+    message: `确认强制关闭会话 ${session.id} 吗？`,
+    confirmLabel: "关闭",
+  });
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    await api.closeSession(session.id);
+    ui.setSuccess(`已发起关闭会话 ${session.id}`);
+    await loadSessions();
+  } catch (error) {
+    ui.setError((error as Error).message);
+  }
 }
 
 async function loadSessions() {
@@ -113,14 +211,15 @@ async function loadSessions() {
 }
 
 async function deleteSessionRecord(sessionId: string) {
+  closeMenu();
   if (!canDeleteSessions.value) {
-    ui.setError("缺少删除租赁数据权限");
+    ui.setError("缺少删除会话数据权限");
     return;
   }
   const confirmed = await ui.confirm({
     tone: "danger",
-    title: "删除会话租约",
-    message: `确认删除会话租约 ${sessionId} 吗？`,
+    title: "删除会话记录",
+    message: `确认删除会话记录 ${sessionId} 吗？`,
     confirmLabel: "删除",
   });
   if (!confirmed) {
@@ -129,7 +228,7 @@ async function deleteSessionRecord(sessionId: string) {
 
   try {
     await api.deleteSession(sessionId);
-    ui.setSuccess(`已删除会话租约 ${sessionId}`);
+    ui.setSuccess(`已删除会话记录 ${sessionId}`);
     await loadSessions();
   } catch (error) {
     ui.setError((error as Error).message);
@@ -137,9 +236,12 @@ async function deleteSessionRecord(sessionId: string) {
 }
 
 onMounted(() => {
+  document.addEventListener("click", onDocumentClick);
   ui.clearMessages();
   void loadSessions();
 });
+
+onUnmounted(() => document.removeEventListener("click", onDocumentClick));
 </script>
 
 <template>
@@ -158,11 +260,11 @@ onMounted(() => {
             <span>状态</span>
             <select v-model="stateFilter">
               <option value="all">全部状态</option>
-              <option value="active">占用中</option>
-              <option value="releasing">释放中</option>
-              <option value="released">已释放</option>
-              <option value="expired">已过期</option>
-              <option value="failed">失败</option>
+              <option value="active">已连接</option>
+              <option value="releasing">断开中</option>
+              <option value="released">已断开</option>
+              <option value="expired">已超时</option>
+              <option value="failed">异常</option>
             </select>
           </label>
         </div>
@@ -211,20 +313,62 @@ onMounted(() => {
               <td>{{ sessionDurationLabel(item.session) }}</td>
               <td>
                 <StatusPill
-                  :tone="sessionStatus(item.session).tone"
-                  :label="sessionStatus(item.session).label"
+                  :tone="getSessionDisplayStatus(item.session.state).tone"
+                  :label="getSessionDisplayStatus(item.session.state).label"
                 />
               </td>
               <td class="col-actions">
                 <div class="row-actions">
                   <button
                     class="btn-icon-only"
-                    title="删除"
-                    :disabled="!canDeleteSession(item.session)"
-                    @click="deleteSessionRecord(item.session.id)"
+                    title="编辑"
+                    :disabled="!canUpdateSessions"
+                    @click="openEdit(item.session)"
                   >
-                    <Icon name="trash" :size="16" />
+                    <Icon name="edit" :size="16" />
                   </button>
+                  <button
+                    class="btn-icon-only"
+                    title="关闭"
+                    :disabled="!canCloseSession(item.session)"
+                    @click="closeSessionRecord(item.session)"
+                  >
+                    <Icon name="ban" :size="16" />
+                  </button>
+                  <div class="row-action-menu">
+                    <button
+                      class="btn-icon-only"
+                      title="更多"
+                      :aria-expanded="openMenuSessionId === item.session.id"
+                      @click.stop="toggleMenu(item.session.id, $event)"
+                    >
+                      <Icon name="more-vertical" :size="16" />
+                    </button>
+                  </div>
+                  <Teleport to="body">
+                    <div
+                      v-if="openMenuSessionId === item.session.id"
+                      class="action-menu action-menu--floating"
+                      :style="{ top: `${menuPosition.top}px`, left: `${menuPosition.left}px` }"
+                    >
+                      <button
+                        class="action-menu-item"
+                        :disabled="!item.lease"
+                        @click="goToLease(item)"
+                      >
+                        <Icon name="clipboard" :size="14" />
+                        转到租赁
+                      </button>
+                      <button
+                        class="action-menu-item"
+                        :disabled="!canDeleteSession()"
+                        @click="deleteSessionRecord(item.session.id)"
+                      >
+                        <Icon name="trash" :size="14" />
+                        删除记录
+                      </button>
+                    </div>
+                  </Teleport>
                 </div>
               </td>
             </tr>
@@ -236,6 +380,44 @@ onMounted(() => {
         <span>{{ filteredSessions.length === 0 ? "暂无分页" : "第 1 / 共 1 页" }}</span>
         <span>本页 {{ filteredSessions.length }} 条</span>
         <span>筛选后 {{ filteredSessions.length }} 条 / 共 {{ sessions.length }} 条</span>
+      </div>
+    </div>
+
+    <div v-if="editingSession" class="modal-overlay">
+      <div class="modal-card modal-card--narrow">
+        <header class="modal-header">
+          <h3>编辑会话记录</h3>
+          <button class="btn-icon-only modal-close-button" title="关闭" @click="closeEdit">×</button>
+        </header>
+
+        <form class="modal-form" @submit.prevent="submitEdit">
+          <div class="modal-body">
+            <label class="field">
+              <span>客户端名称</span>
+              <input
+                v-model="editForm.client_name"
+                maxlength="128"
+                placeholder="客户端名称"
+              />
+            </label>
+            <label class="field">
+              <span>异常说明</span>
+              <textarea
+                v-model="editForm.failure_message"
+                maxlength="500"
+                rows="4"
+                placeholder="可填写异常或备注信息"
+              />
+            </label>
+          </div>
+
+          <div class="modal-actions toolbar-actions">
+            <button type="submit" class="btn btn-primary" :disabled="submitting">
+              {{ submitting ? "保存中..." : "保存" }}
+            </button>
+            <button type="button" class="btn btn-ghost" :disabled="submitting" @click="closeEdit">取消</button>
+          </div>
+        </form>
       </div>
     </div>
   </section>

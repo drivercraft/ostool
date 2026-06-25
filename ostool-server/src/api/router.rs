@@ -34,10 +34,10 @@ use crate::{
             AdminPermissionResponse, AdminPermissionsResponse, AdminRoleCreateRequest,
             AdminRoleResponse, AdminRoleUpdateRequest, AdminRolesResponse,
             AdminServerConfigEditable, AdminServerConfigReadonly, AdminServerConfigResponse,
-            AdminSessionResponse, AdminSessionsResponse, AdminTftpConfigResponse,
-            AdminTftpStatusResponse, AdminUserCreateRequest, AdminUserResponse,
-            AdminUserRolesResponse, AdminUserRolesUpdateRequest, AdminUserUpdateRequest,
-            AdminUsersResponse, BoardPowerAction, BoardPowerStatusResponse,
+            AdminSessionResponse, AdminSessionUpdateRequest, AdminSessionsResponse,
+            AdminTftpConfigResponse, AdminTftpStatusResponse, AdminUserCreateRequest,
+            AdminUserResponse, AdminUserRolesResponse, AdminUserRolesUpdateRequest,
+            AdminUserUpdateRequest, AdminUsersResponse, BoardPowerAction, BoardPowerStatusResponse,
             BoardRuntimeStatusResponse, BoardTypeSummary, BootProfileResponse, CaptchaResponse,
             CreateLeaseRequest, CreateSessionRequest, CurrentUserResponse, DtbFileResponse,
             FileResponse, HttpBootFileResponse, KernelPublishResponse, LeaseResponse,
@@ -199,7 +199,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/admin/sessions", get(list_admin_sessions))
         .route(
             "/api/v1/admin/sessions/{session_id}",
-            delete(delete_admin_session),
+            put(update_admin_session).delete(delete_admin_session),
+        )
+        .route(
+            "/api/v1/admin/sessions/{session_id}/close",
+            post(close_admin_session),
         )
         .route(
             "/api/v1/admin/tftp",
@@ -576,7 +580,7 @@ fn admin_permission_for_request(method: &Method, path: &str) -> Option<&'static 
         "users" => admin_users_permission(method, &segments),
         "roles" => crud_permission(method, "roles"),
         "leases" => admin_leases_permission(method, &segments),
-        "sessions" => admin_sessions_permission(method),
+        "sessions" => admin_sessions_permission(method, &segments),
         "boards" => admin_boards_permission(method, &segments),
         "dtbs" => crud_permission(method, "dtbs"),
         "serial-ports" if method == Method::GET => Some("serial_ports.read"),
@@ -672,10 +676,12 @@ fn admin_leases_permission(method: &Method, segments: &[&str]) -> Option<&'stati
     }
 }
 
-fn admin_sessions_permission(method: &Method) -> Option<&'static str> {
-    match method.as_str() {
-        "GET" => Some("sessions.read"),
-        "DELETE" => Some("sessions.delete"),
+fn admin_sessions_permission(method: &Method, segments: &[&str]) -> Option<&'static str> {
+    match (method.as_str(), segments) {
+        ("GET", ["sessions"]) | ("GET", ["sessions", _]) => Some("sessions.read"),
+        ("PUT", ["sessions", _]) => Some("sessions.update"),
+        ("POST", ["sessions", _, "close"]) => Some("sessions.delete"),
+        ("DELETE", ["sessions", _]) => Some("sessions.delete"),
         _ => None,
     }
 }
@@ -1735,20 +1741,16 @@ async fn start_lease_session(
 async fn get_admin_overview(
     State(state): State<AppState>,
 ) -> Result<axum::Json<AdminOverviewResponse>, ApiError> {
+    let current_leased_board_ids = current_leased_board_ids(&state).await?;
     let boards = state.boards.read().await;
     let runtimes = state.board_runtimes.read().await;
-    let board_types = summarize_board_types(&boards, &runtimes);
+    let board_types = summarize_board_types(&boards, &runtimes, &current_leased_board_ids);
     let board_count_total = boards.len();
     let disabled_board_count = boards.values().filter(|board| board.disabled).count();
     let board_count_available = boards
         .values()
         .filter(|board| !board.disabled)
-        .filter(|board| {
-            runtimes
-                .get(&board.id)
-                .map(|runtime| runtime.lease_state == BoardLeaseState::Idle)
-                .unwrap_or(false)
-        })
+        .filter(|board| !current_leased_board_ids.contains(&board.id))
         .count();
     drop(runtimes);
     drop(boards);
@@ -2521,6 +2523,68 @@ async fn list_admin_sessions(
     }))
 }
 
+async fn update_admin_session(
+    Path(session_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::Json(request): axum::Json<AdminSessionUpdateRequest>,
+) -> Result<axum::Json<AdminSessionResponse>, ApiError> {
+    let user = current_user_from_headers(&state, &headers).await?;
+    require_permission(&user, "sessions.update")?;
+
+    if let Some(client_name) = request.client_name.as_deref() {
+        validate_max_len(
+            client_name.trim(),
+            "client_name",
+            validation::CLIENT_NAME_MAX_LEN,
+        )?;
+    }
+    if let Some(failure_message) = request.failure_message.as_deref() {
+        validate_max_len(
+            failure_message.trim(),
+            "failure_message",
+            validation::LONG_DESCRIPTION_MAX_LEN,
+        )?;
+    }
+
+    let session = state
+        .storage
+        .update_session_record(
+            &session_id,
+            clean_optional(request.client_name),
+            clean_optional(request.failure_message),
+        )
+        .await?
+        .ok_or_else(|| ApiError::not_found("session record not found"))?;
+
+    let lease = state
+        .storage
+        .list_leases()
+        .await?
+        .into_iter()
+        .find(|lease| lease.session_id.as_deref() == Some(&session.id));
+    Ok(axum::Json(AdminSessionResponse {
+        user_id: lease.as_ref().map(|item| item.user_id.clone()),
+        source_ip: session.source_ip.clone(),
+        lease,
+        session,
+    }))
+}
+
+async fn close_admin_session(
+    Path(session_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    let user = current_user_from_headers(&state, &headers).await?;
+    require_permission(&user, "sessions.delete")?;
+    state
+        .request_session_stop(&session_id, SessionStopReason::ApiDelete)
+        .await
+        .ok_or_else(|| ApiError::not_found("active session not found"))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn delete_admin_session(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
@@ -2666,9 +2730,10 @@ async fn reconcile_tftp(
 async fn list_board_types(
     State(state): State<AppState>,
 ) -> Result<axum::Json<Vec<BoardTypeSummary>>, ApiError> {
+    let current_leased_board_ids = current_leased_board_ids(&state).await?;
     let boards = state.boards.read().await;
     let runtimes = state.board_runtimes.read().await;
-    let result = summarize_board_types(&boards, &runtimes);
+    let result = summarize_board_types(&boards, &runtimes, &current_leased_board_ids);
     Ok(axum::Json(result))
 }
 
@@ -3625,6 +3690,7 @@ async fn write_audit_log(
 fn summarize_board_types(
     boards: &BTreeMap<String, BoardConfig>,
     runtimes: &BTreeMap<String, crate::state::BoardRuntimeState>,
+    current_leased_board_ids: &BTreeSet<String>,
 ) -> Vec<BoardTypeSummary> {
     let mut aggregate = BTreeMap::<String, (BTreeSet<String>, usize, usize)>::new();
     for board in boards.values().filter(|board| !board.disabled) {
@@ -3635,11 +3701,10 @@ fn summarize_board_types(
             entry.0.insert(tag.clone());
         }
         entry.1 += 1;
-        if runtimes
+        let has_active_runtime = runtimes
             .get(&board.id)
-            .map(|runtime| runtime.lease_state == BoardLeaseState::Idle)
-            .unwrap_or(false)
-        {
+            .is_some_and(|runtime| runtime.lease_state != BoardLeaseState::Idle);
+        if !current_leased_board_ids.contains(&board.id) && !has_active_runtime {
             entry.2 += 1;
         }
     }
@@ -3653,6 +3718,24 @@ fn summarize_board_types(
             available,
         })
         .collect::<Vec<_>>()
+}
+
+async fn current_leased_board_ids(state: &AppState) -> Result<BTreeSet<String>, ApiError> {
+    let now = chrono::Utc::now();
+    Ok(state
+        .storage
+        .list_leases()
+        .await?
+        .into_iter()
+        .filter(|lease| {
+            matches!(
+                lease.state,
+                crate::storage::LeaseState::Active | crate::storage::LeaseState::Releasing
+            ) && lease.starts_at <= now
+                && now < lease.expires_at
+        })
+        .map(|lease| lease.board_id)
+        .collect())
 }
 
 async fn session_snapshots(state: &AppState) -> Vec<crate::session::Session> {
@@ -4102,6 +4185,14 @@ mod tests {
         );
         assert_eq!(
             admin_permission_for_request(&Method::DELETE, "/api/v1/admin/sessions/session-1"),
+            Some("sessions.delete")
+        );
+        assert_eq!(
+            admin_permission_for_request(&Method::PUT, "/api/v1/admin/sessions/session-1"),
+            Some("sessions.update")
+        );
+        assert_eq!(
+            admin_permission_for_request(&Method::POST, "/api/v1/admin/sessions/session-1/close"),
             Some("sessions.delete")
         );
         assert_eq!(

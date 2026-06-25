@@ -97,6 +97,7 @@ describe("MySessionsView", () => {
     expect(wrapper.text()).toContain("当前会话");
     expect(wrapper.text()).toContain("rk3568-1");
     expect(wrapper.text()).toContain("session-2");
+    expect(wrapper.text()).toContain("已连接");
 
     const button = wrapper
       .findAll("button")

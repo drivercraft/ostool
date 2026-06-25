@@ -11,6 +11,8 @@ import type {
   AdminRoleUpdateRequest,
   AdminServerConfigResponse,
   AdminSessionsResponse,
+  AdminSessionUpdateRequest,
+  AdminSessionResponse,
   SiteSettingsResponse,
   SiteSettingsUpdateRequest,
   AdminTftpConfigResponse,
@@ -123,6 +125,17 @@ export const adminApi = {
   deleteSession(sessionId: string) {
     return request<void>(`/api/v1/admin/sessions/${encodeURIComponent(sessionId)}`, {
       method: "DELETE",
+    });
+  },
+  updateSession(sessionId: string, payload: AdminSessionUpdateRequest) {
+    return request<AdminSessionResponse>(`/api/v1/admin/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "PUT",
+      bodyJson: payload,
+    });
+  },
+  closeSession(sessionId: string) {
+    return request<void>(`/api/v1/admin/sessions/${encodeURIComponent(sessionId)}/close`, {
+      method: "POST",
     });
   },
   getTftpConfig() {

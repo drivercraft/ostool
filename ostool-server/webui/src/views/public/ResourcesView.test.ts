@@ -102,7 +102,7 @@ describe("ResourcesView", () => {
     expect(wrapper.text()).not.toContain("stm32mp1");
   });
 
-  it("links available resources to the standalone lease creation page", async () => {
+  it("links resources to the standalone lease creation page even when currently full", async () => {
     await seedUser();
     const ResourcesView = (await import("./ResourcesView.vue")).default;
     const wrapper = mount(ResourcesView, {
@@ -110,13 +110,17 @@ describe("ResourcesView", () => {
     });
     await flushPromises();
 
-    const leaseLink = wrapper
+    const leaseLinks = wrapper
       .findAllComponents(RouterLinkStub)
-      .find((link) => link.text().includes("申请租赁"));
+      .filter((link) => link.text().includes("申请租赁"));
 
-    expect(leaseLink?.props("to")).toEqual({
+    expect(leaseLinks[0]?.props("to")).toEqual({
       name: "user-lease-new",
       query: { board_type: "rk3568" },
+    });
+    expect(leaseLinks[1]?.props("to")).toEqual({
+      name: "user-lease-new",
+      query: { board_type: "stm32mp1" },
     });
   });
 });

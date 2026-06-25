@@ -360,6 +360,7 @@ impl AppState {
 
     pub async fn cleanup_expired_sessions(&self) -> anyhow::Result<Vec<String>> {
         let now = Utc::now();
+        self.storage.expire_leases_before(now).await?;
         let sessions = self
             .sessions
             .read()

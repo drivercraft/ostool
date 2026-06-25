@@ -686,6 +686,7 @@ pub trait LeaseRepository: Send + Sync {
         released_at: Option<DateTime<Utc>>,
         failure_message: Option<String>,
     ) -> anyhow::Result<()>;
+    async fn expire_leases_before(&self, now: DateTime<Utc>) -> anyhow::Result<u64>;
     async fn update_lease_expiry(
         &self,
         lease_id: &str,
@@ -723,6 +724,12 @@ pub trait SessionRecordRepository: Send + Sync {
         ended_at: DateTime<Utc>,
         failure_message: Option<String>,
     ) -> anyhow::Result<()>;
+    async fn update_session_record(
+        &self,
+        session_id: &str,
+        client_name: Option<String>,
+        failure_message: Option<String>,
+    ) -> anyhow::Result<Option<SessionRecord>>;
     async fn delete_session_record(&self, session_id: &str) -> anyhow::Result<()>;
 }
 

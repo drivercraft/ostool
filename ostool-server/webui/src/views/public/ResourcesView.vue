@@ -116,7 +116,7 @@ onMounted(() => {
         <p class="eyebrow">资源总览</p>
         <h2>可租赁的开发板资源</h2>
         <p class="public-page-subtitle">
-          下方为平台当前纳管的全部开发板型号。登录后可在用户控制台中创建会话并申请使用，平台会自动从空闲池中为你分配设备。
+          下方为平台当前纳管的全部开发板型号。登录后可在用户控制台中创建租赁，并按时间段预约设备。
         </p>
       </div>
       <section class="resources-stats" v-if="!loading && !failed">
@@ -149,11 +149,11 @@ onMounted(() => {
           />
         </label>
         <label class="field filter-field">
-          <span>可用状态</span>
-          <select v-model="availabilityFilter" aria-label="可用状态">
+          <span>当前空闲</span>
+          <select v-model="availabilityFilter" aria-label="当前空闲">
             <option value="all">全部状态</option>
-            <option value="available">仅显示可用</option>
-            <option value="unavailable">仅显示已满</option>
+            <option value="available">当前有空闲</option>
+            <option value="unavailable">当前无空闲</option>
           </select>
         </label>
         <label class="field filter-field">
@@ -242,11 +242,10 @@ onMounted(() => {
           <RouterLink
             v-if="auth.isAuthenticated"
             class="btn btn-primary"
-            :class="{ 'is-disabled': board.available === 0 }"
-            :to="board.available > 0 ? leaseCreateTarget(board) : '/dashboard'"
+            :to="leaseCreateTarget(board)"
           >
-            <Icon :name="board.available > 0 ? 'arrow-right' : 'ban'" :size="15" class="btn-icon" />
-            {{ board.available > 0 ? "申请租赁" : "暂无空闲" }}
+            <Icon name="arrow-right" :size="15" class="btn-icon" />
+            申请租赁
           </RouterLink>
           <RouterLink v-else class="btn btn-ghost" :to="loginTarget(board)">
             <Icon name="login" :size="15" class="btn-icon" />
@@ -301,10 +300,9 @@ onMounted(() => {
           <RouterLink
             v-if="auth.isAuthenticated"
             class="btn btn-primary btn-sm"
-            :class="{ 'is-disabled': board.available === 0 }"
-            :to="board.available > 0 ? leaseCreateTarget(board) : '/dashboard'"
+            :to="leaseCreateTarget(board)"
           >
-            {{ board.available > 0 ? "申请租赁" : "已满" }}
+            申请租赁
           </RouterLink>
           <RouterLink v-else class="btn btn-ghost btn-sm" :to="loginTarget(board)">登录</RouterLink>
         </div>

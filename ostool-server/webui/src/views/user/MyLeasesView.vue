@@ -7,6 +7,7 @@ import StatusPill from "@/components/StatusPill.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import type { LeaseResponse } from "@/types/api";
+import { getLeaseDisplayStatus } from "@/utils/leaseStatus";
 import { formatLeaseTime, remainingLeaseLabel, useUserLeases } from "./useUserLeases";
 
 type CalendarViewMode = "hour" | "day" | "month" | "year";
@@ -218,30 +219,6 @@ function eventLabelForSlot(item: LeaseResponse, slot: CalendarSlot) {
   return `${formatTime(item.lease.starts_at)} ~ ${formatTime(item.lease.expires_at)}`;
 }
 
-function leaseStateLabel(state: string) {
-  const labels: Record<string, string> = {
-    active: "活跃",
-    releasing: "释放中",
-    released: "已释放",
-    expired: "已过期",
-    failed: "异常",
-  };
-  return labels[state] ?? state;
-}
-
-function leaseStateTone(state: string) {
-  if (state === "active") {
-    return "good";
-  }
-  if (state === "releasing") {
-    return "warn";
-  }
-  if (state === "failed") {
-    return "danger";
-  }
-  return "neutral";
-}
-
 function hasLeaseSession(item: LeaseResponse) {
   return Boolean(item.session || item.lease.session_id);
 }
@@ -289,7 +266,7 @@ onMounted(() => {
       <div v-if="loading" class="empty-state"><div class="empty-state-icon">&#9641;</div>正在加载预约日历...</div>
       <div v-else-if="activeLeases.length === 0" class="empty-state">
         <div class="empty-state-icon">&#9641;</div>
-        当前没有活跃租赁，预约日历暂无内容。
+        当前没有有效租赁，预约日历暂无内容。
       </div>
       <div v-else class="lease-calendar-shell dashboard-lease-calendar-shell">
         <div class="lease-calendar-grid" :class="`lease-calendar-${calendarView}`">
@@ -338,7 +315,7 @@ onMounted(() => {
       <div class="dashboard-subsection-head">
         <div>
           <h4>租赁情况</h4>
-          <span>{{ activeLeases.length }} 条活跃</span>
+          <span>{{ activeLeases.length }} 条有效租赁</span>
         </div>
         <div class="view-toggle" role="group" aria-label="排列方式">
           <button
@@ -360,7 +337,7 @@ onMounted(() => {
       <div v-if="loading" class="empty-state"><div class="empty-state-icon">&#9641;</div>正在加载租赁...</div>
       <div v-else-if="activeLeases.length === 0" class="empty-state">
         <div class="empty-state-icon">&#9641;</div>
-        当前没有活跃租赁。请前往资源页面选择开发板并申请租赁。
+        当前没有有效租赁。请前往资源页面选择开发板并申请租赁。
       </div>
 
       <div v-else-if="leaseViewMode === 'grid'" class="board-card-grid">
@@ -370,7 +347,10 @@ onMounted(() => {
               <strong>{{ item.lease.board_id }}</strong>
               <span class="board-card-meta">{{ item.lease.board_type }}</span>
             </div>
-            <StatusPill :tone="leaseStateTone(item.lease.state)" :label="leaseStateLabel(item.lease.state)" />
+            <StatusPill
+              :tone="getLeaseDisplayStatus(item.lease).tone"
+              :label="getLeaseDisplayStatus(item.lease).label"
+            />
           </div>
 
           <div class="lease-card-window">
@@ -398,7 +378,7 @@ onMounted(() => {
             >
               转到会话
             </RouterLink>
-            <button class="btn btn-danger btn-sm" type="button" @click="releaseLease(item.lease.id)">释放租赁</button>
+            <button class="btn btn-danger btn-sm" type="button" @click="releaseLease(item.lease.id)">取消租赁</button>
           </div>
         </article>
       </div>
@@ -429,7 +409,10 @@ onMounted(() => {
             <div :style="{color: remainingLeaseLabel(item.lease.expires_at) === '已过期' ? 'var(--c-danger)' : 'var(--c-success)'}">{{ remainingLeaseLabel(item.lease.expires_at) }}</div>
           </div>
           <div>
-            <StatusPill :tone="leaseStateTone(item.lease.state)" :label="leaseStateLabel(item.lease.state)" />
+            <StatusPill
+              :tone="getLeaseDisplayStatus(item.lease).tone"
+              :label="getLeaseDisplayStatus(item.lease).label"
+            />
           </div>
           <div class="toolbar-actions">
             <RouterLink
@@ -440,7 +423,7 @@ onMounted(() => {
             >
               转到会话
             </RouterLink>
-            <button class="btn btn-danger btn-sm" type="button" @click="releaseLease(item.lease.id)">释放租赁</button>
+            <button class="btn btn-danger btn-sm" type="button" @click="releaseLease(item.lease.id)">取消租赁</button>
           </div>
         </div>
       </div>

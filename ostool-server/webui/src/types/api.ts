@@ -236,6 +236,11 @@ export interface AdminSessionResponse {
   source_ip: string | null;
 }
 
+export interface AdminSessionUpdateRequest {
+  client_name: string | null;
+  failure_message: string | null;
+}
+
 export type LeaseState = "active" | "releasing" | "released" | "expired" | "failed";
 
 export interface Lease {
