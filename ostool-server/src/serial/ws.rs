@@ -52,7 +52,7 @@ async fn run_serial_ws_inner(
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("board has no serial configuration"))?;
     let resolved_serial = resolve_serial_config(serial)?;
-    let port = tokio_serial::new(&resolved_serial.current_device_path, serial.baud_rate)
+    let mut port = tokio_serial::new(&resolved_serial.current_device_path, serial.baud_rate)
         .timeout(SERIAL_READ_TIMEOUT)
         .open_native_async()
         .with_context(|| {
@@ -61,6 +61,7 @@ async fn run_serial_ws_inner(
                 resolved_serial.current_device_path
             )
         })?;
+    clear_serial_input_after_open(&session_id, &mut port);
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
     let (mut serial_rx, mut serial_tx) = tokio::io::split(port);
@@ -106,48 +107,6 @@ async fn run_serial_ws_inner(
                                 .await;
                             break;
                         }
-                    }
-                    maybe_message = ws_receiver.next() => {
-                        let Some(message) = maybe_message else {
-                            break;
-                        };
-                        match message {
-                            Ok(Message::Binary(bytes)) => {
-                                write_serial_payload(&mut serial_tx, &bytes).await?;
-                            }
-                            Ok(Message::Text(text)) => {
-                                let control: ClientControlMessage = serde_json::from_str(&text)?;
-                                match control.kind.as_str() {
-                                    "close" => {
-                                        let _ = ws_sender
-                                            .send(Message::Text(r#"{"type":"closed"}"#.to_string().into()))
-                                            .await;
-                                        break;
-                                    }
-                                    "tx" => {
-                                        let Some(data) = control.data.as_deref() else {
-                                            anyhow::bail!("missing tx data");
-                                        };
-                                        let payload = match control.encoding.as_deref() {
-                                            Some("base64") => base64::engine::general_purpose::STANDARD
-                                                .decode(data)
-                                                .context("invalid base64 payload")?,
-                                            Some("utf8") | None => data.as_bytes().to_vec(),
-                                            Some(other) => anyhow::bail!("unsupported encoding `{other}`"),
-                                        };
-                                        write_serial_payload(&mut serial_tx, &payload).await?;
-                                    }
-                                    other => anyhow::bail!("unsupported websocket control type `{other}`"),
-                                }
-                            }
-                            Ok(Message::Close(_)) => break,
-                            Ok(Message::Ping(payload)) => {
-                                ws_sender.send(Message::Pong(payload)).await.ok();
-                            }
-                            Ok(Message::Pong(_)) => {}
-                            Err(err) => return Err(err.into()),
-                        }
-                        let _ = session.heartbeat().await;
                     }
                     read = serial_rx.read(&mut serial_buffer) => {
                         let read = read.context("serial read failed")?;
@@ -301,6 +260,25 @@ where
     let _ = ws_sender.send(Message::Close(None)).await;
 }
 
+trait SerialOpenCleanup {
+    fn clear_input_buffer(&mut self) -> std::io::Result<()>;
+}
+
+impl SerialOpenCleanup for tokio_serial::SerialStream {
+    fn clear_input_buffer(&mut self) -> std::io::Result<()> {
+        self.clear(ClearBuffer::Input).map_err(std::io::Error::from)
+    }
+}
+
+fn clear_serial_input_after_open<T>(session_id: &str, port: &mut T)
+where
+    T: SerialOpenCleanup + ?Sized,
+{
+    if let Err(err) = port.clear_input_buffer() {
+        log::warn!("session `{session_id}` failed to clear serial input after open: {err}");
+    }
+}
+
 async fn write_serial_payload(
     port: &mut tokio::io::WriteHalf<tokio_serial::SerialStream>,
     payload: &[u8],
@@ -368,9 +346,10 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        ClientControlMessage, SerialQueueCleanup, cleanup_power_link,
-        cleanup_serial_queue_before_close, finalize_power_linked_session,
-        preserve_result_after_serial_cleanup, send_power_on_failure_and_close,
+        ClientControlMessage, SerialOpenCleanup, SerialQueueCleanup, cleanup_power_link,
+        cleanup_serial_queue_before_close, clear_serial_input_after_open,
+        finalize_power_linked_session, preserve_result_after_serial_cleanup,
+        send_power_on_failure_and_close,
     };
     use crate::{
         build_app_state,
@@ -389,13 +368,29 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum CleanupEvent {
+        ClearInput,
         Flush,
         ClearAll,
+    }
+
+    struct RecordingSerialOpenCleanup {
+        events: Arc<Mutex<Vec<CleanupEvent>>>,
+        clear_result: io::Result<()>,
     }
 
     struct RecordingSerialCleanup {
         events: Arc<Mutex<Vec<CleanupEvent>>>,
         clear_result: io::Result<()>,
+    }
+
+    impl SerialOpenCleanup for RecordingSerialOpenCleanup {
+        fn clear_input_buffer(&mut self) -> io::Result<()> {
+            self.events.lock().unwrap().push(CleanupEvent::ClearInput);
+            self.clear_result
+                .as_ref()
+                .map(|_| ())
+                .map_err(|err| io::Error::new(err.kind(), err.to_string()))
+        }
     }
 
     #[async_trait::async_trait]
@@ -450,6 +445,38 @@ mod tests {
         assert_eq!(message.kind, "close");
     }
 
+    #[test]
+    fn serial_open_cleanup_clears_only_input_buffer() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut cleanup = RecordingSerialOpenCleanup {
+            events: events.clone(),
+            clear_result: Ok(()),
+        };
+
+        clear_serial_input_after_open("session-1", &mut cleanup);
+
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            &[CleanupEvent::ClearInput]
+        );
+    }
+
+    #[test]
+    fn serial_open_cleanup_does_not_fail_session_on_clear_error() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut cleanup = RecordingSerialOpenCleanup {
+            events: events.clone(),
+            clear_result: Err(io::Error::other("clear failed")),
+        };
+
+        clear_serial_input_after_open("session-1", &mut cleanup);
+
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            &[CleanupEvent::ClearInput]
+        );
+    }
+
     #[tokio::test]
     async fn serial_cleanup_flushes_before_clearing_all_buffers() {
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -473,7 +500,7 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let mut cleanup = RecordingSerialCleanup {
             events: events.clone(),
-            clear_result: Err(io::Error::new(io::ErrorKind::Other, "clear failed")),
+            clear_result: Err(io::Error::other("clear failed")),
         };
 
         let err = cleanup_serial_queue_before_close(&mut cleanup)
@@ -492,7 +519,7 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let mut cleanup = RecordingSerialCleanup {
             events,
-            clear_result: Err(io::Error::new(io::ErrorKind::Other, "clear failed")),
+            clear_result: Err(io::Error::other("clear failed")),
         };
 
         let err = preserve_result_after_serial_cleanup::<(), _>(

@@ -9,7 +9,7 @@ use tokio::sync::{RwLock, mpsc, watch};
 
 use crate::{config::BoardConfig, state::AppState};
 
-pub const SESSION_TTL: Duration = Duration::seconds(2);
+pub const SESSION_TTL: Duration = Duration::seconds(10);
 
 const SESSION_STATE_ACTIVE: u8 = 0;
 const SESSION_STATE_RELEASING: u8 = 1;
@@ -305,6 +305,7 @@ mod tests {
     fn session_new_uses_fixed_ttl() {
         let session = Session::new("demo".into(), Some("client".into()));
         assert_eq!(session.expires_at - session.created_at, SESSION_TTL);
+        assert!(SESSION_TTL >= chrono::Duration::seconds(10));
         assert_eq!(session.last_heartbeat_at, session.created_at);
         assert_eq!(session.state, SessionLifecycleState::Active);
     }
