@@ -24,7 +24,6 @@ const saving = ref(false);
 const roles = ref<AdminRoleResponse[]>([]);
 const permissions = ref<AdminPermissionResponse[]>([]);
 const selectedRoleId = ref<string | null>(null);
-const showPermissionInfo = ref(false);
 const openMenuRoleId = ref<string | null>(null);
 const menuPosition = ref({ top: 0, left: 0 });
 const search = ref("");
@@ -135,12 +134,6 @@ const permissionGroups = computed<PermissionGroup[]>(() => {
     }));
 });
 
-function rolesForPermission(permissionId: string) {
-  return roles.value.filter((role) =>
-    role.permissions.some((permission) => permission.id === permissionId),
-  );
-}
-
 function groupPermissionIds(group: PermissionGroup) {
   return group.permissions.map((permission) => permission.id);
 }
@@ -205,10 +198,6 @@ function fillRoleForm(role: AdminRoleResponse) {
 function cancelEdit() {
   resetForm();
   void router.push({ name: "admin-user-roles" });
-}
-
-function togglePermissionInfo() {
-  showPermissionInfo.value = !showPermissionInfo.value;
 }
 
 function toggleMenu(roleId: string, event: MouseEvent) {
@@ -476,12 +465,9 @@ watch(
 
     <template v-else>
       <div class="panel admin-table-panel role-table-panel">
-        <div class="admin-toolbar">
+          <div class="admin-toolbar">
           <div class="admin-toolbar-left">
             <button class="btn btn-primary" @click="openCreate">新增角色</button>
-            <button class="btn btn-ghost btn-sm" @click="togglePermissionInfo">
-              {{ showPermissionInfo ? "隐藏权限说明" : "权限说明" }}
-            </button>
             <button class="btn btn-ghost btn-sm" @click="loadRbac">刷新</button>
           </div>
           <div class="admin-toolbar-right">
@@ -590,43 +576,6 @@ watch(
         </div>
       </div>
 
-      <div v-if="showPermissionInfo" class="panel permission-catalog-panel">
-        <div class="panel-heading admin-section-heading">
-          <div>
-            <h3>权限配置</h3>
-            <p class="muted">查看系统内置权限，以及当前有哪些角色持有这些权限。</p>
-          </div>
-        </div>
-
-        <div v-if="loading" class="empty-state">正在加载权限...</div>
-        <div v-else class="permission-grid">
-          <article
-            v-for="permission in permissions"
-            :key="permission.id"
-            class="permission-card"
-          >
-            <div class="permission-card-code">
-              <code>{{ permission.code }}</code>
-            </div>
-            <div>
-              <h4>{{ permission.name }}</h4>
-              <p class="muted">{{ permission.description }}</p>
-            </div>
-            <div class="permission-role-list">
-              <span
-                v-for="role in rolesForPermission(permission.id)"
-                :key="role.id"
-                class="tag-chip"
-              >
-                {{ role.display_name }}
-              </span>
-              <span v-if="rolesForPermission(permission.id).length === 0" class="muted">
-                暂未分配给任何角色
-              </span>
-            </div>
-          </article>
-        </div>
-      </div>
     </template>
   </section>
 </template>

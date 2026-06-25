@@ -236,10 +236,6 @@ export const router = createRouter({
           meta: { title: "用户管理 / 编辑角色" },
         },
         {
-          path: "users/permissions",
-          redirect: "/admin/users/roles",
-        },
-        {
           path: "settings",
           redirect: "/admin/settings/server",
         },

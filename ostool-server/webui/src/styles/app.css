@@ -2219,9 +2219,6 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 .roles-page {
   width: 100%;
 }
-.permission-catalog-panel {
-  padding: var(--content-pad);
-}
 .roles-table td {
   vertical-align: middle;
 }
@@ -2576,36 +2573,6 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   color: var(--c-text-muted);
   font-size: .75rem;
   font-weight: 700;
-}
-.permission-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 1rem;
-}
-.permission-card {
-  display: grid;
-  gap: .9rem;
-  min-height: 100%;
-  padding: 1rem;
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
-  background: var(--c-surface);
-  box-shadow: var(--shadow-xs);
-}
-.permission-card-code code {
-  display: inline-flex;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-}
-.permission-card h4 {
-  font-size: 1rem;
-  margin-bottom: .35rem;
-}
-.permission-role-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: .35rem;
-  align-self: end;
 }
 .role-check-grid, .permission-check-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: .5rem; }
 .role-check-grid label, .permission-check-grid label { display: flex; align-items: center; gap: .5rem; padding: .5rem .7rem; border: 1px solid var(--c-border); border-radius: var(--radius-sm); font-size: .86rem; cursor: pointer; }
