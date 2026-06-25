@@ -268,7 +268,6 @@ onMounted(() => {
           <Icon name="cpu-board" :size="14" class="btn-icon" />
           去资源页申请
         </RouterLink>
-        <button class="btn btn-ghost btn-sm" :disabled="loading" @click="loadLeases">刷新</button>
       </div>
     </div>
 

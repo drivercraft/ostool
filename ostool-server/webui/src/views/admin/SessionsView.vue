@@ -191,12 +191,20 @@ onMounted(() => {
               <td>{{ item.session.id }}</td>
               <td>{{ sessionSourceIp(item) }}</td>
               <td>
-                <strong>{{ userLabel(item.user_id) }}</strong>
-                <div>{{ item.user_id || "-" }}</div>
+                <div class="table-cell-stack">
+                  <div class="table-cell-stack-body">
+                    <span class="table-cell-main">{{ userLabel(item.user_id) }}</span>
+                    <span class="table-cell-sub">{{ item.user_id || "-" }}</span>
+                  </div>
+                </div>
               </td>
               <td>
-                <span>{{ boardMap.get(item.session.board_id)?.id || item.session.board_id }}</span>
-                <div class="muted">{{ boardMap.get(item.session.board_id)?.board_type || "-" }}</div>
+                <div class="table-cell-stack">
+                  <div class="table-cell-stack-body">
+                    <span class="table-cell-main">{{ boardMap.get(item.session.board_id)?.id || item.session.board_id }}</span>
+                    <span class="table-cell-sub">{{ boardMap.get(item.session.board_id)?.board_type || "-" }}</span>
+                  </div>
+                </div>
               </td>
               <td>{{ item.session.client_name || "-" }}</td>
               <td>{{ new Date(item.session.created_at).toLocaleString() }}</td>

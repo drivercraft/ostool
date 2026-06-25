@@ -91,13 +91,13 @@ describe("DtbView", () => {
     expect(uiStore.setSuccess).toHaveBeenCalledWith("已上传 DTB new-board.dtb");
   });
 
-  it("renders upload and refresh actions on the left and search/filter controls on the right", async () => {
+  it("renders upload action on the left and search/filter controls on the right", async () => {
     const DtbView = (await import("./DtbView.vue")).default;
     const wrapper = mount(DtbView);
     await flushPromises();
 
     expect(wrapper.find(".admin-toolbar-left").text()).toContain("上传 DTB");
-    expect(wrapper.find(".admin-toolbar-left").text()).toContain("刷新");
+    expect(wrapper.find(".admin-toolbar-left").text()).not.toContain("刷新");
     expect(wrapper.find(".admin-toolbar-right .search-field").exists()).toBe(true);
     expect(wrapper.findAll(".admin-toolbar-right .filter-field").length).toBe(1);
   });

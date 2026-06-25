@@ -36,10 +36,6 @@ onMounted(() => {
         <h2 class="text-xl font-bold">运行状态</h2>
         <p class="text-sm muted" style="margin-top: .15rem">平台当前资源与健康度总览</p>
       </div>
-      <button class="btn btn-secondary btn-sm" @click="loadOverview">
-        <Icon name="refresh" :size="14" class="btn-icon" />
-        刷新
-      </button>
     </div>
 
     <div v-if="loading" class="card loading-block">

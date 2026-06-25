@@ -225,7 +225,6 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
       <section class="admin-toolbar">
         <div class="admin-toolbar-left">
           <RouterLink to="/admin/resources/boards/new" class="btn btn-primary btn-sm">新增开发板</RouterLink>
-          <button class="btn btn-secondary btn-sm" @click="loadBoards">刷新</button>
         </div>
         <div class="admin-toolbar-right">
           <label class="search-field">

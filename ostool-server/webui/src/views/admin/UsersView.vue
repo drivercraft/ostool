@@ -336,10 +336,6 @@ onMounted(() => {
             <Icon name="plus" :size="16" class="btn-icon" />
             新增用户
           </button>
-          <button class="btn btn-ghost btn-sm" @click="loadUsers">
-            <Icon name="refresh" :size="14" class="btn-icon" />
-            刷新
-          </button>
         </div>
         <div class="admin-toolbar-right">
           <label class="search-field">
@@ -390,10 +386,10 @@ onMounted(() => {
             <tr v-for="(user, index) in filteredUsers" :key="user.id">
               <td class="col-index">{{ index + 1 }}</td>
               <td>
-                <div class="user-cell">
-                  <div class="user-cell-main">
-                    <span class="user-cell-username">{{ user.username }}</span>
-                    <span class="user-cell-id">{{ user.id }}</span>
+                <div class="table-cell-stack">
+                  <div class="table-cell-stack-body">
+                    <span class="table-cell-main">{{ user.username }}</span>
+                    <span class="table-cell-sub table-cell-sub--mono">{{ user.id }}</span>
                   </div>
                 </div>
               </td>
@@ -500,17 +496,15 @@ onMounted(() => {
         :class="modalMode === 'reset-password' ? 'modal-card--narrow' : 'modal-card--user-form'"
       >
         <header class="modal-header">
-          <div>
-            <h3>
-              {{
-                modalMode === "create"
-                  ? "新增用户"
-                  : modalMode === "edit"
-                    ? `编辑 ${modalUser?.username}`
-                    : `重置 ${modalUser?.username} 的密码`
-              }}
-            </h3>
-          </div>
+          <h3>
+            {{
+              modalMode === "create"
+                ? "新增用户"
+                : modalMode === "edit"
+                  ? `编辑 ${modalUser?.username}`
+                  : `重置 ${modalUser?.username} 的密码`
+            }}
+          </h3>
           <button class="btn-icon-only modal-close-button" title="关闭" @click="closeModal">×</button>
         </header>
 

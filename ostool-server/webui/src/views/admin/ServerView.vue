@@ -101,7 +101,6 @@ onMounted(() => {
           <h3>Server 顶层配置</h3>
         </div>
         <div class="toolbar-actions">
-          <button class="btn btn-ghost" @click="loadConfig">刷新</button>
           <button class="btn btn-primary" :disabled="saving || !config" @click="saveConfig">
             {{ saving ? "保存中..." : "保存配置" }}
           </button>

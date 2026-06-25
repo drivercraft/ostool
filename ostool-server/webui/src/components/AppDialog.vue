@@ -45,9 +45,7 @@ function onOverlayClick(event: MouseEvent) {
   >
     <section class="modal-card app-dialog-card" role="dialog" aria-modal="true">
       <header class="modal-header">
-        <div>
-          <h3>{{ dialog.title }}</h3>
-        </div>
+        <h3>{{ dialog.title }}</h3>
         <button class="btn-icon-only modal-close-button" type="button" title="关闭" @click="emit('cancel')">
           ×
         </button>

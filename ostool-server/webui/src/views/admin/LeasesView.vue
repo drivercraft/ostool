@@ -243,7 +243,6 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
             <Icon name="plus" :size="16" class="btn-icon" />
             新增租赁
           </button>
-          <button class="btn btn-ghost btn-sm" @click="loadData">刷新</button>
         </div>
         <div class="admin-toolbar-right">
           <label class="search-field">
@@ -284,21 +283,31 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
               <td class="col-index">{{ index + 1 }}</td>
               <td>{{ item.lease.id }}</td>
               <td>
-                <strong>{{ userLabel(item.lease.user_id) }}</strong>
-                <div>{{ item.lease.user_id }}</div>
+                <div class="table-cell-stack">
+                  <div class="table-cell-stack-body">
+                    <span class="table-cell-main">{{ userLabel(item.lease.user_id) }}</span>
+                    <span class="table-cell-sub">{{ item.lease.user_id }}</span>
+                  </div>
+                </div>
               </td>
               <td>
-                <span>{{ item.lease.board_id }}</span>
-                <div class="muted">{{ item.lease.board_type }}</div>
+                <div class="table-cell-stack">
+                  <div class="table-cell-stack-body">
+                    <span class="table-cell-main">{{ item.lease.board_id }}</span>
+                    <span class="table-cell-sub">{{ item.lease.board_type }}</span>
+                  </div>
+                </div>
               </td>
               <td>{{ item.lease.session_id || "-" }}</td>
               <td>
                 <StatusPill :tone="leaseTone(item.lease.state)" :label="leaseStateLabel(item.lease.state)" />
               </td>
               <td>
-                <div>{{ formatDateTime(item.lease.starts_at) }} ~ {{ formatDateTime(item.lease.expires_at) }}</div>
-                <div class="muted">
-                  时长 {{ formatDuration(item.lease.starts_at, item.lease.expires_at) }}
+                <div class="table-cell-stack">
+                  <div class="table-cell-stack-body">
+                    <span class="table-cell-main">{{ formatDateTime(item.lease.starts_at) }} ~ {{ formatDateTime(item.lease.expires_at) }}</span>
+                    <span class="table-cell-sub">时长 {{ formatDuration(item.lease.starts_at, item.lease.expires_at) }}</span>
+                  </div>
                 </div>
               </td>
               <td class="col-actions">

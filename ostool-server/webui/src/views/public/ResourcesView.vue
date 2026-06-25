@@ -182,10 +182,6 @@ onMounted(() => {
             <Icon name="clipboard" :size="15" /> 列表
           </button>
         </div>
-        <button class="btn btn-ghost btn-sm" @click="loadBoardTypes">
-          <Icon name="refresh" :size="14" class="btn-icon" />
-          刷新
-        </button>
       </div>
     </section>
 

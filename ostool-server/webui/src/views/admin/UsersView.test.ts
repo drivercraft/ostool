@@ -131,7 +131,7 @@ describe("UsersView", () => {
 
     const rows = wrapper.findAll("tbody tr");
     expect(rows.length).toBe(2);
-    expect(rows[0].find(".user-cell-username").text()).toBe("alice");
+    expect(rows[0].find(".table-cell-main").text()).toBe("alice");
     // 三组核心按钮：edit、toggle、more
     expect(rows[0].findAll(".btn-icon-only").length).toBe(3);
     expect(rows[0].find('button[title="编辑"]').exists()).toBe(true);
@@ -172,7 +172,7 @@ describe("UsersView", () => {
 
     const rows = wrapper.findAll("tbody tr");
     expect(rows.length).toBe(1);
-    expect(rows[0].find(".user-cell-username").text()).toBe("bob");
+    expect(rows[0].find(".table-cell-main").text()).toBe("bob");
   });
 
   it("opens the create-user modal when 新增用户 is clicked", async () => {

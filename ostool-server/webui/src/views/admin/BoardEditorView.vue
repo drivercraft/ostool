@@ -1054,9 +1054,7 @@ onMounted(() => {
   >
     <div class="modal-card">
       <header class="modal-header">
-        <div>
-          <h3>上传并绑定到当前开发板</h3>
-        </div>
+        <h3>上传并绑定到当前开发板</h3>
         <button class="btn-icon-only modal-close-button" title="关闭" @click="closeDtbUploadModal">×</button>
       </header>
 

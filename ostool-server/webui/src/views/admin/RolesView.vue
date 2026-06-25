@@ -465,10 +465,9 @@ watch(
 
     <template v-else>
       <div class="panel admin-table-panel role-table-panel">
-          <div class="admin-toolbar">
+        <div class="admin-toolbar">
           <div class="admin-toolbar-left">
             <button class="btn btn-primary" @click="openCreate">新增角色</button>
-            <button class="btn btn-ghost btn-sm" @click="loadRbac">刷新</button>
           </div>
           <div class="admin-toolbar-right">
             <label class="search-field">
@@ -503,7 +502,7 @@ watch(
             <tbody>
               <tr v-for="(role, index) in filteredRoles" :key="role.id">
                 <td class="col-index">{{ index + 1 }}</td>
-                <td><strong>{{ role.display_name }}</strong></td>
+                <td>{{ role.display_name }}</td>
                 <td>{{ role.name }}</td>
                 <td>
                   <StatusPill

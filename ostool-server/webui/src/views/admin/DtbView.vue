@@ -395,7 +395,6 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
             <Icon name="plus" :size="16" class="btn-icon" />
             上传 DTB
           </button>
-          <button class="btn btn-ghost btn-sm" @click="loadDtbs">刷新</button>
         </div>
         <div class="admin-toolbar-right">
           <label class="search-field">
@@ -434,9 +433,11 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
             <tr v-for="(dtb, index) in filteredDtbs" :key="dtb.name">
               <td class="col-index">{{ index + 1 }}</td>
               <td>
-                <div class="dtb-name-cell">
-                  <span>{{ dtb.name }}</span>
-                  <span>{{ dtb.relative_tftp_path_template }}</span>
+                <div class="table-cell-stack">
+                  <div class="table-cell-stack-body">
+                    <span class="table-cell-main">{{ dtb.name }}</span>
+                    <span class="table-cell-sub">{{ dtb.relative_tftp_path_template }}</span>
+                  </div>
                 </div>
               </td>
               <td>{{ dtb.boot_architecture || "-" }}</td>
@@ -519,10 +520,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
   >
     <div class="modal-card modal-card--dtb-form">
       <header class="modal-header">
-        <div>
-          <h3>上传 DTB</h3>
-          <p class="muted">补充架构、compatible 和说明，方便后续按板型选择。</p>
-        </div>
+        <h3>上传 DTB</h3>
         <button class="btn-icon-only modal-close-button" title="关闭" @click="closeCreateDtb">×</button>
       </header>
 
@@ -590,10 +588,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
   >
     <div class="modal-card modal-card--dtb-form">
       <header class="modal-header">
-        <div>
-          <h3>{{ editingDtbName }}</h3>
-          <p class="muted">修改 DTB 名称、元信息，或选择文件替换内容。</p>
-        </div>
+        <h3>{{ editingDtbName }}</h3>
         <button class="btn-icon-only modal-close-button" title="关闭" @click="closeEditDtb">×</button>
       </header>
 

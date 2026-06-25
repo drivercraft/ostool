@@ -631,6 +631,14 @@ table.data-table td {
   overflow-wrap: break-word;
   word-break: normal;
 }
+table.tbl td strong,
+table.data-table td strong {
+  font-weight: 400;
+}
+table.tbl td :is(.tag, .tag-chip),
+table.data-table td :is(.tag, .tag-chip) {
+  font-weight: 400;
+}
 table.tbl tbody tr:last-child td,
 table.data-table tbody tr:last-child td { border-bottom: none; }
 table.tbl tbody tr,
@@ -638,14 +646,9 @@ table.data-table tbody tr { transition: background-color .12s ease; }
 table.tbl tbody tr:hover,
 table.data-table tbody tr:hover { background: var(--c-brand-tint); }
 
-table.tbl td > :is(.tag-list, .role-chip-list, .user-cell),
-table.data-table td > :is(.tag-list, .role-chip-list, .user-cell) {
+table.tbl td > :is(.tag-list, .role-chip-list, .table-cell-stack),
+table.data-table td > :is(.tag-list, .role-chip-list, .table-cell-stack) {
   justify-content: center;
-}
-
-table.tbl td > .user-cell .user-cell-main,
-table.data-table td > .user-cell .user-cell-main {
-  justify-items: center;
 }
 
 table.tbl .col-index,
@@ -2072,22 +2075,31 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 .users-page .data-table td {
   vertical-align: middle;
 }
-.user-cell {
+.table-cell-stack {
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.user-cell-main {
+.table-cell-stack-body {
   display: grid;
   gap: .15rem;
   min-width: 0;
+  justify-items: center;
 }
-.user-cell-username {
+.table-cell-main {
   width: fit-content;
+  max-width: 100%;
+  color: var(--c-text);
+  font-weight: 400;
+  overflow-wrap: anywhere;
 }
-.user-cell-id {
+.table-cell-sub {
   color: var(--c-text-muted);
-  font-size: .76rem;
+  font-size: .78rem;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+.table-cell-sub--mono {
   font-family: var(--font-mono);
 }
 .role-chip-list {
@@ -2594,17 +2606,6 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 .upload-zone:hover { border-color: var(--c-brand); background: var(--c-brand-tint); }
 .upload-zone-icon { font-size: 2rem; color: var(--c-text-ghost); margin-bottom: .5rem; }
 .upload-zone-text { font-size: .88rem; color: var(--c-text-muted); }
-.dtb-name-cell {
-  display: grid;
-  gap: .25rem;
-  min-width: 0;
-}
-.dtb-name-cell span {
-  color: var(--c-text-muted);
-  font-size: .78rem;
-  overflow-wrap: anywhere;
-}
-
 .tag-chip { display: inline-flex; align-items: center; padding: .15rem .55rem; font-size: .74rem; font-weight: 500; color: var(--c-text-soft); background: var(--c-bg-alt); border-radius: var(--radius-sm); }
 
 /* ===================================================================== */
@@ -3434,7 +3435,7 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 }
 .modal-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
   flex: 0 0 auto;
@@ -3443,9 +3444,11 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   background: var(--c-surface);
 }
 .modal-header h3 {
-  margin: .2rem 0 0;
+  min-width: 0;
+  margin: 0;
   font-size: 1.1rem;
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 .modal-close-button {
   flex: 0 0 auto;
@@ -3480,6 +3483,9 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   padding: 1rem 1.4rem;
   border-top: 1px solid var(--c-border);
   background: var(--c-bg-alt);
+}
+.modal-actions .btn {
+  min-width: 104px;
 }
 .modal-footer {
   display: flex;
