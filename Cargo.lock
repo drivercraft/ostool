@@ -2241,7 +2241,7 @@ dependencies = [
 
 [[package]]
 name = "ostool-server"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4061,7 +4061,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "uboot-shell"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "colored",
  "env_logger",
