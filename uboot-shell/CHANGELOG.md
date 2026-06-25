@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6](https://github.com/drivercraft/ostool/compare/uboot-shell-v0.2.5...uboot-shell-v0.2.6) - 2026-06-25
+
+### Fixed
+
+- *(uboot)* stabilize serial transfers ([#145](https://github.com/drivercraft/ostool/pull/145))
+
 ## [0.2.5](https://github.com/drivercraft/ostool/compare/uboot-shell-v0.2.4...uboot-shell-v0.2.5) - 2026-06-15
 
 ### Added

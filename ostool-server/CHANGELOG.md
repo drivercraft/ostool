@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3](https://github.com/drivercraft/ostool/compare/ostool-server-v0.4.2...ostool-server-v0.4.3) - 2026-06-25
+
+### Fixed
+
+- *(uboot)* stabilize serial transfers ([#145](https://github.com/drivercraft/ostool/pull/145))
+
 ## [0.4.2](https://github.com/drivercraft/ostool/compare/ostool-server-v0.4.1...ostool-server-v0.4.2) - 2026-06-16
 
 ### Fixed
