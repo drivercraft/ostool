@@ -5,7 +5,7 @@ extern crate log;
 
 use std::{
     io::{Error, ErrorKind, Result, stdout},
-    path::PathBuf,
+    path::{Path, PathBuf},
     pin::Pin,
     task::{Context, Poll},
     time::Duration,
@@ -34,6 +34,8 @@ macro_rules! dbg {
 const CTRL_C: u8 = 0x03;
 const INT_STR: &str = "<INTERRUPT>";
 const INT: &[u8] = INT_STR.as_bytes();
+const LOADY_MAX_ATTEMPTS: usize = 3;
+const LOADY_RETRY_DELAY: Duration = Duration::from_millis(300);
 
 type Tx = Box<dyn AsyncWrite + Send + Unpin>;
 type Rx = Box<dyn AsyncRead + Send + Unpin>;
@@ -279,18 +281,55 @@ impl UbootShell {
         file: impl Into<PathBuf>,
         on_progress: impl Fn(usize, usize),
     ) -> Result<String> {
+        let file = file.into();
+        let mut last_err = None;
+
+        for attempt in 1..=LOADY_MAX_ATTEMPTS {
+            match self.loady_once(addr, &file, &on_progress).await {
+                Ok(reply) => return Ok(reply),
+                Err(err) if attempt < LOADY_MAX_ATTEMPTS => {
+                    warn!(
+                        "loady attempt {attempt}/{LOADY_MAX_ATTEMPTS} failed: {err}; retrying..."
+                    );
+                    last_err = Some(err);
+                    self.wait_for_shell().await.map_err(|recover_err| {
+                        Error::other(format!(
+                            "loady attempt {attempt} failed and shell recovery failed: {recover_err}",
+                        ))
+                    })?;
+                    Delay::new(LOADY_RETRY_DELAY).await;
+                }
+                Err(err) => last_err = Some(err),
+            }
+        }
+
+        Err(Error::other(format!(
+            "loady failed after {LOADY_MAX_ATTEMPTS} attempts: {}",
+            last_err
+                .map(|err| err.to_string())
+                .unwrap_or_else(|| "unknown error".to_string())
+        )))
+    }
+
+    async fn loady_once(
+        &mut self,
+        addr: usize,
+        file: &Path,
+        on_progress: &impl Fn(usize, usize),
+    ) -> Result<String> {
+        self.clear_shell().await?;
         self.cmd_without_reply(&format!("loady {addr:#x}")).await?;
         let crc = self.wait_for_load_crc().await?;
         let mut protocol = ymodem::Ymodem::new(crc);
 
-        let file = file.into();
         let name = file
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "file name must be valid UTF-8"))?;
-        let size = std::fs::metadata(&file)?.len() as usize;
-        let mut file = AllowStdIo::new(std::fs::File::open(&file)?);
+        let size = std::fs::metadata(file)?.len() as usize;
+        let mut file = AllowStdIo::new(std::fs::File::open(file)?);
 
+        on_progress(0, size);
         protocol
             .send(self, &mut file, name, size, |sent| on_progress(sent, size))
             .await?;
@@ -384,5 +423,162 @@ fn print_raw_win(buff: &[u8]) {
         let s = String::from_utf8_lossy(&g[..]);
         println!("{}", s.trim());
         g.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        collections::VecDeque,
+        fs,
+        sync::{Arc, Mutex},
+    };
+
+    #[derive(Default)]
+    struct LoadyScript {
+        reads: VecDeque<u8>,
+        writes: Vec<u8>,
+        command: Vec<u8>,
+        loady_count: usize,
+        interrupted: bool,
+        accepting_commands: bool,
+    }
+
+    impl LoadyScript {
+        fn queue_read(&mut self, bytes: impl AsRef<[u8]>) {
+            self.reads.extend(bytes.as_ref());
+        }
+
+        fn handle_write(&mut self, bytes: &[u8]) {
+            self.writes.extend_from_slice(bytes);
+
+            if bytes == [CTRL_C] {
+                self.command.clear();
+                self.accepting_commands = true;
+                if !self.interrupted {
+                    self.interrupted = true;
+                    self.queue_read(b"=> <INTERRUPT>\n");
+                }
+                return;
+            }
+
+            if !self.accepting_commands {
+                return;
+            }
+
+            for &byte in bytes {
+                self.command.push(byte);
+                if byte == b'\n' {
+                    let command = std::mem::take(&mut self.command);
+                    if command.starts_with(b"loady ") {
+                        self.loady_count += 1;
+                        self.accepting_commands = false;
+                        self.queue_loady_response();
+                    }
+                } else if self.command.len() > 256 {
+                    self.command.clear();
+                }
+            }
+        }
+
+        fn queue_loady_response(&mut self) {
+            match self.loady_count {
+                1 => {
+                    self.queue_read([b'C']);
+                    self.queue_read([ymodem::CRC; ymodem::DEFAULT_BLOCK_RETRIES]);
+                }
+                2 => {
+                    self.queue_read([b'C']);
+                    self.queue_read([ymodem::ACK, ymodem::ACK, ymodem::ACK, ymodem::ACK, b'C']);
+                    self.queue_read(b"done\n=> ");
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct ScriptedTx {
+        script: Arc<Mutex<LoadyScript>>,
+    }
+
+    #[derive(Clone)]
+    struct ScriptedRx {
+        script: Arc<Mutex<LoadyScript>>,
+    }
+
+    impl AsyncWrite for ScriptedTx {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<Result<usize>> {
+            self.script.lock().unwrap().handle_write(buf);
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncRead for ScriptedRx {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut [u8],
+        ) -> Poll<Result<usize>> {
+            let mut script = self.script.lock().unwrap();
+            if script.reads.is_empty() {
+                return Poll::Pending;
+            }
+
+            let n = buf.len().min(script.reads.len());
+            for slot in &mut buf[..n] {
+                *slot = script.reads.pop_front().unwrap();
+            }
+            Poll::Ready(Ok(n))
+        }
+    }
+
+    #[tokio::test]
+    async fn loady_restarts_transfer_after_receiver_rejects_first_attempt() -> Result<()> {
+        let script = Arc::new(Mutex::new(LoadyScript::default()));
+        script.lock().unwrap().accepting_commands = true;
+        let mut shell = UbootShell {
+            tx: Some(Box::new(ScriptedTx {
+                script: script.clone(),
+            })),
+            rx: Some(Box::new(ScriptedRx {
+                script: script.clone(),
+            })),
+            perfix: "=> ".to_string(),
+        };
+
+        let file =
+            std::env::temp_dir().join(format!("uboot-shell-loady-retry-{}", std::process::id()));
+        fs::write(&file, b"payload")?;
+
+        let progress = Arc::new(Mutex::new(Vec::new()));
+        let reply = shell
+            .loady(0x80200000, file.clone(), {
+                let progress = progress.clone();
+                move |sent, size| progress.lock().unwrap().push((sent, size))
+            })
+            .await;
+        let _ = fs::remove_file(&file);
+
+        assert!(reply?.contains("done"));
+        let script = script.lock().unwrap();
+        let writes = String::from_utf8_lossy(&script.writes);
+        assert_eq!(writes.matches("loady 0x80200000").count(), 2);
+        assert!(script.writes.contains(&CTRL_C));
+        assert_eq!(*progress.lock().unwrap(), vec![(0, 7), (0, 7), (7, 7)]);
+        Ok(())
     }
 }

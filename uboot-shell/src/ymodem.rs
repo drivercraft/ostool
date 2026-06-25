@@ -12,15 +12,16 @@ use crate::crc::crc16_ccitt;
 const SOH: u8 = 0x01;
 const STX: u8 = 0x02;
 const EOT: u8 = 0x04;
-const ACK: u8 = 0x06;
-const NAK: u8 = 0x15;
+pub(crate) const ACK: u8 = 0x06;
+pub(crate) const NAK: u8 = 0x15;
 const EOF: u8 = 0x1A;
-const CRC: u8 = 0x43;
+pub(crate) const CRC: u8 = 0x43;
+pub(crate) const DEFAULT_BLOCK_RETRIES: usize = 10;
 
 pub struct Ymodem {
     crc_mode: bool,
     blk: u8,
-    retries: usize,
+    max_block_retries: usize,
 }
 
 impl Ymodem {
@@ -28,7 +29,7 @@ impl Ymodem {
         Self {
             crc_mode,
             blk: 0,
-            retries: 10,
+            max_block_retries: DEFAULT_BLOCK_RETRIES,
         }
     }
 
@@ -141,9 +142,10 @@ impl Ymodem {
         };
         let blk = if last { 0 } else { self.blk };
         let mut err = None;
+        let mut retries = self.max_block_retries;
 
         loop {
-            if self.retries == 0 {
+            if retries == 0 {
                 return Err(err.unwrap_or(Error::new(ErrorKind::BrokenPipe, "retry too much")));
             }
 
@@ -165,7 +167,7 @@ impl Ymodem {
                 Ok(_) => break,
                 Err(e) => {
                     err = Some(e);
-                    self.retries -= 1;
+                    retries -= 1;
                 }
             }
         }
@@ -176,6 +178,85 @@ impl Ymodem {
             self.blk += 1;
         }
 
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        collections::VecDeque,
+        pin::Pin,
+        sync::Mutex,
+        task::{Context, Poll},
+    };
+
+    use futures::io::Cursor;
+
+    struct ScriptedDevice {
+        reads: VecDeque<u8>,
+        writes: Vec<u8>,
+    }
+
+    impl AsyncRead for ScriptedDevice {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut [u8],
+        ) -> Poll<Result<usize>> {
+            if self.reads.is_empty() {
+                return Poll::Ready(Ok(0));
+            }
+
+            let n = buf.len().min(self.reads.len());
+            for slot in &mut buf[..n] {
+                *slot = self.reads.pop_front().unwrap();
+            }
+            Poll::Ready(Ok(n))
+        }
+    }
+
+    impl AsyncWrite for ScriptedDevice {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<Result<usize>> {
+            self.writes.extend_from_slice(buf);
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn acked_block_resets_retry_budget() -> Result<()> {
+        let mut reads = VecDeque::from([CRC, ACK]);
+        reads.extend(std::iter::repeat_n(CRC, DEFAULT_BLOCK_RETRIES - 1));
+        reads.extend([ACK, ACK, ACK, CRC]);
+
+        let mut dev = ScriptedDevice {
+            reads,
+            writes: Vec::new(),
+        };
+        let mut file = Cursor::new(b"payload".to_vec());
+        let progress = Mutex::new(Vec::new());
+
+        Ymodem::new(true)
+            .send(&mut dev, &mut file, "kernel", 7, |sent| {
+                progress.lock().unwrap().push(sent);
+            })
+            .await?;
+
+        assert_eq!(*progress.lock().unwrap(), vec![7]);
+        assert!(dev.writes.contains(&EOT));
         Ok(())
     }
 }

@@ -2,7 +2,7 @@
 #![cfg(unix)]
 
 use std::{
-    io::Write,
+    io::{Read, Write},
     net::SocketAddr,
     path::Path,
     sync::{Arc, mpsc},
@@ -60,7 +60,7 @@ struct SessionCreatedResponse {
     ws_url: Option<String>,
 }
 
-fn sample_board(serial_port: String) -> BoardConfig {
+fn sample_board_with_power_on(serial_port: String, power_on_cmd: String) -> BoardConfig {
     BoardConfig {
         id: TEST_BOARD_ID.into(),
         board_type: TEST_BOARD_TYPE.into(),
@@ -75,7 +75,7 @@ fn sample_board(serial_port: String) -> BoardConfig {
             resolved_usb_path: None,
         }),
         power_management: PowerManagementConfig::Custom(CustomPowerManagement {
-            power_on_cmd: "true".into(),
+            power_on_cmd,
             power_off_cmd: "true".into(),
         }),
         boot: BootConfig::Uboot(UbootProfile {
@@ -90,6 +90,14 @@ fn sample_board(serial_port: String) -> BoardConfig {
 
 /// Starts an in-process ostool-server with one board and PTY serial port.
 fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandle> {
+    spawn_test_server_with_power_on(root, serial_port, "true".into())
+}
+
+fn spawn_test_server_with_power_on(
+    root: &Path,
+    serial_port: String,
+    power_on_cmd: String,
+) -> Result<TestServerHandle> {
     let config_path = root.join("config.toml");
     let data_dir = root.join("data");
     let board_dir = root.join("boards");
@@ -117,7 +125,7 @@ fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandl
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)
         .with_context(|| format!("failed to write {}", config_path.display()))?;
 
-    let board = sample_board(serial_port);
+    let board = sample_board_with_power_on(serial_port, power_on_cmd);
     let board_path = board_dir.join(format!("{}.toml", board.id));
     std::fs::write(&board_path, toml::to_string_pretty(&board)?)
         .with_context(|| format!("failed to write {}", board_path.display()))?;
@@ -191,6 +199,109 @@ fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandl
         shutdown_tx: Some(shutdown_tx),
         join,
     })
+}
+
+fn run_delayed_client_write_case() -> Result<()> {
+    let temp = tempfile::tempdir().context("failed to create tempdir")?;
+    let gate_path = temp.path().join("power-on-ready");
+    let power_on_cmd = format!(
+        "while [ ! -f '{}' ]; do sleep 0.05; done",
+        gate_path.display()
+    );
+    let (mut serial_master, mut serial_handle) =
+        TTYPort::pair().context("failed to create PTY pair")?;
+    serial_handle
+        .set_exclusive(false)
+        .context("failed to disable PTY exclusivity")?;
+    serial_master
+        .set_timeout(POLL_INTERVAL)
+        .context("failed to configure PTY timeout")?;
+    let serial_port = serial_handle.name().context("failed to get PTY path")?;
+    drop(serial_handle);
+
+    let server = spawn_test_server_with_power_on(temp.path(), serial_port, power_on_cmd)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to build client runtime")?;
+
+    let client = reqwest::Client::new();
+    let (created, mut websocket) = runtime.block_on(async {
+        wait_for_server_ready(&client, &server.base_url).await?;
+        let created = create_session(&client, &server.base_url).await?;
+        let ws_url = resolve_ws_url(
+            &server.base_url,
+            created.ws_url.as_deref().context("missing websocket URL")?,
+        )?;
+        let (mut websocket, _) = tokio_tungstenite::connect_async(ws_url.as_str())
+            .await
+            .with_context(|| format!("failed to connect websocket {ws_url}"))?;
+        wait_for_opened(&mut websocket).await?;
+        websocket
+            .send(Message::Binary(b"early-input".to_vec().into()))
+            .await
+            .context("failed to send early websocket input")?;
+        Ok::<_, anyhow::Error>((created, websocket))
+    })?;
+
+    assert_no_serial_payload(&mut serial_master, Duration::from_millis(300))?;
+
+    std::fs::write(&gate_path, b"ready").context("failed to release power-on gate")?;
+    let payload = read_serial_master_payload(&mut serial_master, b"early-input")?;
+    assert_eq!(payload, b"early-input");
+
+    runtime.block_on(async {
+        websocket
+            .send(Message::Text(r#"{"type":"close"}"#.to_string().into()))
+            .await
+            .context("failed to send websocket close control message")?;
+        wait_for_closed(&mut websocket).await?;
+        wait_for_session_release(&client, &server.base_url, &created.session_id).await
+    })?;
+    server.shutdown()
+}
+
+fn assert_no_serial_payload(port: &mut TTYPort, duration: Duration) -> Result<()> {
+    let deadline = Instant::now() + duration;
+    let mut buffer = [0u8; 64];
+    loop {
+        match port.read(&mut buffer) {
+            Ok(read) if read > 0 => bail!(
+                "serial received payload before power-on completed: {:?}",
+                &buffer[..read]
+            ),
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(err) => return Err(err).context("failed to read PTY while checking early input"),
+        }
+        if Instant::now() >= deadline {
+            return Ok(());
+        }
+    }
+}
+
+fn read_serial_master_payload(port: &mut TTYPort, expected: &[u8]) -> Result<Vec<u8>> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut payload = Vec::new();
+    let mut buffer = [0u8; 64];
+    while Instant::now() < deadline {
+        match port.read(&mut buffer) {
+            Ok(read) if read > 0 => {
+                payload.extend_from_slice(&buffer[..read]);
+                if payload.len() >= expected.len() {
+                    return Ok(payload);
+                }
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(err) => return Err(err).context("failed to read PTY serial payload"),
+        }
+    }
+    bail!(
+        "timed out waiting for PTY serial payload `{}`; got `{}`",
+        String::from_utf8_lossy(expected),
+        String::from_utf8_lossy(&payload)
+    )
 }
 
 fn run_ws_lifecycle_case(mode: ClientShutdownMode) -> Result<()> {
@@ -462,4 +573,9 @@ fn graceful_ws_close_powers_off_and_releases_session() -> Result<()> {
 #[test]
 fn abrupt_ws_drop_powers_off_and_releases_session() -> Result<()> {
     run_ws_lifecycle_case(ClientShutdownMode::AbruptDrop)
+}
+
+#[test]
+fn websocket_buffers_client_serial_input_until_power_on_finishes() -> Result<()> {
+    run_delayed_client_write_case()
 }
