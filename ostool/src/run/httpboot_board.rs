@@ -31,7 +31,9 @@ use crate::{
         output_matcher::{
             ByteStreamMatcher, MATCH_DRAIN_DURATION, compile_regexes, print_match_event,
         },
-        shell_init::{SHELL_INIT_DELAY, ShellAutoInitMatcher},
+        shell_init::{
+            SHELL_INIT_CHUNK_DELAY, SHELL_INIT_CHUNK_SIZE, SHELL_INIT_DELAY, ShellAutoInitMatcher,
+        },
         uboot::UbootRunInput,
     },
     sterm::{AsyncTerminal, TerminalConfig},
@@ -385,7 +387,12 @@ where
             if let Some(shell_init) = shell_init.as_mut()
                 && let Some(command) = shell_init.observe_byte(byte)
             {
-                handle.send_after(SHELL_INIT_DELAY, command);
+                handle.send_after_chunks(
+                    SHELL_INIT_DELAY,
+                    command,
+                    SHELL_INIT_CHUNK_SIZE,
+                    SHELL_INIT_CHUNK_DELAY,
+                );
             }
 
             if matcher.should_stop() {

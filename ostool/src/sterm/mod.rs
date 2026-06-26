@@ -321,6 +321,29 @@ impl TerminalHandle {
         });
     }
 
+    pub fn send_after_chunks(
+        &self,
+        duration: Duration,
+        bytes: Vec<u8>,
+        chunk_size: usize,
+        chunk_delay: Duration,
+    ) {
+        let handle = self.clone();
+        let chunk_size = chunk_size.max(1);
+        tokio::spawn(async move {
+            tokio::time::sleep(duration).await;
+            for chunk in bytes.chunks(chunk_size) {
+                if !handle.is_running() {
+                    break;
+                }
+                if handle.send(chunk.to_vec()).is_err() {
+                    break;
+                }
+                tokio::time::sleep(chunk_delay).await;
+            }
+        });
+    }
+
     pub fn is_running(&self) -> bool {
         self.inner.running.load(Ordering::Acquire)
     }
@@ -840,6 +863,23 @@ mod tests {
         assert!(!handle.timed_out());
         assert!(handle.stop_deadline().is_none());
         assert!(handle.timeout_deadline().is_some());
+    }
+
+    #[tokio::test]
+    async fn send_after_chunks_splits_long_terminal_input() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let handle = TerminalHandle::new(tx);
+
+        handle.send_after_chunks(
+            Duration::ZERO,
+            b"abcdef".to_vec(),
+            2,
+            Duration::from_millis(1),
+        );
+
+        assert_eq!(rx.recv().await.unwrap(), b"ab");
+        assert_eq!(rx.recv().await.unwrap(), b"cd");
+        assert_eq!(rx.recv().await.unwrap(), b"ef");
     }
 
     #[tokio::test]
