@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.5](https://github.com/drivercraft/ostool/compare/ostool-v0.23.4...ostool-v0.23.5) - 2026-06-26
+
+### Fixed
+
+- *(ostool)* throttle shell init input ([#148](https://github.com/drivercraft/ostool/pull/148))
+
 ## [0.23.4](https://github.com/drivercraft/ostool/compare/ostool-v0.23.3...ostool-v0.23.4) - 2026-06-18
 
 ### Added
