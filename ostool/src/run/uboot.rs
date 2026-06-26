@@ -50,7 +50,10 @@ use crate::{
         output_matcher::{
             ByteStreamMatcher, MATCH_DRAIN_DURATION, compile_regexes, print_match_event,
         },
-        shell_init::{SHELL_INIT_DELAY, ShellAutoInitMatcher, normalize_shell_init_config},
+        shell_init::{
+            SHELL_INIT_CHUNK_DELAY, SHELL_INIT_CHUNK_SIZE, SHELL_INIT_DELAY, ShellAutoInitMatcher,
+            normalize_shell_init_config,
+        },
         tftp,
     },
     sterm::{AsyncTerminal, TerminalConfig},
@@ -1270,7 +1273,12 @@ where
                 if let Some(shell_init) = shell_init.as_mut()
                     && let Some(command) = shell_init.observe_byte(byte)
                 {
-                    h.send_after(SHELL_INIT_DELAY, command);
+                    h.send_after_chunks(
+                        SHELL_INIT_DELAY,
+                        command,
+                        SHELL_INIT_CHUNK_SIZE,
+                        SHELL_INIT_CHUNK_DELAY,
+                    );
                 }
 
                 if matcher.should_stop() {

@@ -3,6 +3,8 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 
 pub(crate) const SHELL_INIT_DELAY: Duration = Duration::from_millis(100);
+pub(crate) const SHELL_INIT_CHUNK_SIZE: usize = 64;
+pub(crate) const SHELL_INIT_CHUNK_DELAY: Duration = Duration::from_millis(2);
 
 pub(crate) fn normalize_shell_init_config(
     shell_prefix: &mut Option<String>,

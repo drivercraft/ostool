@@ -58,7 +58,10 @@ use crate::{
         output_matcher::{ByteStreamMatcher, compile_regexes, print_match_event},
         ovmf_prebuilt::{Arch, FileType, Prebuilt, Source},
         qemu_plan::{QemuBootSource, QemuCommandPlanInput, build_qemu_command_plan},
-        shell_init::{SHELL_INIT_DELAY, ShellAutoInitMatcher, normalize_shell_init_config},
+        shell_init::{
+            SHELL_INIT_CHUNK_DELAY, SHELL_INIT_CHUNK_SIZE, SHELL_INIT_DELAY, ShellAutoInitMatcher,
+            normalize_shell_init_config,
+        },
     },
     sterm::{AsyncTerminal, TerminalConfig},
     utils::PathResultExt,
@@ -555,7 +558,12 @@ impl QemuRunner {
                     if let Some(shell_auto_init) = shell_auto_init.as_mut()
                         && let Some(command) = shell_auto_init.observe_byte(byte)
                     {
-                        handle.send_after(SHELL_INIT_DELAY, command);
+                        handle.send_after_chunks(
+                            SHELL_INIT_DELAY,
+                            command,
+                            SHELL_INIT_CHUNK_SIZE,
+                            SHELL_INIT_CHUNK_DELAY,
+                        );
                     }
 
                     if matcher.should_stop() {
