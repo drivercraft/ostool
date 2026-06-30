@@ -11,19 +11,12 @@ use crate::storage::{
     AuditLog, AuditLogRepository, AuthSession, AuthSessionRepository, BUILTIN_PERMISSIONS,
     BoardConfigRepository, DtbMetadata, DtbMetadataRepository, Lease, LeaseRepository, LeaseState,
     NewAuditLog, NewLease, NewRole, NewSessionRecord, NewUser, Permission, RbacRepository, Role,
-    SessionRecord, SessionRecordRepository, SiteSettingValue, SiteSettings, SiteSettingsRepository,
-    UpsertDtbMetadata, User, UserProfile, UserRepository, UserStatus, default_site_setting_rows,
-    default_user_permission, parse_time, site_settings_from_values, site_settings_to_values,
+    RuntimeSettings, RuntimeSettingsRepository, SessionRecord, SessionRecordRepository,
+    SiteSettingValue, SiteSettings, SiteSettingsRepository, UpsertDtbMetadata, User, UserProfile,
+    UserRepository, UserStatus, default_site_setting_rows, default_user_permission, parse_time,
+    runtime_settings_from_values, runtime_settings_to_values, site_settings_from_values,
+    site_settings_to_values,
 };
-
-const MIGRATION_RBAC_PLATFORM: &str = "0001_rbac_platform";
-const MIGRATION_BOARD_CONFIGS: &str = "0002_board_configs";
-const MIGRATION_DTB_AUDIT: &str = "0003_dtb_audit";
-const MIGRATION_STANDARD_FIELDS: &str = "0004_standard_profile_fields";
-const MIGRATION_SITE_SETTINGS: &str = "0005_site_settings";
-const MIGRATION_PERFORMANCE_INDEXES: &str = "0006_performance_indexes";
-const MIGRATION_ROLE_DISABLED: &str = "0007_role_disabled";
-const MIGRATION_USER_STATUS: &str = "0008_user_status";
 
 #[derive(Clone)]
 pub struct SqliteStorage {
@@ -41,80 +34,11 @@ impl SqliteStorage {
             .await
             .with_context(|| format!("failed to connect SQLite database `{url}`"))?;
         let storage = Self { pool };
-        storage.migrate().await?;
+        storage.init_schema().await?;
         Ok(storage)
     }
 
-    async fn migrate(&self) -> anyhow::Result<()> {
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                version TEXT PRIMARY KEY NOT NULL,
-                applied_at TEXT NOT NULL
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        if !self.is_migration_applied(MIGRATION_RBAC_PLATFORM).await? {
-            self.migrate_schema().await?;
-            self.mark_migration_applied(MIGRATION_RBAC_PLATFORM).await?;
-        }
-        if !self.is_migration_applied(MIGRATION_BOARD_CONFIGS).await? {
-            self.migrate_board_config_tables().await?;
-            self.mark_migration_applied(MIGRATION_BOARD_CONFIGS).await?;
-        }
-        if !self.is_migration_applied(MIGRATION_DTB_AUDIT).await? {
-            self.migrate_dtb_audit_tables().await?;
-            self.mark_migration_applied(MIGRATION_DTB_AUDIT).await?;
-        }
-        if !self.is_migration_applied(MIGRATION_STANDARD_FIELDS).await? {
-            self.migrate_standard_fields().await?;
-            self.mark_migration_applied(MIGRATION_STANDARD_FIELDS)
-                .await?;
-        }
-        if !self.is_migration_applied(MIGRATION_SITE_SETTINGS).await? {
-            self.migrate_site_settings().await?;
-            self.mark_migration_applied(MIGRATION_SITE_SETTINGS).await?;
-        }
-        if !self
-            .is_migration_applied(MIGRATION_PERFORMANCE_INDEXES)
-            .await?
-        {
-            self.migrate_performance_indexes().await?;
-            self.mark_migration_applied(MIGRATION_PERFORMANCE_INDEXES)
-                .await?;
-        }
-        if !self.is_migration_applied(MIGRATION_ROLE_DISABLED).await? {
-            self.migrate_role_disabled().await?;
-            self.mark_migration_applied(MIGRATION_ROLE_DISABLED).await?;
-        }
-        if !self.is_migration_applied(MIGRATION_USER_STATUS).await? {
-            self.migrate_user_status().await?;
-            self.mark_migration_applied(MIGRATION_USER_STATUS).await?;
-        }
-        Ok(())
-    }
-
-    async fn is_migration_applied(&self, version: &str) -> anyhow::Result<bool> {
-        let applied = sqlx::query("SELECT version FROM schema_migrations WHERE version = ?")
-            .bind(version)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(applied.is_some())
-    }
-
-    async fn mark_migration_applied(&self, version: &str) -> anyhow::Result<()> {
-        sqlx::query("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)")
-            .bind(version)
-            .bind(Utc::now().to_rfc3339())
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    async fn migrate_schema(&self) -> anyhow::Result<()> {
+    async fn init_schema(&self) -> anyhow::Result<()> {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS users (
@@ -122,8 +46,15 @@ impl SqliteStorage {
                 username TEXT NOT NULL UNIQUE CHECK(length(username) BETWEEN 3 AND 64),
                 display_name TEXT NOT NULL CHECK(length(display_name) BETWEEN 1 AND 64),
                 email TEXT NOT NULL CHECK(length(email) BETWEEN 5 AND 254),
+                nickname TEXT CHECK(nickname IS NULL OR length(nickname) <= 64),
+                avatar_url TEXT CHECK(avatar_url IS NULL OR length(avatar_url) <= 512),
+                phone TEXT CHECK(phone IS NULL OR length(phone) <= 32),
+                department TEXT CHECK(department IS NULL OR length(department) <= 64),
+                title TEXT CHECK(title IS NULL OR length(title) <= 64),
                 password_hash TEXT NOT NULL CHECK(length(password_hash) BETWEEN 1 AND 255),
                 disabled INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','pending','rejected')),
+                last_login_at TEXT CHECK(last_login_at IS NULL OR length(last_login_at) BETWEEN 1 AND 64),
                 created_at TEXT NOT NULL CHECK(length(created_at) BETWEEN 1 AND 64),
                 updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64)
             )
@@ -132,17 +63,23 @@ impl SqliteStorage {
         .execute(&self.pool)
         .await?;
 
-        self.migrate_rbac_tables().await?;
-        self.migrate_board_config_tables().await?;
-        self.migrate_dtb_audit_tables().await?;
-        self.migrate_site_settings().await?;
+        self.create_rbac_tables().await?;
+        self.create_board_config_tables().await?;
+        self.create_dtb_audit_tables().await?;
+        self.create_site_settings_table().await?;
+        self.seed_builtin_rbac().await?;
+        self.seed_site_settings().await?;
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS auth_sessions (
                 id TEXT PRIMARY KEY NOT NULL CHECK(length(id) BETWEEN 1 AND 64),
                 user_id TEXT NOT NULL CHECK(length(user_id) BETWEEN 1 AND 64),
                 token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash) BETWEEN 1 AND 255),
+                ip_address TEXT CHECK(ip_address IS NULL OR length(ip_address) <= 45),
+                user_agent TEXT CHECK(user_agent IS NULL OR length(user_agent) <= 512),
                 expires_at TEXT NOT NULL CHECK(length(expires_at) BETWEEN 1 AND 64),
+                last_seen_at TEXT CHECK(last_seen_at IS NULL OR length(last_seen_at) BETWEEN 1 AND 64),
+                revoked_at TEXT CHECK(revoked_at IS NULL OR length(revoked_at) BETWEEN 1 AND 64),
                 created_at TEXT NOT NULL CHECK(length(created_at) BETWEEN 1 AND 64),
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
@@ -162,6 +99,7 @@ impl SqliteStorage {
                 required_tags_json TEXT NOT NULL,
                 state TEXT NOT NULL CHECK(length(state) BETWEEN 1 AND 32),
                 created_at TEXT NOT NULL CHECK(length(created_at) BETWEEN 1 AND 64),
+                updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64),
                 starts_at TEXT NOT NULL CHECK(length(starts_at) BETWEEN 1 AND 64),
                 expires_at TEXT NOT NULL CHECK(length(expires_at) BETWEEN 1 AND 64),
                 released_at TEXT CHECK(released_at IS NULL OR length(released_at) BETWEEN 1 AND 64),
@@ -205,6 +143,17 @@ impl SqliteStorage {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_leases_user_id ON leases(user_id)")
             .execute(&self.pool)
             .await?;
+        for statement in [
+            "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions(expires_at)",
+            "CREATE INDEX IF NOT EXISTS idx_auth_sessions_revoked_at ON auth_sessions(revoked_at)",
+            "CREATE INDEX IF NOT EXISTS idx_leases_state ON leases(state)",
+            "CREATE INDEX IF NOT EXISTS idx_leases_expires_at ON leases(expires_at)",
+            "CREATE INDEX IF NOT EXISTS idx_leases_board_id ON leases(board_id)",
+            "CREATE INDEX IF NOT EXISTS idx_leases_user_state ON leases(user_id, state)",
+        ] {
+            sqlx::query(statement).execute(&self.pool).await?;
+        }
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_auth_sessions_token ON auth_sessions(token_hash)",
         )
@@ -213,7 +162,7 @@ impl SqliteStorage {
         Ok(())
     }
 
-    async fn migrate_board_config_tables(&self) -> anyhow::Result<()> {
+    async fn create_board_config_tables(&self) -> anyhow::Result<()> {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS board_configs (
@@ -235,7 +184,7 @@ impl SqliteStorage {
         Ok(())
     }
 
-    async fn migrate_rbac_tables(&self) -> anyhow::Result<()> {
+    async fn create_rbac_tables(&self) -> anyhow::Result<()> {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS permissions (
@@ -267,6 +216,9 @@ impl SqliteStorage {
         )
         .execute(&self.pool)
         .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_roles_system_name ON roles(`system`, name)")
+            .execute(&self.pool)
+            .await?;
 
         sqlx::query(
             r#"
@@ -278,6 +230,11 @@ impl SqliteStorage {
                 FOREIGN KEY(permission_id) REFERENCES permissions(id) ON DELETE CASCADE
             )
             "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_role_permissions_permission_id ON role_permissions(permission_id)",
         )
         .execute(&self.pool)
         .await?;
@@ -295,62 +252,14 @@ impl SqliteStorage {
         )
         .execute(&self.pool)
         .await?;
-
-        self.seed_builtin_rbac().await?;
-        Ok(())
-    }
-
-    async fn migrate_role_disabled(&self) -> anyhow::Result<()> {
-        let columns = sqlx::query("PRAGMA table_info(roles)")
-            .fetch_all(&self.pool)
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_user_roles_role_id ON user_roles(role_id)")
+            .execute(&self.pool)
             .await?;
-        let has_disabled = columns.iter().any(|row| {
-            row.try_get::<String, _>("name")
-                .map(|name| name == "disabled")
-                .unwrap_or(false)
-        });
-        if !has_disabled {
-            sqlx::query("ALTER TABLE roles ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0")
-                .execute(&self.pool)
-                .await?;
-        }
+
         Ok(())
     }
 
-    async fn migrate_user_status(&self) -> anyhow::Result<()> {
-        self.add_column_if_missing(
-            "users",
-            "status",
-            "TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','pending','rejected','disabled'))",
-        )
-        .await?;
-        let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            r#"
-            INSERT OR IGNORE INTO site_settings
-                (key, value_json, value_type, group_name, name, description, readonly, sensitive, created_at, updated_at)
-            VALUES (
-                'registration.mode',
-                '"closed"',
-                'string',
-                'registration',
-                '注册策略',
-                '自助注册策略：closed（关闭）/ auto（自动生效）/ approval（管理员审核）',
-                0,
-                0,
-                ?,
-                ?
-            )
-            "#,
-        )
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn migrate_dtb_audit_tables(&self) -> anyhow::Result<()> {
+    async fn create_dtb_audit_tables(&self) -> anyhow::Result<()> {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS dtb_files (
@@ -402,83 +311,21 @@ impl SqliteStorage {
         )
         .execute(&self.pool)
         .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_user_id ON audit_logs(actor_user_id)",
+        )
+        .execute(&self.pool)
+        .await?;
+        for statement in [
+            "CREATE INDEX IF NOT EXISTS idx_dtb_files_uploaded_by ON dtb_files(uploaded_by)",
+            "CREATE INDEX IF NOT EXISTS idx_dtb_files_sha256 ON dtb_files(sha256)",
+        ] {
+            sqlx::query(statement).execute(&self.pool).await?;
+        }
         Ok(())
     }
 
-    async fn migrate_standard_fields(&self) -> anyhow::Result<()> {
-        self.add_column_if_missing(
-            "users",
-            "nickname",
-            "TEXT CHECK(nickname IS NULL OR length(nickname) <= 64)",
-        )
-        .await?;
-        self.add_column_if_missing(
-            "users",
-            "avatar_url",
-            "TEXT CHECK(avatar_url IS NULL OR length(avatar_url) <= 512)",
-        )
-        .await?;
-        self.add_column_if_missing(
-            "users",
-            "phone",
-            "TEXT CHECK(phone IS NULL OR length(phone) <= 32)",
-        )
-        .await?;
-        self.add_column_if_missing(
-            "users",
-            "department",
-            "TEXT CHECK(department IS NULL OR length(department) <= 64)",
-        )
-        .await?;
-        self.add_column_if_missing(
-            "users",
-            "title",
-            "TEXT CHECK(title IS NULL OR length(title) <= 64)",
-        )
-        .await?;
-        self.add_column_if_missing(
-            "users",
-            "last_login_at",
-            "TEXT CHECK(last_login_at IS NULL OR length(last_login_at) BETWEEN 1 AND 64)",
-        )
-        .await?;
-        self.add_column_if_missing(
-            "auth_sessions",
-            "ip_address",
-            "TEXT CHECK(ip_address IS NULL OR length(ip_address) <= 45)",
-        )
-        .await?;
-        self.add_column_if_missing(
-            "auth_sessions",
-            "user_agent",
-            "TEXT CHECK(user_agent IS NULL OR length(user_agent) <= 512)",
-        )
-        .await?;
-        self.add_column_if_missing(
-            "auth_sessions",
-            "last_seen_at",
-            "TEXT CHECK(last_seen_at IS NULL OR length(last_seen_at) BETWEEN 1 AND 64)",
-        )
-        .await?;
-        self.add_column_if_missing(
-            "auth_sessions",
-            "revoked_at",
-            "TEXT CHECK(revoked_at IS NULL OR length(revoked_at) BETWEEN 1 AND 64)",
-        )
-        .await?;
-        self.add_column_if_missing(
-            "leases",
-            "updated_at",
-            "TEXT CHECK(updated_at IS NULL OR length(updated_at) BETWEEN 1 AND 64)",
-        )
-        .await?;
-        sqlx::query("UPDATE leases SET updated_at = created_at WHERE updated_at IS NULL")
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    async fn migrate_site_settings(&self) -> anyhow::Result<()> {
+    async fn create_site_settings_table(&self) -> anyhow::Result<()> {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS site_settings (
@@ -498,31 +345,11 @@ impl SqliteStorage {
         )
         .execute(&self.pool)
         .await?;
-        self.seed_site_settings().await?;
-        Ok(())
-    }
-
-    async fn migrate_performance_indexes(&self) -> anyhow::Result<()> {
-        for statement in [
-            "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)",
-            "CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions(expires_at)",
-            "CREATE INDEX IF NOT EXISTS idx_auth_sessions_revoked_at ON auth_sessions(revoked_at)",
-            "CREATE INDEX IF NOT EXISTS idx_leases_state ON leases(state)",
-            "CREATE INDEX IF NOT EXISTS idx_leases_expires_at ON leases(expires_at)",
-            "CREATE INDEX IF NOT EXISTS idx_leases_board_id ON leases(board_id)",
-            "CREATE INDEX IF NOT EXISTS idx_leases_user_state ON leases(user_id, state)",
-            "CREATE INDEX IF NOT EXISTS idx_user_roles_role_id ON user_roles(role_id)",
-            "CREATE INDEX IF NOT EXISTS idx_role_permissions_permission_id ON role_permissions(permission_id)",
-            "CREATE INDEX IF NOT EXISTS idx_roles_system_name ON roles(`system`, name)",
-            "CREATE INDEX IF NOT EXISTS idx_dtb_files_uploaded_by ON dtb_files(uploaded_by)",
-            "CREATE INDEX IF NOT EXISTS idx_dtb_files_sha256 ON dtb_files(sha256)",
-            "CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_user_id ON audit_logs(actor_user_id)",
-            "CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)",
-            "CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_type, target_id)",
+        sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_site_settings_group_name ON site_settings(group_name)",
-        ] {
-            sqlx::query(statement).execute(&self.pool).await?;
-        }
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -545,29 +372,6 @@ impl SqliteStorage {
             .bind(if setting.sensitive { 1 } else { 0 })
             .bind(setting.created_at)
             .bind(setting.updated_at)
-            .execute(&self.pool)
-            .await?;
-        }
-        Ok(())
-    }
-
-    async fn add_column_if_missing(
-        &self,
-        table: &str,
-        column: &str,
-        definition: &str,
-    ) -> anyhow::Result<()> {
-        let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
-            .fetch_all(&self.pool)
-            .await?;
-        let exists = rows.iter().any(|row| {
-            row.try_get::<String, _>("name")
-                .is_ok_and(|name| name == column)
-        });
-        if !exists {
-            sqlx::query(&format!(
-                "ALTER TABLE {table} ADD COLUMN {column} {definition}"
-            ))
             .execute(&self.pool)
             .await?;
         }
@@ -695,6 +499,54 @@ impl SiteSettingsRepository for SqliteStorage {
             .await?;
         }
         self.get_site_settings().await
+    }
+}
+
+#[async_trait]
+impl RuntimeSettingsRepository for SqliteStorage {
+    async fn get_runtime_settings(&self) -> anyhow::Result<RuntimeSettings> {
+        self.seed_site_settings().await?;
+        let rows = sqlx::query("SELECT key, value_json, updated_at FROM site_settings")
+            .fetch_all(&self.pool)
+            .await?;
+        let values = rows
+            .into_iter()
+            .map(|row| {
+                Ok(SiteSettingValue {
+                    key: row.try_get("key")?,
+                    value_json: row.try_get("value_json")?,
+                    updated_at: row.try_get("updated_at")?,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        runtime_settings_from_values(values)
+    }
+
+    async fn update_runtime_settings(
+        &self,
+        mut settings: RuntimeSettings,
+        updated_by: Option<String>,
+    ) -> anyhow::Result<RuntimeSettings> {
+        settings.validate()?;
+        settings.updated_at = Utc::now();
+        self.seed_site_settings().await?;
+        let updated_at = settings.updated_at.to_rfc3339();
+        for (key, value_json) in runtime_settings_to_values(&settings)? {
+            sqlx::query(
+                r#"
+                UPDATE site_settings
+                SET value_json = ?, updated_by = ?, updated_at = ?
+                WHERE key = ?
+                "#,
+            )
+            .bind(value_json)
+            .bind(&updated_by)
+            .bind(&updated_at)
+            .bind(key)
+            .execute(&self.pool)
+            .await?;
+        }
+        self.get_runtime_settings().await
     }
 }
 
@@ -873,12 +725,7 @@ fn user_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<User> {
         title: row.try_get("title")?,
         password_hash: row.try_get("password_hash")?,
         disabled: row.try_get::<i64, _>("disabled")? != 0,
-        status: row
-            .try_get::<Option<String>, _>("status")
-            .ok()
-            .flatten()
-            .map(|value| UserStatus::from_str(&value).unwrap_or(UserStatus::Active))
-            .unwrap_or(UserStatus::Active),
+        status: UserStatus::from_str(row.try_get::<String, _>("status")?.as_str())?,
         last_login_at: row
             .try_get::<Option<String>, _>("last_login_at")?
             .map(|value| parse_time(&value))

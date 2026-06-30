@@ -325,8 +325,7 @@ export interface AdminUserResponse {
   department: string | null;
   title: string | null;
   disabled: boolean;
-  /** `active` | `pending` | `rejected` | `disabled` */
-  status: string;
+  status: "active" | "pending" | "rejected";
   last_login_at: string | null;
   created_at: string;
   updated_at: string;
@@ -465,8 +464,7 @@ export interface AdminServerConfigResponse {
 }
 
 export interface UpdateServerConfigRequest {
-  network: TftpNetworkConfig;
-  upload_limits: UploadLimitsConfig;
+  editable: AdminServerConfigEditable;
   site: SiteSettingsUpdateRequest;
 }
 

@@ -9,22 +9,19 @@ use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::config::BoardConfig;
+use crate::config::{BoardConfig, TftpNetworkConfig, UploadLimitsConfig};
 
 /// Account lifecycle status. Drives the registration / approval workflow.
 ///
 /// - `Active`   — user can log in normally (admin-created or approved self-register)
 /// - `Pending`  — self-registered while `registration_mode = approval`, awaiting admin review
 /// - `Rejected` — admin rejected a pending registration; cannot log in
-/// - `Disabled` — kept for forward compatibility; the legacy `disabled` column is the
-///   authoritative source for now, this variant is reserved for future unification.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum UserStatus {
     Active,
     Pending,
     Rejected,
-    Disabled,
 }
 
 impl UserStatus {
@@ -33,7 +30,6 @@ impl UserStatus {
             Self::Active => "active",
             Self::Pending => "pending",
             Self::Rejected => "rejected",
-            Self::Disabled => "disabled",
         }
     }
 
@@ -42,7 +38,6 @@ impl UserStatus {
             "active" => Ok(Self::Active),
             "pending" => Ok(Self::Pending),
             "rejected" => Ok(Self::Rejected),
-            "disabled" => Ok(Self::Disabled),
             other => anyhow::bail!("unknown user status `{other}`"),
         }
     }
@@ -159,14 +154,13 @@ pub const BUILTIN_PERMISSIONS: &[(&str, &str, &str)] = &[
     ),
     ("sessions.delete", "删除会话租约", "删除会话租约记录"),
     ("tftp.read", "查看 TFTP 配置", "查看 TFTP 配置和运行状态"),
-    ("tftp.update", "编辑 TFTP 配置", "修改 TFTP 配置"),
     (
         "tftp.reconcile",
         "同步 TFTP 配置",
         "同步 TFTP provider 的运行配置",
     ),
-    ("server.read", "查看服务器配置", "查看服务器运行配置"),
-    ("server.update", "编辑服务器配置", "修改服务器运行配置"),
+    ("server.read", "查看服务器配置", "查看服务器运行期设置"),
+    ("server.update", "编辑服务器配置", "修改服务器运行期设置"),
     ("site.read", "查看站点设置", "查看站点展示和租赁策略设置"),
     ("site.update", "编辑站点设置", "修改站点展示和租赁策略设置"),
     ("serial_ports.read", "查看串口", "查看服务器可用串口"),
@@ -402,10 +396,6 @@ impl RegistrationMode {
             other => anyhow::bail!("unknown registration mode `{other}`"),
         }
     }
-
-    pub fn from_str(value: &str) -> Self {
-        Self::parse(value).unwrap_or(Self::Closed)
-    }
 }
 
 impl Default for RegistrationMode {
@@ -429,6 +419,33 @@ pub struct SiteSettings {
     pub support_email: Option<String>,
     pub support_url: Option<String>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeSettings {
+    pub network: TftpNetworkConfig,
+    pub upload_limits: UploadLimitsConfig,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl Default for RuntimeSettings {
+    fn default() -> Self {
+        Self {
+            network: TftpNetworkConfig::default(),
+            upload_limits: UploadLimitsConfig::default(),
+            updated_at: Utc::now(),
+        }
+    }
+}
+
+impl RuntimeSettings {
+    pub fn validate(&mut self) -> anyhow::Result<()> {
+        self.network.interface = self.network.interface.trim().to_string();
+        if self.upload_limits.session_file_max_mib == 0 {
+            anyhow::bail!("session file upload limit must be greater than 0");
+        }
+        Ok(())
+    }
 }
 
 impl Default for SiteSettings {
@@ -495,6 +512,7 @@ pub(crate) struct SiteSettingValue {
 
 pub(crate) fn default_site_setting_rows() -> Vec<SiteSettingDefinition> {
     let settings = SiteSettings::default();
+    let runtime = RuntimeSettings::default();
     let now = settings.updated_at.to_rfc3339();
     vec![
         site_setting_definition(
@@ -605,6 +623,24 @@ pub(crate) fn default_site_setting_rows() -> Vec<SiteSettingDefinition> {
             "平台支持或工单系统链接",
             &now,
         ),
+        site_setting_definition(
+            "runtime.network_interface",
+            &runtime.network.interface,
+            "string",
+            "runtime",
+            "网络接口",
+            "用于计算 TFTP/HTTP Boot server_ip 的网络接口，空值表示自动选择",
+            &now,
+        ),
+        site_setting_definition(
+            "runtime.session_file_max_mib",
+            &runtime.upload_limits.session_file_max_mib,
+            "integer",
+            "runtime",
+            "Session 文件上传上限",
+            "Session TFTP/HTTP 文件上传体积上限，单位 MiB",
+            &now,
+        ),
     ]
 }
 
@@ -642,6 +678,21 @@ pub(crate) fn site_settings_to_values(
     ])
 }
 
+pub(crate) fn runtime_settings_to_values(
+    settings: &RuntimeSettings,
+) -> anyhow::Result<Vec<(&'static str, String)>> {
+    Ok(vec![
+        (
+            "runtime.network_interface",
+            setting_json(&settings.network.interface)?,
+        ),
+        (
+            "runtime.session_file_max_mib",
+            setting_json(&settings.upload_limits.session_file_max_mib)?,
+        ),
+    ])
+}
+
 pub(crate) fn site_settings_from_values(
     values: Vec<SiteSettingValue>,
 ) -> anyhow::Result<SiteSettings> {
@@ -670,9 +721,11 @@ pub(crate) fn site_settings_from_values(
         settings.self_service_enabled,
     )?;
     settings.registration_mode = match map.get("registration.mode") {
-        Some(raw) => serde_json::from_str::<String>(raw)
-            .map(|v| RegistrationMode::from_str(&v))
-            .unwrap_or(settings.registration_mode),
+        Some(raw) => {
+            let value: String = serde_json::from_str(raw)
+                .context("failed to parse site setting `registration.mode`")?;
+            RegistrationMode::parse(&value)?
+        }
         None => settings.registration_mode,
     };
     settings.default_lease_minutes = setting_value(
@@ -684,6 +737,36 @@ pub(crate) fn site_settings_from_values(
         setting_value(&map, "rental.max_lease_minutes", settings.max_lease_minutes)?;
     settings.support_email = setting_value(&map, "support.email", settings.support_email)?;
     settings.support_url = setting_value(&map, "support.url", settings.support_url)?;
+    settings.updated_at = updated_at;
+    settings.validate()?;
+    Ok(settings)
+}
+
+pub(crate) fn runtime_settings_from_values(
+    values: Vec<SiteSettingValue>,
+) -> anyhow::Result<RuntimeSettings> {
+    let mut settings = RuntimeSettings::default();
+    let mut updated_at = settings.updated_at;
+    let mut map = std::collections::HashMap::new();
+    for value in values {
+        if let Ok(parsed) = parse_time(&value.updated_at)
+            && parsed > updated_at
+        {
+            updated_at = parsed;
+        }
+        map.insert(value.key, value.value_json);
+    }
+
+    settings.network.interface = setting_value(
+        &map,
+        "runtime.network_interface",
+        settings.network.interface,
+    )?;
+    settings.upload_limits.session_file_max_mib = setting_value(
+        &map,
+        "runtime.session_file_max_mib",
+        settings.upload_limits.session_file_max_mib,
+    )?;
     settings.updated_at = updated_at;
     settings.validate()?;
     Ok(settings)
@@ -914,6 +997,16 @@ pub trait SiteSettingsRepository: Send + Sync {
     ) -> anyhow::Result<SiteSettings>;
 }
 
+#[async_trait]
+pub trait RuntimeSettingsRepository: Send + Sync {
+    async fn get_runtime_settings(&self) -> anyhow::Result<RuntimeSettings>;
+    async fn update_runtime_settings(
+        &self,
+        settings: RuntimeSettings,
+        updated_by: Option<String>,
+    ) -> anyhow::Result<RuntimeSettings>;
+}
+
 pub trait Storage:
     UserRepository
     + AuthSessionRepository
@@ -924,6 +1017,7 @@ pub trait Storage:
     + DtbMetadataRepository
     + AuditLogRepository
     + SiteSettingsRepository
+    + RuntimeSettingsRepository
     + Send
     + Sync
     + 'static
@@ -940,6 +1034,7 @@ impl<T> Storage for T where
         + DtbMetadataRepository
         + AuditLogRepository
         + SiteSettingsRepository
+        + RuntimeSettingsRepository
         + Send
         + Sync
         + 'static

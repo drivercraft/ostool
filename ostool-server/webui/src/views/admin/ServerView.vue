@@ -63,11 +63,10 @@ async function saveConfig() {
     return;
   }
 
-  saving.value = true;
+    saving.value = true;
   try {
     config.value = await api.updateServerConfig({
-      network: config.value.editable.network,
-      upload_limits: config.value.editable.upload_limits,
+      editable: config.value.editable,
       site: config.value.site,
     });
     ui.setSuccess("已保存系统设置");

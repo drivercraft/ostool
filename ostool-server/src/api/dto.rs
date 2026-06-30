@@ -600,8 +600,7 @@ pub struct AdminServerConfigResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateServerConfigRequest {
-    pub network: TftpNetworkConfig,
-    pub upload_limits: UploadLimitsConfig,
+    pub editable: AdminServerConfigEditable,
     pub site: SiteSettingsUpdateRequest,
 }
 

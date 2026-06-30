@@ -31,7 +31,6 @@ import type {
   LeasesResponse,
   NetworkInterfaceSummary,
   SerialPortSummary,
-  TftpConfig,
   UpdateServerConfigRequest,
 } from "@/types/api";
 
@@ -141,12 +140,6 @@ export const adminApi = {
   },
   getTftpConfig() {
     return request<AdminTftpConfigResponse>("/api/v1/admin/tftp");
-  },
-  updateTftpConfig(tftp: TftpConfig) {
-    return request<AdminTftpConfigResponse>("/api/v1/admin/tftp", {
-      method: "PUT",
-      bodyJson: tftp,
-    });
   },
   getTftpStatus() {
     return request<AdminTftpStatusResponse>("/api/v1/admin/tftp/status");

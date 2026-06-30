@@ -26,9 +26,6 @@ pub struct ServerConfig {
     pub tftp: TftpConfig,
     #[serde(default)]
     pub http_boot: HttpBootConfig,
-    pub network: TftpNetworkConfig,
-    #[serde(default)]
-    pub upload_limits: UploadLimitsConfig,
 }
 
 impl Default for ServerConfig {
@@ -68,8 +65,6 @@ impl ServerConfig {
             sample_data: SampleDataConfig::default(),
             tftp,
             http_boot,
-            network: TftpNetworkConfig::default(),
-            upload_limits: UploadLimitsConfig::default(),
         }
     }
 
@@ -80,7 +75,6 @@ impl ServerConfig {
                     .with_context(|| format!("failed to parse {}", path.display()))?;
                 config.normalize_paths(path)?;
                 config.sync_system_tftpd_hpa_config()?;
-                config.sync_network_defaults();
                 config.validate()?;
                 Ok(config)
             }
@@ -88,7 +82,6 @@ impl ServerConfig {
                 let mut config = Self::default_for_path(path);
                 config.normalize_paths(path)?;
                 config.sync_system_tftpd_hpa_config()?;
-                config.sync_network_defaults();
                 config.validate()?;
                 config.write_to_path(path).await?;
                 Ok(config)
@@ -141,14 +134,6 @@ impl ServerConfig {
         Ok(())
     }
 
-    fn sync_network_defaults(&mut self) {
-        if self.network.interface.trim().is_empty()
-            && let Some(interface) = crate::serial::network::default_non_loopback_interface_name()
-        {
-            self.network.interface = interface;
-        }
-    }
-
     pub fn normalize_paths(&mut self, config_path: &Path) -> anyhow::Result<()> {
         let config_dir = config_path
             .parent()
@@ -176,14 +161,6 @@ impl ServerConfig {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.network.interface.trim().is_empty() {
-            bail!(
-                "network.interface must be configured or auto-detected from a non-loopback interface"
-            );
-        }
-        if self.upload_limits.session_file_max_mib == 0 {
-            bail!("upload_limits.session_file_max_mib must be greater than 0");
-        }
         Ok(())
     }
 }
@@ -356,7 +333,7 @@ impl Default for HttpBootConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct UploadLimitsConfig {
     pub session_file_max_mib: u32,
 }
@@ -399,7 +376,7 @@ impl TftpConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
 pub struct TftpNetworkConfig {
     pub interface: String,
 }
@@ -704,19 +681,19 @@ mod tests {
     };
 
     #[test]
-    fn server_config_round_trip_includes_network() {
+    fn server_config_round_trip_keeps_startup_settings_only() {
         let config = ServerConfig::default();
         let encoded = toml::to_string_pretty(&config).unwrap();
         let decoded: ServerConfig = toml::from_str(&encoded).unwrap();
         assert_eq!(decoded.listen_addr, SocketAddr::from(([0, 0, 0, 0], 2999)));
-        assert_eq!(decoded.network.interface, "");
-        assert_eq!(decoded.upload_limits.session_file_max_mib, 64);
+        assert!(!encoded.contains("[network]"));
+        assert!(!encoded.contains("[upload_limits]"));
         assert!(decoded.dtb_dir.ends_with("dtbs"));
         assert!(decoded.http_boot.root_dir.ends_with("http-boot"));
     }
 
     #[test]
-    fn server_config_defaults_upload_limits_when_missing() {
+    fn server_config_ignores_legacy_runtime_settings() {
         let decoded: ServerConfig = toml::from_str(
             r#"
 listen_addr = "0.0.0.0:2999"
@@ -736,7 +713,7 @@ interface = "eth0"
         )
         .unwrap();
 
-        assert_eq!(decoded.upload_limits.session_file_max_mib, 64);
+        assert_eq!(decoded.listen_addr, SocketAddr::from(([0, 0, 0, 0], 2999)));
     }
 
     #[test]
@@ -791,15 +768,14 @@ interface = "eth0"
     async fn write_to_path_persists_default_port_2999() {
         let temp = tempdir().unwrap();
         let path = temp.path().join("config.toml");
-        let mut config =
-            ServerConfig::default_for_path(Path::new("/etc/ostool-server/config.toml"));
-        config.network.interface = "eth0".into();
+        let config = ServerConfig::default_for_path(Path::new("/etc/ostool-server/config.toml"));
 
         config.write_to_path(&path).await.unwrap();
 
         let content = std::fs::read_to_string(path).unwrap();
         assert!(content.contains("listen_addr = \"0.0.0.0:2999\""));
-        assert!(content.contains("session_file_max_mib = 64"));
+        assert!(!content.contains("session_file_max_mib"));
+        assert!(!content.contains("[network]"));
         assert!(content.contains("[http_boot]"));
     }
 

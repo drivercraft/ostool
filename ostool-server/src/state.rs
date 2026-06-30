@@ -18,7 +18,9 @@ use crate::{
     power::{PowerAction, PowerActionError, execute_power_action_for_board},
     seed::{seed_database, seed_sample_runtime_leases},
     session::{Session, SessionState, SessionStopReason},
-    storage::{DynStorage, NewSessionRecord, mysql::MysqlStorage, sqlite::SqliteStorage},
+    storage::{
+        DynStorage, NewSessionRecord, RuntimeSettings, mysql::MysqlStorage, sqlite::SqliteStorage,
+    },
     tftp::service::TftpManager,
 };
 
@@ -103,6 +105,7 @@ fn release_settle_delay(board: &BoardConfig) -> Option<Duration> {
 pub struct AppState {
     pub config_path: Arc<PathBuf>,
     pub config: Arc<RwLock<ServerConfig>>,
+    pub runtime_settings: Arc<RwLock<RuntimeSettings>>,
     pub boards: Arc<RwLock<BTreeMap<String, BoardConfig>>>,
     pub board_runtimes: Arc<RwLock<BTreeMap<String, BoardRuntimeState>>>,
     pub sessions: Arc<RwLock<BTreeMap<String, Arc<SessionState>>>>,
@@ -133,6 +136,7 @@ pub async fn build_app_state(
         }
     };
     seed_database(&storage, &dtb_store, &config.sample_data).await?;
+    let runtime_settings = storage.get_runtime_settings().await?;
     let boards = storage
         .list_board_configs()
         .await?
@@ -146,6 +150,7 @@ pub async fn build_app_state(
     let state = AppState {
         config_path: Arc::new(config_path),
         config: Arc::new(RwLock::new(config)),
+        runtime_settings: Arc::new(RwLock::new(runtime_settings)),
         boards: Arc::new(RwLock::new(boards)),
         board_runtimes: Arc::new(RwLock::new(board_runtimes)),
         sessions: Arc::new(RwLock::new(BTreeMap::new())),
@@ -462,12 +467,6 @@ impl AppState {
         }
 
         failures
-    }
-
-    pub async fn save_config(&self) -> anyhow::Result<()> {
-        let config = self.config.read().await.clone();
-        tokio::fs::write(&*self.config_path, toml::to_string_pretty(&config)?).await?;
-        Ok(())
     }
 
     pub async fn sync_board_runtime_states(&self) {
@@ -962,9 +961,6 @@ mod tests {
             dtb_dir: root.join("dtbs"),
             database: crate::DatabaseConfig::sqlite_with_path(root.join("ostool.db")),
             sample_data: crate::config::SampleDataConfig::disabled(),
-            network: crate::TftpNetworkConfig {
-                interface: "lo".into(),
-            },
             ..ServerConfig::default()
         };
         let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
@@ -1066,9 +1062,6 @@ mod tests {
             dtb_dir: root.join("dtbs"),
             database: crate::DatabaseConfig::sqlite_with_path(root.join("ostool.db")),
             sample_data: crate::config::SampleDataConfig::disabled(),
-            network: crate::TftpNetworkConfig {
-                interface: "lo".into(),
-            },
             ..ServerConfig::default()
         };
         let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);

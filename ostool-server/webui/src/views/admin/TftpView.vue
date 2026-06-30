@@ -4,12 +4,11 @@ import { computed, onMounted, ref } from "vue";
 import StatusPill from "@/components/StatusPill.vue";
 import { api } from "@/api";
 import { useUiStore } from "@/stores/ui";
-import type { BuiltinTftpConfig, SystemTftpdHpaConfig, TftpConfig, TftpStatus } from "@/types/api";
+import type { TftpConfig, TftpStatus } from "@/types/api";
 import { describeTftpStatus } from "@/utils/tftpStatus";
 
 const ui = useUiStore();
 const loading = ref(true);
-const saving = ref(false);
 const reconciling = ref(false);
 const tftpConfig = ref<TftpConfig | null>(null);
 const tftpStatus = ref<TftpStatus | null>(null);
@@ -30,59 +29,6 @@ async function loadTftp() {
     ui.setError((error as Error).message);
   } finally {
     loading.value = false;
-  }
-}
-
-function switchProvider(provider: TftpConfig["provider"]) {
-  if (provider === "builtin") {
-    const current = tftpConfig.value;
-    const next: BuiltinTftpConfig = {
-      provider: "builtin",
-      enabled: current?.enabled ?? true,
-      root_dir: current?.root_dir ?? "/srv/tftp",
-      bind_addr: current && current.provider === "builtin" ? current.bind_addr : "0.0.0.0:69",
-    };
-    tftpConfig.value = next;
-    return;
-  }
-
-  const current = tftpConfig.value;
-  const next: SystemTftpdHpaConfig = {
-    provider: "system_tftpd_hpa",
-    enabled: current?.enabled ?? true,
-    root_dir: current?.root_dir ?? "/srv/tftp",
-    config_path:
-      current && current.provider === "system_tftpd_hpa"
-        ? current.config_path
-        : "/etc/default/tftpd-hpa",
-    service_name:
-      current && current.provider === "system_tftpd_hpa" ? current.service_name : "tftpd-hpa",
-    username: current && current.provider === "system_tftpd_hpa" ? current.username : "tftp",
-    address: current && current.provider === "system_tftpd_hpa" ? current.address : ":69",
-    options: current && current.provider === "system_tftpd_hpa" ? current.options : "-l -s -c",
-    manage_config:
-      current && current.provider === "system_tftpd_hpa" ? current.manage_config : false,
-    reconcile_on_start:
-      current && current.provider === "system_tftpd_hpa" ? current.reconcile_on_start : false,
-  };
-  tftpConfig.value = next;
-}
-
-async function saveConfig() {
-  if (!tftpConfig.value) {
-    return;
-  }
-
-  saving.value = true;
-  try {
-    const response = await api.updateTftpConfig(tftpConfig.value);
-    tftpConfig.value = response.tftp;
-    ui.setSuccess("已保存 TFTP 配置");
-    await loadTftp();
-  } catch (error) {
-    ui.setError((error as Error).message);
-  } finally {
-    saving.value = false;
   }
 }
 
@@ -110,15 +56,12 @@ onMounted(() => {
     <div class="panel">
       <div class="panel-heading">
         <div>
-          <h3>TFTP 配置管理</h3>
+          <h3>TFTP 配置与状态</h3>
         </div>
         <div class="toolbar-actions">
           <button class="btn btn-ghost" @click="loadTftp">刷新</button>
           <button class="btn btn-ghost" :disabled="reconciling" @click="reconcile">
             {{ reconciling ? "执行中..." : "执行 Reconcile" }}
-          </button>
-          <button class="btn btn-primary" :disabled="saving || !tftpConfig" @click="saveConfig">
-            {{ saving ? "保存中..." : "保存配置" }}
           </button>
         </div>
       </div>
@@ -128,62 +71,59 @@ onMounted(() => {
         <div class="split-grid">
           <section class="panel nested-panel">
             <div class="panel-heading compact">
-              <h4>当前 Provider</h4>
+              <h4>启动配置</h4>
               <StatusPill :tone="tone.tone" :label="tone.label" />
             </div>
-            <div class="form-grid two-columns">
-              <label class="field">
-                <span>Provider</span>
-                <select :value="tftpConfig.provider" @change="switchProvider(($event.target as HTMLSelectElement).value as TftpConfig['provider'])">
-                  <option value="builtin">builtin</option>
-                  <option value="system_tftpd_hpa">system_tftpd_hpa</option>
-                </select>
-              </label>
-              <label class="checkbox-field">
-                <input v-model="tftpConfig.enabled" type="checkbox" />
-                <span>启用 TFTP</span>
-              </label>
-              <label class="field">
-                <span>根目录</span>
-                <input v-model="tftpConfig.root_dir" />
-              </label>
+            <dl class="key-value-list">
+              <div>
+                <dt>Provider</dt>
+                <dd>{{ tftpConfig.provider }}</dd>
+              </div>
+              <div>
+                <dt>启用状态</dt>
+                <dd>{{ tftpConfig.enabled ? "已启用" : "已关闭" }}</dd>
+              </div>
+              <div>
+                <dt>根目录</dt>
+                <dd>{{ tftpConfig.root_dir }}</dd>
+              </div>
               <template v-if="tftpConfig.provider === 'builtin'">
-                <label class="field">
-                  <span>绑定地址</span>
-                  <input v-model="tftpConfig.bind_addr" placeholder="0.0.0.0:69" />
-                </label>
+                <div>
+                  <dt>绑定地址</dt>
+                  <dd>{{ tftpConfig.bind_addr }}</dd>
+                </div>
               </template>
               <template v-else>
-                <label class="field">
-                  <span>配置文件</span>
-                  <input v-model="tftpConfig.config_path" />
-                </label>
-                <label class="field">
-                  <span>服务名</span>
-                  <input v-model="tftpConfig.service_name" />
-                </label>
-                <label class="field">
-                  <span>运行用户</span>
-                  <input v-model="tftpConfig.username" />
-                </label>
-                <label class="field">
-                  <span>监听地址</span>
-                  <input v-model="tftpConfig.address" />
-                </label>
-                <label class="field">
-                  <span>启动选项</span>
-                  <input v-model="tftpConfig.options" />
-                </label>
-                <label class="checkbox-field">
-                  <input v-model="tftpConfig.manage_config" type="checkbox" />
-                  <span>允许服务端管理配置文件与重启 service</span>
-                </label>
-                <label class="checkbox-field">
-                  <input v-model="tftpConfig.reconcile_on_start" type="checkbox" />
-                  <span>启动时自动 reconcile</span>
-                </label>
+                <div>
+                  <dt>配置文件</dt>
+                  <dd>{{ tftpConfig.config_path }}</dd>
+                </div>
+                <div>
+                  <dt>服务名</dt>
+                  <dd>{{ tftpConfig.service_name }}</dd>
+                </div>
+                <div>
+                  <dt>运行用户</dt>
+                  <dd>{{ tftpConfig.username || "-" }}</dd>
+                </div>
+                <div>
+                  <dt>监听地址</dt>
+                  <dd>{{ tftpConfig.address }}</dd>
+                </div>
+                <div>
+                  <dt>启动选项</dt>
+                  <dd>{{ tftpConfig.options }}</dd>
+                </div>
+                <div>
+                  <dt>管理系统配置</dt>
+                  <dd>{{ tftpConfig.manage_config ? "允许" : "不允许" }}</dd>
+                </div>
+                <div>
+                  <dt>启动时 Reconcile</dt>
+                  <dd>{{ tftpConfig.reconcile_on_start ? "启用" : "关闭" }}</dd>
+                </div>
               </template>
-            </div>
+            </dl>
           </section>
 
           <section class="panel nested-panel">

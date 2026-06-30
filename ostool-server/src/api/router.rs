@@ -54,9 +54,7 @@ use crate::{
         token_from_headers, verify_password,
     },
     board_pool::BoardAllocationStatus,
-    config::{
-        BoardConfig, BootConfig, PowerManagementConfig, ServerConfig, TftpConfig, UbootNetworkMode,
-    },
+    config::{BoardConfig, BootConfig, PowerManagementConfig, ServerConfig, UbootNetworkMode},
     dtb_store::normalize_dtb_name,
     http_boot::publish::{KernelPublishInput, publish_kernel},
     lease::{create_user_lease, release_lease},
@@ -74,12 +72,11 @@ use crate::{
     session::SessionStopReason,
     state::{AppState, BoardLeaseState, CaptchaChallenge, RateLimitWindow, TouchSessionError},
     storage::{
-        Lease, NewAuditLog, NewRole, Role, SiteSettings, UpsertDtbMetadata, UserProfile,
-        default_user_permission,
+        Lease, NewAuditLog, NewRole, Role, RuntimeSettings, SiteSettings, UpsertDtbMetadata,
+        UserProfile, default_user_permission,
     },
     tftp::{
         files::{TftpFileRef, normalize_relative_path},
-        service::build_tftp_manager,
         status::resolve_interface_ipv4,
     },
     validation,
@@ -221,10 +218,7 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/admin/sessions/{session_id}/close",
             post(close_admin_session),
         )
-        .route(
-            "/api/v1/admin/tftp",
-            get(get_tftp_config).put(update_tftp_config),
-        )
+        .route("/api/v1/admin/tftp", get(get_tftp_config))
         .route("/api/v1/admin/tftp/status", get(get_tftp_status))
         .route("/api/v1/admin/tftp/reconcile", post(reconcile_tftp))
         .route(
@@ -733,7 +727,6 @@ fn admin_boards_permission(method: &Method, segments: &[&str]) -> Option<&'stati
 fn admin_tftp_permission(method: &Method, segments: &[&str]) -> Option<&'static str> {
     match (method.as_str(), segments) {
         ("GET", ["tftp"]) | ("GET", ["tftp", "status"]) => Some("tftp.read"),
-        ("PUT", ["tftp"]) => Some("tftp.update"),
         ("POST", ["tftp", "reconcile"]) => Some("tftp.reconcile"),
         _ => None,
     }
@@ -1992,10 +1985,11 @@ async fn get_admin_overview(
             ApiError::service_unavailable(format!("failed to get TFTP status: {err}"))
         })?;
     let config = state.config.read().await.clone();
+    let runtime = state.runtime_settings.read().await.clone();
     tftp_status.resolved_server_ip =
-        resolve_server_network(&config)?.and_then(|network| network.server_ip);
+        resolve_server_network(&runtime)?.and_then(|network| network.server_ip);
     tftp_status.resolved_netmask =
-        resolve_server_network(&config)?.and_then(|network| network.netmask);
+        resolve_server_network(&runtime)?.and_then(|network| network.netmask);
 
     Ok(axum::Json(AdminOverviewResponse {
         board_count_total,
@@ -2833,35 +2827,6 @@ async fn get_tftp_config(
     Ok(axum::Json(AdminTftpConfigResponse { tftp: config.tftp }))
 }
 
-async fn update_tftp_config(
-    State(state): State<AppState>,
-    axum::Json(tftp): axum::Json<TftpConfig>,
-) -> Result<axum::Json<AdminTftpConfigResponse>, ApiError> {
-    tokio::fs::create_dir_all(tftp.root_dir())
-        .await
-        .map_err(|err| ApiError::internal(err.to_string()))?;
-    let new_manager = build_tftp_manager(&tftp);
-    new_manager.start_if_needed().await.map_err(|err| {
-        ApiError::service_unavailable(format!("failed to start TFTP provider: {err}"))
-    })?;
-    if matches!(tftp, TftpConfig::SystemTftpdHpa(_))
-        && let Err(err) = new_manager.reconcile().await
-    {
-        return Err(ApiError::service_unavailable(format!(
-            "failed to reconcile TFTP provider: {err}"
-        )));
-    }
-
-    {
-        let mut config = state.config.write().await;
-        config.tftp = tftp.clone();
-    }
-    state.save_config().await?;
-    *state.tftp_manager.write().await = new_manager;
-
-    Ok(axum::Json(AdminTftpConfigResponse { tftp }))
-}
-
 async fn get_tftp_status(
     State(state): State<AppState>,
 ) -> Result<axum::Json<AdminTftpStatusResponse>, ApiError> {
@@ -2874,10 +2839,10 @@ async fn get_tftp_status(
         .map_err(|err| {
             ApiError::service_unavailable(format!("failed to get TFTP status: {err}"))
         })?;
-    let config = state.config.read().await.clone();
+    let runtime = state.runtime_settings.read().await.clone();
     status.resolved_server_ip =
-        resolve_server_network(&config)?.and_then(|network| network.server_ip);
-    status.resolved_netmask = resolve_server_network(&config)?.and_then(|network| network.netmask);
+        resolve_server_network(&runtime)?.and_then(|network| network.server_ip);
+    status.resolved_netmask = resolve_server_network(&runtime)?.and_then(|network| network.netmask);
     Ok(axum::Json(AdminTftpStatusResponse { status }))
 }
 
@@ -2886,7 +2851,9 @@ async fn get_server_config(
 ) -> Result<axum::Json<AdminServerConfigResponse>, ApiError> {
     let config = state.config.read().await.clone();
     let site = state.storage.get_site_settings().await?;
-    Ok(axum::Json(server_config_response(&config, site)))
+    let runtime = state.storage.get_runtime_settings().await?;
+    *state.runtime_settings.write().await = runtime.clone();
+    Ok(axum::Json(server_config_response(&config, runtime, site)))
 }
 
 async fn update_server_config(
@@ -2894,22 +2861,15 @@ async fn update_server_config(
     State(state): State<AppState>,
     axum::Json(request): axum::Json<UpdateServerConfigRequest>,
 ) -> Result<axum::Json<AdminServerConfigResponse>, ApiError> {
-    if request.network.interface.trim().is_empty() {
-        return Err(ApiError::bad_request("network.interface must not be empty"));
-    }
-    if request.upload_limits.session_file_max_mib == 0 {
-        return Err(ApiError::bad_request(
-            "upload_limits.session_file_max_mib must be greater than 0",
-        ));
-    }
-
-    {
-        let mut config = state.config.write().await;
-        config.network = request.network;
-        config.upload_limits = request.upload_limits;
-    }
-    state.save_config().await?;
     let current_user = current_user_from_headers(&state, &headers).await?;
+    let runtime = state
+        .storage
+        .update_runtime_settings(
+            runtime_settings_from_request(request.editable)?,
+            Some(current_user.id.clone()),
+        )
+        .await?;
+    *state.runtime_settings.write().await = runtime.clone();
     let site = state
         .storage
         .update_site_settings(
@@ -2919,7 +2879,7 @@ async fn update_server_config(
         .await?;
 
     let config = state.config.read().await.clone();
-    Ok(axum::Json(server_config_response(&config, site)))
+    Ok(axum::Json(server_config_response(&config, runtime, site)))
 }
 
 async fn get_site_settings(
@@ -3404,7 +3364,8 @@ async fn put_http_boot_file(
     let (relative_path, file) =
         put_session_file_from_request(&state, &session_id, request, "HTTP Boot file").await?;
     let config = state.config.read().await.clone();
-    let response = http_boot_file_response(&config, &session_id, &relative_path, file)?;
+    let runtime = state.runtime_settings.read().await.clone();
+    let response = http_boot_file_response(&config, &runtime, &session_id, &relative_path, file)?;
     Ok((StatusCode::CREATED, axum::Json(response)))
 }
 
@@ -3438,7 +3399,9 @@ async fn put_http_boot_kernel(
     )
     .await?;
     let config = state.config.read().await.clone();
-    let kernel_response = http_boot_file_response(&config, &session_id, &remote_name, kernel_file)?;
+    let runtime = state.runtime_settings.read().await.clone();
+    let kernel_response =
+        http_boot_file_response(&config, &runtime, &session_id, &remote_name, kernel_file)?;
     let response = publish_kernel(KernelPublishInput {
         kernel_url: kernel_response.http_url,
         kernel_size,
@@ -3685,7 +3648,12 @@ async fn put_session_file_bytes_from_request(
     request: Request,
     body_label: &'static str,
 ) -> Result<(TftpFileRef, u64, String), ApiError> {
-    let max_mib = state.config.read().await.upload_limits.session_file_max_mib;
+    let max_mib = state
+        .runtime_settings
+        .read()
+        .await
+        .upload_limits
+        .session_file_max_mib;
     let body = read_limited_body(request, max_mib, body_label).await?;
     let size = body.len() as u64;
     let sha256 = hex_sha256(&body);
@@ -3811,36 +3779,41 @@ fn ensure_httpboot_board(board: &BoardConfig) -> Result<(), ApiError> {
 
 fn http_boot_file_response(
     config: &ServerConfig,
+    runtime: &RuntimeSettings,
     session_id: &str,
     relative_path: &str,
     file: TftpFileRef,
 ) -> Result<HttpBootFileResponse, ApiError> {
-    let http_url = http_boot_url(config, session_id, relative_path)?;
+    let http_url = http_boot_url(config, runtime, session_id, relative_path)?;
     Ok(HttpBootFileResponse::from_file(file, http_url))
 }
 
 fn http_boot_url(
     config: &ServerConfig,
+    runtime: &RuntimeSettings,
     session_id: &str,
     relative_path: &str,
 ) -> Result<String, ApiError> {
     let relative_path = normalize_relative_path(relative_path)
         .map_err(|err| ApiError::bad_request(err.to_string()))?;
-    let base_url = http_boot_public_base_url(config)?;
+    let base_url = http_boot_public_base_url(config, runtime)?;
     let base_url = base_url.trim_end_matches('/');
     Ok(format!(
         "{base_url}/boot/sessions/{session_id}/{relative_path}"
     ))
 }
 
-fn http_boot_public_base_url(config: &ServerConfig) -> Result<String, ApiError> {
+fn http_boot_public_base_url(
+    config: &ServerConfig,
+    runtime: &RuntimeSettings,
+) -> Result<String, ApiError> {
     if let Some(public_base_url) = config.http_boot.public_base_url.as_deref()
         && !public_base_url.trim().is_empty()
     {
         return Ok(public_base_url.trim().to_string());
     }
 
-    if let Some(network) = resolve_server_network(config)?
+    if let Some(network) = resolve_server_network(runtime)?
         && let Some(server_ip) = network.server_ip
     {
         return Ok(format!(
@@ -4002,16 +3975,31 @@ fn readonly_server_config(config: &crate::config::ServerConfig) -> AdminServerCo
 
 fn server_config_response(
     config: &crate::config::ServerConfig,
+    runtime: RuntimeSettings,
     site: SiteSettings,
 ) -> AdminServerConfigResponse {
     AdminServerConfigResponse {
         readonly: readonly_server_config(config),
         editable: AdminServerConfigEditable {
-            network: config.network.clone(),
-            upload_limits: config.upload_limits.clone(),
+            network: runtime.network,
+            upload_limits: runtime.upload_limits,
         },
         site: site_settings_response(site),
     }
+}
+
+fn runtime_settings_from_request(
+    request: AdminServerConfigEditable,
+) -> Result<RuntimeSettings, ApiError> {
+    let mut settings = RuntimeSettings {
+        network: request.network,
+        upload_limits: request.upload_limits,
+        updated_at: chrono::Utc::now(),
+    };
+    settings
+        .validate()
+        .map_err(|err| ApiError::bad_request(err.to_string()))?;
+    Ok(settings)
 }
 
 fn site_settings_response(settings: SiteSettings) -> SiteSettingsResponse {
@@ -4099,11 +4087,11 @@ struct ResolvedNetwork {
     netmask: Option<String>,
 }
 
-fn resolve_server_network(config: &ServerConfig) -> Result<Option<ResolvedNetwork>, ApiError> {
-    let interface = if config.network.interface.trim().is_empty() {
+fn resolve_server_network(settings: &RuntimeSettings) -> Result<Option<ResolvedNetwork>, ApiError> {
+    let interface = if settings.network.interface.trim().is_empty() {
         default_non_loopback_interface_name()
     } else {
-        Some(config.network.interface.trim().to_string())
+        Some(settings.network.interface.trim().to_string())
     };
     if interface.as_deref() == Some("lo") {
         return Ok(Some(ResolvedNetwork {
@@ -4156,8 +4144,8 @@ async fn resolved_board_network(
         }));
     }
 
-    let config = state.config.read().await.clone();
-    let mut network = resolve_server_network(&config)?;
+    let runtime = state.runtime_settings.read().await.clone();
+    let mut network = resolve_server_network(&runtime)?;
     if profile.network_mode == UbootNetworkMode::StaticIp
         && let Some(network) = network.as_mut()
     {

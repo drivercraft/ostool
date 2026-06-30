@@ -80,10 +80,7 @@ describe("ServerView", () => {
     ]);
     updateServerConfig.mockImplementation(async (payload) => ({
       ...makeConfig(),
-      editable: {
-        network: payload.network,
-        upload_limits: payload.upload_limits,
-      },
+      editable: payload.editable,
       site: {
         ...payload.site,
         updated_at: "2026-01-01T00:00:00Z",
@@ -110,11 +107,13 @@ describe("ServerView", () => {
     await flushPromises();
 
     expect(updateServerConfig).toHaveBeenCalledWith({
-      network: {
-        interface: "eth0",
-      },
-      upload_limits: {
-        session_file_max_mib: 32,
+      editable: {
+        network: {
+          interface: "eth0",
+        },
+        upload_limits: {
+          session_file_max_mib: 32,
+        },
       },
       site: {
         site_name: "ostool-server",

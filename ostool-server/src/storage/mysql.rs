@@ -11,19 +11,12 @@ use crate::storage::{
     AuditLog, AuditLogRepository, AuthSession, AuthSessionRepository, BUILTIN_PERMISSIONS,
     BoardConfigRepository, DtbMetadata, DtbMetadataRepository, Lease, LeaseRepository, LeaseState,
     NewAuditLog, NewLease, NewRole, NewSessionRecord, NewUser, Permission, RbacRepository, Role,
-    SessionRecord, SessionRecordRepository, SiteSettingValue, SiteSettings, SiteSettingsRepository,
-    UpsertDtbMetadata, User, UserProfile, UserRepository, UserStatus, default_site_setting_rows,
-    default_user_permission, parse_time, site_settings_from_values, site_settings_to_values,
+    RuntimeSettings, RuntimeSettingsRepository, SessionRecord, SessionRecordRepository,
+    SiteSettingValue, SiteSettings, SiteSettingsRepository, UpsertDtbMetadata, User, UserProfile,
+    UserRepository, UserStatus, default_site_setting_rows, default_user_permission, parse_time,
+    runtime_settings_from_values, runtime_settings_to_values, site_settings_from_values,
+    site_settings_to_values,
 };
-
-const MIGRATION_RBAC_PLATFORM: &str = "0001_rbac_platform";
-const MIGRATION_BOARD_CONFIGS: &str = "0002_board_configs";
-const MIGRATION_DTB_AUDIT: &str = "0003_dtb_audit";
-const MIGRATION_STANDARD_FIELDS: &str = "0004_standard_profile_fields";
-const MIGRATION_SITE_SETTINGS: &str = "0005_site_settings";
-const MIGRATION_PERFORMANCE_INDEXES: &str = "0006_performance_indexes";
-const MIGRATION_ROLE_DISABLED: &str = "0007_role_disabled";
-const MIGRATION_USER_STATUS: &str = "0008_user_status";
 
 #[derive(Clone)]
 pub struct MysqlStorage {
@@ -37,80 +30,11 @@ impl MysqlStorage {
             .await
             .with_context(|| format!("failed to connect MySQL database `{url}`"))?;
         let storage = Self { pool };
-        storage.migrate().await?;
+        storage.init_schema().await?;
         Ok(storage)
     }
 
-    async fn migrate(&self) -> anyhow::Result<()> {
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                version VARCHAR(255) PRIMARY KEY NOT NULL,
-                applied_at VARCHAR(255) NOT NULL
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        if !self.is_migration_applied(MIGRATION_RBAC_PLATFORM).await? {
-            self.migrate_schema().await?;
-            self.mark_migration_applied(MIGRATION_RBAC_PLATFORM).await?;
-        }
-        if !self.is_migration_applied(MIGRATION_BOARD_CONFIGS).await? {
-            self.migrate_board_config_tables().await?;
-            self.mark_migration_applied(MIGRATION_BOARD_CONFIGS).await?;
-        }
-        if !self.is_migration_applied(MIGRATION_DTB_AUDIT).await? {
-            self.migrate_dtb_audit_tables().await?;
-            self.mark_migration_applied(MIGRATION_DTB_AUDIT).await?;
-        }
-        if !self.is_migration_applied(MIGRATION_STANDARD_FIELDS).await? {
-            self.migrate_standard_fields().await?;
-            self.mark_migration_applied(MIGRATION_STANDARD_FIELDS)
-                .await?;
-        }
-        if !self.is_migration_applied(MIGRATION_SITE_SETTINGS).await? {
-            self.migrate_site_settings().await?;
-            self.mark_migration_applied(MIGRATION_SITE_SETTINGS).await?;
-        }
-        if !self
-            .is_migration_applied(MIGRATION_PERFORMANCE_INDEXES)
-            .await?
-        {
-            self.migrate_performance_indexes().await?;
-            self.mark_migration_applied(MIGRATION_PERFORMANCE_INDEXES)
-                .await?;
-        }
-        if !self.is_migration_applied(MIGRATION_ROLE_DISABLED).await? {
-            self.migrate_role_disabled().await?;
-            self.mark_migration_applied(MIGRATION_ROLE_DISABLED).await?;
-        }
-        if !self.is_migration_applied(MIGRATION_USER_STATUS).await? {
-            self.migrate_user_status().await?;
-            self.mark_migration_applied(MIGRATION_USER_STATUS).await?;
-        }
-        Ok(())
-    }
-
-    async fn is_migration_applied(&self, version: &str) -> anyhow::Result<bool> {
-        let applied = sqlx::query("SELECT version FROM schema_migrations WHERE version = ?")
-            .bind(version)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(applied.is_some())
-    }
-
-    async fn mark_migration_applied(&self, version: &str) -> anyhow::Result<()> {
-        sqlx::query("INSERT IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)")
-            .bind(version)
-            .bind(Utc::now().to_rfc3339())
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    async fn migrate_schema(&self) -> anyhow::Result<()> {
+    async fn init_schema(&self) -> anyhow::Result<()> {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS users (
@@ -118,8 +42,15 @@ impl MysqlStorage {
                 username VARCHAR(64) NOT NULL UNIQUE,
                 display_name VARCHAR(64) NOT NULL,
                 email VARCHAR(254) NOT NULL,
+                nickname VARCHAR(64),
+                avatar_url VARCHAR(512),
+                phone VARCHAR(32),
+                department VARCHAR(64),
+                title VARCHAR(64),
                 password_hash VARCHAR(255) NOT NULL,
                 disabled TINYINT NOT NULL DEFAULT 0,
+                status VARCHAR(16) NOT NULL DEFAULT 'active',
+                last_login_at VARCHAR(64),
                 created_at VARCHAR(64) NOT NULL,
                 updated_at VARCHAR(64) NOT NULL
             )
@@ -128,10 +59,12 @@ impl MysqlStorage {
         .execute(&self.pool)
         .await?;
 
-        self.migrate_rbac_tables().await?;
-        self.migrate_board_config_tables().await?;
-        self.migrate_dtb_audit_tables().await?;
-        self.migrate_site_settings().await?;
+        self.create_rbac_tables().await?;
+        self.create_board_config_tables().await?;
+        self.create_dtb_audit_tables().await?;
+        self.create_site_settings_table().await?;
+        self.seed_builtin_rbac().await?;
+        self.seed_site_settings().await?;
 
         sqlx::query(
             r#"
@@ -139,8 +72,15 @@ impl MysqlStorage {
                 id VARCHAR(64) PRIMARY KEY NOT NULL,
                 user_id VARCHAR(64) NOT NULL,
                 token_hash VARCHAR(255) NOT NULL UNIQUE,
+                ip_address VARCHAR(45),
+                user_agent VARCHAR(512),
                 expires_at VARCHAR(64) NOT NULL,
+                last_seen_at VARCHAR(64),
+                revoked_at VARCHAR(64),
                 created_at VARCHAR(64) NOT NULL,
+                INDEX idx_auth_sessions_user_id (user_id),
+                INDEX idx_auth_sessions_expires_at (expires_at),
+                INDEX idx_auth_sessions_revoked_at (revoked_at),
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
             "#,
@@ -159,11 +99,16 @@ impl MysqlStorage {
                 required_tags_json TEXT NOT NULL,
                 state VARCHAR(32) NOT NULL,
                 created_at VARCHAR(64) NOT NULL,
+                updated_at VARCHAR(64) NOT NULL,
                 starts_at VARCHAR(64) NOT NULL,
                 expires_at VARCHAR(64) NOT NULL,
                 released_at VARCHAR(64),
                 failure_message VARCHAR(500),
                 INDEX idx_leases_user_id (user_id),
+                INDEX idx_leases_state (state),
+                INDEX idx_leases_expires_at (expires_at),
+                INDEX idx_leases_board_id (board_id),
+                INDEX idx_leases_user_state (user_id, state),
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
             "#,
@@ -194,7 +139,7 @@ impl MysqlStorage {
         Ok(())
     }
 
-    async fn migrate_board_config_tables(&self) -> anyhow::Result<()> {
+    async fn create_board_config_tables(&self) -> anyhow::Result<()> {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS board_configs (
@@ -212,7 +157,7 @@ impl MysqlStorage {
         Ok(())
     }
 
-    async fn migrate_rbac_tables(&self) -> anyhow::Result<()> {
+    async fn create_rbac_tables(&self) -> anyhow::Result<()> {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS permissions (
@@ -238,7 +183,8 @@ impl MysqlStorage {
                 `system` TINYINT NOT NULL DEFAULT 0,
                 disabled TINYINT NOT NULL DEFAULT 0,
                 created_at VARCHAR(64) NOT NULL,
-                updated_at VARCHAR(64) NOT NULL
+                updated_at VARCHAR(64) NOT NULL,
+                INDEX idx_roles_system_name (`system`, name)
             )
             "#,
         )
@@ -251,6 +197,7 @@ impl MysqlStorage {
                 role_id VARCHAR(64) NOT NULL,
                 permission_id VARCHAR(64) NOT NULL,
                 PRIMARY KEY(role_id, permission_id),
+                INDEX idx_role_permissions_permission_id (permission_id),
                 FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE,
                 FOREIGN KEY(permission_id) REFERENCES permissions(id) ON DELETE CASCADE
             )
@@ -265,6 +212,7 @@ impl MysqlStorage {
                 user_id VARCHAR(64) NOT NULL,
                 role_id VARCHAR(64) NOT NULL,
                 PRIMARY KEY(user_id, role_id),
+                INDEX idx_user_roles_role_id (role_id),
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE
             )
@@ -273,61 +221,10 @@ impl MysqlStorage {
         .execute(&self.pool)
         .await?;
 
-        self.seed_builtin_rbac().await?;
         Ok(())
     }
 
-    async fn migrate_role_disabled(&self) -> anyhow::Result<()> {
-        let exists = sqlx::query(
-            r#"
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_schema = DATABASE()
-              AND table_name = 'roles'
-              AND column_name = 'disabled'
-            "#,
-        )
-        .fetch_optional(&self.pool)
-        .await?
-        .is_some();
-        if !exists {
-            sqlx::query("ALTER TABLE roles ADD COLUMN disabled TINYINT NOT NULL DEFAULT 0")
-                .execute(&self.pool)
-                .await?;
-        }
-        Ok(())
-    }
-
-    async fn migrate_user_status(&self) -> anyhow::Result<()> {
-        self.add_column_if_missing("users", "status", "VARCHAR(16) NOT NULL DEFAULT 'active'")
-            .await?;
-        let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            r#"
-            INSERT IGNORE INTO site_settings
-                (`key`, value_json, value_type, group_name, name, description, readonly, `sensitive`, created_at, updated_at)
-            VALUES (
-                'registration.mode',
-                '"closed"',
-                'string',
-                'registration',
-                '注册策略',
-                '自助注册策略：closed（关闭）/ auto（自动生效）/ approval（管理员审核）',
-                0,
-                0,
-                ?,
-                ?
-            )
-            "#,
-        )
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn migrate_dtb_audit_tables(&self) -> anyhow::Result<()> {
+    async fn create_dtb_audit_tables(&self) -> anyhow::Result<()> {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS dtb_files (
@@ -342,7 +239,9 @@ impl MysqlStorage {
                 disabled BOOLEAN NOT NULL DEFAULT FALSE,
                 uploaded_by VARCHAR(64),
                 created_at VARCHAR(64) NOT NULL,
-                updated_at VARCHAR(64) NOT NULL
+                updated_at VARCHAR(64) NOT NULL,
+                INDEX idx_dtb_files_uploaded_by (uploaded_by),
+                INDEX idx_dtb_files_sha256 (sha256)
             )
             "#,
         )
@@ -364,6 +263,7 @@ impl MysqlStorage {
                 request_id VARCHAR(128),
                 metadata_json TEXT NOT NULL,
                 created_at VARCHAR(64) NOT NULL,
+                INDEX idx_audit_logs_actor_user_id (actor_user_id),
                 INDEX idx_audit_logs_created_at (created_at),
                 INDEX idx_audit_logs_target (target_type, target_id)
             )
@@ -374,36 +274,7 @@ impl MysqlStorage {
         Ok(())
     }
 
-    async fn migrate_standard_fields(&self) -> anyhow::Result<()> {
-        self.add_column_if_missing("users", "nickname", "VARCHAR(64)")
-            .await?;
-        self.add_column_if_missing("users", "avatar_url", "VARCHAR(512)")
-            .await?;
-        self.add_column_if_missing("users", "phone", "VARCHAR(32)")
-            .await?;
-        self.add_column_if_missing("users", "department", "VARCHAR(64)")
-            .await?;
-        self.add_column_if_missing("users", "title", "VARCHAR(64)")
-            .await?;
-        self.add_column_if_missing("users", "last_login_at", "VARCHAR(64)")
-            .await?;
-        self.add_column_if_missing("auth_sessions", "ip_address", "VARCHAR(45)")
-            .await?;
-        self.add_column_if_missing("auth_sessions", "user_agent", "VARCHAR(512)")
-            .await?;
-        self.add_column_if_missing("auth_sessions", "last_seen_at", "VARCHAR(64)")
-            .await?;
-        self.add_column_if_missing("auth_sessions", "revoked_at", "VARCHAR(64)")
-            .await?;
-        self.add_column_if_missing("leases", "updated_at", "VARCHAR(64)")
-            .await?;
-        sqlx::query("UPDATE leases SET updated_at = created_at WHERE updated_at IS NULL")
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    async fn migrate_site_settings(&self) -> anyhow::Result<()> {
+    async fn create_site_settings_table(&self) -> anyhow::Result<()> {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS site_settings (
@@ -417,92 +288,13 @@ impl MysqlStorage {
                 `sensitive` TINYINT NOT NULL DEFAULT 0,
                 updated_by VARCHAR(64),
                 created_at VARCHAR(64) NOT NULL,
-                updated_at VARCHAR(64) NOT NULL
+                updated_at VARCHAR(64) NOT NULL,
+                INDEX idx_site_settings_group_name (group_name)
             )
             "#,
         )
         .execute(&self.pool)
         .await?;
-        self.seed_site_settings().await?;
-        Ok(())
-    }
-
-    async fn migrate_performance_indexes(&self) -> anyhow::Result<()> {
-        for (table, index, statement) in [
-            (
-                "auth_sessions",
-                "idx_auth_sessions_expires_at",
-                "CREATE INDEX idx_auth_sessions_expires_at ON auth_sessions(expires_at)",
-            ),
-            (
-                "auth_sessions",
-                "idx_auth_sessions_revoked_at",
-                "CREATE INDEX idx_auth_sessions_revoked_at ON auth_sessions(revoked_at)",
-            ),
-            (
-                "leases",
-                "idx_leases_state",
-                "CREATE INDEX idx_leases_state ON leases(state)",
-            ),
-            (
-                "leases",
-                "idx_leases_expires_at",
-                "CREATE INDEX idx_leases_expires_at ON leases(expires_at)",
-            ),
-            (
-                "leases",
-                "idx_leases_board_id",
-                "CREATE INDEX idx_leases_board_id ON leases(board_id)",
-            ),
-            (
-                "leases",
-                "idx_leases_user_state",
-                "CREATE INDEX idx_leases_user_state ON leases(user_id, state)",
-            ),
-            (
-                "roles",
-                "idx_roles_system_name",
-                "CREATE INDEX idx_roles_system_name ON roles(`system`, name)",
-            ),
-            (
-                "board_configs",
-                "idx_board_configs_board_type",
-                "CREATE INDEX idx_board_configs_board_type ON board_configs(board_type)",
-            ),
-            (
-                "dtb_files",
-                "idx_dtb_files_uploaded_by",
-                "CREATE INDEX idx_dtb_files_uploaded_by ON dtb_files(uploaded_by)",
-            ),
-            (
-                "dtb_files",
-                "idx_dtb_files_sha256",
-                "CREATE INDEX idx_dtb_files_sha256 ON dtb_files(sha256)",
-            ),
-            (
-                "audit_logs",
-                "idx_audit_logs_actor_user_id",
-                "CREATE INDEX idx_audit_logs_actor_user_id ON audit_logs(actor_user_id)",
-            ),
-            (
-                "audit_logs",
-                "idx_audit_logs_created_at",
-                "CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at)",
-            ),
-            (
-                "audit_logs",
-                "idx_audit_logs_target",
-                "CREATE INDEX idx_audit_logs_target ON audit_logs(target_type, target_id)",
-            ),
-            (
-                "site_settings",
-                "idx_site_settings_group_name",
-                "CREATE INDEX idx_site_settings_group_name ON site_settings(group_name)",
-            ),
-        ] {
-            self.create_index_if_missing(table, index, statement)
-                .await?;
-        }
         Ok(())
     }
 
@@ -525,34 +317,6 @@ impl MysqlStorage {
             .bind(if setting.sensitive { 1 } else { 0 })
             .bind(setting.created_at)
             .bind(setting.updated_at)
-            .execute(&self.pool)
-            .await?;
-        }
-        Ok(())
-    }
-
-    async fn add_column_if_missing(
-        &self,
-        table: &str,
-        column: &str,
-        definition: &str,
-    ) -> anyhow::Result<()> {
-        let row = sqlx::query(
-            r#"
-            SELECT COUNT(*) AS count
-            FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?
-            "#,
-        )
-        .bind(table)
-        .bind(column)
-        .fetch_one(&self.pool)
-        .await?;
-        let count: i64 = row.try_get("count")?;
-        if count == 0 {
-            sqlx::query(&format!(
-                "ALTER TABLE `{table}` ADD COLUMN `{column}` {definition}"
-            ))
             .execute(&self.pool)
             .await?;
         }
@@ -633,32 +397,6 @@ impl MysqlStorage {
 
         Ok(())
     }
-
-    async fn create_index_if_missing(
-        &self,
-        table: &str,
-        index: &str,
-        statement: &str,
-    ) -> anyhow::Result<()> {
-        let exists: i64 = sqlx::query(
-            r#"
-            SELECT COUNT(*) AS count
-            FROM INFORMATION_SCHEMA.STATISTICS
-            WHERE TABLE_SCHEMA = DATABASE()
-                AND TABLE_NAME = ?
-                AND INDEX_NAME = ?
-            "#,
-        )
-        .bind(table)
-        .bind(index)
-        .fetch_one(&self.pool)
-        .await?
-        .try_get("count")?;
-        if exists == 0 {
-            sqlx::query(statement).execute(&self.pool).await?;
-        }
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -706,6 +444,54 @@ impl SiteSettingsRepository for MysqlStorage {
             .await?;
         }
         self.get_site_settings().await
+    }
+}
+
+#[async_trait]
+impl RuntimeSettingsRepository for MysqlStorage {
+    async fn get_runtime_settings(&self) -> anyhow::Result<RuntimeSettings> {
+        self.seed_site_settings().await?;
+        let rows = sqlx::query("SELECT `key`, value_json, updated_at FROM site_settings")
+            .fetch_all(&self.pool)
+            .await?;
+        let values = rows
+            .into_iter()
+            .map(|row| {
+                Ok(SiteSettingValue {
+                    key: row.try_get("key")?,
+                    value_json: row.try_get("value_json")?,
+                    updated_at: row.try_get("updated_at")?,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        runtime_settings_from_values(values)
+    }
+
+    async fn update_runtime_settings(
+        &self,
+        mut settings: RuntimeSettings,
+        updated_by: Option<String>,
+    ) -> anyhow::Result<RuntimeSettings> {
+        settings.validate()?;
+        settings.updated_at = Utc::now();
+        self.seed_site_settings().await?;
+        let updated_at = settings.updated_at.to_rfc3339();
+        for (key, value_json) in runtime_settings_to_values(&settings)? {
+            sqlx::query(
+                r#"
+                UPDATE site_settings
+                SET value_json = ?, updated_by = ?, updated_at = ?
+                WHERE `key` = ?
+                "#,
+            )
+            .bind(value_json)
+            .bind(&updated_by)
+            .bind(&updated_at)
+            .bind(key)
+            .execute(&self.pool)
+            .await?;
+        }
+        self.get_runtime_settings().await
     }
 }
 
@@ -874,12 +660,7 @@ fn user_from_row(row: &sqlx::mysql::MySqlRow) -> anyhow::Result<User> {
         title: row.try_get("title")?,
         password_hash: row.try_get("password_hash")?,
         disabled: row.try_get::<i64, _>("disabled")? != 0,
-        status: row
-            .try_get::<Option<String>, _>("status")
-            .ok()
-            .flatten()
-            .map(|value| UserStatus::from_str(&value).unwrap_or(UserStatus::Active))
-            .unwrap_or(UserStatus::Active),
+        status: UserStatus::from_str(row.try_get::<String, _>("status")?.as_str())?,
         last_login_at: row
             .try_get::<Option<String>, _>("last_login_at")?
             .map(|value| parse_time(&value))

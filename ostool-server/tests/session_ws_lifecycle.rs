@@ -15,7 +15,7 @@ use futures_util::{SinkExt, StreamExt};
 use ostool_server::{
     BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement, PowerManagementConfig,
     SampleDataConfig, SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig, TftpConfig,
-    UbootProfile, UploadLimitsConfig, build_app_state, build_router,
+    UbootProfile, build_app_state, build_router,
     storage::BoardConfigRepository,
     storage::sqlite::SqliteStorage,
     tftp::service::{TftpManager, build_tftp_manager},
@@ -111,10 +111,6 @@ fn spawn_test_server(root: &Path, serial_port: String) -> Result<TestServerHandl
         sample_data: SampleDataConfig::disabled(),
         tftp: TftpConfig::Builtin(tftp),
         http_boot: ostool_server::config::HttpBootConfig::default_with_root(http_boot_root),
-        network: ostool_server::TftpNetworkConfig {
-            interface: "lo".into(),
-        },
-        upload_limits: UploadLimitsConfig::default(),
     };
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)
         .with_context(|| format!("failed to write {}", config_path.display()))?;
