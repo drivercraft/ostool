@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::storage::{AuthSession, DynStorage, NewUser, Permission, Role, User, UserProfile};
+use crate::storage::{
+    AuthSession, DynStorage, NewUser, Permission, RegistrationMode, Role, User, UserProfile,
+    UserStatus,
+};
 
 pub const AUTH_COOKIE_NAME: &str = "ostool_server_admin";
 const AUTH_SESSION_TTL: Duration = Duration::hours(8);
@@ -28,6 +31,17 @@ pub struct CurrentUser {
     pub last_login_at: Option<chrono::DateTime<Utc>>,
     pub roles: Vec<Role>,
     pub permissions: Vec<Permission>,
+}
+
+/// Outcome of a self-service registration request.
+#[derive(Debug, Clone)]
+pub enum RegistrationOutcome {
+    /// Self-registration is disabled (`registration_mode = closed`).
+    Closed,
+    /// Account activated immediately (`registration_mode = auto`).
+    Active(User),
+    /// Account created but pending admin approval (`registration_mode = approval`).
+    Pending(User),
 }
 
 #[derive(Clone)]
@@ -58,8 +72,78 @@ impl AuthService {
                 password_hash,
                 profile,
                 role_names,
+                status: UserStatus::Active,
             })
             .await
+    }
+
+    /// Self-service registration. The resulting user status depends on the
+    /// configured `registration_mode`:
+    /// - `Closed`   → registration is rejected
+    /// - `Auto`     → user created as `Active`
+    /// - `Approval` → user created as `Pending`, awaiting admin review
+    pub async fn register_user(
+        &self,
+        username: String,
+        display_name: String,
+        email: String,
+        password: String,
+        profile: UserProfile,
+    ) -> anyhow::Result<RegistrationOutcome> {
+        let mode = self.registration_mode().await?;
+        if matches!(mode, RegistrationMode::Closed) {
+            return Ok(RegistrationOutcome::Closed);
+        }
+        let password_hash = hash_password(&password)?;
+        let status = if matches!(mode, RegistrationMode::Approval) {
+            UserStatus::Pending
+        } else {
+            UserStatus::Active
+        };
+        let user = self
+            .storage
+            .create_user(NewUser {
+                username,
+                display_name,
+                email,
+                password_hash,
+                profile,
+                role_names: vec!["user".to_string()],
+                status,
+            })
+            .await?;
+        Ok(if status == UserStatus::Pending {
+            RegistrationOutcome::Pending(user)
+        } else {
+            RegistrationOutcome::Active(user)
+        })
+    }
+
+    async fn registration_mode(&self) -> anyhow::Result<RegistrationMode> {
+        Ok(self.storage.get_site_settings().await?.registration_mode)
+    }
+
+    /// Approve a pending user → `Active`.
+    pub async fn approve_user(&self, user_id: &str) -> anyhow::Result<User> {
+        self.storage
+            .set_user_status(user_id, UserStatus::Active)
+            .await?;
+        self.storage
+            .find_user_by_id(user_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("user `{user_id}` not found"))
+    }
+
+    /// Reject a pending user → `Rejected`. The account cannot log in until an
+    /// admin re-activates it.
+    pub async fn reject_user(&self, user_id: &str) -> anyhow::Result<User> {
+        self.storage
+            .set_user_status(user_id, UserStatus::Rejected)
+            .await?;
+        self.storage
+            .find_user_by_id(user_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("user `{user_id}` not found"))
     }
 
     async fn current_user_from_user(&self, user: User) -> anyhow::Result<CurrentUser> {
@@ -100,6 +184,9 @@ impl AuthService {
         };
         if user.disabled {
             anyhow::bail!("user is disabled");
+        }
+        if !user.status.can_login() {
+            anyhow::bail!("user status is `{}`, cannot log in", user.status.as_str());
         }
         if self.user_has_disabled_role(&user.id).await? {
             anyhow::bail!("user role is disabled");
@@ -151,6 +238,9 @@ impl AuthService {
             return Ok(None);
         };
         if user.disabled {
+            return Ok(None);
+        }
+        if !user.status.can_login() {
             return Ok(None);
         }
         if self.user_has_disabled_role(&user.id).await? {

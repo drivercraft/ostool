@@ -14,6 +14,8 @@ export const VALIDATION_LIMITS = {
   longDescriptionMax: 500,
   urlMax: 512,
   phoneMax: 32,
+  departmentMax: 64,
+  titleMax: 64,
   boardTypeMax: 64,
   tagMax: 32,
   tagsTextMax: 256,

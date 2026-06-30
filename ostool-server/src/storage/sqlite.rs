@@ -12,7 +12,7 @@ use crate::storage::{
     BoardConfigRepository, DtbMetadata, DtbMetadataRepository, Lease, LeaseRepository, LeaseState,
     NewAuditLog, NewLease, NewRole, NewSessionRecord, NewUser, Permission, RbacRepository, Role,
     SessionRecord, SessionRecordRepository, SiteSettingValue, SiteSettings, SiteSettingsRepository,
-    UpsertDtbMetadata, User, UserProfile, UserRepository, default_site_setting_rows,
+    UpsertDtbMetadata, User, UserProfile, UserRepository, UserStatus, default_site_setting_rows,
     default_user_permission, parse_time, site_settings_from_values, site_settings_to_values,
 };
 
@@ -23,6 +23,7 @@ const MIGRATION_STANDARD_FIELDS: &str = "0004_standard_profile_fields";
 const MIGRATION_SITE_SETTINGS: &str = "0005_site_settings";
 const MIGRATION_PERFORMANCE_INDEXES: &str = "0006_performance_indexes";
 const MIGRATION_ROLE_DISABLED: &str = "0007_role_disabled";
+const MIGRATION_USER_STATUS: &str = "0008_user_status";
 
 #[derive(Clone)]
 pub struct SqliteStorage {
@@ -88,6 +89,10 @@ impl SqliteStorage {
         if !self.is_migration_applied(MIGRATION_ROLE_DISABLED).await? {
             self.migrate_role_disabled().await?;
             self.mark_migration_applied(MIGRATION_ROLE_DISABLED).await?;
+        }
+        if !self.is_migration_applied(MIGRATION_USER_STATUS).await? {
+            self.migrate_user_status().await?;
+            self.mark_migration_applied(MIGRATION_USER_STATUS).await?;
         }
         Ok(())
     }
@@ -309,6 +314,39 @@ impl SqliteStorage {
                 .execute(&self.pool)
                 .await?;
         }
+        Ok(())
+    }
+
+    async fn migrate_user_status(&self) -> anyhow::Result<()> {
+        self.add_column_if_missing(
+            "users",
+            "status",
+            "TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','pending','rejected','disabled'))",
+        )
+        .await?;
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO site_settings
+                (key, value_json, value_type, group_name, name, description, readonly, sensitive, created_at, updated_at)
+            VALUES (
+                'registration.mode',
+                '"closed"',
+                'string',
+                'registration',
+                '注册策略',
+                '自助注册策略：closed（关闭）/ auto（自动生效）/ approval（管理员审核）',
+                0,
+                0,
+                ?,
+                ?
+            )
+            "#,
+        )
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -835,6 +873,12 @@ fn user_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<User> {
         title: row.try_get("title")?,
         password_hash: row.try_get("password_hash")?,
         disabled: row.try_get::<i64, _>("disabled")? != 0,
+        status: row
+            .try_get::<Option<String>, _>("status")
+            .ok()
+            .flatten()
+            .map(|value| UserStatus::from_str(&value).unwrap_or(UserStatus::Active))
+            .unwrap_or(UserStatus::Active),
         last_login_at: row
             .try_get::<Option<String>, _>("last_login_at")?
             .map(|value| parse_time(&value))
@@ -989,8 +1033,8 @@ impl UserRepository for SqliteStorage {
         sqlx::query(
             r#"
             INSERT INTO users
-                (id, username, display_name, nickname, avatar_url, email, phone, department, title, password_hash, disabled, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                (id, username, display_name, nickname, avatar_url, email, phone, department, title, password_hash, disabled, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
             "#,
         )
         .bind(&id)
@@ -1003,6 +1047,7 @@ impl UserRepository for SqliteStorage {
         .bind(user.profile.department)
         .bind(user.profile.title)
         .bind(user.password_hash)
+        .bind(user.status.as_str())
         .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
         .execute(&self.pool)
@@ -1017,6 +1062,16 @@ impl UserRepository for SqliteStorage {
         let rows = sqlx::query("SELECT * FROM users ORDER BY username ASC")
             .fetch_all(&self.pool)
             .await?;
+        rows.iter().map(user_from_row).collect()
+    }
+
+    async fn list_users_with_status(&self, status: UserStatus) -> anyhow::Result<Vec<User>> {
+        let rows = sqlx::query(
+            "SELECT * FROM users WHERE status = ? ORDER BY created_at DESC, username ASC",
+        )
+        .bind(status.as_str())
+        .fetch_all(&self.pool)
+        .await?;
         rows.iter().map(user_from_row).collect()
     }
 
@@ -1097,6 +1152,16 @@ impl UserRepository for SqliteStorage {
     async fn set_user_disabled(&self, user_id: &str, disabled: bool) -> anyhow::Result<()> {
         sqlx::query("UPDATE users SET disabled = ?, updated_at = ? WHERE id = ?")
             .bind(if disabled { 1 } else { 0 })
+            .bind(Utc::now().to_rfc3339())
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn set_user_status(&self, user_id: &str, status: UserStatus) -> anyhow::Result<()> {
+        sqlx::query("UPDATE users SET status = ?, updated_at = ? WHERE id = ?")
+            .bind(status.as_str())
             .bind(Utc::now().to_rfc3339())
             .bind(user_id)
             .execute(&self.pool)

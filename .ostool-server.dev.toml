@@ -4,10 +4,19 @@ board_dir = "/home/zcs/WORKSPACE/ostool/.ostool-server/boards"
 dtb_dir = "/home/zcs/WORKSPACE/ostool/.ostool-server/dtbs"
 
 [database]
-# provider = "sqlite"
-# url = "sqlite:/home/zcs/WORKSPACE/ostool/.ostool-server/ostool.db"
 provider = "mysql"
 url = "mysql://ostool:Ostool%402026Strong%21@127.0.0.1:3306/ostool"
+
+[sample_data]
+enabled = true
+
+[sample_data.admin]
+enabled = true
+username = "admin"
+password = "ostool123"
+reset_existing_password = true
+display_name = "平台管理员"
+email = "admin@ostool.local"
 
 [tftp]
 provider = "builtin"
@@ -24,14 +33,3 @@ interface = "lo"
 
 [upload_limits]
 session_file_max_mib = 64
-
-[sample_data]
-enabled = true
-
-[sample_data.admin]
-enabled = true
-username = "admin"
-password = "ostool123"
-reset_existing_password = true
-display_name = "平台管理员"
-email = "admin@ostool.local"

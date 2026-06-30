@@ -177,6 +177,21 @@ export const adminApi = {
   listAdminUsers() {
     return request<AdminUsersResponse>("/api/v1/admin/users");
   },
+  listPendingAdminUsers() {
+    return request<AdminUsersResponse>("/api/v1/admin/users/pending");
+  },
+  approveAdminUser(userId: string) {
+    return request<AdminUserResponse>(
+      `/api/v1/admin/users/${encodeURIComponent(userId)}/approve`,
+      { method: "POST" },
+    );
+  },
+  rejectAdminUser(userId: string) {
+    return request<AdminUserResponse>(
+      `/api/v1/admin/users/${encodeURIComponent(userId)}/reject`,
+      { method: "POST" },
+    );
+  },
   createAdminUser(payload: AdminUserCreateRequest) {
     return request<AdminUserResponse>("/api/v1/admin/users", {
       method: "POST",

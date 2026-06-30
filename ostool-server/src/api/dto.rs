@@ -29,6 +29,52 @@ pub struct LoginRequest {
     pub captcha_answer: String,
 }
 
+/// Self-service registration payload. Submitted by the public `/register` page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterRequest {
+    pub username: String,
+    pub display_name: Option<String>,
+    pub email: String,
+    pub password: String,
+    pub confirm_password: String,
+    pub captcha_token: String,
+    pub captcha_answer: String,
+    /// Optional profile fields mirrors the admin create form.
+    #[serde(default)]
+    pub phone: Option<String>,
+    #[serde(default)]
+    pub department: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+/// Returned by `/api/v1/auth/register`. Tells the client what happened so the
+/// UI can show the right next-step message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "outcome")]
+pub enum RegisterResponse {
+    /// Self-registration is disabled on this platform.
+    Closed,
+    /// Account is active and the user may log in now.
+    Active {
+        username: String,
+        display_name: String,
+    },
+    /// Account was created but is pending admin approval.
+    Pending {
+        username: String,
+        display_name: String,
+    },
+}
+
+/// Public endpoint that tells the register/login pages which flow to render.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegistrationPolicyResponse {
+    /// `closed` | `auto` | `approval`
+    pub mode: String,
+    pub self_service_enabled: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaptchaResponse {
     pub token: String,
@@ -100,6 +146,8 @@ pub struct AdminUserResponse {
     pub department: Option<String>,
     pub title: Option<String>,
     pub disabled: bool,
+    /// `active` | `pending` | `rejected` | `disabled`
+    pub status: String,
     pub last_login_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -566,6 +614,7 @@ pub struct SiteSettingsResponse {
     pub announcement: Option<String>,
     pub maintenance_mode: bool,
     pub self_service_enabled: bool,
+    pub registration_mode: String,
     pub default_lease_minutes: i64,
     pub max_lease_minutes: i64,
     pub support_email: Option<String>,
@@ -582,6 +631,7 @@ pub struct SiteSettingsUpdateRequest {
     pub announcement: Option<String>,
     pub maintenance_mode: bool,
     pub self_service_enabled: bool,
+    pub registration_mode: String,
     pub default_lease_minutes: i64,
     pub max_lease_minutes: i64,
     pub support_email: Option<String>,

@@ -12,7 +12,8 @@ use crate::{
     dtb_store::DtbStore,
     state::AppState,
     storage::{
-        DynStorage, LeaseState, NewLease, NewSessionRecord, NewUser, UpsertDtbMetadata, UserProfile,
+        DynStorage, LeaseState, NewLease, NewSessionRecord, NewUser, UpsertDtbMetadata,
+        UserProfile, UserStatus,
     },
 };
 
@@ -85,6 +86,7 @@ pub async fn seed_admin_user(storage: &DynStorage, admin: &AdminSeedConfig) -> a
                 .context("failed to hash seeded admin password")?,
             profile: UserProfile::default(),
             role_names: vec!["admin".to_string()],
+            status: UserStatus::Active,
         })
         .await?;
     Ok(())
@@ -118,6 +120,7 @@ async fn seed_sample_users(storage: &DynStorage) -> anyhow::Result<()> {
                     .context("failed to hash sample user password")?,
                 profile: UserProfile::default(),
                 role_names: vec!["user".into()],
+                status: UserStatus::Active,
             })
             .await?;
     }

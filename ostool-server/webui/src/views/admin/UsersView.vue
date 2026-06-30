@@ -28,7 +28,7 @@ const loading = ref(true);
 const submitting = ref(false);
 
 const search = ref("");
-const statusFilter = ref<"all" | "active" | "disabled">("all");
+const statusFilter = ref<"all" | "active" | "disabled" | "pending" | "rejected">("all");
 const roleFilter = ref<string>("");
 
 const filteredUsers = computed(() =>
@@ -41,11 +41,8 @@ const filteredUsers = computed(() =>
         return false;
       }
     }
-    const unavailable = userUnavailable(user);
-    if (statusFilter.value === "active" && unavailable) {
-      return false;
-    }
-    if (statusFilter.value === "disabled" && !unavailable) {
+    const status = userStatus(user).key;
+    if (statusFilter.value !== "all" && status !== statusFilter.value) {
       return false;
     }
     if (roleFilter.value) {
@@ -119,14 +116,26 @@ function userUnavailable(user: AdminUserResponse) {
   return user.disabled || userHasDisabledRole(user);
 }
 
-function userStatus(user: AdminUserResponse) {
+function userStatus(user: AdminUserResponse): {
+  key: "active" | "pending" | "rejected" | "disabled";
+  tone: "good" | "neutral" | "warn" | "danger";
+  label: string;
+} {
+  // Account-status driven by the registration / approval workflow takes
+  // precedence over the legacy `disabled` flag.
+  if (user.status === "pending") {
+    return { key: "pending", tone: "warn", label: "待审核" };
+  }
+  if (user.status === "rejected") {
+    return { key: "rejected", tone: "danger", label: "已拒绝" };
+  }
   if (user.disabled) {
-    return { tone: "neutral" as const, label: "已禁用" };
+    return { key: "disabled", tone: "neutral", label: "已禁用" };
   }
   if (userHasDisabledRole(user)) {
-    return { tone: "neutral" as const, label: "角色已禁用" };
+    return { key: "disabled", tone: "neutral", label: "角色已禁用" };
   }
-  return { tone: "good" as const, label: "启用" };
+  return { key: "active", tone: "good", label: "启用" };
 }
 
 function openEdit(user: AdminUserResponse) {
@@ -327,6 +336,46 @@ async function deleteUser(user: AdminUserResponse) {
   }
 }
 
+async function approveUser(user: AdminUserResponse) {
+  closeMenu();
+  const confirmed = await ui.confirm({
+    tone: "info",
+    title: "通过注册申请",
+    message: `确认通过 ${user.username} 的注册申请？通过后该账号即可登录。`,
+    confirmLabel: "通过",
+  });
+  if (!confirmed) {
+    return;
+  }
+  try {
+    await api.approveAdminUser(user.id);
+    ui.setSuccess(`已通过 ${user.username} 的注册申请`);
+    await loadUsers();
+  } catch (error) {
+    ui.setError((error as Error).message);
+  }
+}
+
+async function rejectUser(user: AdminUserResponse) {
+  closeMenu();
+  const confirmed = await ui.confirm({
+    tone: "danger",
+    title: "拒绝注册申请",
+    message: `确认拒绝 ${user.username} 的注册申请？拒绝后该账号将无法登录，除非管理员重新激活。`,
+    confirmLabel: "拒绝",
+  });
+  if (!confirmed) {
+    return;
+  }
+  try {
+    await api.rejectAdminUser(user.id);
+    ui.setSuccess(`已拒绝 ${user.username} 的注册申请`);
+    await loadUsers();
+  } catch (error) {
+    ui.setError((error as Error).message);
+  }
+}
+
 function submitModal() {
   if (modalMode.value === "create") {
     void submitCreate();
@@ -374,6 +423,8 @@ onMounted(() => {
             <select v-model="statusFilter">
               <option value="all">全部状态</option>
               <option value="active">启用</option>
+              <option value="pending">待审核</option>
+              <option value="rejected">已拒绝</option>
               <option value="disabled">已禁用</option>
             </select>
           </label>
@@ -439,6 +490,22 @@ onMounted(() => {
               <td class="col-actions">
                 <div class="row-actions">
                   <button
+                    v-if="user.status === 'pending'"
+                    class="btn-icon-only"
+                    title="通过注册申请"
+                    @click="approveUser(user)"
+                  >
+                    <Icon name="check" :size="16" />
+                  </button>
+                  <button
+                    v-if="user.status === 'pending'"
+                    class="btn-icon-only"
+                    title="拒绝注册申请"
+                    @click="rejectUser(user)"
+                  >
+                    <Icon name="ban" :size="16" />
+                  </button>
+                  <button
                     class="btn-icon-only"
                     title="编辑"
                     @click="openEdit(user)"
@@ -446,6 +513,7 @@ onMounted(() => {
                     <Icon name="edit" :size="16" />
                   </button>
                   <button
+                    v-if="user.status !== 'pending'"
                     class="btn-icon-only"
                     :title="user.disabled ? '启用' : '禁用'"
                     @click="toggleDisabled(user)"
@@ -476,6 +544,23 @@ onMounted(() => {
                         编辑用户
                       </button>
                       <button
+                        v-if="user.status === 'pending'"
+                        class="action-menu-item"
+                        @click="approveUser(user)"
+                      >
+                        <Icon name="check" :size="14" />
+                        通过注册申请
+                      </button>
+                      <button
+                        v-if="user.status === 'pending'"
+                        class="action-menu-item"
+                        @click="rejectUser(user)"
+                      >
+                        <Icon name="ban" :size="14" />
+                        拒绝注册申请
+                      </button>
+                      <button
+                        v-if="user.status !== 'pending'"
                         class="action-menu-item"
                         @click="openResetPassword(user)"
                       >

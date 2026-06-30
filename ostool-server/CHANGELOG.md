@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- *(ostool-server)* self-service account registration with configurable policy
+  (`registration.mode` site setting: `closed` / `auto` / `approval`). Adds
+  `users.status` column (`active` / `pending` / `rejected` / `disabled`),
+  `POST /api/v1/auth/register`, `GET /api/v1/auth/registration-policy`, and
+  admin approval endpoints `POST /api/v1/admin/users/{id}/approve|reject` plus
+  `GET /api/v1/admin/users/pending`. Login now distinguishes pending/rejected
+  accounts with dedicated messages.
+
 ## [0.4.2](https://github.com/drivercraft/ostool/compare/ostool-server-v0.4.1...ostool-server-v0.4.2) - 2026-06-16
 
 ### Fixed

@@ -144,9 +144,17 @@ onMounted(() => {
 
           <section class="panel nested-panel">
             <div class="panel-heading compact">
-              <h4>租赁策略</h4>
+              <h4>账号与租赁策略</h4>
             </div>
             <div class="form-grid">
+              <label class="field">
+                <span>自助注册策略</span>
+                <select v-model="config.site.registration_mode">
+                  <option value="closed">关闭注册（仅管理员开通）</option>
+                  <option value="auto">自动生效</option>
+                  <option value="approval">管理员审核</option>
+                </select>
+              </label>
               <label class="check-row">
                 <input v-model="config.site.self_service_enabled" type="checkbox" />
                 <span>允许普通用户自助租赁</span>

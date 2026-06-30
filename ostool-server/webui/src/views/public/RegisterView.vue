@@ -1,32 +1,56 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
-import { onMounted } from "vue";
-import { RouterLink } from "vue-router";
+import { computed, onMounted, ref } from "vue";
+import { RouterLink, useRouter } from "vue-router";
 
 import Icon from "@/components/Icon.vue";
 import { api } from "@/api";
 import { USERNAME_PATTERN, VALIDATION_LIMITS } from "@/constants/validation";
 import { useUiStore } from "@/stores/ui";
-import type { CaptchaResponse } from "@/types/api";
+import type { CaptchaResponse, RegistrationPolicyResponse } from "@/types/api";
 
 const ui = useUiStore();
+const router = useRouter();
 
 const username = ref("");
 const displayName = ref("");
 const email = ref("");
 const password = ref("");
 const confirmPassword = ref("");
+const phone = ref("");
+const department = ref("");
+const title = ref("");
 const agreed = ref(false);
 const captchaAnswer = ref("");
 const captcha = ref<CaptchaResponse | null>(null);
 const captchaLoading = ref(false);
 const submitting = ref(false);
 
+// Reflects server-side `registration_mode`. Loaded on mount; when `closed`,
+// the form is hidden and a notice tells the visitor registration is disabled.
+const policy = ref<RegistrationPolicyResponse | null>(null);
+const policyLoading = ref(true);
+
+const registrationClosed = computed(() => policy.value?.mode === "closed");
+
 const passwordsMismatch = computed(
   () => confirmPassword.value.length > 0 && password.value !== confirmPassword.value,
 );
 
-function submit() {
+async function loadPolicy() {
+  policyLoading.value = true;
+  try {
+    policy.value = await api.getRegistrationPolicy();
+  } catch (error) {
+    // If the endpoint is unreachable, default to closed so we never show a
+    // form that cannot succeed.
+    policy.value = { mode: "closed", self_service_enabled: false };
+    ui.setError((error as Error).message);
+  } finally {
+    policyLoading.value = false;
+  }
+}
+
+async function submit() {
   if (submitting.value) {
     return;
   }
@@ -52,14 +76,40 @@ function submit() {
     return;
   }
   submitting.value = true;
-  // 当前平台账号由管理员统一开通；自助注册通道暂未开放。
-  // 在此给出明确反馈，避免调用不存在的后端接口。
-  window.setTimeout(() => {
-    submitting.value = false;
+  try {
+    const result = await api.register({
+      username: username.value.trim(),
+      display_name: displayName.value.trim(),
+      email: email.value.trim(),
+      password: password.value,
+      confirm_password: confirmPassword.value,
+      captcha_token: captcha.value.token,
+      captcha_answer: captchaAnswer.value.trim(),
+      phone: phone.value.trim() || undefined,
+      department: department.value.trim() || undefined,
+      title: title.value.trim() || undefined,
+    });
     captchaAnswer.value = "";
+    if (result.outcome === "closed") {
+      ui.setError("当前平台已关闭自助注册，请联系管理员开通账号。");
+    } else if (result.outcome === "pending") {
+      ui.setSuccess(
+        `注册申请已提交，${result.display_name}。账号正在等待管理员审核，审核通过后即可登录。`,
+      );
+      void router.push({ name: "login" });
+    } else {
+      ui.setSuccess(`注册成功，${result.display_name}。现在可以使用账号登录。`);
+      void router.push({
+        name: "login",
+        query: { username: result.username },
+      });
+    }
+  } catch (error) {
+    ui.setError((error as Error).message);
     void loadCaptcha();
-    ui.setSuccess("注册申请已记录。当前账号由平台管理员统一开通，请联平台管理员完成激活。");
-  }, 400);
+  } finally {
+    submitting.value = false;
+  }
 }
 
 async function loadCaptcha() {
@@ -74,8 +124,11 @@ async function loadCaptcha() {
   }
 }
 
-onMounted(() => {
-  void loadCaptcha();
+onMounted(async () => {
+  await loadPolicy();
+  if (!registrationClosed.value) {
+    void loadCaptcha();
+  }
 });
 </script>
 
@@ -102,10 +155,23 @@ onMounted(() => {
       <section class="auth-card">
         <header class="auth-header">
           <h2>注册 ostool 账号</h2>
-          <p>填写下方信息提交注册申请，账号由平台管理员审核开通。</p>
+          <p v-if="policy && policy.mode === 'approval'">
+            填写下方信息提交注册申请，提交后账号进入待审核状态，由平台管理员审核通过后即可登录。
+          </p>
+          <p v-else-if="policy && policy.mode === 'auto'">
+            填写下方信息完成注册，注册成功后即可使用账号登录平台。
+          </p>
+          <p v-else>填写下方信息提交注册申请，账号由平台管理员审核开通。</p>
         </header>
 
-        <form class="auth-form" @submit.prevent="submit">
+        <div v-if="policyLoading" class="empty-state">正在加载注册设置...</div>
+        <div v-else-if="registrationClosed" class="empty-state">
+          <div class="empty-state-icon">&#9888;</div>
+          当前平台已关闭自助注册。请联系管理员开通账号后再登录。
+          <RouterLink class="btn btn-ghost btn-sm" to="/login">前往登录</RouterLink>
+        </div>
+
+        <form v-else class="auth-form" @submit.prevent="submit">
           <label class="field is-required">
             <span>用户名</span>
             <input
@@ -137,6 +203,36 @@ onMounted(() => {
               :minlength="VALIDATION_LIMITS.emailMin"
               :maxlength="VALIDATION_LIMITS.emailMax"
               placeholder="用于联系和账号通知，例如 you@example.com"
+              :disabled="submitting"
+            />
+          </label>
+          <div class="auth-form-row">
+            <label class="field">
+              <span>手机号（选填）</span>
+              <input
+                v-model="phone"
+                autocomplete="tel"
+                :maxlength="VALIDATION_LIMITS.phoneMax"
+                placeholder="便于紧急联系，可留空"
+                :disabled="submitting"
+              />
+            </label>
+            <label class="field">
+              <span>部门（选填）</span>
+              <input
+                v-model="department"
+                :maxlength="VALIDATION_LIMITS.departmentMax"
+                placeholder="例如：内核组"
+                :disabled="submitting"
+              />
+            </label>
+          </div>
+          <label class="field">
+            <span>职位（选填）</span>
+            <input
+              v-model="title"
+              :maxlength="VALIDATION_LIMITS.titleMax"
+              placeholder="例如：嵌入式工程师"
               :disabled="submitting"
             />
           </label>
@@ -204,10 +300,12 @@ onMounted(() => {
           </button>
         </form>
 
-        <div class="auth-divider">或</div>
-        <div class="auth-footer">
-          已有账号？<RouterLink class="inline-link" to="/login">直接登录</RouterLink>
-        </div>
+        <template v-if="!registrationClosed">
+          <div class="auth-divider">或</div>
+          <div class="auth-footer">
+            已有账号？<RouterLink class="inline-link" to="/login">直接登录</RouterLink>
+          </div>
+        </template>
       </section>
     </main>
   </div>

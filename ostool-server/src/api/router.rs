@@ -41,10 +41,11 @@ use crate::{
             BoardRuntimeStatusResponse, BoardTypeSummary, BootProfileResponse, CaptchaResponse,
             CreateLeaseRequest, CreateSessionRequest, CurrentUserResponse, DtbFileResponse,
             FileResponse, HttpBootFileResponse, KernelPublishResponse, LeaseResponse,
-            LeasesResponse, LoginRequest, NetworkInterfaceSummary, SerialPortSummary,
-            SerialStatusResponse, SessionCreatedResponse, SessionDetailResponse,
-            SessionDtbResponse, SiteSettingsResponse, SiteSettingsUpdateRequest,
-            TftpSessionResponse, UpdateServerConfigRequest, UserPasswordUpdateRequest,
+            LeasesResponse, LoginRequest, NetworkInterfaceSummary, RegisterRequest,
+            RegisterResponse, RegistrationPolicyResponse, SerialPortSummary, SerialStatusResponse,
+            SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse,
+            SiteSettingsResponse, SiteSettingsUpdateRequest, TftpSessionResponse,
+            UpdateServerConfigRequest, UserPasswordUpdateRequest,
         },
         error::ApiError,
     },
@@ -105,6 +106,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/admin/overview", get(get_admin_overview))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/captcha", get(get_captcha))
+        .route("/api/v1/auth/register", post(register))
+        .route("/api/v1/auth/registration-policy", get(registration_policy))
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/me", get(get_current_user))
         .route("/api/v1/user/profile", get(get_user_profile))
@@ -144,6 +147,15 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/admin/users/{user_id}/disable",
             post(disable_admin_user),
         )
+        .route(
+            "/api/v1/admin/users/{user_id}/approve",
+            post(approve_admin_user),
+        )
+        .route(
+            "/api/v1/admin/users/{user_id}/reject",
+            post(reject_admin_user),
+        )
+        .route("/api/v1/admin/users/pending", get(list_pending_admin_users))
         .route(
             "/api/v1/admin/leases",
             get(list_admin_leases).post(create_admin_lease),
@@ -656,7 +668,9 @@ fn read_update_permission(method: &Method, resource: &'static str) -> Option<&'s
 
 fn admin_users_permission(method: &Method, segments: &[&str]) -> Option<&'static str> {
     match (method.as_str(), segments) {
-        ("GET", ["users"]) | ("GET", ["users", _]) => Some("users.read"),
+        ("GET", ["users"]) => Some("users.read"),
+        ("GET", ["users", "pending"]) => Some("users.read"),
+        ("GET", ["users", _]) => Some("users.read"),
         ("POST", ["users"]) => Some("users.create"),
         ("PUT", ["users", _]) => Some("users.update"),
         ("DELETE", ["users", _]) => Some("users.delete"),
@@ -664,6 +678,8 @@ fn admin_users_permission(method: &Method, segments: &[&str]) -> Option<&'static
         ("PUT", ["users", _, "roles"]) => Some("users.update"),
         ("POST", ["users", _, "reset-password"]) => Some("users.password.update"),
         ("POST", ["users", _, "disable"]) => Some("users.update"),
+        ("POST", ["users", _, "approve"]) => Some("users.update"),
+        ("POST", ["users", _, "reject"]) => Some("users.update"),
         _ => None,
     }
 }
@@ -735,6 +751,7 @@ fn admin_user_response(user: crate::storage::User) -> AdminUserResponse {
         department: user.department,
         title: user.title,
         disabled: user.disabled,
+        status: user.status.as_str().to_string(),
         last_login_at: user.last_login_at,
         created_at: user.created_at,
         updated_at: user.updated_at,
@@ -935,10 +952,103 @@ async fn login(
         .auth
         .login(request.username.trim(), &request.password)
         .await
-        .map_err(|_| ApiError::unauthorized("invalid username or password"))?;
+        .map_err(|err| {
+            // Distinguish "pending/rejected" so the UI can guide the user.
+            let message = err.to_string();
+            if message.contains("status is `pending`") {
+                ApiError::forbidden("账号正在等待管理员审核，审核通过后即可登录")
+            } else if message.contains("status is `rejected`") {
+                ApiError::forbidden("账号注册申请已被拒绝，请联系管理员")
+            } else if message.contains("disabled") {
+                ApiError::forbidden("账号已被禁用，请联系管理员")
+            } else {
+                ApiError::unauthorized("invalid username or password")
+            }
+        })?;
     let mut response = axum::Json(user_response(user)).into_response();
     set_cookie_header(response.headers_mut(), cookie_value(&token)).map_err(ApiError::from)?;
     Ok(response)
+}
+
+async fn registration_policy(
+    State(state): State<AppState>,
+) -> Result<axum::Json<RegistrationPolicyResponse>, ApiError> {
+    let site = state.storage.get_site_settings().await?;
+    Ok(axum::Json(RegistrationPolicyResponse {
+        mode: site.registration_mode.as_str().to_string(),
+        self_service_enabled: site.self_service_enabled,
+    }))
+}
+
+async fn register(
+    State(state): State<AppState>,
+    axum::Json(request): axum::Json<RegisterRequest>,
+) -> Result<(StatusCode, axum::Json<RegisterResponse>), ApiError> {
+    verify_captcha(&state, &request.captcha_token, &request.captcha_answer).await?;
+    let username = clean_required_len(
+        request.username,
+        "username",
+        validation::USERNAME_MIN_LEN,
+        validation::USERNAME_MAX_LEN,
+    )?;
+    validate_username(&username)?;
+    let display_name = clean_optional_len(
+        request.display_name,
+        "display_name",
+        validation::DISPLAY_NAME_MAX_LEN,
+    )?
+    .unwrap_or_else(|| username.clone());
+    validate_len(
+        &display_name,
+        "display_name",
+        validation::DISPLAY_NAME_MIN_LEN,
+        validation::DISPLAY_NAME_MAX_LEN,
+    )?;
+    let email = clean_required_len(
+        request.email,
+        "email",
+        validation::EMAIL_MIN_LEN,
+        validation::EMAIL_MAX_LEN,
+    )?;
+    validate_email(&email)?;
+    validate_password(&request.password)?;
+    if request.password != request.confirm_password {
+        return Err(ApiError::bad_request("两次输入的密码不一致"));
+    }
+    let profile =
+        request_profile_checked(None, None, request.phone, request.department, request.title)?;
+    let outcome = state
+        .auth
+        .register_user(
+            username.clone(),
+            display_name.clone(),
+            email,
+            request.password,
+            profile,
+        )
+        .await
+        .map_err(|err| {
+            // username uniqueness / DB errors → 409 conflict
+            ApiError::conflict(err.to_string())
+        })?;
+    let (status_code, response) = match outcome {
+        crate::auth::RegistrationOutcome::Closed => (StatusCode::OK, RegisterResponse::Closed),
+        crate::auth::RegistrationOutcome::Active { .. } => (
+            StatusCode::CREATED,
+            RegisterResponse::Active {
+                username,
+                display_name,
+            },
+        ),
+        crate::auth::RegistrationOutcome::Pending { .. } => (
+            StatusCode::ACCEPTED,
+            RegisterResponse::Pending {
+                username,
+                display_name,
+            },
+        ),
+    };
+    Ok((status_code, axum::Json(response)))
 }
 
 async fn remove_expired_captchas(state: &AppState) {
@@ -1335,6 +1445,94 @@ async fn disable_admin_user(
 ) -> Result<StatusCode, ApiError> {
     state.storage.set_user_disabled(&user_id, true).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn approve_admin_user(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> Result<axum::Json<AdminUserResponse>, ApiError> {
+    let user = ensure_pending_user_for_review(&state, &user_id).await?;
+    state
+        .auth
+        .approve_user(&user_id)
+        .await
+        .map_err(|err| ApiError::not_found(err.to_string()))?;
+    write_audit_log(
+        &state,
+        "user.approve",
+        "user",
+        Some(user_id.clone()),
+        json!({ "username": user.username }),
+    )
+    .await?;
+    let updated = state
+        .storage
+        .find_user_by_id(&user_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("user not found"))?;
+    Ok(axum::Json(admin_user_response(updated)))
+}
+
+async fn reject_admin_user(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> Result<axum::Json<AdminUserResponse>, ApiError> {
+    let user = ensure_pending_user_for_review(&state, &user_id).await?;
+    state
+        .auth
+        .reject_user(&user_id)
+        .await
+        .map_err(|err| ApiError::not_found(err.to_string()))?;
+    write_audit_log(
+        &state,
+        "user.reject",
+        "user",
+        Some(user_id.clone()),
+        json!({ "username": user.username }),
+    )
+    .await?;
+    let updated = state
+        .storage
+        .find_user_by_id(&user_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("user not found"))?;
+    Ok(axum::Json(admin_user_response(updated)))
+}
+
+async fn ensure_user_for_review(
+    state: &AppState,
+    user_id: &str,
+) -> Result<crate::storage::User, ApiError> {
+    state
+        .storage
+        .find_user_by_id(user_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("user not found"))
+}
+
+async fn ensure_pending_user_for_review(
+    state: &AppState,
+    user_id: &str,
+) -> Result<crate::storage::User, ApiError> {
+    let user = ensure_user_for_review(state, user_id).await?;
+    if user.status != crate::storage::UserStatus::Pending {
+        return Err(ApiError::conflict(
+            "only pending registration users can be reviewed",
+        ));
+    }
+    Ok(user)
+}
+
+async fn list_pending_admin_users(
+    State(state): State<AppState>,
+) -> Result<axum::Json<AdminUsersResponse>, ApiError> {
+    let users = state
+        .storage
+        .list_users_with_status(crate::storage::UserStatus::Pending)
+        .await?;
+    Ok(axum::Json(AdminUsersResponse {
+        users: users.into_iter().map(admin_user_response).collect(),
+    }))
 }
 
 async fn delete_admin_user(
@@ -3825,6 +4023,7 @@ fn site_settings_response(settings: SiteSettings) -> SiteSettingsResponse {
         announcement: settings.announcement,
         maintenance_mode: settings.maintenance_mode,
         self_service_enabled: settings.self_service_enabled,
+        registration_mode: settings.registration_mode.as_str().to_string(),
         default_lease_minutes: settings.default_lease_minutes,
         max_lease_minutes: settings.max_lease_minutes,
         support_email: settings.support_email,
@@ -3836,6 +4035,8 @@ fn site_settings_response(settings: SiteSettings) -> SiteSettingsResponse {
 fn site_settings_from_request(
     request: SiteSettingsUpdateRequest,
 ) -> Result<SiteSettings, ApiError> {
+    let registration_mode = crate::storage::RegistrationMode::parse(&request.registration_mode)
+        .map_err(|err| ApiError::bad_request(err.to_string()))?;
     let mut settings = SiteSettings {
         site_name: request.site_name,
         site_subtitle: request.site_subtitle,
@@ -3844,6 +4045,7 @@ fn site_settings_from_request(
         announcement: request.announcement,
         maintenance_mode: request.maintenance_mode,
         self_service_enabled: request.self_service_enabled,
+        registration_mode,
         default_lease_minutes: request.default_lease_minutes,
         max_lease_minutes: request.max_lease_minutes,
         support_email: request.support_email,

@@ -26,6 +26,31 @@ export interface LoginRequest {
   captcha_answer: string;
 }
 
+export interface RegisterRequest {
+  username: string;
+  display_name?: string;
+  email: string;
+  password: string;
+  confirm_password: string;
+  captcha_token: string;
+  captcha_answer: string;
+  phone?: string;
+  department?: string;
+  title?: string;
+}
+
+export type RegisterOutcome = "closed" | "active" | "pending";
+
+export type RegisterResponse =
+  | { outcome: "closed" }
+  | { outcome: "active"; username: string; display_name: string }
+  | { outcome: "pending"; username: string; display_name: string };
+
+export interface RegistrationPolicyResponse {
+  mode: "closed" | "auto" | "approval";
+  self_service_enabled: boolean;
+}
+
 export interface CaptchaResponse {
   token: string;
   image_svg: string;
@@ -300,6 +325,8 @@ export interface AdminUserResponse {
   department: string | null;
   title: string | null;
   disabled: boolean;
+  /** `active` | `pending` | `rejected` | `disabled` */
+  status: string;
   last_login_at: string | null;
   created_at: string;
   updated_at: string;
@@ -451,6 +478,8 @@ export interface SiteSettingsResponse {
   announcement: string | null;
   maintenance_mode: boolean;
   self_service_enabled: boolean;
+  /** `closed` | `auto` | `approval` */
+  registration_mode: string;
   default_lease_minutes: number;
   max_lease_minutes: number;
   support_email: string | null;

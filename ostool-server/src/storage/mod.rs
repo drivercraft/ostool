@@ -11,6 +11,54 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::BoardConfig;
 
+/// Account lifecycle status. Drives the registration / approval workflow.
+///
+/// - `Active`   — user can log in normally (admin-created or approved self-register)
+/// - `Pending`  — self-registered while `registration_mode = approval`, awaiting admin review
+/// - `Rejected` — admin rejected a pending registration; cannot log in
+/// - `Disabled` — kept for forward compatibility; the legacy `disabled` column is the
+///   authoritative source for now, this variant is reserved for future unification.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UserStatus {
+    Active,
+    Pending,
+    Rejected,
+    Disabled,
+}
+
+impl UserStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Pending => "pending",
+            Self::Rejected => "rejected",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    pub fn from_str(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "active" => Ok(Self::Active),
+            "pending" => Ok(Self::Pending),
+            "rejected" => Ok(Self::Rejected),
+            "disabled" => Ok(Self::Disabled),
+            other => anyhow::bail!("unknown user status `{other}`"),
+        }
+    }
+
+    /// A user in this status is allowed to pass the login gate.
+    pub fn can_login(self) -> bool {
+        matches!(self, Self::Active)
+    }
+}
+
+impl Default for UserStatus {
+    fn default() -> Self {
+        Self::Active
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     pub id: String,
@@ -24,6 +72,7 @@ pub struct User {
     pub title: Option<String>,
     pub password_hash: String,
     pub disabled: bool,
+    pub status: UserStatus,
     pub last_login_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -37,6 +86,7 @@ pub struct NewUser {
     pub password_hash: String,
     pub profile: UserProfile,
     pub role_names: Vec<String>,
+    pub status: UserStatus,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -321,6 +371,49 @@ pub struct NewAuditLog {
     pub metadata_json: String,
 }
 
+/// Self-service registration policy. Stored as `registration.mode` site setting.
+///
+/// - `Closed`  — self-registration disabled; only admins can create accounts
+/// - `Auto`    — self-registered accounts activate immediately
+/// - `Approval` — self-registered accounts land in `Pending` status until an admin
+///   approves (`Active`) or rejects (`Rejected`) them
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistrationMode {
+    Closed,
+    Auto,
+    Approval,
+}
+
+impl RegistrationMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Closed => "closed",
+            Self::Auto => "auto",
+            Self::Approval => "approval",
+        }
+    }
+
+    pub fn parse(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "closed" => Ok(Self::Closed),
+            "auto" => Ok(Self::Auto),
+            "approval" => Ok(Self::Approval),
+            other => anyhow::bail!("unknown registration mode `{other}`"),
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        Self::parse(value).unwrap_or(Self::Closed)
+    }
+}
+
+impl Default for RegistrationMode {
+    fn default() -> Self {
+        Self::Closed
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SiteSettings {
     pub site_name: String,
@@ -330,6 +423,7 @@ pub struct SiteSettings {
     pub announcement: Option<String>,
     pub maintenance_mode: bool,
     pub self_service_enabled: bool,
+    pub registration_mode: RegistrationMode,
     pub default_lease_minutes: i64,
     pub max_lease_minutes: i64,
     pub support_email: Option<String>,
@@ -347,6 +441,7 @@ impl Default for SiteSettings {
             announcement: None,
             maintenance_mode: false,
             self_service_enabled: true,
+            registration_mode: RegistrationMode::Closed,
             default_lease_minutes: 120,
             max_lease_minutes: 480,
             support_email: None,
@@ -466,6 +561,15 @@ pub(crate) fn default_site_setting_rows() -> Vec<SiteSettingDefinition> {
             &now,
         ),
         site_setting_definition(
+            "registration.mode",
+            &settings.registration_mode.as_str().to_string(),
+            "string",
+            "registration",
+            "注册策略",
+            "自助注册策略：closed（关闭）/ auto（自动生效）/ approval（管理员审核）",
+            &now,
+        ),
+        site_setting_definition(
             "rental.default_lease_minutes",
             &settings.default_lease_minutes,
             "integer",
@@ -522,6 +626,10 @@ pub(crate) fn site_settings_to_values(
             setting_json(&settings.self_service_enabled)?,
         ),
         (
+            "registration.mode",
+            setting_json(&settings.registration_mode.as_str().to_string())?,
+        ),
+        (
             "rental.default_lease_minutes",
             setting_json(&settings.default_lease_minutes)?,
         ),
@@ -561,6 +669,12 @@ pub(crate) fn site_settings_from_values(
         "rental.self_service_enabled",
         settings.self_service_enabled,
     )?;
+    settings.registration_mode = match map.get("registration.mode") {
+        Some(raw) => serde_json::from_str::<String>(raw)
+            .map(|v| RegistrationMode::from_str(&v))
+            .unwrap_or(settings.registration_mode),
+        None => settings.registration_mode,
+    };
     settings.default_lease_minutes = setting_value(
         &map,
         "rental.default_lease_minutes",
@@ -633,6 +747,7 @@ fn trim_or_default(value: &str, default: &str) -> String {
 pub trait UserRepository: Send + Sync {
     async fn create_user(&self, user: NewUser) -> anyhow::Result<User>;
     async fn list_users(&self) -> anyhow::Result<Vec<User>>;
+    async fn list_users_with_status(&self, status: UserStatus) -> anyhow::Result<Vec<User>>;
     async fn find_user_by_id(&self, user_id: &str) -> anyhow::Result<Option<User>>;
     async fn find_user_by_username(&self, username: &str) -> anyhow::Result<Option<User>>;
     async fn update_user(
@@ -650,6 +765,7 @@ pub trait UserRepository: Send + Sync {
         password_hash: String,
     ) -> anyhow::Result<()>;
     async fn set_user_disabled(&self, user_id: &str, disabled: bool) -> anyhow::Result<()>;
+    async fn set_user_status(&self, user_id: &str, status: UserStatus) -> anyhow::Result<()>;
     async fn user_count(&self) -> anyhow::Result<i64>;
 }
 

@@ -128,6 +128,7 @@ function makeUser(): AdminUserResponse {
     department: null,
     title: null,
     disabled: false,
+    status: "active",
     last_login_at: null,
     created_at: "2026-04-08T00:00:00Z",
     updated_at: "2026-04-08T00:00:00Z",
