@@ -22,6 +22,7 @@ const MIGRATION_DTB_AUDIT: &str = "0003_dtb_audit";
 const MIGRATION_STANDARD_FIELDS: &str = "0004_standard_profile_fields";
 const MIGRATION_SITE_SETTINGS: &str = "0005_site_settings";
 const MIGRATION_PERFORMANCE_INDEXES: &str = "0006_performance_indexes";
+const MIGRATION_ROLE_DISABLED: &str = "0007_role_disabled";
 
 #[derive(Clone)]
 pub struct SqliteStorage {
@@ -83,6 +84,10 @@ impl SqliteStorage {
             self.migrate_performance_indexes().await?;
             self.mark_migration_applied(MIGRATION_PERFORMANCE_INDEXES)
                 .await?;
+        }
+        if !self.is_migration_applied(MIGRATION_ROLE_DISABLED).await? {
+            self.migrate_role_disabled().await?;
+            self.mark_migration_applied(MIGRATION_ROLE_DISABLED).await?;
         }
         Ok(())
     }
@@ -249,6 +254,7 @@ impl SqliteStorage {
                 display_name TEXT NOT NULL CHECK(length(display_name) BETWEEN 1 AND 64),
                 description TEXT NOT NULL CHECK(length(description) <= 255),
                 `system` INTEGER NOT NULL DEFAULT 0,
+                disabled INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL CHECK(length(created_at) BETWEEN 1 AND 64),
                 updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64)
             )
@@ -286,6 +292,23 @@ impl SqliteStorage {
         .await?;
 
         self.seed_builtin_rbac().await?;
+        Ok(())
+    }
+
+    async fn migrate_role_disabled(&self) -> anyhow::Result<()> {
+        let columns = sqlx::query("PRAGMA table_info(roles)")
+            .fetch_all(&self.pool)
+            .await?;
+        let has_disabled = columns.iter().any(|row| {
+            row.try_get::<String, _>("name")
+                .map(|name| name == "disabled")
+                .unwrap_or(false)
+        });
+        if !has_disabled {
+            sqlx::query("ALTER TABLE roles ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0")
+                .execute(&self.pool)
+                .await?;
+        }
         Ok(())
     }
 
@@ -947,6 +970,7 @@ fn role_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<Role> {
         display_name: row.try_get("display_name")?,
         description: row.try_get("description")?,
         system: row.try_get::<i64, _>("system")? != 0,
+        disabled: row.try_get::<i64, _>("disabled")? != 0,
         created_at: parse_time(row.try_get::<String, _>("created_at")?.as_str())?,
         updated_at: parse_time(row.try_get::<String, _>("updated_at")?.as_str())?,
     })
@@ -1533,8 +1557,8 @@ impl RbacRepository for SqliteStorage {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
             r#"
-            INSERT INTO roles (id, name, display_name, description, `system`, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 0, ?, ?)
+            INSERT INTO roles (id, name, display_name, description, `system`, disabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 0, 0, ?, ?)
             "#,
         )
         .bind(&id)
@@ -1573,6 +1597,24 @@ impl RbacRepository for SqliteStorage {
         .execute(&self.pool)
         .await?;
         self.replace_role_permissions(role_id, &permission_ids)
+            .await?;
+        self.find_role_by_id_inner(role_id).await
+    }
+
+    async fn set_role_disabled(
+        &self,
+        role_id: &str,
+        disabled: bool,
+    ) -> anyhow::Result<Option<Role>> {
+        let role = self.find_role_by_id_inner(role_id).await?;
+        if role.as_ref().map(|item| item.system).unwrap_or(false) {
+            anyhow::bail!("system role cannot be disabled");
+        }
+        sqlx::query("UPDATE roles SET disabled = ?, updated_at = ? WHERE id = ?")
+            .bind(if disabled { 1 } else { 0 })
+            .bind(Utc::now().to_rfc3339())
+            .bind(role_id)
+            .execute(&self.pool)
             .await?;
         self.find_role_by_id_inner(role_id).await
     }
@@ -1667,7 +1709,9 @@ impl RbacRepository for SqliteStorage {
             FROM permissions
             INNER JOIN role_permissions ON role_permissions.permission_id = permissions.id
             INNER JOIN user_roles ON user_roles.role_id = role_permissions.role_id
+            INNER JOIN roles ON roles.id = user_roles.role_id
             WHERE user_roles.user_id = ?
+              AND roles.disabled = 0
             ORDER BY permissions.code ASC
             "#,
         )

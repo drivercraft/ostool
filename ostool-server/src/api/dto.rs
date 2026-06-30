@@ -175,6 +175,7 @@ pub struct AdminRoleResponse {
     pub display_name: String,
     pub description: String,
     pub system: bool,
+    pub disabled: bool,
     pub user_count: u64,
     pub permissions: Vec<AdminPermissionResponse>,
     pub created_at: DateTime<Utc>,
@@ -189,6 +190,7 @@ impl AdminRoleResponse {
             display_name: role.display_name,
             description: role.description,
             system: role.system,
+            disabled: role.disabled,
             user_count,
             permissions: permissions
                 .into_iter()
@@ -225,6 +227,11 @@ pub struct AdminRoleUpdateRequest {
     pub description: String,
     #[serde(default)]
     pub permission_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminRoleDisableRequest {
+    pub disabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

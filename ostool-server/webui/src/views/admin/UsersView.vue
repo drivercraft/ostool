@@ -20,6 +20,9 @@ const userRoleIds = ref<Record<string, string[]>>({});
 const roleNamesById = computed(() =>
   new Map(roles.value.map((role) => [role.id, role.display_name])),
 );
+const disabledRoleIds = computed(() =>
+  new Set(roles.value.filter((role) => role.disabled).map((role) => role.id)),
+);
 
 const loading = ref(true);
 const submitting = ref(false);
@@ -38,10 +41,11 @@ const filteredUsers = computed(() =>
         return false;
       }
     }
-    if (statusFilter.value === "active" && user.disabled) {
+    const unavailable = userUnavailable(user);
+    if (statusFilter.value === "active" && unavailable) {
       return false;
     }
-    if (statusFilter.value === "disabled" && !user.disabled) {
+    if (statusFilter.value === "disabled" && !unavailable) {
       return false;
     }
     if (roleFilter.value) {
@@ -105,6 +109,24 @@ function openCreate() {
     role_ids: [],
     disabled: false,
   };
+}
+
+function userHasDisabledRole(user: AdminUserResponse) {
+  return (userRoleIds.value[user.id] ?? []).some((roleId) => disabledRoleIds.value.has(roleId));
+}
+
+function userUnavailable(user: AdminUserResponse) {
+  return user.disabled || userHasDisabledRole(user);
+}
+
+function userStatus(user: AdminUserResponse) {
+  if (user.disabled) {
+    return { tone: "neutral" as const, label: "已禁用" };
+  }
+  if (userHasDisabledRole(user)) {
+    return { tone: "neutral" as const, label: "角色已禁用" };
+  }
+  return { tone: "good" as const, label: "启用" };
 }
 
 function openEdit(user: AdminUserResponse) {
@@ -409,8 +431,8 @@ onMounted(() => {
               </td>
               <td>
                 <StatusPill
-                  :tone="user.disabled ? 'neutral' : 'good'"
-                  :label="user.disabled ? '已禁用' : '启用'"
+                  :tone="userStatus(user).tone"
+                  :label="userStatus(user).label"
                 />
               </td>
               <td class="muted">{{ new Date(user.created_at).toLocaleString() }}</td>

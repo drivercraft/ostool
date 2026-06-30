@@ -6,6 +6,7 @@ import type {
   AdminPasswordResetRequest,
   AdminPermissionsResponse,
   AdminRoleCreateRequest,
+  AdminRoleDisableRequest,
   AdminRoleResponse,
   AdminRolesResponse,
   AdminRoleUpdateRequest,
@@ -239,6 +240,12 @@ export const adminApi = {
   updateAdminRole(roleId: string, payload: AdminRoleUpdateRequest) {
     return request<AdminRoleResponse>(`/api/v1/admin/roles/${encodeURIComponent(roleId)}`, {
       method: "PUT",
+      bodyJson: payload,
+    });
+  },
+  disableAdminRole(roleId: string, payload: AdminRoleDisableRequest) {
+    return request<AdminRoleResponse>(`/api/v1/admin/roles/${encodeURIComponent(roleId)}/disable`, {
+      method: "POST",
       bodyJson: payload,
     });
   },

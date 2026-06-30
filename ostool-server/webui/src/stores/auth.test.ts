@@ -27,7 +27,7 @@ const demoUser = {
   department: null,
   title: null,
   last_login_at: null,
-  roles: [{ id: "role-user", name: "user", display_name: "普通用户", description: "", system: true, user_count: 0, permissions: [], created_at: "", updated_at: "" }],
+  roles: [{ id: "role-user", name: "user", display_name: "普通用户", description: "", system: true, disabled: false, user_count: 0, permissions: [], created_at: "", updated_at: "" }],
   permissions: [],
 };
 
@@ -35,7 +35,7 @@ const adminUser = {
   ...demoUser,
   id: "user-admin",
   username: "admin",
-  roles: [{ id: "role-admin", name: "admin", display_name: "管理员", description: "", system: true, user_count: 0, permissions: [], created_at: "", updated_at: "" }],
+  roles: [{ id: "role-admin", name: "admin", display_name: "管理员", description: "", system: true, disabled: false, user_count: 0, permissions: [], created_at: "", updated_at: "" }],
   permissions: [{ id: "perm-server", code: "server.update", name: "编辑服务器配置", description: "" }],
 };
 

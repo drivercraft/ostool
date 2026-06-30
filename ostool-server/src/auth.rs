@@ -81,6 +81,15 @@ impl AuthService {
         })
     }
 
+    async fn user_has_disabled_role(&self, user_id: &str) -> anyhow::Result<bool> {
+        Ok(self
+            .storage
+            .user_roles(user_id)
+            .await?
+            .iter()
+            .any(|role| role.disabled))
+    }
+
     pub async fn login(
         &self,
         username: &str,
@@ -91,6 +100,9 @@ impl AuthService {
         };
         if user.disabled {
             anyhow::bail!("user is disabled");
+        }
+        if self.user_has_disabled_role(&user.id).await? {
+            anyhow::bail!("user role is disabled");
         }
         verify_password(password, &user.password_hash)?;
         self.storage
@@ -139,6 +151,9 @@ impl AuthService {
             return Ok(None);
         };
         if user.disabled {
+            return Ok(None);
+        }
+        if self.user_has_disabled_role(&user.id).await? {
             return Ok(None);
         }
         Ok(Some(self.current_user_from_user(user).await?))

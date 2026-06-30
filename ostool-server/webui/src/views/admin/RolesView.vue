@@ -28,6 +28,7 @@ const openMenuRoleId = ref<string | null>(null);
 const menuPosition = ref({ top: 0, left: 0 });
 const search = ref("");
 const typeFilter = ref<"all" | "system" | "custom">("all");
+const statusFilter = ref<"all" | "active" | "disabled">("all");
 const form = ref({
   name: "",
   display_name: "",
@@ -49,6 +50,12 @@ const filteredRoles = computed(() =>
       return false;
     }
     if (typeFilter.value === "custom" && role.system) {
+      return false;
+    }
+    if (statusFilter.value === "active" && role.disabled) {
+      return false;
+    }
+    if (statusFilter.value === "disabled" && !role.disabled) {
       return false;
     }
     const query = search.value.trim().toLowerCase();
@@ -338,6 +345,32 @@ async function deleteRole(role: AdminRoleResponse) {
   }
 }
 
+async function toggleRoleDisabled(role: AdminRoleResponse) {
+  if (role.system) {
+    return;
+  }
+  closeMenu();
+  const action = role.disabled ? "启用" : "禁用";
+  const confirmed = await ui.confirm({
+    tone: role.disabled ? "info" : "danger",
+    title: `${action}角色`,
+    message: `确认${action}角色 ${role.display_name}？`,
+    confirmLabel: action,
+  });
+  if (!confirmed) {
+    return;
+  }
+  try {
+    const updated = await api.disableAdminRole(role.id, {
+      disabled: !role.disabled,
+    });
+    roles.value = roles.value.map((item) => (item.id === updated.id ? updated : item));
+    ui.setSuccess(updated.disabled ? "角色已禁用" : "角色已启用");
+  } catch (error) {
+    ui.setError((error as Error).message);
+  }
+}
+
 onMounted(() => {
   document.addEventListener("click", onDocumentClick);
   void loadRbac();
@@ -482,6 +515,14 @@ watch(
                 <option value="custom">自定义角色</option>
               </select>
             </label>
+            <label class="field filter-field">
+              <span>状态</span>
+              <select v-model="statusFilter">
+                <option value="all">全部状态</option>
+                <option value="active">启用</option>
+                <option value="disabled">已禁用</option>
+              </select>
+            </label>
           </div>
         </div>
 
@@ -494,6 +535,7 @@ watch(
                 <th>角色</th>
                 <th>标识</th>
                 <th>类型</th>
+                <th>状态</th>
                 <th>用户数量</th>
                 <th>描述</th>
                 <th class="col-actions">操作</th>
@@ -510,6 +552,12 @@ watch(
                     :label="role.system ? '系统角色' : '自定义角色'"
                   />
                 </td>
+                <td>
+                  <StatusPill
+                    :tone="role.disabled ? 'neutral' : 'good'"
+                    :label="role.disabled ? '已禁用' : '启用'"
+                  />
+                </td>
                 <td>{{ role.user_count }}</td>
                 <td class="muted">{{ role.description || "无描述" }}</td>
                 <td class="col-actions">
@@ -523,10 +571,11 @@ watch(
                     </button>
                     <button
                       class="btn-icon-only"
-                      title="启用/禁用"
-                      disabled
+                      :title="role.disabled ? '启用' : '禁用'"
+                      :disabled="role.system"
+                      @click="toggleRoleDisabled(role)"
                     >
-                      <Icon name="ban" :size="16" />
+                      <Icon :name="role.disabled ? 'check' : 'ban'" :size="16" />
                     </button>
                     <div class="row-action-menu">
                       <button

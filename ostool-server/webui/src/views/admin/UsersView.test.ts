@@ -64,10 +64,18 @@ function makeRole(id: string, name: string, display: string): AdminRoleResponse 
     display_name: display,
     description: "",
     system: false,
+    disabled: false,
     user_count: 0,
     permissions: [],
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
+  };
+}
+
+function makeDisabledRole(id: string, name: string, display: string): AdminRoleResponse {
+  return {
+    ...makeRole(id, name, display),
+    disabled: true,
   };
 }
 
@@ -173,6 +181,37 @@ describe("UsersView", () => {
     const rows = wrapper.findAll("tbody tr");
     expect(rows.length).toBe(1);
     expect(rows[0].find(".table-cell-main").text()).toBe("bob");
+  });
+
+  it("treats users with disabled roles as unavailable", async () => {
+    listAdminRoles.mockResolvedValue({
+      roles: [
+        makeRole("r-1", "lab-admin", "实验室管理员"),
+        makeDisabledRole("r-2", "developer", "开发人员"),
+      ],
+    });
+    getAdminUserRoles.mockImplementation((userId: string) => Promise.resolve({
+      roles: userId === "u-1" ? [makeDisabledRole("r-2", "developer", "开发人员")] : [],
+    }));
+
+    const UsersView = (await import("./UsersView.vue")).default;
+    const wrapper = mount(UsersView);
+
+    await flushPromises();
+
+    const aliceRow = wrapper.findAll("tbody tr")[0];
+    expect(aliceRow.text()).toContain("角色已禁用");
+
+    const statusSelect = wrapper
+      .findAll(".admin-toolbar-right select")
+      .find((s) => s.findAll("option").some((o) => o.text() === "已禁用"));
+    await statusSelect!.setValue("disabled");
+    await flushPromises();
+
+    const rows = wrapper.findAll("tbody tr");
+    expect(rows).toHaveLength(2);
+    expect(rows.some((row) => row.find(".table-cell-main").text() === "alice")).toBe(true);
+    expect(rows.some((row) => row.find(".table-cell-main").text() === "bob")).toBe(true);
   });
 
   it("opens the create-user modal when 新增用户 is clicked", async () => {

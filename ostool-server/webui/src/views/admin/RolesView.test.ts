@@ -7,6 +7,7 @@ const listAdminRoles = vi.fn();
 const listAdminPermissions = vi.fn();
 const createAdminRole = vi.fn();
 const updateAdminRole = vi.fn();
+const disableAdminRole = vi.fn();
 const deleteAdminRole = vi.fn();
 const routerPush = vi.fn();
 const routerReplace = vi.fn();
@@ -26,6 +27,7 @@ vi.mock("@/api", () => ({
     listAdminPermissions,
     createAdminRole,
     updateAdminRole,
+    disableAdminRole,
     deleteAdminRole,
   },
 }));
@@ -51,17 +53,19 @@ function makePermission(overrides: Partial<AdminPermissionResponse> = {}): Admin
   };
 }
 
-function makeRole(permission = makePermission()): AdminRoleResponse {
+function makeRole(permission = makePermission(), overrides: Partial<AdminRoleResponse> = {}): AdminRoleResponse {
   return {
     id: "r-1",
     name: "admin",
     display_name: "管理员",
     description: "平台管理员",
     system: true,
+    disabled: false,
     user_count: 2,
     permissions: [permission],
     created_at: "2026-04-01T00:00:00Z",
     updated_at: "2026-04-01T00:00:00Z",
+    ...overrides,
   };
 }
 
@@ -71,6 +75,7 @@ describe("RolesView", () => {
     listAdminPermissions.mockReset();
     createAdminRole.mockReset();
     updateAdminRole.mockReset();
+    disableAdminRole.mockReset();
     deleteAdminRole.mockReset();
     routerPush.mockReset();
     routerReplace.mockReset();
@@ -98,6 +103,7 @@ describe("RolesView", () => {
     ];
     listAdminRoles.mockResolvedValue({ roles: [makeRole(permissions[0])] });
     listAdminPermissions.mockResolvedValue({ permissions });
+    disableAdminRole.mockResolvedValue(makeRole(permissions[0], { disabled: true }));
   });
 
   it("renders action buttons on the left and search/filter controls on the right", async () => {
@@ -107,7 +113,7 @@ describe("RolesView", () => {
 
     expect(wrapper.find(".admin-toolbar-left").text()).toContain("新增角色");
     expect(wrapper.find(".admin-toolbar-right .search-field").exists()).toBe(true);
-    expect(wrapper.findAll(".admin-toolbar-right .filter-field").length).toBe(1);
+    expect(wrapper.findAll(".admin-toolbar-right .filter-field").length).toBe(2);
   });
 
   it("renders the role table without permission chips by default", async () => {
@@ -116,11 +122,63 @@ describe("RolesView", () => {
     await flushPromises();
 
     const headers = wrapper.findAll("thead th").map((item) => item.text());
-    expect(headers).toEqual(["序号", "角色", "标识", "类型", "用户数量", "描述", "操作"]);
+    expect(headers).toEqual(["序号", "角色", "标识", "类型", "状态", "用户数量", "描述", "操作"]);
     expect(wrapper.text()).toContain("管理员");
     expect(wrapper.text()).toContain("admin");
+    expect(wrapper.text()).toContain("启用");
     expect(wrapper.text()).toContain("2");
     expect(wrapper.find("tbody").text()).not.toContain("boards.read");
+  });
+
+  it("renders disabled roles and filters by status", async () => {
+    const permission = makePermission();
+    listAdminRoles.mockResolvedValue({
+      roles: [
+        makeRole(permission),
+        makeRole(permission, {
+          id: "r-2",
+          name: "developer",
+          display_name: "开发人员",
+          system: false,
+          disabled: true,
+        }),
+      ],
+    });
+    const RolesView = (await import("./RolesView.vue")).default;
+    const wrapper = mount(RolesView);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("已禁用");
+
+    await wrapper.findAll(".filter-field select")[1].setValue("disabled");
+    await flushPromises();
+
+    const rows = wrapper.findAll("tbody tr");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].text()).toContain("开发人员");
+  });
+
+  it("toggles custom role disabled state", async () => {
+    const permission = makePermission();
+    const customRole = makeRole(permission, {
+      id: "r-2",
+      name: "developer",
+      display_name: "开发人员",
+      system: false,
+      disabled: false,
+    });
+    listAdminRoles.mockResolvedValue({ roles: [customRole] });
+    disableAdminRole.mockResolvedValue({ ...customRole, disabled: true });
+
+    const RolesView = (await import("./RolesView.vue")).default;
+    const wrapper = mount(RolesView);
+    await flushPromises();
+
+    await wrapper.find('button[title="禁用"]').trigger("click");
+    await flushPromises();
+
+    expect(disableAdminRole).toHaveBeenCalledWith("r-2", { disabled: true });
+    expect(uiStore.setSuccess).toHaveBeenCalledWith("角色已禁用");
   });
 
   it("routes to the new role editor when creating a role", async () => {

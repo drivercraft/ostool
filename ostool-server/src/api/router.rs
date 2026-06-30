@@ -32,7 +32,7 @@ use crate::{
             ActionResponse, AdminBoardUpsertRequest, AdminLeaseCreateRequest,
             AdminLeaseUpdateRequest, AdminOverviewResponse, AdminPasswordResetRequest,
             AdminPermissionResponse, AdminPermissionsResponse, AdminRoleCreateRequest,
-            AdminRoleResponse, AdminRoleUpdateRequest, AdminRolesResponse,
+            AdminRoleDisableRequest, AdminRoleResponse, AdminRoleUpdateRequest, AdminRolesResponse,
             AdminServerConfigEditable, AdminServerConfigReadonly, AdminServerConfigResponse,
             AdminSessionResponse, AdminSessionUpdateRequest, AdminSessionsResponse,
             AdminTftpConfigResponse, AdminTftpStatusResponse, AdminUserCreateRequest,
@@ -172,6 +172,10 @@ pub fn build_router(state: AppState) -> Router {
             get(get_admin_role)
                 .put(update_admin_role)
                 .delete(delete_admin_role),
+        )
+        .route(
+            "/api/v1/admin/roles/{role_id}/disable",
+            post(disable_admin_role),
         )
         .route("/api/v1/admin/boards", get(list_boards).post(create_board))
         .route("/api/v1/admin/dtbs", get(list_dtbs).post(create_dtb))
@@ -578,7 +582,7 @@ fn admin_permission_for_request(method: &Method, path: &str) -> Option<&'static 
         "overview" if method == Method::GET => Some("overview.read"),
         "permissions" if method == Method::GET => Some("permissions.read"),
         "users" => admin_users_permission(method, &segments),
-        "roles" => crud_permission(method, "roles"),
+        "roles" => admin_roles_permission(method, &segments),
         "leases" => admin_leases_permission(method, &segments),
         "sessions" => admin_sessions_permission(method, &segments),
         "boards" => admin_boards_permission(method, &segments),
@@ -672,6 +676,17 @@ fn admin_leases_permission(method: &Method, segments: &[&str]) -> Option<&'stati
         ("DELETE", ["leases", _]) => Some("leases.delete"),
         ("POST", ["leases", _, "session"]) => Some("leases.start"),
         ("POST", ["leases", _, "release"]) => Some("leases.release"),
+        _ => None,
+    }
+}
+
+fn admin_roles_permission(method: &Method, segments: &[&str]) -> Option<&'static str> {
+    match (method.as_str(), segments) {
+        ("GET", ["roles"]) | ("GET", ["roles", _]) => Some("roles.read"),
+        ("POST", ["roles"]) => Some("roles.create"),
+        ("PUT", ["roles", _]) => Some("roles.update"),
+        ("POST", ["roles", _, "disable"]) => Some("roles.update"),
+        ("DELETE", ["roles", _]) => Some("roles.delete"),
         _ => None,
     }
 }
@@ -1435,6 +1450,20 @@ async fn update_admin_role(
         .storage
         .update_role(&role_id, display_name, description, request.permission_ids)
         .await?
+        .ok_or_else(|| ApiError::not_found("role not found"))?;
+    Ok(axum::Json(admin_role_response(&state, role).await?))
+}
+
+async fn disable_admin_role(
+    State(state): State<AppState>,
+    Path(role_id): Path<String>,
+    axum::Json(request): axum::Json<AdminRoleDisableRequest>,
+) -> Result<axum::Json<AdminRoleResponse>, ApiError> {
+    let role = state
+        .storage
+        .set_role_disabled(&role_id, request.disabled)
+        .await
+        .map_err(|err| ApiError::conflict(err.to_string()))?
         .ok_or_else(|| ApiError::not_found("role not found"))?;
     Ok(axum::Json(admin_role_response(&state, role).await?))
 }
@@ -4080,6 +4109,7 @@ mod tests {
             display_name: name.to_string(),
             description: String::new(),
             system: false,
+            disabled: false,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -4174,6 +4204,10 @@ mod tests {
         assert_eq!(
             admin_permission_for_request(&Method::POST, "/api/v1/admin/leases/lease-1/session"),
             Some("leases.start")
+        );
+        assert_eq!(
+            admin_permission_for_request(&Method::POST, "/api/v1/admin/roles/role-1/disable"),
+            Some("roles.update")
         );
         assert_eq!(
             admin_permission_for_request(&Method::POST, "/api/v1/admin/leases/lease-1/release"),

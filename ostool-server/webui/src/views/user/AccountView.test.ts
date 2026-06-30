@@ -37,7 +37,7 @@ async function seedUser() {
     department: "研发部",
     title: "工程师",
     last_login_at: null,
-    roles: [{ id: "role-user", name: "user", display_name: "普通用户", description: "", system: true, user_count: 0, permissions: [], created_at: "", updated_at: "" }],
+    roles: [{ id: "role-user", name: "user", display_name: "普通用户", description: "", system: true, disabled: false, user_count: 0, permissions: [], created_at: "", updated_at: "" }],
     permissions: [],
   };
   store.loaded = true;

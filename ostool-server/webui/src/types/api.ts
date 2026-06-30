@@ -360,6 +360,7 @@ export interface AdminRoleResponse {
   display_name: string;
   description: string;
   system: boolean;
+  disabled: boolean;
   user_count: number;
   permissions: AdminPermissionResponse[];
   created_at: string;
@@ -381,6 +382,10 @@ export interface AdminRoleUpdateRequest {
   display_name: string;
   description: string;
   permission_ids: string[];
+}
+
+export interface AdminRoleDisableRequest {
+  disabled: boolean;
 }
 
 export interface AdminUserRolesResponse {

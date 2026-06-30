@@ -149,6 +149,7 @@ pub struct Role {
     pub display_name: String,
     pub description: String,
     pub system: bool,
+    pub disabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -757,6 +758,11 @@ pub trait RbacRepository: Send + Sync {
         display_name: String,
         description: String,
         permission_ids: Vec<String>,
+    ) -> anyhow::Result<Option<Role>>;
+    async fn set_role_disabled(
+        &self,
+        role_id: &str,
+        disabled: bool,
     ) -> anyhow::Result<Option<Role>>;
     async fn delete_role(&self, role_id: &str) -> anyhow::Result<()>;
     async fn role_permissions(&self, role_id: &str) -> anyhow::Result<Vec<Permission>>;
