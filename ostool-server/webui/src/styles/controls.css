@@ -960,7 +960,19 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   align-items: start;
 }
 .modal-body-grid .modal-field-full,
-.modal-body-grid .modal-hint {
+.modal-body-grid .modal-hint,
+.modal-body-grid .modal-form-section {
+  grid-column: 1 / -1;
+}
+.modal-form-section {
+  min-width: 0;
+}
+.modal-section-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+.modal-section-grid .modal-field-full {
   grid-column: 1 / -1;
 }
 .modal-actions {

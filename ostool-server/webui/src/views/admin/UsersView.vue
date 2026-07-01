@@ -13,6 +13,21 @@ import type {
 
 type ModalMode = "create" | "edit" | "reset-password" | null;
 
+type UserForm = {
+  username: string;
+  display_name: string;
+  nickname: string;
+  avatar_url: string;
+  email: string;
+  phone: string;
+  department: string;
+  title: string;
+  password: string;
+  confirm_password: string;
+  role_ids: string[];
+  disabled: boolean;
+};
+
 const ui = useUiStore();
 const users = ref<AdminUserResponse[]>([]);
 const roles = ref<AdminRoleResponse[]>([]);
@@ -36,7 +51,18 @@ const filteredUsers = computed(() =>
     if (search.value) {
       const q = search.value.toLowerCase();
       const haystack =
-        `${user.username} ${user.display_name} ${user.email}`.toLowerCase();
+        [
+          user.username,
+          user.display_name,
+          user.nickname,
+          user.email,
+          user.phone,
+          user.department,
+          user.title,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
       if (!haystack.includes(q)) {
         return false;
       }
@@ -86,26 +112,78 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
 const modalMode = ref<ModalMode>(null);
 const modalUser = ref<AdminUserResponse | null>(null);
 const pointerDownOnModalOverlay = ref(false);
-const form = ref({
+const form = ref<UserForm>({
   username: "",
   display_name: "",
+  nickname: "",
+  avatar_url: "",
   email: "",
+  phone: "",
+  department: "",
+  title: "",
   password: "",
+  confirm_password: "",
   role_ids: [] as string[],
   disabled: false,
 });
 
-function openCreate() {
-  modalMode.value = "create";
-  modalUser.value = null;
-  form.value = {
+function emptyUserForm(): UserForm {
+  return {
     username: "",
     display_name: "",
+    nickname: "",
+    avatar_url: "",
     email: "",
+    phone: "",
+    department: "",
+    title: "",
     password: "",
+    confirm_password: "",
     role_ids: [],
     disabled: false,
   };
+}
+
+function optionalText(value: string) {
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function userProfilePayload(source: UserForm | AdminUserResponse) {
+  return {
+    nickname: optionalText(source.nickname ?? ""),
+    avatar_url: optionalText(source.avatar_url ?? ""),
+    phone: optionalText(source.phone ?? ""),
+    department: optionalText(source.department ?? ""),
+    title: optionalText(source.title ?? ""),
+  };
+}
+
+function validatePasswordPair(required: boolean) {
+  const password = form.value.password;
+  const confirmPassword = form.value.confirm_password;
+  if (!required && !password && !confirmPassword) {
+    return true;
+  }
+  if (!password || !confirmPassword) {
+    ui.setError("请填写密码和确认密码");
+    return false;
+  }
+  if (password !== confirmPassword) {
+    ui.setError("两次输入的密码不一致");
+    return false;
+  }
+  if (password.length < VALIDATION_LIMITS.passwordMin) {
+    ui.setError(`密码至少需要 ${VALIDATION_LIMITS.passwordMin} 位`);
+    return false;
+  }
+  return true;
+}
+
+function openCreate() {
+  modalMode.value = "create";
+  modalUser.value = null;
+  form.value = emptyUserForm();
 }
 
 function userHasDisabledRole(user: AdminUserResponse) {
@@ -144,8 +222,14 @@ function openEdit(user: AdminUserResponse) {
   form.value = {
     username: user.username,
     display_name: user.display_name,
+    nickname: user.nickname ?? "",
+    avatar_url: user.avatar_url ?? "",
     email: user.email,
+    phone: user.phone ?? "",
+    department: user.department ?? "",
+    title: user.title ?? "",
     password: "",
+    confirm_password: "",
     role_ids: [...(userRoleIds.value[user.id] ?? [])],
     disabled: user.disabled,
   };
@@ -156,6 +240,7 @@ function openResetPassword(user: AdminUserResponse) {
   modalMode.value = "reset-password";
   modalUser.value = user;
   form.value.password = "";
+  form.value.confirm_password = "";
   closeMenu();
 }
 
@@ -205,8 +290,7 @@ async function submitCreate() {
     ui.setError("请填写用户名、显示名、邮箱和密码");
     return;
   }
-  if (form.value.password.length < VALIDATION_LIMITS.passwordMin) {
-    ui.setError(`密码至少需要 ${VALIDATION_LIMITS.passwordMin} 位`);
+  if (!validatePasswordPair(true)) {
     return;
   }
   submitting.value = true;
@@ -215,6 +299,7 @@ async function submitCreate() {
       username: form.value.username.trim(),
       display_name: form.value.display_name.trim() || form.value.username.trim(),
       email: form.value.email.trim(),
+      ...userProfilePayload(form.value),
       password: form.value.password,
       role_ids: form.value.role_ids,
     });
@@ -241,17 +326,27 @@ async function submitEdit() {
     ui.setError("请填写显示名和邮箱");
     return;
   }
+  const shouldUpdatePassword = Boolean(form.value.password || form.value.confirm_password);
+  if (!validatePasswordPair(false)) {
+    return;
+  }
   submitting.value = true;
   try {
     const userId = modalUser.value.id;
     await api.admin.updateAdminUser(userId, {
       display_name: form.value.display_name.trim() || modalUser.value.username,
       email: form.value.email.trim(),
+      ...userProfilePayload(form.value),
       disabled: form.value.disabled,
     });
     await api.admin.updateAdminUserRoles(userId, {
       role_ids: form.value.role_ids,
     });
+    if (shouldUpdatePassword) {
+      await api.admin.resetAdminUserPassword(userId, {
+        password: form.value.password,
+      });
+    }
     ui.setSuccess(`已更新用户 ${modalUser.value.username}`);
     closeModal();
     await loadUsers();
@@ -266,8 +361,7 @@ async function submitResetPassword() {
   if (!modalUser.value) {
     return;
   }
-  if (form.value.password.length < VALIDATION_LIMITS.passwordMin) {
-    ui.setError(`新密码至少需要 ${VALIDATION_LIMITS.passwordMin} 位`);
+  if (!validatePasswordPair(true)) {
     return;
   }
   submitting.value = true;
@@ -300,6 +394,7 @@ async function toggleDisabled(user: AdminUserResponse) {
       await api.admin.updateAdminUser(user.id, {
         display_name: user.display_name,
         email: user.email,
+        ...userProfilePayload(user),
         disabled: false,
       });
     } else {
@@ -415,7 +510,7 @@ onMounted(() => {
               v-model="search"
               type="search"
               maxlength="128"
-              placeholder="按用户名 / 显示名 / 邮箱搜索"
+              placeholder="按用户名 / 显示名 / 邮箱 / 手机 / 部门搜索"
             />
           </label>
           <label class="field filter-field">
@@ -617,86 +712,170 @@ onMounted(() => {
 
         <form class="modal-form" @submit.prevent="submitModal">
           <div class="modal-body modal-body-grid">
-            <template v-if="modalMode === 'create'">
-              <label class="field is-required">
-                <span>用户名</span>
-                <input
-                  v-model="form.username"
-                  autocomplete="off"
-                  :minlength="VALIDATION_LIMITS.usernameMin"
-                  :maxlength="VALIDATION_LIMITS.usernameMax"
-                  :pattern="USERNAME_PATTERN"
-                  placeholder="登录账号，必须唯一"
-                />
-              </label>
-              <label class="field is-required">
-                <span>显示名</span>
-                <input
-                  v-model="form.display_name"
-                  autocomplete="off"
-                  :minlength="VALIDATION_LIMITS.displayNameMin"
-                  :maxlength="VALIDATION_LIMITS.displayNameMax"
-                  placeholder="页面展示名称，例如 张三"
-                />
-              </label>
-              <label class="field is-required">
-                <span>邮箱</span>
-                <input
-                  v-model="form.email"
-                  type="email"
-                  autocomplete="off"
-                  :minlength="VALIDATION_LIMITS.emailMin"
-                  :maxlength="VALIDATION_LIMITS.emailMax"
-                  placeholder="用户联系邮箱，例如 user@example.com"
-                />
-              </label>
-              <label class="field is-required">
-                <span>密码</span>
-                <input
-                  v-model="form.password"
-                  type="password"
-                  autocomplete="new-password"
-                  :minlength="VALIDATION_LIMITS.passwordMin"
-                  :maxlength="VALIDATION_LIMITS.passwordMax"
-                  placeholder="初始密码，建议至少 8 位"
-                />
-              </label>
-            </template>
+            <template v-if="modalMode === 'create' || modalMode === 'edit'">
+              <section class="form-section modal-form-section">
+                <div class="form-section-header">
+                  <h4>基本信息</h4>
+                </div>
+                <div class="modal-section-grid">
+                  <label class="field" :class="{ 'is-required': modalMode === 'create' }">
+                    <span>用户名</span>
+                    <input
+                      v-if="modalMode === 'create'"
+                      v-model="form.username"
+                      name="username"
+                      autocomplete="off"
+                      :minlength="VALIDATION_LIMITS.usernameMin"
+                      :maxlength="VALIDATION_LIMITS.usernameMax"
+                      :pattern="USERNAME_PATTERN"
+                      placeholder="登录账号，必须唯一"
+                    />
+                    <input v-else name="username" :value="form.username" disabled />
+                  </label>
+                  <label class="field is-required">
+                    <span>显示名</span>
+                    <input
+                      v-model="form.display_name"
+                      name="display_name"
+                      :autocomplete="modalMode === 'create' ? 'off' : undefined"
+                      :minlength="VALIDATION_LIMITS.displayNameMin"
+                      :maxlength="VALIDATION_LIMITS.displayNameMax"
+                      :placeholder="modalMode === 'create' ? '页面展示名称，例如 张三' : '页面展示名称'"
+                    />
+                  </label>
+                  <label class="field is-required">
+                    <span>邮箱</span>
+                    <input
+                      v-model="form.email"
+                      name="email"
+                      type="email"
+                      :autocomplete="modalMode === 'create' ? 'off' : undefined"
+                      :minlength="VALIDATION_LIMITS.emailMin"
+                      :maxlength="VALIDATION_LIMITS.emailMax"
+                      placeholder="用户联系邮箱，例如 user@example.com"
+                    />
+                  </label>
+                  <label class="field">
+                    <span>昵称</span>
+                    <input
+                      v-model="form.nickname"
+                      name="nickname"
+                      :autocomplete="modalMode === 'create' ? 'off' : undefined"
+                      :maxlength="VALIDATION_LIMITS.displayNameMax"
+                      placeholder="用户昵称，可留空"
+                    />
+                  </label>
+                  <label class="field">
+                    <span>头像 URL</span>
+                    <input
+                      v-model="form.avatar_url"
+                      name="avatar_url"
+                      type="url"
+                      :autocomplete="modalMode === 'create' ? 'off' : undefined"
+                      :maxlength="VALIDATION_LIMITS.urlMax"
+                      placeholder="头像图片地址，可留空"
+                    />
+                  </label>
+                  <label class="field">
+                    <span>手机号</span>
+                    <input
+                      v-model="form.phone"
+                      name="phone"
+                      :autocomplete="modalMode === 'create' ? 'off' : undefined"
+                      :maxlength="VALIDATION_LIMITS.phoneMax"
+                      placeholder="便于联系，可留空"
+                    />
+                  </label>
+                  <label class="field">
+                    <span>部门</span>
+                    <input
+                      v-model="form.department"
+                      name="department"
+                      :autocomplete="modalMode === 'create' ? 'off' : undefined"
+                      :maxlength="VALIDATION_LIMITS.departmentMax"
+                      placeholder="例如：内核组"
+                    />
+                  </label>
+                  <label class="field">
+                    <span>职位</span>
+                    <input
+                      v-model="form.title"
+                      name="title"
+                      :autocomplete="modalMode === 'create' ? 'off' : undefined"
+                      :maxlength="VALIDATION_LIMITS.titleMax"
+                      placeholder="例如：嵌入式工程师"
+                    />
+                  </label>
+                </div>
+              </section>
 
-            <template v-else-if="modalMode === 'edit'">
-              <label class="field">
-                <span>用户名</span>
-                <input :value="form.username" disabled />
-              </label>
-              <label class="field is-required">
-                <span>显示名</span>
-                <input
-                  v-model="form.display_name"
-                  :minlength="VALIDATION_LIMITS.displayNameMin"
-                  :maxlength="VALIDATION_LIMITS.displayNameMax"
-                  placeholder="页面展示名称"
-                />
-              </label>
-              <label class="field is-required">
-                <span>邮箱</span>
-                <input
-                  v-model="form.email"
-                  type="email"
-                  :minlength="VALIDATION_LIMITS.emailMin"
-                  :maxlength="VALIDATION_LIMITS.emailMax"
-                  placeholder="用户联系邮箱，例如 user@example.com"
-                />
-              </label>
-              <label class="toggle-field">
-                <span class="toggle-switch">
-                  <input v-model="form.disabled" type="checkbox" />
-                  <span class="toggle-track" />
-                  <span class="toggle-knob" />
-                </span>
-                <span class="toggle-label">
-                  {{ form.disabled ? "已禁用登录" : "允许登录" }}
-                </span>
-              </label>
+              <section class="form-section modal-form-section">
+                <div class="form-section-header">
+                  <h4>密码</h4>
+                </div>
+                <div class="modal-section-grid">
+                  <label class="field" :class="{ 'is-required': modalMode === 'create' }">
+                    <span>密码</span>
+                    <input
+                      v-model="form.password"
+                      name="password"
+                      type="password"
+                      autocomplete="new-password"
+                      :minlength="VALIDATION_LIMITS.passwordMin"
+                      :maxlength="VALIDATION_LIMITS.passwordMax"
+                      :placeholder="modalMode === 'create' ? '初始密码，建议至少 8 位' : '留空表示不修改密码'"
+                    />
+                  </label>
+                  <label class="field" :class="{ 'is-required': modalMode === 'create' }">
+                    <span>确认密码</span>
+                    <input
+                      v-model="form.confirm_password"
+                      name="confirm_password"
+                      type="password"
+                      autocomplete="new-password"
+                      :minlength="VALIDATION_LIMITS.passwordMin"
+                      :maxlength="VALIDATION_LIMITS.passwordMax"
+                      :placeholder="modalMode === 'create' ? '再次输入相同密码' : '留空表示不修改密码'"
+                    />
+                  </label>
+                </div>
+              </section>
+
+              <section class="form-section modal-form-section">
+                <div class="form-section-header">
+                  <h4>系统角色</h4>
+                </div>
+                <div class="modal-section-grid">
+                  <label v-if="modalMode === 'edit'" class="toggle-field modal-field-full">
+                    <span class="toggle-switch">
+                      <input v-model="form.disabled" type="checkbox" />
+                      <span class="toggle-track" />
+                      <span class="toggle-knob" />
+                    </span>
+                    <span class="toggle-label">
+                      {{ form.disabled ? "已禁用登录" : "允许登录" }}
+                    </span>
+                  </label>
+                  <div class="field modal-field-full">
+                    <span>RBAC 角色</span>
+                    <div v-if="roles.length > 0" class="role-check-grid">
+                      <label
+                        v-for="role in roles"
+                        :key="role.id"
+                        class="checkbox-field"
+                      >
+                        <input
+                          v-model="form.role_ids"
+                          type="checkbox"
+                          :value="role.id"
+                        />
+                        <span>{{ role.display_name }}</span>
+                      </label>
+                    </div>
+                    <p v-else class="field-hint">暂无可分配角色，请先在角色与权限中创建角色。</p>
+                  </div>
+                </div>
+              </section>
             </template>
 
             <template v-else>
@@ -707,6 +886,7 @@ onMounted(() => {
                 <span>新密码</span>
                 <input
                   v-model="form.password"
+                  name="password"
                   type="password"
                   autocomplete="new-password"
                   :minlength="VALIDATION_LIMITS.passwordMin"
@@ -714,26 +894,19 @@ onMounted(() => {
                   placeholder="输入新的登录密码"
                 />
               </label>
+              <label class="field modal-field-full is-required">
+                <span>确认新密码</span>
+                <input
+                  v-model="form.confirm_password"
+                  name="confirm_password"
+                  type="password"
+                  autocomplete="new-password"
+                  :minlength="VALIDATION_LIMITS.passwordMin"
+                  :maxlength="VALIDATION_LIMITS.passwordMax"
+                  placeholder="再次输入相同密码"
+                />
+              </label>
             </template>
-
-            <div v-if="modalMode === 'create' || modalMode === 'edit'" class="field modal-field-full">
-              <span>RBAC 角色</span>
-              <div v-if="roles.length > 0" class="role-check-grid">
-                <label
-                  v-for="role in roles"
-                  :key="role.id"
-                  class="checkbox-field"
-                >
-                  <input
-                    v-model="form.role_ids"
-                    type="checkbox"
-                    :value="role.id"
-                  />
-                  <span>{{ role.display_name }}</span>
-                </label>
-              </div>
-              <p v-else class="field-hint">暂无可分配角色，请先在角色与权限中创建角色。</p>
-            </div>
           </div>
 
           <div class="modal-actions toolbar-actions">
