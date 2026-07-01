@@ -23,7 +23,7 @@ fn main() {
         ..Cargo::default()
     };
     let cargo_build = BuildConfig {
-        system: BuildSystem::Cargo(cargo.clone()),
+        system: BuildSystem::Cargo(Box::new(cargo.clone())),
     };
     let custom_build = BuildConfig {
         system: BuildSystem::Custom(Custom {

@@ -105,6 +105,9 @@ ostool build --config custom-build.toml
 # Temporarily override Cargo package / binary target
 ostool build --config custom-build.toml --package paging-test --bin basic
 
+# Temporarily build a Cargo test target
+ostool build --config custom-build.toml --package paging-test --test kernel_axtest
+
 # Build in specified working directory
 ostool --workdir /path/to/project build
 ```
@@ -124,7 +127,7 @@ ostool run qemu --dtb-dump
 # Run with specific Qemu config file
 ostool run qemu --qemu-config my-qemu.toml
 
-# Run after temporarily overriding Cargo package / binary target
+# Run after temporarily overriding Cargo package / binary/test target
 ostool run qemu --package paging-test --bin basic
 
 # Run with U-Boot
@@ -142,7 +145,7 @@ ostool board ls
 # Run on a remote board
 ostool board run
 
-# Run a specific Cargo binary target on a remote board
+# Run a specific Cargo binary/test target on a remote board
 ostool board run --package paging-test --bin basic
 ```
 
@@ -175,6 +178,11 @@ package = "my-os-kernel"
 # set it here or pass `--bin <name>` when the package has multiple binaries.
 bin = "my-os-kernel"
 
+# Test target name. Use this for executable `[[test]]` targets, such as
+# `harness = false` kernel tests. This is mutually exclusive with `bin`;
+# it can also be selected with `--test <name>`.
+# test = "my-os-kernel-axtest"
+
 # Enabled features
 features = ["page-alloc-4g"]
 
@@ -205,7 +213,7 @@ post_build_cmds = ["make post-process"]
 to_bin = true
 ```
 
-Command-line `--package`/`--bin` overrides are applied to the final Cargo
+Command-line `--package`/`--bin`/`--test` overrides are applied to the final Cargo
 selection before `${package}` variable expansion and someboot `build-info.toml`
 argument injection.
 

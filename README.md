@@ -105,6 +105,9 @@ ostool build --config custom-build.toml
 # 临时覆盖 Cargo package / binary target
 ostool build --config custom-build.toml --package paging-test --bin basic
 
+# 临时构建 Cargo test target
+ostool build --config custom-build.toml --package paging-test --test kernel_axtest
+
 # 在指定工作目录中构建
 ostool --workdir /path/to/project build
 ```
@@ -124,7 +127,7 @@ ostool run qemu --dtb-dump
 # 指定 Qemu 配置文件运行
 ostool run qemu --qemu-config my-qemu.toml
 
-# 临时覆盖 Cargo package / binary target 后运行
+# 临时覆盖 Cargo package / binary/test target 后运行
 ostool run qemu --package paging-test --bin basic
 
 # 使用 U-Boot 运行
@@ -142,7 +145,7 @@ ostool board ls
 # 在远端开发板上运行
 ostool board run
 
-# 在远端开发板上运行指定 Cargo binary target
+# 在远端开发板上运行指定 Cargo binary/test target
 ostool board run --package paging-test --bin basic
 ```
 
@@ -175,6 +178,10 @@ package = "my-os-kernel"
 # 包内有多个 binary 时建议设置，或在命令行传 `--bin <name>`。
 bin = "my-os-kernel"
 
+# test target 名称。用于构建可执行 `[[test]]` 目标，例如 `harness = false`
+# 的内核测试；与 `bin` 互斥，也可在命令行传 `--test <name>`。
+# test = "my-os-kernel-axtest"
+
 # 启用的特性
 features = ["page-alloc-4g"]
 
@@ -204,7 +211,7 @@ post_build_cmds = ["make post-process"]
 to_bin = false
 ```
 
-命令行 `--package`/`--bin` 会先覆盖 `.build.toml` 中的 Cargo 包/二进制选择，再用于
+命令行 `--package`/`--bin`/`--test` 会先覆盖 `.build.toml` 中的 Cargo 包/目标选择，再用于
 `${package}` 变量展开和 someboot `build-info.toml` 自动参数注入。
 
 #### 自定义构建系统示例

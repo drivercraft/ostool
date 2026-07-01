@@ -400,11 +400,12 @@ dtb_file = "${package}/board.dtb"
         crate::build::activate_build_config(
             &mut invocation,
             &BuildConfig {
-                system: BuildSystem::Cargo(Cargo {
+                system: BuildSystem::Cargo(Box::new(Cargo {
                     env: HashMap::new(),
                     target: "aarch64-unknown-none".into(),
                     package: "kernel".into(),
                     bin: None,
+                    test: None,
                     features: vec![],
                     log: None,
                     extra_config: None,
@@ -414,7 +415,7 @@ dtb_file = "${package}/board.dtb"
                     pre_build_cmds: vec![],
                     post_build_cmds: vec![],
                     to_bin: false,
-                }),
+                })),
             },
             None,
         )

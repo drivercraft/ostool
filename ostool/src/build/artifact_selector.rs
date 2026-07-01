@@ -52,6 +52,7 @@ impl CargoExecutableArtifact {
 pub(crate) fn select_executable_artifact(
     executable_artifacts: &[CargoExecutableArtifact],
     explicit_bin: Option<&str>,
+    explicit_test: Option<&str>,
     default_run: Option<&str>,
     package: &str,
 ) -> anyhow::Result<ResolvedCargoArtifact> {
@@ -68,10 +69,21 @@ pub(crate) fn select_executable_artifact(
             });
     }
 
+    if let Some(test) = explicit_test {
+        return executable_artifacts
+            .iter()
+            .rev()
+            .find(|candidate| candidate.target_name() == test)
+            .map(|candidate| candidate.artifact().clone())
+            .ok_or_else(|| {
+                anyhow!(
+                    "test target `{test}` was not built for package `{package}`; check system.Cargo.test or --test"
+                )
+            });
+    }
+
     if executable_artifacts.is_empty() {
-        bail!(
-            "no executable bin artifact found in cargo JSON output for package `{package}`; ostool currently resolves only Cargo bin targets"
-        );
+        bail!("no executable artifact found in cargo JSON output for package `{package}`");
     }
 
     if let Some(candidate) = executable_artifacts
@@ -123,17 +135,18 @@ mod tests {
     fn select(
         artifacts: &[CargoExecutableArtifact],
         explicit_bin: Option<&str>,
+        explicit_test: Option<&str>,
         default_run: Option<&str>,
         package: &str,
     ) -> anyhow::Result<ResolvedCargoArtifact> {
-        select_executable_artifact(artifacts, explicit_bin, default_run, package)
+        select_executable_artifact(artifacts, explicit_bin, explicit_test, default_run, package)
     }
 
     #[test]
     fn select_executable_artifact_uses_explicit_bin_first() {
         let artifacts = vec![candidate("kernel"), candidate("kernel-qemu")];
 
-        let selected = select(&artifacts, Some("kernel-qemu"), None, "kernel").unwrap();
+        let selected = select(&artifacts, Some("kernel-qemu"), None, None, "kernel").unwrap();
 
         assert_eq!(
             selected.elf_path(),
@@ -145,7 +158,7 @@ mod tests {
     fn select_executable_artifact_errors_when_explicit_bin_was_not_built() {
         let artifacts = vec![candidate("kernel")];
 
-        let err = select(&artifacts, Some("missing-bin"), None, "kernel").unwrap_err();
+        let err = select(&artifacts, Some("missing-bin"), None, None, "kernel").unwrap_err();
 
         assert!(
             err.to_string()
@@ -154,10 +167,34 @@ mod tests {
     }
 
     #[test]
+    fn select_executable_artifact_uses_explicit_test_target() {
+        let artifacts = vec![candidate("kernel"), candidate("axtest_kernel")];
+
+        let selected = select(&artifacts, None, Some("axtest_kernel"), None, "kernel").unwrap();
+
+        assert_eq!(
+            selected.elf_path(),
+            Path::new("/tmp/ostool-target/debug/axtest_kernel")
+        );
+    }
+
+    #[test]
+    fn select_executable_artifact_errors_when_explicit_test_was_not_built() {
+        let artifacts = vec![candidate("kernel")];
+
+        let err = select(&artifacts, None, Some("missing-test"), None, "kernel").unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("test target `missing-test` was not built")
+        );
+    }
+
+    #[test]
     fn select_executable_artifact_prefers_package_name_before_default_run() {
         let artifacts = vec![candidate("helper"), candidate("kernel")];
 
-        let selected = select(&artifacts, None, Some("helper"), "kernel").unwrap();
+        let selected = select(&artifacts, None, None, Some("helper"), "kernel").unwrap();
 
         assert_eq!(
             selected.elf_path(),
@@ -169,7 +206,7 @@ mod tests {
     fn select_executable_artifact_uses_default_run_without_package_name_binary() {
         let artifacts = vec![candidate("helper"), candidate("boot-test")];
 
-        let selected = select(&artifacts, None, Some("boot-test"), "kernel").unwrap();
+        let selected = select(&artifacts, None, None, Some("boot-test"), "kernel").unwrap();
 
         assert_eq!(
             selected.elf_path(),
@@ -181,7 +218,7 @@ mod tests {
     fn select_executable_artifact_uses_single_binary_as_fallback() {
         let artifacts = vec![candidate("helper")];
 
-        let selected = select(&artifacts, None, None, "kernel").unwrap();
+        let selected = select(&artifacts, None, None, None, "kernel").unwrap();
 
         assert_eq!(
             selected.elf_path(),
@@ -191,16 +228,16 @@ mod tests {
 
     #[test]
     fn select_executable_artifact_errors_on_empty_cargo_output() {
-        let err = select(&[], None, None, "kernel").unwrap_err();
+        let err = select(&[], None, None, None, "kernel").unwrap_err();
 
-        assert!(err.to_string().contains("no executable bin artifact found"));
+        assert!(err.to_string().contains("no executable artifact found"));
     }
 
     #[test]
     fn select_executable_artifact_errors_on_ambiguous_multiple_binaries() {
         let artifacts = vec![candidate("kernel-qemu"), candidate("kernel-uboot")];
 
-        let err = select(&artifacts, None, None, "kernel").unwrap_err();
+        let err = select(&artifacts, None, None, None, "kernel").unwrap_err();
 
         let rendered = err.to_string();
         assert!(rendered.contains("multiple binary targets"));

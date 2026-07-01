@@ -40,7 +40,7 @@ pub struct BuildConfig {
 impl Default for BuildConfig {
     fn default() -> Self {
         Self {
-            system: BuildSystem::Cargo(Cargo::default()),
+            system: BuildSystem::Cargo(Box::default()),
         }
     }
 }
@@ -51,7 +51,7 @@ pub enum BuildSystem {
     /// Use custom shell commands for building.
     Custom(Custom),
     /// Use Cargo for building.
-    Cargo(Cargo),
+    Cargo(Box<Cargo>),
 }
 
 /// Configuration for custom (non-Cargo) build systems.
@@ -90,6 +90,13 @@ pub struct Cargo {
     /// field or pass `--bin` on the command line.
     #[serde(default)]
     pub bin: Option<String>,
+    /// Test target name to build within the selected package.
+    ///
+    /// This is intended for executable `[[test]]` targets that set
+    /// `harness = false`, such as kernel tests run by QEMU or a board runner.
+    /// It is mutually exclusive with [`Cargo::bin`].
+    #[serde(default)]
+    pub test: Option<String>,
     /// Cargo features to enable.
     pub features: Vec<String>,
     /// Log level feature to automatically enable.

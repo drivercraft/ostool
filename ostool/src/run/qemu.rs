@@ -995,6 +995,7 @@ fail_regex = []
                 target: "aarch64-unknown-none".into(),
                 package: "kernel".into(),
                 bin: None,
+                test: None,
                 features: vec![],
                 log: None,
                 extra_config: None,
@@ -1092,6 +1093,7 @@ fail_regex = []
                 target: "riscv64gc-unknown-none-elf".into(),
                 package: "sample".into(),
                 bin: None,
+                test: None,
                 features: vec![],
                 log: None,
                 extra_config: None,
@@ -1295,11 +1297,12 @@ fail_regex = []
         crate::build::activate_build_config(
             &mut invocation,
             &BuildConfig {
-                system: BuildSystem::Cargo(Cargo {
+                system: BuildSystem::Cargo(Box::new(Cargo {
                     env: HashMap::new(),
                     target: "aarch64-unknown-none".into(),
                     package: "sample".into(),
                     bin: None,
+                    test: None,
                     features: vec![],
                     log: None,
                     extra_config: None,
@@ -1309,7 +1312,7 @@ fail_regex = []
                     pre_build_cmds: vec![],
                     post_build_cmds: vec![],
                     to_bin: false,
-                }),
+                })),
             },
             None,
         )

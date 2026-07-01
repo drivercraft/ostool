@@ -257,7 +257,7 @@ pub async fn cargo_run_board(
     run_board(
         invocation,
         &BuildConfig {
-            system: BuildSystem::Cargo(cargo.clone()),
+            system: BuildSystem::Cargo(Box::new(cargo.clone())),
         },
         build_config_path,
         board_config,
