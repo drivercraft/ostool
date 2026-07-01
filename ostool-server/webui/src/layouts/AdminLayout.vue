@@ -55,7 +55,7 @@ const navItems = computed<AdminNavItem[]>(() => [
     id: "resources",
     label: "资源管理",
     icon: "cpu-board",
-    items: [
+    items: [租约会话
       { to: "/admin/resources/boards", label: "开发板配置" },
       { to: "/admin/resources/dtbs", label: "DTB 配置" },
       { to: "/admin/resources/tftp", label: "TFTP 配置" },
@@ -68,7 +68,7 @@ const navItems = computed<AdminNavItem[]>(() => [
     icon: "clipboard",
     items: [
       { to: "/admin/rentals/leases", label: "租赁情况" },
-      { to: "/admin/rentals/sessions", label: "会话租约" },
+      { to: "/admin/rentals/sessions", label: "租约会话" },
     ],
   },
   {

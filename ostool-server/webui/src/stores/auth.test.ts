@@ -55,8 +55,8 @@ const defaultRentalUser = {
   permissions: [
     { id: "perm-leases-read", code: "leases.read", name: "查看租赁", description: "" },
     { id: "perm-leases-create", code: "leases.create", name: "新增租赁", description: "" },
-    { id: "perm-sessions-read", code: "sessions.read", name: "查看会话租约", description: "" },
-    { id: "perm-sessions-create", code: "sessions.create", name: "新增会话租约", description: "" },
+    { id: "perm-sessions-read", code: "sessions.read", name: "查看租约会话", description: "" },
+    { id: "perm-sessions-create", code: "sessions.create", name: "新增租约会话", description: "" },
   ],
 };
 

@@ -48,7 +48,7 @@ const groups: DocGroup[] = [
       },
       {
         id: "session-lifecycle",
-        title: "会话租约与心跳",
+        title: "租约会话与心跳",
         summary: "会话有效期、续租策略与自动释放。",
         body: `每个会话都有租约过期时间（lease_expires_at）。客户端可以通过
 /api/v1/sessions/{id}/heartbeat 接口续租；若长时间未心跳，会话会被自动释放，

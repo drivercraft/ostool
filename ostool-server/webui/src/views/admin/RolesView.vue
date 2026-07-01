@@ -79,7 +79,7 @@ const permissionGroups = computed<PermissionGroup[]>(() => {
     boards: { title: "开发板管理", description: "开发板配置与运行状态" },
     dtbs: { title: "DTB 管理", description: "DTB 文件与元数据" },
     leases: { title: "租赁情况", description: "租赁记录、预约时间段与会话启动" },
-    sessions: { title: "会话租约", description: "会话租约记录与历史数据" },
+    sessions: { title: "租约会话", description: "租约会话记录与历史数据" },
     tftp: { title: "TFTP 配置", description: "TFTP 配置、状态与同步" },
     server: { title: "服务器配置", description: "服务运行参数" },
     site: { title: "站点设置", description: "站点展示与租赁策略" },

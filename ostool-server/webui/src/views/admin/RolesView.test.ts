@@ -99,8 +99,8 @@ describe("RolesView", () => {
       makePermission({
         id: "p-4",
         code: "sessions.delete",
-        name: "删除会话租约",
-        description: "删除会话租约记录",
+        name: "删除租约会话",
+        description: "删除租约会话记录",
       }),
     ];
     listAdminRoles.mockResolvedValue({ roles: [makeRole(permissions[0])] });
@@ -217,7 +217,7 @@ describe("RolesView", () => {
     expect(wrapper.text()).toContain("boards.update");
     expect(wrapper.text()).toContain("租赁情况");
     expect(wrapper.text()).toContain("leases.delete");
-    expect(wrapper.text()).toContain("会话租约");
+    expect(wrapper.text()).toContain("租约会话");
     expect(wrapper.text()).toContain("sessions.delete");
   });
 
