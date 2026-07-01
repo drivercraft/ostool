@@ -39,7 +39,7 @@ const passwordsMismatch = computed(
 async function loadPolicy() {
   policyLoading.value = true;
   try {
-    policy.value = await api.getRegistrationPolicy();
+    policy.value = await api.auth.getRegistrationPolicy();
   } catch (error) {
     // If the endpoint is unreachable, default to closed so we never show a
     // form that cannot succeed.
@@ -77,7 +77,7 @@ async function submit() {
   }
   submitting.value = true;
   try {
-    const result = await api.register({
+    const result = await api.auth.register({
       username: username.value.trim(),
       display_name: displayName.value.trim(),
       email: email.value.trim(),
@@ -115,7 +115,7 @@ async function submit() {
 async function loadCaptcha() {
   captchaLoading.value = true;
   try {
-    captcha.value = await api.getCaptcha();
+    captcha.value = await api.auth.getCaptcha();
     captchaAnswer.value = "";
   } catch (error) {
     ui.setError((error as Error).message);

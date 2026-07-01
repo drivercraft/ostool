@@ -245,42 +245,6 @@ export const router = createRouter({
           component: ServerView,
           meta: { title: "系统设置 / 服务配置" },
         },
-        {
-          path: "boards",
-          redirect: "/admin/resources/boards",
-        },
-        {
-          path: "boards/new",
-          redirect: "/admin/resources/boards/new",
-        },
-        {
-          path: "boards/:boardId",
-          redirect: (to) => `/admin/resources/boards/${to.params.boardId}`,
-        },
-        {
-          path: "dtbs",
-          redirect: "/admin/resources/dtbs",
-        },
-        {
-          path: "sessions",
-          redirect: "/admin/rentals/sessions",
-        },
-        {
-          path: "leases",
-          redirect: "/admin/rentals/leases",
-        },
-        {
-          path: "leases/new",
-          redirect: "/admin/rentals/leases/new",
-        },
-        {
-          path: "tftp",
-          redirect: "/admin/resources/tftp",
-        },
-        {
-          path: "server",
-          redirect: "/admin/settings/server",
-        },
       ],
     },
     {

@@ -6,7 +6,7 @@ import { api } from "@/api";
 import Icon from "@/components/Icon.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
-import { formatLeaseTime } from "./useUserLeases";
+import { formatLeaseTime } from "@/composables/useUserLeases";
 
 const ui = useUiStore();
 const auth = useAuthStore();
@@ -46,7 +46,7 @@ async function submitPasswordChange() {
   }
   submittingPassword.value = true;
   try {
-    await api.updateUserPassword({
+    await api.user.updateUserPassword({
       current_password: passwordForm.value.current_password,
       new_password: passwordForm.value.new_password,
       confirm_new_password: passwordForm.value.confirm_new_password,

@@ -258,8 +258,8 @@ async function loadRbac() {
   loading.value = true;
   try {
     const [roleResponse, permissionResponse] = await Promise.all([
-      api.listAdminRoles(),
-      api.listAdminPermissions(),
+      api.admin.listAdminRoles(),
+      api.admin.listAdminPermissions(),
     ]);
     roles.value = roleResponse.roles;
     permissions.value = permissionResponse.permissions;
@@ -294,14 +294,14 @@ async function saveRole() {
   saving.value = true;
   try {
     if (selectedRole.value) {
-      await api.updateAdminRole(selectedRole.value.id, {
+      await api.admin.updateAdminRole(selectedRole.value.id, {
         display_name: form.value.display_name.trim(),
         description: form.value.description.trim(),
         permission_ids: form.value.permission_ids,
       });
       ui.setSuccess("角色已更新");
     } else {
-      await api.createAdminRole({
+      await api.admin.createAdminRole({
         name: form.value.name.trim(),
         display_name: form.value.display_name.trim(),
         description: form.value.description.trim(),
@@ -333,7 +333,7 @@ async function deleteRole(role: AdminRoleResponse) {
     return;
   }
   try {
-    await api.deleteAdminRole(role.id);
+    await api.admin.deleteAdminRole(role.id);
     ui.setSuccess("角色已删除");
     if (selectedRoleId.value === role.id) {
       resetForm();
@@ -361,7 +361,7 @@ async function toggleRoleDisabled(role: AdminRoleResponse) {
     return;
   }
   try {
-    const updated = await api.disableAdminRole(role.id, {
+    const updated = await api.admin.disableAdminRole(role.id, {
       disabled: !role.disabled,
     });
     roles.value = roles.value.map((item) => (item.id === updated.id ? updated : item));

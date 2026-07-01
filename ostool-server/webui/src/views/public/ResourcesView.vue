@@ -23,7 +23,7 @@ async function loadBoardTypes() {
   loading.value = true;
   failed.value = false;
   try {
-    boardTypes.value = await api.listBoardTypes();
+    boardTypes.value = await api.public.listBoardTypes();
   } catch (error) {
     failed.value = true;
     ui.setError((error as Error).message);

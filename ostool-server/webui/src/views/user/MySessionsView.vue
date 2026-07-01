@@ -7,7 +7,7 @@ import StatusPill from "@/components/StatusPill.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import { getSessionDisplayStatus } from "@/utils/sessionStatus";
-import { formatLeaseTime, remainingLeaseLabel, useUserLeases } from "./useUserLeases";
+import { formatLeaseTime, remainingLeaseLabel, useUserLeases } from "@/composables/useUserLeases";
 
 const ui = useUiStore();
 const auth = useAuthStore();

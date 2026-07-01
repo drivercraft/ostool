@@ -36,8 +36,10 @@ vi.mock("@/stores/ui", () => ({
 
 vi.mock("@/api", () => ({
   api: {
-    getCaptcha,
-    getRegistrationPolicy,
+    auth: {
+      getCaptcha,
+      getRegistrationPolicy,
+    },
   },
 }));
 

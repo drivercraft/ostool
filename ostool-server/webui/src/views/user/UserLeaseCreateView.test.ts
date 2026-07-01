@@ -17,10 +17,14 @@ const uiStore = {
 
 vi.mock("@/api", () => ({
   api: {
-    listBoardTypes,
-    listUserLeases,
-    listUserLeaseAvailability,
-    createLease,
+    public: {
+      listBoardTypes,
+    },
+    user: {
+      listUserLeases,
+      listUserLeaseAvailability,
+      createLease,
+    },
   },
 }));
 

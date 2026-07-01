@@ -35,14 +35,16 @@ vi.mock("vue-router", () => ({
 
 vi.mock("@/api", () => ({
   api: {
-    listSerialPorts,
-    listDtbs,
-    getTftpStatus,
-    createDtb,
-    getBoard,
-    createBoard,
-    updateBoard,
-    deleteBoard,
+    admin: {
+      listSerialPorts,
+      listDtbs,
+      getTftpStatus,
+      createDtb,
+      getBoard,
+      createBoard,
+      updateBoard,
+      deleteBoard,
+    },
   },
 }));
 

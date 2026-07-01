@@ -5,7 +5,7 @@ import { RouterLink, useRouter } from "vue-router";
 import Icon from "@/components/Icon.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
-import { useUserLeases } from "./useUserLeases";
+import { useUserLeases } from "@/composables/useUserLeases";
 
 const ui = useUiStore();
 const auth = useAuthStore();

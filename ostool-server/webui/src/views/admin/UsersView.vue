@@ -180,15 +180,15 @@ async function loadUsers() {
   loading.value = true;
   try {
     const [userResponse, roleResponse] = await Promise.all([
-      api.listAdminUsers(),
-      api.listAdminRoles(),
+      api.admin.listAdminUsers(),
+      api.admin.listAdminRoles(),
     ]);
     users.value = userResponse.users;
     roles.value = roleResponse.roles;
     const rolePairs = await Promise.all(
       userResponse.users.map(async (user) => [
         user.id,
-        (await api.getAdminUserRoles(user.id)).roles.map((role) => role.id),
+        (await api.admin.getAdminUserRoles(user.id)).roles.map((role) => role.id),
       ] as const),
     );
     userRoleIds.value = Object.fromEntries(rolePairs);
@@ -211,7 +211,7 @@ async function submitCreate() {
   }
   submitting.value = true;
   try {
-    const created = await api.createAdminUser({
+    const created = await api.admin.createAdminUser({
       username: form.value.username.trim(),
       display_name: form.value.display_name.trim() || form.value.username.trim(),
       email: form.value.email.trim(),
@@ -219,7 +219,7 @@ async function submitCreate() {
       role_ids: form.value.role_ids,
     });
     if (form.value.role_ids.length > 0) {
-      await api.updateAdminUserRoles(created.id, {
+      await api.admin.updateAdminUserRoles(created.id, {
         role_ids: form.value.role_ids,
       });
     }
@@ -244,12 +244,12 @@ async function submitEdit() {
   submitting.value = true;
   try {
     const userId = modalUser.value.id;
-    await api.updateAdminUser(userId, {
+    await api.admin.updateAdminUser(userId, {
       display_name: form.value.display_name.trim() || modalUser.value.username,
       email: form.value.email.trim(),
       disabled: form.value.disabled,
     });
-    await api.updateAdminUserRoles(userId, {
+    await api.admin.updateAdminUserRoles(userId, {
       role_ids: form.value.role_ids,
     });
     ui.setSuccess(`已更新用户 ${modalUser.value.username}`);
@@ -272,7 +272,7 @@ async function submitResetPassword() {
   }
   submitting.value = true;
   try {
-    await api.resetAdminUserPassword(modalUser.value.id, {
+    await api.admin.resetAdminUserPassword(modalUser.value.id, {
       password: form.value.password,
     });
     ui.setSuccess(`已重置 ${modalUser.value.username} 的密码`);
@@ -297,13 +297,13 @@ async function toggleDisabled(user: AdminUserResponse) {
   }
   try {
     if (user.disabled) {
-      await api.updateAdminUser(user.id, {
+      await api.admin.updateAdminUser(user.id, {
         display_name: user.display_name,
         email: user.email,
         disabled: false,
       });
     } else {
-      await api.disableAdminUser(user.id);
+      await api.admin.disableAdminUser(user.id);
     }
     ui.setSuccess(`已${action}用户 ${user.username}`);
     await loadUsers();
@@ -327,7 +327,7 @@ async function deleteUser(user: AdminUserResponse) {
     return;
   }
   try {
-    await api.deleteAdminUser(user.id);
+    await api.admin.deleteAdminUser(user.id);
     ui.setSuccess(`已删除用户 ${user.username}`);
     closeMenu();
     await loadUsers();
@@ -348,7 +348,7 @@ async function approveUser(user: AdminUserResponse) {
     return;
   }
   try {
-    await api.approveAdminUser(user.id);
+    await api.admin.approveAdminUser(user.id);
     ui.setSuccess(`已通过 ${user.username} 的注册申请`);
     await loadUsers();
   } catch (error) {
@@ -368,7 +368,7 @@ async function rejectUser(user: AdminUserResponse) {
     return;
   }
   try {
-    await api.rejectAdminUser(user.id);
+    await api.admin.rejectAdminUser(user.id);
     ui.setSuccess(`已拒绝 ${user.username} 的注册申请`);
     await loadUsers();
   } catch (error) {

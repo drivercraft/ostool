@@ -13,9 +13,11 @@ const uiStore = {
 
 vi.mock("@/api", () => ({
   api: {
-    getServerConfig,
-    updateServerConfig,
-    listNetworkInterfaces,
+    admin: {
+      getServerConfig,
+      updateServerConfig,
+      listNetworkInterfaces,
+    },
   },
 }));
 

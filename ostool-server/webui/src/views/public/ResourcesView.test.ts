@@ -10,7 +10,7 @@ const uiStore = {
 };
 
 vi.mock("@/api", () => ({
-  api: { listBoardTypes },
+  api: { public: { listBoardTypes } },
 }));
 
 vi.mock("@/stores/ui", () => ({

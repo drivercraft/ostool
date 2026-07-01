@@ -5,9 +5,9 @@ import { sessionsApi } from "./sessions";
 import { userApi } from "./user";
 
 export const api = {
-  ...authApi,
-  ...publicApi,
-  ...userApi,
-  ...sessionsApi,
-  ...adminApi,
+  auth: authApi,
+  public: publicApi,
+  user: userApi,
+  sessions: sessionsApi,
+  admin: adminApi,
 };

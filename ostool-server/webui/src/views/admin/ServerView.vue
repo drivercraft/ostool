@@ -29,8 +29,8 @@ async function loadConfig() {
   loading.value = true;
   try {
     const [serverConfig, interfaces] = await Promise.all([
-      api.getServerConfig(),
-      api.listNetworkInterfaces(),
+      api.admin.getServerConfig(),
+      api.admin.listNetworkInterfaces(),
     ]);
     config.value = serverConfig;
     networkInterfaces.value = interfaces;
@@ -65,7 +65,7 @@ async function saveConfig() {
 
     saving.value = true;
   try {
-    config.value = await api.updateServerConfig({
+    config.value = await api.admin.updateServerConfig({
       editable: config.value.editable,
       site: config.value.site,
     });
@@ -79,7 +79,7 @@ async function saveConfig() {
 
 async function refreshNetworkInterfaces() {
   try {
-    networkInterfaces.value = await api.listNetworkInterfaces();
+    networkInterfaces.value = await api.admin.listNetworkInterfaces();
     ui.setSuccess("已刷新网络接口列表");
   } catch (error) {
     ui.setError((error as Error).message);

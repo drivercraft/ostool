@@ -362,9 +362,9 @@ async function loadData() {
   loading.value = true;
   try {
     const [leaseResponse, userResponse, boardResponse] = await Promise.all([
-      api.listAdminLeases(),
-      api.listAdminUsers(),
-      api.listBoards(),
+      api.admin.listAdminLeases(),
+      api.admin.listAdminUsers(),
+      api.admin.listBoards(),
     ]);
     leases.value = leaseResponse.leases;
     users.value = userResponse.users;
@@ -422,14 +422,14 @@ async function saveLease() {
   saving.value = true;
   try {
     if (editing.value) {
-      await api.updateAdminLease(editingLeaseId.value, {
+      await api.admin.updateAdminLease(editingLeaseId.value, {
         starts_at: fromDatetimeLocal(form.value.starts_at),
         expires_at: fromDatetimeLocal(form.value.expires_at),
         failure_message: form.value.failure_message.trim() || null,
       });
       ui.setSuccess("租赁已更新");
     } else {
-      await api.createAdminLease({
+      await api.admin.createAdminLease({
         user_id: form.value.user_id,
         board_id: form.value.board_id,
         client_name: form.value.client_name.trim() || null,

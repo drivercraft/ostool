@@ -8,9 +8,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/api", () => ({
   api: {
-    getCurrentUser: mocks.getCurrentUser,
-    login: mocks.login,
-    logout: mocks.logout,
+    auth: {
+      getCurrentUser: mocks.getCurrentUser,
+      login: mocks.login,
+      logout: mocks.logout,
+    },
   },
 }));
 

@@ -291,8 +291,8 @@ async function loadData() {
   loading.value = true;
   try {
     const [types, leaseList] = await Promise.all([
-      api.listBoardTypes(),
-      api.listUserLeaseAvailability(),
+      api.public.listBoardTypes(),
+      api.user.listUserLeaseAvailability(),
     ]);
     boardTypes.value = types;
     leases.value = leaseList.leases;
@@ -323,7 +323,7 @@ async function createLease() {
   try {
     const startsAt = fromDatetimeLocal(form.value.starts_at);
     const expiresAt = fromDatetimeLocal(form.value.expires_at);
-    const created = await api.createLease({
+    const created = await api.user.createLease({
       board_type: selectedBoardType.value,
       required_tags: parseRequiredTags(),
       starts_at: startsAt,

@@ -59,7 +59,7 @@ export const useAuthStore = defineStore("auth", () => {
 
   async function loadCurrentUser() {
     try {
-      user.value = await api.getCurrentUser();
+      user.value = await api.auth.getCurrentUser();
     } catch {
       user.value = null;
     } finally {
@@ -73,7 +73,7 @@ export const useAuthStore = defineStore("auth", () => {
     captchaToken: string,
     captchaAnswer: string,
   ) {
-    user.value = await api.login({
+    user.value = await api.auth.login({
       username,
       password,
       captcha_token: captchaToken,
@@ -83,7 +83,7 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   async function logoutUser() {
-    await api.logout().catch(() => undefined);
+    await api.auth.logout().catch(() => undefined);
     user.value = null;
     loaded.value = true;
   }

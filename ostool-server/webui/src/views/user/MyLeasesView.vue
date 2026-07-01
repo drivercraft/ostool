@@ -8,7 +8,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import type { LeaseResponse } from "@/types/api";
 import { getLeaseDisplayStatus } from "@/utils/leaseStatus";
-import { formatLeaseTime, remainingLeaseLabel, useUserLeases } from "./useUserLeases";
+import { formatLeaseTime, remainingLeaseLabel, useUserLeases } from "@/composables/useUserLeases";
 
 type CalendarViewMode = "hour" | "day" | "month" | "year";
 type CalendarSlot = {

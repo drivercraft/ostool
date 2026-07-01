@@ -139,9 +139,9 @@ async function loadData() {
   loading.value = true;
   try {
     const [leaseResponse, userResponse, boardResponse] = await Promise.all([
-      api.listAdminLeases(),
-      api.listAdminUsers(),
-      api.listBoards(),
+      api.admin.listAdminLeases(),
+      api.admin.listAdminUsers(),
+      api.admin.listBoards(),
     ]);
     leases.value = leaseResponse.leases;
     users.value = userResponse.users;
@@ -165,7 +165,7 @@ function openEdit(item: LeaseResponse) {
 async function startLeaseSession(item: LeaseResponse) {
   closeMenu();
   try {
-    const updated = await api.startAdminLeaseSession(item.lease.id);
+    const updated = await api.admin.startAdminLeaseSession(item.lease.id);
     leases.value = leases.value.map((lease) => (lease.lease.id === item.lease.id ? updated : lease));
     ui.setSuccess(`已启用租赁 ${item.lease.id}`);
   } catch (error) {
@@ -191,10 +191,10 @@ async function confirmLeaseRemoval(leaseId: string, action: "disable" | "delete"
   }
   try {
     if (action === "disable") {
-      await api.releaseAdminLease(leaseId);
+      await api.admin.releaseAdminLease(leaseId);
       ui.setSuccess(`已发起${actionLabel}租赁 ${leaseId}`);
     } else {
-      await api.deleteAdminLease(leaseId);
+      await api.admin.deleteAdminLease(leaseId);
       ui.setSuccess(`已${actionLabel}租赁 ${leaseId}`);
     }
     await loadData();

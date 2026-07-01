@@ -22,15 +22,17 @@ const uiStore = {
 
 vi.mock("@/api", () => ({
   api: {
-    listAdminUsers,
-    listAdminRoles,
-    getAdminUserRoles,
-    createAdminUser,
-    updateAdminUser,
-    deleteAdminUser,
-    disableAdminUser,
-    resetAdminUserPassword,
-    updateAdminUserRoles,
+    admin: {
+      listAdminUsers,
+      listAdminRoles,
+      getAdminUserRoles,
+      createAdminUser,
+      updateAdminUser,
+      deleteAdminUser,
+      disableAdminUser,
+      resetAdminUserPassword,
+      updateAdminUserRoles,
+    },
   },
 }));
 

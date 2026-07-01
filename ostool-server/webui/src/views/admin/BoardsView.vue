@@ -190,7 +190,7 @@ async function toggleDisabled(board: BoardConfig) {
   }
   closeMenu();
   try {
-    const updated = await api.updateBoard(board.id, boardToUpsertRequest(board, !board.disabled));
+    const updated = await api.admin.updateBoard(board.id, boardToUpsertRequest(board, !board.disabled));
     boards.value = boards.value.map((item) => (item.id === board.id ? updated : item));
     ui.setSuccess(updated.disabled ? `已禁用开发板 ${updated.id}` : `已启用开发板 ${updated.id}`);
   } catch (error) {
@@ -222,7 +222,7 @@ async function removeBoard(boardId: string) {
     return;
   }
   try {
-    await api.deleteBoard(boardId);
+    await api.admin.deleteBoard(boardId);
     ui.setSuccess(`已删除开发板 ${boardId}`);
     await loadBoards();
   } catch (error) {
@@ -234,9 +234,9 @@ async function loadBoards() {
   loading.value = true;
   try {
     const [boardList, sessionList, leaseList] = await Promise.all([
-      api.listBoards(),
-      api.listSessions(),
-      api.listAdminLeases(),
+      api.admin.listBoards(),
+      api.admin.listSessions(),
+      api.admin.listAdminLeases(),
     ]);
     boards.value = boardList;
     sessions.value = sessionList.sessions;

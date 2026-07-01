@@ -31,14 +31,16 @@ vi.mock("vue-router", async () => {
 
 vi.mock("@/api", () => ({
   api: {
-    listAdminLeases,
-    createAdminLease,
-    updateAdminLease,
-    startAdminLeaseSession,
-    releaseAdminLease,
-    deleteAdminLease,
-    listAdminUsers,
-    listBoards,
+    admin: {
+      listAdminLeases,
+      createAdminLease,
+      updateAdminLease,
+      startAdminLeaseSession,
+      releaseAdminLease,
+      deleteAdminLease,
+      listAdminUsers,
+      listBoards,
+    },
   },
 }));
 

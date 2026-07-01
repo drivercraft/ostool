@@ -14,7 +14,7 @@ const overview = ref<AdminOverviewResponse | null>(null);
 async function loadOverview() {
   loading.value = true;
   try {
-    overview.value = await api.getOverview();
+    overview.value = await api.admin.getOverview();
   } catch (error) {
     ui.setError((error as Error).message);
   } finally {

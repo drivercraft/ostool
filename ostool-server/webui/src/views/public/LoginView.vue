@@ -66,7 +66,7 @@ async function submit() {
 async function loadCaptcha() {
   captchaLoading.value = true;
   try {
-    captcha.value = await api.getCaptcha();
+    captcha.value = await api.auth.getCaptcha();
     captchaAnswer.value = "";
   } catch (error) {
     ui.setError((error as Error).message);

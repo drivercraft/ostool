@@ -17,7 +17,7 @@ describe("api", () => {
       ),
     );
 
-    await expect(api.deleteSession("demo-session")).resolves.toBeUndefined();
+    await expect(api.admin.deleteSession("demo-session")).resolves.toBeUndefined();
   });
 
   it("uses REST endpoints for admin session updates and close actions", async () => {
@@ -45,11 +45,11 @@ describe("api", () => {
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(api.updateSession("demo/session", {
+    await expect(api.admin.updateSession("demo/session", {
       client_name: "web-ui",
       failure_message: null,
     })).resolves.toMatchObject({ session: { id: "demo/session" } });
-    await expect(api.closeSession("demo/session")).resolves.toBeUndefined();
+    await expect(api.admin.closeSession("demo/session")).resolves.toBeUndefined();
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -93,11 +93,11 @@ describe("api", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(api.getAdminUser("u/1")).resolves.toMatchObject({
+    await expect(api.admin.getAdminUser("u/1")).resolves.toMatchObject({
       id: "u/1",
       username: "alice",
     });
-    await expect(api.deleteAdminUser("u/1")).resolves.toBeUndefined();
+    await expect(api.admin.deleteAdminUser("u/1")).resolves.toBeUndefined();
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -118,7 +118,7 @@ describe("api", () => {
   it("reports a service connection hint when fetch fails", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
 
-    await expect(api.getOverview()).rejects.toThrow(
+    await expect(api.admin.getOverview()).rejects.toThrow(
       "无法连接 ostool-server，服务可能正在安装、升级或重启，请稍后刷新页面。",
     );
   });

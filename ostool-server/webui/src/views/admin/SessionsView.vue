@@ -151,7 +151,7 @@ async function submitEdit() {
   }
   submitting.value = true;
   try {
-    const updated = await api.updateSession(editingSession.value.id, {
+    const updated = await api.admin.updateSession(editingSession.value.id, {
       client_name: editForm.client_name.trim() || null,
       failure_message: editForm.failure_message.trim() || null,
     });
@@ -184,7 +184,7 @@ async function closeSessionRecord(session: SessionRecord) {
   }
 
   try {
-    await api.closeSession(session.id);
+    await api.admin.closeSession(session.id);
     ui.setSuccess(`已发起关闭会话 ${session.id}`);
     await loadSessions();
   } catch (error) {
@@ -196,9 +196,9 @@ async function loadSessions() {
   loading.value = true;
   try {
     const [boardList, sessionList, userList] = await Promise.all([
-      api.listBoards(),
-      api.listSessions(),
-      api.listAdminUsers(),
+      api.admin.listBoards(),
+      api.admin.listSessions(),
+      api.admin.listAdminUsers(),
     ]);
     boards.value = boardList;
     users.value = userList.users;
@@ -227,7 +227,7 @@ async function deleteSessionRecord(sessionId: string) {
   }
 
   try {
-    await api.deleteSession(sessionId);
+    await api.admin.deleteSession(sessionId);
     ui.setSuccess(`已删除会话记录 ${sessionId}`);
     await loadSessions();
   } catch (error) {

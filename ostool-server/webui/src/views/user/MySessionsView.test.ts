@@ -13,8 +13,10 @@ const routerReplace = vi.fn();
 
 vi.mock("@/api", () => ({
   api: {
-    listUserLeases,
-    deleteLease,
+    user: {
+      listUserLeases,
+      deleteLease,
+    },
   },
 }));
 

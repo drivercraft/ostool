@@ -25,12 +25,14 @@ const authStore = {
 
 vi.mock("@/api", () => ({
   api: {
-    listBoards,
-    listSessions,
-    listAdminUsers,
-    deleteSession,
-    updateSession,
-    closeSession,
+    admin: {
+      listBoards,
+      listSessions,
+      listAdminUsers,
+      deleteSession,
+      updateSession,
+      closeSession,
+    },
   },
 }));
 

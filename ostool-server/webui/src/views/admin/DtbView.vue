@@ -94,7 +94,7 @@ function validateDtbFileSize(file: File | null): string | null {
 async function loadDtbs() {
   loading.value = true;
   try {
-    const files = await api.listDtbs();
+    const files = await api.admin.listDtbs();
     dtbs.value = files;
   } catch (error) {
     ui.setError((error as Error).message);
@@ -197,7 +197,7 @@ async function createDtb() {
 
   creating.value = true;
   try {
-    await api.createDtb(
+    await api.admin.createDtb(
       name,
       newDtbFile.value,
       dtbMetadata(newDtbArchitecture.value, newDtbCompatible.value, newDtbDescription.value),
@@ -318,7 +318,7 @@ async function saveDtb() {
 
   updatingName.value = currentName;
   try {
-    const updated = await api.updateDtb(
+    const updated = await api.admin.updateDtb(
       currentName,
       nextName === currentName ? null : nextName,
       replaceFile,
@@ -338,7 +338,7 @@ async function toggleDtbDisabled(dtb: DtbFileResponse) {
   closeMenu();
   togglingName.value = dtb.name;
   try {
-    const updated = await api.updateDtb(dtb.name, null, null, {
+    const updated = await api.admin.updateDtb(dtb.name, null, null, {
       boot_architecture: dtb.boot_architecture ?? null,
       compatible: dtb.compatible ?? null,
       description: dtb.description ?? null,
@@ -367,7 +367,7 @@ async function removeDtb(name: string) {
 
   deletingName.value = name;
   try {
-    await api.deleteDtb(name);
+    await api.admin.deleteDtb(name);
     ui.setSuccess(`已删除 DTB ${name}`);
     await loadDtbs();
   } catch (error) {

@@ -16,10 +16,12 @@ const uiStore = {
 
 vi.mock("@/api", () => ({
   api: {
-    listDtbs,
-    createDtb,
-    updateDtb,
-    deleteDtb,
+    admin: {
+      listDtbs,
+      createDtb,
+      updateDtb,
+      deleteDtb,
+    },
   },
 }));
 

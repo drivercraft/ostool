@@ -525,7 +525,7 @@ function resolvedNetmaskHint() {
 }
 
 async function loadSerialPorts() {
-  serialPorts.value = await api.listSerialPorts();
+  serialPorts.value = await api.admin.listSerialPorts();
 }
 
 async function refreshSerialPorts() {
@@ -547,10 +547,10 @@ async function loadEditor() {
 
   try {
     const [ports, dtbList, statusResponse, board] = await Promise.all([
-      api.listSerialPorts(),
-      api.listDtbs(),
-      api.getTftpStatus().catch(() => null),
-      isEditing.value && boardId.value ? api.getBoard(boardId.value) : Promise.resolve(null),
+      api.admin.listSerialPorts(),
+      api.admin.listDtbs(),
+      api.admin.getTftpStatus().catch(() => null),
+      isEditing.value && boardId.value ? api.admin.getBoard(boardId.value) : Promise.resolve(null),
     ]);
     serialPorts.value = ports;
     dtbs.value = dtbList;
@@ -625,7 +625,7 @@ async function uploadDtbAndSelect() {
 
   uploadingDtb.value = true;
   try {
-    const created = await api.createDtb(dtbName, dtbUploadFile.value);
+    const created = await api.admin.createDtb(dtbName, dtbUploadFile.value);
     dtbs.value = [...dtbs.value.filter((item) => item.name !== created.name), created].sort((a, b) =>
       a.name.localeCompare(b.name),
     );
@@ -649,8 +649,8 @@ async function saveBoard() {
   try {
     const payload = buildRequestPayload();
     const saved = isEditing.value && boardId.value
-      ? await api.updateBoard(boardId.value, payload)
-      : await api.createBoard(payload);
+      ? await api.admin.updateBoard(boardId.value, payload)
+      : await api.admin.createBoard(payload);
     form.value = boardToFormState(saved);
     ui.setSuccess(`已保存开发板 ${saved.id}`);
     await router.push(`/admin/resources/boards/${saved.id}`);
@@ -677,7 +677,7 @@ async function removeBoard() {
 
   deleting.value = true;
   try {
-    await api.deleteBoard(boardId.value);
+    await api.admin.deleteBoard(boardId.value);
     ui.setSuccess(`已删除开发板 ${boardId.value}`);
     await router.push("/admin/resources/boards");
   } catch (error) {

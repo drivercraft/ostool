@@ -44,7 +44,7 @@ export function useUserLeases() {
   async function loadLeases() {
     loading.value = true;
     try {
-      const leaseList = await api.listUserLeases();
+      const leaseList = await api.user.listUserLeases();
       leases.value = leaseList.leases;
     } catch (error) {
       ui.setError((error as Error).message);
@@ -64,7 +64,7 @@ export function useUserLeases() {
       return;
     }
     try {
-      await api.deleteLease(leaseId);
+      await api.user.deleteLease(leaseId);
       ui.setSuccess(`已取消租赁 ${leaseId}`);
       await loadLeases();
     } catch (error) {

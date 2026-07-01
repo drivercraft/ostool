@@ -22,7 +22,7 @@ const tone = computed(() =>
 async function loadTftp() {
   loading.value = true;
   try {
-    const [configResponse, statusResponse] = await Promise.all([api.getTftpConfig(), api.getTftpStatus()]);
+    const [configResponse, statusResponse] = await Promise.all([api.admin.getTftpConfig(), api.admin.getTftpStatus()]);
     tftpConfig.value = configResponse.tftp;
     tftpStatus.value = statusResponse.status;
   } catch (error) {
@@ -35,7 +35,7 @@ async function loadTftp() {
 async function reconcile() {
   reconciling.value = true;
   try {
-    const response = await api.reconcileTftp();
+    const response = await api.admin.reconcileTftp();
     tftpStatus.value = response.status;
     ui.setSuccess("已执行 TFTP reconcile");
   } catch (error) {
