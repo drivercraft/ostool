@@ -797,6 +797,7 @@
   --shadow-md: 0 14px 36px rgba(28, 48, 74, .08), 0 3px 10px rgba(28, 48, 74, .04);
   --shadow-lg: 0 24px 70px rgba(28, 48, 74, .18), 0 8px 24px rgba(28, 48, 74, .08);
   --topbar-h: 64px;
+  --admin-topbar-actions-end-pad: clamp(44px, 4vw, 72px);
   --sidebar-w: 240px;
   --content-pad: 20px;
   display: grid;
@@ -1012,7 +1013,7 @@ body.ostool-theme-dark .app-shell {
 }
 .topbar-title .crumb { font-size: .76rem; color: var(--c-text-muted); }
 .topbar-actions {
-  padding-right: var(--topbar-actions-end-pad);
+  padding-right: var(--admin-topbar-actions-end-pad);
   display: flex;
   align-items: center;
   gap: 8px;
