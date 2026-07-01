@@ -513,7 +513,7 @@ onMounted(() => {
               placeholder="按用户名 / 显示名 / 邮箱 / 手机 / 部门搜索"
             />
           </label>
-          <label class="field filter-field">
+          <label class="field select-field filter-field">
             <span>状态</span>
             <select v-model="statusFilter">
               <option value="all">全部状态</option>
@@ -523,7 +523,7 @@ onMounted(() => {
               <option value="disabled">已禁用</option>
             </select>
           </label>
-          <label class="field filter-field">
+          <label class="field select-field filter-field">
             <span>角色</span>
             <select v-model="roleFilter">
               <option value="">全部角色</option>

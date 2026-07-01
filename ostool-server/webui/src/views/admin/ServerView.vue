@@ -213,7 +213,7 @@ onMounted(() => {
                 <div class="settings-card-title">账号与租赁策略</div>
               </div>
               <div class="form-grid two-columns">
-                <label class="field">
+                <label class="field select-field">
                   <span>自助注册策略</span>
                   <select v-model="config.site.registration_mode">
                     <option value="closed">关闭注册（仅管理员开通）</option>
@@ -257,7 +257,7 @@ onMounted(() => {
                 <div class="settings-card-title">网络与上传</div>
               </div>
               <div class="form-grid two-columns">
-                <label class="field form-grid-wide">
+                <label class="field select-field form-grid-wide">
                   <span>网络接口</span>
                   <div class="inline-field-group">
                     <select v-model="config.editable.network.interface">

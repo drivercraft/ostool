@@ -101,6 +101,7 @@
   --control-focus-ring: var(--c-brand-ghost);
   --control-text: var(--c-text);
   --control-muted: var(--c-text-muted);
+  --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20' fill='none'%3E%3Cpath d='M5.25 7.5L10 12.5L14.75 7.5' stroke='%23697386' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --control-primary-bg: var(--c-brand);
   --control-primary-hover-bg: var(--c-brand-dark);
   --control-knob-bg: #ffffff;
@@ -168,6 +169,7 @@ body.ostool-theme-dark {
   --control-focus-ring: rgba(96, 165, 250, .18);
   --control-text: #d8d8d8;
   --control-muted: #858585;
+  --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20' fill='none'%3E%3Cpath d='M5.25 7.5L10 12.5L14.75 7.5' stroke='%23858585' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --control-primary-bg: #2563eb;
   --control-primary-hover-bg: #1d4ed8;
   --control-knob-bg: #e5e7eb;

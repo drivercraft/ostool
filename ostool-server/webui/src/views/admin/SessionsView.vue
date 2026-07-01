@@ -256,7 +256,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
             <Icon name="search" :size="16" />
             <input v-model="search" type="search" maxlength="128" placeholder="搜索会话 / 用户 / 开发板 / 源 IP" />
           </label>
-          <label class="field filter-field">
+          <label class="field select-field filter-field">
             <span>状态</span>
             <select v-model="stateFilter">
               <option value="all">全部状态</option>

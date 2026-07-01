@@ -275,14 +275,14 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
               aria-label="标签筛选"
             />
           </label>
-          <label class="field filter-field">
+          <label class="field select-field filter-field">
             <span>开发板型号</span>
             <select v-model="typeFilter" aria-label="开发板型号">
               <option value="">全部型号</option>
               <option v-for="type in boardTypes" :key="type" :value="type">{{ type }}</option>
             </select>
           </label>
-          <label class="field filter-field">
+          <label class="field select-field filter-field">
             <span>开发板状态</span>
             <select v-model="statusFilter" aria-label="开发板状态">
               <option value="all">全部状态</option>

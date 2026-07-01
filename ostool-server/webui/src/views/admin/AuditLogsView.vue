@@ -170,7 +170,7 @@ onMounted(() => {
               placeholder="搜索操作人 / IP / 请求 ID"
             />
           </label>
-          <label class="field filter-field">
+          <label class="field select-field filter-field">
             <span>操作</span>
             <select v-model="actionFilter">
               <option value="">全部操作</option>
@@ -179,7 +179,7 @@ onMounted(() => {
               </option>
             </select>
           </label>
-          <label class="field filter-field">
+          <label class="field select-field filter-field">
             <span>对象</span>
             <select v-model="targetTypeFilter">
               <option value="">全部对象</option>

@@ -401,7 +401,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
             <Icon name="search" :size="16" />
             <input v-model="search" type="search" maxlength="128" placeholder="搜索名称 / 架构 / compatible / 路径" />
           </label>
-          <label class="field filter-field">
+          <label class="field select-field filter-field">
             <span>大小</span>
             <select v-model="sizeFilter">
               <option value="all">全部大小</option>

@@ -432,7 +432,7 @@ onMounted(() => {
               </div>
 
               <div class="form-grid">
-                <label class="field is-required">
+                <label class="field select-field is-required">
                   <span>开发板型号</span>
                   <select v-model="selectedBoardType" :disabled="loading || submitting">
                     <option value="" disabled>请选择开发板型号</option>

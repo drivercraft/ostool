@@ -774,7 +774,7 @@ onMounted(() => {
           </div>
 
           <div v-if="form.serial_enabled" class="form-grid two-columns">
-            <label class="field is-required">
+            <label class="field select-field is-required">
               <span>串口设备</span>
               <div class="inline-control-row">
                 <select
@@ -826,7 +826,7 @@ onMounted(() => {
             <span class="form-section-icon power">&#9889;</span>
             <h4>电源管理</h4>
           </div>
-          <label class="field">
+          <label class="field select-field">
             <span>电源管理类型</span>
             <select v-model="form.power_management_kind" aria-label="电源管理类型">
               <option value="custom">Custom</option>
@@ -845,7 +845,7 @@ onMounted(() => {
             </label>
           </div>
 
-          <label v-else-if="form.power_management_kind === 'zhongsheng_relay'" class="field" style="margin-top: 16px">
+          <label v-else-if="form.power_management_kind === 'zhongsheng_relay'" class="field select-field" style="margin-top: 16px">
             <span>继电模块串口</span>
             <select
               :value="selectedRelaySerialOptionValue()"
@@ -883,7 +883,7 @@ onMounted(() => {
             <span class="form-section-icon boot">&#9654;</span>
             <h4>启动方式</h4>
           </div>
-          <label class="field">
+          <label class="field select-field">
             <span>启动模式</span>
             <select v-model="form.boot_kind">
               <option value="uboot">U-Boot</option>
@@ -903,7 +903,7 @@ onMounted(() => {
             </label>
 
             <div v-if="form.use_tftp" class="form-grid two-columns" style="margin-top: 18px">
-              <label class="field">
+              <label class="field select-field">
                 <span>网络模式</span>
                 <select v-model="form.network_mode" aria-label="网络模式">
                   <option value="dhcp">DHCP</option>
@@ -976,7 +976,7 @@ onMounted(() => {
                     <p class="field-hint">为当前开发板选择默认使用的设备树文件。</p>
                   </div>
                 </div>
-                <label class="field">
+                <label class="field select-field">
                   <span>已选择 DTB</span>
                   <select v-model="form.dtb_name">
                     <option value="">不使用预设 DTB</option>

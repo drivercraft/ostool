@@ -549,7 +549,7 @@ onMounted(() => {
               </div>
 
               <div class="form-grid">
-                <label class="field is-required">
+                <label class="field select-field is-required">
                   <span>开发板</span>
                   <select v-model="form.board_id" :disabled="loading || editing">
                     <option value="" disabled>请选择开发板</option>
@@ -559,7 +559,7 @@ onMounted(() => {
                   </select>
                 </label>
 
-                <label class="field is-required">
+                <label class="field select-field is-required">
                   <span>用户</span>
                   <select v-model="form.user_id" :disabled="loading || editing">
                     <option value="" disabled>请选择用户</option>

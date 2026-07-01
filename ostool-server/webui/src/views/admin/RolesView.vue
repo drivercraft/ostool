@@ -498,7 +498,7 @@ watch(
               <Icon name="search" :size="16" />
               <input v-model="search" type="search" maxlength="128" placeholder="搜索角色 / 标识 / 描述" />
             </label>
-            <label class="field filter-field">
+            <label class="field select-field filter-field">
               <span>类型</span>
               <select v-model="typeFilter">
                 <option value="all">全部类型</option>
@@ -506,7 +506,7 @@ watch(
                 <option value="custom">自定义角色</option>
               </select>
             </label>
-            <label class="field filter-field">
+            <label class="field select-field filter-field">
               <span>状态</span>
               <select v-model="statusFilter">
                 <option value="all">全部状态</option>

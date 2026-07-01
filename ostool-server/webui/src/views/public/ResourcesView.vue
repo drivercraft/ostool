@@ -148,7 +148,7 @@ onMounted(() => {
             placeholder="搜索型号或标签，例如 rk3568、lab..."
           />
         </label>
-        <label class="field filter-field">
+        <label class="field select-field filter-field">
           <span>当前空闲</span>
           <select v-model="availabilityFilter" aria-label="当前空闲">
             <option value="all">全部状态</option>
@@ -156,7 +156,7 @@ onMounted(() => {
             <option value="unavailable">当前无空闲</option>
           </select>
         </label>
-        <label class="field filter-field">
+        <label class="field select-field filter-field">
           <span>排序方式</span>
           <select v-model="sortKey" aria-label="排序方式">
             <option value="name">按型号排序</option>

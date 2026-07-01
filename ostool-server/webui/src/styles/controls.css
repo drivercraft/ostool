@@ -342,6 +342,17 @@ textarea {
   padding: 0 .8rem;
   transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
 }
+.select-field {
+  position: relative;
+}
+.select-field select {
+  appearance: none;
+  padding-right: 2.1rem;
+  background-image: var(--select-caret);
+  background-position: calc(100% - .8rem) 50%;
+  background-repeat: no-repeat;
+  background-size: 1.05rem 1.05rem;
+}
 textarea {
   min-height: 96px;
   resize: vertical;
@@ -359,7 +370,7 @@ textarea:focus {
   outline: none;
   border-color: var(--control-focus-border);
   box-shadow: 0 0 0 3px var(--control-focus-ring);
-  background: var(--control-bg);
+  background-color: var(--control-bg);
 }
 .input:disabled,
 .field input:disabled,
@@ -368,7 +379,7 @@ textarea:focus {
 input:disabled,
 select:disabled,
 textarea:disabled {
-  background: var(--c-bg-alt);
+  background-color: var(--c-bg-alt);
   color: var(--c-text-muted);
   cursor: not-allowed;
 }
@@ -415,24 +426,11 @@ textarea:disabled {
   box-shadow: 0 0 0 3px var(--control-focus-ring);
 }
 .filter-field {
-  position: relative;
   min-width: 150px;
   width: auto;
 }
 .filter-field > span {
   display: none;
-}
-.filter-field::after {
-  content: "";
-  position: absolute;
-  right: .8rem;
-  top: 50%;
-  width: .45rem;
-  height: .45rem;
-  border-right: 1.5px solid var(--control-muted);
-  border-bottom: 1.5px solid var(--control-muted);
-  pointer-events: none;
-  transform: translateY(-65%) rotate(45deg);
 }
 .filter-field select {
   width: auto;
@@ -440,17 +438,16 @@ textarea:disabled {
   min-height: var(--control-h);
   padding-right: 2.1rem;
   border: 1px solid var(--control-border);
-  background: var(--control-bg-muted);
+  background-color: var(--control-bg-muted);
   box-shadow: none;
-  appearance: none;
 }
 .filter-field select:hover {
   border-color: var(--control-border-hover);
-  background: var(--control-bg);
+  background-color: var(--control-bg);
 }
 .filter-field select:focus {
   border-color: var(--control-focus-border);
-  background: var(--control-bg);
+  background-color: var(--control-bg);
   box-shadow: 0 0 0 3px var(--control-focus-ring);
 }
 
@@ -1054,7 +1051,8 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
 }
 .modal-close-button {
   flex: 0 0 auto;
-  font-size: 1.1rem;
+  font-size: 1.45rem;
+  font-weight: 600;
   line-height: 1;
 }
 .modal-body {
