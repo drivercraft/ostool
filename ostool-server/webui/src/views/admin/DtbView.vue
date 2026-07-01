@@ -500,6 +500,11 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
                 </div>
               </td>
             </tr>
+            <tr v-if="filteredDtbs.length === 0" class="table-empty-row">
+              <td colspan="9">
+                <div class="empty-state">暂无 DTB 数据</div>
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>

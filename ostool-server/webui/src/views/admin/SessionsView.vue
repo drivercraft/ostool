@@ -372,6 +372,11 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
                 </div>
               </td>
             </tr>
+            <tr v-if="filteredSessions.length === 0" class="table-empty-row">
+              <td colspan="10">
+                <div class="empty-state">暂无会话数据</div>
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>

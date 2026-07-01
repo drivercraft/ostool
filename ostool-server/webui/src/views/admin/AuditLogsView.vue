@@ -247,9 +247,13 @@ onMounted(() => {
                 </td>
               </tr>
             </template>
+            <tr v-if="filteredLogs.length === 0" class="table-empty-row">
+              <td colspan="8">
+                <div class="empty-state">暂无审计日志数据</div>
+              </td>
+            </tr>
           </tbody>
         </table>
-        <div v-if="filteredLogs.length === 0" class="empty-state">暂无审计日志</div>
       </div>
 
       <div v-if="!loading" class="table-statusbar">

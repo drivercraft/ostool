@@ -53,7 +53,7 @@ onMounted(() => {
       <div v-if="loading" class="empty-state"><div class="empty-state-icon">&#9641;</div>正在加载会话...</div>
       <div v-else-if="activeSessions.length === 0" class="empty-state">
         <div class="empty-state-icon">&#9641;</div>
-        当前没有正在运行的租约会话。
+        暂无会话数据
       </div>
 
       <div v-else class="board-card-grid">

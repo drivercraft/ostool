@@ -387,6 +387,11 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
               </div>
             </td>
           </tr>
+          <tr v-if="filteredBoards.length === 0" class="table-empty-row">
+            <td colspan="7">
+              <div class="empty-state">暂无开发板数据</div>
+            </td>
+          </tr>
         </tbody>
         </table>
       </div>

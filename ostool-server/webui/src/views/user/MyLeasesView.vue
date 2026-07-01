@@ -266,7 +266,7 @@ onMounted(() => {
       <div v-if="loading" class="empty-state"><div class="empty-state-icon">&#9641;</div>正在加载预约日历...</div>
       <div v-else-if="activeLeases.length === 0" class="empty-state">
         <div class="empty-state-icon">&#9641;</div>
-        当前没有有效租赁，预约日历暂无内容。
+        暂无预约日历数据
       </div>
       <div v-else class="lease-calendar-shell dashboard-lease-calendar-shell">
         <div class="lease-calendar-grid" :class="`lease-calendar-${calendarView}`">
@@ -337,7 +337,7 @@ onMounted(() => {
       <div v-if="loading" class="empty-state"><div class="empty-state-icon">&#9641;</div>正在加载租赁...</div>
       <div v-else-if="activeLeases.length === 0" class="empty-state">
         <div class="empty-state-icon">&#9641;</div>
-        当前没有有效租赁。请前往资源页面选择开发板并申请租赁。
+        暂无租赁数据
       </div>
 
       <div v-else-if="leaseViewMode === 'grid'" class="board-card-grid">

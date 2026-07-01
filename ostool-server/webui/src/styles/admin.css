@@ -190,6 +190,15 @@
   overflow-x: auto;
   overflow-y: auto;
 }
+.table-scroll > .empty-state {
+  min-height: 260px;
+}
+.table-empty-row td {
+  padding: 0 !important;
+}
+.table-empty-row .empty-state {
+  min-height: 260px;
+}
 .admin-table-panel .data-table th:first-child,
 .admin-table-panel .data-table td:first-child {
   padding-left: 1.1rem;

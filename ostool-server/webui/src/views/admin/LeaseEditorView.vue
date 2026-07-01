@@ -500,7 +500,7 @@ onMounted(() => {
             </div>
 
             <div v-if="loading" class="empty-state">正在加载租赁日历...</div>
-            <div v-else-if="!selectedBoard" class="empty-state">暂无可用开发板。</div>
+            <div v-else-if="!selectedBoard" class="empty-state">暂无开发板数据</div>
             <div v-else class="lease-calendar-shell">
               <div
                 class="lease-calendar-grid"

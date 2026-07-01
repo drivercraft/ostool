@@ -196,7 +196,7 @@ onMounted(() => {
     </div>
     <div v-else-if="filteredBoardTypes.length === 0" class="empty-state">
       <div class="empty-state-icon">&#9641;</div>
-      当前没有符合筛选条件的开发板型号。
+      暂无开发板资源数据
     </div>
 
     <div v-else-if="viewMode === 'grid'" class="board-grid">

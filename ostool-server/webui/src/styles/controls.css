@@ -749,18 +749,42 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: .6rem;
+  gap: .75rem;
+  min-height: 180px;
   text-align: center;
   padding: 3rem 1.5rem;
   color: var(--c-text-muted);
-  background: var(--c-surface-2);
-  border: 1px dashed var(--c-border-strong);
-  border-radius: var(--radius);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
   font-size: .92rem;
+  font-weight: 600;
+  line-height: 1.6;
 }
+.empty-state:not(:has(.empty-state-icon, .spinner))::before,
 .empty-state-icon {
-  font-size: 2rem;
+  width: 48px;
+  height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--c-border-light);
+  border-radius: var(--radius);
+  background: var(--c-surface-2);
   color: var(--c-text-ghost);
+  box-shadow: var(--shadow-xs);
+  font-size: 1.35rem;
+  line-height: 1;
+}
+.empty-state:not(:has(.empty-state-icon, .spinner))::before {
+  content: "";
+  background:
+    linear-gradient(var(--c-text-ghost), var(--c-text-ghost)) center 18px / 20px 1.5px no-repeat,
+    linear-gradient(var(--c-text-ghost), var(--c-text-ghost)) center 24px / 14px 1.5px no-repeat,
+    var(--c-surface-2);
+}
+.empty-state .btn {
+  margin-top: .25rem;
 }
 
 /* spinner */

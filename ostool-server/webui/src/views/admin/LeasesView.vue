@@ -353,6 +353,11 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
                 </div>
               </td>
             </tr>
+            <tr v-if="filteredLeases.length === 0" class="table-empty-row">
+              <td colspan="8">
+                <div class="empty-state">暂无租赁数据</div>
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>

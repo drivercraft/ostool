@@ -95,7 +95,7 @@ onMounted(() => {
             <span class="text-sm font-mono muted" style="width: 64px" >{{ item.available }}/{{ item.total }}</span>
           </div>
           <div v-if="overview.board_types.length === 0" class="empty-state">
-            暂无开发板型号数据。
+            暂无开发板型号数据
           </div>
         </div>
       </div>

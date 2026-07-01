@@ -613,6 +613,11 @@ watch(
                   </div>
                 </td>
               </tr>
+              <tr v-if="filteredRoles.length === 0" class="table-empty-row">
+                <td colspan="8">
+                  <div class="empty-state">暂无角色数据</div>
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>

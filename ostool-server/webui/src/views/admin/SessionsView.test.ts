@@ -230,7 +230,8 @@ describe("SessionsView", () => {
     await flushPromises();
 
     expect(wrapper.find("table.data-table thead").exists()).toBe(true);
-    expect(wrapper.findAll("tbody tr")).toHaveLength(0);
+    expect(wrapper.findAll("tbody tr")).toHaveLength(1);
+    expect(wrapper.find(".table-empty-row .empty-state").text()).toContain("暂无会话数据");
     expect(wrapper.text()).toContain("会话 ID");
     expect(wrapper.text()).toContain("源 IP");
   });

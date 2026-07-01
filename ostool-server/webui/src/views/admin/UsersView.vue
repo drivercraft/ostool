@@ -675,6 +675,11 @@ onMounted(() => {
                 </div>
               </td>
             </tr>
+            <tr v-if="filteredUsers.length === 0" class="table-empty-row">
+              <td colspan="8">
+                <div class="empty-state">暂无用户数据</div>
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
