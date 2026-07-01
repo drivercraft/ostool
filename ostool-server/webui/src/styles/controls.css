@@ -35,14 +35,14 @@
 
 .btn-primary {
   background: var(--control-primary-bg);
-  color: var(--control-primary-text);
+  color: #fff;
   border-color: var(--control-primary-bg);
   box-shadow: var(--shadow-sm);
 }
 .btn-primary:hover {
   background: var(--control-primary-hover-bg);
   border-color: var(--control-primary-hover-bg);
-  color: var(--control-primary-text);
+  color: #fff;
   transform: translateY(-1px);
   box-shadow: var(--shadow-sm);
 }
@@ -89,8 +89,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--control-compact-h);
-  height: var(--control-compact-h);
+  width: var(--control-h);
+  height: var(--control-h);
   padding: 0;
   border-radius: var(--radius-sm);
   border: 1px solid var(--control-border);

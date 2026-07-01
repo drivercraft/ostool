@@ -6,7 +6,7 @@
   width: 100%;
   display: grid;
   grid-template-columns: 272px minmax(0, 1fr);
-  gap: var(--content-gap);
+  gap: var(--content-pad);
   align-items: start;
 }
 .user-sidebar {
@@ -173,7 +173,7 @@
 .dashboard-quick-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--content-gap);
+  gap: var(--content-pad);
 }
 .dashboard-quick-card {
   display: grid;
@@ -201,7 +201,7 @@
 }
 .dashboard-rentals-section {
   display: grid;
-  gap: var(--content-gap);
+  gap: var(--content-pad);
   padding: var(--content-pad);
 }
 .dashboard-section-heading,
@@ -209,14 +209,14 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--content-gap);
+  gap: var(--content-pad);
 }
 .dashboard-section-heading {
   margin-bottom: 0;
 }
 .dashboard-subsection {
   display: grid;
-  gap: var(--content-gap);
+  gap: var(--content-pad);
   padding-top: var(--content-pad);
   border-top: 1px solid var(--c-border-light);
 }
@@ -250,12 +250,12 @@
 }
 .dashboard-account-card {
   display: grid;
-  gap: var(--content-gap);
+  gap: var(--content-pad);
   padding: var(--content-pad);
 }
 .dashboard-account-section {
   display: grid;
-  gap: var(--content-gap);
+  gap: var(--content-pad);
   padding-top: var(--content-pad);
   border-top: 1px solid var(--c-border-light);
 }

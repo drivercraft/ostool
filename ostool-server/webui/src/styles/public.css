@@ -17,10 +17,10 @@
   box-shadow: 0 1px 0 rgba(15, 23, 41, .03);
 }
 .public-topbar-inner {
-  max-width: var(--wide-width);
+  max-width: var(--page-max-width);
   height: 100%;
   margin: 0 auto;
-  padding: 0 var(--space-page);
+  padding: 0 var(--page-inline-pad);
   display: flex;
   align-items: center;
   gap: 2.25rem;
@@ -114,9 +114,9 @@
   margin-top: auto;
 }
 .public-footer-inner {
-  max-width: var(--wide-width);
+  max-width: var(--page-max-width);
   margin: 0 auto;
-  padding: 1.6rem var(--space-page);
+  padding: 1.6rem var(--page-inline-pad);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -153,16 +153,7 @@
 .public-user-chip .public-user-name { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .public-user-chip .public-user-caret { color: var(--c-text-ghost); transform: rotate(90deg); }
 
-/* page body container */
-.page-body,
-.public-page-body {
-  max-width: var(--wide-width);
-  margin: 0 auto;
-  padding: clamp(32px, 5vw, 56px) var(--space-page);
-  width: 100%;
-}
-.page-body { max-width: none; }
-.public-page-body { max-width: var(--wide-width); width: 100%; }
+.public-page-body { width: 100%; }
 
 .public-page-header {
   margin-bottom: 2rem;
@@ -255,7 +246,7 @@
   display: flex;
   align-items: center;
   overflow: hidden;
-  padding: clamp(72px, 9vw, 116px) var(--space-page) clamp(72px, 8vw, 104px);
+  padding: clamp(72px, 9vw, 116px) var(--page-inline-pad) clamp(72px, 8vw, 104px);
 }
 .hero::before {
   content: "";
@@ -282,7 +273,7 @@
 .hero-inner {
   position: relative;
   z-index: 1;
-  max-width: var(--wide-width);
+  max-width: var(--page-max-width);
   margin: 0 auto;
   width: 100%;
   display: grid;
@@ -348,10 +339,10 @@
 @keyframes bob { 0%,100% { transform: translate(-50%, 0) rotate(90deg);} 50% { transform: translate(-50%, 8px) rotate(90deg);} }
 
 /* home sections */
-.home-section { padding: clamp(56px, 8vw, 96px) var(--space-page); }
+.home-section { padding: clamp(56px, 8vw, 96px) var(--page-inline-pad); }
 .home-section-alt { background: var(--c-surface); border-block: 1px solid var(--c-border-light); }
 .home-section-inner {
-  max-width: var(--wide-width);
+  max-width: var(--page-max-width);
   margin: 0 auto;
 }
 .home-section-header { margin: 0 0 2rem; max-width: 760px; text-align: left; }
@@ -811,9 +802,9 @@
 
 /* CTA band */
 .cta-band {
-  margin: clamp(40px, 6vw, 64px) var(--space-page);
-  max-width: var(--wide-width);
-  margin-left: auto; margin-right: auto;
+  width: calc(100% - var(--page-inline-pad) - var(--page-inline-pad));
+  max-width: var(--page-max-width);
+  margin: clamp(40px, 6vw, 64px) auto;
   background: linear-gradient(135deg, var(--c-brand) 0%, var(--c-violet) 70%, var(--c-sky) 130%);
   border-radius: var(--radius-2xl);
   padding: clamp(2.2rem, 4vw, 3.2rem);

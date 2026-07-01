@@ -35,6 +35,15 @@ code, kbd {
 }
 hr { border: none; border-top: 1px solid var(--c-border); margin: 1.25rem 0; }
 
+/* ----------------------------- page layout ---------------------------- */
+.page-body,
+.page-container {
+  width: 100%;
+  max-width: var(--page-max-width);
+  margin: 0 auto;
+  padding: var(--page-block-pad) var(--page-inline-pad);
+}
+
 /* ----------------------------- typography helpers --------------------- */
 .eyebrow {
   display: inline-flex;

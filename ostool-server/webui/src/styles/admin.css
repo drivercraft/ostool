@@ -5,7 +5,7 @@
   width: 100%;
   padding: 0;
   display: grid;
-  gap: var(--content-gap);
+  gap: var(--content-pad);
 }
 .admin-list-page {
   flex: 1 1 auto;
@@ -85,7 +85,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--content-gap);
+  gap: var(--content-pad);
   padding: 0 0 var(--content-pad);
   border: 0;
   border-bottom: 1px solid var(--c-border-light);
@@ -153,7 +153,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: var(--content-gap);
+  gap: var(--content-pad);
   min-height: 44px;
   padding: var(--content-pad) 0 0;
   border-top: 1px solid var(--c-border-light);
@@ -244,7 +244,7 @@
   flex: 0 0 auto;
   display: flex;
   justify-content: space-between;
-  gap: var(--content-gap);
+  gap: var(--content-pad);
   align-items: flex-start;
   padding: var(--content-pad);
   border-bottom: 1px solid var(--c-border-light);
@@ -257,7 +257,7 @@
   flex: 1 1 0;
   display: flex;
   flex-direction: column;
-  gap: var(--content-gap);
+  gap: var(--content-pad);
   min-height: 0;
   overflow: hidden;
 }
@@ -265,7 +265,7 @@
   flex: 1 1 0;
   display: grid;
   align-content: start;
-  gap: var(--content-gap);
+  gap: var(--content-pad);
   min-height: 0;
   max-height: 100%;
   overflow: auto;
@@ -276,20 +276,20 @@
 .role-basic-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--content-gap);
+  gap: var(--content-pad);
 }
 .role-field-full {
   grid-column: 1 / -1;
 }
 .role-permission-section {
   display: grid;
-  gap: var(--content-gap);
+  gap: var(--content-pad);
 }
 .role-permission-section-head {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: var(--content-gap);
+  gap: var(--content-pad);
 }
 .role-permission-section-head h4 {
   margin-bottom: .25rem;
@@ -382,7 +382,7 @@
   align-content: stretch;
   align-items: stretch;
   column-gap: clamp(24px, 2.4vw, 40px);
-  row-gap: var(--content-gap);
+  row-gap: var(--content-pad);
   height: 100%;
   overflow: hidden;
 }
@@ -394,7 +394,7 @@
 .lease-calendar-panel {
   display: flex;
   flex-direction: column;
-  gap: var(--content-gap);
+  gap: var(--content-pad);
   min-height: 0;
   height: 100%;
 }
@@ -404,7 +404,7 @@
 .lease-calendar-head {
   display: flex;
   justify-content: space-between;
-  gap: var(--content-gap);
+  gap: var(--content-pad);
   align-items: flex-start;
 }
 .lease-calendar-head h4 {
@@ -645,103 +645,76 @@
 /*  Admin shell (sidebar + topbar)                                       */
 /* ===================================================================== */
 .app-shell {
-  --admin-bg: #eef4fb;
   --admin-surface-plain: rgba(255, 255, 255, .72);
-  --admin-surface-raised: rgba(255, 255, 255, .86);
-  --admin-surface-muted: rgba(248, 251, 255, .72);
   --admin-surface-hover: rgba(237, 244, 255, .86);
   --admin-surface-active: rgba(239, 246, 255, .72);
-  --admin-line: rgba(213, 224, 237, .88);
-  --admin-focus-line: rgba(59, 130, 246, .28);
-  --admin-text: #1a1a2e;
-  --admin-muted: #6b7280;
-  --admin-primary: #3b82f6;
-  --admin-primary-light: #eff6ff;
-  --admin-shadow: 0 16px 42px rgba(28, 48, 74, .08), 0 2px 8px rgba(28, 48, 74, .04);
-  --admin-shadow-lg: 0 24px 70px rgba(28, 48, 74, .18), 0 8px 24px rgba(28, 48, 74, .08);
-  --c-brand: var(--admin-primary);
+  --c-brand: #3b82f6;
   --c-brand-light: #60a5fa;
   --c-brand-dark: #2563eb;
-  --c-brand-ghost: var(--admin-primary-light);
+  --c-brand-ghost: #eff6ff;
   --c-brand-soft: #dbeafe;
   --c-brand-tint: rgba(239, 246, 255, .78);
-  --c-border: var(--admin-line);
+  --c-border: rgba(213, 224, 237, .88);
   --c-border-light: rgba(226, 235, 246, .76);
   --c-border-strong: rgba(191, 207, 226, .95);
-  --c-surface: var(--admin-surface-raised);
-  --c-surface-2: var(--admin-surface-muted);
-  --c-text: var(--admin-text);
+  --c-surface: rgba(255, 255, 255, .86);
+  --c-surface-2: rgba(248, 251, 255, .72);
+  --c-text: #1a1a2e;
   --c-text-soft: #374151;
-  --c-text-muted: var(--admin-muted);
+  --c-text-muted: #6b7280;
   --control-primary-bg: #2563eb;
   --control-primary-hover-bg: #1d4ed8;
-  --control-primary-text: #ffffff;
   --shadow-xs: 0 1px 2px rgba(28, 48, 74, .04);
   --shadow-sm: 0 2px 8px rgba(28, 48, 74, .05);
-  --shadow: var(--admin-shadow);
   --shadow-md: 0 14px 36px rgba(28, 48, 74, .08), 0 3px 10px rgba(28, 48, 74, .04);
-  --shadow-lg: var(--admin-shadow-lg);
+  --shadow-lg: 0 24px 70px rgba(28, 48, 74, .18), 0 8px 24px rgba(28, 48, 74, .08);
   --topbar-h: 64px;
   --sidebar-w: 240px;
-  --content-pad: 12px;
-  --content-gap: 12px;
+  --content-pad: 20px;
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
   min-height: 100vh;
   height: 100vh;
   overflow: hidden;
-  color: var(--admin-text);
+  color: var(--c-text);
   background: linear-gradient(135deg, #eef6ff 0%, #f7fbff 42%, #f2f7f1 100%);
 }
 body.ostool-theme-dark .app-shell {
-  --admin-bg: #101010;
   --admin-surface-plain: rgba(28, 28, 28, .62);
-  --admin-surface-raised: rgba(34, 34, 34, .74);
-  --admin-surface-muted: rgba(42, 42, 42, .52);
   --admin-surface-hover: rgba(52, 52, 52, .82);
   --admin-surface-active: rgba(64, 64, 64, .52);
-  --admin-line: rgba(255, 255, 255, .11);
-  --admin-focus-line: rgba(255, 255, 255, .22);
-  --admin-text: #d8d8d8;
-  --admin-muted: #858585;
-  --admin-primary: #60a5fa;
-  --admin-primary-light: rgba(96, 165, 250, .14);
-  --admin-shadow: 0 18px 50px rgba(0, 0, 0, .24), 0 2px 10px rgba(0, 0, 0, .16);
-  --admin-shadow-lg: 0 28px 80px rgba(0, 0, 0, .38), 0 8px 24px rgba(0, 0, 0, .22);
-  --c-brand: var(--admin-primary);
+  --c-brand: #60a5fa;
   --c-brand-light: #93c5fd;
   --c-brand-dark: #bfdbfe;
-  --c-brand-ghost: var(--admin-primary-light);
+  --c-brand-ghost: rgba(96, 165, 250, .14);
   --c-brand-soft: rgba(96, 165, 250, .28);
   --c-brand-tint: rgba(255, 255, 255, .08);
-  --c-border: var(--admin-line);
+  --c-border: rgba(255, 255, 255, .11);
   --c-border-light: rgba(255, 255, 255, .08);
   --c-border-strong: rgba(255, 255, 255, .18);
-  --c-surface: var(--admin-surface-raised);
-  --c-surface-2: var(--admin-surface-muted);
-  --c-text: var(--admin-text);
+  --c-surface: rgba(34, 34, 34, .74);
+  --c-surface-2: rgba(42, 42, 42, .52);
+  --c-text: #d8d8d8;
   --c-text-soft: #b0b0b0;
-  --c-text-muted: var(--admin-muted);
+  --c-text-muted: #858585;
   --control-bg: var(--admin-surface-plain);
-  --control-bg-muted: var(--admin-surface-muted);
+  --control-bg-muted: var(--c-surface-2);
   --control-hover-bg: var(--admin-surface-hover);
-  --control-border: var(--admin-line);
+  --control-border: var(--c-border);
   --control-border-hover: rgba(255, 255, 255, .18);
   --control-focus-border: rgba(147, 197, 253, .62);
   --control-focus-ring: rgba(96, 165, 250, .18);
-  --control-text: var(--admin-text);
-  --control-muted: var(--admin-muted);
+  --control-text: var(--c-text);
+  --control-muted: var(--c-text-muted);
   --control-primary-bg: #2563eb;
   --control-primary-hover-bg: #1d4ed8;
-  --control-primary-text: #ffffff;
   --overlay-surface: #181818;
   --overlay-footer-bg: #151515;
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, .16);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, .2);
-  --shadow: var(--admin-shadow);
   --shadow-md: 0 22px 62px rgba(0, 0, 0, .28), 0 4px 14px rgba(0, 0, 0, .18);
-  --shadow-lg: var(--admin-shadow-lg);
-  color: var(--admin-text);
+  --shadow-lg: 0 28px 80px rgba(0, 0, 0, .38), 0 8px 24px rgba(0, 0, 0, .22);
+  color: var(--c-text);
   background: linear-gradient(135deg, #0c0c0c 0%, #141414 48%, #1b1b1b 100%);
 }
 .app-shell:has(.admin-editor-page) {
@@ -753,8 +726,8 @@ body.ostool-theme-dark .app-shell {
   background: var(--admin-surface-plain);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
-  border-right: 1px solid var(--admin-line);
-  color: var(--admin-text);
+  border-right: 1px solid var(--c-border);
+  color: var(--c-text);
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -766,10 +739,10 @@ body.ostool-theme-dark .app-shell {
   align-items: center;
   gap: 10px;
   padding: 0 24px;
-  border-bottom: 1px solid var(--admin-line);
+  border-bottom: 1px solid var(--c-border);
 }
 .sidebar .brand h1 {
-  color: var(--admin-text);
+  color: var(--c-text);
   font-size: 22px;
   font-weight: 700;
   line-height: 1;
@@ -801,7 +774,7 @@ body.ostool-theme-dark .app-shell {
   padding: 10px 10px 10px 16px;
   border: none;
   background: transparent;
-  color: var(--admin-text);
+  color: var(--c-text);
   font: inherit;
   font-size: 14px;
   font-weight: 500;
@@ -810,9 +783,9 @@ body.ostool-theme-dark .app-shell {
   text-align: left;
   transition: background .16s ease, color .16s ease, box-shadow .16s ease;
 }
-.nav-group-trigger:hover { color: var(--admin-text); background: var(--admin-surface-hover); }
-.nav-group-trigger.is-active { color: var(--admin-primary); background: var(--admin-surface-active); }
-.nav-group-trigger .nav-link-icon { color: var(--admin-muted); }
+.nav-group-trigger:hover { color: var(--c-text); background: var(--admin-surface-hover); }
+.nav-group-trigger.is-active { color: var(--c-brand); background: var(--admin-surface-active); }
+.nav-group-trigger .nav-link-icon { color: var(--c-text-muted); }
 .nav-group-trigger:hover .nav-link-icon,
 .nav-group-trigger.is-active .nav-link-icon { color: currentColor; }
 .nav-group-chevron {
@@ -821,10 +794,10 @@ body.ostool-theme-dark .app-shell {
   height: 24px;
   padding: 4px;
   border-radius: 6px;
-  color: var(--admin-muted);
+  color: var(--c-text-muted);
   transition: transform .2s ease, color .16s ease;
 }
-.nav-group-trigger:hover .nav-group-chevron { color: var(--admin-text); }
+.nav-group-trigger:hover .nav-group-chevron { color: var(--c-text); }
 .nav-group-chevron.is-open { transform: rotate(90deg); }
 .nav-sub-list {
   display: grid;
@@ -839,7 +812,7 @@ body.ostool-theme-dark .app-shell {
   padding: 9px 16px;
   font-size: 13px;
   font-weight: 500;
-  color: var(--admin-text);
+  color: var(--c-text);
   border-radius: 8px;
   transition: background .16s ease, color .16s ease;
   position: relative;
@@ -863,15 +836,15 @@ body.ostool-theme-dark .app-shell {
   opacity: .65;
   transition: width .18s ease, height .18s ease, opacity .18s ease;
 }
-.nav-link:hover { color: var(--admin-text); background: var(--admin-surface-hover); }
-.nav-link.is-active { color: var(--admin-primary); background: var(--admin-surface-active); }
+.nav-link:hover { color: var(--c-text); background: var(--admin-surface-hover); }
+.nav-link.is-active { color: var(--c-brand); background: var(--admin-surface-active); }
 .nav-link.is-active .nav-sub-marker::before {
   width: 4px;
   height: 22px;
   opacity: 1;
 }
 
-.sidebar-footer { padding: 12px; border-top: 1px solid var(--admin-line); }
+.sidebar-footer { padding: 12px; border-top: 1px solid var(--c-border); }
 .nav-group-bottom-link { width: 100%; }
 
 .app-content {
@@ -894,7 +867,7 @@ body.ostool-theme-dark .app-shell {
   height: var(--topbar-h);
   min-height: var(--topbar-h);
   background: transparent;
-  border-bottom: 1px solid var(--admin-line);
+  border-bottom: 1px solid var(--c-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -904,7 +877,7 @@ body.ostool-theme-dark .app-shell {
 }
 .topbar-title { display: flex; flex-direction: column; gap: .1rem; }
 .topbar-title h2 {
-  color: var(--admin-text);
+  color: var(--c-text);
   font-size: 18px;
   font-weight: 600;
   letter-spacing: 0;
@@ -912,11 +885,11 @@ body.ostool-theme-dark .app-shell {
 .topbar-title .crumb { font-size: .76rem; color: var(--c-text-muted); }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
 .admin-avatar {
-  width: var(--control-compact-h);
-  height: var(--control-compact-h);
+  width: var(--control-h);
+  height: var(--control-h);
   border-radius: 999px;
   display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid var(--admin-line);
+  border: 1px solid var(--c-border);
   font-size: 14px;
   font-weight: 900;
   color: #fff;
@@ -936,7 +909,7 @@ body.ostool-theme-dark .app-shell {
   padding: var(--content-pad);
   display: flex;
   flex-direction: column;
-  gap: var(--content-gap);
+  gap: var(--content-pad);
 }
 
 /* admin content helpers */
