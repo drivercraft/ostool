@@ -67,6 +67,14 @@ const navGroups = computed<NavGroup[]>(() => [
       { to: "/admin/users/roles", label: "角色与权限" },
     ],
   },
+  {
+    id: "audit",
+    label: "系统审计",
+    icon: "shield",
+    items: [
+      { to: "/admin/audit/logs", label: "审计日志" },
+    ],
+  },
 ]);
 
 const collapsedGroups = reactive<Record<string, boolean>>({});

@@ -10,7 +10,7 @@ use crate::{
     dtb_store::DtbFile,
     session::Session,
     state::BoardLeaseState,
-    storage::{DtbMetadata, Lease, Permission, Role, SessionRecord},
+    storage::{AuditLog, DtbMetadata, Lease, Permission, Role, SessionRecord},
     tftp::{files::TftpFileRef, status::TftpStatus},
 };
 
@@ -80,6 +80,48 @@ pub struct CaptchaResponse {
     pub token: String,
     pub image_svg: String,
     pub expires_in_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminAuditLogResponse {
+    pub id: String,
+    pub actor_user_id: Option<String>,
+    pub actor_username: Option<String>,
+    pub action: String,
+    pub target_type: String,
+    pub target_id: Option<String>,
+    pub outcome: String,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+    pub request_id: Option<String>,
+    pub metadata: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminAuditLogsResponse {
+    pub logs: Vec<AdminAuditLogResponse>,
+}
+
+impl From<AuditLog> for AdminAuditLogResponse {
+    fn from(value: AuditLog) -> Self {
+        let metadata = serde_json::from_str(&value.metadata_json)
+            .unwrap_or_else(|_| serde_json::json!({ "raw": value.metadata_json }));
+        Self {
+            id: value.id,
+            actor_user_id: value.actor_user_id,
+            actor_username: value.actor_username,
+            action: value.action,
+            target_type: value.target_type,
+            target_id: value.target_id,
+            outcome: value.outcome,
+            ip_address: value.ip_address,
+            user_agent: value.user_agent,
+            request_id: value.request_id,
+            metadata,
+            created_at: value.created_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

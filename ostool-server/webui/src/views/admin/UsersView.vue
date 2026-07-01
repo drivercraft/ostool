@@ -715,6 +715,7 @@ onMounted(() => {
             <template v-if="modalMode === 'create' || modalMode === 'edit'">
               <section class="form-section modal-form-section">
                 <div class="form-section-header">
+                  <span class="form-section-icon info"><Icon name="user" :size="16" /></span>
                   <h4>基本信息</h4>
                 </div>
                 <div class="modal-section-grid">
@@ -811,6 +812,7 @@ onMounted(() => {
 
               <section class="form-section modal-form-section">
                 <div class="form-section-header">
+                  <span class="form-section-icon password"><Icon name="key" :size="16" /></span>
                   <h4>密码</h4>
                 </div>
                 <div class="modal-section-grid">
@@ -843,6 +845,7 @@ onMounted(() => {
 
               <section class="form-section modal-form-section">
                 <div class="form-section-header">
+                  <span class="form-section-icon roles"><Icon name="shield" :size="16" /></span>
                   <h4>系统角色</h4>
                 </div>
                 <div class="modal-section-grid">

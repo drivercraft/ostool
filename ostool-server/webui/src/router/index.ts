@@ -26,6 +26,7 @@ const LeasesView = () => import("@/views/admin/LeasesView.vue");
 const LeaseEditorView = () => import("@/views/admin/LeaseEditorView.vue");
 const UsersView = () => import("@/views/admin/UsersView.vue");
 const RolesView = () => import("@/views/admin/RolesView.vue");
+const AuditLogsView = () => import("@/views/admin/AuditLogsView.vue");
 const TftpView = () => import("@/views/admin/TftpView.vue");
 const ServerView = () => import("@/views/admin/ServerView.vue");
 
@@ -234,6 +235,16 @@ export const router = createRouter({
           name: "admin-user-role-edit",
           component: RolesView,
           meta: { title: "用户管理 / 编辑角色" },
+        },
+        {
+          path: "audit",
+          redirect: "/admin/audit/logs",
+        },
+        {
+          path: "audit/logs",
+          name: "admin-audit-logs",
+          component: AuditLogsView,
+          meta: { title: "系统审计 / 审计日志" },
         },
         {
           path: "settings",

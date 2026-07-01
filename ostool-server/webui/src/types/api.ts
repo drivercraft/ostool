@@ -57,6 +57,25 @@ export interface CaptchaResponse {
   expires_in_seconds: number;
 }
 
+export interface AdminAuditLogResponse {
+  id: string;
+  actor_user_id: string | null;
+  actor_username: string | null;
+  action: string;
+  target_type: string;
+  target_id: string | null;
+  outcome: string;
+  ip_address: string | null;
+  user_agent: string | null;
+  request_id: string | null;
+  metadata: unknown;
+  created_at: string;
+}
+
+export interface AdminAuditLogsResponse {
+  logs: AdminAuditLogResponse[];
+}
+
 export interface BuiltinTftpConfig {
   provider: "builtin";
   enabled: boolean;

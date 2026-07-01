@@ -6,7 +6,7 @@ use std::{
 use axum::{
     Router,
     body::{Bytes, to_bytes},
-    extract::{ConnectInfo, Path, Request, State, WebSocketUpgrade},
+    extract::{ConnectInfo, Path, Query, Request, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -17,6 +17,7 @@ use futures_util::future::join_all;
 use httpboot_protocol::{BootArch, ImageFormat};
 use mime_guess::from_path;
 use rand_core::{OsRng, RngCore};
+use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -29,15 +30,16 @@ use uuid::Uuid;
 use crate::{
     api::{
         dto::{
-            ActionResponse, AdminBoardUpsertRequest, AdminLeaseCreateRequest,
-            AdminLeaseUpdateRequest, AdminOverviewResponse, AdminPasswordResetRequest,
-            AdminPermissionResponse, AdminPermissionsResponse, AdminRoleCreateRequest,
-            AdminRoleDisableRequest, AdminRoleResponse, AdminRoleUpdateRequest, AdminRolesResponse,
-            AdminServerConfigEditable, AdminServerConfigReadonly, AdminServerConfigResponse,
-            AdminSessionResponse, AdminSessionUpdateRequest, AdminSessionsResponse,
-            AdminTftpConfigResponse, AdminTftpStatusResponse, AdminUserCreateRequest,
-            AdminUserResponse, AdminUserRolesResponse, AdminUserRolesUpdateRequest,
-            AdminUserUpdateRequest, AdminUsersResponse, BoardPowerAction, BoardPowerStatusResponse,
+            ActionResponse, AdminAuditLogResponse, AdminAuditLogsResponse, AdminBoardUpsertRequest,
+            AdminLeaseCreateRequest, AdminLeaseUpdateRequest, AdminOverviewResponse,
+            AdminPasswordResetRequest, AdminPermissionResponse, AdminPermissionsResponse,
+            AdminRoleCreateRequest, AdminRoleDisableRequest, AdminRoleResponse,
+            AdminRoleUpdateRequest, AdminRolesResponse, AdminServerConfigEditable,
+            AdminServerConfigReadonly, AdminServerConfigResponse, AdminSessionResponse,
+            AdminSessionUpdateRequest, AdminSessionsResponse, AdminTftpConfigResponse,
+            AdminTftpStatusResponse, AdminUserCreateRequest, AdminUserResponse,
+            AdminUserRolesResponse, AdminUserRolesUpdateRequest, AdminUserUpdateRequest,
+            AdminUsersResponse, BoardPowerAction, BoardPowerStatusResponse,
             BoardRuntimeStatusResponse, BoardTypeSummary, BootProfileResponse, CaptchaResponse,
             CreateLeaseRequest, CreateSessionRequest, CurrentUserResponse, DtbFileResponse,
             FileResponse, HttpBootFileResponse, KernelPublishResponse, LeaseResponse,
@@ -153,6 +155,7 @@ pub fn build_router(state: AppState) -> Router {
             post(reject_admin_user),
         )
         .route("/api/v1/admin/users/pending", get(list_pending_admin_users))
+        .route("/api/v1/admin/audit-logs", get(list_admin_audit_logs))
         .route(
             "/api/v1/admin/leases",
             get(list_admin_leases).post(create_admin_lease),
@@ -598,6 +601,7 @@ fn admin_permission_for_request(method: &Method, path: &str) -> Option<&'static 
         "tftp" => admin_tftp_permission(method, &segments),
         "server-config" => read_update_permission(method, "server"),
         "site-settings" => read_update_permission(method, "site"),
+        "audit-logs" if method == Method::GET => Some("audit.read"),
         _ => None,
     }
 }
@@ -1537,6 +1541,26 @@ async fn delete_admin_user(
     }
     state.storage.set_user_disabled(&user_id, true).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminAuditLogsQuery {
+    limit: Option<i64>,
+}
+
+async fn list_admin_audit_logs(
+    State(state): State<AppState>,
+    Query(query): Query<AdminAuditLogsQuery>,
+) -> Result<axum::Json<AdminAuditLogsResponse>, ApiError> {
+    let limit = query.limit.unwrap_or(500).clamp(1, 1000);
+    let logs = state
+        .storage
+        .list_audit_logs(limit)
+        .await?
+        .into_iter()
+        .map(AdminAuditLogResponse::from)
+        .collect();
+    Ok(axum::Json(AdminAuditLogsResponse { logs }))
 }
 
 async fn list_admin_permissions(
@@ -4422,6 +4446,10 @@ mod tests {
         assert_eq!(
             admin_permission_for_request(&Method::POST, "/api/v1/admin/tftp/reconcile"),
             Some("tftp.reconcile")
+        );
+        assert_eq!(
+            admin_permission_for_request(&Method::GET, "/api/v1/admin/audit-logs"),
+            Some("audit.read")
         );
     }
 

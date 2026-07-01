@@ -42,19 +42,49 @@
 .form-grid.three-columns { grid-template-columns: 1fr 1fr 1fr; }
 .form-section { padding-top: 1.25rem; margin-top: 1.25rem; border-top: 1px solid var(--c-border); }
 .form-section:first-of-type { padding-top: 0; margin-top: 0; border-top: none; }
-.form-section h4 { font-size: .94rem; font-weight: 700; margin: 0 0 .75rem; padding-bottom: .5rem; border-bottom: 1px solid var(--c-border-light); }
-.form-section-header { display: flex; align-items: center; gap: .6rem; margin-bottom: .75rem; padding-bottom: .5rem; border-bottom: 1px solid var(--c-border-light); }
-.form-section-header.has-trailing-control { justify-content: space-between; gap: .75rem; }
-.form-section-title { display: flex; align-items: center; gap: .6rem; min-width: 0; }
+.form-section h4 { font-size: .94rem; font-weight: 700; margin: 0; padding: 0; border: none; white-space: nowrap; }
+.form-section > h4 { display: flex; align-items: center; gap: .75rem; margin-bottom: .75rem; }
+.form-section > h4::after,
+.form-section-header::after {
+  content: "";
+  flex: 1 1 auto;
+  min-width: 32px;
+  height: 1px;
+  background: var(--c-border-light);
+}
+.form-section-header { display: flex; align-items: center; gap: .6rem; margin-bottom: .75rem; padding-bottom: 0; border-bottom: 0; }
+.form-section-header.has-trailing-control { justify-content: flex-start; gap: .75rem; }
+.form-section-header.has-trailing-control::after { order: 1; }
+.form-section-title { display: flex; align-items: center; gap: .6rem; min-width: 0; flex: 0 0 auto; order: 0; }
 .form-section-header h4 { margin: 0; padding: 0; border: none; }
-.form-section-toggle { flex: 0 0 auto; }
+.form-section-toggle { flex: 0 0 auto; order: 2; }
 .form-section-icon { width: 30px; height: 30px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; font-size: .82rem; flex-shrink: 0; }
 .form-section-icon.serial, .form-section-icon.info { background: var(--c-brand-ghost); color: var(--c-brand); }
 .form-section-icon.power { background: var(--c-warning-bg); color: var(--c-warning); }
 .form-section-icon.boot { background: var(--c-violet-soft); color: var(--c-violet); }
+.form-section-icon.password { background: var(--c-warning-bg); color: var(--c-warning); }
+.form-section-icon.roles { background: var(--c-violet-soft); color: var(--c-violet); }
 .nested-panel { padding-top: 1rem; margin-top: 1rem; border-top: 1px solid var(--c-border); background: transparent; box-shadow: none; }
 .danger-zone { margin-top: 1.25rem; }
-.danger-zone h4 { font-size: .94rem; font-weight: 700; color: var(--c-danger); margin: 0 0 .75rem; padding-bottom: .5rem; border-bottom: 1px solid var(--c-danger-border); }
+.danger-zone h4 {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  font-size: .94rem;
+  font-weight: 700;
+  color: var(--c-danger);
+  margin: 0 0 .75rem;
+  padding: 0;
+  border: 0;
+  white-space: nowrap;
+}
+.danger-zone h4::after {
+  content: "";
+  flex: 1 1 auto;
+  min-width: 32px;
+  height: 1px;
+  background: var(--c-danger-border);
+}
 
 .user-management-page {
   width: 100%;
@@ -80,6 +110,25 @@
 }
 .page-grid > .panel > .panel-heading:first-child {
   min-height: 40px;
+}
+.page-grid .panel-heading.compact {
+  align-items: center;
+}
+.page-grid .panel-heading.compact h4 {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  gap: .75rem;
+  margin: 0;
+  font-size: .94rem;
+  white-space: nowrap;
+}
+.page-grid .panel-heading.compact h4::after {
+  content: "";
+  flex: 1 1 auto;
+  min-width: 32px;
+  height: 1px;
+  background: var(--c-border-light);
 }
 .admin-toolbar {
   display: flex;
@@ -206,6 +255,44 @@
 .users-list-item { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 1.25rem; }
 .users-list-item + .users-list-item { border-top: 1px solid var(--c-border-light); }
 .users-list-item-info { display: flex; align-items: center; gap: .75rem; }
+
+.audit-row { cursor: pointer; }
+.audit-row:hover { background: var(--c-brand-tint); }
+.audit-user-agent {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.audit-detail-row td {
+  background: var(--c-surface-2);
+  border-top: 0;
+}
+.audit-detail-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: .55rem;
+}
+.audit-detail-pre {
+  max-height: 280px;
+  margin: 0;
+  padding: .85rem;
+  overflow: auto;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  background: var(--code-block-bg);
+  color: var(--code-block-text);
+  font-family: var(--font-mono);
+  font-size: .82rem;
+  line-height: 1.55;
+}
+.table-statusbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+}
 .user-actions { display: flex; gap: .375rem; }
 .row-actions {
   display: flex;
@@ -291,9 +378,24 @@
   justify-content: space-between;
   gap: var(--content-pad);
 }
+.role-permission-section-head > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
 .role-permission-section-head h4 {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
   margin-bottom: .25rem;
   font-size: 1rem;
+  white-space: nowrap;
+}
+.role-permission-section-head h4::after {
+  content: "";
+  flex: 1 1 auto;
+  min-width: 32px;
+  height: 1px;
+  background: var(--c-border-light);
 }
 .permission-matrix {
   border: 1px solid var(--c-border);
@@ -583,7 +685,24 @@
 
 .server-config-grid, .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
 .server-config-card, .config-card { padding: 1.25rem; }
-.server-config-card h4, .config-card h4 { font-size: .94rem; font-weight: 700; margin-bottom: .75rem; padding-bottom: .5rem; border-bottom: 1px solid var(--c-border-light); }
+.server-config-card h4, .config-card h4 {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  font-size: .94rem;
+  font-weight: 700;
+  margin: 0 0 .75rem;
+  padding: 0;
+  border: 0;
+  white-space: nowrap;
+}
+.server-config-card h4::after, .config-card h4::after {
+  content: "";
+  flex: 1 1 auto;
+  min-width: 32px;
+  height: 1px;
+  background: var(--c-border-light);
+}
 
 .readonly-field { display: flex; justify-content: space-between; padding: .5rem 0; font-size: .82rem; }
 .readonly-field dt { color: var(--c-text-muted); }

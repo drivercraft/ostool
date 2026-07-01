@@ -163,6 +163,7 @@ pub const BUILTIN_PERMISSIONS: &[(&str, &str, &str)] = &[
     ("server.update", "编辑服务器配置", "修改服务器运行期设置"),
     ("site.read", "查看站点设置", "查看站点展示和租赁策略设置"),
     ("site.update", "编辑站点设置", "修改站点展示和租赁策略设置"),
+    ("audit.read", "查看审计日志", "查看系统审计日志和行为轨迹"),
     ("serial_ports.read", "查看串口", "查看服务器可用串口"),
     (
         "network_interfaces.read",

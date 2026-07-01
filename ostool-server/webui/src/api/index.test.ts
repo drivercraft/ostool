@@ -115,6 +115,41 @@ describe("api", () => {
     );
   });
 
+  it("loads admin audit logs with a limit query", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        logs: [
+          {
+            id: "audit-1",
+            actor_user_id: null,
+            actor_username: "admin",
+            action: "dtb.create",
+            target_type: "dtb_file",
+            target_id: "demo.dtb",
+            outcome: "success",
+            ip_address: null,
+            user_agent: null,
+            request_id: null,
+            metadata: { name: "demo.dtb" },
+            created_at: "2026-01-01T00:00:00Z",
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.admin.listAuditLogs(25)).resolves.toMatchObject({
+      logs: [{ id: "audit-1" }],
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/admin/audit-logs?limit=25",
+      expect.objectContaining({
+        credentials: "same-origin",
+      }),
+    );
+  });
+
   it("reports a service connection hint when fetch fails", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
 

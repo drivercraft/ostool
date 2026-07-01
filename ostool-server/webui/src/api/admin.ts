@@ -1,4 +1,5 @@
 import type {
+  AdminAuditLogsResponse,
   AdminBoardUpsertRequest,
   AdminLeaseCreateRequest,
   AdminLeaseUpdateRequest,
@@ -59,6 +60,11 @@ function dtbHeaders(dtbName?: string | null, metadata?: DtbMetadataInput) {
 export const adminApi = {
   getOverview() {
     return request<AdminOverviewResponse>("/api/v1/admin/overview");
+  },
+  listAuditLogs(limit = 500) {
+    return request<AdminAuditLogsResponse>(
+      `/api/v1/admin/audit-logs?limit=${encodeURIComponent(String(limit))}`,
+    );
   },
   listBoards() {
     return request<BoardConfig[]>("/api/v1/admin/boards");
