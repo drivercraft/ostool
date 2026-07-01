@@ -137,8 +137,8 @@ onMounted(() => {
       </section>
     </section>
 
-    <section class="admin-toolbar">
-      <div class="admin-toolbar-left">
+    <section class="public-toolbar">
+      <div class="public-toolbar-left">
         <label class="search-field">
           <Icon name="search" :size="16" />
           <input
@@ -165,7 +165,7 @@ onMounted(() => {
           </select>
         </label>
       </div>
-      <div class="admin-toolbar-right">
+      <div class="public-toolbar-right">
         <div class="view-toggle" role="group" aria-label="排列方式">
           <button
             type="button"

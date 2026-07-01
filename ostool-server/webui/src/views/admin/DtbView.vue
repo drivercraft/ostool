@@ -388,7 +388,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
 
 <template>
   <section class="page-grid admin-list-page dtb-page">
-    <div class="panel admin-table-panel">
+    <div class="admin-table-panel">
       <div class="admin-toolbar">
         <div class="admin-toolbar-left">
           <button class="btn btn-primary" @click="openCreateDtb">

@@ -7,6 +7,13 @@ import { api } from "@/api";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import type { BoardTypeSummary, LeaseResponse } from "@/types/api";
+import {
+  fromDatetimeLocal,
+  selectLeaseCalendarRange,
+  slotOverlapsSelection,
+  toDatetimeLocal,
+  windowsOverlap,
+} from "@/utils/leaseCalendar";
 
 type CalendarViewMode = "hour" | "day" | "month" | "year";
 type CalendarSlot = {
@@ -90,25 +97,6 @@ const calendarPeriodLabel = computed(() => {
   return `${formatMonth(first.startIso)} ~ ${formatMonth(last.startIso)}`;
 });
 
-function windowsOverlap(startA: string, endA: string, startB: string, endB: string) {
-  if (!startA || !endA || !startB || !endB) {
-    return false;
-  }
-  return new Date(startA).getTime() < new Date(endB).getTime()
-    && new Date(endA).getTime() > new Date(startB).getTime();
-}
-
-function toDatetimeLocal(value: string) {
-  const date = new Date(value);
-  const pad = (part: number) => `${part}`.padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function fromDatetimeLocal(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
-}
-
 function defaultExpiresAt() {
   const date = new Date();
   date.setHours(date.getHours() + 2);
@@ -125,12 +113,47 @@ function isMyLease(item: LeaseResponse) {
   return item.lease.user_id === auth.user?.id;
 }
 
-function hasMyLease(slot: CalendarSlot) {
+function slotIsOccupied(slot: CalendarSlot) {
+  return slot.leases.length > 0;
+}
+
+function slotHasMyLease(slot: CalendarSlot) {
   return slot.leases.some(isMyLease);
 }
 
-function hasOtherLease(slot: CalendarSlot) {
+function slotHasOtherLease(slot: CalendarSlot) {
   return slot.leases.some((item) => !isMyLease(item));
+}
+
+function slotIsPast(slot: CalendarSlot) {
+  return new Date(slot.endIso).getTime() <= Date.now();
+}
+
+function slotIsDisabled(slot: CalendarSlot) {
+  return slotIsOccupied(slot) || slotIsPast(slot);
+}
+
+function slotOverlapsSelected(slot: CalendarSlot) {
+  return slotOverlapsSelection(slot, fromDatetimeLocal(form.value.starts_at), fromDatetimeLocal(form.value.expires_at));
+}
+
+function slotIsSelectable(slot: CalendarSlot) {
+  return !slotIsDisabled(slot);
+}
+
+function selectCalendarSlot(slot: CalendarSlot) {
+  const selection = selectLeaseCalendarRange(
+    calendarSlots.value,
+    slot,
+    fromDatetimeLocal(form.value.starts_at),
+    fromDatetimeLocal(form.value.expires_at),
+    slotIsSelectable,
+  );
+  if (!selection) {
+    return;
+  }
+  form.value.starts_at = toDatetimeLocal(selection.startIso);
+  form.value.expires_at = toDatetimeLocal(selection.endIso);
 }
 
 function makeCalendarSlot(label: string, caption: string, start: Date, end: Date): CalendarSlot {
@@ -353,10 +376,10 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="page-grid user-lease-create-page">
-    <div class="admin-editor-panel panel">
-      <form class="admin-editor-form" @submit.prevent="createLease">
-        <div class="admin-editor-body lease-editor-scroll">
+  <section class="user-lease-create-page">
+    <div class="user-lease-editor-panel">
+      <form class="user-lease-editor-form" @submit.prevent="createLease">
+        <div class="user-lease-editor-body user-lease-editor-scroll">
           <section class="lease-calendar-panel">
             <div class="lease-calendar-head">
               <div>
@@ -377,16 +400,20 @@ onMounted(() => {
             <div v-else-if="!selectedBoard" class="empty-state">请选择开发板型号。</div>
             <div v-else class="lease-calendar-shell">
               <div class="lease-calendar-grid" :class="`lease-calendar-${calendarView}`">
-                <article
+                <button
                   v-for="slot in calendarSlots"
                   :key="slot.key"
+                  type="button"
                   class="lease-calendar-cell"
                   :class="{
-                    'has-own-reservation': hasMyLease(slot),
-                    'has-reservation': hasOtherLease(slot),
-                    'is-disabled': hasOtherLease(slot),
-                    'is-selected': windowsOverlap(slot.startIso, slot.endIso, fromDatetimeLocal(form.starts_at), fromDatetimeLocal(form.expires_at)),
+                    'has-reservation': slotHasOtherLease(slot),
+                    'has-own-reservation': slotHasMyLease(slot),
+                    'is-disabled': slotIsDisabled(slot),
+                    'is-selected': slotOverlapsSelected(slot),
                   }"
+                  :aria-pressed="slotOverlapsSelected(slot)"
+                  :disabled="slotIsDisabled(slot)"
+                  @click="selectCalendarSlot(slot)"
                 >
                   <header>
                     <strong>{{ slot.label }}</strong>
@@ -397,7 +424,7 @@ onMounted(() => {
                       v-for="item in slot.leases.slice(0, calendarView === 'hour' ? 2 : 3)"
                       :key="item.lease.id"
                       class="lease-calendar-event compact"
-                      :class="{ 'is-own': isMyLease(item), 'is-unavailable': !isMyLease(item) }"
+                      :class="isMyLease(item) ? 'is-own' : 'is-unavailable'"
                       :title="`${formatDateTime(item.lease.starts_at)} ~ ${formatDateTime(item.lease.expires_at)}`"
                     >
                       <strong>{{ eventLabelForSlot(item, slot) }}</strong>
@@ -410,7 +437,7 @@ onMounted(() => {
                       +{{ slot.leases.length - (calendarView === 'hour' ? 2 : 3) }} 条
                     </span>
                   </div>
-                </article>
+                </button>
               </div>
             </div>
             <div v-if="!loading && selectedBoard" class="lease-calendar-nav">
@@ -424,7 +451,7 @@ onMounted(() => {
             </div>
           </section>
 
-          <section class="lease-config-panel">
+          <section class="user-lease-config-panel">
             <div class="form-section">
               <div class="form-section-header">
                 <span class="form-section-icon info"><Icon name="clipboard" :size="16" /></span>
@@ -473,7 +500,7 @@ onMounted(() => {
           </section>
         </div>
 
-        <div class="admin-editor-actions">
+        <div class="user-lease-editor-actions">
           <button
             type="submit"
             class="btn btn-primary"

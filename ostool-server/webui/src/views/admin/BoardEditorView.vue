@@ -694,7 +694,7 @@ onMounted(() => {
 
 <template>
   <section class="page-grid admin-editor-page">
-    <div class="admin-editor-panel panel board-editor-page">
+    <div class="admin-editor-panel board-editor-page">
       <div v-if="loading" class="empty-state">
         <div class="empty-state-icon">&#9641;</div>
         正在加载开发板配置...
@@ -969,7 +969,7 @@ onMounted(() => {
             </div>
 
             <div class="split-grid dtb-config-grid" style="margin-top: 18px">
-              <section class="panel nested-panel dtb-selection-panel">
+              <section class="admin-section-block dtb-selection-panel">
                 <div class="panel-heading compact">
                   <div>
                     <h4>预设 DTB</h4>
@@ -994,7 +994,7 @@ onMounted(() => {
                 </p>
               </section>
 
-              <section class="panel nested-panel dtb-action-panel">
+              <section class="admin-section-block dtb-action-panel">
                 <div class="panel-heading compact">
                   <div>
                     <h4>新增 DTB</h4>

@@ -53,7 +53,7 @@ onMounted(() => {
 
 <template>
   <section class="page-grid">
-    <div class="panel">
+    <div class="admin-page-surface tftp-page-surface">
       <div class="panel-heading panel-heading--actions-only">
         <div class="toolbar-actions">
           <button class="btn btn-ghost" @click="loadTftp">刷新</button>
@@ -66,7 +66,7 @@ onMounted(() => {
       <div v-if="loading" class="empty-state">正在加载 TFTP 配置...</div>
       <template v-else-if="tftpConfig && tftpStatus">
         <div class="split-grid">
-          <section class="panel nested-panel">
+          <section class="admin-section-block">
             <div class="panel-heading compact">
               <h4>启动配置</h4>
               <StatusPill :tone="tone.tone" :label="tone.label" />
@@ -123,7 +123,7 @@ onMounted(() => {
             </dl>
           </section>
 
-          <section class="panel nested-panel">
+          <section class="admin-section-block">
             <div class="panel-heading compact">
               <h4>运行状态</h4>
             </div>

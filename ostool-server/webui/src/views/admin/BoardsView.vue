@@ -259,7 +259,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
 
 <template>
   <div class="boards-page page-grid admin-list-page">
-    <div class="panel admin-table-panel">
+    <div class="admin-table-panel">
       <section class="admin-toolbar">
         <div class="admin-toolbar-left">
           <RouterLink to="/admin/resources/boards/new" class="btn btn-primary btn-sm">新增开发板</RouterLink>

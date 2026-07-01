@@ -814,6 +814,30 @@
   display: grid;
   gap: 1.5rem;
 }
+.public-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--content-pad);
+  padding: 0 0 var(--content-pad);
+  border-bottom: 1px solid var(--c-border-light);
+  background: transparent;
+}
+.public-toolbar-left,
+.public-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.public-toolbar-left {
+  flex: 1 1 auto;
+}
+.public-toolbar-right {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
 .resources-hero {
   display: grid;
   grid-template-columns: minmax(0, .92fr) minmax(420px, .78fr);

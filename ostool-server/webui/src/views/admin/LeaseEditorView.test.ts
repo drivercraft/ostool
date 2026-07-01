@@ -122,6 +122,12 @@ function makeLongLease(): LeaseResponse {
   };
 }
 
+function datetimeLocalAfter(hours: number) {
+  const date = new Date(Date.now() + hours * 60 * 60 * 1000);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
 describe("LeaseEditorView", () => {
   beforeEach(() => {
     routeMock = {
@@ -154,14 +160,45 @@ describe("LeaseEditorView", () => {
     expect(wrapper.findAll("select")[0].text()).toContain("board-1");
     expect(wrapper.findAll("select")[1].text()).toContain("Alice");
     expect(wrapper.find(".lease-calendar-month").exists()).toBe(true);
-    await wrapper.findAll('input[type="datetime-local"]')[0].setValue("2026-01-01T00:00");
+    const dateInputs = wrapper.findAll('input[type="datetime-local"]');
+    await dateInputs[0].setValue("2026-01-01T01:00");
+    await dateInputs[1].setValue("2026-01-01T02:00");
     await flushPromises();
     await wrapper.findAll(".lease-calendar-tabs button")[0].trigger("click");
     await flushPromises();
     expect(wrapper.find(".lease-calendar-hour").exists()).toBe(true);
     expect(wrapper.findAll(".lease-calendar-cell")).toHaveLength(24);
     expect(wrapper.find(".lease-calendar-event").exists()).toBe(true);
+    const disabledCell = wrapper.find(".lease-calendar-cell:disabled");
+    expect(disabledCell.exists()).toBe(true);
+    await disabledCell.trigger("click");
+    await flushPromises();
+    expect(disabledCell.classes()).not.toContain("is-selected");
 
+    await dateInputs[0].setValue(datetimeLocalAfter(-48));
+    await dateInputs[1].setValue(datetimeLocalAfter(-47));
+    await flushPromises();
+    expect(wrapper.findAll(".lease-calendar-cell:disabled")).toHaveLength(24);
+
+    await dateInputs[0].setValue(datetimeLocalAfter(48));
+    await dateInputs[1].setValue(datetimeLocalAfter(49));
+    await flushPromises();
+    await dateInputs[0].setValue("");
+    await dateInputs[1].setValue("");
+    await flushPromises();
+    const selectableCells = wrapper.findAll(".lease-calendar-cell:not(:disabled)");
+    await selectableCells[0].trigger("click");
+    await flushPromises();
+    expect(wrapper.findAll(".lease-calendar-cell.is-selected")).toHaveLength(1);
+    expect((dateInputs[0].element as HTMLInputElement).value).toBeTruthy();
+    expect((dateInputs[1].element as HTMLInputElement).value).toBeTruthy();
+    await selectableCells[0].trigger("click");
+    await flushPromises();
+    expect(wrapper.findAll(".lease-calendar-cell.is-selected")).toHaveLength(0);
+
+    await dateInputs[0].setValue("2026-01-01T01:00");
+    await dateInputs[1].setValue("2026-01-01T02:00");
+    await flushPromises();
     await wrapper.findAll(".lease-calendar-tabs button")[1].trigger("click");
     await flushPromises();
     expect(wrapper.find(".lease-calendar-day").exists()).toBe(true);
@@ -193,8 +230,10 @@ describe("LeaseEditorView", () => {
     await wrapper.findAll("select")[1].setValue("u-1");
     await wrapper.find('input[placeholder="例如 手动分配给 Alice"]').setValue("预约调试");
     const dateInputs = wrapper.findAll('input[type="datetime-local"]');
-    await dateInputs[0].setValue("2026-01-01T03:00");
-    await dateInputs[1].setValue("2026-01-01T04:00");
+    const startsAt = datetimeLocalAfter(72);
+    const expiresAt = datetimeLocalAfter(73);
+    await dateInputs[0].setValue(startsAt);
+    await dateInputs[1].setValue(expiresAt);
     await wrapper.get("form").trigger("submit");
     await flushPromises();
 
@@ -202,8 +241,8 @@ describe("LeaseEditorView", () => {
       user_id: "u-1",
       board_id: "board-2",
       client_name: "预约调试",
-      starts_at: new Date("2026-01-01T03:00").toISOString(),
-      expires_at: new Date("2026-01-01T04:00").toISOString(),
+      starts_at: new Date(startsAt).toISOString(),
+      expires_at: new Date(expiresAt).toISOString(),
     });
     expect(routerPush).toHaveBeenCalledWith({ name: "admin-rental-leases" });
   });

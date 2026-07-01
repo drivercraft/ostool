@@ -149,7 +149,7 @@ onMounted(() => {
 
 <template>
   <section class="page-grid admin-list-page audit-page">
-    <div class="panel admin-table-panel">
+    <div class="admin-table-panel">
       <div class="admin-toolbar">
         <div class="admin-toolbar-left">
           <button class="btn btn-ghost btn-sm" type="button" @click="resetFilters">

@@ -84,6 +84,11 @@
     height: auto;
     overflow: auto;
   }
+  .user-lease-editor-scroll {
+    grid-template-columns: 1fr;
+    height: auto;
+    overflow: auto;
+  }
   .lease-calendar-panel {
     min-height: 520px;
   }
@@ -116,18 +121,27 @@
   .admin-toolbar,
   .admin-toolbar-left,
   .admin-toolbar-right,
+  .public-toolbar,
+  .public-toolbar-left,
+  .public-toolbar-right,
   .toolbar-actions {
     align-items: stretch;
     flex-direction: column;
   }
   .admin-toolbar-left,
-  .admin-toolbar-right {
+  .admin-toolbar-right,
+  .public-toolbar-left,
+  .public-toolbar-right {
     flex-wrap: wrap;
   }
   .admin-toolbar-left,
   .admin-toolbar-right,
   .admin-toolbar-left .btn,
-  .admin-toolbar-right .btn {
+  .admin-toolbar-right .btn,
+  .public-toolbar-left,
+  .public-toolbar-right,
+  .public-toolbar-left .btn,
+  .public-toolbar-right .btn {
     width: 100%;
   }
   .search-field,
@@ -229,7 +243,8 @@
     grid-template-columns: 1fr;
   }
   .role-permission-section-head,
-  .admin-editor-actions {
+  .admin-editor-actions,
+  .user-lease-editor-actions {
     align-items: stretch;
     flex-direction: column;
   }

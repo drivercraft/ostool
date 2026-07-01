@@ -495,7 +495,7 @@ onMounted(() => {
 
 <template>
   <section class="page-grid users-page admin-list-page">
-    <div class="panel admin-table-panel">
+    <div class="admin-table-panel">
       <div class="admin-toolbar">
         <div class="admin-toolbar-left">
           <button class="btn btn-primary" @click="openCreate">

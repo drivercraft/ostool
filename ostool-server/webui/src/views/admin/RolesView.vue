@@ -389,7 +389,7 @@ watch(
     :class="editing ? 'admin-editor-page' : 'admin-list-page'"
   >
     <template v-if="editing">
-      <div class="admin-editor-panel panel">
+      <div class="admin-editor-panel">
         <form class="admin-editor-form" @submit.prevent="saveRole">
           <div class="admin-editor-body">
             <div class="role-basic-fields">
@@ -488,7 +488,7 @@ watch(
     </template>
 
     <template v-else>
-      <div class="panel admin-table-panel role-table-panel">
+      <div class="admin-table-panel role-table-panel">
         <div class="admin-toolbar">
           <div class="admin-toolbar-left">
             <button class="btn btn-primary" @click="openCreate">新增角色</button>

@@ -451,6 +451,200 @@ textarea:disabled {
   box-shadow: 0 0 0 3px var(--control-focus-ring);
 }
 
+/* ------------------------- lease calendar ---------------------------- */
+.lease-calendar-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--content-pad);
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+.lease-calendar-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--content-pad);
+  align-items: flex-start;
+}
+.lease-calendar-head h4 {
+  margin: 0 0 .25rem;
+  font-size: 1.05rem;
+}
+.lease-calendar-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  justify-items: end;
+  gap: .6rem;
+}
+.lease-calendar-tabs {
+  flex: 0 0 auto;
+  background: var(--c-surface-2);
+}
+.lease-calendar-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  flex: 0 0 auto;
+  padding-top: .35rem;
+}
+.lease-calendar-shell {
+  flex: 1 1 0;
+  min-height: 0;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface);
+  overflow: hidden;
+}
+.lease-calendar-grid {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  background: var(--c-border-light);
+  gap: 1px;
+  overflow: hidden;
+}
+.lease-calendar-hour {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-rows: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
+.lease-calendar-month {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
+.lease-calendar-day {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-rows: repeat(5, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
+.lease-calendar-year {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
+.lease-calendar-cell {
+  display: flex;
+  flex-direction: column;
+  gap: .45rem;
+  min-width: 0;
+  min-height: 0;
+  padding: .65rem;
+  border: 0;
+  background: var(--c-surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.lease-calendar-cell:hover:not(:disabled) {
+  background: var(--c-brand-tint);
+}
+.lease-calendar-cell.is-selected {
+  background: color-mix(in srgb, var(--c-brand-tint) 70%, var(--c-surface));
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--c-brand) 52%, transparent);
+}
+.lease-calendar-cell.has-reservation,
+.lease-calendar-cell.is-disabled {
+  background: var(--c-disabled-bg);
+  box-shadow: inset 0 0 0 1px var(--c-disabled-border);
+  color: var(--c-disabled-text);
+}
+.lease-calendar-cell.is-disabled {
+  cursor: not-allowed;
+}
+.lease-calendar-cell.has-own-reservation {
+  background: var(--c-reservation-own-bg);
+  box-shadow: inset 0 0 0 1px var(--c-reservation-own-border);
+}
+.lease-calendar-cell.is-disabled.has-own-reservation {
+  background: color-mix(in srgb, var(--c-reservation-own-bg) 58%, var(--c-disabled-bg));
+  box-shadow:
+    inset 0 0 0 1px var(--c-disabled-border),
+    inset 0 0 0 3px var(--c-reservation-own-border);
+}
+.lease-calendar-cell header {
+  display: flex;
+  justify-content: space-between;
+  gap: .45rem;
+  color: var(--c-text-soft);
+  font-size: .82rem;
+  font-weight: 800;
+}
+.lease-calendar-cell header strong,
+.lease-calendar-cell header span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lease-calendar-cell header span {
+  flex: 0 0 auto;
+  color: var(--c-text-muted);
+  font-size: .74rem;
+}
+.lease-calendar-events {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: .35rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.lease-calendar-event {
+  display: grid;
+  gap: .1rem;
+  min-width: 0;
+  padding: .4rem .5rem;
+  text-align: center;
+  border-left: 3px solid var(--c-brand);
+  border-radius: var(--radius-xs);
+  background: var(--c-brand-ghost);
+  color: var(--c-brand);
+  box-shadow: var(--shadow-xs);
+}
+.lease-calendar-event.is-conflicting {
+  border-left-color: var(--c-danger);
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
+}
+.lease-calendar-event.is-unavailable {
+  border-left-color: var(--c-disabled-text);
+  background: var(--c-disabled-strong);
+  color: var(--c-disabled-text);
+  box-shadow: none;
+}
+.lease-calendar-event.is-own {
+  border-left-color: var(--c-reservation-own-text);
+  background: var(--c-reservation-own-strong);
+  color: var(--c-reservation-own-text);
+  box-shadow: none;
+}
+.lease-calendar-event strong,
+.lease-calendar-event span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lease-calendar-event strong {
+  color: currentColor;
+  font-size: .75rem;
+}
+.lease-calendar-event span {
+  color: currentColor;
+  font-size: .72rem;
+  opacity: .82;
+}
+.lease-calendar-event.compact {
+  padding: .28rem .4rem;
+}
+.lease-calendar-more {
+  color: var(--c-text-muted);
+  font-size: .75rem;
+  font-weight: 700;
+}
+
 .toolbar-actions {
   display: flex;
   align-items: center;

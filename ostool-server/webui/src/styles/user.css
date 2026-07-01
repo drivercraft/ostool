@@ -115,13 +115,68 @@
   gap: 1.25rem;
 }
 .user-lease-create-page {
+  display: grid;
+  gap: var(--content-pad);
   width: 100%;
-  min-height: calc(100vh - var(--topbar-h) - 88px);
-  padding: 0;
+  box-sizing: border-box;
+  min-height: calc(100vh - var(--topbar-h));
+  padding: var(--page-block-pad) var(--page-inline-pad);
 }
-.user-lease-create-page .admin-editor-panel {
-  min-height: inherit;
+.user-lease-editor-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - var(--topbar-h) - var(--page-block-pad) - var(--page-block-pad));
   overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.user-lease-editor-form {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--content-pad);
+  min-height: 0;
+  overflow: hidden;
+}
+.user-lease-editor-body {
+  flex: 1 1 0;
+  display: grid;
+  align-content: start;
+  gap: var(--content-pad);
+  min-height: 0;
+  max-height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 0 .5rem var(--content-pad) 0;
+}
+.user-lease-editor-actions {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  gap: .75rem;
+  padding: var(--content-pad) 0 0;
+  border-top: 1px solid var(--c-border-light);
+}
+.user-lease-editor-scroll {
+  grid-template-columns: minmax(420px, 1.08fr) minmax(360px, .92fr);
+  grid-template-rows: minmax(0, 1fr);
+  align-content: stretch;
+  align-items: stretch;
+  column-gap: clamp(24px, 2.4vw, 40px);
+  row-gap: var(--content-pad);
+  height: 100%;
+  overflow: hidden;
+}
+.user-lease-config-panel {
+  min-width: 0;
+  min-height: 0;
+}
+.user-lease-config-panel {
+  overflow: auto;
 }
 .dashboard-page > section {
   scroll-margin-top: calc(var(--topbar-h) + 24px);

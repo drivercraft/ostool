@@ -136,6 +136,7 @@ describe("UserLeaseCreateView", () => {
 
     expect(wrapper.text()).not.toContain("返回资源");
     expect(wrapper.text()).toContain("取消");
+    expect(wrapper.find(".user-lease-editor-panel").classes()).not.toContain("panel");
     expect(wrapper.find(".lease-calendar-month").exists()).toBe(true);
     expect((wrapper.find("select").element as HTMLSelectElement).value).toBe("rk3568");
     await wrapper.findAll(".lease-calendar-tabs button")[0].trigger("click");
@@ -147,6 +148,22 @@ describe("UserLeaseCreateView", () => {
     await flushPromises();
     expect(wrapper.find(".lease-calendar-day").exists()).toBe(true);
     expect(wrapper.findAll(".lease-calendar-cell")).toHaveLength(35);
+
+    const dateInputs = wrapper.findAll('input[type="datetime-local"]');
+    await dateInputs[0].setValue("");
+    await dateInputs[1].setValue("");
+    await flushPromises();
+    const selectableCells = wrapper.findAll(".lease-calendar-cell:not(:disabled)");
+    await selectableCells[0].trigger("click");
+    await flushPromises();
+    expect(wrapper.findAll(".lease-calendar-cell.is-selected").length).toBe(1);
+    await selectableCells[0].trigger("click");
+    await flushPromises();
+    expect(wrapper.findAll(".lease-calendar-cell.is-selected")).toHaveLength(0);
+    await selectableCells[0].trigger("click");
+    await selectableCells[1].trigger("click");
+    await flushPromises();
+    expect(wrapper.findAll(".lease-calendar-cell.is-selected").length).toBeGreaterThanOrEqual(2);
 
     await wrapper.find('input[placeholder="多个标签用英文逗号分隔，例如 lab, usb"]').setValue("lab");
     await wrapper.find('input[type="datetime-local"]').setValue("2027-01-01T03:00");
@@ -168,6 +185,10 @@ describe("UserLeaseCreateView", () => {
     occupiedStart.setMinutes(0, 0, 0);
     const occupiedEnd = new Date(occupiedStart);
     occupiedEnd.setHours(occupiedStart.getHours() + 2);
+    const ownStart = new Date(occupiedStart);
+    ownStart.setHours(occupiedStart.getHours() + 3);
+    const ownEnd = new Date(ownStart);
+    ownEnd.setHours(ownStart.getHours() + 1);
     routeMock = {
       query: { board_type: "sample-loongarch64-httpboot" },
     };
@@ -194,6 +215,24 @@ describe("UserLeaseCreateView", () => {
           },
           session: null,
         },
+        {
+          lease: {
+            id: "lease-own",
+            user_id: "user-demo",
+            session_id: null,
+            board_id: "sample-loongarch64-httpboot-02",
+            board_type: "sample-loongarch64-httpboot",
+            required_tags: [],
+            state: "active",
+            created_at: ownStart.toISOString(),
+            updated_at: ownStart.toISOString(),
+            starts_at: ownStart.toISOString(),
+            expires_at: ownEnd.toISOString(),
+            released_at: null,
+            failure_message: null,
+          },
+          session: null,
+        },
       ],
     });
 
@@ -207,6 +246,12 @@ describe("UserLeaseCreateView", () => {
     const disabledCells = wrapper.findAll(".lease-calendar-cell.is-disabled");
     expect(disabledCells.length).toBeGreaterThan(0);
     expect(wrapper.find(".lease-calendar-event.is-unavailable").exists()).toBe(true);
+    expect(wrapper.find(".lease-calendar-event.is-own").exists()).toBe(true);
     expect(wrapper.text()).toContain("已占用");
+    expect(wrapper.text()).toContain("我的租赁");
+    expect(wrapper.text()).not.toContain("other-user");
+    await disabledCells[0].trigger("click");
+    await flushPromises();
+    expect(disabledCells[0].classes()).not.toContain("is-selected");
   });
 });

@@ -7,6 +7,13 @@ import { api } from "@/api";
 import { VALIDATION_LIMITS } from "@/constants/validation";
 import { useUiStore } from "@/stores/ui";
 import type { AdminUserResponse, BoardConfig, LeaseResponse } from "@/types/api";
+import {
+  fromDatetimeLocal,
+  selectLeaseCalendarRange,
+  slotOverlapsSelection,
+  toDatetimeLocal,
+  windowsOverlap,
+} from "@/utils/leaseCalendar";
 
 type CalendarViewMode = "hour" | "day" | "month" | "year";
 type CalendarSlot = {
@@ -44,7 +51,6 @@ const editingLeaseId = computed(() => (typeof route.params.leaseId === "string" 
 const enabledUsers = computed(() => users.value.filter((user) => !user.disabled));
 const enabledBoards = computed(() => boards.value.filter((board) => !board.disabled));
 const selectedBoard = computed(() => boards.value.find((board) => board.id === form.value.board_id) ?? null);
-const selectedDate = computed(() => form.value.starts_at.slice(0, 10));
 const selectedBoardLeases = computed(() =>
   leases.value
     .filter((item) => item.lease.board_id === form.value.board_id && item.lease.state === "active")
@@ -108,19 +114,6 @@ const calendarPeriodLabel = computed(() => {
   return base.toLocaleDateString("zh-CN", { year: "numeric", month: "long" });
 });
 
-function toDatetimeLocal(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 16);
-}
-
-function fromDatetimeLocal(value: string) {
-  return new Date(value).toISOString();
-}
-
 function dateKey(date: Date) {
   const year = date.getFullYear();
   const month = `${date.getMonth() + 1}`.padStart(2, "0");
@@ -135,14 +128,6 @@ function defaultStartsAt() {
 function defaultExpiresAt(startsAt: string) {
   const startTime = startsAt ? new Date(startsAt).getTime() : Date.now();
   return toDatetimeLocal(new Date(startTime + 60 * 60 * 1000).toISOString());
-}
-
-function windowsOverlap(startA: string, endA: string, startB: string, endB: string) {
-  if (!startA || !endA || !startB || !endB) {
-    return false;
-  }
-  return new Date(startA).getTime() < new Date(endB).getTime()
-    && new Date(endA).getTime() > new Date(startB).getTime();
 }
 
 function leasesForRange(startIso: string, endIso: string) {
@@ -280,15 +265,42 @@ function buildYearSlots(anchor: Date) {
 }
 
 function slotOverlapsSelected(slot: CalendarSlot) {
-  if (!form.value.starts_at || !form.value.expires_at) {
-    return false;
-  }
-  return windowsOverlap(
-    slot.startIso,
-    slot.endIso,
+  return slotOverlapsSelection(slot, fromDatetimeLocal(form.value.starts_at), fromDatetimeLocal(form.value.expires_at));
+}
+
+function blockingLeasesForSlot(slot: CalendarSlot) {
+  return slot.leases.filter((item) => item.lease.id !== editingLeaseId.value);
+}
+
+function slotIsOccupied(slot: CalendarSlot) {
+  return blockingLeasesForSlot(slot).length > 0;
+}
+
+function slotIsPast(slot: CalendarSlot) {
+  return !editing.value && new Date(slot.endIso).getTime() <= Date.now();
+}
+
+function slotIsDisabled(slot: CalendarSlot) {
+  return slotIsOccupied(slot) || slotIsPast(slot);
+}
+
+function slotIsSelectable(slot: CalendarSlot) {
+  return !slotIsDisabled(slot);
+}
+
+function selectCalendarSlot(slot: CalendarSlot) {
+  const selection = selectLeaseCalendarRange(
+    calendarSlots.value,
+    slot,
     fromDatetimeLocal(form.value.starts_at),
     fromDatetimeLocal(form.value.expires_at),
+    slotIsSelectable,
   );
+  if (!selection) {
+    return;
+  }
+  form.value.starts_at = toDatetimeLocal(selection.startIso);
+  form.value.expires_at = toDatetimeLocal(selection.endIso);
 }
 
 function eventLabelForSlot(item: LeaseResponse, slot: CalendarSlot) {
@@ -401,6 +413,9 @@ function validateForm() {
   if (new Date(form.value.expires_at).getTime() <= new Date(form.value.starts_at).getTime()) {
     return "租赁结束时间必须晚于开始时间";
   }
+  if (!editing.value && new Date(fromDatetimeLocal(form.value.expires_at)).getTime() <= Date.now()) {
+    return "租赁结束时间必须在当前时间之后";
+  }
   if (!editing.value && form.value.client_name.trim().length > VALIDATION_LIMITS.clientNameMax) {
     return `会话名称不能超过 ${VALIDATION_LIMITS.clientNameMax} 个字符`;
   }
@@ -470,7 +485,7 @@ onMounted(() => {
 
 <template>
   <section class="page-grid admin-editor-page lease-editor-page">
-    <div class="admin-editor-panel panel">
+    <div class="admin-editor-panel">
       <form class="admin-editor-form" @submit.prevent="saveLease">
         <div class="admin-editor-body lease-editor-scroll">
           <section class="lease-calendar-panel">
@@ -496,14 +511,19 @@ onMounted(() => {
                 class="lease-calendar-grid"
                 :class="`lease-calendar-${calendarView}`"
               >
-                <article
+                <button
                   v-for="slot in calendarSlots"
                   :key="slot.key"
+                  type="button"
                   class="lease-calendar-cell"
                   :class="{
                     'is-selected': slotOverlapsSelected(slot),
-                    'has-reservation': slot.leases.length > 0,
+                    'has-reservation': slotIsOccupied(slot),
+                    'is-disabled': slotIsDisabled(slot),
                   }"
+                  :aria-pressed="slotOverlapsSelected(slot)"
+                  :disabled="slotIsDisabled(slot)"
+                  @click="selectCalendarSlot(slot)"
                 >
                   <header>
                     <strong>{{ slot.label }}</strong>
@@ -527,7 +547,7 @@ onMounted(() => {
                       +{{ slot.leases.length - (calendarView === 'hour' ? 2 : 3) }} 条
                     </span>
                   </div>
-                </article>
+                </button>
               </div>
             </div>
             <div v-if="!loading && selectedBoard" class="lease-calendar-nav">
