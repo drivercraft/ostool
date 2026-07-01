@@ -31,18 +31,19 @@ use crate::{
     api::{
         dto::{
             ActionResponse, AdminAuditLogResponse, AdminAuditLogsResponse, AdminBoardUpsertRequest,
-            AdminLeaseCreateRequest, AdminLeaseUpdateRequest, AdminOverviewResponse,
-            AdminPasswordResetRequest, AdminPermissionResponse, AdminPermissionsResponse,
-            AdminRoleCreateRequest, AdminRoleDisableRequest, AdminRoleResponse,
-            AdminRoleUpdateRequest, AdminRolesResponse, AdminServerConfigEditable,
-            AdminServerConfigReadonly, AdminServerConfigResponse, AdminSessionResponse,
-            AdminSessionUpdateRequest, AdminSessionsResponse, AdminTftpConfigResponse,
-            AdminTftpStatusResponse, AdminUserCreateRequest, AdminUserResponse,
-            AdminUserRolesResponse, AdminUserRolesUpdateRequest, AdminUserUpdateRequest,
-            AdminUsersResponse, BoardPowerAction, BoardPowerStatusResponse,
+            AdminIssueSessionUpdateRequest, AdminLeaseCreateRequest, AdminLeaseUpdateRequest,
+            AdminOverviewResponse, AdminPasswordResetRequest, AdminPermissionResponse,
+            AdminPermissionsResponse, AdminRoleCreateRequest, AdminRoleDisableRequest,
+            AdminRoleResponse, AdminRoleUpdateRequest, AdminRolesResponse,
+            AdminServerConfigEditable, AdminServerConfigReadonly, AdminServerConfigResponse,
+            AdminSessionResponse, AdminSessionUpdateRequest, AdminSessionsResponse,
+            AdminTftpConfigResponse, AdminTftpStatusResponse, AdminUserCreateRequest,
+            AdminUserResponse, AdminUserRolesResponse, AdminUserRolesUpdateRequest,
+            AdminUserUpdateRequest, AdminUsersResponse, BoardPowerAction, BoardPowerStatusResponse,
             BoardRuntimeStatusResponse, BoardTypeSummary, BootProfileResponse, CaptchaResponse,
-            CreateLeaseRequest, CreateSessionRequest, CurrentUserResponse, DtbFileResponse,
-            FileResponse, HttpBootFileResponse, KernelPublishResponse, LeaseResponse,
+            CreateIssueSessionRequest, CreateLeaseRequest, CreateSessionRequest,
+            CurrentUserResponse, DtbFileResponse, FileResponse, HttpBootFileResponse,
+            IssueSessionResponse, IssueSessionsResponse, KernelPublishResponse, LeaseResponse,
             LeasesResponse, LoginRequest, NetworkInterfaceSummary, RegisterRequest,
             RegisterResponse, RegistrationPolicyResponse, SerialPortSummary, SerialStatusResponse,
             SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse,
@@ -74,8 +75,9 @@ use crate::{
     session::SessionStopReason,
     state::{AppState, BoardLeaseState, CaptchaChallenge, RateLimitWindow, TouchSessionError},
     storage::{
-        Lease, NewAuditLog, NewRole, Role, RuntimeSettings, SiteSettings, UpsertDtbMetadata,
-        UserProfile, default_user_permission,
+        IssueSession, IssueSessionPriority, IssueSessionState, Lease, NewAuditLog, NewIssueSession,
+        NewRole, Role, RuntimeSettings, SiteSettings, UpsertDtbMetadata, UserProfile,
+        default_user_permission,
     },
     tftp::{
         files::{TftpFileRef, normalize_relative_path},
@@ -123,6 +125,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/user/leases/{lease_id}/heartbeat",
             post(heartbeat_user_lease),
+        )
+        .route(
+            "/api/v1/user/issues",
+            get(list_user_issue_sessions).post(create_user_issue_session),
         )
         .route(
             "/api/v1/admin/users",
@@ -220,6 +226,11 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/admin/sessions/{session_id}/close",
             post(close_admin_session),
+        )
+        .route("/api/v1/admin/issues", get(list_admin_issue_sessions))
+        .route(
+            "/api/v1/admin/issues/{issue_id}",
+            put(update_admin_issue_session).delete(delete_admin_issue_session),
         )
         .route("/api/v1/admin/tftp", get(get_tftp_config))
         .route("/api/v1/admin/tftp/status", get(get_tftp_status))
@@ -552,6 +563,7 @@ fn is_admin_permission(permission_code: &str) -> bool {
                 | "dtbs"
                 | "leases"
                 | "sessions"
+                | "issues"
                 | "tftp"
                 | "server"
                 | "site"
@@ -594,6 +606,7 @@ fn admin_permission_for_request(method: &Method, path: &str) -> Option<&'static 
         "roles" => admin_roles_permission(method, &segments),
         "leases" => admin_leases_permission(method, &segments),
         "sessions" => admin_sessions_permission(method, &segments),
+        "issues" => admin_issues_permission(method, &segments),
         "boards" => admin_boards_permission(method, &segments),
         "dtbs" => crud_permission(method, "dtbs"),
         "serial-ports" if method == Method::GET => Some("serial_ports.read"),
@@ -618,6 +631,8 @@ fn user_permission_for_request(method: &Method, path: &str) -> Option<&'static s
         ("POST", ["leases"]) => Some("leases.create"),
         ("DELETE", ["leases", _]) => Some("leases.release"),
         ("POST", ["leases", _, "heartbeat"]) => Some("leases.heartbeat"),
+        ("GET", ["issues"]) => Some("issues.read"),
+        ("POST", ["issues"]) => Some("issues.create"),
         _ => None,
     }
 }
@@ -711,6 +726,15 @@ fn admin_sessions_permission(method: &Method, segments: &[&str]) -> Option<&'sta
         ("PUT", ["sessions", _]) => Some("sessions.update"),
         ("POST", ["sessions", _, "close"]) => Some("sessions.delete"),
         ("DELETE", ["sessions", _]) => Some("sessions.delete"),
+        _ => None,
+    }
+}
+
+fn admin_issues_permission(method: &Method, segments: &[&str]) -> Option<&'static str> {
+    match (method.as_str(), segments) {
+        ("GET", ["issues"]) | ("GET", ["issues", _]) => Some("issues.read"),
+        ("PUT", ["issues", _]) => Some("issues.update"),
+        ("DELETE", ["issues", _]) => Some("issues.delete"),
         _ => None,
     }
 }
@@ -915,6 +939,10 @@ async fn lease_response(state: &AppState, lease: Lease) -> LeaseResponse {
         None => None,
     };
     LeaseResponse { lease, session }
+}
+
+fn issue_session_response(issue: IssueSession) -> IssueSessionResponse {
+    IssueSessionResponse { issue }
 }
 
 const CAPTCHA_EXPIRES_IN_SECONDS: i64 = 300;
@@ -1305,6 +1333,128 @@ async fn heartbeat_user_lease(
         .await?
         .ok_or_else(|| ApiError::not_found("lease not found"))?;
     Ok(axum::Json(lease_response(&state, lease).await))
+}
+
+fn parse_issue_priority(value: Option<String>) -> Result<IssueSessionPriority, ApiError> {
+    let value = value.unwrap_or_else(|| "normal".to_string());
+    IssueSessionPriority::from_str(value.trim())
+        .map_err(|err| ApiError::bad_request(err.to_string()))
+}
+
+fn parse_issue_state(value: &str) -> Result<IssueSessionState, ApiError> {
+    IssueSessionState::from_str(value.trim()).map_err(|err| ApiError::bad_request(err.to_string()))
+}
+
+async fn list_user_issue_sessions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<axum::Json<IssueSessionsResponse>, ApiError> {
+    let user = current_user_from_headers(&state, &headers).await?;
+    let issues = state
+        .storage
+        .list_issue_sessions_for_user(&user.id)
+        .await?
+        .into_iter()
+        .map(issue_session_response)
+        .collect();
+    Ok(axum::Json(IssueSessionsResponse { issues }))
+}
+
+async fn create_user_issue_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::Json(request): axum::Json<CreateIssueSessionRequest>,
+) -> Result<(StatusCode, axum::Json<IssueSessionResponse>), ApiError> {
+    let user = current_user_from_headers(&state, &headers).await?;
+    let title = clean_required_len(request.title, "title", 1, 128)?;
+    let category = clean_optional_len(request.category, "category", 64)?
+        .unwrap_or_else(|| "general".to_string());
+    let description = clean_required_len(request.description, "description", 1, 4000)?;
+    let lease_id = clean_optional_len(request.lease_id, "lease_id", validation::ID_MAX_LEN)?;
+    let session_id = clean_optional_len(request.session_id, "session_id", validation::ID_MAX_LEN)?;
+    let priority = parse_issue_priority(request.priority)?;
+
+    if let Some(lease_id) = lease_id.as_deref() {
+        let lease = state
+            .storage
+            .find_lease(lease_id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("lease not found"))?;
+        if lease.user_id != user.id {
+            return Err(ApiError::not_found("lease not found"));
+        }
+    }
+    if let Some(session_id) = session_id.as_deref() {
+        let owns_session = state
+            .storage
+            .list_leases_for_user(&user.id)
+            .await?
+            .into_iter()
+            .any(|lease| lease.session_id.as_deref() == Some(session_id));
+        if !owns_session {
+            return Err(ApiError::not_found("session not found"));
+        }
+    }
+
+    let issue = state
+        .storage
+        .create_issue_session(NewIssueSession {
+            user_id: user.id,
+            lease_id,
+            session_id,
+            title,
+            category,
+            description,
+            priority,
+        })
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        axum::Json(issue_session_response(issue)),
+    ))
+}
+
+async fn list_admin_issue_sessions(
+    State(state): State<AppState>,
+) -> Result<axum::Json<IssueSessionsResponse>, ApiError> {
+    let issues = state
+        .storage
+        .list_issue_sessions()
+        .await?
+        .into_iter()
+        .map(issue_session_response)
+        .collect();
+    Ok(axum::Json(IssueSessionsResponse { issues }))
+}
+
+async fn update_admin_issue_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(issue_id): Path<String>,
+    axum::Json(request): axum::Json<AdminIssueSessionUpdateRequest>,
+) -> Result<axum::Json<IssueSessionResponse>, ApiError> {
+    let user = current_user_from_headers(&state, &headers).await?;
+    require_permission(&user, "issues.update")?;
+    let state_value = parse_issue_state(&request.state)?;
+    let priority = parse_issue_priority(Some(request.priority))?;
+    let resolution = clean_optional_len(request.resolution, "resolution", 4000)?;
+    let issue = state
+        .storage
+        .update_issue_session(&issue_id, state_value, priority, Some(user.id), resolution)
+        .await?
+        .ok_or_else(|| ApiError::not_found("issue session not found"))?;
+    Ok(axum::Json(issue_session_response(issue)))
+}
+
+async fn delete_admin_issue_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(issue_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let user = current_user_from_headers(&state, &headers).await?;
+    require_permission(&user, "issues.delete")?;
+    state.storage.delete_issue_session(&issue_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_admin_users(

@@ -16,12 +16,14 @@ const DashboardView = () => import("@/views/user/DashboardView.vue");
 const AccountView = () => import("@/views/user/AccountView.vue");
 const MyLeasesView = () => import("@/views/user/MyLeasesView.vue");
 const MySessionsView = () => import("@/views/user/MySessionsView.vue");
+const IssueFeedbackView = () => import("@/views/user/IssueFeedbackView.vue");
 const UserLeaseCreateView = () => import("@/views/user/UserLeaseCreateView.vue");
 const OverviewView = () => import("@/views/admin/OverviewView.vue");
 const BoardsView = () => import("@/views/admin/BoardsView.vue");
 const BoardEditorView = () => import("@/views/admin/BoardEditorView.vue");
 const DtbView = () => import("@/views/admin/DtbView.vue");
 const SessionsView = () => import("@/views/admin/SessionsView.vue");
+const IssueSessionsView = () => import("@/views/admin/IssueSessionsView.vue");
 const LeasesView = () => import("@/views/admin/LeasesView.vue");
 const LeaseEditorView = () => import("@/views/admin/LeaseEditorView.vue");
 const UsersView = () => import("@/views/admin/UsersView.vue");
@@ -129,6 +131,12 @@ export const router = createRouter({
           component: MySessionsView,
           meta: { title: "租约会话", requiresUser: true },
         },
+        {
+          path: "issues",
+          name: "user-issues",
+          component: IssueFeedbackView,
+          meta: { title: "问题反馈", requiresUser: true },
+        },
       ],
     },
     {
@@ -207,6 +215,16 @@ export const router = createRouter({
           name: "admin-rental-sessions",
           component: SessionsView,
           meta: { title: "租赁管理 / 租约会话" },
+        },
+        {
+          path: "rentals/issues",
+          redirect: "/admin/issues",
+        },
+        {
+          path: "issues",
+          name: "admin-issues",
+          component: IssueSessionsView,
+          meta: { title: "问题会话" },
         },
         {
           path: "users",

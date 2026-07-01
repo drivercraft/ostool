@@ -285,6 +285,49 @@ export interface AdminSessionUpdateRequest {
   failure_message: string | null;
 }
 
+export type IssueSessionState = "open" | "in_progress" | "resolved" | "closed";
+export type IssueSessionPriority = "low" | "normal" | "high" | "urgent";
+
+export interface IssueSession {
+  id: string;
+  user_id: string;
+  lease_id: string | null;
+  session_id: string | null;
+  title: string;
+  category: string;
+  description: string;
+  state: IssueSessionState;
+  priority: IssueSessionPriority;
+  handler_user_id: string | null;
+  resolution: string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+}
+
+export interface IssueSessionResponse {
+  issue: IssueSession;
+}
+
+export interface IssueSessionsResponse {
+  issues: IssueSessionResponse[];
+}
+
+export interface CreateIssueSessionRequest {
+  title: string;
+  category?: string | null;
+  description: string;
+  lease_id?: string | null;
+  session_id?: string | null;
+  priority?: IssueSessionPriority | null;
+}
+
+export interface AdminIssueSessionUpdateRequest {
+  state: IssueSessionState;
+  priority: IssueSessionPriority;
+  resolution: string | null;
+}
+
 export type LeaseState = "active" | "releasing" | "released" | "expired" | "failed";
 
 export interface Lease {

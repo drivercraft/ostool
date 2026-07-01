@@ -9,9 +9,10 @@ use uuid::Uuid;
 use crate::BoardConfig;
 use crate::storage::{
     AuditLog, AuditLogRepository, AuthSession, AuthSessionRepository, BUILTIN_PERMISSIONS,
-    BoardConfigRepository, DtbMetadata, DtbMetadataRepository, Lease, LeaseRepository, LeaseState,
-    NewAuditLog, NewLease, NewRole, NewSessionRecord, NewUser, Permission, RbacRepository, Role,
-    RuntimeSettings, RuntimeSettingsRepository, SessionRecord, SessionRecordRepository,
+    BoardConfigRepository, DtbMetadata, DtbMetadataRepository, IssueSession, IssueSessionPriority,
+    IssueSessionRepository, IssueSessionState, Lease, LeaseRepository, LeaseState, NewAuditLog,
+    NewIssueSession, NewLease, NewRole, NewSessionRecord, NewUser, Permission, RbacRepository,
+    Role, RuntimeSettings, RuntimeSettingsRepository, SessionRecord, SessionRecordRepository,
     SiteSettingValue, SiteSettings, SiteSettingsRepository, UpsertDtbMetadata, User, UserProfile,
     UserRepository, UserStatus, default_site_setting_rows, default_user_permission, parse_time,
     runtime_settings_from_values, runtime_settings_to_values, site_settings_from_values,
@@ -131,6 +132,34 @@ impl MysqlStorage {
                 failure_message VARCHAR(500),
                 INDEX idx_session_records_board_id (board_id),
                 INDEX idx_session_records_created_at (created_at)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS issue_sessions (
+                id VARCHAR(64) PRIMARY KEY NOT NULL,
+                user_id VARCHAR(64) NOT NULL,
+                lease_id VARCHAR(64),
+                session_id VARCHAR(64),
+                title VARCHAR(128) NOT NULL,
+                category VARCHAR(64) NOT NULL,
+                description TEXT NOT NULL,
+                state VARCHAR(32) NOT NULL,
+                priority VARCHAR(32) NOT NULL,
+                handler_user_id VARCHAR(64),
+                resolution TEXT,
+                created_at VARCHAR(64) NOT NULL,
+                updated_at VARCHAR(64) NOT NULL,
+                resolved_at VARCHAR(64),
+                INDEX idx_issue_sessions_user_id (user_id),
+                INDEX idx_issue_sessions_state (state),
+                INDEX idx_issue_sessions_created_at (created_at),
+                INDEX idx_issue_sessions_session_id (session_id),
+                FOREIGN KEY(user_id) REFERENCES users(id)
             )
             "#,
         )
@@ -737,6 +766,28 @@ fn session_record_from_row(row: &sqlx::mysql::MySqlRow) -> anyhow::Result<Sessio
     })
 }
 
+fn issue_session_from_row(row: &sqlx::mysql::MySqlRow) -> anyhow::Result<IssueSession> {
+    Ok(IssueSession {
+        id: row.try_get("id")?,
+        user_id: row.try_get("user_id")?,
+        lease_id: row.try_get("lease_id")?,
+        session_id: row.try_get("session_id")?,
+        title: row.try_get("title")?,
+        category: row.try_get("category")?,
+        description: row.try_get("description")?,
+        state: IssueSessionState::from_str(row.try_get::<String, _>("state")?.as_str())?,
+        priority: IssueSessionPriority::from_str(row.try_get::<String, _>("priority")?.as_str())?,
+        handler_user_id: row.try_get("handler_user_id")?,
+        resolution: row.try_get("resolution")?,
+        created_at: parse_time(row.try_get::<String, _>("created_at")?.as_str())?,
+        updated_at: parse_time(row.try_get::<String, _>("updated_at")?.as_str())?,
+        resolved_at: row
+            .try_get::<Option<String>, _>("resolved_at")?
+            .map(|value| parse_time(&value))
+            .transpose()?,
+    })
+}
+
 fn board_config_from_row(row: &sqlx::mysql::MySqlRow) -> anyhow::Result<BoardConfig> {
     let config_json: String = row.try_get("config_json")?;
     let board: BoardConfig =
@@ -1291,6 +1342,106 @@ impl SessionRecordRepository for MysqlStorage {
     async fn delete_session_record(&self, session_id: &str) -> anyhow::Result<()> {
         sqlx::query("DELETE FROM session_records WHERE id = ?")
             .bind(session_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl IssueSessionRepository for MysqlStorage {
+    async fn create_issue_session(&self, issue: NewIssueSession) -> anyhow::Result<IssueSession> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO issue_sessions
+                (id, user_id, lease_id, session_id, title, category, description, state, priority, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&id)
+        .bind(issue.user_id)
+        .bind(issue.lease_id)
+        .bind(issue.session_id)
+        .bind(issue.title)
+        .bind(issue.category)
+        .bind(issue.description)
+        .bind(IssueSessionState::Open.as_str())
+        .bind(issue.priority.as_str())
+        .bind(now.to_rfc3339())
+        .bind(now.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        self.find_issue_session(&id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("created issue session `{id}` disappeared"))
+    }
+
+    async fn list_issue_sessions(&self) -> anyhow::Result<Vec<IssueSession>> {
+        let rows = sqlx::query("SELECT * FROM issue_sessions ORDER BY created_at DESC")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(issue_session_from_row).collect()
+    }
+
+    async fn list_issue_sessions_for_user(
+        &self,
+        user_id: &str,
+    ) -> anyhow::Result<Vec<IssueSession>> {
+        let rows =
+            sqlx::query("SELECT * FROM issue_sessions WHERE user_id = ? ORDER BY created_at DESC")
+                .bind(user_id)
+                .fetch_all(&self.pool)
+                .await?;
+        rows.iter().map(issue_session_from_row).collect()
+    }
+
+    async fn find_issue_session(&self, issue_id: &str) -> anyhow::Result<Option<IssueSession>> {
+        sqlx::query("SELECT * FROM issue_sessions WHERE id = ?")
+            .bind(issue_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .as_ref()
+            .map(issue_session_from_row)
+            .transpose()
+    }
+
+    async fn update_issue_session(
+        &self,
+        issue_id: &str,
+        state: IssueSessionState,
+        priority: IssueSessionPriority,
+        handler_user_id: Option<String>,
+        resolution: Option<String>,
+    ) -> anyhow::Result<Option<IssueSession>> {
+        let resolved_at = matches!(
+            state,
+            IssueSessionState::Resolved | IssueSessionState::Closed
+        )
+        .then(|| Utc::now().to_rfc3339());
+        sqlx::query(
+            r#"
+            UPDATE issue_sessions
+            SET state = ?, priority = ?, handler_user_id = ?, resolution = ?, updated_at = ?, resolved_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(state.as_str())
+        .bind(priority.as_str())
+        .bind(handler_user_id)
+        .bind(resolution)
+        .bind(Utc::now().to_rfc3339())
+        .bind(resolved_at)
+        .bind(issue_id)
+        .execute(&self.pool)
+        .await?;
+        self.find_issue_session(issue_id).await
+    }
+
+    async fn delete_issue_session(&self, issue_id: &str) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM issue_sessions WHERE id = ?")
+            .bind(issue_id)
             .execute(&self.pool)
             .await?;
         Ok(())

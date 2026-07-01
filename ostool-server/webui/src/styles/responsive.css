@@ -95,6 +95,13 @@
   .dashboard-form-inline {
     grid-template-columns: 1fr 1fr;
   }
+  .issue-feedback-form {
+    grid-template-columns: 1fr;
+  }
+  .issue-feedback-filters,
+  .issue-feedback-filters .search-field {
+    width: 100%;
+  }
   .dashboard-form-actions {
     grid-column: 1 / -1;
   }

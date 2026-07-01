@@ -1,5 +1,8 @@
 import type {
+  CreateIssueSessionRequest,
   CreateLeaseRequest,
+  IssueSessionResponse,
+  IssueSessionsResponse,
   LeaseResponse,
   LeasesResponse,
   UserPasswordUpdateRequest,
@@ -36,5 +39,14 @@ export const userApi = {
       `/api/v1/user/leases/${encodeURIComponent(leaseId)}/heartbeat`,
       { method: "POST" },
     );
+  },
+  listIssueSessions() {
+    return request<IssueSessionsResponse>("/api/v1/user/issues");
+  },
+  createIssueSession(payload: CreateIssueSessionRequest) {
+    return request<IssueSessionResponse>("/api/v1/user/issues", {
+      method: "POST",
+      bodyJson: payload,
+    });
   },
 };

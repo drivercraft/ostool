@@ -56,6 +56,11 @@ onMounted(() => {
         <strong>租约会话</strong>
         <span>查看当前已经启动的租赁会话。</span>
       </RouterLink>
+      <RouterLink class="dashboard-quick-card card" to="/dashboard/issues">
+        <span class="form-section-icon info"><Icon name="bell" :size="16" /></span>
+        <strong>问题反馈</strong>
+        <span>提交使用问题并查看管理员处理进度。</span>
+      </RouterLink>
       <RouterLink class="dashboard-quick-card card" to="/resources">
         <span class="form-section-icon info"><Icon name="cpu-board" :size="16" /></span>
         <strong>资源申请</strong>

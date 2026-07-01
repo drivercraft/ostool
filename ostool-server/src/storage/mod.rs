@@ -153,6 +153,14 @@ pub const BUILTIN_PERMISSIONS: &[(&str, &str, &str)] = &[
         "更新租约会话心跳和运行状态",
     ),
     ("sessions.delete", "删除租约会话", "删除租约会话记录"),
+    ("issues.read", "查看问题会话", "查看用户反馈的问题会话"),
+    ("issues.create", "提交问题会话", "提交用户反馈的问题会话"),
+    (
+        "issues.update",
+        "处理问题会话",
+        "更新问题会话状态和处理备注",
+    ),
+    ("issues.delete", "删除问题会话", "删除问题会话记录"),
     ("tftp.read", "查看 TFTP 配置", "查看 TFTP 配置和运行状态"),
     (
         "tftp.reconcile",
@@ -184,6 +192,8 @@ pub fn default_user_permission(code: &str) -> bool {
             | "sessions.read"
             | "sessions.create"
             | "sessions.update"
+            | "issues.read"
+            | "issues.create"
     )
 }
 
@@ -305,6 +315,95 @@ pub struct NewSessionRecord {
     pub created_at: DateTime<Utc>,
     pub last_heartbeat_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueSessionState {
+    Open,
+    InProgress,
+    Resolved,
+    Closed,
+}
+
+impl IssueSessionState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::InProgress => "in_progress",
+            Self::Resolved => "resolved",
+            Self::Closed => "closed",
+        }
+    }
+
+    pub fn from_str(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "open" => Ok(Self::Open),
+            "in_progress" => Ok(Self::InProgress),
+            "resolved" => Ok(Self::Resolved),
+            "closed" => Ok(Self::Closed),
+            other => anyhow::bail!("unknown issue session state `{other}`"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueSessionPriority {
+    Low,
+    Normal,
+    High,
+    Urgent,
+}
+
+impl IssueSessionPriority {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Normal => "normal",
+            Self::High => "high",
+            Self::Urgent => "urgent",
+        }
+    }
+
+    pub fn from_str(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "low" => Ok(Self::Low),
+            "normal" => Ok(Self::Normal),
+            "high" => Ok(Self::High),
+            "urgent" => Ok(Self::Urgent),
+            other => anyhow::bail!("unknown issue session priority `{other}`"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueSession {
+    pub id: String,
+    pub user_id: String,
+    pub lease_id: Option<String>,
+    pub session_id: Option<String>,
+    pub title: String,
+    pub category: String,
+    pub description: String,
+    pub state: IssueSessionState,
+    pub priority: IssueSessionPriority,
+    pub handler_user_id: Option<String>,
+    pub resolution: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub resolved_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewIssueSession {
+    pub user_id: String,
+    pub lease_id: Option<String>,
+    pub session_id: Option<String>,
+    pub title: String,
+    pub category: String,
+    pub description: String,
+    pub priority: IssueSessionPriority,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -935,6 +1034,26 @@ pub trait SessionRecordRepository: Send + Sync {
 }
 
 #[async_trait]
+pub trait IssueSessionRepository: Send + Sync {
+    async fn create_issue_session(&self, issue: NewIssueSession) -> anyhow::Result<IssueSession>;
+    async fn list_issue_sessions(&self) -> anyhow::Result<Vec<IssueSession>>;
+    async fn list_issue_sessions_for_user(
+        &self,
+        user_id: &str,
+    ) -> anyhow::Result<Vec<IssueSession>>;
+    async fn find_issue_session(&self, issue_id: &str) -> anyhow::Result<Option<IssueSession>>;
+    async fn update_issue_session(
+        &self,
+        issue_id: &str,
+        state: IssueSessionState,
+        priority: IssueSessionPriority,
+        handler_user_id: Option<String>,
+        resolution: Option<String>,
+    ) -> anyhow::Result<Option<IssueSession>>;
+    async fn delete_issue_session(&self, issue_id: &str) -> anyhow::Result<()>;
+}
+
+#[async_trait]
 pub trait BoardConfigRepository: Send + Sync {
     async fn create_board_config(&self, board: BoardConfig) -> anyhow::Result<BoardConfig>;
     async fn list_board_configs(&self) -> anyhow::Result<Vec<BoardConfig>>;
@@ -1013,6 +1132,7 @@ pub trait Storage:
     + AuthSessionRepository
     + LeaseRepository
     + SessionRecordRepository
+    + IssueSessionRepository
     + BoardConfigRepository
     + RbacRepository
     + DtbMetadataRepository
@@ -1030,6 +1150,7 @@ impl<T> Storage for T where
         + AuthSessionRepository
         + LeaseRepository
         + SessionRecordRepository
+        + IssueSessionRepository
         + BoardConfigRepository
         + RbacRepository
         + DtbMetadataRepository

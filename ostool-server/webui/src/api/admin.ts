@@ -1,6 +1,7 @@
 import type {
   AdminAuditLogsResponse,
   AdminBoardUpsertRequest,
+  AdminIssueSessionUpdateRequest,
   AdminLeaseCreateRequest,
   AdminLeaseUpdateRequest,
   AdminOverviewResponse,
@@ -28,6 +29,8 @@ import type {
   BoardConfig,
   DtbMetadataInput,
   DtbFileResponse,
+  IssueSessionResponse,
+  IssueSessionsResponse,
   LeaseResponse,
   LeasesResponse,
   NetworkInterfaceSummary,
@@ -142,6 +145,20 @@ export const adminApi = {
   closeSession(sessionId: string) {
     return request<void>(`/api/v1/admin/sessions/${encodeURIComponent(sessionId)}/close`, {
       method: "POST",
+    });
+  },
+  listIssueSessions() {
+    return request<IssueSessionsResponse>("/api/v1/admin/issues");
+  },
+  updateIssueSession(issueId: string, payload: AdminIssueSessionUpdateRequest) {
+    return request<IssueSessionResponse>(`/api/v1/admin/issues/${encodeURIComponent(issueId)}`, {
+      method: "PUT",
+      bodyJson: payload,
+    });
+  },
+  deleteIssueSession(issueId: string) {
+    return request<void>(`/api/v1/admin/issues/${encodeURIComponent(issueId)}`, {
+      method: "DELETE",
     });
   },
   getTftpConfig() {

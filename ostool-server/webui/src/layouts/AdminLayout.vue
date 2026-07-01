@@ -87,6 +87,12 @@ const navItems = computed<AdminNavItem[]>(() => [
     label: "审计日志",
     icon: "shield",
   },
+  {
+    type: "link",
+    to: "/admin/issues",
+    label: "问题会话",
+    icon: "bell",
+  },
 ]);
 
 const collapsedGroups = reactive<Record<string, boolean>>({});

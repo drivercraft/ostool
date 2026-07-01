@@ -25,6 +25,7 @@ const menuItems = computed<AccountMenuItem[]>(() => {
     { to: "/dashboard/account", label: "用户信息", icon: "user" },
     { to: "/dashboard/leases", label: "我的租赁", icon: "clipboard" },
     { to: "/dashboard/sessions", label: "我的会话", icon: "terminal" },
+    { to: "/dashboard/issues", label: "问题反馈", icon: "bell" },
     { to: "/leases/new", label: "申请租赁", icon: "plus" },
   ];
   if (auth.isAdmin) {

@@ -10,7 +10,7 @@ use crate::{
     dtb_store::DtbFile,
     session::Session,
     state::BoardLeaseState,
-    storage::{AuditLog, DtbMetadata, Lease, Permission, Role, SessionRecord},
+    storage::{AuditLog, DtbMetadata, IssueSession, Lease, Permission, Role, SessionRecord},
     tftp::{files::TftpFileRef, status::TftpStatus},
 };
 
@@ -381,6 +381,33 @@ pub struct AdminSessionResponse {
 pub struct AdminSessionUpdateRequest {
     pub client_name: Option<String>,
     pub failure_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueSessionResponse {
+    pub issue: IssueSession,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueSessionsResponse {
+    pub issues: Vec<IssueSessionResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateIssueSessionRequest {
+    pub title: String,
+    pub category: Option<String>,
+    pub description: String,
+    pub lease_id: Option<String>,
+    pub session_id: Option<String>,
+    pub priority: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminIssueSessionUpdateRequest {
+    pub state: String,
+    pub priority: String,
+    pub resolution: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
