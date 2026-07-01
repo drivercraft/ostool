@@ -55,7 +55,7 @@ const navItems = computed<AdminNavItem[]>(() => [
     id: "resources",
     label: "资源管理",
     icon: "cpu-board",
-    items: [租约会话
+    items: [
       { to: "/admin/resources/boards", label: "开发板配置" },
       { to: "/admin/resources/dtbs", label: "DTB 配置" },
       { to: "/admin/resources/tftp", label: "TFTP 配置" },

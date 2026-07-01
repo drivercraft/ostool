@@ -205,7 +205,7 @@ export const router = createRouter({
         {
           path: "rentals/sessions",
           name: "admin-rental-sessions",
-          component: SessionsView租约会话
+          component: SessionsView,
           meta: { title: "租赁管理 / 租约会话" },
         },
         {
