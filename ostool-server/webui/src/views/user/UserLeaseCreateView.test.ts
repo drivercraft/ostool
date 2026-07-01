@@ -138,7 +138,17 @@ describe("UserLeaseCreateView", () => {
     expect(wrapper.text()).toContain("取消");
     expect(wrapper.find(".user-lease-editor-panel").classes()).not.toContain("panel");
     expect(wrapper.find(".lease-calendar-month").exists()).toBe(true);
+    expect(wrapper.text()).toContain("新增租赁");
+    expect(wrapper.text()).toContain("已有租赁");
+    expect(wrapper.text()).toContain("暂无已有租赁");
+    expect(wrapper.find(".lease-calendar-panel .lease-calendar-reservations").exists()).toBe(false);
+    expect(wrapper.find(".user-lease-config-panel .lease-calendar-reservations").exists()).toBe(true);
+    const sectionTitles = wrapper.findAll(".user-lease-config-panel .form-section-header h4").map((item) => item.text());
+    expect(sectionTitles).toEqual(["新增租赁", "已有租赁"]);
     expect((wrapper.find("select").element as HTMLSelectElement).value).toBe("rk3568");
+    const dateInputs = wrapper.findAll('input[type="datetime-local"]');
+    expect((dateInputs[0].element as HTMLInputElement).value).toBe("");
+    expect((dateInputs[1].element as HTMLInputElement).value).toBe("");
     await wrapper.findAll(".lease-calendar-tabs button")[0].trigger("click");
     await flushPromises();
     expect(wrapper.find(".lease-calendar-hour").exists()).toBe(true);
@@ -148,10 +158,15 @@ describe("UserLeaseCreateView", () => {
     await flushPromises();
     expect(wrapper.find(".lease-calendar-day").exists()).toBe(true);
     expect(wrapper.findAll(".lease-calendar-cell")).toHaveLength(35);
+    const dayCells = wrapper.findAll(".lease-calendar-cell:not(:disabled)");
+    await dayCells[0].trigger("click");
+    await flushPromises();
+    expect(wrapper.findAll(".lease-calendar-cell.is-selected")).toHaveLength(0);
 
-    const dateInputs = wrapper.findAll('input[type="datetime-local"]');
     await dateInputs[0].setValue("");
     await dateInputs[1].setValue("");
+    await flushPromises();
+    await wrapper.findAll(".lease-calendar-tabs button")[0].trigger("click");
     await flushPromises();
     const selectableCells = wrapper.findAll(".lease-calendar-cell:not(:disabled)");
     await selectableCells[0].trigger("click");
@@ -179,6 +194,48 @@ describe("UserLeaseCreateView", () => {
       expires_at: new Date("2027-01-01T04:00").toISOString(),
     });
     expect(routerPush).toHaveBeenCalledWith("/dashboard/leases");
+  });
+
+  it("shows the signed-in user's existing leases even when expired", async () => {
+    listUserLeaseAvailability.mockResolvedValue({ leases: [] });
+    listUserLeases.mockResolvedValue({
+      leases: [
+        {
+          lease: {
+            id: "lease-expired-own",
+            user_id: "user-demo",
+            session_id: null,
+            board_id: "rk3568-old",
+            board_type: "rk3568",
+            required_tags: [],
+            state: "expired",
+            created_at: "2025-01-01T00:00:00Z",
+            updated_at: "2025-01-02T00:00:00Z",
+            starts_at: "2025-01-01T00:00:00Z",
+            expires_at: "2025-01-02T00:00:00Z",
+            released_at: null,
+            failure_message: null,
+          },
+          session: null,
+        },
+      ],
+    });
+
+    await seedUser();
+    const UserLeaseCreateView = (await import("./UserLeaseCreateView.vue")).default;
+    const wrapper = mount(UserLeaseCreateView);
+    await flushPromises();
+
+    expect(listUserLeases).toHaveBeenCalled();
+    expect(wrapper.text()).toContain("已有租赁");
+    expect(wrapper.text()).toContain("1 条");
+    expect(wrapper.text()).toContain("rk3568-old");
+    expect(wrapper.text()).toContain("已过期");
+    expect(wrapper.find(".lease-calendar-reservation").exists()).toBe(true);
+
+    await wrapper.find(".lease-calendar-reservation").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("2025");
   });
 
   it("marks other users' occupied slots as unavailable", async () => {

@@ -34,13 +34,14 @@ const loading = ref(true);
 const submitting = ref(false);
 const boardTypes = ref<BoardTypeSummary[]>([]);
 const leases = ref<LeaseResponse[]>([]);
+const userLeases = ref<LeaseResponse[]>([]);
 const selectedBoardType = ref("");
 const requiredTags = ref("");
 const calendarView = ref<CalendarViewMode>("month");
 const calendarCursorIso = ref(new Date().toISOString());
 const form = ref({
-  starts_at: toDatetimeLocal(new Date().toISOString()),
-  expires_at: defaultExpiresAt(),
+  starts_at: "",
+  expires_at: "",
 });
 
 const selectedBoard = computed(() =>
@@ -51,6 +52,12 @@ const selectedBoardLeases = computed(() =>
     .filter((item) => item.lease.board_type === selectedBoardType.value && item.lease.state === "active")
     .sort((left, right) => new Date(left.lease.starts_at).getTime() - new Date(right.lease.starts_at).getTime()),
 );
+const selectedOwnBoardLeases = computed(() =>
+  userLeases.value
+    .filter((item) => item.lease.board_type === selectedBoardType.value)
+    .sort((left, right) => new Date(left.lease.starts_at).getTime() - new Date(right.lease.starts_at).getTime()),
+);
+const visibleOwnBoardLeases = computed(() => selectedOwnBoardLeases.value.slice(0, 8));
 const selectedWindowConflict = computed(() =>
   selectedBoardLeases.value.find((item) =>
     windowsOverlap(
@@ -97,12 +104,6 @@ const calendarPeriodLabel = computed(() => {
   return `${formatMonth(first.startIso)} ~ ${formatMonth(last.startIso)}`;
 });
 
-function defaultExpiresAt() {
-  const date = new Date();
-  date.setHours(date.getHours() + 2);
-  return toDatetimeLocal(date.toISOString());
-}
-
 function leasesForRange(startIso: string, endIso: string) {
   return selectedBoardLeases.value.filter((item) =>
     windowsOverlap(item.lease.starts_at, item.lease.expires_at, startIso, endIso),
@@ -138,7 +139,7 @@ function slotOverlapsSelected(slot: CalendarSlot) {
 }
 
 function slotIsSelectable(slot: CalendarSlot) {
-  return !slotIsDisabled(slot);
+  return calendarView.value === "hour" && !slotIsDisabled(slot);
 }
 
 function selectCalendarSlot(slot: CalendarSlot) {
@@ -303,6 +304,32 @@ function userLabel(item: LeaseResponse) {
   return isMyLease(item) ? "我的租赁" : "已占用";
 }
 
+function focusLeaseReservation(item: LeaseResponse) {
+  calendarCursorIso.value = item.lease.starts_at;
+}
+
+function leaseTimingLabel(item: LeaseResponse) {
+  if (item.lease.state === "released") {
+    return "已释放";
+  }
+  if (item.lease.state === "failed") {
+    return "失败";
+  }
+  if (item.lease.state === "releasing") {
+    return "释放中";
+  }
+  const now = Date.now();
+  const startsAt = new Date(item.lease.starts_at).getTime();
+  const expiresAt = new Date(item.lease.expires_at).getTime();
+  if (item.lease.state === "expired" || expiresAt <= now) {
+    return "已过期";
+  }
+  if (startsAt <= now) {
+    return "进行中";
+  }
+  return "待开始";
+}
+
 function parseRequiredTags() {
   return requiredTags.value
     .split(",")
@@ -313,12 +340,14 @@ function parseRequiredTags() {
 async function loadData() {
   loading.value = true;
   try {
-    const [types, leaseList] = await Promise.all([
+    const [types, availabilityList, userLeaseList] = await Promise.all([
       api.public.listBoardTypes(),
       api.user.listUserLeaseAvailability(),
+      api.user.listUserLeases(),
     ]);
     boardTypes.value = types;
-    leases.value = leaseList.leases;
+    leases.value = availabilityList.leases;
+    userLeases.value = userLeaseList.leases;
     if (!selectedBoardType.value && types.length > 0) {
       selectedBoardType.value = types[0].board_type;
     }
@@ -469,7 +498,7 @@ onMounted(() => {
             <div class="form-section">
               <div class="form-section-header">
                 <span class="form-section-icon info"><Icon name="clipboard" :size="16" /></span>
-                <h4>租赁配置</h4>
+                <h4>新增租赁</h4>
               </div>
 
               <div class="form-grid">
@@ -509,6 +538,33 @@ onMounted(() => {
                 <p v-else-if="selectedWindowConflict" class="field-error form-grid-wide">
                   所选时间段已被占用：{{ formatDateTime(selectedWindowConflict.lease.starts_at) }} ~ {{ formatDateTime(selectedWindowConflict.lease.expires_at) }}
                 </p>
+              </div>
+            </div>
+
+            <div v-if="!loading && selectedBoard" class="form-section lease-calendar-reservations">
+              <div class="form-section-header has-trailing-control">
+                <span class="form-section-icon info"><Icon name="clipboard" :size="16" /></span>
+                <h4>已有租赁</h4>
+                <span class="form-section-toggle lease-calendar-reservation-count">{{ selectedOwnBoardLeases.length }} 条</span>
+              </div>
+              <div v-if="selectedOwnBoardLeases.length" class="lease-calendar-reservation-list">
+                <button
+                  v-for="item in visibleOwnBoardLeases"
+                  :key="item.lease.id"
+                  type="button"
+                  class="lease-calendar-reservation"
+                  @click="focusLeaseReservation(item)"
+                >
+                  <span class="lease-calendar-reservation-time">
+                    {{ formatDateTime(item.lease.starts_at) }} ~ {{ formatDateTime(item.lease.expires_at) }}
+                  </span>
+                  <span class="lease-calendar-reservation-user">{{ item.lease.board_id }}</span>
+                  <span class="lease-calendar-reservation-state">{{ leaseTimingLabel(item) }}</span>
+                </button>
+              </div>
+              <div v-else class="empty-state compact">
+                <Icon name="clipboard" :size="22" />
+                <span>暂无已有租赁</span>
               </div>
             </div>
           </section>

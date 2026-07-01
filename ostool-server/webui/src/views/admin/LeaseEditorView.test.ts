@@ -67,6 +67,16 @@ function makeUser(): AdminUserResponse {
   };
 }
 
+function makeOtherUser(): AdminUserResponse {
+  return {
+    ...makeUser(),
+    id: "u-2",
+    username: "bob",
+    display_name: "Bob",
+    email: "bob@example.com",
+  };
+}
+
 function makeBoard(id = "board-1"): BoardConfig {
   return {
     id,
@@ -122,6 +132,27 @@ function makeLongLease(): LeaseResponse {
   };
 }
 
+function makeExpiredOtherLease(): LeaseResponse {
+  return {
+    lease: {
+      id: "lease-expired-other",
+      user_id: "u-2",
+      session_id: null,
+      board_id: "board-1",
+      board_type: "rk3568",
+      required_tags: [],
+      state: "expired",
+      created_at: "2025-12-01T00:00:00Z",
+      updated_at: "2025-12-02T00:00:00Z",
+      starts_at: "2025-12-01T00:00:00Z",
+      expires_at: "2025-12-02T00:00:00Z",
+      released_at: null,
+      failure_message: null,
+    },
+    session: null,
+  };
+}
+
 function datetimeLocalAfter(hours: number) {
   const date = new Date(Date.now() + hours * 60 * 60 * 1000);
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
@@ -136,8 +167,8 @@ describe("LeaseEditorView", () => {
     };
     [listAdminLeases, createAdminLease, updateAdminLease, listAdminUsers, listBoards, routerPush, routerReplace, uiStore.setError, uiStore.setSuccess]
       .forEach((fn) => fn.mockReset());
-    listAdminLeases.mockResolvedValue({ leases: [makeLease(), makeLongLease()] });
-    listAdminUsers.mockResolvedValue({ users: [makeUser()] });
+    listAdminLeases.mockResolvedValue({ leases: [makeExpiredOtherLease(), makeLease(), makeLongLease()] });
+    listAdminUsers.mockResolvedValue({ users: [makeUser(), makeOtherUser()] });
     listBoards.mockResolvedValue([makeBoard("board-1"), makeBoard("board-2")]);
     createAdminLease.mockResolvedValue(makeLease());
     updateAdminLease.mockResolvedValue(makeLease());
@@ -151,8 +182,8 @@ describe("LeaseEditorView", () => {
     expect(wrapper.text()).not.toContain("返回列表");
     expect(wrapper.text()).toContain("取消");
     expect(wrapper.text()).toContain("预约占用情况");
-    expect(wrapper.text()).toContain("租赁配置");
-    expect(wrapper.text()).toContain("预约时间");
+    expect(wrapper.text()).toContain("新增租赁");
+    expect(wrapper.text()).not.toContain("预约时间");
     expect(wrapper.text()).toContain("时");
     expect(wrapper.text()).toContain("日");
     expect(wrapper.text()).toContain("月");
@@ -160,7 +191,42 @@ describe("LeaseEditorView", () => {
     expect(wrapper.findAll("select")[0].text()).toContain("board-1");
     expect(wrapper.findAll("select")[1].text()).toContain("Alice");
     expect(wrapper.find(".lease-calendar-month").exists()).toBe(true);
+    const now = new Date();
+    const currentRangeStart = new Date(now.getFullYear(), now.getMonth() - 12, 1).toLocaleDateString("zh-CN", {
+      year: "numeric",
+      month: "long",
+    });
+    const currentRangeEnd = new Date(now.getFullYear(), now.getMonth() + 12, 1).toLocaleDateString("zh-CN", {
+      year: "numeric",
+      month: "long",
+    });
+    expect(wrapper.text()).toContain(`${currentRangeStart} ~ ${currentRangeEnd}`);
     const dateInputs = wrapper.findAll('input[type="datetime-local"]');
+    expect((dateInputs[0].element as HTMLInputElement).value).toBe("");
+    expect((dateInputs[1].element as HTMLInputElement).value).toBe("");
+    expect(wrapper.text()).toContain("已有租赁");
+    expect(wrapper.text()).toContain("3 条");
+    expect(wrapper.find(".lease-calendar-panel .lease-calendar-reservations").exists()).toBe(false);
+    expect(wrapper.find(".lease-config-panel .lease-calendar-reservations").exists()).toBe(true);
+    const sectionTitles = wrapper.findAll(".lease-config-panel .form-section-header h4").map((item) => item.text());
+    expect(sectionTitles).toEqual(["新增租赁", "已有租赁"]);
+    expect(wrapper.findAll(".lease-calendar-reservation")).toHaveLength(3);
+    expect(wrapper.text()).toContain("2026/12/1");
+    expect(wrapper.text()).toContain("Alice / alice");
+    expect(wrapper.text()).toContain("Bob / bob");
+    expect(wrapper.text()).toContain("已过期");
+    const bobReservation = wrapper.findAll(".lease-calendar-reservation").find((item) => item.text().includes("Bob / bob"));
+    expect(bobReservation).toBeTruthy();
+    await bobReservation!.trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".lease-calendar-event").text()).toContain("Bob / bob");
+    expect(wrapper.find(".lease-calendar-event").classes()).not.toContain("is-conflicting");
+
+    const longReservation = wrapper.findAll(".lease-calendar-reservation").find((item) => item.text().includes("2026/12/1"));
+    expect(longReservation).toBeTruthy();
+    await longReservation!.trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("2026/12/1");
     await dateInputs[0].setValue("2026-01-01T01:00");
     await dateInputs[1].setValue("2026-01-01T02:00");
     await flushPromises();

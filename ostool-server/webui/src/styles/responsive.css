@@ -118,6 +118,13 @@
   .resources-stats {
     grid-template-columns: repeat(2, 1fr);
   }
+  .lease-calendar-reservation {
+    grid-template-columns: 1fr;
+    gap: .25rem;
+  }
+  .lease-calendar-reservation-state {
+    justify-self: start;
+  }
   .admin-toolbar,
   .admin-toolbar-left,
   .admin-toolbar-right,

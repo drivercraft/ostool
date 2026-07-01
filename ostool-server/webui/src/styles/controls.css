@@ -489,6 +489,92 @@ textarea:disabled {
   flex: 0 0 auto;
   padding-top: .35rem;
 }
+.lease-calendar-reservations {
+  display: grid;
+  gap: .55rem;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.lease-calendar-reservation-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  color: var(--c-text-soft);
+  font-size: .82rem;
+}
+.lease-calendar-reservation-head strong {
+  color: var(--c-text);
+}
+.lease-calendar-reservation-head span {
+  color: var(--c-text-muted);
+  font-weight: 700;
+}
+.lease-calendar-reservation-count {
+  color: var(--c-text-muted);
+  font-size: .78rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.lease-time-grid {
+  margin-top: 1rem;
+}
+.lease-calendar-reservation-list {
+  display: grid;
+  gap: .45rem;
+  max-height: 172px;
+  overflow: auto;
+  padding-right: .25rem;
+}
+.lease-calendar-reservation {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(96px, auto) auto;
+  align-items: center;
+  gap: .6rem;
+  min-width: 0;
+  min-height: 36px;
+  padding: .42rem .55rem;
+  border: 1px solid var(--c-border-light);
+  border-left: 3px solid var(--c-brand);
+  border-radius: var(--radius-xs);
+  background: var(--c-surface);
+  color: var(--c-text-soft);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+.lease-calendar-reservation:hover {
+  border-color: var(--c-brand-soft);
+  background: var(--c-brand-tint);
+  color: var(--c-text);
+}
+.lease-calendar-reservation.is-conflicting {
+  border-left-color: var(--c-danger);
+  background: var(--c-danger-bg);
+}
+.lease-calendar-reservation-time,
+.lease-calendar-reservation-user {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lease-calendar-reservation-time {
+  font-size: .78rem;
+  font-weight: 700;
+}
+.lease-calendar-reservation-user {
+  color: var(--c-text-muted);
+  font-size: .75rem;
+}
+.lease-calendar-reservation-state {
+  justify-self: end;
+  color: var(--c-brand);
+  font-size: .72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
 .lease-calendar-shell {
   flex: 1 1 0;
   min-height: 0;
@@ -1070,6 +1156,15 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   font-size: .92rem;
   font-weight: 600;
   line-height: 1.6;
+}
+.empty-state.compact {
+  min-height: 68px;
+  padding: .85rem;
+  gap: .45rem;
+  font-size: .82rem;
+}
+.empty-state.compact::before {
+  content: none;
 }
 .empty-state:not(:has(.empty-state-icon, .spinner))::before,
 .empty-state-icon {

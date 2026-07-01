@@ -56,6 +56,12 @@ const selectedBoardLeases = computed(() =>
     .filter((item) => item.lease.board_id === form.value.board_id && item.lease.state === "active")
     .sort((left, right) => new Date(left.lease.starts_at).getTime() - new Date(right.lease.starts_at).getTime()),
 );
+const selectedBoardLeaseRecords = computed(() =>
+  leases.value
+    .filter((item) => item.lease.board_id === form.value.board_id)
+    .sort((left, right) => new Date(left.lease.starts_at).getTime() - new Date(right.lease.starts_at).getTime()),
+);
+const visibleBoardLeases = computed(() => selectedBoardLeaseRecords.value.slice(0, 8));
 const selectedWindowConflicts = computed(() => {
   if (!form.value.starts_at || !form.value.expires_at) {
     return [];
@@ -121,17 +127,13 @@ function dateKey(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
-function defaultStartsAt() {
-  return toDatetimeLocal(new Date().toISOString());
-}
-
 function defaultExpiresAt(startsAt: string) {
   const startTime = startsAt ? new Date(startsAt).getTime() : Date.now();
   return toDatetimeLocal(new Date(startTime + 60 * 60 * 1000).toISOString());
 }
 
 function leasesForRange(startIso: string, endIso: string) {
-  return selectedBoardLeases.value.filter((item) =>
+  return selectedBoardLeaseRecords.value.filter((item) =>
     windowsOverlap(item.lease.starts_at, item.lease.expires_at, startIso, endIso),
   );
 }
@@ -269,7 +271,9 @@ function slotOverlapsSelected(slot: CalendarSlot) {
 }
 
 function blockingLeasesForSlot(slot: CalendarSlot) {
-  return slot.leases.filter((item) => item.lease.id !== editingLeaseId.value);
+  return slot.leases.filter((item) =>
+    item.lease.state === "active" && item.lease.id !== editingLeaseId.value,
+  );
 }
 
 function slotIsOccupied(slot: CalendarSlot) {
@@ -355,6 +359,32 @@ function userLabel(userId: string) {
 
 function isConflictLease(item: LeaseResponse) {
   return selectedWindowConflicts.value.some((conflict) => conflict.lease.id === item.lease.id);
+}
+
+function focusLeaseReservation(item: LeaseResponse) {
+  calendarCursorIso.value = item.lease.starts_at;
+}
+
+function leaseTimingLabel(item: LeaseResponse) {
+  if (item.lease.state === "released") {
+    return "已释放";
+  }
+  if (item.lease.state === "failed") {
+    return "失败";
+  }
+  if (item.lease.state === "releasing") {
+    return "释放中";
+  }
+  const now = Date.now();
+  const startsAt = new Date(item.lease.starts_at).getTime();
+  const expiresAt = new Date(item.lease.expires_at).getTime();
+  if (item.lease.state === "expired" || expiresAt <= now) {
+    return "已过期";
+  }
+  if (startsAt <= now) {
+    return "进行中";
+  }
+  return "待开始";
 }
 
 function fillFormFromLease(item: LeaseResponse) {
@@ -475,9 +505,8 @@ watch(
 );
 
 onMounted(() => {
-  const startsAt = defaultStartsAt();
-  form.value.starts_at = startsAt;
-  form.value.expires_at = defaultExpiresAt(startsAt);
+  form.value.starts_at = "";
+  form.value.expires_at = "";
   form.value.failure_message = "";
   void loadData();
 });
@@ -579,7 +608,7 @@ onMounted(() => {
             <div class="form-section">
               <div class="form-section-header">
                 <span class="form-section-icon info"><Icon name="clipboard" :size="16" /></span>
-                <h4>租赁配置</h4>
+                <h4>{{ editing ? "编辑租赁" : "新增租赁" }}</h4>
               </div>
 
               <div class="form-grid">
@@ -622,15 +651,8 @@ onMounted(() => {
                   />
                 </label>
               </div>
-            </div>
 
-            <div class="form-section">
-              <div class="form-section-header">
-                <span class="form-section-icon boot"><Icon name="pulse" :size="16" /></span>
-                <h4>预约时间</h4>
-              </div>
-
-              <div class="form-grid two-columns">
+              <div class="form-grid two-columns lease-time-grid">
                 <label class="field is-required">
                   <span>开始时间</span>
                   <input v-model="form.starts_at" type="datetime-local" />
@@ -647,6 +669,34 @@ onMounted(() => {
               <p v-else class="field-hint">
                 当前时间段可预约，预计使用 {{ selectedDurationLabel() }}。
               </p>
+            </div>
+
+            <div v-if="!loading && selectedBoard" class="form-section lease-calendar-reservations">
+              <div class="form-section-header has-trailing-control">
+                <span class="form-section-icon info"><Icon name="clipboard" :size="16" /></span>
+                <h4>已有租赁</h4>
+                <span class="form-section-toggle lease-calendar-reservation-count">{{ selectedBoardLeaseRecords.length }} 条</span>
+              </div>
+              <div v-if="selectedBoardLeaseRecords.length" class="lease-calendar-reservation-list">
+                <button
+                  v-for="item in visibleBoardLeases"
+                  :key="item.lease.id"
+                  type="button"
+                  class="lease-calendar-reservation"
+                  :class="{ 'is-conflicting': isConflictLease(item) }"
+                  @click="focusLeaseReservation(item)"
+                >
+                  <span class="lease-calendar-reservation-time">
+                    {{ formatDateTime(item.lease.starts_at) }} ~ {{ formatDateTime(item.lease.expires_at) }}
+                  </span>
+                  <span class="lease-calendar-reservation-user">{{ userLabel(item.lease.user_id) }}</span>
+                  <span class="lease-calendar-reservation-state">{{ leaseTimingLabel(item) }}</span>
+                </button>
+              </div>
+              <div v-else class="empty-state compact">
+                <Icon name="clipboard" :size="22" />
+                <span>暂无已有租赁</span>
+              </div>
             </div>
           </section>
         </div>
