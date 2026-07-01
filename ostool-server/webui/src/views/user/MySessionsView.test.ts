@@ -95,7 +95,6 @@ describe("MySessionsView", () => {
     const wrapper = mount(MySessionsView);
     await flushPromises();
 
-    expect(wrapper.text()).toContain("租约会话");
     expect(wrapper.text()).toContain("当前会话");
     expect(wrapper.text()).toContain("rk3568-1");
     expect(wrapper.text()).toContain("session-2");

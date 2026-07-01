@@ -54,10 +54,7 @@ onMounted(() => {
 <template>
   <section class="page-grid">
     <div class="panel">
-      <div class="panel-heading">
-        <div>
-          <h3>TFTP 配置与状态</h3>
-        </div>
+      <div class="panel-heading panel-heading--actions-only">
         <div class="toolbar-actions">
           <button class="btn btn-ghost" @click="loadTftp">刷新</button>
           <button class="btn btn-ghost" :disabled="reconciling" @click="reconcile">

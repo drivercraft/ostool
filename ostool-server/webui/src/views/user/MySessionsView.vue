@@ -31,11 +31,7 @@ onMounted(() => {
 
 <template>
   <section class="dashboard-rentals-section card">
-    <div class="panel-heading compact dashboard-section-heading">
-      <div>
-        <h3>租约会话</h3>
-        <p class="muted">查看当前已经启动的租赁会话。</p>
-      </div>
+    <div class="panel-heading compact dashboard-section-heading panel-heading--actions-only">
       <div class="dashboard-form-actions">
         <RouterLink class="btn btn-ghost btn-sm" to="/dashboard/leases">
           <Icon name="clipboard" :size="14" class="btn-icon" />

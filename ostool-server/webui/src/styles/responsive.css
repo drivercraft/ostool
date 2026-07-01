@@ -228,7 +228,6 @@
   .modal-body-grid {
     grid-template-columns: 1fr;
   }
-  .admin-editor-header,
   .role-permission-section-head,
   .admin-editor-actions {
     align-items: stretch;

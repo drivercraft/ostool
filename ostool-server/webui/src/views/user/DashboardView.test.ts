@@ -109,7 +109,6 @@ describe("DashboardView", () => {
 
     expect(listUserLeases).toHaveBeenCalled();
     expect(wrapper.text()).toContain("Demo");
-    expect(wrapper.text()).toContain("工作台");
     expect(wrapper.text()).toContain("我的租赁");
     expect(wrapper.text()).toContain("当前会话");
     expect(wrapper.text()).toContain("账户信息");

@@ -355,14 +355,6 @@ onMounted(() => {
 <template>
   <section class="page-grid user-lease-create-page">
     <div class="admin-editor-panel panel">
-      <div class="admin-editor-header">
-        <div>
-          <h3>申请租赁</h3>
-          <p class="muted">选择开发板型号和租赁时间，已被占用的时间段会在日历中标出。</p>
-        </div>
-        <RouterLink class="btn btn-ghost btn-sm" to="/resources">返回资源</RouterLink>
-      </div>
-
       <form class="admin-editor-form" @submit.prevent="createLease">
         <div class="admin-editor-body lease-editor-scroll">
           <section class="lease-calendar-panel">

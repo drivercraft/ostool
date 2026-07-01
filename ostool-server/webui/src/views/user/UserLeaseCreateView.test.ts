@@ -134,7 +134,8 @@ describe("UserLeaseCreateView", () => {
     const wrapper = mount(UserLeaseCreateView);
     await flushPromises();
 
-    expect(wrapper.text()).toContain("申请租赁");
+    expect(wrapper.text()).not.toContain("返回资源");
+    expect(wrapper.text()).toContain("取消");
     expect(wrapper.find(".lease-calendar-month").exists()).toBe(true);
     expect((wrapper.find("select").element as HTMLSelectElement).value).toBe("rk3568");
     await wrapper.findAll(".lease-calendar-tabs button")[0].trigger("click");

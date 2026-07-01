@@ -390,14 +390,6 @@ watch(
   >
     <template v-if="editing">
       <div class="admin-editor-panel panel">
-        <div class="admin-editor-header">
-          <div>
-            <h3>{{ selectedRole ? "编辑角色" : "新建角色" }}</h3>
-            <p class="muted">配置角色基础信息，并为该角色勾选可访问的功能权限。</p>
-          </div>
-          <button class="btn btn-ghost btn-sm" type="button" @click="cancelEdit">返回列表</button>
-        </div>
-
         <form class="admin-editor-form" @submit.prevent="saveRole">
           <div class="admin-editor-body">
             <div class="role-basic-fields">
@@ -435,7 +427,6 @@ watch(
               <div class="role-permission-section-head">
                 <div>
                   <h4>功能模块</h4>
-                  <p class="muted">按模块勾选权限，保存后立即影响该角色下的用户访问范围。</p>
                 </div>
                 <span class="muted">已选择 {{ form.permission_ids.length }} / {{ permissions.length }}</span>
               </div>

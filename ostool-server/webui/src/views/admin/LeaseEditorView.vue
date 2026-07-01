@@ -471,16 +471,6 @@ onMounted(() => {
 <template>
   <section class="page-grid admin-editor-page lease-editor-page">
     <div class="admin-editor-panel panel">
-      <div class="admin-editor-header">
-        <div>
-          <h3>{{ editing ? "编辑租赁" : "新增租赁" }}</h3>
-          <p class="muted">
-            {{ editing ? "查看当前开发板预约情况，并调整租赁时间段。" : "选择开发板后查看已预约时段，再填写租赁用户和时间段。" }}
-          </p>
-        </div>
-        <RouterLink class="btn btn-ghost btn-sm" to="/admin/rentals/leases">返回列表</RouterLink>
-      </div>
-
       <form class="admin-editor-form" @submit.prevent="saveLease">
         <div class="admin-editor-body lease-editor-scroll">
           <section class="lease-calendar-panel">

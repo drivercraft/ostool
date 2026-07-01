@@ -97,11 +97,31 @@ describe("ServerView", () => {
 
     expect(getServerConfig).toHaveBeenCalledTimes(1);
     expect(listNetworkInterfaces).toHaveBeenCalledTimes(1);
+    expect(wrapper.find('[role="tablist"][aria-label="系统设置标签"]').exists()).toBe(true);
+    expect(wrapper.findAll('[role="tab"]').map((tab) => tab.text())).toEqual([
+      "站点信息",
+      "账号与租赁",
+      "网络与上传",
+      "只读信息",
+    ]);
+    expect(wrapper.text()).not.toContain("按配置类型切换不同设置项");
     expect(wrapper.text()).toContain("DTB 上传上限");
     expect(wrapper.text()).toContain("10 MiB");
 
+    await wrapper.findAll('[role="tab"]')[2].trigger("click");
+    await flushPromises();
+    expect(wrapper.find("#settings-panel-runtime").attributes("hidden")).toBeUndefined();
+
     const numberInputs = wrapper.findAll('input[type="number"]');
     const numberInput = numberInputs[numberInputs.length - 1];
+    await numberInput.setValue("32");
+    expect((numberInput.element as HTMLInputElement).value).toBe("32");
+
+    const resetButton = wrapper.findAll("button").find((button) => button.text() === "恢复默认");
+    await resetButton!.trigger("click");
+    await flushPromises();
+    expect((numberInput.element as HTMLInputElement).value).toBe("64");
+
     await numberInput.setValue("32");
 
     const saveButton = wrapper.findAll("button").find((button) => button.text() === "保存配置");

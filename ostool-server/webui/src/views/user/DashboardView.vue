@@ -27,7 +27,6 @@ onMounted(() => {
     <section class="dashboard-welcome">
       <div>
         <h2>你好，{{ auth.user?.display_name ?? auth.user?.username }}</h2>
-        <p class="public-page-subtitle">这里是你的开发板租赁工作台，可以快速查看账户、租赁和会话状态。</p>
       </div>
       <div class="dashboard-kpis">
         <div>

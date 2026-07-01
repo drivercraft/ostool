@@ -30,14 +30,6 @@ onMounted(() => {
 
 <template>
   <div class="space-y-6">
-    <!-- Header -->
-    <div class="flex items-center justify-between">
-      <div>
-        <h2 class="text-xl font-bold">运行状态</h2>
-        <p class="text-sm muted" style="margin-top: .15rem">平台当前资源与健康度总览</p>
-      </div>
-    </div>
-
     <div v-if="loading" class="card loading-block">
       <div class="spinner" />
       <p>正在加载总览信息...</p>

@@ -61,7 +61,6 @@ describe("AccountView", () => {
     const wrapper = mount(AccountView);
     await flushPromises();
 
-    expect(wrapper.text()).toContain("账户信息");
     expect(wrapper.text()).toContain("基本资料");
     expect(wrapper.text()).toContain("账号安全");
     expect(wrapper.text()).toContain("demo");

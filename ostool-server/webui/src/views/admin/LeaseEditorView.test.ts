@@ -142,7 +142,8 @@ describe("LeaseEditorView", () => {
     const wrapper = mount(LeaseEditorView);
     await flushPromises();
 
-    expect(wrapper.text()).toContain("新增租赁");
+    expect(wrapper.text()).not.toContain("返回列表");
+    expect(wrapper.text()).toContain("取消");
     expect(wrapper.text()).toContain("预约占用情况");
     expect(wrapper.text()).toContain("租赁配置");
     expect(wrapper.text()).toContain("预约时间");
@@ -217,7 +218,8 @@ describe("LeaseEditorView", () => {
     const wrapper = mount(LeaseEditorView);
     await flushPromises();
 
-    expect(wrapper.text()).toContain("编辑租赁");
+    expect(wrapper.text()).not.toContain("返回列表");
+    expect(wrapper.text()).toContain("取消");
     expect((wrapper.findAll("select")[0].element as HTMLSelectElement).disabled).toBe(true);
     expect((wrapper.findAll("select")[1].element as HTMLSelectElement).disabled).toBe(true);
 

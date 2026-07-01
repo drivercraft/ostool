@@ -72,13 +72,6 @@ onMounted(() => {
 
 <template>
   <section class="dashboard-account-card card">
-    <div class="panel-heading compact dashboard-section-heading">
-      <div>
-        <h3>账户信息</h3>
-        <p class="muted">当前登录账户的资料与安全设置。</p>
-      </div>
-    </div>
-
     <section class="dashboard-account-section">
       <div class="form-section-header">
         <span class="form-section-icon info"><Icon name="user" :size="16" /></span>

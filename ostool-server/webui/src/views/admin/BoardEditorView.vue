@@ -695,14 +695,6 @@ onMounted(() => {
 <template>
   <section class="page-grid admin-editor-page">
     <div class="admin-editor-panel panel board-editor-page">
-      <div class="admin-editor-header">
-        <div>
-          <h3>{{ isEditing ? "编辑开发板" : "新建开发板" }}</h3>
-          <p class="muted">维护开发板基础信息、串口、电源与启动配置。</p>
-        </div>
-        <RouterLink class="btn btn-ghost btn-sm" to="/admin/resources/boards">返回列表</RouterLink>
-      </div>
-
       <div v-if="loading" class="empty-state">
         <div class="empty-state-icon">&#9641;</div>
         正在加载开发板配置...

@@ -104,7 +104,6 @@ describe("MyLeasesView", () => {
     const wrapper = mount(MyLeasesView);
     await flushPromises();
 
-    expect(wrapper.text()).toContain("我的租赁");
     expect(wrapper.text()).toContain("我的预约日历");
     expect(wrapper.text()).toContain("租赁情况");
     expect(wrapper.text()).toContain("rk3568-1");

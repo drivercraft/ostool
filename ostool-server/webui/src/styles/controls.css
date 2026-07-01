@@ -176,6 +176,66 @@
 }
 .panel-heading.compact { margin-bottom: .85rem; }
 .panel-heading.compact h3 { font-size: 1rem; }
+.panel-heading--actions-only {
+  justify-content: flex-end;
+}
+
+.tab-list {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--c-border-light);
+}
+.tab-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  min-height: var(--control-h);
+  padding: 0 1.05rem;
+  margin-bottom: -1px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: transparent;
+  color: var(--c-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: .9rem;
+  font-weight: 700;
+  transition: background-color .16s ease, border-color .16s ease, color .16s ease;
+}
+.tab-button:hover {
+  color: var(--c-text);
+  background: var(--control-hover-bg);
+}
+.tab-button.is-active,
+.tab-button.active {
+  z-index: 1;
+  color: var(--c-brand);
+  border-color: var(--c-border-light);
+  background: var(--c-surface);
+}
+.tab-button.is-active::after,
+.tab-button.active::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  background: var(--c-surface);
+}
+.tab-title {
+  line-height: 1;
+}
+.tab-panel {
+  padding-top: var(--content-pad);
+}
+.tab-panel[hidden] {
+  display: none;
+}
 
 .section-title {
   font-size: 1.05rem;
@@ -231,6 +291,34 @@
 }
 .inline-control-row > .btn {
   flex: 0 0 auto;
+}
+.inline-field-group {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  min-width: 0;
+}
+.inline-field-group > input,
+.inline-field-group > select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.inline-field-group > .btn {
+  flex: 0 0 auto;
+}
+.check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: .6rem;
+  min-height: var(--control-h);
+  color: var(--c-text-soft);
+  font-size: .9rem;
+  font-weight: 600;
+}
+.check-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--c-brand);
 }
 .input,
 .field input,
