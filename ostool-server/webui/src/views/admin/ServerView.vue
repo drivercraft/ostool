@@ -223,7 +223,7 @@ onMounted(() => {
                 </label>
                 <label class="check-row">
                   <input v-model="config.site.self_service_enabled" type="checkbox" />
-                  <span>允许普通用户自助租赁</span>
+                  <span>允许注册用户自助租赁</span>
                 </label>
                 <label class="field">
                   <span>默认租赁时长（分钟）</span>

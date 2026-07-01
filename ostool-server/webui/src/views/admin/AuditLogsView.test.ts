@@ -27,8 +27,8 @@ function makeAuditLog(overrides: Partial<AdminAuditLogResponse> = {}): AdminAudi
     id: "audit-1",
     actor_user_id: "user-1",
     actor_username: "alice",
-    action: "dtb.create",
-    target_type: "dtb_file",
+    action: "dtbs.create",
+    target_type: "dtbs",
     target_id: "demo.dtb",
     outcome: "success",
     ip_address: "127.0.0.1",
@@ -51,8 +51,8 @@ describe("AuditLogsView", () => {
         makeAuditLog({
           id: "audit-2",
           actor_username: "bob",
-          action: "user.reject",
-          target_type: "user",
+          action: "users.reject",
+          target_type: "users",
           target_id: "user-2",
           ip_address: "10.0.0.2",
           metadata: { username: "bob" },
@@ -96,7 +96,7 @@ describe("AuditLogsView", () => {
     await flushPromises();
 
     const actionSelect = wrapper.findAll(".filter-field select")[0];
-    await actionSelect.setValue("user.reject");
+    await actionSelect.setValue("users.reject");
     await flushPromises();
 
     const rows = wrapper.findAll("tbody tr.audit-row");

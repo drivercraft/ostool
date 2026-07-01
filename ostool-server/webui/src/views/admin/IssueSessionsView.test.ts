@@ -101,7 +101,7 @@ describe("IssueSessionsView", () => {
     const wrapper = mount(IssueSessionsView);
     await flushPromises();
 
-    expect(wrapper.find(".admin-toolbar-left").text()).toContain("刷新");
+    expect(wrapper.find(".admin-toolbar-left").text()).toBe("");
     expect(wrapper.find(".admin-toolbar-right .search-field").exists()).toBe(true);
     expect(wrapper.findAll(".admin-toolbar-right .filter-field")).toHaveLength(2);
     expect(wrapper.text()).toContain("串口无法连接");

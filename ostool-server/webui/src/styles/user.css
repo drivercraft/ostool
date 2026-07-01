@@ -119,13 +119,11 @@
   gap: var(--content-pad);
   width: 100%;
   box-sizing: border-box;
-  min-height: calc(100vh - var(--topbar-h));
-  padding: var(--page-block-pad) var(--page-inline-pad);
+  padding: var(--page-block-pad) var(--page-inline-pad) 1.5rem;
 }
 .user-lease-editor-panel {
   display: flex;
   flex-direction: column;
-  min-height: calc(100vh - var(--topbar-h) - var(--page-block-pad) - var(--page-block-pad));
   overflow: hidden;
   padding: 0;
   border: 0;
@@ -134,49 +132,40 @@
   box-shadow: none;
 }
 .user-lease-editor-form {
-  flex: 1 1 0;
   display: flex;
   flex-direction: column;
-  gap: var(--content-pad);
-  min-height: 0;
-  overflow: hidden;
+  gap: 1rem;
 }
 .user-lease-editor-body {
-  flex: 1 1 0;
   display: grid;
   align-content: start;
+  align-items: start;
   gap: var(--content-pad);
-  min-height: 0;
-  max-height: 100%;
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-  padding: 0 .5rem var(--content-pad) 0;
+  padding: 0;
 }
 .user-lease-editor-actions {
   flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   gap: .75rem;
-  padding: var(--content-pad) 0 0;
+  padding: 1rem 0 0;
   border-top: 1px solid var(--c-border-light);
 }
 .user-lease-editor-scroll {
   grid-template-columns: minmax(420px, 1.08fr) minmax(360px, .92fr);
-  grid-template-rows: minmax(0, 1fr);
-  align-content: stretch;
-  align-items: stretch;
+  align-items: start;
   column-gap: clamp(24px, 2.4vw, 40px);
   row-gap: var(--content-pad);
-  height: 100%;
-  overflow: hidden;
 }
 .user-lease-config-panel {
   min-width: 0;
-  min-height: 0;
 }
-.user-lease-config-panel {
-  overflow: auto;
+.user-lease-create-page .lease-calendar-panel {
+  height: auto;
+}
+.user-lease-create-page .lease-calendar-shell {
+  flex: 0 0 auto;
+  height: clamp(360px, 48vh, 560px);
 }
 .dashboard-page > section {
   scroll-margin-top: calc(var(--topbar-h) + 24px);

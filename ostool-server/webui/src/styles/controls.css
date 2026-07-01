@@ -244,6 +244,90 @@
 }
 
 /* ----------------------------- forms --------------------------------- */
+.form-grid {
+  display: grid;
+  gap: 1rem;
+}
+.form-grid.two-columns { grid-template-columns: 1fr 1fr; }
+.form-grid.three-columns { grid-template-columns: 1fr 1fr 1fr; }
+.form-section {
+  padding-top: 1.25rem;
+  margin-top: 1.25rem;
+}
+.form-section:first-of-type {
+  padding-top: 0;
+  margin-top: 0;
+}
+.form-section h4,
+.form-section-header h4 {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: .94rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.form-section > h4,
+.form-section-header {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  margin-bottom: .75rem;
+  padding: 0;
+  border: 0;
+}
+.form-section > h4::after,
+.form-section-header::after {
+  content: "";
+  flex: 1 1 auto;
+  min-width: 32px;
+  height: 1px;
+  background: var(--c-border-light);
+}
+.form-section-header.has-trailing-control {
+  justify-content: flex-start;
+}
+.form-section-header.has-trailing-control::after {
+  order: 1;
+}
+.form-section-title {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  min-width: 0;
+  flex: 0 0 auto;
+  order: 0;
+}
+.form-section-toggle {
+  flex: 0 0 auto;
+  order: 2;
+}
+.form-section-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+  font-size: .82rem;
+}
+.form-section-icon.serial,
+.form-section-icon.info {
+  background: var(--c-brand-ghost);
+  color: var(--c-brand);
+}
+.form-section-icon.power,
+.form-section-icon.password {
+  background: var(--c-warning-bg);
+  color: var(--c-warning);
+}
+.form-section-icon.boot,
+.form-section-icon.roles {
+  background: var(--c-violet-soft);
+  color: var(--c-violet);
+}
+
 .field,
 .form-group {
   display: flex;
@@ -598,7 +682,7 @@ textarea:disabled {
 }
 .lease-calendar-month {
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  grid-auto-rows: minmax(0, 1fr);
+  grid-template-rows: repeat(5, minmax(0, 1fr));
 }
 .lease-calendar-day {
   grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -607,7 +691,7 @@ textarea:disabled {
 }
 .lease-calendar-year {
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  grid-auto-rows: minmax(0, 1fr);
+  grid-template-rows: repeat(5, minmax(0, 1fr));
 }
 .lease-calendar-cell {
   position: relative;
@@ -1187,6 +1271,10 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
     linear-gradient(var(--c-text-ghost), var(--c-text-ghost)) center 18px / 20px 1.5px no-repeat,
     linear-gradient(var(--c-text-ghost), var(--c-text-ghost)) center 24px / 14px 1.5px no-repeat,
     var(--c-surface-2);
+}
+.empty-state.compact:not(:has(.empty-state-icon, .spinner))::before {
+  content: none;
+  display: none;
 }
 .empty-state .btn {
   margin-top: .25rem;

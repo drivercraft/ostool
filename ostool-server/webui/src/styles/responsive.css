@@ -112,6 +112,13 @@
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { position: fixed; left: -100%; width: var(--sidebar-w); z-index: 80; transition: left .25s ease; }
   .public-nav { display: none; }
+  .announcement-bar-inner {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .announcement-bar-toggle {
+    grid-column: 2;
+    justify-self: start;
+  }
   .stats-strip { grid-template-columns: repeat(2, 1fr); }
   .resources-page {
     gap: 1rem;

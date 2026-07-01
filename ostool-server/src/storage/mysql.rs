@@ -8,15 +8,16 @@ use uuid::Uuid;
 
 use crate::BoardConfig;
 use crate::storage::{
-    AuditLog, AuditLogRepository, AuthSession, AuthSessionRepository, BUILTIN_PERMISSIONS,
+    Announcement, AnnouncementKind, AnnouncementRepository, AnnouncementStatus, AuditLog,
+    AuditLogRepository, AuthSession, AuthSessionRepository, BUILTIN_PERMISSIONS,
     BoardConfigRepository, DtbMetadata, DtbMetadataRepository, IssueSession, IssueSessionPriority,
-    IssueSessionRepository, IssueSessionState, Lease, LeaseRepository, LeaseState, NewAuditLog,
-    NewIssueSession, NewLease, NewRole, NewSessionRecord, NewUser, Permission, RbacRepository,
-    Role, RuntimeSettings, RuntimeSettingsRepository, SessionRecord, SessionRecordRepository,
-    SiteSettingValue, SiteSettings, SiteSettingsRepository, UpsertDtbMetadata, User, UserProfile,
-    UserRepository, UserStatus, default_site_setting_rows, default_user_permission, parse_time,
-    runtime_settings_from_values, runtime_settings_to_values, site_settings_from_values,
-    site_settings_to_values,
+    IssueSessionRepository, IssueSessionState, Lease, LeaseRepository, LeaseState, NewAnnouncement,
+    NewAuditLog, NewIssueSession, NewLease, NewRole, NewSessionRecord, NewUser, Permission,
+    RbacRepository, Role, RuntimeSettings, RuntimeSettingsRepository, SessionRecord,
+    SessionRecordRepository, SiteSettingValue, SiteSettings, SiteSettingsRepository,
+    UpsertDtbMetadata, User, UserProfile, UserRepository, UserStatus, default_site_setting_rows,
+    default_user_permission, parse_time, runtime_settings_from_values, runtime_settings_to_values,
+    site_settings_from_values, site_settings_to_values,
 };
 
 #[derive(Clone)]
@@ -160,6 +161,28 @@ impl MysqlStorage {
                 INDEX idx_issue_sessions_created_at (created_at),
                 INDEX idx_issue_sessions_session_id (session_id),
                 FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS announcements (
+                id VARCHAR(64) PRIMARY KEY NOT NULL,
+                title VARCHAR(128) NOT NULL,
+                content TEXT NOT NULL,
+                kind VARCHAR(32) NOT NULL,
+                status VARCHAR(32) NOT NULL,
+                pinned TINYINT NOT NULL DEFAULT 0,
+                created_by VARCHAR(64),
+                updated_by VARCHAR(64),
+                published_at VARCHAR(64),
+                created_at VARCHAR(64) NOT NULL,
+                updated_at VARCHAR(64) NOT NULL,
+                INDEX idx_announcements_status (status),
+                INDEX idx_announcements_pinned_created_at (pinned, created_at)
             )
             "#,
         )
@@ -373,7 +396,7 @@ impl MysqlStorage {
 
         for (name, display_name, description, system) in [
             ("admin", "管理员", "拥有平台全部管理权限", 1),
-            ("user", "普通用户", "可登录平台并租赁开发板", 1),
+            ("user", "注册用户", "可登录平台并租赁开发板", 1),
         ] {
             sqlx::query(
                 r#"
@@ -785,6 +808,25 @@ fn issue_session_from_row(row: &sqlx::mysql::MySqlRow) -> anyhow::Result<IssueSe
             .try_get::<Option<String>, _>("resolved_at")?
             .map(|value| parse_time(&value))
             .transpose()?,
+    })
+}
+
+fn announcement_from_row(row: &sqlx::mysql::MySqlRow) -> anyhow::Result<Announcement> {
+    Ok(Announcement {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        content: row.try_get("content")?,
+        kind: AnnouncementKind::from_str(row.try_get::<String, _>("kind")?.as_str())?,
+        status: AnnouncementStatus::from_str(row.try_get::<String, _>("status")?.as_str())?,
+        pinned: row.try_get::<i8, _>("pinned")? != 0,
+        created_by: row.try_get("created_by")?,
+        updated_by: row.try_get("updated_by")?,
+        published_at: row
+            .try_get::<Option<String>, _>("published_at")?
+            .map(|value| parse_time(&value))
+            .transpose()?,
+        created_at: parse_time(row.try_get::<String, _>("created_at")?.as_str())?,
+        updated_at: parse_time(row.try_get::<String, _>("updated_at")?.as_str())?,
     })
 }
 
@@ -1442,6 +1484,121 @@ impl IssueSessionRepository for MysqlStorage {
     async fn delete_issue_session(&self, issue_id: &str) -> anyhow::Result<()> {
         sqlx::query("DELETE FROM issue_sessions WHERE id = ?")
             .bind(issue_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl AnnouncementRepository for MysqlStorage {
+    async fn create_announcement(
+        &self,
+        announcement: NewAnnouncement,
+    ) -> anyhow::Result<Announcement> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let published_at =
+            matches!(announcement.status, AnnouncementStatus::Published).then(|| now.to_rfc3339());
+        let updated_by = announcement.created_by.clone();
+        sqlx::query(
+            r#"
+            INSERT INTO announcements
+                (id, title, content, kind, status, pinned, created_by, updated_by, published_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&id)
+        .bind(announcement.title)
+        .bind(announcement.content)
+        .bind(announcement.kind.as_str())
+        .bind(announcement.status.as_str())
+        .bind(if announcement.pinned { 1_i8 } else { 0_i8 })
+        .bind(announcement.created_by)
+        .bind(updated_by)
+        .bind(published_at)
+        .bind(now.to_rfc3339())
+        .bind(now.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        self.find_announcement(&id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("created announcement `{id}` disappeared"))
+    }
+
+    async fn list_announcements(&self) -> anyhow::Result<Vec<Announcement>> {
+        let rows = sqlx::query("SELECT * FROM announcements ORDER BY pinned DESC, created_at DESC")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(announcement_from_row).collect()
+    }
+
+    async fn list_published_announcements(&self) -> anyhow::Result<Vec<Announcement>> {
+        let rows = sqlx::query(
+            "SELECT * FROM announcements WHERE status = 'published' ORDER BY pinned DESC, created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(announcement_from_row).collect()
+    }
+
+    async fn find_announcement(
+        &self,
+        announcement_id: &str,
+    ) -> anyhow::Result<Option<Announcement>> {
+        sqlx::query("SELECT * FROM announcements WHERE id = ?")
+            .bind(announcement_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .as_ref()
+            .map(announcement_from_row)
+            .transpose()
+    }
+
+    async fn update_announcement(
+        &self,
+        announcement_id: &str,
+        title: String,
+        content: String,
+        kind: AnnouncementKind,
+        status: AnnouncementStatus,
+        pinned: bool,
+        updated_by: Option<String>,
+    ) -> anyhow::Result<Option<Announcement>> {
+        let current = match self.find_announcement(announcement_id).await? {
+            Some(current) => current,
+            None => return Ok(None),
+        };
+        let now = Utc::now();
+        let published_at = if matches!(status, AnnouncementStatus::Published) {
+            current.published_at.or(Some(now))
+        } else {
+            None
+        };
+        sqlx::query(
+            r#"
+            UPDATE announcements
+            SET title = ?, content = ?, kind = ?, status = ?, pinned = ?, updated_by = ?, published_at = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(title)
+        .bind(content)
+        .bind(kind.as_str())
+        .bind(status.as_str())
+        .bind(if pinned { 1_i8 } else { 0_i8 })
+        .bind(updated_by)
+        .bind(published_at.map(|value| value.to_rfc3339()))
+        .bind(now.to_rfc3339())
+        .bind(announcement_id)
+        .execute(&self.pool)
+        .await?;
+        self.find_announcement(announcement_id).await
+    }
+
+    async fn delete_announcement(&self, announcement_id: &str) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM announcements WHERE id = ?")
+            .bind(announcement_id)
             .execute(&self.pool)
             .await?;
         Ok(())

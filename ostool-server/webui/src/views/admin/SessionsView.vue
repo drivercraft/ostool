@@ -248,9 +248,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
   <section class="page-grid admin-list-page">
     <div class="admin-table-panel">
       <div class="admin-toolbar">
-        <div class="admin-toolbar-left">
-          <button class="btn btn-ghost btn-sm" @click="loadSessions">刷新</button>
-        </div>
+        <div class="admin-toolbar-left"></div>
         <div class="admin-toolbar-right">
           <label class="search-field">
             <Icon name="search" :size="16" />

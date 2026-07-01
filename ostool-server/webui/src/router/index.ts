@@ -29,6 +29,7 @@ const LeaseEditorView = () => import("@/views/admin/LeaseEditorView.vue");
 const UsersView = () => import("@/views/admin/UsersView.vue");
 const RolesView = () => import("@/views/admin/RolesView.vue");
 const AuditLogsView = () => import("@/views/admin/AuditLogsView.vue");
+const AnnouncementsView = () => import("@/views/admin/AnnouncementsView.vue");
 const TftpView = () => import("@/views/admin/TftpView.vue");
 const ServerView = () => import("@/views/admin/ServerView.vue");
 
@@ -225,6 +226,12 @@ export const router = createRouter({
           name: "admin-issues",
           component: IssueSessionsView,
           meta: { title: "问题会话" },
+        },
+        {
+          path: "announcements",
+          name: "admin-announcements",
+          component: AnnouncementsView,
+          meta: { title: "公告管理" },
         },
         {
           path: "users",

@@ -3,7 +3,9 @@ import { computed, watch } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
 
 import AccountMenu from "@/components/AccountMenu.vue";
+import AnnouncementBar from "@/components/AnnouncementBar.vue";
 import AppDialog from "@/components/AppDialog.vue";
+import AppFooter from "@/components/AppFooter.vue";
 import Icon, { type IconName } from "@/components/Icon.vue";
 import ThemeMenu from "@/components/ThemeMenu.vue";
 import { useAuthStore } from "@/stores/auth";
@@ -84,6 +86,8 @@ function isWorkspaceActive(item: { to: string; exact: boolean }) {
       </div>
     </header>
 
+    <AnnouncementBar />
+
     <main class="public-main user-main">
       <div class="user-app-shell">
         <aside class="user-sidebar">
@@ -91,7 +95,7 @@ function isWorkspaceActive(item: { to: string; exact: boolean }) {
             <span class="avatar-circle">{{ avatarInitial }}</span>
             <div>
               <strong>{{ displayName }}</strong>
-              <span>{{ auth.isAdmin ? "管理员" : "普通用户" }}</span>
+              <span>{{ auth.isAdmin ? "管理员" : "注册用户" }}</span>
             </div>
           </div>
 
@@ -114,6 +118,7 @@ function isWorkspaceActive(item: { to: string; exact: boolean }) {
         </section>
       </div>
     </main>
+    <AppFooter />
     <AppDialog
       v-if="ui.dialog"
       :dialog="ui.dialog"

@@ -328,6 +328,39 @@ export interface AdminIssueSessionUpdateRequest {
   resolution: string | null;
 }
 
+export type AnnouncementStatus = "draft" | "published" | "hidden";
+export type AnnouncementKind = "system" | "activity";
+
+export interface Announcement {
+  id: string;
+  title: string;
+  content: string;
+  kind: AnnouncementKind;
+  status: AnnouncementStatus;
+  pinned: boolean;
+  created_by: string | null;
+  updated_by: string | null;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AnnouncementResponse {
+  announcement: Announcement;
+}
+
+export interface AnnouncementsResponse {
+  announcements: AnnouncementResponse[];
+}
+
+export interface AdminAnnouncementUpsertRequest {
+  title: string;
+  content: string;
+  kind: AnnouncementKind;
+  status: AnnouncementStatus;
+  pinned: boolean;
+}
+
 export type LeaseState = "active" | "releasing" | "released" | "expired" | "failed";
 
 export interface Lease {

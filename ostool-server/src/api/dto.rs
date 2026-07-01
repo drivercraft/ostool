@@ -10,7 +10,9 @@ use crate::{
     dtb_store::DtbFile,
     session::Session,
     state::BoardLeaseState,
-    storage::{AuditLog, DtbMetadata, IssueSession, Lease, Permission, Role, SessionRecord},
+    storage::{
+        Announcement, AuditLog, DtbMetadata, IssueSession, Lease, Permission, Role, SessionRecord,
+    },
     tftp::{files::TftpFileRef, status::TftpStatus},
 };
 
@@ -408,6 +410,25 @@ pub struct AdminIssueSessionUpdateRequest {
     pub state: String,
     pub priority: String,
     pub resolution: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnnouncementResponse {
+    pub announcement: Announcement,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnnouncementsResponse {
+    pub announcements: Vec<AnnouncementResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminAnnouncementUpsertRequest {
+    pub title: String,
+    pub content: String,
+    pub kind: String,
+    pub status: String,
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

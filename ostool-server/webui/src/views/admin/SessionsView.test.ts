@@ -187,12 +187,12 @@ describe("SessionsView", () => {
     expect(wrapper.text()).toContain("断开中");
   });
 
-  it("renders refresh actions on the left and search/filter controls on the right", async () => {
+  it("renders search/filter controls on the right", async () => {
     const SessionsView = (await import("./SessionsView.vue")).default;
     const wrapper = mount(SessionsView);
     await flushPromises();
 
-    expect(wrapper.find(".admin-toolbar-left").text()).toContain("刷新");
+    expect(wrapper.find(".admin-toolbar-left").text()).toBe("");
     expect(wrapper.find(".admin-toolbar-right .search-field").exists()).toBe(true);
     expect(wrapper.findAll(".admin-toolbar-right .filter-field").length).toBe(1);
   });

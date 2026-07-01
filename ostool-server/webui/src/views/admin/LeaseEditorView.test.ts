@@ -159,6 +159,10 @@ function datetimeLocalAfter(hours: number) {
   return local.toISOString().slice(0, 16);
 }
 
+function formatDateTimeForTest(value: string) {
+  return new Date(value).toLocaleString("zh-CN", { hour12: false });
+}
+
 describe("LeaseEditorView", () => {
   beforeEach(() => {
     routeMock = {
@@ -190,16 +194,15 @@ describe("LeaseEditorView", () => {
     expect(wrapper.text()).toContain("年");
     expect(wrapper.findAll("select")[0].text()).toContain("board-1");
     expect(wrapper.findAll("select")[1].text()).toContain("Alice");
-    expect(wrapper.find(".lease-calendar-month").exists()).toBe(true);
+    expect(wrapper.find(".lease-calendar-hour").exists()).toBe(true);
     const now = new Date();
-    const currentRangeStart = new Date(now.getFullYear(), now.getMonth() - 12, 1).toLocaleDateString("zh-CN", {
-      year: "numeric",
-      month: "long",
-    });
-    const currentRangeEnd = new Date(now.getFullYear(), now.getMonth() + 12, 1).toLocaleDateString("zh-CN", {
-      year: "numeric",
-      month: "long",
-    });
+    const hourStart = new Date(now);
+    hourStart.setMinutes(0, 0, 0);
+    hourStart.setHours(hourStart.getHours() - 12);
+    const hourEnd = new Date(hourStart);
+    hourEnd.setHours(hourStart.getHours() + 24);
+    const currentRangeStart = formatDateTimeForTest(hourStart.toISOString());
+    const currentRangeEnd = formatDateTimeForTest(hourEnd.toISOString());
     expect(wrapper.text()).toContain(`${currentRangeStart} ~ ${currentRangeEnd}`);
     const dateInputs = wrapper.findAll('input[type="datetime-local"]');
     expect((dateInputs[0].element as HTMLInputElement).value).toBe("");

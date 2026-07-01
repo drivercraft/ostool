@@ -1,4 +1,5 @@
 import type {
+  AdminAnnouncementUpsertRequest,
   AdminAuditLogsResponse,
   AdminBoardUpsertRequest,
   AdminIssueSessionUpdateRequest,
@@ -26,6 +27,8 @@ import type {
   AdminUserRolesUpdateRequest,
   AdminUsersResponse,
   AdminUserUpdateRequest,
+  AnnouncementResponse,
+  AnnouncementsResponse,
   BoardConfig,
   DtbMetadataInput,
   DtbFileResponse,
@@ -68,6 +71,29 @@ export const adminApi = {
     return request<AdminAuditLogsResponse>(
       `/api/v1/admin/audit-logs?limit=${encodeURIComponent(String(limit))}`,
     );
+  },
+  listAnnouncements() {
+    return request<AnnouncementsResponse>("/api/v1/admin/announcements");
+  },
+  createAnnouncement(payload: AdminAnnouncementUpsertRequest) {
+    return request<AnnouncementResponse>("/api/v1/admin/announcements", {
+      method: "POST",
+      bodyJson: payload,
+    });
+  },
+  updateAnnouncement(announcementId: string, payload: AdminAnnouncementUpsertRequest) {
+    return request<AnnouncementResponse>(
+      `/api/v1/admin/announcements/${encodeURIComponent(announcementId)}`,
+      {
+        method: "PUT",
+        bodyJson: payload,
+      },
+    );
+  },
+  deleteAnnouncement(announcementId: string) {
+    return request<void>(`/api/v1/admin/announcements/${encodeURIComponent(announcementId)}`, {
+      method: "DELETE",
+    });
   },
   listBoards() {
     return request<BoardConfig[]>("/api/v1/admin/boards");

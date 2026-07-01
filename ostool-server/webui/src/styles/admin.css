@@ -37,33 +37,6 @@
 .split-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.4rem; align-items: start; }
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .75rem; margin-bottom: 1.5rem; }
 .toolbar-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: .75rem; margin-bottom: 1.25rem; }
-.form-grid { display: grid; gap: 1rem; }
-.form-grid.two-columns { grid-template-columns: 1fr 1fr; }
-.form-grid.three-columns { grid-template-columns: 1fr 1fr 1fr; }
-.form-section { padding-top: 1.25rem; margin-top: 1.25rem; border-top: 1px solid var(--c-border); }
-.form-section:first-of-type { padding-top: 0; margin-top: 0; border-top: none; }
-.form-section h4 { font-size: .94rem; font-weight: 700; margin: 0; padding: 0; border: none; white-space: nowrap; }
-.form-section > h4 { display: flex; align-items: center; gap: .75rem; margin-bottom: .75rem; }
-.form-section > h4::after,
-.form-section-header::after {
-  content: "";
-  flex: 1 1 auto;
-  min-width: 32px;
-  height: 1px;
-  background: var(--c-border-light);
-}
-.form-section-header { display: flex; align-items: center; gap: .6rem; margin-bottom: .75rem; padding-bottom: 0; border-bottom: 0; }
-.form-section-header.has-trailing-control { justify-content: flex-start; gap: .75rem; }
-.form-section-header.has-trailing-control::after { order: 1; }
-.form-section-title { display: flex; align-items: center; gap: .6rem; min-width: 0; flex: 0 0 auto; order: 0; }
-.form-section-header h4 { margin: 0; padding: 0; border: none; }
-.form-section-toggle { flex: 0 0 auto; order: 2; }
-.form-section-icon { width: 30px; height: 30px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; font-size: .82rem; flex-shrink: 0; }
-.form-section-icon.serial, .form-section-icon.info { background: var(--c-brand-ghost); color: var(--c-brand); }
-.form-section-icon.power { background: var(--c-warning-bg); color: var(--c-warning); }
-.form-section-icon.boot { background: var(--c-violet-soft); color: var(--c-violet); }
-.form-section-icon.password { background: var(--c-warning-bg); color: var(--c-warning); }
-.form-section-icon.roles { background: var(--c-violet-soft); color: var(--c-violet); }
 .admin-section-block {
   min-width: 0;
   padding-top: 1rem;

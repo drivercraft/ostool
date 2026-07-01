@@ -3,7 +3,12 @@
 /* ===================================================================== */
 /*  Public shell (topbar + main + footer)                                */
 /* ===================================================================== */
-.public-shell { display: flex; flex-direction: column; min-height: 100vh; }
+.public-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: var(--c-bg);
+}
 
 .public-topbar {
   position: sticky;
@@ -111,13 +116,91 @@
   gap: .75rem;
 }
 
-.public-main { flex: 1; }
+.public-main {
+  flex: 1 1 auto;
+  background: var(--c-bg);
+}
 .public-main.user-main { padding: var(--content-pad); }
+
+.announcement-bar {
+  border-bottom: 1px solid var(--c-border-light);
+  background: var(--c-surface);
+}
+.announcement-bar-inner {
+  max-width: var(--page-max-width);
+  margin: 0 auto;
+  padding: .75rem var(--page-inline-pad);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: .8rem;
+}
+.announcement-bar-icon {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--c-brand);
+  background: var(--c-brand-tint);
+}
+.announcement-bar-list {
+  display: grid;
+  gap: .6rem;
+  min-width: 0;
+}
+.announcement-bar-item {
+  min-width: 0;
+}
+.announcement-bar-title {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  flex-wrap: wrap;
+  margin-bottom: .2rem;
+}
+.announcement-bar-title strong {
+  color: var(--c-text);
+  font-size: .94rem;
+}
+.announcement-bar-title span {
+  color: var(--c-text-muted);
+  font-size: .76rem;
+  font-weight: 700;
+}
+.announcement-bar-item.is-pinned .announcement-bar-title strong {
+  color: var(--c-brand-dark);
+}
+.announcement-bar-item p {
+  margin: 0;
+  color: var(--c-text-soft);
+  font-size: .86rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.announcement-bar-toggle {
+  min-height: 30px;
+  padding: 0 .7rem;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+  color: var(--c-text-soft);
+  font: inherit;
+  font-size: .8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.announcement-bar-toggle:hover {
+  color: var(--c-brand);
+  border-color: var(--c-brand-soft);
+  background: var(--control-hover-bg);
+}
 
 .public-footer {
   border-top: 1px solid var(--c-border);
   background: var(--c-surface);
-  margin-top: auto;
 }
 .public-footer-inner {
   max-width: var(--page-max-width);

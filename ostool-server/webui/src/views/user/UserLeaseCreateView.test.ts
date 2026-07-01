@@ -137,7 +137,7 @@ describe("UserLeaseCreateView", () => {
     expect(wrapper.text()).not.toContain("返回资源");
     expect(wrapper.text()).toContain("取消");
     expect(wrapper.find(".user-lease-editor-panel").classes()).not.toContain("panel");
-    expect(wrapper.find(".lease-calendar-month").exists()).toBe(true);
+    expect(wrapper.find(".lease-calendar-hour").exists()).toBe(true);
     expect(wrapper.text()).toContain("新增租赁");
     expect(wrapper.text()).toContain("已有租赁");
     expect(wrapper.text()).toContain("暂无已有租赁");
@@ -149,9 +149,6 @@ describe("UserLeaseCreateView", () => {
     const dateInputs = wrapper.findAll('input[type="datetime-local"]');
     expect((dateInputs[0].element as HTMLInputElement).value).toBe("");
     expect((dateInputs[1].element as HTMLInputElement).value).toBe("");
-    await wrapper.findAll(".lease-calendar-tabs button")[0].trigger("click");
-    await flushPromises();
-    expect(wrapper.find(".lease-calendar-hour").exists()).toBe(true);
     expect(wrapper.findAll(".lease-calendar-cell")).toHaveLength(24);
 
     await wrapper.findAll(".lease-calendar-tabs button")[1].trigger("click");
@@ -161,7 +158,10 @@ describe("UserLeaseCreateView", () => {
     const dayCells = wrapper.findAll(".lease-calendar-cell:not(:disabled)");
     await dayCells[0].trigger("click");
     await flushPromises();
-    expect(wrapper.findAll(".lease-calendar-cell.is-selected")).toHaveLength(0);
+    expect(wrapper.find(".lease-calendar-day").exists()).toBe(true);
+    expect(wrapper.findAll(".lease-calendar-cell.is-selected").length).toBeGreaterThanOrEqual(1);
+    expect((dateInputs[0].element as HTMLInputElement).value).toBeTruthy();
+    expect((dateInputs[1].element as HTMLInputElement).value).toBeTruthy();
 
     await dateInputs[0].setValue("");
     await dateInputs[1].setValue("");
@@ -304,9 +304,8 @@ describe("UserLeaseCreateView", () => {
     const disabledCells = wrapper.findAll(".lease-calendar-cell.is-disabled");
     expect(disabledCells.length).toBeGreaterThan(0);
     expect(disabledCells[0].find(".lease-calendar-status-icon.is-unavailable").exists()).toBe(true);
-    expect(wrapper.find(".lease-calendar-event.is-unavailable").exists()).toBe(true);
+    expect(wrapper.find(".lease-calendar-event.is-unavailable").exists()).toBe(false);
     expect(wrapper.find(".lease-calendar-event.is-own").exists()).toBe(true);
-    expect(wrapper.text()).toContain("已占用");
     expect(wrapper.text()).toContain("我的租赁");
     expect(wrapper.text()).not.toContain("other-user");
     await disabledCells[0].trigger("click");

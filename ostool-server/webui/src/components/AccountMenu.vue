@@ -17,7 +17,7 @@ interface AccountMenuItem {
 
 const displayName = computed(() => auth.user?.display_name || auth.user?.username || "用户");
 const avatarText = computed(() => displayName.value.slice(0, 1).toUpperCase());
-const roleLabel = computed(() => (auth.isAdmin ? "管理员" : "普通用户"));
+const roleLabel = computed(() => (auth.isAdmin ? "管理员" : "注册用户"));
 
 const menuItems = computed<AccountMenuItem[]>(() => {
   const items: AccountMenuItem[] = [

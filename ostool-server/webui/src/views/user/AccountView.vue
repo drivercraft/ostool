@@ -26,7 +26,7 @@ const accountFields = computed(() => [
   ["部门", auth.user?.department ?? "-"],
   ["职位", auth.user?.title ?? "-"],
   ["最后登录", auth.user?.last_login_at ? formatLeaseTime(auth.user.last_login_at) : "-"],
-  ["角色", auth.user?.roles.map((role) => role.display_name || role.name).join("、") || "普通用户"],
+  ["角色", auth.user?.roles.map((role) => role.display_name || role.name).join("、") || "注册用户"],
 ]);
 const passwordMismatch = computed(() =>
   passwordForm.value.confirm_new_password.length > 0

@@ -93,6 +93,12 @@ const navItems = computed<AdminNavItem[]>(() => [
     label: "问题会话",
     icon: "bell",
   },
+  {
+    type: "link",
+    to: "/admin/announcements",
+    label: "公告管理",
+    icon: "book",
+  },
 ]);
 
 const collapsedGroups = reactive<Record<string, boolean>>({});

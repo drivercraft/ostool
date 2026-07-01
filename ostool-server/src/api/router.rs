@@ -30,25 +30,26 @@ use uuid::Uuid;
 use crate::{
     api::{
         dto::{
-            ActionResponse, AdminAuditLogResponse, AdminAuditLogsResponse, AdminBoardUpsertRequest,
-            AdminIssueSessionUpdateRequest, AdminLeaseCreateRequest, AdminLeaseUpdateRequest,
-            AdminOverviewResponse, AdminPasswordResetRequest, AdminPermissionResponse,
-            AdminPermissionsResponse, AdminRoleCreateRequest, AdminRoleDisableRequest,
-            AdminRoleResponse, AdminRoleUpdateRequest, AdminRolesResponse,
-            AdminServerConfigEditable, AdminServerConfigReadonly, AdminServerConfigResponse,
-            AdminSessionResponse, AdminSessionUpdateRequest, AdminSessionsResponse,
-            AdminTftpConfigResponse, AdminTftpStatusResponse, AdminUserCreateRequest,
-            AdminUserResponse, AdminUserRolesResponse, AdminUserRolesUpdateRequest,
-            AdminUserUpdateRequest, AdminUsersResponse, BoardPowerAction, BoardPowerStatusResponse,
-            BoardRuntimeStatusResponse, BoardTypeSummary, BootProfileResponse, CaptchaResponse,
-            CreateIssueSessionRequest, CreateLeaseRequest, CreateSessionRequest,
-            CurrentUserResponse, DtbFileResponse, FileResponse, HttpBootFileResponse,
-            IssueSessionResponse, IssueSessionsResponse, KernelPublishResponse, LeaseResponse,
-            LeasesResponse, LoginRequest, NetworkInterfaceSummary, RegisterRequest,
-            RegisterResponse, RegistrationPolicyResponse, SerialPortSummary, SerialStatusResponse,
-            SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse,
-            SiteSettingsResponse, SiteSettingsUpdateRequest, TftpSessionResponse,
-            UpdateServerConfigRequest, UserPasswordUpdateRequest,
+            ActionResponse, AdminAnnouncementUpsertRequest, AdminAuditLogResponse,
+            AdminAuditLogsResponse, AdminBoardUpsertRequest, AdminIssueSessionUpdateRequest,
+            AdminLeaseCreateRequest, AdminLeaseUpdateRequest, AdminOverviewResponse,
+            AdminPasswordResetRequest, AdminPermissionResponse, AdminPermissionsResponse,
+            AdminRoleCreateRequest, AdminRoleDisableRequest, AdminRoleResponse,
+            AdminRoleUpdateRequest, AdminRolesResponse, AdminServerConfigEditable,
+            AdminServerConfigReadonly, AdminServerConfigResponse, AdminSessionResponse,
+            AdminSessionUpdateRequest, AdminSessionsResponse, AdminTftpConfigResponse,
+            AdminTftpStatusResponse, AdminUserCreateRequest, AdminUserResponse,
+            AdminUserRolesResponse, AdminUserRolesUpdateRequest, AdminUserUpdateRequest,
+            AdminUsersResponse, AnnouncementResponse, AnnouncementsResponse, BoardPowerAction,
+            BoardPowerStatusResponse, BoardRuntimeStatusResponse, BoardTypeSummary,
+            BootProfileResponse, CaptchaResponse, CreateIssueSessionRequest, CreateLeaseRequest,
+            CreateSessionRequest, CurrentUserResponse, DtbFileResponse, FileResponse,
+            HttpBootFileResponse, IssueSessionResponse, IssueSessionsResponse,
+            KernelPublishResponse, LeaseResponse, LeasesResponse, LoginRequest,
+            NetworkInterfaceSummary, RegisterRequest, RegisterResponse, RegistrationPolicyResponse,
+            SerialPortSummary, SerialStatusResponse, SessionCreatedResponse, SessionDetailResponse,
+            SessionDtbResponse, SiteSettingsResponse, SiteSettingsUpdateRequest,
+            TftpSessionResponse, UpdateServerConfigRequest, UserPasswordUpdateRequest,
         },
         error::ApiError,
     },
@@ -75,9 +76,9 @@ use crate::{
     session::SessionStopReason,
     state::{AppState, BoardLeaseState, CaptchaChallenge, RateLimitWindow, TouchSessionError},
     storage::{
-        IssueSession, IssueSessionPriority, IssueSessionState, Lease, NewAuditLog, NewIssueSession,
-        NewRole, Role, RuntimeSettings, SiteSettings, UpsertDtbMetadata, UserProfile,
-        default_user_permission,
+        Announcement, AnnouncementKind, AnnouncementStatus, IssueSession, IssueSessionPriority,
+        IssueSessionState, Lease, NewAnnouncement, NewAuditLog, NewIssueSession, NewRole, Role,
+        RuntimeSettings, SiteSettings, UpsertDtbMetadata, UserProfile, default_user_permission,
     },
     tftp::{
         files::{TftpFileRef, normalize_relative_path},
@@ -111,6 +112,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/auth/registration-policy", get(registration_policy))
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/me", get(get_current_user))
+        .route("/api/v1/announcements", get(list_public_announcements))
         .route("/api/v1/user/profile", get(get_user_profile))
         .route("/api/v1/user/password", post(update_user_password))
         .route(
@@ -232,6 +234,14 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/admin/issues/{issue_id}",
             put(update_admin_issue_session).delete(delete_admin_issue_session),
         )
+        .route(
+            "/api/v1/admin/announcements",
+            get(list_admin_announcements).post(create_admin_announcement),
+        )
+        .route(
+            "/api/v1/admin/announcements/{announcement_id}",
+            put(update_admin_announcement).delete(delete_admin_announcement),
+        )
         .route("/api/v1/admin/tftp", get(get_tftp_config))
         .route("/api/v1/admin/tftp/status", get(get_tftp_status))
         .route("/api/v1/admin/tftp/reconcile", post(reconcile_tftp))
@@ -299,6 +309,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/{*path}", get(serve_history_fallback))
         .layer(middleware::from_fn_with_state(state.clone(), auth_gate))
+        .layer(middleware::from_fn_with_state(state.clone(), audit_gate))
         .layer(middleware::from_fn_with_state(state.clone(), security_gate))
         .with_state(state)
 }
@@ -504,6 +515,118 @@ async fn auth_gate(
     Ok(next.run(request).await)
 }
 
+async fn audit_gate(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    request: Request,
+    next: Next,
+) -> Response {
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    if !should_audit_admin_request(&method, &path) {
+        return next.run(request).await;
+    }
+
+    let actor = current_user_from_headers(&state, &headers).await.ok();
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    let request_id = headers
+        .get(HeaderName::from_static("x-request-id"))
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    let (target_type, target_id) = audit_target_for_admin_path(&path);
+    let action = audit_action_for_admin_request(&method, &path);
+    let response = next.run(request).await;
+    let status = response.status();
+    let metadata = json!({
+        "method": method.as_str(),
+        "path": path,
+        "status": status.as_u16(),
+        "reason": status.canonical_reason().unwrap_or(""),
+    });
+
+    if let Err(err) = state
+        .storage
+        .create_audit_log(NewAuditLog {
+            actor_user_id: actor.as_ref().map(|user| user.id.clone()),
+            actor_username: actor.as_ref().map(|user| user.username.clone()),
+            action,
+            target_type,
+            target_id,
+            outcome: if status.is_success() {
+                "success"
+            } else {
+                "failed"
+            }
+            .to_string(),
+            ip_address: Some(addr.ip().to_string()),
+            user_agent,
+            request_id,
+            metadata_json: metadata.to_string(),
+        })
+        .await
+    {
+        log::warn!("failed to write audit log for admin request: {err:#}");
+    }
+
+    response
+}
+
+fn should_audit_admin_request(method: &Method, path: &str) -> bool {
+    path.starts_with("/api/v1/admin/")
+        && matches!(*method, Method::POST | Method::PUT | Method::DELETE)
+}
+
+fn audit_action_for_admin_request(method: &Method, path: &str) -> String {
+    let segments = path
+        .trim_start_matches("/api/v1/admin/")
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let resource = segments.first().copied().unwrap_or("admin");
+    let verb = match (method.as_str(), segments.as_slice()) {
+        ("POST", ["users", _, "reset-password"]) => "reset_password",
+        ("POST", ["users", _, "disable"]) => "disable",
+        ("POST", ["users", _, "approve"]) => "approve",
+        ("POST", ["users", _, "reject"]) => "reject",
+        ("PUT", ["users", _, "roles"]) => "update_roles",
+        ("POST", ["roles", _, "disable"]) => "disable",
+        ("POST", ["leases", _, "session"]) => "start_session",
+        ("POST", ["leases", _, "release"]) => "release",
+        ("POST", ["sessions", _, "close"]) => "close",
+        ("POST", ["tftp", "reconcile"]) => "reconcile",
+        ("POST", _) => "create",
+        ("PUT", _) => "update",
+        ("DELETE", _) => "delete",
+        _ => "request",
+    };
+    format!("{resource}.{verb}")
+}
+
+fn audit_target_for_admin_path(path: &str) -> (String, Option<String>) {
+    let segments = path
+        .trim_start_matches("/api/v1/admin/")
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let Some(resource) = segments.first() else {
+        return ("admin".to_string(), None);
+    };
+    let target_id = segments
+        .get(1)
+        .filter(|segment| {
+            !matches!(
+                **segment,
+                "pending" | "status" | "reconcile" | "server-config" | "site-settings"
+            )
+        })
+        .map(|segment| (*segment).to_string());
+    (resource.replace('-', "_"), target_id)
+}
+
 async fn current_user_from_headers(
     state: &AppState,
     headers: &HeaderMap,
@@ -564,6 +687,7 @@ fn is_admin_permission(permission_code: &str) -> bool {
                 | "leases"
                 | "sessions"
                 | "issues"
+                | "announcements"
                 | "tftp"
                 | "server"
                 | "site"
@@ -607,6 +731,7 @@ fn admin_permission_for_request(method: &Method, path: &str) -> Option<&'static 
         "leases" => admin_leases_permission(method, &segments),
         "sessions" => admin_sessions_permission(method, &segments),
         "issues" => admin_issues_permission(method, &segments),
+        "announcements" => admin_announcements_permission(method, &segments),
         "boards" => admin_boards_permission(method, &segments),
         "dtbs" => crud_permission(method, "dtbs"),
         "serial-ports" if method == Method::GET => Some("serial_ports.read"),
@@ -735,6 +860,16 @@ fn admin_issues_permission(method: &Method, segments: &[&str]) -> Option<&'stati
         ("GET", ["issues"]) | ("GET", ["issues", _]) => Some("issues.read"),
         ("PUT", ["issues", _]) => Some("issues.update"),
         ("DELETE", ["issues", _]) => Some("issues.delete"),
+        _ => None,
+    }
+}
+
+fn admin_announcements_permission(method: &Method, segments: &[&str]) -> Option<&'static str> {
+    match (method.as_str(), segments) {
+        ("GET", ["announcements"]) | ("GET", ["announcements", _]) => Some("announcements.read"),
+        ("POST", ["announcements"]) => Some("announcements.create"),
+        ("PUT", ["announcements", _]) => Some("announcements.update"),
+        ("DELETE", ["announcements", _]) => Some("announcements.delete"),
         _ => None,
     }
 }
@@ -943,6 +1078,10 @@ async fn lease_response(state: &AppState, lease: Lease) -> LeaseResponse {
 
 fn issue_session_response(issue: IssueSession) -> IssueSessionResponse {
     IssueSessionResponse { issue }
+}
+
+fn announcement_response(announcement: Announcement) -> AnnouncementResponse {
+    AnnouncementResponse { announcement }
 }
 
 const CAPTCHA_EXPIRES_IN_SECONDS: i64 = 300;
@@ -1457,6 +1596,113 @@ async fn delete_admin_issue_session(
     Ok(StatusCode::NO_CONTENT)
 }
 
+fn parse_announcement_kind(value: &str) -> Result<AnnouncementKind, ApiError> {
+    AnnouncementKind::from_str(value.trim()).map_err(|err| ApiError::bad_request(err.to_string()))
+}
+
+fn parse_announcement_status(value: &str) -> Result<AnnouncementStatus, ApiError> {
+    AnnouncementStatus::from_str(value.trim()).map_err(|err| ApiError::bad_request(err.to_string()))
+}
+
+fn parse_announcement_request(
+    request: AdminAnnouncementUpsertRequest,
+) -> Result<(String, String, AnnouncementKind, AnnouncementStatus, bool), ApiError> {
+    Ok((
+        clean_required_len(request.title, "title", 1, 128)?,
+        clean_required_len(request.content, "content", 1, 8000)?,
+        parse_announcement_kind(&request.kind)?,
+        parse_announcement_status(&request.status)?,
+        request.pinned,
+    ))
+}
+
+async fn list_public_announcements(
+    State(state): State<AppState>,
+) -> Result<axum::Json<AnnouncementsResponse>, ApiError> {
+    let announcements = state
+        .storage
+        .list_published_announcements()
+        .await?
+        .into_iter()
+        .map(announcement_response)
+        .collect();
+    Ok(axum::Json(AnnouncementsResponse { announcements }))
+}
+
+async fn list_admin_announcements(
+    State(state): State<AppState>,
+) -> Result<axum::Json<AnnouncementsResponse>, ApiError> {
+    let announcements = state
+        .storage
+        .list_announcements()
+        .await?
+        .into_iter()
+        .map(announcement_response)
+        .collect();
+    Ok(axum::Json(AnnouncementsResponse { announcements }))
+}
+
+async fn create_admin_announcement(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::Json(request): axum::Json<AdminAnnouncementUpsertRequest>,
+) -> Result<(StatusCode, axum::Json<AnnouncementResponse>), ApiError> {
+    let user = current_user_from_headers(&state, &headers).await?;
+    require_permission(&user, "announcements.create")?;
+    let (title, content, kind, status, pinned) = parse_announcement_request(request)?;
+    let announcement = state
+        .storage
+        .create_announcement(NewAnnouncement {
+            title,
+            content,
+            kind,
+            status,
+            pinned,
+            created_by: Some(user.id),
+        })
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        axum::Json(announcement_response(announcement)),
+    ))
+}
+
+async fn update_admin_announcement(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(announcement_id): Path<String>,
+    axum::Json(request): axum::Json<AdminAnnouncementUpsertRequest>,
+) -> Result<axum::Json<AnnouncementResponse>, ApiError> {
+    let user = current_user_from_headers(&state, &headers).await?;
+    require_permission(&user, "announcements.update")?;
+    let (title, content, kind, status, pinned) = parse_announcement_request(request)?;
+    let announcement = state
+        .storage
+        .update_announcement(
+            &announcement_id,
+            title,
+            content,
+            kind,
+            status,
+            pinned,
+            Some(user.id),
+        )
+        .await?
+        .ok_or_else(|| ApiError::not_found("announcement not found"))?;
+    Ok(axum::Json(announcement_response(announcement)))
+}
+
+async fn delete_admin_announcement(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(announcement_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let user = current_user_from_headers(&state, &headers).await?;
+    require_permission(&user, "announcements.delete")?;
+    state.storage.delete_announcement(&announcement_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn list_admin_users(
     State(state): State<AppState>,
 ) -> Result<axum::Json<AdminUsersResponse>, ApiError> {
@@ -1598,20 +1844,12 @@ async fn approve_admin_user(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
 ) -> Result<axum::Json<AdminUserResponse>, ApiError> {
-    let user = ensure_pending_user_for_review(&state, &user_id).await?;
+    ensure_pending_user_for_review(&state, &user_id).await?;
     state
         .auth
         .approve_user(&user_id)
         .await
         .map_err(|err| ApiError::not_found(err.to_string()))?;
-    write_audit_log(
-        &state,
-        "user.approve",
-        "user",
-        Some(user_id.clone()),
-        json!({ "username": user.username }),
-    )
-    .await?;
     let updated = state
         .storage
         .find_user_by_id(&user_id)
@@ -1624,20 +1862,12 @@ async fn reject_admin_user(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
 ) -> Result<axum::Json<AdminUserResponse>, ApiError> {
-    let user = ensure_pending_user_for_review(&state, &user_id).await?;
+    ensure_pending_user_for_review(&state, &user_id).await?;
     state
         .auth
         .reject_user(&user_id)
         .await
         .map_err(|err| ApiError::not_found(err.to_string()))?;
-    write_audit_log(
-        &state,
-        "user.reject",
-        "user",
-        Some(user_id.clone()),
-        json!({ "username": user.username }),
-    )
-    .await?;
     let updated = state
         .storage
         .find_user_by_id(&user_id)
@@ -2308,18 +2538,6 @@ async fn create_dtb(
 
     let file = state.dtb_store.write(&dtb_name, &body).await?;
     let metadata = sync_dtb_metadata(&state, &file, &body, dtb_metadata, None).await?;
-    write_audit_log(
-        &state,
-        "dtb.create",
-        "dtb_file",
-        Some(dtb_name.clone()),
-        json!({
-            "name": dtb_name,
-            "size_bytes": file.size,
-            "sha256": metadata.sha256,
-        }),
-    )
-    .await?;
     Ok((
         StatusCode::CREATED,
         axum::Json(DtbFileResponse::from_dtb_with_metadata(
@@ -2737,35 +2955,12 @@ async fn update_dtb(
             .storage
             .rename_dtb_metadata(&current_name, new_name)
             .await?;
-        write_audit_log(
-            &state,
-            "dtb.rename",
-            "dtb_file",
-            Some(new_name.to_string()),
-            json!({
-                "from": current_name,
-                "to": new_name,
-            }),
-        )
-        .await?;
         effective_name = new_name.to_string();
     }
 
     if !body.is_empty() {
         let file = state.dtb_store.write(&effective_name, &body).await?;
-        let metadata = sync_dtb_metadata(&state, &file, &body, dtb_metadata, None).await?;
-        write_audit_log(
-            &state,
-            "dtb.update",
-            "dtb_file",
-            Some(effective_name.clone()),
-            json!({
-                "name": effective_name,
-                "size_bytes": file.size,
-                "sha256": metadata.sha256,
-            }),
-        )
-        .await?;
+        sync_dtb_metadata(&state, &file, &body, dtb_metadata, None).await?;
     } else if dtb_metadata.has_updates() {
         let file = state
             .dtb_store
@@ -2777,18 +2972,7 @@ async fn update_dtb(
             .read(&effective_name)
             .await
             .map_err(ApiError::from)?;
-        let metadata = sync_dtb_metadata(&state, &file, &bytes, dtb_metadata, None).await?;
-        write_audit_log(
-            &state,
-            "dtb.update_metadata",
-            "dtb_file",
-            Some(effective_name.clone()),
-            json!({
-                "name": effective_name,
-                "sha256": metadata.sha256,
-            }),
-        )
-        .await?;
+        sync_dtb_metadata(&state, &file, &bytes, dtb_metadata, None).await?;
     } else if requested_name.is_none() {
         return Err(ApiError::bad_request(
             "DTB update requires a new name, metadata, or replacement file body",
@@ -2829,16 +3013,6 @@ async fn delete_dtb(
     }
     state.dtb_store.delete(&dtb_name).await?;
     state.storage.delete_dtb_metadata_by_name(&dtb_name).await?;
-    write_audit_log(
-        &state,
-        "dtb.delete",
-        "dtb_file",
-        Some(dtb_name.clone()),
-        json!({
-            "name": dtb_name,
-        }),
-    )
-    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -4034,31 +4208,6 @@ async fn sync_dtb_metadata(
             uploaded_by,
         })
         .await?)
-}
-
-async fn write_audit_log(
-    state: &AppState,
-    action: &str,
-    target_type: &str,
-    target_id: Option<String>,
-    metadata: serde_json::Value,
-) -> Result<(), ApiError> {
-    state
-        .storage
-        .create_audit_log(NewAuditLog {
-            actor_user_id: None,
-            actor_username: None,
-            action: action.to_string(),
-            target_type: target_type.to_string(),
-            target_id,
-            outcome: "success".to_string(),
-            ip_address: None,
-            user_agent: None,
-            request_id: None,
-            metadata_json: metadata.to_string(),
-        })
-        .await?;
-    Ok(())
 }
 
 fn summarize_board_types(

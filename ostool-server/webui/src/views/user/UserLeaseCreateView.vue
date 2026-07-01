@@ -37,7 +37,7 @@ const leases = ref<LeaseResponse[]>([]);
 const userLeases = ref<LeaseResponse[]>([]);
 const selectedBoardType = ref("");
 const requiredTags = ref("");
-const calendarView = ref<CalendarViewMode>("month");
+const calendarView = ref<CalendarViewMode>("hour");
 const calendarCursorIso = ref(new Date().toISOString());
 const form = ref({
   starts_at: "",
@@ -139,7 +139,7 @@ function slotOverlapsSelected(slot: CalendarSlot) {
 }
 
 function slotIsSelectable(slot: CalendarSlot) {
-  return calendarView.value === "hour" && !slotIsDisabled(slot);
+  return !slotIsDisabled(slot);
 }
 
 function selectCalendarSlot(slot: CalendarSlot) {
@@ -155,6 +155,18 @@ function selectCalendarSlot(slot: CalendarSlot) {
   }
   form.value.starts_at = toDatetimeLocal(selection.startIso);
   form.value.expires_at = toDatetimeLocal(selection.endIso);
+}
+
+function slotEventLimit() {
+  return calendarView.value === "hour" ? 2 : 3;
+}
+
+function visibleSlotLeases(slot: CalendarSlot) {
+  return slot.leases.filter(isMyLease);
+}
+
+function visibleSlotMoreCount(slot: CalendarSlot) {
+  return Math.max(0, visibleSlotLeases(slot).length - slotEventLimit());
 }
 
 function makeCalendarSlot(label: string, caption: string, start: Date, end: Date): CalendarSlot {
@@ -464,7 +476,7 @@ onMounted(() => {
                   </span>
                   <div class="lease-calendar-events">
                     <div
-                      v-for="item in slot.leases.slice(0, calendarView === 'hour' ? 2 : 3)"
+                      v-for="item in visibleSlotLeases(slot).slice(0, slotEventLimit())"
                       :key="item.lease.id"
                       class="lease-calendar-event compact"
                       :class="isMyLease(item) ? 'is-own' : 'is-unavailable'"
@@ -474,10 +486,10 @@ onMounted(() => {
                       <span>{{ userLabel(item) }}</span>
                     </div>
                     <span
-                      v-if="slot.leases.length > (calendarView === 'hour' ? 2 : 3)"
+                      v-if="visibleSlotMoreCount(slot) > 0"
                       class="lease-calendar-more"
                     >
-                      +{{ slot.leases.length - (calendarView === 'hour' ? 2 : 3) }} 条
+                      +{{ visibleSlotMoreCount(slot) }} 条
                     </span>
                   </div>
                 </button>

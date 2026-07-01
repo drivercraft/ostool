@@ -161,6 +161,10 @@ pub const BUILTIN_PERMISSIONS: &[(&str, &str, &str)] = &[
         "更新问题会话状态和处理备注",
     ),
     ("issues.delete", "删除问题会话", "删除问题会话记录"),
+    ("announcements.read", "查看公告", "查看公告管理和公告内容"),
+    ("announcements.create", "新增公告", "创建平台公告"),
+    ("announcements.update", "编辑公告", "编辑平台公告内容和状态"),
+    ("announcements.delete", "删除公告", "删除平台公告"),
     ("tftp.read", "查看 TFTP 配置", "查看 TFTP 配置和运行状态"),
     (
         "tftp.reconcile",
@@ -404,6 +408,82 @@ pub struct NewIssueSession {
     pub category: String,
     pub description: String,
     pub priority: IssueSessionPriority,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AnnouncementStatus {
+    Draft,
+    Published,
+    Hidden,
+}
+
+impl AnnouncementStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Published => "published",
+            Self::Hidden => "hidden",
+        }
+    }
+
+    pub fn from_str(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "draft" => Ok(Self::Draft),
+            "published" => Ok(Self::Published),
+            "hidden" => Ok(Self::Hidden),
+            other => anyhow::bail!("unknown announcement status `{other}`"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AnnouncementKind {
+    System,
+    Activity,
+}
+
+impl AnnouncementKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Activity => "activity",
+        }
+    }
+
+    pub fn from_str(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "system" => Ok(Self::System),
+            "activity" => Ok(Self::Activity),
+            other => anyhow::bail!("unknown announcement kind `{other}`"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Announcement {
+    pub id: String,
+    pub title: String,
+    pub content: String,
+    pub kind: AnnouncementKind,
+    pub status: AnnouncementStatus,
+    pub pinned: bool,
+    pub created_by: Option<String>,
+    pub updated_by: Option<String>,
+    pub published_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewAnnouncement {
+    pub title: String,
+    pub content: String,
+    pub kind: AnnouncementKind,
+    pub status: AnnouncementStatus,
+    pub pinned: bool,
+    pub created_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -675,7 +755,7 @@ pub(crate) fn default_site_setting_rows() -> Vec<SiteSettingDefinition> {
             "boolean",
             "rental",
             "自助租赁",
-            "是否允许普通用户自助创建开发板租赁",
+            "是否允许注册用户自助创建开发板租赁",
             &now,
         ),
         site_setting_definition(
@@ -1054,6 +1134,31 @@ pub trait IssueSessionRepository: Send + Sync {
 }
 
 #[async_trait]
+pub trait AnnouncementRepository: Send + Sync {
+    async fn create_announcement(
+        &self,
+        announcement: NewAnnouncement,
+    ) -> anyhow::Result<Announcement>;
+    async fn list_announcements(&self) -> anyhow::Result<Vec<Announcement>>;
+    async fn list_published_announcements(&self) -> anyhow::Result<Vec<Announcement>>;
+    async fn find_announcement(
+        &self,
+        announcement_id: &str,
+    ) -> anyhow::Result<Option<Announcement>>;
+    async fn update_announcement(
+        &self,
+        announcement_id: &str,
+        title: String,
+        content: String,
+        kind: AnnouncementKind,
+        status: AnnouncementStatus,
+        pinned: bool,
+        updated_by: Option<String>,
+    ) -> anyhow::Result<Option<Announcement>>;
+    async fn delete_announcement(&self, announcement_id: &str) -> anyhow::Result<()>;
+}
+
+#[async_trait]
 pub trait BoardConfigRepository: Send + Sync {
     async fn create_board_config(&self, board: BoardConfig) -> anyhow::Result<BoardConfig>;
     async fn list_board_configs(&self) -> anyhow::Result<Vec<BoardConfig>>;
@@ -1133,6 +1238,7 @@ pub trait Storage:
     + LeaseRepository
     + SessionRecordRepository
     + IssueSessionRepository
+    + AnnouncementRepository
     + BoardConfigRepository
     + RbacRepository
     + DtbMetadataRepository
@@ -1151,6 +1257,7 @@ impl<T> Storage for T where
         + LeaseRepository
         + SessionRecordRepository
         + IssueSessionRepository
+        + AnnouncementRepository
         + BoardConfigRepository
         + RbacRepository
         + DtbMetadataRepository

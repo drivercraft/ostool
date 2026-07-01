@@ -29,7 +29,7 @@ const demoUser = {
   department: null,
   title: null,
   last_login_at: null,
-  roles: [{ id: "role-user", name: "user", display_name: "普通用户", description: "", system: true, disabled: false, user_count: 0, permissions: [], created_at: "", updated_at: "" }],
+  roles: [{ id: "role-user", name: "user", display_name: "注册用户", description: "", system: true, disabled: false, user_count: 0, permissions: [], created_at: "", updated_at: "" }],
   permissions: [],
 };
 
