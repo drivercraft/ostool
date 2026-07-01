@@ -35,14 +35,14 @@
 
 .btn-primary {
   background: var(--control-primary-bg);
-  color: #fff;
+  color: var(--c-on-accent);
   border-color: var(--control-primary-bg);
   box-shadow: var(--shadow-sm);
 }
 .btn-primary:hover {
   background: var(--control-primary-hover-bg);
   border-color: var(--control-primary-hover-bg);
-  color: #fff;
+  color: var(--c-on-accent);
   transform: translateY(-1px);
   box-shadow: var(--shadow-sm);
 }
@@ -73,13 +73,13 @@
   color: var(--c-danger);
   border-color: var(--c-danger-border);
 }
-.btn-danger:hover { background: var(--c-danger); color: #fff; border-color: var(--c-danger); }
+.btn-danger:hover { background: var(--c-danger); color: var(--c-on-accent); border-color: var(--c-danger); }
 .btn-success {
   background: var(--c-success-bg);
   color: var(--c-success);
   border-color: var(--c-success-border);
 }
-.btn-success:hover { background: var(--c-success); color: #fff; }
+.btn-success:hover { background: var(--c-success); color: var(--c-on-accent); }
 .btn-sm {
   min-height: var(--control-h);
   padding: 0 .8rem;
@@ -454,7 +454,7 @@ textarea:disabled {
   align-items: center;
   justify-content: center;
   background: var(--control-primary-bg);
-  color: #fff;
+  color: var(--c-on-accent);
   box-shadow: var(--shadow-sm);
   cursor: pointer;
   font: inherit;
@@ -502,7 +502,7 @@ textarea:disabled {
   align-items: center;
   justify-content: center;
   background: var(--control-primary-bg);
-  color: #fff;
+  color: var(--c-on-accent);
   font-size: 1.15rem;
   font-weight: 900;
   box-shadow: var(--shadow-sm);
@@ -873,7 +873,7 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--control-knob-bg);
   box-shadow: var(--shadow-xs);
   transition: transform .15s ease;
 }
@@ -1055,7 +1055,7 @@ dl.profile-dl dd { margin: 0; color: var(--c-text-soft); font-weight: 500; }
   width: 34px; height: 34px;
   border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
-  font-weight: 700; color: #fff;
+  font-weight: 700; color: var(--c-on-accent);
   background: var(--control-primary-bg);
   font-size: .85rem;
 }
