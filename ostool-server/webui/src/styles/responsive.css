@@ -1,0 +1,246 @@
+/* Responsive overrides for shared controls and area-specific layouts.
+   Keep this file last in app.css so breakpoint rules can adjust prior files. */
+@media (min-width: 640px) {
+  .sm\:grid-cols-4 { grid-template-columns: repeat(4, 1fr); }
+  .sm\:flex-row { flex-direction: row; }
+  .sm\:items-center { align-items: center; }
+}
+@media (max-width: 1024px) {
+  .split-grid, .server-config-grid, .config-grid { grid-template-columns: 1fr; }
+  .form-grid.two-columns, .form-grid.three-columns { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 480px) {
+  .auth-form-row,
+  .captcha-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ----------------------------- responsive ---------------------------- */
+@media (max-width: 1024px) {
+  .hero-inner { grid-template-columns: 1fr; }
+  .hero-visual { display: none; }
+  .hero-art-wrap--inline { display: block; margin: 1.4rem 0; }
+  .split { grid-template-columns: 1fr; }
+  .split--reverse .split-media { order: 0; }
+  .capability-showcase,
+  .workflow-heading {
+    grid-template-columns: 1fr;
+  }
+  .capability-showcase-art {
+    min-height: 360px;
+  }
+  .feature-list {
+    grid-template-rows: none;
+  }
+  .workflow-track,
+  .governance-grid,
+  .ops-list,
+  .integration-strip,
+  .steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ops-showcase {
+    grid-template-columns: 1fr;
+  }
+  .ops-panel {
+    min-height: 300px;
+  }
+  .resources-hero {
+    grid-template-columns: 1fr;
+  }
+  .roles-page {
+    grid-template-columns: 1fr;
+  }
+  .resources-stats {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  .board-row {
+    grid-template-columns: minmax(220px, 1.5fr) repeat(2, minmax(90px, .65fr)) auto;
+  }
+  .board-row > div:nth-child(4) {
+    display: none;
+  }
+  .steps::before {
+    display: none;
+  }
+  .docs-layout { grid-template-columns: 1fr; }
+  .docs-side { position: static; flex-direction: row; flex-wrap: wrap; }
+  .auth-shell { grid-template-columns: 1fr; }
+  .auth-aside { display: none; }
+  .user-app-shell {
+    grid-template-columns: 1fr;
+  }
+  .user-sidebar {
+    position: static;
+    min-height: auto;
+  }
+  .user-nav {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .lease-editor-scroll {
+    grid-template-columns: 1fr;
+    height: auto;
+    overflow: auto;
+  }
+  .lease-calendar-panel {
+    min-height: 520px;
+  }
+  .dashboard-form-inline {
+    grid-template-columns: 1fr 1fr;
+  }
+  .dashboard-form-actions {
+    grid-column: 1 / -1;
+  }
+  .dashboard-grid { grid-template-columns: 1fr; }
+  .dashboard-sidebar { position: static; }
+}
+@media (max-width: 760px) {
+  .app-shell { grid-template-columns: 1fr; }
+  .sidebar { position: fixed; left: -100%; width: var(--sidebar-w); z-index: 80; transition: left .25s ease; }
+  .public-nav { display: none; }
+  .stats-strip { grid-template-columns: repeat(2, 1fr); }
+  .resources-page {
+    gap: 1rem;
+  }
+  .resources-hero {
+    padding: 1.25rem;
+  }
+  .resources-hero h2 {
+    font-size: 2rem;
+  }
+  .resources-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .admin-toolbar,
+  .admin-toolbar-left,
+  .admin-toolbar-right,
+  .toolbar-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .admin-toolbar-left,
+  .admin-toolbar-right {
+    flex-wrap: wrap;
+  }
+  .admin-toolbar-left,
+  .admin-toolbar-right,
+  .admin-toolbar-left .btn,
+  .admin-toolbar-right .btn {
+    width: 100%;
+  }
+  .search-field,
+  .filter-field,
+  .filter-field select {
+    max-width: none;
+    width: 100%;
+  }
+  .inline-control-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .inline-control-row > .btn {
+    width: 100%;
+  }
+  .form-section-header.has-trailing-control {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .form-section-toggle {
+    justify-content: space-between;
+  }
+  .panel-heading,
+  .admin-table-panel > .panel-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .admin-table-panel > .panel-heading {
+    padding: var(--content-pad) var(--content-pad) 0;
+  }
+  .view-toggle {
+    width: 100%;
+  }
+  .view-toggle button {
+    flex: 1;
+    justify-content: center;
+  }
+  .board-grid {
+    grid-template-columns: 1fr;
+  }
+  .resource-card-stats {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .user-sidebar {
+    padding: .9rem;
+  }
+  .user-nav,
+  .dashboard-form-inline,
+  .dashboard-welcome,
+  .dashboard-kpis,
+  .dashboard-account-dl,
+  .dashboard-password-form {
+    grid-template-columns: 1fr;
+  }
+  .dashboard-welcome {
+    flex-direction: column;
+  }
+  .feature-grid,
+  .feature-list .feature-card,
+  .workflow-track,
+  .governance-grid,
+  .ops-list,
+  .integration-strip,
+  .steps {
+    grid-template-columns: 1fr;
+  }
+  .home-section-media,
+  .capability-showcase-art,
+  .workflow-art {
+    min-height: 280px;
+  }
+  .capability-chip {
+    display: none;
+  }
+  .ops-item,
+  .integration-item {
+    grid-template-columns: 1fr;
+  }
+  .hero-stats { gap: 1.4rem; }
+  .board-row {
+    grid-template-columns: 1fr;
+    gap: .8rem;
+  }
+  .board-row > div:nth-child(4) {
+    display: block;
+  }
+  .board-row .resource-card-actions {
+    justify-content: flex-start;
+  }
+  .modal-actions {
+    align-items: center;
+    flex-direction: row;
+    justify-content: flex-end;
+  }
+  .modal-actions .btn {
+    width: auto;
+  }
+  .modal-body-grid {
+    grid-template-columns: 1fr;
+  }
+  .admin-editor-header,
+  .role-permission-section-head,
+  .admin-editor-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .role-basic-fields,
+  .permission-matrix-row,
+  .permission-matrix-options {
+    grid-template-columns: 1fr;
+  }
+  .permission-matrix-module {
+    border-right: 0;
+    border-bottom: 1px solid var(--c-border-light);
+  }
+}

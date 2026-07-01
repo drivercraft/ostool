@@ -1,0 +1,177 @@
+/* =====================================================================
+   ostool-server webui · design system
+   Light, modern SaaS theme. Indigo primary, slate neutrals, soft tints.
+   ===================================================================== */
+
+:root {
+  /* brand */
+  --c-brand: #4f46e5;
+  --c-brand-light: #6366f1;
+  --c-brand-dark: #4338ca;
+  --c-brand-ghost: #eef2ff;
+  --c-brand-soft: #e0e7ff;
+  --c-brand-tint: #f5f7ff;
+
+  /* accent spectrum */
+  --c-violet: #7c3aed;
+  --c-violet-soft: #ede9fe;
+  --c-sky: #0ea5e9;
+  --c-sky-soft: #e0f2fe;
+  --c-teal: #0d9488;
+  --c-teal-soft: #ccfbf1;
+
+  /* neutrals */
+  --c-bg: #f6f7fb;
+  --c-bg-alt: #eef1f7;
+  --c-surface: #ffffff;
+  --c-surface-2: #fbfcfe;
+  --c-disabled-bg: #f1f5f9;
+  --c-disabled-strong: #cbd5e1;
+  --c-disabled-border: #94a3b8;
+  --c-disabled-text: #475569;
+  --c-reservation-own-bg: #eef2ff;
+  --c-reservation-own-strong: #dbe4ff;
+  --c-reservation-own-border: #818cf8;
+  --c-reservation-own-text: #4338ca;
+  --c-border: #e6e8f0;
+  --c-border-light: #eef0f5;
+  --c-border-strong: #d6dae5;
+
+  /* text */
+  --c-text: #0f1729;
+  --c-text-soft: #2e3856;
+  --c-text-muted: #697386;
+  --c-text-ghost: #98a2b3;
+
+  /* semantic */
+  --c-success: #059669;
+  --c-success-bg: #ecfdf5;
+  --c-success-border: #a7f3d0;
+  --c-warning: #d97706;
+  --c-warning-bg: #fffbeb;
+  --c-warning-border: #fde68a;
+  --c-danger: #e11d48;
+  --c-danger-bg: #fff1f3;
+  --c-danger-border: #fecdd3;
+  --c-info: #0284c7;
+  --c-info-bg: #f0f9ff;
+  --c-info-border: #bae6fd;
+
+  /* type */
+  --font-sans: "Inter", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Noto Sans SC", sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular,
+    Consolas, monospace;
+
+  /* radius */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius-2xl: 28px;
+  --radius-pill: 999px;
+
+  /* shadows */
+  --shadow-xs: 0 1px 2px rgba(15, 23, 41, .04);
+  --shadow-sm: 0 1px 3px rgba(15, 23, 41, .05), 0 1px 2px rgba(15, 23, 41, .03);
+  --shadow: 0 2px 8px rgba(15, 23, 41, .05), 0 1px 3px rgba(15, 23, 41, .04);
+  --shadow-md: 0 8px 24px rgba(15, 23, 41, .07), 0 2px 6px rgba(15, 23, 41, .04);
+  --shadow-lg: 0 18px 48px rgba(15, 23, 41, .10), 0 6px 16px rgba(15, 23, 41, .05);
+  --shadow-brand: 0 12px 28px rgba(79, 70, 229, .28);
+
+  /* layout */
+  --space-page: clamp(16px, 4vw, 40px);
+  --max-width: 1440px;
+  --wide-width: 1680px;
+  --topbar-h: 72px;
+  --sidebar-w: 256px;
+  --content-pad: clamp(10px, 1.2vw, 16px);
+  --content-gap: var(--content-pad);
+  --control-h: 40px;
+  --control-compact-h: var(--control-h);
+  --control-bg: var(--c-surface);
+  --control-bg-muted: var(--c-surface-2);
+  --control-hover-bg: var(--c-brand-tint);
+  --control-border: var(--c-border);
+  --control-border-hover: var(--c-border-strong);
+  --control-focus-border: var(--c-brand-light);
+  --control-focus-ring: var(--c-brand-ghost);
+  --control-text: var(--c-text);
+  --control-muted: var(--c-text-muted);
+  --control-primary-bg: var(--c-brand);
+  --control-primary-hover-bg: var(--c-brand-dark);
+  --control-primary-text: #ffffff;
+  --overlay-backdrop: rgba(15, 23, 41, .45);
+  --overlay-surface: var(--c-surface);
+  --overlay-footer-bg: var(--c-bg-alt);
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+
+  color-scheme: light;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--c-text);
+  background: var(--c-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body.ostool-theme-dark {
+  color-scheme: dark;
+  --c-bg: #101010;
+  --c-bg-alt: #151515;
+  --c-surface: rgba(34, 34, 34, .86);
+  --c-surface-2: rgba(42, 42, 42, .66);
+  --c-border: rgba(255, 255, 255, .11);
+  --c-border-light: rgba(255, 255, 255, .08);
+  --c-border-strong: rgba(255, 255, 255, .18);
+  --c-text: #d8d8d8;
+  --c-text-soft: #b0b0b0;
+  --c-text-muted: #858585;
+  --c-text-ghost: #666666;
+  --c-brand: #60a5fa;
+  --c-brand-light: #93c5fd;
+  --c-brand-dark: #bfdbfe;
+  --c-brand-ghost: rgba(96, 165, 250, .14);
+  --c-brand-soft: rgba(96, 165, 250, .28);
+  --c-brand-tint: rgba(255, 255, 255, .08);
+  --c-violet: #a78bfa;
+  --c-violet-soft: rgba(167, 139, 250, .16);
+  --c-sky: #38bdf8;
+  --c-sky-soft: rgba(56, 189, 248, .14);
+  --c-teal: #2dd4bf;
+  --c-teal-soft: rgba(45, 212, 191, .14);
+  --c-success-bg: rgba(16, 185, 129, .16);
+  --c-success-border: rgba(16, 185, 129, .28);
+  --c-warning-bg: rgba(245, 158, 11, .16);
+  --c-warning-border: rgba(245, 158, 11, .28);
+  --c-danger-bg: rgba(239, 68, 68, .16);
+  --c-danger-border: rgba(239, 68, 68, .3);
+  --c-info-bg: rgba(14, 165, 233, .14);
+  --c-info-border: rgba(14, 165, 233, .28);
+  --control-bg: rgba(28, 28, 28, .74);
+  --control-bg-muted: rgba(42, 42, 42, .52);
+  --control-hover-bg: rgba(52, 52, 52, .82);
+  --control-border: rgba(255, 255, 255, .11);
+  --control-border-hover: rgba(255, 255, 255, .18);
+  --control-focus-border: rgba(147, 197, 253, .62);
+  --control-focus-ring: rgba(96, 165, 250, .18);
+  --control-text: #d8d8d8;
+  --control-muted: #858585;
+  --control-primary-bg: #2563eb;
+  --control-primary-hover-bg: #1d4ed8;
+  --control-primary-text: #ffffff;
+  --overlay-backdrop: rgba(0, 0, 0, .56);
+  --overlay-surface: #181818;
+  --overlay-footer-bg: #151515;
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, .16);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, .2);
+  --shadow: 0 18px 50px rgba(0, 0, 0, .24), 0 2px 10px rgba(0, 0, 0, .16);
+  --shadow-md: 0 22px 62px rgba(0, 0, 0, .28), 0 4px 14px rgba(0, 0, 0, .18);
+  --shadow-lg: 0 28px 80px rgba(0, 0, 0, .38), 0 8px 24px rgba(0, 0, 0, .22);
+  --shadow-brand: 0 12px 28px rgba(96, 165, 250, .18);
+  background: linear-gradient(135deg, #0c0c0c 0%, #141414 48%, #1b1b1b 100%);
+}

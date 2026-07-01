@@ -61,7 +61,9 @@ export type IconName =
   | "bolt"
   | "check"
   | "bell"
+  | "sun"
   | "moon"
+  | "monitor"
   | "chevron-right"
   | "sparkles"
   | "globe"
@@ -105,7 +107,9 @@ const paths: Record<IconName, string> = {
   bolt: `<path d="M13 3 5 13h6l-1 8 8-10h-6z" />`,
   check: `<path d="m5 12 4 4 10-10" />`,
   bell: `<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" /><path d="M10 21a2 2 0 0 0 4 0" />`,
+  sun: `<circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />`,
   moon: `<path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 7 7 0 1 0 20 15.5z" />`,
+  monitor: `<rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4" />`,
   "chevron-right": `<path d="m9 6 6 6-6 6" />`,
   sparkles: `<path d="M12 3v4M12 17v4M3 12h4M17 12h4" /><path d="m6.3 6.3 2.4 2.4M15.3 15.3l2.4 2.4M17.7 6.3l-2.4 2.4M8.7 15.3l-2.4 2.4" />`,
   globe: `<circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z" />`,

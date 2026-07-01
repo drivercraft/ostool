@@ -1,0 +1,51 @@
+/* Shared foundation styles only: reset, document defaults, base elements,
+   and small cross-area typography helpers. */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--c-bg);
+}
+
+#app { min-height: 100vh; display: flex; flex-direction: column; }
+
+::selection { background: var(--c-brand-soft); color: var(--c-brand-dark); }
+
+h1, h2, h3, h4, h5, h6 {
+  margin: 0;
+  line-height: 1.22;
+  font-weight: 700;
+  letter-spacing: -.015em;
+  color: var(--c-text);
+}
+h1 { font-size: clamp(2.1rem, 4.4vw, 3.2rem); }
+h2 { font-size: clamp(1.7rem, 3.2vw, 2.3rem); }
+h3 { font-size: clamp(1.3rem, 2vw, 1.6rem); }
+p { margin: 0; }
+a { color: var(--c-brand); text-decoration: none; transition: color .15s ease; }
+a:hover { color: var(--c-brand-dark); }
+code, kbd {
+  font-family: var(--font-mono);
+  font-size: .86em;
+  background: var(--c-bg-alt);
+  padding: .12em .42em;
+  border-radius: var(--radius-xs);
+  color: var(--c-text-soft);
+}
+hr { border: none; border-top: 1px solid var(--c-border); margin: 1.25rem 0; }
+
+/* ----------------------------- typography helpers --------------------- */
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  font-size: .72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .14em;
+  color: var(--c-brand);
+  margin-bottom: .65rem;
+}
+.muted { color: var(--c-text-muted); }
+.subtle { color: var(--c-text-soft); }
+.text-center { text-align: center; }

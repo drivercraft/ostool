@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
 
 import AppDialog from "@/components/AppDialog.vue";
 import Icon, { type IconName } from "@/components/Icon.vue";
 import { useAuthStore } from "@/stores/auth";
-import { useUiStore } from "@/stores/ui";
+import { type UiThemeMode, useUiStore } from "@/stores/ui";
 
 const route = useRoute();
 const ui = useUiStore();
@@ -70,12 +70,20 @@ const navGroups = computed<NavGroup[]>(() => [
 ]);
 
 const collapsedGroups = reactive<Record<string, boolean>>({});
+const themeMenuOpen = ref(false);
+
+const themeOptions: Array<{ value: UiThemeMode; label: string; icon: IconName }> = [
+  { value: "light", label: "明亮", icon: "sun" },
+  { value: "dark", label: "黑暗", icon: "moon" },
+  { value: "system", label: "跟随系统", icon: "monitor" },
+];
 
 const displayName = computed(
   () => auth.user?.display_name || auth.user?.username || "管理员",
 );
 
 const avatarText = computed(() => displayName.value.slice(0, 1).toUpperCase());
+const themeButtonIcon = computed<IconName>(() => (ui.effectiveTheme === "dark" ? "moon" : "sun"));
 
 function isNavItemActive(to: string) {
   return route.path === to || route.path.startsWith(`${to}/`);
@@ -92,6 +100,35 @@ function isGroupCollapsed(group: NavGroup) {
 function toggleGroup(group: NavGroup) {
   collapsedGroups[group.id] = !isGroupCollapsed(group);
 }
+
+function selectThemeMode(value: UiThemeMode) {
+  ui.setThemeMode(value);
+  themeMenuOpen.value = false;
+}
+
+function closeThemeMenu(event: MouseEvent) {
+  if ((event.target as HTMLElement | null)?.closest(".topbar-menu-shell")) {
+    return;
+  }
+  themeMenuOpen.value = false;
+}
+
+function closeThemeMenuOnEscape(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    themeMenuOpen.value = false;
+  }
+}
+
+onMounted(() => {
+  ui.initializeTheme();
+  document.addEventListener("click", closeThemeMenu);
+  document.addEventListener("keydown", closeThemeMenuOnEscape);
+});
+
+onUnmounted(() => {
+  document.removeEventListener("click", closeThemeMenu);
+  document.removeEventListener("keydown", closeThemeMenuOnEscape);
+});
 </script>
 
 <template>
@@ -99,10 +136,7 @@ function toggleGroup(group: NavGroup) {
     <aside class="sidebar">
       <div class="brand">
         <span class="brand-mark"><Icon name="circuit" :size="22" /></span>
-        <div>
-          <h1>ostool-server</h1>
-          <p>开发板管理台</p>
-        </div>
+        <h1>ostool-server</h1>
       </div>
       <nav class="nav-list" aria-label="管理导航">
         <section v-for="group in navGroups" :key="group.label" class="nav-group">
@@ -156,9 +190,35 @@ function toggleGroup(group: NavGroup) {
           <button class="btn-icon-only" type="button" title="消息">
             <Icon name="bell" :size="18" />
           </button>
-          <button class="btn-icon-only" type="button" title="主题">
-            <Icon name="moon" :size="18" />
-          </button>
+          <div class="topbar-menu-shell">
+            <button
+              class="btn-icon-only"
+              type="button"
+              title="明暗主题"
+              aria-label="明暗主题"
+              :aria-expanded="themeMenuOpen"
+              @click.stop="themeMenuOpen = !themeMenuOpen"
+            >
+              <Icon :name="themeButtonIcon" :size="18" />
+            </button>
+            <div v-if="themeMenuOpen" class="topbar-menu">
+              <div class="topbar-menu-title">主题</div>
+              <button
+                v-for="option in themeOptions"
+                :key="option.value"
+                class="topbar-menu-item"
+                :class="{ 'is-active': ui.themeMode === option.value }"
+                type="button"
+                @click="selectThemeMode(option.value)"
+              >
+                <span>
+                  <Icon :name="option.icon" :size="15" />
+                  {{ option.label }}
+                </span>
+                <Icon v-if="ui.themeMode === option.value" name="check" :size="14" />
+              </button>
+            </div>
+          </div>
           <button class="btn-icon-only" type="button" title="语言">
             <Icon name="globe" :size="18" />
           </button>
