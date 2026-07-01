@@ -69,8 +69,11 @@ describe("AuditLogsView", () => {
 
     expect(listAuditLogs).toHaveBeenCalledWith();
     expect(wrapper.find(".admin-toolbar-left").text()).toContain("刷新");
-    expect(wrapper.findAll(".admin-toolbar-right .filter-field")).toHaveLength(2);
+    expect(wrapper.find(".admin-toolbar-left").text()).toContain("清空");
+    expect(wrapper.find(".admin-toolbar-left .search-field").exists()).toBe(false);
     expect(wrapper.find(".admin-toolbar-right .search-field").exists()).toBe(true);
+    expect(wrapper.find(".admin-toolbar-right").element.firstElementChild?.classList.contains("search-field")).toBe(true);
+    expect(wrapper.findAll(".admin-toolbar-right .filter-field")).toHaveLength(2);
     expect(wrapper.findAll("th").map((header) => header.text())).toEqual([
       "序号",
       "时间",

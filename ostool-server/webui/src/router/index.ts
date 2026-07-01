@@ -238,13 +238,13 @@ export const router = createRouter({
         },
         {
           path: "audit",
-          redirect: "/admin/audit/logs",
+          name: "admin-audit-logs",
+          component: AuditLogsView,
+          meta: { title: "审计日志" },
         },
         {
           path: "audit/logs",
-          name: "admin-audit-logs",
-          component: AuditLogsView,
-          meta: { title: "系统审计 / 审计日志" },
+          redirect: "/admin/audit",
         },
         {
           path: "settings",

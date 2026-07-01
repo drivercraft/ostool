@@ -152,12 +152,24 @@ onMounted(() => {
     <div class="panel admin-table-panel">
       <div class="admin-toolbar">
         <div class="admin-toolbar-left">
+          <button class="btn btn-ghost btn-sm" type="button" @click="resetFilters">
+            清空
+          </button>
           <button class="btn btn-ghost btn-sm" type="button" @click="loadAuditLogs">
             <Icon name="refresh" :size="15" class="btn-icon" />
             刷新
           </button>
         </div>
         <div class="admin-toolbar-right">
+          <label class="search-field">
+            <Icon name="search" :size="16" />
+            <input
+              v-model="operatorSearch"
+              type="search"
+              maxlength="128"
+              placeholder="搜索操作人 / IP / 请求 ID"
+            />
+          </label>
           <label class="field filter-field">
             <span>操作</span>
             <select v-model="actionFilter">
@@ -176,18 +188,6 @@ onMounted(() => {
               </option>
             </select>
           </label>
-          <label class="search-field">
-            <Icon name="search" :size="16" />
-            <input
-              v-model="operatorSearch"
-              type="search"
-              maxlength="128"
-              placeholder="搜索操作人 / IP / 请求 ID"
-            />
-          </label>
-          <button class="btn btn-ghost btn-sm" type="button" @click="resetFilters">
-            清空
-          </button>
         </div>
       </div>
 

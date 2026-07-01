@@ -25,21 +25,33 @@ interface NavItem {
   label: string;
 }
 
-interface NavGroup {
+interface NavGroupItem {
+  type: "group";
   id: string;
   label: string;
   icon: IconName;
   items: NavItem[];
 }
 
-const navGroups = computed<NavGroup[]>(() => [
+interface NavLinkItem {
+  type: "link";
+  to: string;
+  label: string;
+  icon: IconName;
+}
+
+type AdminNavItem = NavGroupItem | NavLinkItem;
+
+const navItems = computed<AdminNavItem[]>(() => [
   {
+    type: "group",
     id: "overview",
     label: "概览",
     icon: "chart",
     items: [{ to: "/admin/overview", label: "运行总览" }],
   },
   {
+    type: "group",
     id: "resources",
     label: "资源管理",
     icon: "cpu-board",
@@ -50,6 +62,7 @@ const navGroups = computed<NavGroup[]>(() => [
     ],
   },
   {
+    type: "group",
     id: "rentals",
     label: "租赁管理",
     icon: "clipboard",
@@ -59,6 +72,7 @@ const navGroups = computed<NavGroup[]>(() => [
     ],
   },
   {
+    type: "group",
     id: "users",
     label: "用户管理",
     icon: "users",
@@ -68,12 +82,10 @@ const navGroups = computed<NavGroup[]>(() => [
     ],
   },
   {
-    id: "audit",
-    label: "系统审计",
+    type: "link",
+    to: "/admin/audit",
+    label: "审计日志",
     icon: "shield",
-    items: [
-      { to: "/admin/audit/logs", label: "审计日志" },
-    ],
   },
 ]);
 
@@ -83,15 +95,15 @@ function isNavItemActive(to: string) {
   return route.path === to || route.path.startsWith(`${to}/`);
 }
 
-function isGroupActive(group: NavGroup) {
+function isGroupActive(group: NavGroupItem) {
   return group.items.some((item) => isNavItemActive(item.to));
 }
 
-function isGroupCollapsed(group: NavGroup) {
+function isGroupCollapsed(group: NavGroupItem) {
   return collapsedGroups[group.id] ?? false;
 }
 
-function toggleGroup(group: NavGroup) {
+function toggleGroup(group: NavGroupItem) {
   collapsedGroups[group.id] = !isGroupCollapsed(group);
 }
 </script>
@@ -104,36 +116,47 @@ function toggleGroup(group: NavGroup) {
         <h1>ostool-server</h1>
       </div>
       <nav class="nav-list" aria-label="管理导航">
-        <section v-for="group in navGroups" :key="group.label" class="nav-group">
-          <button
-            class="nav-group-trigger"
-            :class="{ 'is-active': isGroupActive(group) }"
-            type="button"
-            :aria-expanded="!isGroupCollapsed(group)"
-            @click="toggleGroup(group)"
+        <template v-for="item in navItems" :key="item.label">
+          <RouterLink
+            v-if="item.type === 'link'"
+            :to="item.to"
+            class="nav-group-trigger nav-standalone-link"
+            :class="{ 'is-active': isNavItemActive(item.to) }"
           >
-            <Icon :name="group.icon" :size="16" class="nav-link-icon" />
-            <span>{{ group.label }}</span>
-            <Icon
-              name="chevron-right"
-              :size="15"
-              class="nav-group-chevron"
-              :class="{ 'is-open': !isGroupCollapsed(group) }"
-            />
-          </button>
-          <div v-show="!isGroupCollapsed(group)" class="nav-sub-list">
-            <RouterLink
-              v-for="item in group.items"
-              :key="item.to"
-              :to="item.to"
-              class="nav-link"
-              :class="{ 'is-active': isNavItemActive(item.to) }"
+            <Icon :name="item.icon" :size="16" class="nav-link-icon" />
+            <span>{{ item.label }}</span>
+          </RouterLink>
+          <section v-else class="nav-group">
+            <button
+              class="nav-group-trigger"
+              :class="{ 'is-active': isGroupActive(item) }"
+              type="button"
+              :aria-expanded="!isGroupCollapsed(item)"
+              @click="toggleGroup(item)"
             >
-              <span class="nav-sub-marker" aria-hidden="true"></span>
+              <Icon :name="item.icon" :size="16" class="nav-link-icon" />
               <span>{{ item.label }}</span>
-            </RouterLink>
-          </div>
-        </section>
+              <Icon
+                name="chevron-right"
+                :size="15"
+                class="nav-group-chevron"
+                :class="{ 'is-open': !isGroupCollapsed(item) }"
+              />
+            </button>
+            <div v-show="!isGroupCollapsed(item)" class="nav-sub-list">
+              <RouterLink
+                v-for="child in item.items"
+                :key="child.to"
+                :to="child.to"
+                class="nav-link"
+                :class="{ 'is-active': isNavItemActive(child.to) }"
+              >
+                <span class="nav-sub-marker" aria-hidden="true"></span>
+                <span>{{ child.label }}</span>
+              </RouterLink>
+            </div>
+          </section>
+        </template>
       </nav>
       <div class="sidebar-footer">
         <RouterLink
