@@ -74,16 +74,10 @@ export function selectLeaseCalendarRange<TSlot extends LeaseCalendarSlotBase>(
   const lastSelectedIndex = Math.max(...selectedIndexes);
 
   if (selectedIndexes.includes(clickedIndex)) {
-    if (selectedIndexes.length === 1) {
+    if (clickedIndex === firstSelectedIndex) {
       return { startIso: "", endIso: "" };
     }
-    if (clickedIndex === firstSelectedIndex) {
-      return selectionFromSlots(slots, firstSelectedIndex + 1, lastSelectedIndex);
-    }
-    if (clickedIndex === lastSelectedIndex) {
-      return selectionFromSlots(slots, firstSelectedIndex, lastSelectedIndex - 1);
-    }
-    return { startIso: "", endIso: "" };
+    return selectionFromSlots(slots, firstSelectedIndex, clickedIndex - 1);
   }
 
   const nextFirstIndex = Math.min(firstSelectedIndex, clickedIndex);

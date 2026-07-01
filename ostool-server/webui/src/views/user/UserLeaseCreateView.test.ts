@@ -157,6 +157,7 @@ describe("UserLeaseCreateView", () => {
     await selectableCells[0].trigger("click");
     await flushPromises();
     expect(wrapper.findAll(".lease-calendar-cell.is-selected").length).toBe(1);
+    expect(wrapper.find(".lease-calendar-status-icon.is-selected").exists()).toBe(true);
     await selectableCells[0].trigger("click");
     await flushPromises();
     expect(wrapper.findAll(".lease-calendar-cell.is-selected")).toHaveLength(0);
@@ -245,6 +246,7 @@ describe("UserLeaseCreateView", () => {
 
     const disabledCells = wrapper.findAll(".lease-calendar-cell.is-disabled");
     expect(disabledCells.length).toBeGreaterThan(0);
+    expect(disabledCells[0].find(".lease-calendar-status-icon.is-unavailable").exists()).toBe(true);
     expect(wrapper.find(".lease-calendar-event.is-unavailable").exists()).toBe(true);
     expect(wrapper.find(".lease-calendar-event.is-own").exists()).toBe(true);
     expect(wrapper.text()).toContain("已占用");

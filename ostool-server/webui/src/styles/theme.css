@@ -1,20 +1,20 @@
 /* =====================================================================
    ostool-server webui · design system
-   Light, modern SaaS theme. Indigo primary, slate neutrals, soft tints.
+   Light, modern SaaS theme. Shared blue primary, slate neutrals, soft tints.
    ===================================================================== */
 
 :root {
   /* brand */
-  --c-brand: #4f46e5;
-  --c-brand-light: #6366f1;
-  --c-brand-dark: #4338ca;
-  --c-brand-ghost: #eef2ff;
-  --c-brand-soft: #e0e7ff;
-  --c-brand-tint: #f5f7ff;
+  --c-brand: #3b82f6;
+  --c-brand-light: #60a5fa;
+  --c-brand-dark: #2563eb;
+  --c-brand-ghost: #eff6ff;
+  --c-brand-soft: #dbeafe;
+  --c-brand-tint: #f7fbff;
 
   /* accent spectrum */
-  --c-violet: #7c3aed;
-  --c-violet-soft: #ede9fe;
+  --c-violet: #2563eb;
+  --c-violet-soft: #dbeafe;
   --c-sky: #0ea5e9;
   --c-sky-soft: #e0f2fe;
   --c-teal: #0d9488;
@@ -29,10 +29,17 @@
   --c-disabled-strong: #cbd5e1;
   --c-disabled-border: #94a3b8;
   --c-disabled-text: #475569;
-  --c-reservation-own-bg: #eef2ff;
-  --c-reservation-own-strong: #dbe4ff;
-  --c-reservation-own-border: #818cf8;
-  --c-reservation-own-text: #4338ca;
+  --lease-unavailable-bg: var(--c-disabled-bg);
+  --lease-unavailable-strong: var(--c-disabled-strong);
+  --lease-unavailable-border: var(--c-disabled-border);
+  --lease-unavailable-text: var(--c-disabled-text);
+  --lease-selected-bg: var(--c-success-bg);
+  --lease-selected-border: var(--c-success-border);
+  --lease-selected-text: var(--c-success);
+  --c-reservation-own-bg: #eff6ff;
+  --c-reservation-own-strong: #dbeafe;
+  --c-reservation-own-border: #60a5fa;
+  --c-reservation-own-text: #2563eb;
   --c-border: #e6e8f0;
   --c-border-light: #eef0f5;
   --c-border-strong: #d6dae5;
@@ -142,12 +149,19 @@ body.ostool-theme-dark {
   --c-brand-ghost: rgba(96, 165, 250, .14);
   --c-brand-soft: rgba(96, 165, 250, .28);
   --c-brand-tint: rgba(255, 255, 255, .08);
-  --c-violet: #a78bfa;
-  --c-violet-soft: rgba(167, 139, 250, .16);
+  --c-violet: #60a5fa;
+  --c-violet-soft: rgba(96, 165, 250, .16);
   --c-sky: #38bdf8;
   --c-sky-soft: rgba(56, 189, 248, .14);
   --c-teal: #2dd4bf;
   --c-teal-soft: rgba(45, 212, 191, .14);
+  --lease-unavailable-bg: rgba(39, 39, 42, .76);
+  --lease-unavailable-strong: rgba(63, 63, 70, .72);
+  --lease-unavailable-border: rgba(113, 113, 122, .34);
+  --lease-unavailable-text: #8f96a3;
+  --lease-selected-bg: rgba(16, 185, 129, .16);
+  --lease-selected-border: rgba(16, 185, 129, .34);
+  --lease-selected-text: #34d399;
   --c-success-bg: rgba(16, 185, 129, .16);
   --c-success-border: rgba(16, 185, 129, .28);
   --c-warning-bg: rgba(245, 158, 11, .16);

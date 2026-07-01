@@ -139,13 +139,13 @@ function leasesForRange(startIso: string, endIso: string) {
 function moveCalendar(step: number) {
   const next = new Date(calendarAnchor.value);
   if (calendarView.value === "hour") {
-    next.setHours(next.getHours() + step * 24);
+    next.setHours(next.getHours() + step);
   } else if (calendarView.value === "day") {
-    next.setMonth(next.getMonth() + step);
+    next.setDate(next.getDate() + step);
   } else if (calendarView.value === "year") {
-    next.setFullYear(next.getFullYear() + step * 12);
+    next.setFullYear(next.getFullYear() + step);
   } else {
-    next.setMonth(next.getMonth() + step * 12);
+    next.setMonth(next.getMonth() + step);
   }
   calendarCursorIso.value = next.toISOString();
 }
@@ -529,6 +529,20 @@ onMounted(() => {
                     <strong>{{ slot.label }}</strong>
                     <span v-if="slot.caption">{{ slot.caption }}</span>
                   </header>
+                  <span
+                    v-if="slotOverlapsSelected(slot)"
+                    class="lease-calendar-status-icon is-selected"
+                    aria-hidden="true"
+                  >
+                    <Icon name="check" :size="21" />
+                  </span>
+                  <span
+                    v-else-if="slotIsDisabled(slot)"
+                    class="lease-calendar-status-icon is-unavailable"
+                    aria-hidden="true"
+                  >
+                    <Icon name="ban" :size="21" />
+                  </span>
                   <div class="lease-calendar-events">
                     <div
                       v-for="item in slot.leases.slice(0, calendarView === 'hour' ? 2 : 3)"

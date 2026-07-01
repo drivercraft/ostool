@@ -171,6 +171,7 @@ describe("LeaseEditorView", () => {
     expect(wrapper.find(".lease-calendar-event").exists()).toBe(true);
     const disabledCell = wrapper.find(".lease-calendar-cell:disabled");
     expect(disabledCell.exists()).toBe(true);
+    expect(disabledCell.find(".lease-calendar-status-icon.is-unavailable").exists()).toBe(true);
     await disabledCell.trigger("click");
     await flushPromises();
     expect(disabledCell.classes()).not.toContain("is-selected");
@@ -190,6 +191,7 @@ describe("LeaseEditorView", () => {
     await selectableCells[0].trigger("click");
     await flushPromises();
     expect(wrapper.findAll(".lease-calendar-cell.is-selected")).toHaveLength(1);
+    expect(wrapper.find(".lease-calendar-status-icon.is-selected").exists()).toBe(true);
     expect((dateInputs[0].element as HTMLInputElement).value).toBeTruthy();
     expect((dateInputs[1].element as HTMLInputElement).value).toBeTruthy();
     await selectableCells[0].trigger("click");

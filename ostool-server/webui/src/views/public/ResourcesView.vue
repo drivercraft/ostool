@@ -72,13 +72,13 @@ interface StatCard {
   value: number | string;
   suffix?: string;
   icon: IconName;
-  tone: "brand" | "success" | "violet" | "sky";
+  tone: "brand" | "success" | "accent" | "sky";
 }
 
 const heroStats = computed<StatCard[]>(() => [
   { key: "models", label: "开发板型号", value: boardTypes.value.length, suffix: " 款", icon: "cpu-board", tone: "brand" },
   { key: "available", label: "当前可用", value: totals.value.available, suffix: " 块", icon: "check", tone: "success" },
-  { key: "leased", label: "使用中", value: totals.value.leased, suffix: " 块", icon: "pulse", tone: "violet" },
+  { key: "leased", label: "使用中", value: totals.value.leased, suffix: " 块", icon: "pulse", tone: "accent" },
   { key: "total", label: "在管总数", value: totals.value.total, suffix: " 块", icon: "cube", tone: "sky" },
 ]);
 

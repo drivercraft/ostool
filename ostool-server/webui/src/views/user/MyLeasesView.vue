@@ -147,13 +147,13 @@ function buildYearSlots(anchor: Date) {
 function moveCalendar(step: number) {
   const next = new Date(calendarAnchor.value);
   if (calendarView.value === "hour") {
-    next.setHours(next.getHours() + step * 24);
+    next.setHours(next.getHours() + step);
   } else if (calendarView.value === "day") {
-    next.setMonth(next.getMonth() + step);
+    next.setDate(next.getDate() + step);
   } else if (calendarView.value === "year") {
-    next.setFullYear(next.getFullYear() + step * 12);
+    next.setFullYear(next.getFullYear() + step);
   } else {
-    next.setMonth(next.getMonth() + step * 12);
+    next.setMonth(next.getMonth() + step);
   }
   calendarCursorIso.value = next.toISOString();
 }
