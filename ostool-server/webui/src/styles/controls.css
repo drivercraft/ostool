@@ -381,7 +381,8 @@ textarea:disabled {
 .topbar-menu {
   position: absolute;
   top: calc(100% + 10px);
-  right: 0;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 80;
   display: grid;
   gap: 4px;
@@ -435,6 +436,132 @@ textarea:disabled {
 
 .topbar-menu-item.is-active {
   color: var(--c-brand);
+}
+
+/* ----------------------------- account menu -------------------------- */
+.account-menu-shell {
+  position: relative;
+  display: inline-flex;
+}
+
+.account-avatar-button {
+  width: var(--control-h);
+  height: var(--control-h);
+  padding: 0;
+  border: 1px solid var(--control-border);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--control-primary-bg);
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  font: inherit;
+  font-size: .9rem;
+  font-weight: 900;
+  line-height: 1;
+  transition: background-color .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+.account-avatar-button:hover,
+.account-avatar-button[aria-expanded="true"] {
+  background: var(--control-primary-hover-bg);
+  border-color: var(--control-primary-hover-bg);
+}
+.account-avatar-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--control-focus-ring);
+}
+
+.account-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90;
+  width: 228px;
+  padding: 10px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  background: var(--overlay-surface);
+  box-shadow: var(--shadow-lg);
+}
+.account-menu-profile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .3rem;
+  padding: .8rem .5rem .9rem;
+  text-align: center;
+}
+.account-menu-avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--control-primary-bg);
+  color: #fff;
+  font-size: 1.15rem;
+  font-weight: 900;
+  box-shadow: var(--shadow-sm);
+}
+.account-menu-profile strong {
+  max-width: 100%;
+  color: var(--c-text);
+  font-size: .96rem;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-menu-profile span:last-child {
+  color: var(--c-text-muted);
+  font-size: .78rem;
+  font-weight: 600;
+}
+.account-menu-list {
+  display: grid;
+  gap: 3px;
+}
+.account-menu-item {
+  min-height: 38px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  padding: .52rem .65rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--c-text-soft);
+  cursor: pointer;
+  font: inherit;
+  font-size: .86rem;
+  font-weight: 700;
+  text-align: left;
+  text-decoration: none;
+  transition: background-color .16s ease, color .16s ease;
+}
+.account-menu-item:hover,
+.account-menu-item:focus-visible {
+  outline: none;
+  background: var(--control-hover-bg);
+  color: var(--c-brand);
+}
+.account-menu-divider {
+  height: 1px;
+  margin: 8px 0;
+  background: var(--control-border);
+}
+.account-menu-item-danger {
+  color: var(--c-danger);
+}
+.account-menu-item-danger:hover,
+.account-menu-item-danger:focus-visible {
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
 }
 
 /* ----------------------------- pills / tags -------------------------- */

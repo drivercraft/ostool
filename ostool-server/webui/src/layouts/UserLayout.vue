@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { computed, watch } from "vue";
-import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
+import { RouterLink, RouterView, useRoute } from "vue-router";
 
+import AccountMenu from "@/components/AccountMenu.vue";
 import AppDialog from "@/components/AppDialog.vue";
 import Icon, { type IconName } from "@/components/Icon.vue";
+import ThemeMenu from "@/components/ThemeMenu.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 
 const route = useRoute();
-const router = useRouter();
 const ui = useUiStore();
 const auth = useAuthStore();
 
@@ -37,11 +38,6 @@ watch(
   },
   { immediate: true },
 );
-
-async function logout() {
-  await auth.logoutUser();
-  void router.push("/");
-}
 
 function isTopActive(item: { to: string; exact: boolean }) {
   return item.exact ? route.path === item.to : route.path.startsWith(item.to);
@@ -78,14 +74,11 @@ function isWorkspaceActive(item: { to: string; exact: boolean }) {
         </nav>
 
         <div class="public-actions">
-          <RouterLink v-if="auth.isAdmin" class="btn btn-ghost btn-sm" to="/admin/overview">
-            <Icon name="shield" :size="14" class="btn-icon" />
-            管理台
-          </RouterLink>
-          <button class="btn btn-ghost btn-sm" type="button" @click="logout">
-            <Icon name="logout" :size="14" class="btn-icon" />
-            退出登录
+          <ThemeMenu />
+          <button class="btn-icon-only" type="button" title="语言" aria-label="语言">
+            <Icon name="globe" :size="18" />
           </button>
+          <AccountMenu />
         </div>
       </div>
     </header>

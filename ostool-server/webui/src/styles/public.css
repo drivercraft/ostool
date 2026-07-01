@@ -103,7 +103,13 @@
 }
 .public-nav-link.is-active .nav-link-icon { color: var(--c-brand); }
 
-.public-actions { margin-left: auto; display: flex; align-items: center; gap: .75rem; }
+.public-actions {
+  margin-left: auto;
+  padding-right: var(--topbar-actions-end-pad);
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+}
 
 .public-main { flex: 1; }
 .public-main.user-main { padding: var(--content-pad); }
@@ -134,24 +140,6 @@
 .footer-brand span { font-size: .74rem; color: var(--c-text-muted); }
 .footer-brand .brand-mark { width: 30px; height: 30px; border-radius: 9px; }
 .footer-copy { color: var(--c-text-ghost); font-size: .8rem; }
-
-.public-user-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: .5rem;
-  padding: .28rem .55rem .28rem .3rem;
-  border-radius: var(--radius-pill);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--c-text-soft);
-  font-size: .86rem;
-  font-weight: 600;
-  transition: all .15s ease;
-}
-.public-user-chip:hover { border-color: transparent; background: transparent; color: var(--c-brand-dark); }
-.public-user-chip .avatar-circle { width: 28px; height: 28px; font-size: .78rem; }
-.public-user-chip .public-user-name { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.public-user-chip .public-user-caret { color: var(--c-text-ghost); transform: rotate(90deg); }
 
 .public-page-body { width: 100%; }
 

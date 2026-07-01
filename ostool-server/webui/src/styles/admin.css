@@ -883,19 +883,11 @@ body.ostool-theme-dark .app-shell {
   letter-spacing: 0;
 }
 .topbar-title .crumb { font-size: .76rem; color: var(--c-text-muted); }
-.topbar-actions { display: flex; align-items: center; gap: 8px; }
-.admin-avatar {
-  width: var(--control-h);
-  height: var(--control-h);
-  border-radius: 999px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid var(--c-border);
-  font-size: 14px;
-  font-weight: 900;
-  color: #fff;
-  background: var(--control-primary-bg);
-  box-shadow: 0 8px 18px rgba(59, 130, 246, .18);
-  cursor: pointer;
+.topbar-actions {
+  padding-right: var(--topbar-actions-end-pad);
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .app-shell .page-body {

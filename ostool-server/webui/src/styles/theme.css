@@ -83,6 +83,7 @@
   --page-max-width: none;
   --page-inline-pad: clamp(24px, 5vw, 72px);
   --page-block-pad: clamp(32px, 5vw, 56px);
+  --topbar-actions-end-pad: clamp(48px, 7vw, 128px);
   --topbar-h: 72px;
   --sidebar-w: 256px;
   --content-pad: clamp(16px, 1.8vw, 24px);

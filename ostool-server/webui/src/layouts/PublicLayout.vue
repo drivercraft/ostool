@@ -2,8 +2,10 @@
 import { computed, watch } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
 
+import AccountMenu from "@/components/AccountMenu.vue";
 import AppDialog from "@/components/AppDialog.vue";
 import Icon, { type IconName } from "@/components/Icon.vue";
+import ThemeMenu from "@/components/ThemeMenu.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 
@@ -56,22 +58,12 @@ function isExactActive(item: { to: string; exact: boolean }) {
           </RouterLink>
         </nav>
         <div class="public-actions">
+          <ThemeMenu />
+          <button class="btn-icon-only" type="button" title="语言" aria-label="语言">
+            <Icon name="globe" :size="18" />
+          </button>
           <template v-if="auth.isAuthenticated">
-            <RouterLink
-              v-if="auth.isAdmin"
-              class="btn btn-ghost btn-sm"
-              to="/admin/overview"
-            >
-              <Icon name="shield" :size="14" class="btn-icon" />
-              管理台
-            </RouterLink>
-            <RouterLink class="public-user-chip" to="/dashboard">
-              <span class="avatar-circle">
-                {{ (auth.user?.display_name ?? auth.user?.username ?? "?").slice(0, 1).toUpperCase() }}
-              </span>
-              <span class="public-user-name">{{ auth.user?.display_name ?? auth.user?.username }}</span>
-              <Icon name="chevron-right" :size="14" class="public-user-caret" />
-            </RouterLink>
+            <AccountMenu />
           </template>
           <template v-else>
             <RouterLink class="btn btn-ghost btn-sm" to="/login">
