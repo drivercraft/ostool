@@ -58,10 +58,10 @@ const sections = [
 </script>
 
 <template>
-  <div class="page-body public-page-body legal-page">
-    <header class="public-page-header">
+  <div class="page-body site-page legal-page">
+    <header class="page-header">
       <h2>隐私政策</h2>
-      <p class="public-page-subtitle">
+      <p class="page-subtitle">
         本政策说明 ostool 开发板租赁平台在账号、租赁、远程会话、上传文件和运维审计中如何处理相关信息。
       </p>
     </header>

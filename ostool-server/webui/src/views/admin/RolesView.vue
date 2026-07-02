@@ -386,10 +386,10 @@ watch(
 <template>
   <section
     class="page-grid user-management-page roles-page"
-    :class="editing ? 'admin-editor-page' : 'admin-list-page'"
+    :class="editing ? 'admin-editor-page' : 'admin-list-page admin-list-content role-list-content'"
   >
     <template v-if="editing">
-      <div class="admin-editor-panel">
+      <div class="admin-editor-content">
         <form class="admin-editor-form" @submit.prevent="saveRole">
           <div class="admin-editor-body">
             <div class="role-basic-fields">
@@ -488,7 +488,6 @@ watch(
     </template>
 
     <template v-else>
-      <div class="admin-table-panel role-table-panel">
         <div class="admin-toolbar">
           <div class="admin-toolbar-left">
             <button class="btn btn-primary" @click="openCreate">新增角色</button>
@@ -618,7 +617,6 @@ watch(
           <span>本页 {{ filteredRoles.length }} 条</span>
           <span>筛选后 {{ filteredRoles.length }} 条 / 共 {{ roles.length }} 条</span>
         </div>
-      </div>
 
     </template>
   </section>

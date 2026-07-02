@@ -184,8 +184,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="page-grid admin-list-page audit-page">
-    <div class="admin-table-panel">
+  <section class="page-grid admin-list-page admin-list-content audit-page">
       <div class="admin-toolbar">
         <div class="admin-toolbar-left">
           <button class="btn btn-ghost btn-sm" type="button" @click="resetFilters">
@@ -305,6 +304,5 @@ onMounted(() => {
           </button>
         </span>
       </div>
-    </div>
   </section>
 </template>

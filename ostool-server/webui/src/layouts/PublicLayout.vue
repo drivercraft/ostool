@@ -37,53 +37,51 @@ function isExactActive(item: { to: string; exact: boolean }) {
 </script>
 
 <template>
-  <div class="public-shell">
-    <header class="public-topbar">
-      <div class="public-topbar-inner">
-        <RouterLink class="brand-lockup" to="/">
-          <span class="brand-mark"><Icon name="circuit" :size="22" /></span>
-          <div>
-            <strong>ostool</strong>
-            <span>开发板租赁平台</span>
-          </div>
-        </RouterLink>
-        <nav class="public-nav" aria-label="平台导航">
-          <RouterLink
-            v-for="item in navItems"
-            :key="item.to"
-            :to="item.to"
-            class="public-nav-link"
-            :class="{ 'is-active': isExactActive(item) }"
-          >
-            <Icon :name="item.icon" :size="16" class="nav-link-icon" />
-            <span>{{ item.label }}</span>
-          </RouterLink>
-        </nav>
-        <div class="public-actions">
-          <ThemeMenu />
-          <button class="btn-icon-only" type="button" title="语言" aria-label="语言">
-            <Icon name="globe" :size="18" />
-          </button>
-          <template v-if="auth.isAuthenticated">
-            <AccountMenu />
-          </template>
-          <template v-else>
-            <RouterLink class="btn btn-ghost btn-sm" to="/login">
-              <Icon name="login" :size="14" class="btn-icon" />
-              登录
-            </RouterLink>
-            <RouterLink class="btn btn-primary btn-sm" to="/register">
-              <Icon name="user" :size="14" class="btn-icon" />
-              注册
-            </RouterLink>
-          </template>
+  <div class="site-shell">
+    <header class="site-header">
+      <RouterLink class="brand-lockup" to="/">
+        <span class="brand-mark"><Icon name="circuit" :size="22" /></span>
+        <div>
+          <strong>ostool</strong>
+          <span>开发板租赁平台</span>
         </div>
+      </RouterLink>
+      <nav class="site-nav" aria-label="平台导航">
+        <RouterLink
+          v-for="item in navItems"
+          :key="item.to"
+          :to="item.to"
+          class="site-nav-link"
+          :class="{ 'is-active': isExactActive(item) }"
+        >
+          <Icon :name="item.icon" :size="16" class="nav-link-icon" />
+          <span>{{ item.label }}</span>
+        </RouterLink>
+      </nav>
+      <div class="site-actions">
+        <ThemeMenu />
+        <button class="btn-icon-only" type="button" title="语言" aria-label="语言">
+          <Icon name="globe" :size="18" />
+        </button>
+        <template v-if="auth.isAuthenticated">
+          <AccountMenu />
+        </template>
+        <template v-else>
+          <RouterLink class="btn btn-ghost btn-sm" to="/login">
+            <Icon name="login" :size="14" class="btn-icon" />
+            登录
+          </RouterLink>
+          <RouterLink class="btn btn-primary btn-sm" to="/register">
+            <Icon name="user" :size="14" class="btn-icon" />
+            注册
+          </RouterLink>
+        </template>
       </div>
     </header>
 
     <AnnouncementBar />
 
-    <main class="public-main">
+    <main class="site-main">
       <RouterView />
     </main>
 

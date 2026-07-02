@@ -59,7 +59,7 @@ describe("AnnouncementBar", () => {
     expect(wrapper.text()).toContain("系统公告");
     expect(wrapper.text()).not.toContain("活动公告");
 
-    await wrapper.find(".announcement-bar-toggle").trigger("click");
+    await wrapper.find(".announcement-toggle").trigger("click");
     expect(wrapper.text()).toContain("活动公告");
     expect(wrapper.text()).toContain("活动公告");
   });
@@ -70,6 +70,6 @@ describe("AnnouncementBar", () => {
     const wrapper = mount(AnnouncementBar);
     await flushPromises();
 
-    expect(wrapper.find(".announcement-bar").exists()).toBe(false);
+    expect(wrapper.find(".announcement-banner").exists()).toBe(false);
   });
 });

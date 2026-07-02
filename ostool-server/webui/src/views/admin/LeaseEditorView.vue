@@ -514,7 +514,7 @@ onMounted(() => {
 
 <template>
   <section class="page-grid admin-editor-page lease-editor-page">
-    <div class="admin-editor-panel">
+    <div class="admin-editor-content">
       <form class="admin-editor-form" @submit.prevent="saveLease">
         <div class="admin-editor-body lease-editor-scroll">
           <section class="lease-calendar-panel">

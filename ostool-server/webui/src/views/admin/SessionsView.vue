@@ -245,8 +245,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
 </script>
 
 <template>
-  <section class="page-grid admin-list-page">
-    <div class="admin-table-panel">
+  <section class="page-grid admin-list-page admin-list-content">
       <div class="admin-toolbar">
         <div class="admin-toolbar-left"></div>
         <div class="admin-toolbar-right">
@@ -384,8 +383,6 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
         <span>本页 {{ filteredSessions.length }} 条</span>
         <span>筛选后 {{ filteredSessions.length }} 条 / 共 {{ sessions.length }} 条</span>
       </div>
-    </div>
-
     <div v-if="editingSession" class="modal-overlay">
       <div class="modal-card modal-card--narrow">
         <header class="modal-header">

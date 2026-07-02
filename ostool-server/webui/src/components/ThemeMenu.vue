@@ -45,7 +45,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="topbar-menu-shell theme-menu-shell">
+  <div class="header-menu-shell theme-menu-shell">
     <button
       class="btn-icon-only"
       type="button"
@@ -56,12 +56,12 @@ onUnmounted(() => {
     >
       <Icon :name="themeButtonIcon" :size="18" />
     </button>
-    <div v-if="open" class="topbar-menu">
-      <div class="topbar-menu-title">主题</div>
+    <div v-if="open" class="header-menu">
+      <div class="header-menu-title">主题</div>
       <button
         v-for="option in themeOptions"
         :key="option.value"
-        class="topbar-menu-item"
+        class="header-menu-item"
         :class="{ 'is-active': ui.themeMode === option.value }"
         type="button"
         @click="selectThemeMode(option.value)"

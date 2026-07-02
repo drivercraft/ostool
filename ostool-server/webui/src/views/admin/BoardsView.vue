@@ -258,8 +258,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
 </script>
 
 <template>
-  <div class="boards-page page-grid admin-list-page">
-    <div class="admin-table-panel">
+  <div class="boards-page page-grid admin-list-page admin-list-content">
       <section class="admin-toolbar">
         <div class="admin-toolbar-left">
           <RouterLink to="/admin/resources/boards/new" class="btn btn-primary btn-sm">新增开发板</RouterLink>
@@ -401,6 +400,5 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
         <span>本页 {{ filteredBoards.length }} 条</span>
         <span>筛选后 {{ filteredBoards.length }} 条 / 共 {{ boards.length }} 条</span>
       </div>
-    </div>
   </div>
 </template>

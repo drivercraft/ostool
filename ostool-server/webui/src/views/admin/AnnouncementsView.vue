@@ -199,8 +199,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="page-grid admin-list-page">
-    <div class="admin-table-panel">
+  <section class="page-grid admin-list-page admin-list-content">
       <div class="admin-toolbar">
         <div class="admin-toolbar-left">
           <button class="btn btn-primary" type="button" :disabled="!canCreate" @click="openCreate">
@@ -306,8 +305,6 @@ onMounted(() => {
         <span>本页 {{ filteredAnnouncements.length }} 条</span>
         <span>筛选后 {{ filteredAnnouncements.length }} 条 / 共 {{ announcements.length }} 条</span>
       </div>
-    </div>
-
     <div v-if="modalVisible" class="modal-overlay">
       <div class="modal-card">
         <header class="modal-header">

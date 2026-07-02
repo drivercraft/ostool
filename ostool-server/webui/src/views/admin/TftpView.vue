@@ -53,7 +53,7 @@ onMounted(() => {
 
 <template>
   <section class="page-grid">
-    <div class="admin-page-surface tftp-page-surface">
+    <div class="admin-page-content tftp-page-content">
       <div class="panel-heading panel-heading--actions-only">
         <div class="toolbar-actions">
           <button class="btn btn-ghost" @click="loadTftp">刷新</button>

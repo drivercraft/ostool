@@ -1,8 +1,7 @@
 /* ===================================================================== */
 /*  User dashboard                                                       */
 /* ===================================================================== */
-.user-shell { min-height: 100vh; display: flex; flex-direction: column; }
-.user-app-shell {
+.user-workspace {
   width: 100%;
   display: grid;
   grid-template-columns: 272px minmax(0, 1fr);
@@ -11,8 +10,8 @@
 }
 .user-sidebar {
   position: sticky;
-  top: calc(var(--topbar-h) + 24px);
-  min-height: calc(100vh - var(--topbar-h) - 48px);
+  top: calc(var(--site-header-h) + 24px);
+  min-height: calc(100vh - var(--site-header-h) - 48px);
   display: flex;
   flex-direction: column;
   gap: 1rem;
@@ -103,10 +102,10 @@
   background: var(--c-danger-bg);
   color: var(--c-danger);
 }
-.user-content-shell {
+.user-main > :not(.user-sidebar) {
   min-width: 0;
 }
-.user-content-shell .public-page-body {
+.user-main > .site-page {
   max-width: none;
   padding: 0;
 }
@@ -168,7 +167,7 @@
   height: clamp(360px, 48vh, 560px);
 }
 .dashboard-page > section {
-  scroll-margin-top: calc(var(--topbar-h) + 24px);
+  scroll-margin-top: calc(var(--site-header-h) + 24px);
 }
 .dashboard-welcome {
   display: flex;
@@ -450,7 +449,7 @@
   gap: 1.6rem;
   align-items: flex-start;
 }
-.dashboard-sidebar { display: flex; flex-direction: column; gap: 1.2rem; position: sticky; top: calc(var(--topbar-h) + 24px); }
+.dashboard-sidebar { display: flex; flex-direction: column; gap: 1.2rem; position: sticky; top: calc(var(--site-header-h) + 24px); }
 .profile-card { display: flex; flex-direction: column; align-items: center; text-align: center; gap: .5rem; padding: 1.8rem 1.4rem; }
 .profile-avatar {
   width: 72px; height: 72px;

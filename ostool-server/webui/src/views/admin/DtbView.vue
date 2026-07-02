@@ -387,8 +387,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
 </script>
 
 <template>
-  <section class="page-grid admin-list-page dtb-page">
-    <div class="admin-table-panel">
+  <section class="page-grid admin-list-page admin-list-content dtb-page">
       <div class="admin-toolbar">
         <div class="admin-toolbar-left">
           <button class="btn btn-primary" @click="openCreateDtb">
@@ -514,7 +513,6 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
         <span>本页 {{ filteredDtbs.length }} 条</span>
         <span>筛选后 {{ filteredDtbs.length }} 条 / 共 {{ dtbs.length }} 条</span>
       </div>
-    </div>
   </section>
 
   <div

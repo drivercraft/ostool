@@ -52,71 +52,65 @@ function isWorkspaceActive(item: { to: string; exact: boolean }) {
 </script>
 
 <template>
-  <div class="user-shell">
-    <header class="public-topbar user-topbar">
-      <div class="public-topbar-inner">
-        <RouterLink class="brand-lockup" to="/">
-          <span class="brand-mark"><Icon name="circuit" :size="22" /></span>
-          <div>
-            <strong>ostool</strong>
-            <span>开发板租赁平台</span>
-          </div>
-        </RouterLink>
-
-        <nav class="public-nav" aria-label="平台导航">
-          <RouterLink
-            v-for="item in topNavItems"
-            :key="item.to"
-            class="public-nav-link"
-            :class="{ 'is-active': isTopActive(item) }"
-            :to="item.to"
-          >
-            <Icon :name="item.icon" :size="16" class="nav-link-icon" />
-            <span>{{ item.label }}</span>
-          </RouterLink>
-        </nav>
-
-        <div class="public-actions">
-          <ThemeMenu />
-          <button class="btn-icon-only" type="button" title="语言" aria-label="语言">
-            <Icon name="globe" :size="18" />
-          </button>
-          <AccountMenu />
+  <div class="site-shell user-shell">
+    <header class="site-header">
+      <RouterLink class="brand-lockup" to="/">
+        <span class="brand-mark"><Icon name="circuit" :size="22" /></span>
+        <div>
+          <strong>ostool</strong>
+          <span>开发板租赁平台</span>
         </div>
+      </RouterLink>
+
+      <nav class="site-nav" aria-label="平台导航">
+        <RouterLink
+          v-for="item in topNavItems"
+          :key="item.to"
+          class="site-nav-link"
+          :class="{ 'is-active': isTopActive(item) }"
+          :to="item.to"
+        >
+          <Icon :name="item.icon" :size="16" class="nav-link-icon" />
+          <span>{{ item.label }}</span>
+        </RouterLink>
+      </nav>
+
+      <div class="site-actions">
+        <ThemeMenu />
+        <button class="btn-icon-only" type="button" title="语言" aria-label="语言">
+          <Icon name="globe" :size="18" />
+        </button>
+        <AccountMenu />
       </div>
     </header>
 
     <AnnouncementBar />
 
-    <main class="public-main user-main">
-      <div class="user-app-shell">
-        <aside class="user-sidebar">
-          <div class="user-sidebar-profile">
-            <span class="avatar-circle">{{ avatarInitial }}</span>
-            <div>
-              <strong>{{ displayName }}</strong>
-              <span>{{ auth.isAdmin ? "管理员" : "注册用户" }}</span>
-            </div>
+    <main class="site-main user-main user-workspace">
+      <aside class="user-sidebar">
+        <div class="user-sidebar-profile">
+          <span class="avatar-circle">{{ avatarInitial }}</span>
+          <div>
+            <strong>{{ displayName }}</strong>
+            <span>{{ auth.isAdmin ? "管理员" : "注册用户" }}</span>
           </div>
+        </div>
 
-          <nav class="user-nav" aria-label="用户导航">
-            <RouterLink
-              v-for="item in workspaceNavItems"
-              :key="item.to"
-              class="user-nav-link"
-              :class="{ 'is-active': isWorkspaceActive(item) }"
-              :to="item.to"
-            >
-              <Icon :name="item.icon" :size="17" class="nav-link-icon" />
-              <span>{{ item.label }}</span>
-            </RouterLink>
-          </nav>
-        </aside>
+        <nav class="user-nav" aria-label="用户导航">
+          <RouterLink
+            v-for="item in workspaceNavItems"
+            :key="item.to"
+            class="user-nav-link"
+            :class="{ 'is-active': isWorkspaceActive(item) }"
+            :to="item.to"
+          >
+            <Icon :name="item.icon" :size="17" class="nav-link-icon" />
+            <span>{{ item.label }}</span>
+          </RouterLink>
+        </nav>
+      </aside>
 
-        <section class="user-content-shell">
-          <RouterView />
-        </section>
-      </div>
+      <RouterView />
     </main>
     <AppFooter />
     <AppDialog

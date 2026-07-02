@@ -38,33 +38,31 @@ onMounted(() => {
 </script>
 
 <template>
-  <section v-if="!loading && announcements.length > 0" class="announcement-bar" aria-label="平台公告">
-    <div class="announcement-bar-inner">
-      <span class="announcement-bar-icon"><Icon name="bell" :size="16" /></span>
-      <div class="announcement-bar-list">
-        <article
-          v-for="item in visibleAnnouncements"
-          :key="item.announcement.id"
-          class="announcement-bar-item"
-          :class="{ 'is-pinned': item.announcement.pinned }"
-        >
-          <div class="announcement-bar-title">
-            <strong>{{ item.announcement.title }}</strong>
-            <span>{{ getAnnouncementKindLabel(item.announcement.kind) }}</span>
-            <span v-if="item.announcement.pinned">置顶</span>
-            <span>{{ formatDate(item.announcement.published_at || item.announcement.created_at) }}</span>
-          </div>
-          <p>{{ item.announcement.content }}</p>
-        </article>
-      </div>
-      <button
-        v-if="announcements.length > 1"
-        class="announcement-bar-toggle"
-        type="button"
-        @click="expanded = !expanded"
+  <section v-if="!loading && announcements.length > 0" class="announcement-banner" aria-label="平台公告">
+    <span class="announcement-icon"><Icon name="bell" :size="16" /></span>
+    <div class="announcement-list">
+      <article
+        v-for="item in visibleAnnouncements"
+        :key="item.announcement.id"
+        class="announcement-item"
+        :class="{ 'is-pinned': item.announcement.pinned }"
       >
-        {{ expanded ? "收起" : `展开 ${announcements.length} 条` }}
-      </button>
+        <div class="announcement-title">
+          <strong>{{ item.announcement.title }}</strong>
+          <span>{{ getAnnouncementKindLabel(item.announcement.kind) }}</span>
+          <span v-if="item.announcement.pinned">置顶</span>
+          <span>{{ formatDate(item.announcement.published_at || item.announcement.created_at) }}</span>
+        </div>
+        <p>{{ item.announcement.content }}</p>
+      </article>
     </div>
+    <button
+      v-if="announcements.length > 1"
+      class="announcement-toggle"
+      type="button"
+      @click="expanded = !expanded"
+    >
+      {{ expanded ? "收起" : `展开 ${announcements.length} 条` }}
+    </button>
   </section>
 </template>

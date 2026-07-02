@@ -140,7 +140,7 @@ onMounted(() => {
 
 <template>
   <section class="page-grid settings-page">
-    <div class="settings-surface">
+    <div class="settings-content">
       <div v-if="loading" class="empty-state">正在加载 server 配置...</div>
       <template v-else-if="config">
         <div class="tab-list settings-tab-list" role="tablist" aria-label="系统设置标签">

@@ -19,18 +19,19 @@
   align-content: stretch;
   overflow: hidden;
 }
-.app-shell .page-body:has(> .admin-editor-page) {
+.admin-shell .admin-main:has(> .admin-editor-page) {
   overflow: hidden;
 }
-.app-shell .page-body > .admin-list-page {
+.admin-shell .admin-main > .admin-list-page {
   height: 100%;
   min-height: 0;
 }
-.app-shell .page-body > .admin-editor-page {
+.admin-shell .admin-main > .admin-editor-page {
   height: 100%;
   min-height: 0;
 }
-.admin-list-page > .admin-table-panel:only-child {
+.admin-list-page.admin-list-content,
+.admin-list-page > .admin-list-content:only-child {
   height: 100%;
   min-height: 0;
 }
@@ -77,14 +78,15 @@
   max-width: 680px;
   font-size: .88rem;
 }
-.page-grid > .admin-page-surface,
-.page-grid > .admin-table-panel,
-.page-grid > .admin-editor-panel,
+.page-grid > .admin-page-content,
+.page-grid > .admin-list-content,
+.page-grid.admin-list-content,
+.page-grid > .admin-editor-content,
 .page-grid > .admin-toolbar {
   width: 100%;
 }
-.page-grid > .admin-page-surface > .panel-heading:first-child,
-.page-grid > .admin-table-panel > .panel-heading:first-child {
+.page-grid > .admin-page-content > .panel-heading:first-child,
+.page-grid > .admin-list-content > .panel-heading:first-child {
   min-height: 40px;
 }
 .page-grid .panel-heading.compact {
@@ -118,7 +120,7 @@
   background: transparent;
   box-shadow: none;
 }
-.admin-table-panel > .admin-toolbar {
+.admin-list-content > .admin-toolbar {
   border-bottom: 1px solid var(--c-border-light);
   border-radius: 0;
   box-shadow: none;
@@ -142,7 +144,7 @@
 .admin-toolbar-right .filter-field:first-of-type {
   margin-left: auto;
 }
-.admin-table-panel {
+.admin-list-content {
   display: flex;
   flex-direction: column;
   padding: 0;
@@ -152,10 +154,10 @@
   border-radius: 0;
   box-shadow: none;
 }
-.admin-table-panel > .panel-heading {
+.admin-list-content > .panel-heading {
   padding: 0 0 var(--content-pad);
 }
-.admin-table-panel > .empty-state {
+.admin-list-content > .empty-state {
   flex: 1 1 auto;
   display: flex;
   align-items: center;
@@ -179,12 +181,12 @@
 .table-empty-row .empty-state {
   min-height: 260px;
 }
-.admin-table-panel .data-table th:first-child,
-.admin-table-panel .data-table td:first-child {
+.admin-list-content .data-table th:first-child,
+.admin-list-content .data-table td:first-child {
   padding-left: 1.1rem;
 }
-.admin-table-panel .data-table th:last-child,
-.admin-table-panel .data-table td:last-child {
+.admin-list-content .data-table th:last-child,
+.admin-list-content .data-table td:last-child {
   padding-right: 1.1rem;
 }
 .table-statusbar {
@@ -303,7 +305,7 @@
 }
 
 /* Shared admin editor layout: titlebar, scrollable body, fixed footer actions. */
-.admin-editor-panel {
+.admin-editor-content {
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -314,7 +316,7 @@
   border-radius: 0;
   box-shadow: none;
 }
-.admin-editor-page > .admin-editor-panel {
+.admin-editor-page > .admin-editor-content {
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -485,7 +487,7 @@
   height: 100%;
   min-height: 0;
 }
-.settings-page > .settings-surface {
+.settings-page > .settings-content {
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -619,9 +621,9 @@
 .hover\:bg-red-50:hover { background: var(--c-danger-bg); }
 
 /* ===================================================================== */
-/*  Admin shell (sidebar + topbar)                                       */
+/*  Admin shell (admin-sidebar + admin-header)                                       */
 /* ===================================================================== */
-.app-shell {
+.admin-shell {
   --admin-surface-plain: rgba(255, 255, 255, .72);
   --admin-surface-hover: rgba(237, 244, 255, .86);
   --admin-surface-active: rgba(239, 246, 255, .72);
@@ -637,19 +639,19 @@
   --shadow-sm: 0 2px 8px rgba(28, 48, 74, .05);
   --shadow-md: 0 14px 36px rgba(28, 48, 74, .08), 0 3px 10px rgba(28, 48, 74, .04);
   --shadow-lg: 0 24px 70px rgba(28, 48, 74, .18), 0 8px 24px rgba(28, 48, 74, .08);
-  --topbar-h: 64px;
-  --admin-topbar-actions-end-pad: clamp(44px, 4vw, 72px);
-  --sidebar-w: 240px;
+  --admin-header-h: 64px;
+  --admin-header-actions-end-pad: clamp(44px, 4vw, 72px);
+  --admin-sidebar-w: 240px;
   --content-pad: 20px;
   display: grid;
-  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-columns: var(--admin-sidebar-w) 1fr;
   min-height: 100vh;
   height: 100vh;
   overflow: hidden;
   color: var(--c-text);
-  background: linear-gradient(135deg, #eef6ff 0%, #f7fbff 42%, #f2f7f1 100%);
+  background: var(--app-frame-bg);
 }
-body.ostool-theme-dark .app-shell {
+body.ostool-theme-dark .admin-shell {
   --admin-surface-plain: rgba(28, 28, 28, .62);
   --admin-surface-hover: rgba(52, 52, 52, .82);
   --admin-surface-active: rgba(64, 64, 64, .52);
@@ -677,14 +679,14 @@ body.ostool-theme-dark .app-shell {
   --shadow-md: 0 22px 62px rgba(0, 0, 0, .28), 0 4px 14px rgba(0, 0, 0, .18);
   --shadow-lg: 0 28px 80px rgba(0, 0, 0, .38), 0 8px 24px rgba(0, 0, 0, .22);
   color: var(--c-text);
-  background: linear-gradient(135deg, #0c0c0c 0%, #141414 48%, #1b1b1b 100%);
+  background: var(--app-frame-bg);
 }
-.app-shell:has(.admin-editor-page) {
+.admin-shell:has(.admin-editor-page) {
   height: 100vh;
   min-height: 0;
   overflow: hidden;
 }
-.sidebar {
+.admin-sidebar {
   background: var(--admin-surface-plain);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
@@ -695,22 +697,22 @@ body.ostool-theme-dark .app-shell {
   height: 100vh;
   overflow: hidden;
 }
-.sidebar .brand {
-  height: var(--topbar-h);
+.admin-sidebar .brand {
+  height: var(--admin-header-h);
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 0 24px;
   border-bottom: 1px solid var(--c-border);
 }
-.sidebar .brand h1 {
+.admin-sidebar .brand h1 {
   color: var(--c-text);
   font-size: 22px;
   font-weight: 700;
   line-height: 1;
   letter-spacing: 0;
 }
-.sidebar .brand .brand-mark {
+.admin-sidebar .brand .brand-mark {
   width: 32px;
   height: 32px;
   border-radius: 8px;
@@ -718,7 +720,7 @@ body.ostool-theme-dark .app-shell {
   box-shadow: 0 8px 18px rgba(59, 130, 246, .18);
 }
 
-.nav-list {
+.admin-nav {
   padding: 16px 12px;
   display: flex;
   flex-direction: column;
@@ -726,8 +728,8 @@ body.ostool-theme-dark .app-shell {
   flex: 1;
   overflow-y: auto;
 }
-.nav-group { display: grid; gap: 4px; }
-.nav-group-trigger {
+.admin-nav-group { display: grid; gap: 4px; }
+.admin-nav-button {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -745,12 +747,12 @@ body.ostool-theme-dark .app-shell {
   text-align: left;
   transition: background .16s ease, color .16s ease, box-shadow .16s ease;
 }
-.nav-group-trigger:hover { color: var(--c-text); background: var(--admin-surface-hover); }
-.nav-group-trigger.is-active { color: var(--c-brand); background: var(--admin-surface-active); }
-.nav-group-trigger .nav-link-icon { color: var(--c-text-muted); }
-.nav-group-trigger:hover .nav-link-icon,
-.nav-group-trigger.is-active .nav-link-icon { color: currentColor; }
-.nav-group-chevron {
+.admin-nav-button:hover { color: var(--c-text); background: var(--admin-surface-hover); }
+.admin-nav-button.is-active { color: var(--c-brand); background: var(--admin-surface-active); }
+.admin-nav-button .admin-nav-icon { color: var(--c-text-muted); }
+.admin-nav-button:hover .admin-nav-icon,
+.admin-nav-button.is-active .admin-nav-icon { color: currentColor; }
+.admin-nav-chevron {
   margin-left: auto;
   width: 24px;
   height: 24px;
@@ -759,14 +761,14 @@ body.ostool-theme-dark .app-shell {
   color: var(--c-text-muted);
   transition: transform .2s ease, color .16s ease;
 }
-.nav-group-trigger:hover .nav-group-chevron { color: var(--c-text); }
-.nav-group-chevron.is-open { transform: rotate(90deg); }
-.nav-sub-list {
+.admin-nav-button:hover .admin-nav-chevron { color: var(--c-text); }
+.admin-nav-chevron.is-open { transform: rotate(90deg); }
+.admin-subnav {
   display: grid;
   gap: 2px;
   padding-left: 16px;
 }
-.nav-link {
+.admin-subnav-link {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -779,7 +781,7 @@ body.ostool-theme-dark .app-shell {
   transition: background .16s ease, color .16s ease;
   position: relative;
 }
-.nav-link .nav-sub-marker {
+.admin-subnav-link .admin-subnav-marker {
   width: 8px;
   height: 22px;
   display: inline-flex;
@@ -789,7 +791,7 @@ body.ostool-theme-dark .app-shell {
   background: transparent;
   position: static;
 }
-.nav-link .nav-sub-marker::before {
+.admin-subnav-link .admin-subnav-marker::before {
   content: "";
   width: 6px;
   height: 6px;
@@ -798,18 +800,18 @@ body.ostool-theme-dark .app-shell {
   opacity: .65;
   transition: width .18s ease, height .18s ease, opacity .18s ease;
 }
-.nav-link:hover { color: var(--c-text); background: var(--admin-surface-hover); }
-.nav-link.is-active { color: var(--c-brand); background: var(--admin-surface-active); }
-.nav-link.is-active .nav-sub-marker::before {
+.admin-subnav-link:hover { color: var(--c-text); background: var(--admin-surface-hover); }
+.admin-subnav-link.is-active { color: var(--c-brand); background: var(--admin-surface-active); }
+.admin-subnav-link.is-active .admin-subnav-marker::before {
   width: 4px;
   height: 22px;
   opacity: 1;
 }
 
-.sidebar-footer { padding: 12px; border-top: 1px solid var(--c-border); }
-.nav-group-bottom-link { width: 100%; }
+.admin-sidebar-footer { padding: 12px; border-top: 1px solid var(--c-border); }
+.admin-nav-bottom-link { width: 100%; }
 
-.app-content {
+.admin-workspace {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -820,14 +822,14 @@ body.ostool-theme-dark .app-shell {
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
 }
-.app-content:has(.admin-editor-page) {
+.admin-workspace:has(.admin-editor-page) {
   height: 100vh;
   min-height: 0;
   overflow: hidden;
 }
-.topbar {
-  height: var(--topbar-h);
-  min-height: var(--topbar-h);
+.admin-header {
+  height: var(--admin-header-h);
+  min-height: var(--admin-header-h);
   background: transparent;
   border-bottom: 1px solid var(--c-border);
   display: flex;
@@ -837,22 +839,22 @@ body.ostool-theme-dark .app-shell {
   flex-shrink: 0;
   z-index: 40;
 }
-.topbar-title { display: flex; flex-direction: column; gap: .1rem; }
-.topbar-title h2 {
+.admin-header-title { display: flex; flex-direction: column; gap: .1rem; }
+.admin-header-title h2 {
   color: var(--c-text);
   font-size: 18px;
   font-weight: 600;
   letter-spacing: 0;
 }
-.topbar-title .crumb { font-size: .76rem; color: var(--c-text-muted); }
-.topbar-actions {
-  padding-right: var(--admin-topbar-actions-end-pad);
+.admin-header-title .crumb { font-size: .76rem; color: var(--c-text-muted); }
+.admin-header-actions {
+  padding-right: var(--admin-header-actions-end-pad);
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.app-shell .page-body {
+.admin-shell .admin-main {
   flex: 1 1 0;
   min-height: 0;
   height: 0;

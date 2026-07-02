@@ -694,7 +694,7 @@ onMounted(() => {
 
 <template>
   <section class="page-grid admin-editor-page">
-    <div class="admin-editor-panel board-editor-page">
+    <div class="admin-editor-content board-editor-page">
       <div v-if="loading" class="empty-state">
         <div class="empty-state-icon">&#9641;</div>
         正在加载开发板配置...

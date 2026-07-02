@@ -220,8 +220,7 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
 </script>
 
 <template>
-  <section class="page-grid admin-list-page">
-    <div class="admin-table-panel">
+  <section class="page-grid admin-list-page admin-list-content">
       <div class="admin-toolbar">
         <div class="admin-toolbar-left">
           <button class="btn btn-primary" @click="openCreate">
@@ -367,6 +366,5 @@ onUnmounted(() => document.removeEventListener("click", onDocumentClick));
         <span>本页 {{ filteredLeases.length }} 条</span>
         <span>筛选后 {{ filteredLeases.length }} 条 / 共 {{ leases.length }} 条</span>
       </div>
-    </div>
   </section>
 </template>

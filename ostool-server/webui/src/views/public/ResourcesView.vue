@@ -110,12 +110,12 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page-body public-page-body resources-page">
+  <div class="page-body site-page resources-page">
     <section class="resources-hero">
       <div class="resources-hero-copy">
         <p class="eyebrow">资源总览</p>
         <h2>可租赁的开发板资源</h2>
-        <p class="public-page-subtitle">
+        <p class="page-subtitle">
           下方为平台当前纳管的全部开发板型号。登录后可在用户控制台中创建租赁，并按时间段预约设备。
         </p>
       </div>
@@ -137,8 +137,8 @@ onMounted(() => {
       </section>
     </section>
 
-    <section class="public-toolbar">
-      <div class="public-toolbar-left">
+    <section class="page-toolbar">
+      <div class="page-toolbar-left">
         <label class="search-field">
           <Icon name="search" :size="16" />
           <input
@@ -165,7 +165,7 @@ onMounted(() => {
           </select>
         </label>
       </div>
-      <div class="public-toolbar-right">
+      <div class="page-toolbar-right">
         <div class="view-toggle" role="group" aria-label="排列方式">
           <button
             type="button"

@@ -494,8 +494,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="page-grid users-page admin-list-page">
-    <div class="admin-table-panel">
+  <section class="page-grid users-page admin-list-page admin-list-content">
       <div class="admin-toolbar">
         <div class="admin-toolbar-left">
           <button class="btn btn-primary" @click="openCreate">
@@ -689,8 +688,6 @@ onMounted(() => {
         <span>本页 {{ filteredUsers.length }} 条</span>
         <span>筛选后 {{ filteredUsers.length }} 条 / 共 {{ users.length }} 条</span>
       </div>
-    </div>
-
     <!-- 创建 / 编辑 / 重置密码 弹窗 -->
     <div
       v-if="modalMode"

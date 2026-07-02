@@ -52,10 +52,10 @@ const sections = [
 </script>
 
 <template>
-  <div class="page-body public-page-body legal-page">
-    <header class="public-page-header">
+  <div class="page-body site-page legal-page">
+    <header class="page-header">
       <h2>用户协议</h2>
-      <p class="public-page-subtitle">
+      <p class="page-subtitle">
         本协议说明使用 ostool 开发板租赁平台时应遵守的账号、资源租赁、远程调试和安全规范。
       </p>
     </header>

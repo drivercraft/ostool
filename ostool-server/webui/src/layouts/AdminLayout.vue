@@ -121,72 +121,72 @@ function toggleGroup(group: NavGroupItem) {
 </script>
 
 <template>
-  <div class="app-shell">
-    <aside class="sidebar">
+  <div class="admin-shell">
+    <aside class="admin-sidebar">
       <div class="brand">
         <span class="brand-mark"><Icon name="circuit" :size="22" /></span>
         <h1>ostool-server</h1>
       </div>
-      <nav class="nav-list" aria-label="管理导航">
+      <nav class="admin-nav" aria-label="管理导航">
         <template v-for="item in navItems" :key="item.label">
           <RouterLink
             v-if="item.type === 'link'"
             :to="item.to"
-            class="nav-group-trigger nav-standalone-link"
+            class="admin-nav-button admin-nav-standalone-link"
             :class="{ 'is-active': isNavItemActive(item.to) }"
           >
-            <Icon :name="item.icon" :size="16" class="nav-link-icon" />
+            <Icon :name="item.icon" :size="16" class="admin-nav-icon" />
             <span>{{ item.label }}</span>
           </RouterLink>
-          <section v-else class="nav-group">
+          <section v-else class="admin-nav-group">
             <button
-              class="nav-group-trigger"
+              class="admin-nav-button"
               :class="{ 'is-active': isGroupActive(item) }"
               type="button"
               :aria-expanded="!isGroupCollapsed(item)"
               @click="toggleGroup(item)"
             >
-              <Icon :name="item.icon" :size="16" class="nav-link-icon" />
+              <Icon :name="item.icon" :size="16" class="admin-nav-icon" />
               <span>{{ item.label }}</span>
               <Icon
                 name="chevron-right"
                 :size="15"
-                class="nav-group-chevron"
+                class="admin-nav-chevron"
                 :class="{ 'is-open': !isGroupCollapsed(item) }"
               />
             </button>
-            <div v-show="!isGroupCollapsed(item)" class="nav-sub-list">
+            <div v-show="!isGroupCollapsed(item)" class="admin-subnav">
               <RouterLink
                 v-for="child in item.items"
                 :key="child.to"
                 :to="child.to"
-                class="nav-link"
+                class="admin-subnav-link"
                 :class="{ 'is-active': isNavItemActive(child.to) }"
               >
-                <span class="nav-sub-marker" aria-hidden="true"></span>
+                <span class="admin-subnav-marker" aria-hidden="true"></span>
                 <span>{{ child.label }}</span>
               </RouterLink>
             </div>
           </section>
         </template>
       </nav>
-      <div class="sidebar-footer">
+      <div class="admin-sidebar-footer">
         <RouterLink
-          class="nav-group-trigger nav-group-bottom-link"
+          class="admin-nav-button admin-nav-bottom-link"
           :class="{ 'is-active': isNavItemActive('/admin/settings/server') }"
           to="/admin/settings/server"
         >
-          <Icon name="settings" :size="16" class="nav-link-icon" />
+          <Icon name="settings" :size="16" class="admin-nav-icon" />
           <span>系统设置</span>
         </RouterLink>
       </div>
     </aside>
-    <div class="app-content">
-      <header class="topbar">
-        <div class="topbar-title">
+    <div class="admin-workspace">
+      <header class="admin-header">
+        <div class="admin-header-title">
           <h2>{{ ui.title }}</h2>
         </div>
-        <div class="topbar-actions" aria-label="管理台工具栏">
+        <div class="admin-header-actions" aria-label="管理台工具栏">
           <button class="btn-icon-only" type="button" title="消息">
             <Icon name="bell" :size="18" />
           </button>
@@ -198,7 +198,7 @@ function toggleGroup(group: NavGroupItem) {
         </div>
       </header>
 
-      <main class="page-body">
+      <main class="admin-main">
         <RouterView />
       </main>
     </div>
