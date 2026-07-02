@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0](https://github.com/drivercraft/ostool/compare/ostool-v0.23.5...ostool-v0.24.0) - 2026-07-02
+
+### Added
+
+- *(cargo)* support test target artifacts ([#149](https://github.com/drivercraft/ostool/pull/149))
+
 ## [0.23.5](https://github.com/drivercraft/ostool/compare/ostool-v0.23.4...ostool-v0.23.5) - 2026-06-26
 
 ### Fixed
