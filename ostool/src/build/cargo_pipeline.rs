@@ -12,7 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, anyhow, bail};
-use cargo_metadata::{Message, PackageId};
+use cargo_metadata::{Message, PackageId, TargetKind};
 use colored::Colorize;
 
 use crate::{
@@ -73,6 +73,12 @@ impl CargoBuildOutcome {
     }
 }
 
+fn is_executable_target_kind(kinds: &[TargetKind]) -> bool {
+    kinds
+        .iter()
+        .any(|kind| matches!(kind, TargetKind::Bin | TargetKind::Test))
+}
+
 #[derive(Debug, Clone)]
 struct CargoBuildPlan {
     command: String,
@@ -81,6 +87,7 @@ struct CargoBuildPlan {
     extra_config_path: Option<PathBuf>,
     package: String,
     bin: Option<String>,
+    test: Option<String>,
     target: String,
     target_dir: PathBuf,
     features: Vec<String>,
@@ -115,6 +122,10 @@ impl CargoBuildPlan {
         if let Some(bin) = &self.bin {
             cmd.arg("--bin");
             cmd.arg(bin);
+        }
+        if let Some(test) = &self.test {
+            cmd.arg("--test");
+            cmd.arg(test);
         }
         cmd.arg("--target");
         cmd.arg(&self.target);
@@ -162,6 +173,10 @@ impl CargoBuildPlan {
         if let Some(bin) = &self.bin {
             args.push("--bin".into());
             args.push(bin.clone());
+        }
+        if let Some(test) = &self.test {
+            args.push("--test".into());
+            args.push(test.clone());
         }
         args.push("--target".into());
         args.push(self.target.clone());
@@ -292,7 +307,7 @@ impl<'a> CargoBuildPipeline<'a> {
             match message {
                 Message::CompilerArtifact(artifact) => {
                     if artifact.package_id == target_pkg_id
-                        && artifact.target.is_bin()
+                        && is_executable_target_kind(&artifact.target.kind)
                         && let Some(executable) = artifact.executable
                     {
                         let elf_path = executable.into_std_path_buf();
@@ -333,6 +348,7 @@ impl<'a> CargoBuildPipeline<'a> {
         let resolved = select_executable_artifact(
             &executable_artifacts,
             self.config.bin.as_deref(),
+            self.config.test.as_deref(),
             default_run.as_deref(),
             &self.config.package,
         )?;
@@ -346,6 +362,9 @@ impl<'a> CargoBuildPipeline<'a> {
     }
 
     async fn build_cargo_plan(&mut self) -> anyhow::Result<CargoBuildPlan> {
+        if self.config.bin.is_some() && self.config.test.is_some() {
+            bail!("system.Cargo.bin and system.Cargo.test are mutually exclusive");
+        }
         let features = self.build_features();
         let extra_config_path = self.cargo_extra_config().await?;
         let someboot_args = self.detect_someboot_args(&features)?;
@@ -370,6 +389,7 @@ impl<'a> CargoBuildPipeline<'a> {
             extra_config_path,
             package: self.config.package.clone(),
             bin: self.config.bin.clone(),
+            test: self.config.test.clone(),
             target: self.config.target.clone(),
             target_dir: self.input.build_dir.clone(),
             features,
@@ -673,7 +693,11 @@ mod tests {
         )
     }
 
-    async fn cargo_plan_args(root: &Path, config: &Cargo, debug: bool) -> Vec<String> {
+    async fn cargo_plan_args_result(
+        root: &Path,
+        config: &Cargo,
+        debug: bool,
+    ) -> anyhow::Result<Vec<String>> {
         let invocation = Invocation::new(InvocationOptions::new(
             Some(root.to_path_buf()),
             None,
@@ -683,7 +707,11 @@ mod tests {
         .unwrap();
         let input = cargo_input_for(&invocation, config, debug);
         let mut builder = CargoBuildPipeline::build(input, config).skip_objcopy(true);
-        builder.build_cargo_plan().await.unwrap().args()
+        builder.build_cargo_plan().await.map(|plan| plan.args())
+    }
+
+    async fn cargo_plan_args(root: &Path, config: &Cargo, debug: bool) -> Vec<String> {
+        cargo_plan_args_result(root, config, debug).await.unwrap()
     }
 
     fn feature_arg(args: &[String]) -> Option<&str> {
@@ -771,6 +799,49 @@ mod tests {
 
         assert!(!debug_args.iter().any(|arg| arg == "--release"));
         assert!(release_args.iter().any(|arg| arg == "--release"));
+    }
+
+    #[tokio::test]
+    async fn build_cargo_plan_uses_test_target_selector() {
+        let temp = tempfile::tempdir().unwrap();
+        write_log_workspace(temp.path(), false);
+        let config = Cargo {
+            package: "app".into(),
+            target: "x86_64-unknown-none".into(),
+            test: Some("kernel_axtest".into()),
+            profile: Some(CargoBuildProfile::Debug),
+            ..Default::default()
+        };
+
+        let args = cargo_plan_args(temp.path(), &config, false).await;
+
+        assert!(
+            args.windows(2)
+                .any(|window| window == ["--test", "kernel_axtest"])
+        );
+        assert!(!args.iter().any(|arg| arg == "--bin"));
+    }
+
+    #[tokio::test]
+    async fn build_cargo_plan_rejects_bin_and_test_target_together() {
+        let temp = tempfile::tempdir().unwrap();
+        write_log_workspace(temp.path(), false);
+        let config = Cargo {
+            package: "app".into(),
+            target: "x86_64-unknown-none".into(),
+            bin: Some("kernel".into()),
+            test: Some("kernel_axtest".into()),
+            ..Default::default()
+        };
+
+        let err = cargo_plan_args_result(temp.path(), &config, false)
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("system.Cargo.bin and system.Cargo.test")
+        );
     }
 
     #[tokio::test]

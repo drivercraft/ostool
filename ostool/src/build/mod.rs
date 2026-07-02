@@ -162,18 +162,19 @@ impl CargoRunnerKind {
 pub(crate) struct CargoSelector {
     package: Option<String>,
     bin: Option<String>,
+    test: Option<String>,
 }
 
 impl CargoSelector {
     /// Creates a Cargo selector from optional CLI overrides.
     #[cfg(test)]
-    pub(crate) fn new(package: Option<String>, bin: Option<String>) -> Self {
-        Self { package, bin }
+    pub(crate) fn new(package: Option<String>, bin: Option<String>, test: Option<String>) -> Self {
+        Self { package, bin, test }
     }
 
     /// Returns whether no selector override was supplied.
     fn is_empty(&self) -> bool {
-        self.package.is_none() && self.bin.is_none()
+        self.package.is_none() && self.bin.is_none() && self.test.is_none()
     }
 }
 
@@ -187,7 +188,7 @@ fn apply_cargo_selector(
     }
 
     let config::BuildSystem::Cargo(cargo_config) = &mut config.system else {
-        bail!("--package/--bin can only be used with system.Cargo build configs");
+        bail!("--package/--bin/--test can only be used with system.Cargo build configs");
     };
 
     if let Some(package) = &selector.package {
@@ -195,6 +196,11 @@ fn apply_cargo_selector(
     }
     if let Some(bin) = &selector.bin {
         cargo_config.bin = Some(bin.clone());
+        cargo_config.test = None;
+    }
+    if let Some(test) = &selector.test {
+        cargo_config.bin = None;
+        cargo_config.test = Some(test.clone());
     }
     Ok(())
 }
@@ -352,7 +358,7 @@ pub async fn cargo_build(
     activate_build_config(
         invocation,
         &BuildConfig {
-            system: BuildSystem::Cargo(config.clone()),
+            system: BuildSystem::Cargo(Box::new(config.clone())),
         },
         config_path,
     )?;
@@ -420,7 +426,7 @@ pub async fn cargo_run(
     activate_build_config(
         invocation,
         &BuildConfig {
-            system: BuildSystem::Cargo(config.clone()),
+            system: BuildSystem::Cargo(Box::new(config.clone())),
         },
         config_path,
     )?;
@@ -713,17 +719,17 @@ mod tests {
         let layout = resolve_project_layout(Some(temp.path().to_path_buf())).unwrap();
         let config_path = temp.path().join(".build.toml");
         let config = BuildConfig {
-            system: BuildSystem::Cargo(Cargo {
+            system: BuildSystem::Cargo(Box::new(Cargo {
                 package: "placeholder".into(),
                 ..Default::default()
-            }),
+            })),
         };
 
         let active = activate_build_context(
             &layout,
             config,
             Some(config_path.clone()),
-            &CargoSelector::new(Some("kernel".into()), Some("kernel-qemu".into())),
+            &CargoSelector::new(Some("kernel".into()), Some("kernel-qemu".into()), None),
         )
         .unwrap();
 
@@ -752,10 +758,10 @@ mod tests {
         ))
         .unwrap();
         let config = BuildConfig {
-            system: BuildSystem::Cargo(Cargo {
+            system: BuildSystem::Cargo(Box::new(Cargo {
                 package: "kernel".into(),
                 ..Default::default()
-            }),
+            })),
         };
         let config_path = temp.path().join(".build.toml");
 
@@ -792,13 +798,13 @@ mod tests {
             &layout,
             config,
             None,
-            &CargoSelector::new(Some("kernel".into()), None),
+            &CargoSelector::new(Some("kernel".into()), None, None),
         )
         .unwrap_err();
 
         assert!(
             err.to_string()
-                .contains("--package/--bin can only be used with system.Cargo")
+                .contains("--package/--bin/--test can only be used with system.Cargo")
         );
     }
 }

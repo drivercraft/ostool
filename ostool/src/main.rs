@@ -101,13 +101,16 @@ struct CargoSelectorArgs {
     #[arg(long)]
     package: Option<String>,
     /// Select a Cargo binary target within the selected package
-    #[arg(long)]
+    #[arg(long, conflicts_with = "test")]
     bin: Option<String>,
+    /// Select a Cargo test target within the selected package
+    #[arg(long, conflicts_with = "bin")]
+    test: Option<String>,
 }
 
 impl CargoSelectorArgs {
     fn is_empty(&self) -> bool {
-        self.package.is_none() && self.bin.is_none()
+        self.package.is_none() && self.bin.is_none() && self.test.is_none()
     }
 }
 
@@ -416,7 +419,7 @@ async fn load_build_config(
     Ok(LoadedBuildConfig { config, path })
 }
 
-/// Applies `--package` and `--bin` overrides to Cargo build configs.
+/// Applies `--package`, `--bin`, and `--test` overrides to Cargo build configs.
 fn apply_cargo_selector(
     invocation: &mut Invocation,
     build_config: &mut build::config::BuildConfig,
@@ -425,7 +428,9 @@ fn apply_cargo_selector(
 ) -> Result<()> {
     if !selector.is_empty() {
         let build::config::BuildSystem::Cargo(cargo_config) = &mut build_config.system else {
-            anyhow::bail!("--package/--bin can only be used with system.Cargo build configs");
+            anyhow::bail!(
+                "--package/--bin/--test can only be used with system.Cargo build configs"
+            );
         };
 
         if let Some(package) = &selector.package {
@@ -433,6 +438,11 @@ fn apply_cargo_selector(
         }
         if let Some(bin) = &selector.bin {
             cargo_config.bin = Some(bin.clone());
+            cargo_config.test = None;
+        }
+        if let Some(test) = &selector.test {
+            cargo_config.bin = None;
+            cargo_config.test = Some(test.clone());
         }
     }
 
@@ -535,6 +545,31 @@ mod tests {
                 );
                 assert_eq!(cargo_selector.package.as_deref(), Some("kernel"));
                 assert_eq!(cargo_selector.bin.as_deref(), Some("kernel-qemu"));
+                assert!(cargo_selector.test.is_none());
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_build_with_test_selector() {
+        let cli = Cli::try_parse_from([
+            "ostool",
+            "build",
+            "--config",
+            "kernel.build.toml",
+            "--package",
+            "kernel",
+            "--test",
+            "axtest_kernel",
+        ])
+        .unwrap();
+
+        match cli.command {
+            SubCommands::Build { cargo_selector, .. } => {
+                assert_eq!(cargo_selector.package.as_deref(), Some("kernel"));
+                assert!(cargo_selector.bin.is_none());
+                assert_eq!(cargo_selector.test.as_deref(), Some("axtest_kernel"));
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -570,6 +605,7 @@ mod tests {
                 );
                 assert_eq!(args.cargo_selector.package.as_deref(), Some("kernel"));
                 assert_eq!(args.cargo_selector.bin.as_deref(), Some("kernel-qemu"));
+                assert!(args.cargo_selector.test.is_none());
                 assert_eq!(
                     args.qemu.qemu_config.as_deref(),
                     Some(std::path::Path::new("kernel.qemu.toml"))
@@ -609,6 +645,7 @@ mod tests {
                 );
                 assert_eq!(args.cargo_selector.package.as_deref(), Some("kernel"));
                 assert_eq!(args.cargo_selector.bin.as_deref(), Some("kernel-uboot"));
+                assert!(args.cargo_selector.test.is_none());
                 assert_eq!(
                     args.uboot.uboot_config.as_deref(),
                     Some(std::path::Path::new("kernel.uboot.toml"))
@@ -738,6 +775,7 @@ mod tests {
                 );
                 assert!(args.cargo_selector.package.is_none());
                 assert!(args.cargo_selector.bin.is_none());
+                assert!(args.cargo_selector.test.is_none());
                 assert_eq!(args.board_type.as_deref(), Some("rk3568"));
                 assert_eq!(args.server.server.as_deref(), Some("10.0.0.2"));
                 assert_eq!(args.server.port, Some(9000));
@@ -766,6 +804,7 @@ mod tests {
             }) => {
                 assert_eq!(args.cargo_selector.package.as_deref(), Some("kernel"));
                 assert_eq!(args.cargo_selector.bin.as_deref(), Some("kernel-board"));
+                assert!(args.cargo_selector.test.is_none());
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -775,11 +814,11 @@ mod tests {
     fn apply_cargo_selector_overrides_cargo_build_config() {
         let (_temp, mut invocation) = test_invocation();
         let mut build_config = build::config::BuildConfig {
-            system: build::config::BuildSystem::Cargo(build::config::Cargo {
+            system: build::config::BuildSystem::Cargo(Box::new(build::config::Cargo {
                 package: "default-package".into(),
                 bin: None,
                 ..Default::default()
-            }),
+            })),
         };
 
         apply_cargo_selector(
@@ -789,6 +828,7 @@ mod tests {
             &CargoSelectorArgs {
                 package: Some("kernel".into()),
                 bin: Some("kernel-qemu".into()),
+                test: None,
             },
         )
         .unwrap();
@@ -797,6 +837,7 @@ mod tests {
             build::config::BuildSystem::Cargo(cargo) => {
                 assert_eq!(cargo.package, "kernel");
                 assert_eq!(cargo.bin.as_deref(), Some("kernel-qemu"));
+                assert!(cargo.test.is_none());
             }
             other => panic!("unexpected build system: {other:?}"),
         }
@@ -820,14 +861,48 @@ mod tests {
             &CargoSelectorArgs {
                 package: Some("kernel".into()),
                 bin: None,
+                test: None,
             },
         )
         .unwrap_err();
 
         assert!(
             err.to_string()
-                .contains("--package/--bin can only be used with system.Cargo")
+                .contains("--package/--bin/--test can only be used with system.Cargo")
         );
+    }
+
+    #[test]
+    fn apply_cargo_selector_overrides_test_target() {
+        let (_temp, mut invocation) = test_invocation();
+        let mut build_config = build::config::BuildConfig {
+            system: build::config::BuildSystem::Cargo(Box::new(build::config::Cargo {
+                package: "default-package".into(),
+                bin: Some("old-bin".into()),
+                ..Default::default()
+            })),
+        };
+
+        apply_cargo_selector(
+            &mut invocation,
+            &mut build_config,
+            _temp.path().join(".build.toml").as_path(),
+            &CargoSelectorArgs {
+                package: Some("kernel".into()),
+                bin: None,
+                test: Some("axtest_kernel".into()),
+            },
+        )
+        .unwrap();
+
+        match &build_config.system {
+            build::config::BuildSystem::Cargo(cargo) => {
+                assert_eq!(cargo.package, "kernel");
+                assert!(cargo.bin.is_none());
+                assert_eq!(cargo.test.as_deref(), Some("axtest_kernel"));
+            }
+            other => panic!("unexpected build system: {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -870,11 +945,11 @@ dtb_file = "${package}/board.dtb"
         let mut invocation =
             Invocation::new(InvocationOptions::new(Some(app_dir), None, None, false)).unwrap();
         let mut build_config = build::config::BuildConfig {
-            system: build::config::BuildSystem::Cargo(build::config::Cargo {
+            system: build::config::BuildSystem::Cargo(Box::new(build::config::Cargo {
                 package: "app".into(),
                 target: "aarch64-unknown-none".into(),
                 ..Default::default()
-            }),
+            })),
         };
 
         apply_cargo_selector(
@@ -884,6 +959,7 @@ dtb_file = "${package}/board.dtb"
             &CargoSelectorArgs {
                 package: Some("kernel".into()),
                 bin: Some("kernel-board".into()),
+                test: None,
             },
         )
         .unwrap();
@@ -981,6 +1057,7 @@ fail_regex = []
             &CargoSelectorArgs {
                 package: Some("kernel".into()),
                 bin: Some("kernel-board".into()),
+                test: None,
             },
         )
         .unwrap();
