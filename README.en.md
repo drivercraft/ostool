@@ -319,6 +319,29 @@ ostool board config
 
 Project-local `.board.toml` `server` / `port` fields still apply to `ostool board run`, with precedence lower than CLI flags and higher than the global config.
 
+### Public board authentication
+
+Direct LAN connections to `ostool-server` keep the anonymous HTTP configuration above. A public authentication gateway uses a complete HTTPS URL:
+
+```toml
+[board]
+server_url = "https://203.0.113.10:8443"
+auth_mode = "required"
+```
+
+Sign in through browser device authorization, or import a personal access token (PAT) created in the web UI from standard input:
+
+```bash
+ostool login
+printf '%s' "$OSTOOL_PAT" | ostool login --with-token
+ostool auth status
+ostool logout
+```
+
+OAuth sign-in automatically refreshes short-lived access tokens. A PAT is sent directly as a Bearer token and is never refreshed. Credentials are stored in the system credential store when available, with a warned user-level credential-file fallback. Automation can use `OSTOOL_BOARD_ACCESS_TOKEN`; it is neither stored nor refreshed.
+
+Public authentication requires HTTPS. The client verifies certificates only through the system trust store; deployments using a private CA must install its root certificate on client systems. Do not use HTTP, bypass certificate verification, or put tokens in configuration files.
+
 ## 🛠️ Subproject Details
 
 ### JKConfig - Smart Configuration Editor

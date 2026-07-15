@@ -19,7 +19,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use crate::board::global_config::{BoardGlobalConfig, LoadedBoardGlobalConfig};
+use crate::board::global_config::{AuthMode, BoardGlobalConfig, LoadedBoardGlobalConfig};
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const FORM_CONTENT_HEIGHT: u16 = 14;
@@ -125,6 +125,8 @@ impl InputField {
 #[derive(Debug, Clone)]
 struct BoardConfigApp {
     path: PathBuf,
+    server_url: Option<String>,
+    auth_mode: AuthMode,
     server_ip: InputField,
     port: InputField,
     active: ActiveField,
@@ -135,6 +137,8 @@ impl BoardConfigApp {
     fn new(path: PathBuf, config: BoardGlobalConfig) -> Self {
         Self {
             path,
+            server_url: config.server_url,
+            auth_mode: config.auth_mode,
             server_ip: InputField::new(config.server_ip),
             port: InputField::new(config.port.to_string()),
             active: ActiveField::ServerIp,
@@ -257,7 +261,12 @@ impl BoardConfigApp {
             bail!("port must be in 1..=65535");
         }
 
-        Ok(BoardGlobalConfig { server_ip, port })
+        Ok(BoardGlobalConfig {
+            server_url: self.server_url.clone(),
+            auth_mode: self.auth_mode,
+            server_ip,
+            port,
+        })
     }
 
     fn focus_next(&mut self) {
@@ -485,6 +494,7 @@ mod tests {
             BoardGlobalConfig {
                 server_ip: "10.0.0.2".into(),
                 port: 9000,
+                ..BoardGlobalConfig::default()
             },
         );
 

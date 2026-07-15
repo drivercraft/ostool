@@ -51,8 +51,13 @@ pub(crate) fn classify_server_control_message(
     }
 }
 
-pub async fn run_serial_terminal(ws_url: reqwest::Url) -> anyhow::Result<()> {
-    let (stream, _) = tokio_tungstenite::connect_async(ws_url.as_str())
+pub async fn run_serial_terminal(
+    ws_url: reqwest::Url,
+    authorization: Option<String>,
+) -> anyhow::Result<()> {
+    let request =
+        crate::board::serial_stream::websocket_request(&ws_url, authorization.as_deref())?;
+    let (stream, _) = tokio_tungstenite::connect_async(request)
         .await
         .with_context(|| format!("failed to connect serial websocket {ws_url}"))?;
     let (mut sink, mut stream) = stream.split();

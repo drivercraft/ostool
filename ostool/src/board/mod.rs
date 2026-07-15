@@ -14,7 +14,7 @@ use crate::board::{
     client::{BoardServerClient, BoardTypeSummary},
     config::BoardRunConfig,
     config_tui::run_board_config_tui,
-    global_config::LoadedBoardGlobalConfig,
+    global_config::{BoardEndpoint, LoadedBoardGlobalConfig},
     session::BoardSession,
 };
 use crate::{
@@ -26,12 +26,25 @@ use crate::{
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunBoardOptions {
     pub board_type: Option<String>,
+    pub server_url: Option<String>,
     pub server: Option<String>,
     pub port: Option<u16>,
 }
 
 pub async fn fetch_board_types(server: &str, port: u16) -> anyhow::Result<Vec<BoardTypeSummary>> {
     let client = BoardServerClient::new(server, port)?;
+    let mut boards = client
+        .list_board_types()
+        .await
+        .context("failed to list board types")?;
+    boards.sort_by(|a, b| a.board_type.cmp(&b.board_type));
+    Ok(boards)
+}
+
+pub async fn fetch_board_types_endpoint(
+    endpoint: BoardEndpoint,
+) -> anyhow::Result<Vec<BoardTypeSummary>> {
+    let client = BoardServerClient::new_with_endpoint(endpoint)?;
     let mut boards = client
         .list_board_types()
         .await
@@ -102,6 +115,12 @@ pub async fn list_boards(server: &str, port: u16) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub async fn list_boards_endpoint(endpoint: BoardEndpoint) -> anyhow::Result<()> {
+    let boards = fetch_board_types_endpoint(endpoint).await?;
+    println!("{}", render_board_table(&boards));
+    Ok(())
+}
+
 pub fn config() -> anyhow::Result<()> {
     run_board_config_tui()
 }
@@ -126,8 +145,35 @@ pub async fn acquire_board_session(
     Ok((client, session))
 }
 
+pub async fn acquire_board_session_endpoint(
+    endpoint: BoardEndpoint,
+    board_type: &str,
+) -> anyhow::Result<(BoardServerClient, BoardSession)> {
+    let client = BoardServerClient::new_with_endpoint(endpoint)?;
+    let session = BoardSession::acquire(client.clone(), board_type)
+        .await
+        .with_context(|| format!("failed to acquire board type `{board_type}`"))?;
+    Ok((client, session))
+}
+
 pub async fn connect_board(server: &str, port: u16, board_type: &str) -> anyhow::Result<()> {
     let (client, session) = acquire_board_session(server, port, board_type).await?;
+    connect_allocated_board(client, session, board_type).await
+}
+
+pub async fn connect_board_endpoint(
+    endpoint: BoardEndpoint,
+    board_type: &str,
+) -> anyhow::Result<()> {
+    let (client, session) = acquire_board_session_endpoint(endpoint, board_type).await?;
+    connect_allocated_board(client, session, board_type).await
+}
+
+async fn connect_allocated_board(
+    client: BoardServerClient,
+    session: BoardSession,
+    board_type: &str,
+) -> anyhow::Result<()> {
     print_allocated_board_session(&session, board_type);
 
     let result = if session.info().serial_available {
@@ -137,7 +183,7 @@ pub async fn connect_board(server: &str, port: u16, board_type: &str) -> anyhow:
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("server did not return a serial websocket URL"))?;
         let ws_url = client.resolve_ws_url(ws_path)?;
-        terminal::run_serial_terminal(ws_url).await
+        terminal::run_serial_terminal(ws_url, client.websocket_authorization().await?).await
     } else {
         let lease_expires_at = session.current_lease_expires_at().await;
         println!("Board has no serial configuration; keeping session alive until Ctrl+C.");
@@ -281,12 +327,14 @@ pub async fn run_prepared_board(
     board_config.apply_overrides(
         &scope,
         options.board_type.as_deref(),
+        options.server_url.as_deref(),
         options.server.as_deref(),
         options.port,
     )?;
 
-    let (server, port) = board_config.resolve_server(None, None, &global_config.board);
-    let (client, session) = acquire_board_session(&server, port, &board_config.board_type).await?;
+    let endpoint = board_config.resolve_endpoint(None, None, None, &global_config.board)?;
+    let (client, session) =
+        acquire_board_session_endpoint(endpoint, &board_config.board_type).await?;
     print_allocated_board_session(&session, &board_config.board_type);
 
     let run_result = match session.info().boot_mode.as_str() {

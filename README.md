@@ -316,6 +316,29 @@ ostool board config
 
 项目级 `.board.toml` 中的 `server` / `port` 仍可用于 `ostool board run`，其优先级低于命令行参数，高于全局配置。
 
+### 公网开发板认证
+
+局域网直接连接 `ostool-server` 时保留上述匿名 HTTP 配置。公网认证网关使用完整 HTTPS 地址：
+
+```toml
+[board]
+server_url = "https://203.0.113.10:8443"
+auth_mode = "required"
+```
+
+登录使用浏览器设备授权流程，或从标准输入导入在 Web 管理台创建的个人访问令牌（PAT）：
+
+```bash
+ostool login
+printf '%s' "$OSTOOL_PAT" | ostool login --with-token
+ostool auth status
+ostool logout
+```
+
+OAuth 登录会自动刷新短期 access token；PAT 直接用于 Bearer 认证，不会刷新。凭据优先保存到系统 credential store；不可用时会警告并退回用户级凭据文件。自动化场景可设置 `OSTOOL_BOARD_ACCESS_TOKEN`，该 token 不保存也不刷新。
+
+公网认证必须使用 HTTPS。客户端仅使用系统信任库验证证书；部署组织私有 CA 时，需由运维将其根证书安装到客户端系统。不要使用 HTTP、跳过证书验证或把 token 放进配置文件。
+
 ## 🛠️ 子项目详解
 
 ### JKConfig - 智能配置编辑器

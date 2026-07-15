@@ -35,6 +35,9 @@
 mod artifact;
 mod boot;
 
+/// Authentication gateway client, secure credential storage, and token lifecycle management.
+pub mod auth;
+
 /// Build system configuration and Cargo integration.
 ///
 /// Provides functionality for configuring and executing Cargo builds

@@ -3,15 +3,31 @@ use std::fmt;
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 use httpboot_protocol::KernelPublishResponse;
-use reqwest::{StatusCode, Url};
+use reqwest::{Method, StatusCode, Url};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
-#[derive(Debug, Clone)]
+use crate::{
+    auth::token_manager::TokenManager,
+    board::global_config::{AuthMode, BoardEndpoint},
+};
+
+#[derive(Clone)]
 pub struct BoardServerClient {
     client: reqwest::Client,
     base_url: Url,
     ws_base_url: Url,
+    endpoint: BoardEndpoint,
+    token_manager: TokenManager,
+}
+
+impl fmt::Debug for BoardServerClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BoardServerClient")
+            .field("base_url", &self.base_url)
+            .field("auth_mode", &self.endpoint.auth_mode)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -198,20 +214,30 @@ impl BoardServerClientError {
 
 impl BoardServerClient {
     pub fn new(server: &str, port: u16) -> anyhow::Result<Self> {
+        Self::new_with_endpoint(BoardEndpoint::new(
+            &format!("http://{server}:{port}"),
+            AuthMode::Disabled,
+        )?)
+    }
+
+    pub fn new_with_endpoint(endpoint: BoardEndpoint) -> anyhow::Result<Self> {
         Ok(Self {
             client: reqwest::Client::builder()
                 .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .context("failed to build HTTP client")?,
-            base_url: build_base_url("http", server, port)?,
-            ws_base_url: build_base_url("ws", server, port)?,
+            base_url: endpoint.base_url.clone(),
+            ws_base_url: endpoint.websocket_base_url()?,
+            token_manager: TokenManager::new(endpoint.clone())?,
+            endpoint,
         })
     }
 
     pub async fn list_board_types(&self) -> Result<Vec<BoardTypeSummary>, BoardServerClientError> {
         let response = self
-            .client
-            .get(self.endpoint("/api/v1/board-types"))
+            .request(Method::GET, self.endpoint("/api/v1/board-types"))
+            .await?
             .send()
             .await
             .map_err(Self::request_error)?;
@@ -223,8 +249,8 @@ impl BoardServerClient {
         board_type: &str,
     ) -> Result<SessionCreatedResponse, BoardServerClientError> {
         let response = self
-            .client
-            .post(self.endpoint("/api/v1/sessions"))
+            .request(Method::POST, self.endpoint("/api/v1/sessions"))
+            .await?
             .json(&CreateSessionRequest {
                 board_type: board_type.to_string(),
                 required_tags: vec![],
@@ -241,8 +267,11 @@ impl BoardServerClient {
         session_id: &str,
     ) -> Result<HeartbeatResponse, BoardServerClientError> {
         let response = self
-            .client
-            .post(self.endpoint(&format!("/api/v1/sessions/{session_id}/heartbeat")))
+            .request(
+                Method::POST,
+                self.endpoint(&format!("/api/v1/sessions/{session_id}/heartbeat")),
+            )
+            .await?
             .send()
             .await
             .map_err(Self::request_error)?;
@@ -251,8 +280,11 @@ impl BoardServerClient {
 
     pub async fn delete_session(&self, session_id: &str) -> Result<(), BoardServerClientError> {
         let response = self
-            .client
-            .delete(self.endpoint(&format!("/api/v1/sessions/{session_id}")))
+            .request(
+                Method::DELETE,
+                self.endpoint(&format!("/api/v1/sessions/{session_id}")),
+            )
+            .await?
             .send()
             .await
             .map_err(Self::request_error)?;
@@ -267,8 +299,11 @@ impl BoardServerClient {
         session_id: &str,
     ) -> Result<BootProfileResponse, BoardServerClientError> {
         let response = self
-            .client
-            .get(self.endpoint(&format!("/api/v1/sessions/{session_id}/boot-profile")))
+            .request(
+                Method::GET,
+                self.endpoint(&format!("/api/v1/sessions/{session_id}/boot-profile")),
+            )
+            .await?
             .send()
             .await
             .map_err(Self::request_error)?;
@@ -280,8 +315,11 @@ impl BoardServerClient {
         session_id: &str,
     ) -> Result<SerialStatusResponse, BoardServerClientError> {
         let response = self
-            .client
-            .get(self.endpoint(&format!("/api/v1/sessions/{session_id}/serial")))
+            .request(
+                Method::GET,
+                self.endpoint(&format!("/api/v1/sessions/{session_id}/serial")),
+            )
+            .await?
             .send()
             .await
             .map_err(Self::request_error)?;
@@ -293,8 +331,11 @@ impl BoardServerClient {
         session_id: &str,
     ) -> Result<TftpSessionResponse, BoardServerClientError> {
         let response = self
-            .client
-            .get(self.endpoint(&format!("/api/v1/sessions/{session_id}/tftp")))
+            .request(
+                Method::GET,
+                self.endpoint(&format!("/api/v1/sessions/{session_id}/tftp")),
+            )
+            .await?
             .send()
             .await
             .map_err(Self::request_error)?;
@@ -306,8 +347,11 @@ impl BoardServerClient {
         session_id: &str,
     ) -> Result<SessionDtbResponse, BoardServerClientError> {
         let response = self
-            .client
-            .get(self.endpoint(&format!("/api/v1/sessions/{session_id}/dtb")))
+            .request(
+                Method::GET,
+                self.endpoint(&format!("/api/v1/sessions/{session_id}/dtb")),
+            )
+            .await?
             .send()
             .await
             .map_err(Self::request_error)?;
@@ -319,8 +363,11 @@ impl BoardServerClient {
         session_id: &str,
     ) -> Result<Vec<u8>, BoardServerClientError> {
         let response = self
-            .client
-            .get(self.endpoint(&format!("/api/v1/sessions/{session_id}/dtb/download")))
+            .request(
+                Method::GET,
+                self.endpoint(&format!("/api/v1/sessions/{session_id}/dtb/download")),
+            )
+            .await?
             .send()
             .await
             .map_err(Self::request_error)?;
@@ -329,8 +376,11 @@ impl BoardServerClient {
 
     pub async fn power_on_board(&self, session_id: &str) -> Result<(), BoardServerClientError> {
         let response = self
-            .client
-            .post(self.endpoint(&format!("/api/v1/sessions/{session_id}/board/power-on")))
+            .request(
+                Method::POST,
+                self.endpoint(&format!("/api/v1/sessions/{session_id}/board/power-on")),
+            )
+            .await?
             .send()
             .await
             .map_err(Self::request_error)?;
@@ -339,8 +389,11 @@ impl BoardServerClient {
 
     pub async fn power_off_board(&self, session_id: &str) -> Result<(), BoardServerClientError> {
         let response = self
-            .client
-            .post(self.endpoint(&format!("/api/v1/sessions/{session_id}/board/power-off")))
+            .request(
+                Method::POST,
+                self.endpoint(&format!("/api/v1/sessions/{session_id}/board/power-off")),
+            )
+            .await?
             .send()
             .await
             .map_err(Self::request_error)?;
@@ -354,8 +407,11 @@ impl BoardServerClient {
         bytes: Vec<u8>,
     ) -> Result<FileResponse, BoardServerClientError> {
         let response = self
-            .client
-            .put(self.endpoint(&format!("/api/v1/sessions/{session_id}/files")))
+            .request(
+                Method::PUT,
+                self.endpoint(&format!("/api/v1/sessions/{session_id}/files")),
+            )
+            .await?
             .header("X-File-Path", relative_path)
             .body(bytes)
             .send()
@@ -371,8 +427,11 @@ impl BoardServerClient {
         bytes: Vec<u8>,
     ) -> Result<HttpBootFileResponse, BoardServerClientError> {
         let response = self
-            .client
-            .put(self.endpoint(&format!("/api/v1/sessions/{session_id}/http-boot/files")))
+            .request(
+                Method::PUT,
+                self.endpoint(&format!("/api/v1/sessions/{session_id}/http-boot/files")),
+            )
+            .await?
             .header("X-File-Path", relative_path)
             .body(bytes)
             .send()
@@ -387,8 +446,11 @@ impl BoardServerClient {
         upload: HttpBootKernelUpload,
     ) -> Result<KernelPublishResponse, BoardServerClientError> {
         let mut request = self
-            .client
-            .put(self.endpoint(&format!("/api/v1/sessions/{session_id}/http-boot/kernel")))
+            .request(
+                Method::PUT,
+                self.endpoint(&format!("/api/v1/sessions/{session_id}/http-boot/kernel")),
+            )
+            .await?
             .header("X-HttpBoot-Remote-Name", upload.remote_name)
             .header("X-HttpBoot-Arch", upload.arch)
             .header("X-HttpBoot-Image-Format", upload.image_format);
@@ -405,7 +467,20 @@ impl BoardServerClient {
 
     pub fn resolve_ws_url(&self, ws_url: &str) -> anyhow::Result<Url> {
         if ws_url.starts_with("ws://") || ws_url.starts_with("wss://") {
-            return Url::parse(ws_url).with_context(|| format!("invalid websocket URL `{ws_url}`"));
+            let url =
+                Url::parse(ws_url).with_context(|| format!("invalid websocket URL `{ws_url}`"))?;
+            // A server-provided absolute URL must not redirect a Bearer token
+            // to another origin. Relative URLs are resolved against ws_base_url below.
+            if self.endpoint.auth_mode == AuthMode::Required
+                && (url.scheme() != self.ws_base_url.scheme()
+                    || url.host() != self.ws_base_url.host()
+                    || url.port_or_known_default() != self.ws_base_url.port_or_known_default())
+            {
+                anyhow::bail!(
+                    "refusing to send authentication credentials to cross-origin websocket URL `{url}`"
+                );
+            }
+            return Ok(url);
         }
 
         self.ws_base_url
@@ -419,6 +494,28 @@ impl BoardServerClient {
             .expect("static API path should be valid")
     }
 
+    pub async fn websocket_authorization(&self) -> anyhow::Result<Option<String>> {
+        self.token_manager.authorization_token().await
+    }
+
+    async fn request(
+        &self,
+        method: Method,
+        url: Url,
+    ) -> Result<reqwest::RequestBuilder, BoardServerClientError> {
+        let request = self.client.request(method, url);
+        match self.token_manager.authorization_token().await {
+            // TokenManager returns None only for the explicitly anonymous mode.
+            Ok(Some(token)) => Ok(request.bearer_auth(token)),
+            Ok(None) => Ok(request),
+            Err(error) => Err(BoardServerClientError {
+                status: StatusCode::UNAUTHORIZED,
+                code: Some("authentication_required".to_string()),
+                message: error.to_string(),
+            }),
+        }
+    }
+
     async fn decode_json<T: DeserializeOwned>(
         &self,
         response: reqwest::Response,
@@ -426,6 +523,8 @@ impl BoardServerClient {
         if response.status().is_success() {
             response.json::<T>().await.map_err(Self::request_error)
         } else {
+            self.clear_invalid_credential_if_unauthorized(&response)
+                .await;
             Err(Self::api_error(response).await)
         }
     }
@@ -437,6 +536,8 @@ impl BoardServerClient {
         if response.status().is_success() {
             Ok(())
         } else {
+            self.clear_invalid_credential_if_unauthorized(&response)
+                .await;
             Err(Self::api_error(response).await)
         }
     }
@@ -452,7 +553,19 @@ impl BoardServerClient {
                 .map(|bytes| bytes.to_vec())
                 .map_err(Self::request_error)
         } else {
+            self.clear_invalid_credential_if_unauthorized(&response)
+                .await;
             Err(Self::api_error(response).await)
+        }
+    }
+
+    async fn clear_invalid_credential_if_unauthorized(&self, response: &reqwest::Response) {
+        // Do not keep a credential the gateway has explicitly rejected. The next
+        // command must authenticate again instead of silently falling back to LAN mode.
+        if response.status() == StatusCode::UNAUTHORIZED
+            && let Err(error) = self.token_manager.invalidate_after_unauthorized().await
+        {
+            log::warn!("failed to remove rejected board credentials: {error:#}");
         }
     }
 
@@ -469,16 +582,6 @@ impl BoardServerClient {
             message: err.to_string(),
         }
     }
-}
-
-fn build_base_url(scheme: &str, server: &str, port: u16) -> anyhow::Result<Url> {
-    let mut url = Url::parse(&format!("{scheme}://localhost"))
-        .with_context(|| format!("failed to create {scheme} URL"))?;
-    url.set_host(Some(server))
-        .map_err(|_| anyhow::anyhow!("invalid server host `{server}`"))?;
-    url.set_port(Some(port))
-        .map_err(|_| anyhow::anyhow!("invalid port `{port}`"))?;
-    Ok(url)
 }
 
 fn parse_error_body(status: StatusCode, body: &str) -> BoardServerClientError {
@@ -512,6 +615,7 @@ mod tests {
     use reqwest::StatusCode;
 
     use super::{BoardServerClient, BootConfig, parse_error_body};
+    use crate::board::global_config::{AuthMode, BoardEndpoint};
 
     #[test]
     fn resolve_relative_ws_url_uses_server_defaults() {
@@ -534,6 +638,19 @@ mod tests {
         assert_eq!(
             url.as_str(),
             "ws://10.0.0.2:9000/api/v1/sessions/demo/serial/ws"
+        );
+    }
+
+    #[test]
+    fn authenticated_client_rejects_cross_origin_websocket_url() {
+        let client = BoardServerClient::new_with_endpoint(
+            BoardEndpoint::new("https://203.0.113.10:8443", AuthMode::Required).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            client
+                .resolve_ws_url("wss://203.0.113.11:8443/api/v1/sessions/demo/serial/ws")
+                .is_err()
         );
     }
 

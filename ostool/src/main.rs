@@ -1,14 +1,15 @@
 //! Main ostool CLI argument parsing and command dispatch.
 
-use std::{path::PathBuf, process::ExitCode};
+use std::{io::Read as _, path::PathBuf, process::ExitCode};
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use clap::*;
 use colored::Colorize as _;
 use env_logger::Env;
 
 use log::info;
 use ostool::{
+    auth::token_manager::TokenManager,
     board,
     build::{self, CargoQemuRunnerArgs, CargoRunnerKind, CargoUbootRunnerArgs},
     invocation::{Invocation, InvocationOptions},
@@ -42,6 +43,12 @@ enum SubCommands {
         command: RunSubCommands,
     },
     Board(BoardArgs),
+    /// Authenticate with an ostool board service.
+    Login(LoginArgs),
+    /// Remove stored authentication credentials for an ostool board service.
+    Logout(ServerUrlArgs),
+    /// Inspect authentication state.
+    Auth(AuthArgs),
     Menuconfig {
         /// Menu configuration mode (qemu or uboot)
         #[arg(value_enum)]
@@ -51,12 +58,42 @@ enum SubCommands {
 
 #[derive(Args, Debug, Default, Clone)]
 struct BoardServerArgs {
+    /// Complete board service URL, for example https://board.example.com
+    #[arg(long, conflicts_with_all = ["server", "port"])]
+    server_url: Option<String>,
     /// ostool-server host
     #[arg(long)]
     server: Option<String>,
     /// ostool-server port
     #[arg(long)]
     port: Option<u16>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+struct ServerUrlArgs {
+    /// Complete board service URL.
+    #[arg(long)]
+    server_url: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct LoginArgs {
+    #[command(flatten)]
+    server: ServerUrlArgs,
+    /// Read a personal access token from standard input instead of using browser login.
+    #[arg(long)]
+    with_token: bool,
+}
+
+#[derive(Args, Debug)]
+struct AuthArgs {
+    #[command(subcommand)]
+    command: AuthSubCommands,
+}
+
+#[derive(Subcommand, Debug)]
+enum AuthSubCommands {
+    Status(ServerUrlArgs),
 }
 
 #[derive(Args, Debug)]
@@ -189,18 +226,69 @@ async fn try_main() -> Result<()> {
     let Cli { manifest, command } = Cli::parse();
 
     match command {
+        SubCommands::Login(args) => {
+            let global_config = board::load_board_global_config_with_notice()?;
+            let endpoint =
+                resolve_auth_endpoint(&global_config, args.server.server_url.as_deref())?;
+            let tokens = TokenManager::new(endpoint)?;
+            if args.with_token {
+                let mut token = String::new();
+                std::io::stdin()
+                    .read_to_string(&mut token)
+                    .context("failed to read personal access token from standard input")?;
+                tokens.import_personal_access_token(token).await?;
+            } else {
+                tokens.login_device().await?;
+            }
+            println!("Logged in successfully.");
+        }
+        SubCommands::Logout(args) => {
+            let global_config = board::load_board_global_config_with_notice()?;
+            let endpoint = resolve_auth_endpoint(&global_config, args.server_url.as_deref())?;
+            let tokens = TokenManager::new(endpoint)?;
+            tokens.logout().await?;
+            println!("Logged out.");
+        }
+        SubCommands::Auth(args) => match args.command {
+            AuthSubCommands::Status(args) => {
+                let global_config = board::load_board_global_config_with_notice()?;
+                let endpoint = resolve_auth_endpoint(&global_config, args.server_url.as_deref())?;
+                let tokens = TokenManager::new(endpoint.clone())?;
+                let status = tokens.status().await?;
+                println!("server: {}", endpoint.base_url);
+                println!("auth_mode: {:?}", endpoint.auth_mode);
+                match status.kind {
+                    Some(kind) => {
+                        println!("credential: {kind}");
+                        if let Some(expires_at) = status.expires_at {
+                            println!("expires_at: {expires_at}");
+                        }
+                        if let Some(scope) = status.scope {
+                            println!("scope: {scope}");
+                        }
+                    }
+                    None => println!("credential: none"),
+                }
+            }
+        },
         SubCommands::Board(args) => match args.command {
             BoardSubCommands::Ls(server) => {
                 let global_config = board::load_board_global_config_with_notice()?;
-                let (server, port) =
-                    global_config.resolve_server(server.server.as_deref(), server.port);
-                board::list_boards(&server, port).await?;
+                let endpoint = global_config.resolve_endpoint(
+                    server.server_url.as_deref(),
+                    server.server.as_deref(),
+                    server.port,
+                )?;
+                board::list_boards_endpoint(endpoint).await?;
             }
             BoardSubCommands::Connect(args) => {
                 let global_config = board::load_board_global_config_with_notice()?;
-                let (server, port) =
-                    global_config.resolve_server(args.server.server.as_deref(), args.server.port);
-                board::connect_board(&server, port, &args.board_type).await?;
+                let endpoint = global_config.resolve_endpoint(
+                    args.server.server_url.as_deref(),
+                    args.server.server.as_deref(),
+                    args.server.port,
+                )?;
+                board::connect_board_endpoint(endpoint, &args.board_type).await?;
             }
             BoardSubCommands::Run(args) => {
                 let mut invocation = init_invocation(manifest.clone())?;
@@ -221,6 +309,7 @@ async fn try_main() -> Result<()> {
                     &board_config,
                     board::RunBoardOptions {
                         board_type: args.board_type,
+                        server_url: args.server.server_url,
                         server: args.server.server,
                         port: args.server.port,
                     },
@@ -500,6 +589,19 @@ fn report_error(err: &anyhow::Error) {
     println!("{}", format!("\nTrace:\n{err:?}").red());
 }
 
+fn resolve_auth_endpoint(
+    config: &board::global_config::LoadedBoardGlobalConfig,
+    explicit_server_url: Option<&str>,
+) -> Result<board::global_config::BoardEndpoint> {
+    match explicit_server_url {
+        Some(server_url) => board::global_config::BoardEndpoint::new(
+            server_url,
+            board::global_config::AuthMode::Required,
+        ),
+        None => config.resolve_endpoint(None, None, None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -508,9 +610,9 @@ mod tests {
     use ostool::invocation::{Invocation, InvocationOptions};
 
     use super::{
-        BoardArgs, BoardSubCommands, CargoSelectorArgs, Cli, RunSubCommands, SubCommands,
-        apply_cargo_selector, build, load_board_config, load_build_config, load_qemu_config,
-        load_uboot_config,
+        AuthArgs, AuthSubCommands, BoardArgs, BoardSubCommands, CargoSelectorArgs, Cli, LoginArgs,
+        RunSubCommands, SubCommands, apply_cargo_selector, build, load_board_config,
+        load_build_config, load_qemu_config, load_uboot_config,
     };
 
     /// Verifies build parsing accepts manifest, config, package, and bin overrides.
@@ -671,6 +773,47 @@ mod tests {
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_root_device_login_with_server_url() {
+        let cli = Cli::try_parse_from([
+            "ostool",
+            "login",
+            "--server-url",
+            "https://203.0.113.10:8443",
+        ])
+        .unwrap();
+        match cli.command {
+            SubCommands::Login(args) => {
+                assert_eq!(
+                    args.server.server_url.as_deref(),
+                    Some("https://203.0.113.10:8443")
+                );
+                assert!(!args.with_token);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_root_pat_login_and_auth_status() {
+        let login = Cli::try_parse_from(["ostool", "login", "--with-token"]).unwrap();
+        assert!(matches!(
+            login.command,
+            SubCommands::Login(LoginArgs {
+                with_token: true,
+                ..
+            })
+        ));
+
+        let status = Cli::try_parse_from(["ostool", "auth", "status"]).unwrap();
+        assert!(matches!(
+            status.command,
+            SubCommands::Auth(AuthArgs {
+                command: AuthSubCommands::Status(_)
+            })
+        ));
     }
 
     #[test]

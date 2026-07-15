@@ -5,7 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    board::global_config::BoardGlobalConfig,
+    board::global_config::{AuthMode, BoardEndpoint, BoardGlobalConfig},
     project::variables::{self, VariableScope},
     run::shell_init::normalize_shell_init_config,
 };
@@ -26,6 +26,8 @@ pub struct BoardRunConfig {
     pub shell_prefix: Option<String>,
     pub shell_init_cmd: Option<String>,
     pub timeout: Option<u64>,
+    pub server_url: Option<String>,
+    pub auth_mode: Option<AuthMode>,
     pub server: Option<String>,
     pub port: Option<u16>,
 }
@@ -77,10 +79,35 @@ impl BoardRunConfig {
         (server, port)
     }
 
+    pub(crate) fn resolve_endpoint(
+        &self,
+        cli_server_url: Option<&str>,
+        cli_server: Option<&str>,
+        cli_port: Option<u16>,
+        global_config: &BoardGlobalConfig,
+    ) -> anyhow::Result<BoardEndpoint> {
+        if cli_server_url.is_some() && (cli_server.is_some() || cli_port.is_some()) {
+            anyhow::bail!("--server-url cannot be used with --server or --port");
+        }
+        let auth_mode = self.auth_mode.unwrap_or(global_config.auth_mode);
+        if let Some(server_url) = cli_server_url.or(self.server_url.as_deref()) {
+            return BoardEndpoint::new(server_url, auth_mode);
+        }
+        if cli_server.is_none()
+            && cli_port.is_none()
+            && let Some(server_url) = global_config.server_url.as_deref()
+        {
+            return BoardEndpoint::new(server_url, auth_mode);
+        }
+        let (server, port) = self.resolve_server(cli_server, cli_port, global_config);
+        BoardEndpoint::new(&format!("http://{server}:{port}"), AuthMode::Disabled)
+    }
+
     pub(crate) fn apply_overrides(
         &mut self,
         scope: &VariableScope,
         board_type: Option<&str>,
+        server_url: Option<&str>,
         server: Option<&str>,
         port: Option<u16>,
     ) -> anyhow::Result<()> {
@@ -95,6 +122,17 @@ impl BoardRunConfig {
                 anyhow::bail!("board server override must not be empty");
             }
             self.server = Some(server);
+        }
+
+        if let Some(server_url) = server_url {
+            let server_url = variables::expand_variables(server_url, scope)?;
+            let server_url = server_url.trim().to_string();
+            if server_url.is_empty() {
+                anyhow::bail!("board server URL override must not be empty");
+            }
+            self.server_url = Some(server_url);
+            self.server = None;
+            self.port = None;
         }
 
         if let Some(port) = port {
@@ -161,6 +199,11 @@ impl BoardRunConfig {
             .transpose()?;
         self.server = self
             .server
+            .as_deref()
+            .map(|value| variables::expand_variables(value, scope))
+            .transpose()?;
+        self.server_url = self
+            .server_url
             .as_deref()
             .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
@@ -278,6 +321,7 @@ port = 9000
                 &BoardGlobalConfig {
                     server_ip: "localhost".into(),
                     port: 2999,
+                    ..BoardGlobalConfig::default()
                 }
             ),
             ("127.0.0.1".to_string(), 9000)
@@ -317,6 +361,7 @@ port = 9000
             .apply_overrides(
                 &invocation.variable_scope().unwrap(),
                 Some(" rk3568 "),
+                None,
                 Some(" 127.0.0.1 "),
                 Some(7000),
             )
