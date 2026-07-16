@@ -1,5 +1,3 @@
-use ostool::build::cargo_pipeline::CargoBuildPipeline;
+use ostool::build::cargo_pipeline as _;
 
-fn main() {
-    let _ = core::mem::size_of::<CargoBuildPipeline<'static>>();
-}
+fn main() {}

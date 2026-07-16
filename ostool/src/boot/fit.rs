@@ -16,6 +16,9 @@ const FDT_COMPONENT_NAME: &str = "fdt";
 const DEFAULT_CONFIG_NAME: &str = "config-ostool";
 const FIT_DESCRIPTION: &str = "Various kernels, ramdisks and FDT blobs";
 const FIT_IMAGE_NAME: &str = "image.fit";
+const LOONGARCH_IMAGE_MAGIC: &[u8] = b"MZ";
+const LOONGARCH_IMAGE_ENTRY_OFFSET: usize = 8;
+const LOONGARCH_IMAGE_LOAD_OFFSET: usize = 24;
 
 mod errors {
     pub const KERNEL_READ_ERROR: &str = "读取 kernel 文件失败";
@@ -60,6 +63,16 @@ pub(crate) async fn generate_fit_image(input: FitInput) -> anyhow::Result<Genera
         Byte::from(kernel_data.len())
     );
 
+    let kernel_entry_addr = resolve_kernel_entry_addr(
+        input.arch,
+        &kernel_data,
+        input.kernel_load_addr,
+        input.kernel_entry_addr,
+    )?;
+    if kernel_entry_addr != input.kernel_entry_addr {
+        info!("resolved LoongArch kernel entry: {kernel_entry_addr:#x}");
+    }
+
     let arch_name = fit_arch_name(input.arch)?;
     let dtb_data = if let Some(dtb_path) = &input.dtb_path {
         let data = fs::read(dtb_path)
@@ -81,7 +94,7 @@ pub(crate) async fn generate_fit_image(input: FitInput) -> anyhow::Result<Genera
         kernel_data,
         dtb_data,
         input.kernel_load_addr,
-        input.kernel_entry_addr,
+        kernel_entry_addr,
         input.fdt_load_addr,
     );
 
@@ -105,10 +118,48 @@ pub(crate) fn fit_arch_name(arch: Architecture) -> anyhow::Result<&'static str> 
     match arch {
         Architecture::Aarch64 => Ok("arm64"),
         Architecture::Arm => Ok("arm"),
-        Architecture::LoongArch64 => Ok("loongarch64"),
+        Architecture::LoongArch64 => Ok("loongarch"),
         Architecture::Riscv64 => Ok("riscv"),
         other => anyhow::bail!("unsupported architecture for FIT image generation: {other:?}"),
     }
+}
+
+fn resolve_kernel_entry_addr(
+    arch: Architecture,
+    kernel_data: &[u8],
+    kernel_load_addr: u64,
+    fallback_entry_addr: u64,
+) -> anyhow::Result<u64> {
+    if arch != Architecture::LoongArch64 || !kernel_data.starts_with(LOONGARCH_IMAGE_MAGIC) {
+        return Ok(fallback_entry_addr);
+    }
+
+    let image_entry = read_image_header_u64(kernel_data, LOONGARCH_IMAGE_ENTRY_OFFSET)?;
+    let image_load_addr = read_image_header_u64(kernel_data, LOONGARCH_IMAGE_LOAD_OFFSET)?;
+    let entry_offset = image_entry.checked_sub(image_load_addr).ok_or_else(|| {
+        anyhow!(
+            "invalid LoongArch image header: entry {image_entry:#x} precedes load address {image_load_addr:#x}"
+        )
+    })?;
+    if entry_offset >= kernel_data.len() as u64 {
+        anyhow::bail!(
+            "invalid LoongArch image header: entry offset {entry_offset:#x} exceeds image size {:#x}",
+            kernel_data.len()
+        );
+    }
+
+    kernel_load_addr
+        .checked_add(entry_offset)
+        .ok_or_else(|| anyhow!("LoongArch kernel entry address overflow"))
+}
+
+fn read_image_header_u64(kernel_data: &[u8], offset: usize) -> anyhow::Result<u64> {
+    let bytes = kernel_data
+        .get(offset..offset + size_of::<u64>())
+        .ok_or_else(|| anyhow!("truncated LoongArch image header at offset {offset:#x}"))?;
+    let bytes = <[u8; size_of::<u64>()]>::try_from(bytes)
+        .map_err(|_| anyhow!("invalid LoongArch image header field at offset {offset:#x}"))?;
+    Ok(u64::from_le_bytes(bytes))
 }
 
 fn default_output_path(kernel_path: &Path) -> anyhow::Result<PathBuf> {
@@ -167,7 +218,10 @@ fn build_default_fit_config(
 
 #[cfg(test)]
 mod tests {
-    use super::{FitInput, build_default_fit_config, default_output_path, fit_arch_name};
+    use super::{
+        FitInput, build_default_fit_config, default_output_path, fit_arch_name,
+        resolve_kernel_entry_addr,
+    };
     use object::Architecture;
 
     #[test]
@@ -176,7 +230,7 @@ mod tests {
         assert_eq!(fit_arch_name(Architecture::Arm).unwrap(), "arm");
         assert_eq!(
             fit_arch_name(Architecture::LoongArch64).unwrap(),
-            "loongarch64"
+            "loongarch"
         );
         assert_eq!(fit_arch_name(Architecture::Riscv64).unwrap(), "riscv");
     }
@@ -189,6 +243,24 @@ mod tests {
             err.to_string()
                 .contains("unsupported architecture for FIT image generation: X86_64")
         );
+    }
+
+    #[test]
+    fn resolves_loongarch_linux_image_entry_from_header() {
+        let mut kernel_data = vec![0_u8; 0x40_0000];
+        kernel_data[..2].copy_from_slice(b"MZ");
+        kernel_data[8..16].copy_from_slice(&0x5c_8b40_u64.to_le_bytes());
+        kernel_data[24..32].copy_from_slice(&0x20_0000_u64.to_le_bytes());
+
+        let entry = resolve_kernel_entry_addr(
+            Architecture::LoongArch64,
+            &kernel_data,
+            0x9000_0000_9800_0000,
+            0x9000_0000_9800_0000,
+        )
+        .unwrap();
+
+        assert_eq!(entry, 0x9000_0000_983c_8b40);
     }
 
     #[test]
