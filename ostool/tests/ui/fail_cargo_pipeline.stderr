@@ -1,7 +1,7 @@
 error[E0603]: module `cargo_pipeline` is private
  --> tests/ui/fail_cargo_pipeline.rs:1:20
   |
-1 | use ostool::build::cargo_pipeline::CargoBuildPipeline;
+1 | use ostool::build::cargo_pipeline as _;
   |                    ^^^^^^^^^^^^^^ private module
   |
 note: the module `cargo_pipeline` is defined here

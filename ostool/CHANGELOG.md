@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.1](https://github.com/drivercraft/ostool/compare/ostool-v0.24.0...ostool-v0.24.1) - 2026-07-17
+
+### Fixed
+
+- *(ostool)* support LoongArch U-Boot board boot ([#151](https://github.com/drivercraft/ostool/pull/151))
+
 ## [0.24.0](https://github.com/drivercraft/ostool/compare/ostool-v0.23.5...ostool-v0.24.0) - 2026-07-02
 
 ### Added

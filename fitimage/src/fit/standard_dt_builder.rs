@@ -6,6 +6,9 @@ use crate::error::Result;
 use crate::fit::config::{ComponentConfig, FitImageConfig};
 use crate::fit::{FdtHeader, FdtToken, FdtTokenUtils, MemReserveEntry, StringTable};
 
+const FDT_DATA_ALIGNMENT: usize = 8;
+const PROPERTY_PREFIX_SIZE: usize = 3 * size_of::<u32>();
+
 /// Standard FDT builder that creates U-Boot compatible FIT images
 pub struct StandardFdtBuilder {
     /// FDT header
@@ -265,7 +268,7 @@ impl StandardFdtBuilder {
             self.add_property_u64("load", load_addr)?;
         }
 
-        self.add_property_data("data", &component.data)?;
+        self.add_fdt_property_data("data", &component.data)?;
 
         // Add hash nodes to match mkimage standard
         // self.add_hash_nodes(&component.data)?;
@@ -357,6 +360,23 @@ impl StandardFdtBuilder {
         FdtTokenUtils::write_prop_header(&mut self.struct_buffer, data.len() as u32, name_offset)?;
         FdtTokenUtils::write_prop_data(&mut self.struct_buffer, data)?;
         Ok(())
+    }
+
+    /// Add an FDT payload at the alignment required for a nested devicetree blob.
+    fn add_fdt_property_data(&mut self, name: &str, data: &[u8]) -> Result<()> {
+        self.align_fdt_data();
+        self.add_property_data(name, data)
+    }
+
+    fn align_fdt_data(&mut self) {
+        let data_offset = FdtHeader::size()
+            + self.mem_reserve.len() * MemReserveEntry::size()
+            + self.struct_buffer.len()
+            + PROPERTY_PREFIX_SIZE;
+
+        if !data_offset.is_multiple_of(FDT_DATA_ALIGNMENT) {
+            FdtToken::Nop.write_to_buffer(&mut self.struct_buffer);
+        }
     }
 
     /// Finalize and return the complete FDT
@@ -489,5 +509,47 @@ mod tests {
         // Should be valid
         assert!(!fdt_data.is_empty());
         assert_eq!(&fdt_data[0..4], b"\xd0\x0d\xfe\xed");
+    }
+
+    #[test]
+    fn only_fdt_component_data_is_eight_byte_aligned() {
+        let kernel_data = vec![0xa5; 17];
+        let fdt_data = vec![0x5a; 19];
+        let config = FitImageConfig::new("Aligned FIT")
+            .with_kernel(
+                ComponentConfig::new("kernel", kernel_data.clone())
+                    .with_description("Kernel")
+                    .with_type("kernel")
+                    .with_arch("loongarch")
+                    .with_os("linux")
+                    .with_compression(false)
+                    .with_load_address(0x9000_0000_9800_0000)
+                    .with_entry_point(0x9000_0000_9800_0000),
+            )
+            .with_fdt(
+                ComponentConfig::new("fdt", fdt_data.clone())
+                    .with_description("FDT")
+                    .with_type("flat_dt")
+                    .with_arch("loongarch"),
+            );
+
+        let mut builder = StandardFdtBuilder::new().unwrap();
+        builder.build_fit_tree(&config).unwrap();
+        let fit_data = builder.finalize().unwrap();
+        let kernel_offset = fit_data
+            .windows(kernel_data.len())
+            .position(|window| window == kernel_data)
+            .unwrap();
+        let fdt_offset = fit_data
+            .windows(fdt_data.len())
+            .position(|window| window == fdt_data)
+            .unwrap();
+
+        assert_eq!(
+            kernel_offset % 8,
+            4,
+            "kernel data offset: {kernel_offset:#x}"
+        );
+        assert_eq!(fdt_offset % 8, 0, "FDT data offset: {fdt_offset:#x}");
     }
 }
