@@ -2,8 +2,10 @@
 
 本文根据当前 `ostool` 实现整理认证网关和开发板服务的调用接口。
 
-认证模式为 `required` 时，服务地址来自 `board.server_url` 或命令行 `--server-url`，且必须使用 HTTPS；认证网关和 board API 使用同一个 Base URL。
-旧的 `server_ip + port` 局域网模式使用 HTTP 且 `auth_mode = "disabled"`，不会发送认证 Header。
+服务地址来自全局或项目配置中的 `board.server`（完整 URL），可被命令行 `--server` 覆盖；可选的 `board.port` 或 `--port` 用于覆盖 URL 中的端口。认证网关和 board API 使用同一个 Base URL。
+
+- `auth_mode = "required"` 时，`board.server` 必须使用 HTTPS，所有请求携带下文描述的 Bearer Token；
+- `auth_mode = "disabled"`（默认）时通常使用 HTTP，不会发送认证 Header，适合局域网直连 `ostool-server`。
 
 ## 通用认证规则
 
@@ -27,13 +29,13 @@ HTTP 客户端不跟随重定向。认证模式下，绝对 WebSocket URL 必须
 
 | 命令 | 基本功能 | `auth_mode = "required"` 时的行为 | 涉及 API |
 | --- | --- | --- | --- |
-| `ostool login [--server-url URL]` | 发起浏览器 Device Authorization 登录。 | 保存 OAuth 凭据；未指定 `--server-url` 时使用全局 board 配置。 | `POST /oauth/device/code`；`POST /oauth/token`（Device Code 轮询） |
-| `ostool login --with-token [--server-url URL]` | 从标准输入导入 PAT。 | 保存 PAT；不刷新该 Token。 | 无网络 API |
-| `ostool auth status [--server-url URL]` | 显示当前 endpoint 的认证状态。 | 显示凭据类型、已知过期时间和 scope，不显示 Token。 | 无网络 API |
-| `ostool logout [--server-url URL]` | 退出登录。 | OAuth 凭据会尝试远端撤销；随后删除本地凭据。PAT 仅删除本地副本。 | `POST /oauth/revoke`（仅 OAuth） |
-| `ostool board ls [--server-url URL]` | 查询可用开发板类型。 | 调用时携带 Bearer Token。 | `GET /api/v1/board-types` |
-| `ostool board connect --board-type TYPE [--server-url URL]` | 分配开发板并打开串口终端。 | REST 和 WebSocket 请求均携带 Bearer Token。 | `POST /api/v1/sessions`；`POST /api/v1/sessions/{session_id}/heartbeat`；`GET /api/v1/sessions/{session_id}/serial/ws`；`DELETE /api/v1/sessions/{session_id}` |
-| `ostool board run [--server-url URL]` | 构建、分配开发板、上传产物并启动。 | REST 和 WebSocket 请求均携带 Bearer Token。 | 始终：`POST /api/v1/sessions`、`POST /api/v1/sessions/{session_id}/heartbeat`、`DELETE /api/v1/sessions/{session_id}`。U-Boot：`GET /boot-profile`、`GET /serial`、`GET /tftp`、`GET /dtb`、`GET /dtb/download`、`PUT /files`、`GET /serial/ws`。HTTP Boot：`GET /boot-profile`、`GET /serial`、`PUT /http-boot/kernel`、`GET /serial/ws`。 |
+| `ostool login [--server URL] [--port PORT]` | 发起浏览器 Device Authorization 登录。 | 保存 OAuth 凭据；未指定 `--server` 时使用全局 board 配置。 | `POST /oauth/device/code`；`POST /oauth/token`（Device Code 轮询） |
+| `ostool login --with-token [--server URL] [--port PORT]` | 从标准输入导入 PAT。 | 保存 PAT；不刷新该 Token。 | 无网络 API |
+| `ostool auth status [--server URL] [--port PORT]` | 显示当前 endpoint 的认证状态。 | 显示凭据类型、已知过期时间和 scope，不显示 Token。 | 无网络 API |
+| `ostool logout [--server URL] [--port PORT]` | 退出登录。 | OAuth 凭据会尝试远端撤销；随后删除本地凭据。PAT 仅删除本地副本。 | `POST /oauth/revoke`（仅 OAuth） |
+| `ostool board ls [--server URL] [--port PORT]` | 查询可用开发板类型。 | 调用时携带 Bearer Token。 | `GET /api/v1/board-types` |
+| `ostool board connect --board-type TYPE [--server URL] [--port PORT]` | 分配开发板并打开串口终端。 | REST 和 WebSocket 请求均携带 Bearer Token。 | `POST /api/v1/sessions`；`POST /api/v1/sessions/{session_id}/heartbeat`；`GET /api/v1/sessions/{session_id}/serial/ws`；`DELETE /api/v1/sessions/{session_id}` |
+| `ostool board run [--server URL] [--port PORT]` | 构建、分配开发板、上传产物并启动。 | REST 和 WebSocket 请求均携带 Bearer Token。 | 始终：`POST /api/v1/sessions`、`POST /api/v1/sessions/{session_id}/heartbeat`、`DELETE /api/v1/sessions/{session_id}`。U-Boot：`GET /boot-profile`、`GET /serial`、`GET /tftp`、`GET /dtb`、`GET /dtb/download`、`PUT /files`、`GET /serial/ws`。HTTP Boot：`GET /boot-profile`、`GET /serial`、`PUT /http-boot/kernel`、`GET /serial/ws`。 |
 
 ## OAuth Device Authorization API
 
@@ -164,7 +166,33 @@ token=<refresh_token>
 GET /api/v1/board-types
 ```
 
-用于 `ostool board ls`。
+用于 `ostool board ls`。客户端接受两种响应格式：
+
+`ostool-server` 直接返回已聚合的开发板类型列表：
+
+```json
+[
+  {
+    "board_type": "rk3568",
+    "tags": [],
+    "total": 2,
+    "available": 1
+  }
+]
+```
+
+认证网关则返回逐块列出开发板的 envelope：
+
+```json
+{
+  "data": [
+    { "model": "rk3568", "status": "available" },
+    { "model": "rk3568", "status": "in_use" }
+  ]
+}
+```
+
+客户端按 `model` 聚合：每个唯一 `model` 对应一个条目，`total` 等于该型号出现的次数，`available` 等于 `status` 不区分大小写为 `available` 的数量，`tags` 始终为空数组。
 
 ### 创建会话
 
