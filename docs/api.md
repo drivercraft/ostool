@@ -1,6 +1,6 @@
 # `ostool` 实际调用的服务 API
 
-本文根据当前 `ostool` 实现整理认证网关和开发板服务的调用接口。
+本文根据当前 `ostool` 客户端实现整理认证网关和开发板服务的调用接口；不包含 `ostool-server` 管理后台的 `/api/v1/admin/...` 接口。
 
 服务地址来自全局或项目配置中的 `board.server`（完整 URL），可被命令行 `--server` 覆盖；可选的 `board.port` 或 `--port` 用于覆盖 URL 中的端口。认证网关和 board API 使用同一个 Base URL。
 
@@ -15,11 +15,11 @@
 Authorization: Bearer <access_token>
 ```
 
-Access Token 来源优先级：
+Access Token 选择规则：
 
-1. `OSTOOL_BOARD_ACCESS_TOKEN` 环境变量；
-2. 本地保存的 PAT；
-3. 本地保存的 OAuth Access Token；若剩余有效期不超过 60 秒，则先刷新。
+1. `OSTOOL_BOARD_ACCESS_TOKEN` 非空时优先使用；该值不保存也不刷新；
+2. 否则读取当前 endpoint 保存的一条本地凭据：PAT 直接使用，OAuth Access Token 剩余有效期超过 60 秒时直接使用；
+3. OAuth Access Token 剩余有效期不超过 60 秒时，使用保存的 Refresh Token 刷新后再发送请求。
 
 HTTP 客户端不跟随重定向。认证模式下，绝对 WebSocket URL 必须与 Base URL 使用相同的 scheme、host 和有效端口。
 
@@ -33,9 +33,9 @@ HTTP 客户端不跟随重定向。认证模式下，绝对 WebSocket URL 必须
 | `ostool login --with-token [--server URL] [--port PORT]` | 从标准输入导入 PAT。 | 保存 PAT；不刷新该 Token。 | 无网络 API |
 | `ostool auth status [--server URL] [--port PORT]` | 显示当前 endpoint 的认证状态。 | 显示凭据类型、已知过期时间和 scope，不显示 Token。 | 无网络 API |
 | `ostool logout [--server URL] [--port PORT]` | 退出登录。 | OAuth 凭据会尝试远端撤销；随后删除本地凭据。PAT 仅删除本地副本。 | `POST /oauth/revoke`（仅 OAuth） |
-| `ostool board ls [--server URL] [--port PORT]` | 查询可用开发板类型。 | 调用时携带 Bearer Token。 | `GET /api/v1/board-types` |
-| `ostool board connect --board-type TYPE [--server URL] [--port PORT]` | 分配开发板并打开串口终端。 | REST 和 WebSocket 请求均携带 Bearer Token。 | `POST /api/v1/sessions`；`POST /api/v1/sessions/{session_id}/heartbeat`；`GET /api/v1/sessions/{session_id}/serial/ws`；`DELETE /api/v1/sessions/{session_id}` |
-| `ostool board run [--server URL] [--port PORT]` | 构建、分配开发板、上传产物并启动。 | REST 和 WebSocket 请求均携带 Bearer Token。 | 始终：`POST /api/v1/sessions`、`POST /api/v1/sessions/{session_id}/heartbeat`、`DELETE /api/v1/sessions/{session_id}`。U-Boot：`GET /boot-profile`、`GET /serial`、`GET /tftp`、`GET /dtb`、`GET /dtb/download`、`PUT /files`、`GET /serial/ws`。HTTP Boot：`GET /boot-profile`、`GET /serial`、`PUT /http-boot/kernel`、`GET /serial/ws`。 |
+| `ostool board ls [--server URL] [--port PORT]` | 查询按类型聚合的可用开发板信息。 | 调用时携带 Bearer Token。 | `GET /api/v1/board-types` |
+| `ostool board connect --board-type TYPE [--server URL] [--port PORT]` | 请求服务端从指定类型中自动分配一块开发板并打开串口终端。 | REST 和 WebSocket 请求均携带 Bearer Token。 | `POST /api/v1/sessions`；`POST /api/v1/sessions/{session_id}/heartbeat`；WebSocket `/api/v1/sessions/{session_id}/serial/ws`；`DELETE /api/v1/sessions/{session_id}` |
+| `ostool board run [--server URL] [--port PORT]` | 构建后请求服务端按 `.board.toml` 的 `board_type` 自动分配开发板并启动。 | REST 和 WebSocket 请求均携带 Bearer Token。 | 始终：`POST /api/v1/sessions`、`POST /api/v1/sessions/{session_id}/heartbeat`、`DELETE /api/v1/sessions/{session_id}`。U-Boot：`GET /boot-profile`、`GET /serial`、`GET /tftp`、`GET /dtb`、`GET /dtb/download`、`PUT /files`、WebSocket `/serial/ws`。HTTP Boot：`GET /boot-profile`、`GET /serial`、`PUT /http-boot/kernel`、WebSocket `/serial/ws`。 |
 
 ## OAuth Device Authorization API
 
@@ -100,7 +100,7 @@ grant_type=urn:ietf:params:oauth:grant-type:device_code
 &client_id=ostool-cli
 ```
 
-客户端在 `expires_in` 期间按 `interval` 轮询。响应中的 `authorization_pending` 会继续轮询；`slow_down` 会使轮询间隔增加 5 秒。
+客户端在 `expires_in` 期间按 `interval` 轮询。`authorization_pending` 必须作为非 2xx OAuth 错误响应返回，客户端会继续轮询；`slow_down` 同样必须作为非 2xx OAuth 错误响应返回，客户端会将轮询间隔增加 5 秒。成功的 2xx 响应必须包含下文的完整 Token 字段。
 
 ### 刷新 Access Token
 
@@ -124,12 +124,11 @@ grant_type=refresh_token
   "access_token": "...",
   "refresh_token": "...",
   "token_type": "Bearer",
-  "expires_in": 900,
-  "scope": "board:operate offline_access"
+  "expires_in": 900
 }
 ```
 
-`token_type` 必须为 `Bearer`，`expires_in` 必须为正数，`refresh_token` 必须非空。
+`token_type` 必须为 `Bearer`，`expires_in` 必须为正数，`refresh_token` 必须非空。`scope` 为可选字段。
 服务端应在刷新时返回轮换后的 Refresh Token。
 
 ### 撤销 OAuth 会话
@@ -166,9 +165,7 @@ token=<refresh_token>
 GET /api/v1/board-types
 ```
 
-用于 `ostool board ls`。客户端接受两种响应格式：
-
-`ostool-server` 直接返回已聚合的开发板类型列表：
+用于 `ostool board ls`。客户端只接受 `ostool-server` 的已聚合开发板类型列表：
 
 ```json
 [
@@ -181,18 +178,7 @@ GET /api/v1/board-types
 ]
 ```
 
-认证网关则返回逐块列出开发板的 envelope：
-
-```json
-{
-  "data": [
-    { "model": "rk3568", "status": "available" },
-    { "model": "rk3568", "status": "in_use" }
-  ]
-}
-```
-
-客户端按 `model` 聚合：每个唯一 `model` 对应一个条目，`total` 等于该型号出现的次数，`available` 等于 `status` 不区分大小写为 `available` 的数量，`tags` 始终为空数组。
+每个 `board_type` 仅有一个聚合条目：`total` 是该类型未禁用开发板的数量，`available` 是其中租约状态为 idle 的数量，`tags` 是该类型所有未禁用开发板标签的去重并集。该接口不返回 `board_id`；创建会话时由服务端自动选择实际开发板，并在成功响应中返回 `board_id`。
 
 ### 创建会话
 
@@ -207,7 +193,22 @@ Content-Type: application/json
 }
 ```
 
-用于 `ostool board connect` 和 `ostool board run`。
+用于 `ostool board connect` 和 `ostool board run`。`board_type` 必填，`required_tags` 由当前 CLI 固定发送空数组，`client_name` 固定为 `ostool`。服务端在满足类型和标签条件的空闲开发板中自动分配，不支持通过当前 `ostool` 指定 `board_id`。
+
+成功时返回 `201 Created`：
+
+```json
+{
+  "session_id": "...",
+  "board_id": "rk3568-01",
+  "lease_expires_at": "2026-07-20T02:00:00Z",
+  "serial_available": true,
+  "boot_mode": "uboot",
+  "ws_url": "/api/v1/sessions/.../serial/ws"
+}
+```
+
+指定类型不存在时返回 `404`；类型存在但没有符合条件的空闲开发板时返回 `409`。客户端会对后一种情况每秒重试一次，直到分配成功或收到其他错误。
 
 ### 会话保活与释放
 
@@ -216,7 +217,7 @@ POST /api/v1/sessions/{session_id}/heartbeat
 DELETE /api/v1/sessions/{session_id}
 ```
 
-心跳请求没有请求体。删除会话返回 404 时，客户端将其视为已释放。
+心跳请求没有请求体，成功响应包含 `session_id` 和新的 `lease_expires_at`。删除会话成功时服务端返回 `202 Accepted`；删除时返回 `404`，客户端也将其视为已释放。
 
 ### 查询会话启动与串口信息
 
@@ -230,15 +231,6 @@ GET /api/v1/sessions/{session_id}/dtb/download
 
 分别获取启动配置、串口状态、TFTP 状态、DTB 元数据和 DTB 原始内容。
 
-### 开关机
-
-```http
-POST /api/v1/sessions/{session_id}/board/power-on
-POST /api/v1/sessions/{session_id}/board/power-off
-```
-
-请求没有请求体。
-
 ### 上传会话文件
 
 ```http
@@ -248,22 +240,13 @@ X-File-Path: <relative_path>
 <raw file bytes>
 ```
 
-### 上传 HTTP Boot 文件
-
-```http
-PUT /api/v1/sessions/{session_id}/http-boot/files
-X-File-Path: <relative_path>
-
-<raw file bytes>
-```
-
 ### 上传 HTTP Boot 内核
 
 ```http
 PUT /api/v1/sessions/{session_id}/http-boot/kernel
-X-HttpBoot-Remote-Name: <remote_name>
-X-HttpBoot-Arch: <arch>
-X-HttpBoot-Image-Format: <image_format>
+X-HttpBoot-Remote-Name: <remote_name>        # 可选，默认 kernel.elf
+X-HttpBoot-Arch: <arch>                       # 必填：x86_64、aarch64、loongarch64、riscv64 或 other
+X-HttpBoot-Image-Format: <image_format>       # 可选，当前仅支持 elf64
 X-HttpBoot-Entry-Symbol: <entry_symbol>  # 可选
 
 <raw kernel bytes>
@@ -295,5 +278,3 @@ WebSocket 二进制帧承载串口字节流；客户端关闭时会发送：
   "message": "board type `rk3568` not found"
 }
 ```
-
-任一 board API 返回 `401 Unauthorized` 时，客户端删除当前 endpoint 的本地凭据；不会自动刷新并重试该业务请求。
