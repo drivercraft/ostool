@@ -307,8 +307,8 @@ baud_rate = "${env:BAUD_RATE:-115200}"
 
 ```toml
 [board]
-server_ip = "localhost"
-port = 2999
+server = "http://localhost"
+auth_mode = "disabled"
 ```
 
 Use the TUI editor to update it:
@@ -317,7 +317,7 @@ Use the TUI editor to update it:
 ostool board config
 ```
 
-Project-local `.board.toml` `server` / `port` fields still apply to `ostool board run`, with precedence lower than CLI flags and higher than the global config.
+`server` must be a complete URL including `http://` or `https://`; the optional `port` overrides the URL port. Project-local `.board.toml` `server` / `port` fields still apply to `ostool board run`, with precedence lower than CLI flags and higher than the global config.
 
 ### Public board authentication
 
@@ -325,17 +325,17 @@ Direct LAN connections to `ostool-server` keep the anonymous HTTP configuration 
 
 ```toml
 [board]
-server_url = "https://203.0.113.10:8443"
+server = "https://203.0.113.10:8443"
 auth_mode = "required"
 ```
 
 Sign in through browser device authorization, or import a personal access token (PAT) created in the web UI from standard input:
 
 ```bash
-ostool login
-printf '%s' "$OSTOOL_PAT" | ostool login --with-token
-ostool auth status
-ostool logout
+ostool login --server https://203.0.113.10:8443
+printf '%s' "$OSTOOL_PAT" | ostool login --with-token --server https://203.0.113.10:8443
+ostool auth status --server https://203.0.113.10:8443
+ostool logout --server https://203.0.113.10:8443
 ```
 
 OAuth sign-in automatically refreshes short-lived access tokens. A PAT is sent directly as a Bearer token and is never refreshed. Credentials are stored in the system credential store when available, with a warned user-level credential-file fallback. Automation can use `OSTOOL_BOARD_ACCESS_TOKEN`; it is neither stored nor refreshed.

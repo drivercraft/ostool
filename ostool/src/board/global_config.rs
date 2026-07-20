@@ -8,8 +8,7 @@ use reqwest::Url;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_BOARD_SERVER_IP: &str = "localhost";
-pub const DEFAULT_BOARD_SERVER_PORT: u16 = 2999;
+pub const DEFAULT_BOARD_SERVER: &str = "http://localhost";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -26,9 +25,9 @@ pub struct BoardEndpoint {
 }
 
 impl BoardEndpoint {
-    pub fn new(server_url: &str, auth_mode: AuthMode) -> anyhow::Result<Self> {
-        let mut base_url = Url::parse(server_url)
-            .with_context(|| format!("invalid board server URL `{server_url}`"))?;
+    pub fn new(server: &str, port: Option<u16>, auth_mode: AuthMode) -> anyhow::Result<Self> {
+        let mut base_url =
+            Url::parse(server).with_context(|| format!("invalid board server URL `{server}`"))?;
         if !matches!(base_url.scheme(), "http" | "https") {
             bail!("board server URL must use http or https");
         }
@@ -37,6 +36,14 @@ impl BoardEndpoint {
         }
         if auth_mode == AuthMode::Required && base_url.scheme() != "https" {
             bail!("authenticated board server URL must use https");
+        }
+        if let Some(port) = port {
+            if port == 0 {
+                bail!("board server port must be in 1..=65535");
+            }
+            base_url
+                .set_port(Some(port))
+                .map_err(|_| anyhow::anyhow!("invalid board server port `{port}`"))?;
         }
         // Url::join treats a base without a trailing slash as a file path and
         // would discard its final path component when resolving API endpoints.
@@ -72,25 +79,24 @@ pub struct BoardGlobalConfigFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct BoardGlobalConfig {
-    /// Complete board server URL. When set, it takes precedence over the legacy host and port.
+    /// Complete board service URL, including its scheme and optional base path.
+    #[serde(default = "default_server")]
+    pub server: String,
+    /// Optional port override for `server`.
     #[serde(default)]
-    pub server_url: Option<String>,
+    pub port: Option<u16>,
     #[serde(default)]
     pub auth_mode: AuthMode,
-    #[serde(default = "default_server_ip")]
-    pub server_ip: String,
-    #[serde(default = "default_server_port")]
-    pub port: u16,
 }
 
 impl Default for BoardGlobalConfig {
     fn default() -> Self {
         Self {
-            server_url: None,
+            server: default_server(),
+            port: None,
             auth_mode: AuthMode::Disabled,
-            server_ip: DEFAULT_BOARD_SERVER_IP.to_string(),
-            port: DEFAULT_BOARD_SERVER_PORT,
         }
     }
 }
@@ -142,82 +148,37 @@ impl LoadedBoardGlobalConfig {
         )
     }
 
-    pub fn resolve_server(&self, cli_server: Option<&str>, cli_port: Option<u16>) -> (String, u16) {
-        self.board.resolve_server(cli_server, cli_port)
-    }
-
     pub fn resolve_endpoint(
         &self,
-        cli_server_url: Option<&str>,
         cli_server: Option<&str>,
         cli_port: Option<u16>,
     ) -> anyhow::Result<BoardEndpoint> {
-        self.board
-            .resolve_endpoint(cli_server_url, cli_server, cli_port)
+        self.board.resolve_endpoint(cli_server, cli_port)
     }
 }
 
 impl BoardGlobalConfig {
-    pub fn resolve_server(&self, cli_server: Option<&str>, cli_port: Option<u16>) -> (String, u16) {
-        let server_ip = cli_server
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| self.server_ip.clone());
-        let port = cli_port.unwrap_or(self.port);
-        (server_ip, port)
-    }
-
     pub fn validate(&self, path: &Path) -> anyhow::Result<()> {
-        if self.server_ip.trim().is_empty() {
-            bail!("`board.server_ip` must not be empty in {}", path.display());
+        if self.server.trim().is_empty() {
+            bail!("`board.server` must not be empty in {}", path.display());
         }
-        if self.port == 0 {
-            bail!("`board.port` must be in 1..=65535 in {}", path.display());
-        }
-        if let Some(server_url) = self.server_url.as_deref() {
-            if self.server_ip != DEFAULT_BOARD_SERVER_IP || self.port != DEFAULT_BOARD_SERVER_PORT {
-                bail!(
-                    "`board.server_url` cannot be combined with non-default `board.server_ip` or `board.port` in {}",
-                    path.display()
-                );
-            }
-            BoardEndpoint::new(server_url, self.auth_mode)?;
-        }
+        BoardEndpoint::new(&self.server, self.port, self.auth_mode)?;
         Ok(())
     }
 
     pub fn resolve_endpoint(
         &self,
-        cli_server_url: Option<&str>,
         cli_server: Option<&str>,
         cli_port: Option<u16>,
     ) -> anyhow::Result<BoardEndpoint> {
-        if cli_server_url.is_some() && (cli_server.is_some() || cli_port.is_some()) {
-            bail!("--server-url cannot be used with --server or --port");
-        }
-
-        if let Some(server_url) = cli_server_url {
-            return BoardEndpoint::new(server_url, self.auth_mode);
-        }
-        if cli_server.is_none()
-            && cli_port.is_none()
-            && let Some(server_url) = self.server_url.as_deref()
-        {
-            return BoardEndpoint::new(server_url, self.auth_mode);
-        }
-
-        let (server, port) = self.resolve_server(cli_server, cli_port);
-        BoardEndpoint::new(&format!("http://{server}:{port}"), AuthMode::Disabled)
+        let server = cli_server.unwrap_or(&self.server);
+        let port = cli_port.or(self.port);
+        BoardEndpoint::new(server, port, self.auth_mode)
     }
 }
 
-fn default_server_ip() -> String {
-    DEFAULT_BOARD_SERVER_IP.to_string()
-}
-
-const fn default_server_port() -> u16 {
-    DEFAULT_BOARD_SERVER_PORT
+fn default_server() -> String {
+    DEFAULT_BOARD_SERVER.to_string()
 }
 
 fn default_config_path() -> anyhow::Result<PathBuf> {
@@ -240,77 +201,88 @@ fn write_config_file(path: &Path, file: &BoardGlobalConfigFile) -> anyhow::Resul
 mod tests {
     use tempfile::tempdir;
 
-    use super::{AuthMode, BoardGlobalConfig, LoadedBoardGlobalConfig};
+    use super::{AuthMode, BoardGlobalConfig, BoardGlobalConfigFile, LoadedBoardGlobalConfig};
 
     #[test]
-    fn load_or_create_creates_default_config_when_missing() {
+    fn load_or_create_creates_url_based_default_config_when_missing() {
         let temp = tempdir().unwrap();
         let path = temp.path().join(".ostool/config.toml");
 
         let loaded = LoadedBoardGlobalConfig::load_or_create_at(&path).unwrap();
 
         assert!(loaded.created);
-        assert_eq!(loaded.board.server_ip, "localhost");
-        assert_eq!(loaded.board.port, 2999);
+        assert_eq!(loaded.board.server, "http://localhost");
+        assert_eq!(loaded.board.port, None);
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("[board]"));
-        assert!(content.contains("server_ip = \"localhost\""));
-        assert!(content.contains("port = 2999"));
+        assert!(content.contains("server = \"http://localhost\""));
+        assert!(!content.contains("server_ip"));
     }
 
     #[test]
-    fn resolve_server_prefers_cli_over_global_defaults() {
+    fn resolve_endpoint_uses_url_port_or_scheme_default() {
         let config = BoardGlobalConfig {
-            server_ip: "10.0.0.2".into(),
-            port: 8000,
-            ..BoardGlobalConfig::default()
+            server: "https://board.example.com:9443/base".into(),
+            port: None,
+            auth_mode: AuthMode::Required,
         };
 
         assert_eq!(
-            config.resolve_server(Some("192.168.1.2"), Some(9000)),
-            ("192.168.1.2".to_string(), 9000)
+            config
+                .resolve_endpoint(None, None)
+                .unwrap()
+                .base_url
+                .as_str(),
+            "https://board.example.com:9443/base/"
         );
         assert_eq!(
-            config.resolve_server(None, None),
-            ("10.0.0.2".to_string(), 8000)
+            config
+                .resolve_endpoint(None, Some(8443))
+                .unwrap()
+                .base_url
+                .as_str(),
+            "https://board.example.com:8443/base/"
         );
     }
 
     #[test]
     fn required_authentication_requires_https() {
         let config = BoardGlobalConfig {
-            server_url: Some("http://203.0.113.10:8443".into()),
+            server: "http://203.0.113.10:8443".into(),
+            port: None,
             auth_mode: AuthMode::Required,
-            ..BoardGlobalConfig::default()
         };
-        assert!(config.resolve_endpoint(None, None, None).is_err());
+        assert!(config.resolve_endpoint(None, None).is_err());
     }
 
     #[test]
-    fn https_server_url_is_used_for_authenticated_endpoint() {
-        let config = BoardGlobalConfig {
-            server_url: Some("https://203.0.113.10:8443".into()),
-            auth_mode: AuthMode::Required,
-            ..BoardGlobalConfig::default()
-        };
-        let endpoint = config.resolve_endpoint(None, None, None).unwrap();
-        assert_eq!(endpoint.base_url.as_str(), "https://203.0.113.10:8443/");
-        assert_eq!(endpoint.auth_mode, AuthMode::Required);
-    }
-
-    #[test]
-    fn save_persists_updated_values() {
+    fn save_persists_url_and_optional_port() {
         let temp = tempdir().unwrap();
         let path = temp.path().join(".ostool/config.toml");
         let mut loaded = LoadedBoardGlobalConfig::load_or_create_at(&path).unwrap();
 
-        loaded.board.server_ip = "10.0.0.2".into();
-        loaded.board.port = 9000;
+        loaded.board = BoardGlobalConfig {
+            server: "http://10.0.0.2".into(),
+            port: Some(9000),
+            auth_mode: AuthMode::Disabled,
+        };
         loaded.save().unwrap();
 
         let reloaded = LoadedBoardGlobalConfig::load_or_create_at(&path).unwrap();
         assert!(!reloaded.created);
-        assert_eq!(reloaded.board.server_ip, "10.0.0.2");
-        assert_eq!(reloaded.board.port, 9000);
+        assert_eq!(reloaded.board.server, "http://10.0.0.2");
+        assert_eq!(reloaded.board.port, Some(9000));
+    }
+
+    #[test]
+    fn legacy_config_fields_are_rejected() {
+        let err = toml::from_str::<BoardGlobalConfigFile>(
+            r#"
+                [board]
+                server_ip = "10.0.0.2"
+                port = 9000
+            "#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("server_ip"));
     }
 }

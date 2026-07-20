@@ -1949,7 +1949,6 @@ timeout = 0
             shell_prefix: Some("login:".into()),
             shell_init_cmd: Some("root".into()),
             timeout: Some(12),
-            server_url: None,
             auth_mode: None,
             server: None,
             port: None,

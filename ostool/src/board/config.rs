@@ -11,6 +11,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct BoardRunConfig {
     pub board_type: String,
     pub dtb_file: Option<String>,
@@ -26,8 +27,8 @@ pub struct BoardRunConfig {
     pub shell_prefix: Option<String>,
     pub shell_init_cmd: Option<String>,
     pub timeout: Option<u64>,
-    pub server_url: Option<String>,
     pub auth_mode: Option<AuthMode>,
+    /// Complete board service URL. `port` optionally overrides its port.
     pub server: Option<String>,
     pub port: Option<u16>,
 }
@@ -65,49 +66,24 @@ impl BoardRunConfig {
         Ok(config)
     }
 
-    pub(crate) fn resolve_server(
-        &self,
-        cli_server: Option<&str>,
-        cli_port: Option<u16>,
-        global_config: &BoardGlobalConfig,
-    ) -> (String, u16) {
-        let server = cli_server
-            .map(str::to_string)
-            .or_else(|| self.server.clone())
-            .unwrap_or_else(|| global_config.server_ip.clone());
-        let port = cli_port.or(self.port).unwrap_or(global_config.port);
-        (server, port)
-    }
-
     pub(crate) fn resolve_endpoint(
         &self,
-        cli_server_url: Option<&str>,
         cli_server: Option<&str>,
         cli_port: Option<u16>,
         global_config: &BoardGlobalConfig,
     ) -> anyhow::Result<BoardEndpoint> {
-        if cli_server_url.is_some() && (cli_server.is_some() || cli_port.is_some()) {
-            anyhow::bail!("--server-url cannot be used with --server or --port");
-        }
         let auth_mode = self.auth_mode.unwrap_or(global_config.auth_mode);
-        if let Some(server_url) = cli_server_url.or(self.server_url.as_deref()) {
-            return BoardEndpoint::new(server_url, auth_mode);
-        }
-        if cli_server.is_none()
-            && cli_port.is_none()
-            && let Some(server_url) = global_config.server_url.as_deref()
-        {
-            return BoardEndpoint::new(server_url, auth_mode);
-        }
-        let (server, port) = self.resolve_server(cli_server, cli_port, global_config);
-        BoardEndpoint::new(&format!("http://{server}:{port}"), AuthMode::Disabled)
+        let server = cli_server
+            .or(self.server.as_deref())
+            .unwrap_or(&global_config.server);
+        let port = cli_port.or(self.port).or(global_config.port);
+        BoardEndpoint::new(server, port, auth_mode)
     }
 
     pub(crate) fn apply_overrides(
         &mut self,
         scope: &VariableScope,
         board_type: Option<&str>,
-        server_url: Option<&str>,
         server: Option<&str>,
         port: Option<u16>,
     ) -> anyhow::Result<()> {
@@ -122,17 +98,6 @@ impl BoardRunConfig {
                 anyhow::bail!("board server override must not be empty");
             }
             self.server = Some(server);
-        }
-
-        if let Some(server_url) = server_url {
-            let server_url = variables::expand_variables(server_url, scope)?;
-            let server_url = server_url.trim().to_string();
-            if server_url.is_empty() {
-                anyhow::bail!("board server URL override must not be empty");
-            }
-            self.server_url = Some(server_url);
-            self.server = None;
-            self.port = None;
         }
 
         if let Some(port) = port {
@@ -199,11 +164,6 @@ impl BoardRunConfig {
             .transpose()?;
         self.server = self
             .server
-            .as_deref()
-            .map(|value| variables::expand_variables(value, scope))
-            .transpose()?;
-        self.server_url = self
-            .server_url
             .as_deref()
             .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
@@ -297,7 +257,7 @@ uboot_cmd = [" run bootcmd "]
 shell_prefix = " login: "
 shell_init_cmd = " root "
 timeout = 15
-server = "10.0.0.2"
+server = "http://10.0.0.2"
 port = 9000
 "#,
         )
@@ -315,16 +275,16 @@ port = 9000
         assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
         assert_eq!(config.timeout, Some(15));
         assert_eq!(
-            config.resolve_server(
-                Some("127.0.0.1"),
-                None,
-                &BoardGlobalConfig {
-                    server_ip: "localhost".into(),
-                    port: 2999,
-                    ..BoardGlobalConfig::default()
-                }
-            ),
-            ("127.0.0.1".to_string(), 9000)
+            config
+                .resolve_endpoint(
+                    Some("http://127.0.0.1"),
+                    None,
+                    &BoardGlobalConfig::default(),
+                )
+                .unwrap()
+                .base_url
+                .as_str(),
+            "http://127.0.0.1:9000/"
         );
     }
 
@@ -342,7 +302,7 @@ port = 9000
         let mut config: BoardRunConfig = toml::from_str(
             r#"
 board_type = "orangepi5plus"
-server = "10.0.0.2"
+server = "http://10.0.0.2"
 port = 9000
 "#,
         )
@@ -361,14 +321,13 @@ port = 9000
             .apply_overrides(
                 &invocation.variable_scope().unwrap(),
                 Some(" rk3568 "),
-                None,
-                Some(" 127.0.0.1 "),
+                Some(" http://127.0.0.1 "),
                 Some(7000),
             )
             .unwrap();
 
         assert_eq!(config.board_type, "rk3568");
-        assert_eq!(config.server.as_deref(), Some("127.0.0.1"));
+        assert_eq!(config.server.as_deref(), Some("http://127.0.0.1"));
         assert_eq!(config.port, Some(7000));
     }
 

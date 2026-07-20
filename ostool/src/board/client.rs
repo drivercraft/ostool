@@ -215,7 +215,8 @@ impl BoardServerClientError {
 impl BoardServerClient {
     pub fn new(server: &str, port: u16) -> anyhow::Result<Self> {
         Self::new_with_endpoint(BoardEndpoint::new(
-            &format!("http://{server}:{port}"),
+            &format!("http://{server}"),
+            Some(port),
             AuthMode::Disabled,
         )?)
     }
@@ -644,7 +645,7 @@ mod tests {
     #[test]
     fn authenticated_client_rejects_cross_origin_websocket_url() {
         let client = BoardServerClient::new_with_endpoint(
-            BoardEndpoint::new("https://203.0.113.10:8443", AuthMode::Required).unwrap(),
+            BoardEndpoint::new("https://203.0.113.10:8443", None, AuthMode::Required).unwrap(),
         )
         .unwrap();
         assert!(

@@ -26,7 +26,6 @@ use crate::{
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunBoardOptions {
     pub board_type: Option<String>,
-    pub server_url: Option<String>,
     pub server: Option<String>,
     pub port: Option<u16>,
 }
@@ -327,12 +326,11 @@ pub async fn run_prepared_board(
     board_config.apply_overrides(
         &scope,
         options.board_type.as_deref(),
-        options.server_url.as_deref(),
         options.server.as_deref(),
         options.port,
     )?;
 
-    let endpoint = board_config.resolve_endpoint(None, None, None, &global_config.board)?;
+    let endpoint = board_config.resolve_endpoint(None, None, &global_config.board)?;
     let (client, session) =
         acquire_board_session_endpoint(endpoint, &board_config.board_type).await?;
     print_allocated_board_session(&session, &board_config.board_type);
