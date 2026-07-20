@@ -24,7 +24,6 @@ pub struct AuthStatus {
     pub kind: Option<&'static str>,
     pub expires_at: Option<chrono::DateTime<Utc>>,
     pub scope: Option<String>,
-    pub from_environment: bool,
 }
 
 impl TokenManager {
@@ -153,7 +152,6 @@ impl TokenManager {
                 kind: None,
                 expires_at: None,
                 scope: None,
-                from_environment: false,
             });
         }
         if env::var_os("OSTOOL_BOARD_ACCESS_TOKEN").is_some() {
@@ -161,7 +159,6 @@ impl TokenManager {
                 kind: Some("environment access token"),
                 expires_at: None,
                 scope: None,
-                from_environment: true,
             });
         }
         let record = self.store.load()?;
@@ -180,7 +177,6 @@ impl TokenManager {
             kind,
             expires_at,
             scope,
-            from_environment: false,
         })
     }
 

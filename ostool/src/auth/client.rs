@@ -90,7 +90,7 @@ impl AuthClient {
             .send()
             .await
             .context("failed to exchange device code")?;
-        token_record(response, true).await
+        token_record(response).await
     }
 
     pub async fn refresh(&self, refresh_token: &str) -> anyhow::Result<CredentialRecord> {
@@ -105,7 +105,7 @@ impl AuthClient {
             .send()
             .await
             .context("failed to refresh access token")?;
-        token_record(response, true).await
+        token_record(response).await
     }
 
     pub async fn revoke(&self, refresh_token: &str) -> anyhow::Result<()> {
@@ -160,10 +160,7 @@ pub async fn complete_device_login(client: &AuthClient) -> anyhow::Result<Creden
     }
 }
 
-async fn token_record(
-    response: reqwest::Response,
-    require_refresh: bool,
-) -> anyhow::Result<CredentialRecord> {
+async fn token_record(response: reqwest::Response) -> anyhow::Result<CredentialRecord> {
     let token: TokenResponse = decode_json(response).await?;
     if !token.token_type.eq_ignore_ascii_case("bearer") {
         bail!(
@@ -175,7 +172,7 @@ async fn token_record(
         bail!("authentication server returned a non-positive token lifetime");
     }
     let refresh_token = token.refresh_token.filter(|value| !value.is_empty());
-    if require_refresh && refresh_token.is_none() {
+    if refresh_token.is_none() {
         bail!("authentication server did not return a refresh token");
     }
     Ok(CredentialRecord::OAuthRefresh {
