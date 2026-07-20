@@ -159,6 +159,8 @@ token=<refresh_token>
 
 ## Board REST API
 
+本节覆盖 `ostool-server` 的全部公开、非管理 REST 接口。`ostool` 当前命令直接调用其中的大部分接口；电源控制、HTTP Boot 普通文件上传及会话查询/文件管理端点虽未由当前命令路径调用，仍是 `BoardServerClient` 或公开 board 服务契约的一部分。
+
 ### 查询开发板类型
 
 ```http
@@ -210,6 +212,60 @@ Content-Type: application/json
 
 指定类型不存在时返回 `404`；类型存在但没有符合条件的空闲开发板时返回 `409`。客户端会对后一种情况每秒重试一次，直到分配成功或收到其他错误。
 
+### 查询会话详情
+
+```http
+GET /api/v1/sessions/{session_id}
+```
+
+请求没有请求体，成功返回 `200 OK`：
+
+```json
+{
+  "session": {
+    "id": "...",
+    "board_id": "rk3568-01",
+    "client_name": "ostool",
+    "created_at": "2026-07-20T02:00:00Z",
+    "last_heartbeat_at": "2026-07-20T02:00:01Z",
+    "expires_at": "2026-07-20T02:01:01Z",
+    "serial_connected": false,
+    "state": "active"
+  },
+  "board": {
+    "id": "rk3568-01",
+    "board_type": "rk3568",
+    "tags": ["lab"],
+    "serial": null,
+    "power_management": {
+      "kind": "custom",
+      "power_on_cmd": "power-on",
+      "power_off_cmd": "power-off"
+    },
+    "boot": {
+      "kind": "uboot",
+      "use_tftp": true,
+      "dtb_name": null,
+      "kernel_load_addr": null,
+      "fit_load_addr": null,
+      "bootm_addr": null,
+      "network_mode": "dhcp",
+      "board_ip": null,
+      "server_ip": null,
+      "netmask": null,
+      "gatewayip": null
+    },
+    "notes": null,
+    "disabled": false
+  },
+  "serial_available": false,
+  "serial_connected": false,
+  "files": []
+}
+```
+
+`session.state` 为会话生命周期状态；`board.serial`、`board.notes` 可为 `null`。`files` 的元素使用下方“上传会话文件”中的文件响应格式。
+
 ### 会话保活与释放
 
 ```http
@@ -217,19 +273,134 @@ POST /api/v1/sessions/{session_id}/heartbeat
 DELETE /api/v1/sessions/{session_id}
 ```
 
-心跳请求没有请求体，成功响应包含 `session_id` 和新的 `lease_expires_at`。删除会话成功时服务端返回 `202 Accepted`；删除时返回 `404`，客户端也将其视为已释放。
+两个请求均没有请求体。心跳成功返回 `200 OK`：
 
-### 查询会话启动与串口信息
+```json
+{
+  "session_id": "...",
+  "lease_expires_at": "2026-07-20T02:00:00Z"
+}
+```
+
+删除成功时服务端返回 `202 Accepted` 且没有响应体；删除时返回 `404`，客户端也将其视为已释放。
+
+### 获取启动配置
 
 ```http
 GET /api/v1/sessions/{session_id}/boot-profile
+```
+
+请求没有请求体，成功返回 `200 OK`。`boot.kind` 决定 `boot` 对象的具体字段：
+
+```json
+{
+  "boot": {
+    "kind": "uboot",
+    "use_tftp": true,
+    "dtb_name": "board.dtb",
+    "kernel_load_addr": "0x80200000",
+    "fit_load_addr": "0x82200000",
+    "bootm_addr": "0x82200000",
+    "network_mode": "dhcp",
+    "board_ip": null,
+    "server_ip": null,
+    "netmask": null,
+    "gatewayip": null
+  },
+  "server_ip": "192.168.1.2",
+  "netmask": "255.255.255.0",
+  "interface": "eth0"
+}
+```
+
+`boot.kind` 可为 `uboot`、`pxe` 或 `httpboot`（客户端也接受别名 `uefi_http`）。`pxe` 的对象仅含可选 `notes`；`httpboot` 的对象含可选 `boot_arch`（`x86_64`、`aarch64`、`loongarch64`、`riscv64` 或 `other`）和 `mac`。顶层 `server_ip`、`netmask`、`interface` 均可为 `null`。
+
+### 获取串口状态
+
+```http
 GET /api/v1/sessions/{session_id}/serial
+```
+
+请求没有请求体，成功返回 `200 OK`：
+
+```json
+{
+  "available": true,
+  "connected": false,
+  "port": "/dev/ttyUSB0",
+  "baud_rate": 115200,
+  "ws_url": "/api/v1/sessions/.../serial/ws"
+}
+```
+
+没有串口时，`available` 和 `connected` 为 `false`，`port`、`baud_rate`、`ws_url` 均为 `null`。
+
+### 获取 TFTP 状态
+
+```http
 GET /api/v1/sessions/{session_id}/tftp
+```
+
+请求没有请求体，成功返回 `200 OK`：
+
+```json
+{
+  "available": true,
+  "provider": "internal",
+  "server_ip": "192.168.1.2",
+  "netmask": "255.255.255.0",
+  "writable": true,
+  "files": [
+    {
+      "filename": "Image",
+      "relative_path": "boot/Image",
+      "tftp_url": "tftp://192.168.1.2/boot/Image",
+      "size": 1048576,
+      "uploaded_at": "2026-07-20T02:00:00Z"
+    }
+  ]
+}
+```
+
+`server_ip`、`netmask` 和每个文件的 `tftp_url` 可为 `null`。`available` 表示 TFTP 已启用、健康、可写且能解析服务端 IP。
+
+### 获取和下载预置 DTB
+
+```http
 GET /api/v1/sessions/{session_id}/dtb
 GET /api/v1/sessions/{session_id}/dtb/download
 ```
 
-分别获取启动配置、串口状态、TFTP 状态、DTB 元数据和 DTB 原始内容。
+第一个请求没有请求体，成功返回 `200 OK` 的 DTB 元数据：
+
+```json
+{
+  "dtb_name": "board.dtb",
+  "relative_path": "boot/dtb/board.dtb",
+  "session_file_path": "boot/dtb/board.dtb",
+  "tftp_url": "tftp://192.168.1.2/boot/dtb/board.dtb"
+}
+```
+
+没有预置 DTB 时上述四个字段均为 `null`。下载接口没有请求体，成功返回 `200 OK`、`Content-Type: application/octet-stream` 和 DTB 原始字节；未配置预置 DTB 或文件不存在时返回 `404`。
+
+### 开关机
+
+```http
+POST /api/v1/sessions/{session_id}/board/power-on
+POST /api/v1/sessions/{session_id}/board/power-off
+```
+
+这两个 `BoardServerClient` 方法没有请求体，成功返回 `200 OK`：
+
+```json
+{
+  "ok": true,
+  "message": "..."
+}
+```
+
+`message` 由具体电源管理实现返回。
 
 ### 上传会话文件
 
@@ -239,6 +410,62 @@ X-File-Path: <relative_path>
 
 <raw file bytes>
 ```
+
+`X-File-Path` 必填，必须是相对路径；请求体是文件原始字节。成功返回 `201 Created`：
+
+```json
+{
+  "filename": "Image",
+  "relative_path": "boot/Image",
+  "tftp_url": "tftp://192.168.1.2/boot/Image",
+  "size": 1048576,
+  "uploaded_at": "2026-07-20T02:00:00Z"
+}
+```
+
+`tftp_url` 可为 `null`。
+
+### 列出、查询和删除会话文件
+
+```http
+GET /api/v1/sessions/{session_id}/files
+GET /api/v1/sessions/{session_id}/files/{path}
+DELETE /api/v1/sessions/{session_id}/files/{path}
+```
+
+三个请求均没有请求体。前两个请求成功返回 `200 OK`：列表接口返回文件对象数组，单文件接口返回一个文件对象，格式与上传会话文件的成功响应相同。删除成功返回 `204 No Content`。`path` 必须是相对路径。
+
+历史上传路径 `PUT /api/v1/sessions/{session_id}/files/{path}` 被明确拒绝并返回 `404`；上传必须使用前述 `PUT /files` 加 `X-File-Path` Header 的形式。
+
+### 上传 HTTP Boot 文件
+
+```http
+PUT /api/v1/sessions/{session_id}/http-boot/files
+X-File-Path: <relative_path>
+
+<raw file bytes>
+```
+
+`X-File-Path` 必填，请求体是文件原始字节。成功返回 `201 Created`：
+
+```json
+{
+  "filename": "kernel.elf",
+  "relative_path": "kernel.elf",
+  "http_url": "https://board.example.com/boot/sessions/.../kernel.elf",
+  "size": 1048576,
+  "uploaded_at": "2026-07-20T02:00:00Z"
+}
+```
+
+### 下载 HTTP Boot 文件
+
+```http
+GET /boot/sessions/{session_id}/{path}
+Range: bytes=<start>-<end>  # 可选
+```
+
+该接口供目标机 HTTP Boot 下载已上传文件，请求没有消息体。无 Range 时成功返回 `200 OK` 和文件原始字节；带合法单段 Range 时返回 `206 Partial Content`，并包含 `Content-Range`、`Content-Length`、`Accept-Ranges: bytes`。响应的 `Content-Type` 根据文件名推断。`path` 必须是相对路径。
 
 ### 上传 HTTP Boot 内核
 
@@ -251,6 +478,19 @@ X-HttpBoot-Entry-Symbol: <entry_symbol>  # 可选
 
 <raw kernel bytes>
 ```
+
+请求体是内核原始字节。成功返回 `201 Created`：
+
+```json
+{
+  "boot_id": "...",
+  "kernel_url": "https://board.example.com/boot/sessions/.../kernel.elf",
+  "kernel_size": 1048576,
+  "kernel_sha256": "..."
+}
+```
+
+`kernel_sha256` 可为 `null`。当前 `ostool board run` 的 HTTP Boot 流程固定发送 `remote_name=kernel.elf`、`image_format=elf64` 和 `entry_symbol=httpboot_entry`。
 
 ## 串口 WebSocket API
 
@@ -275,6 +515,9 @@ WebSocket 二进制帧承载串口字节流；客户端关闭时会发送：
 ```json
 {
   "code": "not_found",
-  "message": "board type `rk3568` not found"
+  "message": "board type `rk3568` not found",
+  "details": null
 }
 ```
+
+`details` 是可选 JSON 值，当前服务端通常返回 `null`；客户端只使用 `code` 和 `message`。任一 board API 返回 `401 Unauthorized` 时，客户端删除当前 endpoint 的本地凭据；不会自动刷新并重试该业务请求。
