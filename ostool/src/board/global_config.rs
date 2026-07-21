@@ -1,5 +1,6 @@
 use std::{
     env, fs,
+    net::IpAddr,
     path::{Path, PathBuf},
 };
 
@@ -26,8 +27,17 @@ pub struct BoardEndpoint {
 
 impl BoardEndpoint {
     pub fn new(server: &str, port: Option<u16>, auth_mode: AuthMode) -> anyhow::Result<Self> {
-        let mut base_url =
-            Url::parse(server).with_context(|| format!("invalid board server URL `{server}`"))?;
+        let server = server.trim();
+        // Before `board.server` became a complete URL, LAN configurations used a
+        // bare IP address. Keep that specific legacy form working by treating it
+        // as HTTP; host names and all new configurations must include a scheme.
+        let server_url = match server.parse::<IpAddr>() {
+            Ok(IpAddr::V4(_)) => format!("http://{server}"),
+            Ok(IpAddr::V6(_)) => format!("http://[{server}]"),
+            Err(_) => server.to_string(),
+        };
+        let mut base_url = Url::parse(&server_url)
+            .with_context(|| format!("invalid board server URL `{server}`"))?;
         if !matches!(base_url.scheme(), "http" | "https") {
             bail!("board server URL must use http or https");
         }
@@ -241,6 +251,35 @@ mod tests {
                 .base_url
                 .as_str(),
             "https://board.example.com:8443/base/"
+        );
+    }
+
+    #[test]
+    fn resolve_endpoint_accepts_legacy_bare_ip_as_http() {
+        let config = BoardGlobalConfig {
+            server: "192.0.2.10".into(),
+            port: Some(9000),
+            auth_mode: AuthMode::Disabled,
+        };
+
+        assert_eq!(
+            config
+                .resolve_endpoint(None, None)
+                .unwrap()
+                .base_url
+                .as_str(),
+            "http://192.0.2.10:9000/"
+        );
+    }
+
+    #[test]
+    fn endpoint_wraps_legacy_bare_ipv6_address() {
+        assert_eq!(
+            super::BoardEndpoint::new("2001:db8::10", Some(9000), AuthMode::Disabled)
+                .unwrap()
+                .base_url
+                .as_str(),
+            "http://[2001:db8::10]:9000/"
         );
     }
 
