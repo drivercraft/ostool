@@ -304,7 +304,7 @@ baud_rate = "${env:BAUD_RATE:-115200}"
 
 ```toml
 [board]
-server = "http://localhost"
+server = "http://localhost:2999"
 auth_mode = "disabled"
 ```
 

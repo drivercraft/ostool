@@ -9,7 +9,9 @@ use reqwest::Url;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_BOARD_SERVER: &str = "http://localhost";
+// Keep the URL-based configuration aligned with ostool-server's established
+// default listen port so a newly generated config works without user edits.
+pub const DEFAULT_BOARD_SERVER: &str = "http://localhost:2999";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -221,11 +223,23 @@ mod tests {
         let loaded = LoadedBoardGlobalConfig::load_or_create_at(&path).unwrap();
 
         assert!(loaded.created);
-        assert_eq!(loaded.board.server, "http://localhost");
+        assert_eq!(loaded.board.server, "http://localhost:2999");
         assert_eq!(loaded.board.port, None);
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("server = \"http://localhost\""));
+        assert!(content.contains("server = \"http://localhost:2999\""));
         assert!(!content.contains("server_ip"));
+    }
+
+    #[test]
+    fn default_config_resolves_to_the_board_server_default_port() {
+        assert_eq!(
+            BoardGlobalConfig::default()
+                .resolve_endpoint(None, None)
+                .unwrap()
+                .base_url
+                .as_str(),
+            "http://localhost:2999/"
+        );
     }
 
     #[test]
