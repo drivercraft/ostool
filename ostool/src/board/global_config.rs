@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, bail};
 use reqwest::Url;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 // Keep the URL-based configuration aligned with ostool-server's established
 // default listen port so a newly generated config works without user edits.
@@ -90,8 +90,7 @@ pub struct BoardGlobalConfigFile {
     pub board: BoardGlobalConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct BoardGlobalConfig {
     /// Complete board service URL, including its scheme and optional base path.
     #[serde(default = "default_server")]
@@ -101,6 +100,53 @@ pub struct BoardGlobalConfig {
     pub port: Option<u16>,
     #[serde(default)]
     pub auth_mode: AuthMode,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BoardGlobalConfigInput {
+    #[serde(default)]
+    server: Option<String>,
+    // The base release persisted this field. It exists only in the input
+    // representation so upgraded installations can be read and rewritten in
+    // the URL-based format; new configuration is always serialized as `server`.
+    #[serde(default)]
+    server_ip: Option<String>,
+    #[serde(default)]
+    port: Option<u16>,
+    #[serde(default)]
+    auth_mode: AuthMode,
+}
+
+impl<'de> Deserialize<'de> for BoardGlobalConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let input = BoardGlobalConfigInput::deserialize(deserializer)?;
+        let server = match (input.server, input.server_ip) {
+            (Some(server), None) => server,
+            (None, Some(server_ip)) => {
+                let server_ip = server_ip.trim();
+                match server_ip.parse::<IpAddr>() {
+                    Ok(IpAddr::V6(_)) => format!("http://[{server_ip}]"),
+                    Ok(IpAddr::V4(_)) | Err(_) => format!("http://{server_ip}"),
+                }
+            }
+            (None, None) => default_server(),
+            (Some(_), Some(_)) => {
+                return Err(D::Error::custom(
+                    "`board.server` and legacy `board.server_ip` cannot be used together",
+                ));
+            }
+        };
+
+        Ok(Self {
+            server,
+            port: input.port,
+            auth_mode: input.auth_mode,
+        })
+    }
 }
 
 impl Default for BoardGlobalConfig {
@@ -213,7 +259,7 @@ fn write_config_file(path: &Path, file: &BoardGlobalConfigFile) -> anyhow::Resul
 mod tests {
     use tempfile::tempdir;
 
-    use super::{AuthMode, BoardGlobalConfig, BoardGlobalConfigFile, LoadedBoardGlobalConfig};
+    use super::{AuthMode, BoardGlobalConfig, LoadedBoardGlobalConfig};
 
     #[test]
     fn load_or_create_creates_url_based_default_config_when_missing() {
@@ -327,15 +373,36 @@ mod tests {
     }
 
     #[test]
-    fn legacy_config_fields_are_rejected() {
-        let err = toml::from_str::<BoardGlobalConfigFile>(
+    fn load_migrates_base_server_ip_config_and_save_writes_url_format() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join(".ostool/config.toml");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
             r#"
                 [board]
-                server_ip = "10.0.0.2"
-                port = 9000
+                server_ip = "localhost"
+                port = 2999
             "#,
         )
-        .unwrap_err();
-        assert!(err.to_string().contains("server_ip"));
+        .unwrap();
+
+        let loaded = LoadedBoardGlobalConfig::load_or_create_at(&path).unwrap();
+        assert!(!loaded.created);
+        assert_eq!(loaded.board.server, "http://localhost");
+        assert_eq!(loaded.board.port, Some(2999));
+        assert_eq!(
+            loaded
+                .resolve_endpoint(None, None)
+                .unwrap()
+                .base_url
+                .as_str(),
+            "http://localhost:2999/"
+        );
+
+        loaded.save().unwrap();
+        let content = std::fs::read_to_string(path).unwrap();
+        assert!(content.contains("server = \"http://localhost\""));
+        assert!(!content.contains("server_ip"));
     }
 }

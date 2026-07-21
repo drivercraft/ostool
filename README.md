@@ -314,7 +314,7 @@ auth_mode = "disabled"
 ostool board config
 ```
 
-`server` 应使用包含 `http://` 或 `https://` 的完整 URL；可选的 `port` 会覆盖 URL 中的端口。为兼容旧的局域网配置，裸 IPv4 或 IPv6 地址会自动补为 `http://`；不支持无 scheme 的主机名，也不恢复已移除的 `server_ip` 字段。项目级 `.board.toml` 中的 `server` / `port` 仍可用于 `ostool board run`，其优先级低于命令行参数，高于全局配置。
+`server` 应使用包含 `http://` 或 `https://` 的完整 URL；可选的 `port` 会覆盖 URL 中的端口。为兼容旧的局域网配置，裸 IPv4 或 IPv6 地址会自动补为 `http://`。基线版本写出的 `server_ip` / `port` 也会在读取时迁移为 `server` / `port`，下一次保存配置时只写新格式；无 scheme 的主机名不支持。项目级 `.board.toml` 中的 `server` / `port` 仍可用于 `ostool board run`，其优先级低于命令行参数，高于全局配置。
 
 ### 公网开发板认证
 

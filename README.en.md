@@ -317,7 +317,7 @@ Use the TUI editor to update it:
 ostool board config
 ```
 
-`server` should be a complete URL including `http://` or `https://`; the optional `port` overrides the URL port. For legacy LAN configurations, a bare IPv4 or IPv6 address is interpreted as `http://`; bare host names are not supported, and the removed `server_ip` field is not restored. Project-local `.board.toml` `server` / `port` fields still apply to `ostool board run`, with precedence lower than CLI flags and higher than the global config.
+`server` should be a complete URL including `http://` or `https://`; the optional `port` overrides the URL port. For legacy LAN configurations, a bare IPv4 or IPv6 address is interpreted as `http://`. The base release's persisted `server_ip` / `port` pair is also migrated to `server` / `port` when read; the next configuration save writes only the new format. Bare host names are not supported. Project-local `.board.toml` `server` / `port` fields still apply to `ostool board run`, with precedence lower than CLI flags and higher than the global config.
 
 ### Public board authentication
 
