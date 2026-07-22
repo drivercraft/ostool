@@ -307,8 +307,8 @@ baud_rate = "${env:BAUD_RATE:-115200}"
 
 ```toml
 [board]
-server_ip = "localhost"
-port = 2999
+server = "http://localhost:2999"
+auth_mode = "disabled"
 ```
 
 Use the TUI editor to update it:
@@ -317,7 +317,30 @@ Use the TUI editor to update it:
 ostool board config
 ```
 
-Project-local `.board.toml` `server` / `port` fields still apply to `ostool board run`, with precedence lower than CLI flags and higher than the global config.
+`server` should be a complete URL including `http://` or `https://`; the optional `port` overrides the URL port. For legacy LAN configurations, a bare IPv4 or IPv6 address is interpreted as `http://`. The base release's persisted `server_ip` / `port` pair is also migrated to `server` / `port` when read; the next configuration save writes only the new format. Bare host names are not supported. Project-local `.board.toml` `server` / `port` fields still apply to `ostool board run`, with precedence lower than CLI flags and higher than the global config.
+
+### Public board authentication
+
+Direct LAN connections to `ostool-server` keep the anonymous HTTP configuration above. A public authentication gateway uses a complete HTTPS URL:
+
+```toml
+[board]
+server = "https://203.0.113.10:8443"
+auth_mode = "required"
+```
+
+Sign in through browser device authorization, or import a personal access token (PAT) created in the web UI from standard input:
+
+```bash
+ostool login --server https://203.0.113.10:8443
+printf '%s' "$OSTOOL_PAT" | ostool login --with-token --server https://203.0.113.10:8443
+ostool auth status --server https://203.0.113.10:8443
+ostool logout --server https://203.0.113.10:8443
+```
+
+OAuth sign-in automatically refreshes short-lived access tokens. A PAT is sent directly as a Bearer token and is never refreshed. Credentials are stored in the system credential store when available, with a warned user-level credential-file fallback. Automation can use `OSTOOL_BOARD_ACCESS_TOKEN`; it is neither stored nor refreshed.
+
+Public authentication requires HTTPS. The client verifies certificates only through the system trust store; deployments using a private CA must install its root certificate on client systems. Do not use HTTP, bypass certificate verification, or put tokens in configuration files.
 
 ## 🛠️ Subproject Details
 

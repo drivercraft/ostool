@@ -19,7 +19,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use crate::board::global_config::{BoardGlobalConfig, LoadedBoardGlobalConfig};
+use crate::board::global_config::{AuthMode, BoardGlobalConfig, LoadedBoardGlobalConfig};
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const FORM_CONTENT_HEIGHT: u16 = 14;
@@ -30,7 +30,7 @@ const FORM_MIN_WIDTH: u16 = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActiveField {
-    ServerIp,
+    Server,
     Port,
 }
 
@@ -125,7 +125,8 @@ impl InputField {
 #[derive(Debug, Clone)]
 struct BoardConfigApp {
     path: PathBuf,
-    server_ip: InputField,
+    auth_mode: AuthMode,
+    server: InputField,
     port: InputField,
     active: ActiveField,
     error: Option<String>,
@@ -135,9 +136,10 @@ impl BoardConfigApp {
     fn new(path: PathBuf, config: BoardGlobalConfig) -> Self {
         Self {
             path,
-            server_ip: InputField::new(config.server_ip),
-            port: InputField::new(config.port.to_string()),
-            active: ActiveField::ServerIp,
+            auth_mode: config.auth_mode,
+            server: InputField::new(config.server),
+            port: InputField::new(config.port.map(|port| port.to_string()).unwrap_or_default()),
+            active: ActiveField::Server,
             error: None,
         }
     }
@@ -223,7 +225,7 @@ impl BoardConfigApp {
 
     fn insert_char(&mut self, ch: char) {
         match self.active {
-            ActiveField::ServerIp => self.server_ip.insert_char(ch),
+            ActiveField::Server => self.server.insert_char(ch),
             ActiveField::Port if ch.is_ascii_digit() => self.port.insert_char(ch),
             ActiveField::Port => {}
         }
@@ -242,28 +244,27 @@ impl BoardConfigApp {
     }
 
     fn validate(&self) -> anyhow::Result<BoardGlobalConfig> {
-        let server_ip = self.server_ip.value.trim().to_string();
-        if server_ip.is_empty() {
-            bail!("server_ip must not be empty");
+        let server = self.server.value.trim().to_string();
+        if server.is_empty() {
+            bail!("server must not be empty");
         }
 
-        let port: u16 = self
-            .port
-            .value
-            .trim()
-            .parse()
-            .context("port must be a valid integer")?;
-        if port == 0 {
-            bail!("port must be in 1..=65535");
-        }
+        let port = match self.port.value.trim() {
+            "" => None,
+            value => Some(value.parse().context("port must be a valid integer")?),
+        };
 
-        Ok(BoardGlobalConfig { server_ip, port })
+        Ok(BoardGlobalConfig {
+            auth_mode: self.auth_mode,
+            server,
+            port,
+        })
     }
 
     fn focus_next(&mut self) {
         self.active = match self.active {
-            ActiveField::ServerIp => ActiveField::Port,
-            ActiveField::Port => ActiveField::ServerIp,
+            ActiveField::Server => ActiveField::Port,
+            ActiveField::Port => ActiveField::Server,
         };
     }
 
@@ -273,7 +274,7 @@ impl BoardConfigApp {
 
     fn active_field_mut(&mut self) -> &mut InputField {
         match self.active {
-            ActiveField::ServerIp => &mut self.server_ip,
+            ActiveField::Server => &mut self.server,
             ActiveField::Port => &mut self.port,
         }
     }
@@ -319,9 +320,9 @@ impl BoardConfigApp {
         let server_cursor = draw_input(
             frame,
             chunks[1],
-            "server_ip",
-            &self.server_ip,
-            self.active == ActiveField::ServerIp,
+            "server",
+            &self.server,
+            self.active == ActiveField::Server,
         );
         let port_cursor = draw_input(
             frame,
@@ -360,7 +361,7 @@ impl BoardConfigApp {
         frame.render_widget(footer, chunks[5]);
 
         let (cursor_area, cursor_offset) = match self.active {
-            ActiveField::ServerIp => (chunks[1], server_cursor),
+            ActiveField::Server => (chunks[1], server_cursor),
             ActiveField::Port => (chunks[2], port_cursor),
         };
         frame.set_cursor_position(Position::new(
@@ -483,14 +484,15 @@ mod tests {
         let app = BoardConfigApp::new(
             PathBuf::from("/tmp/config.toml"),
             BoardGlobalConfig {
-                server_ip: "10.0.0.2".into(),
-                port: 9000,
+                server: "http://10.0.0.2".into(),
+                port: Some(9000),
+                ..BoardGlobalConfig::default()
             },
         );
 
-        assert_eq!(app.server_ip.value, "10.0.0.2");
+        assert_eq!(app.server.value, "http://10.0.0.2");
         assert_eq!(app.port.value, "9000");
-        assert_eq!(app.active, ActiveField::ServerIp);
+        assert_eq!(app.active, ActiveField::Server);
     }
 
     #[test]
@@ -504,12 +506,12 @@ mod tests {
     }
 
     #[test]
-    fn handle_key_edits_server_ip() {
+    fn handle_key_edits_server() {
         let mut app = BoardConfigApp::new(
             PathBuf::from("/tmp/config.toml"),
             BoardGlobalConfig::default(),
         );
-        app.server_ip = InputField::new("");
+        app.server = InputField::new("");
 
         let outcome = app
             .handle_key_event(KeyEvent {
@@ -521,7 +523,7 @@ mod tests {
             .unwrap();
 
         assert!(outcome.is_none());
-        assert_eq!(app.server_ip.value, "a");
+        assert_eq!(app.server.value, "a");
     }
 
     #[test]
@@ -542,25 +544,25 @@ mod tests {
         let temp = tempdir().unwrap();
         let path = temp.path().join(".ostool/config.toml");
         let mut app = BoardConfigApp::new(path.clone(), BoardGlobalConfig::default());
-        app.server_ip = InputField::new("10.0.0.2");
+        app.server = InputField::new("http://10.0.0.2");
         app.port = InputField::new("9000");
 
         app.save().unwrap();
 
         let content = std::fs::read_to_string(path).unwrap();
-        assert!(content.contains("server_ip = \"10.0.0.2\""));
+        assert!(content.contains("server = \"http://10.0.0.2\""));
         assert!(content.contains("port = 9000"));
     }
 
     #[test]
-    fn save_rejects_empty_server_ip() {
+    fn save_rejects_empty_server() {
         let temp = tempdir().unwrap();
         let path = temp.path().join(".ostool/config.toml");
         let mut app = BoardConfigApp::new(path.clone(), BoardGlobalConfig::default());
-        app.server_ip = InputField::new("   ");
+        app.server = InputField::new("   ");
 
         let err = app.save().unwrap_err();
-        assert!(err.to_string().contains("server_ip"));
+        assert!(err.to_string().contains("server"));
         assert!(!path.exists());
     }
 

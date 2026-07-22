@@ -130,7 +130,8 @@ impl HttpBootBoardRunner {
         );
         println!("Waiting for axloader on board serial...");
 
-        let (serial_tx, serial_rx, tasks) = connect_serial_stream(ws_url).await?;
+        let (serial_tx, serial_rx, tasks) =
+            connect_serial_stream(ws_url, self.client.websocket_authorization().await?).await?;
         let mut serial_rx = serial_rx.compat();
         let mut serial_tx = serial_tx.compat_write();
         wait_for_loader_ready(&mut serial_rx, arch).await?;

@@ -5,12 +5,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    board::global_config::BoardGlobalConfig,
+    board::global_config::{AuthMode, BoardEndpoint, BoardGlobalConfig},
     project::variables::{self, VariableScope},
     run::shell_init::normalize_shell_init_config,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct BoardRunConfig {
     pub board_type: String,
     pub dtb_file: Option<String>,
@@ -26,6 +27,8 @@ pub struct BoardRunConfig {
     pub shell_prefix: Option<String>,
     pub shell_init_cmd: Option<String>,
     pub timeout: Option<u64>,
+    pub auth_mode: Option<AuthMode>,
+    /// Complete board service URL. `port` optionally overrides its port.
     pub server: Option<String>,
     pub port: Option<u16>,
 }
@@ -63,18 +66,18 @@ impl BoardRunConfig {
         Ok(config)
     }
 
-    pub(crate) fn resolve_server(
+    pub(crate) fn resolve_endpoint(
         &self,
         cli_server: Option<&str>,
         cli_port: Option<u16>,
         global_config: &BoardGlobalConfig,
-    ) -> (String, u16) {
+    ) -> anyhow::Result<BoardEndpoint> {
+        let auth_mode = self.auth_mode.unwrap_or(global_config.auth_mode);
         let server = cli_server
-            .map(str::to_string)
-            .or_else(|| self.server.clone())
-            .unwrap_or_else(|| global_config.server_ip.clone());
-        let port = cli_port.or(self.port).unwrap_or(global_config.port);
-        (server, port)
+            .or(self.server.as_deref())
+            .unwrap_or(&global_config.server);
+        let port = cli_port.or(self.port).or(global_config.port);
+        BoardEndpoint::new(server, port, auth_mode)
     }
 
     pub(crate) fn apply_overrides(
@@ -254,7 +257,7 @@ uboot_cmd = [" run bootcmd "]
 shell_prefix = " login: "
 shell_init_cmd = " root "
 timeout = 15
-server = "10.0.0.2"
+server = "http://10.0.0.2"
 port = 9000
 "#,
         )
@@ -272,15 +275,16 @@ port = 9000
         assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
         assert_eq!(config.timeout, Some(15));
         assert_eq!(
-            config.resolve_server(
-                Some("127.0.0.1"),
-                None,
-                &BoardGlobalConfig {
-                    server_ip: "localhost".into(),
-                    port: 2999,
-                }
-            ),
-            ("127.0.0.1".to_string(), 9000)
+            config
+                .resolve_endpoint(
+                    Some("http://127.0.0.1"),
+                    None,
+                    &BoardGlobalConfig::default(),
+                )
+                .unwrap()
+                .base_url
+                .as_str(),
+            "http://127.0.0.1:9000/"
         );
     }
 
@@ -298,7 +302,7 @@ port = 9000
         let mut config: BoardRunConfig = toml::from_str(
             r#"
 board_type = "orangepi5plus"
-server = "10.0.0.2"
+server = "http://10.0.0.2"
 port = 9000
 "#,
         )
@@ -317,13 +321,13 @@ port = 9000
             .apply_overrides(
                 &invocation.variable_scope().unwrap(),
                 Some(" rk3568 "),
-                Some(" 127.0.0.1 "),
+                Some(" http://127.0.0.1 "),
                 Some(7000),
             )
             .unwrap();
 
         assert_eq!(config.board_type, "rk3568");
-        assert_eq!(config.server.as_deref(), Some("127.0.0.1"));
+        assert_eq!(config.server.as_deref(), Some("http://127.0.0.1"));
         assert_eq!(config.port, Some(7000));
     }
 

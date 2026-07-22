@@ -13,6 +13,10 @@ use tokio::{
     time::timeout,
 };
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{
+    client::IntoClientRequest as _,
+    http::{HeaderValue, header::AUTHORIZATION},
+};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::board::terminal::{
@@ -29,8 +33,10 @@ pub struct SerialStreamTasks {
 
 pub async fn connect_serial_stream(
     ws_url: reqwest::Url,
+    authorization: Option<String>,
 ) -> anyhow::Result<(BoxedAsyncWrite, BoxedAsyncRead, SerialStreamTasks)> {
-    let (stream, _) = tokio_tungstenite::connect_async(ws_url.as_str())
+    let request = websocket_request(&ws_url, authorization.as_deref())?;
+    let (stream, _) = tokio_tungstenite::connect_async(request)
         .await
         .with_context(|| format!("failed to connect serial websocket {ws_url}"))?;
     let (mut ws_sink, mut ws_stream) = stream.split();
@@ -125,6 +131,23 @@ pub async fn connect_serial_stream(
             write_task,
         },
     ))
+}
+
+pub(crate) fn websocket_request(
+    ws_url: &reqwest::Url,
+    authorization: Option<&str>,
+) -> anyhow::Result<tokio_tungstenite::tungstenite::http::Request<()>> {
+    let mut request = ws_url
+        .as_str()
+        .into_client_request()
+        .context("failed to build serial websocket request")?;
+    if let Some(token) = authorization {
+        // The URL was origin-checked by BoardServerClient before this point.
+        let value = HeaderValue::from_str(&format!("Bearer {token}"))
+            .context("invalid websocket authorization header")?;
+        request.headers_mut().insert(AUTHORIZATION, value);
+    }
+    Ok(request)
 }
 
 async fn write_bridge_bytes<W>(writer: &mut W, bytes: &[u8]) -> anyhow::Result<bool>
@@ -222,7 +245,7 @@ mod tests {
 
     use tokio::{sync::Notify, task::JoinHandle};
 
-    use super::{SerialStreamTasks, write_bridge_bytes};
+    use super::{SerialStreamTasks, websocket_request, write_bridge_bytes};
 
     #[tokio::test]
     async fn shutdown_waits_for_writer_before_reader() {
@@ -290,6 +313,16 @@ mod tests {
             write_bridge_bytes(&mut writer, b"late console output")
                 .await
                 .unwrap()
+        );
+    }
+
+    #[test]
+    fn websocket_request_carries_bearer_token() {
+        let url = reqwest::Url::parse("wss://example.invalid/serial").unwrap();
+        let request = websocket_request(&url, Some("token-value")).unwrap();
+        assert_eq!(
+            request.headers().get("authorization").unwrap(),
+            "Bearer token-value"
         );
     }
 }

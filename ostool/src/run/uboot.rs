@@ -951,7 +951,8 @@ impl RunnerBackend for RemoteBackend {
             .or(self.session.ws_url.as_deref())
             .ok_or_else(|| anyhow!("server did not return a serial websocket URL"))?;
         let ws_url = self.client.resolve_ws_url(ws_url)?;
-        let (tx, rx, tasks) = connect_serial_stream(ws_url).await?;
+        let (tx, rx, tasks) =
+            connect_serial_stream(ws_url, self.client.websocket_authorization().await?).await?;
         self.console_tasks = Some(tasks);
         Ok(ConsoleTransport { tx, rx })
     }
@@ -1948,6 +1949,7 @@ timeout = 0
             shell_prefix: Some("login:".into()),
             shell_init_cmd: Some("root".into()),
             timeout: Some(12),
+            auth_mode: None,
             server: None,
             port: None,
         });
