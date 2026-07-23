@@ -501,6 +501,30 @@ ostool --workdir /path/to/kernel run qemu
 sudo setcap cap_net_bind_service=+eip $(which ostool)
 ```
 
+When using a system TFTP root on Linux (`/srv/tftp` by default), ostool stages
+FIT images under `/srv/tftp/ostool` and removes the staging directory with the
+regular user's permissions after each run. Configure a dedicated group for
+this directory:
+
+```bash
+# One-time setup
+sudo groupadd ostool
+sudo usermod -aG ostool "$USER"
+sudo install -d -o root -g ostool -m 2775 /srv/tftp/ostool
+```
+
+After setup, log in again. Alternatively, start a shell with the new group in
+the current terminal:
+
+```bash
+newgrp ostool
+```
+
+Skip `groupadd` if the `ostool` group already exists. Run `newgrp ostool`, log in
+again to activate the new group; restarting `tftpd-hpa` is not required. ostool
+does not use `sudo rmdir` after a run; cleanup returns an error when the
+directory does not grant group write access.
+
 ### Debug Configuration
 
 ```toml

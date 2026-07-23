@@ -498,6 +498,27 @@ ostool --workdir /path/to/kernel run qemu
 sudo setcap cap_net_bind_service=+eip $(which ostool)
 ```
 
+在 Linux 上使用系统 TFTP 根目录（默认 `/srv/tftp`）时，ostool 会在
+`/srv/tftp/ostool` 下暂存 FIT 镜像，并在任务结束后使用普通用户权限删除暂存目录。
+请为该目录配置专用用户组：
+
+```bash
+# 首次配置
+sudo groupadd ostool
+sudo usermod -aG ostool "$USER"
+sudo install -d -o root -g ostool -m 2775 /srv/tftp/ostool
+```
+
+配置完成后，重新登录；也可以在当前终端启动一个已应用新用户组的 shell：
+
+```bash
+newgrp ostool
+```
+
+如果 `ostool` 组已经存在，可以跳过 `groupadd`。执行 `newgrp ostool` 或重新登录后，
+新用户组权限才会生效；不需要重启 `tftpd-hpa`。ostool 不会在任务结束时使用
+`sudo rmdir`；目录缺少组写权限时，清理操作会返回错误。
+
 ### 调试配置
 
 ```toml
