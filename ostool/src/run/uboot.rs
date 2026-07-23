@@ -72,8 +72,6 @@ pub struct UbootConfig {
     /// Address passed to `bootm` after serial FIT upload.
     /// if not specified, use the FIT load address when configured.
     pub bootm_addr: Option<String>,
-    /// TFTP boot configuration
-    pub net: Option<Net>,
     /// Board reset command
     /// shell command to reset the board
     pub board_reset_cmd: Option<String>,
@@ -498,6 +496,11 @@ struct ConsoleTransport {
     rx: BoxedAsyncRead,
 }
 
+struct SecondaryRunFailure {
+    phase: &'static str,
+    error: anyhow::Error,
+}
+
 #[derive(Debug, Clone, Default)]
 struct ResolvedRuntime {
     server_ip: Option<String>,
@@ -544,6 +547,7 @@ struct LocalBackend {
     config: LocalUbootConfig,
     baud_rate: Option<u32>,
     linux_system_tftp: Option<tftp::TftpdHpaConfig>,
+    linux_tftp_staging: Vec<tftp::LinuxTftpPrepared>,
     existing_tftp_dir: Option<PathBuf>,
     builtin_tftp_started: bool,
 }
@@ -554,6 +558,7 @@ impl LocalBackend {
             config,
             baud_rate: None,
             linux_system_tftp: None,
+            linux_tftp_staging: Vec::new(),
             existing_tftp_dir: None,
             builtin_tftp_started: false,
         }
@@ -717,11 +722,13 @@ impl RunnerBackend for LocalBackend {
         {
             if let Some(system_tftp) = self.linux_system_tftp.as_ref() {
                 let prepared = tftp::stage_linux_fit_image(fitimage, &system_tftp.directory)?;
+                let relative_filename = prepared.relative_filename().to_string();
                 info!(
                     "Staged FIT image to: {}",
-                    prepared.absolute_fit_path.display()
+                    prepared.absolute_fit_path().display()
                 );
-                return Ok(StagedBootArtifact::network(prepared.relative_filename));
+                self.linux_tftp_staging.push(prepared);
+                return Ok(StagedBootArtifact::network(relative_filename));
             }
         }
 
@@ -744,13 +751,29 @@ impl RunnerBackend for LocalBackend {
     }
 
     async fn after_run(&mut self, context: &ProcessContext) -> anyhow::Result<()> {
+        let mut cleanup_failures = Vec::new();
+        for prepared in self.linux_tftp_staging.drain(..) {
+            let target = prepared.target_dir().display().to_string();
+            if let Err(err) = tftp::cleanup_linux_tftp_staging(&prepared) {
+                cleanup_failures.push(format!("{target}: {err:#}"));
+            }
+        }
+
         if let Some(cmd) = self.config.board_power_off_cmd.as_deref()
             && !cmd.trim().is_empty()
             && let Err(err) = crate::process::shell_run_cmd(context, cmd)
         {
             log::warn!("board power-off command failed: {err:#}");
         }
-        Ok(())
+
+        if cleanup_failures.is_empty() {
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "failed to clean local TFTP staging:\n{}",
+                cleanup_failures.join("\n")
+            ))
+        }
     }
 }
 
@@ -1010,6 +1033,61 @@ impl RunnerBackend for RemoteBackend {
     }
 }
 
+async fn finalize_backend_run<B: RunnerBackend>(
+    backend: &mut B,
+    context: &ProcessContext,
+    run_result: anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let console_cleanup = backend.finish_console().await;
+    let post_run_cleanup = backend.after_run(context).await;
+    let (result, secondary_failures) =
+        select_runner_result(run_result, console_cleanup, post_run_cleanup);
+
+    for failure in secondary_failures {
+        log::warn!("backend {} failed: {:#}", failure.phase, failure.error);
+    }
+    result
+}
+
+fn select_runner_result(
+    run_result: anyhow::Result<()>,
+    console_cleanup: anyhow::Result<()>,
+    post_run_cleanup: anyhow::Result<()>,
+) -> (anyhow::Result<()>, Vec<SecondaryRunFailure>) {
+    match run_result {
+        Err(primary) => {
+            let mut secondary = Vec::new();
+            if let Err(error) = console_cleanup {
+                secondary.push(SecondaryRunFailure {
+                    phase: "console cleanup",
+                    error,
+                });
+            }
+            if let Err(error) = post_run_cleanup {
+                secondary.push(SecondaryRunFailure {
+                    phase: "post-run cleanup",
+                    error,
+                });
+            }
+            (Err(primary), secondary)
+        }
+        Ok(()) => match console_cleanup {
+            Err(primary) => {
+                let secondary = post_run_cleanup
+                    .err()
+                    .map(|error| SecondaryRunFailure {
+                        phase: "post-run cleanup",
+                        error,
+                    })
+                    .into_iter()
+                    .collect();
+                (Err(primary), secondary)
+            }
+            Ok(()) => (post_run_cleanup, Vec::new()),
+        },
+    }
+}
+
 impl<B> Runner<B>
 where
     B: RunnerBackend,
@@ -1026,22 +1104,7 @@ where
 
     async fn run(&mut self) -> anyhow::Result<()> {
         let run_result = self._run().await;
-
-        if let Err(err) = self.backend.finish_console().await {
-            if run_result.is_ok() {
-                return Err(err);
-            }
-            log::warn!("backend console cleanup failed: {err:#}");
-        }
-
-        if let Err(err) = self.backend.after_run(&self.input.process_context).await {
-            if run_result.is_ok() {
-                return Err(err);
-            }
-            log::warn!("backend post-run cleanup failed: {err:#}");
-        }
-
-        run_result
+        finalize_backend_run(&mut self.backend, &self.input.process_context, run_result).await
     }
 
     async fn _run(&mut self) -> anyhow::Result<()> {
@@ -1469,6 +1532,8 @@ fn bootm_command(bootm_arg: Option<u64>) -> String {
 mod tests {
     use std::{collections::HashMap, time::Duration};
 
+    use async_trait::async_trait;
+
     use super::{
         LocalBackend, LocalUbootConfig, Net, RemoteBackend, ResolvedRuntime, RunnerBackend,
         UbootConfig, build_network_boot_request, ensure_config_in_dir, fit_artifact_path,
@@ -1511,6 +1576,7 @@ mod tests {
             config: LocalUbootConfig::default(),
             baud_rate: None,
             linux_system_tftp: None,
+            linux_tftp_staging: Vec::new(),
             existing_tftp_dir: None,
             builtin_tftp_started: false,
         }
@@ -1521,6 +1587,143 @@ mod tests {
         std::fs::create_dir_all(fit_path.parent().unwrap()).unwrap();
         std::fs::write(&fit_path, [1_u8, 2, 3, 4]).unwrap();
         fit_path
+    }
+
+    struct CleanupTrackingBackend {
+        finish_calls: usize,
+        after_calls: usize,
+        finish_error: Option<&'static str>,
+        after_error: Option<&'static str>,
+    }
+
+    #[async_trait]
+    impl RunnerBackend for CleanupTrackingBackend {
+        async fn resolve_runtime(
+            &mut self,
+            _input: &super::UbootRunInput,
+            _config: &UbootConfig,
+        ) -> anyhow::Result<ResolvedRuntime> {
+            unreachable!()
+        }
+
+        async fn prepare_dtb(
+            &mut self,
+            _input: &super::UbootRunInput,
+            _config: &UbootConfig,
+        ) -> anyhow::Result<super::PreparedDtb> {
+            unreachable!()
+        }
+
+        async fn open_console(&mut self) -> anyhow::Result<super::ConsoleTransport> {
+            unreachable!()
+        }
+
+        async fn after_console_open(
+            &mut self,
+            _context: &crate::process::ProcessContext,
+        ) -> anyhow::Result<()> {
+            unreachable!()
+        }
+
+        async fn stage_fit_image(
+            &mut self,
+            _fit_artifact: &BootArtifact,
+            _runtime: &ResolvedRuntime,
+        ) -> anyhow::Result<crate::boot::artifacts::StagedBootArtifact> {
+            unreachable!()
+        }
+
+        async fn finish_console(&mut self) -> anyhow::Result<()> {
+            self.finish_calls += 1;
+            match self.finish_error {
+                Some(message) => Err(anyhow!(message)),
+                None => Ok(()),
+            }
+        }
+
+        async fn after_run(
+            &mut self,
+            _context: &crate::process::ProcessContext,
+        ) -> anyhow::Result<()> {
+            self.after_calls += 1;
+            match self.after_error {
+                Some(message) => Err(anyhow!(message)),
+                None => Ok(()),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn runner_cleanup_invokes_after_run_when_console_cleanup_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        write_single_crate_manifest(temp.path());
+        let context = make_invocation(temp.path()).process_context().unwrap();
+        let mut backend = CleanupTrackingBackend {
+            finish_calls: 0,
+            after_calls: 0,
+            finish_error: Some("console cleanup failed"),
+            after_error: Some("post-run cleanup failed"),
+        };
+
+        let err = super::finalize_backend_run(&mut backend, &context, Ok(()))
+            .await
+            .unwrap_err();
+
+        assert_eq!(backend.finish_calls, 1);
+        assert_eq!(backend.after_calls, 1);
+        assert!(err.to_string().contains("console cleanup failed"));
+    }
+
+    #[test]
+    fn runner_cleanup_error_precedence_covers_all_combinations() {
+        for mask in 0_u8..8 {
+            let run_fails = mask & 0b100 != 0;
+            let finish_fails = mask & 0b010 != 0;
+            let after_fails = mask & 0b001 != 0;
+            let result = |fails: bool, message: &'static str| {
+                if fails { Err(anyhow!(message)) } else { Ok(()) }
+            };
+
+            let (primary, secondary) = super::select_runner_result(
+                result(run_fails, "run failed"),
+                result(finish_fails, "console cleanup failed"),
+                result(after_fails, "post-run cleanup failed"),
+            );
+
+            let expected_primary = if run_fails {
+                Some("run failed")
+            } else if finish_fails {
+                Some("console cleanup failed")
+            } else if after_fails {
+                Some("post-run cleanup failed")
+            } else {
+                None
+            };
+            assert_eq!(
+                primary.as_ref().err().map(ToString::to_string).as_deref(),
+                expected_primary,
+                "mask {mask:03b}"
+            );
+
+            let phases = secondary
+                .iter()
+                .map(|failure| failure.phase)
+                .collect::<Vec<_>>();
+            let expected_phases = if run_fails {
+                [
+                    finish_fails.then_some("console cleanup"),
+                    after_fails.then_some("post-run cleanup"),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+            } else if finish_fails && after_fails {
+                vec!["post-run cleanup"]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(phases, expected_phases, "mask {mask:03b}");
+        }
     }
 
     fn prepare_elf_only_invocation(dir: &std::path::Path) -> Invocation {
@@ -1718,13 +1921,132 @@ mod tests {
             .await
             .unwrap();
 
-        let relative_filename = tftp::relative_tftp_filename(&fit_path).unwrap();
-        assert_eq!(staged.bootfile(), Some(relative_filename.as_str()));
+        let relative_filename = staged.bootfile().unwrap();
+        assert!(relative_filename.starts_with("ostool/"));
+        assert!(relative_filename.ends_with("/image.fit"));
         assert!(staged.network_transfer_ready());
         assert_eq!(
             std::fs::read(tftp_root.join(relative_filename)).unwrap(),
             [1_u8, 2, 3, 4]
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn local_backend_cleans_staged_linux_tftp_image() {
+        let temp = tempfile::tempdir().unwrap();
+        write_single_crate_manifest(temp.path());
+        let fit_path = write_fit_image(temp.path());
+        let tftp_root = temp.path().join("tftp-root");
+        let mut backend = local_backend();
+        backend.linux_system_tftp = Some(tftp::TftpdHpaConfig {
+            username: None,
+            directory: tftp_root,
+            address: None,
+            options: None,
+        });
+
+        backend
+            .stage_fit_image(
+                &BootArtifact::fit_image(&fit_path),
+                &ResolvedRuntime::default(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(backend.linux_tftp_staging.len(), 1);
+        let staged_file = backend.linux_tftp_staging[0]
+            .absolute_fit_path()
+            .to_path_buf();
+        let staged_dir = backend.linux_tftp_staging[0].target_dir().to_path_buf();
+        let context = make_invocation(temp.path()).process_context().unwrap();
+        backend.after_run(&context).await.unwrap();
+
+        assert!(!staged_file.exists());
+        assert!(!staged_dir.exists());
+        assert!(backend.linux_tftp_staging.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn local_backend_cleanup_continues_after_error() {
+        let temp = tempfile::tempdir().unwrap();
+        write_single_crate_manifest(temp.path());
+        let tftp_root = temp.path().join("tftp-root");
+        let first_source = write_fit_image(temp.path());
+        let second_source = temp.path().join("other.fit");
+        std::fs::write(&second_source, [5_u8, 6]).unwrap();
+        let first = tftp::stage_linux_fit_image(&first_source, &tftp_root).unwrap();
+        let second = tftp::stage_linux_fit_image(&second_source, &tftp_root).unwrap();
+        let unexpected = first.target_dir().join("keep.txt");
+        std::fs::write(&unexpected, b"keep").unwrap();
+        let second_file = second.absolute_fit_path().to_path_buf();
+        let second_dir = second.target_dir().to_path_buf();
+        let mut backend = local_backend();
+        backend.linux_tftp_staging = vec![first, second];
+
+        let context = make_invocation(temp.path()).process_context().unwrap();
+        let err = backend.after_run(&context).await.unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("failed to clean local TFTP staging")
+        );
+        assert!(unexpected.exists());
+        assert!(!second_file.exists());
+        assert!(!second_dir.exists());
+        assert!(backend.linux_tftp_staging.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn local_backend_cleanup_reports_every_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        write_single_crate_manifest(temp.path());
+        let tftp_root = temp.path().join("tftp-root");
+        let first_source = write_fit_image(temp.path());
+        let second_source = temp.path().join("other.fit");
+        std::fs::write(&second_source, [5_u8, 6]).unwrap();
+        let first = tftp::stage_linux_fit_image(&first_source, &tftp_root).unwrap();
+        let second = tftp::stage_linux_fit_image(&second_source, &tftp_root).unwrap();
+        std::fs::write(first.target_dir().join("keep.txt"), b"keep").unwrap();
+        std::fs::remove_file(second.absolute_fit_path()).unwrap();
+        std::fs::create_dir(second.absolute_fit_path()).unwrap();
+        let first_dir = first.target_dir().display().to_string();
+        let second_file = second.absolute_fit_path().display().to_string();
+        let mut backend = local_backend();
+        backend.linux_tftp_staging = vec![first, second];
+
+        let context = make_invocation(temp.path()).process_context().unwrap();
+        let err = backend.after_run(&context).await.unwrap_err();
+        let message = format!("{err:#}");
+
+        assert!(message.contains(&first_dir));
+        assert!(message.contains(&second_file));
+        assert!(message.contains("failed to remove TFTP staging directory"));
+        assert!(message.contains("failed to remove staged TFTP file"));
+        assert!(backend.linux_tftp_staging.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn local_backend_power_off_runs_after_cleanup_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        write_single_crate_manifest(temp.path());
+        let tftp_root = temp.path().join("tftp-root");
+        let fit_path = write_fit_image(temp.path());
+        let prepared = tftp::stage_linux_fit_image(&fit_path, &tftp_root).unwrap();
+        std::fs::write(prepared.target_dir().join("keep.txt"), b"keep").unwrap();
+        let marker = temp.path().join("powered-off");
+        let mut backend = local_backend();
+        backend.config.board_power_off_cmd = Some(format!("touch {}", marker.display()));
+        backend.linux_tftp_staging.push(prepared);
+
+        let context = make_invocation(temp.path()).process_context().unwrap();
+        backend.after_run(&context).await.unwrap_err();
+
+        assert!(marker.exists());
+        assert!(backend.linux_tftp_staging.is_empty());
     }
 
     #[tokio::test]
@@ -1824,6 +2146,25 @@ timeout = 0
         .unwrap();
 
         assert_eq!(config.timeout, Some(0));
+    }
+
+    #[test]
+    fn uboot_config_parses_network_into_local_backend() {
+        let config: UbootConfig = toml::from_str(
+            r#"
+serial = "/dev/null"
+baud_rate = "115200"
+success_regex = []
+fail_regex = []
+
+[net]
+interface = "eth0"
+"#,
+        )
+        .unwrap();
+
+        let net = config.local.net.unwrap();
+        assert_eq!(net.interface, "eth0");
     }
 
     #[test]
