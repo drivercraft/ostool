@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 pub use httpboot_protocol::KernelPublishResponse;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::{
     config::{
@@ -52,7 +53,7 @@ pub struct SessionDetailResponse {
     pub board: BoardConfig,
     pub serial_available: bool,
     pub serial_connected: bool,
-    pub files: Vec<FileResponse>,
+    pub files: Vec<SharedSessionFileResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,20 +125,25 @@ pub struct NetworkInterfaceSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileResponse {
+pub struct SharedSessionFileResponse {
     pub filename: String,
     pub relative_path: String,
-    pub tftp_url: Option<String>,
+    pub tftp_url: Option<Url>,
+    pub http_url: Option<Url>,
     pub size: u64,
     pub uploaded_at: DateTime<Utc>,
 }
 
-impl FileResponse {
-    pub fn from_file(file: TftpFileRef, tftp_url: Option<String>) -> Self {
+#[deprecated(note = "use SharedSessionFileResponse")]
+pub type FileResponse = SharedSessionFileResponse;
+
+impl SharedSessionFileResponse {
+    pub fn from_file(file: TftpFileRef, tftp_url: Option<Url>, http_url: Option<Url>) -> Self {
         Self {
             filename: file.filename,
             relative_path: file.relative_path,
             tftp_url,
+            http_url,
             size: file.size,
             uploaded_at: file.uploaded_at,
         }
@@ -148,13 +154,13 @@ impl FileResponse {
 pub struct HttpBootFileResponse {
     pub filename: String,
     pub relative_path: String,
-    pub http_url: String,
+    pub http_url: Url,
     pub size: u64,
     pub uploaded_at: DateTime<Utc>,
 }
 
 impl HttpBootFileResponse {
-    pub fn from_file(file: TftpFileRef, http_url: String) -> Self {
+    pub fn from_file(file: TftpFileRef, http_url: Url) -> Self {
         Self {
             filename: file.filename,
             relative_path: file.relative_path,
@@ -172,7 +178,13 @@ pub struct TftpSessionResponse {
     pub server_ip: Option<String>,
     pub netmask: Option<String>,
     pub writable: bool,
-    pub files: Vec<FileResponse>,
+    pub files: Vec<SharedSessionFileResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatResponse {
+    pub session_id: String,
+    pub lease_expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,7 +192,7 @@ pub struct SessionDtbResponse {
     pub dtb_name: Option<String>,
     pub relative_path: Option<String>,
     pub session_file_path: Option<String>,
-    pub tftp_url: Option<String>,
+    pub tftp_url: Option<Url>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,6 +245,7 @@ pub struct BootProfileResponse {
     pub server_ip: Option<String>,
     pub netmask: Option<String>,
     pub interface: Option<String>,
+    pub http_base_url: Option<Url>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

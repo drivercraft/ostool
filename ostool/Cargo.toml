@@ -51,6 +51,7 @@ tokio = { workspace = true, features = ["full"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 toml = { workspace = true }
 uboot-shell = { version = "0.2", path = "../uboot-shell" }
+url = { workspace = true }
 
 lzma-rs = "0.3"
 regex = "1"

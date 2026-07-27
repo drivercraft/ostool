@@ -14,6 +14,12 @@ use crate::{
 #[serde(deny_unknown_fields)]
 pub struct BoardRunConfig {
     pub board_type: String,
+    /// Files shared with the board for the duration of one session.
+    ///
+    /// Paths are relative to the board configuration file and keep the same
+    /// relative path on the session HTTP endpoint.
+    #[serde(default)]
+    pub session_files: Vec<PathBuf>,
     pub dtb_file: Option<String>,
     pub kernel_load_addr: Option<String>,
     pub fit_load_addr: Option<String>,
@@ -231,6 +237,12 @@ mod tests {
         invocation::{Invocation, InvocationOptions},
     };
     use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    #[derive(serde::Serialize)]
+    struct LegacyBoardRunConfigFixture {
+        board_type: String,
+    }
 
     fn make_invocation(dir: &std::path::Path) -> Invocation {
         Invocation::new(InvocationOptions::new(
@@ -286,6 +298,35 @@ port = 9000
                 .as_str(),
             "http://127.0.0.1:9000/"
         );
+    }
+
+    #[test]
+    fn board_run_config_session_files_toml_round_trip() {
+        let config = BoardRunConfig {
+            board_type: "orangepi-5-plus".to_string(),
+            session_files: vec![
+                PathBuf::from("iperf-smoke.sh"),
+                PathBuf::from("tools/network/probe.sh"),
+            ],
+            ..Default::default()
+        };
+
+        let encoded = toml::to_string(&config).unwrap();
+        let decoded: BoardRunConfig = toml::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded, config);
+    }
+
+    #[test]
+    fn legacy_board_run_config_defaults_to_no_session_files() {
+        let fixture = LegacyBoardRunConfigFixture {
+            board_type: "orangepi-5-plus".to_string(),
+        };
+        let encoded = toml::to_string(&fixture).unwrap();
+
+        let decoded: BoardRunConfig = toml::from_str(&encoded).unwrap();
+
+        assert!(decoded.session_files.is_empty());
     }
 
     #[test]

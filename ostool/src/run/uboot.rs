@@ -2280,6 +2280,7 @@ interface = "eth0"
     fn uboot_config_from_board_run_config_keeps_dtb_file() {
         let config = UbootConfig::from_board_run_config(&BoardRunConfig {
             board_type: "rk3568".into(),
+            session_files: Vec::new(),
             dtb_file: Some("/tmp/board.dtb".into()),
             kernel_load_addr: Some("0x80200000".into()),
             fit_load_addr: Some("0x82200000".into()),

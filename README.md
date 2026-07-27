@@ -316,6 +316,13 @@ ostool board config
 
 `server` 应使用包含 `http://` 或 `https://` 的完整 URL；可选的 `port` 会覆盖 URL 中的端口。为兼容旧的局域网配置，裸 IPv4 或 IPv6 地址会自动补为 `http://`。基线版本写出的 `server_ip` / `port` 也会在读取时迁移为 `server` / `port`，下一次保存配置时只写新格式；无 scheme 的主机名不支持。项目级 `.board.toml` 中的 `server` / `port` 仍可用于 `ostool board run`，其优先级低于命令行参数，高于全局配置。
 
+`.board.toml` 可以用 `session_files` 声明相对于配置文件目录的共享文件。调用方通过
+`BoardRunRequest::with_session_files` 提供该目录，ostool 会在 board session
+建立后按原相对路径上传，并在 `shell_init_cmd` 中展开
+`${boardServerIp}`、`${boardServerHttpBaseUrl}` 和
+`${sessionFile:<relative-path>}`。绝对路径、`..`、符号链接逃逸、重复路径及缺失
+文件都会在运行前被拒绝；接口不提供 alias 或上传改名。
+
 ### 公网开发板认证
 
 局域网直接连接 `ostool-server` 时保留上述匿名 HTTP 配置。公网认证网关使用完整 HTTPS 地址：

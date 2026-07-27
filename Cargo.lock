@@ -2637,6 +2637,7 @@ dependencies = [
  "trybuild",
  "uboot-shell",
  "ureq",
+ "url",
 ]
 
 [[package]]
@@ -2673,6 +2674,7 @@ dependencies = [
  "toml",
  "tower",
  "tower-http",
+ "url",
  "uuid",
 ]
 
@@ -4668,6 +4670,7 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
+ "serde_derive",
 ]
 
 [[package]]

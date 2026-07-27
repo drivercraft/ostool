@@ -1,4 +1,4 @@
-use std::{future::Future, sync::Arc, time::Duration};
+use std::{future::Future, net::IpAddr, sync::Arc, time::Duration};
 
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
@@ -6,8 +6,27 @@ use tokio::{
     sync::{RwLock, watch},
     task::JoinHandle,
 };
+use url::Url;
 
-use crate::board::client::{BoardServerClient, BoardServerClientError, SessionCreatedResponse};
+use crate::board::client::{
+    BoardServerClient, BoardServerClientError, SessionCreatedResponse, SharedSessionFileResponse,
+};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BoardSessionContext {
+    pub session_id: String,
+    pub server_ip: IpAddr,
+    pub http_base_url: Url,
+}
+
+#[derive(Clone, Debug)]
+pub struct SharedSessionFile {
+    pub filename: String,
+    pub relative_path: String,
+    pub http_url: Url,
+    pub size: u64,
+    pub uploaded_at: DateTime<Utc>,
+}
 
 #[derive(Debug)]
 pub struct BoardSession {
@@ -53,6 +72,46 @@ impl BoardSession {
         *self.lease_expires_at.read().await
     }
 
+    pub async fn context(&self) -> anyhow::Result<BoardSessionContext> {
+        let profile = self
+            .client
+            .get_boot_profile(&self.info.session_id)
+            .await
+            .context("failed to get board session network context")?;
+        let server_ip = profile
+            .server_ip
+            .as_deref()
+            .ok_or_else(|| anyhow!("board server did not report a board-reachable IP address"))?
+            .parse::<IpAddr>()
+            .with_context(|| {
+                format!(
+                    "board server returned invalid board-reachable IP address `{}`",
+                    profile.server_ip.as_deref().unwrap_or_default()
+                )
+            })?;
+        let http_base_url = profile.http_base_url.ok_or_else(|| {
+            anyhow!("board server did not report a board-reachable shared HTTP URL")
+        })?;
+        Ok(BoardSessionContext {
+            session_id: self.info.session_id.clone(),
+            server_ip,
+            http_base_url,
+        })
+    }
+
+    pub async fn upload_shared_file(
+        &self,
+        relative_path: &str,
+        bytes: Vec<u8>,
+    ) -> anyhow::Result<SharedSessionFile> {
+        let response = self
+            .client
+            .upload_session_file(&self.info.session_id, relative_path, bytes)
+            .await
+            .with_context(|| format!("failed to upload shared session file `{relative_path}`"))?;
+        shared_session_file_from_response(relative_path, response)
+    }
+
     pub async fn release(mut self) -> anyhow::Result<()> {
         self.stop_heartbeat();
         if let Some(task) = self.heartbeat_task.take() {
@@ -74,6 +133,24 @@ impl BoardSession {
     fn stop_heartbeat(&self) {
         let _ = self.heartbeat_stop.send(true);
     }
+}
+
+fn shared_session_file_from_response(
+    requested_relative_path: &str,
+    response: SharedSessionFileResponse,
+) -> anyhow::Result<SharedSessionFile> {
+    let http_url = response.http_url.ok_or_else(|| {
+        anyhow!(
+            "board server did not return an HTTP URL for shared session file `{requested_relative_path}`"
+        )
+    })?;
+    Ok(SharedSessionFile {
+        filename: response.filename,
+        relative_path: requested_relative_path.to_string(),
+        http_url,
+        size: response.size,
+        uploaded_at: response.uploaded_at,
+    })
 }
 
 impl Drop for BoardSession {
@@ -153,8 +230,10 @@ mod tests {
     use chrono::Utc;
     use reqwest::StatusCode;
 
-    use super::acquire_session_with;
-    use crate::board::client::{BoardServerClientError, SessionCreatedResponse};
+    use super::{acquire_session_with, shared_session_file_from_response};
+    use crate::board::client::{
+        BoardServerClientError, SessionCreatedResponse, SharedSessionFileResponse,
+    };
 
     fn created_session(id: &str) -> SessionCreatedResponse {
         SessionCreatedResponse {
@@ -173,6 +252,27 @@ mod tests {
             code: Some("conflict".to_string()),
             message: format!("no available board for type `{board_type}`"),
         }
+    }
+
+    #[test]
+    fn shared_file_keeps_the_requested_relative_path() {
+        let uploaded_at = Utc::now();
+        let response = SharedSessionFileResponse {
+            filename: "probe.sh".to_string(),
+            relative_path: "ostool/sessions/demo/tools/probe.sh".to_string(),
+            tftp_url: None,
+            http_url: Some(
+                "http://192.168.1.2:2999/share/sessions/demo/tools/probe.sh"
+                    .parse()
+                    .unwrap(),
+            ),
+            size: 5,
+            uploaded_at,
+        };
+
+        let shared = shared_session_file_from_response("tools/probe.sh", response).unwrap();
+
+        assert_eq!(shared.relative_path, "tools/probe.sh");
     }
 
     #[tokio::test]
