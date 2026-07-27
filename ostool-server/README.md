@@ -99,6 +99,12 @@ HTTP Boot is enabled by default. Uploaded UEFI HTTP Boot artifacts reuse the
 existing session file storage and lifecycle, so files are scoped to the active
 board session and are cleaned up with that session.
 
+Every active board session also exposes uploaded files through
+`GET /share/sessions/{session_id}/{relative_path}`. This endpoint supports full
+and single-range downloads for every boot mode and remains available when TFTP
+is disabled. Upload responses include a board-reachable `http_url`; both the
+file and URL expire when the session is released or times out.
+
 For boards using the UEFI HTTP Boot loader, configure the board boot profile
 with `kind = "httpboot"` and, when needed, `boot_arch`. The server uses the
 allocated board session and that board's serial configuration to send the boot

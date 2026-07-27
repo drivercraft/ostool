@@ -2,11 +2,15 @@ pub mod client;
 pub mod config;
 pub mod config_tui;
 pub mod global_config;
+pub mod request;
 pub mod serial_stream;
 pub mod session;
+mod shared_files;
 pub mod terminal;
 
-use std::path::Path;
+pub use request::BoardRunRequest;
+
+use std::{collections::BTreeMap, path::Path};
 
 use anyhow::Context as _;
 
@@ -16,6 +20,7 @@ use crate::board::{
     config_tui::run_board_config_tui,
     global_config::{BoardEndpoint, LoadedBoardGlobalConfig},
     session::BoardSession,
+    shared_files::expand_board_session_variables,
 };
 use crate::{
     build::config::{BuildConfig, BuildSystem, Cargo},
@@ -320,9 +325,25 @@ pub async fn run_prepared_board(
     board_config: &BoardRunConfig,
     options: RunBoardOptions,
 ) -> anyhow::Result<()> {
+    if !board_config.session_files.is_empty() {
+        anyhow::bail!(
+            "board config contains `session_files`; use BoardRunRequest::with_session_files to provide the configuration directory"
+        );
+    }
+    run_prepared_board_with_request(
+        invocation,
+        BoardRunRequest::new(board_config.clone(), options),
+    )
+    .await
+}
+
+pub async fn run_prepared_board_with_request(
+    invocation: &mut Invocation,
+    request: BoardRunRequest,
+) -> anyhow::Result<()> {
     let scope = invocation.variable_scope()?;
     let global_config = load_board_global_config_with_notice()?;
-    let mut board_config = board_config.clone();
+    let (mut board_config, options, session_files) = request.into_parts();
     board_config.apply_overrides(
         &scope,
         options.board_type.as_deref(),
@@ -335,23 +356,58 @@ pub async fn run_prepared_board(
         acquire_board_session_endpoint(endpoint, &board_config.board_type).await?;
     print_allocated_board_session(&session, &board_config.board_type);
 
-    let run_result = match session.info().boot_mode.as_str() {
+    let setup_result = async {
+        if !board_session_setup_required(&board_config, !session_files.is_empty()) {
+            return Ok(());
+        }
+        let context = session.context().await?;
+        let mut uploaded_files = BTreeMap::new();
+        for upload in session_files {
+            let relative_path = upload.relative_path().to_string();
+            let bytes = upload.read().await?;
+            let shared_file = session.upload_shared_file(&relative_path, bytes).await?;
+            uploaded_files.insert(relative_path, shared_file.http_url);
+        }
+        expand_board_session_variables(&mut board_config, &context, &uploaded_files)
+    }
+    .await;
+
+    let run_result = match setup_result {
+        Err(error) => Err(error),
+        Ok(()) => run_allocated_board(invocation, &board_config, client, &session).await,
+    };
+
+    finalize_session(session, run_result).await
+}
+
+fn board_session_setup_required(board_config: &BoardRunConfig, has_session_files: bool) -> bool {
+    has_session_files
+        || board_config
+            .shell_init_cmd
+            .as_deref()
+            .is_some_and(|command| {
+                command.contains("${boardServer") || command.contains("${sessionFile")
+            })
+}
+
+async fn run_allocated_board(
+    invocation: &mut Invocation,
+    board_config: &BoardRunConfig,
+    client: BoardServerClient,
+    session: &BoardSession,
+) -> anyhow::Result<()> {
+    match session.info().boot_mode.as_str() {
         "uboot" => {
             invocation.ensure_runtime_bin()?;
             let input = crate::run::uboot::uboot_run_input(invocation)?;
-            crate::run::uboot::run_uboot_remote(
-                input,
-                &board_config,
-                client,
-                session.info().clone(),
-            )
-            .await
+            crate::run::uboot::run_uboot_remote(input, board_config, client, session.info().clone())
+                .await
         }
         "httpboot" | "uefi_http" => {
             let input = crate::run::uboot::uboot_run_input(invocation)?;
             crate::run::httpboot_board::run_httpboot_remote(
                 input,
-                &board_config,
+                board_config,
                 client,
                 session.info().clone(),
             )
@@ -360,19 +416,41 @@ pub async fn run_prepared_board(
         other => Err(anyhow!(
             "unsupported board boot mode `{other}`; supported modes are `uboot` and `httpboot`"
         )),
-    };
-
-    finalize_session(session, run_result).await
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{RunBoardOptions, render_board_table};
+    use super::{RunBoardOptions, board_session_setup_required, render_board_table};
     use crate::board::client::BoardTypeSummary;
+    use crate::board::config::BoardRunConfig;
 
     #[test]
     fn run_board_args_default_to_no_overrides() {
         assert_eq!(RunBoardOptions::default().board_type, None);
+    }
+
+    #[test]
+    fn legacy_board_runs_do_not_require_session_network_context() {
+        assert!(!board_session_setup_required(
+            &BoardRunConfig::default(),
+            false
+        ));
+    }
+
+    #[test]
+    fn shared_files_and_reserved_variables_require_session_setup() {
+        assert!(board_session_setup_required(
+            &BoardRunConfig::default(),
+            true
+        ));
+        assert!(board_session_setup_required(
+            &BoardRunConfig {
+                shell_init_cmd: Some("echo ${boardServerIp}".to_string()),
+                ..Default::default()
+            },
+            false
+        ));
     }
 
     #[test]

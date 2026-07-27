@@ -49,6 +49,7 @@ tokio-modbus = {version = "0.17.0", default-features = false, features = ["rtu"]
 tokio-serial = "5.4"
 toml = {workspace = true}
 tower-http = {version = "0.6", features = ["fs"]}
+url = {workspace = true}
 uuid = {version = "1", features = ["serde", "v4"]}
 
 [dev-dependencies]

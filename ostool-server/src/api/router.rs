@@ -11,13 +11,13 @@ use axum::{
 use futures_util::future::join_all;
 use httpboot_protocol::{BootArch, ImageFormat};
 use mime_guess::from_path;
-use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::{
     fs::{self, File},
     io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
 };
+use url::Url;
 
 use crate::{
     api::{
@@ -28,9 +28,10 @@ use crate::{
             AdminSessionsResponse, AdminTftpConfigResponse, AdminTftpStatusResponse,
             BoardPowerAction, BoardPowerStatusResponse, BoardRuntimeStatusResponse,
             BoardTypeSummary, BootProfileResponse, CreateSessionRequest, DtbFileResponse,
-            FileResponse, HttpBootFileResponse, KernelPublishResponse, NetworkInterfaceSummary,
-            SerialPortSummary, SerialStatusResponse, SessionCreatedResponse, SessionDetailResponse,
-            SessionDtbResponse, TftpSessionResponse, UpdateServerConfigRequest,
+            HeartbeatResponse, HttpBootFileResponse, KernelPublishResponse,
+            NetworkInterfaceSummary, SerialPortSummary, SerialStatusResponse,
+            SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse,
+            SharedSessionFileResponse, TftpSessionResponse, UpdateServerConfigRequest,
         },
     },
     board_pool::BoardAllocationStatus,
@@ -75,6 +76,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/boot/sessions/{session_id}/{*path}",
             get(get_http_boot_file),
+        )
+        .route(
+            "/share/sessions/{session_id}/{*path}",
+            get(get_shared_session_file),
         )
         .route("/api/v1/admin/overview", get(get_admin_overview))
         .route("/api/v1/admin/boards", get(list_boards).post(create_board))
@@ -925,7 +930,7 @@ async fn get_session(
 async fn heartbeat_session(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
-) -> Result<axum::Json<serde_json::Value>, ApiError> {
+) -> Result<axum::Json<HeartbeatResponse>, ApiError> {
     let session = state
         .heartbeat_session(&session_id)
         .await
@@ -937,10 +942,10 @@ async fn heartbeat_session(
                 ApiError::conflict(format!("session `{session_id}` is releasing"))
             }
         })?;
-    Ok(axum::Json(json!({
-        "session_id": session.id,
-        "lease_expires_at": session.expires_at
-    })))
+    Ok(axum::Json(HeartbeatResponse {
+        session_id: session.id,
+        lease_expires_at: session.expires_at,
+    }))
 }
 
 async fn delete_session(
@@ -966,12 +971,20 @@ async fn get_boot_profile(
         .session_board(&session_id)
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
-    let network = resolved_board_network(&state, &board).await?;
+    let network = resolved_shared_network(&state, &board).await?;
+    let http_base_url = match network
+        .as_ref()
+        .and_then(|network| network.server_ip.as_deref())
+    {
+        Some(server_ip) => Some(shared_http_base_url(&state, server_ip).await?),
+        None => None,
+    };
     Ok(axum::Json(BootProfileResponse {
         boot: boot_profile_with_resolved_network(board.boot, network.as_ref()),
         server_ip: network.as_ref().and_then(|item| item.server_ip.clone()),
         netmask: network.as_ref().and_then(|item| item.netmask.clone()),
         interface: network.as_ref().and_then(|item| item.interface.clone()),
+        http_base_url,
     }))
 }
 
@@ -1143,6 +1156,16 @@ async fn get_http_boot_file(
     read_http_boot_session_file(&state, &session_id, &relative_path, request.headers()).await
 }
 
+async fn get_shared_session_file(
+    Path((session_id, path)): Path<(String, String)>,
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    let relative_path = parse_relative_path(&path)?;
+    active_shared_session_or_404(&state, &session_id).await?;
+    read_session_file_response(&state, &session_id, &relative_path, request.headers()).await
+}
+
 async fn read_http_boot_session_file(
     state: &AppState,
     session_id: &str,
@@ -1153,6 +1176,15 @@ async fn read_http_boot_session_file(
     if !config.http_boot.enabled {
         return Err(ApiError::not_found("HTTP Boot is disabled"));
     }
+    read_session_file_response(state, session_id, relative_path, headers).await
+}
+
+async fn read_session_file_response(
+    state: &AppState,
+    session_id: &str,
+    relative_path: &str,
+    headers: &HeaderMap,
+) -> Result<Response, ApiError> {
     let manager = state.tftp_manager.read().await.clone();
     let file = manager
         .get_session_file(session_id, relative_path)
@@ -1315,7 +1347,7 @@ async fn put_http_boot_kernel(
     let config = state.config.read().await.clone();
     let kernel_response = http_boot_file_response(&config, &session_id, &remote_name, kernel_file)?;
     let response = publish_kernel(KernelPublishInput {
-        kernel_url: kernel_response.http_url,
+        kernel_url: kernel_response.http_url.to_string(),
         kernel_size,
         kernel_sha256: Some(kernel_sha256),
     });
@@ -1368,7 +1400,7 @@ fn optional_header(headers: &HeaderMap, name: &'static str) -> Result<Option<Str
 async fn list_session_files(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
-) -> Result<axum::Json<Vec<FileResponse>>, ApiError> {
+) -> Result<axum::Json<Vec<SharedSessionFileResponse>>, ApiError> {
     let board = state
         .session_board(&session_id)
         .await
@@ -1382,7 +1414,7 @@ async fn put_session_file(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
     request: Request,
-) -> Result<(StatusCode, axum::Json<FileResponse>), ApiError> {
+) -> Result<(StatusCode, axum::Json<SharedSessionFileResponse>), ApiError> {
     let session = state
         .session_state(&session_id)
         .await
@@ -1396,10 +1428,6 @@ async fn put_session_file(
         .session_board(&session_id)
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
-    if !state.config.read().await.tftp.enabled() {
-        return Err(ApiError::conflict("TFTP provider is disabled"));
-    }
-
     let (_relative_path, file) =
         put_session_file_from_request(&state, &session_id, request, "session file").await?;
     let response = file_response_for_board(&state, &board, file).await?;
@@ -1409,7 +1437,7 @@ async fn put_session_file(
 async fn get_session_file(
     Path((session_id, path)): Path<(String, String)>,
     State(state): State<AppState>,
-) -> Result<axum::Json<FileResponse>, ApiError> {
+) -> Result<axum::Json<SharedSessionFileResponse>, ApiError> {
     let relative_path = parse_relative_path(&path)?;
     let board = state
         .session_board(&session_id)
@@ -1537,7 +1565,7 @@ async fn session_file_responses(
     state: &AppState,
     session_id: &str,
     board: &BoardConfig,
-) -> Result<Vec<FileResponse>, ApiError> {
+) -> Result<Vec<SharedSessionFileResponse>, ApiError> {
     let manager = state.tftp_manager.read().await.clone();
     let files = manager.list_session_files(session_id).await?;
     let mut responses = Vec::with_capacity(files.len());
@@ -1551,12 +1579,20 @@ async fn file_response_for_board(
     state: &AppState,
     board: &BoardConfig,
     file: TftpFileRef,
-) -> Result<FileResponse, ApiError> {
+) -> Result<SharedSessionFileResponse, ApiError> {
     let tftp_url = resolved_board_network(state, board)
         .await?
         .and_then(|network| network.server_ip)
-        .map(|server_ip| format!("tftp://{server_ip}/{}", file.relative_path));
-    Ok(FileResponse::from_file(file, tftp_url))
+        .map(|server_ip| session_tftp_url(&server_ip, &file.relative_path))
+        .transpose()?;
+    let shared_network = resolved_shared_network(state, board).await?;
+    let http_url = match shared_network.and_then(|network| network.server_ip) {
+        Some(server_ip) => Some(shared_http_url(state, &server_ip, &file.relative_path).await?),
+        None => None,
+    };
+    Ok(SharedSessionFileResponse::from_file(
+        file, tftp_url, http_url,
+    ))
 }
 
 async fn run_board_power_action(
@@ -1623,6 +1659,22 @@ async fn active_session_state_or_404(
     Ok(session)
 }
 
+async fn active_shared_session_or_404(
+    state: &AppState,
+    session_id: &str,
+) -> Result<Arc<SessionState>, ApiError> {
+    let session = state
+        .session_state(session_id)
+        .await
+        .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` not found")))?;
+    if session.is_releasing() || session.is_stop_requested() {
+        return Err(ApiError::not_found(format!(
+            "session `{session_id}` not found"
+        )));
+    }
+    Ok(session)
+}
+
 fn ensure_httpboot_board(board: &BoardConfig) -> Result<(), ApiError> {
     if matches!(board.boot, BootConfig::UefiHttp(_)) {
         Ok(())
@@ -1648,34 +1700,32 @@ fn http_boot_url(
     config: &ServerConfig,
     session_id: &str,
     relative_path: &str,
-) -> Result<String, ApiError> {
+) -> Result<Url, ApiError> {
     let relative_path = normalize_relative_path(relative_path)
         .map_err(|err| ApiError::bad_request(err.to_string()))?;
-    let base_url = http_boot_public_base_url(config)?;
-    let base_url = base_url.trim_end_matches('/');
-    Ok(format!(
-        "{base_url}/boot/sessions/{session_id}/{relative_path}"
-    ))
+    let mut url = http_boot_public_base_url(config)?;
+    append_url_path(&mut url, &["boot", "sessions", session_id], &relative_path)?;
+    Ok(url)
 }
 
-fn http_boot_public_base_url(config: &ServerConfig) -> Result<String, ApiError> {
+fn http_boot_public_base_url(config: &ServerConfig) -> Result<Url, ApiError> {
     if let Some(public_base_url) = config.http_boot.public_base_url.as_deref()
         && !public_base_url.trim().is_empty()
     {
-        return Ok(public_base_url.trim().to_string());
+        return Url::parse(public_base_url.trim())
+            .map_err(|err| ApiError::bad_request(format!("invalid HTTP Boot public URL: {err}")));
     }
 
     if let Some(network) = resolve_server_network(config)?
         && let Some(server_ip) = network.server_ip
     {
-        return Ok(format!(
-            "http://{}:{}",
-            server_ip,
-            config.listen_addr.port()
-        ));
+        return server_http_base_url(&server_ip, config.listen_addr.port());
     }
 
-    Ok(format!("http://{}", config.listen_addr))
+    server_http_base_url(
+        &config.listen_addr.ip().to_string(),
+        config.listen_addr.port(),
+    )
 }
 
 fn hex_sha256(bytes: &[u8]) -> String {
@@ -1879,6 +1929,73 @@ async fn resolved_board_network(
     Ok(network)
 }
 
+async fn resolved_shared_network(
+    state: &AppState,
+    board: &BoardConfig,
+) -> Result<Option<ResolvedNetwork>, ApiError> {
+    if let Some(network) = resolved_board_network(state, board).await? {
+        return Ok(Some(network));
+    }
+    let config = state.config.read().await.clone();
+    resolve_server_network(&config)
+}
+
+async fn shared_http_base_url(state: &AppState, server_ip: &str) -> Result<Url, ApiError> {
+    let port = state.config.read().await.listen_addr.port();
+    server_http_base_url(server_ip, port)
+}
+
+fn server_http_base_url(server_ip: &str, port: u16) -> Result<Url, ApiError> {
+    let mut url = Url::parse("http://localhost/")
+        .map_err(|error| ApiError::service_unavailable(error.to_string()))?;
+    url.set_host(Some(server_ip))
+        .map_err(|_| ApiError::service_unavailable("invalid shared HTTP server address"))?;
+    url.set_port(Some(port))
+        .map_err(|_| ApiError::service_unavailable("invalid shared HTTP server port"))?;
+    Ok(url)
+}
+
+fn session_tftp_url(server_ip: &str, relative_path: &str) -> Result<Url, ApiError> {
+    let mut url = Url::parse("tftp://localhost/")
+        .map_err(|error| ApiError::service_unavailable(error.to_string()))?;
+    url.set_host(Some(server_ip))
+        .map_err(|_| ApiError::service_unavailable("invalid TFTP server address"))?;
+    append_url_path(&mut url, &[], relative_path)?;
+    Ok(url)
+}
+
+async fn shared_http_url(
+    state: &AppState,
+    server_ip: &str,
+    stored_relative_path: &str,
+) -> Result<Url, ApiError> {
+    let relative_path = stored_relative_path
+        .split_once("/sessions/")
+        .map(|(_, relative)| relative)
+        .ok_or_else(|| ApiError::service_unavailable("invalid stored session file path"))?;
+    let mut url = shared_http_base_url(state, server_ip).await?;
+    append_url_path(&mut url, &["share", "sessions"], relative_path)?;
+    Ok(url)
+}
+
+fn append_url_path(
+    url: &mut Url,
+    prefix_segments: &[&str],
+    relative_path: &str,
+) -> Result<(), ApiError> {
+    let mut segments = url
+        .path_segments_mut()
+        .map_err(|_| ApiError::service_unavailable("HTTP base URL cannot contain path segments"))?;
+    segments.pop_if_empty();
+    for segment in prefix_segments {
+        segments.push(segment);
+    }
+    for segment in relative_path.split('/') {
+        segments.push(segment);
+    }
+    Ok(())
+}
+
 fn boot_profile_with_resolved_network(
     boot: BootConfig,
     network: Option<&ResolvedNetwork>,
@@ -1999,6 +2116,7 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode, header},
     };
+    use serde::Serialize;
     use serde_json::json;
     #[cfg(unix)]
     use serialport::{SerialPort, TTYPort};
@@ -2016,7 +2134,11 @@ mod tests {
         http_boot_url, mib_to_bytes, resolve_server_network,
     };
     use crate::{
-        api::models::{AdminBoardUpsertRequest, BoardRuntimeStatusResponse, SessionDetailResponse},
+        api::models::{
+            AdminBoardUpsertRequest, BoardRuntimeStatusResponse, BootProfileResponse,
+            CreateSessionRequest, SessionCreatedResponse, SessionDetailResponse,
+            SharedSessionFileResponse,
+        },
         build_app_state,
         config::{
             BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
@@ -2060,25 +2182,30 @@ mod tests {
     }
 
     async fn test_router() -> Router {
+        test_router_with_config(|_| {}).await
+    }
+
+    async fn test_router_with_config(update: impl FnOnce(&mut ServerConfig)) -> Router {
         let temp = tempdir().unwrap();
         let root = temp.path().to_path_buf();
         std::mem::forget(temp);
         let config_path = root.join(".ostool-server.toml");
-        let config = test_server_config(&root);
+        let mut config = test_server_config(&root);
+        update(&mut config);
         let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
         let state = build_app_state(config_path, config, manager).await.unwrap();
         state.ensure_data_dirs().await.unwrap();
         build_router(state)
     }
 
-    async fn create_board(app: &Router, request: serde_json::Value) -> StatusCode {
+    async fn create_board(app: &Router, request: impl Serialize) -> StatusCode {
         app.clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/api/v1/admin/boards")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(request.to_string()))
+                    .body(Body::from(serde_json::to_vec(&request).unwrap()))
                     .unwrap(),
             )
             .await
@@ -2087,6 +2214,11 @@ mod tests {
     }
 
     async fn create_session(app: &Router, board_type: &str) -> String {
+        let request = CreateSessionRequest {
+            board_type: board_type.to_string(),
+            required_tags: Vec::new(),
+            client_name: Some("test".to_string()),
+        };
         let response = app
             .clone()
             .oneshot(
@@ -2094,22 +2226,15 @@ mod tests {
                     .method("POST")
                     .uri("/api/v1/sessions")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "board_type": board_type,
-                            "required_tags": [],
-                            "client_name": "test",
-                        })
-                        .to_string(),
-                    ))
+                    .body(Body::from(serde_json::to_vec(&request).unwrap()))
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::CREATED);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        value["session_id"].as_str().unwrap().to_string()
+        let response: SessionCreatedResponse = serde_json::from_slice(&body).unwrap();
+        response.session_id
     }
 
     async fn upload_dtb(app: &Router, name: &str, body: &'static str) -> StatusCode {
@@ -2324,7 +2449,7 @@ mod tests {
 
         let url = http_boot_url(&config, "asus-1", "kernel.bin").unwrap();
         assert_eq!(
-            url,
+            url.as_str(),
             "http://10.3.10.192:2999/boot/sessions/asus-1/kernel.bin"
         );
     }
@@ -2339,7 +2464,10 @@ mod tests {
         config.http_boot.public_base_url = None;
 
         let url = http_boot_url(&config, "asus-1", "kernel.elf").unwrap();
-        assert_eq!(url, "http://127.0.0.1:2999/boot/sessions/asus-1/kernel.elf");
+        assert_eq!(
+            url.as_str(),
+            "http://127.0.0.1:2999/boot/sessions/asus-1/kernel.elf"
+        );
     }
 
     #[test]
@@ -3702,6 +3830,144 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn shared_session_http_works_without_tftp_and_expires_with_session() {
+        let app = test_router_with_config(|config| {
+            let TftpConfig::Builtin(tftp) = &mut config.tftp else {
+                panic!("expected builtin TFTP test configuration");
+            };
+            tftp.enabled = false;
+        })
+        .await;
+        let mut board = sample_board("shared-http");
+        let BootConfig::Uboot(profile) = &mut board.boot else {
+            panic!("expected U-Boot board");
+        };
+        profile.use_tftp = false;
+        assert_eq!(create_board(&app, board).await, StatusCode::CREATED);
+        let session_id = create_session(&app, "rk3568").await;
+
+        let profile_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/sessions/{session_id}/boot-profile"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(profile_response.status(), StatusCode::OK);
+        let profile_body = to_bytes(profile_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let profile: BootProfileResponse = serde_json::from_slice(&profile_body).unwrap();
+        assert_eq!(profile.server_ip.as_deref(), Some("127.0.0.1"));
+        assert_eq!(
+            profile.http_base_url.unwrap().as_str(),
+            "http://127.0.0.1:0/"
+        );
+
+        let relative_path = "tools/network/probe script.sh";
+        let upload = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{session_id}/files"))
+                    .header("X-File-Path", relative_path)
+                    .body(Body::from("0123456789"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(upload.status(), StatusCode::CREATED);
+        let upload_body = to_bytes(upload.into_body(), usize::MAX).await.unwrap();
+        let uploaded: SharedSessionFileResponse = serde_json::from_slice(&upload_body).unwrap();
+        assert_eq!(uploaded.filename, "probe script.sh");
+        assert_eq!(
+            uploaded.relative_path,
+            format!("ostool/sessions/{session_id}/{relative_path}")
+        );
+        assert_eq!(uploaded.tftp_url, None);
+        let http_url = uploaded.http_url.unwrap();
+        assert_eq!(
+            http_url.as_str(),
+            format!(
+                "http://127.0.0.1:0/share/sessions/{session_id}/tools/network/probe%20script.sh"
+            )
+        );
+
+        let download_path = format!("/share/sessions/{session_id}/tools/network/probe%20script.sh");
+        let download = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&download_path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(download.status(), StatusCode::OK);
+        let body = to_bytes(download.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.as_ref(), b"0123456789");
+
+        let range = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&download_path)
+                    .header(header::RANGE, "bytes=2-5")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(range.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(range.headers()[header::CONTENT_RANGE], "bytes 2-5/10");
+        let body = to_bytes(range.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.as_ref(), b"2345");
+
+        let escape = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{session_id}/files"))
+                    .header("X-File-Path", "../escape.sh")
+                    .body(Body::from("escape"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(escape.status(), StatusCode::BAD_REQUEST);
+
+        let release = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/sessions/{session_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(release.status(), StatusCode::ACCEPTED);
+
+        let expired = app
+            .oneshot(
+                Request::builder()
+                    .uri(download_path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(expired.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

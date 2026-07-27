@@ -309,11 +309,12 @@ GET /api/v1/sessions/{session_id}/boot-profile
   },
   "server_ip": "192.168.1.2",
   "netmask": "255.255.255.0",
-  "interface": "eth0"
+  "interface": "eth0",
+  "http_base_url": "http://192.168.1.2:2999/"
 }
 ```
 
-`boot.kind` 可为 `uboot`、`pxe` 或 `httpboot`（客户端也接受别名 `uefi_http`）。`pxe` 的对象仅含可选 `notes`；`httpboot` 的对象含可选 `boot_arch`（`x86_64`、`aarch64`、`loongarch64`、`riscv64` 或 `other`）和 `mac`。顶层 `server_ip`、`netmask`、`interface` 均可为 `null`。
+`boot.kind` 可为 `uboot`、`pxe` 或 `httpboot`（客户端也接受别名 `uefi_http`）。`pxe` 的对象仅含可选 `notes`；`httpboot` 的对象含可选 `boot_arch`（`x86_64`、`aarch64`、`loongarch64`、`riscv64` 或 `other`）和 `mac`。顶层 `server_ip`、`netmask`、`interface`、`http_base_url` 均可为 `null`。`server_ip` 和 `http_base_url` 使用板端可访问的网络地址，不一定等于管理网地址。
 
 ### 获取串口状态
 
@@ -418,12 +419,14 @@ X-File-Path: <relative_path>
   "filename": "Image",
   "relative_path": "boot/Image",
   "tftp_url": "tftp://192.168.1.2/boot/Image",
+  "http_url": "http://192.168.1.2:2999/share/sessions/.../boot/Image",
   "size": 1048576,
   "uploaded_at": "2026-07-20T02:00:00Z"
 }
 ```
 
-`tftp_url` 可为 `null`。
+`tftp_url` 可为 `null`；`http_url` 使用板端可访问的服务地址。会话文件 HTTP
+共享不依赖 TFTP 是否启用。
 
 ### 列出、查询和删除会话文件
 
@@ -436,6 +439,18 @@ DELETE /api/v1/sessions/{session_id}/files/{path}
 三个请求均没有请求体。前两个请求成功返回 `200 OK`：列表接口返回文件对象数组，单文件接口返回一个文件对象，格式与上传会话文件的成功响应相同。删除成功返回 `204 No Content`。`path` 必须是相对路径。
 
 历史上传路径 `PUT /api/v1/sessions/{session_id}/files/{path}` 被明确拒绝并返回 `404`；上传必须使用前述 `PUT /files` 加 `X-File-Path` Header 的形式。
+
+### 下载共享会话文件
+
+```http
+GET /share/sessions/{session_id}/{relative_path}
+Range: bytes=<start>-<end>  # 可选
+```
+
+该端点适用于所有 boot mode，与 TFTP 和 HTTP Boot 开关无关。无 Range 时返回
+`200 OK` 和完整文件；合法单段 Range 返回 `206 Partial Content`。URL 仅在 session
+活动期间有效，session 释放、超时或进入 releasing 状态后返回 `404`，对应文件随
+session 清理。
 
 ### 上传 HTTP Boot 文件
 

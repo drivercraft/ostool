@@ -3,9 +3,10 @@ use std::fmt;
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 use httpboot_protocol::KernelPublishResponse;
-use reqwest::{Method, StatusCode, Url};
+use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
+use url::Url;
 
 use crate::{
     auth::token_manager::TokenManager,
@@ -137,6 +138,7 @@ pub struct BootProfileResponse {
     pub server_ip: Option<String>,
     pub netmask: Option<String>,
     pub interface: Option<String>,
+    pub http_base_url: Option<Url>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -149,19 +151,23 @@ pub struct SerialStatusResponse {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct FileResponse {
+pub struct SharedSessionFileResponse {
     pub filename: String,
     pub relative_path: String,
-    pub tftp_url: Option<String>,
+    pub tftp_url: Option<Url>,
+    pub http_url: Option<Url>,
     pub size: u64,
     pub uploaded_at: DateTime<Utc>,
 }
+
+#[deprecated(note = "use SharedSessionFileResponse")]
+pub type FileResponse = SharedSessionFileResponse;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct HttpBootFileResponse {
     pub filename: String,
     pub relative_path: String,
-    pub http_url: String,
+    pub http_url: Url,
     pub size: u64,
     pub uploaded_at: DateTime<Utc>,
 }
@@ -173,7 +179,7 @@ pub struct TftpSessionResponse {
     pub server_ip: Option<String>,
     pub netmask: Option<String>,
     pub writable: bool,
-    pub files: Vec<FileResponse>,
+    pub files: Vec<SharedSessionFileResponse>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -181,7 +187,7 @@ pub struct SessionDtbResponse {
     pub dtb_name: Option<String>,
     pub relative_path: Option<String>,
     pub session_file_path: Option<String>,
-    pub tftp_url: Option<String>,
+    pub tftp_url: Option<Url>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -270,7 +276,7 @@ impl BoardServerClient {
         let response = self
             .request(
                 Method::POST,
-                self.endpoint(&format!("/api/v1/sessions/{session_id}/heartbeat")),
+                self.endpoint_segments(&["api", "v1", "sessions", session_id, "heartbeat"]),
             )
             .await?
             .send()
@@ -283,7 +289,7 @@ impl BoardServerClient {
         let response = self
             .request(
                 Method::DELETE,
-                self.endpoint(&format!("/api/v1/sessions/{session_id}")),
+                self.endpoint_segments(&["api", "v1", "sessions", session_id]),
             )
             .await?
             .send()
@@ -302,7 +308,7 @@ impl BoardServerClient {
         let response = self
             .request(
                 Method::GET,
-                self.endpoint(&format!("/api/v1/sessions/{session_id}/boot-profile")),
+                self.endpoint_segments(&["api", "v1", "sessions", session_id, "boot-profile"]),
             )
             .await?
             .send()
@@ -406,11 +412,11 @@ impl BoardServerClient {
         session_id: &str,
         relative_path: &str,
         bytes: Vec<u8>,
-    ) -> Result<FileResponse, BoardServerClientError> {
+    ) -> Result<SharedSessionFileResponse, BoardServerClientError> {
         let response = self
             .request(
                 Method::PUT,
-                self.endpoint(&format!("/api/v1/sessions/{session_id}/files")),
+                self.endpoint_segments(&["api", "v1", "sessions", session_id, "files"]),
             )
             .await?
             .header("X-File-Path", relative_path)
@@ -493,6 +499,19 @@ impl BoardServerClient {
         self.base_url
             .join(path.trim_start_matches('/'))
             .expect("static API path should be valid")
+    }
+
+    fn endpoint_segments(&self, segments: &[&str]) -> Url {
+        let mut url = self.base_url.clone();
+        let mut path = url
+            .path_segments_mut()
+            .expect("HTTP board server URL must support path segments");
+        path.pop_if_empty();
+        for segment in segments {
+            path.push(segment);
+        }
+        drop(path);
+        url
     }
 
     pub async fn websocket_authorization(&self) -> anyhow::Result<Option<String>> {
@@ -613,10 +632,24 @@ impl fmt::Display for BoardTypeSummary {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{DateTime, Utc};
     use reqwest::StatusCode;
+    use serde::Serialize;
+    use url::Url;
 
     use super::{BoardServerClient, BootConfig, parse_error_body};
     use crate::board::global_config::{AuthMode, BoardEndpoint};
+
+    #[derive(Serialize)]
+    struct FutureSharedSessionFileResponse {
+        filename: String,
+        relative_path: String,
+        tftp_url: Option<Url>,
+        http_url: Option<Url>,
+        size: u64,
+        uploaded_at: DateTime<Utc>,
+        checksum: String,
+    }
 
     #[test]
     fn resolve_relative_ws_url_uses_server_defaults() {
@@ -628,6 +661,30 @@ mod tests {
             url.as_str(),
             "ws://127.0.0.1:8080/api/v1/sessions/demo/serial/ws"
         );
+    }
+
+    #[test]
+    fn shared_session_file_response_round_trips_urls_and_ignores_future_fields() {
+        let fixture = FutureSharedSessionFileResponse {
+            filename: "probe script.sh".to_string(),
+            relative_path: "ostool/sessions/demo/tools/probe script.sh".to_string(),
+            tftp_url: None,
+            http_url: Some(
+                Url::parse("http://192.168.1.2:2999/share/sessions/demo/tools/probe%20script.sh")
+                    .unwrap(),
+            ),
+            size: 42,
+            uploaded_at: "2026-07-27T00:00:00Z".parse().unwrap(),
+            checksum: "future-field".to_string(),
+        };
+
+        let encoded = serde_json::to_vec(&fixture).unwrap();
+        let decoded: super::SharedSessionFileResponse = serde_json::from_slice(&encoded).unwrap();
+
+        assert_eq!(decoded.filename, fixture.filename);
+        assert_eq!(decoded.relative_path, fixture.relative_path);
+        assert_eq!(decoded.http_url, fixture.http_url);
+        assert_eq!(decoded.size, fixture.size);
     }
 
     #[test]
