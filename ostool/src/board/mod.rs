@@ -325,9 +325,9 @@ pub async fn run_prepared_board(
     board_config: &BoardRunConfig,
     options: RunBoardOptions,
 ) -> anyhow::Result<()> {
-    if !board_config.session_files.is_empty() {
+    if !board_config.session_files.is_empty() || board_config.session_program.is_some() {
         anyhow::bail!(
-            "board config contains `session_files`; use BoardRunRequest::with_session_files to provide the configuration directory"
+            "board config contains session assets; use BoardRunRequest::with_session_root to provide the session root"
         );
     }
     run_prepared_board_with_request(
@@ -382,6 +382,7 @@ pub async fn run_prepared_board_with_request(
 
 fn board_session_setup_required(board_config: &BoardRunConfig, has_session_files: bool) -> bool {
     has_session_files
+        || board_config.session_program.is_some()
         || board_config
             .shell_init_cmd
             .as_deref()

@@ -1,7 +1,10 @@
 use std::path::Path;
 
 use ostool::{
-    board::{self, config::BoardRunConfig},
+    board::{
+        self, BoardRunRequest,
+        config::{BoardRunConfig, BoardSessionProgram},
+    },
     build::{
         self, CargoBuildOutput, CargoQemuRunnerArgs, CargoRunnerKind, CargoUbootRunnerArgs,
         RuntimeArtifactInput,
@@ -36,8 +39,18 @@ fn main() {
     let uboot_config: UbootConfig = uboot::default_config();
     let board_config = BoardRunConfig {
         board_type: "rk3568".into(),
+        shell_prefix: Some("root@board:".into()),
+        session_program: Some(BoardSessionProgram {
+            path: "bin/probe".into(),
+            args: vec!["--server=${boardServerIp}".into()],
+        }),
         ..BoardRunConfig::default()
     };
+    let board_request = BoardRunRequest::new(
+        board_config.clone(),
+        board::RunBoardOptions::default(),
+    );
+    let _ = board_request.with_session_root(Path::new("."));
     let qemu_runner = CargoRunnerKind::new_qemu(CargoQemuRunnerArgs {
         qemu: Some(qemu_config.clone()),
         debug: false,

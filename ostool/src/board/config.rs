@@ -10,6 +10,17 @@ use crate::{
     run::shell_init::normalize_shell_init_config,
 };
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BoardSessionProgram {
+    /// Program path relative to the board configuration's session root.
+    pub path: PathBuf,
+    /// Literal argv entries. Project and board-session placeholders are expanded
+    /// before each entry is POSIX-shell quoted.
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct BoardRunConfig {
@@ -20,6 +31,9 @@ pub struct BoardRunConfig {
     /// relative path on the session HTTP endpoint.
     #[serde(default)]
     pub session_files: Vec<PathBuf>,
+    /// Program uploaded, downloaded, and executed for this board session.
+    #[serde(default)]
+    pub session_program: Option<BoardSessionProgram>,
     pub dtb_file: Option<String>,
     pub kernel_load_addr: Option<String>,
     pub fit_load_addr: Option<String>,
@@ -168,6 +182,13 @@ impl BoardRunConfig {
             .as_deref()
             .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
+        if let Some(program) = self.session_program.as_mut() {
+            program.args = program
+                .args
+                .iter()
+                .map(|value| variables::expand_variables(value, scope))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+        }
         self.server = self
             .server
             .as_deref()
@@ -212,7 +233,34 @@ impl BoardRunConfig {
             &mut self.shell_prefix,
             &mut self.shell_init_cmd,
             config_name,
-        )
+        )?;
+        if let Some(program) = self.session_program.as_ref() {
+            if self.shell_init_cmd.is_some() {
+                anyhow::bail!(
+                    "`session_program` and `shell_init_cmd` are mutually exclusive in {config_name}"
+                );
+            }
+            if self.shell_prefix.is_none() {
+                anyhow::bail!("`session_program` requires `shell_prefix` in {config_name}");
+            }
+            if program.path.as_os_str().is_empty() {
+                anyhow::bail!("`session_program.path` must not be empty in {config_name}");
+            }
+            if program.path.to_string_lossy().contains("${") {
+                anyhow::bail!("`session_program.path` must not contain variables in {config_name}");
+            }
+            if let Some(argument) = program
+                .args
+                .iter()
+                .find(|argument| argument.contains(['\0', '\r', '\n']))
+            {
+                anyhow::bail!(
+                    "`session_program.args` must not contain NUL or newline characters in \
+                     {config_name}: {argument:?}"
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -229,7 +277,7 @@ fn normalize_optional_string(value: &mut Option<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::BoardRunConfig;
+    use super::{BoardRunConfig, BoardSessionProgram};
     use crate::{
         board::global_config::BoardGlobalConfig,
         board::{ensure_run_config_in_dir, read_run_config_from_path},
@@ -318,6 +366,28 @@ port = 9000
     }
 
     #[test]
+    fn board_run_config_session_program_toml_round_trip() {
+        let config = BoardRunConfig {
+            board_type: "aka-00-sg2002".to_string(),
+            shell_prefix: Some("root@starry:".to_string()),
+            session_program: Some(BoardSessionProgram {
+                path: PathBuf::from("bin/sg2002-libuvc-init"),
+                args: vec![
+                    "--server".to_string(),
+                    "${boardServerIp}".to_string(),
+                    "argument with spaces".to_string(),
+                ],
+            }),
+            ..Default::default()
+        };
+
+        let encoded = toml::to_string(&config).unwrap();
+        let decoded: BoardRunConfig = toml::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded, config);
+    }
+
+    #[test]
     fn legacy_board_run_config_defaults_to_no_session_files() {
         let fixture = LegacyBoardRunConfigFixture {
             board_type: "orangepi-5-plus".to_string(),
@@ -327,6 +397,44 @@ port = 9000
         let decoded: BoardRunConfig = toml::from_str(&encoded).unwrap();
 
         assert!(decoded.session_files.is_empty());
+        assert!(decoded.session_program.is_none());
+    }
+
+    #[test]
+    fn session_program_rejects_shell_init_command_and_missing_prefix() {
+        let mut conflicting = BoardRunConfig {
+            board_type: "aka-00-sg2002".to_string(),
+            shell_prefix: Some("root@starry:".to_string()),
+            shell_init_cmd: Some("echo legacy".to_string()),
+            session_program: Some(BoardSessionProgram {
+                path: PathBuf::from("bin/probe"),
+                args: Vec::new(),
+            }),
+            ..Default::default()
+        };
+        assert!(
+            conflicting
+                .normalize("test board config")
+                .unwrap_err()
+                .to_string()
+                .contains("mutually exclusive")
+        );
+
+        let mut missing_prefix = BoardRunConfig {
+            board_type: "aka-00-sg2002".to_string(),
+            session_program: Some(BoardSessionProgram {
+                path: PathBuf::from("bin/probe"),
+                args: Vec::new(),
+            }),
+            ..Default::default()
+        };
+        assert!(
+            missing_prefix
+                .normalize("test board config")
+                .unwrap_err()
+                .to_string()
+                .contains("shell_prefix")
+        );
     }
 
     #[test]

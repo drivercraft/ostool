@@ -317,11 +317,30 @@ ostool board config
 `server` 应使用包含 `http://` 或 `https://` 的完整 URL；可选的 `port` 会覆盖 URL 中的端口。为兼容旧的局域网配置，裸 IPv4 或 IPv6 地址会自动补为 `http://`。基线版本写出的 `server_ip` / `port` 也会在读取时迁移为 `server` / `port`，下一次保存配置时只写新格式；无 scheme 的主机名不支持。项目级 `.board.toml` 中的 `server` / `port` 仍可用于 `ostool board run`，其优先级低于命令行参数，高于全局配置。
 
 `.board.toml` 可以用 `session_files` 声明相对于配置文件目录的共享文件。调用方通过
-`BoardRunRequest::with_session_files` 提供该目录，ostool 会在 board session
+`BoardRunRequest::with_session_root` 提供该目录，ostool 会在 board session
 建立后按原相对路径上传，并在 `shell_init_cmd` 中展开
 `${boardServerIp}`、`${boardServerHttpBaseUrl}` 和
 `${sessionFile:<relative-path>}`。绝对路径、`..`、符号链接逃逸、重复路径及缺失
 文件都会在运行前被拒绝；接口不提供 alias 或上传改名。
+
+只需运行一个共享程序时，可改用声明式配置：
+
+```toml
+board_type = "AKA-00-SG2002"
+shell_prefix = "root@starry:"
+success_regex = ["(?m)^PROGRAM_OK\\s*$"]
+
+[session_program]
+path = "bin/probe"
+args = ["--server", "${boardServerIp}"]
+```
+
+`session_program.path` 会自动加入共享文件，无需同时写入 `session_files`。检测到 shell
+prompt 后，ostool 在 `/tmp/ostool-session/<session_id>/` 下按原相对路径下载所有
+session 文件，为程序添加执行权限，并以经过 POSIX shell 引号保护的 argv 运行程序。
+下载会在 60 秒内依次尝试 curl 和 wget；下载、赋权或程序退出失败都会触发 board
+测试失败并进入正常的 session release 流程。`session_program` 与
+`shell_init_cmd` 互斥。
 
 ### 公网开发板认证
 
