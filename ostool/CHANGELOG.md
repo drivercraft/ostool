@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0](https://github.com/drivercraft/ostool/compare/ostool-v0.25.0...ostool-v0.26.0) - 2026-07-27
+
+### Added
+
+- *(board)* share files over session HTTP ([#158](https://github.com/drivercraft/ostool/pull/158))
+
 ## [0.25.0](https://github.com/drivercraft/ostool/compare/ostool-v0.24.1...ostool-v0.25.0) - 2026-07-23
 
 ### Fixed
