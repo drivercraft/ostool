@@ -2593,7 +2593,6 @@ dependencies = [
  "mime_guess",
  "network-interface",
  "nusb",
- "reqwest",
  "rust-embed",
  "schemars",
  "serde",

@@ -11,6 +11,11 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use axum::{
+    Router,
+    body::{Body, to_bytes},
+    http::{Request, StatusCode, header},
+};
 use futures_util::{SinkExt, StreamExt};
 use ostool_server::{
     BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement, PowerManagementConfig,
@@ -18,10 +23,11 @@ use ostool_server::{
     UploadLimitsConfig, build_app_state, build_router,
     tftp::service::{TftpManager, build_tftp_manager},
 };
-use reqwest::StatusCode;
 use serialport::{SerialPort, TTYPort};
-use tokio::sync::oneshot;
+use tokio::{net::TcpStream, sync::oneshot};
 use tokio_tungstenite::tungstenite::Message;
+use tower::ServiceExt;
+use url::Url;
 
 const TEST_BOARD_ID: &str = "custom-board-1";
 const TEST_BOARD_TYPE: &str = "custom-demo";
@@ -38,6 +44,7 @@ enum ClientShutdownMode {
 
 struct TestServerHandle {
     base_url: String,
+    app: Router,
     shutdown_tx: Option<oneshot::Sender<()>>,
     join: thread::JoinHandle<Result<()>>,
 }
@@ -130,7 +137,7 @@ fn spawn_test_server_with_power_on(
     std::fs::write(&board_path, toml::to_string_pretty(&board)?)
         .with_context(|| format!("failed to write {}", board_path.display()))?;
 
-    let (addr_tx, addr_rx) = mpsc::channel::<std::result::Result<SocketAddr, String>>();
+    let (addr_tx, addr_rx) = mpsc::channel::<std::result::Result<(SocketAddr, Router), String>>();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let config_path_for_thread = config_path.clone();
     let addr_tx_for_start = addr_tx.clone();
@@ -171,7 +178,7 @@ fn spawn_test_server_with_power_on(
             let listener = tokio::net::TcpListener::bind(listen_addr).await?;
             let local_addr = listener.local_addr()?;
             addr_tx_for_start
-                .send(Ok(local_addr))
+                .send(Ok((local_addr, app.clone())))
                 .map_err(|_| anyhow!("failed to publish test server listen address"))?;
 
             axum::serve(listener, app)
@@ -188,14 +195,15 @@ fn spawn_test_server_with_power_on(
         result
     });
 
-    let addr = match addr_rx.recv_timeout(Duration::from_secs(5)) {
-        Ok(Ok(addr)) => addr,
+    let (addr, app) = match addr_rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(Ok(server)) => server,
         Ok(Err(err)) => return Err(anyhow!("test server failed to start: {err}")),
         Err(_) => return Err(anyhow!("timed out waiting for test server listen address")),
     };
 
     Ok(TestServerHandle {
         base_url: format!("http://{addr}"),
+        app,
         shutdown_tx: Some(shutdown_tx),
         join,
     })
@@ -225,10 +233,9 @@ fn run_delayed_client_write_case() -> Result<()> {
         .build()
         .context("failed to build client runtime")?;
 
-    let client = reqwest::Client::new();
     let (created, mut websocket) = runtime.block_on(async {
-        wait_for_server_ready(&client, &server.base_url).await?;
-        let created = create_session(&client, &server.base_url).await?;
+        wait_for_server_ready(&server.base_url).await?;
+        let created = create_session(&server.app).await?;
         let ws_url = resolve_ws_url(
             &server.base_url,
             created.ws_url.as_deref().context("missing websocket URL")?,
@@ -256,7 +263,7 @@ fn run_delayed_client_write_case() -> Result<()> {
             .await
             .context("failed to send websocket close control message")?;
         wait_for_closed(&mut websocket).await?;
-        wait_for_session_release(&client, &server.base_url, &created.session_id).await
+        wait_for_session_release(&server.app, &created.session_id).await
     })?;
     server.shutdown()
 }
@@ -317,12 +324,13 @@ fn run_ws_lifecycle_case(mode: ClientShutdownMode) -> Result<()> {
     let server = spawn_test_server(temp.path(), serial_port)?;
     let (serial_ready_tx, serial_ready_rx) = mpsc::channel::<()>();
     let base_url = server.base_url.clone();
+    let app = server.app.clone();
     let client_thread = thread::spawn(move || -> Result<()> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .context("failed to build client runtime")?;
-        runtime.block_on(run_client_flow(&base_url, mode, serial_ready_tx))
+        runtime.block_on(run_client_flow(&app, &base_url, mode, serial_ready_tx))
     });
 
     if let Ok(()) = serial_ready_rx.recv_timeout(Duration::from_secs(3)) {
@@ -345,14 +353,14 @@ fn run_ws_lifecycle_case(mode: ClientShutdownMode) -> Result<()> {
 
 /// Drives one client session through power-on, serial I/O, and release assertions.
 async fn run_client_flow(
+    app: &Router,
     base_url: &str,
     mode: ClientShutdownMode,
     serial_ready_tx: mpsc::Sender<()>,
 ) -> Result<()> {
-    let client = reqwest::Client::new();
-    wait_for_server_ready(&client, base_url).await?;
+    wait_for_server_ready(base_url).await?;
 
-    let created = create_session(&client, base_url).await?;
+    let created = create_session(app).await?;
     assert_eq!(created.board_id, TEST_BOARD_ID);
     let ws_url = resolve_ws_url(
         base_url,
@@ -383,18 +391,21 @@ async fn run_client_flow(
         }
     }
 
-    wait_for_session_release(&client, base_url, &created.session_id).await?;
+    wait_for_session_release(app, &created.session_id).await?;
     Ok(())
 }
 
-async fn wait_for_server_ready(client: &reqwest::Client, base_url: &str) -> Result<()> {
+async fn wait_for_server_ready(base_url: &str) -> Result<()> {
+    let base = Url::parse(base_url).with_context(|| format!("invalid base URL `{base_url}`"))?;
+    let host = base
+        .host_str()
+        .ok_or_else(|| anyhow!("test server URL has no host"))?;
+    let port = base
+        .port_or_known_default()
+        .ok_or_else(|| anyhow!("test server URL has no port"))?;
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let response = client
-            .get(format!("{base_url}/api/v1/admin/overview"))
-            .send()
-            .await;
-        if matches!(response, Ok(response) if response.status() == StatusCode::OK) {
+        if TcpStream::connect((host, port)).await.is_ok() {
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -404,29 +415,36 @@ async fn wait_for_server_ready(client: &reqwest::Client, base_url: &str) -> Resu
     }
 }
 
-async fn create_session(
-    client: &reqwest::Client,
-    base_url: &str,
-) -> Result<SessionCreatedResponse> {
-    let response = client
-        .post(format!("{base_url}/api/v1/sessions"))
-        .json(&serde_json::json!({
-            "board_type": TEST_BOARD_TYPE,
-            "required_tags": [],
-            "client_name": "integration-test",
-        }))
-        .send()
+// Keep REST setup and assertions in-process. A reqwest dev-dependency would inherit ostool's
+// rustls-no-provider feature during workspace builds and make this LAN-only test require TLS setup.
+async fn create_session(app: &Router) -> Result<SessionCreatedResponse> {
+    let request = serde_json::json!({
+        "board_type": TEST_BOARD_TYPE,
+        "required_tags": [],
+        "client_name": "integration-test",
+    })
+    .to_string();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(request))?,
+        )
         .await
-        .context("failed to create session")?;
+        .expect("router service is infallible");
     let status = response.status();
-    let body = response
-        .text()
+    let body = to_bytes(response.into_body(), 1024 * 1024)
         .await
-        .context("failed to read session body")?;
+        .context("failed to read session response")?;
     if status != StatusCode::CREATED {
-        bail!("unexpected create session status {status}: {body}");
+        bail!(
+            "unexpected create session status {}: {}",
+            status,
+            String::from_utf8_lossy(&body)
+        );
     }
-    serde_json::from_str(&body).context("failed to parse session response")
+    serde_json::from_slice(&body).context("failed to parse session response")
 }
 
 async fn wait_for_opened<S>(websocket: &mut S) -> Result<()>
@@ -517,38 +535,35 @@ where
     }
 }
 
-async fn wait_for_session_release(
-    client: &reqwest::Client,
-    base_url: &str,
-    session_id: &str,
-) -> Result<()> {
+async fn wait_for_session_release(app: &Router, session_id: &str) -> Result<()> {
     let deadline = Instant::now() + FAST_ASSERT_TIMEOUT;
     loop {
-        let response = client
-            .get(format!("{base_url}/api/v1/sessions/{session_id}"))
-            .send()
+        let response = app
+            .clone()
+            .oneshot(Request::get(format!("/api/v1/sessions/{session_id}")).body(Body::empty())?)
             .await
-            .with_context(|| format!("failed to query session {session_id}"))?;
+            .expect("router service is infallible");
         let status = response.status();
         if status == StatusCode::NOT_FOUND {
             return Ok(());
         }
-        let body = response.text().await.unwrap_or_default();
         if Instant::now() >= deadline {
+            let body = to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .context("failed to read session response")?;
             bail!(
-                "timed out waiting for session `{session_id}` release, last status: {status}, body: {body}"
+                "timed out waiting for session `{session_id}` release, last status: {status}, body: {}",
+                String::from_utf8_lossy(&body)
             );
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
 }
 
-fn resolve_ws_url(base_url: &str, ws_path: &str) -> Result<reqwest::Url> {
-    let base =
-        reqwest::Url::parse(base_url).with_context(|| format!("invalid base URL `{base_url}`"))?;
+fn resolve_ws_url(base_url: &str, ws_path: &str) -> Result<Url> {
+    let base = Url::parse(base_url).with_context(|| format!("invalid base URL `{base_url}`"))?;
     if ws_path.starts_with("ws://") || ws_path.starts_with("wss://") {
-        return reqwest::Url::parse(ws_path)
-            .with_context(|| format!("invalid websocket URL `{ws_path}`"));
+        return Url::parse(ws_path).with_context(|| format!("invalid websocket URL `{ws_path}`"));
     }
 
     let ws_scheme = if base.scheme() == "https" {
