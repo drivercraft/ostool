@@ -229,7 +229,7 @@ impl BoardServerClient {
 
     pub fn new_with_endpoint(endpoint: BoardEndpoint) -> anyhow::Result<Self> {
         Ok(Self {
-            client: reqwest::Client::builder()
+            client: crate::http_client::builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()

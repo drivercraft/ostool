@@ -569,7 +569,7 @@ impl<'a> CargoBuildPipeline<'a> {
         let target_path = temp_dir.join(filename);
 
         // Create reqwest client
-        let client = reqwest::Client::builder()
+        let client = crate::http_client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to create HTTP client: {e}"))?;
