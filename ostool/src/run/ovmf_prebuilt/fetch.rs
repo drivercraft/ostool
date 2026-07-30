@@ -1,12 +1,13 @@
 use super::{Error, Source, error::MirrorAttempt};
 use indicatif::{ProgressBar, ProgressStyle};
+use reqwest::{Client, header::RANGE};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::{self, Cursor, ErrorKind, Read};
+use std::future::Future;
+use std::io::{self, Cursor, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tar::Archive;
-use ureq::Agent;
 
 /// User-Agent header to send with download requests.
 const USER_AGENT: &str = "https://github.com/drivercraft/ostool";
@@ -73,11 +74,25 @@ struct VerifiedDownload {
 }
 
 /// Update the local cache. Does nothing if the cache is already up to date.
-pub(crate) fn update_cache(source: Source, prebuilt_dir: &Path) -> Result<(), Error> {
-    update_cache_with_fetchers(source, prebuilt_dir, OVMF_MIRRORS, probe_url, download_url)
+pub(crate) async fn update_cache(source: Source, prebuilt_dir: &Path) -> Result<(), Error> {
+    let probe_client = http_client(PROBE_TIMEOUT, PROBE_TIMEOUT, PROBE_TIMEOUT)?;
+    let download_client = http_client(
+        FULL_DOWNLOAD_TIMEOUT,
+        FULL_DOWNLOAD_CONNECT_TIMEOUT,
+        FULL_DOWNLOAD_BODY_TIMEOUT,
+    )?;
+
+    update_cache_with_fetchers(
+        source,
+        prebuilt_dir,
+        OVMF_MIRRORS,
+        |url| probe_url(probe_client.clone(), url),
+        |url| download_url(download_client.clone(), url),
+    )
+    .await
 }
 
-fn update_cache_with_fetchers<P, D>(
+async fn update_cache_with_fetchers<P, PF, D, DF>(
     source: Source,
     prebuilt_dir: &Path,
     mirrors: &[Mirror],
@@ -85,8 +100,10 @@ fn update_cache_with_fetchers<P, D>(
     download: D,
 ) -> Result<(), Error>
 where
-    P: FnMut(&str) -> Result<ProbeStats, Error>,
-    D: FnMut(&str) -> Result<Vec<u8>, Error>,
+    P: FnMut(String) -> PF,
+    PF: Future<Output = Result<ProbeStats, Error>>,
+    D: FnMut(String) -> DF,
+    DF: Future<Output = Result<Vec<u8>, Error>>,
 {
     let hash_path = prebuilt_dir.join("sha256");
 
@@ -104,8 +121,8 @@ where
         }
     }
 
-    let candidates = ranked_mirrors_by_probe(&source, mirrors, probe);
-    let verified = download_from_candidates(&source, &candidates, download)?;
+    let candidates = ranked_mirrors_by_probe(&source, mirrors, probe).await;
+    let verified = download_from_candidates(&source, &candidates, download).await?;
 
     // Clear out the existing prebuilt dir, if present.
     if let Err(source) = fs::remove_dir_all(prebuilt_dir)
@@ -131,45 +148,42 @@ where
     Ok(())
 }
 
-fn ranked_mirrors_by_probe<P>(
+async fn ranked_mirrors_by_probe<P, PF>(
     source: &Source,
     mirrors: &[Mirror],
     mut probe: P,
 ) -> Vec<MirrorCandidate>
 where
-    P: FnMut(&str) -> Result<ProbeStats, Error>,
+    P: FnMut(String) -> PF,
+    PF: Future<Output = Result<ProbeStats, Error>>,
 {
-    let mut candidates = mirrors
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(index, mirror)| {
-            let url = mirror.url(source);
-            let probe = match probe(&url) {
-                Ok(stats) => {
-                    info!(
-                        "OVMF mirror {} probe: {} bytes in {:?}",
-                        mirror.name, stats.bytes, stats.elapsed
-                    );
-                    Some(stats)
-                }
-                Err(err) => {
-                    debug!(
-                        "failed to probe OVMF mirror {} ({}): {}",
-                        mirror.name, url, err
-                    );
-                    None
-                }
-            };
-
-            MirrorCandidate {
-                mirror,
-                url,
-                probe,
-                index,
+    let mut candidates = Vec::with_capacity(mirrors.len());
+    for (index, mirror) in mirrors.iter().copied().enumerate() {
+        let url = mirror.url(source);
+        let probe = match probe(url.clone()).await {
+            Ok(stats) => {
+                info!(
+                    "OVMF mirror {} probe: {} bytes in {:?}",
+                    mirror.name, stats.bytes, stats.elapsed
+                );
+                Some(stats)
             }
-        })
-        .collect::<Vec<_>>();
+            Err(err) => {
+                debug!(
+                    "failed to probe OVMF mirror {} ({}): {}",
+                    mirror.name, url, err
+                );
+                None
+            }
+        };
+
+        candidates.push(MirrorCandidate {
+            mirror,
+            url,
+            probe,
+            index,
+        });
+    }
 
     candidates.sort_by(|left_candidate, right_candidate| {
         match (left_candidate.probe, right_candidate.probe) {
@@ -188,19 +202,23 @@ where
     candidates
 }
 
-fn download_from_candidates<D>(
+async fn download_from_candidates<D, DF>(
     source: &Source,
     candidates: &[MirrorCandidate],
     mut download: D,
 ) -> Result<VerifiedDownload, Error>
 where
-    D: FnMut(&str) -> Result<Vec<u8>, Error>,
+    D: FnMut(String) -> DF,
+    DF: Future<Output = Result<Vec<u8>, Error>>,
 {
     let mut attempts = Vec::new();
 
     for candidate in candidates {
         info!("{}", download_source_message(candidate));
-        match download(&candidate.url).and_then(|data| verify_download(source, data)) {
+        match download(candidate.url.clone())
+            .await
+            .and_then(|data| verify_download(source, data))
+        {
             Ok(verified) => return Ok(verified),
             Err(err) => {
                 warn!(
@@ -257,48 +275,47 @@ fn verify_download(source: &Source, data: Vec<u8>) -> Result<VerifiedDownload, E
     })
 }
 
-fn http_agent(
+fn http_client(
     global_timeout: Duration,
     connect_timeout: Duration,
-    response_timeout: Duration,
     body_timeout: Duration,
-) -> Agent {
-    let config = Agent::config_builder()
+) -> Result<Client, Error> {
+    Client::builder()
         .user_agent(USER_AGENT)
-        .timeout_global(Some(global_timeout))
-        .timeout_connect(Some(connect_timeout))
-        .timeout_recv_response(Some(response_timeout))
-        .timeout_recv_body(Some(body_timeout))
-        .build();
-    Agent::new_with_config(config)
+        .timeout(global_timeout)
+        .connect_timeout(connect_timeout)
+        .read_timeout(body_timeout)
+        .build()
+        .map_err(Error::Request)
 }
 
-fn probe_url(url: &str) -> Result<ProbeStats, Error> {
-    let agent = http_agent(PROBE_TIMEOUT, PROBE_TIMEOUT, PROBE_TIMEOUT, PROBE_TIMEOUT);
-
+async fn probe_url(client: Client, url: String) -> Result<ProbeStats, Error> {
     info!("probing OVMF mirror {url}");
     let started = Instant::now();
-    let resp = agent
-        .get(url)
-        .header(
-            "Range",
-            format!("bytes=0-{}", PROBE_DOWNLOAD_SIZE_IN_BYTES - 1),
-        )
-        .call()
-        .map_err(|err| Error::Request(Box::new(err)))?;
+    let mut response = tokio::time::timeout(
+        PROBE_TIMEOUT,
+        client
+            .get(url)
+            .header(
+                RANGE,
+                format!("bytes=0-{}", PROBE_DOWNLOAD_SIZE_IN_BYTES - 1),
+            )
+            .send(),
+    )
+    .await
+    .map_err(|_| timeout_error("OVMF mirror probe response"))?
+    .map_err(Error::Request)?
+    .error_for_status()
+    .map_err(Error::Request)?;
 
-    let mut reader = resp
-        .into_body()
-        .into_reader()
-        .take(PROBE_DOWNLOAD_SIZE_IN_BYTES.try_into().unwrap());
-    let mut buffer = [0u8; 8192];
     let mut bytes = 0usize;
-    loop {
-        match reader.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(n) => bytes += n,
-            Err(e) => return Err(Error::Download(e)),
-        }
+    while bytes < PROBE_DOWNLOAD_SIZE_IN_BYTES {
+        let Some(chunk) = response.chunk().await.map_err(Error::Request)? else {
+            break;
+        };
+        bytes += chunk
+            .len()
+            .min(PROBE_DOWNLOAD_SIZE_IN_BYTES.saturating_sub(bytes));
     }
 
     if bytes == 0 {
@@ -315,27 +332,22 @@ fn probe_url(url: &str) -> Result<ProbeStats, Error> {
 }
 
 /// Download `url` and return the raw data.
-fn download_url(url: &str) -> Result<Vec<u8>, Error> {
-    let agent = http_agent(
-        FULL_DOWNLOAD_TIMEOUT,
-        FULL_DOWNLOAD_CONNECT_TIMEOUT,
-        FULL_DOWNLOAD_RESPONSE_TIMEOUT,
-        FULL_DOWNLOAD_BODY_TIMEOUT,
-    );
-
+async fn download_url(client: Client, url: String) -> Result<Vec<u8>, Error> {
     // Download the file.
     info!("downloading {url}");
-    let resp = agent
-        .get(url)
-        .call()
-        .map_err(|err| Error::Request(Box::new(err)))?;
+    let mut response =
+        tokio::time::timeout(FULL_DOWNLOAD_RESPONSE_TIMEOUT, client.get(&url).send())
+            .await
+            .map_err(|_| timeout_error("OVMF download response"))?
+            .map_err(Error::Request)?
+            .error_for_status()
+            .map_err(Error::Request)?;
 
     // Get content length if available
-    let content_length = resp
-        .headers()
-        .get("content-length")
-        .and_then(|s| s.to_str().ok())
-        .and_then(|s| s.parse::<u64>().ok());
+    let content_length = response.content_length();
+    if content_length.is_some_and(|length| length > MAX_DOWNLOAD_SIZE_IN_BYTES as u64) {
+        return Err(download_size_error());
+    }
 
     // Create progress bar
     let progress = if let Some(total) = content_length {
@@ -365,33 +377,43 @@ fn download_url(url: &str) -> Result<Vec<u8>, Error> {
         pb
     };
 
-    let mut data = Vec::with_capacity(MAX_DOWNLOAD_SIZE_IN_BYTES);
-    let mut reader = resp
-        .into_body()
-        .into_reader()
-        // Limit the size of the download.
-        .take(MAX_DOWNLOAD_SIZE_IN_BYTES.try_into().unwrap());
+    let mut data = Vec::with_capacity(
+        content_length
+            .unwrap_or(MAX_DOWNLOAD_SIZE_IN_BYTES as u64)
+            .min(MAX_DOWNLOAD_SIZE_IN_BYTES as u64) as usize,
+    );
 
     // Read in chunks and update progress
-    let mut buffer = [0u8; 8192];
-    loop {
-        match reader.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(n) => {
-                data.extend_from_slice(&buffer[..n]);
-                progress.inc(n as u64);
-            }
-            Err(e) => {
-                progress.finish_and_clear();
-                return Err(Error::Download(e));
-            }
+    while let Some(chunk) = response.chunk().await.map_err(|err| {
+        progress.finish_and_clear();
+        Error::Request(err)
+    })? {
+        if data.len().saturating_add(chunk.len()) > MAX_DOWNLOAD_SIZE_IN_BYTES {
+            progress.finish_and_clear();
+            return Err(download_size_error());
         }
+        data.extend_from_slice(&chunk);
+        progress.inc(chunk.len() as u64);
     }
 
     progress.finish_with_message(format!("Downloaded {} bytes", data.len()));
     info!("received {} bytes", data.len());
 
     Ok(data)
+}
+
+fn timeout_error(operation: &str) -> Error {
+    Error::Download(io::Error::new(
+        ErrorKind::TimedOut,
+        format!("{operation} timed out"),
+    ))
+}
+
+fn download_size_error() -> Error {
+    Error::Download(io::Error::new(
+        ErrorKind::InvalidData,
+        format!("OVMF download exceeds the {MAX_DOWNLOAD_SIZE_IN_BYTES}-byte limit"),
+    ))
 }
 
 fn decompress(data: &[u8]) -> Result<Vec<u8>, Error> {
@@ -450,6 +472,7 @@ mod tests {
     use std::{
         cell::RefCell,
         fs,
+        future::ready,
         io::{self, Cursor, ErrorKind},
         time::Duration,
     };
@@ -511,8 +534,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn cache_hit_does_not_probe_or_download() {
+    #[tokio::test]
+    async fn cache_hit_does_not_probe_or_download() {
         let temp = TempDir::new().unwrap();
         let source = test_source("test-release", "cached-hash".to_string());
         fs::write(temp.path().join("sha256"), source.sha256).unwrap();
@@ -521,30 +544,34 @@ mod tests {
             source,
             temp.path(),
             TEST_MIRRORS,
-            |_| panic!("cache hit should not probe mirrors"),
-            |_| panic!("cache hit should not download mirrors"),
+            |_| async { panic!("cache hit should not probe mirrors") },
+            |_| async { panic!("cache hit should not download mirrors") },
         )
+        .await
         .unwrap();
     }
 
-    #[test]
-    fn ranked_mirrors_probe_every_source_and_prefer_fast_successes() {
+    #[tokio::test]
+    async fn ranked_mirrors_probe_every_source_and_prefer_fast_successes() {
         let source = test_source("test-release", "unused".to_string());
         let probed = RefCell::new(Vec::new());
 
         let ranked = ranked_mirrors_by_probe(&source, TEST_MIRRORS, |url| {
-            probed.borrow_mut().push(url.to_string());
-            if url.contains("fast.example") {
-                Ok(probe(256 * 1024, 20))
-            } else if url.contains("slow.example") {
-                Ok(probe(256 * 1024, 200))
-            } else {
-                Err(Error::Download(io::Error::new(
-                    ErrorKind::TimedOut,
-                    "probe timed out",
-                )))
-            }
-        });
+            ready({
+                probed.borrow_mut().push(url.to_string());
+                if url.contains("fast.example") {
+                    Ok(probe(256 * 1024, 20))
+                } else if url.contains("slow.example") {
+                    Ok(probe(256 * 1024, 200))
+                } else {
+                    Err(Error::Download(io::Error::new(
+                        ErrorKind::TimedOut,
+                        "probe timed out",
+                    )))
+                }
+            })
+        })
+        .await;
 
         assert_eq!(probed.borrow().len(), TEST_MIRRORS.len());
         assert_eq!(
@@ -556,8 +583,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn fastest_download_failure_falls_back_to_slower_success() {
+    #[tokio::test]
+    async fn fastest_download_failure_falls_back_to_slower_success() {
         let temp = TempDir::new().unwrap();
         let archive = test_tar_xz("test-release", "x64/code.fd", b"firmware");
         let source = test_source("test-release", sha256_hex(&archive));
@@ -568,28 +595,33 @@ mod tests {
             temp.path(),
             TEST_MIRRORS,
             |url| {
-                if url.contains("fast.example") {
-                    Ok(probe(256 * 1024, 10))
-                } else if url.contains("slow.example") {
-                    Ok(probe(256 * 1024, 100))
-                } else {
-                    Ok(probe(256 * 1024, 200))
-                }
+                ready({
+                    if url.contains("fast.example") {
+                        Ok(probe(256 * 1024, 10))
+                    } else if url.contains("slow.example") {
+                        Ok(probe(256 * 1024, 100))
+                    } else {
+                        Ok(probe(256 * 1024, 200))
+                    }
+                })
             },
             |url| {
-                downloads.borrow_mut().push(url.to_string());
-                if url.contains("fast.example") {
-                    Err(Error::Download(io::Error::new(
-                        ErrorKind::ConnectionReset,
-                        "fast mirror reset",
-                    )))
-                } else if url.contains("slow.example") {
-                    Ok(archive.clone())
-                } else {
-                    panic!("backup mirror should not be downloaded after slow succeeds");
-                }
+                ready({
+                    downloads.borrow_mut().push(url.to_string());
+                    if url.contains("fast.example") {
+                        Err(Error::Download(io::Error::new(
+                            ErrorKind::ConnectionReset,
+                            "fast mirror reset",
+                        )))
+                    } else if url.contains("slow.example") {
+                        Ok(archive.clone())
+                    } else {
+                        panic!("backup mirror should not be downloaded after slow succeeds");
+                    }
+                })
             },
         )
+        .await
         .unwrap();
 
         let downloads = downloads.borrow();
@@ -606,8 +638,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn failed_mirrors_preserve_existing_cache_until_a_valid_download_is_ready() {
+    #[tokio::test]
+    async fn failed_mirrors_preserve_existing_cache_until_a_valid_download_is_ready() {
         let temp = TempDir::new().unwrap();
         fs::create_dir_all(temp.path().join("x64")).unwrap();
         fs::write(temp.path().join("x64/code.fd"), b"old firmware").unwrap();
@@ -620,15 +652,18 @@ mod tests {
             source,
             temp.path(),
             &TEST_MIRRORS[..2],
-            |_| Ok(probe(256 * 1024, 10)),
+            |_| ready(Ok(probe(256 * 1024, 10))),
             |url| {
-                if url.contains("fast.example") {
-                    Ok(b"wrong hash".to_vec())
-                } else {
-                    Ok(b"not xz data".to_vec())
-                }
+                ready({
+                    if url.contains("fast.example") {
+                        Ok(b"wrong hash".to_vec())
+                    } else {
+                        Ok(b"not xz data".to_vec())
+                    }
+                })
             },
         )
+        .await
         .unwrap_err();
 
         let Error::AllMirrorsFailed { attempts } = err else {
@@ -647,8 +682,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn all_download_failures_report_each_mirror() {
+    #[tokio::test]
+    async fn all_download_failures_report_each_mirror() {
         let temp = TempDir::new().unwrap();
         let source = test_source("test-release", "expected-hash".to_string());
 
@@ -657,18 +692,23 @@ mod tests {
             temp.path(),
             &TEST_MIRRORS[..2],
             |_| {
-                Err(Error::Download(io::Error::new(
-                    ErrorKind::TimedOut,
-                    "probe",
-                )))
+                ready({
+                    Err(Error::Download(io::Error::new(
+                        ErrorKind::TimedOut,
+                        "probe",
+                    )))
+                })
             },
             |url| {
-                Err(Error::Download(io::Error::new(
-                    ErrorKind::TimedOut,
-                    format!("download timed out at {url}"),
-                )))
+                ready({
+                    Err(Error::Download(io::Error::new(
+                        ErrorKind::TimedOut,
+                        format!("download timed out at {url}"),
+                    )))
+                })
             },
         )
+        .await
         .unwrap_err();
 
         let Error::AllMirrorsFailed { attempts } = err else {

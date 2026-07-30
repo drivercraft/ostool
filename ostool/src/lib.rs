@@ -34,7 +34,6 @@
 
 mod artifact;
 mod boot;
-mod http_client;
 
 /// Authentication gateway client, secure credential storage, and token lifecycle management.
 pub mod auth;

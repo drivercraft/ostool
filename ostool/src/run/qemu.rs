@@ -619,6 +619,7 @@ impl QemuRunner {
 
         println!("Preparing OVMF firmware for architecture: {arch:?}");
         let prebuilt = Prebuilt::fetch(Source::LATEST, &bios_dir)
+            .await
             .with_context(|| format!("failed to prepare OVMF cache: {}", bios_dir.display()))?;
         let arch = match arch {
             Architecture::X86_64 => Arch::X64,

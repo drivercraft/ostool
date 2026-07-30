@@ -50,7 +50,7 @@ pub struct AuthClient {
 impl AuthClient {
     pub fn new(endpoint: BoardEndpoint) -> anyhow::Result<Self> {
         Ok(Self {
-            client: crate::http_client::builder()
+            client: reqwest::Client::builder()
                 .no_proxy()
                 // Authentication responses must never be redirected to a host that
                 // did not receive the original Device Authorization request.

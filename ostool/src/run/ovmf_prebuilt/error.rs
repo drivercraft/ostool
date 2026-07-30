@@ -46,7 +46,7 @@ pub enum Error {
 
     /// Remote request failed.
     #[error("remote request failed")]
-    Request(#[source] Box<ureq::Error>),
+    Request(#[source] reqwest::Error),
 
     /// Download failed.
     #[error("download failed")]

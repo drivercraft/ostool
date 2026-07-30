@@ -46,10 +46,9 @@ reqwest = { version = "0.13", default-features = false, features = [
     "form",
     "http2",
     "json",
-    "rustls-no-provider",
+    "rustls",
     "system-proxy",
 ] }
-rustls = { workspace = true }
 schemars = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -66,7 +65,6 @@ regex = "1"
 sha2 = "0.11"
 tar = "0.4"
 thiserror = { workspace = true }
-ureq = { version = "3.0", default-features = false, features = ["gzip", "rustls"] }
 chrono = { version = "0.4.44", features = ["serde"] }
 fs4 = "1.1"
 keyring = "4.1"

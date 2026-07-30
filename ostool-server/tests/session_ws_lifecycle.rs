@@ -415,8 +415,8 @@ async fn wait_for_server_ready(base_url: &str) -> Result<()> {
     }
 }
 
-// Keep REST setup and assertions in-process. A reqwest dev-dependency would inherit ostool's
-// rustls-no-provider feature during workspace builds and make this LAN-only test require TLS setup.
+// Exercise REST setup and assertions directly through the router; the listener is only needed for
+// the WebSocket lifecycle under test.
 async fn create_session(app: &Router) -> Result<SessionCreatedResponse> {
     let request = serde_json::json!({
         "board_type": TEST_BOARD_TYPE,
