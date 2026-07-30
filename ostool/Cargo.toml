@@ -62,7 +62,7 @@ ureq = "3.0"
 chrono = { version = "0.4.44", features = ["serde"] }
 fs4 = "1.1"
 keyring = "4.1"
-tokio-tungstenite = "0.28"
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
 tokio-serial = "5.4"
 
 [dev-dependencies]
