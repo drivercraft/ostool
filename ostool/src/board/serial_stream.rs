@@ -245,7 +245,26 @@ mod tests {
 
     use tokio::{sync::Notify, task::JoinHandle};
 
-    use super::{SerialStreamTasks, websocket_request, write_bridge_bytes};
+    use super::{SerialStreamTasks, connect_serial_stream, websocket_request, write_bridge_bytes};
+
+    #[tokio::test]
+    async fn secure_websocket_support_is_enabled() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            drop(socket);
+        });
+
+        let url = reqwest::Url::parse(&format!("wss://{address}/serial")).unwrap();
+        let result = connect_serial_stream(url, None).await;
+        server.await.unwrap();
+
+        let error = result
+            .err()
+            .expect("dummy TLS server should reject the client");
+        assert!(!format!("{error:#}").contains("TLS support not compiled in"));
+    }
 
     #[tokio::test]
     async fn shutdown_waits_for_writer_before_reader() {

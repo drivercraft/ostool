@@ -89,10 +89,10 @@ impl Prebuilt {
     /// the release tarballs on Github.
     ///
     /// [`source.sha256`]: Source::sha256
-    pub fn fetch<P: AsRef<Path>>(source: Source, prebuilt_dir: P) -> Result<Self, Error> {
+    pub async fn fetch<P: AsRef<Path>>(source: Source, prebuilt_dir: P) -> Result<Self, Error> {
         let prebuilt_dir = prebuilt_dir.as_ref();
 
-        update_cache(source, prebuilt_dir)?;
+        update_cache(source, prebuilt_dir).await?;
 
         Ok(Self {
             dir: prebuilt_dir.to_owned(),
