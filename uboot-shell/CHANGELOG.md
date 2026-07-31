@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Detect U-Boot prompts printed on the line after the interrupt marker.
+
 ## [0.2.6](https://github.com/drivercraft/ostool/compare/uboot-shell-v0.2.5...uboot-shell-v0.2.6) - 2026-06-25
 
 ### Fixed

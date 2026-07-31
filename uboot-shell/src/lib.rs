@@ -110,25 +110,44 @@ impl UbootShell {
         Ok(interrupt_line)
     }
 
-    async fn clear_shell(&mut self) -> Result<()> {
+    async fn read_until_idle(&mut self) -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
         loop {
             match self
                 .read_byte_with_timeout(Duration::from_millis(300))
                 .await
             {
-                Ok(_) => {}
-                Err(err) if err.kind() == ErrorKind::TimedOut => return Ok(()),
+                Ok(byte) => bytes.push(byte),
+                Err(err) if err.kind() == ErrorKind::TimedOut => return Ok(bytes),
                 Err(err) => return Err(err),
             }
         }
+    }
+
+    async fn clear_shell(&mut self) -> Result<()> {
+        self.read_until_idle().await.map(|_| ())
     }
 
     async fn wait_for_shell(&mut self) -> Result<()> {
         let mut line = self.wait_for_interrupt().await?;
         debug!("got {}", String::from_utf8_lossy(&line));
         line.resize(line.len().saturating_sub(INT.len()), 0);
-        self.perfix = String::from_utf8_lossy(&line).to_string();
-        self.clear_shell().await?;
+        if line.is_empty() {
+            let prompt = self.read_until_idle().await?;
+            let prompt = String::from_utf8_lossy(&prompt);
+            self.perfix = prompt
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or_default()
+                .to_string();
+            if self.perfix.is_empty() {
+                return Err(Error::new(ErrorKind::InvalidData, "U-Boot prompt is empty"));
+            }
+        } else {
+            self.perfix = String::from_utf8_lossy(&line).to_string();
+            self.clear_shell().await?;
+        }
         Ok(())
     }
 
@@ -431,6 +450,103 @@ mod tests {
         fs,
         sync::{Arc, Mutex},
     };
+
+    #[derive(Clone)]
+    struct InterruptTx {
+        response: Arc<Mutex<VecDeque<u8>>>,
+        interrupt_output: &'static [u8],
+    }
+
+    impl AsyncWrite for InterruptTx {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<Result<usize>> {
+            if buf == [CTRL_C] {
+                self.response.lock().unwrap().extend(self.interrupt_output);
+            }
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    struct InterruptRx {
+        response: Arc<Mutex<VecDeque<u8>>>,
+    }
+
+    impl AsyncRead for InterruptRx {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut [u8],
+        ) -> Poll<Result<usize>> {
+            let mut response = self.response.lock().unwrap();
+            if response.is_empty() {
+                return Poll::Pending;
+            }
+            let count = buf.len().min(response.len());
+            for slot in &mut buf[..count] {
+                *slot = response.pop_front().unwrap();
+            }
+            Poll::Ready(Ok(count))
+        }
+    }
+
+    #[tokio::test]
+    async fn detects_prompt_printed_before_interrupt_marker() -> Result<()> {
+        let response = Arc::new(Mutex::new(VecDeque::new()));
+        let shell = UbootShell::new(
+            InterruptTx {
+                response: response.clone(),
+                interrupt_output: b"=> <INTERRUPT>\n=> ",
+            },
+            InterruptRx { response },
+        )
+        .await?;
+
+        assert_eq!(shell.perfix, "=> ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn detects_prompt_printed_after_interrupt_line() -> Result<()> {
+        let response = Arc::new(Mutex::new(VecDeque::new()));
+        let shell = UbootShell::new(
+            InterruptTx {
+                response: response.clone(),
+                interrupt_output: b"<INTERRUPT>\n=> ",
+            },
+            InterruptRx { response },
+        )
+        .await?;
+
+        assert_eq!(shell.perfix, "=> ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn detects_prompt_after_repeated_interrupt_output() -> Result<()> {
+        let response = Arc::new(Mutex::new(VecDeque::new()));
+        let shell = UbootShell::new(
+            InterruptTx {
+                response: response.clone(),
+                interrupt_output: b"<INTERRUPT>\n=> <INTERRUPT>\n=> ",
+            },
+            InterruptRx { response },
+        )
+        .await?;
+
+        assert_eq!(shell.perfix, "=> ");
+        Ok(())
+    }
 
     #[derive(Default)]
     struct LoadyScript {
