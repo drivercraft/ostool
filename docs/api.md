@@ -7,9 +7,11 @@
 
 本文同时记录上述两类后端使用的接口契约，并不表示单个后端实现文中的全部接口。`ostool` CLI 只调用 OAuth、Board REST 和串口 WebSocket；`/api/v1/admin/...` 及管理后台属于 `ostool-server`，供本地管理使用。
 
-服务地址来自全局或项目配置中的 `board.server`（完整 URL），可被命令行 `--server` 覆盖；可选的 `board.port` 或 `--port` 用于覆盖 URL 中的端口。`auth_mode = "disabled"` 时该地址指向局域网 `ostool-server`；`auth_mode = "required"` 时该地址指向认证后端，OAuth 和受认证的 Board API 共用这个 Base URL。为兼容旧的局域网配置，`board.server` 为裸 IPv4 或 IPv6 地址时客户端自动补为 `http://`。基线版本写出的 `board.server_ip` / `board.port` 也会在读取时迁移为 `board.server` / `board.port`，下一次保存配置时只写新格式；无 scheme 的主机名不支持。
+服务地址来自全局或项目配置中的 `board.server`（完整 URL，可包含路径前缀），可被命令行 `--server` 覆盖；可选的 `board.port` 或 `--port` 用于覆盖 URL 中的端口。`auth_mode = "disabled"` 时该地址指向局域网 `ostool-server`；`auth_mode = "required"` 时该地址指向认证后端，OAuth 和受认证的 Board API 共用这个 Base URL。为兼容旧的局域网配置，`board.server` 为裸 IPv4 或 IPv6 地址时客户端自动补为 `http://`。基线版本写出的 `board.server_ip` / `board.port` 也会在读取时迁移为 `board.server` / `board.port`，下一次保存配置时只写新格式；无 scheme 的主机名不支持。
 
-- `auth_mode = "required"` 时，`board.server` 必须使用 HTTPS，所有请求携带下文描述的 Bearer Token；
+客户端会先把 Base URL 规范化为以 `/` 结尾，再将 HTTP 和 OAuth 接口路径追加到该路径。本文为简洁起见把接口写成 `/api/...` 或 `/oauth/...`；这些是相对于 Base URL 的接口标识，不表示实际请求必须位于域名根目录。例如 Base URL 为 `https://board.example.com/webapp/ostoolmanagephp/` 时，创建会话的实际 URL 是 `https://board.example.com/webapp/ostoolmanagephp/api/v1/sessions`。
+
+- `auth_mode = "required"` 时，`board.server` 必须使用 HTTPS，Board REST 请求和串口 WebSocket 握手携带下文描述的 Bearer Token；OAuth Device Authorization、Token 和撤销请求不携带该 Header；
 - `auth_mode = "disabled"`（默认）时通常使用 HTTP，不会发送认证 Header，适合局域网直连 `ostool-server`。
 
 ## 通用认证规则
@@ -26,7 +28,7 @@ Access Token 选择规则：
 2. 否则读取当前 endpoint 保存的一条本地凭据：PAT 直接使用，OAuth Access Token 剩余有效期超过 60 秒时直接使用；
 3. OAuth Access Token 剩余有效期不超过 60 秒时，使用保存的 Refresh Token 刷新后再发送请求。
 
-HTTP 客户端不跟随重定向。认证模式下，绝对 WebSocket URL 必须与 Base URL 使用相同的 scheme、host 和有效端口。
+HTTP 客户端不跟随重定向。认证模式下，绝对 WebSocket URL 必须使用 Base URL 对应的 WebSocket scheme（HTTP 对应 `ws`，HTTPS 对应 `wss`），并与 Base URL 使用相同的 host 和有效端口。
 
 ## 命令索引
 
@@ -297,7 +299,7 @@ Content-Type: application/json
   ```
 
 - `boot.kind` 可为上例的 `uboot`、`{"kind":"pxe","notes":null}`，或 `{"kind":"httpboot","boot_arch":"aarch64"}`。`boot_arch` 可为 `x86_64`、`aarch64`、`loongarch64`、`riscv64` 或 `other`。
-- U-Boot `network_mode` 可为 `dhcp` 或 `static_ip`。未启用 TFTP 或使用 DHCP 时服务端清除静态网络字段；使用 `static_ip` 时 `board_ip` 必填，所有已提供的网络字段必须是 IPv4 地址。`dtb_name` 必须引用合法的单层 DTB 文件名。
+- U-Boot `network_mode` 可为 `dhcp` 或 `static_ip`。未启用 TFTP 或使用 DHCP 时服务端清除静态网络字段；使用 `static_ip` 时 `board_ip` 必填，所有已提供的网络字段必须是 IPv4 地址。`dtb_name` 必须符合单层 DTB 文件名格式，但创建或更新开发板时不会检查对应文件是否已经上传。
 
 创建成功返回 `201 Created` 和规范化后的 `BoardConfig`；更新成功返回 `200 OK`。删除请求没有请求体，成功返回 `204 No Content`：
 
@@ -318,10 +320,10 @@ GET /api/v1/admin/boards/{board_id}/runtime-status
 
 ```json
 {
-  "available": true,
-  "powered": false,
-  "last_action": "power_off",
-  "updated_at": "2026-07-30T06:00:00Z"
+  "available": false,
+  "powered": null,
+  "last_action": null,
+  "updated_at": null
 }
 ```
 
@@ -334,7 +336,7 @@ GET /api/v1/admin/boards/{board_id}/runtime-status
 }
 ```
 
-`powered`、`last_action` 和对应的 `updated_at` 在未知时为 `null`；`last_action` 可为 `power_on` 或 `power_off`。`lease_state` 可为 `idle`、`using`、`releasing` 或 `error`。
+当前 `ostool-server` 只用该接口确认开发板是否存在，尚未维护可查询的实时电源状态，因此对存在的开发板固定返回 `available: false`，其余三个字段为 `null`。响应模型为后续电源状态后端预留了 `powered`、`last_action` 和 `updated_at`；实现这些字段后，`last_action` 可为 `power_on` 或 `power_off`。`lease_state` 可为 `idle`、`using`、`releasing` 或 `error`。
 
 硬件发现接口读取服务器当前可见的串口和网络接口：
 
@@ -555,7 +557,7 @@ Content-Type: application/json
 
 ## Board REST API
 
-本节定义两种后端共用的开发板服务契约：本地局域网模式由 `ostool-server` 直接提供，认证模式由独立认证后端提供受认证的对应接口。这里覆盖 `ostool-server` 的全部公开、非管理 REST 接口；`ostool` 当前命令直接调用其中的大部分接口，电源控制、HTTP Boot 普通文件上传及会话查询/文件管理端点虽未由当前命令路径调用，仍是 `BoardServerClient` 或公开 board 服务契约的一部分。
+本节定义两种后端共用的开发板服务契约：本地局域网模式由 `ostool-server` 直接提供，认证模式由独立认证后端提供受认证的对应接口。这里覆盖 `ostool-server` 的全部公开、非管理 REST 接口。`ostool` 当前命令会使用会话文件上传，但不会直接调用会话详情、会话文件列表/查询/删除、显式电源控制和普通 HTTP Boot 文件上传；后者仍属于公开 board 服务契约，其中显式电源控制和普通 HTTP Boot 文件上传也已有 `BoardServerClient` 方法。
 
 ### 查询开发板类型
 
@@ -599,14 +601,20 @@ Content-Type: application/json
 {
   "session_id": "...",
   "board_id": "rk3568-01",
-  "lease_expires_at": "2026-07-20T02:00:00Z",
+  "lease_expires_at": "2026-07-20T02:00:10Z",
   "serial_available": true,
   "boot_mode": "uboot",
-  "ws_url": "/api/v1/sessions/.../serial/ws"
+  "ws_url": "api/v1/sessions/.../serial/ws"
 }
 ```
 
-指定类型不存在时返回 `404`；类型存在但没有符合条件的空闲开发板时返回 `409`。客户端会对后一种情况每秒重试一次，直到分配成功或收到其他错误。
+`ws_url` 在开发板没有串口配置时为 `null`。为兼容包含路径前缀的 Base URL，认证后端应返回不以 `/` 开头的 Base URL 相对路径，或者返回包含完整路径前缀的同源绝对 `ws://`/`wss://` URL。以 `/` 开头的值是 origin-relative URL，只适用于 API 确实部署在域名根目录的情况。
+
+`boot_mode` 可为 `uboot`、`pxe` 或 `httpboot`。
+
+当前 `ostool-server` 的固定会话 TTL 为 10 秒，每次心跳会把到期时间更新为服务端当前时间之后 10 秒；`ostool` 在成功创建会话后每秒发送一次心跳。独立认证后端可以采用不同 TTL，但必须返回真实的 `lease_expires_at` 并在心跳时续租。
+
+指定类型不存在时返回 `404`；类型存在但没有符合条件的空闲开发板时返回 `409`。只有结构化错误中的 `code` 恰好为 `conflict`，且 `message` 与服务端生成的 `no available board for type …` 完全匹配时，当前客户端才会每秒重试；其他 `409` 会直接返回给调用者。
 
 ### 查询会话详情
 
@@ -624,7 +632,7 @@ GET /api/v1/sessions/{session_id}
     "client_name": "ostool",
     "created_at": "2026-07-20T02:00:00Z",
     "last_heartbeat_at": "2026-07-20T02:00:01Z",
-    "expires_at": "2026-07-20T02:01:01Z",
+    "expires_at": "2026-07-20T02:00:11Z",
     "serial_connected": false,
     "state": "active"
   },
@@ -669,16 +677,16 @@ POST /api/v1/sessions/{session_id}/heartbeat
 DELETE /api/v1/sessions/{session_id}
 ```
 
-两个请求均没有请求体。心跳成功返回 `200 OK`：
+两个请求均没有请求体。心跳成功返回 `200 OK`；会话正在释放时返回 `409 Conflict`：
 
 ```json
 {
   "session_id": "...",
-  "lease_expires_at": "2026-07-20T02:00:00Z"
+  "lease_expires_at": "2026-07-20T02:00:12Z"
 }
 ```
 
-删除成功时服务端返回 `202 Accepted` 且没有响应体；删除时返回 `404`，客户端也将其视为已释放。
+删除成功时服务端返回 `202 Accepted` 且没有响应体；会话不存在时返回 `404`，客户端也将其视为已释放。
 
 ### 获取启动配置
 
@@ -710,7 +718,7 @@ GET /api/v1/sessions/{session_id}/boot-profile
 }
 ```
 
-`boot.kind` 可为 `uboot`、`pxe` 或 `httpboot`（客户端也接受别名 `uefi_http`）。`pxe` 的对象仅含可选 `notes`；`httpboot` 的对象含可选 `boot_arch`（`x86_64`、`aarch64`、`loongarch64`、`riscv64` 或 `other`）和 `mac`。顶层 `server_ip`、`netmask`、`interface`、`http_base_url` 均可为 `null`。`server_ip` 和 `http_base_url` 使用板端可访问的网络地址，不一定等于管理网地址。
+`boot.kind` 可为 `uboot`、`pxe` 或 `httpboot`（客户端也接受别名 `uefi_http`）。`pxe` 的对象仅含可选 `notes`；`httpboot` 的对象含可选 `boot_arch`（`x86_64`、`aarch64`、`loongarch64`、`riscv64` 或 `other`）。客户端还兼容认证后端返回可选 `mac`，但当前 `ostool-server` 不序列化该字段。顶层 `server_ip`、`netmask`、`interface`、`http_base_url` 均可为 `null`。`server_ip` 和 `http_base_url` 使用板端可访问的网络地址，不一定等于管理网地址。
 
 ### 获取串口状态
 
@@ -726,11 +734,11 @@ GET /api/v1/sessions/{session_id}/serial
   "connected": false,
   "port": "/dev/ttyUSB0",
   "baud_rate": 115200,
-  "ws_url": "/api/v1/sessions/.../serial/ws"
+  "ws_url": "api/v1/sessions/.../serial/ws"
 }
 ```
 
-没有串口时，`available` 和 `connected` 为 `false`，`port`、`baud_rate`、`ws_url` 均为 `null`。
+没有串口时，`available` 和 `connected` 为 `false`，`port`、`baud_rate`、`ws_url` 均为 `null`。配置了串口但服务端无法把稳定标识解析为当前设备路径时返回 `503 Service Unavailable`。
 
 ### 获取 TFTP 状态
 
@@ -750,8 +758,8 @@ GET /api/v1/sessions/{session_id}/tftp
   "files": [
     {
       "filename": "Image",
-      "relative_path": "boot/Image",
-      "tftp_url": "tftp://192.168.1.2/boot/Image",
+      "relative_path": "ostool/sessions/.../boot/Image",
+      "tftp_url": "tftp://192.168.1.2/ostool/sessions/.../boot/Image",
       "http_url": "http://192.168.1.2:2999/share/sessions/.../boot/Image",
       "size": 1048576,
       "uploaded_at": "2026-07-20T02:00:00Z"
@@ -760,7 +768,7 @@ GET /api/v1/sessions/{session_id}/tftp
 }
 ```
 
-`provider` 可为 `builtin` 或 `system_tftpd_hpa`。`server_ip`、`netmask` 以及每个文件的 `tftp_url` 和 `http_url` 可为 `null`。`available` 表示 TFTP 已启用、健康、可写且能解析服务端 IP。
+`provider` 可为 `builtin` 或 `system_tftpd_hpa`。`server_ip`、`netmask` 以及每个文件的 `tftp_url` 和 `http_url` 可为 `null`。`available` 表示 TFTP 已启用、健康、可写且能解析服务端 IP。文件响应中的 `relative_path` 是相对于 TFTP 根目录的存储路径，包含 `ostool/sessions/{session_id}/`；它不是上传时 `X-File-Path` 使用的会话内相对路径。
 
 ### 获取和下载预置 DTB
 
@@ -774,13 +782,13 @@ GET /api/v1/sessions/{session_id}/dtb/download
 ```json
 {
   "dtb_name": "board.dtb",
-  "relative_path": "boot/dtb/board.dtb",
+  "relative_path": "ostool/sessions/.../boot/dtb/board.dtb",
   "session_file_path": "boot/dtb/board.dtb",
-  "tftp_url": "tftp://192.168.1.2/boot/dtb/board.dtb"
+  "tftp_url": "tftp://192.168.1.2/ostool/sessions/.../boot/dtb/board.dtb"
 }
 ```
 
-没有预置 DTB 时上述四个字段均为 `null`。下载接口没有请求体，成功返回 `200 OK`、`Content-Type: application/octet-stream` 和 DTB 原始字节；未配置预置 DTB 或文件不存在时返回 `404`。
+`relative_path` 是相对于 TFTP 根目录的完整存储路径，`session_file_path` 才是会话内路径。没有预置 DTB 时上述四个字段均为 `null`。下载接口没有请求体，成功返回 `200 OK`、`Content-Type: application/octet-stream` 和 DTB 原始字节；未配置预置 DTB 或文件不存在时返回 `404`。
 
 ### 开关机
 
@@ -809,20 +817,20 @@ X-File-Path: <relative_path>
 <raw file bytes>
 ```
 
-`X-File-Path` 必填，必须是相对路径；请求体是文件原始字节。请求体大小受服务器配置 `upload_limits.session_file_max_mib` 限制，超限返回 `413 Payload Too Large`。成功返回 `201 Created`：
+`X-File-Path` 必填，必须是相对于会话根目录的文件路径；绝对路径、`.`/`..` 段以及以 `/` 结尾的路径会被拒绝。请求体是文件原始字节，同一路径再次上传会覆盖原文件。请求体大小受服务器配置 `upload_limits.session_file_max_mib` 限制，超限返回 `413 Payload Too Large`。成功返回 `201 Created`：
 
 ```json
 {
   "filename": "Image",
-  "relative_path": "boot/Image",
-  "tftp_url": "tftp://192.168.1.2/boot/Image",
+  "relative_path": "ostool/sessions/.../boot/Image",
+  "tftp_url": "tftp://192.168.1.2/ostool/sessions/.../boot/Image",
   "http_url": "http://192.168.1.2:2999/share/sessions/.../boot/Image",
   "size": 1048576,
   "uploaded_at": "2026-07-20T02:00:00Z"
 }
 ```
 
-`tftp_url` 和 `http_url` 均可为 `null`；能够解析板端可访问的服务地址时，`http_url` 使用该地址。会话文件 HTTP 共享不依赖 TFTP 是否启用。
+响应中的 `relative_path` 是包含 `ostool/sessions/{session_id}/` 的 TFTP 根目录相对路径；上传和后续查询、删除时仍使用会话内路径 `boot/Image`。`tftp_url` 和 `http_url` 均可为 `null`；能够解析板端可访问的服务地址时，`http_url` 使用该地址。会话文件 HTTP 共享不依赖 TFTP 是否启用。
 
 ### 列出、查询和删除会话文件
 
@@ -832,7 +840,7 @@ GET /api/v1/sessions/{session_id}/files/{path}
 DELETE /api/v1/sessions/{session_id}/files/{path}
 ```
 
-三个请求均没有请求体。前两个请求成功返回 `200 OK`：列表接口返回文件对象数组，单文件接口返回一个文件对象，格式与上传会话文件的成功响应相同。删除成功返回 `204 No Content`。`path` 必须是相对路径。
+三个请求均没有请求体。前两个请求成功返回 `200 OK`：列表接口返回文件对象数组，单文件接口返回一个文件对象，格式与上传会话文件的成功响应相同。删除成功返回 `204 No Content`，文件不存在时删除同样按成功处理。URL 中的 `path` 必须是会话内相对路径，不应使用响应里的完整 `relative_path`。
 
 历史上传路径 `PUT /api/v1/sessions/{session_id}/files/{path}` 被明确拒绝并返回 `404`；上传必须使用前述 `PUT /files` 加 `X-File-Path` Header 的形式。
 
@@ -843,7 +851,7 @@ GET /share/sessions/{session_id}/{relative_path}
 Range: bytes=<start>-<end>  # 可选
 ```
 
-该端点适用于所有 boot mode，与 TFTP 和 HTTP Boot 开关无关。无 Range 时返回 `200 OK` 和完整文件；合法单段 Range 返回 `206 Partial Content`。URL 仅在 session 活动期间有效，session 释放、超时或进入 releasing 状态后返回 `404`，对应文件随 session 清理。
+该端点适用于所有 boot mode，与 TFTP 和 HTTP Boot 开关无关。无 Range 时返回 `200 OK` 和完整文件；合法单段 Range 返回 `206 Partial Content`。与 HTTP Boot 下载相同，当前实现会忽略不合法或不支持的 Range 并返回完整的 `200 OK` 响应，而不是返回 `416`。响应的 `Content-Type` 根据文件名推断。URL 仅在 session 活动期间有效，session 释放、超时或进入 releasing 状态后返回 `404`，对应文件随 session 清理。
 
 ### 上传 HTTP Boot 文件
 
@@ -854,17 +862,19 @@ X-File-Path: <relative_path>
 <raw file bytes>
 ```
 
-`X-File-Path` 必填，请求体是文件原始字节。请求体大小受服务器配置 `upload_limits.session_file_max_mib` 限制，超限返回 `413 Payload Too Large`。成功返回 `201 Created`：
+`X-File-Path` 必填并遵循会话文件上传的相对路径规则，请求体是文件原始字节。该接口仅接受 `boot.kind = "httpboot"` 的活动会话，并要求服务端启用 HTTP Boot；其他 boot mode 返回 `400 Bad Request`，HTTP Boot 被禁用时返回 `409 Conflict`。请求体大小受服务器配置 `upload_limits.session_file_max_mib` 限制，超限返回 `413 Payload Too Large`。成功返回 `201 Created`：
 
 ```json
 {
   "filename": "kernel.elf",
-  "relative_path": "kernel.elf",
+  "relative_path": "ostool/sessions/.../kernel.elf",
   "http_url": "https://board.example.com/boot/sessions/.../kernel.elf",
   "size": 1048576,
   "uploaded_at": "2026-07-20T02:00:00Z"
 }
 ```
+
+响应中的 `relative_path` 同样是包含 `ostool/sessions/{session_id}/` 的存储路径，而不是后续下载 URL 使用的会话内路径。
 
 ### 下载 HTTP Boot 文件
 
@@ -873,21 +883,21 @@ GET /boot/sessions/{session_id}/{path}
 Range: bytes=<start>-<end>  # 可选
 ```
 
-该接口供目标机 HTTP Boot 下载已上传文件，请求没有消息体。无 Range 时成功返回 `200 OK` 和文件原始字节；带合法单段 Range 时返回 `206 Partial Content`，并包含 `Content-Range`、`Content-Length`、`Accept-Ranges: bytes`。响应的 `Content-Type` 根据文件名推断。`path` 必须是相对路径。
+该接口供目标机 HTTP Boot 下载已上传文件，请求没有消息体，仅适用于 `boot.kind = "httpboot"` 的活动会话且要求服务端启用 HTTP Boot；其他 boot mode 返回 `400 Bad Request`，HTTP Boot 被禁用时返回 `404 Not Found`。无 Range 时成功返回 `200 OK` 和文件原始字节；带合法单段 Range 时返回 `206 Partial Content`，并包含 `Content-Range`、`Content-Length`、`Accept-Ranges: bytes`。当前实现对不合法或不支持的 Range 不返回 `416`，而是忽略 Range 并返回完整的 `200 OK` 响应。响应的 `Content-Type` 根据文件名推断。`path` 必须是会话内相对路径。会话进入 `releasing` 时返回 `409 Conflict`，会话被移除后返回 `404 Not Found`。
 
 ### 上传 HTTP Boot 内核
 
 ```http
 PUT /api/v1/sessions/{session_id}/http-boot/kernel
 X-HttpBoot-Remote-Name: <remote_name>        # 可选，默认 kernel.elf
-X-HttpBoot-Arch: <arch>                       # 必填：x86_64、aarch64、loongarch64、riscv64 或 other
-X-HttpBoot-Image-Format: <image_format>       # 可选，当前仅支持 elf64
-X-HttpBoot-Entry-Symbol: <entry_symbol>  # 可选
+X-HttpBoot-Arch: <arch>                      # 必填：x86_64、aarch64、loongarch64、riscv64 或 other
+X-HttpBoot-Image-Format: <image_format>      # 可选，当前仅支持 elf64
+X-HttpBoot-Entry-Symbol: <entry_symbol>      # 可选
 
 <raw kernel bytes>
 ```
 
-请求体是内核原始字节，大小受服务器配置 `upload_limits.session_file_max_mib` 限制，超限返回 `413 Payload Too Large`。成功返回 `201 Created`：
+该接口与普通 HTTP Boot 文件上传具有相同的会话类型和服务开关限制。`X-HttpBoot-Remote-Name` 也必须是合法的会话内相对路径。请求体是内核原始字节，大小受服务器配置 `upload_limits.session_file_max_mib` 限制，超限返回 `413 Payload Too Large`。成功返回 `201 Created`：
 
 ```json
 {
@@ -898,11 +908,19 @@ X-HttpBoot-Entry-Symbol: <entry_symbol>  # 可选
 }
 ```
 
-`kernel_sha256` 可为 `null`。当前 `ostool board run` 的 HTTP Boot 流程固定发送 `remote_name=kernel.elf`、`image_format=elf64` 和 `entry_symbol=httpboot_entry`。
+响应模型允许 `kernel_sha256` 为 `null`，但当前 `ostool-server` 会计算并返回 64 位小写十六进制 SHA-256。当前 `ostool board run` 的 HTTP Boot 流程固定发送 `remote_name=kernel.elf`、`image_format=elf64` 和 `entry_symbol=httpboot_entry`。
 
 ## 串口 WebSocket API
 
-会话创建或串口状态响应中的 `ws_url` 用于建立串口连接。客户端先将 HTTP/HTTPS Base URL 的 scheme 分别转换为 `ws`/`wss`，再解析 `ws_url`：完整的 `ws://` 或 `wss://` 地址直接使用；以 `/` 开头的地址从当前 origin 的根路径解析，会丢弃 Base URL 中的路径前缀；不以 `/` 开头的相对地址追加到 Base URL 路径。认证模式下，服务端返回的完整 WebSocket URL 必须与 Base URL 使用相同的 scheme、host 和有效端口。
+会话创建或串口状态响应中的 `ws_url` 用于建立串口连接。客户端先将 HTTP/HTTPS Base URL 的 scheme 分别转换为 `ws`/`wss`，再按标准 URL 规则解析 `ws_url`：
+
+- `ws://` 或 `wss://` 绝对 URL 直接使用；认证模式下必须使用对应的 WebSocket scheme，并与 Base URL 使用相同的 host 和有效端口；
+- 不以 `/` 开头的相对路径追加到 Base URL 路径，这是支持带路径前缀部署时应使用的格式；
+- 以 `/` 开头的路径从当前 origin 根目录解析并丢弃 Base URL 路径前缀，只能在 API 部署于域名根目录时使用。
+
+例如 Base URL 为 `https://www.iamhack.com/webapp/ostoolmanagephp/`，服务端返回 `"api/v1/sessions/.../serial/ws"` 时，客户端连接 `wss://www.iamhack.com/webapp/ostoolmanagephp/api/v1/sessions/.../serial/ws`。
+
+当前 `ostool-server` 的响应代码生成 `/api/v1/sessions/.../serial/ws`。这个值只在服务位于 origin 根目录时能保持正确；如果认证后端或反向代理把 API 挂载到路径前缀下，不能原样透传它，必须改为 Base URL 相对路径或带完整前缀的同源绝对 URL。
 
 ```http
 GET /api/v1/sessions/{session_id}/serial/ws
@@ -958,6 +976,6 @@ Board REST 和 Management API 业务处理器产生的错误使用以下格式�
 }
 ```
 
-`details` 是可选 JSON 值，当前服务端通常返回 `null`。常见 `code` 包括 `bad_request`、`payload_too_large`、`not_found`、`conflict`、`service_unavailable` 和 `internal_server_error`。请求在进入业务处理器前由 Axum 拒绝时不保证使用此结构，例如无法反序列化 JSON 请求体时可能直接返回 `422 Unprocessable Entity`；WebSocket Upgrade 提取失败时也使用框架自身的错误响应。
+`details` 是预留 JSON 字段，当前 `ostool-server` 的 `ApiError` 固定返回 `null`。常见 `code` 包括 `bad_request`、`payload_too_large`、`not_found`、`conflict`、`service_unavailable` 和 `internal_server_error`。请求在进入业务处理器前由 Axum 拒绝时不保证使用此结构，例如无法反序列化 JSON 请求体时可能直接返回 `422 Unprocessable Entity`；WebSocket Upgrade 提取失败时也使用框架自身的错误响应。
 
-`ostool` 客户端只使用 Board API 错误中的 `code` 和 `message`。任一 Board API 返回 `401 Unauthorized` 时，客户端删除当前 endpoint 的本地凭据；不会自动刷新并重试该业务请求。Management API 本身当前不会生成认证类错误，反向代理增加的认证错误也不保证使用上述 JSON 格式。
+`ostool` 客户端只使用 Board REST API 错误中的 `code` 和 `message`。任一 Board REST 请求返回 `401 Unauthorized` 时，客户端删除当前 endpoint 的本地凭据；不会自动刷新并重试该业务请求。WebSocket 握手返回 `401` 时当前不会触发该凭据清理逻辑。Management API 本身当前不会生成认证类错误，反向代理增加的认证错误也不保证使用上述 JSON 格式。
