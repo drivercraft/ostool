@@ -24,6 +24,10 @@ const RELEASE_RETRY_ATTEMPTS: usize = 3;
 const RELEASE_RETRY_DELAY: Duration = Duration::from_millis(200);
 const RELEASE_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 const RELEASE_COMPLETION_TIMEOUT: Duration = Duration::from_secs(12);
+#[cfg(not(test))]
+const RELEASE_RECOVERY_RETRY_DELAY: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const RELEASE_RECOVERY_RETRY_DELAY: Duration = Duration::from_millis(100);
 const ZHONGSHENG_RELEASE_SETTLE_DELAY: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -386,7 +390,11 @@ impl AppState {
         Ok(())
     }
 
-    pub async fn mark_board_idle(&self, board_id: &str, session_id: &str) -> anyhow::Result<()> {
+    pub async fn complete_session_release(
+        &self,
+        board_id: &str,
+        session_id: &str,
+    ) -> anyhow::Result<()> {
         let mut runtimes = self.board_runtimes.write().await;
         let runtime = runtimes
             .get_mut(board_id)
@@ -396,10 +404,16 @@ impl AppState {
             anyhow::bail!("board `{board_id}` is no longer associated with session `{session_id}`");
         }
 
+        let mut sessions = self.sessions.write().await;
+        if !sessions.contains_key(session_id) {
+            anyhow::bail!("session `{session_id}` disappeared before board release completed");
+        }
+
         runtime.lease_state = BoardLeaseState::Idle;
         runtime.active_session_id = None;
         runtime.last_release_error = None;
         runtime.updated_at = Utc::now();
+        sessions.remove(session_id);
         Ok(())
     }
 
@@ -419,7 +433,6 @@ impl AppState {
         }
 
         runtime.lease_state = BoardLeaseState::Error;
-        runtime.active_session_id = None;
         runtime.last_release_error = Some(error);
         runtime.updated_at = Utc::now();
         Ok(())
@@ -433,10 +446,6 @@ impl AppState {
         self.release_tx
             .send(ReleaseJob { session, reason })
             .map_err(|_| anyhow::anyhow!("release coordinator is not running"))
-    }
-
-    pub async fn remove_session_runtime(&self, session_id: &str) {
-        self.sessions.write().await.remove(session_id);
     }
 
     async fn wait_for_session_removed(
@@ -469,64 +478,86 @@ impl AppState {
             job.reason
         );
 
-        let mut errors = Vec::new();
+        let mut session_tasks_stopped = false;
+        let mut board_powered_off = false;
+        let mut release_settled = false;
+        let mut tftp_cleaned = false;
 
-        if let Err(err) = self
-            .wait_for_session_tasks_to_stop(&session, RELEASE_WAIT_TIMEOUT)
-            .await
-        {
-            errors.push(err);
-        }
+        loop {
+            let mut errors = Vec::new();
 
-        if let Err(err) = retry_release_step(RELEASE_RETRY_ATTEMPTS, RELEASE_RETRY_DELAY, || {
-            let state = self.clone();
-            let board = board.clone();
-            async move {
-                state
-                    .execute_board_power_action(&board, PowerAction::Off)
+            if !session_tasks_stopped {
+                match self
+                    .wait_for_session_tasks_to_stop(&session, RELEASE_WAIT_TIMEOUT)
                     .await
-                    .map(|_| ())
-                    .map_err(|err| err.to_string())
+                {
+                    Ok(()) => session_tasks_stopped = true,
+                    Err(err) => errors.push(err),
+                }
             }
-        })
-        .await
-        {
-            errors.push(format!("power-off failed: {err}"));
-        }
 
-        if errors.is_empty()
-            && let Some(delay) = release_settle_delay(&board)
-        {
-            tokio::time::sleep(delay).await;
-        }
+            if !board_powered_off {
+                match retry_release_step(RELEASE_RETRY_ATTEMPTS, RELEASE_RETRY_DELAY, || {
+                    let state = self.clone();
+                    let board = board.clone();
+                    async move {
+                        state
+                            .execute_board_power_action(&board, PowerAction::Off)
+                            .await
+                            .map(|_| ())
+                            .map_err(|err| err.to_string())
+                    }
+                })
+                .await
+                {
+                    Ok(()) => board_powered_off = true,
+                    Err(err) => errors.push(format!("power-off failed: {err}")),
+                }
+            }
 
-        if let Err(err) = retry_release_step(RELEASE_RETRY_ATTEMPTS, RELEASE_RETRY_DELAY, || {
-            let manager = self.tftp_manager.clone();
-            let session_id = snapshot.id.clone();
-            async move {
-                manager
-                    .read()
+            if !release_settled && session_tasks_stopped && board_powered_off {
+                if let Some(delay) = release_settle_delay(&board) {
+                    tokio::time::sleep(delay).await;
+                }
+                release_settled = true;
+            }
+
+            if !tftp_cleaned {
+                match retry_release_step(RELEASE_RETRY_ATTEMPTS, RELEASE_RETRY_DELAY, || {
+                    let manager = self.tftp_manager.clone();
+                    let session_id = snapshot.id.clone();
+                    async move {
+                        manager
+                            .read()
+                            .await
+                            .clone()
+                            .remove_session_dir(&session_id)
+                            .await
+                            .map_err(|err| err.to_string())
+                    }
+                })
+                .await
+                {
+                    Ok(()) => tftp_cleaned = true,
+                    Err(err) => errors.push(format!("tftp cleanup failed: {err}")),
+                }
+            }
+
+            if errors.is_empty()
+                && session_tasks_stopped
+                && board_powered_off
+                && release_settled
+                && tftp_cleaned
+            {
+                match self
+                    .complete_session_release(&snapshot.board_id, &snapshot.id)
                     .await
-                    .clone()
-                    .remove_session_dir(&session_id)
-                    .await
-                    .map_err(|err| err.to_string())
+                {
+                    Ok(()) => return,
+                    Err(err) => errors.push(format!("failed to mark board idle: {err:#}")),
+                }
             }
-        })
-        .await
-        {
-            errors.push(format!("tftp cleanup failed: {err}"));
-        }
 
-        if errors.is_empty() {
-            if let Err(err) = self.mark_board_idle(&snapshot.board_id, &snapshot.id).await {
-                log::warn!(
-                    "failed to mark board `{}` idle after releasing session `{}`: {err:#}",
-                    snapshot.board_id,
-                    snapshot.id
-                );
-            }
-        } else {
             let message = errors.join("; ");
             if let Err(err) = self
                 .mark_board_error(&snapshot.board_id, &snapshot.id, message.clone())
@@ -539,13 +570,13 @@ impl AppState {
                 );
             }
             log::warn!(
-                "release for session `{}` completed with errors: {}",
+                "release for session `{}` failed and will retry in {:?}: {}",
                 snapshot.id,
+                RELEASE_RECOVERY_RETRY_DELAY,
                 message
             );
+            tokio::time::sleep(RELEASE_RECOVERY_RETRY_DELAY).await;
         }
-
-        self.remove_session_runtime(&snapshot.id).await;
     }
 
     async fn wait_for_session_tasks_to_stop(
@@ -601,7 +632,15 @@ pub enum TouchSessionError {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path, sync::Arc, time::Duration};
+    use std::{
+        fs,
+        path::Path,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
 
     use async_trait::async_trait;
     #[cfg(unix)]
@@ -616,7 +655,7 @@ mod tests {
     };
 
     use super::{
-        BoardLeaseState, RELEASE_COMPLETION_TIMEOUT, TouchSessionError,
+        BoardLeaseState, RELEASE_COMPLETION_TIMEOUT, RELEASE_RETRY_ATTEMPTS, TouchSessionError,
         ZHONGSHENG_RELEASE_SETTLE_DELAY, build_app_state, release_settle_delay,
     };
     use crate::{
@@ -733,6 +772,7 @@ mod tests {
 
     struct FailingRemoveTftpManager {
         root_dir: std::path::PathBuf,
+        failures_remaining: Option<AtomicUsize>,
     }
 
     #[async_trait]
@@ -790,6 +830,17 @@ mod tests {
         }
 
         async fn remove_session_dir(&self, _session_id: &str) -> anyhow::Result<()> {
+            if let Some(failures_remaining) = &self.failures_remaining {
+                if failures_remaining
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                        remaining.checked_sub(1)
+                    })
+                    .is_err()
+                {
+                    return Ok(());
+                }
+                anyhow::bail!("simulated transient TFTP cleanup failure");
+            }
             anyhow::bail!("simulated TFTP cleanup failure")
         }
 
@@ -892,7 +943,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remove_session_marks_board_error_when_tftp_cleanup_fails() {
+    async fn failed_release_retains_session_for_retry() {
         let temp = tempdir().unwrap();
         let root = temp.path().to_path_buf();
         let power_log = root.join("power.log");
@@ -911,6 +962,7 @@ mod tests {
         let state = build_app_state(config_path, config, manager).await.unwrap();
         *state.tftp_manager.write().await = Arc::new(FailingRemoveTftpManager {
             root_dir: root.join("tftp"),
+            failures_remaining: None,
         });
 
         let board = BoardConfig {
@@ -941,18 +993,90 @@ mod tests {
             .await
             .insert("session-1".into(), session);
 
-        let removed = state.remove_session("session-1").await.unwrap();
-        assert!(removed.is_some());
+        state
+            .request_session_stop("session-1", SessionStopReason::ApiDelete)
+            .await
+            .unwrap();
+
+        let runtime = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let runtime = state.board_runtime_status("board-1").await.unwrap();
+                if runtime.lease_state == BoardLeaseState::Error {
+                    break runtime;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .unwrap();
+
         assert_eq!(fs::read_to_string(power_log).unwrap(), "off");
-        assert!(!state.sessions.read().await.contains_key("session-1"));
-        let runtime = state.board_runtime_status("board-1").await.unwrap();
-        assert_eq!(runtime.lease_state, BoardLeaseState::Error);
+        assert!(state.sessions.read().await.contains_key("session-1"));
+        assert_eq!(runtime.active_session_id.as_deref(), Some("session-1"));
         assert!(
             runtime
                 .last_release_error
                 .unwrap()
                 .contains("tftp cleanup failed")
         );
+    }
+
+    #[tokio::test]
+    async fn release_recovers_after_transient_tftp_cleanup_failure() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let state = test_state(&root).await;
+        *state.tftp_manager.write().await = Arc::new(FailingRemoveTftpManager {
+            root_dir: root.join("tftp"),
+            failures_remaining: Some(AtomicUsize::new(RELEASE_RETRY_ATTEMPTS)),
+        });
+
+        let board = BoardConfig {
+            id: "board-1".into(),
+            board_type: "demo".into(),
+            tags: vec![],
+            serial: None,
+            power_management: PowerManagementConfig::Custom(CustomPowerManagement {
+                power_on_cmd: "printf on >/dev/null".into(),
+                power_off_cmd: "printf off >/dev/null".into(),
+            }),
+            boot: BootConfig::Pxe(PxeProfile::default()),
+            notes: None,
+            disabled: false,
+        };
+        state
+            .boards
+            .write()
+            .await
+            .insert(board.id.clone(), board.clone());
+        state.sync_board_runtime_states().await;
+        let session =
+            SessionState::new_with_actor("session-1".into(), board.clone(), None, state.clone());
+        state.claim_board_for_session(&board.id, "session-1").await;
+        state
+            .sessions
+            .write()
+            .await
+            .insert("session-1".into(), session);
+
+        state
+            .request_session_stop("session-1", SessionStopReason::ApiDelete)
+            .await
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let runtime = state.board_runtime_status("board-1").await.unwrap();
+                if runtime.lease_state == BoardLeaseState::Idle
+                    && state.get_session("session-1").await.is_none()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
