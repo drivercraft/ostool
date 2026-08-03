@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/drivercraft/ostool/compare/ostool-server-v0.5.0...ostool-server-v0.6.0) - 2026-08-03
+
+### Added
+
+- *(ostool)* enable rustls native TLS roots for tokio-tungstenite ([#161](https://github.com/drivercraft/ostool/pull/161))
+
+### Fixed
+
+- *(ostool-server)* retry failed session releases ([#162](https://github.com/drivercraft/ostool/pull/162))
+
 ## [0.5.0](https://github.com/drivercraft/ostool/compare/ostool-server-v0.4.3...ostool-server-v0.5.0) - 2026-07-27
 
 ### Added
