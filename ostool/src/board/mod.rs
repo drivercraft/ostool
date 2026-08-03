@@ -26,6 +26,7 @@ use crate::{
     build::config::{BuildConfig, BuildSystem, Cargo},
     invocation::Invocation,
     project::variables::{self, VariableScope},
+    utils::format_local_time,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -80,16 +81,54 @@ pub fn render_board_table(boards: &[BoardTypeSummary]) -> String {
         .max()
         .unwrap_or(1)
         .max("TOTAL".len());
+    let tags_width = boards
+        .iter()
+        .map(|item| {
+            if item.tags.is_empty() {
+                1
+            } else {
+                item.tags.join(",").len()
+            }
+        })
+        .max()
+        .unwrap_or(1)
+        .max("TAGS".len());
+    let board_id_width = boards
+        .iter()
+        .filter_map(|item| item.leases.as_ref())
+        .flatten()
+        .map(|lease| lease.board_id.len())
+        .max()
+        .unwrap_or(1)
+        .max("BOARD ID".len());
+    let date_begin_width = boards
+        .iter()
+        .filter_map(|item| item.leases.as_ref())
+        .flatten()
+        .map(|lease| lease.date_begin.len())
+        .max()
+        .unwrap_or(1)
+        .max("DATE BEGIN".len());
 
-    let mut lines = Vec::with_capacity(boards.len() + 1);
+    let row_count = boards
+        .iter()
+        .map(|item| item.leases.as_ref().map_or(1, |leases| leases.len().max(1)))
+        .sum::<usize>();
+    let mut lines = Vec::with_capacity(row_count + 1);
     lines.push(format!(
-        "{:<type_width$}  {:>avail_width$}  {:>total_width$}  TAGS",
+        "{:<type_width$}  {:>avail_width$}  {:>total_width$}  {:<tags_width$}  {:<board_id_width$}  {:<date_begin_width$}  DATE END",
         "BOARD TYPE",
         "AVAILABLE",
         "TOTAL",
+        "TAGS",
+        "BOARD ID",
+        "DATE BEGIN",
         type_width = type_width,
         avail_width = avail_width,
         total_width = total_width,
+        tags_width = tags_width,
+        board_id_width = board_id_width,
+        date_begin_width = date_begin_width,
     ));
 
     for item in boards {
@@ -98,16 +137,33 @@ pub fn render_board_table(boards: &[BoardTypeSummary]) -> String {
         } else {
             item.tags.join(",")
         };
-        lines.push(format!(
-            "{:<type_width$}  {:>avail_width$}  {:>total_width$}  {}",
-            item.board_type,
-            item.available,
-            item.total,
-            tags,
-            type_width = type_width,
-            avail_width = avail_width,
-            total_width = total_width,
-        ));
+        let mut push_row = |board_id: &str, date_begin: &str, date_end: &str| {
+            lines.push(format!(
+                "{:<type_width$}  {:>avail_width$}  {:>total_width$}  {:<tags_width$}  {:<board_id_width$}  {:<date_begin_width$}  {}",
+                item.board_type,
+                item.available,
+                item.total,
+                tags,
+                board_id,
+                date_begin,
+                date_end,
+                type_width = type_width,
+                avail_width = avail_width,
+                total_width = total_width,
+                tags_width = tags_width,
+                board_id_width = board_id_width,
+                date_begin_width = date_begin_width,
+            ));
+        };
+
+        match item.leases.as_deref() {
+            Some(leases) if !leases.is_empty() => {
+                for lease in leases {
+                    push_row(&lease.board_id, &lease.date_begin, &lease.date_end);
+                }
+            }
+            Some(_) | None => push_row("-", "-", "-"),
+        }
     }
 
     lines.join("\n")
@@ -191,7 +247,10 @@ async fn connect_allocated_board(
     } else {
         let lease_expires_at = session.current_lease_expires_at().await;
         println!("Board has no serial configuration; keeping session alive until Ctrl+C.");
-        println!("  lease_expires_at: {lease_expires_at}");
+        println!(
+            "  lease_expires_at: {}",
+            format_local_time(lease_expires_at)
+        );
         tokio::signal::ctrl_c()
             .await
             .context("failed to wait for Ctrl+C")?;
@@ -206,7 +265,10 @@ pub(crate) fn print_allocated_board_session(session: &BoardSession, board_type: 
     println!("  board_type: {board_type}");
     println!("  board_id: {}", session.info().board_id);
     println!("  session_id: {}", session.info().session_id);
-    println!("  lease_expires_at: {}", session.info().lease_expires_at);
+    println!(
+        "  lease_expires_at: {}",
+        format_local_time(session.info().lease_expires_at)
+    );
     println!("  boot_mode: {}", session.info().boot_mode);
 }
 
@@ -422,7 +484,7 @@ async fn run_allocated_board(
 #[cfg(test)]
 mod tests {
     use super::{RunBoardOptions, board_session_setup_required, render_board_table};
-    use crate::board::client::BoardTypeSummary;
+    use crate::board::client::{BoardLease, BoardTypeSummary};
     use crate::board::config::BoardRunConfig;
 
     #[test]
@@ -460,11 +522,73 @@ mod tests {
             tags: vec!["arm64".into(), "lab".into()],
             total: 3,
             available: 2,
+            leases: None,
         }]);
 
         assert!(rendered.contains("BOARD TYPE"));
+        assert!(rendered.contains("BOARD ID"));
+        assert!(rendered.contains("DATE BEGIN"));
+        assert!(rendered.contains("DATE END"));
         assert!(rendered.contains("rk3568"));
         assert!(rendered.contains("arm64,lab"));
+        assert_eq!(
+            rendered
+                .lines()
+                .nth(1)
+                .unwrap()
+                .split_whitespace()
+                .collect::<Vec<_>>(),
+            vec!["rk3568", "2", "3", "arm64,lab", "-", "-", "-"]
+        );
+    }
+
+    #[test]
+    fn render_board_table_places_each_lease_on_its_own_row() {
+        let rendered = render_board_table(&[BoardTypeSummary {
+            board_type: "Rock-4D".into(),
+            tags: vec![],
+            total: 2,
+            available: 0,
+            leases: Some(vec![
+                BoardLease {
+                    board_id: "Rock-4D-1".into(),
+                    date_begin: "2026-07-31 15:40:00".into(),
+                    date_end: "2026-08-03 15:40:00".into(),
+                },
+                BoardLease {
+                    board_id: "Rock-4D-2".into(),
+                    date_begin: "2026-08-01 10:00:00".into(),
+                    date_end: "2026-08-02 10:00:00".into(),
+                },
+            ]),
+        }]);
+
+        let rows = rendered.lines().skip(1).collect::<Vec<_>>();
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].contains("Rock-4D-1"));
+        assert!(rows[0].contains("2026-07-31 15:40:00"));
+        assert!(rows[0].contains("2026-08-03 15:40:00"));
+        assert!(rows[1].contains("Rock-4D-2"));
+        assert!(rows[1].contains("2026-08-01 10:00:00"));
+        assert!(rows[1].contains("2026-08-02 10:00:00"));
+    }
+
+    #[test]
+    fn render_board_table_handles_empty_leases() {
+        let rendered = render_board_table(&[BoardTypeSummary {
+            board_type: "Rock-4D".into(),
+            tags: vec![],
+            total: 1,
+            available: 1,
+            leases: Some(vec![]),
+        }]);
+
+        let rows = rendered.lines().skip(1).collect::<Vec<_>>();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].split_whitespace().collect::<Vec<_>>(),
+            vec!["Rock-4D", "1", "1", "-", "-", "-", "-"]
+        );
     }
 
     #[test]

@@ -37,6 +37,14 @@ pub struct BoardTypeSummary {
     pub tags: Vec<String>,
     pub total: usize,
     pub available: usize,
+    pub leases: Option<Vec<BoardLease>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BoardLease {
+    pub board_id: String,
+    pub date_begin: String,
+    pub date_end: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -637,7 +645,7 @@ mod tests {
     use serde::Serialize;
     use url::Url;
 
-    use super::{BoardServerClient, BootConfig, parse_error_body};
+    use super::{BoardServerClient, BoardTypeSummary, BootConfig, parse_error_body};
     use crate::board::global_config::{AuthMode, BoardEndpoint};
 
     #[derive(Serialize)]
@@ -649,6 +657,51 @@ mod tests {
         size: u64,
         uploaded_at: DateTime<Utc>,
         checksum: String,
+    }
+
+    #[test]
+    fn board_type_summary_accepts_response_without_leases() {
+        let summaries: Vec<BoardTypeSummary> = serde_json::from_str(
+            r#"[
+                {
+                    "board_type": "rk3568",
+                    "tags": [],
+                    "total": 2,
+                    "available": 1
+                }
+            ]"#,
+        )
+        .unwrap();
+
+        assert!(summaries[0].leases.is_none());
+    }
+
+    #[test]
+    fn board_type_summary_parses_optional_leases() {
+        let summaries: Vec<BoardTypeSummary> = serde_json::from_str(
+            r#"[
+                {
+                    "board_type": "Rock-4D",
+                    "tags": [],
+                    "total": 1,
+                    "available": 1,
+                    "leases": [
+                        {
+                            "board_id": "Rock-4D-1",
+                            "date_begin": "2026-07-31 15:40:00",
+                            "date_end": "2026-08-03 15:40:00"
+                        }
+                    ]
+                }
+            ]"#,
+        )
+        .unwrap();
+
+        let leases = summaries[0].leases.as_ref().unwrap();
+        assert_eq!(leases.len(), 1);
+        assert_eq!(leases[0].board_id, "Rock-4D-1");
+        assert_eq!(leases[0].date_begin, "2026-07-31 15:40:00");
+        assert_eq!(leases[0].date_end, "2026-08-03 15:40:00");
     }
 
     #[test]

@@ -11,7 +11,21 @@ use std::{
 
 use anyhow::Context;
 use anyhow::bail;
+use chrono::{DateTime, Local, TimeZone, Utc};
 use colored::Colorize;
+
+/// Formats a UTC timestamp in the operating system's local time zone.
+pub fn format_local_time(datetime: DateTime<Utc>) -> String {
+    format_time(datetime, &Local)
+}
+
+fn format_time<Tz>(datetime: DateTime<Utc>, timezone: &Tz) -> String
+where
+    Tz: TimeZone,
+    Tz::Offset: std::fmt::Display,
+{
+    datetime.with_timezone(timezone).to_string()
+}
 
 /// A command builder wrapper with variable substitution support.
 ///
@@ -233,7 +247,27 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{FixedOffset, Timelike as _, Utc};
     use std::env;
+
+    #[test]
+    fn format_time_converts_to_requested_timezone() {
+        let utc = Utc
+            .with_ymd_and_hms(2026, 8, 2, 18, 19, 22)
+            .unwrap()
+            .with_nanosecond(987_576_390)
+            .unwrap();
+        let timezone = FixedOffset::east_opt(8 * 60 * 60).unwrap();
+
+        assert_eq!(
+            format_time(utc, &timezone),
+            "2026-08-03 02:19:22.987576390 +08:00"
+        );
+        assert_eq!(
+            format_time(utc.with_nanosecond(0).unwrap(), &timezone),
+            "2026-08-03 02:19:22 +08:00"
+        );
+    }
 
     #[test]
     fn test_replace_placeholders_supports_custom_variables() {
