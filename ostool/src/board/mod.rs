@@ -26,6 +26,7 @@ use crate::{
     build::config::{BuildConfig, BuildSystem, Cargo},
     invocation::Invocation,
     project::variables::{self, VariableScope},
+    utils::format_local_time,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -246,7 +247,10 @@ async fn connect_allocated_board(
     } else {
         let lease_expires_at = session.current_lease_expires_at().await;
         println!("Board has no serial configuration; keeping session alive until Ctrl+C.");
-        println!("  lease_expires_at: {lease_expires_at}");
+        println!(
+            "  lease_expires_at: {}",
+            format_local_time(lease_expires_at)
+        );
         tokio::signal::ctrl_c()
             .await
             .context("failed to wait for Ctrl+C")?;
@@ -261,7 +265,10 @@ pub(crate) fn print_allocated_board_session(session: &BoardSession, board_type: 
     println!("  board_type: {board_type}");
     println!("  board_id: {}", session.info().board_id);
     println!("  session_id: {}", session.info().session_id);
-    println!("  lease_expires_at: {}", session.info().lease_expires_at);
+    println!(
+        "  lease_expires_at: {}",
+        format_local_time(session.info().lease_expires_at)
+    );
     println!("  boot_mode: {}", session.info().boot_mode);
 }
 

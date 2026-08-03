@@ -18,6 +18,7 @@ use ostool::{
         qemu::{QemuConfig, RunQemuOptions},
         uboot::UbootConfig,
     },
+    utils::format_local_time,
 };
 
 #[derive(Parser, Debug)]
@@ -256,7 +257,7 @@ async fn try_main() -> Result<()> {
                     Some(kind) => {
                         println!("credential: {kind}");
                         if let Some(expires_at) = status.expires_at {
-                            println!("expires_at: {expires_at}");
+                            println!("expires_at: {}", format_local_time(expires_at));
                         }
                         if let Some(scope) = status.scope {
                             println!("scope: {scope}");
