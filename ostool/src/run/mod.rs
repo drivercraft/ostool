@@ -34,8 +34,8 @@ mod output_matcher;
 
 pub use output_matcher::{ByteStreamMatcher, StreamMatch, StreamMatchKind};
 
-/// OVMF prebuilt firmware downloader (internal).
-mod ovmf_prebuilt;
+/// OVMF prebuilt firmware downloader backing the public cache API.
+pub(crate) mod ovmf_prebuilt;
 
 /// Shared shell auto-init matcher and delayed command sender.
 pub(crate) mod shell_init;

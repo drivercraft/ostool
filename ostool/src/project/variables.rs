@@ -28,7 +28,7 @@ impl VariableScope {
     }
 
     /// Builds a variable scope for a specific Cargo package directory.
-    pub fn for_package(layout: &ProjectLayout, package_dir: PathBuf) -> Self {
+    pub(crate) fn for_package(layout: &ProjectLayout, package_dir: PathBuf) -> Self {
         Self::new(
             layout.workspace_dir().to_path_buf(),
             package_dir,

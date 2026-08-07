@@ -8,13 +8,26 @@ use ostool::{
         config::{BuildConfig, BuildSystem, Cargo, Custom},
     },
     invocation::{Invocation, InvocationOptions},
+    ovmf::{Arch, FileType, Prebuilt, Source, default_cache_dir},
     run::{
         qemu::{self, QemuConfig, RunQemuOptions},
         uboot::{self, UbootConfig},
     },
+    variables::{VariableScope, expand_path_variables, expand_variables},
 };
 
+fn assert_prebuilt_api(prebuilt: &Prebuilt) {
+    let _ = prebuilt.get_file(Arch::X64, FileType::Code);
+}
+
 fn main() {
+    let scope = VariableScope::new("workspace".into(), "package".into(), "tmp".into());
+    let _ = expand_variables("${workspace}", &scope).unwrap();
+    let _ = expand_path_variables(Path::new("${tmpDir}/asset"), &scope).unwrap();
+    let _ = default_cache_dir();
+    let _ = Source::LATEST;
+    let _ = assert_prebuilt_api;
+
     let mut invocation = Invocation::new(InvocationOptions::default()).unwrap();
     let cargo = Cargo {
         package: "kernel".into(),
