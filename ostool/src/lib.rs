@@ -19,9 +19,11 @@
 //! - [`build`] - Build system configuration and Cargo integration
 //! - [`invocation`] - Invocation inputs and resolved project layout
 //! - [`menuconfig`] - TUI-based menu configuration
+//! - [`ovmf`] - Verified prebuilt OVMF firmware cache
 //! - [`run`] - QEMU, TFTP, and U-Boot runners
 //! - [`sterm`] - Serial terminal implementation
 //! - [`utils`] - Common utilities and helper functions
+//! - [`variables`] - Workspace, package, temporary, and environment variable expansion
 //!
 //! ## Example
 //!
@@ -62,6 +64,9 @@ pub mod logger;
 /// build options through an interactive terminal interface.
 pub mod menuconfig;
 
+/// Verified prebuilt OVMF firmware cache.
+pub mod ovmf;
+
 mod project;
 
 mod process;
@@ -80,6 +85,9 @@ pub mod sterm;
 
 /// Common utilities and helper functions.
 pub mod utils;
+
+/// Workspace, package, temporary, and environment variable expansion.
+pub mod variables;
 
 #[macro_use]
 extern crate log;

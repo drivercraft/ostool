@@ -50,13 +50,13 @@ use crate::{
     boot::artifacts::{default_qemu_dtb_dump_path, prepare_qemu_dtb_dump},
     build::config::Cargo,
     invocation::Invocation,
+    ovmf::{Arch, FileType, Prebuilt, Source, default_cache_dir},
     process::ProcessContext,
     project::variables::{self, VariableScope},
     project::{ProjectLayout, metadata},
     run::{
         execution::{RunnerExecutionSummary, RunnerExitStatus, timeout_duration},
         output_matcher::{ByteStreamMatcher, compile_regexes, print_match_event},
-        ovmf_prebuilt::{Arch, FileType, Prebuilt, Source},
         qemu_plan::{QemuBootSource, QemuCommandPlanInput, build_qemu_command_plan},
         shell_init::{
             SHELL_INIT_CHUNK_DELAY, SHELL_INIT_CHUNK_SIZE, SHELL_INIT_DELAY, ShellAutoInitMatcher,
@@ -611,8 +611,7 @@ impl QemuRunner {
             .input
             .arch
             .ok_or_else(|| anyhow::anyhow!("Cannot determine architecture for OVMF preparation"))?;
-        let tmp = std::env::temp_dir();
-        let bios_dir = tmp.join("ostool").join("ovmf");
+        let bios_dir = default_cache_dir();
         fs::create_dir_all(&bios_dir)
             .await
             .with_path("failed to create directory", &bios_dir)?;
