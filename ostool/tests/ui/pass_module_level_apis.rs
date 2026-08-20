@@ -10,6 +10,7 @@ use ostool::{
     invocation::{Invocation, InvocationOptions},
     ovmf::{Arch, FileType, Prebuilt, Source, default_cache_dir},
     run::{
+        ShellCheckStep,
         qemu::{self, QemuConfig, RunQemuOptions},
         uboot::{self, UbootConfig},
     },
@@ -46,6 +47,13 @@ fn main() {
         }),
     };
     let qemu_config: QemuConfig = qemu::default_config_for_cargo(&invocation, &cargo);
+    let _step = ShellCheckStep {
+        shell_prefix: Some("root@starry:/root #".into()),
+        shell_cmd: Some("echo pass".into()),
+        success_regex: Some(vec!["PASS".into()]),
+        fail_regex: Some(vec!["FAIL".into()]),
+        timeout: Some(30),
+    };
     let uboot_config: UbootConfig = uboot::default_config();
     let board_config = BoardRunConfig {
         board_type: "rk3568".into(),

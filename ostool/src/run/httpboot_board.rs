@@ -29,10 +29,10 @@ use crate::{
     run::{
         execution::{RunnerExecutionSummary, RunnerExitStatus, timeout_duration},
         output_matcher::{
-            ByteStreamMatcher, MATCH_DRAIN_DURATION, compile_regexes, print_match_event,
+            FailStreamMatcher, MATCH_DRAIN_DURATION, compile_fail_regexes, print_fail_match,
         },
-        shell_init::{
-            SHELL_INIT_CHUNK_DELAY, SHELL_INIT_CHUNK_SIZE, SHELL_INIT_DELAY, ShellAutoInitMatcher,
+        shell_check::{
+            ShellCheckDriver, ShellCheckMatcher, ShellCheckStep, normalize_shell_check_steps,
         },
         uboot::UbootRunInput,
     },
@@ -157,10 +157,8 @@ impl HttpBootBoardRunner {
             TerminalRunOptions {
                 boot_offer_line: line,
                 arch,
-                success_regex: self.board_config.success_regex,
                 fail_regex: self.board_config.fail_regex,
-                shell_prefix: self.board_config.shell_prefix,
-                shell_init_cmd: self.board_config.shell_init_cmd,
+                shell_check_steps: self.board_config.shell_check_steps,
                 timeout: self.board_config.timeout,
             },
         )
@@ -290,11 +288,32 @@ fn validate_ready(ready: &SerialReadyMessage<'_>, expected_arch: BootArch) -> an
 struct TerminalRunOptions {
     boot_offer_line: String,
     arch: BootArch,
-    success_regex: Vec<String>,
     fail_regex: Vec<String>,
-    shell_prefix: Option<String>,
-    shell_init_cmd: Option<String>,
+    shell_check_steps: Vec<ShellCheckStep>,
     timeout: Option<u64>,
+}
+
+async fn write_board_input<W>(
+    writer: &mut W,
+    input: crate::sterm::TerminalInput,
+) -> anyhow::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    if let Err(error) = writer.write_all(input.bytes()).await {
+        input.acknowledge_failed(format!(
+            "failed to write HTTP Boot board serial input: {error}"
+        ));
+        return Err(error).context("failed to write HTTP Boot board serial input");
+    }
+    if let Err(error) = writer.flush().await {
+        input.acknowledge_failed(format!(
+            "failed to flush HTTP Boot board serial input: {error}"
+        ));
+        return Err(error).context("failed to flush HTTP Boot board serial input");
+    }
+    input.acknowledge_flushed();
+    Ok(())
 }
 
 async fn run_terminal<R, W>(
@@ -309,31 +328,30 @@ where
     let TerminalRunOptions {
         boot_offer_line,
         arch,
-        success_regex,
         fail_regex,
-        shell_prefix,
-        shell_init_cmd,
+        shell_check_steps,
         timeout,
     } = options;
-    let (success_regex, fail_regex) = compile_regexes(&success_regex, &fail_regex)?;
-    let matcher = Arc::new(Mutex::new(ByteStreamMatcher::new(
-        success_regex,
-        fail_regex,
-    )));
+    let fail_regex = compile_fail_regexes(&fail_regex)?;
+    let matcher = Arc::new(Mutex::new(FailStreamMatcher::new(fail_regex)));
     let res = Arc::new(Mutex::new(None));
     let res_clone = res.clone();
     let matcher_clone = matcher.clone();
-    let shell_init = Arc::new(Mutex::new(ShellAutoInitMatcher::new(
-        shell_prefix,
-        shell_init_cmd,
-    )));
-    let shell_init_clone = shell_init.clone();
+    let shell_check_matcher = if shell_check_steps.is_empty() {
+        None
+    } else {
+        let mut steps = shell_check_steps;
+        let resolved = normalize_shell_check_steps(&mut steps, "HTTP Boot runtime config")?;
+        Some(ShellCheckMatcher::from_steps(resolved)?)
+    };
+    let shell_check_driver = shell_check_matcher.map(ShellCheckDriver::new);
+    let shell_check_driver_clone = shell_check_driver.clone();
     let ready_monitor = Arc::new(Mutex::new(LoaderReadyMonitor::new(arch)));
     let ready_monitor_clone = ready_monitor.clone();
     let boot_offer_bytes = boot_offer_line_bytes(&boot_offer_line);
 
     let (inbound_tx, inbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<crate::sterm::TerminalInput>();
 
     let read_task = tokio::spawn(async move {
         let mut serial_rx = serial_rx;
@@ -355,15 +373,8 @@ where
 
     let write_task = tokio::spawn(async move {
         let mut serial_tx = serial_tx;
-        while let Some(bytes) = outbound_rx.recv().await {
-            serial_tx
-                .write_all(&bytes)
-                .await
-                .context("failed to write serial input")?;
-            serial_tx
-                .flush()
-                .await
-                .context("failed to flush serial input")?;
+        while let Some(input) = outbound_rx.recv().await {
+            write_board_input(&mut serial_tx, input).await?;
         }
         Ok::<(), anyhow::Error>(())
     });
@@ -375,25 +386,19 @@ where
     });
     let started_at = Instant::now();
     let terminal_result = terminal
-        .run(inbound_rx, outbound_tx, move |handle, byte| {
+        .run_with_write_ack(inbound_rx, outbound_tx, move |handle, chunk| {
             let mut matcher = matcher_clone.lock().unwrap();
-            if let Some(matched) = matcher.observe_byte(byte) {
-                print_match_event(&matched);
-                let mut res_lock = res_clone.lock().unwrap();
-                *res_lock = Some(matched);
-                handle.stop_after(MATCH_DRAIN_DURATION);
+            for byte in chunk {
+                if let Some(matched) = matcher.observe_byte(*byte) {
+                    print_fail_match(&matched);
+                    let mut res_lock = res_clone.lock().unwrap();
+                    *res_lock = Some(matched);
+                    handle.stop_after(MATCH_DRAIN_DURATION);
+                }
             }
 
-            let mut shell_init = shell_init_clone.lock().unwrap();
-            if let Some(shell_init) = shell_init.as_mut()
-                && let Some(command) = shell_init.observe_byte(byte)
-            {
-                handle.send_after_chunks(
-                    SHELL_INIT_DELAY,
-                    command,
-                    SHELL_INIT_CHUNK_SIZE,
-                    SHELL_INIT_CHUNK_DELAY,
-                );
+            if let Some(shell_check_driver) = shell_check_driver_clone.as_ref() {
+                shell_check_driver.observe_chunk(handle, chunk);
             }
 
             if matcher.should_stop() {
@@ -401,8 +406,10 @@ where
             }
 
             let mut ready_monitor = ready_monitor_clone.lock().unwrap();
-            if ready_monitor.observe_byte(byte) {
-                handle.send_after(BOOT_OFFER_SEND_DELAY, boot_offer_bytes.clone());
+            for byte in chunk {
+                if ready_monitor.observe_byte(*byte) {
+                    handle.send_after(BOOT_OFFER_SEND_DELAY, boot_offer_bytes.clone());
+                }
             }
         })
         .await;
@@ -410,6 +417,12 @@ where
     shutdown_serial_task(write_task, Duration::from_secs(1)).await?;
     shutdown_serial_task(read_task, Duration::from_millis(300)).await?;
 
+    let shell_check_completed = shell_check_driver
+        .as_ref()
+        .is_some_and(ShellCheckDriver::completed);
+    let shell_check_failure = shell_check_driver
+        .as_ref()
+        .and_then(ShellCheckDriver::completion_error);
     let mut res_lock = res.lock().unwrap();
     RunnerExecutionSummary::new(
         "HTTP Boot kernel boot",
@@ -417,7 +430,9 @@ where
         started_at.elapsed(),
     )
     .with_terminal_error(terminal_result.err())
-    .with_stream_match(res_lock.take())
+    .with_shell_check_error(shell_check_failure)
+    .with_shell_check_completed(shell_check_completed)
+    .with_fail_match(res_lock.take())
     .into_result()
 }
 
@@ -526,4 +541,192 @@ fn hex_sha256(bytes: &[u8]) -> String {
         let _ = write!(output, "{byte:02x}");
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        pin::Pin,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+        task::{Context, Poll},
+        time::Duration,
+    };
+
+    use tokio::io::AsyncWrite;
+
+    use super::write_board_input;
+
+    #[derive(Clone, Copy)]
+    enum WriterFailure {
+        None,
+        Write,
+        Flush,
+    }
+
+    struct FlushCheckingWriter {
+        callback_ran: Arc<AtomicBool>,
+        failure: WriterFailure,
+        flushes: usize,
+    }
+
+    impl AsyncWrite for FlushCheckingWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            bytes: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            if matches!(self.failure, WriterFailure::Write) {
+                Poll::Ready(Err(std::io::Error::other("injected write failure")))
+            } else {
+                Poll::Ready(Ok(bytes.len()))
+            }
+        }
+
+        fn poll_flush(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            assert!(!self.callback_ran.load(Ordering::Acquire));
+            if matches!(self.failure, WriterFailure::Flush) {
+                return Poll::Ready(Err(std::io::Error::other("injected flush failure")));
+            }
+            self.flushes += 1;
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn board_writer_acknowledges_only_after_flush() {
+        let callback_ran = Arc::new(AtomicBool::new(false));
+        let callback_ran_clone = callback_ran.clone();
+        let input = crate::sterm::TerminalInput::for_test(b"command\n".to_vec(), move |result| {
+            result.unwrap();
+            callback_ran_clone.store(true, Ordering::Release);
+        });
+        let mut writer = FlushCheckingWriter {
+            callback_ran: callback_ran.clone(),
+            failure: WriterFailure::None,
+            flushes: 0,
+        };
+
+        write_board_input(&mut writer, input).await.unwrap();
+
+        assert_eq!(writer.flushes, 1);
+        assert!(callback_ran.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn board_writer_reports_write_failure() {
+        let error_seen = Arc::new(Mutex::new(None));
+        let error_seen_clone = error_seen.clone();
+        let input = crate::sterm::TerminalInput::for_test(b"command\n".to_vec(), move |result| {
+            *error_seen_clone.lock().unwrap() = result.err().map(|error| error.to_string());
+        });
+        let mut writer = FlushCheckingWriter {
+            callback_ran: Arc::new(AtomicBool::new(false)),
+            failure: WriterFailure::Write,
+            flushes: 0,
+        };
+
+        let error = write_board_input(&mut writer, input).await.unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to write HTTP Boot board serial input")
+        );
+        assert_eq!(writer.flushes, 0);
+        assert_eq!(
+            error_seen.lock().unwrap().as_deref(),
+            Some("failed to write HTTP Boot board serial input: injected write failure")
+        );
+    }
+
+    #[tokio::test]
+    async fn board_writer_reports_flush_failure() {
+        let error_seen = Arc::new(Mutex::new(None));
+        let error_seen_clone = error_seen.clone();
+        let input = crate::sterm::TerminalInput::for_test(b"command\n".to_vec(), move |result| {
+            *error_seen_clone.lock().unwrap() = result.err().map(|error| error.to_string());
+        });
+        let mut writer = FlushCheckingWriter {
+            callback_ran: Arc::new(AtomicBool::new(false)),
+            failure: WriterFailure::Flush,
+            flushes: 0,
+        };
+
+        let error = write_board_input(&mut writer, input).await.unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to flush HTTP Boot board serial input")
+        );
+        assert_eq!(writer.flushes, 0);
+        assert_eq!(
+            error_seen.lock().unwrap().as_deref(),
+            Some("failed to flush HTTP Boot board serial input: injected flush failure")
+        );
+    }
+
+    #[tokio::test]
+    async fn board_writer_reports_first_chunk_failure_once_for_chunked_operation() {
+        let (handle, mut rx) = crate::sterm::TerminalHandle::acknowledged_for_test();
+        let completions = Arc::new(Mutex::new(Vec::new()));
+        let completions_clone = completions.clone();
+        handle.send_after_chunks_then(
+            Duration::ZERO,
+            vec![b'x'; 192],
+            64,
+            Duration::ZERO,
+            move |_, result| {
+                completions_clone
+                    .lock()
+                    .unwrap()
+                    .push(result.err().map(|error| error.to_string()));
+            },
+        );
+
+        let first = rx.recv().await.unwrap();
+        assert_eq!(first.bytes().len(), 64);
+        let mut failing_writer = FlushCheckingWriter {
+            callback_ran: Arc::new(AtomicBool::new(false)),
+            failure: WriterFailure::Write,
+            flushes: 0,
+        };
+        let error = write_board_input(&mut failing_writer, first)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("failed to write HTTP Boot board serial input")
+        );
+
+        for _ in 0..2 {
+            let input = rx.recv().await.unwrap();
+            assert_eq!(input.bytes().len(), 64);
+            let mut writer = FlushCheckingWriter {
+                callback_ran: Arc::new(AtomicBool::new(false)),
+                failure: WriterFailure::None,
+                flushes: 0,
+            };
+            write_board_input(&mut writer, input).await.unwrap();
+        }
+        tokio::task::yield_now().await;
+
+        assert_eq!(
+            completions.lock().unwrap().as_slice(),
+            &[Some(
+                "failed to write HTTP Boot board serial input: injected write failure".to_string()
+            )]
+        );
+    }
 }

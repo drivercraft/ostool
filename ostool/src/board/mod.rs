@@ -444,12 +444,11 @@ pub async fn run_prepared_board_with_request(
 
 fn board_session_setup_required(board_config: &BoardRunConfig, has_session_files: bool) -> bool {
     has_session_files
-        || board_config
-            .shell_init_cmd
-            .as_deref()
-            .is_some_and(|command| {
+        || board_config.shell_check_steps.iter().any(|step| {
+            step.shell_cmd.as_deref().is_some_and(|command| {
                 command.contains("${boardServer") || command.contains("${sessionFile")
             })
+        })
 }
 
 async fn run_allocated_board(
@@ -508,7 +507,11 @@ mod tests {
         ));
         assert!(board_session_setup_required(
             &BoardRunConfig {
-                shell_init_cmd: Some("echo ${boardServerIp}".to_string()),
+                shell_check_steps: vec![crate::run::ShellCheckStep {
+                    shell_prefix: Some("root#".into()),
+                    shell_cmd: Some("echo ${boardServerIp}".into()),
+                    ..Default::default()
+                }],
                 ..Default::default()
             },
             false

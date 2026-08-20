@@ -10,14 +10,11 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use ostool::run::{ByteStreamMatcher, StreamMatchKind};
+use ostool::run::FailStreamMatcher;
 use regex::Regex;
 
 static PORT: AtomicU32 = AtomicU32::new(11000);
-const SUCCESS_MARKER: &str = "__OSTOOL_QEMU_SUCCESS_MARKER__";
 const FAIL_MARKER: &str = "__OSTOOL_QEMU_FAIL_MARKER__";
-const BOTH_MARKER: &str = "__OSTOOL_QEMU_BOTH_MARKER__";
-const NEVER_MATCH_REGEX: &str = r"__ostool_never_match__";
 const MARKER_COMMAND_DELAY: Duration = Duration::from_secs(2);
 const MARKER_COMMAND_INTERVAL: Duration = Duration::from_millis(300);
 
@@ -105,7 +102,6 @@ fn spawn_uboot_qemu() -> Result<(QemuGuard, TcpStream)> {
 }
 
 struct MatchOutcome {
-    kind: StreamMatchKind,
     matched_regex: String,
     matched_text: String,
     tail_bytes: usize,
@@ -141,11 +137,7 @@ fn drive_uboot_marker_command(
     Ok(())
 }
 
-fn run_case(
-    success_patterns: &[&str],
-    fail_patterns: &[&str],
-    marker: &str,
-) -> Result<Option<MatchOutcome>> {
+fn run_case(fail_patterns: &[&str], marker: &str) -> Result<Option<MatchOutcome>> {
     let (guard, mut stream) = match spawn_uboot_qemu() {
         Ok(pair) => pair,
         Err(err) if err.to_string().contains("not installed") => {
@@ -155,16 +147,12 @@ fn run_case(
         Err(err) => return Err(err),
     };
 
-    let success_regex: Vec<Regex> = success_patterns
-        .iter()
-        .map(|p| Regex::new(p).with_context(|| format!("invalid success regex: {p}")))
-        .collect::<Result<_, _>>()?;
     let fail_regex: Vec<Regex> = fail_patterns
         .iter()
         .map(|p| Regex::new(p).with_context(|| format!("invalid fail regex: {p}")))
         .collect::<Result<_, _>>()?;
 
-    let mut matcher = ByteStreamMatcher::new(success_regex, fail_regex);
+    let mut matcher = FailStreamMatcher::new(fail_regex);
     let mut buffer = [0u8; 512];
     let overall_deadline = Instant::now() + Duration::from_secs(15);
     let command_started_at = Instant::now();
@@ -199,7 +187,6 @@ fn run_case(
                 if let Some(matched) = matcher.matched() {
                     guard.shutdown();
                     return Ok(Some(MatchOutcome {
-                        kind: matched.kind,
                         matched_regex: matched.matched_regex.clone(),
                         matched_text: matched.matched_text.clone(),
                         tail_bytes,
@@ -219,7 +206,6 @@ fn run_case(
                     guard.shutdown();
                     let matched = matcher.matched().unwrap();
                     return Ok(Some(MatchOutcome {
-                        kind: matched.kind,
                         matched_regex: matched.matched_regex.clone(),
                         matched_text: matched.matched_text.clone(),
                         tail_bytes,
@@ -233,7 +219,6 @@ fn run_case(
                     guard.shutdown();
                     let matched = matcher.matched().unwrap();
                     return Ok(Some(MatchOutcome {
-                        kind: matched.kind,
                         matched_regex: matched.matched_regex.clone(),
                         matched_text: matched.matched_text.clone(),
                         tail_bytes,
@@ -245,70 +230,16 @@ fn run_case(
     }
 }
 
-/// Verifies a success regex can match before the newline is drained.
-#[test]
-fn qemu_byte_stream_success_matches_before_newline() -> Result<()> {
-    // Drive U-Boot to print a marker line controlled by the test fixture. The
-    // line-anchor keeps the matcher from accepting the echoed command itself.
-    let success_marker_regex = marker_regex(SUCCESS_MARKER);
-    let Some(outcome) = run_case(
-        &[success_marker_regex.as_str()],
-        &[NEVER_MATCH_REGEX],
-        SUCCESS_MARKER,
-    )?
-    else {
-        return Ok(());
-    };
-
-    assert_eq!(outcome.kind, StreamMatchKind::Success);
-    assert_eq!(outcome.matched_regex, success_marker_regex);
-    assert!(outcome.matched_text.contains(SUCCESS_MARKER));
-    assert!(
-        outcome.tail_bytes > 0,
-        "expected tail drain bytes after success"
-    );
-    Ok(())
-}
-
 /// Verifies a fail regex can match before the newline is drained.
 #[test]
 fn qemu_byte_stream_fail_matches_before_newline() -> Result<()> {
     let fail_marker_regex = marker_regex(FAIL_MARKER);
-    let Some(outcome) = run_case(
-        &[NEVER_MATCH_REGEX],
-        &[fail_marker_regex.as_str()],
-        FAIL_MARKER,
-    )?
-    else {
+    let Some(outcome) = run_case(&[fail_marker_regex.as_str()], FAIL_MARKER)? else {
         return Ok(());
     };
 
-    assert_eq!(outcome.kind, StreamMatchKind::Fail);
     assert_eq!(outcome.matched_regex, fail_marker_regex);
     assert!(outcome.matched_text.contains(FAIL_MARKER));
-    assert!(
-        outcome.tail_bytes > 0,
-        "expected tail drain bytes after fail"
-    );
-    Ok(())
-}
-
-/// Verifies fail matches take precedence when both regex sets match.
-#[test]
-fn qemu_byte_stream_fail_wins_when_both_match() -> Result<()> {
-    let both_marker_regex = marker_regex(BOTH_MARKER);
-    let Some(outcome) = run_case(
-        &[both_marker_regex.as_str()],
-        &[both_marker_regex.as_str()],
-        BOTH_MARKER,
-    )?
-    else {
-        return Ok(());
-    };
-
-    assert_eq!(outcome.kind, StreamMatchKind::Fail);
-    assert_eq!(outcome.matched_regex, both_marker_regex);
-    assert!(outcome.matched_text.contains(BOTH_MARKER));
     assert!(
         outcome.tail_bytes > 0,
         "expected tail drain bytes after fail"

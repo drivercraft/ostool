@@ -1169,7 +1169,6 @@ dtb_file = "${package}/board.dtb"
 args = ["${package}/kernel"]
 uefi = false
 to_bin = false
-success_regex = []
 fail_regex = []
 "#,
         )
@@ -1178,7 +1177,6 @@ fail_regex = []
             temp.path().join(".uboot.toml"),
             r#"
 dtb_file = "${package}/board.dtb"
-success_regex = []
 fail_regex = []
 "#,
         )

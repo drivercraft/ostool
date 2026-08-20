@@ -249,9 +249,6 @@ uefi = false
 # Output as binary file
 to_bin = true
 
-# Success regex patterns (for auto-detection)
-success_regex = ["Hello from my OS", "Kernel booted successfully"]
-
 # Failure regex patterns (for auto-detection)
 fail_regex = ["panic", "error", "failed"]
 ```
@@ -284,12 +281,41 @@ board_reset_cmd = "reset"
 # Board power off command (optional)
 board_power_off_cmd = "poweroff"
 
-# Success boot regex patterns
-success_regex = ["Starting kernel", "Boot successful"]
-
 # Failure boot regex patterns
 fail_regex = ["Boot failed", "Error loading kernel"]
 ```
+
+### Ordered shell initialization steps
+
+QEMU, U-Boot, and board configurations use `shell_check_steps` for ordered shell commands and result checks. For example, switch from the Axvisor shell to a VM console before running a guest test command:
+
+```toml
+fail_regex = ["(?i)failed|panic"]
+
+shell_check_steps = [
+  { shell_prefix = "axvisor:/$", shell_cmd = "vm console 1" },
+  { shell_prefix = "root@starry:/root #", shell_cmd = "pwd && echo 'starry guest test pass'", success_regex = ["(?m)^starry guest test pass\\s*$"], fail_regex = ["(?i)failed|panic"], timeout = 30 },
+]
+```
+
+Array order is execution order. A step that sends a command must resolve a non-empty `shell_prefix`. A later command step inherits the previous prefix when omitted; an explicitly empty prefix is rejected. `shell_cmd` may be omitted; such a passive step does not wait for a prompt or send input and only checks output against `success_regex` and `fail_regex`. This is useful for profile autorun and self-running kernel tests.
+
+When a step contains both `success_regex` and `fail_regex`, failure patterns are checked first. Any success pattern advances to the next step, while any failure pattern fails the test. A step with `fail_regex` but no success condition is rejected. `timeout` is the number of seconds to wait after a command step has been written and flushed, and must be greater than zero; passive steps must use the top-level overall `timeout`.
+
+A step without either result field advances after its command completes write/flush. Completing the last step marks the shell-check sequence as successful. Top-level `fail_regex` and `timeout` are the global failure conditions and overall timeout; a step-level `fail_regex` is active only while that step waits for its result.
+
+Top-level `success_regex` has been removed; success conditions must be placed on the relevant `shell_check_steps` entry. Step prefixes, commands, and regexes support normal variable expansion. Board placeholders `${boardServerIp}`, `${boardServerHttpBaseUrl}`, and `${sessionFile:<relative-path>}` expand only in each step's `shell_cmd`.
+
+Use a commandless step when only self-generated output needs to be checked:
+
+```toml
+[[shell_check_steps]]
+success_regex = ["(?m)^TEST_PASSED\\s*$"]
+```
+
+This is a hard configuration switch: the former top-level shell prefix/command, the former step array, and the former step command field have been removed. Existing configurations must be migrated as a unit and are not read through compatibility aliases.
+
+For a Starry guest behind Axvisor, move the former top-level success pattern into the step that runs the guest command. That step's success/failure patterns then determine its result, while top-level failure patterns still guard the entire run.
 
 ### Environment Variable Support
 
@@ -318,6 +344,16 @@ ostool board config
 ```
 
 `server` should be a complete URL including `http://` or `https://`; the optional `port` overrides the URL port. For legacy LAN configurations, a bare IPv4 or IPv6 address is interpreted as `http://`. The base release's persisted `server_ip` / `port` pair is also migrated to `server` / `port` when read; the next configuration save writes only the new format. Bare host names are not supported. Project-local `.board.toml` `server` / `port` fields still apply to `ostool board run`, with precedence lower than CLI flags and higher than the global config.
+
+A `.board.toml` file can declare shared files relative to its own directory with
+`session_files`. The caller supplies that directory through
+`BoardRunRequest::with_session_files`; after the board session is created,
+ostool uploads each file under its unchanged relative path. In every
+`shell_check_steps` entry, `shell_cmd` can expand `${boardServerIp}`,
+`${boardServerHttpBaseUrl}`, and `${sessionFile:<relative-path>}`. Absolute
+paths, `..`, symlink escapes, duplicate paths, and missing files are rejected
+before the run starts. The interface does not support aliases or renamed
+uploads.
 
 ### Public board authentication
 

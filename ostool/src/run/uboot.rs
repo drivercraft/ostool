@@ -12,7 +12,7 @@ use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use log::info;
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use tokio::{
     fs,
     io::{AsyncReadExt, AsyncWriteExt},
@@ -48,11 +48,10 @@ use crate::{
     run::{
         execution::{RunnerExecutionSummary, RunnerExitStatus, timeout_duration},
         output_matcher::{
-            ByteStreamMatcher, MATCH_DRAIN_DURATION, compile_regexes, print_match_event,
+            FailStreamMatcher, MATCH_DRAIN_DURATION, compile_fail_regexes, print_fail_match,
         },
-        shell_init::{
-            SHELL_INIT_CHUNK_DELAY, SHELL_INIT_CHUNK_SIZE, SHELL_INIT_DELAY, ShellAutoInitMatcher,
-            normalize_shell_init_config,
+        shell_check::{
+            ShellCheckDriver, ShellCheckMatcher, ShellCheckStep, normalize_shell_check_steps,
         },
         tftp,
     },
@@ -60,7 +59,7 @@ use crate::{
     utils::PathResultExt,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, Serialize, JsonSchema, Default)]
 pub struct UbootConfig {
     pub dtb_file: Option<String>,
     /// Kernel load address
@@ -78,18 +77,79 @@ pub struct UbootConfig {
     /// Board power off command
     /// shell command to power off the board
     pub board_power_off_cmd: Option<String>,
-    pub success_regex: Vec<String>,
     pub fail_regex: Vec<String>,
     pub uboot_cmd: Option<Vec<String>>,
-    /// String prefix that indicates the target shell is ready after boot.
-    pub shell_prefix: Option<String>,
-    /// Command sent once after `shell_prefix` is detected.
-    pub shell_init_cmd: Option<String>,
+    /// Ordered shell commands and result checks.
+    #[serde(default)]
+    pub shell_check_steps: Vec<ShellCheckStep>,
     /// Timeout in seconds after entering the serial terminal interaction stage. `None` or `0`
     /// disables the timeout.
     pub timeout: Option<u64>,
     #[serde(flatten)]
     pub local: LocalUbootConfig,
+}
+
+#[derive(Deserialize)]
+struct UbootConfigWire {
+    dtb_file: Option<String>,
+    kernel_load_addr: Option<String>,
+    fit_load_addr: Option<String>,
+    bootm_addr: Option<String>,
+    board_reset_cmd: Option<String>,
+    board_power_off_cmd: Option<String>,
+    success_regex: Option<serde::de::IgnoredAny>,
+    fail_regex: Vec<String>,
+    uboot_cmd: Option<Vec<String>>,
+    #[serde(default)]
+    shell_check_steps: Vec<ShellCheckStep>,
+    timeout: Option<u64>,
+    shell_prefix: Option<serde::de::IgnoredAny>,
+    shell_init_cmd: Option<serde::de::IgnoredAny>,
+    shell_init_steps: Option<serde::de::IgnoredAny>,
+    #[serde(flatten)]
+    local: LocalUbootConfig,
+}
+
+impl<'de> Deserialize<'de> for UbootConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = UbootConfigWire::deserialize(deserializer)?;
+        reject_removed_uboot_key(&wire)?;
+        Ok(Self {
+            dtb_file: wire.dtb_file,
+            kernel_load_addr: wire.kernel_load_addr,
+            fit_load_addr: wire.fit_load_addr,
+            bootm_addr: wire.bootm_addr,
+            board_reset_cmd: wire.board_reset_cmd,
+            board_power_off_cmd: wire.board_power_off_cmd,
+            fail_regex: wire.fail_regex,
+            uboot_cmd: wire.uboot_cmd,
+            shell_check_steps: wire.shell_check_steps,
+            timeout: wire.timeout,
+            local: wire.local,
+        })
+    }
+}
+
+fn reject_removed_uboot_key<E>(wire: &UbootConfigWire) -> Result<(), E>
+where
+    E: serde::de::Error,
+{
+    for (key, present) in [
+        ("shell_prefix", wire.shell_prefix.is_some()),
+        ("shell_init_cmd", wire.shell_init_cmd.is_some()),
+        ("shell_init_steps", wire.shell_init_steps.is_some()),
+        ("success_regex", wire.success_regex.is_some()),
+    ] {
+        if present {
+            return Err(E::custom(format!(
+                "removed U-Boot config key `{key}`; use `shell_check_steps`"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Default, Serialize, Deserialize, JsonSchema, Debug, Clone)]
@@ -115,11 +175,9 @@ impl UbootConfig {
             kernel_load_addr: config.kernel_load_addr.clone(),
             fit_load_addr: config.fit_load_addr.clone(),
             bootm_addr: config.bootm_addr.clone(),
-            success_regex: config.success_regex.clone(),
             fail_regex: config.fail_regex.clone(),
             uboot_cmd: config.uboot_cmd.clone(),
-            shell_prefix: config.shell_prefix.clone(),
-            shell_init_cmd: config.shell_init_cmd.clone(),
+            shell_check_steps: config.shell_check_steps.clone(),
             timeout: config.timeout,
             ..Default::default()
         }
@@ -156,11 +214,6 @@ impl UbootConfig {
             .as_deref()
             .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
-        self.success_regex = self
-            .success_regex
-            .iter()
-            .map(|value| variables::expand_variables(value, scope))
-            .collect::<anyhow::Result<Vec<_>>>()?;
         self.fail_regex = self
             .fail_regex
             .iter()
@@ -176,16 +229,9 @@ impl UbootConfig {
                     .collect::<anyhow::Result<Vec<_>>>()
             })
             .transpose()?;
-        self.shell_prefix = self
-            .shell_prefix
-            .as_deref()
-            .map(|value| variables::expand_variables(value, scope))
-            .transpose()?;
-        self.shell_init_cmd = self
-            .shell_init_cmd
-            .as_deref()
-            .map(|value| variables::expand_variables(value, scope))
-            .transpose()?;
+        for step in &mut self.shell_check_steps {
+            step.replace_strings(scope)?;
+        }
         self.local.replace_strings(scope)?;
         Ok(())
     }
@@ -207,15 +253,16 @@ impl UbootConfig {
     }
 
     fn normalize(&mut self, config_name: &str) -> anyhow::Result<()> {
-        normalize_shell_init_config(
-            &mut self.shell_prefix,
-            &mut self.shell_init_cmd,
-            config_name,
-        )
+        normalize_shell_check_steps(&mut self.shell_check_steps, config_name).map(drop)
     }
 
-    fn shell_auto_init(&self) -> Option<ShellAutoInitMatcher> {
-        ShellAutoInitMatcher::new(self.shell_prefix.clone(), self.shell_init_cmd.clone())
+    fn shell_check_matcher(&self) -> anyhow::Result<Option<ShellCheckMatcher>> {
+        if self.shell_check_steps.is_empty() {
+            return Ok(None);
+        }
+        let mut steps = self.shell_check_steps.clone();
+        let resolved = normalize_shell_check_steps(&mut steps, "U-Boot runtime config")?;
+        Ok(Some(ShellCheckMatcher::from_steps(resolved)?))
     }
 }
 
@@ -480,7 +527,6 @@ pub(crate) async fn ensure_uboot_config_at_path(
 struct Runner<B> {
     input: UbootRunInput,
     config: UbootConfig,
-    success_regex: Vec<regex::Regex>,
     fail_regex: Vec<regex::Regex>,
     backend: B,
 }
@@ -1096,7 +1142,6 @@ where
         Self {
             input,
             config,
-            success_regex: vec![],
             fail_regex: vec![],
             backend,
         }
@@ -1270,21 +1315,22 @@ where
 
         println!("{}", "Interacting with U-Boot shell...".green());
 
-        let matcher = Arc::new(Mutex::new(ByteStreamMatcher::new(
-            self.success_regex.clone(),
-            self.fail_regex.clone(),
-        )));
+        let matcher = Arc::new(Mutex::new(FailStreamMatcher::new(self.fail_regex.clone())));
 
         let res = Arc::new(Mutex::new(None));
         let res_clone = res.clone();
         let matcher_clone = matcher.clone();
-        let shell_init = Arc::new(Mutex::new(self.config.shell_auto_init()));
-        let shell_init_clone = shell_init.clone();
+        let shell_check_driver = self
+            .config
+            .shell_check_matcher()?
+            .map(ShellCheckDriver::new);
+        let shell_check_driver_clone = shell_check_driver.clone();
         let mut serial_rx = uboot.rx.take().unwrap().compat();
         let mut serial_tx = uboot.tx.take().unwrap().compat_write();
         drop(uboot);
         let (inbound_tx, inbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (outbound_tx, mut outbound_rx) =
+            mpsc::unbounded_channel::<crate::sterm::TerminalInput>();
 
         let read_task = tokio::spawn(async move {
             let mut buffer = [0u8; 1024];
@@ -1304,15 +1350,8 @@ where
         });
 
         let write_task = tokio::spawn(async move {
-            while let Some(bytes) = outbound_rx.recv().await {
-                serial_tx
-                    .write_all(&bytes)
-                    .await
-                    .context("failed to write serial input")?;
-                serial_tx
-                    .flush()
-                    .await
-                    .context("failed to flush serial input")?;
+            while let Some(input) = outbound_rx.recv().await {
+                write_uboot_input(&mut serial_tx, input).await?;
             }
             Ok::<(), anyhow::Error>(())
         });
@@ -1324,25 +1363,19 @@ where
         });
         let started_at = Instant::now();
         let terminal_result = terminal
-            .run(inbound_rx, outbound_tx, move |h, byte| {
+            .run_with_write_ack(inbound_rx, outbound_tx, move |h, chunk| {
                 let mut matcher = matcher_clone.lock().unwrap();
-                if let Some(matched) = matcher.observe_byte(byte) {
-                    print_match_event(&matched);
-                    let mut res_lock = res_clone.lock().unwrap();
-                    *res_lock = Some(matched);
-                    h.stop_after(MATCH_DRAIN_DURATION);
+                for byte in chunk {
+                    if let Some(matched) = matcher.observe_byte(*byte) {
+                        print_fail_match(&matched);
+                        let mut res_lock = res_clone.lock().unwrap();
+                        *res_lock = Some(matched);
+                        h.stop_after(MATCH_DRAIN_DURATION);
+                    }
                 }
 
-                let mut shell_init = shell_init_clone.lock().unwrap();
-                if let Some(shell_init) = shell_init.as_mut()
-                    && let Some(command) = shell_init.observe_byte(byte)
-                {
-                    h.send_after_chunks(
-                        SHELL_INIT_DELAY,
-                        command,
-                        SHELL_INIT_CHUNK_SIZE,
-                        SHELL_INIT_CHUNK_DELAY,
-                    );
+                if let Some(shell_check_driver) = shell_check_driver_clone.as_ref() {
+                    shell_check_driver.observe_chunk(h, chunk);
                 }
 
                 if matcher.should_stop() {
@@ -1382,22 +1415,28 @@ where
 
         {
             let mut res_lock = res.lock().unwrap();
+            let shell_check_completed = shell_check_driver
+                .as_ref()
+                .is_some_and(ShellCheckDriver::completed);
+            let shell_check_failure = shell_check_driver
+                .as_ref()
+                .and_then(ShellCheckDriver::completion_error);
             RunnerExecutionSummary::new(
                 "kernel boot",
                 RunnerExitStatus::not_available(),
                 started_at.elapsed(),
             )
             .with_terminal_error(terminal_result.err())
-            .with_stream_match(res_lock.take())
+            .with_shell_check_error(shell_check_failure)
+            .with_shell_check_completed(shell_check_completed)
+            .with_fail_match(res_lock.take())
             .into_result()?;
         }
         Ok(())
     }
 
     fn prepare_regex(&mut self) -> anyhow::Result<()> {
-        let (success, fail) = compile_regexes(&self.config.success_regex, &self.config.fail_regex)?;
-        self.success_regex = success;
-        self.fail_regex = fail;
+        self.fail_regex = compile_fail_regexes(&self.config.fail_regex)?;
         Ok(())
     }
 
@@ -1453,6 +1492,25 @@ where
         println!("send ok");
         Ok(())
     }
+}
+
+async fn write_uboot_input<W>(
+    writer: &mut W,
+    input: crate::sterm::TerminalInput,
+) -> anyhow::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    if let Err(error) = writer.write_all(input.bytes()).await {
+        input.acknowledge_failed(format!("failed to write U-Boot serial input: {error}"));
+        return Err(error).context("failed to write U-Boot serial input");
+    }
+    if let Err(error) = writer.flush().await {
+        input.acknowledge_failed(format!("failed to flush U-Boot serial input: {error}"));
+        return Err(error).context("failed to flush U-Boot serial input");
+    }
+    input.acknowledge_flushed();
+    Ok(())
 }
 
 fn detect_tftp_ip(net: Option<&Net>) -> Option<String> {
@@ -1530,14 +1588,24 @@ fn bootm_command(bootm_arg: Option<u64>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, time::Duration};
+    use std::{
+        collections::HashMap,
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        task::{Context, Poll},
+        time::Duration,
+    };
 
     use async_trait::async_trait;
+    use tokio::io::AsyncWrite;
 
     use super::{
         LocalBackend, LocalUbootConfig, Net, RemoteBackend, ResolvedRuntime, RunnerBackend,
         UbootConfig, build_network_boot_request, ensure_config_in_dir, fit_artifact_path,
-        timeout_duration,
+        timeout_duration, write_uboot_input,
     };
     use crate::{
         artifact::runtime::{RuntimeArtifactOptions, prepare_runtime_artifacts},
@@ -1548,7 +1616,7 @@ mod tests {
         boot::artifacts::BootArtifact,
         build::config::{BuildConfig, BuildSystem, Cargo},
         invocation::{Invocation, InvocationOptions},
-        run::tftp,
+        run::{ShellCheckStep, tftp},
     };
 
     fn make_invocation(dir: &std::path::Path) -> Invocation {
@@ -1580,6 +1648,177 @@ mod tests {
             existing_tftp_dir: None,
             builtin_tftp_started: false,
         }
+    }
+
+    #[derive(Clone, Copy)]
+    enum WriterFailure {
+        None,
+        Write,
+        Flush,
+    }
+
+    struct FlushCheckingWriter {
+        callback_ran: Arc<AtomicBool>,
+        failure: WriterFailure,
+        flushes: usize,
+    }
+
+    impl AsyncWrite for FlushCheckingWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            bytes: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            if matches!(self.failure, WriterFailure::Write) {
+                Poll::Ready(Err(std::io::Error::other("injected write failure")))
+            } else {
+                Poll::Ready(Ok(bytes.len()))
+            }
+        }
+
+        fn poll_flush(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            assert!(!self.callback_ran.load(Ordering::Acquire));
+            if matches!(self.failure, WriterFailure::Flush) {
+                return Poll::Ready(Err(std::io::Error::other("injected flush failure")));
+            }
+            self.flushes += 1;
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn uboot_writer_acknowledges_only_after_flush() {
+        let callback_ran = Arc::new(AtomicBool::new(false));
+        let callback_ran_clone = callback_ran.clone();
+        let input = crate::sterm::TerminalInput::for_test(b"command\n".to_vec(), move |result| {
+            result.unwrap();
+            callback_ran_clone.store(true, Ordering::Release);
+        });
+        let mut writer = FlushCheckingWriter {
+            callback_ran: callback_ran.clone(),
+            failure: WriterFailure::None,
+            flushes: 0,
+        };
+
+        write_uboot_input(&mut writer, input).await.unwrap();
+
+        assert_eq!(writer.flushes, 1);
+        assert!(callback_ran.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn uboot_writer_reports_write_failure() {
+        let error_seen = Arc::new(std::sync::Mutex::new(None));
+        let error_seen_clone = error_seen.clone();
+        let input = crate::sterm::TerminalInput::for_test(b"command\n".to_vec(), move |result| {
+            *error_seen_clone.lock().unwrap() = result.err().map(|error| error.to_string());
+        });
+        let mut writer = FlushCheckingWriter {
+            callback_ran: Arc::new(AtomicBool::new(false)),
+            failure: WriterFailure::Write,
+            flushes: 0,
+        };
+
+        let error = write_uboot_input(&mut writer, input).await.unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to write U-Boot serial input")
+        );
+        assert_eq!(writer.flushes, 0);
+        assert_eq!(
+            error_seen.lock().unwrap().as_deref(),
+            Some("failed to write U-Boot serial input: injected write failure")
+        );
+    }
+
+    #[tokio::test]
+    async fn uboot_writer_reports_flush_failure() {
+        let error_seen = Arc::new(std::sync::Mutex::new(None));
+        let error_seen_clone = error_seen.clone();
+        let input = crate::sterm::TerminalInput::for_test(b"command\n".to_vec(), move |result| {
+            *error_seen_clone.lock().unwrap() = result.err().map(|error| error.to_string());
+        });
+        let mut writer = FlushCheckingWriter {
+            callback_ran: Arc::new(AtomicBool::new(false)),
+            failure: WriterFailure::Flush,
+            flushes: 0,
+        };
+
+        let error = write_uboot_input(&mut writer, input).await.unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to flush U-Boot serial input")
+        );
+        assert_eq!(writer.flushes, 0);
+        assert_eq!(
+            error_seen.lock().unwrap().as_deref(),
+            Some("failed to flush U-Boot serial input: injected flush failure")
+        );
+    }
+
+    #[tokio::test]
+    async fn uboot_writer_reports_first_chunk_failure_once_for_chunked_operation() {
+        let (handle, mut rx) = crate::sterm::TerminalHandle::acknowledged_for_test();
+        let completions = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let completions_clone = completions.clone();
+        handle.send_after_chunks_then(
+            Duration::ZERO,
+            vec![b'x'; 192],
+            64,
+            Duration::ZERO,
+            move |_, result| {
+                completions_clone
+                    .lock()
+                    .unwrap()
+                    .push(result.err().map(|error| error.to_string()));
+            },
+        );
+
+        let first = rx.recv().await.unwrap();
+        assert_eq!(first.bytes().len(), 64);
+        let mut failing_writer = FlushCheckingWriter {
+            callback_ran: Arc::new(AtomicBool::new(false)),
+            failure: WriterFailure::Write,
+            flushes: 0,
+        };
+        let error = write_uboot_input(&mut failing_writer, first)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("failed to write U-Boot serial input")
+        );
+
+        for _ in 0..2 {
+            let input = rx.recv().await.unwrap();
+            assert_eq!(input.bytes().len(), 64);
+            let mut writer = FlushCheckingWriter {
+                callback_ran: Arc::new(AtomicBool::new(false)),
+                failure: WriterFailure::None,
+                flushes: 0,
+            };
+            write_uboot_input(&mut writer, input).await.unwrap();
+        }
+        tokio::task::yield_now().await;
+
+        assert_eq!(
+            completions.lock().unwrap().as_slice(),
+            &[Some(
+                "failed to write U-Boot serial input: injected write failure".to_string()
+            )]
+        );
     }
 
     fn write_fit_image(root: &std::path::Path) -> std::path::PathBuf {
@@ -2091,9 +2330,12 @@ mod tests {
     }
 
     #[test]
-    fn uboot_config_normalize_rejects_shell_init_without_prefix() {
+    fn uboot_config_normalize_rejects_shell_check_without_prefix() {
         let mut config = UbootConfig {
-            shell_init_cmd: Some("root".into()),
+            shell_check_steps: vec![ShellCheckStep {
+                shell_cmd: Some("root".into()),
+                ..Default::default()
+            }],
             local: LocalUbootConfig {
                 serial: Some("/dev/null".into()),
                 baud_rate: Some("115200".into()),
@@ -2107,10 +2349,13 @@ mod tests {
     }
 
     #[test]
-    fn uboot_config_normalize_trims_shell_fields() {
+    fn uboot_config_normalize_trims_prefix_and_preserves_command() {
         let mut config = UbootConfig {
-            shell_prefix: Some(" login: ".into()),
-            shell_init_cmd: Some(" root ".into()),
+            shell_check_steps: vec![ShellCheckStep {
+                shell_prefix: Some(" login: ".into()),
+                shell_cmd: Some(" root ".into()),
+                ..Default::default()
+            }],
             local: LocalUbootConfig {
                 serial: Some("/dev/null".into()),
                 baud_rate: Some("115200".into()),
@@ -2121,8 +2366,14 @@ mod tests {
 
         config.normalize("test config").unwrap();
 
-        assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
-        assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
+        assert_eq!(
+            config.shell_check_steps[0].shell_prefix.as_deref(),
+            Some("login:")
+        );
+        assert_eq!(
+            config.shell_check_steps[0].shell_cmd.as_deref(),
+            Some(" root ")
+        );
     }
 
     #[test]
@@ -2138,7 +2389,6 @@ mod tests {
             r#"
 serial = "/dev/null"
 baud_rate = "115200"
-success_regex = []
 fail_regex = []
 timeout = 0
 "#,
@@ -2154,7 +2404,6 @@ timeout = 0
             r#"
 serial = "/dev/null"
 baud_rate = "115200"
-success_regex = []
 fail_regex = []
 
 [net]
@@ -2211,11 +2460,14 @@ interface = "eth0"
             kernel_load_addr: Some("${workspaceFolder}".into()),
             fit_load_addr: Some("${package}".into()),
             bootm_addr: Some("${workspace}".into()),
-            success_regex: vec!["${workspace}".into()],
             fail_regex: vec!["${package}".into()],
             uboot_cmd: Some(vec!["setenv boot ${workspace}".into()]),
-            shell_prefix: Some("${workspace}".into()),
-            shell_init_cmd: Some("${package}".into()),
+            shell_check_steps: vec![ShellCheckStep {
+                shell_prefix: Some("${workspace}".into()),
+                shell_cmd: Some("${package}".into()),
+                success_regex: Some(vec!["${workspace}".into()]),
+                ..Default::default()
+            }],
             local: LocalUbootConfig {
                 serial: Some("${workspace}/tty".into()),
                 baud_rate: Some("${env:OSTOOL_UBOOT_TEST_ENV}".into()),
@@ -2257,14 +2509,23 @@ interface = "eth0"
             config.local.board_power_off_cmd.as_deref(),
             Some(expected.as_str())
         );
-        assert_eq!(config.success_regex, vec![expected.clone()]);
         assert_eq!(config.fail_regex, vec![expected.clone()]);
+        assert_eq!(
+            config.shell_check_steps[0].success_regex.as_deref(),
+            Some(&[expected.clone()][..])
+        );
         assert_eq!(
             config.uboot_cmd,
             Some(vec![format!("setenv boot {expected}")])
         );
-        assert_eq!(config.shell_prefix.as_deref(), Some(expected.as_str()));
-        assert_eq!(config.shell_init_cmd.as_deref(), Some(expected.as_str()));
+        assert_eq!(
+            config.shell_check_steps[0].shell_prefix.as_deref(),
+            Some(expected.as_str())
+        );
+        assert_eq!(
+            config.shell_check_steps[0].shell_cmd.as_deref(),
+            Some(expected.as_str())
+        );
         let net = config.local.net.unwrap();
         assert_eq!(net.interface, "env-ok");
         assert_eq!(net.board_ip.as_deref(), Some(expected.as_str()));
@@ -2285,11 +2546,9 @@ interface = "eth0"
             kernel_load_addr: Some("0x80200000".into()),
             fit_load_addr: Some("0x82200000".into()),
             bootm_addr: Some("0x82200000".into()),
-            success_regex: vec!["ok".into()],
             fail_regex: vec!["fail".into()],
             uboot_cmd: Some(vec!["run ab_select_cmd".into(), "run avb_boot".into()]),
-            shell_prefix: Some("login:".into()),
-            shell_init_cmd: Some("root".into()),
+            shell_check_steps: Vec::new(),
             timeout: Some(12),
             auth_mode: None,
             server: None,
@@ -2300,7 +2559,6 @@ interface = "eth0"
         assert_eq!(config.kernel_load_addr.as_deref(), Some("0x80200000"));
         assert_eq!(config.fit_load_addr.as_deref(), Some("0x82200000"));
         assert_eq!(config.bootm_addr.as_deref(), Some("0x82200000"));
-        assert_eq!(config.success_regex, vec!["ok"]);
         assert_eq!(config.timeout, Some(12));
         assert_eq!(
             config.uboot_cmd,
@@ -2309,6 +2567,22 @@ interface = "eth0"
                 "run avb_boot".to_string()
             ])
         );
+    }
+
+    #[test]
+    fn uboot_config_from_board_run_config_keeps_shell_check_steps() {
+        let board_config = BoardRunConfig {
+            shell_check_steps: vec![crate::run::ShellCheckStep {
+                shell_prefix: Some("axvisor:/$".into()),
+                shell_cmd: Some("vm console 1".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let config = UbootConfig::from_board_run_config(&board_config);
+
+        assert_eq!(config.shell_check_steps, board_config.shell_check_steps);
     }
 
     #[tokio::test]
@@ -2362,7 +2636,6 @@ interface = "eth0"
             tmp.path().join(".uboot.toml"),
             r#"
 dtb_file = "${package}/board.dtb"
-success_regex = []
 fail_regex = []
 serial = "/dev/null"
 baud_rate = "115200"

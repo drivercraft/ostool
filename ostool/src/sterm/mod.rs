@@ -6,7 +6,7 @@ use std::{
     io::{self, IsTerminal, Write},
     process::Command,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
@@ -60,14 +60,76 @@ pub struct TerminalHandle {
     inner: Arc<TerminalState>,
 }
 
+#[derive(Clone)]
+pub(crate) struct WeakTerminalHandle {
+    inner: Weak<TerminalState>,
+}
+
 struct TerminalState {
     running: AtomicBool,
     timed_out: AtomicBool,
     stop_deadline: Mutex<Option<Instant>>,
     timeout_deadline: Mutex<Option<Instant>>,
-    outbound_tx: mpsc::UnboundedSender<Vec<u8>>,
+    outbound_tx: TerminalOutboundSender,
     wake_version: AtomicU64,
     wake_tx: watch::Sender<u64>,
+}
+
+#[derive(Clone)]
+enum TerminalOutboundSender {
+    Bytes(mpsc::UnboundedSender<Vec<u8>>),
+    Acknowledged(mpsc::UnboundedSender<TerminalInput>),
+}
+
+pub(crate) struct TerminalInput {
+    bytes: Vec<u8>,
+    on_flushed: Option<Box<dyn FnOnce(io::Result<()>) + Send>>,
+}
+
+impl TerminalInput {
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        bytes: Vec<u8>,
+        on_flushed: impl FnOnce(io::Result<()>) + Send + 'static,
+    ) -> Self {
+        Self {
+            bytes,
+            on_flushed: Some(Box::new(on_flushed)),
+        }
+    }
+
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub(crate) fn acknowledge_flushed(mut self) {
+        if let Some(on_flushed) = self.on_flushed.take() {
+            on_flushed(Ok(()));
+        }
+    }
+
+    pub(crate) fn acknowledge_failed(mut self, error: impl Into<String>) {
+        if let Some(on_flushed) = self.on_flushed.take() {
+            on_flushed(Err(io::Error::other(error.into())));
+        }
+    }
+
+    fn acknowledge_error(mut self, error: io::Error) {
+        if let Some(on_flushed) = self.on_flushed.take() {
+            on_flushed(Err(error));
+        }
+    }
+}
+
+impl Drop for TerminalInput {
+    fn drop(&mut self) {
+        if let Some(on_flushed) = self.on_flushed.take() {
+            on_flushed(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "terminal input was dropped before it was flushed",
+            )));
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,16 +166,59 @@ impl AsyncTerminal {
             .await
     }
 
+    pub(crate) async fn run_with_write_ack<F>(
+        self,
+        inbound_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+        outbound_tx: mpsc::UnboundedSender<TerminalInput>,
+        on_byte: F,
+    ) -> anyhow::Result<()>
+    where
+        F: FnMut(&TerminalHandle, &[u8]) + Send,
+    {
+        self.run_with_output_sender(
+            inbound_rx,
+            TerminalOutboundSender::Acknowledged(outbound_tx),
+            io::stdout(),
+            on_byte,
+        )
+        .await
+    }
+
     async fn run_with_output<W, F>(
         self,
-        mut inbound_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+        inbound_rx: mpsc::UnboundedReceiver<Vec<u8>>,
         outbound_tx: mpsc::UnboundedSender<Vec<u8>>,
+        output: W,
+        on_byte: F,
+    ) -> anyhow::Result<()>
+    where
+        W: Write,
+        F: FnMut(&TerminalHandle, u8) + Send,
+    {
+        let mut on_byte = on_byte;
+        self.run_with_output_sender(
+            inbound_rx,
+            TerminalOutboundSender::Bytes(outbound_tx),
+            output,
+            move |handle, chunk| {
+                for byte in chunk {
+                    on_byte(handle, *byte);
+                }
+            },
+        )
+        .await
+    }
+
+    async fn run_with_output_sender<W, F>(
+        self,
+        mut inbound_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+        outbound_tx: TerminalOutboundSender,
         mut output: W,
         mut on_byte: F,
     ) -> anyhow::Result<()>
     where
         W: Write,
-        F: FnMut(&TerminalHandle, u8) + Send,
+        F: FnMut(&TerminalHandle, &[u8]) + Send,
     {
         let interactive_input_enabled = io::stdin().is_terminal() && io::stdout().is_terminal();
         self.run_with_output_mode(
@@ -129,14 +234,14 @@ impl AsyncTerminal {
     async fn run_with_output_mode<W, F>(
         mut self,
         inbound_rx: &mut mpsc::UnboundedReceiver<Vec<u8>>,
-        outbound_tx: mpsc::UnboundedSender<Vec<u8>>,
+        outbound_tx: TerminalOutboundSender,
         output: &mut W,
-        on_byte: &mut F,
+        on_chunk: &mut F,
         interactive_input_enabled: bool,
     ) -> anyhow::Result<()>
     where
         W: Write,
-        F: FnMut(&TerminalHandle, u8) + Send,
+        F: FnMut(&TerminalHandle, &[u8]) + Send,
     {
         if interactive_input_enabled {
             enable_raw_mode().ok();
@@ -154,7 +259,7 @@ impl AsyncTerminal {
 
         let mut events = interactive_input_enabled.then(EventStream::new);
         let result = self
-            .run_loop(&handle, inbound_rx, &mut events, output, on_byte)
+            .run_loop(&handle, inbound_rx, &mut events, output, on_chunk)
             .await;
 
         if interactive_input_enabled {
@@ -183,11 +288,11 @@ impl AsyncTerminal {
         inbound_rx: &mut mpsc::UnboundedReceiver<Vec<u8>>,
         events: &mut Option<EventStream>,
         output: &mut W,
-        on_byte: &mut F,
+        on_chunk: &mut F,
     ) -> anyhow::Result<()>
     where
         W: Write,
-        F: FnMut(&TerminalHandle, u8) + Send,
+        F: FnMut(&TerminalHandle, &[u8]) + Send,
     {
         while handle.is_running() {
             let mut wake_rx = handle.subscribe();
@@ -211,9 +316,7 @@ impl AsyncTerminal {
                     match maybe_chunk {
                         Some(chunk) => {
                             write_output(output, &chunk)?;
-                            for byte in chunk {
-                                (on_byte)(handle, byte);
-                            }
+                            (on_chunk)(handle, &chunk);
                         }
                         None => break,
                     }
@@ -273,7 +376,13 @@ impl AsyncTerminal {
 }
 
 impl TerminalHandle {
-    fn new(outbound_tx: mpsc::UnboundedSender<Vec<u8>>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn acknowledged_for_test() -> (Self, mpsc::UnboundedReceiver<TerminalInput>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (Self::new(TerminalOutboundSender::Acknowledged(tx)), rx)
+    }
+
+    fn new(outbound_tx: TerminalOutboundSender) -> Self {
         let (wake_tx, _wake_rx) = watch::channel(0u64);
         Self {
             inner: Arc::new(TerminalState {
@@ -328,16 +437,53 @@ impl TerminalHandle {
         chunk_size: usize,
         chunk_delay: Duration,
     ) {
+        self.send_after_chunks_then(duration, bytes, chunk_size, chunk_delay, |_, _| {});
+    }
+
+    pub(crate) fn send_after_chunks_then<F>(
+        &self,
+        duration: Duration,
+        bytes: Vec<u8>,
+        chunk_size: usize,
+        chunk_delay: Duration,
+        on_sent: F,
+    ) where
+        F: FnOnce(&TerminalHandle, io::Result<()>) + Send + 'static,
+    {
         let handle = self.clone();
         let chunk_size = chunk_size.max(1);
         tokio::spawn(async move {
             tokio::time::sleep(duration).await;
-            for chunk in bytes.chunks(chunk_size) {
-                if !handle.is_running() {
-                    break;
+            let chunk_count = bytes.len().div_ceil(chunk_size);
+            let completion = Arc::new(Mutex::new(Some(on_sent)));
+            if bytes.is_empty() {
+                if let Some(on_sent) = completion.lock().unwrap().take() {
+                    on_sent(&handle, Ok(()));
                 }
-                if handle.send(chunk.to_vec()).is_err() {
-                    break;
+                return;
+            }
+            for (index, chunk) in bytes.chunks(chunk_size).enumerate() {
+                if !handle.is_running() {
+                    if let Some(on_sent) = completion.lock().unwrap().take() {
+                        on_sent(&handle, Err(terminal_send_cancelled_error()));
+                    }
+                    return;
+                }
+                let callback_handle = handle.clone();
+                let completion = completion.clone();
+                let is_last = index + 1 == chunk_count;
+                let send_result = handle.send_with_completion(
+                    chunk.to_vec(),
+                    Box::new(move |result| {
+                        if (result.is_err() || is_last)
+                            && let Some(on_sent) = completion.lock().unwrap().take()
+                        {
+                            on_sent(&callback_handle, result);
+                        }
+                    }),
+                );
+                if send_result.is_err() {
+                    return;
                 }
                 tokio::time::sleep(chunk_delay).await;
             }
@@ -348,11 +494,41 @@ impl TerminalHandle {
         self.inner.running.load(Ordering::Acquire)
     }
 
+    pub(crate) fn downgrade(&self) -> WeakTerminalHandle {
+        WeakTerminalHandle {
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
+
     fn send(&self, bytes: Vec<u8>) -> io::Result<()> {
-        self.inner
-            .outbound_tx
-            .send(bytes)
-            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "terminal transport closed"))
+        self.send_input(bytes, None)
+    }
+
+    fn send_with_completion(
+        &self,
+        bytes: Vec<u8>,
+        on_flushed: Box<dyn FnOnce(io::Result<()>) + Send>,
+    ) -> io::Result<()> {
+        self.send_input(bytes, Some(on_flushed))
+    }
+
+    fn send_input(
+        &self,
+        bytes: Vec<u8>,
+        on_flushed: Option<Box<dyn FnOnce(io::Result<()>) + Send>>,
+    ) -> io::Result<()> {
+        match &self.inner.outbound_tx {
+            TerminalOutboundSender::Bytes(tx) => tx
+                .send(bytes)
+                .map_err(|_| terminal_transport_closed_error()),
+            TerminalOutboundSender::Acknowledged(tx) => {
+                if let Err(error) = tx.send(TerminalInput { bytes, on_flushed }) {
+                    error.0.acknowledge_error(terminal_transport_closed_error());
+                    return Err(terminal_transport_closed_error());
+                }
+                Ok(())
+            }
+        }
     }
 
     fn timed_out(&self) -> bool {
@@ -378,6 +554,23 @@ impl TerminalHandle {
     fn wake(&self) {
         let version = self.inner.wake_version.fetch_add(1, Ordering::AcqRel) + 1;
         let _ = self.inner.wake_tx.send(version);
+    }
+}
+
+fn terminal_transport_closed_error() -> io::Error {
+    io::Error::new(io::ErrorKind::BrokenPipe, "terminal transport closed")
+}
+
+fn terminal_send_cancelled_error() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Interrupted,
+        "terminal stopped before input was sent",
+    )
+}
+
+impl WeakTerminalHandle {
+    pub(crate) fn upgrade(&self) -> Option<TerminalHandle> {
+        self.inner.upgrade().map(|inner| TerminalHandle { inner })
     }
 }
 
@@ -470,9 +663,9 @@ pub fn encode_key_event(key: KeyEvent) -> io::Result<TerminalAction> {
 }
 
 fn write_output(output: &mut impl Write, chunk: &[u8]) -> io::Result<()> {
-    for &b in chunk {
-        output.write_all(&[b])?;
-        if b == b'\n' {
+    for segment in chunk.split_inclusive(|byte| *byte == b'\n') {
+        output.write_all(segment)?;
+        if segment.ends_with(b"\n") {
             output.flush()?;
         }
     }
@@ -761,6 +954,7 @@ mod tests {
     struct FlushCountingWriter {
         buf: Vec<u8>,
         flushes: usize,
+        writes: Vec<Vec<u8>>,
     }
 
     impl FlushCountingWriter {
@@ -768,6 +962,7 @@ mod tests {
             Self {
                 buf: Vec::new(),
                 flushes: 0,
+                writes: Vec::new(),
             }
         }
     }
@@ -775,6 +970,7 @@ mod tests {
     impl Write for FlushCountingWriter {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             self.buf.extend_from_slice(buf);
+            self.writes.push(buf.to_vec());
             Ok(buf.len())
         }
 
@@ -846,9 +1042,21 @@ mod tests {
     }
 
     #[test]
+    fn write_output_submits_complete_segments_instead_of_individual_bytes() {
+        let mut writer = FlushCountingWriter::new();
+
+        write_output(&mut writer, b"log line\nprompt").unwrap();
+
+        assert_eq!(
+            writer.writes,
+            [b"log line\n".as_slice(), b"prompt".as_slice()]
+        );
+    }
+
+    #[test]
     fn stop_after_does_not_mark_timeout() {
         let (tx, _rx) = mpsc::unbounded_channel();
-        let handle = TerminalHandle::new(tx);
+        let handle = TerminalHandle::new(super::TerminalOutboundSender::Bytes(tx));
         handle.stop_after(Duration::from_millis(10));
         assert!(!handle.timed_out());
         assert!(handle.stop_deadline().is_some());
@@ -858,7 +1066,7 @@ mod tests {
     #[test]
     fn timeout_after_sets_timeout_deadline_only() {
         let (tx, _rx) = mpsc::unbounded_channel();
-        let handle = TerminalHandle::new(tx);
+        let handle = TerminalHandle::new(super::TerminalOutboundSender::Bytes(tx));
         handle.timeout_after(Duration::from_millis(10));
         assert!(!handle.timed_out());
         assert!(handle.stop_deadline().is_none());
@@ -868,7 +1076,7 @@ mod tests {
     #[tokio::test]
     async fn send_after_chunks_splits_long_terminal_input() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let handle = TerminalHandle::new(tx);
+        let handle = TerminalHandle::new(super::TerminalOutboundSender::Bytes(tx));
 
         handle.send_after_chunks(
             Duration::ZERO,
@@ -880,6 +1088,125 @@ mod tests {
         assert_eq!(rx.recv().await.unwrap(), b"ab");
         assert_eq!(rx.recv().await.unwrap(), b"cd");
         assert_eq!(rx.recv().await.unwrap(), b"ef");
+    }
+
+    #[tokio::test]
+    async fn acknowledged_input_completes_only_after_writer_acknowledges_flush() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let handle = TerminalHandle::new(super::TerminalOutboundSender::Acknowledged(tx));
+        let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let completed_clone = completed.clone();
+
+        handle.send_after_chunks_then(
+            Duration::ZERO,
+            b"abcdef".to_vec(),
+            3,
+            Duration::ZERO,
+            move |_, result| {
+                result.unwrap();
+                completed_clone.store(true, std::sync::atomic::Ordering::Release);
+            },
+        );
+
+        let first = rx.recv().await.unwrap();
+        assert_eq!(first.bytes(), b"abc");
+        assert!(!completed.load(std::sync::atomic::Ordering::Acquire));
+        let last = rx.recv().await.unwrap();
+        assert_eq!(last.bytes(), b"def");
+        assert!(!completed.load(std::sync::atomic::Ordering::Acquire));
+        last.acknowledge_flushed();
+        tokio::task::yield_now().await;
+        assert!(completed.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn acknowledged_input_reports_writer_failure() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let handle = TerminalHandle::new(super::TerminalOutboundSender::Acknowledged(tx));
+        let failure = Arc::new(Mutex::new(None));
+        let failure_clone = failure.clone();
+
+        handle.send_after_chunks_then(
+            Duration::ZERO,
+            vec![b'x'; 192],
+            64,
+            Duration::ZERO,
+            move |_, result| {
+                *failure_clone.lock().unwrap() = result.err().map(|err| err.to_string())
+            },
+        );
+        let input = rx.recv().await.unwrap();
+        assert_eq!(input.bytes().len(), 64);
+        input.acknowledge_failed("serial flush failed");
+        tokio::task::yield_now().await;
+
+        assert_eq!(
+            failure.lock().unwrap().as_deref(),
+            Some("serial flush failed")
+        );
+    }
+
+    #[test]
+    fn acknowledged_send_reports_closed_transport_to_completion_once() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let handle = TerminalHandle::new(super::TerminalOutboundSender::Acknowledged(tx));
+        drop(rx);
+        let completions = Arc::new(Mutex::new(Vec::new()));
+        let completions_clone = completions.clone();
+
+        let send_error = handle
+            .send_with_completion(
+                b"command\n".to_vec(),
+                Box::new(move |result| {
+                    let error = result.unwrap_err();
+                    completions_clone
+                        .lock()
+                        .unwrap()
+                        .push((error.kind(), error.to_string()));
+                }),
+            )
+            .unwrap_err();
+
+        assert_eq!(send_error.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(send_error.to_string(), "terminal transport closed");
+        assert_eq!(
+            completions.lock().unwrap().as_slice(),
+            &[(
+                io::ErrorKind::BrokenPipe,
+                "terminal transport closed".to_string()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn acknowledged_send_reports_terminal_stop_before_enqueue() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let handle = TerminalHandle::new(super::TerminalOutboundSender::Acknowledged(tx));
+        handle.stop();
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+
+        handle.send_after_chunks_then(
+            Duration::ZERO,
+            b"command\n".to_vec(),
+            64,
+            Duration::ZERO,
+            move |_, result| {
+                let error = result.unwrap_err();
+                let _ = completion_tx.send((error.kind(), error.to_string()));
+            },
+        );
+
+        let completion = tokio::time::timeout(Duration::from_millis(100), completion_rx)
+            .await
+            .expect("send completion was not called after the terminal stopped")
+            .unwrap();
+        assert_eq!(
+            completion,
+            (
+                io::ErrorKind::Interrupted,
+                "terminal stopped before input was sent".to_string()
+            )
+        );
     }
 
     #[tokio::test]
@@ -901,9 +1228,9 @@ mod tests {
         terminal
             .run_with_output_mode(
                 &mut inbound_rx,
-                outbound_tx,
+                super::TerminalOutboundSender::Bytes(outbound_tx),
                 &mut Cursor::new(&mut written),
-                &mut move |_handle, byte| seen_clone.lock().unwrap().push(byte),
+                &mut move |_handle, chunk| seen_clone.lock().unwrap().extend_from_slice(chunk),
                 false,
             )
             .await
@@ -928,7 +1255,7 @@ mod tests {
         let err = terminal
             .run_with_output_mode(
                 &mut inbound_rx,
-                outbound_tx,
+                super::TerminalOutboundSender::Bytes(outbound_tx),
                 &mut Cursor::new(&mut written),
                 &mut |_handle, _byte| {},
                 false,

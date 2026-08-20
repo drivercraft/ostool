@@ -2,16 +2,16 @@ use std::{env::current_dir, path::PathBuf};
 
 use anyhow::Context as _;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
     board::global_config::{AuthMode, BoardEndpoint, BoardGlobalConfig},
     project::variables::{self, VariableScope},
-    run::shell_init::normalize_shell_init_config,
+    run::shell_check::{ShellCheckStep, normalize_shell_check_steps},
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, JsonSchema, Default, PartialEq, Eq)]
+#[schemars(deny_unknown_fields)]
 pub struct BoardRunConfig {
     pub board_type: String,
     /// Files shared with the board for the duration of one session.
@@ -25,18 +25,69 @@ pub struct BoardRunConfig {
     pub fit_load_addr: Option<String>,
     pub bootm_addr: Option<String>,
     #[serde(default)]
-    pub success_regex: Vec<String>,
-    #[serde(default)]
     pub fail_regex: Vec<String>,
     #[serde(default)]
     pub uboot_cmd: Option<Vec<String>>,
-    pub shell_prefix: Option<String>,
-    pub shell_init_cmd: Option<String>,
+    /// Ordered shell commands and result checks.
+    #[serde(default)]
+    pub shell_check_steps: Vec<ShellCheckStep>,
     pub timeout: Option<u64>,
     pub auth_mode: Option<AuthMode>,
     /// Complete board service URL. `port` optionally overrides its port.
     pub server: Option<String>,
     pub port: Option<u16>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BoardRunConfigWire {
+    board_type: String,
+    #[serde(default)]
+    session_files: Vec<PathBuf>,
+    dtb_file: Option<String>,
+    kernel_load_addr: Option<String>,
+    fit_load_addr: Option<String>,
+    bootm_addr: Option<String>,
+    success_regex: Option<serde::de::IgnoredAny>,
+    #[serde(default)]
+    fail_regex: Vec<String>,
+    #[serde(default)]
+    uboot_cmd: Option<Vec<String>>,
+    #[serde(default)]
+    shell_check_steps: Vec<ShellCheckStep>,
+    timeout: Option<u64>,
+    auth_mode: Option<AuthMode>,
+    server: Option<String>,
+    port: Option<u16>,
+}
+
+impl<'de> Deserialize<'de> for BoardRunConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = BoardRunConfigWire::deserialize(deserializer)?;
+        if wire.success_regex.is_some() {
+            return Err(serde::de::Error::custom(
+                "removed board config key `success_regex`; use `shell_check_steps`",
+            ));
+        }
+        Ok(Self {
+            board_type: wire.board_type,
+            session_files: wire.session_files,
+            dtb_file: wire.dtb_file,
+            kernel_load_addr: wire.kernel_load_addr,
+            fit_load_addr: wire.fit_load_addr,
+            bootm_addr: wire.bootm_addr,
+            fail_regex: wire.fail_regex,
+            uboot_cmd: wire.uboot_cmd,
+            shell_check_steps: wire.shell_check_steps,
+            timeout: wire.timeout,
+            auth_mode: wire.auth_mode,
+            server: wire.server,
+            port: wire.port,
+        })
+    }
 }
 
 impl BoardRunConfig {
@@ -138,11 +189,6 @@ impl BoardRunConfig {
             .as_deref()
             .map(|value| variables::expand_variables(value, scope))
             .transpose()?;
-        self.success_regex = self
-            .success_regex
-            .iter()
-            .map(|value| variables::expand_variables(value, scope))
-            .collect::<anyhow::Result<Vec<_>>>()?;
         self.fail_regex = self
             .fail_regex
             .iter()
@@ -158,16 +204,9 @@ impl BoardRunConfig {
                     .collect::<anyhow::Result<Vec<_>>>()
             })
             .transpose()?;
-        self.shell_prefix = self
-            .shell_prefix
-            .as_deref()
-            .map(|value| variables::expand_variables(value, scope))
-            .transpose()?;
-        self.shell_init_cmd = self
-            .shell_init_cmd
-            .as_deref()
-            .map(|value| variables::expand_variables(value, scope))
-            .transpose()?;
+        for step in &mut self.shell_check_steps {
+            step.replace_strings(scope)?;
+        }
         self.server = self
             .server
             .as_deref()
@@ -208,11 +247,7 @@ impl BoardRunConfig {
         if self.board_type.is_empty() {
             anyhow::bail!("`board_type` must not be empty in {config_name}");
         }
-        normalize_shell_init_config(
-            &mut self.shell_prefix,
-            &mut self.shell_init_cmd,
-            config_name,
-        )
+        normalize_shell_check_steps(&mut self.shell_check_steps, config_name).map(drop)
     }
 }
 
@@ -263,11 +298,11 @@ dtb_file = " ${workspace}/board.dtb "
 kernel_load_addr = " 0x80200000 "
 fit_load_addr = " 0x82200000 "
 bootm_addr = " 0x82200000 "
-success_regex = ["ok"]
 fail_regex = ["panic"]
 uboot_cmd = [" run bootcmd "]
-shell_prefix = " login: "
-shell_init_cmd = " root "
+shell_check_steps = [
+  { shell_prefix = " login: ", shell_cmd = " root ", success_regex = ["ok"] },
+]
 timeout = 15
 server = "http://10.0.0.2"
 port = 9000
@@ -283,8 +318,14 @@ port = 9000
         assert_eq!(config.fit_load_addr.as_deref(), Some("0x82200000"));
         assert_eq!(config.bootm_addr.as_deref(), Some("0x82200000"));
         assert_eq!(config.uboot_cmd, Some(vec!["run bootcmd".to_string()]));
-        assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
-        assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
+        assert_eq!(
+            config.shell_check_steps[0].shell_prefix.as_deref(),
+            Some("login:")
+        );
+        assert_eq!(
+            config.shell_check_steps[0].shell_cmd.as_deref(),
+            Some(" root ")
+        );
         assert_eq!(config.timeout, Some(15));
         assert_eq!(
             config
@@ -318,6 +359,28 @@ port = 9000
     }
 
     #[test]
+    fn board_run_config_accepts_inherited_prefix_in_ordered_steps() {
+        let mut config: BoardRunConfig = toml::from_str(
+            r#"
+board_type = "orangepi-5-plus"
+shell_check_steps = [
+  { shell_prefix = "axvisor:/$", shell_cmd = "help" },
+  { shell_cmd = "vm list" },
+]
+"#,
+        )
+        .unwrap();
+
+        config.normalize("test board config").unwrap();
+
+        assert_eq!(
+            config.shell_check_steps[0].shell_prefix.as_deref(),
+            Some("axvisor:/$")
+        );
+        assert_eq!(config.shell_check_steps[1].shell_prefix, None);
+    }
+
+    #[test]
     fn legacy_board_run_config_defaults_to_no_session_files() {
         let fixture = LegacyBoardRunConfigFixture {
             board_type: "orangepi-5-plus".to_string(),
@@ -336,6 +399,15 @@ port = 9000
             path.file_name().and_then(|name| name.to_str()),
             Some(".board.toml")
         );
+    }
+
+    #[test]
+    fn board_run_config_schema_rejects_unknown_top_level_fields() {
+        let schema = schemars::schema_for!(BoardRunConfig);
+        let schema = serde_json::to_value(schema).unwrap();
+
+        assert_eq!(schema["additionalProperties"], false);
+        assert!(schema["properties"].get("success_regex").is_none());
     }
 
     #[test]
@@ -387,8 +459,9 @@ port = 9000
             &config_path,
             r#"
 board_type = " rk3568 "
-shell_prefix = " login: "
-shell_init_cmd = " root "
+shell_check_steps = [
+  { shell_prefix = " login: ", shell_cmd = " root " },
+]
 timeout = 8
 "#,
         )
@@ -400,8 +473,14 @@ timeout = 8
             .await
             .unwrap();
         assert_eq!(config.board_type, "rk3568");
-        assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
-        assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
+        assert_eq!(
+            config.shell_check_steps[0].shell_prefix.as_deref(),
+            Some("login:")
+        );
+        assert_eq!(
+            config.shell_check_steps[0].shell_cmd.as_deref(),
+            Some(" root ")
+        );
         assert_eq!(config.timeout, Some(8));
     }
 
@@ -471,5 +550,53 @@ dtb_file = "${package}/board.dtb"
             .unwrap();
         let expected = kernel_dir.join("board.dtb").display().to_string();
         assert_eq!(config.dtb_file.as_deref(), Some(expected.as_str()));
+    }
+
+    #[tokio::test]
+    async fn read_board_run_config_expands_every_shell_check_step_string() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("src/lib.rs"), "").unwrap();
+        let config_path = tmp.path().join("variables.board.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+board_type = "sample"
+shell_check_steps = [
+  {
+    shell_prefix = "${package}:/$",
+    shell_cmd = "run ${package}",
+    success_regex = ["${package} passed"],
+    fail_regex = ["${package} failed"],
+  },
+]
+"#,
+        )
+        .unwrap();
+
+        let config = read_run_config_from_path(&make_invocation(tmp.path()), &config_path)
+            .await
+            .unwrap();
+        let step = &config.shell_check_steps[0];
+        let package_path = tmp.path().display().to_string();
+
+        assert_eq!(step.shell_prefix, Some(format!("{package_path}:/$")));
+        assert_eq!(
+            step.shell_cmd.as_deref(),
+            Some(format!("run {package_path}").as_str())
+        );
+        assert_eq!(
+            step.success_regex,
+            Some(vec![format!("{package_path} passed")])
+        );
+        assert_eq!(
+            step.fail_regex,
+            Some(vec![format!("{package_path} failed")])
+        );
     }
 }
