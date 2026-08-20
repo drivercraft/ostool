@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0](https://github.com/drivercraft/ostool/compare/ostool-v0.27.1...ostool-v0.28.0) - 2026-08-20
+
+### Added
+
+- *(ostool)* add ordered shell check steps ([#170](https://github.com/drivercraft/ostool/pull/170))
+
 ## [0.27.1](https://github.com/drivercraft/ostool/compare/ostool-v0.27.0...ostool-v0.27.1) - 2026-08-07
 
 ### Added
