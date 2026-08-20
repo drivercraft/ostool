@@ -84,10 +84,22 @@ pub(crate) fn expand_board_session_variables(
     context: &BoardSessionContext,
     uploaded_files: &BTreeMap<String, Url>,
 ) -> anyhow::Result<()> {
-    let Some(shell_init_cmd) = board_config.shell_init_cmd.as_deref() else {
-        return Ok(());
-    };
-    let expanded = replace_placeholders(shell_init_cmd, |placeholder| match placeholder {
+    for step in &mut board_config.shell_check_steps {
+        step.shell_cmd = step
+            .shell_cmd
+            .as_deref()
+            .map(|command| expand_shell_command(command, context, uploaded_files))
+            .transpose()?;
+    }
+    Ok(())
+}
+
+fn expand_shell_command(
+    command: &str,
+    context: &BoardSessionContext,
+    uploaded_files: &BTreeMap<String, Url>,
+) -> anyhow::Result<String> {
+    replace_placeholders(command, |placeholder| match placeholder {
         "boardServerIp" => Ok(Some(context.server_ip.to_string())),
         "boardServerHttpBaseUrl" => Ok(Some(context.http_base_url.to_string())),
         "sessionFile" => bail!("session file placeholder must include a relative path"),
@@ -95,19 +107,17 @@ pub(crate) fn expand_board_session_variables(
             let relative_path = value.trim_start_matches("sessionFile:");
             let relative_path = normalize_relative_path(Path::new(relative_path))?;
             let url = uploaded_files.get(&relative_path).ok_or_else(|| {
-                    anyhow!(
-                        "shell_init_cmd references shared session file `{relative_path}` that was not uploaded"
-                    )
-                })?;
+                anyhow!(
+                    "shell check command references shared session file `{relative_path}` that was not uploaded"
+                )
+            })?;
             Ok(Some(url.to_string()))
         }
         value if value.starts_with("boardServer") || value.starts_with("sessionFile") => {
             bail!("unknown board session placeholder `${{{value}}}`")
         }
         _ => Ok(None),
-    })?;
-    board_config.shell_init_cmd = Some(expanded);
-    Ok(())
+    })
 }
 
 fn normalize_relative_path(path: &Path) -> anyhow::Result<String> {
@@ -198,10 +208,14 @@ mod tests {
     #[test]
     fn session_variables_expand_known_values_and_preserve_shell_variables() {
         let mut config = BoardRunConfig {
-            shell_init_cmd: Some(
-                "server=${boardServerIp}; file=${sessionFile:tools/probe.sh}; echo ${marker}"
-                    .into(),
-            ),
+            shell_check_steps: vec![crate::run::ShellCheckStep {
+                shell_prefix: Some("root#".into()),
+                shell_cmd: Some(
+                    "server=${boardServerIp}; file=${sessionFile:tools/probe.sh}; echo ${marker}"
+                        .into(),
+                ),
+                ..Default::default()
+            }],
             ..Default::default()
         };
         let context = BoardSessionContext {
@@ -217,7 +231,7 @@ mod tests {
         expand_board_session_variables(&mut config, &context, &files).unwrap();
 
         assert_eq!(
-            config.shell_init_cmd.as_deref(),
+            config.shell_check_steps[0].shell_cmd.as_deref(),
             Some(
                 "server=192.168.1.2; file=http://192.168.1.2:2999/share/sessions/session-1/tools/probe.sh; echo ${marker}"
             )
@@ -227,7 +241,11 @@ mod tests {
     #[test]
     fn session_variables_reject_missing_uploaded_file() {
         let mut config = BoardRunConfig {
-            shell_init_cmd: Some("${sessionFile:missing.sh}".into()),
+            shell_check_steps: vec![crate::run::ShellCheckStep {
+                shell_prefix: Some("root#".into()),
+                shell_cmd: Some("${sessionFile:missing.sh}".into()),
+                ..Default::default()
+            }],
             ..Default::default()
         };
         let context = BoardSessionContext {
@@ -237,5 +255,77 @@ mod tests {
         };
 
         assert!(expand_board_session_variables(&mut config, &context, &BTreeMap::new()).is_err());
+    }
+
+    #[test]
+    fn session_variables_expand_only_commands_across_all_shell_check_steps() {
+        let mut config = BoardRunConfig {
+            shell_check_steps: vec![
+                crate::run::ShellCheckStep {
+                    shell_prefix: Some("${sessionFile:not-a-reference-prefix}".into()),
+                    shell_cmd: Some(
+                        concat!(
+                            "server=${boardServerIp}; base=${boardServerHttpBaseUrl}; ",
+                            "wget ${sessionFile:tools/probe.sh} -O /tmp/probe.sh"
+                        )
+                        .into(),
+                    ),
+                    success_regex: Some(vec!["${sessionFile:not-a-reference-success}".into()]),
+                    fail_regex: Some(vec!["${sessionFile:not-a-reference-fail}".into()]),
+                    ..Default::default()
+                },
+                crate::run::ShellCheckStep {
+                    shell_prefix: Some("root#".into()),
+                    shell_cmd: Some("sh ${sessionFile:scripts/check.sh}".into()),
+                    success_regex: Some(vec!["PASS".into()]),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let context = BoardSessionContext {
+            session_id: "session-1".into(),
+            server_ip: "192.168.1.2".parse().unwrap(),
+            http_base_url: Url::parse("http://192.168.1.2:2999/").unwrap(),
+        };
+        let files = BTreeMap::from([
+            (
+                "tools/probe.sh".into(),
+                Url::parse("http://192.168.1.2:2999/share/sessions/session-1/tools/probe.sh")
+                    .unwrap(),
+            ),
+            (
+                "scripts/check.sh".into(),
+                Url::parse("http://192.168.1.2:2999/share/sessions/session-1/scripts/check.sh")
+                    .unwrap(),
+            ),
+        ]);
+
+        expand_board_session_variables(&mut config, &context, &files).unwrap();
+
+        assert_eq!(
+            config.shell_check_steps[0].shell_cmd.as_deref(),
+            Some(concat!(
+                "server=192.168.1.2; base=http://192.168.1.2:2999/; ",
+                "wget http://192.168.1.2:2999/share/sessions/session-1/tools/probe.sh ",
+                "-O /tmp/probe.sh"
+            ))
+        );
+        assert_eq!(
+            config.shell_check_steps[1].shell_cmd.as_deref(),
+            Some("sh http://192.168.1.2:2999/share/sessions/session-1/scripts/check.sh")
+        );
+        assert_eq!(
+            config.shell_check_steps[0].shell_prefix.as_deref(),
+            Some("${sessionFile:not-a-reference-prefix}")
+        );
+        assert_eq!(
+            config.shell_check_steps[0].success_regex.as_deref(),
+            Some(&["${sessionFile:not-a-reference-success}".into()][..])
+        );
+        assert_eq!(
+            config.shell_check_steps[0].fail_regex.as_deref(),
+            Some(&["${sessionFile:not-a-reference-fail}".into()][..])
+        );
     }
 }

@@ -246,9 +246,6 @@ uefi = false
 # 可选兼容字段。UEFI QEMU 会自动准备所需 BIN。
 to_bin = false
 
-# 成功运行的正则表达式（用于自动检测）
-success_regex = ["Hello from my OS", "Kernel booted successfully"]
-
 # 失败运行的正则表达式（用于自动检测）
 fail_regex = ["panic", "error", "failed"]
 ```
@@ -281,12 +278,41 @@ board_reset_cmd = "reset"
 # 板子断电命令（可选）
 board_power_off_cmd = "poweroff"
 
-# 成功启动的正则表达式
-success_regex = ["Starting kernel", "Boot successful"]
-
 # 失败启动的正则表达式
 fail_regex = ["Boot failed", "Error loading kernel"]
 ```
+
+### 有序 Shell 初始化步骤
+
+QEMU、U-Boot 和 board 配置都使用 `shell_check_steps` 描述有序的 shell 命令与结果检查。例如先从 Axvisor shell 切换到 VM console，再在 guest shell 中执行测试命令：
+
+```toml
+fail_regex = ["(?i)failed|panic"]
+
+shell_check_steps = [
+  { shell_prefix = "axvisor:/$", shell_cmd = "vm console 1" },
+  { shell_prefix = "root@starry:/root #", shell_cmd = "pwd && echo 'starry guest test pass'", success_regex = ["(?m)^starry guest test pass\\s*$"], fail_regex = ["(?i)failed|panic"], timeout = 30 },
+]
+```
+
+数组下标就是执行顺序。需要发送命令的步骤必须能取得非空 `shell_prefix`；后续命令步骤省略它时会自动继承前一步的 prefix，显式写空字符串会报错。`shell_cmd` 可以省略，此时该步骤不等待 prompt、不发送命令，只按 `success_regex`/`fail_regex` 检查输出，适合 profile autorun 或内核自行运行测试的场景。
+
+步骤同时配置 `success_regex` 和 `fail_regex` 时，ostool 会先检查失败表达式，再检查成功表达式；任意一个成功表达式匹配后就进入下一步，任意一个失败表达式匹配则测试失败。只配置 `fail_regex` 会因为没有成功完成条件而被拒绝。`timeout` 是命令步骤发送完成后的等待秒数，且必须大于 0；不发送命令的被动步骤应使用顶层总 `timeout`。
+
+如果一步没有配置 `success_regex` 和 `fail_regex`，命令完成 write/flush 后直接进入下一步。最后一步完成后，整个 shell-check 序列即视为测试成功。顶层 `fail_regex` 和 `timeout` 分别是全局失败条件和总超时；步骤内 `fail_regex` 只在当前步骤等待结果时生效。
+
+顶层 `success_regex` 已移除；成功条件必须放到相应的 `shell_check_steps` 步骤中。步骤的 prefix、命令和正则支持普通变量展开。board 的 `${boardServerIp}`、`${boardServerHttpBaseUrl}` 和 `${sessionFile:<relative-path>}` 仅在每一步的 `shell_cmd` 中展开。
+
+只检查自行产生的输出时，可以使用无命令步骤：
+
+```toml
+[[shell_check_steps]]
+success_regex = ["(?m)^TEST_PASSED\\s*$"]
+```
+
+这是一次配置硬切换：旧的顶层 shell prefix/command、旧步骤数组及旧步骤命令字段已经移除，旧配置需要整体迁移到 `shell_check_steps`，不会被兼容读取。
+
+对于运行在 Axvisor 后面的 Starry guest，把旧的顶层成功表达式放到执行 guest 命令的步骤中；这样该步骤自己的 success/fail 负责判断命令结果，顶层 fail 继续兜底整个运行过程。
 
 ### 环境变量支持
 
@@ -318,7 +344,7 @@ ostool board config
 
 `.board.toml` 可以用 `session_files` 声明相对于配置文件目录的共享文件。调用方通过
 `BoardRunRequest::with_session_files` 提供该目录，ostool 会在 board session
-建立后按原相对路径上传，并在 `shell_init_cmd` 中展开
+建立后按原相对路径上传，并在每个 `shell_check_steps` 的 `shell_cmd` 中展开
 `${boardServerIp}`、`${boardServerHttpBaseUrl}` 和
 `${sessionFile:<relative-path>}`。绝对路径、`..`、符号链接逃逸、重复路径及缺失
 文件都会在运行前被拒绝；接口不提供 alias 或上传改名。

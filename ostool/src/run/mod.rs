@@ -29,13 +29,15 @@ pub(crate) mod tftp;
 /// U-Boot bootloader integration.
 pub mod uboot;
 
-/// Shared byte-stream matcher for runtime output detection.
+/// Shared byte-stream matcher for runtime failure detection.
 mod output_matcher;
 
-pub use output_matcher::{ByteStreamMatcher, StreamMatch, StreamMatchKind};
+pub use output_matcher::{FailMatch, FailStreamMatcher};
 
 /// OVMF prebuilt firmware downloader backing the public cache API.
 pub(crate) mod ovmf_prebuilt;
 
-/// Shared shell auto-init matcher and delayed command sender.
-pub(crate) mod shell_init;
+/// Shared shell check matcher and delayed command sender.
+pub(crate) mod shell_check;
+
+pub use shell_check::ShellCheckStep;

@@ -9,91 +9,59 @@ const MAX_MATCH_WINDOW_BYTES: usize = 2048;
 const MATCH_EXCERPT_CONTEXT_CHARS: usize = 120;
 const MATCH_EXCERPT_MAX_CHARS: usize = 240;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StreamMatchKind {
-    Success,
-    Fail,
-}
-
-impl StreamMatchKind {
-    pub(crate) fn into_result(self, matched: &StreamMatch) -> anyhow::Result<()> {
-        match self {
-            StreamMatchKind::Success => Ok(()),
-            StreamMatchKind::Fail => Err(anyhow!(
-                "Fail pattern matched '{}': {}",
-                matched.matched_regex,
-                match_excerpt(&matched.matched_text, &matched.matched_regex)
-            )),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
-pub struct StreamMatch {
-    pub kind: StreamMatchKind,
+pub struct FailMatch {
     pub matched_regex: String,
     pub matched_text: String,
     pub deadline: Instant,
 }
 
-pub(crate) fn compile_regexes(
-    success_patterns: &[String],
-    fail_patterns: &[String],
-) -> anyhow::Result<(Vec<Regex>, Vec<Regex>)> {
-    let success_regex = success_patterns
-        .iter()
-        .map(|p| Regex::new(p).map_err(|e| anyhow!("success regex error: {e}")))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let fail_regex = fail_patterns
-        .iter()
-        .map(|p| Regex::new(p).map_err(|e| anyhow!("fail regex error: {e}")))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok((success_regex, fail_regex))
+impl FailMatch {
+    pub(crate) fn into_error(self) -> anyhow::Error {
+        anyhow!(
+            "Fail pattern matched '{}': {}",
+            self.matched_regex,
+            match_excerpt(&self.matched_text, &self.matched_regex)
+        )
+    }
 }
 
-pub(crate) fn print_match_event(matched: &StreamMatch) {
-    match matched.kind {
-        StreamMatchKind::Success => println!(
-            "{}",
-            format!(
-                "\n=== SUCCESS PATTERN MATCHED: {} ===",
-                matched.matched_regex
-            )
-            .green()
-        ),
-        StreamMatchKind::Fail => println!(
-            "{}",
-            format!("\n=== FAIL PATTERN MATCHED: {}", matched.matched_regex).red()
-        ),
-    }
+pub(crate) fn compile_fail_regexes(fail_patterns: &[String]) -> anyhow::Result<Vec<Regex>> {
+    fail_patterns
+        .iter()
+        .map(|p| Regex::new(p).map_err(|e| anyhow!("fail regex error: {e}")))
+        .collect::<Result<Vec<_>, _>>()
+}
+
+pub(crate) fn print_fail_match(matched: &FailMatch) {
+    println!(
+        "{}",
+        format!("\n=== FAIL PATTERN MATCHED: {}", matched.matched_regex).red()
+    );
 }
 
 #[derive(Debug, Clone)]
 enum StreamMatchState {
     Pending,
-    Matched(StreamMatch),
+    Matched(FailMatch),
 }
 
-pub struct ByteStreamMatcher {
-    success_regex: Vec<Regex>,
+pub struct FailStreamMatcher {
     fail_regex: Vec<Regex>,
     match_buf: Vec<u8>,
     state: StreamMatchState,
 }
 
-impl ByteStreamMatcher {
-    pub fn new(success_regex: Vec<Regex>, fail_regex: Vec<Regex>) -> Self {
+impl FailStreamMatcher {
+    pub fn new(fail_regex: Vec<Regex>) -> Self {
         Self {
-            success_regex,
             fail_regex,
             match_buf: Vec::with_capacity(MAX_MATCH_WINDOW_BYTES),
             state: StreamMatchState::Pending,
         }
     }
 
-    pub fn observe_byte(&mut self, byte: u8) -> Option<StreamMatch> {
+    pub fn observe_byte(&mut self, byte: u8) -> Option<FailMatch> {
         self.match_buf.push(byte);
         if self.match_buf.len() > MAX_MATCH_WINDOW_BYTES {
             let overflow = self.match_buf.len() - MAX_MATCH_WINDOW_BYTES;
@@ -109,22 +77,10 @@ impl ByteStreamMatcher {
                     .fail_regex
                     .iter()
                     .find(|regex| regex.is_match(&text))
-                    .map(|regex| StreamMatch {
-                        kind: StreamMatchKind::Fail,
+                    .map(|regex| FailMatch {
                         matched_regex: regex.as_str().to_string(),
                         matched_text: text.to_string(),
                         deadline: Instant::now() + MATCH_DRAIN_DURATION,
-                    })
-                    .or_else(|| {
-                        self.success_regex
-                            .iter()
-                            .find(|regex| regex.is_match(&text))
-                            .map(|regex| StreamMatch {
-                                kind: StreamMatchKind::Success,
-                                matched_regex: regex.as_str().to_string(),
-                                matched_text: text.to_string(),
-                                deadline: Instant::now() + MATCH_DRAIN_DURATION,
-                            })
                     });
 
                 if let Some(matched) = matched {
@@ -138,7 +94,7 @@ impl ByteStreamMatcher {
         }
     }
 
-    pub fn matched(&self) -> Option<&StreamMatch> {
+    pub fn matched(&self) -> Option<&FailMatch> {
         match &self.state {
             StreamMatchState::Pending => None,
             StreamMatchState::Matched(matched) => Some(matched),
@@ -236,8 +192,7 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ByteStreamMatcher, StreamMatchKind, compile_regexes, match_excerpt,
-        strip_ansi_escape_sequences,
+        FailStreamMatcher, compile_fail_regexes, match_excerpt, strip_ansi_escape_sequences,
     };
     use regex::Regex;
 
@@ -250,9 +205,22 @@ mod tests {
     }
 
     #[test]
+    fn runtime_output_matcher_accepts_only_global_fail_patterns() {
+        let fail = compile_fail_regexes(&["panic".to_string()]).unwrap();
+        let mut matcher = FailStreamMatcher::new(fail);
+
+        let matched = b"kernel panic\n"
+            .iter()
+            .find_map(|byte| matcher.observe_byte(*byte))
+            .expect("expected global fail match");
+
+        assert_eq!(matched.matched_regex, "panic");
+    }
+
+    #[test]
     fn fail_matcher_ignores_ansi_sequences() {
         let mut matcher =
-            ByteStreamMatcher::new(vec![], vec![Regex::new("(?i)\\bpanic(?:ked)?\\b").unwrap()]);
+            FailStreamMatcher::new(vec![Regex::new("(?i)\\bpanic(?:ked)?\\b").unwrap()]);
 
         let input = "\u{1b}[31mpanicked at os/arceos/foo.rs:1:1\n";
         let mut matched = None;
@@ -261,16 +229,13 @@ mod tests {
         }
 
         let matched = matched.expect("expected panic match");
-        assert_eq!(matched.kind, StreamMatchKind::Fail);
         assert!(matched.matched_text.to_ascii_lowercase().contains("panic"));
     }
 
     #[test]
     fn matcher_detects_fail_pattern_across_multiple_lines() {
-        let mut matcher = ByteStreamMatcher::new(
-            vec![],
-            vec![Regex::new("Failed to load VM images").unwrap()],
-        );
+        let mut matcher =
+            FailStreamMatcher::new(vec![Regex::new("Failed to load VM images").unwrap()]);
 
         let input = "line one\nline two\npanicked at foo\nFailed to load VM images: AxErrorKind::NotFound\n";
         let mut matched = None;
@@ -279,13 +244,12 @@ mod tests {
         }
 
         let matched = matched.expect("expected match");
-        assert_eq!(matched.kind, StreamMatchKind::Fail);
         assert!(matched.matched_text.contains("Failed to load VM images"));
     }
 
     #[test]
-    fn compile_regexes_keeps_empty_fail_patterns_empty() {
-        let (_success, fail) = compile_regexes(&[], &[]).unwrap();
+    fn compile_fail_regexes_keeps_empty_patterns_empty() {
+        let fail = compile_fail_regexes(&[]).unwrap();
 
         assert!(fail.is_empty());
     }

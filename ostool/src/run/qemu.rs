@@ -18,7 +18,6 @@
 //! # `to_bin` remains supported for explicit legacy configurations, but QEMU
 //! # UEFI boot prepares the required BIN artifact automatically.
 //! to_bin = true
-//! success_regex = ["All tests passed"]
 //! fail_regex = ["PANIC", "FAILED"]
 //! ```
 
@@ -29,7 +28,7 @@ use std::{
     path::PathBuf,
     process::Stdio,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, anyhow};
@@ -37,7 +36,7 @@ use anyhow::{Context, anyhow};
 use colored::Colorize;
 use object::Architecture;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use tokio::{
     fs,
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -56,11 +55,10 @@ use crate::{
     project::{ProjectLayout, metadata},
     run::{
         execution::{RunnerExecutionSummary, RunnerExitStatus, timeout_duration},
-        output_matcher::{ByteStreamMatcher, compile_regexes, print_match_event},
+        output_matcher::{FailStreamMatcher, compile_fail_regexes, print_fail_match},
         qemu_plan::{QemuBootSource, QemuCommandPlanInput, build_qemu_command_plan},
-        shell_init::{
-            SHELL_INIT_CHUNK_DELAY, SHELL_INIT_CHUNK_SIZE, SHELL_INIT_DELAY, ShellAutoInitMatcher,
-            normalize_shell_init_config,
+        shell_check::{
+            ShellCheckDriver, ShellCheckMatcher, ShellCheckStep, normalize_shell_check_steps,
         },
     },
     sterm::{AsyncTerminal, TerminalConfig},
@@ -78,7 +76,7 @@ enum UefiBootConfig {
 /// QEMU configuration structure.
 ///
 /// This configuration is typically loaded from a `.qemu.toml` file.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq, Default)]
 pub struct QemuConfig {
     /// Additional QEMU command-line arguments.
     pub args: Vec<String>,
@@ -90,16 +88,64 @@ pub struct QemuConfig {
     /// automatically even when this is unset.
     #[serde(default)]
     pub to_bin: bool,
-    /// Regex patterns that indicate successful execution.
-    pub success_regex: Vec<String>,
     /// Regex patterns that indicate failed execution.
     pub fail_regex: Vec<String>,
-    /// String prefix that indicates the guest shell is ready.
-    pub shell_prefix: Option<String>,
-    /// Command sent once after `shell_prefix` is detected.
-    pub shell_init_cmd: Option<String>,
+    /// Ordered shell commands and result checks.
+    #[serde(default)]
+    pub shell_check_steps: Vec<ShellCheckStep>,
     /// Timeout in seconds. `None` or `0` disables the timeout.
     pub timeout: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct QemuConfigWire {
+    args: Vec<String>,
+    uefi: bool,
+    #[serde(default)]
+    to_bin: bool,
+    fail_regex: Vec<String>,
+    #[serde(default)]
+    shell_check_steps: Vec<ShellCheckStep>,
+    timeout: Option<u64>,
+    shell_prefix: Option<serde::de::IgnoredAny>,
+    shell_init_cmd: Option<serde::de::IgnoredAny>,
+    shell_init_steps: Option<serde::de::IgnoredAny>,
+}
+
+impl<'de> Deserialize<'de> for QemuConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = QemuConfigWire::deserialize(deserializer)?;
+        reject_removed_qemu_shell_key(&wire)?;
+        Ok(Self {
+            args: wire.args,
+            uefi: wire.uefi,
+            to_bin: wire.to_bin,
+            fail_regex: wire.fail_regex,
+            shell_check_steps: wire.shell_check_steps,
+            timeout: wire.timeout,
+        })
+    }
+}
+
+fn reject_removed_qemu_shell_key<E>(wire: &QemuConfigWire) -> Result<(), E>
+where
+    E: serde::de::Error,
+{
+    for (key, present) in [
+        ("shell_prefix", wire.shell_prefix.is_some()),
+        ("shell_init_cmd", wire.shell_init_cmd.is_some()),
+        ("shell_init_steps", wire.shell_init_steps.is_some()),
+    ] {
+        if present {
+            return Err(E::custom(format!(
+                "removed QEMU config key `{key}`; use `shell_check_steps`"
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl QemuConfig {
@@ -109,39 +155,28 @@ impl QemuConfig {
             .iter()
             .map(|arg| variables::expand_variables(arg, scope))
             .collect::<anyhow::Result<Vec<_>>>()?;
-        self.success_regex = self
-            .success_regex
-            .iter()
-            .map(|arg| variables::expand_variables(arg, scope))
-            .collect::<anyhow::Result<Vec<_>>>()?;
         self.fail_regex = self
             .fail_regex
             .iter()
             .map(|arg| variables::expand_variables(arg, scope))
             .collect::<anyhow::Result<Vec<_>>>()?;
-        self.shell_prefix = self
-            .shell_prefix
-            .as_deref()
-            .map(|value| variables::expand_variables(value, scope))
-            .transpose()?;
-        self.shell_init_cmd = self
-            .shell_init_cmd
-            .as_deref()
-            .map(|value| variables::expand_variables(value, scope))
-            .transpose()?;
+        for step in &mut self.shell_check_steps {
+            step.replace_strings(scope)?;
+        }
         Ok(())
     }
 
     fn normalize(&mut self, config_name: &str) -> anyhow::Result<()> {
-        normalize_shell_init_config(
-            &mut self.shell_prefix,
-            &mut self.shell_init_cmd,
-            config_name,
-        )
+        normalize_shell_check_steps(&mut self.shell_check_steps, config_name).map(drop)
     }
 
-    fn shell_auto_init(&self) -> Option<ShellAutoInitMatcher> {
-        ShellAutoInitMatcher::new(self.shell_prefix.clone(), self.shell_init_cmd.clone())
+    fn shell_check_matcher(&self) -> anyhow::Result<Option<ShellCheckMatcher>> {
+        if self.shell_check_steps.is_empty() {
+            return Ok(None);
+        }
+        let mut steps = self.shell_check_steps.clone();
+        let resolved = normalize_shell_check_steps(&mut steps, "QEMU runtime config")?;
+        Ok(Some(ShellCheckMatcher::from_steps(resolved)?))
     }
 
     fn requires_bin_artifact(&self) -> bool {
@@ -301,7 +336,6 @@ pub(crate) async fn run_qemu_with_config(
         input,
         config,
         dtbdump: run_args.dtb_dump,
-        success_regex: vec![],
         fail_regex: vec![],
     };
     runner.run().await
@@ -418,7 +452,6 @@ struct QemuRunner {
     input: QemuRunInput,
     config: QemuConfig,
     dtbdump: bool,
-    success_regex: Vec<regex::Regex>,
     fail_regex: Vec<regex::Regex>,
 }
 
@@ -505,7 +538,8 @@ impl QemuRunner {
             .context("failed to capture QEMU stderr")?;
 
         let (inbound_tx, inbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (outbound_tx, mut outbound_rx) =
+            mpsc::unbounded_channel::<crate::sterm::TerminalInput>();
         let stderr_capture = Arc::new(Mutex::new(Vec::<u8>::new()));
 
         let stdout_task = tokio::spawn(read_child_stream(stdout, inbound_tx.clone(), None));
@@ -516,23 +550,17 @@ impl QemuRunner {
         ));
         let write_task = tokio::spawn(async move {
             let mut stdin = stdin;
-            while let Some(bytes) = outbound_rx.recv().await {
-                if let Err(err) = stdin.write_all(&bytes).await {
-                    if err.kind() != ErrorKind::BrokenPipe {
-                        return Err(err).context("failed to forward stdin to QEMU");
-                    }
-                    break;
-                }
-                stdin.flush().await.context("failed to flush QEMU stdin")?;
+            while let Some(input) = outbound_rx.recv().await {
+                write_qemu_input(&mut stdin, input).await?;
             }
             Ok::<(), anyhow::Error>(())
         });
 
-        let matcher = Arc::new(Mutex::new(ByteStreamMatcher::new(
-            self.success_regex.clone(),
-            self.fail_regex.clone(),
-        )));
-        let shell_auto_init = Arc::new(Mutex::new(self.config.shell_auto_init()));
+        let matcher = Arc::new(Mutex::new(FailStreamMatcher::new(self.fail_regex.clone())));
+        let shell_check_driver = self
+            .config
+            .shell_check_matcher()?
+            .map(ShellCheckDriver::new);
         let match_result = Arc::new(Mutex::new(None));
         let terminal = AsyncTerminal::new(TerminalConfig {
             intercept_exit_sequence: false,
@@ -541,29 +569,23 @@ impl QemuRunner {
         });
 
         let terminal_result = terminal
-            .run(inbound_rx, outbound_tx, {
+            .run_with_write_ack(inbound_rx, outbound_tx, {
                 let matcher = matcher.clone();
-                let shell_auto_init = shell_auto_init.clone();
+                let shell_check_driver = shell_check_driver.clone();
                 let match_result = match_result.clone();
-                move |handle, byte| {
+                move |handle, chunk| {
                     let mut matcher = matcher.lock().unwrap();
-                    if let Some(matched) = matcher.observe_byte(byte) {
-                        print_match_event(&matched);
-                        let mut result = match_result.lock().unwrap();
-                        *result = Some(matched);
-                        handle.stop_after(crate::run::output_matcher::MATCH_DRAIN_DURATION);
+                    for byte in chunk {
+                        if let Some(matched) = matcher.observe_byte(*byte) {
+                            print_fail_match(&matched);
+                            let mut result = match_result.lock().unwrap();
+                            *result = Some(matched);
+                            handle.stop_after(crate::run::output_matcher::MATCH_DRAIN_DURATION);
+                        }
                     }
 
-                    let mut shell_auto_init = shell_auto_init.lock().unwrap();
-                    if let Some(shell_auto_init) = shell_auto_init.as_mut()
-                        && let Some(command) = shell_auto_init.observe_byte(byte)
-                    {
-                        handle.send_after_chunks(
-                            SHELL_INIT_DELAY,
-                            command,
-                            SHELL_INIT_CHUNK_SIZE,
-                            SHELL_INIT_CHUNK_DELAY,
-                        );
+                    if let Some(shell_check_driver) = shell_check_driver.as_ref() {
+                        shell_check_driver.observe_chunk(handle, chunk);
                     }
 
                     if matcher.should_stop() {
@@ -573,7 +595,19 @@ impl QemuRunner {
             })
             .await;
 
-        let should_kill = matcher.lock().unwrap().should_stop() || terminal_result.is_err();
+        let writer_error = shutdown_qemu_writer_task(write_task).await.err();
+
+        let shell_check_completed = shell_check_driver
+            .as_ref()
+            .is_some_and(ShellCheckDriver::completed);
+        let shell_check_failure = shell_check_driver
+            .as_ref()
+            .and_then(ShellCheckDriver::completion_error);
+        let should_kill = matcher.lock().unwrap().should_stop()
+            || shell_check_completed
+            || shell_check_failure.is_some()
+            || writer_error.is_some()
+            || terminal_result.is_err();
         if should_kill
             && child
                 .try_wait()
@@ -588,7 +622,6 @@ impl QemuRunner {
         let status = child.wait().await?;
         let _ = stdout_task.await;
         let _ = stderr_task.await;
-        let _ = write_task.await;
 
         let stderr = stderr_capture.lock().unwrap().clone();
         RunnerExecutionSummary::new(
@@ -596,8 +629,10 @@ impl QemuRunner {
             RunnerExitStatus::process(status),
             started_at.elapsed(),
         )
-        .with_terminal_error(terminal_result.err())
-        .with_stream_match(match_result.lock().unwrap().take())
+        .with_terminal_error(terminal_result.err().or(writer_error))
+        .with_shell_check_error(shell_check_failure)
+        .with_shell_check_completed(shell_check_completed)
+        .with_fail_match(match_result.lock().unwrap().take())
         .with_stderr_log(&stderr)
         .into_result()
     }
@@ -720,10 +755,41 @@ impl QemuRunner {
     }
 
     fn prepare_regex(&mut self) -> anyhow::Result<()> {
-        let (success, fail) = compile_regexes(&self.config.success_regex, &self.config.fail_regex)?;
-        self.success_regex = success;
-        self.fail_regex = fail;
+        self.fail_regex = compile_fail_regexes(&self.config.fail_regex)?;
         Ok(())
+    }
+}
+
+async fn write_qemu_input<W>(
+    writer: &mut W,
+    input: crate::sterm::TerminalInput,
+) -> anyhow::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    if let Err(error) = writer.write_all(input.bytes()).await {
+        input.acknowledge_failed(format!("failed to write QEMU stdin: {error}"));
+        return Err(error).context("failed to write QEMU stdin");
+    }
+    if let Err(error) = writer.flush().await {
+        input.acknowledge_failed(format!("failed to flush QEMU stdin: {error}"));
+        return Err(error).context("failed to flush QEMU stdin");
+    }
+    input.acknowledge_flushed();
+    Ok(())
+}
+
+async fn shutdown_qemu_writer_task(
+    mut task: tokio::task::JoinHandle<anyhow::Result<()>>,
+) -> anyhow::Result<()> {
+    match tokio::time::timeout(Duration::from_secs(1), &mut task).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(error)) => Err(anyhow!("QEMU stdin writer task join error: {error}")),
+        Err(_) => {
+            task.abort();
+            let _ = task.await;
+            Err(anyhow!("QEMU stdin writer task did not stop within 1s"))
+        }
     }
 }
 
@@ -803,14 +869,22 @@ mod tests {
         QemuConfig, QemuRunInput, QemuRunner, RunQemuOptions, build_default_qemu_config,
         default_qemu_config_for_cargo, ensure_config_for_cargo, ensure_qemu_config_at_path,
         infer_target_arch, read_config_from_path, read_qemu_config_at_path,
-        resolve_qemu_config_path_in_dir, run_qemu_with_config, timeout_duration,
+        resolve_qemu_config_path_in_dir, run_qemu_with_config, shutdown_qemu_writer_task,
+        timeout_duration, write_qemu_input,
     };
     use object::Architecture;
     use std::{
         path::{Path, PathBuf},
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        task::{Context, Poll},
         time::Duration,
     };
     use tempfile::TempDir;
+    use tokio::io::AsyncWrite;
 
     use crate::{
         artifact::{
@@ -823,11 +897,179 @@ mod tests {
         },
         invocation::{Invocation, InvocationOptions},
         run::{
-            output_matcher::{ByteStreamMatcher, StreamMatchKind},
-            shell_init::ShellAutoInitMatcher,
+            output_matcher::FailStreamMatcher,
+            shell_check::{ShellCheckMatcher, ShellCheckStep, normalize_shell_check_steps},
         },
     };
     use std::collections::HashMap;
+
+    #[derive(Clone, Copy)]
+    enum WriterFailure {
+        None,
+        Write,
+        Flush,
+    }
+
+    struct FlushCheckingWriter {
+        callback_ran: Arc<AtomicBool>,
+        failure: WriterFailure,
+        flushes: usize,
+    }
+
+    impl AsyncWrite for FlushCheckingWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            bytes: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            if matches!(self.failure, WriterFailure::Write) {
+                Poll::Ready(Err(std::io::Error::other("injected write failure")))
+            } else {
+                Poll::Ready(Ok(bytes.len()))
+            }
+        }
+
+        fn poll_flush(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            assert!(!self.callback_ran.load(Ordering::Acquire));
+            if matches!(self.failure, WriterFailure::Flush) {
+                return Poll::Ready(Err(std::io::Error::other("injected flush failure")));
+            }
+            self.flushes += 1;
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn qemu_writer_acknowledges_only_after_flush() {
+        let callback_ran = Arc::new(AtomicBool::new(false));
+        let callback_ran_clone = callback_ran.clone();
+        let input = crate::sterm::TerminalInput::for_test(b"command\n".to_vec(), move |result| {
+            result.unwrap();
+            callback_ran_clone.store(true, Ordering::Release);
+        });
+        let mut writer = FlushCheckingWriter {
+            callback_ran: callback_ran.clone(),
+            failure: WriterFailure::None,
+            flushes: 0,
+        };
+
+        write_qemu_input(&mut writer, input).await.unwrap();
+
+        assert_eq!(writer.flushes, 1);
+        assert!(callback_ran.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn qemu_writer_reports_write_failure() {
+        let error_seen = Arc::new(std::sync::Mutex::new(None));
+        let error_seen_clone = error_seen.clone();
+        let input = crate::sterm::TerminalInput::for_test(b"command\n".to_vec(), move |result| {
+            *error_seen_clone.lock().unwrap() = result.err().map(|error| error.to_string());
+        });
+        let mut writer = FlushCheckingWriter {
+            callback_ran: Arc::new(AtomicBool::new(false)),
+            failure: WriterFailure::Write,
+            flushes: 0,
+        };
+
+        let error = write_qemu_input(&mut writer, input).await.unwrap_err();
+
+        assert!(error.to_string().contains("failed to write QEMU stdin"));
+        assert_eq!(writer.flushes, 0);
+        assert_eq!(
+            error_seen.lock().unwrap().as_deref(),
+            Some("failed to write QEMU stdin: injected write failure")
+        );
+    }
+
+    #[tokio::test]
+    async fn qemu_writer_reports_flush_failure() {
+        let error_seen = Arc::new(std::sync::Mutex::new(None));
+        let error_seen_clone = error_seen.clone();
+        let input = crate::sterm::TerminalInput::for_test(b"command\n".to_vec(), move |result| {
+            *error_seen_clone.lock().unwrap() = result.err().map(|error| error.to_string());
+        });
+        let mut writer = FlushCheckingWriter {
+            callback_ran: Arc::new(AtomicBool::new(false)),
+            failure: WriterFailure::Flush,
+            flushes: 0,
+        };
+
+        let error = write_qemu_input(&mut writer, input).await.unwrap_err();
+
+        assert!(error.to_string().contains("failed to flush QEMU stdin"));
+        assert_eq!(writer.flushes, 0);
+        assert_eq!(
+            error_seen.lock().unwrap().as_deref(),
+            Some("failed to flush QEMU stdin: injected flush failure")
+        );
+    }
+
+    #[tokio::test]
+    async fn qemu_writer_reports_first_chunk_failure_once_for_chunked_operation() {
+        let (handle, mut rx) = crate::sterm::TerminalHandle::acknowledged_for_test();
+        let completions = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let completions_clone = completions.clone();
+        handle.send_after_chunks_then(
+            Duration::ZERO,
+            vec![b'x'; 192],
+            64,
+            Duration::ZERO,
+            move |_, result| {
+                completions_clone
+                    .lock()
+                    .unwrap()
+                    .push(result.err().map(|error| error.to_string()));
+            },
+        );
+
+        let first = rx.recv().await.unwrap();
+        assert_eq!(first.bytes().len(), 64);
+        let mut failing_writer = FlushCheckingWriter {
+            callback_ran: Arc::new(AtomicBool::new(false)),
+            failure: WriterFailure::Write,
+            flushes: 0,
+        };
+        let error = write_qemu_input(&mut failing_writer, first)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("failed to write QEMU stdin"));
+
+        for _ in 0..2 {
+            let input = rx.recv().await.unwrap();
+            assert_eq!(input.bytes().len(), 64);
+            let mut writer = FlushCheckingWriter {
+                callback_ran: Arc::new(AtomicBool::new(false)),
+                failure: WriterFailure::None,
+                flushes: 0,
+            };
+            write_qemu_input(&mut writer, input).await.unwrap();
+        }
+        tokio::task::yield_now().await;
+
+        assert_eq!(
+            completions.lock().unwrap().as_slice(),
+            &[Some(
+                "failed to write QEMU stdin: injected write failure".to_string()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn qemu_writer_task_error_is_preserved() {
+        let task = tokio::spawn(async { Err(anyhow::anyhow!("injected writer failure")) });
+
+        let error = shutdown_qemu_writer_task(task).await.unwrap_err();
+
+        assert_eq!(error.to_string(), "injected writer failure");
+    }
 
     fn write_single_crate_manifest(dir: &std::path::Path) {
         std::fs::write(
@@ -864,7 +1106,6 @@ mod tests {
 
         assert!(config.to_bin);
         assert_eq!(config.args, vec!["-nographic", "-cpu", "cortex-a53"]);
-        assert!(config.success_regex.is_empty());
         assert!(config.fail_regex.is_empty());
         assert_eq!(config.timeout, None);
     }
@@ -906,10 +1147,10 @@ mod tests {
 args = ["-nographic", "-machine", "virt"]
 uefi = false
 to_bin = false
-success_regex = ["PASS"]
 fail_regex = ["FAIL"]
-shell_prefix = "login:"
-shell_init_cmd = "root"
+shell_check_steps = [
+  { shell_prefix = "login:", shell_cmd = "root", success_regex = ["PASS"] },
+]
 "#,
         )
         .unwrap();
@@ -919,10 +1160,19 @@ shell_init_cmd = "root"
         let config = read_qemu_config_at_path(&scope, config_path).await.unwrap();
 
         assert!(!config.to_bin);
-        assert_eq!(config.success_regex, vec!["PASS"]);
         assert_eq!(config.fail_regex, vec!["FAIL"]);
-        assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
-        assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
+        assert_eq!(
+            config.shell_check_steps[0].shell_prefix.as_deref(),
+            Some("login:")
+        );
+        assert_eq!(
+            config.shell_check_steps[0].shell_cmd.as_deref(),
+            Some("root")
+        );
+        assert_eq!(
+            config.shell_check_steps[0].success_regex.as_deref(),
+            Some(&["PASS".to_string()][..])
+        );
         assert_eq!(config.args, vec!["-nographic", "-machine", "virt"]);
     }
 
@@ -979,7 +1229,6 @@ shell_init_cmd = "root"
 args = ["-custom"]
 uefi = false
 to_bin = true
-success_regex = []
 fail_regex = []
 "#,
         )
@@ -1124,7 +1373,6 @@ fail_regex = []
 args = ["-nographic"]
 uefi = false
 to_bin = true
-success_regex = []
 fail_regex = []
 timeout = 0
 "#,
@@ -1140,7 +1388,6 @@ timeout = 0
             r#"
 args = ["-nographic"]
 uefi = false
-success_regex = []
 fail_regex = []
 "#,
         )
@@ -1150,9 +1397,12 @@ fail_regex = []
     }
 
     #[test]
-    fn qemu_config_normalize_rejects_shell_init_without_prefix() {
+    fn qemu_config_normalize_rejects_shell_check_without_prefix() {
         let mut config = QemuConfig {
-            shell_init_cmd: Some("root".into()),
+            shell_check_steps: vec![ShellCheckStep {
+                shell_cmd: Some("root".into()),
+                ..Default::default()
+            }],
             ..Default::default()
         };
 
@@ -1161,41 +1411,79 @@ fail_regex = []
     }
 
     #[test]
-    fn qemu_config_normalize_trims_shell_fields() {
+    fn qemu_config_parses_ordered_shell_check_steps() {
+        let mut config: QemuConfig = toml::from_str(
+            r#"
+args = []
+uefi = false
+fail_regex = []
+shell_check_steps = [
+  { shell_prefix = "axvisor:/$", shell_cmd = "vm console 1" },
+  { shell_prefix = "root@starry:/root #", shell_cmd = "echo pass", success_regex = ["(?m)^pass\\s*$"], fail_regex = ["(?i)fail"] },
+]
+"#,
+        )
+        .unwrap();
+
+        config.normalize("test config").unwrap();
+
+        assert_eq!(config.shell_check_steps.len(), 2);
+        assert_eq!(
+            config.shell_check_steps[0].shell_cmd.as_deref(),
+            Some("vm console 1")
+        );
+        assert_eq!(
+            config.shell_check_steps[1].success_regex.as_deref(),
+            Some(&["(?m)^pass\\s*$".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn qemu_config_normalize_trims_prefix_and_preserves_command() {
         let mut config = QemuConfig {
-            shell_prefix: Some(" login: ".into()),
-            shell_init_cmd: Some(" root ".into()),
+            shell_check_steps: vec![ShellCheckStep {
+                shell_prefix: Some(" login: ".into()),
+                shell_cmd: Some(" root ".into()),
+                ..Default::default()
+            }],
             ..Default::default()
         };
 
         config.normalize("test config").unwrap();
 
-        assert_eq!(config.shell_prefix.as_deref(), Some("login:"));
-        assert_eq!(config.shell_init_cmd.as_deref(), Some("root"));
+        assert_eq!(
+            config.shell_check_steps[0].shell_prefix.as_deref(),
+            Some("login:")
+        );
+        assert_eq!(
+            config.shell_check_steps[0].shell_cmd.as_deref(),
+            Some(" root ")
+        );
     }
 
     #[test]
-    fn qemu_shell_auto_init_can_coexist_with_success_matcher() {
-        let mut matcher = ByteStreamMatcher::new(
-            vec![regex::Regex::new("ready").unwrap()],
-            vec![regex::Regex::new("__never_fail__").unwrap()],
-        );
-        let mut shell_init =
-            ShellAutoInitMatcher::new(Some("login:".to_string()), Some("root".to_string()))
-                .unwrap();
+    fn qemu_shell_check_matcher_can_coexist_with_global_fail_matcher() {
+        let mut matcher =
+            FailStreamMatcher::new(vec![regex::Regex::new("__never_fail__").unwrap()]);
+        let mut steps = vec![ShellCheckStep {
+            shell_prefix: Some("login:".into()),
+            shell_cmd: Some("root".into()),
+            ..Default::default()
+        }];
+        let resolved = normalize_shell_check_steps(&mut steps, "test config").unwrap();
+        let mut shell_check = ShellCheckMatcher::from_steps(resolved).unwrap();
         let mut sent = None;
 
         for byte in b"login: system ready\n" {
             if sent.is_none() {
-                sent = shell_init.observe_byte(*byte);
+                sent = shell_check.observe_byte(*byte);
             } else {
-                let _ = shell_init.observe_byte(*byte);
+                let _ = shell_check.observe_byte(*byte);
             }
             let _ = matcher.observe_byte(*byte);
         }
 
-        let matched = matcher.matched().unwrap();
-        assert_eq!(matched.kind, StreamMatchKind::Success);
+        assert!(matcher.matched().is_none());
         assert_eq!(sent.as_deref(), Some(&b"root\n"[..]));
     }
 
@@ -1218,7 +1506,6 @@ fail_regex = []
             input,
             config: QemuConfig::default(),
             dtbdump: false,
-            success_regex: vec![],
             fail_regex: vec![],
         };
 
@@ -1323,10 +1610,13 @@ fail_regex = []
 
         let mut config = QemuConfig {
             args: vec!["${workspace}".into(), "${package}".into()],
-            success_regex: vec!["${env:OSTOOL_QEMU_TEST_ENV}".into()],
             fail_regex: vec!["${workspaceFolder}".into()],
-            shell_prefix: Some("${workspace}".into()),
-            shell_init_cmd: Some("${package}".into()),
+            shell_check_steps: vec![ShellCheckStep {
+                shell_prefix: Some("${workspace}".into()),
+                shell_cmd: Some("${package}".into()),
+                success_regex: Some(vec!["${env:OSTOOL_QEMU_TEST_ENV}".into()]),
+                ..Default::default()
+            }],
             ..Default::default()
         };
 
@@ -1336,10 +1626,19 @@ fail_regex = []
 
         let expected = tmp.path().display().to_string();
         assert_eq!(config.args, vec![expected.clone(), expected.clone()]);
-        assert_eq!(config.success_regex, vec!["env-ok"]);
         assert_eq!(config.fail_regex, vec![expected.clone()]);
-        assert_eq!(config.shell_prefix.as_deref(), Some(expected.as_str()));
-        assert_eq!(config.shell_init_cmd.as_deref(), Some(expected.as_str()));
+        assert_eq!(
+            config.shell_check_steps[0].success_regex.as_deref(),
+            Some(&["env-ok".to_string()][..])
+        );
+        assert_eq!(
+            config.shell_check_steps[0].shell_prefix.as_deref(),
+            Some(expected.as_str())
+        );
+        assert_eq!(
+            config.shell_check_steps[0].shell_cmd.as_deref(),
+            Some(expected.as_str())
+        );
     }
 
     #[tokio::test]
@@ -1352,7 +1651,6 @@ fail_regex = []
 args = ["-nographic"]
 uefi = false
 to_bin = false
-success_regex = []
 fail_regex = []
 "#,
         )
