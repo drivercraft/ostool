@@ -175,11 +175,13 @@ pub struct LocalUbootConfig {
     pub baud_rate: Option<String>,
     /// TFTP boot configuration
     pub net: Option<Net>,
-    /// Board reset command
-    /// shell command to reset the board
+    /// Legacy Rust API compatibility field. Use `UbootConfig::board_reset_cmd`.
+    #[serde(skip)]
+    #[schemars(skip)]
     pub board_reset_cmd: Option<String>,
-    /// Board power off command
-    /// shell command to power off the board
+    /// Legacy Rust API compatibility field. Use `UbootConfig::board_power_off_cmd`.
+    #[serde(skip)]
+    #[schemars(skip)]
     pub board_power_off_cmd: Option<String>,
 }
 
@@ -466,7 +468,11 @@ pub(crate) async fn run_uboot_with_config(
     input: UbootRunInput,
     config: UbootConfig,
 ) -> anyhow::Result<()> {
-    let backend = LocalBackend::new(config.local.clone());
+    let backend = LocalBackend::new(
+        config.local.clone(),
+        config.board_reset_cmd.clone(),
+        config.board_power_off_cmd.clone(),
+    );
     let mut runner = Runner::new(input, config, backend);
     runner.run().await
 }
@@ -606,6 +612,10 @@ trait RunnerBackend {
 
 struct LocalBackend {
     config: LocalUbootConfig,
+    /// Host-side reset command, taken from `UbootConfig::board_reset_cmd`.
+    reset_cmd: Option<String>,
+    /// Host-side power-off command, taken from `UbootConfig::board_power_off_cmd`.
+    power_off_cmd: Option<String>,
     baud_rate: Option<u32>,
     linux_system_tftp: Option<tftp::TftpdHpaConfig>,
     linux_tftp_staging: Vec<tftp::LinuxTftpPrepared>,
@@ -614,9 +624,17 @@ struct LocalBackend {
 }
 
 impl LocalBackend {
-    fn new(config: LocalUbootConfig) -> Self {
+    fn new(
+        config: LocalUbootConfig,
+        reset_cmd: Option<String>,
+        power_off_cmd: Option<String>,
+    ) -> Self {
+        let reset_cmd = reset_cmd.or_else(|| config.board_reset_cmd.clone());
+        let power_off_cmd = power_off_cmd.or_else(|| config.board_power_off_cmd.clone());
         Self {
             config,
+            reset_cmd,
+            power_off_cmd,
             baud_rate: None,
             linux_system_tftp: None,
             linux_tftp_staging: Vec::new(),
@@ -761,7 +779,7 @@ impl RunnerBackend for LocalBackend {
 
     async fn after_console_open(&mut self, context: &ProcessContext) -> anyhow::Result<()> {
         println!("Waiting for board on power or reset...");
-        if let Some(cmd) = self.config.board_reset_cmd.as_deref()
+        if let Some(cmd) = self.reset_cmd.as_deref()
             && !cmd.trim().is_empty()
         {
             crate::process::shell_run_cmd(context, cmd)?;
@@ -820,7 +838,7 @@ impl RunnerBackend for LocalBackend {
             }
         }
 
-        if let Some(cmd) = self.config.board_power_off_cmd.as_deref()
+        if let Some(cmd) = self.power_off_cmd.as_deref()
             && !cmd.trim().is_empty()
             && let Err(err) = crate::process::shell_run_cmd(context, cmd)
         {
@@ -1661,6 +1679,8 @@ mod tests {
     fn local_backend() -> LocalBackend {
         LocalBackend {
             config: LocalUbootConfig::default(),
+            reset_cmd: None,
+            power_off_cmd: None,
             baud_rate: None,
             linux_system_tftp: None,
             linux_tftp_staging: Vec::new(),
@@ -2297,7 +2317,7 @@ mod tests {
         std::fs::write(prepared.target_dir().join("keep.txt"), b"keep").unwrap();
         let marker = temp.path().join("powered-off");
         let mut backend = local_backend();
-        backend.config.board_power_off_cmd = Some(format!("touch {}", marker.display()));
+        backend.power_off_cmd = Some(format!("touch {}", marker.display()));
         backend.linux_tftp_staging.push(prepared);
 
         let context = make_invocation(temp.path()).process_context().unwrap();
@@ -2458,6 +2478,56 @@ interface = "eth0"
     }
 
     #[test]
+    fn uboot_config_parses_board_commands_at_top_level() {
+        let config: UbootConfig = toml::from_str(
+            r#"
+serial = "/dev/null"
+baud_rate = "115200"
+fail_regex = []
+board_reset_cmd = "reset-board"
+board_power_off_cmd = "power-off-board"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.board_reset_cmd.as_deref(), Some("reset-board"));
+        assert_eq!(
+            config.board_power_off_cmd.as_deref(),
+            Some("power-off-board")
+        );
+        assert_eq!(config.local.board_reset_cmd, None);
+        assert_eq!(config.local.board_power_off_cmd, None);
+
+        let serialized = toml::to_string(&config).unwrap();
+        assert_eq!(serialized.matches("board_reset_cmd").count(), 1);
+        assert_eq!(serialized.matches("board_power_off_cmd").count(), 1);
+
+        let backend = LocalBackend::new(
+            config.local,
+            config.board_reset_cmd,
+            config.board_power_off_cmd,
+        );
+        assert_eq!(backend.reset_cmd.as_deref(), Some("reset-board"));
+        assert_eq!(backend.power_off_cmd.as_deref(), Some("power-off-board"));
+    }
+
+    #[test]
+    fn local_backend_keeps_legacy_command_fields_usable() {
+        let backend = LocalBackend::new(
+            LocalUbootConfig {
+                board_reset_cmd: Some("legacy-reset".into()),
+                board_power_off_cmd: Some("legacy-power-off".into()),
+                ..Default::default()
+            },
+            None,
+            None,
+        );
+
+        assert_eq!(backend.reset_cmd.as_deref(), Some("legacy-reset"));
+        assert_eq!(backend.power_off_cmd.as_deref(), Some("legacy-power-off"));
+    }
+
+    #[test]
     fn uboot_config_replaces_string_fields() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -2501,6 +2571,8 @@ interface = "eth0"
             kernel_load_addr: Some("${workspaceFolder}".into()),
             fit_load_addr: Some("${package}".into()),
             bootm_addr: Some("${workspace}".into()),
+            board_reset_cmd: Some("${workspace}".into()),
+            board_power_off_cmd: Some("${package}".into()),
             fail_regex: vec!["${package}".into()],
             uboot_cmd: Some(vec!["setenv boot ${workspace}".into()]),
             shell_check_steps: vec![ShellCheckStep {
@@ -2512,8 +2584,6 @@ interface = "eth0"
             local: LocalUbootConfig {
                 serial: Some("${workspace}/tty".into()),
                 baud_rate: Some("${env:OSTOOL_UBOOT_TEST_ENV}".into()),
-                board_reset_cmd: Some("${workspace}".into()),
-                board_power_off_cmd: Some("${package}".into()),
                 net: Some(Net {
                     interface: "${env:OSTOOL_UBOOT_TEST_ENV}".into(),
                     board_ip: Some("${workspace}".into()),
@@ -2521,6 +2591,7 @@ interface = "eth0"
                     netmask: Some("${workspaceFolder}".into()),
                     tftp_dir: Some("${package}/tftp".into()),
                 }),
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -2542,12 +2613,9 @@ interface = "eth0"
         assert_eq!(config.kernel_load_addr.as_deref(), Some(expected.as_str()));
         assert_eq!(config.fit_load_addr.as_deref(), Some(expected.as_str()));
         assert_eq!(config.bootm_addr.as_deref(), Some(expected.as_str()));
+        assert_eq!(config.board_reset_cmd.as_deref(), Some(expected.as_str()));
         assert_eq!(
-            config.local.board_reset_cmd.as_deref(),
-            Some(expected.as_str())
-        );
-        assert_eq!(
-            config.local.board_power_off_cmd.as_deref(),
+            config.board_power_off_cmd.as_deref(),
             Some(expected.as_str())
         );
         assert_eq!(config.fail_regex, vec![expected.clone()]);

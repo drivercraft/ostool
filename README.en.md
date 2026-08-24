@@ -270,11 +270,6 @@ dtb_file = "tools/device_tree.dtb"
 # Kernel load address (optional)
 kernel_load_addr = "0x80080000"
 
-# Network boot configuration (optional)
-[net]
-interface = "eth0"
-board_ip = "192.168.1.100"
-
 # Board reset command (optional)
 board_reset_cmd = "reset"
 
@@ -283,6 +278,11 @@ board_power_off_cmd = "poweroff"
 
 # Failure boot regex patterns
 fail_regex = ["Boot failed", "Error loading kernel"]
+
+# Network boot configuration (optional)
+[net]
+interface = "eth0"
+board_ip = "192.168.1.100"
 ```
 
 ### Ordered shell initialization steps
