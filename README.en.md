@@ -315,6 +315,11 @@ success_regex = ["(?m)^TEST_PASSED\\s*$"]
 
 This is a hard configuration switch: the former top-level shell prefix/command, the former step array, and the former step command field have been removed. Existing configurations must be migrated as a unit and are not read through compatibility aliases.
 
+When entering the U-Boot shell, ostool normally detects the prompt from the
+`<INTERRUPT>` line. Some vendor U-Boot builds add timestamps to interrupt
+markers, such as `=> [   2.209] <INTERRUPT>` or `[ 115.141] <INTERRUPT>`;
+ostool recognizes those formats automatically, with no extra configuration.
+
 For a Starry guest behind Axvisor, move the former top-level success pattern into the step that runs the guest command. That step's success/failure patterns then determine its result, while top-level failure patterns still guard the entire run.
 
 ### Environment Variable Support
