@@ -151,6 +151,7 @@ impl HttpBootBoardRunner {
         send_boot_offer_line(&mut serial_tx, &line).await?;
         println!("HTTP Boot offer sent, entering serial terminal...");
 
+        let shell_check_steps = self.board_config.effective_shell_check_steps();
         let result = run_terminal(
             serial_rx,
             serial_tx,
@@ -158,7 +159,7 @@ impl HttpBootBoardRunner {
                 boot_offer_line: line,
                 arch,
                 fail_regex: self.board_config.fail_regex,
-                shell_check_steps: self.board_config.shell_check_steps,
+                shell_check_steps,
                 timeout: self.board_config.timeout,
             },
         )

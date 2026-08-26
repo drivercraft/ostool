@@ -282,6 +282,21 @@ board_power_off_cmd = "poweroff"
 fail_regex = ["Boot failed", "Error loading kernel"]
 ```
 
+U-Boot 进入 shell 时默认通过 `<INTERRUPT>` 自动识别 prompt。某些厂商 U-Boot 会给
+中断提示加时间戳，例如 `=> [   2.209] <INTERRUPT>`，此时可以配置 prompt 过滤：
+
+```toml
+[[prompt.filters]]
+pattern = "^=> \\[\\s*\\d+\\.\\d+\\] $"
+replacement = "=> "
+
+[[prompt.filters]]
+pattern = "^\\[\\s*\\d+\\.\\d+\\] $"
+replacement = "=> "
+```
+
+同样的 `prompt` 配置也可用于 `ostool board` 的 board 运行配置。
+
 ### 有序 Shell 初始化步骤
 
 QEMU、U-Boot 和 board 配置都使用 `shell_check_steps` 描述有序的 shell 命令与结果检查。例如先从 Axvisor shell 切换到 VM console，再在 guest shell 中执行测试命令：
@@ -301,7 +316,7 @@ shell_check_steps = [
 
 如果一步没有配置 `success_regex` 和 `fail_regex`，命令完成 write/flush 后直接进入下一步。最后一步完成后，整个 shell-check 序列即视为测试成功。顶层 `fail_regex` 和 `timeout` 分别是全局失败条件和总超时；步骤内 `fail_regex` 只在当前步骤等待结果时生效。
 
-顶层 `success_regex` 已移除；成功条件必须放到相应的 `shell_check_steps` 步骤中。步骤的 prefix、命令和正则支持普通变量展开。board 的 `${boardServerIp}`、`${boardServerHttpBaseUrl}` 和 `${sessionFile:<relative-path>}` 仅在每一步的 `shell_cmd` 中展开。
+顶层 `shell_prefix`、`shell_init_cmd` 和 `success_regex` 已移除；prefix、命令和成功条件必须放到相应的 `shell_check_steps` 步骤中。步骤的 prefix、命令和正则支持普通变量展开。board 的 `${boardServerIp}`、`${boardServerHttpBaseUrl}` 和 `${sessionFile:<relative-path>}` 仅在每一步的 `shell_cmd` 中展开。
 
 只检查自行产生的输出时，可以使用无命令步骤：
 
@@ -310,7 +325,7 @@ shell_check_steps = [
 success_regex = ["(?m)^TEST_PASSED\\s*$"]
 ```
 
-这是一次配置硬切换：旧的顶层 shell prefix/command、旧步骤数组及旧步骤命令字段已经移除，旧配置需要整体迁移到 `shell_check_steps`，不会被兼容读取。
+这是一次配置硬切换：旧的顶层 shell prefix/command/success regex、旧步骤数组及旧步骤命令字段已经移除，旧配置需要整体迁移到 `shell_check_steps`，不会被兼容读取。
 
 对于运行在 Axvisor 后面的 Starry guest，把旧的顶层成功表达式放到执行 guest 命令的步骤中；这样该步骤自己的 success/fail 负责判断命令结果，顶层 fail 继续兜底整个运行过程。
 

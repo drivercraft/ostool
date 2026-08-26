@@ -98,6 +98,7 @@ pub struct QemuConfig {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct QemuConfigWire {
     args: Vec<String>,
     uefi: bool,
@@ -107,9 +108,6 @@ struct QemuConfigWire {
     #[serde(default)]
     shell_check_steps: Vec<ShellCheckStep>,
     timeout: Option<u64>,
-    shell_prefix: Option<serde::de::IgnoredAny>,
-    shell_init_cmd: Option<serde::de::IgnoredAny>,
-    shell_init_steps: Option<serde::de::IgnoredAny>,
 }
 
 impl<'de> Deserialize<'de> for QemuConfig {
@@ -118,7 +116,6 @@ impl<'de> Deserialize<'de> for QemuConfig {
         D: Deserializer<'de>,
     {
         let wire = QemuConfigWire::deserialize(deserializer)?;
-        reject_removed_qemu_shell_key(&wire)?;
         Ok(Self {
             args: wire.args,
             uefi: wire.uefi,
@@ -128,24 +125,6 @@ impl<'de> Deserialize<'de> for QemuConfig {
             timeout: wire.timeout,
         })
     }
-}
-
-fn reject_removed_qemu_shell_key<E>(wire: &QemuConfigWire) -> Result<(), E>
-where
-    E: serde::de::Error,
-{
-    for (key, present) in [
-        ("shell_prefix", wire.shell_prefix.is_some()),
-        ("shell_init_cmd", wire.shell_init_cmd.is_some()),
-        ("shell_init_steps", wire.shell_init_steps.is_some()),
-    ] {
-        if present {
-            return Err(E::custom(format!(
-                "removed QEMU config key `{key}`; use `shell_check_steps`"
-            )));
-        }
-    }
-    Ok(())
 }
 
 impl QemuConfig {
@@ -171,10 +150,10 @@ impl QemuConfig {
     }
 
     fn shell_check_matcher(&self) -> anyhow::Result<Option<ShellCheckMatcher>> {
-        if self.shell_check_steps.is_empty() {
+        let mut steps = self.shell_check_steps.clone();
+        if steps.is_empty() {
             return Ok(None);
         }
-        let mut steps = self.shell_check_steps.clone();
         let resolved = normalize_shell_check_steps(&mut steps, "QEMU runtime config")?;
         Ok(Some(ShellCheckMatcher::from_steps(resolved)?))
     }
@@ -1174,6 +1153,39 @@ shell_check_steps = [
             Some(&["PASS".to_string()][..])
         );
         assert_eq!(config.args, vec!["-nographic", "-machine", "virt"]);
+    }
+
+    #[test]
+    fn qemu_config_rejects_legacy_shell_check_fields() {
+        toml::from_str::<QemuConfig>(
+            r#"
+args = ["-nographic"]
+uefi = false
+fail_regex = []
+shell_prefix = "root@starry:"
+shell_init_cmd = "echo pass"
+success_regex = ["(?m)^pass\\s*$"]
+"#,
+        )
+        .unwrap_err();
+    }
+
+    #[test]
+    fn qemu_config_rejects_legacy_fields_mixed_with_shell_check_steps() {
+        let error = toml::from_str::<QemuConfig>(
+            r#"
+args = ["-nographic"]
+uefi = false
+fail_regex = []
+shell_prefix = "root@starry:"
+shell_check_steps = [
+  { shell_prefix = "root@starry:", shell_cmd = "echo pass" },
+]
+"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("shell_prefix"));
     }
 
     #[tokio::test]

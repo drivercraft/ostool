@@ -23,7 +23,7 @@ use tokio_util::compat::{
     FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt, TokioAsyncReadCompatExt,
     TokioAsyncWriteCompatExt,
 };
-use uboot_shell::UbootShell;
+use uboot_shell::{PromptFilter, UbootShell, UbootShellOptions};
 
 use crate::{
     artifact::state::OutputArtifacts,
@@ -79,6 +79,9 @@ pub struct UbootConfig {
     pub board_power_off_cmd: Option<String>,
     pub fail_regex: Vec<String>,
     pub uboot_cmd: Option<Vec<String>>,
+    /// U-Boot prompt detection customization used while entering the bootloader shell.
+    #[serde(default)]
+    pub prompt: UbootPromptConfig,
     /// Ordered shell commands and result checks.
     #[serde(default)]
     pub shell_check_steps: Vec<ShellCheckStep>,
@@ -90,6 +93,7 @@ pub struct UbootConfig {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UbootConfigWire {
     dtb_file: Option<String>,
     kernel_load_addr: Option<String>,
@@ -97,15 +101,13 @@ struct UbootConfigWire {
     bootm_addr: Option<String>,
     board_reset_cmd: Option<String>,
     board_power_off_cmd: Option<String>,
-    success_regex: Option<serde::de::IgnoredAny>,
     fail_regex: Vec<String>,
     uboot_cmd: Option<Vec<String>>,
     #[serde(default)]
+    prompt: UbootPromptConfig,
+    #[serde(default)]
     shell_check_steps: Vec<ShellCheckStep>,
     timeout: Option<u64>,
-    shell_prefix: Option<serde::de::IgnoredAny>,
-    shell_init_cmd: Option<serde::de::IgnoredAny>,
-    shell_init_steps: Option<serde::de::IgnoredAny>,
     #[serde(flatten)]
     local: LocalUbootConfig,
 }
@@ -116,7 +118,6 @@ impl<'de> Deserialize<'de> for UbootConfig {
         D: Deserializer<'de>,
     {
         let wire = UbootConfigWire::deserialize(deserializer)?;
-        reject_removed_uboot_key(&wire)?;
         Ok(Self {
             dtb_file: wire.dtb_file,
             kernel_load_addr: wire.kernel_load_addr,
@@ -126,30 +127,12 @@ impl<'de> Deserialize<'de> for UbootConfig {
             board_power_off_cmd: wire.board_power_off_cmd,
             fail_regex: wire.fail_regex,
             uboot_cmd: wire.uboot_cmd,
+            prompt: wire.prompt,
             shell_check_steps: wire.shell_check_steps,
             timeout: wire.timeout,
             local: wire.local,
         })
     }
-}
-
-fn reject_removed_uboot_key<E>(wire: &UbootConfigWire) -> Result<(), E>
-where
-    E: serde::de::Error,
-{
-    for (key, present) in [
-        ("shell_prefix", wire.shell_prefix.is_some()),
-        ("shell_init_cmd", wire.shell_init_cmd.is_some()),
-        ("shell_init_steps", wire.shell_init_steps.is_some()),
-        ("success_regex", wire.success_regex.is_some()),
-    ] {
-        if present {
-            return Err(E::custom(format!(
-                "removed U-Boot config key `{key}`; use `shell_check_steps`"
-            )));
-        }
-    }
-    Ok(())
 }
 
 #[derive(Default, Serialize, Deserialize, JsonSchema, Debug, Clone)]
@@ -177,13 +160,14 @@ impl UbootConfig {
             bootm_addr: config.bootm_addr.clone(),
             fail_regex: config.fail_regex.clone(),
             uboot_cmd: config.uboot_cmd.clone(),
+            prompt: config.prompt.clone(),
             shell_check_steps: config.shell_check_steps.clone(),
             timeout: config.timeout,
             ..Default::default()
         }
     }
 
-    fn replace_strings(&mut self, scope: &VariableScope) -> anyhow::Result<()> {
+    pub(crate) fn replace_strings(&mut self, scope: &VariableScope) -> anyhow::Result<()> {
         self.dtb_file = self
             .dtb_file
             .as_deref()
@@ -229,6 +213,7 @@ impl UbootConfig {
                     .collect::<anyhow::Result<Vec<_>>>()
             })
             .transpose()?;
+        self.prompt.replace_strings(scope)?;
         for step in &mut self.shell_check_steps {
             step.replace_strings(scope)?;
         }
@@ -252,18 +237,71 @@ impl UbootConfig {
         parse_addr_int(addr_str)
     }
 
-    fn normalize(&mut self, config_name: &str) -> anyhow::Result<()> {
+    pub(crate) fn normalize(&mut self, config_name: &str) -> anyhow::Result<()> {
+        self.prompt.normalize(config_name)?;
         normalize_shell_check_steps(&mut self.shell_check_steps, config_name).map(drop)
     }
 
     fn shell_check_matcher(&self) -> anyhow::Result<Option<ShellCheckMatcher>> {
-        if self.shell_check_steps.is_empty() {
+        let mut steps = self.shell_check_steps.clone();
+        if steps.is_empty() {
             return Ok(None);
         }
-        let mut steps = self.shell_check_steps.clone();
         let resolved = normalize_shell_check_steps(&mut steps, "U-Boot runtime config")?;
         Ok(Some(ShellCheckMatcher::from_steps(resolved)?))
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct UbootPromptConfig {
+    #[serde(default)]
+    pub filters: Vec<UbootPromptFilterConfig>,
+}
+
+impl UbootPromptConfig {
+    pub(crate) fn replace_strings(&mut self, scope: &VariableScope) -> anyhow::Result<()> {
+        for filter in &mut self.filters {
+            filter.pattern = variables::expand_variables(&filter.pattern, scope)?;
+            filter.replacement = variables::expand_variables(&filter.replacement, scope)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn normalize(&mut self, config_name: &str) -> anyhow::Result<()> {
+        self.filters.retain_mut(|filter| {
+            let trimmed = filter.pattern.trim();
+            if trimmed.is_empty() {
+                return false;
+            }
+            if trimmed.len() != filter.pattern.len() {
+                filter.pattern = trimmed.to_string();
+            }
+            true
+        });
+        self.to_shell_options()
+            .with_context(|| format!("invalid `prompt` in {config_name}"))?;
+        Ok(())
+    }
+
+    pub(crate) fn to_shell_options(&self) -> anyhow::Result<UbootShellOptions> {
+        let mut options = UbootShellOptions::new();
+        for filter in &self.filters {
+            options = options.with_prompt_filter(PromptFilter::new(
+                &filter.pattern,
+                filter.replacement.clone(),
+            )?);
+        }
+        Ok(options)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct UbootPromptFilterConfig {
+    pub pattern: String,
+    #[serde(default)]
+    pub replacement: String,
 }
 
 fn parse_addr_int(addr_str: Option<&String>) -> Option<u64> {
@@ -1179,7 +1217,8 @@ where
             .await?;
 
         let mut net_ok = false;
-        let mut uboot = UbootShell::new(tx, rx).await?;
+        let shell_options = self.config.prompt.to_shell_options()?;
+        let mut uboot = UbootShell::new_with_options(tx, rx, shell_options).await?;
         uboot.set_env("autoload", "yes").await?;
 
         if let Some(ref cmds) = self.config.uboot_cmd {
@@ -1604,8 +1643,8 @@ mod tests {
 
     use super::{
         LocalBackend, LocalUbootConfig, Net, RemoteBackend, ResolvedRuntime, RunnerBackend,
-        UbootConfig, build_network_boot_request, ensure_config_in_dir, fit_artifact_path,
-        timeout_duration, write_uboot_input,
+        UbootConfig, UbootPromptConfig, build_network_boot_request, ensure_config_in_dir,
+        fit_artifact_path, timeout_duration, write_uboot_input,
     };
     use crate::{
         artifact::runtime::{RuntimeArtifactOptions, prepare_runtime_artifacts},
@@ -2417,6 +2456,60 @@ interface = "eth0"
     }
 
     #[test]
+    fn uboot_config_parses_prompt_filters() {
+        let mut config: UbootConfig = toml::from_str(
+            r#"
+serial = "/dev/null"
+baud_rate = "115200"
+fail_regex = []
+
+[[prompt.filters]]
+pattern = " ^custom-timestamp: "
+replacement = ""
+"#,
+        )
+        .unwrap();
+
+        config.normalize("test config").unwrap();
+
+        assert_eq!(config.prompt.filters[0].pattern, "^custom-timestamp:");
+        assert_eq!(config.prompt.filters[0].replacement, "");
+    }
+
+    #[test]
+    fn uboot_config_rejects_legacy_shell_check_fields() {
+        toml::from_str::<UbootConfig>(
+            r#"
+serial = "/dev/null"
+baud_rate = "115200"
+fail_regex = []
+shell_prefix = "root@starry:"
+shell_init_cmd = "echo pass"
+success_regex = ["(?m)^pass\\s*$"]
+"#,
+        )
+        .unwrap_err();
+    }
+
+    #[test]
+    fn uboot_config_rejects_legacy_fields_mixed_with_shell_check_steps() {
+        let error = toml::from_str::<UbootConfig>(
+            r#"
+serial = "/dev/null"
+baud_rate = "115200"
+fail_regex = []
+shell_prefix = "root@starry:"
+shell_check_steps = [
+  { shell_prefix = "root@starry:", shell_cmd = "echo pass" },
+]
+"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("shell_prefix"));
+    }
+
+    #[test]
     fn uboot_config_replaces_string_fields() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -2548,6 +2641,7 @@ interface = "eth0"
             bootm_addr: Some("0x82200000".into()),
             fail_regex: vec!["fail".into()],
             uboot_cmd: Some(vec!["run ab_select_cmd".into(), "run avb_boot".into()]),
+            prompt: UbootPromptConfig::default(),
             shell_check_steps: Vec::new(),
             timeout: Some(12),
             auth_mode: None,

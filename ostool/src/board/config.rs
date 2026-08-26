@@ -7,7 +7,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::{
     board::global_config::{AuthMode, BoardEndpoint, BoardGlobalConfig},
     project::variables::{self, VariableScope},
-    run::shell_check::{ShellCheckStep, normalize_shell_check_steps},
+    run::{
+        shell_check::{ShellCheckStep, normalize_shell_check_steps},
+        uboot::UbootPromptConfig,
+    },
 };
 
 #[derive(Debug, Clone, Serialize, JsonSchema, Default, PartialEq, Eq)]
@@ -28,6 +31,8 @@ pub struct BoardRunConfig {
     pub fail_regex: Vec<String>,
     #[serde(default)]
     pub uboot_cmd: Option<Vec<String>>,
+    #[serde(default)]
+    pub prompt: UbootPromptConfig,
     /// Ordered shell commands and result checks.
     #[serde(default)]
     pub shell_check_steps: Vec<ShellCheckStep>,
@@ -48,11 +53,12 @@ struct BoardRunConfigWire {
     kernel_load_addr: Option<String>,
     fit_load_addr: Option<String>,
     bootm_addr: Option<String>,
-    success_regex: Option<serde::de::IgnoredAny>,
     #[serde(default)]
     fail_regex: Vec<String>,
     #[serde(default)]
     uboot_cmd: Option<Vec<String>>,
+    #[serde(default)]
+    prompt: UbootPromptConfig,
     #[serde(default)]
     shell_check_steps: Vec<ShellCheckStep>,
     timeout: Option<u64>,
@@ -67,11 +73,6 @@ impl<'de> Deserialize<'de> for BoardRunConfig {
         D: Deserializer<'de>,
     {
         let wire = BoardRunConfigWire::deserialize(deserializer)?;
-        if wire.success_regex.is_some() {
-            return Err(serde::de::Error::custom(
-                "removed board config key `success_regex`; use `shell_check_steps`",
-            ));
-        }
         Ok(Self {
             board_type: wire.board_type,
             session_files: wire.session_files,
@@ -81,6 +82,7 @@ impl<'de> Deserialize<'de> for BoardRunConfig {
             bootm_addr: wire.bootm_addr,
             fail_regex: wire.fail_regex,
             uboot_cmd: wire.uboot_cmd,
+            prompt: wire.prompt,
             shell_check_steps: wire.shell_check_steps,
             timeout: wire.timeout,
             auth_mode: wire.auth_mode,
@@ -204,6 +206,7 @@ impl BoardRunConfig {
                     .collect::<anyhow::Result<Vec<_>>>()
             })
             .transpose()?;
+        self.prompt.replace_strings(scope)?;
         for step in &mut self.shell_check_steps {
             step.replace_strings(scope)?;
         }
@@ -247,7 +250,12 @@ impl BoardRunConfig {
         if self.board_type.is_empty() {
             anyhow::bail!("`board_type` must not be empty in {config_name}");
         }
+        self.prompt.normalize(config_name)?;
         normalize_shell_check_steps(&mut self.shell_check_steps, config_name).map(drop)
+    }
+
+    pub(crate) fn effective_shell_check_steps(&self) -> Vec<ShellCheckStep> {
+        self.shell_check_steps.clone()
     }
 }
 
@@ -381,6 +389,35 @@ shell_check_steps = [
     }
 
     #[test]
+    fn board_run_config_rejects_legacy_shell_check_fields() {
+        toml::from_str::<BoardRunConfig>(
+            r#"
+            board_type = "visionfive2"
+            shell_prefix = "root@starry:"
+            shell_init_cmd = "echo pass"
+            success_regex = ["(?m)^pass\\s*$"]
+            "#,
+        )
+        .unwrap_err();
+    }
+
+    #[test]
+    fn board_run_config_rejects_legacy_fields_mixed_with_shell_check_steps() {
+        let error = toml::from_str::<BoardRunConfig>(
+            r#"
+            board_type = "visionfive2"
+            shell_prefix = "root@starry:"
+            shell_check_steps = [
+            { shell_prefix = "root@starry:", shell_cmd = "echo pass" },
+            ]
+            "#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("shell_prefix"));
+    }
+
+    #[test]
     fn legacy_board_run_config_defaults_to_no_session_files() {
         let fixture = LegacyBoardRunConfigFixture {
             board_type: "orangepi-5-plus".to_string(),
@@ -407,7 +444,10 @@ shell_check_steps = [
         let schema = serde_json::to_value(schema).unwrap();
 
         assert_eq!(schema["additionalProperties"], false);
+        assert!(schema["properties"].get("shell_check_steps").is_some());
         assert!(schema["properties"].get("success_regex").is_none());
+        assert!(schema["properties"].get("shell_prefix").is_none());
+        assert!(schema["properties"].get("shell_init_cmd").is_none());
     }
 
     #[test]

@@ -4588,6 +4588,7 @@ dependencies = [
  "indicatif",
  "log",
  "ntest",
+ "regex",
  "serialport",
  "tokio",
  "tokio-serial",

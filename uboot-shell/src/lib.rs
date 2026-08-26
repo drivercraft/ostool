@@ -18,6 +18,7 @@ use futures::{
     pin_mut,
 };
 use futures_timer::Delay;
+use regex::Regex;
 
 /// CRC16-CCITT checksum implementation.
 pub mod crc;
@@ -40,6 +41,55 @@ const LOADY_RETRY_DELAY: Duration = Duration::from_millis(300);
 type Tx = Box<dyn AsyncWrite + Send + Unpin>;
 type Rx = Box<dyn AsyncRead + Send + Unpin>;
 
+#[derive(Default)]
+pub struct UbootShellOptions {
+    prompt_filters: Vec<PromptFilter>,
+}
+
+impl UbootShellOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_prompt_filter(mut self, filter: PromptFilter) -> Self {
+        self.prompt_filters.push(filter);
+        self
+    }
+
+    fn normalize_interrupt_prompt<'a>(&self, prompt: &'a str) -> std::borrow::Cow<'a, str> {
+        let mut normalized = std::borrow::Cow::Borrowed(prompt);
+        for filter in &self.prompt_filters {
+            normalized = std::borrow::Cow::Owned(
+                filter
+                    .pattern
+                    .replace_all(&normalized, filter.replacement.as_str())
+                    .into_owned(),
+            );
+        }
+        normalized
+    }
+}
+
+pub struct PromptFilter {
+    pattern: Regex,
+    replacement: String,
+}
+
+impl PromptFilter {
+    pub fn new(pattern: &str, replacement: impl Into<String>) -> Result<Self> {
+        let pattern = Regex::new(pattern).map_err(|err| {
+            Error::new(
+                ErrorKind::InvalidInput,
+                format!("invalid U-Boot prompt filter regex `{pattern}`: {err}"),
+            )
+        })?;
+        Ok(Self {
+            pattern,
+            replacement: replacement.into(),
+        })
+    }
+}
+
 pub struct UbootShell {
     /// Transmit stream for sending bytes to U-Boot.
     pub tx: Option<Tx>,
@@ -47,6 +97,7 @@ pub struct UbootShell {
     pub rx: Option<Rx>,
     /// Shell prompt prefix detected during initialization.
     perfix: String,
+    options: UbootShellOptions,
 }
 
 impl UbootShell {
@@ -54,10 +105,19 @@ impl UbootShell {
         tx: impl AsyncWrite + Send + Unpin + 'static,
         rx: impl AsyncRead + Send + Unpin + 'static,
     ) -> Result<Self> {
+        Self::new_with_options(tx, rx, UbootShellOptions::default()).await
+    }
+
+    pub async fn new_with_options(
+        tx: impl AsyncWrite + Send + Unpin + 'static,
+        rx: impl AsyncRead + Send + Unpin + 'static,
+        options: UbootShellOptions,
+    ) -> Result<Self> {
         let mut shell = Self {
             tx: Some(Box::new(tx)),
             rx: Some(Box::new(rx)),
             perfix: String::new(),
+            options,
         };
         shell.wait_for_shell().await?;
         debug!("shell ready, perfix: `{}`", shell.perfix);
@@ -132,6 +192,8 @@ impl UbootShell {
         let mut line = self.wait_for_interrupt().await?;
         debug!("got {}", String::from_utf8_lossy(&line));
         line.resize(line.len().saturating_sub(INT.len()), 0);
+        let line = String::from_utf8_lossy(&line);
+        let line = self.options.normalize_interrupt_prompt(&line);
         if line.is_empty() {
             let prompt = self.read_until_idle().await?;
             let prompt = String::from_utf8_lossy(&prompt);
@@ -145,7 +207,7 @@ impl UbootShell {
                 return Err(Error::new(ErrorKind::InvalidData, "U-Boot prompt is empty"));
             }
         } else {
-            self.perfix = String::from_utf8_lossy(&line).to_string();
+            self.perfix = line.to_string();
             self.clear_shell().await?;
         }
         Ok(())
@@ -215,27 +277,9 @@ impl UbootShell {
         let cmd_with_id = format!("{cmd}&& echo {ok_str}");
         self.cmd_without_reply(&cmd_with_id).await?;
         let perfix = self.perfix.clone();
-        let res = self
-            .wait_for_reply(&perfix)
-            .await?
-            .trim_end()
-            .trim_end_matches(self.perfix.as_str().trim())
-            .trim_end()
-            .to_string();
-
-        if res.ends_with(ok_str) {
-            Ok(res
-                .trim()
-                .trim_end_matches(ok_str)
-                .trim_end()
-                .trim_start_matches(&cmd_with_id)
-                .trim()
-                .to_string())
-        } else {
-            Err(Error::other(format!(
-                "command `{cmd}` failed, response: {res}",
-            )))
-        }
+        let reply = self.wait_for_reply(&perfix).await?;
+        strip_command_reply(&reply, self.perfix.as_str(), &cmd_with_id, ok_str)
+            .ok_or_else(|| Error::other(format!("command `{cmd}` failed, response: {reply}")))
     }
 
     pub async fn cmd(&mut self, cmd: &str) -> Result<String> {
@@ -372,6 +416,35 @@ impl UbootShell {
             }
         }
     }
+}
+
+fn strip_command_reply(
+    reply: &str,
+    prompt: &str,
+    cmd_with_id: &str,
+    ok_str: &str,
+) -> Option<String> {
+    let response = reply
+        .trim_end()
+        .trim_end_matches(prompt.trim())
+        .trim_end()
+        .trim_end_matches(prompt)
+        .trim();
+    let mut lines = response.lines().collect::<Vec<_>>();
+    let ok_line = lines.last()?.trim_end();
+    if !ok_line.ends_with(ok_str) {
+        return None;
+    }
+    lines.pop();
+
+    if lines
+        .first()
+        .is_some_and(|line| line.trim_end().ends_with(cmd_with_id))
+    {
+        lines.remove(0);
+    }
+
+    Some(lines.join("\n").trim().to_string())
 }
 
 impl AsyncRead for UbootShell {
@@ -548,6 +621,65 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn filters_spacemit_timestamp_after_prompt_in_interrupt_line() -> Result<()> {
+        let response = Arc::new(Mutex::new(VecDeque::new()));
+        let shell = UbootShell::new_with_options(
+            InterruptTx {
+                response: response.clone(),
+                interrupt_output: b"=> [   2.209] <INTERRUPT>\n",
+            },
+            InterruptRx { response },
+            UbootShellOptions::new()
+                .with_prompt_filter(PromptFilter::new(r"^=> \[\s*\d+\.\d+\] $", "=> ")?),
+        )
+        .await?;
+
+        assert_eq!(shell.perfix, "=> ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn filters_spacemit_timestamp_only_interrupt_line_to_default_prompt() -> Result<()> {
+        let response = Arc::new(Mutex::new(VecDeque::new()));
+        let shell = UbootShell::new_with_options(
+            InterruptTx {
+                response: response.clone(),
+                interrupt_output: b"[ 115.141] <INTERRUPT>\n",
+            },
+            InterruptRx { response },
+            UbootShellOptions::new()
+                .with_prompt_filter(PromptFilter::new(r"^\[\s*\d+\.\d+\] $", "=> ")?),
+        )
+        .await?;
+
+        assert_eq!(shell.perfix, "=> ");
+        Ok(())
+    }
+
+    #[test]
+    fn strips_plain_command_reply() {
+        let reply = "echo $fdt_addr_r&& echo cmd-ok\n0x138000000\ncmd-ok\n=> ";
+        let stripped =
+            strip_command_reply(reply, "=> ", "echo $fdt_addr_r&& echo cmd-ok", "cmd-ok");
+
+        assert_eq!(stripped.as_deref(), Some("0x138000000"));
+    }
+
+    #[test]
+    fn strips_timestamp_prefixed_command_reply() {
+        let reply = concat!(
+            "[   6.212] echo $fdt_addr_r&& echo cmd-ok\n",
+            "0x138000000\n",
+            "[   6.215] cmd-ok\n",
+            "=> "
+        );
+        let stripped =
+            strip_command_reply(reply, "=> ", "echo $fdt_addr_r&& echo cmd-ok", "cmd-ok");
+
+        assert_eq!(stripped.as_deref(), Some("0x138000000"));
+    }
+
     #[derive(Default)]
     struct LoadyScript {
         reads: VecDeque<u8>,
@@ -671,6 +803,7 @@ mod tests {
                 script: script.clone(),
             })),
             perfix: "=> ".to_string(),
+            options: UbootShellOptions::default(),
         };
 
         let file =

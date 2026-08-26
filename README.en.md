@@ -285,6 +285,23 @@ board_power_off_cmd = "poweroff"
 fail_regex = ["Boot failed", "Error loading kernel"]
 ```
 
+When entering the U-Boot shell, ostool normally detects the prompt from the
+`<INTERRUPT>` line. Some vendor U-Boot builds add timestamps to interrupt
+markers, such as `=> [   2.209] <INTERRUPT>`. Configure prompt filtering for
+that case:
+
+```toml
+[[prompt.filters]]
+pattern = "^=> \\[\\s*\\d+\\.\\d+\\] $"
+replacement = "=> "
+
+[[prompt.filters]]
+pattern = "^\\[\\s*\\d+\\.\\d+\\] $"
+replacement = "=> "
+```
+
+The same `prompt` configuration can be used in `ostool board` run configs.
+
 ### Ordered shell initialization steps
 
 QEMU, U-Boot, and board configurations use `shell_check_steps` for ordered shell commands and result checks. For example, switch from the Axvisor shell to a VM console before running a guest test command:
@@ -304,7 +321,7 @@ When a step contains both `success_regex` and `fail_regex`, failure patterns are
 
 A step without either result field advances after its command completes write/flush. Completing the last step marks the shell-check sequence as successful. Top-level `fail_regex` and `timeout` are the global failure conditions and overall timeout; a step-level `fail_regex` is active only while that step waits for its result.
 
-Top-level `success_regex` has been removed; success conditions must be placed on the relevant `shell_check_steps` entry. Step prefixes, commands, and regexes support normal variable expansion. Board placeholders `${boardServerIp}`, `${boardServerHttpBaseUrl}`, and `${sessionFile:<relative-path>}` expand only in each step's `shell_cmd`.
+Top-level `shell_prefix`, `shell_init_cmd`, and `success_regex` have been removed; prefixes, commands, and success conditions must be placed on the relevant `shell_check_steps` entry. Step prefixes, commands, and regexes support normal variable expansion. Board placeholders `${boardServerIp}`, `${boardServerHttpBaseUrl}`, and `${sessionFile:<relative-path>}` expand only in each step's `shell_cmd`.
 
 Use a commandless step when only self-generated output needs to be checked:
 
@@ -313,7 +330,7 @@ Use a commandless step when only self-generated output needs to be checked:
 success_regex = ["(?m)^TEST_PASSED\\s*$"]
 ```
 
-This is a hard configuration switch: the former top-level shell prefix/command, the former step array, and the former step command field have been removed. Existing configurations must be migrated as a unit and are not read through compatibility aliases.
+This is a hard configuration switch: the former top-level shell prefix/command/success regex, the former step array, and the former step command field have been removed. Existing configurations must be migrated as a unit and are not read through compatibility aliases.
 
 For a Starry guest behind Axvisor, move the former top-level success pattern into the step that runs the guest command. That step's success/failure patterns then determine its result, while top-level failure patterns still guard the entire run.
 

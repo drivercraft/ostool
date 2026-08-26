@@ -19,26 +19,30 @@ board_type = "orangepi-5-plus"
 "#;
 
 #[test]
-fn qemu_rejects_removed_top_level_shell_fields() {
-    assert_removed_root_keys_are_rejected::<QemuConfig>(QEMU_CONFIG, false);
+fn qemu_rejects_legacy_top_level_shell_fields() {
+    assert_legacy_root_keys_are_rejected::<QemuConfig>(QEMU_CONFIG, false);
 }
 
 #[test]
-fn uboot_rejects_removed_top_level_shell_fields() {
-    assert_removed_root_keys_are_rejected::<UbootConfig>(UBOOT_CONFIG, true);
+fn uboot_rejects_legacy_top_level_shell_fields() {
+    assert_legacy_root_keys_are_rejected::<UbootConfig>(UBOOT_CONFIG, true);
 }
 
 #[test]
-fn board_rejects_removed_top_level_shell_fields() {
-    assert_removed_root_keys_are_rejected::<BoardRunConfig>(BOARD_CONFIG, true);
+fn board_rejects_legacy_top_level_shell_fields() {
+    assert_legacy_root_keys_are_rejected::<BoardRunConfig>(BOARD_CONFIG, true);
 }
 
 #[test]
-fn qemu_ignores_removed_top_level_success_regex() {
+fn qemu_rejects_removed_top_level_success_regex() {
     for field in ["success_regex = [\"PASS\"]", "success_regex = []"] {
         let input = format!("{QEMU_CONFIG}\n{field}\n");
-        toml::from_str::<QemuConfig>(&input)
-            .unwrap_or_else(|error| panic!("QEMU success_regex must be ignored: {error}"));
+        let error =
+            toml::from_str::<QemuConfig>(&input).expect_err("QEMU success_regex was accepted");
+        assert!(
+            error.to_string().contains("success_regex"),
+            "error did not name removed key `success_regex`: {error}"
+        );
     }
 }
 
@@ -58,50 +62,55 @@ fn board_rejects_mixed_new_and_removed_step_command() {
 }
 
 #[test]
-fn qemu_still_tolerates_axbuild_extension_fields() {
-    let input = format!(
-        r#"{QEMU_CONFIG}
-test_commands = ["echo pass"]
-
-[host_http_server]
-port = 8080
-"#
-    );
-
-    toml::from_str::<QemuConfig>(&input).expect("axbuild extensions must remain tolerated");
+fn qemu_rejects_removed_shell_init_steps() {
+    assert_removed_shell_init_steps_is_rejected::<QemuConfig>(QEMU_CONFIG);
 }
 
-fn assert_removed_root_keys_are_rejected<T>(minimal_config: &str, reject_success_regex: bool)
+#[test]
+fn uboot_rejects_removed_shell_init_steps() {
+    assert_removed_shell_init_steps_is_rejected::<UbootConfig>(UBOOT_CONFIG);
+}
+
+#[test]
+fn board_rejects_removed_shell_init_steps() {
+    assert_removed_shell_init_steps_is_rejected::<BoardRunConfig>(BOARD_CONFIG);
+}
+
+fn assert_legacy_root_keys_are_rejected<T>(minimal_config: &str, include_success_regex: bool)
 where
     T: DeserializeOwned,
 {
-    let mut removed_fields = vec![
-        ("shell_prefix", "shell_prefix = \"root#\""),
-        ("shell_init_cmd", "shell_init_cmd = \"echo pass\""),
-        ("shell_init_steps", "shell_init_steps = []"),
-    ];
-    if reject_success_regex {
-        removed_fields.extend([
-            ("success_regex", "success_regex = [\"PASS\"]"),
-            ("success_regex", "success_regex = []"),
-        ]);
+    let mut legacy_fields = vec!["shell_prefix = \"root#\"", "shell_init_cmd = \"echo pass\""];
+    if include_success_regex {
+        legacy_fields.extend(["success_regex = [\"PASS\"]", "success_regex = []"]);
     }
-    for (removed_key, removed_field) in removed_fields {
-        let input = format!("{minimal_config}\n{removed_field}\n");
+    for legacy_field in legacy_fields {
+        let input = format!("{minimal_config}\n{legacy_field}\n");
         let error = toml::from_str::<T>(&input)
             .err()
-            .unwrap_or_else(|| panic!("removed root key `{removed_key}` was accepted"));
-        let message = error.to_string();
-
+            .expect("legacy root key was accepted");
+        let key = legacy_field.split_once(' ').unwrap().0;
         assert!(
-            message.contains(removed_key),
-            "error did not name removed key `{removed_key}`: {message}"
-        );
-        assert!(
-            message.contains("shell_check_steps"),
-            "error did not direct the user to `shell_check_steps`: {message}"
+            error.to_string().contains(key),
+            "error did not name removed key `{key}`: {error}"
         );
     }
+}
+
+fn assert_removed_shell_init_steps_is_rejected<T>(minimal_config: &str)
+where
+    T: DeserializeOwned,
+{
+    let input = format!("{minimal_config}\nshell_init_steps = []\n");
+    let error = toml::from_str::<T>(&input)
+        .err()
+        .expect("removed root key `shell_init_steps` was accepted");
+    let message = error.to_string();
+
+    assert!(
+        message.contains("shell_init_steps"),
+        "error did not name removed key `shell_init_steps`: {message}"
+    );
 }
 
 fn assert_mixed_step_command_is_rejected<T>(minimal_config: &str)
