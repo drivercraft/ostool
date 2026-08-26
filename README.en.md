@@ -291,6 +291,11 @@ success_regex = ["Starting kernel", "Boot successful"]
 fail_regex = ["Boot failed", "Error loading kernel"]
 ```
 
+When entering the U-Boot shell, ostool normally detects the prompt from the
+`<INTERRUPT>` line. Some vendor U-Boot builds add timestamps to interrupt
+markers, such as `=> [   2.209] <INTERRUPT>` or `[ 115.141] <INTERRUPT>`;
+ostool recognizes those formats automatically, with no extra configuration.
+
 ### Environment Variable Support
 
 Configuration files support environment variable substitution using `${env:VAR_NAME:-default}` format:

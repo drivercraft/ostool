@@ -4,9 +4,11 @@
 extern crate log;
 
 use std::{
+    borrow::Cow,
     io::{Error, ErrorKind, Result, stdout},
     path::{Path, PathBuf},
     pin::Pin,
+    sync::OnceLock,
     task::{Context, Poll},
     time::Duration,
 };
@@ -18,6 +20,7 @@ use futures::{
     pin_mut,
 };
 use futures_timer::Delay;
+use regex::Regex;
 
 /// CRC16-CCITT checksum implementation.
 pub mod crc;
@@ -39,6 +42,20 @@ const LOADY_RETRY_DELAY: Duration = Duration::from_millis(300);
 
 type Tx = Box<dyn AsyncWrite + Send + Unpin>;
 type Rx = Box<dyn AsyncRead + Send + Unpin>;
+
+fn normalize_interrupt_prompt(prompt: &str) -> Cow<'_, str> {
+    static TIMESTAMP_PROMPT: OnceLock<Regex> = OnceLock::new();
+    let timestamp_prompt = TIMESTAMP_PROMPT.get_or_init(|| {
+        Regex::new(r"^(?:(.+?) )?\[\s*\d+\.\d+\] $")
+            .expect("built-in U-Boot timestamp prompt regex must compile")
+    });
+
+    let Some(captures) = timestamp_prompt.captures(prompt) else {
+        return Cow::Borrowed(prompt);
+    };
+    let prompt = captures.get(1).map_or("=>", |matched| matched.as_str());
+    Cow::Owned(format!("{prompt} "))
+}
 
 pub struct UbootShell {
     /// Transmit stream for sending bytes to U-Boot.
@@ -132,6 +149,8 @@ impl UbootShell {
         let mut line = self.wait_for_interrupt().await?;
         debug!("got {}", String::from_utf8_lossy(&line));
         line.resize(line.len().saturating_sub(INT.len()), 0);
+        let line = String::from_utf8_lossy(&line);
+        let line = normalize_interrupt_prompt(&line);
         if line.is_empty() {
             let prompt = self.read_until_idle().await?;
             let prompt = String::from_utf8_lossy(&prompt);
@@ -145,7 +164,7 @@ impl UbootShell {
                 return Err(Error::new(ErrorKind::InvalidData, "U-Boot prompt is empty"));
             }
         } else {
-            self.perfix = String::from_utf8_lossy(&line).to_string();
+            self.perfix = line.to_string();
             self.clear_shell().await?;
         }
         Ok(())
@@ -539,6 +558,38 @@ mod tests {
             InterruptTx {
                 response: response.clone(),
                 interrupt_output: b"<INTERRUPT>\n=> <INTERRUPT>\n=> ",
+            },
+            InterruptRx { response },
+        )
+        .await?;
+
+        assert_eq!(shell.perfix, "=> ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn filters_timestamp_after_prompt_in_interrupt_line() -> Result<()> {
+        let response = Arc::new(Mutex::new(VecDeque::new()));
+        let shell = UbootShell::new(
+            InterruptTx {
+                response: response.clone(),
+                interrupt_output: b"=> [   2.209] <INTERRUPT>\n",
+            },
+            InterruptRx { response },
+        )
+        .await?;
+
+        assert_eq!(shell.perfix, "=> ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn filters_timestamp_only_interrupt_line_to_default_prompt() -> Result<()> {
+        let response = Arc::new(Mutex::new(VecDeque::new()));
+        let shell = UbootShell::new(
+            InterruptTx {
+                response: response.clone(),
+                interrupt_output: b"[ 115.141] <INTERRUPT>\n",
             },
             InterruptRx { response },
         )

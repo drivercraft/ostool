@@ -288,6 +288,10 @@ success_regex = ["Starting kernel", "Boot successful"]
 fail_regex = ["Boot failed", "Error loading kernel"]
 ```
 
+U-Boot 进入 shell 时默认通过 `<INTERRUPT>` 自动识别 prompt。某些厂商 U-Boot 会给
+中断提示加时间戳，例如 `=> [   2.209] <INTERRUPT>` 或
+`[ 115.141] <INTERRUPT>`；ostool 会内建识别这些格式，无需额外配置。
+
 ### 环境变量支持
 
 配置文件支持环境变量替换，使用 `${env:VAR_NAME:-default}` 格式：
