@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- *(ostool)* bound U-Boot shell initialization when the serial console never responds
+
 ## [0.28.0](https://github.com/drivercraft/ostool/compare/ostool-v0.27.1...ostool-v0.28.0) - 2026-08-20
 
 ### Added

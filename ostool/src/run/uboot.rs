@@ -59,6 +59,21 @@ use crate::{
     utils::PathResultExt,
 };
 
+/// Keep a dead serial console from holding a board runner forever when no
+/// positive U-Boot timeout is configured.
+const DEFAULT_UBOOT_SHELL_TIMEOUT: Duration = Duration::from_secs(300);
+
+async fn new_uboot_shell<Tx, Rx>(tx: Tx, rx: Rx, timeout: Duration) -> anyhow::Result<UbootShell>
+where
+    Tx: futures::io::AsyncWrite + Send + Unpin + 'static,
+    Rx: futures::io::AsyncRead + Send + Unpin + 'static,
+{
+    tokio::time::timeout(timeout, UbootShell::new(tx, rx))
+        .await
+        .with_context(|| format!("timed out waiting for U-Boot shell after {timeout:?}"))?
+        .context("failed to initialize U-Boot shell")
+}
+
 #[derive(Debug, Clone, Serialize, JsonSchema, Default)]
 pub struct UbootConfig {
     pub dtb_file: Option<String>,
@@ -83,7 +98,7 @@ pub struct UbootConfig {
     #[serde(default)]
     pub shell_check_steps: Vec<ShellCheckStep>,
     /// Timeout in seconds after entering the serial terminal interaction stage. `None` or `0`
-    /// disables the timeout.
+    /// disables the terminal timeout; U-Boot shell initialization still uses a bounded default.
     pub timeout: Option<u64>,
     #[serde(flatten)]
     pub local: LocalUbootConfig,
@@ -1179,7 +1194,10 @@ where
             .await?;
 
         let mut net_ok = false;
-        let mut uboot = UbootShell::new(tx, rx).await?;
+        let shell_timeout =
+            timeout_duration(self.config.timeout).unwrap_or(DEFAULT_UBOOT_SHELL_TIMEOUT);
+        info!("Waiting for U-Boot shell response (timeout: {shell_timeout:?})...");
+        let mut uboot = new_uboot_shell(tx, rx, shell_timeout).await?;
         uboot.set_env("autoload", "yes").await?;
 
         if let Some(ref cmds) = self.config.uboot_cmd {
@@ -1601,6 +1619,7 @@ mod tests {
 
     use async_trait::async_trait;
     use tokio::io::AsyncWrite;
+    use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
     use super::{
         LocalBackend, LocalUbootConfig, Net, RemoteBackend, ResolvedRuntime, RunnerBackend,
@@ -2381,6 +2400,28 @@ mod tests {
         assert_eq!(timeout_duration(None), None);
         assert_eq!(timeout_duration(Some(0)), None);
         assert_eq!(timeout_duration(Some(5)), Some(Duration::from_secs(5)));
+    }
+
+    #[tokio::test]
+    async fn uboot_shell_initialization_times_out_without_serial_response() {
+        let (host, _peer) = tokio::io::duplex(64);
+        let (rx, tx) = tokio::io::split(host);
+        let result = tokio::time::timeout(
+            Duration::from_millis(50),
+            super::new_uboot_shell(tx.compat_write(), rx.compat(), Duration::from_millis(10)),
+        )
+        .await;
+
+        let error = match result {
+            Ok(Err(error)) => error,
+            Ok(Ok(_)) => panic!("U-Boot shell unexpectedly initialized"),
+            Err(_) => panic!("U-Boot shell initialization did not return a bounded error"),
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("timed out waiting for U-Boot shell")
+        );
     }
 
     #[test]

@@ -74,7 +74,6 @@ impl TokenManager {
             CredentialRecord::OAuthRefresh {
                 access_token,
                 access_expires_at,
-                refresh_token: _,
                 ..
             } if access_expires_at > Utc::now() + Duration::seconds(60) => Ok(Some(access_token)),
             CredentialRecord::OAuthRefresh { refresh_token, .. } => {
