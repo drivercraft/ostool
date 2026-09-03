@@ -267,11 +267,6 @@ dtb_file = "tools/device_tree.dtb"
 # 内核加载地址（可选）
 kernel_load_addr = "0x80080000"
 
-# 网络启动配置（可选）
-[net]
-interface = "eth0"
-board_ip = "192.168.1.100"
-
 # 板子重置命令（可选）
 board_reset_cmd = "reset"
 
@@ -280,6 +275,11 @@ board_power_off_cmd = "poweroff"
 
 # 失败启动的正则表达式
 fail_regex = ["Boot failed", "Error loading kernel"]
+
+# 网络启动配置（可选）
+[net]
+interface = "eth0"
+board_ip = "192.168.1.100"
 ```
 
 ### 有序 Shell 初始化步骤
