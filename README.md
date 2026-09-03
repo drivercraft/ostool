@@ -312,6 +312,10 @@ success_regex = ["(?m)^TEST_PASSED\\s*$"]
 
 这是一次配置硬切换：旧的顶层 shell prefix/command、旧步骤数组及旧步骤命令字段已经移除，旧配置需要整体迁移到 `shell_check_steps`，不会被兼容读取。
 
+U-Boot 进入 shell 时默认通过 `<INTERRUPT>` 自动识别 prompt。某些厂商 U-Boot 会给
+中断提示加时间戳，例如 `=> [   2.209] <INTERRUPT>` 或
+`[ 115.141] <INTERRUPT>`；ostool 会内建识别这些格式，无需额外配置。
+
 对于运行在 Axvisor 后面的 Starry guest，把旧的顶层成功表达式放到执行 guest 命令的步骤中；这样该步骤自己的 success/fail 负责判断命令结果，顶层 fail 继续兜底整个运行过程。
 
 ### 环境变量支持
