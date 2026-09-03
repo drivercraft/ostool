@@ -50,6 +50,8 @@ pub struct BoardLease {
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateSessionRequest {
     pub board_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub board_id: Option<String>,
     pub required_tags: Vec<String>,
     pub client_name: Option<String>,
 }
@@ -219,6 +221,12 @@ impl BoardServerClientError {
             && self.message == format!("no available board for type `{board_type}`")
     }
 
+    pub fn is_no_available_board_id(&self, board_id: &str) -> bool {
+        self.status == StatusCode::CONFLICT
+            && self.code.as_deref() == Some("conflict")
+            && self.message == format!("board `{board_id}` is not available")
+    }
+
     pub fn is_board_type_not_found_for(&self, board_type: &str) -> bool {
         self.status == StatusCode::NOT_FOUND
             && self.code.as_deref() == Some("not_found")
@@ -262,12 +270,14 @@ impl BoardServerClient {
     pub async fn create_session(
         &self,
         board_type: &str,
+        board_id: Option<&str>,
     ) -> Result<SessionCreatedResponse, BoardServerClientError> {
         let response = self
             .request(Method::POST, self.endpoint("/api/v1/sessions"))
             .await?
             .json(&CreateSessionRequest {
                 board_type: board_type.to_string(),
+                board_id: board_id.map(ToOwned::to_owned),
                 required_tags: vec![],
                 client_name: Some("ostool".to_string()),
             })

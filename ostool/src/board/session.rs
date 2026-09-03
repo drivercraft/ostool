@@ -38,10 +38,15 @@ pub struct BoardSession {
 }
 
 impl BoardSession {
-    pub async fn acquire(client: BoardServerClient, board_type: &str) -> anyhow::Result<Self> {
+    pub async fn acquire(
+        client: BoardServerClient,
+        board_type: &str,
+        board_id: Option<&str>,
+    ) -> anyhow::Result<Self> {
         let info = acquire_session_with(
             board_type,
-            || client.create_session(board_type),
+            board_id,
+            || client.create_session(board_type, board_id),
             |duration| tokio::time::sleep(duration),
         )
         .await?;
@@ -196,6 +201,7 @@ async fn run_heartbeat_loop(
 
 async fn acquire_session_with<CreateFn, CreateFut, SleepFn, SleepFut>(
     board_type: &str,
+    board_id: Option<&str>,
     mut create: CreateFn,
     mut sleep: SleepFn,
 ) -> Result<SessionCreatedResponse, BoardServerClientError>
@@ -208,6 +214,17 @@ where
     loop {
         match create().await {
             Ok(session) => return Ok(session),
+            Err(err)
+                if board_id
+                    .map(|board_id| err.is_no_available_board_id(board_id))
+                    .unwrap_or(false) =>
+            {
+                println!(
+                    "Board `{}` is not available, retrying in 1s...",
+                    board_id.unwrap()
+                );
+                sleep(Duration::from_secs(1)).await;
+            }
             Err(err) if err.is_no_available_board_for(board_type) => {
                 println!("No available board for type `{board_type}`, retrying in 1s...");
                 sleep(Duration::from_secs(1)).await;
@@ -254,6 +271,14 @@ mod tests {
         }
     }
 
+    fn no_board_id_error(board_id: &str) -> BoardServerClientError {
+        BoardServerClientError {
+            status: StatusCode::CONFLICT,
+            code: Some("conflict".to_string()),
+            message: format!("board `{board_id}` is not available"),
+        }
+    }
+
     #[test]
     fn shared_file_keeps_the_requested_relative_path() {
         let uploaded_at = Utc::now();
@@ -286,6 +311,7 @@ mod tests {
 
         let session = acquire_session_with(
             "rk3568",
+            None,
             {
                 let responses = responses.clone();
                 move || {
@@ -318,6 +344,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn acquire_session_retries_until_requested_board_id_is_available() {
+        let responses = Arc::new(Mutex::new(vec![
+            Ok(created_session("demo-session")),
+            Err(no_board_id_error("demo-02")),
+        ]));
+        let sleeps = Arc::new(Mutex::new(Vec::new()));
+
+        let session = acquire_session_with(
+            "rk3568",
+            Some("demo-02"),
+            {
+                let responses = responses.clone();
+                move || {
+                    let responses = responses.clone();
+                    async move { responses.lock().unwrap().pop().unwrap() }
+                }
+            },
+            {
+                let sleeps = sleeps.clone();
+                move |duration| {
+                    let sleeps = sleeps.clone();
+                    async move {
+                        sleeps.lock().unwrap().push(duration);
+                    }
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(session.session_id, "demo-session");
+        assert_eq!(*sleeps.lock().unwrap(), vec![Duration::from_secs(1)]);
+    }
+
+    #[tokio::test]
     async fn acquire_session_stops_retrying_on_non_conflict_error() {
         let error = BoardServerClientError {
             status: StatusCode::SERVICE_UNAVAILABLE,
@@ -327,6 +388,7 @@ mod tests {
 
         let result = acquire_session_with(
             "rk3568",
+            None,
             || {
                 let error = error.clone();
                 async move { Err(error) }
@@ -349,6 +411,7 @@ mod tests {
 
         let result = acquire_session_with(
             "rk3568",
+            None,
             || {
                 let error = error.clone();
                 async move { Err(error) }

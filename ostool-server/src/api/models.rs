@@ -33,6 +33,8 @@ pub struct BoardTypeSummary {
 pub struct CreateSessionRequest {
     pub board_type: String,
     #[serde(default)]
+    pub board_id: Option<String>,
+    #[serde(default)]
     pub required_tags: Vec<String>,
     pub client_name: Option<String>,
 }

@@ -142,6 +142,9 @@ ostool board config
 # 查看远端开发板类型
 ostool board ls
 
+# 连接指定开发板
+ostool board connect -b OrangePi-5-Plus --board-id OrangePi-5-Plus-2
+
 # 在远端开发板上运行
 ostool board run
 
@@ -345,6 +348,8 @@ ostool board config
 ```
 
 `server` 应使用包含 `http://` 或 `https://` 的完整 URL；可选的 `port` 会覆盖 URL 中的端口。为兼容旧的局域网配置，裸 IPv4 或 IPv6 地址会自动补为 `http://`。基线版本写出的 `server_ip` / `port` 也会在读取时迁移为 `server` / `port`，下一次保存配置时只写新格式；无 scheme 的主机名不支持。项目级 `.board.toml` 中的 `server` / `port` 仍可用于 `ostool board run`，其优先级低于命令行参数，高于全局配置。
+
+`ostool board connect -b <BOARD_TYPE>` 会按类型分配任意空闲开发板；需要连接某一块具体开发板时，可以额外传入 `--board-id <BOARD_ID>`。
 
 `.board.toml` 可以用 `session_files` 声明相对于配置文件目录的共享文件。调用方通过
 `BoardRunRequest::with_session_files` 提供该目录，ostool 会在 board session

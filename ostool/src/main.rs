@@ -164,6 +164,9 @@ struct BoardConnectArgs {
     /// Board type to allocate and connect
     #[arg(short = 'b', long)]
     board_type: String,
+    /// Specific board ID to allocate and connect
+    #[arg(long)]
+    board_id: Option<String>,
     #[command(flatten)]
     server: BoardServerArgs,
 }
@@ -278,7 +281,8 @@ async fn try_main() -> Result<()> {
                 let global_config = board::load_board_global_config_with_notice()?;
                 let endpoint = global_config
                     .resolve_endpoint(args.server.server.as_deref(), args.server.port)?;
-                board::connect_board_endpoint(endpoint, &args.board_type).await?;
+                board::connect_board_endpoint(endpoint, &args.board_type, args.board_id.as_deref())
+                    .await?;
             }
             BoardSubCommands::Run(args) => {
                 let mut invocation = init_invocation(manifest.clone())?;
@@ -822,6 +826,7 @@ mod tests {
                 command: BoardSubCommands::Connect(args),
             }) => {
                 assert_eq!(args.board_type, "rk3568");
+                assert!(args.board_id.is_none());
                 assert!(args.server.server.is_none());
                 assert!(args.server.port.is_none());
             }
@@ -837,6 +842,8 @@ mod tests {
             "connect",
             "--board-type",
             "rk3568",
+            "--board-id",
+            "rk3568-2",
             "--server",
             "http://10.0.0.2",
             "--port",
@@ -849,6 +856,7 @@ mod tests {
                 command: BoardSubCommands::Connect(args),
             }) => {
                 assert_eq!(args.board_type, "rk3568");
+                assert_eq!(args.board_id.as_deref(), Some("rk3568-2"));
                 assert_eq!(args.server.server.as_deref(), Some("http://10.0.0.2"));
                 assert_eq!(args.server.port, Some(9000));
             }
