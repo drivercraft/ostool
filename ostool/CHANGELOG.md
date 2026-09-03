@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.2](https://github.com/drivercraft/ostool/compare/ostool-v0.28.1...ostool-v0.28.2) - 2026-09-03
+
+### Fixed
+
+- *(ostool)* honor board_reset_cmd/board_power_off_cmd from uboot config ([#172](https://github.com/drivercraft/ostool/pull/172))
+
 ### Fixed
 
 - *(ostool)* bound U-Boot shell initialization when the serial console never responds
