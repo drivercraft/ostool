@@ -142,6 +142,9 @@ ostool board config
 # List remote board types
 ostool board ls
 
+# Connect a specific remote board
+ostool board connect -b OrangePi-5-Plus --board-id OrangePi-5-Plus-2
+
 # Run on a remote board
 ostool board run
 
@@ -349,6 +352,8 @@ ostool board config
 ```
 
 `server` should be a complete URL including `http://` or `https://`; the optional `port` overrides the URL port. For legacy LAN configurations, a bare IPv4 or IPv6 address is interpreted as `http://`. The base release's persisted `server_ip` / `port` pair is also migrated to `server` / `port` when read; the next configuration save writes only the new format. Bare host names are not supported. Project-local `.board.toml` `server` / `port` fields still apply to `ostool board run`, with precedence lower than CLI flags and higher than the global config.
+
+`ostool board connect -b <BOARD_TYPE>` allocates any available board of that type; pass `--board-id <BOARD_ID>` as well when you need to connect a specific board.
 
 A `.board.toml` file can declare shared files relative to its own directory with
 `session_files`. The caller supplies that directory through

@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, mpsc};
 
 use crate::{
-    board_pool::{BoardAllocationStatus, allocate_board},
+    board_pool::{
+        BoardAllocationStatus, BoardAllocationWithIdStatus, allocate_board,
+        allocate_board_with_board_id,
+    },
     board_store::fs::FileBoardStore,
     config::{BoardConfig, PowerManagementConfig, ServerConfig},
     dtb_store::DtbStore,
@@ -160,6 +163,40 @@ impl AppState {
         required_tags: &[String],
         client_name: Option<String>,
     ) -> Result<Session, BoardAllocationStatus> {
+        self.create_session_inner(board_type, None, required_tags, client_name)
+            .await
+            .map_err(|status| match status {
+                BoardAllocationWithIdStatus::BoardTypeNotFound => {
+                    BoardAllocationStatus::BoardTypeNotFound
+                }
+                BoardAllocationWithIdStatus::NoAvailableBoard => {
+                    BoardAllocationStatus::NoAvailableBoard
+                }
+                BoardAllocationWithIdStatus::BoardNotFound
+                | BoardAllocationWithIdStatus::BoardTypeMismatch { .. } => {
+                    unreachable!("board ID errors are impossible without a requested board ID")
+                }
+            })
+    }
+
+    pub async fn create_session_with_board_id(
+        &self,
+        board_type: &str,
+        board_id: &str,
+        required_tags: &[String],
+        client_name: Option<String>,
+    ) -> Result<Session, BoardAllocationWithIdStatus> {
+        self.create_session_inner(board_type, Some(board_id), required_tags, client_name)
+            .await
+    }
+
+    async fn create_session_inner(
+        &self,
+        board_type: &str,
+        board_id: Option<&str>,
+        required_tags: &[String],
+        client_name: Option<String>,
+    ) -> Result<Session, BoardAllocationWithIdStatus> {
         loop {
             let boards = self.boards.read().await;
             let runtimes = self.board_runtimes.read().await;
@@ -168,7 +205,24 @@ impl AppState {
                 .filter(|(_, runtime)| runtime.lease_state != BoardLeaseState::Idle)
                 .map(|(board_id, _)| board_id.clone())
                 .collect::<BTreeSet<_>>();
-            let board = allocate_board(&boards, &unavailable_board_ids, board_type, required_tags)?;
+            let board = match board_id {
+                Some(board_id) => allocate_board_with_board_id(
+                    &boards,
+                    &unavailable_board_ids,
+                    board_type,
+                    board_id,
+                    required_tags,
+                )?,
+                None => allocate_board(&boards, &unavailable_board_ids, board_type, required_tags)
+                    .map_err(|status| match status {
+                        BoardAllocationStatus::BoardTypeNotFound => {
+                            BoardAllocationWithIdStatus::BoardTypeNotFound
+                        }
+                        BoardAllocationStatus::NoAvailableBoard => {
+                            BoardAllocationWithIdStatus::NoAvailableBoard
+                        }
+                    })?,
+            };
             drop(runtimes);
             drop(boards);
 

@@ -54,6 +54,15 @@ pub struct CreateSessionRequest {
     pub client_name: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateSessionRequestWithBoardId {
+    pub board_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub board_id: Option<String>,
+    pub required_tags: Vec<String>,
+    pub client_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct SessionCreatedResponse {
     pub session_id: String,
@@ -219,6 +228,13 @@ impl BoardServerClientError {
             && self.message == format!("no available board for type `{board_type}`")
     }
 
+    pub fn is_no_available_board_id(&self, board_id: &str) -> bool {
+        let board_id = board_id.trim();
+        self.status == StatusCode::CONFLICT
+            && self.code.as_deref() == Some("conflict")
+            && self.message == format!("board `{board_id}` is not available")
+    }
+
     pub fn is_board_type_not_found_for(&self, board_type: &str) -> bool {
         self.status == StatusCode::NOT_FOUND
             && self.code.as_deref() == Some("not_found")
@@ -263,18 +279,63 @@ impl BoardServerClient {
         &self,
         board_type: &str,
     ) -> Result<SessionCreatedResponse, BoardServerClientError> {
+        self.create_session_inner(board_type, None).await
+    }
+
+    pub async fn create_session_with_board_id(
+        &self,
+        board_type: &str,
+        board_id: &str,
+    ) -> Result<SessionCreatedResponse, BoardServerClientError> {
+        let board_id = board_id.trim();
+        if board_id.is_empty() {
+            return Err(BoardServerClientError {
+                status: StatusCode::BAD_REQUEST,
+                code: Some("bad_request".to_string()),
+                message: "board_id must not be empty when provided".to_string(),
+            });
+        }
+        self.create_session_inner(board_type, Some(board_id)).await
+    }
+
+    async fn create_session_inner(
+        &self,
+        board_type: &str,
+        board_id: Option<&str>,
+    ) -> Result<SessionCreatedResponse, BoardServerClientError> {
         let response = self
             .request(Method::POST, self.endpoint("/api/v1/sessions"))
             .await?
-            .json(&CreateSessionRequest {
+            .json(&CreateSessionRequestWithBoardId {
                 board_type: board_type.to_string(),
+                board_id: board_id.map(ToOwned::to_owned),
                 required_tags: vec![],
                 client_name: Some("ostool".to_string()),
             })
             .send()
             .await
             .map_err(Self::request_error)?;
-        self.decode_json(response).await
+        let session: SessionCreatedResponse = self.decode_json(response).await?;
+        if let Some(requested_board_id) = board_id
+            && session.board_id != requested_board_id
+        {
+            if let Err(error) = self.delete_session(&session.session_id).await {
+                log::warn!(
+                    "failed to release mismatched board session `{}` after requesting board `{}`: {error}",
+                    session.session_id,
+                    requested_board_id
+                );
+            }
+            return Err(BoardServerClientError {
+                status: StatusCode::CONFLICT,
+                code: Some("conflict".to_string()),
+                message: format!(
+                    "server allocated board `{}` while board `{}` was requested",
+                    session.board_id, requested_board_id
+                ),
+            });
+        }
+        Ok(session)
     }
 
     pub async fn heartbeat(
@@ -640,9 +701,18 @@ impl fmt::Display for BoardTypeSummary {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
     use chrono::{DateTime, Utc};
     use reqwest::StatusCode;
     use serde::Serialize;
+    use tokio::{
+        io::{AsyncReadExt as _, AsyncWriteExt as _},
+        net::TcpStream,
+    };
     use url::Url;
 
     use super::{BoardServerClient, BoardTypeSummary, BootConfig, parse_error_body};
@@ -784,6 +854,89 @@ mod tests {
         );
         assert!(error.is_board_type_not_found_for("rk3568"));
         assert!(!error.is_no_available_board_for("rk3568"));
+    }
+
+    #[tokio::test]
+    async fn create_session_releases_mismatched_requested_board_id() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let saw_delete = Arc::new(AtomicBool::new(false));
+        let saw_delete_server = saw_delete.clone();
+
+        let server = tokio::spawn(async move {
+            let (mut post_socket, _) = listener.accept().await.unwrap();
+            let request = read_http_request(&mut post_socket).await;
+            assert!(request.starts_with("POST /api/v1/sessions "));
+            assert!(request.contains(r#""board_id":"demo-02""#));
+            write_http_response(
+                &mut post_socket,
+                "201 Created",
+                r#"{"session_id":"session-1","board_id":"demo-01","lease_expires_at":"2026-09-03T00:00:00Z","serial_available":false,"boot_mode":"uboot","ws_url":null}"#,
+            )
+            .await;
+
+            let (mut delete_socket, _) = listener.accept().await.unwrap();
+            let request = read_http_request(&mut delete_socket).await;
+            assert!(request.starts_with("DELETE /api/v1/sessions/session-1 "));
+            saw_delete_server.store(true, Ordering::SeqCst);
+            write_http_response(&mut delete_socket, "202 Accepted", "").await;
+        });
+
+        let endpoint =
+            BoardEndpoint::new(&format!("http://{address}"), None, AuthMode::Disabled).unwrap();
+        let client = BoardServerClient::new_with_endpoint(endpoint).unwrap();
+        let error = client
+            .create_session_with_board_id("demo", " demo-02 ")
+            .await
+            .unwrap_err();
+
+        server.await.unwrap();
+        assert!(saw_delete.load(Ordering::SeqCst));
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(error.code.as_deref(), Some("conflict"));
+        assert_eq!(
+            error.message,
+            "server allocated board `demo-01` while board `demo-02` was requested"
+        );
+    }
+
+    async fn read_http_request(socket: &mut TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let read = socket.read(&mut buffer).await.unwrap();
+            assert_ne!(read, 0, "client closed connection before request completed");
+            bytes.extend_from_slice(&buffer[..read]);
+            if request_complete(&bytes) {
+                break;
+            }
+        }
+        String::from_utf8(bytes).unwrap()
+    }
+
+    fn request_complete(bytes: &[u8]) -> bool {
+        let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
+            return false;
+        };
+        let headers = String::from_utf8_lossy(&bytes[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then_some(value.trim())
+            })
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        bytes.len() >= header_end + 4 + content_length
+    }
+
+    async fn write_http_response(socket: &mut TcpStream, status: &str, body: &str) {
+        let response = format!(
+            "HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
     }
 
     #[test]

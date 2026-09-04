@@ -38,6 +38,16 @@ pub struct CreateSessionRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateSessionRequestWithBoardId {
+    pub board_type: String,
+    #[serde(default)]
+    pub board_id: Option<String>,
+    #[serde(default)]
+    pub required_tags: Vec<String>,
+    pub client_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionCreatedResponse {
     pub session_id: String,
     pub board_id: String,

@@ -27,14 +27,14 @@ use crate::{
             AdminServerConfigEditable, AdminServerConfigReadonly, AdminServerConfigResponse,
             AdminSessionsResponse, AdminTftpConfigResponse, AdminTftpStatusResponse,
             BoardPowerAction, BoardPowerStatusResponse, BoardRuntimeStatusResponse,
-            BoardTypeSummary, BootProfileResponse, CreateSessionRequest, DtbFileResponse,
-            HeartbeatResponse, HttpBootFileResponse, KernelPublishResponse,
+            BoardTypeSummary, BootProfileResponse, CreateSessionRequestWithBoardId,
+            DtbFileResponse, HeartbeatResponse, HttpBootFileResponse, KernelPublishResponse,
             NetworkInterfaceSummary, SerialPortSummary, SerialStatusResponse,
             SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse,
             SharedSessionFileResponse, TftpSessionResponse, UpdateServerConfigRequest,
         },
     },
-    board_pool::BoardAllocationStatus,
+    board_pool::{BoardAllocationStatus, BoardAllocationWithIdStatus},
     config::{
         BoardConfig, BootConfig, PowerManagementConfig, ServerConfig, TftpConfig, UbootNetworkMode,
     },
@@ -861,28 +861,62 @@ async fn list_board_types(
 
 async fn create_session(
     State(state): State<AppState>,
-    axum::Json(request): axum::Json<CreateSessionRequest>,
+    axum::Json(request): axum::Json<CreateSessionRequestWithBoardId>,
 ) -> Result<(StatusCode, axum::Json<SessionCreatedResponse>), ApiError> {
     if request.board_type.trim().is_empty() {
         return Err(ApiError::bad_request("board_type must not be empty"));
     }
+    let board_id = request.board_id.as_deref().map(str::trim);
+    if board_id == Some("") {
+        return Err(ApiError::bad_request(
+            "board_id must not be empty when provided",
+        ));
+    }
 
-    let session = state
-        .create_session(
-            &request.board_type,
-            &request.required_tags,
-            request.client_name.clone(),
-        )
-        .await
-        .map_err(|err| match err {
-            BoardAllocationStatus::BoardTypeNotFound => {
-                ApiError::not_found(format!("board type `{}` not found", request.board_type))
-            }
-            BoardAllocationStatus::NoAvailableBoard => ApiError::conflict(format!(
-                "no available board for type `{}`",
-                request.board_type
-            )),
-        })?;
+    let session = match board_id {
+        Some(board_id) => state
+            .create_session_with_board_id(
+                &request.board_type,
+                board_id,
+                &request.required_tags,
+                request.client_name.clone(),
+            )
+            .await
+            .map_err(|err| match err {
+                BoardAllocationWithIdStatus::BoardTypeNotFound => {
+                    ApiError::not_found(format!("board type `{}` not found", request.board_type))
+                }
+                BoardAllocationWithIdStatus::BoardNotFound => {
+                    ApiError::not_found(format!("board `{board_id}` not found"))
+                }
+                BoardAllocationWithIdStatus::BoardTypeMismatch {
+                    board_id,
+                    board_type,
+                    actual_board_type,
+                } => ApiError::bad_request(format!(
+                    "board `{board_id}` has type `{actual_board_type}`, not `{board_type}`"
+                )),
+                BoardAllocationWithIdStatus::NoAvailableBoard => {
+                    ApiError::conflict(format!("board `{board_id}` is not available"))
+                }
+            })?,
+        None => state
+            .create_session(
+                &request.board_type,
+                &request.required_tags,
+                request.client_name.clone(),
+            )
+            .await
+            .map_err(|err| match err {
+                BoardAllocationStatus::BoardTypeNotFound => {
+                    ApiError::not_found(format!("board type `{}` not found", request.board_type))
+                }
+                BoardAllocationStatus::NoAvailableBoard => ApiError::conflict(format!(
+                    "no available board for type `{}`",
+                    request.board_type
+                )),
+            })?,
+    };
 
     let board = state
         .session_board(&session.id)
@@ -4284,6 +4318,76 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["board_id"], "demo-01");
         assert_eq!(value["serial_available"], true);
+    }
+
+    #[tokio::test]
+    async fn create_session_allocates_requested_board_id() {
+        let app = test_router().await;
+        for board_id in ["demo-01", "demo-02"] {
+            let mut board = sample_board(board_id);
+            board.board_type = "demo".to_string();
+            assert_eq!(
+                create_board(&app, serde_json::to_value(board).unwrap()).await,
+                StatusCode::CREATED
+            );
+        }
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/sessions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "board_type": "demo",
+                            "board_id": " demo-02 ",
+                            "required_tags": [],
+                            "client_name": "test",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["board_id"], "demo-02");
+    }
+
+    #[tokio::test]
+    async fn create_session_rejects_missing_requested_board_id() {
+        let app = test_router().await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/sessions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "board_type": "demo",
+                            "board_id": "missing-demo-01",
+                            "required_tags": [],
+                            "client_name": "test",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["code"], "not_found");
+        assert_eq!(value["message"], "board `missing-demo-01` not found");
     }
 
     #[tokio::test]
