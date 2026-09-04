@@ -38,18 +38,47 @@ pub struct BoardSession {
 }
 
 impl BoardSession {
-    pub async fn acquire(
+    pub async fn acquire(client: BoardServerClient, board_type: &str) -> anyhow::Result<Self> {
+        Self::acquire_inner(client, board_type, None).await
+    }
+
+    pub async fn acquire_with_board_id(
+        client: BoardServerClient,
+        board_type: &str,
+        board_id: &str,
+    ) -> anyhow::Result<Self> {
+        let board_id = board_id.trim();
+        if board_id.is_empty() {
+            return Err(anyhow!("board_id must not be empty when provided"));
+        }
+        Self::acquire_inner(client, board_type, Some(board_id)).await
+    }
+
+    async fn acquire_inner(
         client: BoardServerClient,
         board_type: &str,
         board_id: Option<&str>,
     ) -> anyhow::Result<Self> {
-        let info = acquire_session_with(
-            board_type,
-            board_id,
-            || client.create_session(board_type, board_id),
-            |duration| tokio::time::sleep(duration),
-        )
-        .await?;
+        let info = match board_id {
+            Some(board_id) => {
+                acquire_session_with(
+                    board_type,
+                    Some(board_id),
+                    || client.create_session_with_board_id(board_type, board_id),
+                    |duration| tokio::time::sleep(duration),
+                )
+                .await?
+            }
+            None => {
+                acquire_session_with(
+                    board_type,
+                    None,
+                    || client.create_session(board_type),
+                    |duration| tokio::time::sleep(duration),
+                )
+                .await?
+            }
+        };
 
         let lease_expires_at = Arc::new(RwLock::new(info.lease_expires_at));
         let (heartbeat_stop, heartbeat_rx) = watch::channel(false);
@@ -211,6 +240,7 @@ where
     SleepFn: FnMut(Duration) -> SleepFut,
     SleepFut: Future<Output = ()>,
 {
+    let board_id = board_id.map(str::trim);
     loop {
         match create().await {
             Ok(session) => return Ok(session),
@@ -353,7 +383,7 @@ mod tests {
 
         let session = acquire_session_with(
             "rk3568",
-            Some("demo-02"),
+            Some(" demo-02 "),
             {
                 let responses = responses.clone();
                 move || {

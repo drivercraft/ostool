@@ -27,14 +27,14 @@ use crate::{
             AdminServerConfigEditable, AdminServerConfigReadonly, AdminServerConfigResponse,
             AdminSessionsResponse, AdminTftpConfigResponse, AdminTftpStatusResponse,
             BoardPowerAction, BoardPowerStatusResponse, BoardRuntimeStatusResponse,
-            BoardTypeSummary, BootProfileResponse, CreateSessionRequest, DtbFileResponse,
-            HeartbeatResponse, HttpBootFileResponse, KernelPublishResponse,
+            BoardTypeSummary, BootProfileResponse, CreateSessionRequestWithBoardId,
+            DtbFileResponse, HeartbeatResponse, HttpBootFileResponse, KernelPublishResponse,
             NetworkInterfaceSummary, SerialPortSummary, SerialStatusResponse,
             SessionCreatedResponse, SessionDetailResponse, SessionDtbResponse,
             SharedSessionFileResponse, TftpSessionResponse, UpdateServerConfigRequest,
         },
     },
-    board_pool::BoardAllocationStatus,
+    board_pool::{BoardAllocationStatus, BoardAllocationWithIdStatus},
     config::{
         BoardConfig, BootConfig, PowerManagementConfig, ServerConfig, TftpConfig, UbootNetworkMode,
     },
@@ -861,7 +861,7 @@ async fn list_board_types(
 
 async fn create_session(
     State(state): State<AppState>,
-    axum::Json(request): axum::Json<CreateSessionRequest>,
+    axum::Json(request): axum::Json<CreateSessionRequestWithBoardId>,
 ) -> Result<(StatusCode, axum::Json<SessionCreatedResponse>), ApiError> {
     if request.board_type.trim().is_empty() {
         return Err(ApiError::bad_request("board_type must not be empty"));
@@ -873,37 +873,50 @@ async fn create_session(
         ));
     }
 
-    let session = state
-        .create_session(
-            &request.board_type,
-            board_id,
-            &request.required_tags,
-            request.client_name.clone(),
-        )
-        .await
-        .map_err(|err| match err {
-            BoardAllocationStatus::BoardTypeNotFound => {
-                ApiError::not_found(format!("board type `{}` not found", request.board_type))
-            }
-            BoardAllocationStatus::BoardNotFound => ApiError::not_found(format!(
-                "board `{}` not found",
-                board_id.unwrap_or_default()
-            )),
-            BoardAllocationStatus::BoardTypeMismatch {
+    let session = match board_id {
+        Some(board_id) => state
+            .create_session_with_board_id(
+                &request.board_type,
                 board_id,
-                board_type,
-                actual_board_type,
-            } => ApiError::bad_request(format!(
-                "board `{board_id}` has type `{actual_board_type}`, not `{board_type}`"
-            )),
-            BoardAllocationStatus::NoAvailableBoard => ApiError::conflict(
-                board_id
-                    .map(|board_id| format!("board `{board_id}` is not available"))
-                    .unwrap_or_else(|| {
-                        format!("no available board for type `{}`", request.board_type)
-                    }),
-            ),
-        })?;
+                &request.required_tags,
+                request.client_name.clone(),
+            )
+            .await
+            .map_err(|err| match err {
+                BoardAllocationWithIdStatus::BoardTypeNotFound => {
+                    ApiError::not_found(format!("board type `{}` not found", request.board_type))
+                }
+                BoardAllocationWithIdStatus::BoardNotFound => {
+                    ApiError::not_found(format!("board `{board_id}` not found"))
+                }
+                BoardAllocationWithIdStatus::BoardTypeMismatch {
+                    board_id,
+                    board_type,
+                    actual_board_type,
+                } => ApiError::bad_request(format!(
+                    "board `{board_id}` has type `{actual_board_type}`, not `{board_type}`"
+                )),
+                BoardAllocationWithIdStatus::NoAvailableBoard => {
+                    ApiError::conflict(format!("board `{board_id}` is not available"))
+                }
+            })?,
+        None => state
+            .create_session(
+                &request.board_type,
+                &request.required_tags,
+                request.client_name.clone(),
+            )
+            .await
+            .map_err(|err| match err {
+                BoardAllocationStatus::BoardTypeNotFound => {
+                    ApiError::not_found(format!("board type `{}` not found", request.board_type))
+                }
+                BoardAllocationStatus::NoAvailableBoard => ApiError::conflict(format!(
+                    "no available board for type `{}`",
+                    request.board_type
+                )),
+            })?,
+    };
 
     let board = state
         .session_board(&session.id)
@@ -2237,7 +2250,6 @@ mod tests {
     async fn create_session(app: &Router, board_type: &str) -> String {
         let request = CreateSessionRequest {
             board_type: board_type.to_string(),
-            board_id: None,
             required_tags: Vec::new(),
             client_name: Some("test".to_string()),
         };
@@ -4330,7 +4342,7 @@ mod tests {
                     .body(Body::from(
                         json!({
                             "board_type": "demo",
-                            "board_id": "demo-02",
+                            "board_id": " demo-02 ",
                             "required_tags": [],
                             "client_name": "test",
                         })

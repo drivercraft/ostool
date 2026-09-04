@@ -197,16 +197,25 @@ pub async fn acquire_board_session(
     server: &str,
     port: u16,
     board_type: &str,
-    board_id: Option<&str>,
 ) -> anyhow::Result<(BoardServerClient, BoardSession)> {
     let client = BoardServerClient::new(server, port)?;
-    let session = BoardSession::acquire(client.clone(), board_type, board_id)
+    let session = BoardSession::acquire(client.clone(), board_type)
         .await
-        .with_context(|| match board_id {
-            Some(board_id) => {
-                format!("failed to acquire board type `{board_type}` with board id `{board_id}`")
-            }
-            None => format!("failed to acquire board type `{board_type}`"),
+        .with_context(|| format!("failed to acquire board type `{board_type}`"))?;
+    Ok((client, session))
+}
+
+pub async fn acquire_board_session_with_board_id(
+    server: &str,
+    port: u16,
+    board_type: &str,
+    board_id: &str,
+) -> anyhow::Result<(BoardServerClient, BoardSession)> {
+    let client = BoardServerClient::new(server, port)?;
+    let session = BoardSession::acquire_with_board_id(client.clone(), board_type, board_id)
+        .await
+        .with_context(|| {
+            format!("failed to acquire board type `{board_type}` with board id `{board_id}`")
         })?;
     Ok((client, session))
 }
@@ -214,36 +223,59 @@ pub async fn acquire_board_session(
 pub async fn acquire_board_session_endpoint(
     endpoint: BoardEndpoint,
     board_type: &str,
-    board_id: Option<&str>,
 ) -> anyhow::Result<(BoardServerClient, BoardSession)> {
     let client = BoardServerClient::new_with_endpoint(endpoint)?;
-    let session = BoardSession::acquire(client.clone(), board_type, board_id)
+    let session = BoardSession::acquire(client.clone(), board_type)
         .await
-        .with_context(|| match board_id {
-            Some(board_id) => {
-                format!("failed to acquire board type `{board_type}` with board id `{board_id}`")
-            }
-            None => format!("failed to acquire board type `{board_type}`"),
+        .with_context(|| format!("failed to acquire board type `{board_type}`"))?;
+    Ok((client, session))
+}
+
+pub async fn acquire_board_session_endpoint_with_board_id(
+    endpoint: BoardEndpoint,
+    board_type: &str,
+    board_id: &str,
+) -> anyhow::Result<(BoardServerClient, BoardSession)> {
+    let client = BoardServerClient::new_with_endpoint(endpoint)?;
+    let session = BoardSession::acquire_with_board_id(client.clone(), board_type, board_id)
+        .await
+        .with_context(|| {
+            format!("failed to acquire board type `{board_type}` with board id `{board_id}`")
         })?;
     Ok((client, session))
 }
 
-pub async fn connect_board(
+pub async fn connect_board(server: &str, port: u16, board_type: &str) -> anyhow::Result<()> {
+    let (client, session) = acquire_board_session(server, port, board_type).await?;
+    connect_allocated_board(client, session, board_type).await
+}
+
+pub async fn connect_board_with_board_id(
     server: &str,
     port: u16,
     board_type: &str,
-    board_id: Option<&str>,
+    board_id: &str,
 ) -> anyhow::Result<()> {
-    let (client, session) = acquire_board_session(server, port, board_type, board_id).await?;
+    let (client, session) =
+        acquire_board_session_with_board_id(server, port, board_type, board_id).await?;
     connect_allocated_board(client, session, board_type).await
 }
 
 pub async fn connect_board_endpoint(
     endpoint: BoardEndpoint,
     board_type: &str,
-    board_id: Option<&str>,
 ) -> anyhow::Result<()> {
-    let (client, session) = acquire_board_session_endpoint(endpoint, board_type, board_id).await?;
+    let (client, session) = acquire_board_session_endpoint(endpoint, board_type).await?;
+    connect_allocated_board(client, session, board_type).await
+}
+
+pub async fn connect_board_endpoint_with_board_id(
+    endpoint: BoardEndpoint,
+    board_type: &str,
+    board_id: &str,
+) -> anyhow::Result<()> {
+    let (client, session) =
+        acquire_board_session_endpoint_with_board_id(endpoint, board_type, board_id).await?;
     connect_allocated_board(client, session, board_type).await
 }
 
@@ -433,7 +465,7 @@ pub async fn run_prepared_board_with_request(
 
     let endpoint = board_config.resolve_endpoint(None, None, &global_config.board)?;
     let (client, session) =
-        acquire_board_session_endpoint(endpoint, &board_config.board_type, None).await?;
+        acquire_board_session_endpoint(endpoint, &board_config.board_type).await?;
     print_allocated_board_session(&session, &board_config.board_type);
 
     let setup_result = async {

@@ -50,6 +50,13 @@ pub struct BoardLease {
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateSessionRequest {
     pub board_type: String,
+    pub required_tags: Vec<String>,
+    pub client_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateSessionRequestWithBoardId {
+    pub board_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub board_id: Option<String>,
     pub required_tags: Vec<String>,
@@ -222,6 +229,7 @@ impl BoardServerClientError {
     }
 
     pub fn is_no_available_board_id(&self, board_id: &str) -> bool {
+        let board_id = board_id.trim();
         self.status == StatusCode::CONFLICT
             && self.code.as_deref() == Some("conflict")
             && self.message == format!("board `{board_id}` is not available")
@@ -270,12 +278,35 @@ impl BoardServerClient {
     pub async fn create_session(
         &self,
         board_type: &str,
+    ) -> Result<SessionCreatedResponse, BoardServerClientError> {
+        self.create_session_inner(board_type, None).await
+    }
+
+    pub async fn create_session_with_board_id(
+        &self,
+        board_type: &str,
+        board_id: &str,
+    ) -> Result<SessionCreatedResponse, BoardServerClientError> {
+        let board_id = board_id.trim();
+        if board_id.is_empty() {
+            return Err(BoardServerClientError {
+                status: StatusCode::BAD_REQUEST,
+                code: Some("bad_request".to_string()),
+                message: "board_id must not be empty when provided".to_string(),
+            });
+        }
+        self.create_session_inner(board_type, Some(board_id)).await
+    }
+
+    async fn create_session_inner(
+        &self,
+        board_type: &str,
         board_id: Option<&str>,
     ) -> Result<SessionCreatedResponse, BoardServerClientError> {
         let response = self
             .request(Method::POST, self.endpoint("/api/v1/sessions"))
             .await?
-            .json(&CreateSessionRequest {
+            .json(&CreateSessionRequestWithBoardId {
                 board_type: board_type.to_string(),
                 board_id: board_id.map(ToOwned::to_owned),
                 required_tags: vec![],
@@ -855,7 +886,7 @@ mod tests {
             BoardEndpoint::new(&format!("http://{address}"), None, AuthMode::Disabled).unwrap();
         let client = BoardServerClient::new_with_endpoint(endpoint).unwrap();
         let error = client
-            .create_session("demo", Some("demo-02"))
+            .create_session_with_board_id("demo", " demo-02 ")
             .await
             .unwrap_err();
 

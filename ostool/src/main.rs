@@ -281,8 +281,17 @@ async fn try_main() -> Result<()> {
                 let global_config = board::load_board_global_config_with_notice()?;
                 let endpoint = global_config
                     .resolve_endpoint(args.server.server.as_deref(), args.server.port)?;
-                board::connect_board_endpoint(endpoint, &args.board_type, args.board_id.as_deref())
-                    .await?;
+                match args.board_id.as_deref() {
+                    Some(board_id) => {
+                        board::connect_board_endpoint_with_board_id(
+                            endpoint,
+                            &args.board_type,
+                            board_id,
+                        )
+                        .await?
+                    }
+                    None => board::connect_board_endpoint(endpoint, &args.board_type).await?,
+                }
             }
             BoardSubCommands::Run(args) => {
                 let mut invocation = init_invocation(manifest.clone())?;
