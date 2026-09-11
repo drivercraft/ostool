@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.2](https://github.com/drivercraft/ostool/compare/ostool-v0.29.1...ostool-v0.29.2) - 2026-09-11
+
+### Added
+
+- *(ostool-server)* rebuild admin UI with realtime updates and unbound power control ([#183](https://github.com/drivercraft/ostool/pull/183))
+
+### Fixed
+
+- *(ostool-server)* isolate serial and websocket I/O with bounded queues ([#185](https://github.com/drivercraft/ostool/pull/185))
+
 ## [0.29.1](https://github.com/drivercraft/ostool/compare/ostool-v0.29.0...ostool-v0.29.1) - 2026-09-10
 
 ### Added
