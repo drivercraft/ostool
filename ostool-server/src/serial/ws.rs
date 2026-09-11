@@ -9,7 +9,7 @@ use axum::extract::ws::{Message, WebSocket};
 use base64::Engine;
 use futures_util::{Sink, SinkExt, StreamExt};
 use serde::Deserialize;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::task::JoinHandle;
 use tokio_serial::{ClearBuffer, SerialPort, SerialPortBuilderExt};
 
@@ -21,7 +21,7 @@ use crate::{
     state::AppState,
 };
 
-const SERIAL_READ_BUFFER_SIZE: usize = 64;
+const SERIAL_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 const SERIAL_READ_TIMEOUT: Duration = Duration::from_millis(20);
 
 enum BoardSerialStream {
@@ -73,9 +73,9 @@ impl AsyncWrite for BoardSerialStream {
 }
 
 #[derive(Debug, Deserialize)]
-struct ClientControlMessage {
+pub(super) struct ClientControlMessage {
     #[serde(rename = "type")]
-    kind: String,
+    pub(super) kind: String,
     encoding: Option<String>,
     data: Option<String>,
 }
@@ -108,7 +108,6 @@ async fn run_serial_ws_inner(
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
     let (mut serial_rx, mut serial_tx) = tokio::io::split(port);
-    let mut serial_buffer = [0u8; SERIAL_READ_BUFFER_SIZE];
     let mut power_on_task = Some(spawn_power_action_task(
         state.clone(),
         board.clone(),
@@ -117,121 +116,46 @@ async fn run_serial_ws_inner(
     let power_linked = true;
     let mut shutdown_rx = session.subscribe_shutdown();
 
-    ws_sender
-        .send(Message::Text(r#"{"type":"opened"}"#.to_string().into()))
-        .await
-        .ok();
-    let result = async {
-        loop {
-            if let Some(task) = power_on_task.as_mut() {
-                tokio::select! {
-                    power_result = task => {
-                        power_on_task = None;
-                        match power_result {
-                            Ok(Ok(_)) => {}
-                            Ok(Err(err)) => {
-                                let message = format!("automatic power-on failed: {err}");
-                                log::warn!("session `{session_id}` {message}");
-                                send_power_on_failure_and_close(&mut ws_sender, &message).await;
-                                break;
-                            }
-                            Err(err) => {
-                                let message = format!("automatic power-on task join failed: {err}");
-                                log::warn!("session `{session_id}` {message}");
-                                send_power_on_failure_and_close(&mut ws_sender, &message).await;
-                                break;
-                            }
-                        }
-                    }
-                    changed = shutdown_rx.changed() => {
-                        if changed.is_ok() && *shutdown_rx.borrow() {
-                            let _ = ws_sender
-                                .send(Message::Text(r#"{"type":"closed"}"#.to_string().into()))
-                                .await;
-                            break;
-                        }
-                    }
-                    read = serial_rx.read(&mut serial_buffer) => {
-                        let read = read.context("serial read failed")?;
-                        if read == 0 {
-                            break;
-                        }
-                        ws_sender
-                            .send(Message::Binary(serial_buffer[..read].to_vec().into()))
-                            .await
-                            .context("failed to send serial output over websocket")?;
-                        let _ = session.heartbeat().await;
-                    }
-                }
-            } else {
-                tokio::select! {
-                    changed = shutdown_rx.changed() => {
-                        if changed.is_ok() && *shutdown_rx.borrow() {
-                            let _ = ws_sender
-                                .send(Message::Text(r#"{"type":"closed"}"#.to_string().into()))
-                                .await;
-                            break;
-                        }
-                    }
-                    maybe_message = ws_receiver.next() => {
-                        let Some(message) = maybe_message else {
-                            break;
-                        };
-                        match message {
-                            Ok(Message::Binary(bytes)) => {
-                                write_serial_payload(&mut serial_tx, &bytes).await?;
-                            }
-                            Ok(Message::Text(text)) => {
-                                let control: ClientControlMessage = serde_json::from_str(&text)?;
-                                match control.kind.as_str() {
-                                    "close" => {
-                                        let _ = ws_sender
-                                            .send(Message::Text(r#"{"type":"closed"}"#.to_string().into()))
-                                            .await;
-                                        break;
-                                    }
-                                    "tx" => {
-                                        let Some(data) = control.data.as_deref() else {
-                                            anyhow::bail!("missing tx data");
-                                        };
-                                        let payload = match control.encoding.as_deref() {
-                                            Some("base64") => base64::engine::general_purpose::STANDARD
-                                                .decode(data)
-                                                .context("invalid base64 payload")?,
-                                            Some("utf8") | None => data.as_bytes().to_vec(),
-                                            Some(other) => anyhow::bail!("unsupported encoding `{other}`"),
-                                        };
-                                        write_serial_payload(&mut serial_tx, &payload).await?;
-                                    }
-                                    other => anyhow::bail!("unsupported websocket control type `{other}`"),
-                                }
-                            }
-                            Ok(Message::Close(_)) => break,
-                            Ok(Message::Ping(payload)) => {
-                                ws_sender.send(Message::Pong(payload)).await.ok();
-                            }
-                            Ok(Message::Pong(_)) => {}
-                            Err(err) => return Err(err.into()),
-                        }
-                        let _ = session.heartbeat().await;
-                    }
-                    read = serial_rx.read(&mut serial_buffer) => {
-                        let read = read.context("serial read failed")?;
-                        if read == 0 {
-                            break;
-                        }
-                        ws_sender
-                            .send(Message::Binary(serial_buffer[..read].to_vec().into()))
-                            .await
-                            .context("failed to send serial output over websocket")?;
-                        let _ = session.heartbeat().await;
-                    }
-                }
-            }
+    let (ready_tx, ready_rx) = tokio::sync::watch::channel(false);
+    let result = {
+        let transport = super::transport::run(
+            &mut serial_rx,
+            &mut serial_tx,
+            &mut ws_sender,
+            &mut ws_receiver,
+            ready_rx,
+            || async {
+                let _ = session.heartbeat().await;
+            },
+        );
+        let power_on = async {
+            let result = power_on_task.as_mut().expect("power-on task exists").await;
+            power_on_task = None;
+            result
+                .context("automatic power-on task join failed")?
+                .map_err(|err| anyhow::anyhow!("automatic power-on failed: {err}"))?;
+            ready_tx.send_replace(true);
+            std::future::pending::<anyhow::Result<()>>().await
+        };
+        tokio::select! {
+            result = transport => result,
+            result = power_on => result,
+            _ = shutdown_rx.wait_for(|shutdown| *shutdown) => Ok(()),
         }
+    };
 
-        Ok(())
-    }
+    // A stalled WebSocket must not prevent session/serial cleanup. The peer
+    // sees an explicit error when writable, otherwise it sees the connection close.
+    let _ = tokio::time::timeout(SERIAL_CLOSE_TIMEOUT, async {
+        if let Err(err) = &result {
+            send_power_on_failure_and_close(&mut ws_sender, &format!("{err:#}")).await;
+        } else {
+            let _ = ws_sender
+                .send(Message::Text(r#"{"type":"closed"}"#.into()))
+                .await;
+            let _ = ws_sender.send(Message::Close(None)).await;
+        }
+    })
     .await;
 
     let result =
@@ -241,7 +165,6 @@ async fn run_serial_ws_inner(
     let _ = state
         .request_session_stop(&session_id, crate::session::SessionStopReason::SerialClosed)
         .await;
-    let _ = ws_sender.send(Message::Close(None)).await;
     result
 }
 
@@ -357,15 +280,23 @@ where
     }
 }
 
-async fn write_serial_payload<T>(
-    port: &mut tokio::io::WriteHalf<T>,
-    payload: &[u8],
-) -> anyhow::Result<()>
+pub(super) fn decode_serial_payload(control: ClientControlMessage) -> anyhow::Result<Vec<u8>> {
+    let data = control.data.context("missing tx data")?;
+    match control.encoding.as_deref() {
+        Some("base64") => base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .context("invalid base64 payload"),
+        Some("utf8") | None => Ok(data.into_bytes()),
+        Some(other) => anyhow::bail!("unsupported encoding `{other}`"),
+    }
+}
+
+pub(super) async fn write_serial_payload<T>(port: &mut T, payload: &[u8]) -> anyhow::Result<()>
 where
     T: AsyncWrite + Unpin,
 {
+    // Writes are unbuffered. Do not call tcdrain while sharing the receive lock.
     port.write_all(payload).await?;
-    port.flush().await?;
     Ok(())
 }
 
@@ -378,7 +309,13 @@ trait SerialQueueCleanup {
 #[async_trait::async_trait]
 impl SerialQueueCleanup for tokio_serial::SerialStream {
     async fn flush_output(&mut self) -> std::io::Result<()> {
-        AsyncWriteExt::flush(self).await
+        // tcdrain is a blocking syscall even through tokio-serial. Observe the
+        // driver's output queue without parking a runtime worker indefinitely.
+        wait_output_empty(
+            || self.bytes_to_write().map_err(std::io::Error::from),
+            SERIAL_CLOSE_TIMEOUT,
+        )
+        .await
     }
 
     fn clear_all_buffers(&mut self) -> std::io::Result<()> {
@@ -389,7 +326,10 @@ impl SerialQueueCleanup for tokio_serial::SerialStream {
 #[async_trait::async_trait]
 impl SerialQueueCleanup for BoardSerialStream {
     async fn flush_output(&mut self) -> std::io::Result<()> {
-        AsyncWriteExt::flush(self).await
+        match self {
+            Self::Physical(stream) => stream.flush_output().await,
+            Self::Qemu(stream) => stream.flush().await,
+        }
     }
 
     fn clear_all_buffers(&mut self) -> std::io::Result<()> {
@@ -400,16 +340,38 @@ impl SerialQueueCleanup for BoardSerialStream {
     }
 }
 
+async fn wait_output_empty(
+    mut bytes_to_write: impl FnMut() -> std::io::Result<u32>,
+    timeout: Duration,
+) -> std::io::Result<()> {
+    tokio::time::timeout(timeout, async {
+        while bytes_to_write()? != 0 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "serial output queue did not drain",
+        )
+    })?
+}
+
 async fn cleanup_serial_queue_before_close<T>(port: &mut T) -> anyhow::Result<()>
 where
     T: SerialQueueCleanup + ?Sized,
 {
-    port.flush_output()
+    let drain = port
+        .flush_output()
         .await
-        .context("failed to flush serial output before close")?;
-    port.clear_all_buffers()
-        .context("failed to clear serial buffers before close")?;
-    Ok(())
+        .context("failed to drain serial output before close");
+    let clear = port
+        .clear_all_buffers()
+        .context("failed to clear serial buffers before close");
+    // Even a stuck transmitter must be purged before its lease is released.
+    drain.and(clear)
 }
 
 async fn preserve_result_after_serial_cleanup<T, P>(
@@ -534,6 +496,57 @@ mod tests {
         }
     }
 
+    struct DrainMustNotBeCalled(Vec<u8>);
+
+    impl tokio::io::AsyncRead for DrainMustNotBeCalled {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            _: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    impl tokio::io::AsyncWrite for DrainMustNotBeCalled {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            bytes: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            self.0.extend_from_slice(bytes);
+            Poll::Ready(Ok(bytes.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            panic!(
+                "serial payload must not synchronously drain the UART while holding the shared read/write lock"
+            );
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn serial_payload_does_not_block_receive_on_uart_drain() {
+        let (rx, mut tx) = tokio::io::split(DrainMustNotBeCalled(Vec::new()));
+        super::write_serial_payload(&mut tx, b"command\n")
+            .await
+            .unwrap();
+        assert_eq!(rx.unsplit(tx).0, b"command\n");
+    }
+
+    #[tokio::test]
+    async fn serial_close_drain_is_bounded() {
+        let err = super::wait_output_empty(|| Ok(1), Duration::ZERO)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        super::wait_output_empty(|| Ok(0), Duration::from_secs(1))
+            .await
+            .unwrap();
+    }
+
     #[test]
     fn control_message_parses_close_type() {
         let message: ClientControlMessage = serde_json::from_str(r#"{"type":"close"}"#).unwrap();
@@ -607,6 +620,27 @@ mod tests {
             events.lock().unwrap().as_slice(),
             &[CleanupEvent::Flush, CleanupEvent::ClearAll]
         );
+    }
+
+    #[tokio::test]
+    async fn serial_cleanup_clears_buffers_even_when_drain_fails() {
+        struct StuckTransmitter(bool);
+        #[async_trait::async_trait]
+        impl SerialQueueCleanup for StuckTransmitter {
+            async fn flush_output(&mut self) -> io::Result<()> {
+                Err(io::Error::new(io::ErrorKind::TimedOut, "stuck transmitter"))
+            }
+            fn clear_all_buffers(&mut self) -> io::Result<()> {
+                self.0 = true;
+                Ok(())
+            }
+        }
+        let mut port = StuckTransmitter(false);
+        let err = cleanup_serial_queue_before_close(&mut port)
+            .await
+            .unwrap_err();
+        assert!(port.0, "failed drain must not skip purging queued commands");
+        assert!(err.to_string().contains("failed to drain serial output"));
     }
 
     #[tokio::test]

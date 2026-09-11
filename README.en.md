@@ -158,6 +158,8 @@ ostool board run --package paging-test --bin basic
 ```
 
 > Exit shortcut: In the serial terminal (e.g., `ostool run uboot`), press `Ctrl+A` then `x` to quit; the tool captures this sequence and exits gracefully instead of sending it to the target device.
+
+Serial sessions isolate serial and WebSocket I/O with bounded channels. Each binary or decoded `tx` command is limited to 256 KiB; queue overflow fails the session instead of silently dropping bytes. See [server serial transport](ostool-server/README.md#serial-transport).
 > For more keyboard mappings, see `ostool/src/sterm/mod.rs`.
 
 ## ⚙️ Configuration Files

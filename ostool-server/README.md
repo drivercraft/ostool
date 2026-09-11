@@ -9,6 +9,23 @@ It provides:
 - TFTP session file handling
 - a systemd-friendly deployment model on Linux
 
+## Serial transport
+
+Serial receive, serial transmit, WebSocket receive, and WebSocket transmit run as
+independently polled asynchronous workers. Bounded channels separate the transports;
+a blocked network write does not stop serial reads, and a blocked serial write does
+not stop output or close handling. All workers belong to the session and are cancelled
+before the port is reunited and released.
+
+Each data queue holds at most 64 chunks of 4 KiB (256 KiB). Binary and decoded `tx`
+commands must fit within 256 KiB; larger commands must be split by the client. A full
+queue ends the session with an error instead of silently dropping bytes. The error
+is sent when the WebSocket remains writable; otherwise the connection closes.
+Normal serial EOF drains queued output first. Session cancellation discards pending
+commands and stops forwarding output. Serial writes do not call blocking `tcdrain`;
+close waits up to one second for the driver output queue, then clears buffers even
+if the transmitter remains stuck. This close deadline does not extend test timeouts.
+
 ## Install
 
 Before installing `ostool-server`, make sure `Node.js` and `pnpm` are available in your environment.
