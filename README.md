@@ -158,6 +158,8 @@ ostool board run --package paging-test --bin basic
 ```
 
 > 交互退出：在串口终端（如 `ostool run uboot`）中，按下 `Ctrl+A` 后再按 `x`，工具会检测到该序列并优雅退出，不会将按键发送到目标设备。
+
+串口会话通过有界通道隔离串口与 WebSocket 的收发。单条二进制或解码后的 `tx` 命令上限为 256 KiB；队列满时会话明确失败，不静默丢字节。详见 [服务器串口传输说明](ostool-server/README.md#serial-transport)。
 > 更多键盘快捷键映射可参考源码 `ostool/src/sterm/mod.rs`。
 
 ## ⚙️ 配置文件
