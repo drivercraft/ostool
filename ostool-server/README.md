@@ -11,11 +11,17 @@ It provides:
 
 ## Serial transport
 
-Serial receive, serial transmit, WebSocket receive, and WebSocket transmit run as
-independently polled asynchronous workers. Bounded channels separate the transports;
-a blocked network write does not stop serial reads, and a blocked serial write does
-not stop output or close handling. All workers belong to the session and are cancelled
-before the port is reunited and released.
+On Unix, a dedicated thread drains physical serial input independently of the
+HTTP/WebSocket executor. A 256 KiB byte buffer transfers ownership to the async
+session; its short mutex protects only memory copies, never serial or network I/O.
+This also covers executor stalls caused by synchronous management operations.
+The remaining serial/WebSocket directions use independently polled async workers
+and bounded channels. QEMU serial streams continue using their async transport.
+
+Closing or cancelling a session signals and joins the physical reader before the
+port and board lease can be reused. The reader never waits for buffer capacity;
+its only blocking wait is a serial read with a 20 ms timeout. Overflow is reported
+after the already buffered bytes, instead of silently losing data.
 
 Each data queue holds at most 64 chunks of 4 KiB (256 KiB). Binary and decoded `tx`
 commands must fit within 256 KiB; larger commands must be split by the client. A full
