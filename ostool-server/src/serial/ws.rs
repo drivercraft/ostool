@@ -11,7 +11,9 @@ use futures_util::{Sink, SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::task::JoinHandle;
-use tokio_serial::{ClearBuffer, SerialPort, SerialPortBuilderExt};
+#[cfg(not(unix))]
+use tokio_serial::SerialPortBuilderExt;
+use tokio_serial::{ClearBuffer, SerialPort};
 
 use crate::{
     config::{BoardConfig, SerialConfig, SerialPortKeyKind},
@@ -24,8 +26,13 @@ use crate::{
 const SERIAL_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 const SERIAL_READ_TIMEOUT: Duration = Duration::from_millis(20);
 
+#[cfg(unix)]
+use super::physical::PhysicalSerial;
+#[cfg(not(unix))]
+type PhysicalSerial = tokio_serial::SerialStream;
+
 enum BoardSerialStream {
-    Physical(tokio_serial::SerialStream),
+    Physical(PhysicalSerial),
     Qemu(tokio::io::DuplexStream),
 }
 
@@ -182,16 +189,24 @@ async fn open_board_serial(
     }
 
     let resolved_serial = resolve_serial_config(serial)?;
-    let port = tokio_serial::new(&resolved_serial.current_device_path, serial.baud_rate)
-        .timeout(SERIAL_READ_TIMEOUT)
-        .open_native_async()
-        .with_context(|| {
-            format!(
-                "failed to open serial port {}",
-                resolved_serial.current_device_path
-            )
-        })?;
+    let builder = tokio_serial::new(&resolved_serial.current_device_path, serial.baud_rate)
+        .timeout(SERIAL_READ_TIMEOUT);
+    #[cfg(unix)]
+    return physical_from_port(builder.open_native()?);
+    #[cfg(not(unix))]
+    let port = builder.open_native_async().with_context(|| {
+        format!(
+            "failed to open serial port {}",
+            resolved_serial.current_device_path
+        )
+    })?;
+    #[cfg(not(unix))]
     Ok(BoardSerialStream::Physical(port))
+}
+
+#[cfg(unix)]
+fn physical_from_port(port: serialport::TTYPort) -> anyhow::Result<BoardSerialStream> {
+    Ok(BoardSerialStream::Physical(PhysicalSerial::new(port)?))
 }
 
 fn spawn_power_action_task(
@@ -262,6 +277,14 @@ impl SerialOpenCleanup for tokio_serial::SerialStream {
     }
 }
 
+#[cfg(unix)]
+impl SerialOpenCleanup for PhysicalSerial {
+    fn clear_input_buffer(&mut self) -> std::io::Result<()> {
+        // Cleared before the receive worker starts, while the board is off.
+        Ok(())
+    }
+}
+
 impl SerialOpenCleanup for BoardSerialStream {
     fn clear_input_buffer(&mut self) -> std::io::Result<()> {
         match self {
@@ -320,6 +343,18 @@ impl SerialQueueCleanup for tokio_serial::SerialStream {
 
     fn clear_all_buffers(&mut self) -> std::io::Result<()> {
         self.clear(ClearBuffer::All).map_err(std::io::Error::from)
+    }
+}
+
+#[cfg(unix)]
+#[async_trait::async_trait]
+impl SerialQueueCleanup for PhysicalSerial {
+    async fn flush_output(&mut self) -> std::io::Result<()> {
+        self.stop_reader();
+        self.writer.flush_output().await
+    }
+    fn clear_all_buffers(&mut self) -> std::io::Result<()> {
+        self.writer.clear_all_buffers()
     }
 }
 
@@ -760,5 +795,89 @@ mod tests {
             other => panic!("unexpected second message: {other:?}"),
         }
         assert!(matches!(third, Message::Close(_)));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod reader_progress_tests {
+    use serialport::SerialPort;
+    use std::{io::Write, time::Duration};
+    use tokio::io::AsyncReadExt;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn physical_receive_survives_a_blocked_websocket_executor() {
+        let (mut board, mut port) = serialport::TTYPort::pair().unwrap();
+        board.set_timeout(Duration::from_millis(200)).unwrap();
+        port.set_timeout(super::SERIAL_READ_TIMEOUT).unwrap();
+        let mut serial = super::physical_from_port(port).unwrap();
+        let payload: Vec<u8> = (0..65536).map(|i| (i % 251) as u8).collect();
+        let expected = payload.clone();
+        let (sent, finished) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let result = payload
+                .chunks(128)
+                .try_for_each(|chunk| board.write_all(chunk));
+            sent.send(result).unwrap();
+            // Keep the PTY open until the receiver has consumed buffered bytes.
+            board
+        });
+        // Deliberately block the only Tokio worker. More bytes than the PTY
+        // queue can hold must be drained before this executor runs again.
+        let result = finished.recv_timeout(Duration::from_secs(2)).unwrap();
+        let _board = writer.join().unwrap();
+        assert!(
+            result.is_ok(),
+            "physical RX depends on the blocked executor: {result:?}"
+        );
+        let mut received = vec![0; expected.len()];
+        tokio::time::timeout(Duration::from_secs(2), serial.read_exact(&mut received))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(received, expected);
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn physical_receive_overflow_is_reported_after_buffered_bytes() {
+        let (mut board, mut port) = serialport::TTYPort::pair().unwrap();
+        board.set_timeout(Duration::from_millis(200)).unwrap();
+        port.set_timeout(super::SERIAL_READ_TIMEOUT).unwrap();
+        let mut serial = super::physical_from_port(port).unwrap();
+        let writer = std::thread::spawn(move || {
+            // Deliberately exceed the receive bound without polling AsyncRead.
+            let _ = (0..4096).try_for_each(|_| board.write_all(&[0x5a; 128]));
+            board
+        });
+        let _board = writer.join().unwrap();
+        let mut bytes = Vec::new();
+        let error = tokio::time::timeout(Duration::from_secs(2), serial.read_to_end(&mut bytes))
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("physical serial RX buffer full"),
+            "{error}"
+        );
+        assert!(!bytes.is_empty());
+        assert!(bytes.len() <= 256 * 1024);
+        assert!(bytes.iter().all(|byte| *byte == 0x5a));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dropping_physical_receive_joins_reader_before_reusing_tty() {
+        use std::io::Read;
+        let (mut board, mut port) = serialport::TTYPort::pair().unwrap();
+        board.set_timeout(Duration::from_millis(200)).unwrap();
+        port.set_timeout(super::SERIAL_READ_TIMEOUT).unwrap();
+        let mut observer = port.try_clone_native().unwrap();
+        let mut serial = super::physical_from_port(port).unwrap();
+        board.write_all(b"first").unwrap();
+        let mut first = [0; 5];
+        serial.read_exact(&mut first).await.unwrap();
+        assert_eq!(&first, b"first");
+        drop(serial);
+        board.write_all(b"next").unwrap();
+        let mut next = [0; 4];
+        observer.read_exact(&mut next).unwrap();
+        assert_eq!(&next, b"next");
     }
 }
