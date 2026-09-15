@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.3](https://github.com/drivercraft/ostool/compare/ostool-v0.29.2...ostool-v0.29.3) - 2026-09-15
+
+### Fixed
+
+- *(ostool)* preserve Unix terminal input bytes ([#187](https://github.com/drivercraft/ostool/pull/187))
+
 ## [0.29.2](https://github.com/drivercraft/ostool/compare/ostool-v0.29.1...ostool-v0.29.2) - 2026-09-11
 
 ### Added
