@@ -159,6 +159,8 @@ ostool board run --package paging-test --bin basic
 
 > Exit shortcut: In the serial terminal (e.g., `ostool run uboot`), press `Ctrl+A` then `x` to quit; the tool captures this sequence and exits gracefully instead of sending it to the target device.
 
+Unix interactive terminals forward input and output as raw bytes and do not enable mouse capture themselves. Guest applications control mouse modes; cursor reports and bracketed paste sequences are forwarded intact. Ordinary shells retain the host terminal’s mouse selection and paste behavior. When the serial exit prefix is enabled, press `Ctrl+A` twice to send one literal `Ctrl+A`.
+
 Serial sessions isolate serial and WebSocket I/O with bounded channels. Each binary or decoded `tx` command is limited to 256 KiB; queue overflow fails the session instead of silently dropping bytes. See [server serial transport](ostool-server/README.md#serial-transport).
 > For more keyboard mappings, see `ostool/src/sterm/mod.rs`.
 

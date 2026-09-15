@@ -74,3 +74,6 @@ tokio-serial = "5.4"
 [dev-dependencies]
 tempfile = "3"
 trybuild = "1"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["fs"] }

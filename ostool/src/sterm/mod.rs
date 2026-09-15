@@ -13,14 +13,23 @@ use std::{
 };
 
 use anyhow::anyhow;
+#[cfg(not(unix))]
+use crossterm::event::{EnableMouseCapture, Event, EventStream, KeyEventKind};
 use crossterm::{
     event::{
-        DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent,
-        KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        DisableMouseCapture, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
+        MouseEventKind,
     },
     terminal::{disable_raw_mode, enable_raw_mode},
 };
+#[cfg(not(unix))]
 use futures::StreamExt;
+#[cfg(unix)]
+mod input;
+#[cfg(unix)]
+use input::Input;
+#[cfg(not(unix))]
+type Input = EventStream;
 use tokio::{
     sync::{mpsc, watch},
     time::{Instant, sleep_until},
@@ -243,8 +252,18 @@ impl AsyncTerminal {
         W: Write,
         F: FnMut(&TerminalHandle, &[u8]) + Send,
     {
+        #[cfg(unix)]
+        let mut events = if interactive_input_enabled {
+            Some(Input::new()?)
+        } else {
+            None
+        };
+        #[cfg(not(unix))]
+        let mut events = interactive_input_enabled.then(Input::new);
+
         if interactive_input_enabled {
             enable_raw_mode().ok();
+            #[cfg(not(unix))]
             if let Err(e) = crossterm::execute!(io::stdout(), EnableMouseCapture) {
                 debug!("EnableMouseCapture failed: {e}");
             }
@@ -257,10 +276,10 @@ impl AsyncTerminal {
             handle.timeout_after(timeout);
         }
 
-        let mut events = interactive_input_enabled.then(EventStream::new);
         let result = self
             .run_loop(&handle, inbound_rx, &mut events, output, on_chunk)
             .await;
+        drop(events);
 
         if interactive_input_enabled {
             if let Err(e) = crossterm::execute!(io::stdout(), DisableMouseCapture) {
@@ -286,7 +305,7 @@ impl AsyncTerminal {
         &mut self,
         handle: &TerminalHandle,
         inbound_rx: &mut mpsc::UnboundedReceiver<Vec<u8>>,
-        events: &mut Option<EventStream>,
+        events: &mut Option<Input>,
         output: &mut W,
         on_chunk: &mut F,
     ) -> anyhow::Result<()>
@@ -329,6 +348,18 @@ impl AsyncTerminal {
                     }
                 } => {
                     match maybe_event {
+                        #[cfg(unix)]
+                        Some(Ok(bytes)) => {
+                            let (bytes, exit) = self.key_processor.process_bytes(&bytes);
+                            if !bytes.is_empty() {
+                                handle.send(bytes)?;
+                            }
+                            if exit {
+                                eprintln!("\r\nExit by: Ctrl+A+x");
+                                handle.stop();
+                            }
+                        }
+                        #[cfg(not(unix))]
                         Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
                             match self.key_processor.process_key(key)? {
                                 TerminalAction::SendBytes(bytes) => {
@@ -341,6 +372,7 @@ impl AsyncTerminal {
                                 TerminalAction::Noop => {}
                             }
                         }
+                        #[cfg(not(unix))]
                         Some(Ok(Event::Mouse(mouse))) => {
                             // Moved events fire on every pixel of cursor motion and
                             // cause a full TUI redraw on every move, saturating the
@@ -351,6 +383,7 @@ impl AsyncTerminal {
                                 handle.send(bytes).ok();
                             }
                         }
+                        #[cfg(not(unix))]
                         Some(Ok(_)) => {}
                         Some(Err(err)) => return Err(err.into()),
                         None => break,
@@ -582,6 +615,34 @@ impl KeyProcessor {
         }
     }
 
+    #[cfg(unix)]
+    fn process_bytes(&mut self, input: &[u8]) -> (Vec<u8>, bool) {
+        if !self.intercept_exit_sequence {
+            return (input.to_vec(), false);
+        }
+        let mut output = Vec::with_capacity(input.len());
+        for &byte in input {
+            match self.state {
+                KeySequenceState::Normal if byte == 1 => {
+                    self.state = KeySequenceState::CtrlAPressed
+                }
+                KeySequenceState::Normal => output.push(byte),
+                KeySequenceState::CtrlAPressed => {
+                    self.state = KeySequenceState::Normal;
+                    if byte == b'x' {
+                        return (output, true);
+                    }
+                    output.push(1);
+                    if byte != 1 {
+                        output.push(byte);
+                    }
+                }
+            }
+        }
+        (output, false)
+    }
+
+    #[cfg(any(not(unix), test))]
     fn process_key(&mut self, key: KeyEvent) -> io::Result<TerminalAction> {
         if !self.intercept_exit_sequence {
             return encode_key_event(key);
@@ -1320,5 +1381,31 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         assert_eq!(super::encode_mouse_event(mouse), None);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn byte_transport_preserves_protocols_and_exit_sequence_boundaries() {
+        let bytes = b"\x1b[24;80R\x1b[<32;32;24M\x1b[200~https://example.test/\x1b[201~";
+        for split in 0..=bytes.len() {
+            let mut processor = super::KeyProcessor::new(false);
+            let (mut actual, exit) = processor.process_bytes(&bytes[..split]);
+            assert!(!exit);
+            let (rest, exit) = processor.process_bytes(&bytes[split..]);
+            assert!(!exit);
+            actual.extend(rest);
+            assert_eq!(actual, bytes);
+        }
+        let mut processor = super::KeyProcessor::new(true);
+        assert_eq!(
+            processor.process_bytes(b"prefix\x01"),
+            (b"prefix".to_vec(), false)
+        );
+        assert_eq!(processor.process_bytes(b"z"), (b"\x01z".to_vec(), false));
+        assert_eq!(processor.process_bytes(b"\x01\x01"), (vec![1], false));
+        assert_eq!(
+            processor.process_bytes(b"last\x01"),
+            (b"last".to_vec(), false)
+        );
+        assert_eq!(processor.process_bytes(b"xdiscard"), (vec![], true));
     }
 }

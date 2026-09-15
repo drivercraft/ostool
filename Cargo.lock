@@ -2732,6 +2732,7 @@ dependencies = [
  "ratatui",
  "regex",
  "reqwest",
+ "rustix",
  "schemars",
  "serde",
  "serde_json",
