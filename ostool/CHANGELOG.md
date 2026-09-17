@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.4](https://github.com/drivercraft/ostool/compare/ostool-v0.29.3...ostool-v0.29.4) - 2026-09-17
+
+### Fixed
+
+- *(board)* propagate serial failures and release failed sessions ([#190](https://github.com/drivercraft/ostool/pull/190))
+
 ## [0.29.3](https://github.com/drivercraft/ostool/compare/ostool-v0.29.2...ostool-v0.29.3) - 2026-09-15
 
 ### Fixed

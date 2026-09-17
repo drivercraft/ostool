@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3](https://github.com/drivercraft/ostool/compare/ostool-server-v0.7.2...ostool-server-v0.7.3) - 2026-09-17
+
+### Fixed
+
+- *(board)* propagate serial failures and release failed sessions ([#190](https://github.com/drivercraft/ostool/pull/190))
+- *(ostool-server)* isolate physical serial receive from the network executor ([#186](https://github.com/drivercraft/ostool/pull/186))
+
 ## [0.7.2](https://github.com/drivercraft/ostool/compare/ostool-server-v0.7.1...ostool-server-v0.7.2) - 2026-09-11
 
 ### Added
