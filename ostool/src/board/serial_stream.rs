@@ -7,11 +7,7 @@ use std::io::ErrorKind;
 
 use anyhow::Context as _;
 use futures::{SinkExt, StreamExt};
-use tokio::{
-    io::{AsyncReadExt, split},
-    task::JoinHandle,
-    time::timeout,
-};
+use tokio::{io::AsyncReadExt, task::JoinHandle, time::timeout};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::{
     client::IntoClientRequest as _,
@@ -42,9 +38,11 @@ pub async fn connect_serial_stream(
     let (mut ws_sink, mut ws_stream) = stream.split();
     let locally_closed = Arc::new(AtomicBool::new(false));
 
-    let (runner_stream, bridge_stream) = tokio::io::duplex(64 * 1024);
-    let (runner_rx, runner_tx) = split(runner_stream);
-    let (mut bridge_rx, mut bridge_tx) = split(bridge_stream);
+    // Each direction owns its endpoint independently. Splitting one duplex
+    // keeps both directions alive until both halves are dropped, hiding remote
+    // failures from the reader and local EOF from the WebSocket writer.
+    let (runner_rx, mut bridge_tx) = tokio::io::duplex(64 * 1024);
+    let (mut bridge_rx, runner_tx) = tokio::io::duplex(64 * 1024);
 
     let read_task = tokio::spawn({
         let locally_closed = locally_closed.clone();
@@ -246,6 +244,80 @@ mod tests {
     use tokio::{sync::Notify, task::JoinHandle};
 
     use super::{SerialStreamTasks, connect_serial_stream, websocket_request, write_bridge_bytes};
+
+    #[tokio::test]
+    async fn remote_error_ends_runner_input_while_writer_is_alive() {
+        use futures::{AsyncReadExt, SinkExt};
+        use tokio_tungstenite::tungstenite::Message;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            ws.send(Message::Binary(b"boot output\n".to_vec().into()))
+                .await
+                .unwrap();
+            ws.send(Message::Text(
+                r#"{"type":"error","message":"automatic power-on failed"}"#.into(),
+            ))
+            .await
+            .unwrap();
+        });
+        let url = reqwest::Url::parse(&format!("ws://{address}/serial")).unwrap();
+        let (writer, mut reader, tasks) = connect_serial_stream(url, None).await.unwrap();
+        let error = tasks.read_task.await.unwrap().unwrap_err();
+        assert!(error.to_string().contains("automatic power-on failed"));
+        let mut bytes = Vec::new();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            reader.read_to_end(&mut bytes),
+        )
+        .await;
+        tasks.write_task.abort();
+        let _ = tasks.write_task.await;
+        drop(writer);
+        server.await.unwrap();
+        result
+            .expect("completed WebSocket reader must signal EOF")
+            .unwrap();
+        assert_eq!(bytes, b"boot output\n");
+    }
+
+    #[tokio::test]
+    async fn dropping_runner_writer_closes_websocket_while_reader_is_alive() {
+        use futures::StreamExt;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            assert_eq!(
+                ws.next().await.unwrap().unwrap(),
+                Message::Text(r#"{"type":"close"}"#.into())
+            );
+        });
+        let url = reqwest::Url::parse(&format!("ws://{address}/serial")).unwrap();
+        let (writer, reader, tasks) = connect_serial_stream(url, None).await.unwrap();
+        drop(writer);
+        let mut write_task = tasks.write_task;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), &mut write_task).await;
+        tasks.read_task.abort();
+        let _ = tasks.read_task.await;
+        write_task.abort();
+        drop(reader);
+        if result.is_err() {
+            server.abort();
+        } else {
+            server.await.unwrap();
+        }
+        result
+            .expect("writer must observe local EOF independently")
+            .unwrap()
+            .unwrap();
+    }
 
     #[tokio::test]
     async fn secure_websocket_support_is_enabled() {

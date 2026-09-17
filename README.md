@@ -162,6 +162,9 @@ ostool board run --package paging-test --bin basic
 Unix 交互终端按原始字节转发客户机输入输出，不主动开启鼠标捕获。鼠标模式由客户机应用控制；光标位置回复和括号粘贴序列完整透传。普通 shell 可使用宿主终端的鼠标选择与粘贴。串口退出前缀启用时，连续输入两次 `Ctrl+A` 可发送一个字面 `Ctrl+A`。
 
 串口会话通过有界通道隔离串口与 WebSocket 的收发。单条二进制或解码后的 `tx` 命令上限为 256 KiB；队列满时会话明确失败，不静默丢字节。详见 [服务器串口传输说明](ostool-server/README.md#serial-transport)。
+
+客户端 `connect_serial_stream()` 为收发分别持有缓冲端点：远端关闭或报错后，接收方读完已收到的数据便结束；停止本地发送也能独立触发 WebSocket 关闭，不必等待接收方先退出。
+
 > 更多键盘快捷键映射可参考源码 `ostool/src/sterm/mod.rs`。
 
 ## ⚙️ 配置文件

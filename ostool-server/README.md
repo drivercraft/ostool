@@ -32,6 +32,12 @@ commands and stops forwarding output. Serial writes do not call blocking `tcdrai
 close waits up to one second for the driver output queue, then clears buffers even
 if the transmitter remains stuck. This close deadline does not extend test timeouts.
 
+`run_serial_ws()` requests session release on every terminal path, including
+failure to open the serial device. The server sends an `error` control message
+with the open failure before closing the WebSocket when the connection is writable.
+The lease then follows the normal power-off and file cleanup flow; client
+heartbeats cannot keep a failed serial session allocated.
+
 ## Install
 
 Before installing `ostool-server`, make sure `Node.js` and `pnpm` are available in your environment.

@@ -597,3 +597,42 @@ fn abrupt_ws_drop_powers_off_and_releases_session() -> Result<()> {
 fn websocket_buffers_client_serial_input_until_power_on_finishes() -> Result<()> {
     run_delayed_client_write_case()
 }
+
+#[test]
+fn serial_open_failure_reports_error_and_releases_session() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let missing_serial = temp.path().join("disconnected-serial");
+    let server = spawn_test_server(temp.path(), missing_serial.display().to_string())?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let result = runtime.block_on(async {
+        let created = create_session(&server.app).await?;
+        let url = resolve_ws_url(&server.base_url, created.ws_url.as_deref().unwrap())?;
+        let (mut ws, _) = tokio_tungstenite::connect_async(url.as_str()).await?;
+        let message = tokio::time::timeout(Duration::from_secs(2), ws.next())
+            .await?
+            .context("WebSocket closed without reporting serial open failure")??;
+        let Message::Text(text) = message else {
+            bail!("expected serial error, got {message:?}");
+        };
+        let error: serde_json::Value = serde_json::from_str(&text)?;
+        anyhow::ensure!(error["type"] == "error", "{text}");
+        anyhow::ensure!(
+            error["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("failed to open board serial"),
+            "{text}"
+        );
+        wait_for_closed(&mut ws).await?;
+        wait_for_session_release(&server.app, &created.session_id).await?;
+        // A failed open must not leave a lease renewed indefinitely by its client.
+        let next = create_session(&server.app).await?;
+        anyhow::ensure!(next.board_id == TEST_BOARD_ID);
+        Ok(())
+    });
+    let shutdown = server.shutdown();
+    result?;
+    shutdown
+}

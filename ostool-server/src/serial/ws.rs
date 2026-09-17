@@ -92,15 +92,24 @@ pub async fn run_serial_ws(
     state: AppState,
     session: std::sync::Arc<SessionState>,
 ) {
+    let session_id = session.snapshot().await.id;
     let result = run_serial_ws_inner(socket, &state, session.clone()).await;
+    // Opening the serial device can fail before the transport starts. Every
+    // terminal path must stop the lease, even if its client keeps heartbeating.
+    let _ = state
+        .request_session_stop(&session_id, crate::session::SessionStopReason::SerialClosed)
+        .await;
     session.clear_serial_connected();
     if let Err(err) = result {
-        log::warn!("serial websocket ended with error: {err:#}");
+        log::warn!(
+            "session `{session_id}` board `{}` serial websocket ended with error: {err:#}",
+            session.board().id
+        );
     }
 }
 
 async fn run_serial_ws_inner(
-    socket: WebSocket,
+    mut socket: WebSocket,
     state: &AppState,
     session: std::sync::Arc<SessionState>,
 ) -> anyhow::Result<()> {
@@ -110,7 +119,20 @@ async fn run_serial_ws_inner(
         .serial
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("board has no serial configuration"))?;
-    let mut port = open_board_serial(state, serial).await?;
+    let mut port = match open_board_serial(state, serial)
+        .await
+        .with_context(|| format!("failed to open board serial for `{}`", board.id))
+    {
+        Ok(port) => port,
+        Err(err) => {
+            let _ = tokio::time::timeout(
+                SERIAL_CLOSE_TIMEOUT,
+                send_serial_failure_and_close(&mut socket, &format!("{err:#}")),
+            )
+            .await;
+            return Err(err);
+        }
+    };
     clear_serial_input_after_open(&session_id, &mut port);
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
@@ -155,7 +177,7 @@ async fn run_serial_ws_inner(
     // sees an explicit error when writable, otherwise it sees the connection close.
     let _ = tokio::time::timeout(SERIAL_CLOSE_TIMEOUT, async {
         if let Err(err) = &result {
-            send_power_on_failure_and_close(&mut ws_sender, &format!("{err:#}")).await;
+            send_serial_failure_and_close(&mut ws_sender, &format!("{err:#}")).await;
         } else {
             let _ = ws_sender
                 .send(Message::Text(r#"{"type":"closed"}"#.into()))
@@ -168,11 +190,7 @@ async fn run_serial_ws_inner(
     let result =
         finalize_power_linked_session(state, &board, power_linked, power_on_task, result).await;
     let mut port = serial_rx.unsplit(serial_tx);
-    let result = preserve_result_after_serial_cleanup(&session_id, result, &mut port).await;
-    let _ = state
-        .request_session_stop(&session_id, crate::session::SessionStopReason::SerialClosed)
-        .await;
-    result
+    preserve_result_after_serial_cleanup(&session_id, result, &mut port).await
 }
 
 async fn open_board_serial(
@@ -251,7 +269,7 @@ async fn finalize_power_linked_session<T>(
     result
 }
 
-async fn send_power_on_failure_and_close<S>(ws_sender: &mut S, message: &str)
+async fn send_serial_failure_and_close<S>(ws_sender: &mut S, message: &str)
 where
     S: Sink<Message> + Unpin,
 {
@@ -441,7 +459,7 @@ mod tests {
         ClientControlMessage, SerialOpenCleanup, SerialQueueCleanup, cleanup_power_link,
         cleanup_serial_queue_before_close, clear_serial_input_after_open,
         finalize_power_linked_session, preserve_result_after_serial_cleanup,
-        send_power_on_failure_and_close,
+        send_serial_failure_and_close,
     };
     use crate::{
         build_app_state,
@@ -780,7 +798,7 @@ mod tests {
     #[tokio::test]
     async fn power_on_failure_sends_error_then_close_messages() {
         let mut sender = VecSink::default();
-        send_power_on_failure_and_close(&mut sender, "automatic power-on failed").await;
+        send_serial_failure_and_close(&mut sender, "automatic power-on failed").await;
         let mut messages = sender.messages.into_iter();
         let first = messages.next().unwrap();
         let second = messages.next().unwrap();
