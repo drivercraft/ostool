@@ -102,6 +102,21 @@ impl PhysicalSerial {
             }
         }
     }
+
+    #[cfg(test)]
+    pub(super) fn test_receive_snapshotter(
+        &self,
+    ) -> impl Fn() -> (Vec<u8>, bool, bool) + Send + Sync + 'static {
+        let receive = self.receive.clone();
+        move || {
+            let state = receive.state.lock().expect("serial RX mutex poisoned");
+            (
+                state.bytes.iter().copied().collect(),
+                state.closed,
+                state.error.is_some(),
+            )
+        }
+    }
 }
 
 impl Drop for PhysicalSerial {

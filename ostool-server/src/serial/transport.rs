@@ -41,23 +41,31 @@ where
     let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(QUEUE_CHUNKS);
     let (control_tx, mut control_rx) = mpsc::channel(CONTROL_MESSAGES);
 
+    let (serial_result_tx, serial_result_rx) = tokio::sync::oneshot::channel();
     let read_serial = async {
         let mut buffer = [0; CHUNK_SIZE];
-        loop {
-            let size = serial_rx
-                .read(&mut buffer)
-                .await
-                .context("serial read failed")?;
+        let result = loop {
+            let size = match serial_rx.read(&mut buffer).await {
+                Ok(size) => size,
+                Err(error) => {
+                    break Err(anyhow::Error::new(error).context("serial read failed"));
+                }
+            };
             if size == 0 {
-                // Let the WebSocket writer drain queued final bytes before ending.
-                drop(output_tx);
-                return pending::<anyhow::Result<()>>().await;
+                break Ok(());
             }
-            output_tx.try_send(buffer[..size].to_vec()).map_err(|_| {
-                anyhow::anyhow!("serial output buffer full or closed; websocket cannot keep up")
-            })?;
+            if output_tx.try_send(buffer[..size].to_vec()).is_err() {
+                return Err(anyhow::anyhow!(
+                    "serial output buffer full or closed; websocket cannot keep up"
+                ));
+            }
             tokio::task::yield_now().await;
-        }
+        };
+        // Close the queue first so the WebSocket writer can drain all accepted
+        // chunks, then report EOF or the serial read error through that writer.
+        drop(output_tx);
+        let _ = serial_result_tx.send(result);
+        pending::<anyhow::Result<()>>().await
     };
     let write_websocket = async {
         ws_sender
@@ -66,7 +74,11 @@ where
         loop {
             let message = tokio::select! {
                 output = output_rx.recv() => {
-                    let Some(output) = output else { return Ok::<(), anyhow::Error>(()); };
+                    let Some(output) = output else {
+                        return serial_result_rx
+                            .await
+                            .context("serial reader stopped without a result")?;
+                    };
                     Message::Binary(output.into())
                 }
                 Some(control) = control_rx.recv() => control,
@@ -145,10 +157,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::super::physical::PhysicalSerial;
     use super::*;
     use futures_util::{Sink, stream};
+    #[cfg(unix)]
+    use serialport::TTYPort;
     use std::{
-        io,
+        io::{self, Write},
         pin::Pin,
         sync::Arc,
         task::{Context, Poll},
@@ -163,12 +179,15 @@ mod tests {
         output: mpsc::UnboundedSender<Message>,
         gate: Option<tokio::sync::oneshot::Receiver<()>>,
         blocked: Arc<Notify>,
+        gate_after_open: bool,
+        opened: bool,
     }
 
     impl Sink<Message> for OutputSink {
         type Error = io::Error;
         fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            if let Some(gate) = self.gate.as_mut() {
+            if self.gate.is_some() && (!self.gate_after_open || self.opened) {
+                let gate = self.gate.as_mut().expect("gate checked above");
                 if Pin::new(gate).poll(cx).is_pending() {
                     self.blocked.notify_one();
                     return Poll::Pending;
@@ -177,8 +196,12 @@ mod tests {
             }
             Poll::Ready(Ok(()))
         }
-        fn start_send(self: Pin<&mut Self>, item: Message) -> io::Result<()> {
-            self.output.send(item).map_err(io::Error::other)
+        fn start_send(mut self: Pin<&mut Self>, item: Message) -> io::Result<()> {
+            let this = self.as_mut().get_mut();
+            if matches!(&item, Message::Text(text) if text.as_str() == r#"{"type":"opened"}"#) {
+                this.opened = true;
+            }
+            this.output.send(item).map_err(io::Error::other)
         }
         fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
             Poll::Ready(Ok(()))
@@ -205,6 +228,8 @@ mod tests {
             output,
             gate: Some(gate),
             blocked: blocked.clone(),
+            gate_after_open: false,
+            opened: false,
         };
         let (_ready, ready) = watch::channel(true);
         let task = tokio::spawn(async move {
@@ -235,6 +260,95 @@ mod tests {
         assert_eq!(bytes, payload);
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn physical_receive_overflow_drains_accepted_output_before_error() {
+        let (mut board, slave) = TTYPort::pair().expect("create PTY pair");
+        let physical = PhysicalSerial::new(slave).expect("start physical serial reader");
+        let snapshot = physical.test_receive_snapshotter();
+        let payload: Vec<u8> = (0..CHUNK_SIZE * QUEUE_CHUNKS + 1)
+            .map(|i| (i % 251) as u8)
+            .collect();
+        deadline(tokio::task::spawn_blocking(move || {
+            board.write_all(&payload)
+        }))
+        .await
+        .expect("PTY writer task panicked")
+        .expect("write PTY payload");
+
+        let expected = deadline(async {
+            loop {
+                let (bytes, closed, error_pending) = snapshot();
+                if closed {
+                    assert!(error_pending, "physical reader closed without overflow");
+                    break bytes;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(!expected.is_empty(), "physical reader buffered no input");
+
+        let (mut serial_rx, mut serial_tx) = tokio::io::split(physical);
+        let (output, mut received) = mpsc::unbounded_channel();
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let blocked = Arc::new(Notify::new());
+        let mut sink = OutputSink {
+            output,
+            gate: Some(gate),
+            blocked: blocked.clone(),
+            gate_after_open: true,
+            opened: false,
+        };
+        let (_ready, ready) = watch::channel(true);
+        let task = tokio::spawn(async move {
+            run(
+                &mut serial_rx,
+                &mut serial_tx,
+                &mut sink,
+                &mut stream::pending::<Result<Message, io::Error>>(),
+                ready,
+                || async {},
+            )
+            .await
+        });
+
+        deadline(blocked.notified()).await;
+        deadline(async {
+            loop {
+                let (_, closed, error_pending) = snapshot();
+                if closed && !error_pending {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(
+            !task.is_finished(),
+            "transport reported serial overflow before draining queued output"
+        );
+
+        release
+            .send(())
+            .expect("WebSocket writer was cancelled early");
+        let error = deadline(task)
+            .await
+            .expect("transport task panicked")
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("serial read failed"),
+            "{error:#}"
+        );
+        let mut actual = Vec::new();
+        while let Some(message) = received.recv().await {
+            if let Message::Binary(chunk) = message {
+                actual.extend_from_slice(&chunk);
+            }
+        }
+        assert_eq!(actual, expected);
+    }
+
     #[tokio::test]
     async fn blocked_serial_write_does_not_stop_output_or_peer_close() {
         let (mut board, server) = tokio::io::duplex(16);
@@ -244,6 +358,8 @@ mod tests {
             output,
             gate: None,
             blocked: Arc::new(Notify::new()),
+            gate_after_open: false,
+            opened: false,
         };
         let (commands, mut command_rx) = mpsc::unbounded_channel();
         let mut input = Box::pin(stream::poll_fn(move |cx| command_rx.poll_recv(cx)));
@@ -278,6 +394,8 @@ mod tests {
             output,
             gate: Some(gate),
             blocked: Arc::new(Notify::new()),
+            gate_after_open: false,
+            opened: false,
         };
         let (_ready, ready) = watch::channel(true);
         let task = tokio::spawn(async move {
@@ -313,6 +431,8 @@ mod tests {
             output,
             gate: None,
             blocked: Arc::new(Notify::new()),
+            gate_after_open: false,
+            opened: false,
         };
         let (_ready, ready) = watch::channel(true);
         let task = tokio::spawn(async move {
@@ -350,6 +470,8 @@ mod tests {
             output,
             gate: None,
             blocked: Arc::new(Notify::new()),
+            gate_after_open: false,
+            opened: false,
         };
         let (_ready, ready) = watch::channel(true);
         let mut input = stream::iter([Ok::<_, io::Error>(Message::Binary(
@@ -376,6 +498,8 @@ mod tests {
             output,
             gate: Some(gate),
             blocked: blocked.clone(),
+            gate_after_open: false,
+            opened: false,
         };
         let (_ready, ready) = watch::channel(true);
         let mut incoming = stream::pending::<Result<Message, io::Error>>();
