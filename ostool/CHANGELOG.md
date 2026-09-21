@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.5](https://github.com/drivercraft/ostool/compare/ostool-v0.29.4...ostool-v0.29.5) - 2026-09-21
+
+### Fixed
+
+- *(ostool)* avoid re-polling completed serial tasks ([#191](https://github.com/drivercraft/ostool/pull/191))
+
 ## [0.29.4](https://github.com/drivercraft/ostool/compare/ostool-v0.29.3...ostool-v0.29.4) - 2026-09-17
 
 ### Fixed
