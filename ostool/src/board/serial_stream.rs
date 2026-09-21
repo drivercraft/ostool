@@ -191,12 +191,22 @@ impl SerialStreamTasks {
 
     pub async fn shutdown_with_timeout(self, duration: std::time::Duration) -> anyhow::Result<()> {
         let SerialStreamTasks {
-            mut read_task,
-            mut write_task,
+            read_task,
+            write_task,
         } = self;
+        // Each handle sits inside a slot that releases ownership only once the
+        // handle resolves. If the timeout cancels this attempt, the slot still
+        // owns whichever tasks have not finished, so they can be aborted and
+        // joined instead of being detached.
+        let mut write_slot = TaskSlot(Some(write_task));
+        let mut read_slot = TaskSlot(Some(read_task));
+
         let shutdown = async {
-            let write_result = (&mut write_task).await;
-            let read_result = (&mut read_task).await;
+            // Both handles are fully awaited before either result is inspected,
+            // matching the original behavior: a writer failure must not abandon
+            // a reader that is still shutting down.
+            let write_result = write_slot.await_handle().await;
+            let read_result = read_slot.await_handle().await;
 
             if let Ok(Err(err)) = write_result {
                 return Err(err);
@@ -221,10 +231,11 @@ impl SerialStreamTasks {
         match timeout(duration, shutdown).await {
             Ok(result) => result,
             Err(_) => {
-                write_task.abort();
-                read_task.abort();
-                let _ = write_task.await;
-                let _ = read_task.await;
+                // Only the tasks that have not finished yet are still owned by
+                // their slot; anything already joined is a no-op here. This also
+                // covers the timeout firing while the writer itself is pending.
+                write_slot.abort_and_join().await;
+                read_slot.abort_and_join().await;
                 Err(anyhow::anyhow!(
                     "serial websocket shutdown timed out after {}s",
                     duration.as_secs_f64()
@@ -234,14 +245,43 @@ impl SerialStreamTasks {
     }
 }
 
+/// Owns one shutdown `JoinHandle` and guarantees it is polled at most once.
+struct TaskSlot(Option<JoinHandle<anyhow::Result<()>>>);
+
+impl TaskSlot {
+    /// Awaits the handle in place. The slot is cleared only after the `await`
+    /// resolves, and that assignment has no intervening `await`, so a future
+    /// cancelled mid-poll leaves the still-running task owned by this slot for
+    /// timeout cleanup. The `JoinError` result is returned untouched so the
+    /// caller keeps the original error handling.
+    async fn await_handle(&mut self) -> Result<anyhow::Result<()>, tokio::task::JoinError> {
+        let handle = self.0.as_mut().expect("task slot must be occupied");
+        let result = handle.await;
+        self.0 = None;
+        result
+    }
+
+    /// Cancels and joins the handle if it is still owned. No-op once the handle
+    /// has resolved and the slot cleared itself.
+    async fn abort_and_join(&mut self) {
+        let Some(handle) = self.0.take() else {
+            return;
+        };
+        handle.abort();
+        let _ = handle.await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     };
-
-    use tokio::{sync::Notify, task::JoinHandle};
+    use tokio::{
+        sync::{Notify, oneshot},
+        task::JoinHandle,
+    };
 
     use super::{SerialStreamTasks, connect_serial_stream, websocket_request, write_bridge_bytes};
 
@@ -393,6 +433,128 @@ mod tests {
         .shutdown()
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn shutdown_with_timeout_handles_completed_writer_with_pending_reader() {
+        // A `pending` reader can never complete, so it deterministically stays
+        // blocked regardless of how the runtime schedules the two tasks. When
+        // its future is dropped (aborted), the guard reports `read_stopped`.
+        let (read_started_tx, read_started_rx) = oneshot::channel::<()>();
+        let (read_stopped_tx, mut read_stopped_rx) = oneshot::channel::<()>();
+        let read_task: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
+            let _guard = HasPendingGuard::new(read_stopped_tx);
+            let _ = read_started_tx.send(());
+            std::future::pending::<anyhow::Result<()>>().await
+        });
+
+        // The writer resolves immediately, so `shutdown_with_timeout` joins it
+        // before it ever reaches the pending reader.
+        let (write_started_tx, write_started_rx) = oneshot::channel::<()>();
+        let (write_stopped_tx, mut write_stopped_rx) = oneshot::channel::<()>();
+        let write_task: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
+            let _guard = HasPendingGuard::new(write_stopped_tx);
+            let _ = write_started_tx.send(());
+            Ok(())
+        });
+
+        // Both tasks are confirmed started before shutdown, so the stop
+        // signals below can only come from shutdown's own cleanup.
+        assert!(read_started_rx.await.is_ok());
+        assert!(write_started_rx.await.is_ok());
+
+        // The timeout is only a termination guard. On the old implementation
+        // this panicked with `JoinHandle polled after completion`: the timeout
+        // branch re-awaited the writer handle the shutdown attempt had already
+        // resolved.
+        let error = SerialStreamTasks {
+            read_task,
+            write_task,
+        }
+        .shutdown_with_timeout(std::time::Duration::from_secs(1))
+        .await
+        .expect_err("pending reader must surface a timeout error");
+
+        // Both tasks must be fully stopped by the time shutdown returns: the
+        // writer finished on its own, and the blocked reader must have been
+        // aborted and joined rather than left detached.
+        assert!(
+            write_stopped_rx.try_recv().is_ok(),
+            "writer task was not observed as stopped"
+        );
+        assert!(
+            read_stopped_rx.try_recv().is_ok(),
+            "pending reader task was not aborted/joined"
+        );
+        assert!(
+            error.to_string().contains("shutdown timed out"),
+            "unexpected shutdown error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_with_timeout_cancels_pending_writer() {
+        // The timeout fires while the writer is still pending. Both handles are
+        // therefore still owned by their slots and must be cancelled and joined
+        // exactly once; a leaked handle would never drop its guard.
+        let (writer_started_tx, writer_started_rx) = oneshot::channel::<()>();
+        let (writer_stopped_tx, mut writer_stopped_rx) = oneshot::channel::<()>();
+        let write_task: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
+            let _guard = HasPendingGuard::new(writer_stopped_tx);
+            let _ = writer_started_tx.send(());
+            std::future::pending::<anyhow::Result<()>>().await
+        });
+
+        let (reader_started_tx, reader_started_rx) = oneshot::channel::<()>();
+        let (reader_stopped_tx, mut reader_stopped_rx) = oneshot::channel::<()>();
+        let read_task: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
+            let _guard = HasPendingGuard::new(reader_stopped_tx);
+            let _ = reader_started_tx.send(());
+            std::future::pending::<anyhow::Result<()>>().await
+        });
+
+        assert!(writer_started_rx.await.is_ok());
+        assert!(reader_started_rx.await.is_ok());
+
+        let error = SerialStreamTasks {
+            read_task,
+            write_task,
+        }
+        .shutdown_with_timeout(std::time::Duration::from_secs(1))
+        .await
+        .expect_err("pending writer must surface a timeout error");
+
+        assert!(
+            writer_stopped_rx.try_recv().is_ok(),
+            "pending writer task was not aborted/joined"
+        );
+        assert!(
+            reader_stopped_rx.try_recv().is_ok(),
+            "pending reader task was not aborted/joined"
+        );
+        assert!(
+            error.to_string().contains("shutdown timed out"),
+            "unexpected shutdown error: {error}"
+        );
+    }
+
+    /// Lives across an await point inside a background task and reports exactly
+    /// when that task's future is dropped (natural completion or abort). Used
+    /// to prove shutdown actually stopped a task instead of detaching it.
+    struct HasPendingGuard(Option<oneshot::Sender<()>>);
+
+    impl HasPendingGuard {
+        fn new(stopped: oneshot::Sender<()>) -> Self {
+            Self(Some(stopped))
+        }
+    }
+
+    impl Drop for HasPendingGuard {
+        fn drop(&mut self) {
+            if let Some(stopped) = self.0.take() {
+                let _ = stopped.send(());
+            }
+        }
     }
 
     #[tokio::test]
