@@ -245,7 +245,7 @@ impl SerialStreamTasks {
     }
 }
 
-/// Owns one shutdown `JoinHandle` and guarantees it is polled at most once.
+/// Owns one shutdown `JoinHandle` and guarantees it is joined at most once.
 struct TaskSlot(Option<JoinHandle<anyhow::Result<()>>>);
 
 impl TaskSlot {
