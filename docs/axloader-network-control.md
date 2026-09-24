@@ -1,6 +1,6 @@
 # axloader 网络控制与虚拟板
 
-本文说明 `httpboot-protocol 0.2`、`axloader`、`ostool-server`、`ostool` CLI 和管理页面之间的网络启动契约。该契约不兼容旧版串口 `READY/BOOT` 协议。
+本文说明 `httpboot-protocol` v3、`axloader`、`ostool-server`、`ostool` CLI 和管理页面之间的网络启动契约。服务端仍接受不使用宿主 initramfs/cmdline 的 v2 loader；该契约不兼容旧版串口 `READY/BOOT` 协议。
 
 ## 设计边界
 
@@ -26,13 +26,16 @@ sequenceDiagram
         L->>S: POST /api/v1/loaders/poll
         S-->>L: unbound / bound_idle / reject
     end
-    C->>S: 创建 Session 并上传 ELF
+    C->>S: 创建 Session；可选上传宿主 initramfs，再上传 ELF 并发布启动清单
     C->>S: 连接串口 WebSocket（自动上电）
     L->>S: POST /api/v1/loaders/poll
-    S-->>L: boot + session_id + boot_id + 摘要
+    S-->>L: boot + session_id + boot_id + 内核摘要及可选归档摘要/cmdline
     L->>S: accepted / downloading
     L->>S: GET 相对 kernel_path
-    L->>L: 校验长度和 SHA-256，装载 ELF
+    opt 启动清单包含宿主 initramfs
+        L->>S: GET 同一 Session 的 initramfs.path
+    end
+    L->>L: 校验文件长度和 SHA-256，装载 ELF/归档
     L->>S: verified / ready_to_handoff
     L->>L: 销毁 UDP/HTTP/IP 对象并 ExitBootServices
     T-->>C: 目标系统原始串口输出
@@ -41,6 +44,15 @@ sequenceDiagram
 ```
 
 `ready_to_handoff` 是最后一个可靠网络状态。它不会消费启动清单；同一 Session 内板卡重启后，新 `registration_id` 会重新取得相同 `boot_id`。上传新内核才会以新 `boot_id` 替换旧命令。Session 释放时，启动命令和 loader 状态一起删除。
+
+宿主归档由 CLI 先以会话内路径 `initramfs.cpio` 上传，再在发布内核时以
+`X-HttpBoot-Initramfs-Path` 引用；`X-HttpBoot-Cmdline` 可独立提供命令行。
+服务端读取同一 Session 的归档并记录大小、SHA-256，拒绝空文件或超过
+256 MiB 的归档；命令行最长 4095 字节，仅允许可打印 ASCII 和空格。
+v3 loader 从启动清单取得可选的 `initramfs: {path, size, sha256}` 和
+`cmdline`，从当前 Session 下载并再次核对归档，失败时不上交内核。
+v2 loader 遇到任一新字段时收到 `boot_payload_unsupported`，没有新字段的
+启动保持兼容。摘要用于发现不一致，不替代受信网络或认证。
 
 ## 发现和注册代次
 
@@ -68,7 +80,7 @@ axloader 如果发现两个不同的 `server_id`，不会随机选择其中一�
 | `POST /api/v1/admin/virtual-devices` | 管理页面 | 创建并启动一个尚未绑定的 QEMU 设备 |
 | `DELETE /api/v1/admin/virtual-devices/{id}` | 管理页面 | 停止并删除未绑定虚拟设备 |
 
-`boot` 响应中的内核路径必须是当前 server 下的相对路径，同时包含大小、SHA-256、架构、`elf64` 格式和可选入口符号。状态更新由 `session_id + boot_id + registration_id` 定位；旧启动命令或旧注册代次的迟到状态返回冲突，不能覆盖当前状态。
+`boot` 响应中的内核路径必须是当前 server 下的相对路径，同时包含大小、SHA-256、架构、`elf64` 格式和可选入口符号；v3 还可包含宿主归档的相对路径、大小、SHA-256 及命令行。状态更新由 `session_id + boot_id + registration_id` 定位；旧启动命令或旧注册代次的迟到状态返回冲突，不能覆盖当前状态。
 
 ## 板卡配置
 
@@ -109,12 +121,16 @@ MAC 保存为小写六字节冒号格式并全局唯一。HTTP Boot 板卡缺少
 HTTP Boot runner 按以下顺序工作：
 
 1. 按人工配置的 `board_type` 创建 Session；
-2. 上传 ELF，server 发布新的 `boot_id`；
+2. 可选地上传宿主归档到该 Session；上传 ELF 时引用归档路径并发布新的 `boot_id`；
 3. 立即连接串口 WebSocket，由现有串口生命周期自动上电；
 4. 并行读取原始串口并轮询 loader status；
 5. 活动 Session 内板卡重启时继续等待新注册代次，不重建 Session；
 6. loader 报告 `failed` 时结束；正常成功仍以目标系统串口成功条件为准；
 7. WebSocket 关闭后沿用 `SerialClosed` 释放流程并断电。
+
+`.board.toml` 中的 `initramfs` 和 `cmdline` 都是可选字段。前者是宿主归档，
+不是虚拟机内 Linux guest 的 initrd；后者传给宿主内核。只有目标 loader、
+固件与内核实现了对应交接时才配置这些字段。
 
 ## 内建 QEMU 虚拟板
 

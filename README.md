@@ -15,7 +15,7 @@
 
 ## 📖 项目简介
 
-axloader 0.2 的网络控制、持久 MAC 绑定、Web 管理和内建 QEMU 虚拟板设计见 [docs/axloader-network-control.md](docs/axloader-network-control.md)，完整接口契约见 [docs/api.md](docs/api.md)。
+axloader 网络控制（v3 宿主启动制品及 v2 兼容）、持久 MAC 绑定、Web 管理和内建 QEMU 虚拟板设计见 [docs/axloader-network-control.md](docs/axloader-network-control.md)，完整接口契约见 [docs/api.md](docs/api.md)。
 
 管理后台位于 `/admin/`，使用 React + shadcn/ui。新建开发板时可先选择电源模块并手动上电，再从实时发现列表选择或手工填写 MAC；保存后完成绑定。全部管理页面采用 SSE 推送更新，断线重连保留页面与编辑草稿。详见 [管理界面与事件协议](docs/admin-ui.md)。
 不兼容的板卡 TOML 会在启动时移入板卡目录下的 `quarantine/`，保留原文件和原因，其余有效板卡继续加载。
@@ -333,7 +333,7 @@ interface = "eth0"
 board_ip = "192.168.1.100"
 ```
 
-`BootPayloadConfig` 的 `initramfs` 是宿主归档，与 Linux guest 的 initrd 分开配置。QEMU 直启仅在 AArch64/RISC-V 路径使用 `-initrd` 和 `-append`；x86 使用 UEFI ESP 中的 `EFI/BOOT/initramfs.cpio`、`cmdline.txt`，不向裸 ELF 传 Linux x86 启动协议参数。U-Boot 的 `generate_fit_image()` 将归档作为 FIT ramdisk，并在启动前设置 `bootargs`；串口命令路径暂不接受含单引号的 `cmdline`。board HTTP Boot 将归档和内核上传到同一 session，服务端校验文件大小与 SHA-256 后仅向协议 v3 loader 提供归档，且归档上限为 256 MiB、cmdline 上限为 4095 字节；v2 loader 仍可启动不带宿主归档且不带新 cmdline 的旧会话，带任一新字段的启动会被拒绝。实体板卡的固件和内核须实现对应交接协议。
+`BootPayloadConfig` 的 `initramfs` 是宿主归档，与 Linux guest 的 initrd 分开配置。QEMU 直启仅在 AArch64/RISC-V 路径使用 `-initrd` 和 `-append`；x86 使用 UEFI ESP 中的 `EFI/BOOT/initramfs.cpio`、`cmdline.txt`，不向裸 ELF 传 Linux x86 启动协议参数。U-Boot 的 `generate_fit_image()` 将归档作为 FIT ramdisk，并在启动前设置 `bootargs`；串口命令路径暂不接受含单引号的 `cmdline`。board HTTP Boot 将归档和内核上传到同一 session，服务端记录归档大小与 SHA-256，v3 loader 下载后再次校验；归档上限为 256 MiB，cmdline 上限为 4095 字节且仅允许可打印 ASCII 和空格。服务端仍允许 v2 loader 启动两个新字段均未配置的旧会话，遇到任一新字段则在 poll 阶段明确拒绝。实体板卡的固件和内核须实现对应交接协议。
 
 ### 有序 Shell 初始化步骤
 

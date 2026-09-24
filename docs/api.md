@@ -42,7 +42,7 @@ HTTP 客户端不跟随重定向。认证模式下，绝对 WebSocket URL 必须
 | `ostool logout [--server URL] [--port PORT]` | 退出登录。 | OAuth 凭据会尝试远端撤销；随后删除本地凭据。PAT 仅删除本地副本。 | `POST /oauth/revoke`（仅 OAuth） |
 | `ostool board ls [--server URL] [--port PORT]` | 查询按类型聚合的可用开发板信息。 | 调用时携带 Bearer Token。 | `GET /api/v1/board-types` |
 | `ostool board connect --board-type TYPE [--board-id BOARD_ID] [--server URL] [--port PORT]` | 请求服务端从指定类型中自动分配一块开发板，或指定一块开发板，并打开串口终端。 | REST 和 WebSocket 请求均携带 Bearer Token。 | `POST /api/v1/sessions`；`POST /api/v1/sessions/{session_id}/heartbeat`；WebSocket `/api/v1/sessions/{session_id}/serial/ws`；`DELETE /api/v1/sessions/{session_id}` |
-| `ostool board run [--server URL] [--port PORT]` | 构建后请求服务端按 `.board.toml` 的 `board_type` 自动分配开发板并启动。 | REST 和 WebSocket 请求均携带 Bearer Token。 | 始终：`POST /api/v1/sessions`、`POST /api/v1/sessions/{session_id}/heartbeat`、`DELETE /api/v1/sessions/{session_id}`。U-Boot：`GET /boot-profile`、`GET /serial`、`GET /tftp`、`GET /dtb`、`GET /dtb/download`、`PUT /files`、WebSocket `/serial/ws`。HTTP Boot：`GET /boot-profile`、`GET /serial`、`PUT /http-boot/kernel`、WebSocket `/serial/ws`。 |
+| `ostool board run [--server URL] [--port PORT]` | 构建后请求服务端按 `.board.toml` 的 `board_type` 自动分配开发板并启动。 | REST 和 WebSocket 请求均携带 Bearer Token。 | 始终：`POST /api/v1/sessions`、`POST /api/v1/sessions/{session_id}/heartbeat`、`DELETE /api/v1/sessions/{session_id}`。U-Boot：`GET /boot-profile`、`GET /serial`、`GET /tftp`、`GET /dtb`、`GET /dtb/download`、`PUT /files`、WebSocket `/serial/ws`。HTTP Boot：`GET /boot-profile`、`GET /serial`、可选 `PUT /http-boot/files`、`PUT /http-boot/kernel`、WebSocket `/serial/ws`。 |
 
 ## OAuth Device Authorization API
 
@@ -594,9 +594,9 @@ Content-Type: application/json
 
 ## Board REST API
 
-本节定义两种后端共用的开发板服务契约：本地局域网模式由 `ostool-server` 直接提供，认证模式由独立认证后端提供受认证的对应接口。这里覆盖 `ostool-server` 的全部公开、非管理 REST 接口。`ostool` 当前命令会使用会话文件上传，但不会直接调用会话详情、会话文件列表/查询/删除、显式电源控制和普通 HTTP Boot 文件上传；后者仍属于公开 board 服务契约，其中显式电源控制和普通 HTTP Boot 文件上传也已有 `BoardServerClient` 方法。
+本节定义两种后端共用的开发板服务契约：本地局域网模式由 `ostool-server` 直接提供，认证模式由独立认证后端提供受认证的对应接口。这里覆盖 `ostool-server` 的全部公开、非管理 REST 接口。`ostool` 当前命令会使用会话文件上传；配置宿主 initramfs 时还会调用普通 HTTP Boot 文件上传。它不直接调用会话详情、会话文件列表/查询/删除和显式电源控制；这些仍属于公开 board 服务契约，其中显式电源控制也已有 `BoardServerClient` 方法。
 
-axloader 0.2 另使用 `POST /api/v1/loaders/poll`、`POST /api/v1/loaders/status` 和 `GET /api/v1/sessions/{session_id}/loader-status`。poll/status 由 UDP 发现返回的一次性 `registration_id` 关联本次固件启动；状态以 `session_id + boot_id + registration_id` 定位，旧代次迟到上报不能覆盖新代次。Session 释放时删除启动清单和 loader 状态。
+axloader 协议 v3 另使用 `POST /api/v1/loaders/poll`、`POST /api/v1/loaders/status` 和 `GET /api/v1/sessions/{session_id}/loader-status`。poll/status 由 UDP 发现返回的一次性 `registration_id` 关联本次固件启动；状态以 `session_id + boot_id + registration_id` 定位，旧代次迟到上报不能覆盖新代次。服务端仍接受 v2 loader：仅无 `initramfs` 且无 `cmdline` 的启动可下发；否则 poll 返回 `reject`，代码为 `boot_payload_unsupported`。Session 释放时删除启动清单和 loader 状态。
 
 ### 查询开发板类型
 
@@ -942,11 +942,13 @@ X-HttpBoot-Remote-Name: <remote_name>        # 可选，默认 kernel.elf
 X-HttpBoot-Arch: <arch>                      # 必填：x86_64、aarch64、loongarch64、riscv64 或 other
 X-HttpBoot-Image-Format: <image_format>      # 可选，当前仅支持 elf64
 X-HttpBoot-Entry-Symbol: <entry_symbol>      # 可选
+X-HttpBoot-Initramfs-Path: <relative_path>   # 可选，当前 Session 已上传的宿主归档路径
+X-HttpBoot-Cmdline: <cmdline>                 # 可选，宿主内核命令行
 
 <raw kernel bytes>
 ```
 
-该接口与普通 HTTP Boot 文件上传具有相同的会话类型和服务开关限制。`X-HttpBoot-Remote-Name` 也必须是合法的会话内相对路径。请求体是内核原始字节，大小受服务器配置 `upload_limits.session_file_max_mib` 限制，超限返回 `413 Payload Too Large`。成功返回 `201 Created`：
+该接口与普通 HTTP Boot 文件上传具有相同的会话类型和服务开关限制。`X-HttpBoot-Remote-Name` 和 `X-HttpBoot-Initramfs-Path` 都必须是合法的会话内相对路径。若配置归档，先通过 `PUT /http-boot/files` 上传到**同一 Session**，再发布内核；服务端拒绝不存在、为空或超过 256 MiB 的归档，读取后记录其大小和 SHA-256。`X-HttpBoot-Cmdline` 最长 4095 字节，只允许可打印 ASCII 和空格，超限或含控制字符返回 `400`。请求体是内核原始字节，大小受服务器配置 `upload_limits.session_file_max_mib` 限制，超限返回 `413 Payload Too Large`。成功返回 `201 Created`：
 
 ```json
 {
@@ -957,7 +959,7 @@ X-HttpBoot-Entry-Symbol: <entry_symbol>      # 可选
 }
 ```
 
-响应模型允许 `kernel_sha256` 为 `null`，但当前 `ostool-server` 会计算并返回 64 位小写十六进制 SHA-256。当前 `ostool board run` 的 HTTP Boot 流程固定发送 `remote_name=kernel.elf`、`image_format=elf64` 和 `entry_symbol=httpboot_entry`。
+响应模型允许 `kernel_sha256` 为 `null`，但当前 `ostool-server` 会计算并返回 64 位小写十六进制 SHA-256。当前 `ostool board run` 的 HTTP Boot 流程固定发送 `remote_name=kernel.elf`、`image_format=elf64` 和 `entry_symbol=httpboot_entry`；配置 `initramfs` 时先上传为 `initramfs.cpio` 并设置对应路径 Header。v3 poll 响应包含可选的 `initramfs: {path, size, sha256}` 和 `cmdline`；loader 必须从当前 Session 下载归档并核对大小与摘要，校验失败不交接内核。v2 loader 仅能接收两个字段均未配置的启动。
 
 ## 串口 WebSocket API
 

@@ -44,8 +44,10 @@ pub struct BoardRunConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BoardRunConfigWire {
-    #[serde(flatten)]
-    boot: crate::BootPayloadConfig,
+    #[serde(default)]
+    initramfs: Option<String>,
+    #[serde(default)]
+    cmdline: Option<String>,
     board_type: String,
     #[serde(default)]
     session_files: Vec<PathBuf>,
@@ -88,7 +90,10 @@ impl<'de> Deserialize<'de> for BoardRunConfig {
             }
         }
         Ok(Self {
-            boot: wire.boot,
+            boot: crate::BootPayloadConfig {
+                initramfs: wire.initramfs,
+                cmdline: wire.cmdline,
+            },
             board_type: wire.board_type,
             session_files: wire.session_files,
             dtb_file: wire.dtb_file,
@@ -426,6 +431,36 @@ shell_check_steps = [
 
         assert_eq!(schema["additionalProperties"], false);
         assert!(schema["properties"].get("success_regex").is_none());
+    }
+
+    #[test]
+    fn board_run_config_rejects_unknown_fields_with_optional_boot_payload() {
+        let config: BoardRunConfig = toml::from_str(
+            r#"
+board_type = "orangepi-5-plus"
+initramfs = "host.cpio"
+cmdline = "console=ttyS0"
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.boot.initramfs.as_deref(), Some("host.cpio"));
+        assert_eq!(config.boot.cmdline.as_deref(), Some("console=ttyS0"));
+
+        let error = toml::from_str::<BoardRunConfig>(
+            r#"
+board_type = "orangepi-5-plus"
+initramfs = "real.cpio"
+initramf = "host.cpio"
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("initramf"), "{error}");
+
+        let error = serde_json::from_str::<BoardRunConfig>(
+            r#"{"board_type":"orangepi-5-plus","initramfs":"real.cpio","initramf":"host.cpio"}"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("initramf"), "{error}");
     }
 
     #[test]

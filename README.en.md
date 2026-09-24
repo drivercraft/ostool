@@ -15,7 +15,7 @@
 
 ## 📖 Project Overview
 
-See [docs/axloader-network-control.md](docs/axloader-network-control.md) for the axloader 0.2 network control, persistent MAC binding, web administration, and built-in QEMU virtual board design. The complete API contract is documented in [docs/api.md](docs/api.md).
+See [docs/axloader-network-control.md](docs/axloader-network-control.md) for the axloader network control (v3 host boot payloads with v2 compatibility), persistent MAC binding, web administration, and built-in QEMU virtual board design. The complete API contract is documented in [docs/api.md](docs/api.md).
 
 The management console at `/admin/` uses React + shadcn/ui. In the new-board form, choose a power module and power it on before selecting a discovered MAC or entering one manually; saving completes the binding. All management pages receive SSE updates and preserve displayed data and drafts across reconnects. See [Admin UI and event protocol](docs/admin-ui.md).
 At startup, incompatible board TOML files move into `quarantine/` under the board directory with their original contents and diagnostic metadata; valid boards continue to load.
@@ -310,8 +310,12 @@ args = ["-machine", "virt", "-cpu", "cortex-a57", "-nographic"]
 # Enable UEFI boot
 uefi = false
 
-# Output as binary file
-to_bin = true
+# Optional host archive and kernel command line
+initramfs = "images/host.cpio.gz"
+cmdline = "console=ttyAMA0 rdinit=/init -- rescue"
+
+# Optional compatibility setting; UEFI QEMU prepares the required BIN automatically
+to_bin = false
 
 # Failure regex patterns (for auto-detection)
 fail_regex = ["panic", "error", "failed"]
@@ -331,6 +335,10 @@ baud_rate = "115200"
 # Device tree file (optional)
 dtb_file = "tools/device_tree.dtb"
 
+# Optional FIT ramdisk and U-Boot bootargs
+initramfs = "images/host.cpio.gz"
+cmdline = "console=ttyS0 rdinit=/init"
+
 # Kernel load address (optional)
 kernel_load_addr = "0x80080000"
 
@@ -348,6 +356,8 @@ fail_regex = ["Boot failed", "Error loading kernel"]
 interface = "eth0"
 board_ip = "192.168.1.100"
 ```
+
+`initramfs` is the **host** archive, separate from a Linux guest initrd. Direct AArch64/RISC-V QEMU boot passes it with `-initrd` and passes `cmdline` with `-append`; x86 uses `EFI/BOOT/initramfs.cpio` and `cmdline.txt` on the UEFI ESP, not the Linux x86 boot protocol for a bare ELF. U-Boot includes the archive as a FIT ramdisk and sets `bootargs` before booting; the serial command path rejects a `cmdline` containing a single quote. For board HTTP Boot, the archive and kernel belong to the same session: the server records the archive size and SHA-256, and a v3 loader verifies them before handoff. The archive limit is 256 MiB and the command-line limit is 4095 printable ASCII bytes. A v2 loader can still boot a session without either new field; the server rejects a v2 poll for a boot requiring either field. Firmware and kernels on physical boards must implement the corresponding handoff.
 
 ### Ordered shell initialization steps
 
