@@ -10,8 +10,9 @@ use axum::{
 };
 use futures_util::future::join_all;
 use httpboot_protocol::{
-    BootArch, ImageFormat, LoaderPollRequest, LoaderPollResponse, LoaderStatusReport,
-    LoaderStatusResponse, MacAddress,
+    BootArch, BootFile, ImageFormat, LEGACY_PROTOCOL_VERSION, LoaderPollRequest,
+    LoaderPollResponse, LoaderStatusReport, LoaderStatusResponse, MAX_HTTP_BOOT_INITRAMFS_BYTES,
+    MacAddress, valid_host_cmdline,
 };
 use mime_guess::from_path;
 use sha2::{Digest, Sha256};
@@ -740,6 +741,15 @@ async fn poll_loader(
             retry_after_ms: None,
         }));
     }
+    if request.protocol_version == LEGACY_PROTOCOL_VERSION
+        && (command.initramfs.is_some() || command.cmdline.is_some())
+    {
+        return Ok(axum::Json(LoaderPollResponse::Reject {
+            code: "boot_payload_unsupported".into(),
+            message: "this boot requires a loader supporting host initramfs and cmdline".into(),
+            retry_after_ms: None,
+        }));
+    }
     Ok(axum::Json(LoaderPollResponse::Boot {
         board_id,
         session_id,
@@ -750,6 +760,8 @@ async fn poll_loader(
         arch: command.arch,
         image_format: command.image_format,
         entry_symbol: command.entry_symbol,
+        initramfs: command.initramfs,
+        cmdline: command.cmdline,
     }))
 }
 
@@ -1862,9 +1874,57 @@ async fn put_http_boot_kernel(
     let entry_symbol = optional_header(headers, "X-HttpBoot-Entry-Symbol")?
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
+    let initramfs_path = optional_header(headers, "X-HttpBoot-Initramfs-Path")?
+        .map(|path| parse_relative_path(&path))
+        .transpose()?;
+    let cmdline = optional_header(headers, "X-HttpBoot-Cmdline")?;
+    if cmdline
+        .as_deref()
+        .is_some_and(|value| !valid_host_cmdline(value))
+    {
+        return Err(ApiError::bad_request("invalid host kernel command line"));
+    }
     if !state.config.read().await.http_boot.enabled {
         return Err(ApiError::conflict("HTTP Boot is disabled"));
     }
+
+    let initramfs = if let Some(path) = initramfs_path.as_deref() {
+        let manager = state.tftp_manager.read().await.clone();
+        let file = manager
+            .get_session_file(&session_id, path)
+            .await
+            .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?
+            .ok_or_else(|| ApiError::bad_request("host initramfs not uploaded to this session"))?;
+        let size = fs::metadata(&file.disk_path)
+            .await
+            .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?
+            .len();
+        if size == 0 {
+            return Err(ApiError::bad_request("host initramfs is empty"));
+        }
+        if size > MAX_HTTP_BOOT_INITRAMFS_BYTES as u64 {
+            return Err(ApiError::bad_request(
+                "host initramfs exceeds HTTP Boot loader limit",
+            ));
+        }
+        let bytes = fs::read(&file.disk_path)
+            .await
+            .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
+        if bytes.len() as u64 != size {
+            return Err(ApiError::conflict(
+                "host initramfs changed during publication",
+            ));
+        }
+        let config = state.config.read().await.clone();
+        let url = http_boot_url(&config, &session_id, path)?;
+        Some(BootFile {
+            path: url.path().into(),
+            size: bytes.len() as u64,
+            sha256: hex_sha256(&bytes),
+        })
+    } else {
+        None
+    };
 
     let (kernel_file, kernel_size, kernel_sha256) = put_session_file_bytes_from_request(
         &state,
@@ -1894,6 +1954,8 @@ async fn put_http_boot_kernel(
             arch,
             image_format,
             entry_symbol,
+            initramfs,
+            cmdline,
         })
         .await;
 
@@ -2662,8 +2724,9 @@ mod tests {
         http::{Request, StatusCode, header},
     };
     use httpboot_protocol::{
-        BootArch, LoaderDiscoveryProbe, LoaderHardwareInfo, LoaderPollRequest, LoaderPollResponse,
-        LoaderStatusPhase, LoaderStatusReport, PROTOCOL_VERSION,
+        BootArch, LEGACY_PROTOCOL_VERSION, LoaderDiscoveryProbe, LoaderHardwareInfo,
+        LoaderPollRequest, LoaderPollResponse, LoaderStatusPhase, LoaderStatusReport,
+        PROTOCOL_VERSION,
     };
     use serde::Serialize;
     use serde_json::json;
@@ -2680,7 +2743,8 @@ mod tests {
 
     use super::{
         DTB_UPLOAD_MAX_MIB, ResolvedNetwork, boot_profile_with_resolved_network, build_router,
-        http_boot_url, mib_to_bytes, resolve_server_network, virtual_loader_is_bindable,
+        hex_sha256, http_boot_url, mib_to_bytes, resolve_server_network,
+        virtual_loader_is_bindable,
     };
     use crate::{
         api::models::{
@@ -4597,6 +4661,128 @@ mod tests {
         );
         assert_eq!(ready_value["kernel_size"], 10);
         assert!(ready_value["kernel_sha256"].as_str().unwrap().len() == 64);
+    }
+
+    #[tokio::test]
+    async fn network_loader_publishes_verified_host_payload_only_to_supported_version() {
+        let (app, state) = test_router_and_state_with_config(|_| {}).await;
+        let board = sample_httpboot_board("httpboot-initramfs");
+        let mac = board.network_identity.as_ref().unwrap().mac_address;
+        assert_eq!(
+            create_board(&app, serde_json::to_value(&board).unwrap()).await,
+            StatusCode::CREATED
+        );
+        let session_id = create_session(&app, &board.board_type).await;
+        let archive = b"initramfs-bytes";
+
+        let uploaded = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/files"))
+                    .header("X-File-Path", "initramfs.cpio")
+                    .body(Body::from(archive.to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(uploaded.status(), StatusCode::CREATED);
+
+        let too_long = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/kernel"))
+                    .header("X-HttpBoot-Arch", "x86_64")
+                    .header("X-HttpBoot-Image-Format", "elf64")
+                    .header("X-HttpBoot-Initramfs-Path", "initramfs.cpio")
+                    .header("X-HttpBoot-Cmdline", "x".repeat(4096))
+                    .body(Body::from("kernel-elf"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(too_long.status(), StatusCode::BAD_REQUEST);
+
+        let published = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/kernel"))
+                    .header("X-HttpBoot-Arch", "x86_64")
+                    .header("X-HttpBoot-Image-Format", "elf64")
+                    .header("X-HttpBoot-Initramfs-Path", "initramfs.cpio")
+                    .header("X-HttpBoot-Cmdline", "console=ttyS0 -- test")
+                    .body(Body::from("kernel-elf"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(published.status(), StatusCode::CREATED);
+
+        for version in [PROTOCOL_VERSION, LEGACY_PROTOCOL_VERSION] {
+            let probe = LoaderDiscoveryProbe {
+                protocol_version: version,
+                mac_address: mac,
+                current_mac_address: mac,
+                arch: BootArch::X86_64,
+                loader_version: "test-loader".into(),
+            };
+            let offer = state
+                .loader_registry
+                .offer(&probe, "http://127.0.0.1:2999".into())
+                .await
+                .unwrap();
+            assert_eq!(offer.protocol_version, version);
+            let request = LoaderPollRequest {
+                protocol_version: version,
+                registration_id: offer.registration_id,
+                mac_address: mac,
+                current_mac_address: mac,
+                ip_address: "10.77.0.2".into(),
+                arch: BootArch::X86_64,
+                loader_version: "test-loader".into(),
+                hardware: LoaderHardwareInfo::default(),
+            };
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/loaders/poll")
+                        .body(Body::from(serde_json::to_vec(&request).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let response: LoaderPollResponse = serde_json::from_slice(&body).unwrap();
+            if version == LEGACY_PROTOCOL_VERSION {
+                assert!(
+                    matches!(response, LoaderPollResponse::Reject { ref code, .. }
+                    if code == "boot_payload_unsupported")
+                );
+            } else {
+                let LoaderPollResponse::Boot {
+                    initramfs: Some(file),
+                    cmdline,
+                    ..
+                } = response
+                else {
+                    panic!("expected boot with verified initramfs");
+                };
+                assert_eq!(
+                    file.path,
+                    format!("/boot/sessions/{session_id}/initramfs.cpio")
+                );
+                assert_eq!(file.size, archive.len() as u64);
+                assert_eq!(file.sha256, hex_sha256(archive));
+                assert_eq!(cmdline.as_deref(), Some("console=ttyS0 -- test"));
+            }
+        }
     }
 
     #[tokio::test]

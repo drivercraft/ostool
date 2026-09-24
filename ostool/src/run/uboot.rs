@@ -63,6 +63,14 @@ use crate::{
 /// positive U-Boot timeout is configured.
 const DEFAULT_UBOOT_SHELL_TIMEOUT: Duration = Duration::from_secs(300);
 
+fn quote_uboot_bootargs(cmdline: &str) -> anyhow::Result<String> {
+    anyhow::ensure!(
+        !cmdline.contains('\''),
+        "U-Boot bootargs cannot contain single quotes"
+    );
+    Ok(format!("'{cmdline}'"))
+}
+
 async fn new_uboot_shell<Tx, Rx>(tx: Tx, rx: Rx, timeout: Duration) -> anyhow::Result<UbootShell>
 where
     Tx: futures::io::AsyncWrite + Send + Unpin + 'static,
@@ -76,6 +84,9 @@ where
 
 #[derive(Debug, Clone, Serialize, JsonSchema, Default)]
 pub struct UbootConfig {
+    /// Host initramfs and kernel command line.
+    #[serde(flatten)]
+    pub boot: crate::BootPayloadConfig,
     pub dtb_file: Option<String>,
     /// Kernel load address
     /// if not specified, use U-Boot env variable 'loadaddr'
@@ -106,6 +117,8 @@ pub struct UbootConfig {
 
 #[derive(Deserialize)]
 struct UbootConfigWire {
+    #[serde(flatten)]
+    boot: crate::BootPayloadConfig,
     dtb_file: Option<String>,
     kernel_load_addr: Option<String>,
     fit_load_addr: Option<String>,
@@ -133,6 +146,7 @@ impl<'de> Deserialize<'de> for UbootConfig {
         let wire = UbootConfigWire::deserialize(deserializer)?;
         reject_removed_uboot_key(&wire)?;
         Ok(Self {
+            boot: wire.boot,
             dtb_file: wire.dtb_file,
             kernel_load_addr: wire.kernel_load_addr,
             fit_load_addr: wire.fit_load_addr,
@@ -188,6 +202,7 @@ pub struct LocalUbootConfig {
 impl UbootConfig {
     pub fn from_board_run_config(config: &BoardRunConfig) -> Self {
         Self {
+            boot: config.boot.clone(),
             dtb_file: config.dtb_file.clone(),
             kernel_load_addr: config.kernel_load_addr.clone(),
             fit_load_addr: config.fit_load_addr.clone(),
@@ -201,6 +216,7 @@ impl UbootConfig {
     }
 
     fn replace_strings(&mut self, scope: &VariableScope) -> anyhow::Result<()> {
+        self.boot.replace_strings(scope)?;
         self.dtb_file = self
             .dtb_file
             .as_deref()
@@ -270,6 +286,7 @@ impl UbootConfig {
     }
 
     fn normalize(&mut self, config_name: &str) -> anyhow::Result<()> {
+        self.boot.validate()?;
         normalize_shell_check_steps(&mut self.shell_check_steps, config_name).map(drop)
     }
 
@@ -1310,6 +1327,7 @@ where
         let generated_fit = fit::generate_fit_image(FitInput {
             kernel_path: kernel.clone(),
             dtb_path: prepared_dtb.fit_source.clone(),
+            initramfs_path: self.config.boot.initramfs_path(),
             arch,
             kernel_load_addr: kernel_entry,
             kernel_entry_addr: kernel_entry,
@@ -1346,6 +1364,12 @@ where
             self.serial_bootm_command(bootm_arg)
         };
 
+        if let Some(cmdline) = self.config.boot.cmdline.as_deref() {
+            self.config.boot.validate()?;
+            uboot
+                .set_env("bootargs", quote_uboot_bootargs(cmdline)?)
+                .await?;
+        }
         info!("Booting kernel with command: {bootcmd}");
         uboot.cmd_without_reply(&bootcmd).await?;
 
@@ -1642,7 +1666,7 @@ mod tests {
     use super::{
         LocalBackend, LocalUbootConfig, Net, RemoteBackend, ResolvedRuntime, RunnerBackend,
         UbootConfig, build_network_boot_request, ensure_config_in_dir, fit_artifact_path,
-        timeout_duration, write_uboot_input,
+        quote_uboot_bootargs, timeout_duration, write_uboot_input,
     };
     use crate::{
         artifact::runtime::{RuntimeArtifactOptions, prepare_runtime_artifacts},
@@ -1655,6 +1679,15 @@ mod tests {
         invocation::{Invocation, InvocationOptions},
         run::{ShellCheckStep, tftp},
     };
+
+    #[test]
+    fn bootargs_quoting_preserves_linux_double_quotes() {
+        assert_eq!(
+            quote_uboot_bootargs("rdinit=\"/my init\" -- arg").unwrap(),
+            "'rdinit=\"/my init\" -- arg'"
+        );
+        assert!(quote_uboot_bootargs("name='literal'").is_err());
+    }
 
     fn make_invocation(dir: &std::path::Path) -> Invocation {
         Invocation::new(InvocationOptions::new(
@@ -2650,6 +2683,7 @@ board_power_off_cmd = "power-off-board"
     #[test]
     fn uboot_config_from_board_run_config_keeps_dtb_file() {
         let config = UbootConfig::from_board_run_config(&BoardRunConfig {
+            boot: Default::default(),
             board_type: "rk3568".into(),
             session_files: Vec::new(),
             dtb_file: Some("/tmp/board.dtb".into()),

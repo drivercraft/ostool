@@ -13,6 +13,9 @@ use crate::{
 #[derive(Debug, Clone, Serialize, JsonSchema, Default, PartialEq, Eq)]
 #[schemars(deny_unknown_fields)]
 pub struct BoardRunConfig {
+    /// Host initramfs and kernel command line.
+    #[serde(flatten)]
+    pub boot: crate::BootPayloadConfig,
     pub board_type: String,
     /// Files shared with the board for the duration of one session.
     ///
@@ -41,6 +44,10 @@ pub struct BoardRunConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BoardRunConfigWire {
+    #[serde(default)]
+    initramfs: Option<String>,
+    #[serde(default)]
+    cmdline: Option<String>,
     board_type: String,
     #[serde(default)]
     session_files: Vec<PathBuf>,
@@ -49,6 +56,9 @@ struct BoardRunConfigWire {
     fit_load_addr: Option<String>,
     bootm_addr: Option<String>,
     success_regex: Option<serde::de::IgnoredAny>,
+    shell_prefix: Option<serde::de::IgnoredAny>,
+    shell_init_cmd: Option<serde::de::IgnoredAny>,
+    shell_init_steps: Option<serde::de::IgnoredAny>,
     #[serde(default)]
     fail_regex: Vec<String>,
     #[serde(default)]
@@ -67,12 +77,23 @@ impl<'de> Deserialize<'de> for BoardRunConfig {
         D: Deserializer<'de>,
     {
         let wire = BoardRunConfigWire::deserialize(deserializer)?;
-        if wire.success_regex.is_some() {
-            return Err(serde::de::Error::custom(
-                "removed board config key `success_regex`; use `shell_check_steps`",
-            ));
+        for (key, present) in [
+            ("success_regex", wire.success_regex.is_some()),
+            ("shell_prefix", wire.shell_prefix.is_some()),
+            ("shell_init_cmd", wire.shell_init_cmd.is_some()),
+            ("shell_init_steps", wire.shell_init_steps.is_some()),
+        ] {
+            if present {
+                return Err(serde::de::Error::custom(format!(
+                    "removed board config key `{key}`; use `shell_check_steps`"
+                )));
+            }
         }
         Ok(Self {
+            boot: crate::BootPayloadConfig {
+                initramfs: wire.initramfs,
+                cmdline: wire.cmdline,
+            },
             board_type: wire.board_type,
             session_files: wire.session_files,
             dtb_file: wire.dtb_file,
@@ -168,6 +189,7 @@ impl BoardRunConfig {
     }
 
     fn replace_strings(&mut self, scope: &VariableScope) -> anyhow::Result<()> {
+        self.boot.replace_strings(scope)?;
         self.board_type = variables::expand_variables(&self.board_type, scope)?;
         self.dtb_file = self
             .dtb_file
@@ -216,6 +238,7 @@ impl BoardRunConfig {
     }
 
     fn normalize(&mut self, config_name: &str) -> anyhow::Result<()> {
+        self.boot.validate()?;
         self.board_type = self.board_type.trim().to_string();
         if let Some(dtb_file) = self.dtb_file.as_mut() {
             let trimmed = dtb_file.trim();
@@ -408,6 +431,36 @@ shell_check_steps = [
 
         assert_eq!(schema["additionalProperties"], false);
         assert!(schema["properties"].get("success_regex").is_none());
+    }
+
+    #[test]
+    fn board_run_config_rejects_unknown_fields_with_optional_boot_payload() {
+        let config: BoardRunConfig = toml::from_str(
+            r#"
+board_type = "orangepi-5-plus"
+initramfs = "host.cpio"
+cmdline = "console=ttyS0"
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.boot.initramfs.as_deref(), Some("host.cpio"));
+        assert_eq!(config.boot.cmdline.as_deref(), Some("console=ttyS0"));
+
+        let error = toml::from_str::<BoardRunConfig>(
+            r#"
+board_type = "orangepi-5-plus"
+initramfs = "real.cpio"
+initramf = "host.cpio"
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("initramf"), "{error}");
+
+        let error = serde_json::from_str::<BoardRunConfig>(
+            r#"{"board_type":"orangepi-5-plus","initramfs":"real.cpio","initramf":"host.cpio"}"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("initramf"), "{error}");
     }
 
     #[test]

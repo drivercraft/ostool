@@ -3,8 +3,9 @@ use std::{collections::BTreeMap, sync::Arc};
 use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
 use httpboot_protocol::{
-    LoaderDiscoveryOffer, LoaderDiscoveryProbe, LoaderHardwareInfo, LoaderPollRequest,
-    LoaderStatusReport, MAX_DISCOVERY_DATAGRAM_BYTES, MacAddress, PROTOCOL_VERSION,
+    LEGACY_PROTOCOL_VERSION, LoaderDiscoveryOffer, LoaderDiscoveryProbe, LoaderHardwareInfo,
+    LoaderPollRequest, LoaderStatusReport, MAX_DISCOVERY_DATAGRAM_BYTES, MacAddress,
+    PROTOCOL_VERSION,
 };
 use serde::Serialize;
 use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
@@ -32,6 +33,7 @@ pub struct LoaderDeviceSnapshot {
 #[derive(Debug, Clone)]
 struct Registration {
     mac_address: MacAddress,
+    protocol_version: u16,
     issued_at: DateTime<Utc>,
     last_seen_at: Option<DateTime<Utc>>,
     superseded_at: Option<DateTime<Utc>>,
@@ -153,7 +155,10 @@ impl LoaderRegistry {
         probe: &LoaderDiscoveryProbe,
         control_base_url: String,
     ) -> Result<LoaderDiscoveryOffer, RegistrationError> {
-        if probe.protocol_version != PROTOCOL_VERSION {
+        if !matches!(
+            probe.protocol_version,
+            LEGACY_PROTOCOL_VERSION | PROTOCOL_VERSION
+        ) {
             return Err(RegistrationError::ProtocolVersion);
         }
         let now = Utc::now();
@@ -164,13 +169,14 @@ impl LoaderRegistry {
             registration_id.clone(),
             Registration {
                 mac_address: probe.mac_address,
+                protocol_version: probe.protocol_version,
                 issued_at: now,
                 last_seen_at: None,
                 superseded_at: None,
             },
         );
         Ok(LoaderDiscoveryOffer {
-            protocol_version: PROTOCOL_VERSION,
+            protocol_version: probe.protocol_version,
             server_id: self.server_id.to_string(),
             control_base_url,
             registration_id,
@@ -182,7 +188,10 @@ impl LoaderRegistry {
         &self,
         request: &LoaderPollRequest,
     ) -> Result<bool, RegistrationError> {
-        if request.protocol_version != PROTOCOL_VERSION {
+        if !matches!(
+            request.protocol_version,
+            LEGACY_PROTOCOL_VERSION | PROTOCOL_VERSION
+        ) {
             return Err(RegistrationError::ProtocolVersion);
         }
         let now = Utc::now();
@@ -195,6 +204,9 @@ impl LoaderRegistry {
             .ok_or(RegistrationError::Unknown)?;
         if registration.mac_address != request.mac_address {
             return Err(RegistrationError::MacMismatch);
+        }
+        if registration.protocol_version != request.protocol_version {
+            return Err(RegistrationError::ProtocolVersion);
         }
         if registration.last_seen_at.is_none() && now - registration.issued_at > REGISTRATION_TTL {
             return Err(RegistrationError::Expired);
@@ -264,7 +276,10 @@ impl LoaderRegistry {
         &self,
         report: &LoaderStatusReport,
     ) -> Result<(), RegistrationError> {
-        if report.protocol_version != PROTOCOL_VERSION {
+        if !matches!(
+            report.protocol_version,
+            LEGACY_PROTOCOL_VERSION | PROTOCOL_VERSION
+        ) {
             return Err(RegistrationError::ProtocolVersion);
         }
         let now = Utc::now();
@@ -276,6 +291,9 @@ impl LoaderRegistry {
             .ok_or(RegistrationError::Unknown)?;
         if registration.mac_address != report.mac_address {
             return Err(RegistrationError::MacMismatch);
+        }
+        if registration.protocol_version != report.protocol_version {
+            return Err(RegistrationError::ProtocolVersion);
         }
         if registration.superseded_at.is_some() {
             state
