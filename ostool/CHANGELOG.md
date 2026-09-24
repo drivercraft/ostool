@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.0](https://github.com/drivercraft/ostool/compare/ostool-v0.29.5...ostool-v0.30.0) - 2026-09-24
+
+### Added
+
+- *(ostool)* 支持可选 ELF 调试产物与元数据解析 ([#193](https://github.com/drivercraft/ostool/pull/193))
+
 ## [0.29.5](https://github.com/drivercraft/ostool/compare/ostool-v0.29.4...ostool-v0.29.5) - 2026-09-21
 
 ### Fixed

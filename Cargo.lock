@@ -2707,7 +2707,7 @@ dependencies = [
 
 [[package]]
 name = "ostool"
-version = "0.29.5"
+version = "0.30.0"
 dependencies = [
  "anyhow",
  "async-trait",
