@@ -282,8 +282,8 @@ impl StandardFdtBuilder {
         self.begin_node(name)?;
         self.add_property_string("description", "Ramdisk Image")?;
         self.add_property_string("type", "ramdisk")?;
-        self.add_property_string("arch", "arm64")?;
-        self.add_property_string("os", "linux")?;
+        self.add_property_string("arch", component.arch.as_deref().unwrap_or("arm64"))?;
+        self.add_property_string("os", component.os.as_deref().unwrap_or("linux"))?;
         // Use custom compression if provided, otherwise default
         if component.compression {
             self.add_property_string("compression", "gzip")?;

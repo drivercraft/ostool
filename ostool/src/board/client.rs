@@ -131,6 +131,8 @@ pub struct HttpBootKernelUpload {
     pub image_format: String,
     pub entry_symbol: Option<String>,
     pub bytes: Vec<u8>,
+    pub initramfs: Option<Vec<u8>>,
+    pub cmdline: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -536,6 +538,11 @@ impl BoardServerClient {
         session_id: &str,
         upload: HttpBootKernelUpload,
     ) -> Result<KernelPublishResponse, BoardServerClientError> {
+        let has_initramfs = upload.initramfs.is_some();
+        if let Some(archive) = upload.initramfs {
+            self.upload_http_boot_file(session_id, "initramfs.cpio", archive)
+                .await?;
+        }
         let mut request = self
             .request(
                 Method::PUT,
@@ -547,6 +554,12 @@ impl BoardServerClient {
             .header("X-HttpBoot-Image-Format", upload.image_format);
         if let Some(entry_symbol) = upload.entry_symbol {
             request = request.header("X-HttpBoot-Entry-Symbol", entry_symbol);
+        }
+        if has_initramfs {
+            request = request.header("X-HttpBoot-Initramfs-Path", "initramfs.cpio");
+        }
+        if let Some(cmdline) = upload.cmdline {
+            request = request.header("X-HttpBoot-Cmdline", cmdline);
         }
         let response = request
             .body(upload.bytes)

@@ -122,6 +122,8 @@ pub struct SessionBootCommand {
     pub arch: BootArch,
     pub image_format: ImageFormat,
     pub entry_symbol: Option<String>,
+    pub initramfs: Option<httpboot_protocol::BootFile>,
+    pub cmdline: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -418,6 +420,8 @@ mod tests {
             arch: BootArch::X86_64,
             image_format: ImageFormat::Elf64,
             entry_symbol: None,
+            initramfs: None,
+            cmdline: None,
         };
         state.publish_boot_command(command("boot-1")).await;
         state

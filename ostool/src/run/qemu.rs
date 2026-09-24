@@ -78,6 +78,9 @@ enum UefiBootConfig {
 /// This configuration is typically loaded from a `.qemu.toml` file.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq, Default)]
 pub struct QemuConfig {
+    /// Host initramfs and kernel command line.
+    #[serde(flatten)]
+    pub boot: crate::BootPayloadConfig,
     /// Additional QEMU command-line arguments.
     pub args: Vec<String>,
     /// Whether to use UEFI boot via OVMF firmware.
@@ -99,6 +102,8 @@ pub struct QemuConfig {
 
 #[derive(Deserialize)]
 struct QemuConfigWire {
+    #[serde(flatten)]
+    boot: crate::BootPayloadConfig,
     args: Vec<String>,
     uefi: bool,
     #[serde(default)]
@@ -120,6 +125,7 @@ impl<'de> Deserialize<'de> for QemuConfig {
         let wire = QemuConfigWire::deserialize(deserializer)?;
         reject_removed_qemu_shell_key(&wire)?;
         Ok(Self {
+            boot: wire.boot,
             args: wire.args,
             uefi: wire.uefi,
             to_bin: wire.to_bin,
@@ -150,6 +156,7 @@ where
 
 impl QemuConfig {
     fn replace_strings(&mut self, scope: &VariableScope) -> anyhow::Result<()> {
+        self.boot.replace_strings(scope)?;
         self.args = self
             .args
             .iter()
@@ -167,6 +174,7 @@ impl QemuConfig {
     }
 
     fn normalize(&mut self, config_name: &str) -> anyhow::Result<()> {
+        self.boot.validate()?;
         normalize_shell_check_steps(&mut self.shell_check_steps, config_name).map(drop)
     }
 
@@ -458,6 +466,7 @@ struct QemuRunner {
 impl QemuRunner {
     async fn run(&mut self) -> anyhow::Result<()> {
         self.prepare_regex()?;
+        self.config.boot.validate()?;
 
         let detected_arch = self.input.arch.ok_or_else(|| {
             anyhow!("Please specify `arch` in QEMU config or provide a valid ELF file.")
@@ -506,10 +515,27 @@ impl QemuRunner {
                 } => Some(QemuBootSource::uefi_pflash(code, vars, esp_dir)),
             }
         } else {
-            self.input
-                .artifacts
-                .runtime_image()
-                .map(|path| QemuBootSource::direct_kernel_loader(path.to_path_buf()))
+            if (self.config.boot.initramfs.is_some() || self.config.boot.cmdline.is_some())
+                && !matches!(detected_arch, Architecture::Aarch64 | Architecture::Riscv64)
+            {
+                anyhow::bail!(
+                    "direct QEMU host initramfs/cmdline handoff is unsupported for {detected_arch:?}; use UEFI boot"
+                );
+            }
+            let initramfs = self
+                .config
+                .boot
+                .initramfs_path()
+                .map(|path| {
+                    path.canonicalize().with_context(|| {
+                        format!("failed to open host initramfs {}", path.display())
+                    })
+                })
+                .transpose()?;
+            self.input.artifacts.runtime_image().map(|path| {
+                QemuBootSource::direct_kernel_loader(path.to_path_buf())
+                    .with_boot_payload(initramfs, self.config.boot.cmdline.clone())
+            })
         };
 
         let plan = build_qemu_command_plan(QemuCommandPlanInput {
@@ -700,6 +726,41 @@ impl QemuRunner {
                 boot_path.display()
             )
         })?;
+
+        for (source, filename) in [
+            (self.config.boot.initramfs.as_deref(), "initramfs.cpio"),
+            (self.config.boot.cmdline.as_deref(), "cmdline.txt"),
+        ] {
+            let destination = boot_dir.join(filename);
+            match source {
+                Some(value) if filename == "initramfs.cpio" => {
+                    let path = Path::new(value);
+                    anyhow::ensure!(
+                        fs::metadata(path).await?.len() > 0,
+                        "host initramfs is empty: {}",
+                        path.display()
+                    );
+                    fs::copy(path, &destination).await.with_context(|| {
+                        format!("failed to stage host initramfs {}", path.display())
+                    })?;
+                }
+                Some(value) => fs::write(&destination, value).await.with_context(|| {
+                    format!(
+                        "failed to stage host kernel command line to {}",
+                        destination.display()
+                    )
+                })?,
+                None => {
+                    if let Err(err) = fs::remove_file(&destination).await
+                        && err.kind() != std::io::ErrorKind::NotFound
+                    {
+                        return Err(err).with_context(|| {
+                            format!("failed to remove {}", destination.display())
+                        });
+                    }
+                }
+            }
+        }
 
         Ok(esp_dir)
     }

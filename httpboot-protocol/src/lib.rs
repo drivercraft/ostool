@@ -8,9 +8,19 @@ use core::{fmt, str::FromStr};
 #[cfg(feature = "alloc")]
 use alloc::{string::String, vec::Vec};
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
+pub const LEGACY_PROTOCOL_VERSION: u16 = 2;
+pub const MAX_HOST_CMDLINE_BYTES: usize = 4095;
+pub const MAX_HTTP_BOOT_INITRAMFS_BYTES: usize = 256 * 1024 * 1024;
 pub const DISCOVERY_PORT: u16 = 2998;
 pub const MAX_DISCOVERY_DATAGRAM_BYTES: usize = 1400;
+
+pub fn valid_host_cmdline(value: &str) -> bool {
+    value.len() <= MAX_HOST_CMDLINE_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte == b' ' || byte.is_ascii_graphic())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MacAddress([u8; 6]);
@@ -200,12 +210,24 @@ pub enum LoaderPollResponse {
         arch: BootArch,
         image_format: ImageFormat,
         entry_symbol: Option<String>,
+        initramfs: Option<BootFile>,
+        cmdline: Option<String>,
     },
     Reject {
         code: String,
         message: String,
         retry_after_ms: Option<u64>,
     },
+}
+
+/// A session-scoped boot file authenticated before kernel handoff.
+#[cfg(feature = "alloc")]
+#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootFile {
+    pub path: String,
+    pub size: u64,
+    pub sha256: String,
 }
 
 #[cfg(feature = "alloc")]
@@ -371,6 +393,12 @@ mod tests {
             arch: BootArch::X86_64,
             image_format: ImageFormat::Elf64,
             entry_symbol: Some("httpboot_entry".into()),
+            initramfs: Some(BootFile {
+                path: "/boot/sessions/session-1/initramfs.cpio".into(),
+                size: 1024,
+                sha256: "11".repeat(32),
+            }),
+            cmdline: Some("root=/dev/vda".into()),
         };
         let bytes = serde_json::to_vec(&response).unwrap();
         assert_eq!(

@@ -286,6 +286,10 @@ args = ["-machine", "virt", "-cpu", "cortex-a57", "-nographic"]
 # 启用 UEFI 引导
 uefi = false
 
+# 可选：宿主镜像和传给宿主内核的命令行
+initramfs = "images/host.cpio.gz"
+cmdline = "console=ttyAMA0 rdinit=/init -- rescue"
+
 # 可选兼容字段。UEFI QEMU 会自动准备所需 BIN。
 to_bin = false
 
@@ -307,6 +311,10 @@ baud_rate = "115200"
 # 设备树文件（可选）
 dtb_file = "tools/device_tree.dtb"
 
+# 可选：FIT ramdisk 和 U-Boot bootargs
+initramfs = "images/host.cpio.gz"
+cmdline = "console=ttyS0 rdinit=/init"
+
 # 内核加载地址（可选）
 kernel_load_addr = "0x80080000"
 
@@ -324,6 +332,8 @@ fail_regex = ["Boot failed", "Error loading kernel"]
 interface = "eth0"
 board_ip = "192.168.1.100"
 ```
+
+`BootPayloadConfig` 的 `initramfs` 是宿主归档，与 Linux guest 的 initrd 分开配置。QEMU 直启仅在 AArch64/RISC-V 路径使用 `-initrd` 和 `-append`；x86 使用 UEFI ESP 中的 `EFI/BOOT/initramfs.cpio`、`cmdline.txt`，不向裸 ELF 传 Linux x86 启动协议参数。U-Boot 的 `generate_fit_image()` 将归档作为 FIT ramdisk，并在启动前设置 `bootargs`；串口命令路径暂不接受含单引号的 `cmdline`。board HTTP Boot 将归档和内核上传到同一 session，服务端校验文件大小与 SHA-256 后仅向协议 v3 loader 提供归档，且归档上限为 256 MiB、cmdline 上限为 4095 字节；v2 loader 仍可启动不带宿主归档且不带新 cmdline 的旧会话，带任一新字段的启动会被拒绝。实体板卡的固件和内核须实现对应交接协议。
 
 ### 有序 Shell 初始化步骤
 

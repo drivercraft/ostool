@@ -13,6 +13,7 @@ use crate::utils::PathResultExt;
 
 const KERNEL_COMPONENT_NAME: &str = "kernel";
 const FDT_COMPONENT_NAME: &str = "fdt";
+const RAMDISK_COMPONENT_NAME: &str = "ramdisk";
 const DEFAULT_CONFIG_NAME: &str = "config-ostool";
 const FIT_DESCRIPTION: &str = "Various kernels, ramdisks and FDT blobs";
 const FIT_IMAGE_NAME: &str = "image.fit";
@@ -32,6 +33,7 @@ mod errors {
 pub(crate) struct FitInput {
     pub(crate) kernel_path: PathBuf,
     pub(crate) dtb_path: Option<PathBuf>,
+    pub(crate) initramfs_path: Option<PathBuf>,
     pub(crate) arch: Architecture,
     pub(crate) kernel_load_addr: u64,
     pub(crate) kernel_entry_addr: u64,
@@ -88,11 +90,22 @@ pub(crate) async fn generate_fit_image(input: FitInput) -> anyhow::Result<Genera
         warn!("未指定 DTB 文件，将生成仅包含 kernel 的 FIT image");
         None
     };
+    let initramfs_data = match input.initramfs_path.as_ref() {
+        Some(path) => {
+            let data = fs::read(path)
+                .await
+                .with_path("failed to read initramfs", path)?;
+            anyhow::ensure!(!data.is_empty(), "initramfs is empty: {}", path.display());
+            Some(data)
+        }
+        None => None,
+    };
 
     let config = build_default_fit_config(
         arch_name,
         kernel_data,
         dtb_data,
+        initramfs_data,
         input.kernel_load_addr,
         kernel_entry_addr,
         input.fdt_load_addr,
@@ -174,6 +187,7 @@ fn build_default_fit_config(
     arch_name: &'static str,
     kernel_data: Vec<u8>,
     dtb_data: Option<Vec<u8>>,
+    initramfs_data: Option<Vec<u8>>,
     kernel_load_addr: u64,
     kernel_entry_addr: u64,
     fdt_load_addr: Option<u64>,
@@ -205,6 +219,19 @@ fn build_default_fit_config(
         None
     };
 
+    let ramdisk_name = if let Some(data) = initramfs_data {
+        config = config.with_ramdisk(
+            ComponentConfig::new(RAMDISK_COMPONENT_NAME, data)
+                .with_type("ramdisk")
+                .with_arch(arch_name)
+                .with_os("linux")
+                .with_compression(false),
+        );
+        Some(RAMDISK_COMPONENT_NAME)
+    } else {
+        None
+    };
+
     config
         .with_default_config(DEFAULT_CONFIG_NAME)
         .with_configuration(
@@ -212,7 +239,7 @@ fn build_default_fit_config(
             "ostool configuration",
             Some(KERNEL_COMPONENT_NAME),
             fdt_name,
-            None::<String>,
+            ramdisk_name,
         )
 }
 
@@ -272,7 +299,8 @@ mod tests {
 
     #[test]
     fn default_fit_config_keeps_linux_kernel_defaults_without_dtb() {
-        let config = build_default_fit_config("arm64", vec![1, 2, 3], None, 0x80000, 0x80000, None);
+        let config =
+            build_default_fit_config("arm64", vec![1, 2, 3], None, None, 0x80000, 0x80000, None);
         let kernel = config.kernel.as_ref().unwrap();
 
         assert_eq!(
@@ -300,6 +328,7 @@ mod tests {
             "riscv",
             vec![1, 2, 3],
             Some(vec![4, 5, 6]),
+            None,
             0x8020_0000,
             0x8020_0000,
             Some(0x8800_0000),
@@ -314,6 +343,25 @@ mod tests {
         assert_eq!(default_config.fdt.as_deref(), Some("fdt"));
     }
 
+    #[test]
+    fn default_fit_config_links_initramfs_for_target_architecture() {
+        let config = build_default_fit_config(
+            "riscv",
+            vec![1, 2, 3],
+            None,
+            Some(vec![4, 5, 6]),
+            0x8020_0000,
+            0x8020_0000,
+            None,
+        );
+        let ramdisk = config.ramdisk.as_ref().unwrap();
+        let selected = config.configurations.get("config-ostool").unwrap();
+        assert_eq!(ramdisk.data, [4, 5, 6]);
+        assert_eq!(ramdisk.arch.as_deref(), Some("riscv"));
+        assert!(!ramdisk.compression);
+        assert_eq!(selected.ramdisk.as_deref(), Some("ramdisk"));
+    }
+
     #[tokio::test]
     async fn generate_fit_image_writes_default_output_path() {
         let temp = tempfile::tempdir().unwrap();
@@ -325,6 +373,7 @@ mod tests {
         let generated = super::generate_fit_image(FitInput {
             kernel_path: kernel_path.clone(),
             dtb_path: None,
+            initramfs_path: None,
             arch: Architecture::Aarch64,
             kernel_load_addr: 0x80000,
             kernel_entry_addr: 0x80000,
@@ -354,6 +403,7 @@ mod tests {
         let generated = super::generate_fit_image(FitInput {
             kernel_path,
             dtb_path: Some(dtb_path),
+            initramfs_path: None,
             arch: Architecture::Riscv64,
             kernel_load_addr: 0x8020_0000,
             kernel_entry_addr: 0x8020_0000,

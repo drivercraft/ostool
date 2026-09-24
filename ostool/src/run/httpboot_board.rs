@@ -84,6 +84,24 @@ impl HttpBootBoardRunner {
         let kernel_bytes =
             fs::read(elf_path).with_context(|| format!("failed to read {}", elf_path.display()))?;
         let kernel_sha256 = hex_sha256(&kernel_bytes);
+        let initramfs = match self.board_config.boot.initramfs_path() {
+            Some(path) => {
+                let bytes = fs::read(&path)
+                    .with_context(|| format!("failed to read host initramfs {}", path.display()))?;
+                anyhow::ensure!(
+                    !bytes.is_empty(),
+                    "host initramfs is empty: {}",
+                    path.display()
+                );
+                anyhow::ensure!(
+                    bytes.len() <= httpboot_protocol::MAX_HTTP_BOOT_INITRAMFS_BYTES,
+                    "host initramfs exceeds HTTP Boot loader limit: {}",
+                    path.display()
+                );
+                Some(bytes)
+            }
+            None => None,
+        };
         let upload = self
             .client
             .upload_http_boot_kernel(
@@ -94,6 +112,8 @@ impl HttpBootBoardRunner {
                     image_format: "elf64".into(),
                     entry_symbol: Some("httpboot_entry".into()),
                     bytes: kernel_bytes,
+                    initramfs,
+                    cmdline: self.board_config.boot.cmdline.clone(),
                 },
             )
             .await

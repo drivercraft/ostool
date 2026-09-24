@@ -14,6 +14,8 @@ use crate::{process::ProcessContext, utils::Command};
 pub(crate) enum QemuBootSource {
     DirectKernelLoader {
         path: PathBuf,
+        initramfs: Option<PathBuf>,
+        cmdline: Option<String>,
     },
     UefiPflash {
         code: PathBuf,
@@ -24,7 +26,28 @@ pub(crate) enum QemuBootSource {
 
 impl QemuBootSource {
     pub(crate) fn direct_kernel_loader(path: impl Into<PathBuf>) -> Self {
-        Self::DirectKernelLoader { path: path.into() }
+        Self::DirectKernelLoader {
+            path: path.into(),
+            initramfs: None,
+            cmdline: None,
+        }
+    }
+
+    pub(crate) fn with_boot_payload(
+        mut self,
+        initramfs: Option<PathBuf>,
+        cmdline: Option<String>,
+    ) -> Self {
+        if let Self::DirectKernelLoader {
+            initramfs: archive,
+            cmdline: args,
+            ..
+        } = &mut self
+        {
+            *archive = initramfs;
+            *args = cmdline;
+        }
+        self
     }
 
     pub(crate) fn uefi_pflash(
@@ -41,9 +64,21 @@ impl QemuBootSource {
 
     fn append_args(&self, args: &mut Vec<OsString>) {
         match self {
-            Self::DirectKernelLoader { path } => {
+            Self::DirectKernelLoader {
+                path,
+                initramfs,
+                cmdline,
+            } => {
                 args.push("-kernel".into());
                 args.push(path.as_os_str().to_os_string());
+                if let Some(initramfs) = initramfs {
+                    args.push("-initrd".into());
+                    args.push(initramfs.as_os_str().to_os_string());
+                }
+                if let Some(cmdline) = cmdline {
+                    args.push("-append".into());
+                    args.push(cmdline.into());
+                }
             }
             Self::UefiPflash {
                 code,
@@ -173,6 +208,30 @@ mod tests {
                 "virt",
                 "-kernel",
                 "target/kernel.elf",
+            ]
+        );
+    }
+
+    #[test]
+    fn plan_renders_host_payload_for_direct_kernel_boot() {
+        let args = plan_args(QemuCommandPlanInput {
+            boot_source: Some(
+                QemuBootSource::direct_kernel_loader("target/kernel.elf").with_boot_payload(
+                    Some("target/root.cpio.gz".into()),
+                    Some("root=/dev/vda".into()),
+                ),
+            ),
+            ..base_input()
+        });
+        assert_eq!(
+            &args[args.len() - 6..],
+            [
+                "-kernel",
+                "target/kernel.elf",
+                "-initrd",
+                "target/root.cpio.gz",
+                "-append",
+                "root=/dev/vda"
             ]
         );
     }
