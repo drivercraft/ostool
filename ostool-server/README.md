@@ -7,6 +7,7 @@ It provides:
 - board allocation and lease management
 - remote serial terminal access
 - TFTP session file handling
+- HTTP network throughput tests on a dedicated port
 - a systemd-friendly deployment model on Linux
 
 ## Serial transport
@@ -124,6 +125,13 @@ The default listen address is:
 0.0.0.0:2999
 ```
 
+The network throughput test listener is enabled by default on `0.0.0.0:3000`.
+It has a separate router from the management listener, so board management,
+session file uploads, and `/admin/` stay on port 2999. The test listener has no
+authentication and should only be reachable from a trusted LAN. Its address,
+concurrency limit, and maximum test duration can be changed in the server TOML
+configuration; see [the network test API](../docs/api.md#网络吞吐测试-api).
+
 HTTP Boot is enabled by default. Uploaded UEFI HTTP Boot artifacts reuse the
 existing session file storage and lifecycle, so files are scoped to the active
 board session and are cleaned up with that session.
@@ -139,6 +147,66 @@ with `kind = "httpboot"`, `network_identity.mac_address`, and, when needed,
 `boot_arch`. The server binds each UDP/HTTP loader registration to the board by
 its persisted permanent MAC address. Boot manifests and status reports stay in
 the active session; serial is used only for target-system interaction.
+
+## Network throughput tests
+
+The dedicated HTTP listener measures raw upload and download streams without
+installing a client. It does not implement the iperf2 protocol. A test ID holds
+separate upload and download results, and both directions may run concurrently
+under the same ID. Upload bytes are counted and discarded without being stored;
+download data is generated while the connection is writable. Neither direction
+has a fixed byte-count limit. The default limit is 64 test IDs with active
+transfers and one hour per transfer; creating an ID does not use a transfer
+slot. Pending IDs expire after 10 minutes; finished results remain
+queryable for one hour, up to 4096 records.
+
+Existing config files can omit the `[network_test]` section and use these
+defaults. To override them, add the section to `/etc/ostool-server/config.toml`
+and restart the service:
+
+```toml
+[network_test]
+enabled = true
+listen_addr = "0.0.0.0:3000"
+max_active_tests = 64
+max_duration_secs = 3600
+```
+
+Create a test, then use its returned `test_id` in these commands. The examples
+transfer 1 GiB per direction and discard the downloaded data locally:
+
+```bash
+base=http://10.3.10.194:3000
+curl -fsS -X POST "$base/v1/tests"
+test_id='UUID_FROM_POST_RESPONSE'
+dd if=/dev/zero bs=1M count=1024 status=none | curl -fsS -T - "$base/v1/tests/$test_id/upload"
+curl -fsS "$base/v1/tests/$test_id/download?bytes=1073741824" -o /dev/null
+curl -fsS "$base/v1/tests/$test_id"
+```
+
+For a simultaneous two-way test, start upload and download on the same ID and
+wait for both requests before reading the final result. Create a fresh test ID
+and replace the placeholder before running these commands:
+
+```bash
+curl -fsS -X POST "$base/v1/tests"
+test_id='UUID_FROM_NEW_POST_RESPONSE'
+dd if=/dev/zero bs=1M count=1024 status=none | curl -fsS -T - "$base/v1/tests/$test_id/upload" &
+upload_pid=$!
+curl -fsS "$base/v1/tests/$test_id/download?duration_secs=30" -o /dev/null &
+download_pid=$!
+wait "$upload_pid"
+wait "$download_pid"
+curl -fsS "$base/v1/tests/$test_id"
+```
+
+An upload or download can be started only once for each test ID. A canceled
+connection, network error, or time limit leaves a queryable terminal result.
+An upload that reaches the time limit returns HTTP 408 when the connection is
+still open. A byte-count download interrupted by the time limit ends its body;
+query the test ID for `timed_out` and compare bytes received by the client.
+Use `GET /healthz` on port 3000 to check the test listener. These endpoints are
+independent of board session file uploads, which remain on port 2999.
 
 ## Useful Commands
 

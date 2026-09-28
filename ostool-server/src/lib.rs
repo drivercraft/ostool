@@ -10,6 +10,7 @@ pub mod config;
 pub mod dtb_store;
 pub mod http_boot;
 pub mod loader;
+pub mod network_test;
 pub mod power;
 pub mod process;
 pub mod serial;

@@ -120,6 +120,7 @@ fn spawn_test_server_with_power_on(
 
     let config = ServerConfig {
         listen_addr: "127.0.0.1:0".parse().unwrap(),
+        network_test: ostool_server::config::NetworkTestConfig::default(),
         data_dir,
         board_dir: board_dir.clone(),
         dtb_dir,

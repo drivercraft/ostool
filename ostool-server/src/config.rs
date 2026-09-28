@@ -17,6 +17,8 @@ const SYSTEM_DATA_DIR: &str = "/var/lib/ostool-server";
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ServerConfig {
     pub listen_addr: SocketAddr,
+    #[serde(default)]
+    pub network_test: NetworkTestConfig,
     pub data_dir: PathBuf,
     pub board_dir: PathBuf,
     pub dtb_dir: PathBuf,
@@ -62,6 +64,7 @@ impl ServerConfig {
 
         Self {
             listen_addr: SocketAddr::from(([0, 0, 0, 0], 2999)),
+            network_test: NetworkTestConfig::default(),
             data_dir,
             board_dir,
             dtb_dir,
@@ -184,6 +187,7 @@ impl ServerConfig {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        self.network_test.validate(self.listen_addr)?;
         if self.network.interface.trim().is_empty() {
             bail!(
                 "network.interface must be configured or auto-detected from a non-loopback interface"
@@ -206,6 +210,41 @@ impl ServerConfig {
             }
         }
         self.virtual_qemu.validate()?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct NetworkTestConfig {
+    pub enabled: bool,
+    pub listen_addr: SocketAddr,
+    pub max_active_tests: usize,
+    pub max_duration_secs: u64,
+}
+
+impl Default for NetworkTestConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            listen_addr: SocketAddr::from(([0, 0, 0, 0], 3000)),
+            max_active_tests: 64,
+            max_duration_secs: 3600,
+        }
+    }
+}
+
+impl NetworkTestConfig {
+    fn validate(&self, management_addr: SocketAddr) -> anyhow::Result<()> {
+        if self.listen_addr.port() == management_addr.port() {
+            bail!("network_test.listen_addr must use a different port from listen_addr");
+        }
+        if self.max_active_tests == 0 {
+            bail!("network_test.max_active_tests must be greater than 0");
+        }
+        if self.max_duration_secs == 0 {
+            bail!("network_test.max_duration_secs must be greater than 0");
+        }
         Ok(())
     }
 }
@@ -702,6 +741,13 @@ mod tests {
         let encoded = toml::to_string_pretty(&config).unwrap();
         let decoded: ServerConfig = toml::from_str(&encoded).unwrap();
         assert_eq!(decoded.listen_addr, SocketAddr::from(([0, 0, 0, 0], 2999)));
+        assert_eq!(
+            decoded.network_test.listen_addr,
+            SocketAddr::from(([0, 0, 0, 0], 3000))
+        );
+        assert!(decoded.network_test.enabled);
+        assert_eq!(decoded.network_test.max_active_tests, 64);
+        assert_eq!(decoded.network_test.max_duration_secs, 3600);
         assert_eq!(decoded.network.interface, "");
         assert_eq!(decoded.upload_limits.session_file_max_mib, 64);
         assert!(decoded.dtb_dir.ends_with("dtbs"));
@@ -730,6 +776,51 @@ interface = "eth0"
         .unwrap();
 
         assert_eq!(decoded.upload_limits.session_file_max_mib, 64);
+        assert!(decoded.network_test.enabled);
+        assert_eq!(decoded.network_test.listen_addr.port(), 3000);
+    }
+
+    #[test]
+    fn network_test_config_accepts_partial_table_and_rejects_invalid_values() {
+        let config = ServerConfig::default();
+        let encoded = toml::to_string_pretty(&config).unwrap();
+        let mut value: toml::Value = toml::from_str(&encoded).unwrap();
+        let mut network_test = toml::map::Map::new();
+        network_test.insert("max_active_tests".into(), toml::Value::Integer(8));
+        value
+            .as_table_mut()
+            .unwrap()
+            .insert("network_test".into(), toml::Value::Table(network_test));
+        let partial = toml::to_string(&value).unwrap();
+        let mut decoded: ServerConfig = toml::from_str(&partial).unwrap();
+        assert_eq!(decoded.network_test.max_active_tests, 8);
+
+        decoded.network_test.max_active_tests = 0;
+        assert!(
+            decoded
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("max_active_tests")
+        );
+        decoded.network_test.max_active_tests = 64;
+        decoded.network_test.max_duration_secs = 0;
+        assert!(
+            decoded
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("max_duration_secs")
+        );
+        decoded.network_test.max_duration_secs = 3600;
+        decoded.network_test.listen_addr = "127.0.0.1:2999".parse().unwrap();
+        assert!(
+            decoded
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("different port")
+        );
     }
 
     #[test]

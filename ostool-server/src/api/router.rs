@@ -2782,6 +2782,7 @@ mod tests {
     fn test_server_config(root: &std::path::Path) -> ServerConfig {
         ServerConfig {
             listen_addr: "127.0.0.1:0".parse().unwrap(),
+            network_test: crate::config::NetworkTestConfig::default(),
             data_dir: root.join("data"),
             board_dir: root.join("boards"),
             dtb_dir: root.join("dtbs"),
