@@ -23,7 +23,7 @@ serde_json = "1"
 toml = "1.0"
 url = {version = "2", features = ["serde"]}
 
-httpboot-protocol = { version = "0.2", path = "./httpboot-protocol" }
+httpboot-protocol = { version = "0.3", path = "./httpboot-protocol" }
 
 # Error handling
 thiserror = "2"

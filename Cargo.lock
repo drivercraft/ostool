@@ -1239,7 +1239,7 @@ checksum = "9844ddc3a6e533d62bba727eb6c28b5d360921d5175e9ff0f1e621a5c590a4d5"
 
 [[package]]
 name = "fitimage"
-version = "0.1.6"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -1636,7 +1636,7 @@ checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
 name = "httpboot-protocol"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2707,7 +2707,7 @@ dependencies = [
 
 [[package]]
 name = "ostool"
-version = "0.29.5"
+version = "0.30.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2754,7 +2754,7 @@ dependencies = [
 
 [[package]]
 name = "ostool-server"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-trait",

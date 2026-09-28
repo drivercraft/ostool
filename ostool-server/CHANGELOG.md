@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/drivercraft/ostool/compare/ostool-server-v0.7.3...ostool-server-v0.8.0) - 2026-09-28
+
+### Added
+
+- *(ostool-server)* add dedicated network throughput tests ([#197](https://github.com/drivercraft/ostool/pull/197))
+- *(boot)* [**breaking**] add host initramfs handoff across runners ([#194](https://github.com/drivercraft/ostool/pull/194))
+
 ## [0.7.3](https://github.com/drivercraft/ostool/compare/ostool-server-v0.7.2...ostool-server-v0.7.3) - 2026-09-17
 
 ### Fixed

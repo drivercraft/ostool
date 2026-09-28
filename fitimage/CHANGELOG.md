@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/drivercraft/ostool/compare/fitimage-v0.1.6...fitimage-v0.2.0) - 2026-09-28
+
+### Added
+
+- *(boot)* [**breaking**] add host initramfs handoff across runners ([#194](https://github.com/drivercraft/ostool/pull/194))
+
 ## [0.1.6](https://github.com/drivercraft/ostool/compare/fitimage-v0.1.5...fitimage-v0.1.6) - 2026-07-17
 
 ### Fixed
