@@ -1,6 +1,6 @@
 # axloader 网络控制与虚拟板
 
-本文说明 `httpboot-protocol` v3、`axloader`、`ostool-server`、`ostool` CLI 和管理页面之间的网络启动契约。服务端仍接受不使用宿主 initramfs/cmdline 的 v2 loader；该契约不兼容旧版串口 `READY/BOOT` 协议。
+本文说明 `httpboot-protocol` v4、`axloader`、`ostool-server`、`ostool` CLI 和管理页面之间的网络启动及装载器升级契约。服务端继续接受 v2/v3 原有启动请求，只有 v4 可以接收 OTA 任务；旧串口 `READY/BOOT` 协议不受支持。
 
 ## 设计边界
 
@@ -8,7 +8,7 @@
 - `BoardConfig.network_identity.mac_address` 是板卡和配置之间唯一持久绑定；探测记录只驻留内存。
 - `board_type`、板卡 ID、电源、串口和启动配置始终由管理员填写。SMBIOS 仅辅助辨认硬件，不推断 `board_type`。
 - MAC 是绑定键，不是认证凭据。当前协议用于受信实验室二层网络；HTTP 和镜像 SHA-256 不抵抗同网段主动攻击。
-- 服务重启后会重新读取板卡 TOML，但不恢复旧 Session、启动清单、loader 状态或客户端连接。
+- 服务重启后会重新读取板卡 TOML 和独立的 OTA 镜像库、任务及最近设备升级状态；旧 Session、启动清单、loader 在线状态及客户端连接不恢复。
 
 ## 启动流程
 
@@ -79,6 +79,37 @@ axloader 如果发现两个不同的 `server_id`，不会随机选择其中一�
 | `GET /api/v1/admin/virtual-devices` | 管理页面 | 查询虚拟板功能开关和进程状态 |
 | `POST /api/v1/admin/virtual-devices` | 管理页面 | 创建并启动一个尚未绑定的 QEMU 设备 |
 | `DELETE /api/v1/admin/virtual-devices/{id}` | 管理页面 | 停止并删除未绑定虚拟设备 |
+
+### 装载器升级接口（v4）
+
+| 方法与路径 | 请求/响应 |
+| --- | --- |
+| `POST /api/v1/admin/loader-images` | 原始 x86_64 EFI，`Content-Length` 必需，最多 32 MiB；可选 `X-Image-Version`，返回服务端计算的 SHA-256、大小和展示版本 |
+| `GET /api/v1/admin/loader-images` | 列出持久镜像库 |
+| `POST /api/v1/admin/boards/{board_id}/loader-updates` | JSON `{"image_sha256":"..."}`；绑定板卡 MAC，生成单独的 `update_id` |
+| `GET /api/v1/admin/boards/{board_id}/loader-updates` | 查看该板卡最近任务和阶段 |
+| `DELETE /api/v1/admin/boards/{board_id}/loader-updates/{update_id}` | 仅取消尚未下发的 `queued` 任务 |
+| `GET /api/v1/loader-updates/{update_id}/image` | 设备按已指派任务下载镜像 |
+| `POST /api/v1/loaders/ota-status` | 设备凭当前发现注册代次上报 `downloading`、`staged` 或 `failed` |
+
+管理页面在板卡编辑页上传镜像、选择镜像、指派任务、观察 SSE `ota`
+快照/阶段，并可取消尚未下发任务。镜像以摘要命名，任务以 UUID 标识；
+同一镜像重新指派得到新的任务 ID。任务 JSON、设备最近升级状态和镜像文件
+存放在 `ServerConfig.data_dir/loader-ota`，写入临时文件、`fsync` 后同目录
+替换并同步目录。任务持久化独立于临时 Boot Session。
+
+v4 `LoaderPollRequest.ota` 包含当前稳定/运行摘要、待试 ID、来源与上次结果。
+当前板卡 MAC 与注册代次匹配、无 Boot Session 且没有其他待试升级时，服务端
+把任务持久转为 `downloading`，返回 `update`（任务 ID、镜像相对路径、长度和
+摘要）。装载器分块写非活动槽，完成 EFI 校验和记录后重启。新版待试槽的
+首次轮询只有在任务 ID、运行摘要、来源、当前注册和板卡绑定一致时才得到
+`confirm_update`；装载器持久提交，随后轮询报告结果。服务重启会恢复
+`confirming`，并可重发确认。来源为 `direct` 的待试槽必须由直连上传方
+确认，服务端不会替它提交。
+
+服务端只在隔离实验网工作；这里的 SHA-256 是完整性检查，MAC 和一次性注册
+ID 都不是身份认证。首次迁移和掉电恢复所需的 A/B 布局、`BOOTX64.EFI`
+启动器和离线恢复参见 TGOS `bootloader/axloader/README.md`。
 
 `boot` 响应中的内核路径必须是当前 server 下的相对路径，同时包含大小、SHA-256、架构、`elf64` 格式和可选入口符号；v3 还可包含宿主归档的相对路径、大小、SHA-256 及命令行。状态更新由 `session_id + boot_id + registration_id` 定位；旧启动命令或旧注册代次的迟到状态返回冲突，不能覆盖当前状态。
 

@@ -670,7 +670,7 @@ Content-Type: application/json
 
 本节定义两种后端共用的开发板服务契约：本地局域网模式由 `ostool-server` 直接提供，认证模式由独立认证后端提供受认证的对应接口。这里覆盖 `ostool-server` 的全部公开、非管理 REST 接口。`ostool` 当前命令会使用会话文件上传；配置宿主 initramfs 时还会调用普通 HTTP Boot 文件上传。它不直接调用会话详情、会话文件列表/查询/删除和显式电源控制；这些仍属于公开 board 服务契约，其中显式电源控制也已有 `BoardServerClient` 方法。
 
-axloader 协议 v3 另使用 `POST /api/v1/loaders/poll`、`POST /api/v1/loaders/status` 和 `GET /api/v1/sessions/{session_id}/loader-status`。poll/status 由 UDP 发现返回的一次性 `registration_id` 关联本次固件启动；状态以 `session_id + boot_id + registration_id` 定位，旧代次迟到上报不能覆盖新代次。服务端仍接受 v2 loader：仅无 `initramfs` 且无 `cmdline` 的启动可下发；否则 poll 返回 `reject`，代码为 `boot_payload_unsupported`。Session 释放时删除启动清单和 loader 状态。
+axloader 协议 v2/v3/v4 使用 `POST /api/v1/loaders/poll`、`POST /api/v1/loaders/status` 和 `GET /api/v1/sessions/{session_id}/loader-status`。poll/status 由 UDP 发现返回的一次性 `registration_id` 关联本次固件启动；状态以 `session_id + boot_id + registration_id` 定位，旧代次迟到上报不能覆盖新代次。v2 loader 仅在没有 `initramfs` 与 `cmdline` 时接收启动，否则得到 `boot_payload_unsupported`；v3 保留原有启动契约；v4 另携带 `ota` 状态并可收到 `update` / `confirm_update`。Session 释放时删除启动清单和 loader 状态，不删除独立持久的 OTA 任务。管理端镜像上传、指派、取消及设备状态路径见 [axloader 网络控制与虚拟板](axloader-network-control.md#装载器升级接口v4)。
 
 ### 查询开发板类型
 

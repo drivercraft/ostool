@@ -63,7 +63,7 @@ data: {"epoch":"...","revision":1,"kind":"snapshot","data":{"boards":[],"session
 ```
 
 后续事件名为 `update`，信封字段相同，`data` 仅包含改变的资源集合。
-集合键包括 `quarantined_boards`、`boards`、`runtimes`、`sessions`、`loaders`、`virtual`、`dtbs`、
+集合键包括 `quarantined_boards`、`boards`、`runtimes`、`sessions`、`loaders`、`ota`（镜像和升级任务）、`virtual`、`dtbs`、
 `serial`、`network`、`server`、`tftp`、`tftp_status`、`overview`、`power_actions`。
 集合更新是该集合的完整替换；消失的实体表示删除。前端按稳定 ID/MAC/name
 合并并复用未变化的对象，不重新挂载整张表或表单。

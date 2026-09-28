@@ -180,6 +180,26 @@ export interface LoaderDeviceSummary {
   current_registration_id: string | null;
 }
 
+export interface LoaderImage {
+  sha256: string;
+  size: number;
+  version: string | null;
+}
+
+export interface LoaderUpdateJob {
+  board_id: string;
+  mac_address: string;
+  update_id: string;
+  image: LoaderImage;
+  phase: "queued" | "downloading" | "staged" | "confirming" | "succeeded" | "rolled_back" | "failed" | "cancelled";
+  error: string | null;
+}
+
+export interface LoaderOtaResources {
+  jobs: LoaderUpdateJob[];
+  images: LoaderImage[];
+}
+
 export interface VirtualDeviceSummary {
   id: string;
   mac_address: string;

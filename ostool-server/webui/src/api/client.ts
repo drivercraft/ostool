@@ -9,6 +9,8 @@ import type {
   DtbFileResponse,
   ErrorResponse,
   LoaderDeviceSummary,
+  LoaderImage,
+  LoaderUpdateJob,
   NetworkInterfaceSummary,
   SerialPortSummary,
   TftpConfig,
@@ -62,6 +64,25 @@ async function request<T>(
 }
 
 export const api = {
+  uploadLoaderImage(file: File, version?: string) {
+    return request<LoaderImage>("/api/v1/admin/loader-images", {
+      method: "POST",
+      headers: version ? { "X-Image-Version": version } : undefined,
+      body: file,
+    });
+  },
+  queueLoaderUpdate(boardId: string, imageSha256: string) {
+    return request<LoaderUpdateJob>(
+      `/api/v1/admin/boards/${encodeURIComponent(boardId)}/loader-updates`,
+      { method: "POST", bodyJson: { image_sha256: imageSha256 } },
+    );
+  },
+  cancelLoaderUpdate(boardId: string, updateId: string) {
+    return request<LoaderUpdateJob>(
+      `/api/v1/admin/boards/${encodeURIComponent(boardId)}/loader-updates/${encodeURIComponent(updateId)}`,
+      { method: "DELETE" },
+    );
+  },
   powerAction(payload: {
     request_id: string;
     action: "on" | "off";

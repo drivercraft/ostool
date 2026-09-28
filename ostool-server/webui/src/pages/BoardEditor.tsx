@@ -35,6 +35,7 @@ import {
 } from "@/components/forms";
 import { MacPicker } from "@/components/mac-picker";
 import { DtbUpload } from "./Dtbs";
+import { BoardOta } from "./BoardOta";
 
 export default function BoardEditor() {
   const { boardId } = useParams();
@@ -538,6 +539,7 @@ function Editor({ board }: { board?: BoardConfig }) {
           </Button>
         </footer>
       </form>
+      {board?.network_identity && <BoardOta boardId={board.id} />}
     </>
   );
 }

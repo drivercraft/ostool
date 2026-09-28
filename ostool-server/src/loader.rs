@@ -5,7 +5,7 @@ use chrono::{DateTime, Duration, Utc};
 use httpboot_protocol::{
     LEGACY_PROTOCOL_VERSION, LoaderDiscoveryOffer, LoaderDiscoveryProbe, LoaderHardwareInfo,
     LoaderPollRequest, LoaderStatusReport, MAX_DISCOVERY_DATAGRAM_BYTES, MacAddress,
-    PROTOCOL_VERSION,
+    PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION,
 };
 use serde::Serialize;
 use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
@@ -157,7 +157,7 @@ impl LoaderRegistry {
     ) -> Result<LoaderDiscoveryOffer, RegistrationError> {
         if !matches!(
             probe.protocol_version,
-            LEGACY_PROTOCOL_VERSION | PROTOCOL_VERSION
+            LEGACY_PROTOCOL_VERSION | PREVIOUS_PROTOCOL_VERSION | PROTOCOL_VERSION
         ) {
             return Err(RegistrationError::ProtocolVersion);
         }
@@ -190,7 +190,7 @@ impl LoaderRegistry {
     ) -> Result<bool, RegistrationError> {
         if !matches!(
             request.protocol_version,
-            LEGACY_PROTOCOL_VERSION | PROTOCOL_VERSION
+            LEGACY_PROTOCOL_VERSION | PREVIOUS_PROTOCOL_VERSION | PROTOCOL_VERSION
         ) {
             return Err(RegistrationError::ProtocolVersion);
         }
@@ -278,7 +278,7 @@ impl LoaderRegistry {
     ) -> Result<(), RegistrationError> {
         if !matches!(
             report.protocol_version,
-            LEGACY_PROTOCOL_VERSION | PROTOCOL_VERSION
+            LEGACY_PROTOCOL_VERSION | PREVIOUS_PROTOCOL_VERSION | PROTOCOL_VERSION
         ) {
             return Err(RegistrationError::ProtocolVersion);
         }
@@ -476,6 +476,7 @@ mod tests {
             arch: BootArch::X86_64,
             loader_version: "test".into(),
             hardware: LoaderHardwareInfo::default(),
+            ota: None,
         }
     }
 

@@ -5,6 +5,7 @@ import type {
   BoardConfig,
   Session,
   LoaderDeviceSummary,
+  LoaderOtaResources,
   VirtualDevicesResponse,
   DtbFileResponse,
   SerialPortSummary,
@@ -34,6 +35,7 @@ export interface Resources {
   sessions: Session[];
   runtimes: Record<string, Runtime>;
   loaders: LoaderDeviceSummary[];
+  ota: LoaderOtaResources;
   virtual: VirtualDevicesResponse;
   dtbs: DtbFileResponse[];
   serial: SerialPortSummary[];

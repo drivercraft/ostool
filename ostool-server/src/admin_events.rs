@@ -22,6 +22,7 @@ pub const TOPICS: &[&str] = &[
     "runtimes",
     "sessions",
     "loaders",
+    "ota",
     "virtual",
     "dtbs",
     "serial",

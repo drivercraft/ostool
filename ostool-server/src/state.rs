@@ -20,6 +20,7 @@ use crate::{
     config::{BoardConfig, PowerManagementConfig, ServerConfig},
     dtb_store::DtbStore,
     loader::LoaderRegistry,
+    ota::OtaStore,
     power::{PowerAction, PowerActionError, execute_power_action_for_board},
     session::{Session, SessionState, SessionStopReason},
     tftp::service::TftpManager,
@@ -105,6 +106,7 @@ pub struct AppState {
     pub board_runtimes: Arc<RwLock<BTreeMap<String, BoardRuntimeState>>>,
     pub sessions: Arc<RwLock<BTreeMap<String, Arc<SessionState>>>>,
     pub loader_registry: LoaderRegistry,
+    pub ota: OtaStore,
     pub virtual_boards: VirtualBoardManager,
     pub(crate) board_inventory_gate: Arc<Mutex<()>>,
     pub board_store: Arc<FileBoardStore>,
@@ -127,6 +129,7 @@ pub async fn build_app_state(
     let (release_tx, release_rx) = mpsc::unbounded_channel();
 
     let admin_events = crate::admin_events::AdminEvents::default();
+    let ota = OtaStore::open(&config.data_dir)?;
     let mut virtual_boards = VirtualBoardManager::new(config.virtual_qemu.clone());
     virtual_boards.set_events(admin_events.clone());
     if virtual_boards.enabled() {
@@ -155,6 +158,7 @@ pub async fn build_app_state(
         board_runtimes: Arc::new(RwLock::new(board_runtimes)),
         sessions: Arc::new(RwLock::new(BTreeMap::new())),
         loader_registry: LoaderRegistry::with_events(admin_events),
+        ota,
         virtual_boards,
         board_inventory_gate: Arc::new(Mutex::new(())),
         board_store,
