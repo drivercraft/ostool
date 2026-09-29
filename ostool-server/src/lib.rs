@@ -7,6 +7,7 @@ pub mod api;
 pub mod board_pool;
 pub mod board_store;
 pub mod config;
+pub mod device;
 pub mod dtb_store;
 pub mod http_boot;
 pub mod loader;

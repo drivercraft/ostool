@@ -1,233 +1,116 @@
-# axloader 网络控制与虚拟板
+# axloader 网络控制与本地验证
 
-本文说明 `httpboot-protocol` v4、`axloader`、`ostool-server`、`ostool` CLI 和管理页面之间的网络启动及装载器升级契约。服务端继续接受 v2/v3 原有启动请求，只有 v4 可以接收 OTA 任务；旧串口 `READY/BOOT` 协议不受支持。
+## 1. 设备所有权
 
-## 设计边界
+### 1.1 入口与发现
 
-- 控制面只使用 UDP 发现和 HTTP。串口只承载目标系统的原始输入输出。
-- `BoardConfig.network_identity.mac_address` 是板卡和配置之间唯一持久绑定；探测记录只驻留内存。
-- `board_type`、板卡 ID、电源、串口和启动配置始终由管理员填写。SMBIOS 仅辅助辨认硬件，不推断 `board_type`。
-- MAC 是绑定键，不是认证凭据。当前协议用于受信实验室二层网络；HTTP 和镜像 SHA-256 不抵抗同网段主动攻击。
-- 服务重启后会重新读取板卡 TOML 和独立的 OTA 镜像库、任务及最近设备升级状态；旧 Session、启动清单、loader 在线状态及客户端连接不恢复。
+协议 v5 将 HTTP 控制入口放在 axloader。`network::Announcer` 在同一 UEFI 网卡
+向 UDP `2998` 单向广播 MAC、架构、启动代次和设备 TCP4 端口 `2999`；
+`direct::Listener` 在该端口处理启动与 OTA。ostool-server 的
+`loader::serve_udp_discovery()` 对 v5 广播调用 `device::reconcile()`，先反向
+GET 设备状态，核对 MAC、代次和架构，才从板卡 TOML 中查找当前绑定。
+发现不要求服务端响应：直连客户端知道设备 IP 时可独立控制装载器。
 
-## 启动流程
+广播和 HTTP 没有身份认证。MAC 仅作板卡配置绑定键；报文和镜像的 SHA-256
+仅检验一致性，本阶段限定可信隔离实验网。服务器对重复 MAC 且不同来源 IP
+的在线设备停止下发任务，新的启动代次替代同地址的旧实例；设备拒绝旧代次的
+修改请求。
+
+### 1.2 启动交接
+
+`BootServer` 在内存维护一个 `DeviceBootJob`。内核和可选 initramfs 由调用方
+PUT 上传，各自按清单长度及 SHA-256 检验，每个文件不超过 256 MiB。
+`POST /api/v1/boot/jobs/{id}/start` 验证 ELF，复制已核对摘要的归档并发布宿主配置表，回复
+`ready_to_handoff` 后释放 TCP4 与 UDP4 对象，进入既有 UEFI 内核交接。
+没有 ESP 写入或 ostool-server 时，同样可以从设备 IP 直连完成启动。
 
 ```mermaid
 sequenceDiagram
     participant L as axloader
-    participant S as ostool-server
-    participant C as ostool CLI
-    participant T as 目标系统串口
-
-    L->>L: UEFI 同一控制器取得 SNP/IP4/UDP4/HTTP
-    L->>S: UDP :2998 DiscoveryProbe
-    S-->>L: DiscoveryOffer + registration_id
-    loop 未绑定或没有启动命令
-        L->>S: POST /api/v1/loaders/poll
-        S-->>L: unbound / bound_idle / reject
-    end
-    C->>S: 创建 Session；可选上传宿主 initramfs，再上传 ELF 并发布启动清单
-    C->>S: 连接串口 WebSocket（自动上电）
-    L->>S: POST /api/v1/loaders/poll
-    S-->>L: boot + session_id + boot_id + 内核摘要及可选归档摘要/cmdline
-    L->>S: accepted / downloading
-    L->>S: GET 相对 kernel_path
-    opt 启动清单包含宿主 initramfs
-        L->>S: GET 同一 Session 的 initramfs.path
-    end
-    L->>L: 校验文件长度和 SHA-256，装载 ELF/归档
-    L->>S: verified / ready_to_handoff
-    L->>L: 销毁 UDP/HTTP/IP 对象并 ExitBootServices
-    T-->>C: 目标系统原始串口输出
-    C--xS: WebSocket 关闭
-    S->>S: SerialClosed → releasing → 断电 → idle
+    participant S as ostool-server 或直连工具
+    L-->>S: UDP :2998 广播（可选）
+    S->>L: GET /api/v1/status
+    S->>L: POST /api/v1/boot/jobs（X-Boot-Epoch）
+    S->>L: PUT kernel；可选 PUT initramfs
+    S->>L: POST /api/v1/boot/jobs/{id}/start
+    L-->>S: 202 ready_to_handoff
+    L->>L: 释放网络对象并交接内核
 ```
 
-`ready_to_handoff` 是最后一个可靠网络状态。它不会消费启动清单；同一 Session 内板卡重启后，新 `registration_id` 会重新取得相同 `boot_id`。上传新内核才会以新 `boot_id` 替换旧命令。Session 释放时，启动命令和 loader 状态一起删除。
+ostool-server 保留原有 Session、串口 WebSocket、启动清单和板卡租约。会话
+上传文件后，`device::push_boot()` 从会话存储读取并重新核对长度与摘要，
+再调用设备接口；它不把文件 URL 交给装载器。设备在同一 Session 内复位时，
+服务器观察新启动代次并按原 `boot_id` 重新推送。串口只承载目标系统输出。
 
-宿主归档由 CLI 先以会话内路径 `initramfs.cpio` 上传，再在发布内核时以
-`X-HttpBoot-Initramfs-Path` 引用；`X-HttpBoot-Cmdline` 可独立提供命令行。
-服务端读取同一 Session 的归档并记录大小、SHA-256，拒绝空文件或超过
-256 MiB 的归档；命令行最长 4095 字节，仅允许可打印 ASCII 和空格。
-v3 loader 从启动清单取得可选的 `initramfs: {path, size, sha256}` 和
-`cmdline`，从当前 Session 下载并再次核对归档，失败时不上交内核。
-v2 loader 遇到任一新字段时收到 `boot_payload_unsupported`，没有新字段的
-启动保持兼容。摘要用于发现不一致，不替代受信网络或认证。
+## 2. 设备协议
 
-## 发现和注册代次
+### 2.1 启动事务
 
-axloader 向当前 IPv4 子网定向广播地址的 UDP `2998` 发送 JSON。数据报不得超过 1400 字节，只含协议版本、永久 MAC、当前链路 MAC、架构和 loader 版本。SMBIOS Type 1 详情在 HTTP poll 中上报。
+所有修改调用携带当前 `/api/v1/status` 返回的 `X-Boot-Epoch`。
+`BootServer::create()` 只接受 x86_64 ELF64、非空合法启动 ID、预期长度与
+摘要，以及合法的可选命令行；相同 ID 和清单的重试保留已接收文件，
+冲突清单返回 `409`。设备只保留一个启动事务，可在启动前取消。
 
-server 为每次发现签发一次性 `registration_id`，默认有效期为 30 秒。第一次 poll 后它代表当前 loader 启动代次：
-
-- 新代次可以替换不再上报的旧代次；
-- 被替换的旧代次若再次上报，则该 MAC 进入冲突状态；
-- 冲突期间 server 返回 `duplicate_mac`，不下发启动命令；
-- 10 秒没有 poll 的设备显示为离线，探测记录保留 24 小时；
-- 每次 poll 都从当前板卡 TOML 重新计算 `bound_board_id`，不保存第二份绑定关系。
-
-axloader 如果发现两个不同的 `server_id`，不会随机选择其中一个，而是按 1、2、4、8、10 秒封顶退避重新发现。
-
-## HTTP 接口
-
-| 方法与路径 | 调用者 | 含义 |
-| --- | --- | --- |
-| `POST /api/v1/loaders/poll` | axloader | 注册或刷新设备，返回 `unbound`、`bound_idle`、`boot` 或 `reject` |
-| `POST /api/v1/loaders/status` | axloader | 上报 `accepted`、`downloading`、`verified`、`ready_to_handoff` 或 `failed` |
-| `GET /api/v1/admin/loader-devices` | 管理页面 | 查询探测设备、绑定、在线和冲突状态 |
-| `GET /api/v1/sessions/{id}/loader-status` | CLI/管理工具 | 查询当前 Session 的 `boot_id`、`registration_id` 和状态 |
-| `GET /api/v1/admin/virtual-devices` | 管理页面 | 查询虚拟板功能开关和进程状态 |
-| `POST /api/v1/admin/virtual-devices` | 管理页面 | 创建并启动一个尚未绑定的 QEMU 设备 |
-| `DELETE /api/v1/admin/virtual-devices/{id}` | 管理页面 | 停止并删除未绑定虚拟设备 |
-
-### 装载器升级接口（v4）
-
-| 方法与路径 | 请求/响应 |
+| 方法与路径 | 结果 |
 | --- | --- |
-| `POST /api/v1/admin/loader-images` | 原始 x86_64 EFI，`Content-Length` 必需，最多 32 MiB；可选 `X-Image-Version`，返回服务端计算的 SHA-256、大小和展示版本 |
-| `GET /api/v1/admin/loader-images` | 列出持久镜像库 |
-| `POST /api/v1/admin/boards/{board_id}/loader-updates` | JSON `{"image_sha256":"..."}`；绑定板卡 MAC，生成单独的 `update_id` |
-| `GET /api/v1/admin/boards/{board_id}/loader-updates` | 查看该板卡最近任务和阶段 |
-| `DELETE /api/v1/admin/boards/{board_id}/loader-updates/{update_id}` | 仅取消尚未下发的 `queued` 任务 |
-| `GET /api/v1/loader-updates/{update_id}/image` | 设备按已指派任务下载镜像 |
-| `POST /api/v1/loaders/ota-status` | 设备凭当前发现注册代次上报 `downloading`、`staged` 或 `failed` |
+| `GET /api/v1/status` | 返回 v5、MAC、启动代次、硬件、启动事务及 OTA 状态 |
+| `POST /api/v1/boot/jobs` | 提交 `DeviceBootJob`；创建返回 `201`，幂等重试返回 `200` |
+| `GET /api/v1/boot/jobs/{id}` | 查询事务阶段及已接收文件 |
+| `PUT /api/v1/boot/jobs/{id}/kernel` | 原始内核，必须带定长和 `X-Image-Sha256` |
+| `PUT /api/v1/boot/jobs/{id}/initramfs` | 原始可选归档，采用相同校验规则 |
+| `POST /api/v1/boot/jobs/{id}/start` | 文件齐备且装载成功返回 `202` 并交接 |
+| `DELETE /api/v1/boot/jobs/{id}` | 未交接时释放事务和文件 |
 
-管理页面在板卡编辑页上传镜像、选择镜像、指派任务、观察 SSE `ota`
-快照/阶段，并可取消尚未下发任务。镜像以摘要命名，任务以 UUID 标识；
-同一镜像重新指派得到新的任务 ID。任务 JSON、设备最近升级状态和镜像文件
-存放在 `ServerConfig.data_dir/loader-ota`，写入临时文件、`fsync` 后同目录
-替换并同步目录。任务持久化独立于临时 Boot Session。
+请求头限制 4 KiB；仅接受 `Content-Length`，连接空闲 30 秒后取消，短读和
+错误摘要或上传中断释放启动事务。长时间接收过程中等待路径继续驱动 UDP 广播；单个设备
+一次只处理一个 TCP 连接。需要同时上传或查询的客户端应等当前请求完成。
 
-v4 `LoaderPollRequest.ota` 包含当前稳定/运行摘要、待试 ID、来源与上次结果。
-当前板卡 MAC 与注册代次匹配、无 Boot Session 且没有其他待试升级时，服务端
-把任务持久转为 `downloading`，返回 `update`（任务 ID、镜像相对路径、长度和
-摘要）。装载器分块写非活动槽，完成 EFI 校验和记录后重启。新版待试槽的
-首次轮询只有在任务 ID、运行摘要、来源、当前注册和板卡绑定一致时才得到
-`confirm_update`；装载器持久提交，随后轮询报告结果。服务重启会恢复
-`confirming`，并可重发确认。来源为 `direct` 的待试槽必须由直连上传方
-确认，服务端不会替它提交。
+### 2.2 装载器升级
 
-服务端只在隔离实验网工作；这里的 SHA-256 是完整性检查，MAC 和一次性注册
-ID 都不是身份认证。首次迁移和掉电恢复所需的 A/B 布局、`BOOTX64.EFI`
-启动器和离线恢复参见 TGOS `bootloader/axloader/README.md`。
+设备复用 `ota::OtaContext` 和现有 A/B 启动器：流式写入非活动槽，完成文件
+摘要、PE 架构与 UEFI 加载校验后才持久记录待试升级并复位。待试槽未收到
+相同升级 ID、相同来源的确认时拒绝内核启动；复位或加载失败由启动器回滚。
 
-`boot` 响应中的内核路径必须是当前 server 下的相对路径，同时包含大小、SHA-256、架构、`elf64` 格式和可选入口符号；v3 还可包含宿主归档的相对路径、大小、SHA-256 及命令行。状态更新由 `session_id + boot_id + registration_id` 定位；旧启动命令或旧注册代次的迟到状态返回冲突，不能覆盖当前状态。
+| 方法与路径 | 结果 |
+| --- | --- |
+| `GET /api/v1/ota/status` | 当前槽、摘要、待试 ID 与最近结果 |
+| `PUT /api/v1/ota/image` | 32 MiB 以内的原始 EFI，`X-Image-Sha256` 必需，成功返回 `202` 并复位 |
+| `POST /api/v1/ota/confirm` | JSON 升级 ID；只有对应待试槽可以持久提交 |
 
-## 板卡配置
+直连上传默认生成 ID，且来源为 `direct`。服务端指派传入持久任务 ID，
+以及 `X-Update-Source: server`；`OtaStore::decide()` 只在板卡空闲且非其他
+待试升级时下发。新槽广播后，服务端核对当前板卡绑定、升级 ID、运行摘要与
+来源，才调用确认接口；设备持久提交后服务器任务变为成功。服务重启读取独立
+于 Session 的镜像库和任务。直连升级不会被服务端自动确认。
 
-HTTP Boot 实体板示例：
+## 3. 兼容与本地联调
 
-```toml
-id = "rk3568-01"
-board_type = "RK3568"
-disabled = false
-tags = ["arm64"]
+### 3.1 兼容边界
 
-[network_identity]
-mac_address = "02:11:22:33:44:55"
+ostool-server 继续接受旧装载器 v2/v3/v4 的 UDP Offer、
+`POST /api/v1/loaders/poll`、状态上报和下载 URL；`httpboot-protocol` 中的
+`PROTOCOL_VERSION` 继续标识这条旧路径，`DEVICE_PROTOCOL_VERSION` 标识 v5。
+v5 装载器只广播，不调用任何服务端 HTTP 接口。TGOS 当前依赖已发布
+`httpboot-protocol 0.3.0`；其 v5 设备请求类型在本地定义，两仓用实际 HTTP
+契约测试核对，代码交付不依赖另一仓的绝对路径或发布新 crate。
 
-[serial]
-baud_rate = 1500000
+### 3.2 隔离测试
 
-[serial.key]
-kind = "serial_number"
-value = "USB-UART-01"
-
-[power_management]
-kind = "custom"
-power_on_cmd = "board-power rk3568-01 on"
-power_off_cmd = "board-power rk3568-01 off"
-
-[boot]
-kind = "httpboot"
-boot_arch = "aarch64"
-```
-
-MAC 保存为小写六字节冒号格式并全局唯一。HTTP Boot 板卡缺少 MAC 时配置无效。只有板卡处于 `idle` 时才允许修改 MAC、重命名或删除；使用中和释放中返回 `409 Conflict`。重复绑定返回错误码 `mac_already_bound`。
-
-管理页面通过 `/api/v1/admin/events` 接收设备快照与增量事件，取消定时刷新。创建页可以在未保存板卡、未填写 MAC 时直接按当前电源配置手动上电或下电；设备上报后实时出现在 MAC 选择列表。选择探测设备只会把 MAC 带入编辑器并展示 IP、架构、loader 版本和 SMBIOS；不会自动填写板卡 ID、`board_type`、电源、串口或启动设置。也可以手工输入 MAC。
-
-## ostool CLI 行为
-
-HTTP Boot runner 按以下顺序工作：
-
-1. 按人工配置的 `board_type` 创建 Session；
-2. 可选地上传宿主归档到该 Session；上传 ELF 时引用归档路径并发布新的 `boot_id`；
-3. 立即连接串口 WebSocket，由现有串口生命周期自动上电；
-4. 并行读取原始串口并轮询 loader status；
-5. 活动 Session 内板卡重启时继续等待新注册代次，不重建 Session；
-6. loader 报告 `failed` 时结束；正常成功仍以目标系统串口成功条件为准；
-7. WebSocket 关闭后沿用 `SerialClosed` 释放流程并断电。
-
-`.board.toml` 中的 `initramfs` 和 `cmdline` 都是可选字段。前者是宿主归档，
-不是虚拟机内 Linux guest 的 initrd；后者传给宿主内核。只有目标 loader、
-固件与内核实现了对应交接时才配置这些字段。
-
-## 内建 QEMU 虚拟板
-
-虚拟板默认关闭。第一阶段固定为 `x86_64 + OVMF + q35`，使用 TCG，协议类型仍保留其他架构值。示例 server 配置：
-
-```toml
-[loader_network]
-enabled = true
-bind_addr = "0.0.0.0:2998"
-public_base_url = "http://10.77.0.1:2999"
-
-[virtual_qemu]
-enabled = true
-qemu_binary = "/usr/bin/qemu-system-x86_64"
-ovmf_code = "/usr/share/OVMF/OVMF_CODE_4M.fd"
-ovmf_vars = "/usr/share/OVMF/OVMF_VARS_4M.fd"
-axloader_efi = "/opt/ostool/BOOTX64.EFI"
-runtime_dir = "/var/lib/ostool-server/qemu"
-network_namespace = "ostool-qemu"
-bridge = "ostool-br0"
-tap_pool = ["ostool-tap0", "ostool-tap1"]
-memory_mib = 512
-cpus = 2
-```
-
-本地网络环境命令需要创建 network namespace、veth、bridge、TAP 和 dnsmasq，因此应以具备 `CAP_NET_ADMIN` 的身份运行：
+`ostool-server/scripts/test-axloader-local.py` 启动本地 ostool-server 与 OVMF/QEMU，
+在临时目录创建板卡 TOML、服务端配置、OVMF VARS 和真实 FAT 磁盘。管理入口
+使用独立 loopback 端口，关闭测速与系统 TFTP 接管；QEMU `hostfwd` 指向真实
+客户机 TCP4 监听。测试夹具仅转发 QEMU 广播帧并将公告端口换成本地
+`hostfwd` 端口，服务端必须直接 HTTP 请求客户机完成启动与 OTA。
 
 ```bash
-ostool-server --config /etc/ostool-server/config.toml virtual-lab up
-ostool-server --config /etc/ostool-server/config.toml virtual-lab status
-ostool-server --config /etc/ostool-server/config.toml virtual-lab down
+cargo build -p ostool-server
+python3 ostool-server/scripts/test-axloader-local.py \
+  --tgos /home/zhourui/.codex/worktrees/9a24/tgoskits-dev \
+  --server-bin target/debug/ostool-server
 ```
 
-默认客户机网段为 `10.77.0.0/24`，server 为 `10.77.0.1`，dnsmasq/bridge 为 `10.77.0.254`，DHCP 池为 `10.77.0.100-200`。`up`、`status` 和 `down` 可以重复调用；`up` 检测已存在环境，`down` 忽略已删除资源。
-
-管理页面启动虚拟设备后，QEMU 必须通过真实 UDP/HTTP 流程出现在未绑定列表。绑定时三个位置必须引用同一虚拟设备及其 MAC：
-
-```toml
-[network_identity]
-mac_address = "02:aa:bb:cc:dd:ee"
-
-[serial]
-baud_rate = 115200
-
-[serial.key]
-kind = "qemu"
-value = "<virtual_device_id>"
-
-[power_management]
-kind = "qemu"
-virtual_device_id = "<virtual_device_id>"
-
-[boot]
-kind = "httpboot"
-boot_arch = "x86_64"
-```
-
-`VirtualBoardManager` 持有 QEMU 子进程、TAP、独立 OVMF VARS、QMP socket 和串口 hub。`On`/`Off` 幂等；关闭先发 QMP `quit`，3 秒后仍未退出才终止进程。串口 hub 不随 QEMU 子进程退出，保留最近 64 KiB 输出，使同一 WebSocket 能跨 `Off → On`。新 QEMU 启动会生成新的 loader 注册代次，并从同一活动 Session 重新取得原 `boot_id`。
-
-## 验收顺序
-
-1. 启动未绑定 QEMU，确认它通过真实发现出现在管理页面。
-2. 人工填写板卡 ID、名称/类型、QEMU 电源和串口，并选择探测 MAC。
-3. 使用 `ostool` 创建 Session、上传 ELF并连接串口，确认下载、摘要校验、handoff 和串口成功标志。
-4. 保持 WebSocket 和 Session，执行虚拟板 `Off → On`，确认新 `registration_id` 取得相同 `boot_id` 并再次 handoff。
-5. 关闭 WebSocket，确认 Session 经 `releasing` 回到 `idle` 且 QEMU 退出。
-6. 新建 Session 再运行一次，全程不修改绑定。
-
-实体板按相同顺序验收首次绑定、活动 Session 内重启、释放和新 Session；差异只在电源与串口后端。
+TGOS 单仓用 `cargo xtask axloader test qemu --target x86_64-unknown-uefi` 验证
+同一真实 FAT 映像上的直连启动、镜像升级、坏摘要、短请求、待试复位和持久确认。
+本地测试不调用安装、更新或 systemd 脚本，不连接 runner，也不刷写实体板卡。
+`hostfwd` 证明本地真实 HTTP 反向调用，不证明实体网络广播与反向路由；后者
+属于日后上线前的单独验收。

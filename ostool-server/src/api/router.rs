@@ -2755,6 +2755,72 @@ async fn rewrite_board_dtb_references(
     Ok(())
 }
 
+async fn notify_admin_changes(
+    State(state): State<AppState>,
+    request: Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mutation =
+        request.method() != axum::http::Method::GET && request.method() != axum::http::Method::HEAD;
+    let path = request.uri().path().to_owned();
+    let response = next.run(request).await;
+    if mutation {
+        let topics: &[&str] = if path.contains("/loaders/") {
+            &["loaders"]
+        } else if path.contains("/boards") {
+            &["boards"]
+        } else if path.contains("/sessions") {
+            &["sessions", "virtual"]
+        } else if path.contains("/virtual-devices") {
+            &["virtual", "serial"]
+        } else if path.contains("/dtbs") {
+            &["dtbs"]
+        } else if path.contains("/tftp") {
+            &["tftp"]
+        } else if path.contains("/server-config") {
+            &["server"]
+        } else {
+            &[]
+        };
+        state.admin_events.invalidate(topics);
+    }
+    response
+}
+
+pub(crate) async fn admin_topic(
+    state: &AppState,
+    topic: &str,
+) -> Result<serde_json::Value, ApiError> {
+    let extractor = State(state.clone());
+    let value = match topic {
+        "quarantined_boards" => serde_json::to_value(state.board_store.quarantined().await?),
+        "boards" => serde_json::to_value(list_boards(extractor).await?.0),
+        "sessions" => serde_json::to_value(list_admin_sessions(extractor).await?.0.sessions),
+        "loaders" => serde_json::to_value(list_loader_devices(extractor).await?.0),
+        "ota" => {
+            Ok(serde_json::json!({ "jobs": state.ota.jobs().await, "images": state.ota.images()? }))
+        }
+        "virtual" => serde_json::to_value(list_virtual_devices(extractor).await.0),
+        "dtbs" => serde_json::to_value(list_dtbs(extractor).await?.0),
+        "serial" => serde_json::to_value(list_serial_ports().await?.0),
+        "network" => serde_json::to_value(list_network_interfaces().await?.0),
+        "server" => serde_json::to_value(get_server_config(extractor).await?.0),
+        "tftp" => serde_json::to_value(get_tftp_config(extractor).await?.0.tftp),
+        "tftp_status" => serde_json::to_value(get_tftp_status(extractor).await?.0.status),
+        "overview" => serde_json::to_value(get_admin_overview(extractor).await?.0),
+        "power_actions" => serde_json::to_value(state.admin_power.snapshots()),
+        "runtimes" => {
+            let mut values = BTreeMap::new();
+            for (id, r) in state.board_runtimes.read().await.iter() {
+                values.insert(id.clone(), serde_json::json!({"lease_state":r.lease_state,"active_session_id":r.active_session_id,"last_release_error":r.last_release_error,"updated_at":r.updated_at}));
+            }
+            serde_json::to_value(values)
+        }
+        _ => return Err(ApiError::bad_request("unknown admin topic")),
+    };
+    value.map_err(|e| ApiError::internal(e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use std::future;
@@ -5918,70 +5984,4 @@ mod tests {
                 "mac_address": mac, "update_id": job.update_id, "phase": "succeeded"}).to_string())).unwrap()).await.unwrap();
         assert_eq!(response.status(), StatusCode::CONFLICT);
     }
-}
-
-async fn notify_admin_changes(
-    State(state): State<AppState>,
-    request: Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let mutation =
-        request.method() != axum::http::Method::GET && request.method() != axum::http::Method::HEAD;
-    let path = request.uri().path().to_owned();
-    let response = next.run(request).await;
-    if mutation {
-        let topics: &[&str] = if path.contains("/loaders/") {
-            &["loaders"]
-        } else if path.contains("/boards") {
-            &["boards"]
-        } else if path.contains("/sessions") {
-            &["sessions", "virtual"]
-        } else if path.contains("/virtual-devices") {
-            &["virtual", "serial"]
-        } else if path.contains("/dtbs") {
-            &["dtbs"]
-        } else if path.contains("/tftp") {
-            &["tftp"]
-        } else if path.contains("/server-config") {
-            &["server"]
-        } else {
-            &[]
-        };
-        state.admin_events.invalidate(topics);
-    }
-    response
-}
-
-pub(crate) async fn admin_topic(
-    state: &AppState,
-    topic: &str,
-) -> Result<serde_json::Value, ApiError> {
-    let extractor = State(state.clone());
-    let value = match topic {
-        "quarantined_boards" => serde_json::to_value(state.board_store.quarantined().await?),
-        "boards" => serde_json::to_value(list_boards(extractor).await?.0),
-        "sessions" => serde_json::to_value(list_admin_sessions(extractor).await?.0.sessions),
-        "loaders" => serde_json::to_value(list_loader_devices(extractor).await?.0),
-        "ota" => {
-            Ok(serde_json::json!({ "jobs": state.ota.jobs().await, "images": state.ota.images()? }))
-        }
-        "virtual" => serde_json::to_value(list_virtual_devices(extractor).await.0),
-        "dtbs" => serde_json::to_value(list_dtbs(extractor).await?.0),
-        "serial" => serde_json::to_value(list_serial_ports().await?.0),
-        "network" => serde_json::to_value(list_network_interfaces().await?.0),
-        "server" => serde_json::to_value(get_server_config(extractor).await?.0),
-        "tftp" => serde_json::to_value(get_tftp_config(extractor).await?.0.tftp),
-        "tftp_status" => serde_json::to_value(get_tftp_status(extractor).await?.0.status),
-        "overview" => serde_json::to_value(get_admin_overview(extractor).await?.0),
-        "power_actions" => serde_json::to_value(state.admin_power.snapshots()),
-        "runtimes" => {
-            let mut values = BTreeMap::new();
-            for (id, r) in state.board_runtimes.read().await.iter() {
-                values.insert(id.clone(), serde_json::json!({"lease_state":r.lease_state,"active_session_id":r.active_session_id,"last_release_error":r.last_release_error,"updated_at":r.updated_at}));
-            }
-            serde_json::to_value(values)
-        }
-        _ => return Err(ApiError::bad_request("unknown admin topic")),
-    };
-    value.map_err(|e| ApiError::internal(e.to_string()))
 }
