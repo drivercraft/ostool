@@ -12,6 +12,7 @@ use serde::Deserialize;
 
 use crate::{
     api::{error::ApiError, router::board_id_for_mac},
+    config::{BootConfig, UefiBootArch},
     ota::{DeleteImageError, Image, Job, MAX_IMAGE_BYTES, Phase},
     state::{AppState, BoardLeaseState},
 };
@@ -115,6 +116,15 @@ async fn queue_job(
     let board = boards
         .get(&board_id)
         .ok_or_else(|| ApiError::not_found("board not found"))?;
+    if !matches!(
+        &board.boot,
+        BootConfig::UefiHttp(profile)
+            if profile.boot_arch.as_ref() == Some(&UefiBootArch::X86_64)
+    ) {
+        return Err(ApiError::conflict(
+            "loader OTA requires an x86_64 UEFI HTTP board",
+        ));
+    }
     let mac = board
         .network_identity
         .as_ref()

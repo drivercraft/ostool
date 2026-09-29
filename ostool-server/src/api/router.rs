@@ -5959,6 +5959,44 @@ mod tests {
         let uploaded: crate::ota::Image =
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
+        let mut arm_board = sample_httpboot_board("ota-arm-board");
+        arm_board.board_type = "aarch64-uefi-http".into();
+        arm_board.serial = None;
+        arm_board.boot = BootConfig::UefiHttp(UefiHttpProfile {
+            boot_arch: Some(UefiBootArch::Aarch64),
+        });
+        arm_board.network_identity = Some(crate::config::BoardNetworkIdentity {
+            mac_address: "02:00:00:00:00:02".parse().unwrap(),
+        });
+        assert_eq!(
+            create_board(&app, serde_json::to_value(&arm_board).unwrap()).await,
+            StatusCode::CREATED
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/admin/boards/{}/loader-updates",
+                        arm_board.id
+                    ))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({"image_sha256": uploaded.sha256}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let error: crate::api::models::ErrorResponse =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(
+            error.message,
+            "loader OTA requires an x86_64 UEFI HTTP board"
+        );
         let queue = || {
             Request::builder()
                 .method("POST")

@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     api::router::board_id_for_mac,
     config::BootConfig,
-    ota::{Decision, Phase},
+    ota::{Decision, Job, Phase},
     session::SessionBootCommand,
     state::{AppState, BoardLeaseState},
 };
@@ -78,22 +78,21 @@ pub async fn reconcile(
         {
             Decision::Update(job) => {
                 state.admin_events.invalidate(&["ota"]);
-                let bytes = tokio::fs::read(state.ota.image_path(&job.image.sha256)?).await?;
-                ensure!(
-                    bytes.len() as u64 == job.image.size && hex_sha256(&bytes) == job.image.sha256,
-                    "OTA image changed in storage"
-                );
-                let response = client
-                    .put(format!("{endpoint}/api/v1/ota/image"))
-                    .header("X-Boot-Epoch", &observed.boot_epoch)
-                    .header("X-Image-Sha256", &job.image.sha256)
-                    .header("X-Update-Source", "server")
-                    .header("X-Update-Id", &job.update_id)
-                    .header("Content-Length", bytes.len())
-                    .body(bytes)
-                    .send()
-                    .await?;
-                require_status(response, 202).await?;
+                if let Err(error) =
+                    push_ota_image(&state, &client, &endpoint, &observed, &job).await
+                {
+                    state
+                        .ota
+                        .record_delivery_failure(
+                            &board_id,
+                            announcement.mac_address,
+                            &job.update_id,
+                            format!("{error:#}"),
+                        )
+                        .await?;
+                    state.admin_events.invalidate(&["ota"]);
+                    return Err(error);
+                }
                 state
                     .ota
                     .report(
@@ -187,6 +186,31 @@ pub async fn reconcile(
     .await
 }
 
+async fn push_ota_image(
+    state: &AppState,
+    client: &Client,
+    endpoint: &str,
+    observed: &LoaderDeviceStatus,
+    job: &Job,
+) -> anyhow::Result<()> {
+    let bytes = tokio::fs::read(state.ota.image_path(&job.image.sha256)?).await?;
+    ensure!(
+        bytes.len() as u64 == job.image.size && hex_sha256(&bytes) == job.image.sha256,
+        "OTA image changed in storage"
+    );
+    let response = client
+        .put(format!("{endpoint}/api/v1/ota/image"))
+        .header("X-Boot-Epoch", &observed.boot_epoch)
+        .header("X-Image-Sha256", &job.image.sha256)
+        .header("X-Update-Source", "server")
+        .header("X-Update-Id", &job.update_id)
+        .header("Content-Length", bytes.len())
+        .body(bytes)
+        .send()
+        .await?;
+    require_status(response, 202).await
+}
+
 async fn push_boot(
     state: &AppState,
     client: &Client,
@@ -219,7 +243,7 @@ async fn push_boot(
             .header("X-Boot-Epoch", epoch)
             .send()
             .await?;
-        require_status(delete_response, 204).await?;
+        require_status_in(delete_response, &[204, 404]).await?;
         create().await?
     } else {
         response
@@ -340,9 +364,13 @@ async fn push_file(
 }
 
 async fn require_status(response: Response, expected: u16) -> anyhow::Result<()> {
+    require_status_in(response, &[expected]).await
+}
+
+async fn require_status_in(response: Response, expected: &[u16]) -> anyhow::Result<()> {
     let status = response.status();
     ensure!(
-        status.as_u16() == expected,
+        expected.contains(&status.as_u16()),
         "device HTTP {status}: {}",
         response.text().await?
     );
@@ -417,6 +445,7 @@ mod tests {
         delete_attempts: usize,
         upload_attempts: usize,
         start_attempts: usize,
+        delete_returns_not_found: bool,
         reject_create_without_manifest: bool,
         reject_upload: bool,
         kernel: Vec<u8>,
@@ -593,6 +622,11 @@ mod tests {
             != Some(device.status.boot_epoch.as_str())
         {
             return (StatusCode::CONFLICT, "stale boot epoch").into_response();
+        }
+        if device.delete_returns_not_found {
+            device.manifest = None;
+            device.status.boot = None;
+            return StatusCode::NOT_FOUND.into_response();
         }
         if device
             .manifest
@@ -778,6 +812,12 @@ mod tests {
             state.ota.job("board-1").await.unwrap().phase,
             Phase::Downloading
         );
+        let failed = state.ota.job("board-1").await.unwrap();
+        assert_eq!(failed.delivery_attempts, 1);
+        assert_eq!(
+            failed.error.as_deref(),
+            Some("device HTTP 409 Conflict: stale boot epoch")
+        );
 
         {
             let mut fake = fake.lock().await;
@@ -890,6 +930,7 @@ mod tests {
             delete_attempts: 0,
             upload_attempts: 0,
             start_attempts: 0,
+            delete_returns_not_found: false,
             reject_create_without_manifest: false,
             reject_upload: true,
             kernel,
@@ -942,7 +983,11 @@ mod tests {
                 cmdline: Some("console=ttyS0".into()),
             })
             .await;
-        fake.lock().await.reject_create_without_manifest = true;
+        {
+            let mut fake = fake.lock().await;
+            fake.delete_returns_not_found = true;
+            fake.reject_create_without_manifest = true;
+        }
         let error = reconcile(state, announcement, peer).await.unwrap_err();
         let error = format!("{error:#}");
         assert!(error.contains("device refused boot job: create still conflicts"));

@@ -193,6 +193,7 @@ export interface LoaderUpdateJob {
   image: LoaderImage;
   phase: "queued" | "downloading" | "staged" | "confirming" | "succeeded" | "rolled_back" | "failed" | "cancelled";
   error: string | null;
+  delivery_attempts: number;
 }
 
 export interface LoaderOtaResources {

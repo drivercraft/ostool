@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 pub const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+pub(crate) const MAX_DELIVERY_ATTEMPTS: u8 = 3;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Image {
@@ -53,6 +54,8 @@ pub struct Job {
     pub image: Image,
     pub phase: Phase,
     pub error: Option<String>,
+    #[serde(default)]
+    pub delivery_attempts: u8,
 }
 
 #[derive(Clone, Debug)]
@@ -294,6 +297,7 @@ impl OtaStore {
             image,
             phase: Phase::Queued,
             error: None,
+            delivery_attempts: 0,
         };
         let mut updated = jobs.clone();
         updated.insert(board_id, job.clone());
@@ -430,10 +434,15 @@ impl OtaStore {
             ),
             "invalid loader OTA phase"
         );
-        ensure!(
-            !job.phase.is_terminal() || job.phase == phase,
-            "OTA job already finished"
-        );
+        if job.phase == phase {
+            if job.error != error {
+                job.error = error;
+                self.save(&updated)?;
+                *jobs = updated;
+            }
+            return Ok(());
+        }
+        ensure!(!job.phase.is_terminal(), "OTA job already finished");
         ensure!(
             matches!(
                 (job.phase, phase),
@@ -467,6 +476,37 @@ impl OtaStore {
             *jobs = updated;
         }
         Ok(())
+    }
+
+    pub async fn record_delivery_failure(
+        &self,
+        board_id: &str,
+        mac_address: httpboot_protocol::MacAddress,
+        update_id: &str,
+        error: String,
+    ) -> anyhow::Result<Job> {
+        let mut jobs = self.jobs.lock().await;
+        let mut updated = jobs.clone();
+        let job = updated.get_mut(board_id).context("unknown OTA job")?;
+        ensure!(
+            job.mac_address == mac_address && job.update_id == update_id,
+            "stale OTA delivery failure"
+        );
+        ensure!(
+            matches!(job.phase, Phase::Queued | Phase::Downloading),
+            "OTA job is not accepting an image"
+        );
+        job.delivery_attempts = job.delivery_attempts.saturating_add(1);
+        job.error = Some(error);
+        if job.delivery_attempts >= MAX_DELIVERY_ATTEMPTS {
+            job.phase = Phase::Failed;
+        } else {
+            job.phase = Phase::Downloading;
+        }
+        let result = job.clone();
+        self.save(&updated)?;
+        *jobs = updated;
+        Ok(result)
     }
 
     fn save(&self, jobs: &BTreeMap<String, Job>) -> anyhow::Result<()> {
@@ -527,6 +567,131 @@ mod tests {
         bytes[0x98..0x9a].copy_from_slice(&[0x0b, 0x02]);
         bytes[0xdc..0xde].copy_from_slice(&[10, 0]);
         bytes
+    }
+
+    #[tokio::test]
+    async fn duplicate_phase_reports_are_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = OtaStore::open(dir.path()).unwrap();
+        let image = store.put_image(&efi_image(), Some("first".into())).unwrap();
+        let mac = "02:00:00:00:00:01".parse().unwrap();
+        let job = store
+            .queue("board-1".into(), mac, &image.sha256)
+            .await
+            .unwrap();
+
+        for phase in [
+            Phase::Downloading,
+            Phase::Downloading,
+            Phase::Staged,
+            Phase::Staged,
+            Phase::Failed,
+            Phase::Failed,
+        ] {
+            store
+                .report(
+                    "board-1",
+                    mac,
+                    &job.update_id,
+                    phase,
+                    (phase == Phase::Failed).then(|| "device rejected image".into()),
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        let mut replacement = efi_image();
+        replacement.push(1);
+        let image = store
+            .put_image(&replacement, Some("second".into()))
+            .unwrap();
+        let job = store
+            .queue("board-1".into(), mac, &image.sha256)
+            .await
+            .unwrap();
+        let trial = LoaderOtaState {
+            active_sha256: "11".repeat(32),
+            running_sha256: image.sha256.clone(),
+            pending_update_id: Some(job.update_id.clone()),
+            trial: true,
+            source: Some(OtaSource::Server),
+            last_update_id: None,
+            last_outcome: None,
+        };
+        assert!(matches!(
+            store.decide("board-1", mac, &trial, true).await.unwrap(),
+            Decision::Confirm(id) if id == job.update_id
+        ));
+        for _ in 0..2 {
+            store
+                .report(
+                    "board-1",
+                    mac,
+                    &job.update_id,
+                    Phase::Succeeded,
+                    None,
+                    Some(&image.sha256),
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(store.job("board-1").await.unwrap().phase, Phase::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn delivery_failures_are_persisted_and_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = OtaStore::open(dir.path()).unwrap();
+        let image = store.put_image(&efi_image(), None).unwrap();
+        let mac = "02:00:00:00:00:01".parse().unwrap();
+        let job = store
+            .queue("board-1".into(), mac, &image.sha256)
+            .await
+            .unwrap();
+
+        let first = store
+            .record_delivery_failure(
+                "board-1",
+                mac,
+                &job.update_id,
+                "device HTTP 409 Conflict".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.phase, Phase::Downloading);
+        assert_eq!(first.delivery_attempts, 1);
+        drop(store);
+
+        let store = OtaStore::open(dir.path()).unwrap();
+        for attempt in 2..=MAX_DELIVERY_ATTEMPTS {
+            let updated = store
+                .record_delivery_failure(
+                    "board-1",
+                    mac,
+                    &job.update_id,
+                    format!("delivery attempt {attempt} failed"),
+                )
+                .await
+                .unwrap();
+            assert_eq!(updated.delivery_attempts, attempt);
+        }
+        let failed = store.job("board-1").await.unwrap();
+        assert_eq!(failed.phase, Phase::Failed);
+        assert_eq!(failed.error.as_deref(), Some("delivery attempt 3 failed"));
+        let idle = LoaderOtaState {
+            active_sha256: "11".repeat(32),
+            running_sha256: "11".repeat(32),
+            pending_update_id: None,
+            trial: false,
+            source: None,
+            last_update_id: None,
+            last_outcome: None,
+        };
+        assert!(matches!(
+            store.decide("board-1", mac, &idle, true).await.unwrap(),
+            Decision::Idle
+        ));
     }
 
     #[tokio::test]

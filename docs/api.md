@@ -672,7 +672,7 @@ Content-Type: application/json
 
 axloader 协议 v2/v3/v4 使用 `POST /api/v1/loaders/poll`、`POST /api/v1/loaders/status` 和 `GET /api/v1/sessions/{session_id}/loader-status`。poll/status 由 UDP 发现返回的一次性 `registration_id` 关联本次固件启动；状态以 `session_id + boot_id + registration_id` 定位，旧代次迟到上报不能覆盖新代次。v2 loader 仅在没有 `initramfs` 与 `cmdline` 时接收启动，否则得到 `boot_payload_unsupported`；v3 保留原有启动契约；v4 另携带 `ota` 状态并可收到 `update` / `confirm_update`。Session 释放时删除启动清单和 loader 状态，不删除独立持久的 OTA 任务。
 
-v5 axloader 通过 UDP 广播自身地址，ostool-server 随后调用设备的 HTTP 接口。设备 `POST /api/v1/boot/jobs` 创建事务返回 `201`，相同清单重试返回 `200`，冲突清单返回 `409`；服务端观察到同代次的其他启动 ID 时会先删除旧事务并只重试创建一次。服务端构造 v5 清单时完整保留相互独立的可选 `cmdline` 与 `initramfs` 元数据，并把 Session 的兼容入口转换为 `__x86_64_efi_pe_entry`；v2/v3/v4 poll 响应继续返回原入口。`POST /api/v1/boot/jobs/{id}/start` 和 `PUT /api/v1/ota/image` 接受交接或升级后返回 `202`；`POST /api/v1/ota/confirm` 成功返回 `200`，代次、来源或升级 ID 不匹配返回 `409`。完整设备接口及状态机见 [axloader 网络控制与本地验证](axloader-network-control.md#21-启动事务)和[装载器升级](axloader-network-control.md#22-装载器升级)。设备没有可用 OTA 持久区时，`ota` 状态可以为空；服务端跳过升级，但仍可向已有 Session 推送普通启动事务。
+v5 axloader 通过 UDP 广播自身地址，ostool-server 随后调用设备的 HTTP 接口。设备 `POST /api/v1/boot/jobs` 创建事务返回 `201`，相同清单重试返回 `200`，冲突清单返回 `409`；服务端观察到同代次的其他启动 ID 时会先删除旧事务并只重试创建一次，删除返回 `404` 也视为旧事务已经消失。服务端构造 v5 清单时完整保留相互独立的可选 `cmdline` 与 `initramfs` 元数据，并把 Session 的兼容入口转换为 `__x86_64_efi_pe_entry`；v2/v3/v4 poll 响应继续返回原入口。`POST /api/v1/boot/jobs/{id}/start` 和 `PUT /api/v1/ota/image` 接受交接或升级后返回 `202`；`POST /api/v1/ota/confirm` 成功返回 `200`，代次、来源或升级 ID 不匹配返回 `409`。完整设备接口及状态机见 [axloader 网络控制与本地验证](axloader-network-control.md#21-启动事务)和[装载器升级](axloader-network-control.md#22-装载器升级)。设备没有可用 OTA 持久区时，`ota` 状态可以为空；服务端跳过升级，但仍可向已有 Session 推送普通启动事务。
 
 装载器镜像库和指派任务使用下列 ostool-server 接口：
 
@@ -682,12 +682,12 @@ v5 axloader 通过 UDP 广播自身地址，ostool-server 随后调用设备的 
 | `POST /api/v1/admin/loader-images` | `201`，按请求体保存 EFI 并返回摘要、长度和可选 `X-Image-Version` | 空请求体、缺少或错误的 `Content-Length`、无效 PE/COFF 或版本返回 `400`，超过 32 MiB 返回 `413` |
 | `DELETE /api/v1/admin/loader-images/{sha256}` | `204`，删除未被活动任务引用的 EFI 文件和元数据 | 摘要无效返回 `400`，镜像不存在返回 `404`，仍被非终态任务引用返回 `409` |
 | `GET /api/v1/admin/boards/{board_id}/loader-updates` | `200`，返回该板卡当前任务或 `null` | 未知板卡返回 `404` |
-| `POST /api/v1/admin/boards/{board_id}/loader-updates` | `201`，创建绑定当前板卡 MAC 的独立升级 ID | 板卡有 Session、已有非终态任务、设备处于待试槽或镜像已激活时返回 `409` |
+| `POST /api/v1/admin/boards/{board_id}/loader-updates` | `201`，为 x86_64 UEFI HTTP 板卡创建绑定当前 MAC 的独立升级 ID | 架构或启动类型不支持、板卡有 Session、已有非终态任务、设备处于待试槽或镜像已激活时返回 `409` |
 | `DELETE /api/v1/admin/boards/{board_id}/loader-updates/{update_id}` | `200`，取消任意非终态任务并返回 `cancelled` 任务 | ID 已被替代或任务已经终结返回 `409` |
 | `GET /api/v1/loader-updates/{update_id}/image` | `200`，向旧 v4 loader 返回任务对应 EFI | 任务不存在或不可下载返回 `404`，板卡 MAC 已改变返回 `409` |
 | `POST /api/v1/loaders/ota-status` | `204`，接受旧 v4 loader 的阶段上报 | 协议版本错误返回 `400`，注册、MAC、任务或阶段不匹配返回 `409` |
 
-OTA 镜像和任务是独立于 Session 的持久状态。服务端重启后继续使用原升级 ID；取消已激活的任务不会远程改写设备状态，已进入待试槽的设备会在未获确认时按自身 A/B 规则回滚。非终态任务引用的镜像不能删除；删除终态任务曾引用的镜像只回收 EFI 文件和镜像元数据，任务中保存的摘要、版本和长度仍可用于审计。
+OTA 镜像和任务是独立于 Session 的持久状态。服务端重启后继续使用原升级 ID；同一阶段的回报可安全重试。v5 设备镜像投递失败会持久记录错误和次数，连续三次失败后任务进入 `failed` 并停止重发。取消已激活的任务不会远程改写设备状态，已进入待试槽的设备会在未获确认时按自身 A/B 规则回滚。非终态任务引用的镜像不能删除；删除终态任务曾引用的镜像只回收 EFI 文件和镜像元数据，任务中保存的摘要、版本和长度仍可用于审计。
 
 ### 查询开发板类型
 

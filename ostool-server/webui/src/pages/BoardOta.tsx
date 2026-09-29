@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { api } from "@/api/client";
 import { useResource } from "@/api/events";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ const terminalPhases = ["succeeded", "rolled_back", "failed", "cancelled"];
 
 export function BoardOta({ boardId }: { boardId: string }) {
   const ota = useResource("ota");
+  const fileInput = useRef<HTMLInputElement>(null);
   const [selected, setSelected] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const upload = useAction();
@@ -33,7 +34,7 @@ export function BoardOta({ boardId }: { boardId: string }) {
       )}
       <label className="full-width">
         EFI 镜像（最多 32 MiB）
-        <input type="file" accept=".efi,application/octet-stream"
+        <input ref={fileInput} type="file" accept=".efi,application/octet-stream"
           onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
       </label>
       <Button type="button" variant="outline" disabled={!file || upload.pending}
@@ -42,6 +43,7 @@ export function BoardOta({ boardId }: { boardId: string }) {
           const image = await api.uploadLoaderImage(file, sanitizeImageVersion(file.name));
           setSelected(image.sha256);
           setFile(null);
+          if (fileInput.current) fileInput.current.value = "";
         }, "镜像已保存")}>上传镜像</Button>
       <SelectField label="待下发镜像" value={selected}
         onValue={setSelected} options={[

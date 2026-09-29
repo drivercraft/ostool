@@ -32,6 +32,7 @@ function job(phase: LoaderUpdateJob["phase"]): LoaderUpdateJob {
     image,
     phase,
     error: null,
+    delivery_attempts: 0,
   };
 }
 
@@ -64,4 +65,25 @@ it("deletes an image referenced only by a terminal assignment", async () => {
 
   await waitFor(() => expect(remove).toHaveBeenCalledWith(image.sha256));
   await waitFor(() => expect(select).toHaveValue(""));
+});
+
+it("allows selecting the same image after a successful upload", async () => {
+  applyOta(job("succeeded"));
+  const upload = vi.spyOn(api, "uploadLoaderImage").mockResolvedValue(image);
+  render(<BoardOta boardId="board-1" />);
+  const user = userEvent.setup();
+  const input = screen.getByLabelText("EFI 镜像（最多 32 MiB）");
+  const button = screen.getByRole("button", { name: "上传镜像" });
+  const file = new File(["efi"], "loader.efi", {
+    type: "application/octet-stream",
+  });
+
+  await user.upload(input, file);
+  await user.click(button);
+  await waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+  expect(input).toHaveValue("");
+
+  await user.upload(input, file);
+  await user.click(button);
+  await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
 });
