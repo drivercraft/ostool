@@ -21,9 +21,11 @@ GET 设备状态，核对 MAC、代次和架构，才从板卡 TOML 中查找当
 ### 1.2 启动交接
 
 `BootServer` 在内存维护一个 `DeviceBootJob`。内核和可选 initramfs 由调用方
-PUT 上传，各自按清单长度及 SHA-256 检验，每个文件不超过 256 MiB。
-`POST /api/v1/boot/jobs/{id}/start` 验证 ELF，复制已核对摘要的归档并发布宿主配置表，回复
-`ready_to_handoff` 后释放 TCP4 与 UDP4 对象，进入既有 UEFI 内核交接。
+PUT 上传，各自按清单长度及 SHA-256 检验，每个文件不超过 256 MiB。cmdline
+和 initramfs 相互独立且都可省略。`POST /api/v1/boot/jobs/{id}/start` 只接受
+x86_64 ELF64 的 `__x86_64_efi_pe_entry`，把 cmdline 安装为 EFI LoadOptions，
+并仅在归档存在时发布 TGOS `BootPayload` 配置表；回复 `ready_to_handoff` 后释放
+TCP4 与 UDP4 对象，进入 UEFI 内核交接。
 没有 ESP 写入或 ostool-server 时，同样可以从设备 IP 直连完成启动。
 
 ```mermaid
@@ -52,7 +54,7 @@ ostool-server 保留原有 Session、串口 WebSocket、启动清单和板卡租
 
 所有修改调用携带当前 `/api/v1/status` 返回的 `X-Boot-Epoch`。
 `BootServer::create()` 只接受 x86_64 ELF64、非空合法启动 ID、预期长度与
-摘要，以及合法的可选命令行；相同 ID 和清单的重试保留已接收文件，
+摘要、固定 EFI 入口，以及合法的可选命令行；相同 ID 和清单的重试保留已接收文件，
 冲突清单返回 `409`。设备只保留一个启动事务，可在启动前取消。
 
 | 方法与路径 | 结果 |
@@ -97,6 +99,9 @@ ostool-server 保留原有 Session、串口 WebSocket、启动清单和板卡租
 ostool-server 继续接受旧装载器 v2/v3/v4 的 UDP Offer、
 `POST /api/v1/loaders/poll`、状态上报和下载 URL；`httpboot-protocol` 中的
 `PROTOCOL_VERSION` 继续标识这条旧路径，`DEVICE_PROTOCOL_VERSION` 标识 v5。
+服务端只在 `device::push_boot()` 构造 v5 设备清单时把 Session 的
+`httpboot_entry` 转换为 `__x86_64_efi_pe_entry`；v2/v3/v4 poll 继续收到原入口
+和原字段，旧装载器不需要解析新入口。
 v5 装载器只广播，不调用任何服务端 HTTP 接口。TGOS 当前依赖已发布
 `httpboot-protocol 0.3.0`；其 v5 设备请求类型在本地定义，两仓用实际 HTTP
 契约测试核对，代码交付不依赖另一仓的绝对路径或发布新 crate。
@@ -108,6 +113,11 @@ v5 装载器只广播，不调用任何服务端 HTTP 接口。TGOS 当前依赖
 使用独立 loopback 端口，关闭测速与系统 TFTP 接管；QEMU `hostfwd` 指向真实
 客户机 TCP4 监听。测试夹具仅转发 QEMU 广播帧并将公告端口换成本地
 `hostfwd` 端口，服务端必须直接 HTTP 请求客户机完成启动与 OTA。
+Session 启动使用 TGOS 已构建的真实 `arceos-helloworld`，同时上传可选 initramfs
+并发送 cmdline；成功条件来自内核输出的 `HOST_CMDLINE`、
+`HOST_INITRAMFS_PASSED` 和 `Hello, world!`，不以装载器准备交接日志代替。
+默认内核来自 TGOS 的 axloader QEMU 测试产物，也可用 `--kernel` 和
+`--initramfs` 显式指定。
 
 ```bash
 cargo build -p ostool-server

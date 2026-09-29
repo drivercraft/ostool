@@ -18,6 +18,8 @@ use crate::{
     state::{AppState, BoardLeaseState},
 };
 
+const V5_EFI_ENTRY_SYMBOL: &str = "__x86_64_efi_pe_entry";
+
 pub async fn reconcile(
     state: AppState,
     announcement: LoaderAnnouncement,
@@ -196,21 +198,8 @@ async fn push_boot(
 ) -> anyhow::Result<()> {
     let epoch = observed.boot_epoch.as_str();
     let observed_boot_id = observed.boot.as_ref().map(|boot| boot.boot_id.as_str());
-    let manifest = DeviceBootJob {
-        boot_id: command.boot_id.clone(),
-        arch: command.arch,
-        image_format: command.image_format,
-        kernel: DeviceBootImage {
-            size: command.kernel_size,
-            sha256: command.kernel_sha256.clone(),
-        },
-        initramfs: command.initramfs.as_ref().map(|file| DeviceBootImage {
-            size: file.size,
-            sha256: file.sha256.clone(),
-        }),
-        cmdline: command.cmdline.clone(),
-        entry_symbol: command.entry_symbol.clone(),
-    };
+    let manifest = v5_boot_manifest(command);
+
     let base = format!("{endpoint}/api/v1/boot/jobs");
     let create = || {
         client
@@ -295,6 +284,24 @@ async fn push_boot(
     Ok(())
 }
 
+fn v5_boot_manifest(command: &SessionBootCommand) -> DeviceBootJob {
+    DeviceBootJob {
+        boot_id: command.boot_id.clone(),
+        arch: command.arch,
+        image_format: command.image_format,
+        kernel: DeviceBootImage {
+            size: command.kernel_size,
+            sha256: command.kernel_sha256.clone(),
+        },
+        initramfs: command.initramfs.as_ref().map(|file| DeviceBootImage {
+            size: file.size,
+            sha256: file.sha256.clone(),
+        }),
+        cmdline: command.cmdline.clone(),
+        entry_symbol: Some(V5_EFI_ENTRY_SYMBOL.into()),
+    }
+}
+
 struct PushContext<'a> {
     state: &'a AppState,
     client: &'a Client,
@@ -374,14 +381,14 @@ mod tests {
         routing::{delete, get, post, put},
     };
     use httpboot_protocol::{
-        BootArch, DEVICE_PROTOCOL_VERSION, DeviceBootJob, DeviceBootStatus, ImageFormat,
+        BootArch, BootFile, DEVICE_PROTOCOL_VERSION, DeviceBootJob, DeviceBootStatus, ImageFormat,
         LoaderAnnouncement, LoaderDeviceStatus, LoaderHardwareInfo, LoaderOtaState, OtaOutcome,
         OtaSource,
     };
     use serde::Deserialize;
     use tokio::{net::TcpListener, sync::Mutex};
 
-    use super::{hex_sha256, reconcile};
+    use super::{V5_EFI_ENTRY_SYMBOL, hex_sha256, reconcile, v5_boot_manifest};
     use crate::{
         BoardConfig, BoardNetworkIdentity, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
         PowerManagementConfig, ServerConfig, TftpConfig, UefiBootArch, UefiHttpProfile,
@@ -416,6 +423,54 @@ mod tests {
     }
 
     type FakeBootState = Arc<Mutex<FakeBootDevice>>;
+
+    #[test]
+    fn v5_manifest_preserves_optional_boot_payloads_and_uses_efi_entry() {
+        for (cmdline, initramfs) in [
+            (None, None),
+            (Some("console=ttyS0".to_string()), None),
+            (
+                None,
+                Some(BootFile {
+                    path: "/boot/sessions/session/initramfs.cpio".into(),
+                    size: 123,
+                    sha256: "22".repeat(32),
+                }),
+            ),
+            (
+                Some("console=ttyS0".to_string()),
+                Some(BootFile {
+                    path: "/boot/sessions/session/initramfs.cpio".into(),
+                    size: 123,
+                    sha256: "22".repeat(32),
+                }),
+            ),
+        ] {
+            let command = SessionBootCommand {
+                boot_id: "boot-1".into(),
+                kernel_path: "/boot/sessions/session/kernel.elf".into(),
+                kernel_size: 456,
+                kernel_sha256: "11".repeat(32),
+                arch: BootArch::X86_64,
+                image_format: ImageFormat::Elf64,
+                entry_symbol: Some("httpboot_entry".into()),
+                initramfs: initramfs.clone(),
+                cmdline: cmdline.clone(),
+            };
+
+            let manifest = v5_boot_manifest(&command);
+
+            assert_eq!(manifest.cmdline, cmdline);
+            assert_eq!(manifest.entry_symbol.as_deref(), Some(V5_EFI_ENTRY_SYMBOL));
+            assert_eq!(
+                manifest.initramfs,
+                initramfs.map(|file| httpboot_protocol::DeviceBootImage {
+                    size: file.size,
+                    sha256: file.sha256,
+                })
+            );
+        }
+    }
 
     async fn get_status(State(device): State<FakeState>) -> Json<LoaderDeviceStatus> {
         Json(device.lock().await.status.clone())

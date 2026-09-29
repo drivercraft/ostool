@@ -13,8 +13,10 @@ use crate::project::variables::{self, VariableScope};
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct BootPayloadConfig {
     /// Path to a host initramfs archive; guest initrds are configured separately.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initramfs: Option<String>,
     /// Boot arguments passed to the host kernel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cmdline: Option<String>,
 }
 
@@ -59,6 +61,44 @@ mod tests {
     use super::BootPayloadConfig;
 
     #[test]
+    fn serializes_all_optional_payload_combinations_without_null_fields() {
+        for (config, expected) in [
+            (BootPayloadConfig::default(), serde_json::json!({})),
+            (
+                BootPayloadConfig {
+                    cmdline: Some("console=ttyS0".into()),
+                    initramfs: None,
+                },
+                serde_json::json!({"cmdline": "console=ttyS0"}),
+            ),
+            (
+                BootPayloadConfig {
+                    cmdline: None,
+                    initramfs: Some("host.cpio".into()),
+                },
+                serde_json::json!({"initramfs": "host.cpio"}),
+            ),
+            (
+                BootPayloadConfig {
+                    cmdline: Some("console=ttyS0".into()),
+                    initramfs: Some("host.cpio".into()),
+                },
+                serde_json::json!({
+                    "cmdline": "console=ttyS0",
+                    "initramfs": "host.cpio",
+                }),
+            ),
+        ] {
+            let encoded = serde_json::to_value(&config).unwrap();
+            assert_eq!(encoded, expected);
+            assert_eq!(
+                serde_json::from_value::<BootPayloadConfig>(encoded).unwrap(),
+                config
+            );
+        }
+    }
+
+    #[test]
     fn rejects_control_bytes_and_oversize() {
         for value in [
             "console=ttyS0\nreset".to_string(),
@@ -85,6 +125,14 @@ mod tests {
         assert!(
             BootPayloadConfig {
                 cmdline: Some("value='literal'".into()),
+                ..Default::default()
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            BootPayloadConfig {
+                cmdline: Some(String::new()),
                 ..Default::default()
             }
             .validate()

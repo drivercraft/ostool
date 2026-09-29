@@ -672,7 +672,7 @@ Content-Type: application/json
 
 axloader 协议 v2/v3/v4 使用 `POST /api/v1/loaders/poll`、`POST /api/v1/loaders/status` 和 `GET /api/v1/sessions/{session_id}/loader-status`。poll/status 由 UDP 发现返回的一次性 `registration_id` 关联本次固件启动；状态以 `session_id + boot_id + registration_id` 定位，旧代次迟到上报不能覆盖新代次。v2 loader 仅在没有 `initramfs` 与 `cmdline` 时接收启动，否则得到 `boot_payload_unsupported`；v3 保留原有启动契约；v4 另携带 `ota` 状态并可收到 `update` / `confirm_update`。Session 释放时删除启动清单和 loader 状态，不删除独立持久的 OTA 任务。
 
-v5 axloader 通过 UDP 广播自身地址，ostool-server 随后调用设备的 HTTP 接口。设备 `POST /api/v1/boot/jobs` 创建事务返回 `201`，相同清单重试返回 `200`，冲突清单返回 `409`；服务端观察到同代次的其他启动 ID 时会先删除旧事务并只重试创建一次。`POST /api/v1/boot/jobs/{id}/start` 和 `PUT /api/v1/ota/image` 接受交接或升级后返回 `202`；`POST /api/v1/ota/confirm` 成功返回 `200`，代次、来源或升级 ID 不匹配返回 `409`。完整设备接口及状态机见 [axloader 网络控制与本地验证](axloader-network-control.md#21-启动事务)和[装载器升级](axloader-network-control.md#22-装载器升级)。设备没有可用 OTA 持久区时，`ota` 状态可以为空；服务端跳过升级，但仍可向已有 Session 推送普通启动事务。
+v5 axloader 通过 UDP 广播自身地址，ostool-server 随后调用设备的 HTTP 接口。设备 `POST /api/v1/boot/jobs` 创建事务返回 `201`，相同清单重试返回 `200`，冲突清单返回 `409`；服务端观察到同代次的其他启动 ID 时会先删除旧事务并只重试创建一次。服务端构造 v5 清单时完整保留相互独立的可选 `cmdline` 与 `initramfs` 元数据，并把 Session 的兼容入口转换为 `__x86_64_efi_pe_entry`；v2/v3/v4 poll 响应继续返回原入口。`POST /api/v1/boot/jobs/{id}/start` 和 `PUT /api/v1/ota/image` 接受交接或升级后返回 `202`；`POST /api/v1/ota/confirm` 成功返回 `200`，代次、来源或升级 ID 不匹配返回 `409`。完整设备接口及状态机见 [axloader 网络控制与本地验证](axloader-network-control.md#21-启动事务)和[装载器升级](axloader-network-control.md#22-装载器升级)。设备没有可用 OTA 持久区时，`ota` 状态可以为空；服务端跳过升级，但仍可向已有 Session 推送普通启动事务。
 
 装载器镜像库和指派任务使用下列 ostool-server 接口：
 

@@ -54,17 +54,6 @@ def run(*args, cwd=None):
     subprocess.run(args, cwd=cwd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
-def kernel_elf():
-    data = bytearray(0x1002)
-    data[:4] = b"\x7fELF"
-    data[4:7] = b"\x02\x01\x01"
-    struct.pack_into("<HHIQQ", data, 16, 2, 62, 1, 0x200000, 64)
-    struct.pack_into("<HHH", data, 52, 64, 56, 1)
-    struct.pack_into("<IIQQQQQQ", data, 64, 1, 5, 0x1000, 0x200000, 0x200000, 2, 0x1000, 0x1000)
-    data[0x1000:] = b"\xeb\xfe"
-    return bytes(data)
-
-
 def relay_beacons(capture, guest_port, stopped):
     capture.settimeout(0.5)
     outbound = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -140,12 +129,32 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tgos", type=Path, required=True)
     parser.add_argument("--server-bin", type=Path, required=True)
+    parser.add_argument("--kernel", type=Path)
+    parser.add_argument("--initramfs", type=Path)
     parser.add_argument("--ovmf-code", type=Path, default=Path("/usr/share/OVMF/OVMF_CODE_4M.fd"))
     parser.add_argument("--ovmf-vars", type=Path, default=Path("/usr/share/OVMF/OVMF_VARS_4M.fd"))
     args = parser.parse_args()
     tgos = args.tgos.resolve()
     root = Path(tempfile.mkdtemp(prefix="axloader-v5-local-"))
     print("local v5 artifacts:", root, flush=True)
+    kernel_path = (
+        args.kernel
+        or tgos / "target/x86_64-unknown-linux-musl/release/arceos-helloworld"
+    ).resolve()
+    kernel = kernel_path.read_bytes()
+    if args.initramfs:
+        initramfs_path = args.initramfs.resolve()
+    else:
+        initramfs_path = root / "host-initramfs.cpio"
+        run(
+            str(tgos / "target/debug/tg-xtask"),
+            "image",
+            "pack-initramfs",
+            str(tgos / "test-suit/host-initramfs"),
+            str(initramfs_path),
+            cwd=tgos,
+        )
+    initramfs = initramfs_path.read_bytes()
     loader = (tgos / "target/x86_64-unknown-uefi/release/axloader.efi").read_bytes()
     disk, initial_id = build_disk(root, tgos, loader)
     shutil.copy2(args.ovmf_vars, root / "vars.fd")
@@ -236,13 +245,18 @@ bind_addr = "127.0.0.1:2998"
             wait_for("server discovered v5 device", lambda: (lambda body: body if "qemu-v5" in json.dumps(body) and MAC in json.dumps(body) else None)(request(base + "/api/v1/admin/loader-devices")))
             session = request(base + "/api/v1/sessions", "POST", {"board_type": "qemu-v5", "board_id": "qemu-v5", "required_tags": []})
             session_id = session["session_id"]
-            image = kernel_elf()
-            request(base + "/api/v1/sessions/{}/http-boot/kernel".format(session_id), "PUT", image,
+            request(base + "/api/v1/sessions/{}/http-boot/files".format(session_id), "PUT", initramfs,
+                    {"X-File-Path": "initramfs.cpio"})
+            request(base + "/api/v1/sessions/{}/http-boot/kernel".format(session_id), "PUT", kernel,
                     {"X-HttpBoot-Arch": "x86_64", "X-HttpBoot-Image-Format": "elf64",
-                     "X-HttpBoot-Remote-Name": "kernel.elf"})
-            wait_for("server pushed ELF into QEMU and handed off", lambda: (
-                b'ready_to_handoff' in (root / "qemu-1.log").read_bytes()
-                and b'elf_loaded:' in (root / "qemu-1.log").read_bytes()), 120)
+                     "X-HttpBoot-Remote-Name": "kernel.elf",
+                     "X-HttpBoot-Entry-Symbol": "httpboot_entry",
+                     "X-HttpBoot-Initramfs-Path": "initramfs.cpio",
+                     "X-HttpBoot-Cmdline": "axloader.cmdline=ostool-local"})
+            wait_for("server pushed optional payloads into a real ArceOS kernel", lambda: (
+                b'HOST_CMDLINE: axloader.cmdline=ostool-local' in (root / "qemu-1.log").read_bytes()
+                and b'HOST_INITRAMFS_PASSED' in (root / "qemu-1.log").read_bytes()
+                and b'Hello, world!' in (root / "qemu-1.log").read_bytes()), 120)
             try:
                 request(base + "/api/v1/sessions/" + session_id, "DELETE")
             except urllib.error.HTTPError as error:
@@ -277,6 +291,8 @@ bind_addr = "127.0.0.1:2998"
             (root / "result.json").write_text(json.dumps({
                 "result": "passed",
                 "loader_sha256": hashlib.sha256(loader).hexdigest(),
+                "kernel_sha256": hashlib.sha256(kernel).hexdigest(),
+                "initramfs_sha256": hashlib.sha256(initramfs).hexdigest(),
                 "server_sha256": hashlib.sha256(args.server_bin.read_bytes()).hexdigest(),
                 "task_id": task_id,
                 "fat_disk": str(disk),

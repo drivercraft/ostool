@@ -4835,6 +4835,7 @@ mod tests {
                     .uri(format!("/api/v1/sessions/{session_id}/http-boot/kernel"))
                     .header("X-HttpBoot-Arch", "x86_64")
                     .header("X-HttpBoot-Image-Format", "elf64")
+                    .header("X-HttpBoot-Entry-Symbol", "httpboot_entry")
                     .header("X-HttpBoot-Initramfs-Path", "initramfs.cpio")
                     .header("X-HttpBoot-Cmdline", "console=ttyS0 -- test")
                     .body(Body::from("kernel-elf"))
@@ -4844,7 +4845,11 @@ mod tests {
             .unwrap();
         assert_eq!(published.status(), StatusCode::CREATED);
 
-        for version in [PREVIOUS_PROTOCOL_VERSION, LEGACY_PROTOCOL_VERSION] {
+        for version in [
+            PROTOCOL_VERSION,
+            PREVIOUS_PROTOCOL_VERSION,
+            LEGACY_PROTOCOL_VERSION,
+        ] {
             let probe = LoaderDiscoveryProbe {
                 protocol_version: version,
                 mac_address: mac,
@@ -4867,7 +4872,15 @@ mod tests {
                 arch: BootArch::X86_64,
                 loader_version: "test-loader".into(),
                 hardware: LoaderHardwareInfo::default(),
-                ota: None,
+                ota: (version == PROTOCOL_VERSION).then(|| LoaderOtaState {
+                    active_sha256: "11".repeat(32),
+                    running_sha256: "11".repeat(32),
+                    pending_update_id: None,
+                    trial: false,
+                    source: None,
+                    last_update_id: None,
+                    last_outcome: None,
+                }),
             };
             let response = app
                 .clone()
@@ -4889,6 +4902,7 @@ mod tests {
                 );
             } else {
                 let LoaderPollResponse::Boot {
+                    entry_symbol,
                     initramfs: Some(file),
                     cmdline,
                     ..
@@ -4903,6 +4917,7 @@ mod tests {
                 assert_eq!(file.size, archive.len() as u64);
                 assert_eq!(file.sha256, hex_sha256(archive));
                 assert_eq!(cmdline.as_deref(), Some("console=ttyS0 -- test"));
+                assert_eq!(entry_symbol.as_deref(), Some("httpboot_entry"));
             }
         }
     }
