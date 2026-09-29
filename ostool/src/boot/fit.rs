@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use byte_unit::Byte;
+use fdt_edit::Fdt;
 use fitimage::{ComponentConfig, FitImageBuilder, FitImageConfig};
 use log::{info, warn};
 use object::Architecture;
@@ -85,7 +86,10 @@ pub(crate) async fn generate_fit_image(input: FitInput) -> anyhow::Result<Genera
             dtb_path.display(),
             Byte::from(data.len())
         );
-        Some(data)
+        Some(
+            drop_stale_initrd(data)
+                .with_context(|| format!("failed to prepare FIT DTB {}", dtb_path.display()))?,
+        )
     } else {
         warn!("未指定 DTB 文件，将生成仅包含 kernel 的 FIT image");
         None
@@ -125,6 +129,42 @@ pub(crate) async fn generate_fit_image(input: FitInput) -> anyhow::Result<Genera
 
     info!("FIT image ok: {}", output_path.display());
     Ok(GeneratedFitImage { path: output_path })
+}
+
+fn drop_stale_initrd(data: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    // U-Boot supplies the current FIT ramdisk range during bootm. A preset DTB
+    // may still carry the range of an unrelated, earlier Linux boot.
+    let mut fdt = Fdt::from_bytes(&data).context("invalid input DTB")?;
+    let Some(chosen_id) = fdt.get_by_path("/chosen").map(|node| node.id()) else {
+        return Ok(data);
+    };
+    let chosen = fdt.node_mut(chosen_id).expect("chosen node belongs to FDT");
+    let start_property = chosen.remove_property("linux,initrd-start");
+    let end_property = chosen.remove_property("linux,initrd-end");
+    if start_property.is_none() && end_property.is_none() {
+        return Ok(data);
+    }
+    let start = start_property
+        .as_ref()
+        .and_then(|property| decode_initrd_address(&property.data));
+    let end = end_property
+        .as_ref()
+        .and_then(|property| decode_initrd_address(&property.data));
+    if let (Some(start), Some(end)) = (start, end)
+        && let Some(size) = end.checked_sub(start)
+    {
+        fdt.memory_reservations
+            .retain(|reservation| reservation.address != start || reservation.size != size);
+    }
+    Ok(fdt.encode().as_ref().to_vec())
+}
+
+fn decode_initrd_address(data: &[u8]) -> Option<u64> {
+    match data {
+        [a, b, c, d] => Some(u32::from_be_bytes([*a, *b, *c, *d]) as u64),
+        [a, b, c, d, e, f, g, h] => Some(u64::from_be_bytes([*a, *b, *c, *d, *e, *f, *g, *h])),
+        _ => None,
+    }
 }
 
 pub(crate) fn fit_arch_name(arch: Architecture) -> anyhow::Result<&'static str> {
@@ -249,6 +289,7 @@ mod tests {
         FitInput, build_default_fit_config, default_output_path, fit_arch_name,
         resolve_kernel_entry_addr,
     };
+    use fdt_edit::{Fdt, Node, Property};
     use object::Architecture;
 
     #[test]
@@ -398,7 +439,9 @@ mod tests {
         tokio::fs::write(&kernel_path, [1_u8, 2, 3, 4])
             .await
             .unwrap();
-        tokio::fs::write(&dtb_path, [5_u8, 6, 7, 8]).await.unwrap();
+        tokio::fs::write(&dtb_path, Fdt::new().encode().as_ref())
+            .await
+            .unwrap();
 
         let generated = super::generate_fit_image(FitInput {
             kernel_path,
@@ -420,5 +463,71 @@ mod tests {
                 .unwrap()
                 .is_file()
         );
+    }
+
+    #[tokio::test]
+    async fn fit_without_ramdisk_drops_stale_initrd_properties() {
+        let temp = tempfile::tempdir().unwrap();
+        let kernel_path = temp.path().join("kernel.bin");
+        let dtb_path = temp.path().join("board.dtb");
+        tokio::fs::write(&kernel_path, [1_u8, 2, 3, 4])
+            .await
+            .unwrap();
+
+        let mut board = Fdt::new();
+        board.memory_reservations.push(fdt_edit::MemoryReservation {
+            address: 0x4610_0000,
+            size: 0x05f0_0000,
+        });
+        board.memory_reservations.push(fdt_edit::MemoryReservation {
+            address: 0x8000_0000,
+            size: 0x1000,
+        });
+        let chosen = board.add_node(board.root_id(), Node::new("chosen"));
+        let node = board.node_mut(chosen).unwrap();
+        node.set_property(Property::new(
+            "linux,initrd-start",
+            0x4610_0000_u64.to_be_bytes().to_vec(),
+        ));
+        node.set_property(Property::new(
+            "linux,initrd-end",
+            0x4c00_0000_u64.to_be_bytes().to_vec(),
+        ));
+        node.set_property(Property::new("bootargs", b"root=/dev/mmcblk0p2\0".to_vec()));
+        tokio::fs::write(&dtb_path, board.encode().as_ref())
+            .await
+            .unwrap();
+
+        let generated = super::generate_fit_image(FitInput {
+            kernel_path,
+            dtb_path: Some(dtb_path),
+            initramfs_path: None,
+            arch: Architecture::Riscv64,
+            kernel_load_addr: 0x8020_0000,
+            kernel_entry_addr: 0x8020_0000,
+            fdt_load_addr: None,
+            output_path: None,
+        })
+        .await
+        .unwrap();
+        let fit_bytes = tokio::fs::read(generated.path()).await.unwrap();
+        let fit = Fdt::from_bytes(&fit_bytes).unwrap();
+        let fdt_bytes = &fit
+            .get_by_path("/images/fdt")
+            .unwrap()
+            .as_node()
+            .get_property("data")
+            .unwrap()
+            .data;
+        let boot_fdt = Fdt::from_bytes(fdt_bytes).unwrap();
+        let chosen = boot_fdt.get_by_path("/chosen").unwrap().as_node();
+        assert!(chosen.get_property("linux,initrd-start").is_none());
+        assert!(chosen.get_property("linux,initrd-end").is_none());
+        assert_eq!(
+            chosen.get_property("bootargs").unwrap().data,
+            b"root=/dev/mmcblk0p2\0"
+        );
+        assert_eq!(boot_fdt.memory_reservations.len(), 1);
+        assert_eq!(boot_fdt.memory_reservations[0].address, 0x8000_0000);
     }
 }
