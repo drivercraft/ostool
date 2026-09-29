@@ -3,6 +3,7 @@ import { api } from "@/api/client";
 import { useResource } from "@/api/events";
 import { Button } from "@/components/ui/button";
 import { Section, SelectField, Notice, ConfirmAction, useAction } from "@/components/forms";
+import { sanitizeImageVersion } from "@/utils/ota";
 
 export function BoardOta({ boardId }: { boardId: string }) {
   const ota = useResource("ota");
@@ -18,8 +19,8 @@ export function BoardOta({ boardId }: { boardId: string }) {
         <div className="full-width">
           <p>任务 {job.update_id} · {job.phase} · 镜像 {job.image.version || job.image.sha256.slice(0, 12)}</p>
           {job.error && <Notice>{job.error}</Notice>}
-          {pending && job.phase === "queued" && (
-            <ConfirmAction label="取消升级" description="取消尚未激活的升级任务？"
+          {pending && (
+            <ConfirmAction label="取消升级" description="取消当前升级任务？设备若已进入待试槽，将在下次复位时回滚。"
               action={() => api.cancelLoaderUpdate(boardId, job.update_id)} />
           )}
         </div>
@@ -32,7 +33,7 @@ export function BoardOta({ boardId }: { boardId: string }) {
       <Button type="button" variant="outline" disabled={!file || upload.pending}
         onClick={() => void upload.run(async () => {
           if (!file) return;
-          const image = await api.uploadLoaderImage(file, file.name);
+          const image = await api.uploadLoaderImage(file, sanitizeImageVersion(file.name));
           setSelected(image.sha256);
           setFile(null);
         }, "镜像已保存")}>上传镜像</Button>

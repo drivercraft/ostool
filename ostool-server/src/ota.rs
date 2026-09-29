@@ -244,17 +244,26 @@ impl OtaStore {
     }
 
     pub async fn cancel(&self, board_id: &str, update_id: &str) -> anyhow::Result<Job> {
+        let mut observations = self.observations.lock().await;
         let mut jobs = self.jobs.lock().await;
-        let mut updated = jobs.clone();
-        let job = updated.get_mut(board_id).context("no OTA job for board")?;
+        let mut updated_jobs = jobs.clone();
+        let job = updated_jobs
+            .get_mut(board_id)
+            .context("no OTA job for board")?;
         ensure!(
-            job.update_id == update_id && job.phase == Phase::Queued,
-            "OTA job already activated or superseded"
+            job.update_id == update_id && !job.phase.is_terminal(),
+            "OTA job already finished or superseded"
         );
         job.phase = Phase::Cancelled;
+        job.error = None;
         let result = job.clone();
-        self.save(&updated)?;
-        *jobs = updated;
+
+        let mut updated_observations = observations.clone();
+        updated_observations.remove(board_id);
+        self.save_observations(&updated_observations)?;
+        self.save(&updated_jobs)?;
+        *observations = updated_observations;
+        *jobs = updated_jobs;
         Ok(result)
     }
 
@@ -278,10 +287,7 @@ impl OtaStore {
                     state: ota.clone(),
                 },
             );
-            atomic_write(
-                &self.root.join("devices.json"),
-                &serde_json::to_vec(&updated)?,
-            )?;
+            self.save_observations(&updated)?;
             *observations = updated;
         }
         let mut jobs = self.jobs.lock().await;
@@ -406,6 +412,16 @@ impl OtaStore {
     fn save(&self, jobs: &BTreeMap<String, Job>) -> anyhow::Result<()> {
         atomic_write(&self.root.join("jobs.json"), &serde_json::to_vec(jobs)?)
     }
+
+    fn save_observations(
+        &self,
+        observations: &BTreeMap<String, Observation>,
+    ) -> anyhow::Result<()> {
+        atomic_write(
+            &self.root.join("devices.json"),
+            &serde_json::to_vec(observations)?,
+        )
+    }
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -524,6 +540,56 @@ mod tests {
                 .queue("board-1".into(), mac, &candidate.sha256)
                 .await
                 .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn active_update_can_be_cancelled_and_replaced_after_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = OtaStore::open(dir.path()).unwrap();
+        let image = store.put_image(&efi_image(), Some("first".into())).unwrap();
+        let mac = "02:00:00:00:00:01".parse().unwrap();
+        let job = store
+            .queue("board-1".into(), mac, &image.sha256)
+            .await
+            .unwrap();
+        let state = LoaderOtaState {
+            active_sha256: "11".repeat(32),
+            running_sha256: "11".repeat(32),
+            pending_update_id: None,
+            trial: false,
+            source: None,
+            last_update_id: None,
+            last_outcome: None,
+        };
+        assert!(matches!(
+            store.decide("board-1", mac, &state, true).await.unwrap(),
+            Decision::Update(_)
+        ));
+        assert_eq!(
+            store.job("board-1").await.unwrap().phase,
+            Phase::Downloading
+        );
+
+        let cancelled = store.cancel("board-1", &job.update_id).await.unwrap();
+        assert_eq!(cancelled.phase, Phase::Cancelled);
+        assert!(!store.observations.lock().await.contains_key("board-1"));
+        assert!(store.cancel("board-1", &job.update_id).await.is_err());
+
+        drop(store);
+        let store = OtaStore::open(dir.path()).unwrap();
+        assert_eq!(store.job("board-1").await.unwrap().phase, Phase::Cancelled);
+        assert!(!store.observations.lock().await.contains_key("board-1"));
+        let mut replacement = efi_image();
+        replacement.push(1);
+        let replacement = store
+            .put_image(&replacement, Some("second".into()))
+            .unwrap();
+        assert!(
+            store
+                .queue("board-1".into(), mac, &replacement.sha256)
+                .await
+                .is_ok()
         );
     }
 }

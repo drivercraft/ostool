@@ -28,7 +28,8 @@ pub async fn reconcile(
         "unsupported device protocol"
     );
     ensure!(announcement.http_port > 0, "missing device HTTP port");
-    let endpoint = format!("http://{}:{}", peer.ip(), announcement.http_port);
+    let device_addr = SocketAddr::new(peer.ip(), announcement.http_port);
+    let endpoint = format!("http://{device_addr}");
     let client = Client::builder()
         .timeout(Duration::from_secs(300))
         .build()?;
@@ -151,7 +152,11 @@ pub async fn reconcile(
             return Ok(());
         }
     } else {
-        return Ok(());
+        log::warn!(
+            "v5 loader {} at {} did not report OTA state; skipping upgrades",
+            announcement.mac_address,
+            peer.ip()
+        );
     }
     if runtime.lease_state != BoardLeaseState::Using {
         return Ok(());
@@ -335,4 +340,452 @@ fn hex_sha256(bytes: &[u8]) -> String {
         write!(result, "{byte:02x}").expect("write to String");
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use axum::{
+        Json, Router,
+        body::Bytes,
+        extract::State,
+        http::{HeaderMap, StatusCode},
+        response::{IntoResponse, Response},
+        routing::{get, post, put},
+    };
+    use httpboot_protocol::{
+        BootArch, DEVICE_PROTOCOL_VERSION, DeviceBootJob, ImageFormat, LoaderAnnouncement,
+        LoaderDeviceStatus, LoaderHardwareInfo, LoaderOtaState, OtaOutcome, OtaSource,
+    };
+    use serde::Deserialize;
+    use tokio::{net::TcpListener, sync::Mutex};
+
+    use super::{hex_sha256, reconcile};
+    use crate::{
+        BoardConfig, BoardNetworkIdentity, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
+        PowerManagementConfig, ServerConfig, TftpConfig, UefiBootArch, UefiHttpProfile,
+        build_app_state, ota::Phase, session::SessionBootCommand, state::BoardRuntimeState,
+        tftp::service::build_tftp_manager,
+    };
+
+    #[derive(Clone)]
+    struct FakeDevice {
+        status: LoaderDeviceStatus,
+        accepted_epoch: String,
+        expected_image: Vec<u8>,
+        update_id: Option<String>,
+        put_attempts: usize,
+        confirm_attempts: usize,
+        allow_confirm: bool,
+    }
+
+    type FakeState = Arc<Mutex<FakeDevice>>;
+
+    #[derive(Clone)]
+    struct FakeBootDevice {
+        status: LoaderDeviceStatus,
+        manifest: Option<DeviceBootJob>,
+        create_attempts: usize,
+        upload_attempts: usize,
+        start_attempts: usize,
+        reject_upload: bool,
+        kernel: Vec<u8>,
+    }
+
+    type FakeBootState = Arc<Mutex<FakeBootDevice>>;
+
+    async fn get_status(State(device): State<FakeState>) -> Json<LoaderDeviceStatus> {
+        Json(device.lock().await.status.clone())
+    }
+
+    async fn put_ota(State(device): State<FakeState>, headers: HeaderMap, body: Bytes) -> Response {
+        let mut device = device.lock().await;
+        device.put_attempts += 1;
+        let header = |name: &'static str| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned)
+        };
+        if header("X-Boot-Epoch").as_deref() != Some(device.accepted_epoch.as_str()) {
+            return (StatusCode::CONFLICT, "stale boot epoch").into_response();
+        }
+        let digest = hex_sha256(&body);
+        if body.as_ref() != device.expected_image
+            || header("X-Image-Sha256").as_deref() != Some(digest.as_str())
+            || header("X-Update-Source").as_deref() != Some("server")
+        {
+            return (StatusCode::BAD_REQUEST, "image mismatch").into_response();
+        }
+        let Some(update_id) = header("X-Update-Id") else {
+            return (StatusCode::BAD_REQUEST, "missing update id").into_response();
+        };
+        device.update_id = Some(update_id.clone());
+        let ota = device.status.ota.as_mut().unwrap();
+        ota.pending_update_id = Some(update_id);
+        ota.running_sha256 = digest;
+        ota.trial = true;
+        ota.source = Some(OtaSource::Server);
+        StatusCode::ACCEPTED.into_response()
+    }
+
+    #[derive(Deserialize)]
+    struct ConfirmRequest {
+        update_id: String,
+    }
+
+    async fn confirm_ota(
+        State(device): State<FakeState>,
+        headers: HeaderMap,
+        Json(request): Json<ConfirmRequest>,
+    ) -> Response {
+        let mut device = device.lock().await;
+        device.confirm_attempts += 1;
+        let epoch = headers
+            .get("X-Boot-Epoch")
+            .and_then(|value| value.to_str().ok());
+        if epoch != Some(device.accepted_epoch.as_str())
+            || headers
+                .get("X-Update-Source")
+                .and_then(|value| value.to_str().ok())
+                != Some("server")
+            || device.update_id.as_deref() != Some(request.update_id.as_str())
+        {
+            return (StatusCode::CONFLICT, "confirmation mismatch").into_response();
+        }
+        if device.allow_confirm {
+            let ota = device.status.ota.as_mut().unwrap();
+            ota.active_sha256.clone_from(&ota.running_sha256);
+            ota.pending_update_id = None;
+            ota.trial = false;
+            ota.last_update_id = Some(request.update_id);
+            ota.last_outcome = Some(OtaOutcome::Confirmed);
+        }
+        StatusCode::OK.into_response()
+    }
+
+    async fn get_boot_status(State(device): State<FakeBootState>) -> Json<LoaderDeviceStatus> {
+        Json(device.lock().await.status.clone())
+    }
+
+    async fn create_boot_job(
+        State(device): State<FakeBootState>,
+        headers: HeaderMap,
+        Json(manifest): Json<DeviceBootJob>,
+    ) -> Response {
+        let mut device = device.lock().await;
+        device.create_attempts += 1;
+        if headers
+            .get("X-Boot-Epoch")
+            .and_then(|value| value.to_str().ok())
+            != Some(device.status.boot_epoch.as_str())
+        {
+            return (StatusCode::CONFLICT, "stale boot epoch").into_response();
+        }
+        match &device.manifest {
+            None => {
+                device.manifest = Some(manifest);
+                StatusCode::CREATED.into_response()
+            }
+            Some(current) if current == &manifest => StatusCode::OK.into_response(),
+            Some(_) => (StatusCode::CONFLICT, "boot manifest changed").into_response(),
+        }
+    }
+
+    async fn put_kernel(
+        State(device): State<FakeBootState>,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> Response {
+        let mut device = device.lock().await;
+        device.upload_attempts += 1;
+        if device.reject_upload {
+            return (StatusCode::BAD_REQUEST, "digest mismatch").into_response();
+        }
+        let digest = hex_sha256(&body);
+        if body.as_ref() != device.kernel
+            || headers
+                .get("X-Image-Sha256")
+                .and_then(|value| value.to_str().ok())
+                != Some(digest.as_str())
+            || headers
+                .get("X-Boot-Epoch")
+                .and_then(|value| value.to_str().ok())
+                != Some(device.status.boot_epoch.as_str())
+        {
+            return (StatusCode::BAD_REQUEST, "kernel mismatch").into_response();
+        }
+        StatusCode::OK.into_response()
+    }
+
+    async fn start_boot(State(device): State<FakeBootState>, headers: HeaderMap) -> Response {
+        let mut device = device.lock().await;
+        device.start_attempts += 1;
+        if headers
+            .get("X-Boot-Epoch")
+            .and_then(|value| value.to_str().ok())
+            != Some(device.status.boot_epoch.as_str())
+        {
+            return (StatusCode::CONFLICT, "stale boot epoch").into_response();
+        }
+        StatusCode::ACCEPTED.into_response()
+    }
+
+    fn efi_image() -> Vec<u8> {
+        let mut bytes = vec![0; 512];
+        bytes[..2].copy_from_slice(b"MZ");
+        bytes[0x3c..0x40].copy_from_slice(&(0x80_u32).to_le_bytes());
+        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+        bytes[0x84..0x86].copy_from_slice(&[0x64, 0x86]);
+        bytes[0x98..0x9a].copy_from_slice(&[0x0b, 0x02]);
+        bytes[0xdc..0xde].copy_from_slice(&[10, 0]);
+        bytes
+    }
+
+    async fn test_state(
+        root: &std::path::Path,
+        mac: httpboot_protocol::MacAddress,
+    ) -> crate::AppState {
+        let config_path = root.join("ostool-server.toml");
+        let mut config = ServerConfig::default_for_path(&config_path);
+        config.data_dir = root.join("data");
+        config.board_dir = root.join("boards");
+        config.dtb_dir = root.join("dtbs");
+        config.tftp = TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(root.join("tftp")));
+        config.http_boot.root_dir = root.join("http-boot");
+        config.virtual_qemu.runtime_dir = root.join("qemu");
+        let manager = build_tftp_manager(&config.tftp);
+        let state = build_app_state(config_path, config, manager).await.unwrap();
+        let board = BoardConfig {
+            id: "board-1".into(),
+            board_type: "x86_64-uefi-http".into(),
+            tags: vec![],
+            serial: None,
+            power_management: PowerManagementConfig::Custom(CustomPowerManagement {
+                power_on_cmd: "true".into(),
+                power_off_cmd: "true".into(),
+            }),
+            boot: BootConfig::UefiHttp(UefiHttpProfile {
+                boot_arch: Some(UefiBootArch::X86_64),
+            }),
+            network_identity: Some(BoardNetworkIdentity { mac_address: mac }),
+            notes: None,
+            disabled: false,
+        };
+        state.boards.write().await.insert(board.id.clone(), board);
+        state
+            .board_runtimes
+            .write()
+            .await
+            .insert("board-1".into(), BoardRuntimeState::default());
+        state
+    }
+
+    fn announcement(
+        mac: httpboot_protocol::MacAddress,
+        boot_epoch: &str,
+        http_port: u16,
+    ) -> LoaderAnnouncement {
+        LoaderAnnouncement {
+            protocol_version: DEVICE_PROTOCOL_VERSION,
+            mac_address: mac,
+            current_mac_address: mac,
+            arch: BootArch::X86_64,
+            loader_version: "fake-v5".into(),
+            boot_epoch: boot_epoch.into(),
+            http_port,
+        }
+    }
+
+    #[tokio::test]
+    async fn reverse_ota_repushes_after_epoch_change_and_retries_confirmation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mac = "02:00:00:00:00:01".parse().unwrap();
+        let state = test_state(dir.path(), mac).await;
+        let image_bytes = efi_image();
+        let image = state
+            .ota
+            .put_image(&image_bytes, Some("test".into()))
+            .unwrap();
+        let job = state
+            .ota
+            .queue("board-1".into(), mac, &image.sha256)
+            .await
+            .unwrap();
+        let fake = Arc::new(Mutex::new(FakeDevice {
+            status: LoaderDeviceStatus {
+                protocol_version: DEVICE_PROTOCOL_VERSION,
+                boot_epoch: "epoch-1".into(),
+                mac_address: mac,
+                current_mac_address: mac,
+                arch: BootArch::X86_64,
+                loader_version: "fake-v5".into(),
+                hardware: LoaderHardwareInfo::default(),
+                boot: None,
+                ota: Some(LoaderOtaState {
+                    active_sha256: "11".repeat(32),
+                    running_sha256: "11".repeat(32),
+                    pending_update_id: None,
+                    trial: false,
+                    source: None,
+                    last_update_id: None,
+                    last_outcome: None,
+                }),
+            },
+            accepted_epoch: "epoch-2".into(),
+            expected_image: image_bytes,
+            update_id: None,
+            put_attempts: 0,
+            confirm_attempts: 0,
+            allow_confirm: false,
+        }));
+        let app = Router::new()
+            .route("/api/v1/status", get(get_status))
+            .route("/api/v1/ota/image", put(put_ota))
+            .route("/api/v1/ota/confirm", post(confirm_ota))
+            .with_state(fake.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let peer = "127.0.0.1:40000".parse().unwrap();
+
+        let error = reconcile(state.clone(), announcement(mac, "epoch-1", port), peer)
+            .await
+            .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(
+            error.contains("device HTTP 409 Conflict: stale boot epoch"),
+            "{error}"
+        );
+        assert_eq!(
+            state.ota.job("board-1").await.unwrap().phase,
+            Phase::Downloading
+        );
+
+        {
+            let mut fake = fake.lock().await;
+            fake.status.boot_epoch = "epoch-2".into();
+        }
+        reconcile(state.clone(), announcement(mac, "epoch-2", port), peer)
+            .await
+            .unwrap();
+        assert_eq!(state.ota.job("board-1").await.unwrap().phase, Phase::Staged);
+        assert_eq!(
+            fake.lock().await.update_id.as_deref(),
+            Some(job.update_id.as_str())
+        );
+
+        let error = reconcile(state.clone(), announcement(mac, "epoch-2", port), peer)
+            .await
+            .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(error.contains("confirmed digest mismatch"), "{error}");
+        assert_eq!(
+            state.ota.job("board-1").await.unwrap().phase,
+            Phase::Confirming
+        );
+        fake.lock().await.allow_confirm = true;
+
+        reconcile(state.clone(), announcement(mac, "epoch-2", port), peer)
+            .await
+            .unwrap();
+        assert_eq!(
+            state.ota.job("board-1").await.unwrap().phase,
+            Phase::Succeeded
+        );
+        let fake = fake.lock().await;
+        assert_eq!(fake.put_attempts, 2);
+        assert_eq!(fake.confirm_attempts, 2);
+        assert_eq!(
+            fake.status.ota.as_ref().unwrap().active_sha256,
+            image.sha256
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn boot_push_retries_device_digest_rejection_without_ota_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let mac = "02:00:00:00:00:02".parse().unwrap();
+        let state = test_state(dir.path(), mac).await;
+        let created = state
+            .create_session_with_board_id(
+                "x86_64-uefi-http",
+                "board-1",
+                &[],
+                Some("device-test".into()),
+            )
+            .await
+            .unwrap();
+        let kernel = b"fake ELF64 kernel".to_vec();
+        let manager = state.tftp_manager.read().await.clone();
+        manager
+            .put_session_file(&created.id, "kernel.elf", &kernel)
+            .await
+            .unwrap();
+        let session = state.session_state(&created.id).await.unwrap();
+        let boot_id = "boot-1";
+        session
+            .publish_boot_command(SessionBootCommand {
+                boot_id: boot_id.into(),
+                kernel_path: format!("/boot/sessions/{}/kernel.elf", created.id),
+                kernel_size: kernel.len() as u64,
+                kernel_sha256: hex_sha256(&kernel),
+                arch: BootArch::X86_64,
+                image_format: ImageFormat::Elf64,
+                entry_symbol: None,
+                initramfs: None,
+                cmdline: Some("console=ttyS0".into()),
+            })
+            .await;
+        let fake = Arc::new(Mutex::new(FakeBootDevice {
+            status: LoaderDeviceStatus {
+                protocol_version: DEVICE_PROTOCOL_VERSION,
+                boot_epoch: "boot-epoch".into(),
+                mac_address: mac,
+                current_mac_address: mac,
+                arch: BootArch::X86_64,
+                loader_version: "fake-v5".into(),
+                hardware: LoaderHardwareInfo::default(),
+                boot: None,
+                ota: None,
+            },
+            manifest: None,
+            create_attempts: 0,
+            upload_attempts: 0,
+            start_attempts: 0,
+            reject_upload: true,
+            kernel,
+        }));
+        let app = Router::new()
+            .route("/api/v1/status", get(get_boot_status))
+            .route("/api/v1/boot/jobs", post(create_boot_job))
+            .route("/api/v1/boot/jobs/{id}/kernel", put(put_kernel))
+            .route("/api/v1/boot/jobs/{id}/start", post(start_boot))
+            .with_state(fake.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let peer = "127.0.0.1:40001".parse().unwrap();
+        let announcement = announcement(mac, "boot-epoch", port);
+
+        let error = reconcile(state.clone(), announcement.clone(), peer)
+            .await
+            .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(
+            error.contains("device HTTP 400 Bad Request: digest mismatch"),
+            "{error}"
+        );
+        fake.lock().await.reject_upload = false;
+
+        reconcile(state, announcement, peer).await.unwrap();
+        let fake = fake.lock().await;
+        assert_eq!(fake.create_attempts, 2);
+        assert_eq!(fake.upload_attempts, 2);
+        assert_eq!(fake.start_attempts, 1);
+        assert_eq!(fake.manifest.as_ref().unwrap().boot_id, boot_id);
+        server.abort();
+    }
 }

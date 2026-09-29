@@ -15,7 +15,7 @@
 
 ## 📖 项目简介
 
-axloader 网络控制（v3 宿主启动制品及 v2 兼容）、持久 MAC 绑定、Web 管理和内建 QEMU 虚拟板设计见 [docs/axloader-network-control.md](docs/axloader-network-control.md)，完整接口契约见 [docs/api.md](docs/api.md)。
+axloader 网络控制（v2/v3/v4 旧协议兼容及 v5 设备 HTTP 接口）、持久 MAC 绑定、Web 管理和本地 QEMU/真实 FAT 磁盘验证设计见 [docs/axloader-network-control.md](docs/axloader-network-control.md)，完整接口契约见 [docs/api.md](docs/api.md)。
 
 管理后台位于 `/admin/`，使用 React + shadcn/ui。新建开发板时可先选择电源模块并手动上电，再从实时发现列表选择或手工填写 MAC；保存后完成绑定。全部管理页面采用 SSE 推送更新，断线重连保留页面与编辑草稿。详见 [管理界面与事件协议](docs/admin-ui.md)。
 不兼容的板卡 TOML 会在启动时移入板卡目录下的 `quarantine/`，保留原文件和原因，其余有效板卡继续加载。
