@@ -539,7 +539,11 @@ function Editor({ board }: { board?: BoardConfig }) {
           </Button>
         </footer>
       </form>
-      {board?.network_identity && <BoardOta boardId={board.id} />}
+      {board?.network_identity &&
+        board.boot.kind === "httpboot" &&
+        (!board.boot.boot_arch || board.boot.boot_arch === "x86_64") && (
+          <BoardOta boardId={board.id} />
+        )}
     </>
   );
 }

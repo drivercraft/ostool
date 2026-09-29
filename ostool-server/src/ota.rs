@@ -5,10 +5,10 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard},
+    sync::Arc,
 };
 
-use anyhow::{Context, anyhow, ensure};
+use anyhow::{Context, ensure};
 use httpboot_protocol::{LoaderOtaState, OtaOutcome, OtaSource};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -83,7 +83,7 @@ pub enum DeleteImageError {
 #[derive(Clone)]
 pub struct OtaStore {
     root: PathBuf,
-    image_io: Arc<StdMutex<()>>,
+    image_catalog: Arc<Mutex<BTreeMap<String, Image>>>,
     jobs: Arc<Mutex<BTreeMap<String, Job>>>,
     observations: Arc<Mutex<BTreeMap<String, Observation>>>,
 }
@@ -109,9 +109,13 @@ impl OtaStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
             Err(error) => return Err(error.into()),
         };
+        let images = read_images(&root)?
+            .into_iter()
+            .map(|image| (image.sha256.clone(), image))
+            .collect();
         Ok(Self {
             root,
-            image_io: Arc::new(StdMutex::new(())),
+            image_catalog: Arc::new(Mutex::new(images)),
             jobs: Arc::new(Mutex::new(jobs)),
             observations: Arc::new(Mutex::new(observations)),
         })
@@ -122,99 +126,22 @@ impl OtaStore {
         Ok(self.root.join("images").join(format!("{digest}.efi")))
     }
 
-    pub fn image(&self, digest: &str) -> anyhow::Result<Image> {
-        let _guard = self.lock_image_io()?;
-        self.image_unlocked(digest)
+    pub async fn images(&self) -> anyhow::Result<Vec<Image>> {
+        Ok(self.image_catalog.lock().await.values().cloned().collect())
     }
 
-    fn image_unlocked(&self, digest: &str) -> anyhow::Result<Image> {
-        ensure!(valid_digest(digest), "invalid image digest");
-        let bytes = fs::read(self.root.join("images").join(format!("{digest}.json")))?;
-        let image: Image = serde_json::from_slice(&bytes)?;
-        ensure!(
-            image.sha256 == digest && self.image_path(digest)?.is_file(),
-            "missing OTA image"
-        );
-        Ok(image)
-    }
-
-    pub fn images(&self) -> anyhow::Result<Vec<Image>> {
-        let _guard = self.lock_image_io()?;
-        let mut images = Vec::new();
-        for entry in fs::read_dir(self.root.join("images"))? {
-            let entry = entry?;
-            if let Some(name) = entry
-                .file_name()
-                .to_str()
-                .and_then(|name| name.strip_suffix(".json"))
-            {
-                images.push(self.image_unlocked(name)?);
-            }
-        }
-        images.sort_by(|a, b| a.sha256.cmp(&b.sha256));
-        Ok(images)
-    }
-
-    pub fn put_image(&self, bytes: &[u8], version: Option<String>) -> anyhow::Result<Image> {
+    pub async fn put_image(&self, bytes: &[u8], version: Option<String>) -> anyhow::Result<Image> {
         ensure!(
             !bytes.is_empty() && bytes.len() <= MAX_IMAGE_BYTES,
             "invalid EFI image size"
         );
-        // DOS header, PE signature, AMD64 machine and EFI application subsystem.
-        ensure!(
-            bytes.len() >= 0x40 && &bytes[..2] == b"MZ",
-            "invalid DOS header"
-        );
-        let pe_offset = u32::from_le_bytes(bytes[0x3c..0x40].try_into()?) as usize;
-        ensure!(
-            pe_offset
-                .checked_add(94)
-                .is_some_and(|end| end <= bytes.len()),
-            "invalid PE offset"
-        );
-        ensure!(
-            &bytes[pe_offset..pe_offset + 4] == b"PE\0\0",
-            "invalid PE header"
-        );
-        ensure!(
-            bytes[pe_offset + 4..pe_offset + 6] == [0x64, 0x86],
-            "unsupported EFI architecture"
-        );
-        let optional = pe_offset + 24;
-        ensure!(
-            bytes[optional..optional + 2] == [0x0b, 0x02],
-            "EFI image must be PE32+"
-        );
-        ensure!(
-            bytes[optional + 68..optional + 70] == [10, 0],
-            "EFI image must be an application"
-        );
-        if let Some(label) = &version {
-            ensure!(
-                label.len() <= 96 && label.bytes().all(|byte| byte.is_ascii_graphic()),
-                "invalid image version"
-            );
-        }
-        let sha256 = format!("{:x}", Sha256::digest(bytes));
-        let image = Image {
-            sha256: sha256.clone(),
-            size: bytes.len() as u64,
-            version,
-        };
-        let _guard = self.lock_image_io()?;
-        let path = self.image_path(&sha256)?;
-        if !path.exists() {
-            atomic_write(&path, bytes)?;
-        } else {
-            ensure!(
-                Sha256::digest(fs::read(&path)?).as_slice() == Sha256::digest(bytes).as_slice(),
-                "existing image digest mismatch"
-            );
-        }
-        atomic_write(
-            &self.root.join("images").join(format!("{sha256}.json")),
-            &serde_json::to_vec(&image)?,
-        )?;
+        let bytes = bytes.to_vec();
+        let root = self.root.clone();
+        let mut images = self.image_catalog.lock().await;
+        let image = tokio::task::spawn_blocking(move || write_image(&root, &bytes, version))
+            .await
+            .context("OTA image write task failed")??;
+        images.insert(image.sha256.clone(), image.clone());
         Ok(image)
     }
 
@@ -222,37 +149,27 @@ impl OtaStore {
         if !valid_digest(digest) {
             return Err(DeleteImageError::InvalidDigest);
         }
-        let jobs = self.jobs.lock().await;
-        if jobs
-            .values()
-            .any(|job| job.image.sha256 == digest && !job.phase.is_terminal())
+        let mut images = self.image_catalog.lock().await;
         {
-            return Err(DeleteImageError::InUse);
+            let jobs = self.jobs.lock().await;
+            if jobs
+                .values()
+                .any(|job| job.image.sha256 == digest && !job.phase.is_terminal())
+            {
+                return Err(DeleteImageError::InUse);
+            }
         }
-        let _guard = self
-            .image_io
-            .lock()
-            .map_err(|_| DeleteImageError::Inconsistent)?;
-        let directory = self.root.join("images");
-        let metadata = directory.join(format!("{digest}.json"));
-        let image = directory.join(format!("{digest}.efi"));
-        if !metadata.exists() && !image.exists() {
-            return Err(DeleteImageError::NotFound);
+        let root = self.root.clone();
+        let digest = digest.to_owned();
+        let remove_digest = digest.clone();
+        let (result, still_valid) =
+            tokio::task::spawn_blocking(move || remove_image(&root, &remove_digest))
+                .await
+                .map_err(|_| DeleteImageError::Inconsistent)?;
+        if !still_valid {
+            images.remove(digest.as_str());
         }
-        if metadata.is_file() {
-            fs::remove_file(&metadata)?;
-            fs::File::open(&directory)?.sync_all()?;
-        } else if metadata.exists() {
-            return Err(DeleteImageError::Inconsistent);
-        }
-        if image.is_file() {
-            fs::remove_file(&image)?;
-            fs::File::open(&directory)?.sync_all()?;
-        } else if image.exists() {
-            return Err(DeleteImageError::Inconsistent);
-        }
-        drop(jobs);
-        Ok(())
+        result
     }
 
     pub async fn jobs(&self) -> Vec<Job> {
@@ -269,6 +186,10 @@ impl OtaStore {
         mac_address: httpboot_protocol::MacAddress,
         digest: &str,
     ) -> anyhow::Result<Job> {
+        // Keep deletion and assignment mutually exclusive while the cached
+        // catalog entry is promoted into a persistent job.
+        let images = self.image_catalog.lock().await;
+        let image = images.get(digest).context("missing OTA image")?.clone();
         let observations = self.observations.lock().await;
         let mut jobs = self.jobs.lock().await;
         ensure!(
@@ -276,7 +197,6 @@ impl OtaStore {
                 .is_none_or(|job| job.phase.is_terminal()),
             "board already has an OTA job"
         );
-        let image = self.image(digest)?;
         if let Some(device) = observations
             .get(&board_id)
             .filter(|device| device.mac_address == mac_address)
@@ -380,8 +300,7 @@ impl OtaStore {
             }
         }
         let decision = if ota.trial {
-            if board_idle
-                && ota.source == Some(OtaSource::Server)
+            if ota.source == Some(OtaSource::Server)
                 && ota.pending_update_id.as_deref() == Some(&job.update_id)
                 && ota.running_sha256 == job.image.sha256
                 && !job.phase.is_terminal()
@@ -522,12 +441,128 @@ impl OtaStore {
             &serde_json::to_vec(observations)?,
         )
     }
+}
 
-    fn lock_image_io(&self) -> anyhow::Result<StdMutexGuard<'_, ()>> {
-        self.image_io
-            .lock()
-            .map_err(|_| anyhow!("OTA image storage lock poisoned"))
+fn image_path(root: &Path, digest: &str) -> PathBuf {
+    root.join("images").join(format!("{digest}.efi"))
+}
+
+fn read_image(root: &Path, digest: &str) -> anyhow::Result<Image> {
+    ensure!(valid_digest(digest), "invalid image digest");
+    let bytes = fs::read(root.join("images").join(format!("{digest}.json")))?;
+    let image: Image = serde_json::from_slice(&bytes)?;
+    ensure!(
+        image.sha256 == digest && image_path(root, digest).is_file(),
+        "missing OTA image"
+    );
+    Ok(image)
+}
+
+fn read_images(root: &Path) -> anyhow::Result<Vec<Image>> {
+    let mut images = Vec::new();
+    for entry in fs::read_dir(root.join("images"))? {
+        let entry = entry?;
+        if let Some(name) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.strip_suffix(".json"))
+        {
+            match read_image(root, name) {
+                Ok(image) => images.push(image),
+                Err(error) => {
+                    log::warn!("ignoring inconsistent OTA image metadata `{name}`: {error:#}")
+                }
+            }
+        }
     }
+    images.sort_by(|a, b| a.sha256.cmp(&b.sha256));
+    Ok(images)
+}
+
+fn write_image(root: &Path, bytes: &[u8], version: Option<String>) -> anyhow::Result<Image> {
+    // DOS header, PE signature, AMD64 machine and EFI application subsystem.
+    ensure!(
+        bytes.len() >= 0x40 && &bytes[..2] == b"MZ",
+        "invalid DOS header"
+    );
+    let pe_offset = u32::from_le_bytes(bytes[0x3c..0x40].try_into()?) as usize;
+    ensure!(
+        pe_offset
+            .checked_add(94)
+            .is_some_and(|end| end <= bytes.len()),
+        "invalid PE offset"
+    );
+    ensure!(
+        &bytes[pe_offset..pe_offset + 4] == b"PE\0\0",
+        "invalid PE header"
+    );
+    ensure!(
+        bytes[pe_offset + 4..pe_offset + 6] == [0x64, 0x86],
+        "unsupported EFI architecture"
+    );
+    let optional = pe_offset + 24;
+    ensure!(
+        bytes[optional..optional + 2] == [0x0b, 0x02],
+        "EFI image must be PE32+"
+    );
+    ensure!(
+        bytes[optional + 68..optional + 70] == [10, 0],
+        "EFI image must be an application"
+    );
+    if let Some(label) = &version {
+        ensure!(
+            label.len() <= 96 && label.bytes().all(|byte| byte.is_ascii_graphic()),
+            "invalid image version"
+        );
+    }
+    let sha256 = format!("{:x}", Sha256::digest(bytes));
+    let image = Image {
+        sha256: sha256.clone(),
+        size: bytes.len() as u64,
+        version,
+    };
+    let path = image_path(root, &sha256);
+    if !path.exists() {
+        atomic_write(&path, bytes)?;
+    } else {
+        ensure!(
+            format!("{:x}", Sha256::digest(fs::read(&path)?)) == sha256,
+            "existing image digest mismatch"
+        );
+    }
+    atomic_write(
+        &root.join("images").join(format!("{sha256}.json")),
+        &serde_json::to_vec(&image)?,
+    )?;
+    Ok(image)
+}
+
+fn remove_image(root: &Path, digest: &str) -> (Result<(), DeleteImageError>, bool) {
+    let result = remove_image_files(root, digest);
+    let still_valid = read_image(root, digest).is_ok();
+    (result, still_valid)
+}
+
+fn remove_image_files(root: &Path, digest: &str) -> Result<(), DeleteImageError> {
+    let directory = root.join("images");
+    let metadata = directory.join(format!("{digest}.json"));
+    let image = image_path(root, digest);
+    if !metadata.exists() && !image.exists() {
+        return Err(DeleteImageError::NotFound);
+    }
+    if metadata.is_file() {
+        fs::remove_file(&metadata)?;
+        fs::File::open(&directory)?.sync_all()?;
+    } else if metadata.exists() {
+        return Err(DeleteImageError::Inconsistent);
+    }
+    if image.is_file() {
+        fs::remove_file(&image)?;
+        fs::File::open(&directory)?.sync_all()?;
+    } else if image.exists() {
+        return Err(DeleteImageError::Inconsistent);
+    }
+    Ok(())
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -573,7 +608,10 @@ mod tests {
     async fn duplicate_phase_reports_are_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         let store = OtaStore::open(dir.path()).unwrap();
-        let image = store.put_image(&efi_image(), Some("first".into())).unwrap();
+        let image = store
+            .put_image(&efi_image(), Some("first".into()))
+            .await
+            .unwrap();
         let mac = "02:00:00:00:00:01".parse().unwrap();
         let job = store
             .queue("board-1".into(), mac, &image.sha256)
@@ -605,6 +643,7 @@ mod tests {
         replacement.push(1);
         let image = store
             .put_image(&replacement, Some("second".into()))
+            .await
             .unwrap();
         let job = store
             .queue("board-1".into(), mac, &image.sha256)
@@ -643,7 +682,7 @@ mod tests {
     async fn delivery_failures_are_persisted_and_bounded() {
         let dir = tempfile::tempdir().unwrap();
         let store = OtaStore::open(dir.path()).unwrap();
-        let image = store.put_image(&efi_image(), None).unwrap();
+        let image = store.put_image(&efi_image(), None).await.unwrap();
         let mac = "02:00:00:00:00:01".parse().unwrap();
         let job = store
             .queue("board-1".into(), mac, &image.sha256)
@@ -695,10 +734,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_survives_server_restart_and_only_confirms_its_own_trial() {
+    async fn update_survives_restart_and_confirms_its_own_trial_while_board_is_busy() {
         let dir = tempfile::tempdir().unwrap();
         let store = OtaStore::open(dir.path()).unwrap();
-        let image = store.put_image(&efi_image(), Some("test".into())).unwrap();
+        let image = store
+            .put_image(&efi_image(), Some("test".into()))
+            .await
+            .unwrap();
         let mac = "02:00:00:00:00:01".parse().unwrap();
         let job = store
             .queue("board-1".into(), mac, &image.sha256)
@@ -739,7 +781,7 @@ mod tests {
         ));
         state.source = Some(OtaSource::Server);
         assert!(
-            matches!(store.decide("board-1", mac, &state, true).await.unwrap(), Decision::Confirm(id) if id == job.update_id)
+            matches!(store.decide("board-1", mac, &state, false).await.unwrap(), Decision::Confirm(id) if id == job.update_id)
         );
         drop(store);
         let store = OtaStore::open(dir.path()).unwrap();
@@ -756,7 +798,7 @@ mod tests {
         assert_eq!(store.job("board-1").await.unwrap().phase, Phase::Succeeded);
         let mut newer = efi_image();
         newer.push(1);
-        let candidate = store.put_image(&newer, None).unwrap();
+        let candidate = store.put_image(&newer, None).await.unwrap();
         state.trial = true;
         state.pending_update_id = Some("01234567-89ab-cdef-0123-456789abcdef".into());
         state.source = Some(OtaSource::Direct);
@@ -778,7 +820,10 @@ mod tests {
     async fn active_update_can_be_cancelled_and_replaced_after_restart() {
         let dir = tempfile::tempdir().unwrap();
         let store = OtaStore::open(dir.path()).unwrap();
-        let image = store.put_image(&efi_image(), Some("first".into())).unwrap();
+        let image = store
+            .put_image(&efi_image(), Some("first".into()))
+            .await
+            .unwrap();
         let mac = "02:00:00:00:00:01".parse().unwrap();
         let job = store
             .queue("board-1".into(), mac, &image.sha256)
@@ -815,6 +860,7 @@ mod tests {
         replacement.push(1);
         let replacement = store
             .put_image(&replacement, Some("second".into()))
+            .await
             .unwrap();
         assert!(
             store
@@ -830,7 +876,9 @@ mod tests {
         let store = OtaStore::open(dir.path()).unwrap();
         let image = store
             .put_image(&efi_image(), Some("delete-me".into()))
+            .await
             .unwrap();
+        assert_eq!(store.images().await.unwrap()[0].sha256, image.sha256);
         let mac = "02:00:00:00:00:01".parse().unwrap();
         let job = store
             .queue("board-1".into(), mac, &image.sha256)
@@ -850,7 +898,7 @@ mod tests {
         ));
         store.cancel("board-1", &job.update_id).await.unwrap();
         store.delete_image(&image.sha256).await.unwrap();
-        assert!(store.images().unwrap().is_empty());
+        assert!(store.images().await.unwrap().is_empty());
         assert!(!image_path.exists());
         assert!(!metadata_path.exists());
         let retained = store.job("board-1").await.unwrap();
@@ -864,6 +912,7 @@ mod tests {
 
         store
             .put_image(&efi_image(), Some("delete-me".into()))
+            .await
             .unwrap();
         fs::remove_file(&metadata_path).unwrap();
         store.delete_image(&image.sha256).await.unwrap();
@@ -872,7 +921,7 @@ mod tests {
 
         drop(store);
         let store = OtaStore::open(dir.path()).unwrap();
-        assert!(store.images().unwrap().is_empty());
+        assert!(store.images().await.unwrap().is_empty());
         let retained = store.job("board-1").await.unwrap();
         assert_eq!(retained.phase, Phase::Cancelled);
         assert_eq!(retained.image.sha256, image.sha256);
@@ -880,5 +929,37 @@ mod tests {
         assert_eq!(retained.image.version, image.version);
         assert!(!image_path.exists());
         assert!(!metadata_path.exists());
+    }
+
+    #[tokio::test]
+    async fn inconsistent_delete_evicts_the_cached_image_and_does_not_block_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = OtaStore::open(dir.path()).unwrap();
+        let image = store.put_image(&efi_image(), None).await.unwrap();
+        let image_path = store.image_path(&image.sha256).unwrap();
+        fs::remove_file(&image_path).unwrap();
+        fs::create_dir(&image_path).unwrap();
+
+        assert!(matches!(
+            store.delete_image(&image.sha256).await,
+            Err(DeleteImageError::Inconsistent)
+        ));
+        assert!(store.images().await.unwrap().is_empty());
+
+        drop(store);
+        let store = OtaStore::open(dir.path()).unwrap();
+        assert!(store.images().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn inconsistent_image_metadata_does_not_prevent_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = OtaStore::open(dir.path()).unwrap();
+        let image = store.put_image(&efi_image(), None).await.unwrap();
+        fs::remove_file(store.image_path(&image.sha256).unwrap()).unwrap();
+        drop(store);
+
+        let store = OtaStore::open(dir.path()).unwrap();
+        assert!(store.images().await.unwrap().is_empty());
     }
 }

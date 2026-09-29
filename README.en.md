@@ -15,7 +15,7 @@
 
 ## 📖 Project Overview
 
-See [docs/axloader-network-control.md](docs/axloader-network-control.md) for axloader network control (legacy v2/v3/v4 compatibility and the v5 device HTTP API), persistent MAC binding, web administration, and local QEMU validation with a real FAT disk image. The complete API contract is documented in [docs/api.md](docs/api.md).
+See [docs/axloader-network-control.md](docs/axloader-network-control.md) for axloader network control (legacy v2/v3/v4 compatibility and the v5 device HTTP API), persistent MAC binding, web administration, built-in QEMU virtual boards, and local validation with a real FAT disk image. The complete API contract is documented in [docs/api.md](docs/api.md).
 
 The management console at `/admin/` uses React + shadcn/ui. In the new-board form, choose a power module and power it on before selecting a discovered MAC or entering one manually; saving completes the binding. All management pages receive SSE updates and preserve displayed data and drafts across reconnects. See [Admin UI and event protocol](docs/admin-ui.md).
 At startup, incompatible board TOML files move into `quarantine/` under the board directory with their original contents and diagnostic metadata; valid boards continue to load.

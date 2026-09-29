@@ -43,7 +43,7 @@ pub fn routes() -> Router<AppState> {
 }
 
 async fn list_images(State(state): State<AppState>) -> Result<Json<Vec<Image>>, ApiError> {
-    Ok(Json(state.ota.images()?))
+    Ok(Json(state.ota.images().await?))
 }
 
 async fn upload_image(
@@ -77,6 +77,7 @@ async fn upload_image(
     let image = state
         .ota
         .put_image(&body, version)
+        .await
         .map_err(|error| ApiError::bad_request(format!("{error:#}")))?;
     state.admin_events.invalidate(&["ota"]);
     Ok((StatusCode::CREATED, Json(image)))
@@ -119,7 +120,10 @@ async fn queue_job(
     if !matches!(
         &board.boot,
         BootConfig::UefiHttp(profile)
-            if profile.boot_arch.as_ref() == Some(&UefiBootArch::X86_64)
+            if profile
+                .boot_arch
+                .as_ref()
+                .is_none_or(|arch| arch == &UefiBootArch::X86_64)
     ) {
         return Err(ApiError::conflict(
             "loader OTA requires an x86_64 UEFI HTTP board",

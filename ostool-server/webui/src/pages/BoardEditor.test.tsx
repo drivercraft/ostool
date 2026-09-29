@@ -47,6 +47,23 @@ function mount(board?: BoardConfig) {
     </MemoryRouter>,
   );
 }
+function httpBootBoard(bootArch?: string): BoardConfig {
+  return {
+    id: "http-board",
+    board_type: "uefi-http",
+    tags: [],
+    notes: null,
+    disabled: false,
+    serial: null,
+    network_identity: { mac_address: "02:00:00:00:00:31" },
+    power_management: {
+      kind: "custom",
+      power_on_cmd: "true",
+      power_off_cmd: "true",
+    },
+    boot: { kind: "httpboot", boot_arch: bootArch },
+  };
+}
 it("only prefills the MAC and does not require board identity for a power command", async () => {
   const power = vi.spyOn(api, "powerAction").mockResolvedValue({
     id: "one",
@@ -152,4 +169,16 @@ it("switches to U-Boot without requiring or submitting a stale MAC", async () =>
       network_identity: null,
     }),
   );
+});
+
+it("hides loader OTA for an unsupported HTTP Boot architecture", () => {
+  mount(httpBootBoard("aarch64"));
+
+  expect(screen.queryByText("axloader OTA")).not.toBeInTheDocument();
+});
+
+it("shows loader OTA when the HTTP Boot architecture is omitted", () => {
+  mount(httpBootBoard());
+
+  expect(screen.getByText("axloader OTA")).toBeInTheDocument();
 });

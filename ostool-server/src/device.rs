@@ -757,6 +757,7 @@ mod tests {
         let image = state
             .ota
             .put_image(&image_bytes, Some("test".into()))
+            .await
             .unwrap();
         let job = state
             .ota

@@ -2797,9 +2797,9 @@ pub(crate) async fn admin_topic(
         "boards" => serde_json::to_value(list_boards(extractor).await?.0),
         "sessions" => serde_json::to_value(list_admin_sessions(extractor).await?.0.sessions),
         "loaders" => serde_json::to_value(list_loader_devices(extractor).await?.0),
-        "ota" => {
-            Ok(serde_json::json!({ "jobs": state.ota.jobs().await, "images": state.ota.images()? }))
-        }
+        "ota" => Ok(
+            serde_json::json!({ "jobs": state.ota.jobs().await, "images": state.ota.images().await? }),
+        ),
         "virtual" => serde_json::to_value(list_virtual_devices(extractor).await.0),
         "dtbs" => serde_json::to_value(list_dtbs(extractor).await?.0),
         "serial" => serde_json::to_value(list_serial_ports().await?.0),
@@ -5936,7 +5936,8 @@ mod tests {
     #[tokio::test]
     async fn v4_upgrade_routes_require_a_board_assignment_and_matching_trial() {
         let (app, state) = test_router_and_state_with_config(|_| {}).await;
-        let board = sample_httpboot_board("ota-board");
+        let mut board = sample_httpboot_board("ota-board");
+        board.boot = BootConfig::UefiHttp(UefiHttpProfile { boot_arch: None });
         let mac = board.network_identity.as_ref().unwrap().mac_address;
         assert_eq!(
             create_board(&app, serde_json::to_value(&board).unwrap()).await,

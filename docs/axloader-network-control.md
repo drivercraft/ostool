@@ -86,18 +86,92 @@ ostool-server 保留原有 Session、串口 WebSocket、启动清单和板卡租
 直连上传默认生成 ID，且来源为 `direct`。服务端指派传入持久任务 ID，
 以及 `X-Update-Source: server`；`OtaStore::decide()` 只在板卡空闲且非其他
 待试升级时下发。新槽广播后，服务端核对当前板卡绑定、升级 ID、运行摘要与
-来源，才调用确认接口；设备持久提交后服务器任务变为成功。服务重启读取独立
+来源，才调用确认接口；此确认不受板卡租约状态限制，活动 Session 可以在确认
+解锁后继续启动。设备持久提交后服务器任务变为成功。服务重启读取独立
 于 Session 的镜像库和任务。直连升级不会被服务端自动确认。
-服务端只向配置为 x86_64 UEFI HTTP 的板卡指派当前 AMD64 EFI 镜像。设备拒绝
+服务端只向配置为 x86_64 UEFI HTTP 的板卡指派当前 AMD64 EFI 镜像；配置省略
+`boot_arch` 时沿用现有 CLI 语义，按 `x86_64` 处理。设备拒绝
 镜像或传输失败时，任务持久记录错误和投递次数；连续三次失败后进入 `failed`，
 不再重复传输完整镜像。同一阶段的设备回报按幂等请求处理。
 管理端可删除没有被非终态任务引用的镜像；终态任务保留自身的摘要、版本和长度，
-因此删除文件不破坏历史任务记录。镜像上传、枚举和删除串行访问同一持久目录，
-防止并发上传与删除留下只有元数据或只有 EFI 文件的可见状态。
+因此删除文件不破坏历史任务记录。镜像上传和删除通过同一目录门闩串行，元数据
+列表在启动时载入内存并只在增删成功后更新；这既避免 SSE 快照重复扫描目录，也
+防止并发上传、删除或指派留下只有元数据、只有 EFI 文件或悬空任务的可见状态。
 
-## 3. 兼容与本地联调
+## 3. 内建 QEMU 虚拟板
 
-### 3.1 兼容边界
+虚拟板默认关闭，当前固定使用 `x86_64 + OVMF + q35 + TCG`。示例服务端配置：
+
+```toml
+[loader_network]
+enabled = true
+bind_addr = "0.0.0.0:2998"
+public_base_url = "http://10.77.0.1:2999"
+
+[virtual_qemu]
+enabled = true
+qemu_binary = "/usr/bin/qemu-system-x86_64"
+ovmf_code = "/usr/share/OVMF/OVMF_CODE_4M.fd"
+ovmf_vars = "/usr/share/OVMF/OVMF_VARS_4M.fd"
+axloader_efi = "/opt/ostool/BOOTX64.EFI"
+runtime_dir = "/var/lib/ostool-server/qemu"
+network_namespace = "ostool-qemu"
+bridge = "ostool-br0"
+tap_pool = ["ostool-tap0", "ostool-tap1"]
+memory_mib = 512
+cpus = 2
+```
+
+相对路径按配置文件目录解析。`virtual-lab` 需要创建 network namespace、veth、
+bridge、TAP 和 dnsmasq，应以具备 Linux `CAP_NET_ADMIN` 的身份运行：
+
+```bash
+ostool-server --config /etc/ostool-server/config.toml virtual-lab up
+ostool-server --config /etc/ostool-server/config.toml virtual-lab status
+ostool-server --config /etc/ostool-server/config.toml virtual-lab down
+```
+
+默认客户机网段为 `10.77.0.0/24`，服务端地址为 `10.77.0.1`，dnsmasq/bridge
+地址为 `10.77.0.254`，DHCP 池为 `10.77.0.100-200`。三个子命令均可重复调用。
+管理页面启动虚拟设备后，QEMU 必须通过真实 UDP 广播和设备 HTTP 接口出现在
+未绑定列表。绑定时 MAC、串口和电源配置必须引用同一个虚拟设备：
+
+```toml
+[network_identity]
+mac_address = "02:aa:bb:cc:dd:ee"
+
+[serial]
+baud_rate = 115200
+
+[serial.key]
+kind = "qemu"
+value = "<virtual_device_id>"
+
+[power_management]
+kind = "qemu"
+virtual_device_id = "<virtual_device_id>"
+
+[boot]
+kind = "httpboot"
+boot_arch = "x86_64"
+```
+
+`VirtualBoardManager` 持有 QEMU 子进程、TAP、独立 OVMF VARS、QMP socket 和
+串口 hub。`On`/`Off` 幂等；关闭先发送 QMP `quit`，超时后才终止进程。串口
+hub 保留最近 64 KiB 输出并跨 QEMU 重启，新实例广播新的启动代次。
+
+验收顺序如下：
+
+1. 启动未绑定 QEMU，确认它通过真实发现出现在管理页面。
+2. 填写板卡 ID、类型、QEMU 电源和串口，并选择探测到的 MAC。
+3. 使用 `ostool` 创建 Session、上传内核及可选 initramfs/cmdline，确认设备 HTTP 交接和内核串口标志。
+4. 保持 WebSocket 和 Session，执行虚拟板 `Off -> On`，确认新启动代次重新取得相同启动事务并再次交接。
+5. 关闭 WebSocket，确认 Session 经 `releasing` 回到 `idle` 且 QEMU 退出。
+6. 新建 Session 再运行一次，全程不修改绑定。
+
+## 4. 兼容与本地联调
+
+### 4.1 兼容边界
 
 ostool-server 继续接受旧装载器 v2/v3/v4 的 UDP Offer、
 `POST /api/v1/loaders/poll`、状态上报和下载 URL；`httpboot-protocol` 中的
@@ -109,7 +183,7 @@ v5 装载器只广播，不调用任何服务端 HTTP 接口。TGOS 当前依赖
 `httpboot-protocol 0.3.0`；其 v5 设备请求类型在本地定义，两仓用实际 HTTP
 契约测试核对，代码交付不依赖另一仓的绝对路径或发布新 crate。
 
-### 3.2 隔离测试
+### 4.2 隔离测试
 
 `ostool-server/scripts/test-axloader-local.py` 启动本地 ostool-server 与 OVMF/QEMU，
 在临时目录创建板卡 TOML、服务端配置、OVMF VARS 和真实 FAT 磁盘。管理入口
