@@ -43,6 +43,8 @@ ostool-server 保留原有 Session、串口 WebSocket、启动清单和板卡租
 上传文件后，`device::push_boot()` 从会话存储读取并重新核对长度与摘要，
 再调用设备接口；它不把文件 URL 交给装载器。设备在同一 Session 内复位时，
 服务器观察新启动代次并按原 `boot_id` 重新推送。串口只承载目标系统输出。
+若同一启动代次仍保留其他 `boot_id`，服务器在创建返回 `409` 后按状态中的旧 ID
+删除该事务，再尝试创建一次；第二次仍冲突则停止本次推送，等待后续设备广播。
 
 ## 2. 设备协议
 
@@ -84,6 +86,9 @@ ostool-server 保留原有 Session、串口 WebSocket、启动清单和板卡租
 待试升级时下发。新槽广播后，服务端核对当前板卡绑定、升级 ID、运行摘要与
 来源，才调用确认接口；设备持久提交后服务器任务变为成功。服务重启读取独立
 于 Session 的镜像库和任务。直连升级不会被服务端自动确认。
+管理端可删除没有被非终态任务引用的镜像；终态任务保留自身的摘要、版本和长度，
+因此删除文件不破坏历史任务记录。镜像上传、枚举和删除串行访问同一持久目录，
+防止并发上传与删除留下只有元数据或只有 EFI 文件的可见状态。
 
 ## 3. 兼容与本地联调
 
@@ -107,7 +112,7 @@ v5 装载器只广播，不调用任何服务端 HTTP 接口。TGOS 当前依赖
 ```bash
 cargo build -p ostool-server
 python3 ostool-server/scripts/test-axloader-local.py \
-  --tgos /home/zhourui/.codex/worktrees/9a24/tgoskits-dev \
+  --tgos /path/to/tgoskits-dev \
   --server-bin target/debug/ostool-server
 ```
 

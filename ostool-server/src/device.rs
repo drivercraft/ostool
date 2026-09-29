@@ -177,7 +177,7 @@ pub async fn reconcile(
         &state,
         &client,
         &endpoint,
-        &observed.boot_epoch,
+        &observed,
         &session_id,
         &command,
         &session,
@@ -189,11 +189,13 @@ async fn push_boot(
     state: &AppState,
     client: &Client,
     endpoint: &str,
-    epoch: &str,
+    observed: &LoaderDeviceStatus,
     session_id: &str,
     command: &SessionBootCommand,
     session: &crate::session::SessionState,
 ) -> anyhow::Result<()> {
+    let epoch = observed.boot_epoch.as_str();
+    let observed_boot_id = observed.boot.as_ref().map(|boot| boot.boot_id.as_str());
     let manifest = DeviceBootJob {
         boot_id: command.boot_id.clone(),
         arch: command.arch,
@@ -210,12 +212,29 @@ async fn push_boot(
         entry_symbol: command.entry_symbol.clone(),
     };
     let base = format!("{endpoint}/api/v1/boot/jobs");
-    let response = client
-        .post(&base)
-        .header("X-Boot-Epoch", epoch)
-        .json(&manifest)
-        .send()
-        .await?;
+    let create = || {
+        client
+            .post(&base)
+            .header("X-Boot-Epoch", epoch)
+            .json(&manifest)
+            .send()
+    };
+    let response = create().await?;
+    let response = if response.status().as_u16() == 409
+        && let Some(stale_boot_id) = observed_boot_id
+        && stale_boot_id != command.boot_id
+    {
+        drop(response);
+        let delete_response = client
+            .delete(format!("{base}/{stale_boot_id}"))
+            .header("X-Boot-Epoch", epoch)
+            .send()
+            .await?;
+        require_status(delete_response, 204).await?;
+        create().await?
+    } else {
+        response
+    };
     ensure!(
         response.status().as_u16() == 201 || response.status().as_u16() == 200,
         "device refused boot job: {}",
@@ -349,14 +368,15 @@ mod tests {
     use axum::{
         Json, Router,
         body::Bytes,
-        extract::State,
+        extract::{Path, State},
         http::{HeaderMap, StatusCode},
         response::{IntoResponse, Response},
-        routing::{get, post, put},
+        routing::{delete, get, post, put},
     };
     use httpboot_protocol::{
-        BootArch, DEVICE_PROTOCOL_VERSION, DeviceBootJob, ImageFormat, LoaderAnnouncement,
-        LoaderDeviceStatus, LoaderHardwareInfo, LoaderOtaState, OtaOutcome, OtaSource,
+        BootArch, DEVICE_PROTOCOL_VERSION, DeviceBootJob, DeviceBootStatus, ImageFormat,
+        LoaderAnnouncement, LoaderDeviceStatus, LoaderHardwareInfo, LoaderOtaState, OtaOutcome,
+        OtaSource,
     };
     use serde::Deserialize;
     use tokio::{net::TcpListener, sync::Mutex};
@@ -387,8 +407,10 @@ mod tests {
         status: LoaderDeviceStatus,
         manifest: Option<DeviceBootJob>,
         create_attempts: usize,
+        delete_attempts: usize,
         upload_attempts: usize,
         start_attempts: usize,
+        reject_create_without_manifest: bool,
         reject_upload: bool,
         kernel: Vec<u8>,
     }
@@ -485,12 +507,49 @@ mod tests {
         }
         match &device.manifest {
             None => {
+                if device.reject_create_without_manifest {
+                    return (StatusCode::CONFLICT, "create still conflicts").into_response();
+                }
+                device.status.boot = Some(DeviceBootStatus {
+                    boot_id: manifest.boot_id.clone(),
+                    phase: "accepted".into(),
+                    kernel_received: false,
+                    initramfs_received: manifest.initramfs.is_none(),
+                    last_error: None,
+                });
                 device.manifest = Some(manifest);
                 StatusCode::CREATED.into_response()
             }
             Some(current) if current == &manifest => StatusCode::OK.into_response(),
             Some(_) => (StatusCode::CONFLICT, "boot manifest changed").into_response(),
         }
+    }
+
+    async fn delete_boot_job(
+        State(device): State<FakeBootState>,
+        Path(id): Path<String>,
+        headers: HeaderMap,
+    ) -> Response {
+        let mut device = device.lock().await;
+        device.delete_attempts += 1;
+        if headers
+            .get("X-Boot-Epoch")
+            .and_then(|value| value.to_str().ok())
+            != Some(device.status.boot_epoch.as_str())
+        {
+            return (StatusCode::CONFLICT, "stale boot epoch").into_response();
+        }
+        if device
+            .manifest
+            .as_ref()
+            .map(|manifest| manifest.boot_id.as_str())
+            != Some(id.as_str())
+        {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        device.manifest = None;
+        device.status.boot = None;
+        StatusCode::NO_CONTENT.into_response()
     }
 
     async fn put_kernel(
@@ -501,6 +560,8 @@ mod tests {
         let mut device = device.lock().await;
         device.upload_attempts += 1;
         if device.reject_upload {
+            device.manifest = None;
+            device.status.boot = None;
             return (StatusCode::BAD_REQUEST, "digest mismatch").into_response();
         }
         let digest = hex_sha256(&body);
@@ -705,7 +766,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn boot_push_retries_device_digest_rejection_without_ota_state() {
+    async fn boot_push_replaces_stale_job_and_only_retries_create_once() {
         let dir = tempfile::tempdir().unwrap();
         let mac = "02:00:00:00:00:02".parse().unwrap();
         let state = test_state(dir.path(), mac).await;
@@ -739,6 +800,18 @@ mod tests {
                 cmdline: Some("console=ttyS0".into()),
             })
             .await;
+        let stale_manifest = DeviceBootJob {
+            boot_id: "stale-boot".into(),
+            arch: BootArch::X86_64,
+            image_format: ImageFormat::Elf64,
+            kernel: httpboot_protocol::DeviceBootImage {
+                size: 1,
+                sha256: "00".repeat(32),
+            },
+            initramfs: None,
+            cmdline: None,
+            entry_symbol: None,
+        };
         let fake = Arc::new(Mutex::new(FakeBootDevice {
             status: LoaderDeviceStatus {
                 protocol_version: DEVICE_PROTOCOL_VERSION,
@@ -748,19 +821,28 @@ mod tests {
                 arch: BootArch::X86_64,
                 loader_version: "fake-v5".into(),
                 hardware: LoaderHardwareInfo::default(),
-                boot: None,
+                boot: Some(DeviceBootStatus {
+                    boot_id: stale_manifest.boot_id.clone(),
+                    phase: "accepted".into(),
+                    kernel_received: false,
+                    initramfs_received: true,
+                    last_error: None,
+                }),
                 ota: None,
             },
-            manifest: None,
+            manifest: Some(stale_manifest),
             create_attempts: 0,
+            delete_attempts: 0,
             upload_attempts: 0,
             start_attempts: 0,
+            reject_create_without_manifest: false,
             reject_upload: true,
             kernel,
         }));
         let app = Router::new()
             .route("/api/v1/status", get(get_boot_status))
             .route("/api/v1/boot/jobs", post(create_boot_job))
+            .route("/api/v1/boot/jobs/{id}", delete(delete_boot_job))
             .route("/api/v1/boot/jobs/{id}/kernel", put(put_kernel))
             .route("/api/v1/boot/jobs/{id}/start", post(start_boot))
             .with_state(fake.clone());
@@ -780,12 +862,41 @@ mod tests {
         );
         fake.lock().await.reject_upload = false;
 
-        reconcile(state, announcement, peer).await.unwrap();
+        reconcile(state.clone(), announcement.clone(), peer)
+            .await
+            .unwrap();
+        {
+            let fake = fake.lock().await;
+            assert_eq!(fake.create_attempts, 3);
+            assert_eq!(fake.delete_attempts, 1);
+            assert_eq!(fake.upload_attempts, 2);
+            assert_eq!(fake.start_attempts, 1);
+            assert_eq!(fake.manifest.as_ref().unwrap().boot_id, boot_id);
+        }
+
+        session
+            .publish_boot_command(SessionBootCommand {
+                boot_id: "boot-2".into(),
+                kernel_path: format!("/boot/sessions/{}/kernel.elf", created.id),
+                kernel_size: b"fake ELF64 kernel".len() as u64,
+                kernel_sha256: hex_sha256(b"fake ELF64 kernel"),
+                arch: BootArch::X86_64,
+                image_format: ImageFormat::Elf64,
+                entry_symbol: None,
+                initramfs: None,
+                cmdline: Some("console=ttyS0".into()),
+            })
+            .await;
+        fake.lock().await.reject_create_without_manifest = true;
+        let error = reconcile(state, announcement, peer).await.unwrap_err();
+        let error = format!("{error:#}");
+        assert!(error.contains("device refused boot job: create still conflicts"));
         let fake = fake.lock().await;
-        assert_eq!(fake.create_attempts, 2);
+        assert_eq!(fake.create_attempts, 5);
+        assert_eq!(fake.delete_attempts, 2);
         assert_eq!(fake.upload_attempts, 2);
         assert_eq!(fake.start_attempts, 1);
-        assert_eq!(fake.manifest.as_ref().unwrap().boot_id, boot_id);
+        assert!(fake.manifest.is_none());
         server.abort();
     }
 }

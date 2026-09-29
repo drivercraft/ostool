@@ -71,6 +71,12 @@ export const api = {
       body: file,
     });
   },
+  deleteLoaderImage(imageSha256: string) {
+    return request<void>(
+      `/api/v1/admin/loader-images/${encodeURIComponent(imageSha256)}`,
+      { method: "DELETE" },
+    );
+  },
   queueLoaderUpdate(boardId: string, imageSha256: string) {
     return request<LoaderUpdateJob>(
       `/api/v1/admin/boards/${encodeURIComponent(boardId)}/loader-updates`,

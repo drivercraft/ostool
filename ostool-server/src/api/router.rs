@@ -2907,6 +2907,17 @@ mod tests {
         }
     }
 
+    fn efi_image() -> Vec<u8> {
+        let mut bytes = vec![0; 512];
+        bytes[..2].copy_from_slice(b"MZ");
+        bytes[0x3c..0x40].copy_from_slice(&(0x80_u32).to_le_bytes());
+        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+        bytes[0x84..0x86].copy_from_slice(&[0x64, 0x86]);
+        bytes[0x98..0x9a].copy_from_slice(&[0x0b, 0x02]);
+        bytes[0xdc..0xde].copy_from_slice(&[10, 0]);
+        bytes
+    }
+
     #[tokio::test]
     async fn unbound_power_action_requires_neither_board_nor_mac() {
         let (app, state) = test_router_and_state_with_config(|_| {}).await;
@@ -5825,6 +5836,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn loader_image_routes_validate_size_and_delete_unreferenced_image() {
+        let (app, _) = test_router_and_state_with_config(|_| {}).await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/admin/loader-images")
+                    .header(header::CONTENT_LENGTH, 0)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(error["code"], "bad_request");
+        assert_eq!(error["message"], "empty EFI image");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/admin/loader-images")
+                    .header(header::CONTENT_LENGTH, crate::ota::MAX_IMAGE_BYTES + 1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/admin/loader-images/not-a-digest")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let image = efi_image();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/admin/loader-images")
+                    .header(header::CONTENT_LENGTH, image.len())
+                    .body(Body::from(image))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let uploaded: crate::ota::Image =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        let delete = || {
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v1/admin/loader-images/{}", uploaded.sha256))
+                .body(Body::empty())
+                .unwrap()
+        };
+        assert_eq!(
+            app.clone().oneshot(delete()).await.unwrap().status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            app.oneshot(delete()).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
     async fn v4_upgrade_routes_require_a_board_assignment_and_matching_trial() {
         let (app, state) = test_router_and_state_with_config(|_| {}).await;
         let board = sample_httpboot_board("ota-board");
@@ -5833,13 +5927,7 @@ mod tests {
             create_board(&app, serde_json::to_value(&board).unwrap()).await,
             StatusCode::CREATED
         );
-        let mut image = vec![0; 512];
-        image[..2].copy_from_slice(b"MZ");
-        image[0x3c..0x40].copy_from_slice(&(0x80_u32).to_le_bytes());
-        image[0x80..0x84].copy_from_slice(b"PE\0\0");
-        image[0x84..0x86].copy_from_slice(&[0x64, 0x86]);
-        image[0x98..0x9a].copy_from_slice(&[0x0b, 0x02]);
-        image[0xdc..0xde].copy_from_slice(&[10, 0]);
+        let image = efi_image();
         let response = app
             .clone()
             .oneshot(
@@ -5871,6 +5959,18 @@ mod tests {
         let job: crate::ota::Job =
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/admin/loader-images/{}", uploaded.sha256))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
         assert_eq!(
             app.clone().oneshot(queue()).await.unwrap().status(),
             StatusCode::CONFLICT
@@ -5942,7 +6042,7 @@ mod tests {
         );
         let trial = poll.ota.as_mut().unwrap();
         trial.pending_update_id = Some(job.update_id.clone());
-        trial.running_sha256 = uploaded.sha256;
+        trial.running_sha256 = uploaded.sha256.clone();
         trial.trial = true;
         trial.source = Some(OtaSource::Direct);
         let response = app
@@ -5978,10 +6078,50 @@ mod tests {
         assert!(
             matches!(reply, LoaderPollResponse::ConfirmUpdate { ref update_id, .. } if update_id == &job.update_id)
         );
-        let response = app.oneshot(Request::builder().method("POST").uri("/api/v1/loaders/ota-status")
+        let response = app.clone().oneshot(Request::builder().method("POST").uri("/api/v1/loaders/ota-status")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(json!({"protocol_version": 4, "registration_id": registration.registration_id,
                 "mac_address": mac, "update_id": job.update_id, "phase": "succeeded"}).to_string())).unwrap()).await.unwrap();
         assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        state
+            .ota
+            .report(
+                &board.id,
+                mac,
+                &job.update_id,
+                crate::ota::Phase::Succeeded,
+                None,
+                Some(&uploaded.sha256),
+            )
+            .await
+            .unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/admin/loader-images/{}", uploaded.sha256))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/loader-updates/{}/image", job.update_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let retained = state.ota.job(&board.id).await.unwrap();
+        assert_eq!(retained.phase, crate::ota::Phase::Succeeded);
+        assert_eq!(retained.image.sha256, uploaded.sha256);
+        assert_eq!(retained.image.size, uploaded.size);
+        assert_eq!(retained.image.version, uploaded.version);
     }
 }

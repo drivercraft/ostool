@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::{
     api::{error::ApiError, router::board_id_for_mac},
-    ota::{Image, Job, MAX_IMAGE_BYTES, Phase},
+    ota::{DeleteImageError, Image, Job, MAX_IMAGE_BYTES, Phase},
     state::{AppState, BoardLeaseState},
 };
 
@@ -21,6 +21,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/api/v1/admin/loader-images",
             get(list_images).post(upload_image),
+        )
+        .route(
+            "/api/v1/admin/loader-images/{sha256}",
+            axum::routing::delete(delete_image),
         )
         .route(
             "/api/v1/admin/boards/{board_id}/loader-updates",
@@ -51,7 +55,10 @@ async fn upload_image(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<usize>().ok())
         .ok_or_else(|| ApiError::bad_request("Content-Length required"))?;
-    if length == 0 || length > MAX_IMAGE_BYTES {
+    if length == 0 {
+        return Err(ApiError::bad_request("empty EFI image"));
+    }
+    if length > MAX_IMAGE_BYTES {
         return Err(ApiError::payload_too_large("EFI image exceeds 32 MiB"));
     }
     let version = request
@@ -72,6 +79,26 @@ async fn upload_image(
         .map_err(|error| ApiError::bad_request(format!("{error:#}")))?;
     state.admin_events.invalidate(&["ota"]);
     Ok((StatusCode::CREATED, Json(image)))
+}
+
+async fn delete_image(
+    Path(sha256): Path<String>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .ota
+        .delete_image(&sha256)
+        .await
+        .map_err(|error| match error {
+            DeleteImageError::InvalidDigest => ApiError::bad_request(error.to_string()),
+            DeleteImageError::NotFound => ApiError::not_found(error.to_string()),
+            DeleteImageError::InUse => ApiError::conflict(error.to_string()),
+            DeleteImageError::Inconsistent | DeleteImageError::Io(_) => {
+                ApiError::internal(error.to_string())
+            }
+        })?;
+    state.admin_events.invalidate(&["ota"]);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -142,13 +169,7 @@ async fn download_image(
         .jobs()
         .await
         .into_iter()
-        .find(|job| {
-            job.update_id == update_id
-                && !matches!(
-                    job.phase,
-                    Phase::Cancelled | Phase::RolledBack | Phase::Failed
-                )
-        })
+        .find(|job| job.update_id == update_id && !job.phase.is_terminal())
         .ok_or_else(|| ApiError::not_found("OTA assignment not found"))?;
     let boards = state.boards.read().await;
     if board_id_for_mac(&boards, job.mac_address).as_deref() != Some(job.board_id.as_str()) {
@@ -156,7 +177,13 @@ async fn download_image(
     }
     let bytes = tokio::fs::read(state.ota.image_path(&job.image.sha256)?)
         .await
-        .map_err(|error| ApiError::internal(format!("failed to read OTA image: {error}")))?;
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                ApiError::not_found("OTA image not found")
+            } else {
+                ApiError::internal(format!("failed to read OTA image: {error}"))
+            }
+        })?;
     if bytes.len() as u64 != job.image.size {
         return Err(ApiError::internal("stored image length changed"));
     }

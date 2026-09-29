@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Section, SelectField, Notice, ConfirmAction, useAction } from "@/components/forms";
 import { sanitizeImageVersion } from "@/utils/ota";
 
+const terminalPhases = ["succeeded", "rolled_back", "failed", "cancelled"];
+
 export function BoardOta({ boardId }: { boardId: string }) {
   const ota = useResource("ota");
   const [selected, setSelected] = useState("");
@@ -12,7 +14,11 @@ export function BoardOta({ boardId }: { boardId: string }) {
   const upload = useAction();
   const assign = useAction();
   const job = ota?.jobs.find((entry) => entry.board_id === boardId);
-  const pending = job && !["succeeded", "rolled_back", "failed", "cancelled"].includes(job.phase);
+  const pending = job && !terminalPhases.includes(job.phase);
+  const selectedInUse = ota?.jobs.some(
+    (entry) =>
+      entry.image.sha256 === selected && !terminalPhases.includes(entry.phase),
+  );
   return (
     <Section title="axloader OTA" hint="仅用于可信隔离实验网；SHA-256 校验不认证发布者。">
       {job && (
@@ -45,6 +51,15 @@ export function BoardOta({ boardId }: { boardId: string }) {
             label: `${image.version || image.sha256.slice(0, 12)} · ${(image.size / 1024 / 1024).toFixed(2)} MiB`,
           })),
         ]} />
+      <ConfirmAction
+        label="删除镜像"
+        description="删除选中的 EFI 镜像？已有终态任务会保留镜像摘要，但不能再下载该文件。"
+        disabled={!selected || selectedInUse}
+        action={async () => {
+          await api.deleteLoaderImage(selected);
+          setSelected("");
+        }}
+      />
       <Button type="button" disabled={!selected || !!pending || assign.pending}
         onClick={() => void assign.run(() => api.queueLoaderUpdate(boardId, selected), "升级任务已指派")}>
         下发升级

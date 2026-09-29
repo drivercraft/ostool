@@ -20,6 +20,17 @@ describe("api client", () => {
     await expect(api.deleteSession("demo-session")).resolves.toBeUndefined();
   });
 
+  it("deletes a loader image using its encoded digest path", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(api.deleteLoaderImage("digest/value")).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/admin/loader-images/digest%2Fvalue",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
   it("reports a service connection hint when fetch fails", async () => {
     vi.stubGlobal(
       "fetch",

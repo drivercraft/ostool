@@ -5,10 +5,10 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard},
 };
 
-use anyhow::{Context, ensure};
+use anyhow::{Context, anyhow, ensure};
 use httpboot_protocol::{LoaderOtaState, OtaOutcome, OtaSource};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -37,7 +37,7 @@ pub enum Phase {
 }
 
 impl Phase {
-    fn is_terminal(self) -> bool {
+    pub(crate) fn is_terminal(self) -> bool {
         matches!(
             self,
             Self::Succeeded | Self::RolledBack | Self::Failed | Self::Cancelled
@@ -63,9 +63,24 @@ pub enum Decision {
     Wait,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum DeleteImageError {
+    #[error("invalid image digest")]
+    InvalidDigest,
+    #[error("OTA image not found")]
+    NotFound,
+    #[error("OTA image is referenced by an active assignment")]
+    InUse,
+    #[error("OTA image storage is inconsistent")]
+    Inconsistent,
+    #[error("failed to update OTA image storage: {0}")]
+    Io(#[from] std::io::Error),
+}
+
 #[derive(Clone)]
 pub struct OtaStore {
     root: PathBuf,
+    image_io: Arc<StdMutex<()>>,
     jobs: Arc<Mutex<BTreeMap<String, Job>>>,
     observations: Arc<Mutex<BTreeMap<String, Observation>>>,
 }
@@ -93,6 +108,7 @@ impl OtaStore {
         };
         Ok(Self {
             root,
+            image_io: Arc::new(StdMutex::new(())),
             jobs: Arc::new(Mutex::new(jobs)),
             observations: Arc::new(Mutex::new(observations)),
         })
@@ -104,6 +120,11 @@ impl OtaStore {
     }
 
     pub fn image(&self, digest: &str) -> anyhow::Result<Image> {
+        let _guard = self.lock_image_io()?;
+        self.image_unlocked(digest)
+    }
+
+    fn image_unlocked(&self, digest: &str) -> anyhow::Result<Image> {
         ensure!(valid_digest(digest), "invalid image digest");
         let bytes = fs::read(self.root.join("images").join(format!("{digest}.json")))?;
         let image: Image = serde_json::from_slice(&bytes)?;
@@ -115,6 +136,7 @@ impl OtaStore {
     }
 
     pub fn images(&self) -> anyhow::Result<Vec<Image>> {
+        let _guard = self.lock_image_io()?;
         let mut images = Vec::new();
         for entry in fs::read_dir(self.root.join("images"))? {
             let entry = entry?;
@@ -123,7 +145,7 @@ impl OtaStore {
                 .to_str()
                 .and_then(|name| name.strip_suffix(".json"))
             {
-                images.push(self.image(name)?);
+                images.push(self.image_unlocked(name)?);
             }
         }
         images.sort_by(|a, b| a.sha256.cmp(&b.sha256));
@@ -176,6 +198,7 @@ impl OtaStore {
             size: bytes.len() as u64,
             version,
         };
+        let _guard = self.lock_image_io()?;
         let path = self.image_path(&sha256)?;
         if !path.exists() {
             atomic_write(&path, bytes)?;
@@ -192,6 +215,43 @@ impl OtaStore {
         Ok(image)
     }
 
+    pub async fn delete_image(&self, digest: &str) -> Result<(), DeleteImageError> {
+        if !valid_digest(digest) {
+            return Err(DeleteImageError::InvalidDigest);
+        }
+        let jobs = self.jobs.lock().await;
+        if jobs
+            .values()
+            .any(|job| job.image.sha256 == digest && !job.phase.is_terminal())
+        {
+            return Err(DeleteImageError::InUse);
+        }
+        let _guard = self
+            .image_io
+            .lock()
+            .map_err(|_| DeleteImageError::Inconsistent)?;
+        let directory = self.root.join("images");
+        let metadata = directory.join(format!("{digest}.json"));
+        let image = directory.join(format!("{digest}.efi"));
+        if !metadata.exists() && !image.exists() {
+            return Err(DeleteImageError::NotFound);
+        }
+        if metadata.is_file() {
+            fs::remove_file(&metadata)?;
+            fs::File::open(&directory)?.sync_all()?;
+        } else if metadata.exists() {
+            return Err(DeleteImageError::Inconsistent);
+        }
+        if image.is_file() {
+            fs::remove_file(&image)?;
+            fs::File::open(&directory)?.sync_all()?;
+        } else if image.exists() {
+            return Err(DeleteImageError::Inconsistent);
+        }
+        drop(jobs);
+        Ok(())
+    }
+
     pub async fn jobs(&self) -> Vec<Job> {
         self.jobs.lock().await.values().cloned().collect()
     }
@@ -206,8 +266,14 @@ impl OtaStore {
         mac_address: httpboot_protocol::MacAddress,
         digest: &str,
     ) -> anyhow::Result<Job> {
-        let image = self.image(digest)?;
         let observations = self.observations.lock().await;
+        let mut jobs = self.jobs.lock().await;
+        ensure!(
+            jobs.get(&board_id)
+                .is_none_or(|job| job.phase.is_terminal()),
+            "board already has an OTA job"
+        );
+        let image = self.image(digest)?;
         if let Some(device) = observations
             .get(&board_id)
             .filter(|device| device.mac_address == mac_address)
@@ -221,12 +287,6 @@ impl OtaStore {
                 "this image is already the active loader"
             );
         }
-        let mut jobs = self.jobs.lock().await;
-        ensure!(
-            jobs.get(&board_id)
-                .is_none_or(|job| job.phase.is_terminal()),
-            "board already has an OTA job"
-        );
         let job = Job {
             board_id: board_id.clone(),
             mac_address,
@@ -422,6 +482,12 @@ impl OtaStore {
             &serde_json::to_vec(observations)?,
         )
     }
+
+    fn lock_image_io(&self) -> anyhow::Result<StdMutexGuard<'_, ()>> {
+        self.image_io
+            .lock()
+            .map_err(|_| anyhow!("OTA image storage lock poisoned"))
+    }
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -591,5 +657,63 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn image_delete_rejects_active_assignment_and_survives_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = OtaStore::open(dir.path()).unwrap();
+        let image = store
+            .put_image(&efi_image(), Some("delete-me".into()))
+            .unwrap();
+        let mac = "02:00:00:00:00:01".parse().unwrap();
+        let job = store
+            .queue("board-1".into(), mac, &image.sha256)
+            .await
+            .unwrap();
+        let image_path = store.image_path(&image.sha256).unwrap();
+        let metadata_path = store
+            .root
+            .join("images")
+            .join(format!("{}.json", image.sha256));
+        assert!(image_path.is_file());
+        assert!(metadata_path.is_file());
+
+        assert!(matches!(
+            store.delete_image(&image.sha256).await,
+            Err(DeleteImageError::InUse)
+        ));
+        store.cancel("board-1", &job.update_id).await.unwrap();
+        store.delete_image(&image.sha256).await.unwrap();
+        assert!(store.images().unwrap().is_empty());
+        assert!(!image_path.exists());
+        assert!(!metadata_path.exists());
+        let retained = store.job("board-1").await.unwrap();
+        assert_eq!(retained.image.sha256, image.sha256);
+        assert_eq!(retained.image.size, image.size);
+        assert_eq!(retained.image.version, image.version);
+        assert!(matches!(
+            store.delete_image(&image.sha256).await,
+            Err(DeleteImageError::NotFound)
+        ));
+
+        store
+            .put_image(&efi_image(), Some("delete-me".into()))
+            .unwrap();
+        fs::remove_file(&metadata_path).unwrap();
+        store.delete_image(&image.sha256).await.unwrap();
+        assert!(!image_path.exists());
+        assert!(!metadata_path.exists());
+
+        drop(store);
+        let store = OtaStore::open(dir.path()).unwrap();
+        assert!(store.images().unwrap().is_empty());
+        let retained = store.job("board-1").await.unwrap();
+        assert_eq!(retained.phase, Phase::Cancelled);
+        assert_eq!(retained.image.sha256, image.sha256);
+        assert_eq!(retained.image.size, image.size);
+        assert_eq!(retained.image.version, image.version);
+        assert!(!image_path.exists());
+        assert!(!metadata_path.exists());
     }
 }
