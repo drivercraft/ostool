@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.1](https://github.com/drivercraft/ostool/compare/ostool-v0.30.0...ostool-v0.30.1) - 2026-09-29
+
+### Added
+
+- *(ostool-server)* control axloader boot and OTA through device HTTP ([#198](https://github.com/drivercraft/ostool/pull/198))
+
 ## [0.30.0](https://github.com/drivercraft/ostool/compare/ostool-v0.29.5...ostool-v0.30.0) - 2026-09-28
 
 ### Added

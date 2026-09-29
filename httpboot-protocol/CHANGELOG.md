@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/drivercraft/ostool/compare/httpboot-protocol-v0.3.0...httpboot-protocol-v0.4.0) - 2026-09-29
+
+### Added
+
+- *(ostool-server)* control axloader boot and OTA through device HTTP ([#198](https://github.com/drivercraft/ostool/pull/198))
+
 ## [0.3.0](https://github.com/drivercraft/ostool/compare/httpboot-protocol-v0.2.1...httpboot-protocol-v0.3.0) - 2026-09-28
 
 ### Added
