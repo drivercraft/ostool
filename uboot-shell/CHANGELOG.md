@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.9](https://github.com/drivercraft/ostool/compare/uboot-shell-v0.2.8...uboot-shell-v0.2.9) - 2026-09-30
+
+### Fixed
+
+- *(uboot-shell)* acknowledge console input before advancing commands ([#203](https://github.com/drivercraft/ostool/pull/203))
+
 ## [0.2.7](https://github.com/drivercraft/ostool/compare/uboot-shell-v0.2.6...uboot-shell-v0.2.7) - 2026-08-03
 
 ### Fixed
