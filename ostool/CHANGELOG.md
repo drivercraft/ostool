@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.2](https://github.com/drivercraft/ostool/compare/ostool-v0.30.1...ostool-v0.30.2) - 2026-09-30
+
+### Fixed
+
+- *(ostool)* drop inherited initrd addresses from FIT device trees ([#201](https://github.com/drivercraft/ostool/pull/201))
+
 ## [0.30.1](https://github.com/drivercraft/ostool/compare/ostool-v0.30.0...ostool-v0.30.1) - 2026-09-29
 
 ### Added

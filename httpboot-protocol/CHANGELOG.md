@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/drivercraft/ostool/compare/httpboot-protocol-v0.4.0...httpboot-protocol-v0.4.1) - 2026-09-30
+
+### Other
+
+- release ([#199](https://github.com/drivercraft/ostool/pull/199))
+
 ## [0.4.0](https://github.com/drivercraft/ostool/compare/httpboot-protocol-v0.3.0...httpboot-protocol-v0.4.0) - 2026-09-29
 
 ### Added
