@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2](https://github.com/drivercraft/ostool/compare/ostool-server-v0.8.1...ostool-server-v0.8.2) - 2026-09-30
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.8.1](https://github.com/drivercraft/ostool/compare/ostool-server-v0.8.0...ostool-server-v0.8.1) - 2026-09-29
 
 ### Added
