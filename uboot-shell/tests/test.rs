@@ -16,27 +16,39 @@ use uboot_shell::UbootShell;
 
 static PORT: AtomicU32 = AtomicU32::new(10000);
 
+struct QemuProcess(Child);
+
+impl Drop for QemuProcess {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// Starts QEMU with the bundled U-Boot image and returns an attached shell.
-async fn new_uboot() -> (Child, UbootShell) {
+async fn new_uboot() -> (QemuProcess, UbootShell) {
+    let _ = env_logger::try_init();
     let port = PORT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
     // qemu-system-aarch64 -machine virt -cpu cortex-a57 -nographic -bios assets/u-boot.bin
-    let out = Command::new("qemu-system-aarch64")
-        .arg("-serial")
-        .arg(format!("tcp::{port},server,nowait"))
-        .args([
-            "-machine",
-            "virt",
-            "-cpu",
-            "cortex-a57",
-            "-nographic",
-            "-net",
-            "none",
-            "-bios",
-            "../assets/u-boot.bin",
-        ])
-        .spawn()
-        .unwrap();
+    let out = QemuProcess(
+        Command::new("qemu-system-aarch64")
+            .arg("-serial")
+            .arg(format!("tcp::{port},server,nowait"))
+            .args([
+                "-machine",
+                "virt",
+                "-cpu",
+                "cortex-a57",
+                "-nographic",
+                "-net",
+                "none",
+                "-bios",
+                "../assets/u-boot.bin",
+            ])
+            .spawn()
+            .unwrap(),
+    );
 
     loop {
         sleep(Duration::from_millis(100)).await;
@@ -61,38 +73,38 @@ async fn new_uboot() -> (Child, UbootShell) {
 #[tokio::test]
 #[timeout(15000)]
 async fn test_shell() {
-    let (mut out, _uboot) = new_uboot().await;
+    let (_qemu, _uboot) = new_uboot().await;
     info!("test_shell ok");
-    let _ = out.kill();
-    out.wait().unwrap();
 }
 
 #[tokio::test]
 #[timeout(15000)]
 async fn test_cmd() {
-    let (mut out, mut uboot) = new_uboot().await;
+    let (_qemu, mut uboot) = new_uboot().await;
     let res = uboot.cmd("help").await.unwrap();
     println!("{}", res);
-    let _ = out.kill();
-    out.wait().unwrap();
 }
 
 #[tokio::test]
 #[timeout(15000)]
 async fn test_setenv() {
-    let (mut out, mut uboot) = new_uboot().await;
-    uboot.set_env("ipaddr", "127.0.0.1").await.unwrap();
-    let _ = out.kill();
-    out.wait().unwrap();
+    let (_qemu, mut uboot) = new_uboot().await;
+    let cmdline = "earlycon init=/bin/sh HOME=/root USER=root HOSTNAME=starry -- -c \"cd /root; export PS1=$USER@$HOSTNAME:~#; exec /bin/sh -i\"";
+    uboot
+        .set_env("bootargs", format!("'{cmdline}'"))
+        .await
+        .unwrap();
+    assert_eq!(
+        uboot.cmd("printenv bootargs").await.unwrap(),
+        format!("bootargs={cmdline}")
+    );
 }
 
 #[tokio::test]
 #[timeout(15000)]
 async fn test_env() {
-    let (mut out, mut uboot) = new_uboot().await;
+    let (_qemu, mut uboot) = new_uboot().await;
     uboot.set_env("fdt_addr", "0x40000000").await.unwrap();
     info!("set fdt_addr ok");
     assert_eq!(uboot.env_int("fdt_addr").await.unwrap(), 0x40000000);
-    let _ = out.kill();
-    out.wait().unwrap();
 }
