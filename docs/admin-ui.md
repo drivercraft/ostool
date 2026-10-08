@@ -11,6 +11,11 @@
 选择发现设备不会自动填写板型、电源或串口，保存前不会生成半成品板卡。
 QEMU 使用已有虚拟设备，保留原来的真实网络发现与匹配校验。
 
+选择 axloader 后，`BoardEditor` 隐藏手动串口开关、SN/path 和线参数，保存 `serial: null`。
+切回 U-Boot 保留编辑中的手动串口草稿。实际参数、端口、错误和 `SerialRuntimeStatus`
+由会话的 SSE 展示；`serial_manager` 展示发现请求数与候选监听数。没有黑名单界面。
+继电器配置继续保留，server 在发现前排除其所有路径别名和 SN。
+
 HTTP Boot 的 `boot_arch` 保留在“高级启动设置”中；留空沿用现有 CLI 的
 `x86_64` 默认值，并不表示自动识别。设备上报架构只读展示，普通绑定无需填写该项。
 
@@ -64,7 +69,7 @@ data: {"epoch":"...","revision":1,"kind":"snapshot","data":{"boards":[],"session
 
 后续事件名为 `update`，信封字段相同，`data` 仅包含改变的资源集合。
 集合键包括 `quarantined_boards`、`boards`、`runtimes`、`sessions`、`loaders`、`ota`（镜像和升级任务）、`virtual`、`dtbs`、
-`serial`、`network`、`server`、`tftp`、`tftp_status`、`overview`、`power_actions`。
+`serial`、`serial_manager`、`network`、`server`、`tftp`、`tftp_status`、`overview`、`power_actions`。
 集合更新是该集合的完整替换；消失的实体表示删除。前端按稳定 ID/MAC/name
 合并并复用未变化的对象，不重新挂载整张表或表单。
 

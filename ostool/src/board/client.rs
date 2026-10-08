@@ -166,6 +166,19 @@ pub struct SerialStatusResponse {
     pub port: Option<String>,
     pub baud_rate: Option<u32>,
     pub ws_url: Option<String>,
+    #[serde(default)]
+    pub runtime: Option<SerialRuntimeStatus>,
+    #[serde(default)]
+    pub manager: ostool_serial::ManagerSnapshot,
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct SerialRuntimeStatus {
+    pub phase: String,
+    pub port: Option<String>,
+    pub parameters: Option<httpboot_protocol::SerialParameters>,
+    pub boot_epoch: Option<String>,
+    pub binding_id: Option<String>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

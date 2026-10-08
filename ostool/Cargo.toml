@@ -36,6 +36,7 @@ fitimage = { version = "0.1", path = "../fitimage" }
 fdt-edit = "0.2.3"
 futures = "0.3"
 httpboot-protocol = { workspace = true }
+ostool-serial = { workspace = true }
 indicatif = "0.18"
 jkconfig = { version = "0.2", path = "../jkconfig", default-features = false }
 log = { workspace = true }

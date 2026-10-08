@@ -210,6 +210,9 @@ async fn run(state: &AppState, request: &PowerRequest) -> anyhow::Result<String>
         Action::On => PowerAction::On,
         Action::Off => PowerAction::Off,
     };
+    let _serial_reservation = state
+        .reserve_power_serial(&request.power_management)
+        .await?;
     match &request.power_management {
         #[cfg(target_os = "linux")]
         PowerManagementConfig::Custom(config) => {

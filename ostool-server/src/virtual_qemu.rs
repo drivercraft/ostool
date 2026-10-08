@@ -496,14 +496,12 @@ impl SerialHub {
     async fn attach(&self) -> anyhow::Result<DuplexStream> {
         let (client, hub_side) = tokio::io::duplex(SERIAL_HISTORY_LIMIT);
         let (mut hub_reader, mut hub_writer) = tokio::io::split(hub_side);
-        let history = self
-            .history
-            .lock()
-            .await
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
+        // Subscribe and snapshot under the producer's lock, so bytes cross the
+        // history/live boundary exactly once during discovery lease transfer.
+        let history_guard = self.history.lock().await;
         let mut output_rx = self.output_tx.subscribe();
+        let history = history_guard.iter().copied().collect::<Vec<_>>();
+        drop(history_guard);
         let (attachment_closed_tx, mut attachment_closed_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             if !history.is_empty() && hub_writer.write_all(&history).await.is_err() {
@@ -588,8 +586,8 @@ impl SerialHub {
         let drain = overflow.min(history.len());
         history.drain(..drain);
         history.extend(bytes.iter().copied());
-        drop(history);
         let _ = self.output_tx.send(bytes.to_vec());
+        drop(history);
     }
 
     async fn shutdown(&self) {

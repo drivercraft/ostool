@@ -298,14 +298,17 @@ fn match_usb_device<'a>(
         return Some(exact);
     }
 
-    if let Some(product) = info.product.as_deref()
-        && let Some(exact) = usb_devices.iter().find(|device| {
+    if let Some(product) = info.product.as_deref() {
+        let mut matches = usb_devices.iter().filter(|device| {
             device.vendor_id == info.vid
                 && device.product_id == info.pid
                 && device.product.as_deref() == Some(product)
-        })
-    {
-        return Some(exact);
+        });
+        if let Some(exact) = matches.next()
+            && matches.next().is_none()
+        {
+            return Some(exact);
+        }
     }
 
     let candidates = usb_devices
@@ -369,6 +372,13 @@ mod tests {
             match_usb_device(&devices, &usb_info(0x1a86, 0x7523, None, None, Some("B"))).unwrap();
 
         assert_eq!(matched.serial_number.as_deref(), Some("B"));
+        assert!(
+            match_usb_device(
+                &devices,
+                &usb_info(0x1a86, 0x7523, None, Some("USB2.0-Serial"), None)
+            )
+            .is_none()
+        );
     }
 
     #[test]

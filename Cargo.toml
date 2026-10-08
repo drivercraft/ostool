@@ -7,6 +7,7 @@ members = [
     "fitimage",
     "ostool-server",
     "httpboot-protocol",
+    "ostool-serial",
 ]
 resolver = "3"
 
@@ -23,7 +24,9 @@ serde_json = "1"
 toml = "1.0"
 url = {version = "2", features = ["serde"]}
 
-httpboot-protocol = { version = "0.4", path = "./httpboot-protocol" }
+httpboot-protocol = { version = "0.5", path = "./httpboot-protocol" }
+
+ostool-serial = { version = "0.1", path = "./ostool-serial" }
 
 # Error handling
 thiserror = "2"

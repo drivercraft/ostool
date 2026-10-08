@@ -69,6 +69,9 @@ test("unbound power -> real discovery -> manual MAC binding; push preserves focu
   await page.getByLabel("板型", { exact: true }).fill("qemu-x86_64");
   await page.getByLabel("ID", { exact: true }).fill("e2e-board");
   await page.getByLabel("启动方式").selectOption("httpboot");
+  await expect(page.getByLabel("波特率", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("启用串口")).toHaveCount(0);
+  await expect(page.getByText("自动串口", { exact: true })).toBeVisible();
   const macInput = page.getByLabel("MAC 地址", { exact: true });
   await macInput.fill("02:00:00:00:00:");
   await macInput.focus();
@@ -109,6 +112,10 @@ test("unbound power -> real discovery -> manual MAC binding; push preserves focu
   await macInput.fill(mac);
   await page.getByRole("button", { name: "保存开发板" }).click();
   await expect(page).toHaveURL(/boards\/e2e-board$/);
+  const saved = await (
+    await request.get("http://127.0.0.1:4175/api/v1/admin/boards/e2e-board")
+  ).json();
+  expect(saved.serial).toBeNull();
   const peer = await context.newPage();
   await peer.goto("/admin/boards");
   await expect(peer.getByText(/1 份不兼容配置已备份隔离/)).toBeVisible();

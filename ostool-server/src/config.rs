@@ -533,6 +533,10 @@ pub struct BoardConfig {
 }
 
 impl BoardConfig {
+    pub fn serial_available(&self) -> bool {
+        self.serial.is_some() || matches!(self.boot, BootConfig::UefiHttp(_))
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         if let BootConfig::Uboot(profile) = &self.boot {
             profile.validate()?;
@@ -546,14 +550,6 @@ impl BoardConfig {
             }
             if virtual_device_id.trim().is_empty() {
                 anyhow::bail!("QEMU virtual_device_id must not be empty");
-            }
-            let serial = self
-                .serial
-                .as_ref()
-                .context("QEMU boards must configure a QEMU serial key")?;
-            if serial.key.kind != SerialPortKeyKind::Qemu || serial.key.value != *virtual_device_id
-            {
-                anyhow::bail!("QEMU power and serial must reference the same virtual_device_id");
             }
             if self.network_identity.is_none() {
                 anyhow::bail!("QEMU boards must configure network_identity.mac_address");
@@ -1148,7 +1144,7 @@ bootm_addr = "0x82200000"
     }
 
     #[test]
-    fn qemu_board_requires_httpboot_and_matching_virtual_serial() {
+    fn qemu_board_requires_httpboot_and_derives_virtual_serial() {
         let mut board = BoardConfig {
             id: "qemu-01".into(),
             board_type: "qemu-x86_64".into(),
@@ -1181,14 +1177,9 @@ bootm_addr = "0x82200000"
             boot_arch: Some(UefiBootArch::X86_64),
         });
         board.validate().unwrap();
-        board.serial.as_mut().unwrap().key.value = "virtual-2".into();
-        assert!(
-            board
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("QEMU power and serial must reference the same virtual_device_id")
-        );
+        board.serial = None;
+        board.validate().unwrap();
+        assert!(board.serial_available());
     }
 
     #[test]

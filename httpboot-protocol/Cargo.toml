@@ -7,7 +7,7 @@ keywords = ["httpboot", "uefi", "bootloader"]
 license = "MIT OR Apache-2.0"
 name = "httpboot-protocol"
 repository = "https://github.com/drivercraft/ostool"
-version = "0.4.1"
+version = "0.5.0"
 
 [features]
 default = ["std", "json"]

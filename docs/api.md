@@ -316,7 +316,7 @@ GET /api/v1/admin/boards
 GET /api/v1/admin/boards/{board_id}
 ```
 
-列表接口返回 `BoardConfig` 数组，单板接口返回一个 `BoardConfig`。读取时服务端会尝试解析串口稳定标识；解析成功后，`serial` 中会额外出现 `resolved_device_path` 和可选的 `resolved_usb_path`。
+列表接口返回 `BoardConfig` 数组，单板接口返回一个 `BoardConfig`。axloader 写入时将 `serial` 规范化为 `null`。读取手动串口配置时服务端会尝试解析串口稳定标识；解析成功后，`serial` 中会额外出现 `resolved_device_path` 和可选的 `resolved_usb_path`。
 
 创建和更新使用相同请求结构：
 
@@ -374,7 +374,7 @@ Content-Type: application/json
   }
   ```
 
-  启用内建虚拟板时也可使用 `{"kind":"qemu","virtual_device_id":"..."}`。此时串口必须为同一个虚拟设备 ID 的 `qemu` key，并配置相同虚拟设备的 MAC。
+  启用内建虚拟板时也可使用 `{"kind":"qemu","virtual_device_id":"..."}`。此时 axloader 配置使用 `serial: null`，串口 provider 从电源取得，并配置相同虚拟设备的 MAC。
 
 - `boot.kind` 可为上例的 `uboot`、`{"kind":"pxe","notes":null}`，或 `{"kind":"httpboot","boot_arch":"aarch64"}`。`boot_arch` 可为 `x86_64`、`aarch64`、`loongarch64`、`riscv64` 或 `other`。
 - `httpboot` 板卡必须提供 `network_identity: {"mac_address":"02:00:00:00:00:01"}`。MAC 会规范化为小写六字节冒号格式并在全部板卡配置中保持唯一；重复绑定返回 `409` 和错误码 `mac_already_bound`。`board_type` 始终由管理员填写，不根据 SMBIOS 或架构推断。
@@ -689,9 +689,9 @@ Content-Type: application/json
 
 本节定义两种后端共用的开发板服务契约：本地局域网模式由 `ostool-server` 直接提供，认证模式由独立认证后端提供受认证的对应接口。这里覆盖 `ostool-server` 的全部公开、非管理 REST 接口。`ostool` 当前命令会使用会话文件上传；配置宿主 initramfs 时还会调用普通 HTTP Boot 文件上传。它不直接调用会话详情、会话文件列表/查询/删除和显式电源控制；这些仍属于公开 board 服务契约，其中显式电源控制也已有 `BoardServerClient` 方法。
 
-axloader 协议 v2/v3/v4 使用 `POST /api/v1/loaders/poll`、`POST /api/v1/loaders/status` 和 `GET /api/v1/sessions/{session_id}/loader-status`。poll/status 由 UDP 发现返回的一次性 `registration_id` 关联本次固件启动；状态以 `session_id + boot_id + registration_id` 定位，旧代次迟到上报不能覆盖新代次。v2 loader 仅在没有 `initramfs` 与 `cmdline` 时接收启动，否则得到 `boot_payload_unsupported`；v3 保留原有启动契约；v4 另携带 `ota` 状态并可收到 `update` / `confirm_update`。Session 释放时删除启动清单和 loader 状态，不删除独立持久的 OTA 任务。
+axloader 协议 v2/v3/v4 的 `POST /api/v1/loaders/poll`、`POST /api/v1/loaders/status` 和 `GET /api/v1/sessions/{session_id}/loader-status` 保留识别及升级用途。poll/status 由 UDP 发现返回的一次性 `registration_id` 关联本次固件启动；状态以 `session_id + boot_id + registration_id` 定位，旧代次迟到上报不能覆盖新代次。v4 携带 `ota` 状态时仍可收到 `update` / `confirm_update`，普通启动统一返回 `serial_protocol_upgrade_required`。Session 释放时删除启动清单和 loader 状态，不删除独立持久的 OTA 任务。
 
-v5 axloader 通过 UDP 广播自身地址，ostool-server 随后调用设备的 HTTP 接口。设备 `POST /api/v1/boot/jobs` 创建事务返回 `201`，相同清单重试返回 `200`，冲突清单返回 `409`；服务端观察到同代次的其他启动 ID 时会先删除旧事务并只重试创建一次，删除返回 `404` 也视为旧事务已经消失。服务端构造 v5 清单时完整保留相互独立的可选 `cmdline` 与 `initramfs` 元数据，并把 Session 的兼容入口转换为 `__x86_64_efi_pe_entry`；v2/v3/v4 poll 响应继续返回原入口。`POST /api/v1/boot/jobs/{id}/start` 和 `PUT /api/v1/ota/image` 接受交接或升级后返回 `202`；`POST /api/v1/ota/confirm` 成功返回 `200`，代次、来源或升级 ID 不匹配返回 `409`。完整设备接口及状态机见 [axloader 网络控制与本地验证](axloader-network-control.md#21-启动事务)和[装载器升级](axloader-network-control.md#22-装载器升级)。设备没有可用 OTA 持久区时，`ota` 状态可以为空；服务端跳过升级，但仍可向已有 Session 推送普通启动事务。
+v5/v6 axloader 通过 UDP 广播自身地址，ostool-server 随后调用设备的 HTTP 接口；v5 保留识别与 OTA，自动启动要求 v6。服务器先从当前 UART 身份帧确认物理连线，以本次参数接管租约，再通过网络 continue 和 `X-Serial-Binding` 放行启动。设备 `POST /api/v1/boot/jobs` 创建事务返回 `201`，相同清单重试返回 `200`，冲突清单返回 `409`；服务端观察到同代次的其他启动 ID 时会先删除旧事务并只重试创建一次，删除返回 `404` 也视为旧事务已经消失。清单完整保留相互独立的可选 `cmdline` 与 `initramfs` 元数据，并把 Session 的兼容入口转换为 `__x86_64_efi_pe_entry`。`POST /api/v1/boot/jobs/{id}/start` 和 `PUT /api/v1/ota/image` 接受交接或升级后返回 `202`；`POST /api/v1/ota/confirm` 成功返回 `200`，代次、来源或升级 ID 不匹配返回 `409`。完整设备接口及状态机见 [axloader 网络控制与本地验证](axloader-network-control.md#21-启动事务)和[装载器升级](axloader-network-control.md#22-装载器升级)。设备没有可用 OTA 持久区时，`ota` 状态可以为空；服务端跳过升级，v6 仍可向已有 Session 推送普通启动事务。
 
 装载器镜像库和指派任务使用下列 ostool-server 接口：
 
@@ -760,7 +760,7 @@ Content-Type: application/json
 }
 ```
 
-`ws_url` 在开发板没有串口配置时为 `null`。为兼容包含路径前缀的 Base URL，认证后端应返回不以 `/` 开头的 Base URL 相对路径，或者返回包含完整路径前缀的同源绝对 `ws://`/`wss://` URL。以 `/` 开头的值是 origin-relative URL，只适用于 API 确实部署在域名根目录的情况。
+`ws_url` 在非 axloader 模式且没有串口配置时为 `null`。axloader 的 `serial: null` 仍提供 WebSocket，先建立接收通道再上电和自动绑定。为兼容包含路径前缀的 Base URL，认证后端应返回不以 `/` 开头的 Base URL 相对路径，或者返回包含完整路径前缀的同源绝对 `ws://`/`wss://` URL。以 `/` 开头的值是 origin-relative URL，只适用于 API 确实部署在域名根目录的情况。
 
 `boot_mode` 可为 `uboot`、`pxe` 或 `httpboot`。
 
@@ -897,7 +897,7 @@ GET /api/v1/sessions/{session_id}/serial
 }
 ```
 
-没有串口时，`available` 和 `connected` 为 `false`，`port`、`baud_rate`、`ws_url` 均为 `null`。配置了串口但服务端无法把稳定标识解析为当前设备路径时返回 `503 Service Unavailable`。
+非 axloader 模式没有串口时，`available` 和 `connected` 为 `false`，`port`、`baud_rate`、`ws_url` 均为 `null`。axloader 连接后 `connected` 只表示 WebSocket；新增 `runtime` 包含 phase、port、parameters、boot_epoch、binding_id、error，`manager` 包含 pending、candidates、leased。实际绑定前 port/baud_rate 为空。配置了串口但服务端无法把稳定标识解析为当前设备路径时返回 `503 Service Unavailable`。
 
 ### 获取 TFTP 状态
 
@@ -1069,7 +1069,7 @@ X-HttpBoot-Cmdline: <cmdline>                 # 可选，宿主内核命令行
 }
 ```
 
-响应模型允许 `kernel_sha256` 为 `null`，但当前 `ostool-server` 会计算并返回 64 位小写十六进制 SHA-256。当前 `ostool board run` 的 HTTP Boot 流程固定发送 `remote_name=kernel.elf`、`image_format=elf64` 和 `entry_symbol=httpboot_entry`；配置 `initramfs` 时先上传为 `initramfs.cpio` 并设置对应路径 Header。v3 poll 响应包含可选的 `initramfs: {path, size, sha256}` 和 `cmdline`；loader 必须从当前 Session 下载归档并核对大小与摘要，校验失败不交接内核。v2 loader 仅能接收两个字段均未配置的启动。
+响应模型允许 `kernel_sha256` 为 `null`，但当前 `ostool-server` 会计算并返回 64 位小写十六进制 SHA-256。当前 `ostool board run` 的 HTTP Boot 流程固定发送 `remote_name=kernel.elf`、`image_format=elf64` 和 `entry_symbol=httpboot_entry`；配置 `initramfs` 时先上传为 `initramfs.cpio` 并设置对应路径 Header。服务器向 v6 设备推送时将兼容入口转换为 `__x86_64_efi_pe_entry`，完整保留独立的可选命令行和归档，核对文件摘要并携带当前串口绑定令牌。旧 poll 装载器需要升级后才能启动。
 
 ## 串口 WebSocket API
 
@@ -1089,9 +1089,9 @@ Upgrade: websocket
 Authorization: Bearer <access_token>  # 仅 required 模式
 ```
 
-握手时会话不存在返回 `404 Not Found`；开发板没有串口、会话正在释放或已有串口 WebSocket 连接时返回 `409 Conflict`。每个会话同时只允许一个串口连接。
+握手时会话不存在返回 `404 Not Found`；非 axloader 板卡没有串口、会话正在释放或已有串口 WebSocket 连接时返回 `409 Conflict`。每个会话同时只允许一个串口连接。
 
-WebSocket 连接成功后服务端打开串口、发送 `opened` 控制消息并自动执行开发板上电。服务端将串口输出作为二进制帧发送，客户端也可直接通过二进制帧写入原始串口字节。
+WebSocket 连接成功后发送 `opened` 控制消息并自动执行开发板上电。U-Boot 先打开手动串口；axloader 先建立接收通道，网络就绪后自动发现并移交串口租约，再以绑定令牌确认和启动。等待时继续处理 Ping、Close 和心跳。服务端将串口输出作为二进制帧发送，客户端也可直接通过二进制帧写入原始串口字节。
 
 服务端文本控制消息如下：
 

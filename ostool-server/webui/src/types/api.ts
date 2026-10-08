@@ -191,7 +191,15 @@ export interface LoaderUpdateJob {
   mac_address: string;
   update_id: string;
   image: LoaderImage;
-  phase: "queued" | "downloading" | "staged" | "confirming" | "succeeded" | "rolled_back" | "failed" | "cancelled";
+  phase:
+    | "queued"
+    | "downloading"
+    | "staged"
+    | "confirming"
+    | "succeeded"
+    | "rolled_back"
+    | "failed"
+    | "cancelled";
   error: string | null;
   delivery_attempts: number;
 }
@@ -230,6 +238,8 @@ export interface DtbFileResponse {
 }
 
 export interface Session {
+  serial_connected?: boolean;
+  serial_runtime?: SerialRuntimeStatus;
   id: string;
   board_id: string;
   client_name: string | null;
@@ -306,4 +316,26 @@ export interface TftpSessionResponse {
   netmask: string | null;
   writable: boolean;
   files: FileResponse[];
+}
+
+export interface SerialRuntimeStatus {
+  phase:
+    | "waiting_device"
+    | "verifying"
+    | "discovering"
+    | "bound"
+    | "recovering"
+    | "failed"
+    | "closed";
+  port: string | null;
+  parameters: {
+    baud_rate: number;
+    data_bits: number;
+    parity: string;
+    stop_bits: string;
+    flow_control: string;
+  } | null;
+  error: string | null;
+  binding_id: string | null;
+  boot_epoch: string | null;
 }

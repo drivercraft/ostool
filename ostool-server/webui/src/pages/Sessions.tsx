@@ -3,6 +3,7 @@ import { formatLeaseRemaining } from "@/utils/time";
 import { useList, useResource } from "@/api/events";
 import { api } from "@/api/client";
 import { DataTable, Row, Cell, ConfirmAction } from "@/components/forms";
+import { SerialRuntimeDetails } from "@/components/serial-runtime";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "react-router-dom";
 export default function Sessions() {
@@ -53,6 +54,10 @@ export default function Sessions() {
                     ? "释放中"
                     : "占用中"}
               </Badge>
+              <small>
+                WebSocket {s.serial_connected ? "已连接" : "未连接"}
+              </small>
+              <SerialRuntimeDetails status={s.serial_runtime} />
               <small className="text-destructive">
                 {runtimes[s.board_id]?.last_release_error}
               </small>

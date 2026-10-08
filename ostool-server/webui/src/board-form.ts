@@ -208,15 +208,16 @@ export function buildRequestPayload(
     tags: splitTags(form.tags_text),
     notes: trimToNull(form.notes),
     disabled: form.disabled,
-    serial: form.serial_enabled
-      ? {
-          key: {
-            kind: form.serial_key_kind,
-            value: form.serial_key_value.trim(),
-          },
-          baud_rate: form.serial_baud_rate,
-        }
-      : null,
+    serial:
+      form.boot_kind !== "httpboot" && form.serial_enabled
+        ? {
+            key: {
+              kind: form.serial_key_kind,
+              value: form.serial_key_value.trim(),
+            },
+            baud_rate: form.serial_baud_rate,
+          }
+        : null,
     power_management: buildPowerManagementConfig(form),
     boot: buildBootConfig(form),
     network_identity:
@@ -235,10 +236,15 @@ export function validateForm(form: BoardEditorFormState): string {
   if (form.id.includes("/") || form.id.includes("\\")) {
     errors.push("板子 ID 不能包含路径分隔符");
   }
-  if (form.serial_enabled && !form.serial_key_value.trim()) {
+  if (
+    form.boot_kind !== "httpboot" &&
+    form.serial_enabled &&
+    !form.serial_key_value.trim()
+  ) {
     errors.push("启用串口时必须选择串口设备");
   }
   if (
+    form.boot_kind !== "httpboot" &&
     form.serial_enabled &&
     (!Number.isFinite(form.serial_baud_rate) || form.serial_baud_rate <= 0)
   ) {
@@ -261,11 +267,6 @@ export function validateForm(form: BoardEditorFormState): string {
   if (form.power_management_kind === "qemu") {
     if (!form.virtual_device_id.trim()) {
       errors.push("QEMU 电源管理必须选择虚拟设备");
-    }
-    if (!form.serial_enabled || form.serial_key_kind !== "qemu") {
-      errors.push("QEMU 电源管理必须启用 QEMU 虚拟串口");
-    } else if (form.serial_key_value.trim() !== form.virtual_device_id.trim()) {
-      errors.push("QEMU 电源和虚拟串口必须引用同一个虚拟设备");
     }
     if (form.boot_kind !== "httpboot") {
       errors.push("QEMU 虚拟设备必须使用 HTTPboot");

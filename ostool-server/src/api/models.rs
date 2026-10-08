@@ -69,6 +69,8 @@ pub struct SessionDetailResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerialStatusResponse {
+    pub runtime: crate::serial::runtime::SerialRuntimeStatus,
+    pub manager: ostool_serial::ManagerSnapshot,
     pub available: bool,
     pub connected: bool,
     pub port: Option<String>,

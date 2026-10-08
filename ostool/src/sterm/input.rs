@@ -5,14 +5,14 @@ use std::{io, os::fd::OwnedFd};
 use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use tokio::io::unix::AsyncFd;
 
-pub(super) struct Input {
+pub(crate) struct Input {
     fd: AsyncFd<OwnedFd>,
     original_flags: OFlags,
 }
 
 impl Input {
     /// The terminal loop must be the sole stdin reader while this owner lives.
-    pub(super) fn new() -> io::Result<Self> {
+    pub(crate) fn new() -> io::Result<Self> {
         Self::from_fd(rustix::io::dup(io::stdin())?)
     }
 
@@ -23,7 +23,7 @@ impl Input {
         Ok(Self { fd, original_flags })
     }
 
-    pub(super) async fn next(&mut self) -> Option<io::Result<Vec<u8>>> {
+    pub(crate) async fn next(&mut self) -> Option<io::Result<Vec<u8>>> {
         loop {
             let mut ready = match self.fd.readable().await {
                 Ok(ready) => ready,

@@ -8,6 +8,19 @@ import {
 } from "./board-form";
 import type { BoardConfig } from "./types/api";
 describe("board configuration contracts", () => {
+  it("hides manual serial in axloader payload and restores the U-Boot draft", () => {
+    const f = defaultFormState();
+    f.serial_enabled = true;
+    f.serial_key_value = "manual";
+    f.serial_baud_rate = 921600;
+    f.boot_kind = "httpboot";
+    expect(buildRequestPayload(f).serial).toBeNull();
+    f.boot_kind = "uboot";
+    expect(buildRequestPayload(f).serial).toEqual({
+      key: { kind: "serial_number", value: "manual" },
+      baud_rate: 921600,
+    });
+  });
   it("allows power configuration before board identity and HTTPboot MAC exist", () => {
     const f = defaultFormState();
     f.power_on_cmd = "on";
@@ -68,7 +81,7 @@ describe("board configuration contracts", () => {
       f.network_mac,
     );
   });
-  it("rejects QEMU mismatched serial ownership and missing HTTPboot MAC", () => {
+  it("derives QEMU serial from power configuration and still requires MAC", () => {
     const f = defaultFormState();
     f.power_management_kind = "qemu";
     f.virtual_device_id = "one";
@@ -76,7 +89,8 @@ describe("board configuration contracts", () => {
     f.serial_key_kind = "qemu";
     f.serial_key_value = "other";
     f.boot_kind = "httpboot";
-    expect(validateForm(f)).toContain("同一个虚拟设备");
+    expect(buildRequestPayload(f).serial).toBeNull();
+    expect(validateForm(f)).not.toContain("串口");
     expect(validateForm(f)).toContain("MAC");
   });
 });

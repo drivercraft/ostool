@@ -65,6 +65,8 @@ pub struct Session {
     pub expires_at: DateTime<Utc>,
     #[serde(default)]
     pub serial_connected: bool,
+    #[serde(default)]
+    pub serial_runtime: crate::serial::runtime::SerialRuntimeStatus,
     #[serde(default = "default_session_state")]
     pub state: SessionLifecycleState,
 }
@@ -84,6 +86,7 @@ impl Session {
             last_heartbeat_at: now,
             expires_at: now + SESSION_TTL,
             serial_connected: false,
+            serial_runtime: Default::default(),
             state: SessionLifecycleState::Active,
         }
     }
@@ -97,6 +100,8 @@ impl Session {
 
 #[derive(Debug)]
 pub struct SessionState {
+    pub serial_runtime: Arc<crate::serial::runtime::SessionSerialRuntime>,
+    boot_generation: watch::Sender<u64>,
     info: RwLock<Session>,
     board: BoardConfig,
     shutdown_tx: watch::Sender<bool>,
@@ -157,6 +162,8 @@ impl SessionState {
     ) -> Arc<Self> {
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
         Arc::new(Self {
+            serial_runtime: Arc::default(),
+            boot_generation: watch::channel(0).0,
             info: RwLock::new(Session::new_with_id(
                 session_id,
                 board.id.clone(),
@@ -172,6 +179,14 @@ impl SessionState {
         })
     }
 
+    pub fn subscribe_boot_generation(&self) -> watch::Receiver<u64> {
+        self.boot_generation.subscribe()
+    }
+    pub async fn change_power(&self, powered: bool) {
+        self.boot_generation
+            .send_modify(|g| *g = g.checked_add(1).expect("boot generation exhausted"));
+        self.serial_runtime.restart(powered).await;
+    }
     pub fn board(&self) -> &BoardConfig {
         &self.board
     }
@@ -184,6 +199,7 @@ impl SessionState {
         let mut info = self.info.read().await.clone();
         info.serial_connected = self.serial_connected.load(Ordering::Acquire);
         info.state = self.lifecycle_state();
+        info.serial_runtime = self.serial_runtime.snapshot();
         info
     }
 
@@ -192,6 +208,7 @@ impl SessionState {
         info.touch();
         info.serial_connected = self.serial_connected.load(Ordering::Acquire);
         info.state = self.lifecycle_state();
+        info.serial_runtime = self.serial_runtime.snapshot();
         info.clone()
     }
 

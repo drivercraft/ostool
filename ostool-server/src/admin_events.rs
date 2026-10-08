@@ -26,6 +26,7 @@ pub const TOPICS: &[&str] = &[
     "virtual",
     "dtbs",
     "serial",
+    "serial_manager",
     "network",
     "server",
     "tftp",

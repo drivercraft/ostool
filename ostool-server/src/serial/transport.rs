@@ -24,7 +24,7 @@ pub(super) async fn run<R, W, S, I, E, F, H>(
     serial_tx: &mut W,
     ws_sender: &mut S,
     ws_receiver: &mut I,
-    mut ready: watch::Receiver<bool>,
+    ready: watch::Receiver<bool>,
     heartbeat: F,
 ) -> anyhow::Result<()>
 where
@@ -91,10 +91,6 @@ where
         }
     };
     let read_websocket = async {
-        ready
-            .wait_for(|ready| *ready)
-            .await
-            .context("power-on cancelled")?;
         while let Some(message) = ws_receiver.next().await {
             let payload = match message? {
                 Message::Binary(bytes) => Some(bytes.to_vec()),
@@ -135,6 +131,11 @@ where
         Ok(())
     };
     let write_serial = async {
+        let mut ready = ready;
+        ready
+            .wait_for(|ready| *ready)
+            .await
+            .context("power-on cancelled")?;
         while let Some(payload) = input_rx.recv().await {
             // SerialStream writes directly to the kernel. flush() calls blocking
             // tcdrain(), holding tokio::io::split's mutex and preventing reads.
@@ -157,14 +158,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use super::super::physical::PhysicalSerial;
     use super::*;
     use futures_util::{Sink, stream};
-    #[cfg(unix)]
-    use serialport::TTYPort;
     use std::{
-        io::{self, Write},
+        io,
         pin::Pin,
         sync::Arc,
         task::{Context, Poll},
@@ -260,36 +257,40 @@ mod tests {
         assert_eq!(bytes, payload);
     }
 
-    #[cfg(unix)]
+    struct ErrorReader {
+        bytes: std::io::Cursor<Vec<u8>>,
+        error_observed: Arc<Notify>,
+    }
+    impl AsyncRead for ErrorReader {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            output: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            if output.remaining() == 0 {
+                return Poll::Ready(Ok(()));
+            }
+            let size = std::io::Read::read(&mut self.bytes, output.initialize_unfilled())?;
+            if size == 0 {
+                self.error_observed.notify_one();
+                Poll::Ready(Err(io::Error::other("receive failed")))
+            } else {
+                output.advance(size);
+                Poll::Ready(Ok(()))
+            }
+        }
+    }
     #[tokio::test]
-    async fn physical_receive_overflow_drains_accepted_output_before_error() {
-        let (mut board, slave) = TTYPort::pair().expect("create PTY pair");
-        let physical = PhysicalSerial::new(slave).expect("start physical serial reader");
-        let snapshot = physical.test_receive_snapshotter();
-        let payload: Vec<u8> = (0..CHUNK_SIZE * QUEUE_CHUNKS + 1)
+    async fn receive_error_drains_accepted_output_before_failure() {
+        let expected: Vec<u8> = (0..CHUNK_SIZE * QUEUE_CHUNKS / 2)
             .map(|i| (i % 251) as u8)
             .collect();
-        deadline(tokio::task::spawn_blocking(move || {
-            board.write_all(&payload)
-        }))
-        .await
-        .expect("PTY writer task panicked")
-        .expect("write PTY payload");
-
-        let expected = deadline(async {
-            loop {
-                let (bytes, closed, error_pending) = snapshot();
-                if closed {
-                    assert!(error_pending, "physical reader closed without overflow");
-                    break bytes;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await;
-        assert!(!expected.is_empty(), "physical reader buffered no input");
-
-        let (mut serial_rx, mut serial_tx) = tokio::io::split(physical);
+        let error_observed = Arc::new(Notify::new());
+        let mut serial_rx = ErrorReader {
+            bytes: std::io::Cursor::new(expected.clone()),
+            error_observed: error_observed.clone(),
+        };
+        let mut serial_tx = tokio::io::sink();
         let (output, mut received) = mpsc::unbounded_channel();
         let (release, gate) = tokio::sync::oneshot::channel();
         let blocked = Arc::new(Notify::new());
@@ -314,16 +315,7 @@ mod tests {
         });
 
         deadline(blocked.notified()).await;
-        deadline(async {
-            loop {
-                let (_, closed, error_pending) = snapshot();
-                if closed && !error_pending {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await;
+        deadline(error_observed.notified()).await;
         assert!(
             !task.is_finished(),
             "transport reported serial overflow before draining queued output"
@@ -351,6 +343,12 @@ mod tests {
 
     #[tokio::test]
     async fn blocked_serial_write_does_not_stop_output_or_peer_close() {
+        for initially_ready in [false, true] {
+            assert_peer_progress_while_serial_write_waits(initially_ready).await;
+        }
+    }
+
+    async fn assert_peer_progress_while_serial_write_waits(initially_ready: bool) {
         let (mut board, server) = tokio::io::duplex(16);
         let (mut rx, mut tx) = tokio::io::split(server);
         let (output, mut received) = mpsc::unbounded_channel();
@@ -363,21 +361,35 @@ mod tests {
         };
         let (commands, mut command_rx) = mpsc::unbounded_channel();
         let mut input = Box::pin(stream::poll_fn(move |cx| command_rx.poll_recv(cx)));
-        let (_ready, ready) = watch::channel(true);
+        let (_ready, ready) = watch::channel(initially_ready);
         let task = tokio::spawn(async move {
             run(&mut rx, &mut tx, &mut sink, &mut input, ready, || async {}).await
         });
         commands
             .send(Ok::<_, io::Error>(Message::Binary(vec![0x41; 128].into())))
             .unwrap();
-        let mut first = [0; 16];
-        deadline(board.read_exact(&mut first)).await.unwrap();
-        // Leave the rest unread, so the serial writer cannot finish.
+        if initially_ready {
+            let mut first = [0; 16];
+            deadline(board.read_exact(&mut first)).await.unwrap();
+            // Leave the rest unread, so the serial writer cannot finish.
+        }
+        commands
+            .send(Ok(Message::Ping(b"waiting".to_vec().into())))
+            .unwrap();
         board.write_all(b"still alive").await.unwrap();
-        loop {
-            if let Message::Binary(bytes) = deadline(received.recv()).await.unwrap() {
-                assert_eq!(bytes.as_ref(), b"still alive");
-                break;
+        let mut got_output = false;
+        let mut got_pong = false;
+        while !got_output || !got_pong {
+            match deadline(received.recv()).await.unwrap() {
+                Message::Binary(bytes) => {
+                    assert_eq!(bytes.as_ref(), b"still alive");
+                    got_output = true;
+                }
+                Message::Pong(bytes) => {
+                    assert_eq!(bytes.as_ref(), b"waiting");
+                    got_pong = true;
+                }
+                _ => {}
             }
         }
         commands.send(Ok(Message::Close(None))).unwrap();

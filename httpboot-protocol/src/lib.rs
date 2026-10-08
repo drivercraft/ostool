@@ -5,12 +5,16 @@ extern crate alloc;
 
 use core::{fmt, str::FromStr};
 
+mod serial;
+pub use serial::*;
+
 #[cfg(feature = "alloc")]
 use alloc::{string::String, vec::Vec};
 
 pub const PROTOCOL_VERSION: u16 = 4;
-/// Loader-hosted HTTP protocol. v2-v4 remain valid for server-hosted polling.
-pub const DEVICE_PROTOCOL_VERSION: u16 = 5;
+/// Loader-hosted HTTP with per-boot serial binding. v5 supports OTA migration only.
+pub const DEVICE_PROTOCOL_VERSION: u16 = 6;
+pub const PREVIOUS_DEVICE_PROTOCOL_VERSION: u16 = 5;
 pub const PREVIOUS_PROTOCOL_VERSION: u16 = 3;
 pub const LEGACY_PROTOCOL_VERSION: u16 = 2;
 pub const MAX_HOST_CMDLINE_BYTES: usize = 4095;
@@ -169,7 +173,7 @@ pub struct LoaderDiscoveryProbe {
     pub loader_version: String,
 }
 
-/// A v5 loader advertises its own HTTP endpoint without registering with a server.
+/// A v5/v6 loader advertises its own HTTP endpoint without registering with a server.
 #[cfg(feature = "alloc")]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,6 +185,10 @@ pub struct LoaderAnnouncement {
     pub loader_version: String,
     pub boot_epoch: String,
     pub http_port: u16,
+    #[cfg_attr(feature = "json", serde(default))]
+    pub serial_id: Option<String>,
+    #[cfg_attr(feature = "json", serde(default))]
+    pub serial_ready: bool,
 }
 
 /// The caller owns the boot ID; the loader owns the current boot epoch.
@@ -229,6 +237,8 @@ pub struct LoaderDeviceStatus {
     pub hardware: LoaderHardwareInfo,
     pub boot: Option<DeviceBootStatus>,
     pub ota: Option<LoaderOtaState>,
+    #[cfg_attr(feature = "json", serde(default))]
+    pub serial: Option<LoaderSerialStatus>,
 }
 
 #[cfg(feature = "alloc")]

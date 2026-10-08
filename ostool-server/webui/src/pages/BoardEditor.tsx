@@ -35,6 +35,7 @@ import {
 } from "@/components/forms";
 import { MacPicker } from "@/components/mac-picker";
 import { DtbUpload } from "./Dtbs";
+import { SerialRuntimeDetails } from "@/components/serial-runtime";
 import { BoardOta } from "./BoardOta";
 
 export default function BoardEditor() {
@@ -73,7 +74,9 @@ function Editor({ board }: { board?: BoardConfig }) {
     loaders = useList("loaders"),
     virtual = useResource("virtual"),
     tftp = useResource("tftp_status"),
-    actions = useList("power_actions");
+    actions = useList("power_actions"),
+    sessions = useList("sessions"),
+    serialManager = useResource("serial_manager");
   const storageKey = `ostool-power:${board?.id ?? "new"}`;
   const [actionId, setActionId] = useState(
     () => sessionStorage.getItem(storageKey) ?? "",
@@ -164,7 +167,17 @@ function Editor({ board }: { board?: BoardConfig }) {
         ? await api.updateBoard(board.id, payload)
         : await api.createBoard(payload);
       setPreviousSource(live);
-      setForm(boardToFormState(saved));
+      setForm((draft) => ({
+        ...boardToFormState(saved),
+        ...(saved.boot.kind === "httpboot"
+          ? {
+              serial_enabled: draft.serial_enabled,
+              serial_key_kind: draft.serial_key_kind,
+              serial_key_value: draft.serial_key_value,
+              serial_baud_rate: draft.serial_baud_rate,
+            }
+          : {}),
+      }));
       setBaseline(JSON.stringify(boardToFormState(saved)));
       navigate(`/boards/${encodeURIComponent(saved.id)}`);
     }, "已保存开发板");
@@ -247,35 +260,52 @@ function Editor({ board }: { board?: BoardConfig }) {
             onChange={(v) => set("disabled", v)}
           />
         </Section>
-        <Section title="串口">
-          <CheckField
-            label="启用串口"
-            checked={form.serial_enabled}
-            onChange={(v) => set("serial_enabled", v)}
-          />
-          {form.serial_enabled && (
-            <>
-              <SelectField
-                label="稳定串口"
-                value={
-                  form.serial_key_value
-                    ? `${form.serial_key_kind}:${form.serial_key_value}`
-                    : ""
-                }
-                onValue={(v) => chooseSerial(v)}
-                options={serialOptions()}
-              />
-              <TextField
-                label="波特率"
-                type="number"
-                min={1}
-                value={form.serial_baud_rate}
-                onValue={(v) => set("serial_baud_rate", Number(v))}
-              />
-              <SerialDetails ports={serial} value={form.serial_key_value} />
-            </>
-          )}
-        </Section>
+        {form.boot_kind === "httpboot" ? (
+          <Section title="自动串口">
+            <p className="text-sm text-muted-foreground">
+              axloader 上报实际参数，每次上电自动确认串口身份。
+            </p>
+            <SerialRuntimeDetails
+              status={
+                sessions.find((s) => s.board_id === board?.id)?.serial_runtime
+              }
+            />
+            <p className="text-sm">
+              发现请求 {serialManager?.pending ?? 0} · 候选监听{" "}
+              {serialManager?.candidates ?? 0}
+            </p>
+          </Section>
+        ) : (
+          <Section title="串口">
+            <CheckField
+              label="启用串口"
+              checked={form.serial_enabled}
+              onChange={(v) => set("serial_enabled", v)}
+            />
+            {form.serial_enabled && (
+              <>
+                <SelectField
+                  label="稳定串口"
+                  value={
+                    form.serial_key_value
+                      ? `${form.serial_key_kind}:${form.serial_key_value}`
+                      : ""
+                  }
+                  onValue={(v) => chooseSerial(v)}
+                  options={serialOptions()}
+                />
+                <TextField
+                  label="波特率"
+                  type="number"
+                  min={1}
+                  value={form.serial_baud_rate}
+                  onValue={(v) => set("serial_baud_rate", Number(v))}
+                />
+                <SerialDetails ports={serial} value={form.serial_key_value} />
+              </>
+            )}
+          </Section>
+        )}
         <fieldset disabled={powerBusy} className="power-fields">
           <Section
             title="电源管理"
@@ -402,7 +432,7 @@ function Editor({ board }: { board?: BoardConfig }) {
             options={[
               { value: "uboot", label: "U-Boot" },
               { value: "pxe", label: "PXE" },
-              { value: "httpboot", label: "HTTP Boot" },
+              { value: "httpboot", label: "axloader (HTTP Boot)" },
             ]}
           />
           {form.boot_kind !== "uboot" && (

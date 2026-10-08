@@ -4,14 +4,14 @@
 
 ### 1.1 入口与发现
 
-协议 v5 将 HTTP 控制入口放在 axloader。`network::Announcer` 在同一 UEFI 网卡
+协议 v6 将 HTTP 控制入口放在 axloader。`network::Announcer` 在同一 UEFI 网卡
 向 UDP `2998` 单向广播 MAC、架构、启动代次和设备 TCP4 端口 `2999`；
 `direct::Listener` 在该端口处理启动与 OTA。ostool-server 的
-`loader::serve_udp_discovery()` 对 v5 广播调用 `device::reconcile()`，先反向
+`loader::serve_udp_discovery()` 对 v5/v6 广播调用 `device::reconcile()`，先反向
 GET 设备状态，核对 MAC、代次和架构，才从板卡 TOML 中查找当前绑定。
 发现不要求服务端响应：直连客户端知道设备 IP 时可独立控制装载器。
 设备没有可写 ESP 或 OTA 状态区时，状态响应中的 `ota` 可以为空；服务端记录
-告警并跳过升级决策，已有 Session 的普通启动推送仍然可用。
+告警并跳过升级决策，v6 设备已有 Session 的普通启动推送仍然可用。
 
 广播和 HTTP 没有身份认证。MAC 仅作板卡配置绑定键；报文和镜像的 SHA-256
 仅检验一致性，本阶段限定可信隔离实验网。服务器对重复 MAC 且不同来源 IP
@@ -25,7 +25,7 @@ PUT 上传，各自按清单长度及 SHA-256 检验，每个文件不超过 256
 和 initramfs 相互独立且都可省略。`POST /api/v1/boot/jobs/{id}/start` 只接受
 x86_64 ELF64 的 `__x86_64_efi_pe_entry`，把 cmdline 安装为 EFI LoadOptions，
 并仅在归档存在时发布 TGOS `BootPayload` 配置表；回复 `ready_to_handoff` 后释放
-TCP4 与 UDP4 对象，进入 UEFI 内核交接。
+TCP4、UDP4 对象和 UART 身份计时器，进入 UEFI 内核交接。
 没有 ESP 写入或 ostool-server 时，同样可以从设备 IP 直连完成启动。
 
 ```mermaid
@@ -34,9 +34,10 @@ sequenceDiagram
     participant S as ostool-server 或直连工具
     L-->>S: UDP :2998 广播（可选）
     S->>L: GET /api/v1/status
+    S->>L: continue（bound 身份匹配或显式 direct）
     S->>L: POST /api/v1/boot/jobs（X-Boot-Epoch）
     S->>L: PUT kernel；可选 PUT initramfs
-    S->>L: POST /api/v1/boot/jobs/{id}/start
+    S->>L: POST /api/v1/boot/jobs/{id}/start（X-Serial-Binding）
     L-->>S: 202 ready_to_handoff
     L->>L: 释放网络对象并交接内核
 ```
@@ -44,7 +45,7 @@ sequenceDiagram
 ostool-server 保留原有 Session、串口 WebSocket、启动清单和板卡租约。会话
 上传文件后，`device::push_boot()` 从会话存储读取并重新核对长度与摘要，
 再调用设备接口；它不把文件 URL 交给装载器。设备在同一 Session 内复位时，
-服务器观察新启动代次并按原 `boot_id` 重新推送。串口只承载目标系统输出。
+服务器观察新启动代次并按原 `boot_id` 重新推送。串口在启动前承载本次身份帧，绑定后承载目标系统输出；每次上电都重新验证身份和参数。
 若同一启动代次仍保留其他 `boot_id`，服务器在创建返回 `409` 后按状态中的旧 ID
 删除该事务，再尝试创建一次；第二次仍冲突则停止本次推送，等待后续设备广播。
 
@@ -59,12 +60,14 @@ ostool-server 保留原有 Session、串口 WebSocket、启动清单和板卡租
 
 | 方法与路径 | 结果 |
 | --- | --- |
-| `GET /api/v1/status` | 返回 v5、MAC、启动代次、硬件、启动事务及 OTA 状态 |
+| `GET /api/v1/status` | 返回 v6、MAC、启动代次、串口参数/绑定、硬件、启动事务及 OTA 状态 |
+| `POST /api/v1/serial/continue` | 当前 epoch 的 `serial_id`、`binding_id` 和 `bound/direct`；相同请求幂等 |
+| `DELETE /api/v1/serial/bindings/{binding_id}` | 撤销当前匹配绑定，尚在装载器时恢复身份帧 |
 | `POST /api/v1/boot/jobs` | 提交 `DeviceBootJob`；创建返回 `201`，幂等重试返回 `200` |
 | `GET /api/v1/boot/jobs/{id}` | 查询事务阶段及已接收文件 |
 | `PUT /api/v1/boot/jobs/{id}/kernel` | 原始内核，必须带定长和 `X-Image-Sha256` |
 | `PUT /api/v1/boot/jobs/{id}/initramfs` | 原始可选归档，采用相同校验规则 |
-| `POST /api/v1/boot/jobs/{id}/start` | 文件齐备且装载成功返回 `202` 并交接 |
+| `POST /api/v1/boot/jobs/{id}/start` | 当前 epoch/绑定令牌通过、文件齐备且装载成功返回 `202` 并交接 |
 | `DELETE /api/v1/boot/jobs/{id}` | 未交接时释放事务和文件 |
 
 请求头限制 4 KiB；仅接受 `Content-Length`，连接空闲 30 秒后取消，短读和
@@ -134,18 +137,11 @@ ostool-server --config /etc/ostool-server/config.toml virtual-lab down
 默认客户机网段为 `10.77.0.0/24`，服务端地址为 `10.77.0.1`，dnsmasq/bridge
 地址为 `10.77.0.254`，DHCP 池为 `10.77.0.100-200`。三个子命令均可重复调用。
 管理页面启动虚拟设备后，QEMU 必须通过真实 UDP 广播和设备 HTTP 接口出现在
-未绑定列表。绑定时 MAC、串口和电源配置必须引用同一个虚拟设备：
+未绑定列表。绑定时 MAC 和电源配置必须引用同一个虚拟设备；串口 provider 从电源取得，板卡不保存串口配置：
 
 ```toml
 [network_identity]
 mac_address = "02:aa:bb:cc:dd:ee"
-
-[serial]
-baud_rate = 115200
-
-[serial.key]
-kind = "qemu"
-value = "<virtual_device_id>"
 
 [power_management]
 kind = "qemu"
@@ -163,7 +159,7 @@ hub 保留最近 64 KiB 输出并跨 QEMU 重启，新实例广播新的启动�
 验收顺序如下：
 
 1. 启动未绑定 QEMU，确认它通过真实发现出现在管理页面。
-2. 填写板卡 ID、类型、QEMU 电源和串口，并选择探测到的 MAC。
+2. 填写板卡 ID、类型和 QEMU 电源，并选择探测到的 MAC。
 3. 使用 `ostool` 创建 Session、上传内核及可选 initramfs/cmdline，确认设备 HTTP 交接和内核串口标志。
 4. 保持 WebSocket 和 Session，执行虚拟板 `Off -> On`，确认新启动代次重新取得相同启动事务并再次交接。
 5. 关闭 WebSocket，确认 Session 经 `releasing` 回到 `idle` 且 QEMU 退出。
@@ -173,38 +169,36 @@ hub 保留最近 64 KiB 输出并跨 QEMU 重启，新实例广播新的启动�
 
 ### 4.1 兼容边界
 
-ostool-server 继续接受旧装载器 v2/v3/v4 的 UDP Offer、
-`POST /api/v1/loaders/poll`、状态上报和下载 URL；`httpboot-protocol` 中的
-`PROTOCOL_VERSION` 继续标识这条旧路径，`DEVICE_PROTOCOL_VERSION` 标识 v5。
-服务端只在 `device::push_boot()` 构造 v5 设备清单时把 Session 的
-`httpboot_entry` 转换为 `__x86_64_efi_pe_entry`；v2/v3/v4 poll 继续收到原入口
-和原字段，旧装载器不需要解析新入口。
-v5 装载器只广播，不调用任何服务端 HTTP 接口。TGOS 当前依赖已发布
-`httpboot-protocol 0.3.0`；其 v5 设备请求类型在本地定义，两仓用实际 HTTP
-契约测试核对，代码交付不依赖另一仓的绝对路径或发布新 crate。
+ostool-server 保留 v5 的设备识别与 OTA，以及 v2/v3/v4 的旧识别和升级入口。
+自动启动要求 v6，旧装载器在启动前收到明确升级错误，不回退手工串口。
+`PROTOCOL_VERSION` 继续标识旧 poll 路径，`DEVICE_PROTOCOL_VERSION` 为 6。
+TGOS 与 ostool 共用正式版本 `httpboot-protocol 0.5.0`；发布前本地联合验证通过
+忽略的 Cargo patch 指向协议工作树，正式交付先发布协议和 `ostool-serial 0.1.0`，
+再更新 registry 锁文件。升级前排空 session，串口定位只在 RAM 保留。
+
+串口 channel、独占租约、原始参数恢复、继电器排除和错误恢复的代码边界见
+[串口所有权](axloader-serial-ownership.md)。U-Boot 继续使用手动串口配置与原步骤。
 
 ### 4.2 隔离测试
 
-`ostool-server/scripts/test-axloader-local.py` 启动本地 ostool-server 与 OVMF/QEMU，
-在临时目录创建板卡 TOML、服务端配置、OVMF VARS 和真实 FAT 磁盘。管理入口
-使用独立 loopback 端口，关闭测速与系统 TFTP 接管；QEMU `hostfwd` 指向真实
-客户机 TCP4 监听。测试夹具仅转发 QEMU 广播帧并将公告端口换成本地
-`hostfwd` 端口，服务端必须直接 HTTP 请求客户机完成启动与 OTA。
-Session 启动使用 TGOS 已构建的真实 `arceos-helloworld`，同时上传可选 initramfs
-并发送 cmdline；成功条件来自内核输出的 `HOST_CMDLINE`、
-`HOST_INITRAMFS_PASSED` 和 `Hello, world!`，不以装载器准备交接日志代替。
-默认内核来自 TGOS 的 axloader QEMU 测试产物，也可用 `--kernel` 和
-`--initramfs` 显式指定。
+`ostool-server/scripts/test-axloader-local.py` 调用隔离的 `qemu_serial` 集成测试，
+运行真实 ostool-server router、HTTP/WebSocket 监听和 OVMF/QEMU。在临时目录
+创建服务存储、OVMF VARS 和 ESP；私有 PTY provider 不枚举或打开实体串口。
+QEMU UART 字节原样经过 PTY，`hostfwd` 指向真实客户机 TCP4；夹具直接把已核对
+的设备公告地址映射到本地端口，不模拟 UART 身份或设备 HTTP。
+
+Session 配置为 `serial: null`，server 必须自动匹配 UART、应用上报参数、确认
+并上传真实 ArceOS UEFI ELF。成功条件来自 WebSocket 中的身份帧和内核
+`HOST_CMDLINE`、`HOST_INITRAMFS_PASSED`、`Hello, world!`；退出后等待真实租约归还。
+默认使用 TGOS axloader QEMU 测试产物，也可用 `--kernel`、`--initramfs` 指定。
 
 ```bash
 cargo build -p ostool-server
-python3 ostool-server/scripts/test-axloader-local.py \
-  --tgos /path/to/tgoskits-dev \
-  --server-bin target/debug/ostool-server
+python3 ostool-server/scripts/test-axloader-local.py --tgos /path/to/tgoskits-dev
 ```
 
 TGOS 单仓用 `cargo xtask axloader test qemu --target x86_64-unknown-uefi` 验证
 同一真实 FAT 映像上的直连启动、镜像升级、坏摘要、短请求、待试复位和持久确认。
 本地测试不调用安装、更新或 systemd 脚本，不连接 runner，也不刷写实体板卡。
-`hostfwd` 证明本地真实 HTTP 反向调用，不证明实体网络广播与反向路由；后者
+`hostfwd` 证明本地真实 HTTP 反向调用；隔离测试不证明实体网络广播与反向路由；后者
 属于日后上线前的单独验收。

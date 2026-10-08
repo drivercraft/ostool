@@ -32,6 +32,10 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum SubCommands {
+    Axloader {
+        #[command(subcommand)]
+        command: ostool::axloader::AxloaderCommand,
+    },
     Build {
         /// Path to the build configuration file
         #[arg(short, long)]
@@ -341,6 +345,7 @@ async fn try_main() -> Result<()> {
             )
             .await?;
         }
+        SubCommands::Axloader { command } => ostool::axloader::execute(command).await?,
         SubCommands::Run { command } => match command {
             RunSubCommands::Qemu(args) => {
                 let RunQemuCommand {

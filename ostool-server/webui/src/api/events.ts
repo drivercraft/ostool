@@ -39,6 +39,7 @@ export interface Resources {
   virtual: VirtualDevicesResponse;
   dtbs: DtbFileResponse[];
   serial: SerialPortSummary[];
+  serial_manager: { pending: number; candidates: number; leased: number };
   network: NetworkInterfaceSummary[];
   server: AdminServerConfigResponse;
   tftp: TftpConfig;

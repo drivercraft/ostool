@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
@@ -86,8 +83,10 @@ impl LoaderRegistry {
         device: &LoaderDeviceStatus,
         ip_address: String,
     ) -> Result<bool, RegistrationError> {
-        if announcement.protocol_version != DEVICE_PROTOCOL_VERSION
-            || device.protocol_version != DEVICE_PROTOCOL_VERSION
+        if !matches!(
+            announcement.protocol_version,
+            DEVICE_PROTOCOL_VERSION | httpboot_protocol::PREVIOUS_DEVICE_PROTOCOL_VERSION
+        ) || device.protocol_version != announcement.protocol_version
             || announcement.mac_address != device.mac_address
             || announcement.boot_epoch != device.boot_epoch
             || announcement.arch != device.arch
@@ -491,31 +490,51 @@ async fn serve_udp_discovery(
     socket: UdpSocket,
 ) -> anyhow::Result<()> {
     let mut buffer = [0_u8; MAX_DISCOVERY_DATAGRAM_BYTES + 1];
-    let in_progress = Arc::new(Mutex::new(BTreeSet::new()));
+    let in_progress = Arc::new(Mutex::new(BTreeMap::<
+        httpboot_protocol::MacAddress,
+        (String, tokio::task::AbortHandle),
+    >::new()));
     loop {
         let (length, peer) = socket.recv_from(&mut buffer).await?;
         if length > MAX_DISCOVERY_DATAGRAM_BYTES {
             continue;
         }
         if let Ok(announcement) = serde_json::from_slice::<LoaderAnnouncement>(&buffer[..length])
-            && announcement.protocol_version == DEVICE_PROTOCOL_VERSION
+            && matches!(
+                announcement.protocol_version,
+                DEVICE_PROTOCOL_VERSION | httpboot_protocol::PREVIOUS_DEVICE_PROTOCOL_VERSION
+            )
         {
             state
                 .loader_registry
                 .touch_announcement(&announcement, &peer.ip().to_string())
                 .await;
             let mac = announcement.mac_address;
-            if !in_progress.lock().await.insert(mac) {
-                continue;
+            let mut running = in_progress.lock().await;
+            if let Some((epoch, task)) = running.get(&mac) {
+                if *epoch == announcement.boot_epoch {
+                    continue;
+                }
+                task.abort();
             }
             let active = in_progress.clone();
-            let state = state.clone();
-            tokio::spawn(async move {
-                if let Err(error) = crate::device::reconcile(state, announcement, peer).await {
-                    log::warn!("v5 device {} at {}: {error:#}", mac, peer);
+            let device_state = state.clone();
+            let epoch = announcement.boot_epoch.clone();
+            let active_epoch = epoch.clone();
+            let task = tokio::spawn(async move {
+                if let Err(error) = crate::device::reconcile(device_state, announcement, peer).await
+                {
+                    log::warn!("device {} at {}: {error:#}", mac, peer);
                 }
-                active.lock().await.remove(&mac);
+                let mut running = active.lock().await;
+                if running
+                    .get(&mac)
+                    .is_some_and(|(current, _)| *current == active_epoch)
+                {
+                    running.remove(&mac);
+                }
             });
+            running.insert(mac, (epoch, task.abort_handle()));
             continue;
         }
         let Ok(probe) = serde_json::from_slice::<LoaderDiscoveryProbe>(&buffer[..length]) else {
@@ -551,6 +570,8 @@ mod tests {
         let registry = LoaderRegistry::new();
         let mac = "02:00:00:00:00:01".parse().unwrap();
         let announcement = LoaderAnnouncement {
+            serial_id: None,
+            serial_ready: false,
             protocol_version: DEVICE_PROTOCOL_VERSION,
             mac_address: mac,
             current_mac_address: mac,
@@ -560,6 +581,7 @@ mod tests {
             http_port: 2999,
         };
         let mut observed = LoaderDeviceStatus {
+            serial: None,
             protocol_version: DEVICE_PROTOCOL_VERSION,
             boot_epoch: "generation-2".into(),
             mac_address: mac,

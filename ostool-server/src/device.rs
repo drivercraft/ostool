@@ -1,4 +1,4 @@
-//! v5 devices own the HTTP endpoint. The server only discovers and calls it.
+//! v6 devices own the HTTP endpoint. The server only discovers and calls it.
 
 use std::{net::SocketAddr, time::Duration};
 
@@ -26,7 +26,10 @@ pub async fn reconcile(
     peer: SocketAddr,
 ) -> anyhow::Result<()> {
     ensure!(
-        announcement.protocol_version == DEVICE_PROTOCOL_VERSION,
+        matches!(
+            announcement.protocol_version,
+            DEVICE_PROTOCOL_VERSION | httpboot_protocol::PREVIOUS_DEVICE_PROTOCOL_VERSION
+        ),
         "unsupported device protocol"
     );
     ensure!(announcement.http_port > 0, "missing device HTTP port");
@@ -154,7 +157,7 @@ pub async fn reconcile(
         }
     } else {
         log::warn!(
-            "v5 loader {} at {} did not report OTA state; skipping upgrades",
+            "loader {} at {} did not report OTA state; skipping upgrades",
             announcement.mac_address,
             peer.ip()
         );
@@ -174,16 +177,119 @@ pub async fn reconcile(
     if command.arch != observed.arch {
         return Ok(());
     }
-    push_boot(
-        &state,
-        &client,
-        &endpoint,
-        &observed,
-        &session_id,
-        &command,
-        &session,
-    )
-    .await
+    if observed.protocol_version != DEVICE_PROTOCOL_VERSION {
+        session.serial_runtime.fail(
+            "automatic serial binding requires axloader protocol v6; upgrade the loader".into(),
+        );
+        return Ok(());
+    }
+    if !session.is_serial_connected() || session.is_stop_requested() || session.is_releasing() {
+        return Ok(());
+    }
+    if !session.serial_runtime.accepts_epoch(&observed.boot_epoch) {
+        return Ok(());
+    }
+    let mut generation = session.subscribe_boot_generation();
+    let mut shutdown = session.subscribe_shutdown();
+    let operation = async {
+        let serial = observed
+            .serial
+            .as_ref()
+            .context("missing v6 serial status")?;
+        let runtime = session.serial_runtime.snapshot();
+        if let Some(binding) = &serial.binding
+            && (runtime.binding_id.as_deref() != Some(binding.binding_id.as_str())
+                || runtime.phase == crate::serial::runtime::SerialRuntimePhase::Recovering)
+        {
+            let response = client
+                .delete(format!(
+                    "{endpoint}/api/v1/serial/bindings/{}",
+                    binding.binding_id
+                ))
+                .header("X-Boot-Epoch", &observed.boot_epoch)
+                .send()
+                .await?;
+            require_status(response, 200).await?;
+        }
+        let binding = session.serial_runtime.bind(observed.clone()).await?;
+        ensure!(
+            !session.is_stop_requested() && !session.is_releasing(),
+            "session stopped before serial continue"
+        );
+        let mut grant = SerialGrant::new(
+            &client,
+            &endpoint,
+            &observed.boot_epoch,
+            &binding.binding_id,
+        );
+        let response = client
+            .post(format!("{endpoint}/api/v1/serial/continue"))
+            .header("X-Boot-Epoch", &observed.boot_epoch)
+            .json(&binding)
+            .send()
+            .await?;
+        require_status(response, 200).await?;
+        session.serial_runtime.confirm(&binding.binding_id).await?;
+        push_boot(
+            &state,
+            &client,
+            &endpoint,
+            &observed,
+            &command,
+            &session,
+            &binding.binding_id,
+        )
+        .await?;
+        grant.armed = false;
+        Ok(())
+    };
+    tokio::select! {
+        result = operation => { if let Err(error)=&result {session.serial_runtime.fail(format!("{error:#}"));} result },
+        _ = shutdown.wait_for(|s|*s) => Ok(()),
+        _ = generation.changed() => Ok(()),
+    }
+}
+
+// Cancellation can race the HTTP reply after the firmware has accepted continue.
+// Revoke the exact epoch/token unless handoff was successfully requested.
+struct SerialGrant {
+    client: Client,
+    endpoint: String,
+    epoch: String,
+    binding_id: String,
+    armed: bool,
+}
+impl SerialGrant {
+    fn new(client: &Client, endpoint: &str, epoch: &str, binding_id: &str) -> Self {
+        Self {
+            client: client.clone(),
+            endpoint: endpoint.into(),
+            epoch: epoch.into(),
+            binding_id: binding_id.into(),
+            armed: true,
+        }
+    }
+}
+impl Drop for SerialGrant {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let client = self.client.clone();
+        let url = format!(
+            "{}/api/v1/serial/bindings/{}",
+            self.endpoint, self.binding_id
+        );
+        let epoch = self.epoch.clone();
+        tokio::spawn(async move {
+            let _ = client
+                .delete(url)
+                .header("X-Boot-Epoch", epoch)
+                .timeout(std::time::Duration::from_secs(2))
+                .send()
+                .await;
+        });
+    }
 }
 
 async fn push_ota_image(
@@ -216,9 +322,9 @@ async fn push_boot(
     client: &Client,
     endpoint: &str,
     observed: &LoaderDeviceStatus,
-    session_id: &str,
     command: &SessionBootCommand,
     session: &crate::session::SessionState,
+    binding_id: &str,
 ) -> anyhow::Result<()> {
     let epoch = observed.boot_epoch.as_str();
     let observed_boot_id = observed.boot.as_ref().map(|boot| boot.boot_id.as_str());
@@ -257,13 +363,14 @@ async fn push_boot(
         .update_loader_status(epoch.into(), &command.boot_id, LoaderStatusPhase::Accepted)
         .await
         .map_err(|error| anyhow::anyhow!("stale boot session: {error:?}"))?;
+    let session_id = session.snapshot().await.id;
     let prefix = format!("/boot/sessions/{session_id}/");
     let push = PushContext {
         state,
         client,
         base: &base,
         epoch,
-        session_id,
+        session_id: &session_id,
         boot_id: &command.boot_id,
     };
     push_file(
@@ -294,6 +401,7 @@ async fn push_boot(
     let response = client
         .post(format!("{base}/{}/start", command.boot_id))
         .header("X-Boot-Epoch", epoch)
+        .header("X-Serial-Binding", binding_id)
         .send()
         .await?;
     require_status(response, 202).await?;
@@ -738,6 +846,8 @@ mod tests {
         http_port: u16,
     ) -> LoaderAnnouncement {
         LoaderAnnouncement {
+            serial_id: None,
+            serial_ready: false,
             protocol_version: DEVICE_PROTOCOL_VERSION,
             mac_address: mac,
             current_mac_address: mac,
@@ -766,7 +876,8 @@ mod tests {
             .unwrap();
         let fake = Arc::new(Mutex::new(FakeDevice {
             status: LoaderDeviceStatus {
-                protocol_version: DEVICE_PROTOCOL_VERSION,
+                serial: None,
+                protocol_version: httpboot_protocol::PREVIOUS_DEVICE_PROTOCOL_VERSION,
                 boot_epoch: "epoch-1".into(),
                 mac_address: mac,
                 current_mac_address: mac,
@@ -801,7 +912,12 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let peer = "127.0.0.1:40000".parse().unwrap();
 
-        let error = reconcile(state.clone(), announcement(mac, "epoch-1", port), peer)
+        let old_announcement = |epoch| {
+            let mut a = announcement(mac, epoch, port);
+            a.protocol_version = httpboot_protocol::PREVIOUS_DEVICE_PROTOCOL_VERSION;
+            a
+        };
+        let error = reconcile(state.clone(), old_announcement("epoch-1"), peer)
             .await
             .unwrap_err();
         let error = format!("{error:#}");
@@ -824,7 +940,7 @@ mod tests {
             let mut fake = fake.lock().await;
             fake.status.boot_epoch = "epoch-2".into();
         }
-        reconcile(state.clone(), announcement(mac, "epoch-2", port), peer)
+        reconcile(state.clone(), old_announcement("epoch-2"), peer)
             .await
             .unwrap();
         assert_eq!(state.ota.job("board-1").await.unwrap().phase, Phase::Staged);
@@ -833,6 +949,7 @@ mod tests {
             Some(job.update_id.as_str())
         );
 
+        fake.lock().await.status.protocol_version = DEVICE_PROTOCOL_VERSION;
         let error = reconcile(state.clone(), announcement(mac, "epoch-2", port), peer)
             .await
             .unwrap_err();
@@ -910,6 +1027,7 @@ mod tests {
         };
         let fake = Arc::new(Mutex::new(FakeBootDevice {
             status: LoaderDeviceStatus {
+                serial: None,
                 protocol_version: DEVICE_PROTOCOL_VERSION,
                 boot_epoch: "boot-epoch".into(),
                 mac_address: mac,
@@ -946,12 +1064,22 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let peer = "127.0.0.1:40001".parse().unwrap();
-        let announcement = announcement(mac, "boot-epoch", port);
+        let observed = fake.lock().await.status.clone();
+        let command = session.boot_command().await.unwrap();
+        let client = reqwest::Client::new();
+        let endpoint = format!("http://127.0.0.1:{port}");
 
-        let error = reconcile(state.clone(), announcement.clone(), peer)
-            .await
-            .unwrap_err();
+        let error = super::push_boot(
+            &state,
+            &client,
+            &endpoint,
+            &observed,
+            &command,
+            &session,
+            "test-binding",
+        )
+        .await
+        .unwrap_err();
         let error = format!("{error:#}");
         assert!(
             error.contains("device HTTP 400 Bad Request: digest mismatch"),
@@ -959,9 +1087,17 @@ mod tests {
         );
         fake.lock().await.reject_upload = false;
 
-        reconcile(state.clone(), announcement.clone(), peer)
-            .await
-            .unwrap();
+        super::push_boot(
+            &state,
+            &client,
+            &endpoint,
+            &observed,
+            &command,
+            &session,
+            "test-binding",
+        )
+        .await
+        .unwrap();
         {
             let fake = fake.lock().await;
             assert_eq!(fake.create_attempts, 3);
@@ -989,7 +1125,17 @@ mod tests {
             fake.delete_returns_not_found = true;
             fake.reject_create_without_manifest = true;
         }
-        let error = reconcile(state, announcement, peer).await.unwrap_err();
+        let error = super::push_boot(
+            &state,
+            &client,
+            &endpoint,
+            &observed,
+            &session.boot_command().await.unwrap(),
+            &session,
+            "test-binding",
+        )
+        .await
+        .unwrap_err();
         let error = format!("{error:#}");
         assert!(error.contains("device refused boot job: create still conflicts"));
         let fake = fake.lock().await;

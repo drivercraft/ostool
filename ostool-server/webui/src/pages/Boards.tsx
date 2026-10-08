@@ -200,9 +200,11 @@ export default function Boards() {
                   )}
                 </Cell>
                 <Cell className="mono">
-                  {b.serial?.resolved_device_path ??
-                    b.serial?.key.value ??
-                    "无串口"}
+                  {b.boot.kind === "httpboot"
+                    ? "自动绑定"
+                    : (b.serial?.resolved_device_path ??
+                      b.serial?.key.value ??
+                      "无串口")}
                   <small>
                     {b.network_identity?.mac_address ?? "未绑定 MAC"}
                   </small>

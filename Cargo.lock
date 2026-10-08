@@ -1689,7 +1689,7 @@ checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
 name = "httpboot-protocol"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2783,6 +2783,7 @@ dependencies = [
  "lzma-rs",
  "network-interface",
  "object",
+ "ostool-serial",
  "ratatui",
  "regex",
  "reqwest",
@@ -2807,6 +2808,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ostool-serial"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "httpboot-protocol",
+ "libc",
+ "log",
+ "nix 0.30.1",
+ "serde",
+ "serialport",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-serial",
+]
+
+[[package]]
 name = "ostool-server"
 version = "0.8.2"
 dependencies = [
@@ -2827,6 +2845,7 @@ dependencies = [
  "nix 0.30.1",
  "notify",
  "nusb",
+ "ostool-serial",
  "reqwest",
  "rust-embed",
  "schemars",

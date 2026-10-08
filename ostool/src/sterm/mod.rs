@@ -27,7 +27,7 @@ use futures::StreamExt;
 #[cfg(unix)]
 mod input;
 #[cfg(unix)]
-use input::Input;
+pub(crate) use input::Input;
 #[cfg(not(unix))]
 type Input = EventStream;
 use tokio::{

@@ -10,9 +10,8 @@ use axum::{
 };
 use futures_util::future::join_all;
 use httpboot_protocol::{
-    BootArch, BootFile, ImageFormat, LEGACY_PROTOCOL_VERSION, LoaderPollRequest,
-    LoaderPollResponse, LoaderStatusReport, LoaderStatusResponse, MAX_HTTP_BOOT_INITRAMFS_BYTES,
-    MacAddress, valid_host_cmdline,
+    BootArch, BootFile, ImageFormat, LoaderPollRequest, LoaderPollResponse, LoaderStatusReport,
+    LoaderStatusResponse, MAX_HTTP_BOOT_INITRAMFS_BYTES, MacAddress, valid_host_cmdline,
 };
 use mime_guess::from_path;
 use sha2::{Digest, Sha256};
@@ -390,6 +389,17 @@ async fn create_dtb(
     ))
 }
 
+fn serial_exclusion_error(error: anyhow::Error) -> ApiError {
+    if error
+        .downcast_ref::<ostool_serial::BindError>()
+        .is_some_and(|error| matches!(error, ostool_serial::BindError::Busy))
+    {
+        ApiError::conflict("relay port is already leased by a session or manual operation")
+    } else {
+        error.into()
+    }
+}
+
 async fn create_board(
     State(state): State<AppState>,
     axum::Json(request): axum::Json<AdminBoardUpsertRequest>,
@@ -413,13 +423,21 @@ async fn create_board(
         ensure_unique_network_identity(&boards, &board, None)?;
     }
 
-    state.board_store.write_board(&board).await?;
+    state
+        .prepare_board_serial_exclusions(&board, None)
+        .await
+        .map_err(serial_exclusion_error)?;
+    if let Err(error) = state.board_store.write_board(&board).await {
+        state.refresh_serial_exclusions().await?;
+        return Err(error.into());
+    }
     state
         .boards
         .write()
         .await
         .insert(board.id.clone(), board.clone());
     state.sync_board_runtime_states().await;
+    state.refresh_serial_exclusions().await?;
     Ok((StatusCode::CREATED, axum::Json(board)))
 }
 
@@ -470,10 +488,18 @@ async fn update_board(
         )));
     }
 
-    state.board_store.write_board(&board).await?;
+    state
+        .prepare_board_serial_exclusions(&board, Some(&board_id))
+        .await
+        .map_err(serial_exclusion_error)?;
+    if let Err(error) = state.board_store.write_board(&board).await {
+        state.refresh_serial_exclusions().await?;
+        return Err(error.into());
+    }
     if board.id != board_id
         && let Err(error) = state.board_store.delete_board(&board_id).await
     {
+        state.refresh_serial_exclusions().await?;
         if let Err(rollback_error) = state.board_store.delete_board(&board.id).await {
             return Err(ApiError::internal(format!(
                 "failed to remove old board config `{board_id}`: {error:#}; \
@@ -490,6 +516,7 @@ async fn update_board(
         boards.insert(board.id.clone(), board.clone());
     }
     state.sync_board_runtime_states().await;
+    state.refresh_serial_exclusions().await?;
 
     Ok(axum::Json(board))
 }
@@ -780,27 +807,15 @@ async fn poll_loader(
             retry_after_ms: None,
         }));
     }
-    if request.protocol_version == LEGACY_PROTOCOL_VERSION
-        && (command.initramfs.is_some() || command.cmdline.is_some())
-    {
-        return Ok(axum::Json(LoaderPollResponse::Reject {
-            code: "boot_payload_unsupported".into(),
-            message: "this boot requires a loader supporting host initramfs and cmdline".into(),
-            retry_after_ms: None,
-        }));
-    }
-    Ok(axum::Json(LoaderPollResponse::Boot {
-        board_id,
-        session_id,
-        boot_id: command.boot_id,
-        kernel_path: command.kernel_path,
-        kernel_size: command.kernel_size,
-        kernel_sha256: command.kernel_sha256,
-        arch: command.arch,
-        image_format: command.image_format,
-        entry_symbol: command.entry_symbol,
-        initramfs: command.initramfs,
-        cmdline: command.cmdline,
+    session
+        .serial_runtime
+        .fail("automatic serial binding requires axloader protocol v6; upgrade the loader".into());
+    Ok(axum::Json(LoaderPollResponse::Reject {
+        code: "serial_protocol_upgrade_required".into(),
+        message:
+            "automatic boot requires axloader protocol v6; identification and OTA remain available"
+                .into(),
+        retry_after_ms: None,
     }))
 }
 
@@ -964,6 +979,9 @@ fn normalize_board_upsert_request(
     normalize_required_string(&mut request.board_type, "board_type")?;
     normalize_optional_string(&mut request.notes);
     normalize_tags(&mut request.tags);
+    if matches!(request.boot, BootConfig::UefiHttp(_)) {
+        request.serial = None;
+    }
     normalize_serial_config(request.serial.as_mut())?;
     normalize_power_management_config(&mut request.power_management)?;
     normalize_boot_config(&mut request.boot)?;
@@ -1247,6 +1265,7 @@ async fn delete_board(
     state.board_store.delete_board(&board_id).await?;
     state.boards.write().await.remove(&board_id);
     state.sync_board_runtime_states().await;
+    state.refresh_serial_exclusions().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1444,17 +1463,16 @@ async fn create_session(
         .await
         .ok_or_else(|| ApiError::not_found("allocated board disappeared"))?;
     let ws_url = board
-        .serial
-        .as_ref()
-        .map(|_| format!("/api/v1/sessions/{}/serial/ws", session.id));
+        .serial_available()
+        .then(|| format!("/api/v1/sessions/{}/serial/ws", session.id));
 
     Ok((
         StatusCode::CREATED,
         axum::Json(SessionCreatedResponse {
             session_id: session.id,
-            board_id: board.id,
+            board_id: board.id.clone(),
             lease_expires_at: session.expires_at,
-            serial_available: board.serial.is_some(),
+            serial_available: board.serial_available(),
             boot_mode: board.boot.kind_name().to_string(),
             ws_url,
         }),
@@ -1476,7 +1494,7 @@ async fn get_session(
     Ok(axum::Json(SessionDetailResponse {
         session,
         board: board.clone(),
-        serial_available: board.serial.is_some(),
+        serial_available: board.serial_available(),
         serial_connected: connected,
         files,
     }))
@@ -1629,7 +1647,25 @@ async fn get_serial_status(
         .await
         .map(|session| session.serial_connected)
         .unwrap_or(false);
-    let response = if let Some(serial) = board.serial {
+    let runtime = state
+        .session_state(&session_id)
+        .await
+        .map(|s| s.serial_runtime.snapshot())
+        .unwrap_or_default();
+    let manager = *state.serial_manager.subscribe().borrow();
+    let response = if matches!(board.boot, BootConfig::UefiHttp(_)) {
+        SerialStatusResponse {
+            available: true,
+            connected,
+            port: runtime.port.clone(),
+            baud_rate: runtime
+                .parameters
+                .and_then(|p| u32::try_from(p.baud_rate).ok()),
+            ws_url: Some(format!("/api/v1/sessions/{session_id}/serial/ws")),
+            runtime,
+            manager,
+        }
+    } else if let Some(serial) = board.serial {
         let port = if serial.key.kind == crate::config::SerialPortKeyKind::Qemu {
             if state
                 .virtual_boards
@@ -1649,6 +1685,8 @@ async fn get_serial_status(
                 .current_device_path
         };
         SerialStatusResponse {
+            runtime,
+            manager,
             available: true,
             connected,
             port: Some(port),
@@ -1657,6 +1695,8 @@ async fn get_serial_status(
         }
     } else {
         SerialStatusResponse {
+            runtime,
+            manager,
             available: false,
             connected: false,
             port: None,
@@ -1691,9 +1731,9 @@ async fn serial_ws(
         .await
         .ok_or_else(|| ApiError::not_found("session not found"))?;
     let board = session.board().clone();
-    let Some(_serial) = board.serial.clone() else {
+    if !board.serial_available() {
         return Err(ApiError::conflict("board has no serial configuration"));
-    };
+    }
     if session.is_releasing() {
         return Err(ApiError::conflict("session is releasing"));
     }
@@ -2803,6 +2843,7 @@ pub(crate) async fn admin_topic(
         "virtual" => serde_json::to_value(list_virtual_devices(extractor).await.0),
         "dtbs" => serde_json::to_value(list_dtbs(extractor).await?.0),
         "serial" => serde_json::to_value(list_serial_ports().await?.0),
+        "serial_manager" => serde_json::to_value(*state.serial_manager.subscribe().borrow()),
         "network" => serde_json::to_value(list_network_interfaces().await?.0),
         "server" => serde_json::to_value(get_server_config(extractor).await?.0),
         "tftp" => serde_json::to_value(get_tftp_config(extractor).await?.0.tftp),
@@ -2851,8 +2892,7 @@ mod tests {
 
     use super::{
         DTB_UPLOAD_MAX_MIB, ResolvedNetwork, boot_profile_with_resolved_network, build_router,
-        hex_sha256, http_boot_url, mib_to_bytes, resolve_server_network,
-        virtual_loader_is_bindable,
+        http_boot_url, mib_to_bytes, resolve_server_network, virtual_loader_is_bindable,
     };
     use crate::{
         api::models::{
@@ -4895,30 +4935,10 @@ mod tests {
                 .unwrap();
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             let response: LoaderPollResponse = serde_json::from_slice(&body).unwrap();
-            if version == LEGACY_PROTOCOL_VERSION {
-                assert!(
-                    matches!(response, LoaderPollResponse::Reject { ref code, .. }
-                    if code == "boot_payload_unsupported")
-                );
-            } else {
-                let LoaderPollResponse::Boot {
-                    entry_symbol,
-                    initramfs: Some(file),
-                    cmdline,
-                    ..
-                } = response
-                else {
-                    panic!("expected boot with verified initramfs");
-                };
-                assert_eq!(
-                    file.path,
-                    format!("/boot/sessions/{session_id}/initramfs.cpio")
-                );
-                assert_eq!(file.size, archive.len() as u64);
-                assert_eq!(file.sha256, hex_sha256(archive));
-                assert_eq!(cmdline.as_deref(), Some("console=ttyS0 -- test"));
-                assert_eq!(entry_symbol.as_deref(), Some("httpboot_entry"));
-            }
+            assert!(
+                matches!(response, LoaderPollResponse::Reject { ref code, .. }
+                if code == "serial_protocol_upgrade_required")
+            );
         }
     }
 
@@ -4998,10 +5018,9 @@ mod tests {
             .unwrap();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let first_boot: LoaderPollResponse = serde_json::from_slice(&body).unwrap();
-        let LoaderPollResponse::Boot { boot_id, .. } = first_boot else {
-            panic!("expected boot response");
-        };
-        assert_eq!(boot_id, published.boot_id);
+        assert!(
+            matches!(first_boot, LoaderPollResponse::Reject { ref code, .. } if code == "serial_protocol_upgrade_required")
+        );
 
         let status = LoaderStatusReport {
             protocol_version: PREVIOUS_PROTOCOL_VERSION,
@@ -5043,10 +5062,9 @@ mod tests {
             .unwrap();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let second_boot: LoaderPollResponse = serde_json::from_slice(&body).unwrap();
-        let LoaderPollResponse::Boot { boot_id, .. } = second_boot else {
-            panic!("expected boot response after restart");
-        };
-        assert_eq!(boot_id, published.boot_id);
+        assert!(
+            matches!(second_boot, LoaderPollResponse::Reject { ref code, .. } if code == "serial_protocol_upgrade_required")
+        );
 
         let response = app
             .oneshot(
