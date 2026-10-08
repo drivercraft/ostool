@@ -1204,6 +1204,7 @@ where
 
     async fn _run(&mut self) -> anyhow::Result<()> {
         self.prepare_regex()?;
+        self.config.boot.validate()?;
 
         let kernel = self
             .input
@@ -1328,6 +1329,7 @@ where
             kernel_path: kernel.clone(),
             dtb_path: prepared_dtb.fit_source.clone(),
             initramfs_path: self.config.boot.initramfs_path(),
+            cmdline: self.config.boot.cmdline.clone(),
             arch,
             kernel_load_addr: kernel_entry,
             kernel_entry_addr: kernel_entry,
@@ -1365,7 +1367,6 @@ where
         };
 
         if let Some(cmdline) = self.config.boot.cmdline.as_deref() {
-            self.config.boot.validate()?;
             uboot
                 .set_env("bootargs", quote_uboot_bootargs(cmdline)?)
                 .await?;
