@@ -265,7 +265,10 @@ fn build_default_fit_config(
                 .with_type("ramdisk")
                 .with_arch(arch_name)
                 .with_os("linux")
-                .with_compression(false),
+                .with_compression(false)
+                // Rockchip FIT post-processing requires a load property. Zero
+                // keeps FIT_LOAD_OPTIONAL_NON_ZERO ramdisks inside the FIT.
+                .with_load_address(0),
         );
         Some(RAMDISK_COMPONENT_NAME)
     } else {
@@ -385,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn default_fit_config_links_initramfs_for_target_architecture() {
+    fn fit_links_initramfs_without_relocation_for_target_architecture() {
         let config = build_default_fit_config(
             "riscv",
             vec![1, 2, 3],
@@ -395,12 +398,21 @@ mod tests {
             0x8020_0000,
             None,
         );
-        let ramdisk = config.ramdisk.as_ref().unwrap();
-        let selected = config.configurations.get("config-ostool").unwrap();
-        assert_eq!(ramdisk.data, [4, 5, 6]);
-        assert_eq!(ramdisk.arch.as_deref(), Some("riscv"));
-        assert!(!ramdisk.compression);
-        assert_eq!(selected.ramdisk.as_deref(), Some("ramdisk"));
+        let bytes = fitimage::FitImageBuilder::new().build(config).unwrap();
+        let fit = Fdt::from_bytes(&bytes).unwrap();
+        let ramdisk = fit.get_by_path("/images/ramdisk").unwrap().as_node();
+        assert_eq!(ramdisk.get_property("data").unwrap().data, [4, 5, 6]);
+        assert_eq!(ramdisk.get_property("arch").unwrap().data, b"riscv\0");
+        assert_eq!(ramdisk.get_property("compression").unwrap().data, b"none\0");
+        assert_eq!(
+            ramdisk.get_property("load").unwrap().data,
+            0_u64.to_be_bytes()
+        );
+        let selected = fit
+            .get_by_path("/configurations/config-ostool")
+            .unwrap()
+            .as_node();
+        assert_eq!(selected.get_property("ramdisk").unwrap().data, b"ramdisk\0");
     }
 
     #[tokio::test]
