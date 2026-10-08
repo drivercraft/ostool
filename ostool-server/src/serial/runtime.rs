@@ -3,7 +3,7 @@ use crate::{
     session::{SessionState, SessionStopReason},
     state::AppState,
 };
-use anyhow::{Context, ensure};
+use anyhow::Context;
 use httpboot_protocol::{LoaderDeviceStatus, SerialBinding, SerialBindingMode, SerialParameters};
 use ostool_serial::{BindRequest, SerialLease};
 use serde::{Deserialize, Serialize};
@@ -273,24 +273,44 @@ impl SessionSerialRuntime {
                             continue;
                         }
                         power_wait = true;
-                        let serial = device
-                            .serial
-                            .as_ref()
-                            .context("device has no v6 serial parameters")?;
-                        ensure!(
-                            serial.ready,
-                            "automatic serial unavailable: {:?}",
-                            serial.error
-                        );
-                        let parameters = serial
-                            .parameters
-                            .context("unknown device UART parameters")?;
-                        parameters.validate().map_err(|e| anyhow::anyhow!("{e}"))?;
+                        let Some(serial) = device.serial.as_ref() else {
+                            self.reject_bind(
+                                state,
+                                &device,
+                                reply,
+                                anyhow::anyhow!("device has no v6 serial parameters"),
+                            );
+                            continue;
+                        };
+                        if !serial.ready {
+                            self.reject_bind(
+                                state,
+                                &device,
+                                reply,
+                                anyhow::anyhow!("automatic serial unavailable: {:?}", serial.error),
+                            );
+                            continue;
+                        }
+                        let Some(parameters) = serial.parameters else {
+                            self.reject_bind(
+                                state,
+                                &device,
+                                reply,
+                                anyhow::anyhow!("unknown device UART parameters"),
+                            );
+                            continue;
+                        };
+                        if let Err(error) = parameters.validate() {
+                            self.reject_bind(state, &device, reply, anyhow::anyhow!("{error}"));
+                            continue;
+                        }
                         if !matches!(
                             session.board().power_management,
                             crate::config::PowerManagementConfig::Qemu { .. }
-                        ) {
-                            ostool_serial::validate_host_parameters(parameters)?;
+                        ) && let Err(error) = ostool_serial::validate_host_parameters(parameters)
+                        {
+                            self.reject_bind(state, &device, reply, error.into());
+                            continue;
                         }
                         if let Some(c) = current.as_ref()
                             && c.device.boot_epoch == device.boot_epoch
@@ -436,6 +456,21 @@ impl SessionSerialRuntime {
                 }
             }
         }
+    }
+    fn reject_bind(
+        &self,
+        state: &AppState,
+        device: &LoaderDeviceStatus,
+        reply: oneshot::Sender<anyhow::Result<SerialBinding>>,
+        error: anyhow::Error,
+    ) {
+        let mut status = self.snapshot();
+        status.phase = SerialRuntimePhase::Recovering;
+        status.boot_epoch = Some(device.boot_epoch.clone());
+        status.parameters = device.serial.as_ref().and_then(|serial| serial.parameters);
+        status.error = Some(format!("{error:#}"));
+        self.publish(state, status);
+        let _ = reply.send(Err(error));
     }
     fn publish(&self, state: &AppState, status: SerialRuntimeStatus) {
         self.status.send_replace(status);

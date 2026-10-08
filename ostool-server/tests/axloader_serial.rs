@@ -40,6 +40,7 @@ struct Device {
     status: LoaderDeviceStatus,
     output: tokio_serial::SerialStream,
     starts: usize,
+    reject_start: bool,
 }
 type DeviceState = Arc<Mutex<Device>>;
 async fn status(State(d): State<DeviceState>) -> Json<LoaderDeviceStatus> {
@@ -69,6 +70,9 @@ async fn start(State(d): State<DeviceState>, h: HeaderMap) -> StatusCode {
             .unwrap()
             .permits_start(header(&h, "X-Serial-Binding").unwrap_or(""))
     {
+        return StatusCode::CONFLICT;
+    }
+    if d.reject_start {
         return StatusCode::CONFLICT;
     }
     d.starts += 1;
@@ -233,6 +237,7 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
         },
         output: tokio_serial::SerialStream::try_from(master).unwrap(),
         starts: 0,
+        reject_start: false,
     }));
     let fake = Router::new()
         .route("/api/v1/status", get(status))
@@ -285,6 +290,33 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
         assert!(Instant::now() < limit);
         tokio::task::yield_now().await;
     }
+    {
+        let mut d = device.lock().await;
+        d.status.boot_epoch = format!("{:032x}", 0);
+        let mut serial = serial_status(0, 57600);
+        serial.ready = false;
+        serial.error = Some("UART is not ready".into());
+        d.status.serial = Some(serial);
+    }
+    let not_ready = LoaderAnnouncement {
+        protocol_version: DEVICE_PROTOCOL_VERSION,
+        mac_address: mac,
+        current_mac_address: mac,
+        arch: BootArch::X86_64,
+        loader_version: "test-v6".into(),
+        boot_epoch: format!("{:032x}", 0),
+        http_port: device_port,
+        serial_id: Some(format!("{:032x}", 0)),
+        serial_ready: false,
+    };
+    let error = ostool_server::device::reconcile(
+        state.clone(),
+        not_ready,
+        "127.0.0.1:12345".parse().unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("automatic serial unavailable"));
     for (n, baud) in [(1, 57600), (2, 115200)] {
         if n == 2 {
             state
@@ -350,7 +382,81 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
         .await;
         assert_eq!(u64::from(actual_baud(&inspection)), baud);
     }
-    assert_eq!(device.lock().await.starts, 2);
+    {
+        let mut d = device.lock().await;
+        d.status.boot_epoch = format!("{:032x}", 3);
+        d.status.serial = Some(serial_status(3, 230400));
+        d.reject_start = true;
+    }
+    let failed_announcement = LoaderAnnouncement {
+        protocol_version: DEVICE_PROTOCOL_VERSION,
+        mac_address: mac,
+        current_mac_address: mac,
+        arch: BootArch::X86_64,
+        loader_version: "test-v6".into(),
+        boot_epoch: format!("{:032x}", 3),
+        http_port: device_port,
+        serial_id: Some(format!("{:032x}", 3)),
+        serial_ready: true,
+    };
+    let failed_reconcile = tokio::spawn(ostool_server::device::reconcile(
+        state.clone(),
+        failed_announcement,
+        "127.0.0.1:12345".parse().unwrap(),
+    ));
+    wait_config(&mut configs, &path, 230400).await;
+    device
+        .lock()
+        .await
+        .output
+        .write_all(format!("\r\nAXLOADER-SERIAL/1 {:032x}\r\n", 3).as_bytes())
+        .await
+        .unwrap();
+    let error = tokio::time::timeout(Duration::from_secs(4), failed_reconcile)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("device HTTP 409 Conflict"));
+
+    // A device-side handoff failure must leave the session runtime available
+    // for the next broadcast instead of closing the session.
+    {
+        let mut d = device.lock().await;
+        d.status.boot_epoch = format!("{:032x}", 4);
+        d.status.serial = Some(serial_status(4, 230400));
+        d.reject_start = false;
+    }
+    let retry_announcement = LoaderAnnouncement {
+        protocol_version: DEVICE_PROTOCOL_VERSION,
+        mac_address: mac,
+        current_mac_address: mac,
+        arch: BootArch::X86_64,
+        loader_version: "test-v6".into(),
+        boot_epoch: format!("{:032x}", 4),
+        http_port: device_port,
+        serial_id: Some(format!("{:032x}", 4)),
+        serial_ready: true,
+    };
+    let retry = tokio::spawn(ostool_server::device::reconcile(
+        state.clone(),
+        retry_announcement,
+        "127.0.0.1:12345".parse().unwrap(),
+    ));
+    wait_config(&mut configs, &path, 230400).await;
+    device
+        .lock()
+        .await
+        .output
+        .write_all(format!("\r\nAXLOADER-SERIAL/1 {:032x}\r\n", 4).as_bytes())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(4), retry)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(device.lock().await.starts, 3);
     while let Ok((port, _)) = configs.try_recv() {
         assert_ne!(port, relay_path);
         assert_ne!(port, path, "bound UART must not reopen on second boot");

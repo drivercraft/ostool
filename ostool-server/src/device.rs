@@ -189,6 +189,7 @@ pub async fn reconcile(
     if !session.serial_runtime.accepts_epoch(&observed.boot_epoch) {
         return Ok(());
     }
+    let session_id = session.snapshot().await.id;
     let mut generation = session.subscribe_boot_generation();
     let mut shutdown = session.subscribe_shutdown();
     let operation = async {
@@ -244,7 +245,15 @@ pub async fn reconcile(
         Ok(())
     };
     tokio::select! {
-        result = operation => { if let Err(error)=&result {session.serial_runtime.fail(format!("{error:#}"));} result },
+        result = operation => {
+            if let Err(error) = &result {
+                log::warn!(
+                    "axloader serial handoff for session `{}` did not complete: {error:#}; waiting for the next device broadcast",
+                    session_id,
+                );
+            }
+            result
+        },
         _ = shutdown.wait_for(|s|*s) => Ok(()),
         _ = generation.changed() => Ok(()),
     }
