@@ -6,7 +6,7 @@
 
 ### 1.1 设备参数
 
-`SerialBeacon` 从 `ConOut` 对应的唯一 `SerialIo` 读取生效参数。未知参数、多个匹配 UART、没有协议和宿主后端不能表示的参数均产生明确错误。服务器不猜测 115200，也不恢复手工串口字段。
+`SerialBeacon` 从 `ConOut` 对应的唯一 `SerialIo` 读取生效参数。固件无法读取某个参数时使用 UEFI 常见默认值 115200/8N1、无硬件流控，并在状态中保留诊断；无法唯一选择 UART、没有协议或宿主后端不能表示的参数仍明确失败。Web UI 可选保存一组宿主侧参数覆盖，覆盖优先级高于本次 axloader 上报；默认不配置。
 
 | 字段 | 含义与约束 |
 | --- | --- |
@@ -80,7 +80,7 @@ sequenceDiagram
 
 ### 3.2 配置和命令
 
-axloader 表单隐藏串口开关、SN/path 和线参数，保存 `serial: null`；编辑时切回 U-Boot 保留手动字段草稿。QEMU 的 provider 来自电源配置的虚拟设备 ID；仍必须解析实际身份帧。U-Boot 保留原手动串口和启动步骤。
+axloader 表单隐藏串口开关和 SN/path，保存 `serial: null`；“指定串口参数”是可选的持久化覆盖，未配置时使用本次上报或固件默认值。编辑时切回 U-Boot 保留手动字段草稿。QEMU 的 provider 来自电源配置的虚拟设备 ID；仍必须解析实际身份帧。U-Boot 保留原手动串口和启动步骤。
 
 ```bash
 ostool axloader run --device http://DEVICE:2999 --kernel kernel.elf \

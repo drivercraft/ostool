@@ -192,6 +192,13 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
         }),
         boot: BootConfig::UefiHttp(UefiHttpProfile {
             boot_arch: Some(UefiBootArch::X86_64),
+            serial_parameters: Some(AxloaderSerialParameters {
+                baud_rate: 38_400,
+                data_bits: 8,
+                parity: AxloaderSerialParity::None,
+                stop_bits: AxloaderSerialStopBits::One,
+                flow_control: AxloaderSerialFlowControl::None,
+            }),
         }),
         network_identity: Some(BoardNetworkIdentity { mac_address: mac }),
         notes: None,
@@ -345,7 +352,7 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
             ostool_server::device::reconcile(s, announcement, "127.0.0.1:12345".parse().unwrap())
                 .await
         });
-        wait_config(&mut configs, &path, baud).await;
+        wait_config(&mut configs, &path, 38_400).await;
         device
             .lock()
             .await
@@ -380,7 +387,7 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
             s.pending == 0 && s.candidates == 0 && s.leased == 1
         })
         .await;
-        assert_eq!(u64::from(actual_baud(&inspection)), baud);
+        assert_eq!(u64::from(actual_baud(&inspection)), 38_400);
     }
     {
         let mut d = device.lock().await;
@@ -404,7 +411,7 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
         failed_announcement,
         "127.0.0.1:12345".parse().unwrap(),
     ));
-    wait_config(&mut configs, &path, 230400).await;
+    wait_config(&mut configs, &path, 38_400).await;
     device
         .lock()
         .await
@@ -443,7 +450,7 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
         retry_announcement,
         "127.0.0.1:12345".parse().unwrap(),
     ));
-    wait_config(&mut configs, &path, 230400).await;
+    wait_config(&mut configs, &path, 38_400).await;
     device
         .lock()
         .await

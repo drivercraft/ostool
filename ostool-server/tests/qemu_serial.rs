@@ -134,6 +134,7 @@ async fn ovmf_identity_binds_serial_null_session_and_boots_kernel() -> anyhow::R
         }),
         boot: BootConfig::UefiHttp(UefiHttpProfile {
             boot_arch: Some(UefiBootArch::X86_64),
+            serial_parameters: None,
         }),
         network_identity: Some(BoardNetworkIdentity { mac_address: mac }),
         notes: None,

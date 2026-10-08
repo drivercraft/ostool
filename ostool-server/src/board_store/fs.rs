@@ -246,7 +246,10 @@ mod tests {
         let store = FileBoardStore::new(dir.path().to_path_buf());
         store.write_board(&valid_board("valid")).await.unwrap();
         let mut missing_mac = valid_board("old-http");
-        missing_mac.boot = BootConfig::UefiHttp(crate::config::UefiHttpProfile { boot_arch: None });
+        missing_mac.boot = BootConfig::UefiHttp(crate::config::UefiHttpProfile {
+            boot_arch: None,
+            serial_parameters: None,
+        });
         store.write_board(&missing_mac).await.unwrap();
         let mut first = valid_board("a");
         first.network_identity = Some(crate::config::BoardNetworkIdentity {

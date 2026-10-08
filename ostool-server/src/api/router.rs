@@ -1119,7 +1119,13 @@ fn normalize_boot_config(boot: &mut BootConfig) -> Result<(), ApiError> {
         BootConfig::Pxe(profile) => {
             normalize_optional_string(&mut profile.notes);
         }
-        BootConfig::UefiHttp(_) => {}
+        BootConfig::UefiHttp(profile) => {
+            if let Some(parameters) = profile.serial_parameters {
+                parameters
+                    .validate()
+                    .map_err(|err| ApiError::bad_request(format!("{err:#}")))?;
+            }
+        }
     }
     Ok(())
 }
@@ -3246,6 +3252,7 @@ mod tests {
         board.tags = vec!["uefi-http".into()];
         board.boot = BootConfig::UefiHttp(UefiHttpProfile {
             boot_arch: Some(UefiBootArch::X86_64),
+            serial_parameters: None,
         });
         board.network_identity = Some(crate::config::BoardNetworkIdentity {
             mac_address: "02:00:00:00:00:01".parse().unwrap(),
@@ -5955,7 +5962,10 @@ mod tests {
     async fn v4_upgrade_routes_require_a_board_assignment_and_matching_trial() {
         let (app, state) = test_router_and_state_with_config(|_| {}).await;
         let mut board = sample_httpboot_board("ota-board");
-        board.boot = BootConfig::UefiHttp(UefiHttpProfile { boot_arch: None });
+        board.boot = BootConfig::UefiHttp(UefiHttpProfile {
+            boot_arch: None,
+            serial_parameters: None,
+        });
         let mac = board.network_identity.as_ref().unwrap().mac_address;
         assert_eq!(
             create_board(&app, serde_json::to_value(&board).unwrap()).await,
@@ -5983,6 +5993,7 @@ mod tests {
         arm_board.serial = None;
         arm_board.boot = BootConfig::UefiHttp(UefiHttpProfile {
             boot_arch: Some(UefiBootArch::Aarch64),
+            serial_parameters: None,
         });
         arm_board.network_identity = Some(crate::config::BoardNetworkIdentity {
             mac_address: "02:00:00:00:00:02".parse().unwrap(),

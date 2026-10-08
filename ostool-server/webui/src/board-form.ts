@@ -19,6 +19,12 @@ export interface BoardEditorFormState {
   serial_key_kind: SerialPortKeyKind;
   serial_key_value: string;
   serial_baud_rate: number;
+  axloader_serial_parameters_enabled: boolean;
+  axloader_baud_rate: number;
+  axloader_data_bits: number;
+  axloader_parity: "none" | "odd" | "even" | "mark" | "space";
+  axloader_stop_bits: "one" | "one_point_five" | "two";
+  axloader_flow_control: "none" | "rts_cts";
   power_management_kind: PowerManagementKind;
   power_on_cmd: string;
   power_off_cmd: string;
@@ -54,6 +60,12 @@ export function defaultFormState(): BoardEditorFormState {
     serial_key_kind: "serial_number",
     serial_key_value: "",
     serial_baud_rate: DEFAULT_SERIAL_BAUD_RATE,
+    axloader_serial_parameters_enabled: false,
+    axloader_baud_rate: DEFAULT_SERIAL_BAUD_RATE,
+    axloader_data_bits: 8,
+    axloader_parity: "none",
+    axloader_stop_bits: "one",
+    axloader_flow_control: "none",
     power_management_kind: "custom",
     power_on_cmd: "",
     power_off_cmd: "",
@@ -91,6 +103,15 @@ export function boardToFormState(board: BoardConfig): BoardEditorFormState {
     next.serial_key_kind = board.serial.key.kind;
     next.serial_key_value = board.serial.key.value;
     next.serial_baud_rate = board.serial.baud_rate;
+  }
+
+  if (board.boot.kind === "httpboot" && board.boot.serial_parameters) {
+    next.axloader_serial_parameters_enabled = true;
+    next.axloader_baud_rate = board.boot.serial_parameters.baud_rate;
+    next.axloader_data_bits = board.boot.serial_parameters.data_bits;
+    next.axloader_parity = board.boot.serial_parameters.parity;
+    next.axloader_stop_bits = board.boot.serial_parameters.stop_bits;
+    next.axloader_flow_control = board.boot.serial_parameters.flow_control;
   }
 
   if (board.power_management.kind === "custom") {
@@ -163,6 +184,15 @@ function buildBootConfig(form: BoardEditorFormState): BootConfig {
     return {
       kind: "httpboot",
       boot_arch: trimToNull(form.boot_arch),
+      serial_parameters: form.axloader_serial_parameters_enabled
+        ? {
+            baud_rate: form.axloader_baud_rate,
+            data_bits: form.axloader_data_bits,
+            parity: form.axloader_parity,
+            stop_bits: form.axloader_stop_bits,
+            flow_control: form.axloader_flow_control,
+          }
+        : null,
     };
   }
 
@@ -287,6 +317,17 @@ export function validateForm(form: BoardEditorFormState): string {
       errors.push("HTTPboot 板卡必须绑定 MAC 地址");
     } else if (!/^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$/i.test(mac)) {
       errors.push("MAC 地址必须是六字节冒号格式，例如 02:00:00:00:00:01");
+    }
+    if (form.axloader_serial_parameters_enabled) {
+      if (
+        !Number.isFinite(form.axloader_baud_rate) ||
+        form.axloader_baud_rate <= 0
+      ) {
+        errors.push("axloader 串口波特率必须大于 0");
+      }
+      if (![7, 8].includes(form.axloader_data_bits)) {
+        errors.push("axloader 串口数据位必须是 7 或 8");
+      }
     }
   }
   return errors.join("\n");

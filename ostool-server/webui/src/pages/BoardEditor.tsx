@@ -175,6 +175,13 @@ function Editor({ board }: { board?: BoardConfig }) {
               serial_key_kind: draft.serial_key_kind,
               serial_key_value: draft.serial_key_value,
               serial_baud_rate: draft.serial_baud_rate,
+              axloader_serial_parameters_enabled:
+                draft.axloader_serial_parameters_enabled,
+              axloader_baud_rate: draft.axloader_baud_rate,
+              axloader_data_bits: draft.axloader_data_bits,
+              axloader_parity: draft.axloader_parity,
+              axloader_stop_bits: draft.axloader_stop_bits,
+              axloader_flow_control: draft.axloader_flow_control,
             }
           : {}),
       }));
@@ -274,6 +281,78 @@ function Editor({ board }: { board?: BoardConfig }) {
               发现请求 {serialManager?.pending ?? 0} · 候选监听{" "}
               {serialManager?.candidates ?? 0}
             </p>
+            <CheckField
+              label="指定串口参数"
+              checked={form.axloader_serial_parameters_enabled}
+              onChange={(v) => set("axloader_serial_parameters_enabled", v)}
+            />
+            {form.axloader_serial_parameters_enabled && (
+              <>
+                <TextField
+                  label="波特率"
+                  type="number"
+                  min={1}
+                  value={form.axloader_baud_rate}
+                  onValue={(v) => set("axloader_baud_rate", Number(v))}
+                  hint="整组参数优先于 axloader 上报；未配置时采用上报值或 115200/8N1"
+                />
+                <SelectField
+                  label="数据位"
+                  value={String(form.axloader_data_bits)}
+                  onValue={(v) => set("axloader_data_bits", Number(v))}
+                  options={[
+                    { value: "7", label: "7" },
+                    { value: "8", label: "8" },
+                  ]}
+                />
+                <SelectField
+                  label="校验"
+                  value={form.axloader_parity}
+                  onValue={(v) =>
+                    set(
+                      "axloader_parity",
+                      v as BoardEditorFormState["axloader_parity"],
+                    )
+                  }
+                  options={[
+                    { value: "none", label: "无" },
+                    { value: "odd", label: "奇校验" },
+                    { value: "even", label: "偶校验" },
+                    { value: "mark", label: "Mark" },
+                    { value: "space", label: "Space" },
+                  ]}
+                />
+                <SelectField
+                  label="停止位"
+                  value={form.axloader_stop_bits}
+                  onValue={(v) =>
+                    set(
+                      "axloader_stop_bits",
+                      v as BoardEditorFormState["axloader_stop_bits"],
+                    )
+                  }
+                  options={[
+                    { value: "one", label: "1" },
+                    { value: "one_point_five", label: "1.5" },
+                    { value: "two", label: "2" },
+                  ]}
+                />
+                <SelectField
+                  label="流控"
+                  value={form.axloader_flow_control}
+                  onValue={(v) =>
+                    set(
+                      "axloader_flow_control",
+                      v as BoardEditorFormState["axloader_flow_control"],
+                    )
+                  }
+                  options={[
+                    { value: "none", label: "无" },
+                    { value: "rts_cts", label: "RTS/CTS" },
+                  ]}
+                />
+              </>
+            )}
           </Section>
         ) : (
           <Section title="串口">

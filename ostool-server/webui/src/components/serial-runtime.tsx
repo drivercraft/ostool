@@ -24,6 +24,7 @@ export function SerialRuntimeDetails({
           {p.stop_bits} · 流控 {p.flow_control}
         </p>
       )}
+      {status?.warning && <p className="text-muted-foreground">{status.warning}</p>}
       {status?.error && <p className="text-destructive">{status.error}</p>}
     </div>
   );

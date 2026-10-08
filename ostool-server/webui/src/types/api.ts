@@ -127,6 +127,19 @@ export interface PxeProfile {
 export interface UefiHttpProfile {
   kind: "httpboot";
   boot_arch?: string | null;
+  serial_parameters?: AxloaderSerialParameters | null;
+}
+
+export type AxloaderSerialParity = "none" | "odd" | "even" | "mark" | "space";
+export type AxloaderSerialStopBits = "one" | "one_point_five" | "two";
+export type AxloaderSerialFlowControl = "none" | "rts_cts";
+
+export interface AxloaderSerialParameters {
+  baud_rate: number;
+  data_bits: number;
+  parity: AxloaderSerialParity;
+  stop_bits: AxloaderSerialStopBits;
+  flow_control: AxloaderSerialFlowControl;
 }
 
 export type BootConfig = UbootProfile | PxeProfile | UefiHttpProfile;
@@ -336,6 +349,7 @@ export interface SerialRuntimeStatus {
     flow_control: string;
   } | null;
   error: string | null;
+  warning: string | null;
   binding_id: string | null;
   boot_epoch: string | null;
 }

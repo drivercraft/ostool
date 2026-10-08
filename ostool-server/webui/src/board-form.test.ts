@@ -93,4 +93,39 @@ describe("board configuration contracts", () => {
     expect(validateForm(f)).not.toContain("串口");
     expect(validateForm(f)).toContain("MAC");
   });
+
+  it("persists optional axloader serial overrides without touching the U-Boot serial draft", () => {
+    const f = defaultFormState();
+    f.board_type = "uefi-http";
+    f.boot_kind = "httpboot";
+    f.network_mac = "02:00:00:00:00:31";
+    f.axloader_serial_parameters_enabled = true;
+    f.axloader_baud_rate = 921600;
+    f.axloader_data_bits = 7;
+    f.axloader_parity = "even";
+    f.axloader_stop_bits = "two";
+    f.axloader_flow_control = "rts_cts";
+
+    expect(buildRequestPayload(f).boot).toEqual({
+      kind: "httpboot",
+      boot_arch: null,
+      serial_parameters: {
+        baud_rate: 921600,
+        data_bits: 7,
+        parity: "even",
+        stop_bits: "two",
+        flow_control: "rts_cts",
+      },
+    });
+    f.axloader_serial_parameters_enabled = false;
+    expect(buildRequestPayload(f).boot).toEqual({
+      kind: "httpboot",
+      boot_arch: null,
+      serial_parameters: null,
+    });
+    f.boot_kind = "uboot";
+    f.serial_enabled = true;
+    f.serial_key_value = "manual";
+    expect(buildRequestPayload(f).serial?.key.value).toBe("manual");
+  });
 });

@@ -835,6 +835,7 @@ mod tests {
             }),
             boot: BootConfig::UefiHttp(UefiHttpProfile {
                 boot_arch: Some(UefiBootArch::X86_64),
+                serial_parameters: None,
             }),
             network_identity: Some(BoardNetworkIdentity { mac_address: mac }),
             notes: None,

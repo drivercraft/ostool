@@ -16,6 +16,19 @@ pub struct SerialParameters {
     pub flow_control: SerialFlowControl,
 }
 
+impl Default for SerialParameters {
+    /// The conventional UART profile used when firmware cannot report one.
+    fn default() -> Self {
+        Self {
+            baud_rate: 115_200,
+            data_bits: 8,
+            parity: SerialParity::None,
+            stop_bits: SerialStopBits::One,
+            flow_control: SerialFlowControl::None,
+        }
+    }
+}
+
 impl SerialParameters {
     /// Reject unknown parameters and formats that cannot carry the ASCII beacon.
     pub fn validate(self) -> Result<(), SerialProtocolError> {
@@ -198,6 +211,21 @@ impl SerialFrameDecoder {
 #[cfg(all(test, feature = "alloc"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serial_defaults_are_conventional_uart_settings() {
+        assert_eq!(
+            SerialParameters::default(),
+            SerialParameters {
+                baud_rate: 115_200,
+                data_bits: 8,
+                parity: SerialParity::None,
+                stop_bits: SerialStopBits::One,
+                flow_control: SerialFlowControl::None,
+            }
+        );
+    }
+
     #[test]
     fn identification_and_grants_reject_stale_owners() {
         let id = "0123456789abcdef0123456789abcdef";

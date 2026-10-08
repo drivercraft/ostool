@@ -11,8 +11,8 @@
 选择发现设备不会自动填写板型、电源或串口，保存前不会生成半成品板卡。
 QEMU 使用已有虚拟设备，保留原来的真实网络发现与匹配校验。
 
-选择 axloader 后，`BoardEditor` 隐藏手动串口开关、SN/path 和线参数，保存 `serial: null`。
-切回 U-Boot 保留编辑中的手动串口草稿。实际参数、端口、错误和 `SerialRuntimeStatus`
+选择 axloader 后，`BoardEditor` 隐藏手动串口开关、SN/path；可选启用“指定串口参数”并持久化保存，未启用时不配置覆盖，保存 `serial: null`。
+指定参数优先于 axloader 上报，未指定时使用上报值或固件默认 115200/8N1。切回 U-Boot 保留编辑中的手动串口草稿。实际参数、端口、错误和 `SerialRuntimeStatus`
 由会话的 SSE 展示；`serial_manager` 展示发现请求数与候选监听数。没有黑名单界面。
 继电器配置继续保留，server 在发现前排除其所有路径别名和 SN。
 

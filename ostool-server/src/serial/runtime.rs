@@ -1,5 +1,6 @@
 //! Session-owned UART runtime. Only this task reads a transferred lease.
 use crate::{
+    config::{AxloaderSerialParameters, BootConfig},
     session::{SessionState, SessionStopReason},
     state::AppState,
 };
@@ -27,6 +28,7 @@ pub struct SerialRuntimeStatus {
     pub boot_epoch: Option<String>,
     pub binding_id: Option<String>,
     pub error: Option<String>,
+    pub warning: Option<String>,
 }
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -291,15 +293,18 @@ impl SessionSerialRuntime {
                             );
                             continue;
                         }
-                        let Some(parameters) = serial.parameters else {
-                            self.reject_bind(
-                                state,
-                                &device,
-                                reply,
-                                anyhow::anyhow!("unknown device UART parameters"),
-                            );
-                            continue;
-                        };
+                        // A saved Web UI profile is an explicit host-side override. Otherwise
+                        // use the current boot's report, falling back to the conventional UART
+                        // profile when firmware has a usable port but cannot report its mode.
+                        let parameters = effective_parameters(
+                            session
+                                .board()
+                                .boot
+                                .as_uefi_http()
+                                .and_then(|profile| profile.serial_parameters),
+                            serial.parameters,
+                        );
+                        let warning = serial.error.clone();
                         if let Err(error) = parameters.validate() {
                             self.reject_bind(state, &device, reply, anyhow::anyhow!("{error}"));
                             continue;
@@ -334,6 +339,7 @@ impl SessionSerialRuntime {
                             device,
                             parameters,
                             binding,
+                            warning,
                             reply: Some(reply),
                         });
                         deadline = Instant::now() + Duration::from_secs(60);
@@ -357,6 +363,7 @@ impl SessionSerialRuntime {
                                 parameters: Some(parameters),
                                 boot_epoch: Some(c.device.boot_epoch.clone()),
                                 port: lease.as_ref().map(|l| l.locator().name.clone()),
+                                warning: c.warning.clone(),
                                 ..Default::default()
                             },
                         );
@@ -376,6 +383,7 @@ impl SessionSerialRuntime {
                         boot_epoch: Some(c.device.boot_epoch.clone()),
                         binding_id: Some(c.binding.binding_id.clone()),
                         error: None,
+                        warning: c.warning.clone(),
                     };
                     lease = Some(io);
                     if let Some(reply) = c.reply.take() {
@@ -477,6 +485,20 @@ impl SessionSerialRuntime {
         state.admin_events.invalidate(&["sessions"]);
     }
 }
+
+trait BootConfigExt {
+    fn as_uefi_http(&self) -> Option<&crate::config::UefiHttpProfile>;
+}
+
+impl BootConfigExt for BootConfig {
+    fn as_uefi_http(&self) -> Option<&crate::config::UefiHttpProfile> {
+        match self {
+            Self::UefiHttp(profile) => Some(profile),
+            _ => None,
+        }
+    }
+}
+
 enum RuntimeEvent {
     Shutdown,
     Command(Option<Command>),
@@ -491,8 +513,20 @@ struct BindingAttempt {
     device: LoaderDeviceStatus,
     parameters: SerialParameters,
     binding: SerialBinding,
+    warning: Option<String>,
     reply: Option<oneshot::Sender<anyhow::Result<SerialBinding>>>,
 }
+
+fn effective_parameters(
+    override_parameters: Option<AxloaderSerialParameters>,
+    reported: Option<SerialParameters>,
+) -> SerialParameters {
+    override_parameters
+        .map(Into::into)
+        .or(reported)
+        .unwrap_or_default()
+}
+
 fn bind_future(
     state: &AppState,
     owner: &str,
@@ -511,4 +545,47 @@ fn bind_future(
         deadline,
     };
     Box::pin(async move { manager.bind(request).await })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effective_parameters;
+    use crate::config::{
+        AxloaderSerialFlowControl, AxloaderSerialParameters, AxloaderSerialParity,
+        AxloaderSerialStopBits,
+    };
+    use httpboot_protocol::{SerialFlowControl, SerialParameters, SerialParity, SerialStopBits};
+
+    fn reported(baud_rate: u64) -> SerialParameters {
+        SerialParameters {
+            baud_rate,
+            data_bits: 8,
+            parity: SerialParity::None,
+            stop_bits: SerialStopBits::One,
+            flow_control: SerialFlowControl::None,
+        }
+    }
+
+    #[test]
+    fn missing_firmware_parameters_use_common_uart_defaults() {
+        assert_eq!(
+            effective_parameters(None, None),
+            SerialParameters::default()
+        );
+    }
+
+    #[test]
+    fn configured_parameters_override_firmware_report() {
+        let configured = AxloaderSerialParameters {
+            baud_rate: 921_600,
+            data_bits: 7,
+            parity: AxloaderSerialParity::Even,
+            stop_bits: AxloaderSerialStopBits::Two,
+            flow_control: AxloaderSerialFlowControl::RtsCts,
+        };
+        assert_eq!(
+            effective_parameters(Some(configured), Some(reported(115_200))),
+            configured.into_protocol()
+        );
+    }
 }
