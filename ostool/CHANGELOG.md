@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.3](https://github.com/drivercraft/ostool/compare/ostool-v0.30.2...ostool-v0.30.3) - 2026-10-08
+
+### Fixed
+
+- *(ostool)* keep FIT ramdisks compatible with Rockchip U-Boot ([#207](https://github.com/drivercraft/ostool/pull/207))
+
 ## [0.30.2](https://github.com/drivercraft/ostool/compare/ostool-v0.30.1...ostool-v0.30.2) - 2026-09-30
 
 ### Fixed
