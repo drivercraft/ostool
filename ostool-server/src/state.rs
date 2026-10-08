@@ -1040,7 +1040,7 @@ mod tests {
         async fn remove_session_dir(&self, _session_id: &str) -> anyhow::Result<()> {
             if let Some(failures_remaining) = &self.failures_remaining {
                 if failures_remaining
-                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                    .try_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
                         remaining.checked_sub(1)
                     })
                     .is_err()

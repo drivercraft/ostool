@@ -292,7 +292,7 @@ impl TransferGuard {
         }
         let counter = self.record.bytes(self.direction);
         counter
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(count as u64)
             })
             .map(|_| ())
