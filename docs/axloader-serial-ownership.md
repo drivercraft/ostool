@@ -70,7 +70,7 @@ sequenceDiagram
 
 ## 3. 会话与界面
 
-`serial_connected` 只表示 WebSocket 已建立。实际 UART 状态由 `SerialRuntimeStatus` 表示；UI 经现有 SSE 订阅 `sessions` 和 `serial_manager`，展示参数、端口、状态、错误、发现请求数和候选数。
+`serial_connected` 只表示 WebSocket 已建立。实际 UART 状态由 `SerialRuntimeStatus` 表示；UI 经现有 SSE 订阅 `sessions` 和 `serial_manager`，展示参数、端口、状态、错误、发现请求数和候选数。`Recovering` 可能仍保留待重新验证的实时租约，此时端口和同一启动代次的绑定令牌继续展示；没有实时租约时才清空端口和令牌。
 
 ### 3.1 上电与错误恢复
 
