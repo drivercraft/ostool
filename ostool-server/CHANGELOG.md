@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/drivercraft/ostool/compare/ostool-server-v0.8.2...ostool-server-v0.9.0) - 2026-10-09
+
+### Added
+
+- *(ostool-server)* add automatic axloader serial binding ([#206](https://github.com/drivercraft/ostool/pull/206))
+
 ## [0.8.2](https://github.com/drivercraft/ostool/compare/ostool-server-v0.8.1...ostool-server-v0.8.2) - 2026-09-30
 
 ### Other
