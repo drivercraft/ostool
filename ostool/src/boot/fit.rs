@@ -10,7 +10,15 @@ use log::{info, warn};
 use object::Architecture;
 use tokio::fs;
 
-use crate::utils::PathResultExt;
+use crate::{
+    artifact::{
+        elf_metadata::ElfMetadata,
+        runtime::{PreparedRuntimeArtifacts, RuntimeArtifactOptions, prepare_runtime_artifacts},
+    },
+    boot::fit_config::{FitAddress, FitConfig, FitFormat, FitOs},
+    process::ProcessContext,
+    utils::PathResultExt,
+};
 
 const KERNEL_COMPONENT_NAME: &str = "kernel";
 const FDT_COMPONENT_NAME: &str = "fdt";
@@ -53,7 +61,191 @@ impl GeneratedFitImage {
     }
 }
 
-pub(crate) async fn generate_fit_image(input: FitInput) -> anyhow::Result<GeneratedFitImage> {
+/// Builds a configured payload from one prepared ELF selection. Paths in the
+/// configuration are already resolved by the caller; this does not run a guest.
+/// Symbols come from the original ELF, even when the runtime copy is stripped.
+#[allow(dead_code)] // Consumed by the boot-prepare entry point in the next change.
+pub(crate) async fn generate_configured_fit(
+    context: &ProcessContext,
+    prepared: &PreparedRuntimeArtifacts,
+    config: &FitConfig,
+) -> anyhow::Result<GeneratedFitImage> {
+    let source_data = fs::read(prepared.source_elf())
+        .await
+        .with_path("failed to read source ELF", prepared.source_elf())?;
+    let metadata = ElfMetadata::parse(&source_data)
+        .with_context(|| format!("invalid source ELF: {}", prepared.source_elf().display()))?;
+    validate_elf_load_data(&metadata, source_data.len())?;
+    fit_arch_name(metadata.arch)?;
+
+    let runtime_data = fs::read(prepared.elf())
+        .await
+        .with_path("failed to read runtime ELF", prepared.elf())?;
+    let runtime_metadata = ElfMetadata::parse(&runtime_data)
+        .with_context(|| format!("invalid runtime ELF: {}", prepared.elf().display()))?;
+    validate_elf_load_data(&runtime_metadata, runtime_data.len())?;
+    if metadata.arch != runtime_metadata.arch
+        || metadata.entry != runtime_metadata.entry
+        || metadata.load_segments != runtime_metadata.load_segments
+        || metadata.load_sections != runtime_metadata.load_sections
+    {
+        anyhow::bail!("source and runtime ELF load layouts differ; prepare the selected ELF again");
+    }
+    let load = config.resolve_load(&metadata)?;
+    let output = match &config.output {
+        Some(path) => path.clone(),
+        None => default_output_path(prepared.elf())?,
+    };
+    // An output alias must not destroy an input needed by subsequent preparation.
+    if let Ok(destination) = output.canonicalize() {
+        for input in [
+            Some(prepared.source_elf()),
+            Some(prepared.elf()),
+            config.fdt.as_ref().map(|fdt| fdt.path.as_path()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if input.canonicalize().ok().as_ref() == Some(&destination) {
+                anyhow::bail!("FIT output would overwrite an input: {}", output.display());
+            }
+        }
+    }
+    let kernel_data = match config.format {
+        FitFormat::Elf => runtime_data,
+        FitFormat::Bin => {
+            // Derive from this runtime ELF, never reuse an unrelated/stale BIN.
+            let temporary = tempfile::tempdir().context("failed to stage FIT BIN payload")?;
+            let binary = prepare_runtime_artifacts(
+                context,
+                RuntimeArtifactOptions {
+                    elf_path: prepared.elf().to_path_buf(),
+                    to_bin: true,
+                    bin_dir: Some(temporary.path().to_path_buf()),
+                    debug: false,
+                    cargo_artifact_dir: None,
+                    strip_elf: false,
+                },
+            )
+            .with_context(|| {
+                format!(
+                    "failed to derive FIT BIN payload with llvm-objcopy from {}",
+                    prepared.elf().display()
+                )
+            })?;
+            fs::read(binary.bin().context("BIN conversion produced no path")?)
+                .await
+                .context("failed to read derived FIT BIN payload")?
+        }
+    };
+    if kernel_data.is_empty() {
+        anyhow::bail!("cannot build FIT with an empty kernel payload");
+    }
+    // The Linux image header takes precedence over metadata-only inference.
+    // These branches are exclusive: an explicit entry never reads the header.
+    let entry = if config.entry == FitAddress::Auto
+        && config.format == FitFormat::Bin
+        && config.os == FitOs::Linux
+        && metadata.arch == Architecture::LoongArch64
+        && kernel_data.starts_with(LOONGARCH_IMAGE_MAGIC)
+    {
+        resolve_kernel_entry_addr(metadata.arch, &kernel_data, load, metadata.entry)?
+    } else {
+        config.resolve_entry(&metadata, load)?
+    };
+    // Replace the output directory entry only after success. In particular, a
+    // hard link to an input must not truncate that input's shared inode.
+    let output_dir = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    #[cfg(unix)]
+    let output_permissions = match fs::metadata(&output).await {
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(error).with_path("failed to read FIT output permissions", &output);
+        }
+    };
+    let builder = tempfile::Builder::new();
+    #[cfg(unix)]
+    let builder = {
+        use std::os::unix::fs::PermissionsExt;
+        let mut builder = builder;
+        // New outputs follow normal file creation (0666 masked by umask).
+        // Keep replacements private until their existing mode is restored.
+        if output_permissions.is_none() {
+            builder.permissions(std::fs::Permissions::from_mode(0o666));
+        }
+        builder
+    };
+    let temporary = builder
+        .tempfile_in(output_dir)
+        .with_path("failed to stage FIT output", &output)?;
+    write_fit_image(
+        FitInput {
+            kernel_path: prepared.elf().to_path_buf(),
+            dtb_path: config.fdt.as_ref().map(|fdt| fdt.path.clone()),
+            initramfs_path: None,
+            arch: metadata.arch,
+            kernel_load_addr: load,
+            kernel_entry_addr: entry,
+            fdt_load_addr: config.fdt.as_ref().and_then(|fdt| fdt.load),
+            output_path: Some(temporary.path().to_path_buf()),
+        },
+        kernel_data,
+        config.os,
+    )
+    .await?;
+    #[cfg(unix)]
+    if let Some(permissions) = output_permissions {
+        temporary
+            .as_file()
+            .set_permissions(permissions)
+            .with_path("failed to preserve FIT output permissions", &output)?;
+    }
+    temporary
+        .persist(&output)
+        .map_err(|error| error.error)
+        .with_path(errors::FIT_SAVE_ERROR, &output)?;
+    Ok(GeneratedFitImage { path: output })
+}
+
+// Metadata parsing reads descriptions, not the bytes they describe. Explicit
+// addresses bypass inference, but cannot make truncated load data valid.
+fn validate_elf_load_data(metadata: &ElfMetadata, file_size: usize) -> anyhow::Result<()> {
+    let in_file = |offset: u64, size: u64| {
+        offset
+            .checked_add(size)
+            .is_some_and(|end| end <= file_size as u64)
+    };
+    for segment in &metadata.load_segments {
+        if segment.file_size > segment.memory_size
+            || !in_file(segment.file_offset, segment.file_size)
+            || segment
+                .virtual_address
+                .checked_add(segment.memory_size)
+                .is_none()
+            || segment
+                .physical_address
+                .checked_add(segment.memory_size)
+                .is_none()
+        {
+            anyhow::bail!("invalid ELF PT_LOAD data range");
+        }
+    }
+    for section in &metadata.load_sections {
+        if !in_file(section.file_offset, section.size)
+            || section.virtual_address.checked_add(section.size).is_none()
+        {
+            anyhow::bail!("invalid ELF allocated section data range");
+        }
+    }
+    Ok(())
+}
+
+/// Existing U-Boot path: Linux payload with its historical header handling.
+pub(crate) async fn generate_fit_image(mut input: FitInput) -> anyhow::Result<GeneratedFitImage> {
     info!("Making FIT image...");
 
     let kernel_data = fs::read(&input.kernel_path)
@@ -76,6 +268,15 @@ pub(crate) async fn generate_fit_image(input: FitInput) -> anyhow::Result<Genera
         info!("resolved LoongArch kernel entry: {kernel_entry_addr:#x}");
     }
 
+    input.kernel_entry_addr = kernel_entry_addr;
+    write_fit_image(input, kernel_data, FitOs::Linux).await
+}
+
+async fn write_fit_image(
+    input: FitInput,
+    kernel_data: Vec<u8>,
+    os: FitOs,
+) -> anyhow::Result<GeneratedFitImage> {
     let arch_name = fit_arch_name(input.arch)?;
     let dtb_data = if let Some(dtb_path) = &input.dtb_path {
         let data = fs::read(dtb_path)
@@ -105,13 +306,14 @@ pub(crate) async fn generate_fit_image(input: FitInput) -> anyhow::Result<Genera
         None => None,
     };
 
-    let config = build_default_fit_config(
+    let config = build_fit_config(
         arch_name,
+        os,
         kernel_data,
         dtb_data,
         initramfs_data,
         input.kernel_load_addr,
-        kernel_entry_addr,
+        input.kernel_entry_addr,
         input.fdt_load_addr,
     );
 
@@ -223,8 +425,10 @@ fn default_output_path(kernel_path: &Path) -> anyhow::Result<PathBuf> {
     Ok(Path::new(output_dir).join(FIT_IMAGE_NAME))
 }
 
-fn build_default_fit_config(
+#[allow(clippy::too_many_arguments)]
+fn build_fit_config(
     arch_name: &'static str,
+    os: FitOs,
     kernel_data: Vec<u8>,
     dtb_data: Option<Vec<u8>>,
     initramfs_data: Option<Vec<u8>>,
@@ -237,7 +441,7 @@ fn build_default_fit_config(
             .with_description("This kernel")
             .with_type("kernel")
             .with_arch(arch_name)
-            .with_os("linux")
+            .with_os(os.as_str())
             .with_compression(false)
             .with_load_address(kernel_load_addr)
             .with_entry_point(kernel_entry_addr),
@@ -289,7 +493,7 @@ fn build_default_fit_config(
 #[cfg(test)]
 mod tests {
     use super::{
-        FitInput, build_default_fit_config, default_output_path, fit_arch_name,
+        FitInput, FitOs, build_fit_config, default_output_path, fit_arch_name,
         resolve_kernel_entry_addr,
     };
     use fdt_edit::{Fdt, Node, Property};
@@ -343,8 +547,16 @@ mod tests {
 
     #[test]
     fn default_fit_config_keeps_linux_kernel_defaults_without_dtb() {
-        let config =
-            build_default_fit_config("arm64", vec![1, 2, 3], None, None, 0x80000, 0x80000, None);
+        let config = build_fit_config(
+            "arm64",
+            FitOs::Linux,
+            vec![1, 2, 3],
+            None,
+            None,
+            0x80000,
+            0x80000,
+            None,
+        );
         let kernel = config.kernel.as_ref().unwrap();
 
         assert_eq!(
@@ -368,8 +580,9 @@ mod tests {
 
     #[test]
     fn default_fit_config_adds_optional_fdt_component() {
-        let config = build_default_fit_config(
+        let config = build_fit_config(
             "riscv",
+            FitOs::Linux,
             vec![1, 2, 3],
             Some(vec![4, 5, 6]),
             None,
@@ -389,8 +602,9 @@ mod tests {
 
     #[test]
     fn fit_links_initramfs_without_relocation_for_target_architecture() {
-        let config = build_default_fit_config(
+        let config = build_fit_config(
             "riscv",
+            FitOs::Linux,
             vec![1, 2, 3],
             None,
             Some(vec![4, 5, 6]),
