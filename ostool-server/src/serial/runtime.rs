@@ -277,16 +277,12 @@ impl SessionSerialRuntime {
                             continue;
                         }
                         power_wait = true;
-                        // Each valid device report is progress.  Refresh the wait
-                        // window before handling recoverable reports such as
-                        // `ready = false`, so repeated diagnostics do not expire
-                        // the session while axloader is still booting.
-                        deadline = Instant::now() + SERIAL_BIND_TIMEOUT;
                         let Some(serial) = device.serial.as_ref() else {
                             self.reject_bind(
                                 state,
                                 &device,
                                 reply,
+                                &mut deadline,
                                 anyhow::anyhow!("device has no v6 serial parameters"),
                             );
                             continue;
@@ -296,6 +292,7 @@ impl SessionSerialRuntime {
                                 state,
                                 &device,
                                 reply,
+                                &mut deadline,
                                 anyhow::anyhow!("automatic serial unavailable: {:?}", serial.error),
                             );
                             continue;
@@ -313,7 +310,13 @@ impl SessionSerialRuntime {
                         );
                         let warning = serial.error.clone();
                         if let Err(error) = parameters.validate() {
-                            self.reject_bind(state, &device, reply, anyhow::anyhow!("{error}"));
+                            self.reject_bind(
+                                state,
+                                &device,
+                                reply,
+                                &mut deadline,
+                                anyhow::anyhow!("{error}"),
+                            );
                             continue;
                         }
                         if !matches!(
@@ -321,7 +324,7 @@ impl SessionSerialRuntime {
                             crate::config::PowerManagementConfig::Qemu { .. }
                         ) && let Err(error) = ostool_serial::validate_host_parameters(parameters)
                         {
-                            self.reject_bind(state, &device, reply, error.into());
+                            self.reject_bind(state, &device, reply, &mut deadline, error.into());
                             continue;
                         }
                         if let Some(c) = current.as_ref()
@@ -477,8 +480,13 @@ impl SessionSerialRuntime {
         state: &AppState,
         device: &LoaderDeviceStatus,
         reply: oneshot::Sender<anyhow::Result<SerialBinding>>,
+        deadline: &mut Instant,
         error: anyhow::Error,
     ) {
+        // A device report, including a recoverable `ready = false` report, is
+        // progress. Keep the session alive for another complete discovery
+        // window while the device repairs or exposes its UART.
+        *deadline = Instant::now() + SERIAL_BIND_TIMEOUT;
         let mut status = self.snapshot();
         status.phase = SerialRuntimePhase::Recovering;
         status.boot_epoch = Some(device.boot_epoch.clone());
