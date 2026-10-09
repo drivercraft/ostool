@@ -5,14 +5,16 @@ use httpboot_protocol::{
     DEVICE_PROTOCOL_VERSION, DeviceBootImage, DeviceBootJob, LoaderDeviceStatus, SerialBinding,
     SerialBindingMode,
 };
-use ostool_serial::{BindRequest, NativeBackend, SerialManager};
+use ostool_serial::{BindError, BindRequest, NativeBackend, SerialManager};
 use reqwest::Client;
 use sha2::{Digest, Sha256};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    time::Instant,
+    time::{Instant, sleep},
 };
+
+const CLI_BIND_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Subcommand)]
 pub enum AxloaderCommand {
@@ -42,14 +44,7 @@ pub async fn execute(command: AxloaderCommand) -> anyhow::Result<()> {
     let client = Client::builder()
         .timeout(Duration::from_secs(300))
         .build()?;
-    let observed: LoaderDeviceStatus = client
-        .get(format!("{device}/api/v1/status"))
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let mut observed = fetch_status(&client, &device).await?;
     ensure!(
         observed.protocol_version == DEVICE_PROTOCOL_VERSION,
         "automatic serial requires axloader v6; upgrade this device"
@@ -82,39 +77,77 @@ pub async fn execute(command: AxloaderCommand) -> anyhow::Result<()> {
         println!("X-Serial-Binding: {}", binding.binding_id);
         return Ok(());
     };
-    ensure!(
-        serial.ready,
-        "automatic serial unavailable: {:?}",
-        serial.error
-    );
-    let parameters = serial
-        .parameters
-        .context("device UART parameters are unknown")?;
-    ostool_serial::validate_host_parameters(parameters)?;
     let kernel = tokio::fs::read(kernel).await?;
     let initramfs = match initramfs {
         Some(path) => Some(tokio::fs::read(path).await?),
         None => None,
     };
     let manager = SerialManager::new(Arc::new(NativeBackend));
-    let owner = binding.binding_id.clone();
-    let mut lease = manager
-        .bind(BindRequest {
-            owner: owner.clone(),
-            generation: 1,
-            mac_address: observed.mac_address,
-            boot_epoch: observed.boot_epoch.clone(),
-            serial_id: binding.serial_id.clone(),
-            parameters,
-            deadline: Instant::now() + Duration::from_secs(60),
-        })
-        .await?;
+    let cli_deadline = Instant::now() + CLI_BIND_TIMEOUT;
+    let mut generation = 0_u64;
+    let (binding, parameters, mut lease, owner) = loop {
+        let serial = observed
+            .serial
+            .as_ref()
+            .context("device did not report serial status")?;
+        if !serial.ready {
+            if Instant::now() >= cli_deadline {
+                anyhow::bail!(
+                    "automatic serial unavailable before deadline: {:?}",
+                    serial.error
+                );
+            }
+            sleep(Duration::from_millis(250)).await;
+            observed = fetch_status(&client, &device).await?;
+            ensure_v6(&observed)?;
+            continue;
+        }
+        let parameters = serial
+            .parameters
+            .context("device UART parameters are unknown")?;
+        ostool_serial::validate_host_parameters(parameters)?;
+        binding = SerialBinding {
+            serial_id: serial.serial_id.clone(),
+            binding_id: format!("{:032x}", binding_nonce()),
+            mode: SerialBindingMode::Bound,
+        };
+        let owner = binding.binding_id.clone();
+        generation = generation
+            .checked_add(1)
+            .context("serial binding generation exhausted")?;
+        let remaining = cli_deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            anyhow::bail!("serial identity did not become available before deadline");
+        }
+        match manager
+            .bind(BindRequest {
+                owner: owner.clone(),
+                generation,
+                mac_address: observed.mac_address,
+                boot_epoch: observed.boot_epoch.clone(),
+                serial_id: binding.serial_id.clone(),
+                parameters,
+                deadline: Instant::now() + remaining.min(Duration::from_secs(5)),
+            })
+            .await
+        {
+            Ok(lease) => break (binding, parameters, lease, owner),
+            Err(error) if retryable_bind_error(&error) => {
+                if Instant::now() >= cli_deadline {
+                    anyhow::bail!("serial identity discovery failed before deadline: {error}");
+                }
+                sleep(Duration::from_millis(250)).await;
+                observed = fetch_status(&client, &device).await?;
+                ensure_v6(&observed)?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
     println!(
         "Serial identity verified on {} with {:?}",
         lease.locator().name,
         parameters
     );
-    binding.mode = SerialBindingMode::Bound;
     if let Err(error) = grant(&client, &device, &observed.boot_epoch, &binding).await {
         drop(lease);
         manager.wait_owner_released(&owner).await?;
@@ -231,6 +264,33 @@ pub async fn execute(command: AxloaderCommand) -> anyhow::Result<()> {
         .await;
     result
 }
+
+async fn fetch_status(client: &Client, device: &str) -> anyhow::Result<LoaderDeviceStatus> {
+    Ok(client
+        .get(format!("{device}/api/v1/status"))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?)
+}
+
+fn ensure_v6(status: &LoaderDeviceStatus) -> anyhow::Result<()> {
+    ensure!(
+        status.protocol_version == DEVICE_PROTOCOL_VERSION,
+        "automatic serial requires axloader v6; upgrade this device"
+    );
+    Ok(())
+}
+
+fn retryable_bind_error(error: &BindError) -> bool {
+    matches!(
+        error,
+        BindError::Timeout | BindError::DiscoveryFailed(_) | BindError::Busy | BindError::Io(_)
+    )
+}
+
 fn image(bytes: &[u8]) -> DeviceBootImage {
     DeviceBootImage {
         size: bytes.len() as u64,

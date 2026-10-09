@@ -281,7 +281,7 @@ impl SessionSerialRuntime {
                             self.reject_bind(
                                 state,
                                 &device,
-                                reply,
+                                Some(reply),
                                 &mut deadline,
                                 anyhow::anyhow!("device has no v6 serial parameters"),
                             );
@@ -291,7 +291,7 @@ impl SessionSerialRuntime {
                             self.reject_bind(
                                 state,
                                 &device,
-                                reply,
+                                Some(reply),
                                 &mut deadline,
                                 anyhow::anyhow!("automatic serial unavailable: {:?}", serial.error),
                             );
@@ -313,7 +313,7 @@ impl SessionSerialRuntime {
                             self.reject_bind(
                                 state,
                                 &device,
-                                reply,
+                                Some(reply),
                                 &mut deadline,
                                 anyhow::anyhow!("{error}"),
                             );
@@ -324,7 +324,13 @@ impl SessionSerialRuntime {
                             crate::config::PowerManagementConfig::Qemu { .. }
                         ) && let Err(error) = ostool_serial::validate_host_parameters(parameters)
                         {
-                            self.reject_bind(state, &device, reply, &mut deadline, error.into());
+                            self.reject_bind(
+                                state,
+                                &device,
+                                Some(reply),
+                                &mut deadline,
+                                error.into(),
+                            );
                             continue;
                         }
                         if let Some(c) = current.as_ref()
@@ -384,7 +390,25 @@ impl SessionSerialRuntime {
                 },
                 RuntimeEvent::Opened(result) => {
                     opening = None;
-                    let io = (*result)?;
+                    let io = match *result {
+                        Ok(io) => io,
+                        Err(error) if is_recoverable_bind_error(&error) => {
+                            let Some(c) = current.take() else {
+                                continue;
+                            };
+                            state.serial_manager.invalidate(c.device.mac_address);
+                            verifying_until = None;
+                            self.reject_bind(
+                                state,
+                                &c.device,
+                                c.reply,
+                                &mut deadline,
+                                anyhow::anyhow!("{error}"),
+                            );
+                            continue;
+                        }
+                        Err(error) => return Err(error.into()),
+                    };
                     let c = current.as_mut().context("missing binding attempt")?;
                     let status = SerialRuntimeStatus {
                         phase: SerialRuntimePhase::Verifying,
@@ -479,7 +503,7 @@ impl SessionSerialRuntime {
         &self,
         state: &AppState,
         device: &LoaderDeviceStatus,
-        reply: oneshot::Sender<anyhow::Result<SerialBinding>>,
+        reply: Option<oneshot::Sender<anyhow::Result<SerialBinding>>>,
         deadline: &mut Instant,
         error: anyhow::Error,
     ) {
@@ -489,16 +513,34 @@ impl SessionSerialRuntime {
         *deadline = Instant::now() + SERIAL_BIND_TIMEOUT;
         let mut status = self.snapshot();
         status.phase = SerialRuntimePhase::Recovering;
+        status.port = None;
+        status.binding_id = None;
         status.boot_epoch = Some(device.boot_epoch.clone());
         status.parameters = device.serial.as_ref().and_then(|serial| serial.parameters);
+        status.warning = device
+            .serial
+            .as_ref()
+            .and_then(|serial| serial.error.clone());
         status.error = Some(format!("{error:#}"));
         self.publish(state, status);
-        let _ = reply.send(Err(error));
+        if let Some(reply) = reply {
+            let _ = reply.send(Err(error));
+        }
     }
     fn publish(&self, state: &AppState, status: SerialRuntimeStatus) {
         self.status.send_replace(status);
         state.admin_events.invalidate(&["sessions"]);
     }
+}
+
+fn is_recoverable_bind_error(error: &ostool_serial::BindError) -> bool {
+    matches!(
+        error,
+        ostool_serial::BindError::Timeout
+            | ostool_serial::BindError::DiscoveryFailed(_)
+            | ostool_serial::BindError::Busy
+            | ostool_serial::BindError::Io(_)
+    )
 }
 
 trait BootConfigExt {
