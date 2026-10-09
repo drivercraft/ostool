@@ -277,6 +277,22 @@ impl SessionSerialRuntime {
                             continue;
                         }
                         power_wait = true;
+                        if device.boot_epoch.is_empty() {
+                            let active = active_binding_status(
+                                lease.as_ref(),
+                                current.as_ref(),
+                                Some(device.boot_epoch.as_str()),
+                            );
+                            self.reject_bind(
+                                state,
+                                &device,
+                                Some(reply),
+                                active,
+                                &mut deadline,
+                                anyhow::anyhow!("invalid device boot epoch"),
+                            );
+                            continue;
+                        }
                         let Some(serial) = device.serial.as_ref() else {
                             let active = active_binding_status(
                                 lease.as_ref(),
@@ -293,6 +309,22 @@ impl SessionSerialRuntime {
                             );
                             continue;
                         };
+                        if !httpboot_protocol::valid_serial_id(&serial.serial_id) {
+                            let active = active_binding_status(
+                                lease.as_ref(),
+                                current.as_ref(),
+                                Some(device.boot_epoch.as_str()),
+                            );
+                            self.reject_bind(
+                                state,
+                                &device,
+                                Some(reply),
+                                active,
+                                &mut deadline,
+                                anyhow::anyhow!("invalid device serial identity"),
+                            );
+                            continue;
+                        }
                         if !serial.ready {
                             let active = active_binding_status(
                                 lease.as_ref(),

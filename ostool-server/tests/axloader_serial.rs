@@ -324,6 +324,66 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
     .await
     .unwrap_err();
     assert!(format!("{error:#}").contains("automatic serial unavailable"));
+    {
+        let mut d = device.lock().await;
+        let mut serial = serial_status(0, 57600);
+        serial.serial_id = "not-a-serial-id".into();
+        d.status.serial = Some(serial);
+    }
+    let malformed_identity = LoaderAnnouncement {
+        protocol_version: DEVICE_PROTOCOL_VERSION,
+        mac_address: mac,
+        current_mac_address: mac,
+        arch: BootArch::X86_64,
+        loader_version: "test-v6".into(),
+        boot_epoch: format!("{:032x}", 0),
+        http_port: device_port,
+        serial_id: Some("not-a-serial-id".into()),
+        serial_ready: true,
+    };
+    let malformed_error = ostool_server::device::reconcile(
+        state.clone(),
+        malformed_identity,
+        "127.0.0.1:12345".parse().unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{malformed_error:#}").contains("invalid device serial identity"));
+    assert_eq!(
+        session.serial_runtime.snapshot().phase,
+        ostool_server::serial::runtime::SerialRuntimePhase::Recovering
+    );
+    assert!(!session.is_stop_requested());
+    {
+        let mut d = device.lock().await;
+        d.status.boot_epoch.clear();
+        d.status.serial = Some(serial_status(0, 57600));
+    }
+    let missing_epoch = LoaderAnnouncement {
+        protocol_version: DEVICE_PROTOCOL_VERSION,
+        mac_address: mac,
+        current_mac_address: mac,
+        arch: BootArch::X86_64,
+        loader_version: "test-v6".into(),
+        boot_epoch: String::new(),
+        http_port: device_port,
+        serial_id: Some(format!("{:032x}", 0)),
+        serial_ready: true,
+    };
+    let missing_epoch_error = ostool_server::device::reconcile(
+        state.clone(),
+        missing_epoch,
+        "127.0.0.1:12345".parse().unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{missing_epoch_error:#}").contains("invalid device boot epoch"));
+    assert!(!session.is_stop_requested());
+    {
+        let mut d = device.lock().await;
+        d.status.boot_epoch = format!("{:032x}", 0);
+        d.status.serial = Some(serial_status(0, 57600));
+    }
     for (n, baud) in [(1, 57600), (2, 115200)] {
         if n == 2 {
             state
