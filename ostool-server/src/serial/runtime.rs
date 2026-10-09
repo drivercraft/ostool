@@ -278,7 +278,11 @@ impl SessionSerialRuntime {
                         }
                         power_wait = true;
                         let Some(serial) = device.serial.as_ref() else {
-                            let active = active_binding_status(lease.as_ref(), current.as_ref());
+                            let active = active_binding_status(
+                                lease.as_ref(),
+                                current.as_ref(),
+                                Some(device.boot_epoch.as_str()),
+                            );
                             self.reject_bind(
                                 state,
                                 &device,
@@ -290,7 +294,11 @@ impl SessionSerialRuntime {
                             continue;
                         };
                         if !serial.ready {
-                            let active = active_binding_status(lease.as_ref(), current.as_ref());
+                            let active = active_binding_status(
+                                lease.as_ref(),
+                                current.as_ref(),
+                                Some(device.boot_epoch.as_str()),
+                            );
                             self.reject_bind(
                                 state,
                                 &device,
@@ -314,7 +322,11 @@ impl SessionSerialRuntime {
                         );
                         let warning = serial.error.clone();
                         if let Err(error) = parameters.validate() {
-                            let active = active_binding_status(lease.as_ref(), current.as_ref());
+                            let active = active_binding_status(
+                                lease.as_ref(),
+                                current.as_ref(),
+                                Some(device.boot_epoch.as_str()),
+                            );
                             self.reject_bind(
                                 state,
                                 &device,
@@ -330,7 +342,11 @@ impl SessionSerialRuntime {
                             crate::config::PowerManagementConfig::Qemu { .. }
                         ) && let Err(error) = ostool_serial::validate_host_parameters(parameters)
                         {
-                            let active = active_binding_status(lease.as_ref(), current.as_ref());
+                            let active = active_binding_status(
+                                lease.as_ref(),
+                                current.as_ref(),
+                                Some(device.boot_epoch.as_str()),
+                            );
                             self.reject_bind(
                                 state,
                                 &device,
@@ -401,7 +417,13 @@ impl SessionSerialRuntime {
                     let io = match *result {
                         Ok(io) => io,
                         Err(error) if is_recoverable_bind_error(&error) => {
-                            let active = active_binding_status(lease.as_ref(), current.as_ref());
+                            let active = active_binding_status(
+                                lease.as_ref(),
+                                current.as_ref(),
+                                current
+                                    .as_ref()
+                                    .map(|attempt| attempt.device.boot_epoch.as_str()),
+                            );
                             let Some(c) = current.take() else {
                                 continue;
                             };
@@ -553,10 +575,15 @@ struct ActiveBindingStatus {
 fn active_binding_status(
     lease: Option<&SerialLease>,
     current: Option<&BindingAttempt>,
+    boot_epoch: Option<&str>,
 ) -> ActiveBindingStatus {
     ActiveBindingStatus {
         port: lease.map(|lease| lease.locator().name.clone()),
-        binding_id: lease.and_then(|_| current.map(|attempt| attempt.binding.binding_id.clone())),
+        binding_id: lease.and_then(|_| {
+            current
+                .filter(|attempt| Some(attempt.device.boot_epoch.as_str()) == boot_epoch)
+                .map(|attempt| attempt.binding.binding_id.clone())
+        }),
     }
 }
 
