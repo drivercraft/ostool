@@ -3,7 +3,7 @@ use anyhow::{Context, ensure};
 use clap::Subcommand;
 use httpboot_protocol::{
     DEVICE_PROTOCOL_VERSION, DeviceBootImage, DeviceBootJob, LoaderDeviceStatus, SerialBinding,
-    SerialBindingMode,
+    SerialBindingMode, SerialParameters,
 };
 use ostool_serial::{BindError, BindRequest, NativeBackend, SerialManager};
 use reqwest::Client;
@@ -102,9 +102,7 @@ pub async fn execute(command: AxloaderCommand) -> anyhow::Result<()> {
             ensure_v6(&observed)?;
             continue;
         }
-        let parameters = serial
-            .parameters
-            .context("device UART parameters are unknown")?;
+        let parameters = effective_parameters(serial.parameters);
         ostool_serial::validate_host_parameters(parameters)?;
         binding = SerialBinding {
             serial_id: serial.serial_id.clone(),
@@ -284,6 +282,10 @@ fn ensure_v6(status: &LoaderDeviceStatus) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn effective_parameters(reported: Option<SerialParameters>) -> SerialParameters {
+    reported.unwrap_or_default()
+}
+
 fn retryable_bind_error(error: &BindError) -> bool {
     matches!(
         error,
@@ -298,6 +300,22 @@ fn image(bytes: &[u8]) -> DeviceBootImage {
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effective_parameters;
+    use httpboot_protocol::{SerialFlowControl, SerialParity, SerialStopBits};
+
+    #[test]
+    fn missing_firmware_parameters_use_protocol_defaults() {
+        let parameters = effective_parameters(None);
+        assert_eq!(parameters.baud_rate, 115_200);
+        assert_eq!(parameters.data_bits, 8);
+        assert_eq!(parameters.parity, SerialParity::None);
+        assert_eq!(parameters.stop_bits, SerialStopBits::One);
+        assert_eq!(parameters.flow_control, SerialFlowControl::None);
     }
 }
 fn binding_nonce() -> u128 {

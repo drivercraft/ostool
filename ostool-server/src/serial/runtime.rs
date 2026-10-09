@@ -84,7 +84,7 @@ impl SessionSerialRuntime {
             return;
         }
         let epoch = self.snapshot().boot_epoch;
-        if epoch.is_some() {
+        if epoch.as_deref().is_some_and(|epoch| !epoch.is_empty()) {
             *self.retired_epoch.lock().expect("serial epoch lock") = epoch;
         }
         let (reply, rx) = oneshot::channel();
@@ -580,7 +580,9 @@ impl SessionSerialRuntime {
         status.phase = SerialRuntimePhase::Recovering;
         status.port = active.port;
         status.binding_id = active.binding_id;
-        status.boot_epoch = Some(device.boot_epoch.clone());
+        if !device.boot_epoch.is_empty() {
+            status.boot_epoch = Some(device.boot_epoch.clone());
+        }
         status.parameters = device.serial.as_ref().and_then(|serial| serial.parameters);
         status.warning = device
             .serial
