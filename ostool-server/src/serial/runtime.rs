@@ -20,6 +20,8 @@ use tokio::{
     time::Instant,
 };
 
+const SERIAL_BIND_TIMEOUT: Duration = Duration::from_secs(60);
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SerialRuntimeStatus {
     pub phase: SerialRuntimePhase,
@@ -240,7 +242,7 @@ impl SessionSerialRuntime {
                         opening = None;
                         verifying_until = None;
                         power_wait = powered;
-                        deadline = Instant::now() + Duration::from_secs(60);
+                        deadline = Instant::now() + SERIAL_BIND_TIMEOUT;
                         self.publish(
                             state,
                             SerialRuntimeStatus {
@@ -275,6 +277,11 @@ impl SessionSerialRuntime {
                             continue;
                         }
                         power_wait = true;
+                        // Each valid device report is progress.  Refresh the wait
+                        // window before handling recoverable reports such as
+                        // `ready = false`, so repeated diagnostics do not expire
+                        // the session while axloader is still booting.
+                        deadline = Instant::now() + SERIAL_BIND_TIMEOUT;
                         let Some(serial) = device.serial.as_ref() else {
                             self.reject_bind(
                                 state,
@@ -342,7 +349,7 @@ impl SessionSerialRuntime {
                             warning,
                             reply: Some(reply),
                         });
-                        deadline = Instant::now() + Duration::from_secs(60);
+                        deadline = Instant::now() + SERIAL_BIND_TIMEOUT;
                         let c = current.as_ref().expect("current attempt");
                         if let Some(io) = lease.as_mut() {
                             if io.configure(parameters).is_err() {

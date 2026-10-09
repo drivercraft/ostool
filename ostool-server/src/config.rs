@@ -548,6 +548,15 @@ impl BoardConfig {
             && let Some(parameters) = profile.serial_parameters
         {
             parameters.validate()?;
+            if !matches!(self.power_management, PowerManagementConfig::Qemu { .. }) {
+                ostool_serial::validate_host_parameters(parameters.into_protocol()).map_err(
+                    |error| {
+                        anyhow::anyhow!(
+                            "boot.serial_parameters is unsupported by the host serial backend: {error}"
+                        )
+                    },
+                )?;
+            }
         }
         if let PowerManagementConfig::Qemu { virtual_device_id } = &self.power_management {
             if !matches!(self.boot, BootConfig::UefiHttp(_)) {
@@ -1257,6 +1266,45 @@ bootm_addr = "0x82200000"
         };
         assert_eq!(profile.serial_parameters, Some(parameters));
         assert_eq!(parameters.into_protocol().baud_rate, 921_600);
+    }
+
+    #[test]
+    fn physical_httpboot_rejects_host_unsupported_serial_modes() {
+        let mut board = BoardConfig {
+            id: "uefi-http-serial-invalid".into(),
+            board_type: "x86_64-uefi-http".into(),
+            tags: vec![],
+            serial: None,
+            power_management: PowerManagementConfig::Custom(CustomPowerManagement {
+                power_on_cmd: "true".into(),
+                power_off_cmd: "true".into(),
+            }),
+            boot: BootConfig::UefiHttp(UefiHttpProfile {
+                boot_arch: Some(UefiBootArch::X86_64),
+                serial_parameters: Some(AxloaderSerialParameters {
+                    baud_rate: 115_200,
+                    data_bits: 8,
+                    parity: AxloaderSerialParity::Mark,
+                    stop_bits: AxloaderSerialStopBits::One,
+                    flow_control: AxloaderSerialFlowControl::None,
+                }),
+            }),
+            network_identity: Some(BoardNetworkIdentity {
+                mac_address: "02:00:00:00:00:01".parse().unwrap(),
+            }),
+            notes: None,
+            disabled: false,
+        };
+        let error = board.validate().unwrap_err().to_string();
+        assert!(error.contains("unsupported by the host serial backend"));
+
+        if let BootConfig::UefiHttp(profile) = &mut board.boot {
+            profile.serial_parameters.as_mut().unwrap().parity = AxloaderSerialParity::None;
+            profile.serial_parameters.as_mut().unwrap().stop_bits =
+                AxloaderSerialStopBits::OnePointFive;
+        }
+        let error = board.validate().unwrap_err().to_string();
+        assert!(error.contains("unsupported by the host serial backend"));
     }
 
     #[test]

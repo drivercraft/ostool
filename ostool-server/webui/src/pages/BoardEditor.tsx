@@ -318,8 +318,6 @@ function Editor({ board }: { board?: BoardConfig }) {
                     { value: "none", label: "无" },
                     { value: "odd", label: "奇校验" },
                     { value: "even", label: "偶校验" },
-                    { value: "mark", label: "Mark" },
-                    { value: "space", label: "Space" },
                   ]}
                 />
                 <SelectField
@@ -333,7 +331,6 @@ function Editor({ board }: { board?: BoardConfig }) {
                   }
                   options={[
                     { value: "one", label: "1" },
-                    { value: "one_point_five", label: "1.5" },
                     { value: "two", label: "2" },
                   ]}
                 />

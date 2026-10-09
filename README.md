@@ -15,7 +15,7 @@
 
 ## 📖 项目简介
 
-axloader 网络控制（v2/v3/v4 旧协议兼容及 v5 设备 HTTP 接口）、持久 MAC 绑定、Web 管理、内建 QEMU 虚拟板和本地真实 FAT 磁盘验证设计见 [docs/axloader-network-control.md](docs/axloader-network-control.md)，完整接口契约见 [docs/api.md](docs/api.md)。
+axloader 网络控制（v6 串口自动绑定、v5 设备识别与 OTA、v2/v3/v4 旧识别与升级入口）、持久 MAC 绑定、Web 管理、内建 QEMU 虚拟板和本地真实 FAT 磁盘验证设计见 [docs/axloader-network-control.md](docs/axloader-network-control.md)，完整接口契约见 [docs/api.md](docs/api.md)。
 
 管理后台位于 `/admin/`，使用 React + shadcn/ui。新建开发板时可先选择电源模块并手动上电，再从实时发现列表选择或手工填写 MAC；保存后完成绑定。全部管理页面采用 SSE 推送更新，断线重连保留页面与编辑草稿。详见 [管理界面与事件协议](docs/admin-ui.md)。
 不兼容的板卡 TOML 会在启动时移入板卡目录下的 `quarantine/`，保留原文件和原因，其余有效板卡继续加载。
@@ -333,7 +333,7 @@ interface = "eth0"
 board_ip = "192.168.1.100"
 ```
 
-`BootPayloadConfig` 的 `cmdline` 与 `initramfs` 相互独立且都可省略；它们是 QEMU、board 与 U-Boot 的顶层运行配置，不属于构建配置。`initramfs` 是宿主归档，与 Linux guest 的 initrd 分开配置。QEMU 直启仅在 AArch64/RISC-V 路径使用 `-initrd` 和 `-append`；x86 使用 UEFI ESP 中的 `EFI/BOOT/initramfs.cpio`、`cmdline.txt`，不向裸 ELF 传 Linux x86 启动协议参数。U-Boot 的 `generate_fit_image()` 将归档作为 FIT ramdisk，并在启动前设置 `bootargs`；生成 FIT 前会清除输入 DTB 中遗留的 `linux,initrd-start/end` 及与其完全对应的内存预留；若 FIT 包含 ramdisk，U-Boot 会写入本次启动的实际范围。串口命令路径暂不接受含单引号的 `cmdline`。board HTTP Boot 将归档和内核上传到同一 session，服务端记录归档大小与 SHA-256。v5 设备由服务端把兼容入口转换为 `__x86_64_efi_pe_entry` 后反向推送，cmdline 通过 EFI LoadOptions、initramfs 通过 TGOS `BootPayload` 交接；v2/v3/v4 poll 仍收到原 `httpboot_entry`。归档上限为 256 MiB，cmdline 上限为 4095 字节且仅允许可打印 ASCII 和空格。服务端仍允许 v2 loader 启动两个新字段均未配置的旧会话，遇到任一新字段则在 poll 阶段明确拒绝。实体板卡的固件和内核须实现对应交接协议。
+`BootPayloadConfig` 的 `cmdline` 与 `initramfs` 相互独立且都可省略；它们是 QEMU、board 与 U-Boot 的顶层运行配置，不属于构建配置。`initramfs` 是宿主归档，与 Linux guest 的 initrd 分开配置。QEMU 直启仅在 AArch64/RISC-V 路径使用 `-initrd` 和 `-append`；x86 使用 UEFI ESP 中的 `EFI/BOOT/initramfs.cpio`、`cmdline.txt`，不向裸 ELF 传 Linux x86 启动协议参数。U-Boot 的 `generate_fit_image()` 将归档作为 FIT ramdisk，并在启动前设置 `bootargs`；生成 FIT 前会清除输入 DTB 中遗留的 `linux,initrd-start/end` 及与其完全对应的内存预留；若 FIT 包含 ramdisk，U-Boot 会写入本次启动的实际范围。串口命令路径暂不接受含单引号的 `cmdline`。board HTTP Boot 将归档和内核上传到同一 session，服务端记录归档大小与 SHA-256。v5 设备保留识别与 OTA；v6 设备由服务端先按本次上报的 UART 参数确认串口身份，再以绑定令牌放行启动，兼容入口转换为 `__x86_64_efi_pe_entry`，cmdline 通过 EFI LoadOptions、initramfs 通过 TGOS `BootPayload` 交接。v2/v3/v4 poll 保留识别与升级用途，普通启动统一返回 `serial_protocol_upgrade_required`。归档上限为 256 MiB，cmdline 上限为 4095 字节且仅允许可打印 ASCII 和空格。实体板卡的固件和内核须实现对应交接协议。
 
 ### 有序 Shell 初始化步骤
 
