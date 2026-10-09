@@ -365,9 +365,20 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
                 .unwrap_err();
             assert!(format!("{error:#}").contains("serial binding"));
             assert!(!session.is_stop_requested());
+            assert!(!session.is_releasing());
             assert_eq!(
                 session.serial_runtime.snapshot().phase,
                 ostool_server::serial::runtime::SerialRuntimePhase::Recovering
+            );
+            assert!(
+                state
+                    .tftp_manager
+                    .read()
+                    .await
+                    .get_session_file(&created.id, "kernel.elf")
+                    .await
+                    .unwrap()
+                    .is_some()
             );
             wait_snapshot(&state.serial_manager, |s| {
                 s.pending == 0 && s.candidates == 0 && s.leased == 0
