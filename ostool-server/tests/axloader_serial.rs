@@ -348,11 +348,54 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
             serial_ready: true,
         };
         let s = state.clone();
-        let operation = tokio::spawn(async move {
+        let mut operation = tokio::spawn(async move {
             ostool_server::device::reconcile(s, announcement, "127.0.0.1:12345".parse().unwrap())
                 .await
         });
         wait_config(&mut configs, &path, 38_400).await;
+        if n == 1 {
+            // The manager's discovery window is deliberately shorter than the
+            // session wait deadline. A missing identity frame must recover the
+            // runtime, rather than request session shutdown, so a later
+            // broadcast can retry the same boot epoch.
+            let error = tokio::time::timeout(Duration::from_secs(10), &mut operation)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+            assert!(format!("{error:#}").contains("serial binding"));
+            assert!(!session.is_stop_requested());
+            assert_eq!(
+                session.serial_runtime.snapshot().phase,
+                ostool_server::serial::runtime::SerialRuntimePhase::Recovering
+            );
+            wait_snapshot(&state.serial_manager, |s| {
+                s.pending == 0 && s.candidates == 0 && s.leased == 0
+            })
+            .await;
+
+            let retry_state = state.clone();
+            let retry_announcement = LoaderAnnouncement {
+                protocol_version: DEVICE_PROTOCOL_VERSION,
+                mac_address: mac,
+                current_mac_address: mac,
+                arch: BootArch::X86_64,
+                loader_version: "test-v6".into(),
+                boot_epoch: format!("{n:032x}"),
+                http_port: device_port,
+                serial_id: Some(format!("{n:032x}")),
+                serial_ready: true,
+            };
+            operation = tokio::spawn(async move {
+                ostool_server::device::reconcile(
+                    retry_state,
+                    retry_announcement,
+                    "127.0.0.1:12345".parse().unwrap(),
+                )
+                .await
+            });
+            wait_config(&mut configs, &path, 38_400).await;
+        }
         device
             .lock()
             .await
@@ -388,6 +431,65 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
         })
         .await;
         assert_eq!(u64::from(actual_baud(&inspection)), 38_400);
+        if n == 1 {
+            let bound = session.serial_runtime.snapshot();
+            let bound_binding_id = bound.binding_id.clone().unwrap();
+            assert_eq!(bound.port.as_deref(), Some(path.as_str()));
+
+            // A transient device-side not-ready report must preserve the
+            // still-live lease identity in the public runtime status.
+            {
+                let mut d = device.lock().await;
+                let mut serial = serial_status(n, 230400);
+                serial.ready = false;
+                serial.error = Some("UART is temporarily unavailable".into());
+                d.status.serial = Some(serial);
+            }
+            let unavailable = LoaderAnnouncement {
+                protocol_version: DEVICE_PROTOCOL_VERSION,
+                mac_address: mac,
+                current_mac_address: mac,
+                arch: BootArch::X86_64,
+                loader_version: "test-v6".into(),
+                boot_epoch: format!("{n:032x}"),
+                http_port: device_port,
+                serial_id: Some(format!("{n:032x}")),
+                serial_ready: false,
+            };
+            let unavailable_error = ostool_server::device::reconcile(
+                state.clone(),
+                unavailable,
+                "127.0.0.1:12345".parse().unwrap(),
+            )
+            .await
+            .unwrap_err();
+            assert!(format!("{unavailable_error:#}").contains("automatic serial unavailable"));
+            let recovering = session.serial_runtime.snapshot();
+            assert_eq!(
+                recovering.phase,
+                ostool_server::serial::runtime::SerialRuntimePhase::Recovering
+            );
+            assert_eq!(recovering.port.as_deref(), Some(path.as_str()));
+            assert_eq!(
+                recovering.binding_id.as_deref(),
+                Some(bound_binding_id.as_str())
+            );
+            assert!(!session.is_stop_requested());
+            assert!(
+                state
+                    .tftp_manager
+                    .read()
+                    .await
+                    .get_session_file(&created.id, "kernel.elf")
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+            {
+                let mut d = device.lock().await;
+                d.status.serial = Some(serial_status(n, baud));
+            }
+        }
     }
     {
         let mut d = device.lock().await;

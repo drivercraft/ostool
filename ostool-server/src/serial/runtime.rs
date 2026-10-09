@@ -278,20 +278,24 @@ impl SessionSerialRuntime {
                         }
                         power_wait = true;
                         let Some(serial) = device.serial.as_ref() else {
+                            let active = active_binding_status(lease.as_ref(), current.as_ref());
                             self.reject_bind(
                                 state,
                                 &device,
                                 Some(reply),
+                                active,
                                 &mut deadline,
                                 anyhow::anyhow!("device has no v6 serial parameters"),
                             );
                             continue;
                         };
                         if !serial.ready {
+                            let active = active_binding_status(lease.as_ref(), current.as_ref());
                             self.reject_bind(
                                 state,
                                 &device,
                                 Some(reply),
+                                active,
                                 &mut deadline,
                                 anyhow::anyhow!("automatic serial unavailable: {:?}", serial.error),
                             );
@@ -310,10 +314,12 @@ impl SessionSerialRuntime {
                         );
                         let warning = serial.error.clone();
                         if let Err(error) = parameters.validate() {
+                            let active = active_binding_status(lease.as_ref(), current.as_ref());
                             self.reject_bind(
                                 state,
                                 &device,
                                 Some(reply),
+                                active,
                                 &mut deadline,
                                 anyhow::anyhow!("{error}"),
                             );
@@ -324,10 +330,12 @@ impl SessionSerialRuntime {
                             crate::config::PowerManagementConfig::Qemu { .. }
                         ) && let Err(error) = ostool_serial::validate_host_parameters(parameters)
                         {
+                            let active = active_binding_status(lease.as_ref(), current.as_ref());
                             self.reject_bind(
                                 state,
                                 &device,
                                 Some(reply),
+                                active,
                                 &mut deadline,
                                 error.into(),
                             );
@@ -393,6 +401,7 @@ impl SessionSerialRuntime {
                     let io = match *result {
                         Ok(io) => io,
                         Err(error) if is_recoverable_bind_error(&error) => {
+                            let active = active_binding_status(lease.as_ref(), current.as_ref());
                             let Some(c) = current.take() else {
                                 continue;
                             };
@@ -402,6 +411,7 @@ impl SessionSerialRuntime {
                                 state,
                                 &c.device,
                                 c.reply,
+                                active,
                                 &mut deadline,
                                 anyhow::anyhow!("{error}"),
                             );
@@ -504,6 +514,7 @@ impl SessionSerialRuntime {
         state: &AppState,
         device: &LoaderDeviceStatus,
         reply: Option<oneshot::Sender<anyhow::Result<SerialBinding>>>,
+        active: ActiveBindingStatus,
         deadline: &mut Instant,
         error: anyhow::Error,
     ) {
@@ -513,8 +524,8 @@ impl SessionSerialRuntime {
         *deadline = Instant::now() + SERIAL_BIND_TIMEOUT;
         let mut status = self.snapshot();
         status.phase = SerialRuntimePhase::Recovering;
-        status.port = None;
-        status.binding_id = None;
+        status.port = active.port;
+        status.binding_id = active.binding_id;
         status.boot_epoch = Some(device.boot_epoch.clone());
         status.parameters = device.serial.as_ref().and_then(|serial| serial.parameters);
         status.warning = device
@@ -530,6 +541,22 @@ impl SessionSerialRuntime {
     fn publish(&self, state: &AppState, status: SerialRuntimeStatus) {
         self.status.send_replace(status);
         state.admin_events.invalidate(&["sessions"]);
+    }
+}
+
+#[derive(Default)]
+struct ActiveBindingStatus {
+    port: Option<String>,
+    binding_id: Option<String>,
+}
+
+fn active_binding_status(
+    lease: Option<&SerialLease>,
+    current: Option<&BindingAttempt>,
+) -> ActiveBindingStatus {
+    ActiveBindingStatus {
+        port: lease.map(|lease| lease.locator().name.clone()),
+        binding_id: lease.and_then(|_| current.map(|attempt| attempt.binding.binding_id.clone())),
     }
 }
 
