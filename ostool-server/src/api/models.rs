@@ -86,6 +86,7 @@ pub struct SerialPortSummary {
     pub primary_key_kind: Option<SerialPortKeyKind>,
     pub primary_key_value: Option<String>,
     pub usb_path: Option<String>,
+    pub usb_id: Option<String>,
     pub stable_identity: bool,
     pub usb_vendor_id: Option<u16>,
     pub usb_product_id: Option<u16>,

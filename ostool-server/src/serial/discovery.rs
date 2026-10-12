@@ -12,6 +12,7 @@ use crate::{
 };
 
 const SERIAL_BY_PATH_DIR: &str = "/dev/serial/by-path";
+const SERIAL_BY_ID_DIR: &str = "/dev/serial/by-id";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct UsbDeviceRecord {
@@ -29,6 +30,7 @@ pub struct SerialPortRecord {
     pub primary_key_kind: Option<SerialPortKeyKind>,
     pub primary_key_value: Option<String>,
     pub usb_path: Option<String>,
+    pub usb_id: Option<String>,
     pub stable_identity: bool,
     pub usb_vendor_id: Option<u16>,
     pub usb_product_id: Option<u16>,
@@ -48,6 +50,7 @@ pub fn list_serial_ports() -> anyhow::Result<Vec<SerialPortSummary>> {
             primary_key_kind: record.primary_key_kind,
             primary_key_value: record.primary_key_value,
             usb_path: record.usb_path,
+            usb_id: record.usb_id,
             stable_identity: record.stable_identity,
             usb_vendor_id: record.usb_vendor_id,
             usb_product_id: record.usb_product_id,
@@ -71,23 +74,43 @@ fn resolve_serial_key_from_records(
     records: &[SerialPortRecord],
     key: &SerialPortKey,
 ) -> anyhow::Result<SerialPortRecord> {
-    if let Some(matched) = records.iter().find(|record| {
-        record.primary_key_kind == Some(key.kind.clone())
-            && record.primary_key_value.as_deref() == Some(key.value.as_str())
-    }) {
+    let mut matches = records.iter().filter(|record| {
+        let value = match key.kind {
+            SerialPortKeyKind::SerialNumber => record.serial_number.as_deref(),
+            SerialPortKeyKind::UsbId => record.usb_id.as_deref(),
+            SerialPortKeyKind::UsbPath => record.usb_path.as_deref(),
+            SerialPortKeyKind::Qemu => None,
+        };
+        value == Some(key.value.as_str())
+    });
+    if let Some(matched) = matches.next() {
+        if matches.next().is_some() {
+            return Err(anyhow::anyhow!(
+                "ambiguous serial device for {} `{}`; select an interface-specific usb_id or usb_path",
+                serial_key_kind_label(&key.kind),
+                key.value
+            ));
+        }
         return Ok(matched.clone());
     }
 
-    if key.kind == SerialPortKeyKind::UsbPath && Path::new(&key.value).exists() {
+    if matches!(
+        key.kind,
+        SerialPortKeyKind::UsbPath | SerialPortKeyKind::UsbId
+    ) && Path::new(&key.value).exists()
+    {
         return Ok(SerialPortRecord {
-            current_device_path: key.value.clone(),
+            current_device_path: fs::canonicalize(&key.value)
+                .unwrap_or_else(|_| PathBuf::from(&key.value))
+                .to_string_lossy()
+                .into_owned(),
             port_type: "usb".to_string(),
-            primary_key_kind: Some(SerialPortKeyKind::UsbPath),
+            primary_key_kind: Some(key.kind.clone()),
             primary_key_value: Some(key.value.clone()),
-            usb_path: key
-                .value
-                .starts_with(SERIAL_BY_PATH_DIR)
-                .then(|| key.value.clone()),
+            usb_path: (key.kind == SerialPortKeyKind::UsbPath)
+                .then(|| key.value.clone())
+                .filter(|value| value.starts_with(SERIAL_BY_PATH_DIR)),
+            usb_id: (key.kind == SerialPortKeyKind::UsbId).then(|| key.value.clone()),
             stable_identity: true,
             usb_vendor_id: None,
             usb_product_id: None,
@@ -107,6 +130,7 @@ fn resolve_serial_key_from_records(
 fn discover_serial_ports() -> anyhow::Result<Vec<SerialPortRecord>> {
     let usb_devices = load_usb_devices().unwrap_or_default();
     let by_path_map = load_usb_path_map();
+    let by_id_map = load_usb_id_map();
     let mut ports = serialport::available_ports()?
         .into_iter()
         .map(|port| match port.port_type {
@@ -122,22 +146,27 @@ fn discover_serial_ports() -> anyhow::Result<Vec<SerialPortRecord>> {
                     .and_then(|device| device.serial_number.clone())
                     .or(info.serial_number.clone());
                 let usb_path = by_path_map.get(port.port_name.as_str()).cloned();
-                let (primary_key_kind, primary_key_value) =
-                    if let Some(serial_number) = serial_number.clone() {
-                        (Some(SerialPortKeyKind::SerialNumber), Some(serial_number))
-                    } else if let Some(usb_path) = usb_path.clone() {
-                        (Some(SerialPortKeyKind::UsbPath), Some(usb_path))
-                    } else {
-                        (None, None)
-                    };
+                let usb_id = by_id_map.get(port.port_name.as_str()).cloned();
+                let (primary_key_kind, primary_key_value) = if let Some(usb_id) = usb_id.clone() {
+                    (Some(SerialPortKeyKind::UsbId), Some(usb_id))
+                } else if let Some(serial_number) = serial_number.clone() {
+                    (Some(SerialPortKeyKind::SerialNumber), Some(serial_number))
+                } else if let Some(usb_path) = usb_path.clone() {
+                    (Some(SerialPortKeyKind::UsbPath), Some(usb_path))
+                } else {
+                    (None, None)
+                };
 
                 SerialPortRecord {
                     current_device_path: port.port_name,
                     port_type: "usb".to_string(),
                     primary_key_kind,
                     primary_key_value,
-                    stable_identity: serial_number.is_some() || usb_path.is_some(),
+                    stable_identity: serial_number.is_some()
+                        || usb_path.is_some()
+                        || usb_id.is_some(),
                     usb_path,
+                    usb_id,
                     usb_vendor_id: Some(info.vid),
                     usb_product_id: Some(info.pid),
                     manufacturer,
@@ -152,6 +181,7 @@ fn discover_serial_ports() -> anyhow::Result<Vec<SerialPortRecord>> {
                 primary_key_value: None,
                 stable_identity: false,
                 usb_path: None,
+                usb_id: None,
                 usb_vendor_id: None,
                 usb_product_id: None,
                 manufacturer: None,
@@ -165,6 +195,7 @@ fn discover_serial_ports() -> anyhow::Result<Vec<SerialPortRecord>> {
                 primary_key_value: None,
                 stable_identity: false,
                 usb_path: None,
+                usb_id: None,
                 usb_vendor_id: None,
                 usb_product_id: None,
                 manufacturer: None,
@@ -178,6 +209,7 @@ fn discover_serial_ports() -> anyhow::Result<Vec<SerialPortRecord>> {
                 primary_key_value: None,
                 stable_identity: false,
                 usb_path: None,
+                usb_id: None,
                 usb_vendor_id: None,
                 usb_product_id: None,
                 manufacturer: None,
@@ -231,6 +263,30 @@ fn load_usb_path_map() -> BTreeMap<String, String> {
     by_path
 }
 
+fn load_usb_id_map() -> BTreeMap<String, String> {
+    load_serial_link_map(SERIAL_BY_ID_DIR)
+}
+
+fn load_serial_link_map(dir: &str) -> BTreeMap<String, String> {
+    let mut links = BTreeMap::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return links;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(target) = fs::read_link(&path) else {
+            continue;
+        };
+        let device_path = resolve_symlink_target(path.parent().unwrap_or(Path::new("/")), &target);
+        if let (Some(device_path), Some(link)) =
+            (device_path.and_then(path_to_string), path_to_string(path))
+        {
+            links.insert(device_path, link);
+        }
+    }
+    links
+}
+
 fn resolve_symlink_target(base_dir: &Path, target: &Path) -> Option<PathBuf> {
     let candidate = if target.is_absolute() {
         target.to_path_buf()
@@ -271,6 +327,7 @@ fn serial_port_label(record: &SerialPortRecord) -> String {
 fn serial_key_kind_short_label(kind: &SerialPortKeyKind) -> &'static str {
     match kind {
         SerialPortKeyKind::SerialNumber => "SN",
+        SerialPortKeyKind::UsbId => "USB ID",
         SerialPortKeyKind::UsbPath => "USB PATH",
         SerialPortKeyKind::Qemu => "QEMU",
     }
@@ -279,6 +336,7 @@ fn serial_key_kind_short_label(kind: &SerialPortKeyKind) -> &'static str {
 fn serial_key_kind_label(kind: &SerialPortKeyKind) -> &'static str {
     match kind {
         SerialPortKeyKind::SerialNumber => "serial number",
+        SerialPortKeyKind::UsbId => "usb id",
         SerialPortKeyKind::UsbPath => "usb path",
         SerialPortKeyKind::Qemu => "qemu virtual device",
     }
@@ -405,6 +463,7 @@ mod tests {
             primary_key_kind: Some(SerialPortKeyKind::SerialNumber),
             primary_key_value: Some("ABC123".into()),
             usb_path: Some("/dev/serial/by-path/demo".into()),
+            usb_id: None,
             stable_identity: true,
             usb_vendor_id: Some(0x0403),
             usb_product_id: Some(0x6001),
@@ -427,6 +486,7 @@ mod tests {
                 primary_key_kind: Some(SerialPortKeyKind::SerialNumber),
                 primary_key_value: Some("relay-123".into()),
                 usb_path: Some("/dev/serial/by-path/demo".into()),
+                usb_id: None,
                 stable_identity: true,
                 usb_vendor_id: Some(0x1a86),
                 usb_product_id: Some(0x7523),
@@ -453,6 +513,7 @@ mod tests {
                 primary_key_kind: Some(SerialPortKeyKind::UsbPath),
                 primary_key_value: Some("/dev/serial/by-path/relay".into()),
                 usb_path: Some("/dev/serial/by-path/relay".into()),
+                usb_id: None,
                 stable_identity: true,
                 usb_vendor_id: Some(0x0403),
                 usb_product_id: Some(0x6001),
@@ -468,6 +529,154 @@ mod tests {
         .unwrap();
 
         assert_eq!(resolved.current_device_path, "/dev/ttyUSB8");
+    }
+
+    #[test]
+    fn resolve_serial_key_matches_usb_id_record() {
+        let resolved = resolve_serial_key_from_records(
+            &[SerialPortRecord {
+                current_device_path: "/dev/ttyUSB9".into(),
+                port_type: "usb".into(),
+                primary_key_kind: Some(SerialPortKeyKind::UsbId),
+                primary_key_value: Some("/dev/serial/by-id/ftdi-if01".into()),
+                usb_path: None,
+                usb_id: Some("/dev/serial/by-id/ftdi-if01".into()),
+                stable_identity: true,
+                usb_vendor_id: Some(0x0403),
+                usb_product_id: Some(0x6011),
+                manufacturer: Some("FTDI".into()),
+                product: Some("FT4232H".into()),
+                serial_number: Some("FTB4GC1E".into()),
+            }],
+            &SerialPortKey {
+                kind: SerialPortKeyKind::UsbId,
+                value: "/dev/serial/by-id/ftdi-if01".into(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(resolved.current_device_path, "/dev/ttyUSB9");
+    }
+
+    fn multi_port_record(interface: u8) -> SerialPortRecord {
+        let usb_id = format!("/dev/serial/by-id/ftdi-if{interface:02}");
+        SerialPortRecord {
+            current_device_path: format!("/dev/ttyUSB{interface}"),
+            port_type: "usb".into(),
+            primary_key_kind: Some(SerialPortKeyKind::UsbId),
+            primary_key_value: Some(usb_id.clone()),
+            usb_path: Some(format!("/dev/serial/by-path/ftdi-if{interface:02}")),
+            usb_id: Some(usb_id),
+            stable_identity: true,
+            usb_vendor_id: Some(0x0403),
+            usb_product_id: Some(0x6011),
+            manufacturer: Some("FTDI".into()),
+            product: Some("FT4232H".into()),
+            serial_number: Some("FTB4GC1E".into()),
+        }
+    }
+
+    #[test]
+    fn resolve_serial_key_preserves_serial_number_with_usb_id_primary() {
+        let record = multi_port_record(1);
+        let resolved = resolve_serial_key_from_records(
+            std::slice::from_ref(&record),
+            &SerialPortKey {
+                kind: SerialPortKeyKind::SerialNumber,
+                value: "FTB4GC1E".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(resolved, record);
+    }
+
+    #[test]
+    fn resolve_serial_key_preserves_usb_path_with_usb_id_primary() {
+        let record = multi_port_record(1);
+        let resolved = resolve_serial_key_from_records(
+            std::slice::from_ref(&record),
+            &SerialPortKey {
+                kind: SerialPortKeyKind::UsbPath,
+                value: record.usb_path.clone().unwrap(),
+            },
+        )
+        .unwrap();
+        assert_eq!(resolved, record);
+    }
+
+    #[test]
+    fn resolve_serial_key_rejects_shared_serial_number_regardless_of_primary() {
+        let mut first = multi_port_record(0);
+        first.primary_key_kind = Some(SerialPortKeyKind::SerialNumber);
+        first.primary_key_value = first.serial_number.clone();
+        let second = multi_port_record(1);
+        for records in [vec![first.clone(), second.clone()], vec![second, first]] {
+            let err = resolve_serial_key_from_records(
+                &records,
+                &SerialPortKey {
+                    kind: SerialPortKeyKind::SerialNumber,
+                    value: "FTB4GC1E".into(),
+                },
+            )
+            .unwrap_err();
+            let message = err.to_string();
+            assert!(message.contains("ambiguous"));
+            assert!(message.contains("FTB4GC1E"));
+            assert!(message.contains("usb_id"));
+            assert!(message.contains("usb_path"));
+        }
+    }
+
+    #[test]
+    fn resolve_serial_key_selects_interface_with_shared_serial_number() {
+        let records = [multi_port_record(0), multi_port_record(1)];
+        for (kind, value) in [
+            (SerialPortKeyKind::UsbId, records[1].usb_id.clone().unwrap()),
+            (
+                SerialPortKeyKind::UsbPath,
+                records[1].usb_path.clone().unwrap(),
+            ),
+        ] {
+            let resolved =
+                resolve_serial_key_from_records(&records, &SerialPortKey { kind, value }).unwrap();
+            assert_eq!(resolved, records[1]);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_serial_key_falls_back_to_usb_id_symlink() {
+        let temp = tempdir().unwrap();
+        let device = temp.path().join("ttyUSB9");
+        let link = temp.path().join("ftdi-if01");
+        std::fs::write(&device, b"").unwrap();
+        std::os::unix::fs::symlink("ttyUSB9", &link).unwrap();
+        let resolved = resolve_serial_key_from_records(
+            &[],
+            &SerialPortKey {
+                kind: SerialPortKeyKind::UsbId,
+                value: link.display().to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            resolved.current_device_path,
+            device.canonicalize().unwrap().display().to_string()
+        );
+        assert_eq!(resolved.usb_id, Some(link.display().to_string()));
+        assert_eq!(resolved.primary_key_kind, Some(SerialPortKeyKind::UsbId));
+        assert!(resolved.stable_identity);
+        std::fs::remove_file(device).unwrap();
+        assert!(
+            resolve_serial_key_from_records(
+                &[],
+                &SerialPortKey {
+                    kind: SerialPortKeyKind::UsbId,
+                    value: link.display().to_string(),
+                },
+            )
+            .is_err()
+        );
     }
 
     #[test]

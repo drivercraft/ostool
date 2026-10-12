@@ -291,12 +291,18 @@ impl TransferGuard {
             ));
         }
         let counter = self.record.bytes(self.direction);
-        counter
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current.checked_add(count as u64)
-            })
-            .map(|_| ())
-            .map_err(|_| TestError::bad_request("test byte counter overflow"))
+        let increment = count as u64;
+        let mut current = counter.load(Ordering::Relaxed);
+        loop {
+            let Some(next) = current.checked_add(increment) else {
+                return Err(TestError::bad_request("test byte counter overflow"));
+            };
+            match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => return Ok(()),
+                Err(observed) => current = observed,
+            }
+        }
     }
 
     fn finish(&mut self, status: TransferStatus, error: Option<String>) {

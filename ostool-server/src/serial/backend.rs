@@ -35,6 +35,11 @@ impl SerialBackend for ServerSerialBackend {
                     {
                         port.aliases.push(alias);
                     }
+                    if let Some(alias) = record.usb_id
+                        && !port.aliases.contains(&alias)
+                    {
+                        port.aliases.push(alias);
+                    }
                 }
             }
             ports.extend(
@@ -82,6 +87,7 @@ pub fn locator_for_key(key: &SerialPortKey) -> anyhow::Result<PortLocator> {
     let canonical = std::fs::canonicalize(&resolved.current_device_path)?;
     let mut aliases = vec![key.value.clone(), resolved.current_device_path];
     aliases.extend(resolved.usb_path);
+    aliases.extend(resolved.usb_id);
     Ok(PortLocator {
         name: canonical.to_string_lossy().into_owned(),
         aliases,

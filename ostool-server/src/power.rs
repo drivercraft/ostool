@@ -116,6 +116,7 @@ async fn run_zhongsheng_relay_action(serial_port: &str, action: PowerAction) -> 
 fn relay_serial_key_kind_label(kind: &SerialPortKeyKind) -> &'static str {
     match kind {
         SerialPortKeyKind::SerialNumber => "serial number",
+        SerialPortKeyKind::UsbId => "usb id",
         SerialPortKeyKind::UsbPath => "usb path",
         SerialPortKeyKind::Qemu => "qemu virtual device",
     }
