@@ -654,7 +654,13 @@ function Editor({ board }: { board?: BoardConfig }) {
   );
 }
 function serialLabel(p: SerialPortSummary) {
-  return `${p.primary_key_kind === "serial_number" ? "SN" : "USB PATH"} ${p.primary_key_value ?? "无稳定标识"} · ${p.current_device_path} · ${p.manufacturer ?? ""} ${p.product ?? ""}`;
+  const kind =
+    p.primary_key_kind === "serial_number"
+      ? "SN"
+      : p.primary_key_kind === "usb_id"
+        ? "USB ID"
+        : "USB PATH";
+  return `${kind} ${p.primary_key_value ?? "无稳定标识"} · ${p.current_device_path} · ${p.manufacturer ?? ""} ${p.product ?? ""}`;
 }
 function SerialDetails({
   ports,
@@ -668,7 +674,7 @@ function SerialDetails({
   return (
     <p className="hint full-width">
       {p
-        ? `${p.usb_path ?? ""} · ${p.current_device_path} · ${p.manufacturer ?? ""} ${p.product ?? ""} · VID:PID ${p.usb_vendor_id?.toString(16) ?? "—"}:${p.usb_product_id?.toString(16) ?? "—"}`
+        ? `${p.usb_id ?? p.usb_path ?? ""} · ${p.current_device_path} · ${p.manufacturer ?? ""} ${p.product ?? ""} · VID:PID ${p.usb_vendor_id?.toString(16) ?? "—"}:${p.usb_product_id?.toString(16) ?? "—"}`
         : "当前未检测到该设备，保留稳定标识"}
     </p>
   );
