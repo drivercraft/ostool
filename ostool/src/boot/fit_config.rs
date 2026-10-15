@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -87,7 +87,8 @@ impl FitConfig {
                 bail!("FIT OS elf requires an explicit load address in safe staging memory")
             }
             FitAddress::Auto if self.format == FitFormat::Bin => {
-                let base = bin_load_base(metadata)?;
+                let base = bin_load_base(metadata)
+                    .context("cannot derive BIN FIT load address; set load explicitly")?;
                 if metadata
                     .executable_start
                     .is_some_and(|address| address != base)
@@ -99,7 +100,7 @@ impl FitConfig {
                 Ok(base)
             }
             FitAddress::Auto => {
-                let base = elf_load_base(metadata)?;
+                let base = elf_load_base(metadata).context("cannot derive ELF FIT load address")?;
                 if metadata
                     .executable_start
                     .is_some_and(|address| address != base)
@@ -126,7 +127,8 @@ impl FitConfig {
         }
         match self.entry {
             FitAddress::Explicit(address) => Ok(address),
-            FitAddress::Auto => direct_entry(metadata, load, self.format),
+            FitAddress::Auto => direct_entry(metadata, load, self.format)
+                .context("cannot derive FIT entry; set entry explicitly"),
         }
     }
 }
@@ -140,7 +142,7 @@ fn direct_entry(metadata: &ElfMetadata, load: u64, format: FitFormat) -> Result<
         FitFormat::Elf => elf_load_base(metadata)?,
     };
     if load != base {
-        bail!("cannot derive FIT entry for a relocated payload; set entry explicitly");
+        bail!("payload load address differs from its original base");
     }
     let mut found = false;
     for section in &metadata.load_sections {
@@ -153,17 +155,13 @@ fn direct_entry(metadata: &ElfMetadata, load: u64, format: FitFormat) -> Result<
                 )?
         {
             if section_lma(section, &metadata.load_segments)? != section.virtual_address {
-                bail!(
-                    "cannot derive FIT entry: ELF entry VMA differs from its LMA; set entry explicitly"
-                );
+                bail!("ELF entry VMA differs from its LMA");
             }
             found = true;
         }
     }
     if !found {
-        bail!(
-            "cannot derive FIT entry: ELF entry is outside the file-backed payload; set entry explicitly"
-        );
+        bail!("ELF entry is outside the file-backed payload");
     }
     Ok(metadata.entry)
 }
@@ -173,15 +171,15 @@ fn elf_load_base(metadata: &ElfMetadata) -> Result<u64> {
         .load_segments
         .iter()
         .filter(|segment| segment.file_size != 0);
-    let first_segment = segments.next().ok_or_else(|| {
-        anyhow!("cannot derive ELF FIT load address: no file-backed PT_LOAD segment")
-    })?;
+    let first_segment = segments
+        .next()
+        .ok_or_else(|| anyhow!("no file-backed PT_LOAD segment"))?;
     let first = elf_container_base(first_segment)?;
     for segment in segments {
         let base = elf_container_base(segment)?;
         if base != first {
             bail!(
-                "cannot derive ELF FIT load address: PT_LOAD at file offset {:#x} requires base {first:#x}, but PT_LOAD at file offset {:#x} requires base {base:#x}; no single load address preserves this layout; overriding load/entry does not rearrange payload bytes",
+                "PT_LOAD at file offset {:#x} requires base {first:#x}, but PT_LOAD at file offset {:#x} requires base {base:#x}; no single load address preserves this layout; overriding load/entry does not rearrange payload bytes",
                 first_segment.file_offset,
                 segment.file_offset,
             );
@@ -192,13 +190,16 @@ fn elf_load_base(metadata: &ElfMetadata) -> Result<u64> {
 
 fn elf_container_base(segment: &LoadSegment) -> Result<u64> {
     valid_segment_range(segment)?;
-    segment.physical_address.checked_sub(segment.file_offset).ok_or_else(|| {
-        anyhow!(
-            "cannot derive ELF FIT load address: PT_LOAD physical address {:#x} precedes file offset {:#x}; set load explicitly",
-            segment.physical_address,
-            segment.file_offset
-        )
-    })
+    segment
+        .physical_address
+        .checked_sub(segment.file_offset)
+        .ok_or_else(|| {
+            anyhow!(
+                "PT_LOAD physical address {:#x} precedes file offset {:#x}",
+                segment.physical_address,
+                segment.file_offset
+            )
+        })
 }
 
 fn bin_load_base(metadata: &ElfMetadata) -> Result<u64> {
@@ -208,13 +209,11 @@ fn bin_load_base(metadata: &ElfMetadata) -> Result<u64> {
         .map(|section| section_lma(section, &metadata.load_segments))
         .try_fold(None::<u64>, |minimum, address| {
             let address = address?;
-            Ok::<_, anyhow::Error>(Some(minimum.map_or(address, |current| current.min(address))))
+            Ok::<_, anyhow::Error>(Some(
+                minimum.map_or(address, |current| current.min(address)),
+            ))
         })?
-        .ok_or_else(|| {
-            anyhow!(
-                "cannot derive BIN FIT load address: no file-backed allocated section; set load explicitly"
-            )
-        })
+        .ok_or_else(|| anyhow!("no file-backed allocated section"))
 }
 
 fn section_lma(section: &LoadSection, segments: &[LoadSegment]) -> Result<u64> {
@@ -252,21 +251,15 @@ fn section_lma(section: &LoadSection, segments: &[LoadSegment]) -> Result<u64> {
             segment
                 .physical_address
                 .checked_add(file_delta)
-                .ok_or_else(|| {
-                    anyhow!("cannot derive BIN FIT load address: PT_LOAD LMA overflow")
-                })?,
+                .ok_or_else(|| anyhow!("PT_LOAD LMA overflow"))?,
         );
     }
 
     let first = candidates.first().copied().ok_or_else(|| {
-        anyhow!(
-            "cannot derive BIN FIT load address: an allocated file-backed section has no matching PT_LOAD segment; set load explicitly"
-        )
+        anyhow!("an allocated file-backed section has no matching PT_LOAD segment")
     })?;
     if candidates.iter().any(|candidate| *candidate != first) {
-        bail!(
-            "cannot derive BIN FIT load address: an allocated file-backed section has ambiguous PT_LOAD LMA mappings; set load explicitly"
-        );
+        bail!("an allocated file-backed section has ambiguous PT_LOAD LMA mappings");
     }
     Ok(first)
 }
@@ -289,7 +282,7 @@ fn valid_segment_range(segment: &LoadSegment) -> Result<()> {
 fn checked_end(start: u64, size: u64, kind: &str) -> Result<u64> {
     start
         .checked_add(size)
-        .ok_or_else(|| anyhow!("cannot derive FIT load address: {kind} overflows"))
+        .ok_or_else(|| anyhow!("{kind} overflows"))
 }
 
 #[cfg(test)]
@@ -361,6 +354,31 @@ mod tests {
         assert!(config.resolve_entry(&metadata, load).is_err());
         config.format = FitFormat::Bin;
         assert!(config.resolve_load(&metadata).is_err());
+
+        // The same section mapping failure belongs to entry for ELF, load for BIN.
+        metadata.load_sections[0].file_offset = 0x400;
+        config = FitConfig {
+            format: FitFormat::Elf,
+            ..FitConfig::default()
+        };
+        assert_eq!(config.resolve_load(&metadata).unwrap(), load);
+        let entry_error = config.resolve_entry(&metadata, load).unwrap_err();
+        assert_eq!(
+            entry_error.to_string(),
+            "cannot derive FIT entry; set entry explicitly"
+        );
+        assert!(!format!("{entry_error:#}").contains("BIN FIT load"));
+        assert!(!format!("{entry_error:#}").contains("set load explicitly"));
+        config.format = FitFormat::Bin;
+        let load_error = config.resolve_load(&metadata).unwrap_err();
+        assert_eq!(
+            load_error.to_string(),
+            "cannot derive BIN FIT load address; set load explicitly"
+        );
+        assert_eq!(
+            entry_error.root_cause().to_string(),
+            load_error.root_cause().to_string()
+        );
     }
 
     #[test]
