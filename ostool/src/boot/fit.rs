@@ -78,19 +78,26 @@ pub(crate) async fn generate_configured_fit(
     validate_elf_load_data(&metadata, source_data.len())?;
     fit_arch_name(metadata.arch)?;
 
-    let runtime_data = fs::read(prepared.elf())
-        .await
-        .with_path("failed to read runtime ELF", prepared.elf())?;
-    let runtime_metadata = ElfMetadata::parse(&runtime_data)
-        .with_context(|| format!("invalid runtime ELF: {}", prepared.elf().display()))?;
-    validate_elf_load_data(&runtime_metadata, runtime_data.len())?;
-    if metadata.arch != runtime_metadata.arch
-        || metadata.entry != runtime_metadata.entry
-        || metadata.load_segments != runtime_metadata.load_segments
-        || metadata.load_sections != runtime_metadata.load_sections
-    {
-        anyhow::bail!("source and runtime ELF load layouts differ; prepare the selected ELF again");
-    }
+    let runtime_data = if prepared.source_elf() == prepared.elf() {
+        source_data
+    } else {
+        let runtime_data = fs::read(prepared.elf())
+            .await
+            .with_path("failed to read runtime ELF", prepared.elf())?;
+        let runtime_metadata = ElfMetadata::parse(&runtime_data)
+            .with_context(|| format!("invalid runtime ELF: {}", prepared.elf().display()))?;
+        validate_elf_load_data(&runtime_metadata, runtime_data.len())?;
+        if metadata.arch != runtime_metadata.arch
+            || metadata.entry != runtime_metadata.entry
+            || metadata.load_segments != runtime_metadata.load_segments
+            || metadata.load_sections != runtime_metadata.load_sections
+        {
+            anyhow::bail!(
+                "source and runtime ELF load layouts differ; prepare the selected ELF again"
+            );
+        }
+        runtime_data
+    };
     let load = config.resolve_load(&metadata)?;
     let output = match &config.output {
         Some(path) => path.clone(),
@@ -208,6 +215,7 @@ pub(crate) async fn generate_configured_fit(
         .persist(&output)
         .map_err(|error| error.error)
         .with_path(errors::FIT_SAVE_ERROR, &output)?;
+    info!("FIT image ok: {}", output.display());
     Ok(GeneratedFitImage { path: output })
 }
 
@@ -269,7 +277,9 @@ pub(crate) async fn generate_fit_image(mut input: FitInput) -> anyhow::Result<Ge
     }
 
     input.kernel_entry_addr = kernel_entry_addr;
-    write_fit_image(input, kernel_data, FitOs::Linux).await
+    let image = write_fit_image(input, kernel_data, FitOs::Linux).await?;
+    info!("FIT image ok: {}", image.path().display());
+    Ok(image)
 }
 
 async fn write_fit_image(
@@ -329,7 +339,6 @@ async fn write_fit_image(
         .await
         .with_path(errors::FIT_SAVE_ERROR, &output_path)?;
 
-    info!("FIT image ok: {}", output_path.display());
     Ok(GeneratedFitImage { path: output_path })
 }
 
