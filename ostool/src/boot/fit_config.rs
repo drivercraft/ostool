@@ -132,8 +132,9 @@ impl FitConfig {
 }
 
 fn direct_entry(metadata: &ElfMetadata, load: u64, format: FitFormat) -> Result<u64> {
-    // Raw bytes carry no relocation or address-mapping contract. Only preserve
-    // e_entry when it still addresses its original bytes without either.
+    // Only infer an entry that directly addresses its file-backed bytes at load time.
+    // Startup code may map or relocate other sections, so they need not have VMA == LMA.
+    // This validates the entry mapping, not the complete runtime memory layout.
     let base = match format {
         FitFormat::Bin => bin_load_base(metadata)?,
         FitFormat::Elf => elf_load_base(metadata)?,
@@ -168,19 +169,21 @@ fn direct_entry(metadata: &ElfMetadata, load: u64, format: FitFormat) -> Result<
 }
 
 fn elf_load_base(metadata: &ElfMetadata) -> Result<u64> {
-    let mut bases = metadata
+    let mut segments = metadata
         .load_segments
         .iter()
-        .filter(|segment| segment.file_size != 0)
-        .map(elf_container_base);
-    let first = bases.next().ok_or_else(|| {
+        .filter(|segment| segment.file_size != 0);
+    let first_segment = segments.next().ok_or_else(|| {
         anyhow!("cannot derive ELF FIT load address: no file-backed PT_LOAD segment")
-    })??;
-    for base in bases {
-        let base = base?;
+    })?;
+    let first = elf_container_base(first_segment)?;
+    for segment in segments {
+        let base = elf_container_base(segment)?;
         if base != first {
             bail!(
-                "cannot derive ELF FIT load address: PT_LOAD segments have different file bases; set load explicitly"
+                "cannot derive ELF FIT load address: PT_LOAD at file offset {:#x} requires base {first:#x}, but PT_LOAD at file offset {:#x} requires base {base:#x}; no single load address preserves this layout; overriding load/entry does not rearrange payload bytes",
+                first_segment.file_offset,
+                segment.file_offset,
             );
         }
     }
