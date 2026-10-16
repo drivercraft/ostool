@@ -1,12 +1,17 @@
 //! Typed internal configuration and address resolution for FIT images.
 
-use std::path::PathBuf;
+use std::{mem::size_of, path::PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
+use object::Architecture;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::artifact::elf_metadata::{ElfMetadata, LoadSection, LoadSegment};
+
+const LOONGARCH_IMAGE_MAGIC: &[u8] = b"MZ";
+const LOONGARCH_IMAGE_ENTRY_OFFSET: usize = 8;
+const LOONGARCH_IMAGE_LOAD_OFFSET: usize = 24;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -74,11 +79,16 @@ impl Default for FitConfig {
 }
 
 impl FitConfig {
-    /// Resolves the payload load address from the original, unstripped ELF.
-    pub(crate) fn resolve_load(&self, metadata: &ElfMetadata) -> Result<u64> {
+    fn validate(&self) -> Result<()> {
         if self.os == FitOs::Elf && self.format != FitFormat::Elf {
             bail!("FIT OS elf requires format elf and U-Boot CONFIG_BOOTM_ELF");
         }
+        Ok(())
+    }
+
+    /// Resolves the payload load address from the original, unstripped ELF.
+    pub(crate) fn resolve_load(&self, metadata: &ElfMetadata) -> Result<u64> {
+        self.validate()?;
         match self.load {
             FitAddress::Explicit(address) => Ok(address),
             // An ELF container needs staging memory, independent of its runtime
@@ -115,8 +125,17 @@ impl FitConfig {
     }
 
     /// FIT OS elf passes the ELF container address to bootelf, which reads e_entry
-    /// itself. Other OS handlers consume an execution address.
-    pub(crate) fn resolve_entry(&self, metadata: &ElfMetadata, load: u64) -> Result<u64> {
+    /// itself. Other OS handlers consume an execution address. For `format = elf`
+    /// with a Linux OS, the payload is a staged ELF container: the entry must be in
+    /// a file-backed section whose LMA equals its VMA. Other sections may rely on
+    /// the kernel's own early mapping or relocation code.
+    pub(crate) fn resolve_entry(
+        &self,
+        metadata: &ElfMetadata,
+        load: u64,
+        payload: &[u8],
+    ) -> Result<u64> {
+        self.validate()?;
         if self.os == FitOs::Elf {
             if let FitAddress::Explicit(address) = self.entry
                 && address != load
@@ -127,10 +146,61 @@ impl FitConfig {
         }
         match self.entry {
             FitAddress::Explicit(address) => Ok(address),
-            FitAddress::Auto => direct_entry(metadata, load, self.format)
-                .context("cannot derive FIT entry; set entry explicitly"),
+            FitAddress::Auto => {
+                if self.format == FitFormat::Bin
+                    && self.os == FitOs::Linux
+                    && let Some(entry) = loongarch_image_entry(metadata.arch, payload, load)?
+                {
+                    // LoongArch Linux BIN images carry their execution offset in
+                    // the MZ image header. That header is authoritative for this
+                    // format and intentionally replaces ELF e_entry validation.
+                    return Ok(entry);
+                }
+                direct_entry(metadata, load, self.format)
+                    .context("cannot derive FIT entry; set entry explicitly")
+            }
         }
     }
+}
+
+/// Returns the execution address encoded in a LoongArch Linux image header.
+/// `None` means the payload is not a LoongArch MZ image and should use the
+/// normal ELF metadata rules.
+pub(crate) fn loongarch_image_entry(
+    arch: Architecture,
+    payload: &[u8],
+    load: u64,
+) -> Result<Option<u64>> {
+    if arch != Architecture::LoongArch64 || !payload.starts_with(LOONGARCH_IMAGE_MAGIC) {
+        return Ok(None);
+    }
+
+    let image_entry = read_image_header_u64(payload, LOONGARCH_IMAGE_ENTRY_OFFSET)?;
+    let image_load_addr = read_image_header_u64(payload, LOONGARCH_IMAGE_LOAD_OFFSET)?;
+    let entry_offset = image_entry.checked_sub(image_load_addr).ok_or_else(|| {
+        anyhow!(
+            "invalid LoongArch image header: entry {image_entry:#x} precedes load address {image_load_addr:#x}"
+        )
+    })?;
+    if entry_offset >= payload.len() as u64 {
+        bail!(
+            "invalid LoongArch image header: entry offset {entry_offset:#x} exceeds image size {:#x}",
+            payload.len()
+        );
+    }
+
+    Ok(Some(load.checked_add(entry_offset).ok_or_else(|| {
+        anyhow!("LoongArch kernel entry address overflow")
+    })?))
+}
+
+fn read_image_header_u64(payload: &[u8], offset: usize) -> Result<u64> {
+    let bytes = payload
+        .get(offset..offset + size_of::<u64>())
+        .ok_or_else(|| anyhow!("truncated LoongArch image header at offset {offset:#x}"))?;
+    let bytes = <[u8; size_of::<u64>()]>::try_from(bytes)
+        .map_err(|_| anyhow!("invalid LoongArch image header field at offset {offset:#x}"))?;
+    Ok(u64::from_le_bytes(bytes))
 }
 
 fn direct_entry(metadata: &ElfMetadata, load: u64, format: FitFormat) -> Result<u64> {
@@ -167,6 +237,9 @@ fn direct_entry(metadata: &ElfMetadata, load: u64, format: FitFormat) -> Result<
 }
 
 fn elf_load_base(metadata: &ElfMetadata) -> Result<u64> {
+    // An ELF payload used as a Linux image is staged as one contiguous byte
+    // container. Every file-backed PT_LOAD therefore needs the same
+    // `p_paddr - p_offset` base; an explicit address cannot rearrange bytes.
     let mut segments = metadata
         .load_segments
         .iter()
@@ -315,7 +388,7 @@ mod tests {
         let load = config.resolve_load(&metadata).unwrap();
         assert_eq!(load, 0x8000_0100);
         assert_eq!(
-            config.resolve_entry(&metadata, load).unwrap(),
+            config.resolve_entry(&metadata, load, &[]).unwrap(),
             metadata.entry
         );
         metadata.executable_start = Some(0x9000_0100);
@@ -323,11 +396,11 @@ mod tests {
         metadata.load_segments[0].virtual_address += 0x1000_0000;
         metadata.load_sections[0].virtual_address += 0x1000_0000;
         metadata.entry += 0x1000_0000;
-        assert!(config.resolve_entry(&metadata, load).is_err());
+        assert!(config.resolve_entry(&metadata, load, &[]).is_err());
         config.entry = FitAddress::Explicit(0);
         config.load = FitAddress::Explicit(0);
         assert_eq!(config.resolve_load(&metadata).unwrap(), 0);
-        assert_eq!(config.resolve_entry(&metadata, 0).unwrap(), 0);
+        assert_eq!(config.resolve_entry(&metadata, 0, &[]).unwrap(), 0);
         config.load = FitAddress::Auto;
         metadata.executable_start = None;
         config.format = FitFormat::Elf;
@@ -339,19 +412,19 @@ mod tests {
         metadata.executable_start = Some(load);
         assert_eq!(config.resolve_load(&metadata).unwrap(), load);
         config.entry = FitAddress::Auto;
-        assert!(config.resolve_entry(&metadata, load).is_err());
+        assert!(config.resolve_entry(&metadata, load, &[]).is_err());
         config.entry = FitAddress::Explicit(metadata.entry);
         assert_eq!(
-            config.resolve_entry(&metadata, load).unwrap(),
+            config.resolve_entry(&metadata, load, &[]).unwrap(),
             metadata.entry
         );
         config.os = FitOs::Elf;
         assert!(config.resolve_load(&metadata).is_err());
         config.load = FitAddress::Explicit(load);
         config.entry = FitAddress::Auto;
-        assert_eq!(config.resolve_entry(&metadata, load).unwrap(), load);
+        assert_eq!(config.resolve_entry(&metadata, load, &[]).unwrap(), load);
         config.entry = FitAddress::Explicit(metadata.entry);
-        assert!(config.resolve_entry(&metadata, load).is_err());
+        assert!(config.resolve_entry(&metadata, load, &[]).is_err());
         config.format = FitFormat::Bin;
         assert!(config.resolve_load(&metadata).is_err());
 
@@ -362,7 +435,7 @@ mod tests {
             ..FitConfig::default()
         };
         assert_eq!(config.resolve_load(&metadata).unwrap(), load);
-        let entry_error = config.resolve_entry(&metadata, load).unwrap_err();
+        let entry_error = config.resolve_entry(&metadata, load, &[]).unwrap_err();
         assert_eq!(
             entry_error.to_string(),
             "cannot derive FIT entry; set entry explicitly"
@@ -379,6 +452,151 @@ mod tests {
             entry_error.root_cause().to_string(),
             load_error.root_cause().to_string()
         );
+    }
+
+    #[test]
+    fn rejects_incompatible_os_and_format_from_both_resolvers() {
+        let metadata = ElfMetadata {
+            arch: Architecture::Aarch64,
+            entry: 0,
+            executable_start: None,
+            load_segments: Vec::new(),
+            load_sections: Vec::new(),
+        };
+        let config = FitConfig {
+            format: FitFormat::Bin,
+            os: FitOs::Elf,
+            load: FitAddress::Explicit(0x4000_0000),
+            ..FitConfig::default()
+        };
+
+        let load_error = config.resolve_load(&metadata).unwrap_err();
+        assert_eq!(
+            load_error.to_string(),
+            "FIT OS elf requires format elf and U-Boot CONFIG_BOOTM_ELF"
+        );
+        let entry_error = config
+            .resolve_entry(&metadata, 0x4000_0000, &[])
+            .unwrap_err();
+        assert_eq!(entry_error.to_string(), load_error.to_string());
+    }
+
+    #[test]
+    fn resolves_loongarch_image_entry_in_the_configured_entry_path() {
+        let metadata = ElfMetadata {
+            arch: Architecture::LoongArch64,
+            entry: 0x1000,
+            executable_start: None,
+            load_segments: Vec::new(),
+            load_sections: Vec::new(),
+        };
+        let mut payload = vec![0_u8; 0x40_0000];
+        payload[..2].copy_from_slice(b"MZ");
+        payload[8..16].copy_from_slice(&0x5c_8b40_u64.to_le_bytes());
+        payload[24..32].copy_from_slice(&0x20_0000_u64.to_le_bytes());
+        let config = FitConfig {
+            format: FitFormat::Bin,
+            load: FitAddress::Explicit(0x9000_0000_9800_0000),
+            ..FitConfig::default()
+        };
+
+        assert_eq!(
+            config
+                .resolve_entry(&metadata, 0x9000_0000_9800_0000, &payload)
+                .unwrap(),
+            0x9000_0000_983c_8b40
+        );
+    }
+
+    #[test]
+    fn allows_elf_container_gaps_with_one_file_base() {
+        let metadata = ElfMetadata {
+            arch: Architecture::Aarch64,
+            entry: 0x8000_0100,
+            executable_start: None,
+            load_segments: vec![
+                LoadSegment {
+                    virtual_address: 0x8000_0000,
+                    physical_address: 0x8000_0000,
+                    file_offset: 0x100,
+                    file_size: 0x200,
+                    memory_size: 0x200,
+                    alignment: 0x1000,
+                    flags: 5,
+                },
+                LoadSegment {
+                    virtual_address: 0x9000_0000,
+                    physical_address: 0x8000_0300,
+                    file_offset: 0x400,
+                    file_size: 0x100,
+                    memory_size: 0x100,
+                    alignment: 0x1000,
+                    flags: 4,
+                },
+            ],
+            load_sections: vec![
+                LoadSection {
+                    virtual_address: 0x8000_0100,
+                    file_offset: 0x200,
+                    size: 0x20,
+                },
+                LoadSection {
+                    virtual_address: 0x9000_0000,
+                    file_offset: 0x400,
+                    size: 0x20,
+                },
+            ],
+        };
+        let config = FitConfig {
+            format: FitFormat::Elf,
+            ..FitConfig::default()
+        };
+
+        let load = config.resolve_load(&metadata).unwrap();
+        assert_eq!(load, 0x7fff_ff00);
+        assert_eq!(
+            config.resolve_entry(&metadata, load, &[]).unwrap(),
+            metadata.entry
+        );
+    }
+
+    #[test]
+    fn rejects_elf_segments_with_different_container_bases() {
+        let mut metadata = ElfMetadata {
+            arch: Architecture::Aarch64,
+            entry: 0,
+            executable_start: None,
+            load_segments: vec![
+                LoadSegment {
+                    virtual_address: 0x8000_0000,
+                    physical_address: 0x8000_0100,
+                    file_offset: 0x100,
+                    file_size: 0x100,
+                    memory_size: 0x100,
+                    alignment: 0x1000,
+                    flags: 5,
+                },
+                LoadSegment {
+                    virtual_address: 0x9000_0000,
+                    physical_address: 0x8000_0400,
+                    file_offset: 0x400,
+                    file_size: 0x100,
+                    memory_size: 0x100,
+                    alignment: 0x1000,
+                    flags: 4,
+                },
+            ],
+            load_sections: Vec::new(),
+        };
+        let config = FitConfig {
+            format: FitFormat::Elf,
+            ..FitConfig::default()
+        };
+        assert!(config.resolve_load(&metadata).is_ok());
+
+        metadata.load_segments[1].physical_address += 0x1000;
+        let error = config.resolve_load(&metadata).unwrap_err();
+        assert!(format!("{error:#}").contains("no single load address preserves this layout"));
     }
 
     #[test]

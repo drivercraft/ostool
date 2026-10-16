@@ -15,7 +15,7 @@ use crate::{
         elf_metadata::ElfMetadata,
         runtime::{PreparedRuntimeArtifacts, RuntimeArtifactOptions, prepare_runtime_artifacts},
     },
-    boot::fit_config::{FitAddress, FitConfig, FitFormat, FitOs},
+    boot::fit_config::{FitConfig, FitFormat, FitOs, loongarch_image_entry},
     process::ProcessContext,
     utils::PathResultExt,
 };
@@ -26,9 +26,6 @@ const RAMDISK_COMPONENT_NAME: &str = "ramdisk";
 const DEFAULT_CONFIG_NAME: &str = "config-ostool";
 const FIT_DESCRIPTION: &str = "Various kernels, ramdisks and FDT blobs";
 const FIT_IMAGE_NAME: &str = "image.fit";
-const LOONGARCH_IMAGE_MAGIC: &[u8] = b"MZ";
-const LOONGARCH_IMAGE_ENTRY_OFFSET: usize = 8;
-const LOONGARCH_IMAGE_LOAD_OFFSET: usize = 24;
 
 mod errors {
     pub const KERNEL_READ_ERROR: &str = "读取 kernel 文件失败";
@@ -148,18 +145,9 @@ pub(crate) async fn generate_configured_fit(
     if kernel_data.is_empty() {
         anyhow::bail!("cannot build FIT with an empty kernel payload");
     }
-    // The Linux image header takes precedence over metadata-only inference.
-    // These branches are exclusive: an explicit entry never reads the header.
-    let entry = if config.entry == FitAddress::Auto
-        && config.format == FitFormat::Bin
-        && config.os == FitOs::Linux
-        && metadata.arch == Architecture::LoongArch64
-        && kernel_data.starts_with(LOONGARCH_IMAGE_MAGIC)
-    {
-        resolve_kernel_entry_addr(metadata.arch, &kernel_data, load, metadata.entry)?
-    } else {
-        config.resolve_entry(&metadata, load)?
-    };
+    // Resolve entry after payload selection so format-specific header rules see
+    // the exact bytes that will be stored in the FIT image.
+    let entry = config.resolve_entry(&metadata, load, &kernel_data)?;
     // Replace the output directory entry only after success. In particular, a
     // hard link to an input must not truncate that input's shared inode.
     let output_dir = output
@@ -266,12 +254,9 @@ pub(crate) async fn generate_fit_image(mut input: FitInput) -> anyhow::Result<Ge
         Byte::from(kernel_data.len())
     );
 
-    let kernel_entry_addr = resolve_kernel_entry_addr(
-        input.arch,
-        &kernel_data,
-        input.kernel_load_addr,
-        input.kernel_entry_addr,
-    )?;
+    let kernel_entry_addr =
+        loongarch_image_entry(input.arch, &kernel_data, input.kernel_load_addr)?
+            .unwrap_or(input.kernel_entry_addr);
     if kernel_entry_addr != input.kernel_entry_addr {
         info!("resolved LoongArch kernel entry: {kernel_entry_addr:#x}");
     }
@@ -388,44 +373,6 @@ pub(crate) fn fit_arch_name(arch: Architecture) -> anyhow::Result<&'static str> 
     }
 }
 
-fn resolve_kernel_entry_addr(
-    arch: Architecture,
-    kernel_data: &[u8],
-    kernel_load_addr: u64,
-    fallback_entry_addr: u64,
-) -> anyhow::Result<u64> {
-    if arch != Architecture::LoongArch64 || !kernel_data.starts_with(LOONGARCH_IMAGE_MAGIC) {
-        return Ok(fallback_entry_addr);
-    }
-
-    let image_entry = read_image_header_u64(kernel_data, LOONGARCH_IMAGE_ENTRY_OFFSET)?;
-    let image_load_addr = read_image_header_u64(kernel_data, LOONGARCH_IMAGE_LOAD_OFFSET)?;
-    let entry_offset = image_entry.checked_sub(image_load_addr).ok_or_else(|| {
-        anyhow!(
-            "invalid LoongArch image header: entry {image_entry:#x} precedes load address {image_load_addr:#x}"
-        )
-    })?;
-    if entry_offset >= kernel_data.len() as u64 {
-        anyhow::bail!(
-            "invalid LoongArch image header: entry offset {entry_offset:#x} exceeds image size {:#x}",
-            kernel_data.len()
-        );
-    }
-
-    kernel_load_addr
-        .checked_add(entry_offset)
-        .ok_or_else(|| anyhow!("LoongArch kernel entry address overflow"))
-}
-
-fn read_image_header_u64(kernel_data: &[u8], offset: usize) -> anyhow::Result<u64> {
-    let bytes = kernel_data
-        .get(offset..offset + size_of::<u64>())
-        .ok_or_else(|| anyhow!("truncated LoongArch image header at offset {offset:#x}"))?;
-    let bytes = <[u8; size_of::<u64>()]>::try_from(bytes)
-        .map_err(|_| anyhow!("invalid LoongArch image header field at offset {offset:#x}"))?;
-    Ok(u64::from_le_bytes(bytes))
-}
-
 fn default_output_path(kernel_path: &Path) -> anyhow::Result<PathBuf> {
     let output_dir = kernel_path
         .parent()
@@ -501,12 +448,111 @@ fn build_fit_config(
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::Path};
+
     use super::{
         FitInput, FitOs, build_fit_config, default_output_path, fit_arch_name,
-        resolve_kernel_entry_addr,
+        generate_configured_fit, loongarch_image_entry,
+    };
+    use crate::{
+        artifact::runtime::{
+            PreparedRuntimeArtifacts, RuntimeArtifactOptions, prepare_runtime_artifacts,
+        },
+        boot::fit_config::{FitAddress, FitConfig, FitFormat},
+        process::ProcessContext,
+        project::variables::VariableScope,
     };
     use fdt_edit::{Fdt, Node, Property};
     use object::Architecture;
+
+    fn write_u16(data: &mut [u8], offset: usize, value: u16) {
+        data[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_u32(data: &mut [u8], offset: usize, value: u32) {
+        data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_u64(data: &mut [u8], offset: usize, value: u64) {
+        data[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn minimal_aarch64_elf() -> Vec<u8> {
+        const DATA_OFFSET: usize = 0x100;
+        const STRING_OFFSET: usize = 0x180;
+        const SECTION_OFFSET: usize = 0x200;
+        const SECTION_SIZE: usize = 64;
+        const SECTION_COUNT: usize = 3;
+        let mut data = vec![0_u8; SECTION_OFFSET + SECTION_COUNT * SECTION_SIZE];
+        data[..4].copy_from_slice(b"\x7fELF");
+        data[4] = 2; // ELFCLASS64
+        data[5] = 1; // ELFDATA2LSB
+        data[6] = 1; // EV_CURRENT
+        write_u16(&mut data, 16, 2); // ET_EXEC
+        write_u16(&mut data, 18, 183); // EM_AARCH64
+        write_u32(&mut data, 20, 1); // EV_CURRENT
+        write_u64(&mut data, 24, 0x8000_0000); // e_entry
+        write_u64(&mut data, 32, 64); // e_phoff
+        write_u64(&mut data, 40, SECTION_OFFSET as u64); // e_shoff
+        write_u16(&mut data, 52, 64); // e_ehsize
+        write_u16(&mut data, 54, 56); // e_phentsize
+        write_u16(&mut data, 56, 1); // e_phnum
+        write_u16(&mut data, 58, SECTION_SIZE as u16); // e_shentsize
+        write_u16(&mut data, 60, SECTION_COUNT as u16); // e_shnum
+        write_u16(&mut data, 62, 2); // e_shstrndx
+
+        // One file-backed executable PT_LOAD containing the section below.
+        write_u32(&mut data, 64, 1); // PT_LOAD
+        write_u32(&mut data, 68, 5); // PF_R | PF_X
+        write_u64(&mut data, 72, DATA_OFFSET as u64); // p_offset
+        write_u64(&mut data, 80, 0x8000_0000); // p_vaddr
+        write_u64(&mut data, 88, 0x8000_0000); // p_paddr
+        write_u64(&mut data, 96, 4); // p_filesz
+        write_u64(&mut data, 104, 4); // p_memsz
+        write_u64(&mut data, 112, 0x1000); // p_align
+
+        data[DATA_OFFSET..DATA_OFFSET + 4].copy_from_slice(&[0x00, 0x00, 0x00, 0x14]);
+        data[STRING_OFFSET..STRING_OFFSET + 17].copy_from_slice(b"\0.text\0.shstrtab\0");
+        // A .text-like allocated section; section zero stays all zero.
+        let section = SECTION_OFFSET + SECTION_SIZE;
+        write_u32(&mut data, section, 1); // sh_name = ".text"
+        write_u32(&mut data, section + 4, 1); // SHT_PROGBITS
+        write_u64(&mut data, section + 8, 0x6); // SHF_ALLOC | SHF_EXECINSTR
+        write_u64(&mut data, section + 16, 0x8000_0000); // sh_addr
+        write_u64(&mut data, section + 24, DATA_OFFSET as u64); // sh_offset
+        write_u64(&mut data, section + 32, 4); // sh_size
+        write_u64(&mut data, section + 48, 4); // sh_addralign
+        let strings = SECTION_OFFSET + 2 * SECTION_SIZE;
+        write_u32(&mut data, strings, 7); // sh_name = ".shstrtab"
+        write_u32(&mut data, strings + 4, 3); // SHT_STRTAB
+        write_u64(&mut data, strings + 24, STRING_OFFSET as u64); // sh_offset
+        write_u64(&mut data, strings + 32, 17); // sh_size
+        write_u64(&mut data, strings + 48, 1); // sh_addralign
+        data
+    }
+
+    fn test_process_context(root: &Path) -> ProcessContext {
+        ProcessContext::new(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            VariableScope::new(root.to_path_buf(), root.to_path_buf(), root.to_path_buf()),
+            None,
+        )
+    }
+
+    fn fit_kernel_property(fit: &Fdt, name: &str) -> Vec<u8> {
+        fit.get_by_path("/images/kernel")
+            .unwrap()
+            .as_node()
+            .get_property(name)
+            .unwrap()
+            .data
+            .to_vec()
+    }
+
+    fn fit_u64_property(fit: &Fdt, name: &str) -> u64 {
+        u64::from_be_bytes(fit_kernel_property(fit, name).try_into().unwrap())
+    }
 
     #[test]
     fn maps_supported_architectures_to_fit_names() {
@@ -536,15 +582,107 @@ mod tests {
         kernel_data[8..16].copy_from_slice(&0x5c_8b40_u64.to_le_bytes());
         kernel_data[24..32].copy_from_slice(&0x20_0000_u64.to_le_bytes());
 
-        let entry = resolve_kernel_entry_addr(
+        let entry = loongarch_image_entry(
             Architecture::LoongArch64,
             &kernel_data,
             0x9000_0000_9800_0000,
-            0x9000_0000_9800_0000,
         )
+        .unwrap()
         .unwrap();
 
         assert_eq!(entry, 0x9000_0000_983c_8b40);
+    }
+
+    #[tokio::test]
+    async fn generates_configured_fit_from_a_real_elf_for_elf_and_bin_payloads() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("kernel.elf");
+        let source_bytes = minimal_aarch64_elf();
+        fs::write(&source, &source_bytes).unwrap();
+        let context = test_process_context(temp.path());
+        let prepared = prepare_runtime_artifacts(
+            &context,
+            RuntimeArtifactOptions {
+                elf_path: source,
+                to_bin: false,
+                bin_dir: None,
+                debug: false,
+                cargo_artifact_dir: None,
+                strip_elf: false,
+            },
+        )
+        .unwrap();
+
+        let elf_output = temp.path().join("kernel-elf.fit");
+        let elf_config = FitConfig {
+            format: FitFormat::Elf,
+            output: Some(elf_output),
+            ..FitConfig::default()
+        };
+        let elf_image = generate_configured_fit(&context, &prepared, &elf_config)
+            .await
+            .unwrap();
+        let elf_fit = Fdt::from_bytes(&fs::read(elf_image.path()).unwrap()).unwrap();
+        assert_eq!(fit_kernel_property(&elf_fit, "os"), b"linux\0");
+        assert_eq!(fit_u64_property(&elf_fit, "load"), 0x7fff_ff00);
+        assert_eq!(fit_u64_property(&elf_fit, "entry"), 0x8000_0000);
+        assert_eq!(fit_kernel_property(&elf_fit, "data"), source_bytes);
+
+        let bin_output = temp.path().join("kernel-bin.fit");
+        let bin_config = FitConfig {
+            format: FitFormat::Bin,
+            output: Some(bin_output),
+            ..FitConfig::default()
+        };
+        let bin_image = generate_configured_fit(&context, &prepared, &bin_config)
+            .await
+            .unwrap();
+        let bin_fit = Fdt::from_bytes(&fs::read(bin_image.path()).unwrap()).unwrap();
+        assert_eq!(fit_kernel_property(&bin_fit, "os"), b"linux\0");
+        assert_eq!(fit_u64_property(&bin_fit, "load"), 0x8000_0000);
+        assert_eq!(fit_u64_property(&bin_fit, "entry"), 0x8000_0000);
+        assert_eq!(
+            fit_kernel_property(&bin_fit, "data"),
+            &[0x00, 0x00, 0x00, 0x14]
+        );
+
+        let elf_os_output = temp.path().join("kernel-bootelf.fit");
+        let elf_os_config = FitConfig {
+            format: FitFormat::Elf,
+            os: FitOs::Elf,
+            load: FitAddress::Explicit(0x4000_0000),
+            output: Some(elf_os_output),
+            ..FitConfig::default()
+        };
+        let elf_os_image = generate_configured_fit(&context, &prepared, &elf_os_config)
+            .await
+            .unwrap();
+        let elf_os_fit = Fdt::from_bytes(&fs::read(elf_os_image.path()).unwrap()).unwrap();
+        assert_eq!(fit_kernel_property(&elf_os_fit, "os"), b"elf\0");
+        assert_eq!(fit_u64_property(&elf_os_fit, "load"), 0x4000_0000);
+        assert_eq!(fit_u64_property(&elf_os_fit, "entry"), 0x4000_0000);
+        assert_eq!(fit_kernel_property(&elf_os_fit, "data"), source_bytes);
+
+        let runtime = temp.path().join("kernel-runtime.elf");
+        fs::copy(prepared.source_elf(), &runtime).unwrap();
+        let separate_runtime = PreparedRuntimeArtifacts::for_test(
+            prepared.source_elf().to_path_buf(),
+            runtime.clone(),
+        );
+        let separate_output = temp.path().join("kernel-separate-runtime.fit");
+        let separate_config = FitConfig {
+            format: FitFormat::Elf,
+            output: Some(separate_output),
+            ..FitConfig::default()
+        };
+        let separate_image = generate_configured_fit(&context, &separate_runtime, &separate_config)
+            .await
+            .unwrap();
+        let separate_fit = Fdt::from_bytes(&fs::read(separate_image.path()).unwrap()).unwrap();
+        assert_eq!(
+            fit_kernel_property(&separate_fit, "data"),
+            fs::read(runtime).unwrap()
+        );
     }
 
     #[test]

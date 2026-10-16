@@ -79,6 +79,24 @@ impl PreparedRuntimeArtifacts {
     pub(crate) fn arch(&self) -> Option<Architecture> {
         self.arch
     }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(source_elf: PathBuf, elf: PathBuf) -> Self {
+        let source_artifact_dir = source_elf
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let runtime_artifact_dir = elf.parent().map(Path::to_path_buf);
+        Self {
+            source_elf,
+            elf,
+            bin: None,
+            source_artifact_dir,
+            cargo_artifact_dir: None,
+            runtime_artifact_dir,
+            arch: None,
+        }
+    }
 }
 
 /// Prepares runtime ELF/BIN artifacts from a Cargo or custom-build ELF.
