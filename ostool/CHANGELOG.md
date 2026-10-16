@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.1](https://github.com/drivercraft/ostool/compare/ostool-v0.31.0...ostool-v0.31.1) - 2026-10-16
+
+### Added
+
+- *(ostool)* 支持 ELF/BIN FIT 生成 ([#196](https://github.com/drivercraft/ostool/pull/196))
+
 ## [0.31.0](https://github.com/drivercraft/ostool/compare/ostool-v0.30.3...ostool-v0.31.0) - 2026-10-09
 
 ### Added
