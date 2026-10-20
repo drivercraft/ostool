@@ -18,6 +18,10 @@ const SYSTEM_DATA_DIR: &str = "/var/lib/ostool-server";
 pub struct ServerConfig {
     pub listen_addr: SocketAddr,
     #[serde(default)]
+    pub database: DatabaseConfig,
+    #[serde(default)]
+    pub auth: AuthConfig,
+    #[serde(default)]
     pub network_test: NetworkTestConfig,
     pub data_dir: PathBuf,
     pub board_dir: PathBuf,
@@ -64,6 +68,8 @@ impl ServerConfig {
 
         Self {
             listen_addr: SocketAddr::from(([0, 0, 0, 0], 2999)),
+            database: DatabaseConfig::default(),
+            auth: AuthConfig::default(),
             network_test: NetworkTestConfig::default(),
             data_dir,
             board_dir,
@@ -211,6 +217,54 @@ impl ServerConfig {
         }
         self.virtual_qemu.validate()?;
         Ok(())
+    }
+}
+
+/// PostgreSQL is optional so existing single-host installations continue to
+/// start. Setting `url` enables migrations, authentication, and database
+/// snapshots of the legacy file stores.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct DatabaseConfig {
+    pub url: Option<String>,
+    pub max_connections: u32,
+    pub migrate: bool,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            url: None,
+            max_connections: 10,
+            migrate: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct AuthConfig {
+    /// Require a Bearer token for management and board APIs.
+    pub enabled: bool,
+    pub access_token_ttl_secs: u64,
+    pub refresh_token_ttl_secs: u64,
+    pub device_code_ttl_secs: u64,
+    pub allow_registration: bool,
+    pub bootstrap_admin_email: Option<String>,
+    pub bootstrap_admin_password: Option<String>,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            access_token_ttl_secs: 900,
+            refresh_token_ttl_secs: 30 * 24 * 60 * 60,
+            device_code_ttl_secs: 600,
+            allow_registration: true,
+            bootstrap_admin_email: None,
+            bootstrap_admin_password: None,
+        }
     }
 }
 

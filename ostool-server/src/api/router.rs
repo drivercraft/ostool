@@ -5,7 +5,7 @@ use axum::{
     body::{Bytes, to_bytes},
     extract::{Path, Request, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode, header},
-    response::{IntoResponse, Redirect, Response},
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
 use futures_util::future::join_all;
@@ -70,6 +70,7 @@ const DTB_UPLOAD_MAX_MIB: u32 = 10;
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
+        .merge(super::auth::routes())
         .merge(super::ota::routes())
         .route("/api/v1/admin/events", get(crate::admin_events::subscribe))
         .route(
@@ -80,14 +81,14 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/admin/power-actions/{id}",
             get(crate::admin_power::get),
         )
-        .route(
-            "/",
-            get(|| async { Redirect::temporary("/admin/overview") }),
-        )
+        .route("/", get(serve_admin_index))
         .route("/admin", get(serve_admin_index))
         .route("/admin/", get(serve_admin_index))
         .route("/admin/assets/{*path}", get(serve_admin_asset))
         .route("/admin/{*path}", get(serve_admin_history))
+        .route("/login", get(serve_admin_index))
+        .route("/login/", get(serve_admin_index))
+        .route("/login/{*path}", get(serve_admin_history))
         .route(
             "/boot/sessions/{session_id}/{*path}",
             get(get_http_boot_file),
@@ -207,6 +208,10 @@ pub fn build_router(state: AppState) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             notify_admin_changes,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            super::auth::middleware,
         ))
         .with_state(state)
 }
@@ -383,6 +388,7 @@ async fn create_dtb(
     }
 
     let file = state.dtb_store.write(&dtb_name, &body).await?;
+    sync_dtb_database(&state, &file, &body).await?;
     Ok((
         StatusCode::CREATED,
         axum::Json(DtbFileResponse::from_dtb(file)),
@@ -431,6 +437,7 @@ async fn create_board(
         state.refresh_serial_exclusions().await?;
         return Err(error.into());
     }
+    sync_board_database(&state, &board).await?;
     state
         .boards
         .write()
@@ -496,6 +503,7 @@ async fn update_board(
         state.refresh_serial_exclusions().await?;
         return Err(error.into());
     }
+    sync_board_database(&state, &board).await?;
     if board.id != board_id
         && let Err(error) = state.board_store.delete_board(&board_id).await
     {
@@ -508,6 +516,11 @@ async fn update_board(
             )));
         }
         return Err(error.into());
+    }
+    if board.id != board_id
+        && let Some(database) = &state.database
+    {
+        database.delete_board(&board_id).await?;
     }
 
     {
@@ -1204,6 +1217,9 @@ async fn update_dtb(
                 }
             })?;
         rewrite_board_dtb_references(&state, &current_name, new_name).await?;
+        if let Some(database) = &state.database {
+            database.delete_dtb(&current_name).await?;
+        }
         effective_name = new_name.to_string();
     }
 
@@ -1220,6 +1236,8 @@ async fn update_dtb(
         .get(&effective_name)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("DTB `{effective_name}` not found")))?;
+    let bytes = state.dtb_store.read(&effective_name).await?;
+    sync_dtb_database(&state, &file, &bytes).await?;
     Ok(axum::Json(DtbFileResponse::from_dtb(file)))
 }
 
@@ -1242,6 +1260,9 @@ async fn delete_dtb(
         return Err(ApiError::not_found(format!("DTB `{dtb_name}` not found")));
     }
     state.dtb_store.delete(&dtb_name).await?;
+    if let Some(database) = &state.database {
+        database.delete_dtb(&dtb_name).await?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1269,6 +1290,9 @@ async fn delete_board(
         return Err(ApiError::not_found(format!("board `{board_id}` not found")));
     }
     state.board_store.delete_board(&board_id).await?;
+    if let Some(database) = &state.database {
+        database.delete_board(&board_id).await?;
+    }
     state.boards.write().await.remove(&board_id);
     state.sync_board_runtime_states().await;
     state.refresh_serial_exclusions().await?;
@@ -2789,6 +2813,7 @@ async fn rewrite_board_dtb_references(
 
     for board in &affected {
         state.board_store.write_board(board).await?;
+        sync_board_database(state, board).await?;
     }
 
     if !affected.is_empty() {
@@ -2798,6 +2823,41 @@ async fn rewrite_board_dtb_references(
         }
     }
 
+    Ok(())
+}
+
+async fn sync_board_database(state: &AppState, board: &BoardConfig) -> Result<(), ApiError> {
+    if let Some(database) = &state.database {
+        let payload =
+            serde_json::to_value(board).map_err(|error| ApiError::internal(error.to_string()))?;
+        database
+            .sync_board(&board.id, &payload)
+            .await
+            .map_err(ApiError::from)?;
+    }
+    Ok(())
+}
+
+async fn sync_dtb_database(
+    state: &AppState,
+    file: &crate::dtb_store::DtbFile,
+    bytes: &[u8],
+) -> Result<(), ApiError> {
+    if let Some(database) = &state.database {
+        let digest = Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        database
+            .sync_dtb(
+                &file.name,
+                file.size,
+                &state.dtb_store.path_for_name(&file.name).to_string_lossy(),
+                &digest,
+            )
+            .await
+            .map_err(ApiError::from)?;
+    }
     Ok(())
 }
 
@@ -2936,6 +2996,8 @@ mod tests {
     fn test_server_config(root: &std::path::Path) -> ServerConfig {
         ServerConfig {
             listen_addr: "127.0.0.1:0".parse().unwrap(),
+            database: crate::config::DatabaseConfig::default(),
+            auth: crate::config::AuthConfig::default(),
             network_test: crate::config::NetworkTestConfig::default(),
             data_dir: root.join("data"),
             board_dir: root.join("boards"),

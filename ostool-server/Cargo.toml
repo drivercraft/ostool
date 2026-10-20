@@ -26,6 +26,7 @@ path = "src/main.rs"
 anyhow = {workspace = true}
 async-trait = "0.1"
 axum = {version = "0.8", features = ["ws"]}
+argon2 = "0.5"
 base64 = "0.22"
 chrono = {version = "0.4.44", features = ["serde"]}
 clap = {workspace = true, features = ["derive"]}
@@ -40,11 +41,13 @@ network-interface = "2"
 nusb = "0.2.3"
 rust-embed = {version = "8", features = ["interpolate-folder-path", "debug-embed"]}
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+rand = "0.9"
 schemars = {workspace = true, features = ["derive"]}
 serde = {workspace = true, features = ["derive"]}
 serde_json = {workspace = true}
 serialport = "4.6"
 sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
 tftpd = "0.5"
 thiserror = {workspace = true}
 tokio = {workspace = true, features = ["full"]}

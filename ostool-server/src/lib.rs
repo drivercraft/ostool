@@ -7,6 +7,7 @@ pub mod api;
 pub mod board_pool;
 pub mod board_store;
 pub mod config;
+pub mod database;
 pub mod device;
 pub mod dtb_store;
 pub mod http_boot;
@@ -25,10 +26,10 @@ pub mod web;
 
 pub use api::router::build_router;
 pub use config::{
-    AxloaderSerialFlowControl, AxloaderSerialParameters, AxloaderSerialParity,
+    AuthConfig, AxloaderSerialFlowControl, AxloaderSerialParameters, AxloaderSerialParity,
     AxloaderSerialStopBits, BoardConfig, BoardNetworkIdentity, BootConfig, BuiltinTftpConfig,
-    CustomPowerManagement, LoaderNetworkConfig, PowerManagementConfig, PxeProfile, SerialConfig,
-    SerialPortKey, SerialPortKeyKind, ServerConfig, SystemTftpdHpaConfig, TftpConfig,
+    CustomPowerManagement, DatabaseConfig, LoaderNetworkConfig, PowerManagementConfig, PxeProfile,
+    SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig, SystemTftpdHpaConfig, TftpConfig,
     TftpNetworkConfig, UbootNetworkMode, UbootProfile, UefiBootArch, UefiHttpProfile,
     UploadLimitsConfig, VirtualQemuConfig, ZhongshengRelayPowerManagement,
 };

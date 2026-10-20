@@ -48,7 +48,11 @@ async function request<T>(
 
   const response = await fetch(path, {
     ...options,
-    headers,
+    headers: (() => {
+      const accessToken = localStorage.getItem("ostool.access_token");
+      if (accessToken) headers.set("authorization", `Bearer ${accessToken}`);
+      return headers;
+    })(),
     body,
   }).catch(() => {
     throw new Error(NETWORK_ERROR_MESSAGE);
@@ -64,6 +68,36 @@ async function request<T>(
 }
 
 export const api = {
+  login(email: string, password: string) {
+    return request<AuthToken>("/api/v1/auth/login", {
+      method: "POST",
+      bodyJson: { email, password },
+    });
+  },
+  register(email: string, password: string, displayName?: string) {
+    return request<AuthToken>("/api/v1/auth/register", {
+      method: "POST",
+      bodyJson: { email, password, display_name: displayName || null },
+    });
+  },
+  authorizeDevice(userCode: string) {
+    return request<void>("/api/v1/auth/device/authorize", {
+      method: "POST",
+      bodyJson: { user_code: userCode },
+    });
+  },
+  me() {
+    return request<AuthUser>("/api/v1/auth/me");
+  },
+  createPersonalAccessToken(name: string, expiresInDays?: number) {
+    return request<PersonalAccessToken>("/api/v1/auth/personal-access-tokens", {
+      method: "POST",
+      bodyJson: { name, expires_in_days: expiresInDays || null },
+    });
+  },
+  revokePersonalAccessToken(id: string) {
+    return request<void>(`/api/v1/auth/personal-access-tokens/${encodeURIComponent(id)}`, { method: "DELETE" });
+  },
   uploadLoaderImage(file: File, version?: string) {
     return request<LoaderImage>("/api/v1/admin/loader-images", {
       method: "POST",
@@ -240,3 +274,35 @@ export const api = {
     });
   },
 };
+
+export interface AuthToken {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  expires_in: number;
+  scope: string;
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  display_name: string | null;
+  is_admin: boolean;
+}
+
+export interface PersonalAccessToken {
+  id: string;
+  token: string;
+  name: string;
+  expires_at: string | null;
+}
+
+export function saveAuthToken(token: AuthToken) {
+  localStorage.setItem("ostool.access_token", token.access_token);
+  localStorage.setItem("ostool.refresh_token", token.refresh_token);
+}
+
+export function clearAuthToken() {
+  localStorage.removeItem("ostool.access_token");
+  localStorage.removeItem("ostool.refresh_token");
+}

@@ -179,6 +179,38 @@
   }
 }
 @layer components {
+  .public-shell {
+    min-height: 100vh;
+    padding: 9rem max(24px, 8vw) 5rem;
+    background: radial-gradient(circle at 70% 0%, oklch(0.94 0.06 259), transparent 40%), var(--background);
+  }
+  main.public-shell, main.auth-shell { margin-left: 0; max-width: none; }
+  .public-hero { max-width: 760px; }
+  .public-eyebrow { color: var(--primary); font-size: 12px; font-weight: 700; letter-spacing: .16em; }
+  .public-hero h1 { max-width: 700px; margin: 16px 0; font-size: clamp(36px, 6vw, 72px); line-height: 1.05; }
+  .public-lede { max-width: 650px; color: var(--muted-foreground); font-size: 18px; line-height: 1.7; }
+  .public-actions { display: flex; gap: 12px; margin-top: 30px; }
+  .public-features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; max-width: 900px; margin-top: 110px; }
+  .public-features article { display: grid; gap: 8px; padding: 22px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in oklch, var(--card), transparent 12%); }
+  .public-features span { color: var(--muted-foreground); line-height: 1.5; }
+  .auth-shell { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: var(--muted); }
+  .auth-card { display: grid; gap: 16px; width: min(100%, 410px); padding: 34px; border: 1px solid var(--border); border-radius: 14px; background: var(--card); box-shadow: 0 18px 60px #0001; }
+  .auth-brand { color: var(--foreground); font-size: 25px; font-weight: 750; text-decoration: none; }
+  .auth-card h1 { margin: 8px 0; font-size: 26px; }
+  .auth-card label { display: grid; gap: 7px; font-weight: 550; }
+  .auth-card input { width: 100%; padding: 10px 11px; border: 1px solid var(--input); border-radius: 7px; background: var(--background); }
+  .auth-hint, .auth-message { margin: 0; color: var(--muted-foreground); line-height: 1.5; }
+  .auth-message { color: var(--destructive); }
+  .auth-switch { border: 0; background: none; color: var(--primary); cursor: pointer; }
+  .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+  .card { display: grid; gap: 12px; padding: 22px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
+  .card h2 { margin: 0; }
+  .card label { display: grid; gap: 6px; }
+  .card input { padding: 8px 10px; border: 1px solid var(--input); border-radius: 6px; }
+  .eyebrow { margin: 0; color: var(--muted-foreground); font-size: 11px; letter-spacing: .12em; }
+  .muted { color: var(--muted-foreground); line-height: 1.5; }
+  .token-result { display: grid; gap: 8px; padding: 12px; border-radius: 6px; background: var(--muted); overflow-wrap: anywhere; }
+  @media (max-width: 700px) { .public-features { grid-template-columns: 1fr; margin-top: 70px; } .public-shell { padding-top: 5rem; } }
   .app-shell {
     min-height: 100vh;
   }

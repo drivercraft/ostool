@@ -9,6 +9,7 @@ use std::{
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock, mpsc};
 
 use crate::{
@@ -18,6 +19,7 @@ use crate::{
     },
     board_store::fs::FileBoardStore,
     config::{BoardConfig, PowerManagementConfig, ServerConfig},
+    database::Database,
     dtb_store::DtbStore,
     loader::LoaderRegistry,
     ota::OtaStore,
@@ -98,6 +100,7 @@ fn release_settle_delay(board: &BoardConfig) -> Option<Duration> {
 
 #[derive(Clone)]
 pub struct AppState {
+    pub database: Option<Database>,
     pub serial_manager: ostool_serial::SerialManager,
     pub admin_events: crate::admin_events::AdminEvents,
     pub admin_power: crate::admin_power::AdminPower,
@@ -126,6 +129,34 @@ pub async fn build_app_state(
     let dtb_store = Arc::new(DtbStore::new(config.dtb_dir.clone()));
     dtb_store.ensure_dir().await?;
     let boards = board_store.load_all().await?;
+    let database = Database::connect(&config.database).await?;
+    if let Some(database) = &database {
+        database.bootstrap_admin(&config.auth).await?;
+        for board in boards.values() {
+            database
+                .sync_board(&board.id, &serde_json::to_value(board)?)
+                .await
+                .with_context(|| format!("failed to migrate board `{}` to PostgreSQL", board.id))?;
+        }
+        for dtb in dtb_store.list_all().await? {
+            let bytes = dtb_store.read(&dtb.name).await?;
+            let digest = Sha256::digest(&bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            database
+                .sync_dtb(
+                    &dtb.name,
+                    dtb.size,
+                    &dtb_store.path_for_name(&dtb.name).to_string_lossy(),
+                    &digest,
+                )
+                .await
+                .with_context(|| format!("failed to migrate DTB `{}` to PostgreSQL", dtb.name))?;
+        }
+    } else if config.auth.enabled {
+        anyhow::bail!("auth.enabled requires database.url to point to PostgreSQL");
+    }
     let board_runtimes = initial_board_runtimes(&boards);
     let (release_tx, release_rx) = mpsc::unbounded_channel();
 
@@ -155,6 +186,7 @@ pub async fn build_app_state(
             virtual_boards: virtual_boards.clone(),
         }));
     let state = AppState {
+        database,
         serial_manager,
         admin_events: admin_events.clone(),
         admin_power: crate::admin_power::AdminPower::default(),

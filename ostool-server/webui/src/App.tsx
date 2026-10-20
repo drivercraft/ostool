@@ -14,6 +14,7 @@ import {
   NetworkIcon,
   SettingsIcon,
   MenuIcon,
+  UserCircleIcon,
 } from "lucide-react";
 import { admin, useConnection, useErrors } from "@/api/events";
 import { Button } from "@/components/ui/button";
@@ -31,6 +32,7 @@ const Tftp = lazy(() =>
 const Server = lazy(() =>
   import("./pages/Settings").then((m) => ({ default: m.Server })),
 );
+const Account = lazy(() => import("./pages/Account"));
 const navigation = [
   ["overview", "总览", LayoutDashboardIcon],
   ["boards", "开发板", CircuitBoardIcon],
@@ -38,6 +40,7 @@ const navigation = [
   ["sessions", "会话租约", ClockIcon],
   ["tftp", "TFTP", NetworkIcon],
   ["server", "Server 配置", SettingsIcon],
+  ["account", "账号", UserCircleIcon],
 ] as const;
 export default function App() {
   const connection = useConnection(),
@@ -118,6 +121,7 @@ export default function App() {
               <Route path="/sessions" element={<Sessions />} />
               <Route path="/tftp" element={<Tftp />} />
               <Route path="/server" element={<Server />} />
+              <Route path="/account" element={<Account />} />
               <Route
                 path="*"
                 element={<Notice>页面不存在。请选择左侧管理模块。</Notice>}

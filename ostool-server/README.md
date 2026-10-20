@@ -125,6 +125,43 @@ The default listen address is:
 0.0.0.0:2999
 ```
 
+### PostgreSQL and login
+
+Set a PostgreSQL URL to enable the identity store and automatic migrations. The
+first deployment can create an administrator from `OSTOOL_ADMIN_EMAIL` and
+`OSTOOL_ADMIN_PASSWORD` (the password must be at least 12 characters), or from
+the equivalent `bootstrap_admin_*` settings. Authentication is opt-in for
+existing installations; set `auth.enabled = true` after the database is ready:
+
+```toml
+[database]
+url = "postgres://ostool:change-me@127.0.0.1/ostool"
+max_connections = 10
+migrate = true
+
+[auth]
+enabled = true
+allow_registration = true
+access_token_ttl_secs = 900
+refresh_token_ttl_secs = 2592000
+device_code_ttl_secs = 600
+```
+
+The server implements the OAuth Device Authorization endpoints consumed by
+`ostool login`: `POST /oauth/device/code`, `POST /oauth/token`, and
+`POST /oauth/revoke`. Browser users can register or sign in at `/login`; CLI
+device approval uses the same page. Board and admin APIs require a Bearer token
+when authentication is enabled, while loader discovery endpoints remain
+unauthenticated for boot-time hardware discovery. A signed-in user can create a
+personal access token with `POST /api/v1/auth/personal-access-tokens`; pass the
+returned one-time token to `ostool login --with-token`.
+
+On startup, existing board TOML records and DTB metadata are imported into
+`board_records` and `dtb_records`. File storage remains the compatibility source
+for this migration step; subsequent board and DTB writes are mirrored to
+PostgreSQL so deployments can move the remaining session and artifact data in a
+later migration without interrupting board access.
+
 The network throughput test listener is enabled by default on `0.0.0.0:3000`.
 It has a separate router from the management listener, so board management,
 session file uploads, and `/admin/` stay on port 2999. The test listener has no

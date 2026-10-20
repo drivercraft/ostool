@@ -137,7 +137,9 @@ export class AdminStore {
   };
   connect = () => {
     if (this.source) return;
-    this.source = new EventSource("/api/v1/admin/events");
+    const token = localStorage.getItem("ostool.access_token");
+    const suffix = token ? `?access_token=${encodeURIComponent(token)}` : "";
+    this.source = new EventSource(`/api/v1/admin/events${suffix}`);
     const receive = (event: MessageEvent) => {
       try {
         this.apply(JSON.parse(event.data));
