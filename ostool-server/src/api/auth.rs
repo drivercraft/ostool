@@ -106,6 +106,7 @@ pub fn routes() -> Router<AppState> {
         .route("/oauth/device/code", post(device_code))
         .route("/oauth/token", post(token))
         .route("/oauth/revoke", post(revoke))
+        .route("/api/v1/auth/config", get(auth_config))
         .route("/api/v1/auth/register", post(register))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/me", get(me))
@@ -131,7 +132,10 @@ pub async fn middleware(
         return next.run(request).await;
     }
     let config = state.config.read().await.auth.clone();
-    let identity_required = path == "/api/v1/auth/me"
+    let identity_required = (state.database.is_some() && path.starts_with("/api/v1/admin/"))
+        || path.starts_with("/api/v1/admin/users")
+        || path.starts_with("/api/v1/admin/roles")
+        || path == "/api/v1/auth/me"
         || path == "/api/v1/auth/device/authorize"
         || path.starts_with("/api/v1/auth/personal-access-tokens");
     if !config.enabled && !identity_required {
@@ -158,11 +162,14 @@ pub async fn middleware(
             .into_response();
     };
     let Some(token) = bearer_token(request.headers()).or_else(|| {
-        request.uri().query().and_then(|query| {
-            query
-                .split('&')
-                .find_map(|part| part.strip_prefix("access_token="))
-        })
+        (path == "/api/v1/admin/events")
+            .then(|| request.uri().query())
+            .flatten()
+            .and_then(|query| {
+                query
+                    .split('&')
+                    .find_map(|part| part.strip_prefix("access_token="))
+            })
     }) else {
         return ApiError::unauthorized("Bearer access token is required").into_response();
     };
@@ -179,12 +186,34 @@ pub async fn middleware(
     if path.starts_with("/api/v1/admin") && !user.is_admin {
         return ApiError::forbidden("administrator role is required").into_response();
     }
+    if !user.is_admin
+        && let Some(tail) = path.strip_prefix("/api/v1/sessions/")
+    {
+        let session_id = tail.split('/').next().unwrap_or_default();
+        match sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM session_owners WHERE session_id=$1 AND user_id=$2)",
+        )
+        .bind(session_id)
+        .bind(user.id)
+        .fetch_one(database.pool())
+        .await
+        {
+            Ok(true) => {}
+            Ok(false) => return ApiError::not_found("session not found").into_response(),
+            Err(_) => {
+                return ApiError::service_unavailable("session ownership lookup unavailable")
+                    .into_response();
+            }
+        }
+    }
     request.extensions_mut().insert(CurrentUser(user));
     next.run(request).await
 }
 
 fn is_public_path(path: &str) -> bool {
     path == "/"
+        || path == "/register"
+        || path == "/account"
         || path.starts_with("/admin")
         || path == "/login"
         || path.starts_with("/login/")
@@ -195,6 +224,7 @@ fn is_public_path(path: &str) -> bool {
         || path == "/about"
         || path.starts_with("/about/")
         || path.starts_with("/oauth/")
+        || path == "/api/v1/auth/config"
         || path == "/api/v1/auth/register"
         || path == "/api/v1/auth/login"
         || path.starts_with("/api/v1/loaders/")
@@ -253,11 +283,16 @@ async fn device_code(
                 &error.to_string(),
             )
         })?;
-    let base = format!("/login?user_code={user_code}");
+    let origin = config
+        .public_base_url
+        .clone()
+        .unwrap_or_else(|| "http://127.0.0.1:2999".into());
+    let verification_uri = format!("{}/login", origin.trim_end_matches('/'));
+    let base = format!("{verification_uri}?user_code={user_code}");
     Ok(Json(DeviceCodeResponse {
         device_code,
         user_code,
-        verification_uri: "/login".into(),
+        verification_uri,
         verification_uri_complete: base,
         expires_in: (expires_at - Utc::now()).num_seconds().max(1),
         interval,
@@ -387,6 +422,13 @@ async fn register(
     if !config.allow_registration {
         return Err(ApiError::forbidden("registration is disabled"));
     }
+    if request
+        .display_name
+        .as_ref()
+        .is_some_and(|name| name.len() > 120)
+    {
+        return Err(ApiError::bad_request("显示名称不超过 120 个字符"));
+    }
     let user = database
         .create_user(
             &request.email,
@@ -395,7 +437,26 @@ async fn register(
             false,
         )
         .await
-        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+        .map_err(|error| {
+            if error
+                .chain()
+                .filter_map(|e| e.downcast_ref::<sqlx::Error>())
+                .any(|e| {
+                    e.as_database_error()
+                        .is_some_and(|e| e.is_unique_violation())
+                })
+            {
+                ApiError::conflict("该邮箱已注册，请直接登录")
+            } else if request.password.len() < 12 || request.password.len() > 1024 {
+                ApiError::bad_request("密码长度需要 12 至 1024 个字符")
+            } else if crate::database::normalize_email(&request.email).is_err() {
+                ApiError::bad_request("邮箱格式无效")
+            } else {
+                log::error!("registration failed: {error:#}");
+                ApiError::service_unavailable("注册暂时不可用，请稍后重试")
+            }
+        })?;
+    state.admin_events.invalidate(&["users"]);
     let grant = database
         .issue_grant(user, "web", "board:operate offline_access", &config)
         .await?;
@@ -521,4 +582,11 @@ fn oauth_error(status: StatusCode, error: &str, description: &str) -> Response {
         Json(serde_json::json!({"error": error, "error_description": description})),
     )
         .into_response()
+}
+
+async fn auth_config(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let config = state.config.read().await;
+    Json(
+        serde_json::json!({"enabled":config.auth.enabled,"allow_registration":config.auth.allow_registration && state.database.is_some(),"database_available":state.database.is_some()}),
+    )
 }

@@ -118,6 +118,11 @@ start_server() {
     nohup env \
         "OSTOOL_ADMIN_EMAIL=$ADMIN_EMAIL" \
         "OSTOOL_ADMIN_PASSWORD=$ADMIN_PASSWORD" \
+        "OSTOOL_DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${PG_PORT}/${DB_NAME}" \
+        "OSTOOL_LISTEN_ADDR=127.0.0.1:${SERVER_PORT}" \
+        "OSTOOL_PUBLIC_BASE_URL=http://127.0.0.1:${SERVER_PORT}" \
+        "OSTOOL_AUTH_ENABLED=true" \
+        "OSTOOL_NETWORK_TEST_ENABLED=false" \
         bash -c 'cd "$1" && exec cargo run -p ostool-server -- --config "$2"' \
         dev-env "$REPO_DIR" "$CONFIG_FILE" \
         >"$LOG_FILE" 2>&1 < /dev/null &
@@ -126,7 +131,7 @@ start_server() {
         if ! server_pid >/dev/null; then
             break
         fi
-        if command -v curl >/dev/null 2>&1 && curl -fsS "http://127.0.0.1:${SERVER_PORT}/" >/dev/null 2>&1; then
+        if command -v curl >/dev/null 2>&1 && curl --noproxy '*' -fsS "http://127.0.0.1:${SERVER_PORT}/" >/dev/null 2>&1; then
             log "ready: http://127.0.0.1:${SERVER_PORT}/"
             log "admin: http://127.0.0.1:${SERVER_PORT}/admin/overview"
             log "login: http://127.0.0.1:${SERVER_PORT}/login"

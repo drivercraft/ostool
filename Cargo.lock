@@ -3006,6 +3006,7 @@ dependencies = [
  "base64",
  "chrono",
  "clap",
+ "dotenvy",
  "env_logger",
  "fs4",
  "futures-util",

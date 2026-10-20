@@ -16,6 +16,9 @@ use tokio::{sync::watch, task::JoinSet};
 struct Cli {
     #[arg(short, long, default_value = ".ostool-server.toml")]
     config: PathBuf,
+    /// Load deployment variables from this file (defaults to .env if present).
+    #[arg(long)]
+    env_file: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -41,7 +44,8 @@ async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     let cli = Cli::parse();
-    let config = ServerConfig::load_or_create(&cli.config).await?;
+    let mut config = ServerConfig::load_or_create(&cli.config).await?;
+    ostool_server::environment::apply(&mut config, cli.env_file.as_deref())?;
     if let Some(Command::VirtualLab { action }) = cli.command {
         let action = match action {
             VirtualLabCommand::Up => VirtualLabAction::Up,

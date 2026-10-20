@@ -353,3 +353,36 @@ export interface SerialRuntimeStatus {
   binding_id: string | null;
   boot_epoch: string | null;
 }
+
+export interface ManagedUser {
+  id: string;
+  email: string;
+  display_name: string | null;
+  role_id: string;
+  disabled: boolean;
+  created_at: string;
+}
+export interface UserInput {
+  email: string;
+  display_name: string | null;
+  role_id: string;
+  disabled: boolean;
+  password?: string;
+}
+export interface RoleInput {
+  name: string;
+  description: string;
+  administrator: boolean;
+}
+export interface UserRole extends RoleInput {
+  id: string;
+  builtin: boolean;
+}
+export interface DeploymentInfo {
+  database_connected: boolean;
+  auth_enabled: boolean;
+  allow_registration: boolean;
+  public_base_url: string | null;
+  access_token_ttl_secs: number;
+  storage: Record<string, string>;
+}

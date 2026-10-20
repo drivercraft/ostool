@@ -1,3 +1,4 @@
+import type { UserInput, RoleInput } from "@/types/api";
 import type {
   AdminBoardUpsertRequest,
   AdminOverviewResponse,
@@ -34,6 +35,31 @@ async function readJsonBody<T>(response: Response): Promise<T | undefined> {
   return JSON.parse(text) as T;
 }
 
+let refreshing: Promise<void> | undefined;
+export async function refreshAuth() {
+  if (!refreshing)
+    refreshing = (async () => {
+      const refresh = localStorage.getItem("ostool.refresh_token");
+      if (!refresh) throw new Error("请重新登录");
+      const response = await fetch("/oauth/token", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: refresh,
+        }),
+      });
+      if (!response.ok) {
+        clearAuthToken();
+        throw new Error("登录已过期，请重新登录");
+      }
+      saveAuthToken(await response.json());
+    })().finally(() => {
+      refreshing = undefined;
+    });
+  return refreshing;
+}
+
 async function request<T>(
   path: string,
   options: RequestOptions = {},
@@ -46,7 +72,7 @@ async function request<T>(
     body = JSON.stringify(options.bodyJson);
   }
 
-  const response = await fetch(path, {
+  let response = await fetch(path, {
     ...options,
     headers: (() => {
       const accessToken = localStorage.getItem("ostool.access_token");
@@ -58,6 +84,18 @@ async function request<T>(
     throw new Error(NETWORK_ERROR_MESSAGE);
   });
 
+  if (
+    response.status === 401 &&
+    localStorage.getItem("ostool.refresh_token") &&
+    !["/api/v1/auth/login", "/api/v1/auth/register"].includes(path)
+  ) {
+    await refreshAuth();
+    headers.set(
+      "authorization",
+      `Bearer ${localStorage.getItem("ostool.access_token")}`,
+    );
+    response = await fetch(path, { ...options, headers, body });
+  }
   if (!response.ok) {
     const error =
       (await readJsonBody<ErrorResponse>(response).catch(() => null)) ?? null;
@@ -67,7 +105,64 @@ async function request<T>(
   return (await readJsonBody<T>(response)) as T;
 }
 
+type AuthConfig = {
+  enabled: boolean;
+  allow_registration: boolean;
+  database_available: boolean;
+};
+let authConfigRequest: Promise<AuthConfig> | undefined;
 export const api = {
+  authConfig() {
+    // StrictMode mounts effects twice; share the in-flight bootstrap request.
+    return (authConfigRequest ??= request<AuthConfig>(
+      "/api/v1/auth/config",
+    ).finally(() => {
+      authConfigRequest = undefined;
+    }));
+  },
+  createUser(payload: UserInput) {
+    return request<void>("/api/v1/admin/users", {
+      method: "POST",
+      bodyJson: payload,
+    });
+  },
+  updateUser(id: string, payload: UserInput) {
+    return request<void>(`/api/v1/admin/users/${id}`, {
+      method: "PUT",
+      bodyJson: payload,
+    });
+  },
+  deleteUser(id: string) {
+    return request<void>(`/api/v1/admin/users/${id}`, { method: "DELETE" });
+  },
+  createRole(payload: RoleInput) {
+    return request<void>("/api/v1/admin/roles", {
+      method: "POST",
+      bodyJson: payload,
+    });
+  },
+  updateRole(id: string, payload: RoleInput) {
+    return request<void>(`/api/v1/admin/roles/${id}`, {
+      method: "PUT",
+      bodyJson: payload,
+    });
+  },
+  deleteRole(id: string) {
+    return request<void>(`/api/v1/admin/roles/${id}`, { method: "DELETE" });
+  },
+  async logout() {
+    const refresh = localStorage.getItem("ostool.refresh_token");
+    try {
+      if (refresh)
+        await fetch("/oauth/revoke", {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ token: refresh }),
+        });
+    } finally {
+      clearAuthToken();
+    }
+  },
   login(email: string, password: string) {
     return request<AuthToken>("/api/v1/auth/login", {
       method: "POST",
@@ -96,7 +191,10 @@ export const api = {
     });
   },
   revokePersonalAccessToken(id: string) {
-    return request<void>(`/api/v1/auth/personal-access-tokens/${encodeURIComponent(id)}`, { method: "DELETE" });
+    return request<void>(
+      `/api/v1/auth/personal-access-tokens/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
   },
   uploadLoaderImage(file: File, version?: string) {
     return request<LoaderImage>("/api/v1/admin/loader-images", {

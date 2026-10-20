@@ -37,6 +37,10 @@ target/
 #.idea/
 /.ostool-server.toml
 /.ostool-server
+/.ostool-server-dev/
+.env
+.env.*
+!.env.example
 /ostool-server/web/dist
 /ostool-server/webui/node_modules
 /ostool-server/webui/playwright-report

@@ -1,0 +1,7 @@
+# Replace the hostname before loading this example into Caddy.
+boards.example.com {
+    # Hardware boot endpoints belong on the board LAN, not the public gateway.
+    @hardware path /api/v1/loaders/* /api/v1/loader-updates/* /boot/* /share/*
+    respond @hardware 404
+    reverse_proxy 127.0.0.1:2999
+}

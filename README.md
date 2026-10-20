@@ -725,3 +725,5 @@ cargo test
 ## 🙏 致谢
 
 感谢所有为 ostool 项目做出贡献的开发者和用户！
+
+本地服务登录、用户/角色管理、环境变量及 Caddy/systemd 部署说明见 [ostool-server 部署指南](ostool-server/deploy/README.md)。

@@ -2,7 +2,7 @@
 //! one projector serializes reads and publication. Subscribers never read owners.
 use crate::AppState;
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::HeaderMap,
     response::sse::{Event, KeepAlive, Sse},
 };
@@ -33,6 +33,9 @@ pub const TOPICS: &[&str] = &[
     "tftp_status",
     "overview",
     "power_actions",
+    "users",
+    "roles",
+    "deployment",
 ];
 const HISTORY_LIMIT: usize = 256;
 
@@ -193,6 +196,7 @@ impl AdminEvents {
 pub async fn subscribe(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<BTreeMap<String, String>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let events = state.admin_events.clone();
     let mut changed = events.changed.subscribe();
@@ -206,10 +210,63 @@ pub async fn subscribe(
         .get("last-event-id")
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
+    let credential = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::to_owned)
+        .or_else(|| query.get("access_token").cloned());
+    let database = state.database.clone();
     let stream = stream::unfold(
-        (events, changed, cursor, VecDeque::<Update>::new()),
-        |(events, mut changed, mut cursor, mut queue)| async move {
+        (
+            events,
+            changed,
+            cursor,
+            VecDeque::<Update>::new(),
+            database,
+            credential,
+            tokio::time::Instant::now(),
+            false,
+        ),
+        |(
+            events,
+            mut changed,
+            mut cursor,
+            mut queue,
+            database,
+            credential,
+            mut check_at,
+            finished,
+        )| async move {
+            if finished {
+                return None;
+            }
             loop {
+                if tokio::time::Instant::now() >= check_at {
+                    if let Some(db) = &database {
+                        let valid = if let Some(token) = &credential {
+                            db.authenticate_token(token)
+                                .await
+                                .ok()
+                                .flatten()
+                                .is_some_and(|u| u.is_admin)
+                        } else {
+                            false
+                        };
+                        if !valid {
+                            return Some((
+                                Ok(Event::default()
+                                    .event("auth-expired")
+                                    .data("reauthenticate")),
+                                (
+                                    events, changed, cursor, queue, database, credential, check_at,
+                                    true,
+                                ),
+                            ));
+                        }
+                    }
+                    check_at = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+                }
                 if let Some(update) = queue.pop_front() {
                     let id = format!("{}:{}", update.epoch, update.revision);
                     cursor = Some(id.clone());
@@ -218,14 +275,20 @@ pub async fn subscribe(
                         .event(update.kind)
                         .json_data(&update)
                         .expect("JSON projection is serializable");
-                    return Some((Ok(event), (events, changed, cursor, queue)));
+                    return Some((
+                        Ok(event),
+                        (
+                            events, changed, cursor, queue, database, credential, check_at, false,
+                        ),
+                    ));
                 }
                 queue = events.after(cursor.as_deref());
                 if !queue.is_empty() {
                     continue;
                 }
-                if changed.changed().await.is_err() {
-                    return None;
+                tokio::select! {
+                    result=changed.changed()=>{if result.is_err(){return None;}},
+                    _=tokio::time::sleep_until(check_at)=>{}
                 }
             }
         },

@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::config::{AuthConfig, DatabaseConfig};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Database {
     pool: PgPool,
 }
@@ -88,7 +88,7 @@ impl Database {
         let (Some(email), Some(password)) = (email, password) else {
             return Ok(());
         };
-        if password.len() < 12 {
+        if password.len() < 12 || password.len() > 1024 {
             bail!("bootstrap admin password must contain at least 12 characters");
         }
         if self.find_user(&email).await?.is_none() {
@@ -106,12 +106,12 @@ impl Database {
         is_admin: bool,
     ) -> anyhow::Result<User> {
         let email = normalize_email(email)?;
-        if password.len() < 12 {
+        if password.len() < 12 || password.len() > 1024 {
             bail!("password must contain at least 12 characters");
         }
-        let password_hash = hash_password(password)?;
+        let password_hash = hash_password_async(password.to_owned()).await?;
         let row = sqlx::query(
-            "INSERT INTO users (email, password_hash, display_name, is_admin) VALUES ($1,$2,$3,$4) RETURNING id,email,display_name,is_admin",
+            "INSERT INTO users (email, password_hash, display_name, is_admin, role_id) VALUES ($1,$2,$3,$4,CASE WHEN $4 THEN 'admin' ELSE 'member' END) RETURNING id,email,display_name,is_admin",
         )
         .bind(email)
         .bind(password_hash)
@@ -161,7 +161,8 @@ impl Database {
             return Ok(None);
         };
         let hash: String = row.try_get("password_hash")?;
-        if !verify_password(password, &hash) {
+        let password = password.to_owned();
+        if !tokio::task::spawn_blocking(move || verify_password(&password, &hash)).await? {
             return Ok(None);
         }
         Ok(Some(user_from_row(&row)))
@@ -420,9 +421,13 @@ fn user_from_row(row: &sqlx::postgres::PgRow) -> User {
     }
 }
 
-fn normalize_email(email: &str) -> anyhow::Result<String> {
+pub(crate) fn normalize_email(email: &str) -> anyhow::Result<String> {
     let email = email.trim().to_lowercase();
-    if email.len() < 3 || !email.contains('@') || email.len() > 320 {
+    if email.len() > 320
+        || email.chars().any(char::is_whitespace)
+        || email.split('@').count() != 2
+        || email.split('@').any(str::is_empty)
+    {
         bail!("invalid email address");
     }
     Ok(email)
@@ -457,4 +462,8 @@ fn token_hash(token: &str) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+pub(crate) async fn hash_password_async(password: String) -> anyhow::Result<String> {
+    tokio::task::spawn_blocking(move || hash_password(&password)).await?
 }

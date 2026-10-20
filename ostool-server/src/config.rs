@@ -193,6 +193,33 @@ impl ServerConfig {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        if !(60..=86400).contains(&self.auth.access_token_ttl_secs)
+            || !(300..=31536000).contains(&self.auth.refresh_token_ttl_secs)
+            || !(60..=1800).contains(&self.auth.device_code_ttl_secs)
+        {
+            bail!(
+                "auth token lifetimes must be access: 60..86400, refresh: 300..31536000, device: 60..1800 seconds"
+            );
+        }
+        if self.database.max_connections == 0 {
+            bail!("database.max_connections must be greater than 0");
+        }
+        if let Some(base) = &self.auth.public_base_url {
+            let url =
+                url::Url::parse(base).context("auth.public_base_url must be an absolute URL")?;
+            if !matches!(url.scheme(), "http" | "https")
+                || url.host_str().is_none()
+                || url.path() != "/"
+                || url.query().is_some()
+                || url.fragment().is_some()
+                || !url.username().is_empty()
+                || url.password().is_some()
+            {
+                bail!(
+                    "auth.public_base_url must be an HTTP(S) origin without credentials, path, query or fragment"
+                );
+            }
+        }
         self.network_test.validate(self.listen_addr)?;
         if self.network.interface.trim().is_empty() {
             bail!(
@@ -226,6 +253,7 @@ impl ServerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct DatabaseConfig {
+    #[serde(skip_serializing)]
     pub url: Option<String>,
     pub max_connections: u32,
     pub migrate: bool,
@@ -250,7 +278,9 @@ pub struct AuthConfig {
     pub refresh_token_ttl_secs: u64,
     pub device_code_ttl_secs: u64,
     pub allow_registration: bool,
+    pub public_base_url: Option<String>,
     pub bootstrap_admin_email: Option<String>,
+    #[serde(skip_serializing)]
     pub bootstrap_admin_password: Option<String>,
 }
 
@@ -262,6 +292,7 @@ impl Default for AuthConfig {
             refresh_token_ttl_secs: 30 * 24 * 60 * 60,
             device_code_ttl_secs: 600,
             allow_registration: true,
+            public_base_url: None,
             bootstrap_admin_email: None,
             bootstrap_admin_password: None,
         }

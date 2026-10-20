@@ -144,8 +144,15 @@ test("unbound power -> real discovery -> manual MAC binding; push preserves focu
     timeout: 15_000,
   });
   expect(
-    reads.every((url) => url.endsWith("/api/v1/admin/events")),
+    reads.every(
+      (url) =>
+        url.endsWith("/api/v1/admin/events") ||
+        url.endsWith("/api/v1/auth/config"),
+    ),
   ).toBeTruthy();
+  expect(
+    reads.filter((url) => url.endsWith("/api/v1/auth/config")),
+  ).toHaveLength(1);
   expect(consoleErrors).toEqual([]);
   await mkdir("/tmp/ostool-admin-screenshots", { recursive: true });
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -173,7 +180,7 @@ test("all management modules, DTB CRUD, session release and narrow viewport", as
   await expect(
     page.getByRole("heading", { name: "总览", exact: true }),
   ).toBeVisible();
-  await page.getByRole("link", { name: "DTB", exact: true }).click();
+  await page.getByRole("link", { name: "DTB 管理", exact: true }).click();
   await page.getByRole("button", { name: "上传 DTB", exact: true }).click();
   await page.getByLabel("文件", { exact: true }).setInputFiles({
     name: "e2e.dtb",
@@ -229,16 +236,25 @@ test("all management modules, DTB CRUD, session release and narrow viewport", as
   await expect(
     page.getByRole("cell", { name: "browser-test", exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("link", { name: "TFTP", exact: true }).click();
-  await expect(page.getByLabel("Provider")).toHaveValue("builtin");
-  await page.getByRole("button", { name: "保存配置", exact: true }).click();
+  await page.getByRole("link", { name: "系统设置", exact: true }).click();
+  await page.getByRole("tab", { name: "TFTP 服务", exact: true }).click();
+  await expect(
+    page.getByRole("tabpanel", { name: "TFTP 服务" }).getByLabel("Provider"),
+  ).toHaveValue("builtin");
+  await page
+    .getByRole("tabpanel", { name: "TFTP 服务" })
+    .getByRole("button", { name: "保存配置", exact: true })
+    .click();
   await expect(
     page.getByText("TFTP 配置已保存", { exact: true }),
   ).toBeVisible();
-  await page.getByRole("link", { name: "Server 配置", exact: true }).click();
+  await page.getByRole("tab", { name: "网络与上传", exact: true }).click();
   await expect(page.getByLabel("网络接口", { exact: true })).toHaveValue("lo");
   await page.getByLabel("Session 文件上传上限（MiB）").fill("128");
-  await page.getByRole("button", { name: "保存配置", exact: true }).click();
+  await page
+    .getByRole("tabpanel", { name: "网络与上传" })
+    .getByRole("button", { name: "保存配置", exact: true })
+    .click();
   await expect(
     page.getByText("Server 配置已保存", { exact: true }),
   ).toBeVisible();

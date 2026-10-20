@@ -10,6 +10,7 @@ pub mod config;
 pub mod database;
 pub mod device;
 pub mod dtb_store;
+pub mod environment;
 pub mod http_boot;
 pub mod loader;
 pub mod network_test;

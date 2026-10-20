@@ -149,18 +149,30 @@ device_code_ttl_secs = 600
 
 The server implements the OAuth Device Authorization endpoints consumed by
 `ostool login`: `POST /oauth/device/code`, `POST /oauth/token`, and
-`POST /oauth/revoke`. Browser users can register or sign in at `/login`; CLI
+`POST /oauth/revoke`. Browser users register at `/register` or sign in at `/login`; CLI
 device approval uses the same page. Board and admin APIs require a Bearer token
 when authentication is enabled, while loader discovery endpoints remain
 unauthenticated for boot-time hardware discovery. A signed-in user can create a
 personal access token with `POST /api/v1/auth/personal-access-tokens`; pass the
 returned one-time token to `ostool login --with-token`.
 
-On startup, existing board TOML records and DTB metadata are imported into
-`board_records` and `dtb_records`. File storage remains the compatibility source
-for this migration step; subsequent board and DTB writes are mirrored to
-PostgreSQL so deployments can move the remaining session and artifact data in a
-later migration without interrupting board access.
+When PostgreSQL is configured, board TOML records are imported once and
+`board_records` becomes the inventory authority. The import marker prevents old
+files from overwriting or resurrecting deleted records on restart. DTB payloads
+and OTA state still use files; DTB metadata is mirrored to PostgreSQL. Active
+leases and serial transports remain process-local and are not restored.
+
+Deployment variables are loaded at runtime from the process environment or an
+explicit `--env-file` (otherwise `.env` in the working directory, when present).
+Use [.env.example](.env.example) and the [deployment guide](deploy/README.md) for
+Caddy, systemd, precedence, secrets and the complete persistence matrix.
+No database credentials or public hostname need to exist during frontend build.
+The database-backed admin console always requires an administrator credential;
+standalone mode without PostgreSQL retains the previous LAN-only behavior.
+
+The sidebar groups development boards, DTBs and leases under **板卡管理**, accounts
+and roles under **用户管理**, with **系统设置** at the bottom. Settings tabs group
+network/upload options, TFTP, deployment/authentication and storage information.
 
 The network throughput test listener is enabled by default on `0.0.0.0:3000`.
 It has a separate router from the management listener, so board management,

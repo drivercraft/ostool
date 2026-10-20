@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use axum::{
     Router,
     body::{Bytes, to_bytes},
-    extract::{Path, Request, State, WebSocketUpgrade},
+    extract::{Extension, Path, Request, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
@@ -71,6 +71,7 @@ const DTB_UPLOAD_MAX_MIB: u32 = 10;
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(super::auth::routes())
+        .merge(super::users::routes())
         .merge(super::ota::routes())
         .route("/api/v1/admin/events", get(crate::admin_events::subscribe))
         .route(
@@ -86,6 +87,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/", get(serve_admin_index))
         .route("/admin/assets/{*path}", get(serve_admin_asset))
         .route("/admin/{*path}", get(serve_admin_history))
+        .route("/register", get(serve_admin_index))
+        .route("/account", get(serve_admin_index))
         .route("/login", get(serve_admin_index))
         .route("/login/", get(serve_admin_index))
         .route("/login/{*path}", get(serve_admin_history))
@@ -443,7 +446,6 @@ async fn create_board(
         state.refresh_serial_exclusions().await?;
         return Err(error.into());
     }
-    sync_board_database(&state, &board).await?;
     state
         .boards
         .write()
@@ -509,7 +511,6 @@ async fn update_board(
         state.refresh_serial_exclusions().await?;
         return Err(error.into());
     }
-    sync_board_database(&state, &board).await?;
     if board.id != board_id
         && let Err(error) = state.board_store.delete_board(&board_id).await
     {
@@ -522,11 +523,6 @@ async fn update_board(
             )));
         }
         return Err(error.into());
-    }
-    if board.id != board_id
-        && let Some(database) = &state.database
-    {
-        database.delete_board(&board_id).await?;
     }
 
     {
@@ -1296,9 +1292,6 @@ async fn delete_board(
         return Err(ApiError::not_found(format!("board `{board_id}` not found")));
     }
     state.board_store.delete_board(&board_id).await?;
-    if let Some(database) = &state.database {
-        database.delete_board(&board_id).await?;
-    }
     state.boards.write().await.remove(&board_id);
     state.sync_board_runtime_states().await;
     state.refresh_serial_exclusions().await?;
@@ -1437,6 +1430,7 @@ async fn list_board_types(
 
 async fn create_session(
     State(state): State<AppState>,
+    actor: Option<Extension<super::auth::CurrentUser>>,
     axum::Json(request): axum::Json<CreateSessionRequestWithBoardId>,
 ) -> Result<(StatusCode, axum::Json<SessionCreatedResponse>), ApiError> {
     if request.board_type.trim().is_empty() {
@@ -1494,6 +1488,23 @@ async fn create_session(
             })?,
     };
 
+    if let (Some(database), Some(Extension(super::auth::CurrentUser(user)))) =
+        (&state.database, actor)
+        && let Err(error) =
+            sqlx::query("INSERT INTO session_owners(session_id,user_id) VALUES($1,$2)")
+                .bind(&session.id)
+                .bind(user.id)
+                .execute(database.pool())
+                .await
+    {
+        state
+            .request_session_stop(&session.id, SessionStopReason::ApiDelete)
+            .await;
+        log::error!("failed to persist session owner: {error}");
+        return Err(ApiError::service_unavailable(
+            "failed to record session owner",
+        ));
+    }
     let board = state
         .session_board(&session.id)
         .await
@@ -2819,7 +2830,6 @@ async fn rewrite_board_dtb_references(
 
     for board in &affected {
         state.board_store.write_board(board).await?;
-        sync_board_database(state, board).await?;
     }
 
     if !affected.is_empty() {
@@ -2829,18 +2839,6 @@ async fn rewrite_board_dtb_references(
         }
     }
 
-    Ok(())
-}
-
-async fn sync_board_database(state: &AppState, board: &BoardConfig) -> Result<(), ApiError> {
-    if let Some(database) = &state.database {
-        let payload =
-            serde_json::to_value(board).map_err(|error| ApiError::internal(error.to_string()))?;
-        database
-            .sync_board(&board.id, &payload)
-            .await
-            .map_err(ApiError::from)?;
-    }
     Ok(())
 }
 
@@ -2922,6 +2920,9 @@ pub(crate) async fn admin_topic(
         "tftp_status" => serde_json::to_value(get_tftp_status(extractor).await?.0.status),
         "overview" => serde_json::to_value(get_admin_overview(extractor).await?.0),
         "power_actions" => serde_json::to_value(state.admin_power.snapshots()),
+        "users" => serde_json::to_value(super::users::list_users(extractor).await?.0),
+        "roles" => serde_json::to_value(super::users::list_roles(extractor).await?.0),
+        "deployment" => Ok(super::users::deployment(extractor).await.0),
         "runtimes" => {
             let mut values = BTreeMap::new();
             for (id, r) in state.board_runtimes.read().await.iter() {

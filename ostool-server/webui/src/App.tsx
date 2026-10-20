@@ -11,12 +11,12 @@ import {
   CircuitBoardIcon,
   FileIcon,
   ClockIcon,
-  NetworkIcon,
   SettingsIcon,
   MenuIcon,
   UserCircleIcon,
   ExternalLinkIcon,
 } from "lucide-react";
+import { api } from "@/api/client";
 import { admin, useConnection, useErrors } from "@/api/events";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -27,23 +27,69 @@ const BoardEditor = lazy(() => import("./pages/BoardEditor"));
 const Overview = lazy(() => import("./pages/Overview"));
 const Dtbs = lazy(() => import("./pages/Dtbs"));
 const Sessions = lazy(() => import("./pages/Sessions"));
-const Tftp = lazy(() =>
-  import("./pages/Settings").then((m) => ({ default: m.Tftp })),
-);
-const Server = lazy(() =>
-  import("./pages/Settings").then((m) => ({ default: m.Server })),
-);
+const Settings = lazy(() => import("./pages/SystemSettings"));
+const Users = lazy(() => import("./pages/Users"));
+const Roles = lazy(() => import("./pages/Roles"));
 const Account = lazy(() => import("./pages/Account"));
-const navigation = [
-  ["overview", "总览", LayoutDashboardIcon],
-  ["boards", "开发板", CircuitBoardIcon],
-  ["dtbs", "DTB", FileIcon],
+const boardNavigation = [
+  ["boards", "开发板列表", CircuitBoardIcon],
+  ["dtbs", "DTB 管理", FileIcon],
   ["sessions", "会话租约", ClockIcon],
-  ["tftp", "TFTP", NetworkIcon],
-  ["server", "Server 配置", SettingsIcon],
-  ["account", "账号", UserCircleIcon],
+] as const;
+const userNavigation = [
+  ["users", "用户列表", UserCircleIcon],
+  ["users/roles", "用户角色", SettingsIcon],
 ] as const;
 export default function App() {
+  const [gate, setGate] = useState<"checking" | "allowed" | "denied" | "error">(
+    "checking",
+  );
+  const [message, setMessage] = useState("");
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const config = await api.authConfig();
+      if (!config.enabled && !config.database_available) {
+        if (active) setGate("allowed");
+        return;
+      }
+      if (!localStorage.getItem("ostool.access_token")) {
+        window.location.assign("/login");
+        return;
+      }
+      const user = await api.me();
+      if (active) setGate(user.is_admin ? "allowed" : "denied");
+    })().catch((e) => {
+      if (active) {
+        setGate("error");
+        setMessage(e instanceof Error ? e.message : "无法验证登录状态");
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+  if (gate === "checking")
+    return (
+      <div className="admin-gate">
+        <Skeleton className="h-24 w-80" />
+      </div>
+    );
+  if (gate !== "allowed")
+    return (
+      <div className="admin-gate">
+        <Notice>
+          {gate === "denied"
+            ? "你的账号没有管理后台权限，请联系管理员分配角色。"
+            : message}
+        </Notice>
+        <a href="/account">个人中心</a>
+        <a href="/login">重新登录</a>
+      </div>
+    );
+  return <AdminConsole />;
+}
+function AdminConsole() {
   const connection = useConnection(),
     errors = useErrors();
   const [menu, setMenu] = useState(false);
@@ -66,20 +112,62 @@ export default function App() {
         </header>
         <aside className={menu ? "sidebar expanded" : "sidebar"}>
           <NavLink to="/overview" className="brand">
-            <span className="logo-mark"><CircuitBoardIcon size={17} /></span>
-            <span><strong>ostool</strong><small>BOARD PLATFORM</small></span>
+            <span className="logo-mark">
+              <CircuitBoardIcon size={17} />
+            </span>
+            <span>
+              <strong>ostool</strong>
+              <small>BOARD PLATFORM</small>
+            </span>
           </NavLink>
           <nav aria-label="主导航">
-            {navigation.map(([path, label, Icon]) => (
-              <NavLink
-                key={path}
-                to={`/${path}`}
-                onClick={() => setMenu(false)}
-              >
-                <Icon aria-hidden="true" />
-                {label}
-              </NavLink>
-            ))}
+            <NavLink to="/overview" onClick={() => setMenu(false)}>
+              <LayoutDashboardIcon />
+              总览
+            </NavLink>
+            <details className="admin-nav-group" open>
+              <summary>
+                <CircuitBoardIcon />
+                板卡管理
+              </summary>
+              <div>
+                {boardNavigation.map(([path, label, Icon]) => (
+                  <NavLink
+                    key={path}
+                    to={`/${path}`}
+                    onClick={() => setMenu(false)}
+                  >
+                    <Icon />
+                    {label}
+                  </NavLink>
+                ))}
+              </div>
+            </details>
+            <details className="admin-nav-group" open>
+              <summary>
+                <UserCircleIcon />
+                用户管理
+              </summary>
+              <div>
+                {userNavigation.map(([path, label, Icon]) => (
+                  <NavLink
+                    end={path === "users"}
+                    key={path}
+                    to={`/${path}`}
+                    onClick={() => setMenu(false)}
+                  >
+                    <Icon />
+                    {label}
+                  </NavLink>
+                ))}
+              </div>
+            </details>
+          </nav>
+          <nav className="admin-bottom-nav" aria-label="系统导航">
+            <NavLink to="/settings" onClick={() => setMenu(false)}>
+              <SettingsIcon />
+              系统设置
+            </NavLink>
           </nav>
           <div className="connection" role="status">
             <span
@@ -103,8 +191,20 @@ export default function App() {
         </aside>
         <main>
           <header className="admin-topbar">
-            <div><span className="admin-breadcrumb">Workspace</span><span className="admin-separator">/</span><strong>设备管理控制台</strong></div>
-            <div className="admin-top-actions"><a href="/" className="admin-site-link">访问网站 <ExternalLinkIcon size={14} /></a><NavLink className="admin-user-chip" to="/account"><UserCircleIcon size={17} /><span>我的账号</span></NavLink></div>
+            <div>
+              <span className="admin-breadcrumb">Workspace</span>
+              <span className="admin-separator">/</span>
+              <strong>设备管理控制台</strong>
+            </div>
+            <div className="admin-top-actions">
+              <a href="/" className="admin-site-link">
+                访问网站 <ExternalLinkIcon size={14} />
+              </a>
+              <NavLink className="admin-user-chip" to="/account">
+                <UserCircleIcon size={17} />
+                <span>我的账号</span>
+              </NavLink>
+            </div>
           </header>
           {connection === "reconnecting" && (
             <Notice>
@@ -125,8 +225,17 @@ export default function App() {
               <Route path="/boards/:boardId" element={<BoardEditor />} />
               <Route path="/dtbs" element={<Dtbs />} />
               <Route path="/sessions" element={<Sessions />} />
-              <Route path="/tftp" element={<Tftp />} />
-              <Route path="/server" element={<Server />} />
+              <Route
+                path="/tftp"
+                element={<Navigate replace to="/settings?tab=tftp" />}
+              />
+              <Route
+                path="/server"
+                element={<Navigate replace to="/settings?tab=server" />}
+              />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="/users" element={<Users />} />
+              <Route path="/users/roles" element={<Roles />} />
               <Route path="/account" element={<Account />} />
               <Route
                 path="*"

@@ -1,3 +1,4 @@
+import { api, refreshAuth } from "./client";
 import { useSyncExternalStore } from "react";
 import type {
   AdminOverviewResponse,
@@ -25,6 +26,9 @@ export interface Runtime {
   last_release_error: string | null;
 }
 export interface Resources {
+  users: import("@/types/api").ManagedUser[];
+  roles: import("@/types/api").UserRole[];
+  deployment: import("@/types/api").DeploymentInfo;
   quarantined_boards: {
     original_path: string;
     backup_path: string;
@@ -149,6 +153,19 @@ export class AdminStore {
     };
     this.source.addEventListener("snapshot", receive as EventListener);
     this.source.addEventListener("update", receive as EventListener);
+    this.source.addEventListener("auth-expired", () => {
+      this.disconnect();
+      void refreshAuth()
+        .then(() => api.me())
+        .then((user) => {
+          if (!user.is_admin) {
+            window.location.assign("/account");
+            return;
+          }
+          this.restart();
+        })
+        .catch(() => window.location.assign("/login"));
+    });
     this.source.onopen = () => {
       if (this.epoch) {
         this.connection = "connected";
