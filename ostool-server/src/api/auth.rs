@@ -188,6 +188,12 @@ fn is_public_path(path: &str) -> bool {
         || path.starts_with("/admin")
         || path == "/login"
         || path.starts_with("/login/")
+        || path == "/devices"
+        || path.starts_with("/devices/")
+        || path == "/docs"
+        || path.starts_with("/docs/")
+        || path == "/about"
+        || path.starts_with("/about/")
         || path.starts_with("/oauth/")
         || path == "/api/v1/auth/register"
         || path == "/api/v1/auth/login"

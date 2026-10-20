@@ -89,6 +89,12 @@ pub fn build_router(state: AppState) -> Router {
         .route("/login", get(serve_admin_index))
         .route("/login/", get(serve_admin_index))
         .route("/login/{*path}", get(serve_admin_history))
+        .route("/devices", get(serve_admin_index))
+        .route("/devices/{*path}", get(serve_admin_history))
+        .route("/docs", get(serve_admin_index))
+        .route("/docs/{*path}", get(serve_admin_history))
+        .route("/about", get(serve_admin_index))
+        .route("/about/{*path}", get(serve_admin_history))
         .route(
             "/boot/sessions/{session_id}/{*path}",
             get(get_http_boot_file),

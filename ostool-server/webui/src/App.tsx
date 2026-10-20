@@ -15,6 +15,7 @@ import {
   SettingsIcon,
   MenuIcon,
   UserCircleIcon,
+  ExternalLinkIcon,
 } from "lucide-react";
 import { admin, useConnection, useErrors } from "@/api/events";
 import { Button } from "@/components/ui/button";
@@ -65,7 +66,8 @@ export default function App() {
         </header>
         <aside className={menu ? "sidebar expanded" : "sidebar"}>
           <NavLink to="/overview" className="brand">
-            ostool
+            <span className="logo-mark"><CircuitBoardIcon size={17} /></span>
+            <span><strong>ostool</strong><small>BOARD PLATFORM</small></span>
           </NavLink>
           <nav aria-label="主导航">
             {navigation.map(([path, label, Icon]) => (
@@ -100,6 +102,10 @@ export default function App() {
           </div>
         </aside>
         <main>
+          <header className="admin-topbar">
+            <div><span className="admin-breadcrumb">Workspace</span><span className="admin-separator">/</span><strong>设备管理控制台</strong></div>
+            <div className="admin-top-actions"><a href="/" className="admin-site-link">访问网站 <ExternalLinkIcon size={14} /></a><NavLink className="admin-user-chip" to="/account"><UserCircleIcon size={17} /><span>我的账号</span></NavLink></div>
+          </header>
           {connection === "reconnecting" && (
             <Notice>
               连接暂时中断，当前内容和输入已保留，恢复后自动同步。
