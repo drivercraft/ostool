@@ -555,6 +555,38 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+@media (max-width: 960px) {
+  .public-hero-section { grid-template-columns: 1fr; padding-top: 70px; }
+  .hero-copy { max-width: 720px; }
+  .hero-console { max-width: 720px; width: 100%; transform: none; }
+  .split-section { gap: 45px; }
+  .auth-shell { gap: 45px; }
+}
+
+@media (max-width: 760px) {
+  .site-header-inner { width: calc(100% - 36px); height: 64px; }
+  .site-actions { display: none; }
+  .site-menu-toggle { display: grid; place-items: center; border: 0; color: #4d617d; background: transparent; }
+  .site-nav { position: absolute; top: 64px; left: 0; right: 0; display: none; flex-direction: column; align-items: stretch; gap: 0; padding: 8px 18px 18px; border-bottom: 1px solid #e5ebf3; background: rgba(251,252,254,.98); box-shadow: 0 12px 25px rgba(25,55,100,.08); }
+  .site-nav.site-nav-open { display: flex; }
+  .site-nav > a { padding: 13px 6px; }
+  .mobile-nav-actions { display: flex; align-items: center; gap: 15px; padding-top: 10px; border-top: 1px solid #edf1f6; }
+  .mobile-nav-actions > a { padding: 8px 0; }
+  .public-hero-section, .public-section, .logo-strip, .public-cta { width: calc(100% - 36px); }
+  .hero-copy h1 { font-size: clamp(38px, 12vw, 58px); }
+  .hero-trust { gap: 10px 15px; }
+  .console-body { grid-template-columns: 84px 1fr; }
+  .console-content { padding: 18px 14px; }
+  .console-metrics { gap: 5px; }.console-metrics > div { padding: 10px 7px; }.console-metrics strong { font-size: 17px; }
+  .logo-strip { display: block; }.logo-strip div { justify-content: space-between; gap: 8px; margin-top: 14px; }
+  .feature-section { padding: 80px 0; }.feature-grid, .device-showcase { grid-template-columns: 1fr; }
+  .split-section { grid-template-columns: 1fr; padding: 60px 0 80px; }.split-visual { padding: 22px; }
+  .public-cta { display: block; margin-bottom: 70px; padding: 30px 25px; }.public-cta [data-slot="button"] { margin-top: 22px; }
+  .site-footer { padding-inline: 18px; }.site-footer-main { grid-template-columns: repeat(2, 1fr); gap: 35px 22px; }.site-footer-bottom { display: grid; gap: 10px; }
+  .public-inner-page { padding: 70px 18px 90px; }.inner-callout { display: block; padding: 25px; }.inner-callout [data-slot="button"] { margin-top: 20px; }.docs-page { min-height: 570px; }
+  .auth-page main.auth-shell { width: calc(100% - 36px); min-height: 0; padding: 55px 0 70px; grid-template-columns: 1fr; gap: 35px; }.auth-aside { text-align: center; }.auth-aside h1 { margin-inline: auto; font-size: 38px; }.auth-aside p { margin-inline: auto; }.auth-aside-points { justify-content: center; }
+}
 @theme inline {
   --color-success: var(--success);
   --color-warning: var(--warning);
