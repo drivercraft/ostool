@@ -1,15 +1,18 @@
 import { useSearchParams } from "react-router-dom";
+import { useEdition } from "@/edition";
 import { useResource } from "@/api/events";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Notice, ReadonlyInfo } from "@/components/forms";
 import { Server, Tftp } from "./Settings";
 
 export default function SystemSettings() {
+  const publicEdition = useEdition().edition === "public";
   const [params, setParams] = useSearchParams();
   const source = useResource("deployment");
-  const tab = ["server", "tftp", "security", "storage"].includes(
-    params.get("tab") ?? "",
-  )
+  const tab = (publicEdition
+    ? ["server", "tftp", "security", "storage"]
+    : ["server", "tftp", "storage"]
+  ).includes(params.get("tab") ?? "")
     ? params.get("tab")!
     : "server";
   return (
@@ -26,7 +29,9 @@ export default function SystemSettings() {
         <TabsList variant="line" className="system-tabs">
           <TabsTrigger value="server">网络与上传</TabsTrigger>
           <TabsTrigger value="tftp">TFTP 服务</TabsTrigger>
-          <TabsTrigger value="security">登录与部署</TabsTrigger>
+          {publicEdition && (
+            <TabsTrigger value="security">登录与部署</TabsTrigger>
+          )}
           <TabsTrigger value="storage">数据存储</TabsTrigger>
         </TabsList>
         <TabsContent value="server" forceMount hidden={tab !== "server"}>

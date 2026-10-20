@@ -327,7 +327,14 @@ async fn delete_role(
 }
 pub async fn deployment(State(state): State<AppState>) -> Json<serde_json::Value> {
     let config = state.config.read().await;
+    let public = config.edition.is_public();
+    let mut storage = serde_json::json!({"boards":if state.database.is_some(){"PostgreSQL"}else{"TOML"},"dtbs":if state.database.is_some(){"文件 + PostgreSQL 元数据镜像"}else{"文件"},"ota":"文件","configuration":"TOML + 环境变量","active_sessions":"内存（重启失效）","artifacts":"文件（随租约清理）"});
+    if public {
+        for key in ["users", "roles", "rentals"] {
+            storage[key] = serde_json::json!("PostgreSQL");
+        }
+    }
     Json(
-        serde_json::json!({"database_connected":state.database.is_some(),"auth_enabled":config.auth.enabled,"allow_registration":config.auth.allow_registration,"public_base_url":config.auth.public_base_url,"access_token_ttl_secs":config.auth.access_token_ttl_secs,"storage":{"users":"PostgreSQL","roles":"PostgreSQL","boards":if state.database.is_some(){"PostgreSQL"}else{"TOML"},"dtbs":"文件 + PostgreSQL 元数据镜像","ota":"文件","configuration":"TOML + 环境变量","active_sessions":"内存（重启失效）","artifacts":"文件（随租约清理）"}}),
+        serde_json::json!({"edition":config.edition,"database_connected":state.database.is_some(),"auth_enabled":public,"allow_registration":public&&config.auth.allow_registration,"public_base_url":config.auth.public_base_url,"access_token_ttl_secs":config.auth.access_token_ttl_secs,"storage":storage}),
     )
 }

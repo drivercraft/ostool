@@ -17,11 +17,13 @@ import {
   BrowserRouter,
   Link,
   NavLink,
+  Navigate,
   Route,
   Routes,
   useLocation,
   useNavigate,
 } from "react-router-dom";
+import { EditionProvider, useEdition } from "./edition";
 import Account from "./pages/Account";
 import { api, saveAuthToken, type AuthUser } from "./api/client";
 import { Button } from "./components/ui/button";
@@ -45,12 +47,13 @@ function Logo({ light = false }: { light?: boolean }) {
 }
 
 function SiteHeader() {
+  const publicEdition = useEdition().edition === "public";
   const [open, setOpen] = useState(false);
   const [user, setUser] = useState<AuthUser>();
   const location = useLocation();
   useEffect(() => {
     let active = true;
-    if (localStorage.getItem("ostool.access_token"))
+    if (publicEdition && localStorage.getItem("ostool.access_token"))
       void api
         .me()
         .then((value) => {
@@ -62,8 +65,12 @@ function SiteHeader() {
     return () => {
       active = false;
     };
-  }, [location.pathname]);
-  const accountActions = user ? (
+  }, [location.pathname, publicEdition]);
+  const accountActions = !publicEdition ? (
+    <Button asChild size="sm">
+      <a href="/admin/overview">打开控制台</a>
+    </Button>
+  ) : user ? (
     <>
       <Link to="/account">{user.display_name || user.email}</Link>
       {user.is_admin && (
@@ -127,6 +134,7 @@ function SiteHeader() {
 }
 
 function SiteFooter() {
+  const publicEdition = useEdition().edition === "public";
   return (
     <footer className="site-footer">
       <div className="site-footer-main">
@@ -138,7 +146,7 @@ function SiteFooter() {
           <strong>产品</strong>
           <Link to="/devices">设备管理</Link>
           <Link to="/docs">文档中心</Link>
-          <Link to="/login">管理后台</Link>
+          <a href="/admin/overview">管理后台</a>
         </div>
         <div className="footer-column">
           <strong>资源</strong>
@@ -150,9 +158,9 @@ function SiteFooter() {
           <strong>开始使用</strong>
           <span>连接你的第一块开发板</span>
           <Button asChild variant="outline" size="sm">
-            <Link to="/login">
+            <a href={publicEdition ? "/login" : "/admin/overview"}>
               进入控制台 <ArrowRight size={14} />
-            </Link>
+            </a>
           </Button>
         </div>
       </div>
@@ -179,6 +187,7 @@ function PublicLayout({ children }: { children: React.ReactNode }) {
 }
 
 function Home() {
+  const publicEdition = useEdition().edition === "public";
   return (
     <PublicLayout>
       <main className="public-home">
@@ -199,9 +208,9 @@ function Home() {
             </p>
             <div className="hero-actions">
               <Button asChild size="lg">
-                <Link to="/register">
+                <a href={publicEdition ? "/register" : "/admin/overview"}>
                   开始使用 <ArrowRight size={16} />
-                </Link>
+                </a>
               </Button>
               <Button asChild size="lg" variant="outline">
                 <Link to="/docs">
@@ -328,7 +337,11 @@ function Home() {
               icon={<Command />}
               number="03"
               title="CLI 优先"
-              text="浏览器和 ostool CLI 使用同一套登录与 API 契约，脚本和人工操作自然衔接。"
+              text={
+                publicEdition
+                  ? "浏览器和 ostool CLI 使用同一套登录与 API 契约，脚本和人工操作自然衔接。"
+                  : "浏览器与 ostool CLI 直连本地服务，脚本和人工操作自然衔接。"
+              }
             />
           </div>
         </section>
@@ -344,13 +357,19 @@ function Home() {
                 <small>ostool terminal</small>
               </div>
               <div className="terminal-lines">
-                <p>
-                  <b>$</b> ostool login
-                </p>
-                <p className="dim">Opening device authorization page...</p>
-                <p>
-                  <b>✓</b> Authenticated as <strong>team@acme.dev</strong>
-                </p>
+                {publicEdition ? (
+                  <>
+                    <p>
+                      <b>$</b> ostool login
+                    </p>
+                    <p className="dim">Opening device authorization page...</p>
+                    <p>
+                      <b>✓</b> Authenticated as <strong>team@acme.dev</strong>
+                    </p>
+                  </>
+                ) : (
+                  <p className="dim">Connected to local board server</p>
+                )}
                 <p>
                   <b>$</b> ostool board run --type rk3568
                 </p>
@@ -376,7 +395,7 @@ function Home() {
               </li>
               <li>
                 <CheckCircle2 />
-                OAuth 登录与个人访问令牌
+                {publicEdition ? "OAuth 登录与个人访问令牌" : "本地设备直连"}
               </li>
             </ul>
             <Link className="text-arrow-link" to="/docs">
@@ -391,9 +410,10 @@ function Home() {
             <p>几分钟完成部署，随后专注于真正重要的开发工作。</p>
           </div>
           <Button asChild size="lg">
-            <Link to="/register">
-              创建免费账号 <ArrowRight size={16} />
-            </Link>
+            <a href={publicEdition ? "/register" : "/admin/overview"}>
+              {publicEdition ? "创建账号" : "打开本地控制台"}{" "}
+              <ArrowRight size={16} />
+            </a>
           </Button>
         </section>
       </main>
@@ -426,6 +446,7 @@ function FeatureCard({
 }
 
 function Devices() {
+  const publicEdition = useEdition().edition === "public";
   return (
     <PublicLayout>
       <main className="public-inner-page">
@@ -460,9 +481,9 @@ function Devices() {
             <p>登录管理后台，查看你的设备池和当前会话。</p>
           </div>
           <Button asChild>
-            <Link to="/login">
+            <a href={publicEdition ? "/login" : "/admin/overview"}>
               进入控制台 <ArrowRight size={15} />
-            </Link>
+            </a>
           </Button>
         </div>
       </main>
@@ -550,13 +571,7 @@ function Login() {
   const registering =
     location.pathname === "/register" || query.get("register") === "1";
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [registrationAllowed, setRegistrationAllowed] = useState<boolean>();
-  useEffect(() => {
-    api
-      .authConfig()
-      .then((c) => setRegistrationAllowed(c.allow_registration))
-      .catch(() => setRegistrationAllowed(false));
-  }, []);
+  const registrationAllowed = useEdition().allow_registration;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -720,22 +735,40 @@ function Login() {
 
 export default function PublicApp() {
   return (
+    <EditionProvider>
+      <PublicRoutes />
+    </EditionProvider>
+  );
+}
+function PublicRoutes() {
+  const publicEdition = useEdition().edition === "public";
+  return (
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/devices" element={<Devices />} />
         <Route path="/docs" element={<Docs />} />
         <Route path="/about" element={<About />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Login />} />
+        <Route
+          path="/login"
+          element={publicEdition ? <Login /> : <Navigate replace to="/" />}
+        />
+        <Route
+          path="/register"
+          element={publicEdition ? <Login /> : <Navigate replace to="/" />}
+        />
         <Route
           path="/account"
           element={
-            <PublicLayout>
-              <main className="public-inner-page">
-                <Account />
-              </main>
-            </PublicLayout>
+            publicEdition ? (
+              <PublicLayout>
+                <main className="public-inner-page">
+                  <Account />
+                </main>
+              </PublicLayout>
+            ) : (
+              <Navigate replace to="/" />
+            )
           }
         />
         <Route path="*" element={<Home />} />

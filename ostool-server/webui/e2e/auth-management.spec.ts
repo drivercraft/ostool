@@ -3,6 +3,7 @@ import { expect, test } from "playwright/test";
 // Optional second server with PostgreSQL; the ordinary fixture stays isolated.
 test("registration, member/admin access, user/role events and settings navigation", async ({
   page,
+  request,
 }) => {
   const base = process.env.OSTOOL_E2E_AUTH_BASE_URL;
   test.skip(!base, "requires a disposable PostgreSQL-backed server");
@@ -53,6 +54,55 @@ test("registration, member/admin access, user/role events and settings navigatio
   await page.getByLabel("角色名称", { exact: true }).fill(role);
   await page.getByRole("button", { name: "保存角色", exact: true }).click();
   await expect(page.getByText(role, { exact: true })).toBeVisible();
+  const token = await page.evaluate(() =>
+    localStorage.getItem("ostool.access_token"),
+  );
+  const headers = { authorization: `Bearer ${token}` };
+  const boardId = `rental-board-${Date.now()}`;
+  expect(
+    (
+      await request.post(`${base}/api/v1/admin/boards`, {
+        headers,
+        data: {
+          id: boardId,
+          board_type: "test-rental",
+          tags: [],
+          disabled: false,
+          serial: null,
+          notes: null,
+          network_identity: null,
+          boot: { kind: "pxe", notes: null },
+          power_management: {
+            kind: "custom",
+            power_on_cmd: "true",
+            power_off_cmd: "true",
+          },
+        },
+      })
+    ).ok(),
+  ).toBeTruthy();
+  await page.getByRole("link", { name: "租赁列表", exact: true }).click();
+  await page.getByRole("button", { name: "新增租赁", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog
+    .getByLabel("使用用户", { exact: true })
+    .selectOption({ label: `浏览器注册用户 · ${email}` });
+  await dialog.getByLabel("指定开发板", { exact: true }).selectOption(boardId);
+  await dialog.getByRole("button", { name: "保存租赁", exact: true }).click();
+  const row = page
+    .getByRole("row")
+    .filter({ has: page.getByRole("cell", { name: boardId, exact: true }) });
+  await expect(row).toBeVisible();
+  await expect(row.getByText("使用期内", { exact: true })).toBeVisible();
+  await page.screenshot({
+    path: "/tmp/ostool-rentals-verified.png",
+    fullPage: true,
+  });
+  await row.getByRole("button", { name: "取消租赁", exact: true }).click();
+  await page.getByRole("button", { name: "确认", exact: true }).click();
+  await expect(row.getByText("已取消", { exact: true })).toBeVisible();
+  await page.getByLabel("租赁状态", { exact: true }).selectOption("active");
+  await expect(row).toHaveCount(0);
   await page.getByRole("link", { name: "系统设置", exact: true }).click();
   await page.getByRole("tab", { name: "数据存储", exact: true }).click();
   await expect(page).toHaveURL(/tab=storage/);

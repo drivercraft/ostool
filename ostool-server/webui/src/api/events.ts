@@ -1,4 +1,4 @@
-import { api, refreshAuth } from "./client";
+import { api, refreshAuth, isPublicEdition } from "./client";
 import { useSyncExternalStore } from "react";
 import type {
   AdminOverviewResponse,
@@ -26,6 +26,7 @@ export interface Runtime {
   last_release_error: string | null;
 }
 export interface Resources {
+  rentals: import("@/types/api").Rental[];
   users: import("@/types/api").ManagedUser[];
   roles: import("@/types/api").UserRole[];
   deployment: import("@/types/api").DeploymentInfo;
@@ -141,7 +142,9 @@ export class AdminStore {
   };
   connect = () => {
     if (this.source) return;
-    const token = localStorage.getItem("ostool.access_token");
+    const token = isPublicEdition()
+      ? localStorage.getItem("ostool.access_token")
+      : null;
     const suffix = token ? `?access_token=${encodeURIComponent(token)}` : "";
     this.source = new EventSource(`/api/v1/admin/events${suffix}`);
     const receive = (event: MessageEvent) => {

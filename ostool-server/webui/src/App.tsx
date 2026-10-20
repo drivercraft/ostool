@@ -11,11 +11,13 @@ import {
   CircuitBoardIcon,
   FileIcon,
   ClockIcon,
+  CalendarClockIcon,
   SettingsIcon,
   MenuIcon,
   UserCircleIcon,
   ExternalLinkIcon,
 } from "lucide-react";
+import { EditionProvider, useEdition } from "./edition";
 import { api } from "@/api/client";
 import { admin, useConnection, useErrors } from "@/api/events";
 import { Button } from "@/components/ui/button";
@@ -28,6 +30,7 @@ const Overview = lazy(() => import("./pages/Overview"));
 const Dtbs = lazy(() => import("./pages/Dtbs"));
 const Sessions = lazy(() => import("./pages/Sessions"));
 const Settings = lazy(() => import("./pages/SystemSettings"));
+const Rentals = lazy(() => import("./pages/Rentals"));
 const Users = lazy(() => import("./pages/Users"));
 const Roles = lazy(() => import("./pages/Roles"));
 const Account = lazy(() => import("./pages/Account"));
@@ -41,6 +44,14 @@ const userNavigation = [
   ["users/roles", "用户角色", SettingsIcon],
 ] as const;
 export default function App() {
+  return (
+    <EditionProvider>
+      <AdminEntry />
+    </EditionProvider>
+  );
+}
+function AdminEntry() {
+  const config = useEdition();
   const [gate, setGate] = useState<"checking" | "allowed" | "denied" | "error">(
     "checking",
   );
@@ -48,8 +59,7 @@ export default function App() {
   useEffect(() => {
     let active = true;
     (async () => {
-      const config = await api.authConfig();
-      if (!config.enabled && !config.database_available) {
+      if (config.edition === "local") {
         if (active) setGate("allowed");
         return;
       }
@@ -68,7 +78,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [config]);
   if (gate === "checking")
     return (
       <div className="admin-gate">
@@ -90,6 +100,7 @@ export default function App() {
   return <AdminConsole />;
 }
 function AdminConsole() {
+  const publicEdition = useEdition().edition === "public";
   const connection = useConnection(),
     errors = useErrors();
   const [menu, setMenu] = useState(false);
@@ -143,25 +154,41 @@ function AdminConsole() {
                 ))}
               </div>
             </details>
-            <details className="admin-nav-group" open>
-              <summary>
-                <UserCircleIcon />
-                用户管理
-              </summary>
-              <div>
-                {userNavigation.map(([path, label, Icon]) => (
-                  <NavLink
-                    end={path === "users"}
-                    key={path}
-                    to={`/${path}`}
-                    onClick={() => setMenu(false)}
-                  >
-                    <Icon />
-                    {label}
-                  </NavLink>
-                ))}
-              </div>
-            </details>
+            {publicEdition && (
+              <>
+                <details className="admin-nav-group" open>
+                  <summary>
+                    <CalendarClockIcon />
+                    租赁管理
+                  </summary>
+                  <div>
+                    <NavLink to="/rentals" onClick={() => setMenu(false)}>
+                      <CalendarClockIcon />
+                      租赁列表
+                    </NavLink>
+                  </div>
+                </details>
+                <details className="admin-nav-group" open>
+                  <summary>
+                    <UserCircleIcon />
+                    用户管理
+                  </summary>
+                  <div>
+                    {userNavigation.map(([path, label, Icon]) => (
+                      <NavLink
+                        end={path === "users"}
+                        key={path}
+                        to={`/${path}`}
+                        onClick={() => setMenu(false)}
+                      >
+                        <Icon />
+                        {label}
+                      </NavLink>
+                    ))}
+                  </div>
+                </details>
+              </>
+            )}
           </nav>
           <nav className="admin-bottom-nav" aria-label="系统导航">
             <NavLink to="/settings" onClick={() => setMenu(false)}>
@@ -200,10 +227,14 @@ function AdminConsole() {
               <a href="/" className="admin-site-link">
                 访问网站 <ExternalLinkIcon size={14} />
               </a>
-              <NavLink className="admin-user-chip" to="/account">
-                <UserCircleIcon size={17} />
-                <span>我的账号</span>
-              </NavLink>
+              {publicEdition ? (
+                <NavLink className="admin-user-chip" to="/account">
+                  <UserCircleIcon size={17} />
+                  <span>我的账号</span>
+                </NavLink>
+              ) : (
+                <span className="admin-user-chip">本地版 · 免登录</span>
+              )}
             </div>
           </header>
           {connection === "reconnecting" && (
@@ -234,9 +265,46 @@ function AdminConsole() {
                 element={<Navigate replace to="/settings?tab=server" />}
               />
               <Route path="/settings" element={<Settings />} />
-              <Route path="/users" element={<Users />} />
-              <Route path="/users/roles" element={<Roles />} />
-              <Route path="/account" element={<Account />} />
+              <Route
+                path="/users"
+                element={
+                  publicEdition ? (
+                    <Users />
+                  ) : (
+                    <Navigate replace to="/overview" />
+                  )
+                }
+              />
+              <Route
+                path="/users/roles"
+                element={
+                  publicEdition ? (
+                    <Roles />
+                  ) : (
+                    <Navigate replace to="/overview" />
+                  )
+                }
+              />
+              <Route
+                path="/account"
+                element={
+                  publicEdition ? (
+                    <Account />
+                  ) : (
+                    <Navigate replace to="/overview" />
+                  )
+                }
+              />
+              <Route
+                path="/rentals"
+                element={
+                  publicEdition ? (
+                    <Rentals />
+                  ) : (
+                    <Navigate replace to="/overview" />
+                  )
+                }
+              />
               <Route
                 path="*"
                 element={<Notice>页面不存在。请选择左侧管理模块。</Notice>}

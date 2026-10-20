@@ -21,6 +21,7 @@ vi.mock("./api/client", () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.config.mockResolvedValue({
+    edition: "public",
     enabled: true,
     allow_registration: true,
     database_available: true,
@@ -36,10 +37,29 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("registration", () => {
+  it("hides every account entry in local edition, even with PostgreSQL and a stale token", async () => {
+    mocks.config.mockResolvedValue({
+      edition: "local",
+      enabled: false,
+      allow_registration: false,
+      database_available: true,
+    });
+    localStorage.setItem("ostool.access_token", "stale-token");
+    render(<PublicApp />);
+    await screen.findByRole("heading", { name: /让每一块开发板/ });
+    expect(window.location.pathname).toBe("/");
+    expect(screen.queryByRole("link", { name: "免费注册" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "登录" })).toBeNull();
+    expect(mocks.me).not.toHaveBeenCalled();
+    expect(mocks.login).not.toHaveBeenCalled();
+    localStorage.clear();
+  });
   it("switches a mounted login page to registration through the header", async () => {
     const user = userEvent.setup();
     render(<PublicApp />);
-    await user.click(screen.getAllByRole("link", { name: "免费注册" })[0]);
+    await user.click(
+      (await screen.findAllByRole("link", { name: "免费注册" }))[0],
+    );
     expect(
       await screen.findByRole("heading", { name: "创建你的账号" }),
     ).toBeTruthy();
@@ -49,7 +69,7 @@ describe("registration", () => {
     window.history.replaceState({}, "", "/register");
     const user = userEvent.setup();
     render(<PublicApp />);
-    await user.type(screen.getByLabelText("邮箱"), "member@test.local");
+    await user.type(await screen.findByLabelText("邮箱"), "member@test.local");
     await user.type(screen.getByLabelText("显示名称"), "Member");
     await user.type(screen.getByLabelText("密码"), "member-password-123");
     await user.type(screen.getByLabelText("确认密码"), "different-password");
@@ -69,7 +89,10 @@ describe("registration", () => {
     );
   });
   it("shows registration closed without sending a request", async () => {
-    mocks.config.mockResolvedValue({ allow_registration: false });
+    mocks.config.mockResolvedValue({
+      edition: "public",
+      allow_registration: false,
+    });
     window.history.replaceState({}, "", "/register");
     render(<PublicApp />);
     await screen.findByText("当前站点未开放注册，请联系管理员。");

@@ -1,25 +1,81 @@
+import { ListToolbar } from "@/components/list-toolbar";
+import { Button } from "@/components/ui/button";
 import { useEffect, useState } from "react";
 import { formatLeaseRemaining } from "@/utils/time";
 import { useList, useResource } from "@/api/events";
 import { api } from "@/api/client";
-import { DataTable, Row, Cell, ConfirmAction } from "@/components/forms";
+import {
+  DataTable,
+  Row,
+  Cell,
+  ConfirmAction,
+  TextField,
+  SelectField,
+} from "@/components/forms";
 import { SerialRuntimeDetails } from "@/components/serial-runtime";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "react-router-dom";
 export default function Sessions() {
   const sessions = useList("sessions"),
     runtimes = useResource("runtimes") ?? {};
+  const [search, setSearch] = useState("");
+  const [board, setBoard] = useState("");
+  const [status, setStatus] = useState("");
+  const filtered = sessions.filter(
+    (s) =>
+      (!board || s.board_id === board) &&
+      (!status || s.state === status) &&
+      `${s.id} ${s.client_name ?? ""}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
+  );
   return (
     <>
       <header className="page-header">
         <h1>会话租约</h1>
       </header>
       <p className="page-description">租约释放及失败恢复状态实时同步。</p>
+      <ListToolbar
+        actions={
+          <Button asChild variant="outline">
+            <Link to="/boards">查看开发板</Link>
+          </Button>
+        }
+        count={`${filtered.length} 个会话`}
+      >
+        <TextField
+          label="搜索会话"
+          value={search}
+          onValue={setSearch}
+          placeholder="会话 ID 或客户端"
+        />
+        <SelectField
+          label="开发板筛选"
+          value={board}
+          onValue={setBoard}
+          options={[
+            { value: "", label: "全部开发板" },
+            ...Array.from(new Set(sessions.map((s) => s.board_id))).map(
+              (id) => ({ value: id, label: id }),
+            ),
+          ]}
+        />
+        <SelectField
+          label="会话状态"
+          value={status}
+          onValue={setStatus}
+          options={[
+            { value: "", label: "全部状态" },
+            { value: "active", label: "占用中" },
+            { value: "releasing", label: "释放中" },
+          ]}
+        />
+      </ListToolbar>
       <DataTable
         headers={["Session", "开发板", "客户端", "创建 / 到期", "状态", "操作"]}
-        empty={!sessions.length}
+        empty={!filtered.length}
       >
-        {sessions.map((s) => (
+        {filtered.map((s) => (
           <Row key={s.id}>
             <Cell className="mono">{s.id}</Cell>
             <Cell>

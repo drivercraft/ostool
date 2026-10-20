@@ -1,3 +1,4 @@
+import { ListToolbar } from "@/components/list-toolbar";
 import { useState } from "react";
 import { api } from "@/api/client";
 import { useList, useResource } from "@/api/events";
@@ -27,15 +28,20 @@ export default function Users() {
     roles = useList("roles"),
     deployment = useResource("deployment");
   const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const [editor, setEditor] = useState<{
     id?: string;
     draft: UserInput;
   } | null>(null);
   const task = useAction();
-  const filtered = users.filter((u) =>
-    `${u.email} ${u.display_name ?? ""}`
-      .toLowerCase()
-      .includes(search.toLowerCase()),
+  const filtered = users.filter(
+    (u) =>
+      (!roleFilter || u.role_id === roleFilter) &&
+      (!statusFilter || String(u.disabled) === statusFilter) &&
+      `${u.email} ${u.display_name ?? ""}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
   );
   const open = (user?: ManagedUser) =>
     setEditor({
@@ -58,25 +64,47 @@ export default function Users() {
             管理用户账号、角色、状态与登录凭据。
           </p>
         </div>
-        <Button
-          disabled={!deployment?.database_connected}
-          onClick={() => open()}
-        >
-          创建用户
-        </Button>
       </header>
       {!deployment?.database_connected && (
         <Notice>用户管理需要连接 PostgreSQL。</Notice>
       )}
-      <div className="filters">
+      <ListToolbar
+        actions={
+          <Button
+            disabled={!deployment?.database_connected}
+            onClick={() => open()}
+          >
+            创建用户
+          </Button>
+        }
+        count={`${filtered.length} 位用户`}
+      >
         <TextField
           label="搜索用户"
           value={search}
           placeholder="邮箱或显示名称"
           onValue={setSearch}
         />
-        <span className="filter-count">{filtered.length} 位用户</span>
-      </div>
+        <SelectField
+          label="角色筛选"
+          value={roleFilter}
+          onValue={setRoleFilter}
+          options={[
+            { value: "", label: "全部角色" },
+            ...roles.map((r) => ({ value: r.id, label: r.name })),
+          ]}
+        />
+        <SelectField
+          label="账号状态"
+          value={statusFilter}
+          onValue={setStatusFilter}
+          options={[
+            { value: "", label: "全部状态" },
+            { value: "false", label: "正常" },
+            { value: "true", label: "已禁用" },
+          ]}
+        />
+      </ListToolbar>
       <DataTable
         headers={["用户", "角色", "状态", "创建时间", "操作"]}
         empty={!filtered.length}

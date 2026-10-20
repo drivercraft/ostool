@@ -1,3 +1,4 @@
+import { ListToolbar } from "@/components/list-toolbar";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { PlusIcon } from "lucide-react";
@@ -6,7 +7,6 @@ import { useList, useResource } from "@/api/events";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { FieldGroup } from "@/components/ui/field";
 import {
   DataTable,
   Row,
@@ -33,6 +33,24 @@ export default function Boards() {
     [tag, setTag] = useState(""),
     [status, setStatus] = useState("");
   const [virtualMac, setVirtualMac] = useState("");
+  const [discoverySearch, setDiscoverySearch] = useState("");
+  const [discoveryStatus, setDiscoveryStatus] = useState("");
+  const [virtualSearch, setVirtualSearch] = useState("");
+  const filteredLoaders = loaders.filter(
+    (d) =>
+      `${d.mac_address} ${d.ip_address} ${d.hardware.product ?? ""}`
+        .toLowerCase()
+        .includes(discoverySearch.toLowerCase()) &&
+      (!discoveryStatus ||
+        (d.conflict ? "conflict" : d.online ? "online" : "offline") ===
+          discoveryStatus),
+  );
+  const filteredVirtual =
+    virtual?.devices.filter((d) =>
+      `${d.id} ${d.mac_address} ${d.tap}`
+        .toLowerCase()
+        .includes(virtualSearch.toLowerCase()),
+    ) ?? [];
   const task = useAction();
   const quarantined = useList("quarantined_boards");
   const filtered = boards.filter(
@@ -64,12 +82,6 @@ export default function Boards() {
             台可用
           </p>
         </div>
-        <Button asChild>
-          <Link to="/boards/new">
-            <PlusIcon data-icon="inline-start" />
-            新建开发板
-          </Link>
-        </Button>
       </header>
       {quarantined.length > 0 && (
         <Notice>
@@ -106,7 +118,17 @@ export default function Boards() {
           )}
         </TabsList>
         <TabsContent value="boards">
-          <FieldGroup className="filter-bar">
+          <ListToolbar
+            actions={
+              <Button asChild>
+                <Link to="/boards/new">
+                  <PlusIcon data-icon="inline-start" />
+                  新建开发板
+                </Link>
+              </Button>
+            }
+            count={`${filtered.length} 台`}
+          >
             <TextField
               label="搜索开发板"
               value={search}
@@ -155,8 +177,7 @@ export default function Boards() {
                 清除筛选
               </Button>
             )}
-            <span className="filter-count">{filtered.length} 台</span>
-          </FieldGroup>
+          </ListToolbar>
           <DataTable
             headers={["开发板", "状态", "连接", "启动方式", "操作"]}
             empty={!filtered.length}
@@ -245,11 +266,37 @@ export default function Boards() {
             <p className="hint">
               设备通过网络上报身份。选择设备创建配置，或在新建页手动输入 MAC。
             </p>
+            <ListToolbar
+              actions={
+                <Button asChild variant="outline">
+                  <Link to="/boards/new">新建开发板</Link>
+                </Button>
+              }
+              count={`${filteredLoaders.length} 台`}
+            >
+              <TextField
+                label="搜索发现设备"
+                value={discoverySearch}
+                onValue={setDiscoverySearch}
+                placeholder="MAC、IP 或硬件"
+              />
+              <SelectField
+                label="发现设备状态"
+                value={discoveryStatus}
+                onValue={setDiscoveryStatus}
+                options={[
+                  { value: "", label: "全部状态" },
+                  { value: "online", label: "在线" },
+                  { value: "offline", label: "离线" },
+                  { value: "conflict", label: "MAC 冲突" },
+                ]}
+              />
+            </ListToolbar>
             <DataTable
               headers={["MAC / IP", "硬件", "架构 / Loader", "状态", "操作"]}
-              empty={!loaders.length}
+              empty={!filteredLoaders.length}
             >
-              {loaders.map((d) => (
+              {filteredLoaders.map((d) => (
                 <Row key={d.mac_address}>
                   <Cell className="mono">
                     {d.mac_address}
@@ -323,31 +370,43 @@ export default function Boards() {
           <TabsContent value="virtual">
             <section className="page-section">
               <h2>虚拟设备</h2>
-              <FieldGroup className="filters">
+              <ListToolbar
+                actions={
+                  <>
+                    <Button
+                      disabled={task.pending}
+                      onClick={() =>
+                        void task.run(
+                          () => api.createVirtualDevice(virtualMac),
+                          "已启动虚拟设备，等待真实网络发现",
+                        )
+                      }
+                    >
+                      启动虚拟设备
+                    </Button>
+                    <TextField
+                      label="MAC 地址（可选）"
+                      value={virtualMac}
+                      onValue={setVirtualMac}
+                      placeholder="留空自动生成"
+                    />
+                  </>
+                }
+                count={`${filteredVirtual.length} 台`}
+              >
                 <TextField
-                  label="MAC 地址（可选）"
-                  value={virtualMac}
-                  onValue={setVirtualMac}
-                  placeholder="留空自动生成"
+                  label="搜索虚拟设备"
+                  value={virtualSearch}
+                  onValue={setVirtualSearch}
+                  placeholder="名称、MAC 或 TAP"
                 />
-                <Button
-                  disabled={task.pending}
-                  onClick={() =>
-                    void task.run(
-                      () => api.createVirtualDevice(virtualMac),
-                      "已启动虚拟设备，等待真实网络发现",
-                    )
-                  }
-                >
-                  启动虚拟设备
-                </Button>
-              </FieldGroup>
+              </ListToolbar>
               {task.error && <Notice>{task.error}</Notice>}
               <DataTable
                 headers={["设备", "MAC / TAP", "电源 / 串口", "操作"]}
-                empty={!virtual.devices.length}
+                empty={!filteredVirtual.length}
               >
-                {virtual.devices.map((d) => (
+                {filteredVirtual.map((d) => (
                   <Row key={d.id}>
                     <Cell className="mono">
                       {d.id}

@@ -82,6 +82,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
         .append_pair("options", &format!("-c search_path={schema},public"));
     let dir = tempfile::tempdir().unwrap();
     let mut config = ServerConfig {
+        edition: ostool_server::config::Edition::Public,
         data_dir: dir.path().join("data"),
         board_dir: dir.path().join("boards"),
         dtb_dir: dir.path().join("dtbs"),
@@ -270,6 +271,124 @@ async fn registration_roles_revocation_and_inventory_restart() {
         .0,
         StatusCode::NO_CONTENT
     );
+    // Public members need an active allocation, including board-type discovery.
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/v1/sessions",
+            Some(member),
+            json!({"board_type":"test"})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            "/api/v1/board-types",
+            Some(member),
+            Value::Null
+        )
+        .await
+        .1,
+        json!([])
+    );
+    let rental_start = chrono::Utc::now() - chrono::Duration::minutes(1);
+    let rental_end = chrono::Utc::now() + chrono::Duration::hours(1);
+    let assignment = json!({"board_id":"test-board","user_id":id,"starts_at":rental_start,"ends_at":rental_end,"notes":"integration rental"});
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/v1/admin/rentals",
+            Some(member),
+            assignment.clone()
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/v1/admin/rentals",
+            Some(admin),
+            assignment.clone()
+        )
+        .await
+        .0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/v1/admin/rentals",
+            Some(admin),
+            assignment.clone()
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let adjacent = json!({"board_id":"test-board","user_id":id,"starts_at":rental_end,"ends_at":rental_end+chrono::Duration::hours(1)});
+    assert_eq!(
+        call(&app, "POST", "/api/v1/admin/rentals", Some(admin), adjacent)
+            .await
+            .0,
+        StatusCode::CREATED
+    );
+    let concurrent = json!({"board_id":"test-board","user_id":id,"starts_at":rental_end+chrono::Duration::hours(2),"ends_at":rental_end+chrono::Duration::hours(3)});
+    let (first, second) = tokio::join!(
+        call(
+            &app,
+            "POST",
+            "/api/v1/admin/rentals",
+            Some(admin),
+            concurrent.clone()
+        ),
+        call(
+            &app,
+            "POST",
+            "/api/v1/admin/rentals",
+            Some(admin),
+            concurrent
+        )
+    );
+    assert!([first.0, second.0].contains(&StatusCode::CREATED));
+    assert!([first.0, second.0].contains(&StatusCode::CONFLICT));
+    let (_, rentals) = call(
+        &app,
+        "GET",
+        "/api/v1/admin/rentals",
+        Some(admin),
+        Value::Null,
+    )
+    .await;
+    let active_id = rentals
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["status"] == "active")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            "/api/v1/admin/boards/test-board",
+            Some(admin),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
     // Member leases are isolated from other users, including serial/file paths.
     let (status, lease) = call(
         &app,
@@ -323,6 +442,121 @@ async fn registration_roles_revocation_and_inventory_restart() {
     })
     .await
     .unwrap();
+    // A serial-style heartbeat cannot extend beyond the allocation deadline.
+    let (_, leased) = call(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        Some(member),
+        json!({"board_type":"test"}),
+    )
+    .await;
+    let leased_id = leased["session_id"].as_str().unwrap();
+    let cutoff = chrono::Utc::now() + chrono::Duration::seconds(2);
+    let shortened = json!({"board_id":"test-board","user_id":id,"starts_at":rental_start,"ends_at":cutoff,"notes":"shortened"});
+    assert_eq!(
+        call(
+            &app,
+            "PUT",
+            &format!("/api/v1/admin/rentals/{active_id}"),
+            Some(admin),
+            shortened
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    let runtime = state.session_state(leased_id).await.unwrap();
+    assert!(runtime.heartbeat().await.expires_at <= cutoff);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while state.get_session(leased_id).await.is_some() {
+            runtime.heartbeat().await;
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/v1/sessions",
+            Some(member),
+            json!({"board_type":"test"})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let replacement = json!({"board_id":"test-board","user_id":id,"starts_at":chrono::Utc::now(),"ends_at":chrono::Utc::now()+chrono::Duration::minutes(5)});
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/v1/admin/rentals",
+            Some(admin),
+            replacement
+        )
+        .await
+        .0,
+        StatusCode::CREATED
+    );
+    let (_, list) = call(
+        &app,
+        "GET",
+        "/api/v1/admin/rentals",
+        Some(admin),
+        Value::Null,
+    )
+    .await;
+    let cancel_id = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["status"] == "active")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let (_, leased) = call(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        Some(member),
+        json!({"board_type":"test"}),
+    )
+    .await;
+    let cancelled_session = leased["session_id"].as_str().unwrap();
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            &format!("/api/v1/admin/rentals/{cancel_id}"),
+            Some(admin),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while state.get_session(cancelled_session).await.is_some() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/v1/sessions",
+            Some(member),
+            json!({"board_type":"test"})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
     let roles_path = "/api/v1/admin/roles";
     assert_eq!(
         call(
@@ -420,6 +654,72 @@ async fn registration_roles_revocation_and_inventory_restart() {
         .unwrap();
     assert!(!stored.contains("test-admin-password"));
     assert!(!stored.contains("postgres://"));
+    let mut local = config.clone();
+    local.edition = ostool_server::config::Edition::Local;
+    let local_state = build_app_state(
+        dir.path().join("local.toml"),
+        local.clone(),
+        build_tftp_manager(&local.tftp),
+    )
+    .await
+    .unwrap();
+    let local_app = build_router(local_state);
+    assert_eq!(
+        call(&local_app, "GET", "/api/v1/auth/config", None, Value::Null)
+            .await
+            .1["edition"],
+        "local"
+    );
+    for path in [
+        "/api/v1/admin/users",
+        "/api/v1/admin/roles",
+        "/api/v1/admin/rentals",
+        "/api/v1/auth/me",
+    ] {
+        assert_eq!(
+            call(&local_app, "GET", path, None, Value::Null).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        call(
+            &local_app,
+            "POST",
+            "/api/v1/auth/login",
+            None,
+            json!({"email":"admin@test.local","password":"test-admin-password"})
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        form(
+            &local_app,
+            "/oauth/device/code",
+            &[("client_id", "ostool-cli")]
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(&local_app, "GET", "/api/v1/admin/boards", None, Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let mut no_database = config.clone();
+    no_database.database.url = None;
+    assert!(
+        build_app_state(
+            dir.path().join("invalid.toml"),
+            no_database.clone(),
+            build_tftp_manager(&no_database.tftp)
+        )
+        .await
+        .is_err()
+    );
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
         .execute(&root)
         .await

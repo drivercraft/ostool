@@ -1,3 +1,4 @@
+import { ListToolbar } from "@/components/list-toolbar";
 import { useRef, useState } from "react";
 import { api } from "@/api/client";
 import { useList } from "@/api/events";
@@ -98,21 +99,32 @@ export function DtbUpload({
 }
 export default function Dtbs() {
   const dtbs = useList("dtbs");
+  const [search, setSearch] = useState("");
+  const filtered = dtbs.filter((d) =>
+    d.name.toLowerCase().includes(search.toLowerCase()),
+  );
   const [editing, setEditing] = useState<DtbFileResponse | null>(null);
   return (
     <>
       <header className="page-header">
         <h1>DTB</h1>
-        <DtbUpload />
       </header>
       <p className="page-description">
         管理板卡启动使用的设备树文件，单个文件最大 10 MiB。
       </p>
+      <ListToolbar actions={<DtbUpload />} count={`${filtered.length} 个文件`}>
+        <TextField
+          label="搜索 DTB"
+          value={search}
+          onValue={setSearch}
+          placeholder="按文件名筛选"
+        />
+      </ListToolbar>
       <DataTable
         headers={["名称", "大小", "更新时间", "TFTP 路径模板", "操作"]}
-        empty={!dtbs.length}
+        empty={!filtered.length}
       >
-        {dtbs.map((d) => (
+        {filtered.map((d) => (
           <Row key={d.name}>
             <Cell className="mono">{d.name}</Cell>
             <Cell>{formatSize(d.size)}</Cell>

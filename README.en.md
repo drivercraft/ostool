@@ -758,4 +758,4 @@ This project is dual-licensed:
 
 Thanks to all developers and users who have contributed to the ostool project!
 
-For server login, user/role management, runtime environment variables and Caddy/systemd deployment, see the [ostool-server deployment guide](ostool-server/deploy/README.md).
+Local edition is login-free by default. For public edition authentication, user/role management, scheduled board rentals, runtime environment variables and Caddy/systemd deployment, see the [ostool-server deployment guide](ostool-server/deploy/README.md).

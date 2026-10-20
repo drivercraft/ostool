@@ -51,8 +51,17 @@ pub(crate) fn apply_values(
             *target = Some(value.clone());
         }
     }
+    parsed(values, "OSTOOL_EDITION", &mut config.edition)?;
     parsed(values, "OSTOOL_LISTEN_ADDR", &mut config.listen_addr)?;
     parsed(values, "OSTOOL_AUTH_ENABLED", &mut config.auth.enabled)?;
+    if config.edition.is_public()
+        && values
+            .get("OSTOOL_AUTH_ENABLED")
+            .is_some_and(|value| value == "false")
+    {
+        bail!("public edition cannot disable authentication");
+    }
+    config.auth.enabled = config.edition.is_public();
     parsed(
         values,
         "OSTOOL_ALLOW_REGISTRATION",
@@ -96,12 +105,46 @@ pub(crate) fn apply_values(
 mod tests {
     use super::*;
     #[test]
+    fn edition_is_explicit_and_public_cannot_disable_authentication() {
+        let mut config = ServerConfig::default();
+        config.network.interface = "lo".into();
+        config.auth.enabled = true;
+        apply_values(
+            &mut config,
+            &BTreeMap::from([(
+                "OSTOOL_DATABASE_URL".into(),
+                "postgres://localhost/test".into(),
+            )]),
+        )
+        .unwrap();
+        assert_eq!(config.edition, crate::config::Edition::Local);
+        assert!(!config.auth.enabled);
+        assert!(
+            apply_values(
+                &mut config,
+                &BTreeMap::from([
+                    ("OSTOOL_EDITION".into(), "public".into()),
+                    ("OSTOOL_AUTH_ENABLED".into(), "false".into())
+                ])
+            )
+            .is_err()
+        );
+        assert!(
+            apply_values(
+                &mut config,
+                &BTreeMap::from([("OSTOOL_EDITION".into(), "pubic".into())])
+            )
+            .is_err()
+        );
+    }
+    #[test]
     fn overrides_and_invalid_values() {
         let mut config = ServerConfig::default();
         config.network.interface = "lo".into();
         apply_values(
             &mut config,
             &BTreeMap::from([
+                ("OSTOOL_EDITION".into(), "public".into()),
                 ("OSTOOL_AUTH_ENABLED".into(), "true".into()),
                 (
                     "OSTOOL_DATABASE_URL".into(),

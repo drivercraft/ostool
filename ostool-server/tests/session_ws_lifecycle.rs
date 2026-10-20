@@ -119,6 +119,7 @@ fn spawn_test_server_with_power_on(
     tftp.enabled = false;
 
     let config = ServerConfig {
+        edition: ostool_server::config::Edition::Local,
         listen_addr: "127.0.0.1:0".parse().unwrap(),
         database: ostool_server::config::DatabaseConfig::default(),
         auth: ostool_server::config::AuthConfig::default(),

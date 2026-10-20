@@ -2,16 +2,18 @@
 set -Eeuo pipefail
 
 # Local development environment for ostool-server. This intentionally uses a
-# private PostgreSQL container and a repository-local data directory; it does
+# repository-local data directory (and PostgreSQL in public edition); it does
 # not modify systemd or /etc/ostool-server.
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_DIR=$(cd -- "$SCRIPT_DIR/../.." && pwd)
-STATE_DIR=${OSTOOL_DEV_DIR:-"$REPO_DIR/.ostool-server-dev"}
+EDITION=${OSTOOL_EDITION:-local}
+[[ "$EDITION" == "local" || "$EDITION" == "public" ]] || { echo "OSTOOL_EDITION must be local or public" >&2; exit 2; }
+STATE_DIR=${OSTOOL_DEV_DIR:-"$REPO_DIR/.ostool-server-dev/$EDITION"}
 CONFIG_FILE="$STATE_DIR/config.toml"
 PID_FILE="$STATE_DIR/server.pid"
 LOG_FILE="$STATE_DIR/server.log"
-PG_CONTAINER=${OSTOOL_DEV_PG_CONTAINER:-ostool-server-dev-postgres}
+PG_CONTAINER=${OSTOOL_DEV_PG_CONTAINER:-ostool-server-dev-public-postgres}
 PG_PORT=${OSTOOL_DEV_PG_PORT:-54329}
 SERVER_PORT=${OSTOOL_DEV_SERVER_PORT:-2999}
 DB_USER=${OSTOOL_DEV_DB_USER:-ostool}
@@ -37,18 +39,14 @@ server_pid() {
 }
 
 write_config() {
-    mkdir -p "$STATE_DIR/data" "$STATE_DIR/postgres"
+    mkdir -p "$STATE_DIR/data"
+    if [[ "$EDITION" == "public" ]]; then mkdir -p "$STATE_DIR/postgres"; fi
     [[ -f "$CONFIG_FILE" ]] && return
     cat > "$CONFIG_FILE" <<EOF
 listen_addr = "127.0.0.1:${SERVER_PORT}"
 data_dir = "${STATE_DIR}/data"
 board_dir = "${STATE_DIR}/data/boards"
 dtb_dir = "${STATE_DIR}/data/dtbs"
-
-[database]
-url = "postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${PG_PORT}/${DB_NAME}"
-max_connections = 5
-migrate = true
 
 [auth]
 enabled = true
@@ -113,18 +111,21 @@ start_server() {
         return
     fi
     rm -f "$PID_FILE"
-    ensure_postgres
+    if [[ "$EDITION" == "public" ]]; then ensure_postgres; fi
     log "starting ostool-server; log: $LOG_FILE"
-    nohup env \
-        "OSTOOL_ADMIN_EMAIL=$ADMIN_EMAIL" \
-        "OSTOOL_ADMIN_PASSWORD=$ADMIN_PASSWORD" \
-        "OSTOOL_DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${PG_PORT}/${DB_NAME}" \
-        "OSTOOL_LISTEN_ADDR=127.0.0.1:${SERVER_PORT}" \
-        "OSTOOL_PUBLIC_BASE_URL=http://127.0.0.1:${SERVER_PORT}" \
-        "OSTOOL_AUTH_ENABLED=true" \
-        "OSTOOL_NETWORK_TEST_ENABLED=false" \
-        bash -c 'cd "$1" && exec cargo run -p ostool-server -- --config "$2"' \
-        dev-env "$REPO_DIR" "$CONFIG_FILE" \
+    # Use an explicit empty env file and edition-specific overrides so a repo
+    # .env for a production deployment is never used by the local test launcher.
+    : > "$STATE_DIR/server.env"
+    local -a server_env=(env -u OSTOOL_DATABASE_URL -u OSTOOL_ADMIN_EMAIL -u OSTOOL_ADMIN_PASSWORD
+        "OSTOOL_EDITION=$EDITION" "OSTOOL_LISTEN_ADDR=127.0.0.1:${SERVER_PORT}"
+        "OSTOOL_PUBLIC_BASE_URL=http://127.0.0.1:${SERVER_PORT}" "OSTOOL_NETWORK_TEST_ENABLED=false")
+    if [[ "$EDITION" == "public" ]]; then
+        server_env+=("OSTOOL_DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${PG_PORT}/${DB_NAME}"
+            "OSTOOL_ADMIN_EMAIL=$ADMIN_EMAIL" "OSTOOL_ADMIN_PASSWORD=$ADMIN_PASSWORD" "OSTOOL_AUTH_ENABLED=true")
+    fi
+    nohup "${server_env[@]}" \
+        bash -c 'cd "$1" && exec cargo run -p ostool-server -- --config "$2" --env-file "$3"' \
+        dev-env "$REPO_DIR" "$CONFIG_FILE" "$STATE_DIR/server.env" \
         >"$LOG_FILE" 2>&1 < /dev/null &
     echo $! > "$PID_FILE"
     for _ in {1..30}; do
@@ -134,7 +135,7 @@ start_server() {
         if command -v curl >/dev/null 2>&1 && curl --noproxy '*' -fsS "http://127.0.0.1:${SERVER_PORT}/" >/dev/null 2>&1; then
             log "ready: http://127.0.0.1:${SERVER_PORT}/"
             log "admin: http://127.0.0.1:${SERVER_PORT}/admin/overview"
-            log "login: http://127.0.0.1:${SERVER_PORT}/login"
+            if [[ "$EDITION" == "public" ]]; then log "login: http://127.0.0.1:${SERVER_PORT}/login"; fi
             return
         fi
         sleep 1
@@ -162,7 +163,7 @@ stop_server() {
         log "ostool-server is not running"
     fi
     rm -f "$PID_FILE"
-    if command -v docker >/dev/null 2>&1 && docker inspect "$PG_CONTAINER" >/dev/null 2>&1; then
+    if [[ "$EDITION" == "public" ]] && command -v docker >/dev/null 2>&1 && docker inspect "$PG_CONTAINER" >/dev/null 2>&1; then
         local running
         running=$(docker inspect -f '{{.State.Running}}' "$PG_CONTAINER" 2>/dev/null || true)
         [[ "$running" == "true" ]] && docker stop "$PG_CONTAINER" >/dev/null
@@ -177,12 +178,13 @@ status() {
     else
         echo "ostool-server: stopped"
     fi
-    if command -v docker >/dev/null 2>&1; then
+    echo "edition: $EDITION"
+    if [[ "$EDITION" == "public" ]] && command -v docker >/dev/null 2>&1; then
         local running
         running=$(docker inspect -f '{{.State.Running}}' "$PG_CONTAINER" 2>/dev/null || true)
         echo "postgres: ${running:-not created} ($PG_CONTAINER, port $PG_PORT)"
     else
-        echo "postgres: docker not found"
+        echo "postgres: not required for local edition (public edition requires Docker)"
     fi
     echo "state: $STATE_DIR"
 }
@@ -194,7 +196,7 @@ case "${1:-start}" in
     status) status ;;
     clean)
         stop_server
-        if [[ -d "$STATE_DIR/postgres" ]] && command -v docker >/dev/null 2>&1; then
+        if [[ "$EDITION" == "public" && -d "$STATE_DIR/postgres" ]] && command -v docker >/dev/null 2>&1; then
             # PostgreSQL writes the bind-mounted data as uid 999. Use the
             # container's root user to remove it without requiring sudo.
             docker run --rm -v "$STATE_DIR/postgres:/data" postgres:16 \

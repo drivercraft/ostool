@@ -36,6 +36,7 @@ pub const TOPICS: &[&str] = &[
     "users",
     "roles",
     "deployment",
+    "rentals",
 ];
 const HISTORY_LIMIT: usize = 256;
 
@@ -216,7 +217,11 @@ pub async fn subscribe(
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(str::to_owned)
         .or_else(|| query.get("access_token").cloned());
-    let database = state.database.clone();
+    let database = if state.config.read().await.edition.is_public() {
+        state.database.clone()
+    } else {
+        None
+    };
     let stream = stream::unfold(
         (
             events,

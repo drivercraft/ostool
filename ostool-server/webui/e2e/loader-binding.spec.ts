@@ -140,7 +140,9 @@ test("unbound power -> real discovery -> manual MAC binding; push preserves focu
   );
   await peer.getByRole("tab", { name: /发现设备/ }).click();
   // No new loader requests: the server deadline itself must publish offline.
-  await expect(peer.getByText("离线", { exact: true })).toBeVisible({
+  await expect(
+    peer.getByRole("table").getByText("离线", { exact: true }),
+  ).toBeVisible({
     timeout: 15_000,
   });
   expect(
@@ -271,4 +273,35 @@ test("all management modules, DTB CRUD, session release and narrow viewport", as
     animations: "disabled",
   });
   expect(consoleErrors).toEqual([]);
+});
+
+test("local edition exposes the existing workflow without any account routes", async ({
+  page,
+  request,
+}) => {
+  await page.goto("/admin/overview");
+  await expect(page.getByText("本地版 · 免登录")).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "用户列表", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "租赁列表", exact: true }),
+  ).toHaveCount(0);
+  for (const path of [
+    "/api/v1/auth/me",
+    "/api/v1/admin/users",
+    "/api/v1/admin/rentals",
+  ]) {
+    expect((await request.get(`http://127.0.0.1:4175${path}`)).status()).toBe(
+      404,
+    );
+  }
+  await page.goto("http://127.0.0.1:4175/login");
+  await expect(page).toHaveURL("http://127.0.0.1:4175/");
+  await expect(
+    page.getByRole("link", { name: "登录", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "免费注册", exact: true }),
+  ).toHaveCount(0);
 });

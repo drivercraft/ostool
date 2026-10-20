@@ -72,6 +72,7 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(super::auth::routes())
         .merge(super::users::routes())
+        .merge(super::rentals::routes())
         .merge(super::ota::routes())
         .route("/api/v1/admin/events", get(crate::admin_events::subscribe))
         .route(
@@ -463,6 +464,9 @@ async fn update_board(
 ) -> Result<axum::Json<BoardConfig>, ApiError> {
     let _inventory_guard = state.board_inventory_gate.lock().await;
     let board = build_board_config_for_update(&state, &board_id, request).await?;
+    if board.id != board_id {
+        super::rentals::protect_board(&state, &board_id).await?;
+    }
     validate_board_config(&board)?;
     if state.admin_power.is_busy(&board.power_management) {
         return Err(ApiError::conflict("power resource has a running action"));
@@ -1291,6 +1295,7 @@ async fn delete_board(
     if !state.boards.read().await.contains_key(&board_id) {
         return Err(ApiError::not_found(format!("board `{board_id}` not found")));
     }
+    super::rentals::protect_board(&state, &board_id).await?;
     state.board_store.delete_board(&board_id).await?;
     state.boards.write().await.remove(&board_id);
     state.sync_board_runtime_states().await;
@@ -1421,11 +1426,24 @@ async fn reconcile_tftp(
 
 async fn list_board_types(
     State(state): State<AppState>,
+    actor: Option<Extension<super::auth::CurrentUser>>,
 ) -> Result<axum::Json<Vec<BoardTypeSummary>>, ApiError> {
+    let allowed = match actor {
+        Some(Extension(super::auth::CurrentUser(user)))
+            if !user.is_admin && state.config.read().await.edition.is_public() =>
+        {
+            Some(super::rentals::active(&state, user.id).await?)
+        }
+        _ => None,
+    };
     let boards = state.boards.read().await;
+    let visible = boards
+        .iter()
+        .filter(|(id, _)| allowed.as_ref().is_none_or(|a| a.contains_key(*id)))
+        .map(|(id, board)| (id.clone(), board.clone()))
+        .collect();
     let runtimes = state.board_runtimes.read().await;
-    let result = summarize_board_types(&boards, &runtimes);
-    Ok(axum::Json(result))
+    Ok(axum::Json(summarize_board_types(&visible, &runtimes)))
 }
 
 async fn create_session(
@@ -1443,57 +1461,105 @@ async fn create_session(
         ));
     }
 
-    let session = match board_id {
-        Some(board_id) => state
-            .create_session_with_board_id(
+    let _rental_guard = state.rental_gate.lock().await;
+    let rental_access = match actor.as_ref() {
+        Some(Extension(super::auth::CurrentUser(user)))
+            if !user.is_admin && state.config.read().await.edition.is_public() =>
+        {
+            Some(super::rentals::active(&state, user.id).await?)
+        }
+        _ => None,
+    };
+    let session = if let Some(access) = &rental_access {
+        let allowed = access.keys().cloned().collect::<BTreeSet<_>>();
+        if allowed.is_empty() || board_id.is_some_and(|id| !allowed.contains(id)) {
+            return Err(ApiError::forbidden(
+                "当前时间没有已分配的开发板，请联系管理员查看租赁",
+            ));
+        }
+        state
+            .create_session_for_rental(
                 &request.board_type,
                 board_id,
                 &request.required_tags,
                 request.client_name.clone(),
+                &allowed,
             )
             .await
-            .map_err(|err| match err {
-                BoardAllocationWithIdStatus::BoardTypeNotFound => {
-                    ApiError::not_found(format!("board type `{}` not found", request.board_type))
-                }
-                BoardAllocationWithIdStatus::BoardNotFound => {
-                    ApiError::not_found(format!("board `{board_id}` not found"))
-                }
-                BoardAllocationWithIdStatus::BoardTypeMismatch {
-                    board_id,
-                    board_type,
-                    actual_board_type,
-                } => ApiError::bad_request(format!(
-                    "board `{board_id}` has type `{actual_board_type}`, not `{board_type}`"
-                )),
+            .map_err(|error| match error {
                 BoardAllocationWithIdStatus::NoAvailableBoard => {
-                    ApiError::conflict(format!("board `{board_id}` is not available"))
+                    ApiError::conflict("已分配的开发板正在使用、释放或已禁用，请稍后重试")
                 }
-            })?,
-        None => state
-            .create_session(
-                &request.board_type,
-                &request.required_tags,
-                request.client_name.clone(),
-            )
-            .await
-            .map_err(|err| match err {
-                BoardAllocationStatus::BoardTypeNotFound => {
-                    ApiError::not_found(format!("board type `{}` not found", request.board_type))
+                BoardAllocationWithIdStatus::BoardTypeMismatch { .. } => {
+                    ApiError::bad_request("开发板与请求板型不匹配")
                 }
-                BoardAllocationStatus::NoAvailableBoard => ApiError::conflict(format!(
-                    "no available board for type `{}`",
-                    request.board_type
-                )),
-            })?,
+                _ => ApiError::not_found("没有匹配请求的开发板"),
+            })?
+    } else {
+        match board_id {
+            Some(board_id) => state
+                .create_session_with_board_id(
+                    &request.board_type,
+                    board_id,
+                    &request.required_tags,
+                    request.client_name.clone(),
+                )
+                .await
+                .map_err(|err| match err {
+                    BoardAllocationWithIdStatus::BoardTypeNotFound => ApiError::not_found(format!(
+                        "board type `{}` not found",
+                        request.board_type
+                    )),
+                    BoardAllocationWithIdStatus::BoardNotFound => {
+                        ApiError::not_found(format!("board `{board_id}` not found"))
+                    }
+                    BoardAllocationWithIdStatus::BoardTypeMismatch {
+                        board_id,
+                        board_type,
+                        actual_board_type,
+                    } => ApiError::bad_request(format!(
+                        "board `{board_id}` has type `{actual_board_type}`, not `{board_type}`"
+                    )),
+                    BoardAllocationWithIdStatus::NoAvailableBoard => {
+                        ApiError::conflict(format!("board `{board_id}` is not available"))
+                    }
+                })?,
+            None => state
+                .create_session(
+                    &request.board_type,
+                    &request.required_tags,
+                    request.client_name.clone(),
+                )
+                .await
+                .map_err(|err| match err {
+                    BoardAllocationStatus::BoardTypeNotFound => ApiError::not_found(format!(
+                        "board type `{}` not found",
+                        request.board_type
+                    )),
+                    BoardAllocationStatus::NoAvailableBoard => ApiError::conflict(format!(
+                        "no available board for type `{}`",
+                        request.board_type
+                    )),
+                })?,
+        }
     };
 
+    let rental = rental_access
+        .as_ref()
+        .and_then(|access| access.get(&session.board_id))
+        .copied();
+    if let Some((_, deadline)) = rental
+        && let Some(runtime) = state.session_state(&session.id).await
+    {
+        runtime.bind_rental_deadline(deadline).await;
+    }
     if let (Some(database), Some(Extension(super::auth::CurrentUser(user)))) =
         (&state.database, actor)
         && let Err(error) =
-            sqlx::query("INSERT INTO session_owners(session_id,user_id) VALUES($1,$2)")
+            sqlx::query("INSERT INTO session_owners(session_id,user_id,rental_id) VALUES($1,$2,$3)")
                 .bind(&session.id)
                 .bind(user.id)
+                .bind(rental.map(|(id, _)| id))
                 .execute(database.pool())
                 .await
     {
@@ -1505,6 +1571,10 @@ async fn create_session(
             "failed to record session owner",
         ));
     }
+    let session = state
+        .get_session(&session.id)
+        .await
+        .ok_or_else(|| ApiError::conflict("session expired during creation"))?;
     let board = state
         .session_board(&session.id)
         .await
@@ -2901,6 +2971,11 @@ pub(crate) async fn admin_topic(
     state: &AppState,
     topic: &str,
 ) -> Result<serde_json::Value, ApiError> {
+    if !state.config.read().await.edition.is_public()
+        && matches!(topic, "users" | "roles" | "rentals")
+    {
+        return Ok(serde_json::json!([]));
+    }
     let extractor = State(state.clone());
     let value = match topic {
         "quarantined_boards" => serde_json::to_value(state.board_store.quarantined().await?),
@@ -2923,6 +2998,7 @@ pub(crate) async fn admin_topic(
         "users" => serde_json::to_value(super::users::list_users(extractor).await?.0),
         "roles" => serde_json::to_value(super::users::list_roles(extractor).await?.0),
         "deployment" => Ok(super::users::deployment(extractor).await.0),
+        "rentals" => serde_json::to_value(super::rentals::list(extractor).await?.0),
         "runtimes" => {
             let mut values = BTreeMap::new();
             for (id, r) in state.board_runtimes.read().await.iter() {
@@ -3002,6 +3078,7 @@ mod tests {
 
     fn test_server_config(root: &std::path::Path) -> ServerConfig {
         ServerConfig {
+            edition: crate::config::Edition::Local,
             listen_addr: "127.0.0.1:0".parse().unwrap(),
             database: crate::config::DatabaseConfig::default(),
             auth: crate::config::AuthConfig::default(),

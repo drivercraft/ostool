@@ -35,6 +35,8 @@ async function readJsonBody<T>(response: Response): Promise<T | undefined> {
   return JSON.parse(text) as T;
 }
 
+let runtimeEdition: "local" | "public" = "local";
+export const isPublicEdition = () => runtimeEdition === "public";
 let refreshing: Promise<void> | undefined;
 export async function refreshAuth() {
   if (!refreshing)
@@ -76,7 +78,8 @@ async function request<T>(
     ...options,
     headers: (() => {
       const accessToken = localStorage.getItem("ostool.access_token");
-      if (accessToken) headers.set("authorization", `Bearer ${accessToken}`);
+      if (isPublicEdition() && accessToken)
+        headers.set("authorization", `Bearer ${accessToken}`);
       return headers;
     })(),
     body,
@@ -85,6 +88,7 @@ async function request<T>(
   });
 
   if (
+    isPublicEdition() &&
     response.status === 401 &&
     localStorage.getItem("ostool.refresh_token") &&
     !["/api/v1/auth/login", "/api/v1/auth/register"].includes(path)
@@ -105,20 +109,39 @@ async function request<T>(
   return (await readJsonBody<T>(response)) as T;
 }
 
-type AuthConfig = {
+export type AuthConfig = {
+  edition: "local" | "public";
   enabled: boolean;
   allow_registration: boolean;
   database_available: boolean;
 };
 let authConfigRequest: Promise<AuthConfig> | undefined;
 export const api = {
+  createRental(payload: import("@/types/api").RentalInput) {
+    return request<void>("/api/v1/admin/rentals", {
+      method: "POST",
+      bodyJson: payload,
+    });
+  },
+  updateRental(id: string, payload: import("@/types/api").RentalInput) {
+    return request<void>(`/api/v1/admin/rentals/${id}`, {
+      method: "PUT",
+      bodyJson: payload,
+    });
+  },
+  cancelRental(id: string) {
+    return request<void>(`/api/v1/admin/rentals/${id}`, { method: "DELETE" });
+  },
   authConfig() {
     // StrictMode mounts effects twice; share the in-flight bootstrap request.
-    return (authConfigRequest ??= request<AuthConfig>(
-      "/api/v1/auth/config",
-    ).finally(() => {
-      authConfigRequest = undefined;
-    }));
+    return (authConfigRequest ??= request<AuthConfig>("/api/v1/auth/config")
+      .then((config) => {
+        runtimeEdition = config.edition;
+        return config;
+      })
+      .finally(() => {
+        authConfigRequest = undefined;
+      }));
   },
   createUser(payload: UserInput) {
     return request<void>("/api/v1/admin/users", {

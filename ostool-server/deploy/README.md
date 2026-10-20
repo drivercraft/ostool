@@ -4,7 +4,13 @@ Build once with `cargo build --release -p ostool-server`. The React bundle is
 embedded by the build script; no domain, database URL or password belongs in
 `VITE_*` variables. The same binary can run on different domains.
 
-Copy [the environment example](../.env.example) to a private file, supply the
+The default local edition has no authentication or user/rental management, even
+with PostgreSQL configured. For public deployment, explicitly set
+`OSTOOL_EDITION=public`; the server enforces authentication and requires
+PostgreSQL. `OSTOOL_AUTH_ENABLED=false` is rejected in public edition. When
+upgrading an earlier authenticated deployment, add this edition variable first.
+
+Copy [the public environment example](public.env.example) to a private file, supply the
 database URL, hostname and bootstrap administrator, then run:
 
 ```bash
@@ -58,7 +64,8 @@ file directories. The system settings storage tab shows this same distinction.
 
 | Data | Current authority | Restart behavior |
 | --- | --- | --- |
-| Users, roles, OAuth sessions, device codes, PAT hashes | PostgreSQL | Persisted |
+| Users, roles, OAuth sessions, device codes, PAT hashes (public only) | PostgreSQL | Persisted |
+| Scheduled board rentals (public only) | PostgreSQL | Persisted; eligibility recalculated at startup |
 | Board inventory | PostgreSQL when configured; TOML in standalone mode | One-time legacy import tracked in `storage_imports`; old files never overwrite DB after import |
 | DTB payloads | Files; metadata mirrored in PostgreSQL | Files required; DB metadata is not a full migration |
 | OTA images, jobs and device observations | Files | Existing file persistence retained |
@@ -86,8 +93,8 @@ OSTOOL_TEST_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54329/ostool \
   cargo test -p ostool-server --test auth_postgres -- --ignored
 ```
 
-For the full browser account-management test, start a disposable environment
-using `scripts/dev-env.sh start`, build the current server, then run:
+For the full browser account-management test, start a disposable public environment
+using `OSTOOL_EDITION=public scripts/dev-env.sh start`, build the current server, then run:
 
 ```bash
 cargo build -p ostool-server
@@ -100,3 +107,25 @@ OSTOOL_E2E_ADMIN_PASSWORD=admin-password-123 \
 The browser suite creates test users/roles in that environment; the ordinary
 board-management fixture is separate. Without `OSTOOL_E2E_AUTH_BASE_URL`, only
 the PostgreSQL account-management browser test is skipped.
+
+## Scheduled board rentals
+
+`/admin/rentals` assigns an enabled user a specific enabled board for a UTC
+interval `[starts_at, ends_at)`. Intervals for the same board cannot overlap;
+adjacent intervals are allowed. The server serializes admission and mutations,
+and uses a per-board PostgreSQL advisory transaction lock for overlap checks.
+
+Members see only currently allocated board types and can obtain a session only
+on an allocated board. An existing short session still needs its usual heartbeat.
+The session deadline is capped by the rental end, including serial-generated
+heartbeats. At expiry/cancellation, the existing release coordinator closes
+serial streams, powers off and cleans artifacts. Actual physical release may
+finish later than the scheduled cutoff; the next allocation never bypasses a
+board's releasing/error state. Administrators may acquire idle boards for
+maintenance without a rental.
+
+New rentals do not power on hardware. Editing a rental preserves its board and
+user; cancel and create another to change those fields. Cancelled/expired
+records remain visible. Renaming/deleting a board with unfinished rentals is
+blocked until those rentals are cancelled. Local edition exposes none of these
+APIs and does not change existing `ostool` session behavior.

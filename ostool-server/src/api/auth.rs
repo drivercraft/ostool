@@ -128,33 +128,24 @@ pub async fn middleware(
     next: Next,
 ) -> Response {
     let path = request.uri().path();
-    if is_public_path(path) {
+    let public = state.config.read().await.edition.is_public();
+    if !public {
+        if path.starts_with("/oauth/")
+            || (path.starts_with("/api/v1/auth/") && path != "/api/v1/auth/config")
+            || [
+                "/api/v1/admin/users",
+                "/api/v1/admin/roles",
+                "/api/v1/admin/rentals",
+            ]
+            .iter()
+            .any(|prefix| path.starts_with(prefix))
+        {
+            return ApiError::not_found("this feature is unavailable in local edition")
+                .into_response();
+        }
         return next.run(request).await;
     }
-    let config = state.config.read().await.auth.clone();
-    let identity_required = (state.database.is_some() && path.starts_with("/api/v1/admin/"))
-        || path.starts_with("/api/v1/admin/users")
-        || path.starts_with("/api/v1/admin/roles")
-        || path == "/api/v1/auth/me"
-        || path == "/api/v1/auth/device/authorize"
-        || path.starts_with("/api/v1/auth/personal-access-tokens");
-    if !config.enabled && !identity_required {
-        // Authentication remains optional for legacy board APIs, but a valid
-        // token is still attached so OAuth device approval and account routes
-        // work when an installation has not yet enforced authentication.
-        if let (Some(database), Some(token)) = (
-            state.database.as_ref(),
-            bearer_token(request.headers()).or_else(|| {
-                request.uri().query().and_then(|query| {
-                    query
-                        .split('&')
-                        .find_map(|part| part.strip_prefix("access_token="))
-                })
-            }),
-        ) && let Ok(Some(user)) = database.authenticate_token(token).await
-        {
-            request.extensions_mut().insert(CurrentUser(user));
-        }
+    if is_public_path(path) {
         return next.run(request).await;
     }
     let Some(database) = state.database.as_ref() else {
@@ -191,7 +182,7 @@ pub async fn middleware(
     {
         let session_id = tail.split('/').next().unwrap_or_default();
         match sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM session_owners WHERE session_id=$1 AND user_id=$2)",
+            "SELECT EXISTS(SELECT 1 FROM session_owners s JOIN board_rentals r ON s.rental_id=r.id WHERE s.session_id=$1 AND s.user_id=$2 AND r.cancelled_at IS NULL AND r.starts_at<=now() AND r.ends_at>now())",
         )
         .bind(session_id)
         .bind(user.id)
@@ -587,6 +578,6 @@ fn oauth_error(status: StatusCode, error: &str, description: &str) -> Response {
 async fn auth_config(State(state): State<AppState>) -> Json<serde_json::Value> {
     let config = state.config.read().await;
     Json(
-        serde_json::json!({"enabled":config.auth.enabled,"allow_registration":config.auth.allow_registration && state.database.is_some(),"database_available":state.database.is_some()}),
+        serde_json::json!({"edition":config.edition,"enabled":config.edition.is_public(),"allow_registration":config.edition.is_public() && config.auth.allow_registration && state.database.is_some(),"database_available":state.database.is_some()}),
     )
 }

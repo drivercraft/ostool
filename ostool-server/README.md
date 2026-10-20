@@ -125,54 +125,43 @@ The default listen address is:
 0.0.0.0:2999
 ```
 
-### PostgreSQL and login
+### Local and public editions
 
-Set a PostgreSQL URL to enable the identity store and automatic migrations. The
-first deployment can create an administrator from `OSTOOL_ADMIN_EMAIL` and
-`OSTOOL_ADMIN_PASSWORD` (the password must be at least 12 characters), or from
-the equivalent `bootstrap_admin_*` settings. Authentication is opt-in for
-existing installations; set `auth.enabled = true` after the database is ready:
+The default is `OSTOOL_EDITION=local`: no login, registration, user/role or
+rental management. Existing `ostool` clients continue to use `auth_mode=disabled`.
+Connecting PostgreSQL in local edition changes inventory persistence only.
 
-```toml
-[database]
-url = "postgres://ostool:change-me@127.0.0.1/ostool"
-max_connections = 10
-migrate = true
+For public deployments, explicitly set `OSTOOL_EDITION=public`, supply
+`OSTOOL_DATABASE_URL` and initialize an administrator. Public edition always
+requires authentication for board APIs and administrator credentials for admin
+APIs; disabling auth is not supported. Missing PostgreSQL fails startup.
+Use [the public environment example](deploy/public.env.example) with Caddy.
+Existing authenticated deployments must add `OSTOOL_EDITION=public` when upgrading.
+The database connection alone no longer enables account features.
 
-[auth]
-enabled = true
-allow_registration = true
-access_token_ttl_secs = 900
-refresh_token_ttl_secs = 2592000
-device_code_ttl_secs = 600
-```
+Public edition supports `/register`, `/login`, OAuth Device Authorization and
+PATs compatible with `ostool login` / `ostool login --with-token`. Rental
+administration assigns a board to a user for a UTC time interval. Members can
+only acquire boards allocated to them at the current time. Administrators retain
+maintenance access. Expiry/cancellation terminates member sessions through the
+existing power-off and file-cleanup coordinator; the next user must wait until
+hardware release completes. Ordinary heartbeat TTL cannot extend that interval.
 
-The server implements the OAuth Device Authorization endpoints consumed by
-`ostool login`: `POST /oauth/device/code`, `POST /oauth/token`, and
-`POST /oauth/revoke`. Browser users register at `/register` or sign in at `/login`; CLI
-device approval uses the same page. Board and admin APIs require a Bearer token
-when authentication is enabled, while loader discovery endpoints remain
-unauthenticated for boot-time hardware discovery. A signed-in user can create a
-personal access token with `POST /api/v1/auth/personal-access-tokens`; pass the
-returned one-time token to `ostool login --with-token`.
+Board TOML records are imported once into PostgreSQL when configured. Subsequent
+inventory reads/writes use the database. DTB contents, OTA state and runtime
+leases retain their documented storage models; see the
+[persistence matrix](deploy/README.md#persistence-status).
 
-When PostgreSQL is configured, board TOML records are imported once and
-`board_records` becomes the inventory authority. The import marker prevents old
-files from overwriting or resurrecting deleted records on restart. DTB payloads
-and OTA state still use files; DTB metadata is mirrored to PostgreSQL. Active
-leases and serial transports remain process-local and are not restored.
+The frontend reads runtime edition information from the Rust server rather than
+an independent build flag, so one binary supports both editions and UI settings
+cannot disable public authentication. `.env` defaults to the process working
+directory; `--env-file` selects an explicit file. Process variables win over file
+variables. See [.env.example](.env.example) for local defaults.
 
-Deployment variables are loaded at runtime from the process environment or an
-explicit `--env-file` (otherwise `.env` in the working directory, when present).
-Use [.env.example](.env.example) and the [deployment guide](deploy/README.md) for
-Caddy, systemd, precedence, secrets and the complete persistence matrix.
-No database credentials or public hostname need to exist during frontend build.
-The database-backed admin console always requires an administrator credential;
-standalone mode without PostgreSQL retains the previous LAN-only behavior.
-
-The sidebar groups development boards, DTBs and leases under **板卡管理**, accounts
-and roles under **用户管理**, with **系统设置** at the bottom. Settings tabs group
-network/upload options, TFTP, deployment/authentication and storage information.
+The sidebar groups boards/DTBs/short sessions under **板卡管理**. Public edition
+also has **租赁管理 → 租赁列表** and **用户管理 → 用户列表 / 用户角色**. All list
+toolbars place actions on the left and search/filter controls on the right.
+**系统设置** stays at the bottom, with grouped configuration tabs.
 
 The network throughput test listener is enabled by default on `0.0.0.0:3000`.
 It has a separate router from the management listener, so board management,
@@ -268,8 +257,7 @@ vi /etc/ostool-server/config.toml
 
 ## Local development environment
 
-The repository includes a script that starts a private PostgreSQL 16 container
-and a local `ostool-server` instance without touching systemd or `/etc`:
+The script defaults to local edition and does not require Docker/PostgreSQL:
 
 ```bash
 ostool-server/scripts/dev-env.sh start
@@ -277,11 +265,20 @@ ostool-server/scripts/dev-env.sh status
 ostool-server/scripts/dev-env.sh stop
 ```
 
-Use `restart` to cycle both processes, or `clean` to stop them and remove the
-repository-local `.ostool-server-dev` data directory. The default URLs are
-`http://127.0.0.1:2999/`, `/login`, and `/admin/overview`. Override
-`OSTOOL_ADMIN_EMAIL`, `OSTOOL_ADMIN_PASSWORD`, `OSTOOL_DEV_PG_PORT`, or
-`OSTOOL_DEV_SERVER_PORT` before `start` when those defaults are unavailable.
+To test authenticated public edition with a private PostgreSQL 16 container:
+
+```bash
+OSTOOL_EDITION=public ostool-server/scripts/dev-env.sh start
+OSTOOL_EDITION=public ostool-server/scripts/dev-env.sh stop
+```
+
+Use `restart` or `clean` with the same edition. Data/log/config directories are
+`.ostool-server-dev/local` and `.ostool-server-dev/public`; `OSTOOL_DEV_DIR` can
+override that location. Default console: `http://127.0.0.1:2999/admin/overview`.
+Only public edition has `/login`, with bootstrap defaults `admin@example.com` /
+`admin-password-123`. Override `OSTOOL_ADMIN_EMAIL`, `OSTOOL_ADMIN_PASSWORD`,
+`OSTOOL_DEV_PG_PORT`, or `OSTOOL_DEV_SERVER_PORT` before starting as needed.
+The script does not read the repository `.env`, modify systemd or touch `/etc`.
 
 ## Management console
 

@@ -100,6 +100,7 @@ impl Session {
 
 #[derive(Debug)]
 pub struct SessionState {
+    pub(crate) rental_deadline: RwLock<Option<chrono::DateTime<chrono::Utc>>>,
     pub serial_runtime: Arc<crate::serial::runtime::SessionSerialRuntime>,
     boot_generation: watch::Sender<u64>,
     info: RwLock<Session>,
@@ -162,6 +163,7 @@ impl SessionState {
     ) -> Arc<Self> {
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
         Arc::new(Self {
+            rental_deadline: RwLock::new(None),
             serial_runtime: Arc::default(),
             boot_generation: watch::channel(0).0,
             info: RwLock::new(Session::new_with_id(
@@ -203,9 +205,18 @@ impl SessionState {
         info
     }
 
+    pub async fn bind_rental_deadline(&self, deadline: chrono::DateTime<chrono::Utc>) {
+        *self.rental_deadline.write().await = Some(deadline);
+        let mut info = self.info.write().await;
+        info.expires_at = info.expires_at.min(deadline);
+    }
+
     pub async fn heartbeat(&self) -> Session {
         let mut info = self.info.write().await;
         info.touch();
+        if let Some(deadline) = *self.rental_deadline.read().await {
+            info.expires_at = info.expires_at.min(deadline);
+        }
         info.serial_connected = self.serial_connected.load(Ordering::Acquire);
         info.state = self.lifecycle_state();
         info.serial_runtime = self.serial_runtime.snapshot();

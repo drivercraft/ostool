@@ -379,10 +379,25 @@ export interface UserRole extends RoleInput {
   builtin: boolean;
 }
 export interface DeploymentInfo {
+  edition: "local" | "public";
   database_connected: boolean;
   auth_enabled: boolean;
   allow_registration: boolean;
   public_base_url: string | null;
   access_token_ttl_secs: number;
   storage: Record<string, string>;
+}
+
+export interface RentalInput {
+  board_id: string;
+  user_id: string;
+  starts_at: string;
+  ends_at: string;
+  notes: string;
+}
+export interface Rental extends RentalInput {
+  id: string;
+  status: "scheduled" | "active" | "expired" | "cancelled";
+  cancelled_at: string | null;
+  created_at: string;
 }

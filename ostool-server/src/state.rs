@@ -113,6 +113,8 @@ pub struct AppState {
     pub ota: OtaStore,
     pub virtual_boards: VirtualBoardManager,
     pub(crate) board_inventory_gate: Arc<Mutex<()>>,
+    pub(crate) rental_gate: Arc<Mutex<()>>,
+    pub(crate) rental_changed: Arc<tokio::sync::Notify>,
     pub board_store: Arc<FileBoardStore>,
     pub dtb_store: Arc<DtbStore>,
     pub tftp_manager: Arc<RwLock<Arc<dyn TftpManager>>>,
@@ -121,14 +123,17 @@ pub struct AppState {
 
 pub async fn build_app_state(
     config_path: PathBuf,
-    config: ServerConfig,
+    mut config: ServerConfig,
     tftp_manager: Arc<dyn TftpManager>,
 ) -> anyhow::Result<AppState> {
+    config.auth.enabled = config.edition.is_public();
     let database = Database::connect(&config.database).await?;
     if let Some(database) = &database {
-        database.bootstrap_admin(&config.auth).await?;
+        if config.edition.is_public() {
+            database.bootstrap_admin(&config.auth).await?;
+        }
     } else if config.auth.enabled {
-        anyhow::bail!("auth.enabled requires PostgreSQL (OSTOOL_DATABASE_URL)");
+        anyhow::bail!("public edition requires PostgreSQL (OSTOOL_DATABASE_URL)");
     }
     let mut board_store = FileBoardStore::new(config.board_dir.clone());
     board_store.ensure_dir().await?;
@@ -198,6 +203,8 @@ pub async fn build_app_state(
         ota,
         virtual_boards,
         board_inventory_gate: Arc::new(Mutex::new(())),
+        rental_gate: Arc::new(Mutex::new(())),
+        rental_changed: Arc::new(tokio::sync::Notify::new()),
         board_store,
         dtb_store,
         tftp_manager: Arc::new(RwLock::new(tftp_manager)),
@@ -217,6 +224,9 @@ pub async fn build_app_state(
 
     state.admin_events.start(state.clone());
     state.loader_registry.start_deadlines();
+    if state.config.read().await.edition.is_public() {
+        crate::api::rentals::start_deadlines(state.clone());
+    }
     Ok(state)
 }
 
@@ -248,7 +258,7 @@ impl AppState {
         required_tags: &[String],
         client_name: Option<String>,
     ) -> Result<Session, BoardAllocationStatus> {
-        self.create_session_inner(board_type, None, required_tags, client_name)
+        self.create_session_inner(board_type, None, required_tags, client_name, None)
             .await
             .map_err(|status| match status {
                 BoardAllocationWithIdStatus::BoardTypeNotFound => {
@@ -271,8 +281,26 @@ impl AppState {
         required_tags: &[String],
         client_name: Option<String>,
     ) -> Result<Session, BoardAllocationWithIdStatus> {
-        self.create_session_inner(board_type, Some(board_id), required_tags, client_name)
+        self.create_session_inner(board_type, Some(board_id), required_tags, client_name, None)
             .await
+    }
+
+    pub async fn create_session_for_rental(
+        &self,
+        board_type: &str,
+        board_id: Option<&str>,
+        required_tags: &[String],
+        client_name: Option<String>,
+        allowed: &BTreeSet<String>,
+    ) -> Result<Session, BoardAllocationWithIdStatus> {
+        self.create_session_inner(
+            board_type,
+            board_id,
+            required_tags,
+            client_name,
+            Some(allowed),
+        )
+        .await
     }
 
     async fn create_session_inner(
@@ -281,6 +309,7 @@ impl AppState {
         board_id: Option<&str>,
         required_tags: &[String],
         client_name: Option<String>,
+        allowed_boards: Option<&BTreeSet<String>>,
     ) -> Result<Session, BoardAllocationWithIdStatus> {
         loop {
             let _inventory_guard = self.board_inventory_gate.lock().await;
@@ -291,6 +320,10 @@ impl AppState {
                 .filter(|(_, runtime)| runtime.lease_state != BoardLeaseState::Idle)
                 .map(|(board_id, _)| board_id.clone())
                 .collect::<BTreeSet<_>>();
+            if let Some(allowed) = allowed_boards {
+                unavailable_board_ids
+                    .extend(boards.keys().filter(|id| !allowed.contains(*id)).cloned());
+            }
             for board in boards.values() {
                 if self.admin_power.is_busy(&board.power_management) {
                     unavailable_board_ids.insert(board.id.clone());
@@ -373,6 +406,19 @@ impl AppState {
     }
 
     pub async fn cleanup_expired_sessions(&self) -> anyhow::Result<Vec<String>> {
+        if self.config.read().await.edition.is_public() && !self.sessions.read().await.is_empty() {
+            let _gate = self.rental_gate.lock().await;
+            if let Err(error) = crate::api::rentals::enforce(self).await {
+                // Never leave active member serial streams running after a
+                // failed authorization lookup. Local/admin sessions are exempt.
+                for session in self.sessions.read().await.values() {
+                    if session.rental_deadline.read().await.is_some() {
+                        session.request_stop(SessionStopReason::Expired);
+                    }
+                }
+                log::warn!("failed to validate active rentals: {}", error.message);
+            }
+        }
         let now = Utc::now();
         let sessions = self
             .sessions

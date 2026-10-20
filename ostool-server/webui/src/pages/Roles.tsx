@@ -1,3 +1,4 @@
+import { ListToolbar } from "@/components/list-toolbar";
 import { useState } from "react";
 import { api } from "@/api/client";
 import { useList, useResource } from "@/api/events";
@@ -12,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   TextField,
+  SelectField,
   CheckField,
   DataTable,
   Row,
@@ -31,6 +33,13 @@ export default function Roles() {
     draft: RoleInput;
   } | null>(null);
   const task = useAction();
+  const [search, setSearch] = useState("");
+  const [kind, setKind] = useState("");
+  const filtered = roles.filter(
+    (r) =>
+      r.name.toLowerCase().includes(search.toLowerCase()) &&
+      (!kind || String(r.administrator) === kind),
+  );
   const open = (role?: UserRole) =>
     setEditor({
       id: role?.id,
@@ -52,21 +61,43 @@ export default function Roles() {
             角色可授予普通板卡访问或完整后台管理权限。内置角色权限固定。
           </p>
         </div>
-        <Button
-          disabled={!deployment?.database_connected}
-          onClick={() => open()}
-        >
-          创建角色
-        </Button>
       </header>
       {!deployment?.database_connected && (
         <Notice>角色管理需要连接 PostgreSQL。</Notice>
       )}
+      <ListToolbar
+        actions={
+          <Button
+            disabled={!deployment?.database_connected}
+            onClick={() => open()}
+          >
+            创建角色
+          </Button>
+        }
+        count={`${filtered.length} 个角色`}
+      >
+        <TextField
+          label="搜索角色"
+          value={search}
+          onValue={setSearch}
+          placeholder="角色名称"
+        />
+        <SelectField
+          label="角色权限"
+          value={kind}
+          onValue={setKind}
+          options={[
+            { value: "", label: "全部权限" },
+            { value: "true", label: "后台管理" },
+            { value: "false", label: "板卡访问" },
+          ]}
+        />
+      </ListToolbar>
       <DataTable
         headers={["角色", "权限", "用户数", "说明", "操作"]}
-        empty={!roles.length}
+        empty={!filtered.length}
       >
-        {roles.map((role) => (
+        {filtered.map((role) => (
           <Row key={role.id}>
             <Cell>
               <strong>{role.name}</strong>

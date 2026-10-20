@@ -16,6 +16,8 @@ const SYSTEM_DATA_DIR: &str = "/var/lib/ostool-server";
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ServerConfig {
+    #[serde(default)]
+    pub edition: Edition,
     pub listen_addr: SocketAddr,
     #[serde(default)]
     pub database: DatabaseConfig,
@@ -67,6 +69,7 @@ impl ServerConfig {
         ));
 
         Self {
+            edition: Edition::Local,
             listen_addr: SocketAddr::from(([0, 0, 0, 0], 2999)),
             database: DatabaseConfig::default(),
             auth: AuthConfig::default(),
@@ -244,6 +247,30 @@ impl ServerConfig {
         }
         self.virtual_qemu.validate()?;
         Ok(())
+    }
+}
+
+/// Runtime edition is authoritative for both browser features and API security.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Edition {
+    #[default]
+    Local,
+    Public,
+}
+impl Edition {
+    pub fn is_public(self) -> bool {
+        self == Self::Public
+    }
+}
+impl std::str::FromStr for Edition {
+    type Err = anyhow::Error;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "local" => Ok(Self::Local),
+            "public" => Ok(Self::Public),
+            _ => bail!("edition must be local or public"),
+        }
     }
 }
 
