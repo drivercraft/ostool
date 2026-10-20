@@ -254,6 +254,23 @@ journalctl -u ostool-server -f
 vi /etc/ostool-server/config.toml
 ```
 
+## Local development environment
+
+The repository includes a script that starts a private PostgreSQL 16 container
+and a local `ostool-server` instance without touching systemd or `/etc`:
+
+```bash
+ostool-server/scripts/dev-env.sh start
+ostool-server/scripts/dev-env.sh status
+ostool-server/scripts/dev-env.sh stop
+```
+
+Use `restart` to cycle both processes, or `clean` to stop them and remove the
+repository-local `.ostool-server-dev` data directory. The default URLs are
+`http://127.0.0.1:2999/`, `/login`, and `/admin/overview`. Override
+`OSTOOL_ADMIN_EMAIL`, `OSTOOL_ADMIN_PASSWORD`, `OSTOOL_DEV_PG_PORT`, or
+`OSTOOL_DEV_SERVER_PORT` before `start` when those defaults are unavailable.
+
 ## Management console
 
 Open `/admin/` for the React + shadcn/ui console. Boards, discovery, virtual
