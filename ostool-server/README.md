@@ -280,6 +280,52 @@ Only public edition has `/login`, with bootstrap defaults `admin@example.com` /
 `OSTOOL_DEV_PG_PORT`, or `OSTOOL_DEV_SERVER_PORT` before starting as needed.
 The script does not read the repository `.env`, modify systemd or touch `/etc`.
 
+The development launcher enables demo data by default (`OSTOOL_DEV_DEMO=true`).
+Restart an existing environment to populate it:
+
+```bash
+ostool-server/scripts/dev-env.sh restart
+# Authenticated demo, including users/roles/rentals:
+OSTOOL_EDITION=public ostool-server/scripts/dev-env.sh restart
+```
+
+Choose the command for your edition. Both default to the same port; stop the old
+edition before switching, or set different `OSTOOL_DEV_SERVER_PORT` values.
+
+Fresh demo environments contain 48 boards (six types, U-Boot/PXE/HTTP Boot,
+multiple tags, long/empty notes, enabled/disabled), 24 sample DTBs, 12 live sample
+sessions with downloadable text/log files, and 18 discovered devices (online,
+offline, conflicting and unbound). Idle, in-use, releasing and error states, plus successful
+and failed power notifications, exercise the console's filters and pagination.
+Public edition additionally has 36 users (including disabled accounts), six
+custom roles and 72 past/current/future/cancelled rentals. Existing records are
+preserved; fixture IDs/names start with `demo` or `[演示]`. These are actual local
+storage/database records consumed by the regular API/SSE, not browser mocks.
+
+Public demo accounts: `demo01@example.test` (administrator),
+`demo02@example.test` (member), password `demo-user-password-123` for both.
+The bootstrap administrator above is also available. Local edition continues
+without login or user management. Demo roles follow existing administrator/member
+permissions; their names do not introduce additional permission levels.
+
+`--dev-demo` is accepted only with a loopback management listener and, if set,
+loopback authentication origin. It disables UDP discovery, QEMU, the network-test
+listener, TFTP service startup and automatic startup power-off. Sample board power
+commands are no-ops; discovered IPs use the documentation-only `192.0.2.0/24`
+range. Sample DTBs contain a minimal display model, not real hardware definitions.
+Demo sessions receive heartbeats while the process runs; manually released
+sessions stay released until restart. Runtime snapshots are recreated on restart.
+These fixtures are intended for UI inspection, not hardware/boot verification.
+
+To launch without adding/refreshing fixtures, use
+`OSTOOL_DEV_DEMO=false ostool-server/scripts/dev-env.sh restart` (or the same
+prefix with `OSTOOL_EDITION=public`). This restores normal hardware startup behavior
+and retains already stored demo records. `clean` deletes **all data for the chosen
+development edition**; starting again recreates fresh fixtures. Never point the
+development launcher at a production database or data directory. Normal direct
+server startup and systemd deployments do not enable demo data; direct isolated
+development startup can opt in with `ostool-server --config ... --dev-demo`.
+
 ## Management console
 
 Open `/admin/` for the React + shadcn/ui console. Boards, discovery, virtual

@@ -21,6 +21,8 @@ DB_PASSWORD=${OSTOOL_DEV_DB_PASSWORD:-ostool}
 DB_NAME=${OSTOOL_DEV_DB_NAME:-ostool}
 ADMIN_EMAIL=${OSTOOL_ADMIN_EMAIL:-admin@example.com}
 ADMIN_PASSWORD=${OSTOOL_ADMIN_PASSWORD:-admin-password-123}
+DEMO=${OSTOOL_DEV_DEMO:-true}
+[[ "$DEMO" == "true" || "$DEMO" == "false" ]] || { echo "OSTOOL_DEV_DEMO must be true or false" >&2; exit 2; }
 
 die() { echo "dev-env: $*" >&2; exit 1; }
 log() { echo "dev-env: $*"; }
@@ -123,9 +125,14 @@ start_server() {
         server_env+=("OSTOOL_DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${PG_PORT}/${DB_NAME}"
             "OSTOOL_ADMIN_EMAIL=$ADMIN_EMAIL" "OSTOOL_ADMIN_PASSWORD=$ADMIN_PASSWORD" "OSTOOL_AUTH_ENABLED=true")
     fi
+    local -a server_args=()
+    if [[ "$DEMO" == "true" ]]; then
+        server_args+=(--dev-demo)
+        log "demo fixtures enabled (demo-*); hardware discovery and startup power-off disabled"
+    fi
     nohup "${server_env[@]}" \
-        bash -c 'cd "$1" && exec cargo run -p ostool-server -- --config "$2" --env-file "$3"' \
-        dev-env "$REPO_DIR" "$CONFIG_FILE" "$STATE_DIR/server.env" \
+        bash -c 'cd "$1" && shift && exec cargo run -p ostool-server -- --config "$1" --env-file "$2" "${@:3}"' \
+        dev-env "$REPO_DIR" "$CONFIG_FILE" "$STATE_DIR/server.env" "${server_args[@]}" \
         >"$LOG_FILE" 2>&1 < /dev/null &
     echo $! > "$PID_FILE"
     for _ in {1..30}; do

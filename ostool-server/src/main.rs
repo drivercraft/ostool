@@ -19,6 +19,9 @@ struct Cli {
     /// Load deployment variables from this file (defaults to .env if present).
     #[arg(long)]
     env_file: Option<PathBuf>,
+    /// Populate an isolated loopback-only UI demo; disable hardware listeners and startup power-off.
+    #[arg(long)]
+    dev_demo: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -54,6 +57,9 @@ async fn main() -> anyhow::Result<()> {
         };
         return run_virtual_lab(&config.virtual_qemu, action).await;
     }
+    if cli.dev_demo {
+        ostool_server::demo::prepare(&mut config)?;
+    }
     let listen_addr = config.listen_addr;
     let listener = tokio::net::TcpListener::bind(listen_addr)
         .await
@@ -78,11 +84,16 @@ async fn main() -> anyhow::Result<()> {
 
     let state = build_app_state(cli.config.clone(), config, tftp_manager.clone()).await?;
     state.ensure_data_dirs().await?;
-    for (board_id, err) in state.power_off_all_boards_on_startup().await {
-        log::warn!(
-            "failed to power off board `{board_id}` during server startup; marking it disabled for this process: {err}"
-        );
-    }
+    let _demo = if cli.dev_demo {
+        Some(ostool_server::demo::seed(&state).await?)
+    } else {
+        for (board_id, err) in state.power_off_all_boards_on_startup().await {
+            log::warn!(
+                "failed to power off board `{board_id}` during server startup; marking it disabled for this process: {err}"
+            );
+        }
+        None
+    };
     let discovery_task = start_udp_discovery(state.clone()).await?;
     tftp_manager.start_if_needed().await?;
     if let ostool_server::TftpConfig::SystemTftpdHpa(cfg) = &state.config.read().await.tftp

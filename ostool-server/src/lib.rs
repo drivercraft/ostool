@@ -8,6 +8,7 @@ pub mod board_pool;
 pub mod board_store;
 pub mod config;
 pub mod database;
+pub mod demo;
 pub mod device;
 pub mod dtb_store;
 pub mod environment;
