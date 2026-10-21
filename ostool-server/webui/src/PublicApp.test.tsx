@@ -9,6 +9,17 @@ const mocks = vi.hoisted(() => ({
   login: vi.fn(),
   me: vi.fn(),
 }));
+vi.mock("./api/events", () => ({
+  account: {
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    reset: vi.fn(),
+    get: vi.fn(),
+  },
+  useAccountResource: () => undefined,
+  useAccountConnection: () => "connected",
+  useAccountErrors: () => ({}),
+}));
 vi.mock("./api/client", () => ({
   api: {
     authConfig: mocks.config,
@@ -16,10 +27,26 @@ vi.mock("./api/client", () => ({
     login: mocks.login,
     me: mocks.me,
   },
-  saveAuthToken: vi.fn(),
+  saveAuthToken: (token: { access_token: string }) => {
+    localStorage.setItem("ostool.access_token", token.access_token);
+    window.dispatchEvent(new Event("ostool:auth"));
+  },
+  clearAuthToken: () => {
+    localStorage.clear();
+    window.dispatchEvent(new Event("ostool:auth"));
+  },
 }));
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: vi.fn().mockImplementation(() => ({
+      matches: false,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
   mocks.config.mockResolvedValue({
     edition: "public",
     enabled: true,
@@ -27,7 +54,9 @@ beforeEach(() => {
     database_available: true,
   });
   mocks.register.mockResolvedValue({ access_token: "member-token" });
+  mocks.login.mockResolvedValue({ access_token: "member-token" });
   mocks.me.mockResolvedValue({
+    id: "member",
     email: "member@test.local",
     display_name: "Member",
     is_admin: false,
@@ -37,6 +66,25 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("registration", () => {
+  it("keeps administrators in the public workspace after a normal website login", async () => {
+    mocks.me.mockResolvedValue({
+      id: "admin",
+      email: "admin@test.local",
+      display_name: "Admin",
+      is_admin: true,
+    });
+    const user = userEvent.setup();
+    render(<PublicApp />);
+    await user.type(await screen.findByLabelText("邮箱"), "admin@test.local");
+    await user.type(screen.getByLabelText("密码"), "admin-password-123");
+    await user.click(screen.getByRole("button", { name: "登录" }));
+    await screen.findByRole("heading", { name: "当前账号" });
+    expect(window.location.pathname).toBe("/account");
+    expect(
+      screen.getAllByRole("button", { name: "用户菜单" }).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByRole("link", { name: "登录" })).toBeNull();
+  });
   it("hides every account entry in local edition, even with PostgreSQL and a stale token", async () => {
     mocks.config.mockResolvedValue({
       edition: "local",

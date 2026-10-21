@@ -7,6 +7,7 @@ use std::{
 const EMBED_WEB_DIR_ENV: &str = "OSTOOL_SERVER_WEB_DIST_DIR";
 
 fn main() {
+    println!("cargo:rerun-if-env-changed={EMBED_WEB_DIR_ENV}");
     for path in [
         "webui/index.html",
         "webui/package.json",
@@ -30,6 +31,7 @@ fn main() {
 
     if let Some(existing_dist_dir) = env::var_os(EMBED_WEB_DIR_ENV) {
         let existing_dist_dir = PathBuf::from(existing_dist_dir);
+        println!("cargo:rerun-if-changed={}", existing_dist_dir.display());
         let index_html = existing_dist_dir.join("index.html");
         if !index_html.exists() {
             panic!(

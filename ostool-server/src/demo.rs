@@ -220,10 +220,11 @@ pub async fn seed(state: &AppState) -> anyhow::Result<DemoRuntime> {
         "users",
         "roles",
         "rentals",
+        "rental_requests",
         "power_actions",
     ]);
     log::warn!(
-        "LOCAL DEMO enabled: 48 boards, 24 DTBs, sample sessions/devices; public edition adds 36 users, 6 roles, 72 rentals. Fixtures use demo-* identifiers; no startup hardware actions."
+        "LOCAL DEMO enabled: 48 boards, 24 DTBs, sample sessions/devices; public edition adds 36 users, 6 roles, 72 rentals, 48 rental requests. Fixtures use demo-* identifiers; no startup hardware actions."
     );
     let runtime_state = state.clone();
     Ok(DemoRuntime(tokio::spawn(async move {
@@ -289,6 +290,13 @@ async fn seed_identity(state: &AppState) -> anyhow::Result<Option<Uuid>> {
             .bind(demo_uuid(2, index)).bind(&sample.id).bind(demo_uuid(1, index % 29 + 1)).bind(start).bind(end)
             .bind(format!("[演示] {} / 项目 {:02}", ["内核适配", "课程实验", "驱动回归", "性能验证"][index % 4], index + 1))
             .bind(cancelled).execute(&mut *tx).await?;
+    }
+    for index in 0..48 {
+        let status = ["pending", "approved", "rejected", "cancelled"][index % 4];
+        let sample = board(index % 12);
+        let start = Utc::now() + chrono::Duration::days(14 + (index / 12) as i64);
+        sqlx::query("INSERT INTO rental_requests (id,user_id,board_id,starts_at,ends_at,notes,status,decision_note,reviewed_at,rental_id) SELECT $1,user_id,CASE WHEN $2='approved' THEN board_id ELSE $3 END,CASE WHEN $2='approved' THEN starts_at ELSE $4 END,CASE WHEN $2='approved' THEN ends_at ELSE $5 END,'[演示] 开发板使用申请',$2,CASE WHEN $2='pending' THEN '' ELSE '[演示] 审核记录' END,CASE WHEN $2 IN ('approved','rejected') THEN now() ELSE NULL END,CASE WHEN $2='approved' THEN id ELSE NULL END FROM board_rentals WHERE id=$6 ON CONFLICT DO NOTHING")
+            .bind(demo_uuid(3,index)).bind(status).bind(sample.id).bind(start).bind(start+chrono::Duration::hours(2)).bind(demo_uuid(2,index)).execute(&mut *tx).await?;
     }
     tx.commit().await?;
     // If the demo administrator has been deleted/disabled or its role changed,
@@ -386,6 +394,10 @@ mod tests {
                 36,
             ),
             ("SELECT count(*) FROM roles WHERE id LIKE 'demo-%'", 6),
+            (
+                "SELECT count(*) FROM rental_requests WHERE notes LIKE '[演示]%'",
+                48,
+            ),
             (
                 "SELECT count(*) FROM board_rentals WHERE notes LIKE '[演示]%'",
                 72,

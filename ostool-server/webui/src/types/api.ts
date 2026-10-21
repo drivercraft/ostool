@@ -401,3 +401,34 @@ export interface Rental extends RentalInput {
   cancelled_at: string | null;
   created_at: string;
 }
+export interface RentalRequest {
+  id: string;
+  user_id: string;
+  user_email: string;
+  board_id: string;
+  starts_at: string;
+  ends_at: string;
+  notes: string;
+  status: "pending" | "approved" | "rejected" | "cancelled";
+  decision_note: string;
+  reviewed_at: string | null;
+  rental_id: string | null;
+  created_at: string;
+}
+export interface RentalApplication {
+  board_id: string;
+  starts_at: string;
+  ends_at: string;
+  notes: string;
+}
+export interface CatalogBoard {
+  id: string;
+  board_type: string;
+  tags: string[];
+}
+export interface PersonalTokenSummary {
+  id: string;
+  name: string;
+  expires_at: string | null;
+  created_at: string;
+}

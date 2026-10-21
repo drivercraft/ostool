@@ -26,6 +26,12 @@ export interface Runtime {
   last_release_error: string | null;
 }
 export interface Resources {
+  profile: import("./client").AuthUser;
+  catalog: import("@/types/api").CatalogBoard[];
+  my_rentals: import("@/types/api").Rental[];
+  my_requests: import("@/types/api").RentalRequest[];
+  personal_tokens: import("@/types/api").PersonalTokenSummary[];
+  rental_requests: import("@/types/api").RentalRequest[];
   rentals: import("@/types/api").Rental[];
   users: import("@/types/api").ManagedUser[];
   roles: import("@/types/api").UserRole[];
@@ -94,6 +100,10 @@ function reconcile(previous: unknown, next: unknown): unknown {
   return next;
 }
 export class AdminStore {
+  constructor(
+    private endpoint = "/api/v1/admin/events",
+    private member = false,
+  ) {}
   private data: Partial<Resources> = {};
   private listeners = new Set<() => void>();
   private source?: EventSource;
@@ -146,7 +156,7 @@ export class AdminStore {
       ? localStorage.getItem("ostool.access_token")
       : null;
     const suffix = token ? `?access_token=${encodeURIComponent(token)}` : "";
-    this.source = new EventSource(`/api/v1/admin/events${suffix}`);
+    this.source = new EventSource(`${this.endpoint}${suffix}`);
     const receive = (event: MessageEvent) => {
       try {
         this.apply(JSON.parse(event.data));
@@ -161,7 +171,7 @@ export class AdminStore {
       void refreshAuth()
         .then(() => api.me())
         .then((user) => {
-          if (!user.is_admin) {
+          if (!this.member && !user.is_admin) {
             window.location.assign("/account");
             return;
           }
@@ -184,6 +194,15 @@ export class AdminStore {
     this.source?.close();
     this.source = undefined;
   };
+  reset = () => {
+    this.disconnect();
+    this.data = {};
+    this.errors = {};
+    this.epoch = "";
+    this.revision = 0;
+    this.connection = "connecting";
+    this.emit();
+  };
   restart = () => {
     this.disconnect();
     this.connection = "reconnecting";
@@ -192,6 +211,16 @@ export class AdminStore {
   };
 }
 export const admin = new AdminStore();
+export const account = new AdminStore("/api/v1/account/events", true);
+export function useAccountResource<K extends keyof Resources>(topic: K) {
+  return useSyncExternalStore(account.subscribe, () => account.get(topic));
+}
+export function useAccountConnection() {
+  return useSyncExternalStore(account.subscribe, account.getConnection);
+}
+export function useAccountErrors() {
+  return useSyncExternalStore(account.subscribe, account.getErrors);
+}
 export function useResource<K extends keyof Resources>(topic: K) {
   return useSyncExternalStore(admin.subscribe, () => admin.get(topic));
 }

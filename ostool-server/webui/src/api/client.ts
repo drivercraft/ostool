@@ -117,6 +117,44 @@ export type AuthConfig = {
 };
 let authConfigRequest: Promise<AuthConfig> | undefined;
 export const api = {
+  updateProfile(payload: {
+    email: string;
+    display_name: string;
+    current_password?: string;
+  }) {
+    return request<void>("/api/v1/account/profile", {
+      method: "PUT",
+      bodyJson: payload,
+    });
+  },
+  changePassword(current_password: string, new_password: string) {
+    return request<void>("/api/v1/account/password", {
+      method: "POST",
+      bodyJson: { current_password, new_password },
+    });
+  },
+  applyRental(payload: import("@/types/api").RentalApplication) {
+    return request<void>("/api/v1/account/rental-requests", {
+      method: "POST",
+      bodyJson: payload,
+    });
+  },
+  withdrawRentalRequest(id: string) {
+    return request<void>(
+      `/api/v1/account/rental-requests/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
+  },
+  reviewRentalRequest(
+    id: string,
+    decision: "approve" | "reject",
+    note: string,
+  ) {
+    return request<void>(
+      `/api/v1/admin/rental-requests/${encodeURIComponent(id)}/review`,
+      { method: "POST", bodyJson: { decision, note } },
+    );
+  },
   createRental(payload: import("@/types/api").RentalInput) {
     return request<void>("/api/v1/admin/rentals", {
       method: "POST",
@@ -421,9 +459,11 @@ export interface PersonalAccessToken {
 export function saveAuthToken(token: AuthToken) {
   localStorage.setItem("ostool.access_token", token.access_token);
   localStorage.setItem("ostool.refresh_token", token.refresh_token);
+  window.dispatchEvent(new Event("ostool:auth"));
 }
 
 export function clearAuthToken() {
   localStorage.removeItem("ostool.access_token");
   localStorage.removeItem("ostool.refresh_token");
+  window.dispatchEvent(new Event("ostool:auth"));
 }

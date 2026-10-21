@@ -279,6 +279,9 @@ Only public edition has `/login`, with bootstrap defaults `admin@example.com` /
 `admin-password-123`. Override `OSTOOL_ADMIN_EMAIL`, `OSTOOL_ADMIN_PASSWORD`,
 `OSTOOL_DEV_PG_PORT`, or `OSTOOL_DEV_SERVER_PORT` before starting as needed.
 The script does not read the repository `.env`, modify systemd or touch `/etc`.
+Where `setsid` is available, it starts the server in an independent session so
+closing a command runner does not terminate it; `stop` still uses the recorded
+server PID. Other environments retain the `nohup` fallback.
 
 The development launcher enables demo data by default (`OSTOOL_DEV_DEMO=true`).
 Restart an existing environment to populate it:
@@ -298,7 +301,8 @@ sessions with downloadable text/log files, and 18 discovered devices (online,
 offline, conflicting and unbound). Idle, in-use, releasing and error states, plus successful
 and failed power notifications, exercise the console's filters and pagination.
 Public edition additionally has 36 users (including disabled accounts), six
-custom roles and 72 past/current/future/cancelled rentals. Existing records are
+custom roles, 72 past/current/future/cancelled rentals, and 48 pending/approved/
+rejected/withdrawn rental applications. Existing records are
 preserved; fixture IDs/names start with `demo` or `[演示]`. These are actual local
 storage/database records consumed by the regular API/SSE, not browser mocks.
 
@@ -327,6 +331,31 @@ server startup and systemd deployments do not enable demo data; direct isolated
 development startup can opt in with `ostool-server --config ... --dev-demo`.
 
 ## Management console
+
+The public website has its own header, footer and authenticated workspace at
+`/account/*`, separate from the administrator layout at `/admin/*`. Website login
+opens the personal workspace for members and administrators alike. Its avatar
+menu links to profile, security, rentals and applications; administrators also
+get an explicit management-console link. Light/dark/system theme preferences
+are stored independently for the website and console.
+
+Members can edit their name/email (email changes require their password), change
+password, manage CLI personal access tokens, view their own rentals and submit
+or withdraw rental applications. The authenticated devices page lists boards
+that can be requested. Administrators review applications under rental management.
+Approval rechecks availability and creates the exclusive rental in the same
+PostgreSQL transaction; applying alone reserves no time or hardware. All personal
+queries and SSE updates are scoped to the authenticated user, excluding management
+configuration and other users' data. Password changes invalidate all existing
+OAuth sessions, personal access tokens and approved device codes for that user.
+These features remain hidden and unavailable in local edition.
+
+After source changes, use `restart` for the running development edition; `start`
+keeps an already running process. Restart rebuilds the embedded website and Rust
+executable using Cargo. HTML is served with `Cache-Control: no-store`, while
+hashed assets are immutable. Prebuilt `OSTOOL_SERVER_WEB_DIST_DIR` changes are
+also tracked by the build script. Deployment schema migrations run automatically
+on connection; the new application table preserves existing rentals.
 
 Open `/admin/` for the React + shadcn/ui console. Boards, discovery, virtual
 hardware, DTBs, leases, TFTP and server settings update through a single SSE

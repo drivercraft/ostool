@@ -46,5 +46,13 @@ fn asset_response(path: String) -> Response {
         HeaderValue::from_str(mime.as_ref())
             .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
     );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(if path == "index.html" {
+            "no-store"
+        } else {
+            "public, max-age=31536000, immutable"
+        }),
+    );
     response
 }

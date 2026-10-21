@@ -73,6 +73,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(super::auth::routes())
         .merge(super::users::routes())
         .merge(super::rentals::routes())
+        .merge(super::account::routes())
         .merge(super::ota::routes())
         .route("/api/v1/admin/events", get(crate::admin_events::subscribe))
         .route(
@@ -90,6 +91,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/{*path}", get(serve_admin_history))
         .route("/register", get(serve_admin_index))
         .route("/account", get(serve_admin_index))
+        .route("/account/{*path}", get(serve_admin_history))
         .route("/login", get(serve_admin_index))
         .route("/login/", get(serve_admin_index))
         .route("/login/{*path}", get(serve_admin_history))
@@ -2999,6 +3001,9 @@ pub(crate) async fn admin_topic(
         "roles" => serde_json::to_value(super::users::list_roles(extractor).await?.0),
         "deployment" => Ok(super::users::deployment(extractor).await.0),
         "rentals" => serde_json::to_value(super::rentals::list(extractor).await?.0),
+        "rental_requests" => {
+            serde_json::to_value(super::account::list_requests(state, None).await?)
+        }
         "runtimes" => {
             let mut values = BTreeMap::new();
             for (id, r) in state.board_runtimes.read().await.iter() {
@@ -3470,6 +3475,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        assert_eq!(
             response.headers().get(header::CONTENT_TYPE).unwrap(),
             "text/html"
         );
@@ -3494,6 +3503,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "public, max-age=31536000, immutable"
+        );
         assert!(response.headers().contains_key(header::CONTENT_TYPE));
     }
 

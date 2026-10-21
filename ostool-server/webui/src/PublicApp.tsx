@@ -2,6 +2,9 @@ import { FormEvent, useEffect, useState } from "react";
 import {
   ArrowRight,
   CheckCircle2,
+  ChevronDown,
+  LogOut,
+  UserRound,
   CircuitBoard,
   Command,
   FileText,
@@ -24,8 +27,20 @@ import {
   useNavigate,
 } from "react-router-dom";
 import { EditionProvider, useEdition } from "./edition";
-import Account from "./pages/Account";
-import { api, saveAuthToken, type AuthUser } from "./api/client";
+import MemberWorkspace, { MemberDeviceCatalog } from "./pages/MemberWorkspace";
+import { SiteSessionProvider, useSiteSession } from "./site-session";
+import { SiteThemeMenu } from "./components/site-theme-menu";
+import { ThemeProvider } from "next-themes";
+import { Toaster } from "./components/ui/sonner";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from "./components/ui/dropdown-menu";
+import { api, saveAuthToken } from "./api/client";
 import { Button } from "./components/ui/button";
 
 const publicNavigation = [
@@ -41,7 +56,10 @@ function Logo({ light = false }: { light?: boolean }) {
       <span className="logo-mark">
         <CircuitBoard size={18} strokeWidth={2.5} />
       </span>
-      <span>ostool</span>
+      <span className="site-logo-copy">
+        <strong>ostool</strong>
+        <small>BOARD PLATFORM</small>
+      </span>
     </Link>
   );
 }
@@ -49,45 +67,84 @@ function Logo({ light = false }: { light?: boolean }) {
 function SiteHeader() {
   const publicEdition = useEdition().edition === "public";
   const [open, setOpen] = useState(false);
-  const [user, setUser] = useState<AuthUser>();
   const location = useLocation();
   useEffect(() => {
-    let active = true;
-    if (publicEdition && localStorage.getItem("ostool.access_token"))
-      void api
-        .me()
-        .then((value) => {
-          if (active) setUser(value);
-        })
-        .catch(() => {
-          if (active) setUser(undefined);
-        });
-    return () => {
-      active = false;
-    };
-  }, [location.pathname, publicEdition]);
+    setOpen(false);
+    const title = location.pathname.startsWith("/account")
+      ? "个人工作台"
+      : location.pathname === "/login"
+        ? "登录"
+        : location.pathname === "/register"
+          ? "注册"
+          : (publicNavigation.find(
+              ([path]) => path === location.pathname,
+            )?.[1] ?? "开发板协作平台");
+    document.title = `${title} · ostool`;
+  }, [location.pathname]);
+  const { user } = useSiteSession();
   const accountActions = !publicEdition ? (
     <Button asChild size="sm">
       <a href="/admin/overview">打开控制台</a>
     </Button>
   ) : user ? (
-    <>
-      <Link to="/account">{user.display_name || user.email}</Link>
-      {user.is_admin && (
-        <Button asChild size="sm">
-          <a href="/admin/overview">管理后台</a>
-        </Button>
-      )}
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() =>
-          void api.logout().finally(() => window.location.assign("/login"))
-        }
-      >
-        退出
-      </Button>
-    </>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button className="site-user" aria-label="用户菜单">
+          <span className="site-avatar">
+            {(user.display_name || user.email).slice(0, 1).toUpperCase()}
+          </span>
+          <span className="site-user-copy">
+            <strong>{user.display_name || user.email}</strong>
+            <small>个人工作台</small>
+          </span>
+          <ChevronDown size={14} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="site-account-menu">
+        <DropdownMenuLabel>
+          <strong>{user.display_name || "我的账号"}</strong>
+          <small>{user.email}</small>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link to="/account">
+            <UserRound />
+            个人中心
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link to="/account/profile">基本信息</Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link to="/account/security">账号安全</Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link to="/account/rentals">我的租赁</Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link to="/account/requests">租赁申请</Link>
+        </DropdownMenuItem>
+        {user.is_admin && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              {(!publicEdition || user?.is_admin) && (
+                <a href="/admin/overview">管理后台</a>
+              )}
+            </DropdownMenuItem>
+          </>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onSelect={() =>
+            void api.logout().finally(() => window.location.assign("/"))
+          }
+        >
+          <LogOut />
+          退出登录
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   ) : (
     <>
       <Link className="site-login" to="/login" onClick={() => setOpen(false)}>
@@ -120,7 +177,10 @@ function SiteHeader() {
           ))}
           <div className="mobile-nav-actions">{accountActions}</div>
         </nav>
-        <div className="site-actions">{accountActions}</div>
+        <div className="site-right-actions">
+          <SiteThemeMenu />
+          <div className="site-actions">{accountActions}</div>
+        </div>
         <button
           className="site-menu-toggle"
           aria-label={open ? "关闭菜单" : "打开菜单"}
@@ -134,6 +194,7 @@ function SiteHeader() {
 }
 
 function SiteFooter() {
+  const { user } = useSiteSession();
   const publicEdition = useEdition().edition === "public";
   return (
     <footer className="site-footer">
@@ -146,7 +207,9 @@ function SiteFooter() {
           <strong>产品</strong>
           <Link to="/devices">设备管理</Link>
           <Link to="/docs">文档中心</Link>
-          <a href="/admin/overview">管理后台</a>
+          {(!publicEdition || user?.is_admin) && (
+            <a href="/admin/overview">管理后台</a>
+          )}
         </div>
         <div className="footer-column">
           <strong>资源</strong>
@@ -158,8 +221,9 @@ function SiteFooter() {
           <strong>开始使用</strong>
           <span>连接你的第一块开发板</span>
           <Button asChild variant="outline" size="sm">
-            <a href={publicEdition ? "/login" : "/admin/overview"}>
-              进入控制台 <ArrowRight size={14} />
+            <a href={publicEdition ? "/account" : "/admin/overview"}>
+              {publicEdition ? "个人工作台" : "进入控制台"}{" "}
+              <ArrowRight size={14} />
             </a>
           </Button>
         </div>
@@ -188,6 +252,12 @@ function PublicLayout({ children }: { children: React.ReactNode }) {
 
 function Home() {
   const publicEdition = useEdition().edition === "public";
+  const { user } = useSiteSession();
+  const startPath = publicEdition
+    ? user
+      ? "/account"
+      : "/register"
+    : "/admin/overview";
   return (
     <PublicLayout>
       <main className="public-home">
@@ -208,7 +278,7 @@ function Home() {
             </p>
             <div className="hero-actions">
               <Button asChild size="lg">
-                <a href={publicEdition ? "/register" : "/admin/overview"}>
+                <a href={startPath}>
                   开始使用 <ArrowRight size={16} />
                 </a>
               </Button>
@@ -410,8 +480,12 @@ function Home() {
             <p>几分钟完成部署，随后专注于真正重要的开发工作。</p>
           </div>
           <Button asChild size="lg">
-            <a href={publicEdition ? "/register" : "/admin/overview"}>
-              {publicEdition ? "创建账号" : "打开本地控制台"}{" "}
+            <a href={startPath}>
+              {publicEdition
+                ? user
+                  ? "打开个人工作台"
+                  : "创建账号"
+                : "打开本地控制台"}{" "}
               <ArrowRight size={16} />
             </a>
           </Button>
@@ -446,6 +520,7 @@ function FeatureCard({
 }
 
 function Devices() {
+  const { user } = useSiteSession();
   const publicEdition = useEdition().edition === "public";
   return (
     <PublicLayout>
@@ -458,31 +533,40 @@ function Devices() {
             虚拟设备，团队成员可以在同一个工作区中发现、分配和操作它们。
           </p>
         </div>
-        <div className="device-showcase">
-          <div className="device-showcase-card">
-            <CircuitBoard size={28} />
-            <strong>设备租约</strong>
-            <span>按需分配，自动释放</span>
+        {publicEdition && user ? (
+          <MemberDeviceCatalog />
+        ) : (
+          <div className="device-showcase">
+            <div className="device-showcase-card">
+              <CircuitBoard size={28} />
+              <strong>设备租约</strong>
+              <span>按需分配，自动释放</span>
+            </div>
+            <div className="device-showcase-card">
+              <Radio size={28} />
+              <strong>串口会话</strong>
+              <span>实时传输，状态透明</span>
+            </div>
+            <div className="device-showcase-card">
+              <Zap size={28} />
+              <strong>远程电源</strong>
+              <span>支持多种电源控制器</span>
+            </div>
           </div>
-          <div className="device-showcase-card">
-            <Radio size={28} />
-            <strong>串口会话</strong>
-            <span>实时传输，状态透明</span>
-          </div>
-          <div className="device-showcase-card">
-            <Zap size={28} />
-            <strong>远程电源</strong>
-            <span>支持多种电源控制器</span>
-          </div>
-        </div>
+        )}
         <div className="inner-callout">
           <div>
             <h2>准备好连接设备了吗？</h2>
-            <p>登录管理后台，查看你的设备池和当前会话。</p>
+            <p>
+              {publicEdition
+                ? "登录个人工作台，查看租赁并申请开发板使用时段。"
+                : "打开本地控制台，查看开发板和当前会话。"}
+            </p>
           </div>
           <Button asChild>
-            <a href={publicEdition ? "/login" : "/admin/overview"}>
-              进入控制台 <ArrowRight size={15} />
+            <a href={publicEdition ? "/account" : "/admin/overview"}>
+              {publicEdition ? "个人工作台" : "进入控制台"}{" "}
+              <ArrowRight size={15} />
             </a>
           </Button>
         </div>
@@ -595,8 +679,15 @@ function Login() {
         setMessage("设备登录已批准，可以返回 ostool CLI。");
       } else {
         const user = await api.me();
-        if (user.is_admin) window.location.assign("/admin/overview");
-        else navigate("/account");
+        const redirect = query.get("redirect");
+        if (user.is_admin && redirect?.startsWith("/admin/"))
+          window.location.assign(redirect);
+        else
+          navigate(
+            redirect?.startsWith("/account") && !redirect.startsWith("//")
+              ? redirect
+              : "/account",
+          );
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "登录失败");
@@ -613,7 +704,7 @@ function Login() {
           <h1>
             把硬件工作，<em>组织起来。</em>
           </h1>
-          <p>登录你的工作区，管理设备、会话和团队访问权限。</p>
+          <p>查看开发板租赁、提交使用申请，并管理你的账号。</p>
           <div className="auth-aside-points">
             <span>
               <CheckCircle2 /> 统一的设备工作区
@@ -638,7 +729,7 @@ function Login() {
                 ? "确认设备验证码并授权 ostool CLI。"
                 : registering
                   ? "创建账号，开始管理你的设备。"
-                  : "登录后进入设备管理控制台。"}
+                  : "登录后进入个人工作台，查看租赁和申请设备。"}
             </p>
           </div>
           {userCode && (
@@ -699,6 +790,9 @@ function Login() {
               />
             </label>
           )}
+          {query.get("password_changed") === "1" && (
+            <p role="status">密码已更新，请使用新密码重新登录。</p>
+          )}
           {message && (
             <p className="auth-message" role="alert">
               {message}
@@ -715,7 +809,7 @@ function Login() {
                 ? "登录并批准"
                 : registering
                   ? "创建账号"
-                  : "登录控制台"}{" "}
+                  : "登录"}{" "}
             <ArrowRight size={15} />
           </Button>
           {!userCode && (
@@ -735,9 +829,22 @@ function Login() {
 
 export default function PublicApp() {
   return (
-    <EditionProvider>
-      <PublicRoutes />
-    </EditionProvider>
+    <ThemeProvider
+      attribute="class"
+      defaultTheme="system"
+      enableSystem
+      storageKey="ostool.web.theme"
+      disableTransitionOnChange
+    >
+      <EditionProvider>
+        <SiteSessionProvider>
+          <div className="site-root">
+            <PublicRoutes />
+          </div>
+          <Toaster position="top-right" richColors closeButton />
+        </SiteSessionProvider>
+      </EditionProvider>
+    </ThemeProvider>
   );
 }
 function PublicRoutes() {
@@ -758,13 +865,11 @@ function PublicRoutes() {
           element={publicEdition ? <Login /> : <Navigate replace to="/" />}
         />
         <Route
-          path="/account"
+          path="/account/*"
           element={
             publicEdition ? (
               <PublicLayout>
-                <main className="public-inner-page">
-                  <Account />
-                </main>
+                <MemberWorkspace />
               </PublicLayout>
             ) : (
               <Navigate replace to="/" />

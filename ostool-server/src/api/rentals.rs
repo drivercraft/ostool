@@ -66,8 +66,14 @@ fn status(
     }
 }
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Rental>>, ApiError> {
-    let rows = sqlx::query("SELECT * FROM board_rentals ORDER BY created_at DESC,id")
-        .fetch_all(database(&state)?.pool())
+    list_for(&state, None).await.map(Json)
+}
+pub(crate) async fn list_for(
+    state: &AppState,
+    user: Option<Uuid>,
+) -> Result<Vec<Rental>, ApiError> {
+    let rows = sqlx::query("SELECT * FROM board_rentals WHERE ($1::uuid IS NULL OR user_id=$1) ORDER BY created_at DESC,id")
+        .bind(user).fetch_all(database(state)?.pool())
         .await
         .map_err(db_error)?;
     let now = Utc::now();
@@ -89,7 +95,6 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Rental>>, Ap
             })
         })
         .collect::<Result<Vec<_>, sqlx::Error>>()
-        .map(Json)
         .map_err(db_error)
 }
 async fn create(
@@ -107,7 +112,16 @@ async fn update(
     save(&state, Some(id), input).await?;
     Ok(StatusCode::NO_CONTENT)
 }
-async fn save(state: &AppState, id: Option<Uuid>, input: RentalInput) -> Result<(), ApiError> {
+async fn save(state: &AppState, id: Option<Uuid>, input: RentalInput) -> Result<Uuid, ApiError> {
+    save_internal(state, id, input, None).await
+}
+
+pub(crate) async fn save_internal(
+    state: &AppState,
+    id: Option<Uuid>,
+    input: RentalInput,
+    approval: Option<(Uuid, Uuid, String)>,
+) -> Result<Uuid, ApiError> {
     if input.starts_at >= input.ends_at || input.ends_at <= Utc::now() {
         return Err(ApiError::bad_request(
             "开始时间必须早于结束时间，且结束时间必须在未来",
@@ -129,6 +143,14 @@ async fn save(state: &AppState, id: Option<Uuid>, input: RentalInput) -> Result<
         return Err(ApiError::conflict("已禁用的开发板不能分配租赁"));
     }
     let mut tx = database(state)?.pool().begin().await.map_err(db_error)?;
+    if let Some((request_id, _, _)) = &approval {
+        let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM (SELECT * FROM rental_requests WHERE id=$1 FOR UPDATE) r WHERE status='pending' AND user_id=$2 AND board_id=$3 AND starts_at=$4 AND ends_at=$5)")
+            .bind(request_id).bind(input.user_id).bind(&input.board_id).bind(input.starts_at).bind(input.ends_at)
+            .fetch_one(&mut *tx).await.map_err(db_error)?;
+        if !pending {
+            return Err(ApiError::conflict("申请已处理或已撤回，请检查最新状态"));
+        }
+    }
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,2999))")
         .bind(&input.board_id)
         .execute(&mut *tx)
@@ -173,6 +195,7 @@ async fn save(state: &AppState, id: Option<Uuid>, input: RentalInput) -> Result<
             "该开发板在指定时间段已有租赁，请调整时间",
         ));
     }
+    let rental_id = id.unwrap_or_else(Uuid::new_v4);
     match id {
         Some(id) => {
             sqlx::query("UPDATE board_rentals SET starts_at=$1,ends_at=$2,notes=$3 WHERE id=$4")
@@ -185,15 +208,21 @@ async fn save(state: &AppState, id: Option<Uuid>, input: RentalInput) -> Result<
                 .map_err(db_error)?;
         }
         None => {
-            sqlx::query("INSERT INTO board_rentals(board_id,user_id,starts_at,ends_at,notes) VALUES($1,$2,$3,$4,$5)").bind(input.board_id).bind(input.user_id).bind(input.starts_at).bind(input.ends_at).bind(input.notes).execute(&mut *tx).await.map_err(db_error)?;
+            sqlx::query("INSERT INTO board_rentals(id,board_id,user_id,starts_at,ends_at,notes) VALUES($1,$2,$3,$4,$5,$6)").bind(rental_id).bind(input.board_id).bind(input.user_id).bind(input.starts_at).bind(input.ends_at).bind(input.notes).execute(&mut *tx).await.map_err(db_error)?;
         }
+    }
+    if let Some((request_id, reviewer, note)) = approval {
+        sqlx::query("UPDATE rental_requests SET status='approved',reviewed_by=$2,reviewed_at=now(),decision_note=$3,rental_id=$4 WHERE id=$1")
+            .bind(request_id).bind(reviewer).bind(note).bind(rental_id).execute(&mut *tx).await.map_err(db_error)?;
     }
     tx.commit().await.map_err(db_error)?;
     // New/shortened time ranges immediately revoke invalid member sessions.
     enforce(state).await?;
-    state.admin_events.invalidate(&["rentals"]);
+    state
+        .admin_events
+        .invalidate(&["rentals", "rental_requests"]);
     state.rental_changed.notify_one();
-    Ok(())
+    Ok(rental_id)
 }
 async fn cancel(
     Path(id): Path<Uuid>,

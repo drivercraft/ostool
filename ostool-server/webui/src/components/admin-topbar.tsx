@@ -41,6 +41,7 @@ const pageTitles: Record<string, string> = {
   "/dtbs": "DTB 管理",
   "/sessions": "会话租约",
   "/rentals": "租赁列表",
+  "/rental-requests": "租赁申请",
   "/users": "用户列表",
   "/users/roles": "用户角色",
   "/settings": "系统设置",
@@ -55,6 +56,7 @@ const topicPaths: Record<string, string> = {
   users: "/users",
   roles: "/users/roles",
   rentals: "/rentals",
+  rental_requests: "/rental-requests",
   dtbs: "/dtbs",
   server: "/settings",
   tftp: "/settings?tab=tftp",
@@ -70,6 +72,7 @@ const topicLabels: Record<string, string> = {
   users: "用户",
   roles: "角色",
   rentals: "租赁",
+  rental_requests: "租赁申请",
   dtbs: "DTB",
   server: "服务器配置",
   tftp: "TFTP",
@@ -320,10 +323,10 @@ function AccountMenu({ user, menus }: { user?: AuthUser; menus: TopbarMenus }) {
         <DropdownMenuSeparator />
         {publicEdition && (
           <DropdownMenuItem asChild>
-            <Link to="/account">
+            <a href="/account">
               <UserRound />
               我的账号
-            </Link>
+            </a>
           </DropdownMenuItem>
         )}
         <DropdownMenuItem asChild>

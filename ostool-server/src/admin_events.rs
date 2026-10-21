@@ -37,6 +37,7 @@ pub const TOPICS: &[&str] = &[
     "roles",
     "deployment",
     "rentals",
+    "rental_requests",
 ];
 const HISTORY_LIMIT: usize = 256;
 
@@ -199,6 +200,26 @@ pub async fn subscribe(
     headers: HeaderMap,
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    subscribe_scoped(state, headers, query, None).await
+}
+
+pub async fn subscribe_account(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<BTreeMap<String, String>>,
+    axum::extract::Extension(crate::api::auth::CurrentUser(user)): axum::extract::Extension<
+        crate::api::auth::CurrentUser,
+    >,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    subscribe_scoped(state, headers, query, Some(user.id)).await
+}
+
+async fn subscribe_scoped(
+    state: AppState,
+    headers: HeaderMap,
+    query: BTreeMap<String, String>,
+    account: Option<uuid::Uuid>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let events = state.admin_events.clone();
     let mut changed = events.changed.subscribe();
     // Subscribe before checking readiness; publication and its cursor share a lock.
@@ -232,6 +253,7 @@ pub async fn subscribe(
             credential,
             tokio::time::Instant::now(),
             false,
+            account.map(|id| (state, id)),
         ),
         |(
             events,
@@ -242,6 +264,7 @@ pub async fn subscribe(
             credential,
             mut check_at,
             finished,
+            account,
         )| async move {
             if finished {
                 return None;
@@ -254,7 +277,9 @@ pub async fn subscribe(
                                 .await
                                 .ok()
                                 .flatten()
-                                .is_some_and(|u| u.is_admin)
+                                .is_some_and(|u| {
+                                    account.as_ref().map_or(u.is_admin, |(_, id)| u.id == *id)
+                                })
                         } else {
                             false
                         };
@@ -265,14 +290,34 @@ pub async fn subscribe(
                                     .data("reauthenticate")),
                                 (
                                     events, changed, cursor, queue, database, credential, check_at,
-                                    true,
+                                    true, account,
                                 ),
                             ));
                         }
                     }
                     check_at = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
                 }
-                if let Some(update) = queue.pop_front() {
+                if let Some(mut update) = queue.pop_front() {
+                    if let Some((state, user)) = &account {
+                        let relevant = update.kind == "snapshot"
+                            || ["users", "rentals", "rental_requests", "boards"]
+                                .iter()
+                                .any(|key| update.data.contains_key(*key));
+                        // Never serialize the management projection for a member.
+                        update.data.clear();
+                        if relevant {
+                            match crate::api::account::projection(state, *user).await {
+                                Ok(serde_json::Value::Object(data)) => update.data.extend(data),
+                                Ok(_) => unreachable!("account projection is an object"),
+                                Err(error) => {
+                                    update.data.insert(
+                                        "profile".into(),
+                                        serde_json::json!({"error":error.message}),
+                                    );
+                                }
+                            }
+                        }
+                    }
                     let id = format!("{}:{}", update.epoch, update.revision);
                     cursor = Some(id.clone());
                     let event = Event::default()
@@ -284,6 +329,7 @@ pub async fn subscribe(
                         Ok(event),
                         (
                             events, changed, cursor, queue, database, credential, check_at, false,
+                            account,
                         ),
                     ));
                 }

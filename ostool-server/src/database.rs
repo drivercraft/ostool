@@ -467,3 +467,9 @@ fn token_hash(token: &str) -> String {
 pub(crate) async fn hash_password_async(password: String) -> anyhow::Result<String> {
     tokio::task::spawn_blocking(move || hash_password(&password)).await?
 }
+
+pub(crate) async fn verify_password_async(password: String, hash: String) -> anyhow::Result<bool> {
+    tokio::task::spawn_blocking(move || verify_password(&password, &hash))
+        .await
+        .map_err(Into::into)
+}

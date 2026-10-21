@@ -31,14 +31,14 @@ test("registration, member/admin access, user/role events and settings navigatio
   await expect(
     page.getByText("你的账号没有管理后台权限，请联系管理员分配角色。"),
   ).toBeVisible();
-  await page.goto(`${base}/login`);
+  await page.goto(`${base}/login?redirect=/admin/overview`);
   await page
     .getByLabel("邮箱", { exact: true })
     .fill(process.env.OSTOOL_E2E_ADMIN_EMAIL ?? "admin@example.com");
   await page
     .getByLabel("密码", { exact: true })
     .fill(process.env.OSTOOL_E2E_ADMIN_PASSWORD ?? "admin-password-123");
-  await page.getByRole("button", { name: "登录控制台", exact: true }).click();
+  await page.getByRole("button", { name: "登录", exact: true }).click();
   await expect(page).toHaveURL(`${base}/admin/overview`);
   await page.getByRole("link", { name: "用户列表", exact: true }).click();
   await expect(page.getByText(email, { exact: true })).toBeVisible();

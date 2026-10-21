@@ -33,7 +33,7 @@ const Settings = lazy(() => import("./pages/SystemSettings"));
 const Rentals = lazy(() => import("./pages/Rentals"));
 const Users = lazy(() => import("./pages/Users"));
 const Roles = lazy(() => import("./pages/Roles"));
-const Account = lazy(() => import("./pages/Account"));
+const RentalRequests = lazy(() => import("./pages/RentalRequests"));
 const boardNavigation = [
   ["boards", "开发板列表"],
   ["dtbs", "DTB 管理"],
@@ -73,7 +73,9 @@ function AdminEntry() {
         return;
       }
       if (!localStorage.getItem("ostool.access_token")) {
-        window.location.assign("/login");
+        window.location.assign(
+          `/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`,
+        );
         return;
       }
       const user = await api.me();
@@ -162,11 +164,15 @@ function AdminConsole({ user }: { user?: AuthUser }) {
                 <SidebarGroup
                   label="租赁管理"
                   icon={<CalendarClockIcon />}
-                  paths={["/rentals"]}
+                  paths={["/rentals", "/rental-requests"]}
                 >
                   <NavLink to="/rentals" onClick={() => setMenu(false)}>
                     <span className="admin-nav-dot" aria-hidden="true" />
                     <span>租赁列表</span>
+                  </NavLink>
+                  <NavLink to="/rental-requests" onClick={() => setMenu(false)}>
+                    <span className="admin-nav-dot" aria-hidden="true" />
+                    <span>租赁申请</span>
                   </NavLink>
                 </SidebarGroup>
                 <SidebarGroup
@@ -276,7 +282,17 @@ function AdminConsole({ user }: { user?: AuthUser }) {
                   path="/account"
                   element={
                     publicEdition ? (
-                      <Account />
+                      <AccountRedirect />
+                    ) : (
+                      <Navigate replace to="/overview" />
+                    )
+                  }
+                />
+                <Route
+                  path="/rental-requests"
+                  element={
+                    publicEdition ? (
+                      <RentalRequests />
                     ) : (
                       <Navigate replace to="/overview" />
                     )
@@ -333,4 +349,9 @@ function SidebarGroup({
       <div>{children}</div>
     </details>
   );
+}
+
+function AccountRedirect() {
+  useEffect(() => window.location.replace("/account"), []);
+  return <Notice>正在打开个人中心…</Notice>;
 }

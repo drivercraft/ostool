@@ -1,5 +1,52 @@
 # 管理界面与事件协议
 
+## 前台个人工作台
+
+网站与管理后台使用独立布局和路由：网站首页 `/`，个人工作台 `/account/*`，
+管理后台 `/admin/*`。它们共享服务器账号与 CLI 登录协议；普通成员不能访问管理 API。
+前台登录默认进入 `/account`，管理员从网站登录也不会自动跳转后台；只有访问后台时的
+站内 `redirect=/admin/...` 才会在验证管理员身份后返回对应管理页面。
+
+前台顶部按 itexp 网站的结构排列：左侧 LOGO 与菜单紧邻，右侧为主题图标和登录/注册；
+登录后显示头像菜单。主题支持明亮、黑暗和跟随系统，前台独立使用 `ostool.web.theme`
+保存偏好，后台仍使用 `ostool.admin.theme`。移动端保留主题按钮并提供折叠菜单。
+
+公开版个人工作台包括总览、基本信息、账号安全、我的租赁、租赁申请和个人访问令牌。
+登录后的设备页提供可申请的开发板目录。基本信息可修改显示名称和邮箱，修改邮箱需验证
+当前密码。改密验证旧密码后撤销该账号全部 OAuth 登录、个人访问令牌及已授权设备码，
+随后回到网站登录页。已有编辑草稿不会被实时推送覆盖。
+
+申请与正式租赁分开存储。成员提交申请后可在待审核状态撤回；管理员通过后台
+“租赁管理 → 租赁申请”批准或拒绝，并可填写审核意见。批准在同一个数据库事务内
+重新检查账号、板卡和租赁时间冲突，生成正式租赁并记录审批结果；重复或并发批准不会
+生成重复租赁。申请本身不占用时段、不上电、不授予板卡使用权。
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET /api/v1/account` | 当前用户资料、可申请设备目录、自己的租赁、申请和令牌元数据 |
+| `GET /api/v1/account/events` | 当前用户实时投影，支持 Bearer 或 EventSource 的 `access_token` |
+| `PUT /api/v1/account/profile` | `{email, display_name, current_password?}` |
+| `POST /api/v1/account/password` | `{current_password, new_password}` |
+| `POST /api/v1/account/rental-requests` | `{board_id, starts_at, ends_at, notes?}` |
+| `DELETE /api/v1/account/rental-requests/{id}` | 撤回自己的待审核申请 |
+| `GET /api/v1/admin/rental-requests` | 管理员申请列表，通过 `rental_requests` topic 同步 |
+| `POST /api/v1/admin/rental-requests/{id}/review` | `{decision: "approve" \| "reject", note?}` |
+
+前台页面统一使用 `api/events.ts` 中的独立 account store，连接个人 SSE；不订阅管理 SSE，
+不在提交后全量 GET，也不轮询列表。个人推送始终按认证用户过滤，并移除管理投影中的
+用户列表、硬件控制命令、服务器配置和其他人的租赁。令牌只在创建响应中展示一次，
+列表仅包含名称和时间等元数据。切换账号会清理旧的投影并重新连接。
+
+本地版继续无认证，并隐藏全部个人工作台功能；个人 API 和申请管理 API 返回 404。
+公开版首次升级时通过 SQLx 自动创建 `rental_requests` 表，不改写已有租赁数据。
+
+源码改动后，`start` 不会替换已运行进程，需要按当前版本执行 `restart`。该命令会通过
+`cargo run` 重新构建 React/Vite 资源并嵌入 Rust 可执行文件，然后运行新进程。
+HTML 响应使用 `Cache-Control: no-store`，带内容哈希的静态资源可长期缓存。
+使用 `OSTOOL_SERVER_WEB_DIST_DIR` 提供预构建资源时，其环境变量和目录变化也会触发构建。
+开发脚本在系统提供 `setsid` 时启动独立会话，避免调用终端退出时连带结束服务器；
+`status` 和 `stop` 仍通过记录的服务器 PID 工作，其他环境保留 `nohup` 兼容方式。
+
 ## 操作流程
 
 管理后台位于 `/admin/`。默认 `OSTOOL_EDITION=local`，保留总览、板卡管理和底部系统设置，免登录且不显示用户/租赁管理。公开版显式设置 `OSTOOL_EDITION=public`，必须登录并校验管理员角色。
@@ -146,7 +193,8 @@ OSTOOL_EDITION=public ostool-server/scripts/dev-env.sh restart
 - 24 个展示用 DTB、12 个持续保活的会话，以及会话下可下载的文本与日志文件。
 - 18 个发现设备：在线、离线、冲突和未绑定设备；顶部消息菜单也包含演示错误通知。
 - 公开测试版另有 36 个用户（含禁用账号）、6 个自定义角色、72 条过去、当前、未来和
-  已取消的租赁；可检查搜索、过滤、分页及编辑效果。
+  已取消的租赁，以及 48 条待审核、已批准、已拒绝和已撤回的申请。
+  可检查搜索、过滤、分页及编辑效果。
 
 公开测试版演示管理员 `demo01@example.test`、普通用户 `demo02@example.test`，
 密码均为 `demo-user-password-123`。原有默认管理员仍为

@@ -5,4 +5,5 @@ pub mod ota;
 pub mod router;
 pub mod users;
 
+pub mod account;
 pub mod rentals;

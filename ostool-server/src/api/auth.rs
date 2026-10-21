@@ -136,6 +136,8 @@ pub async fn middleware(
                 "/api/v1/admin/users",
                 "/api/v1/admin/roles",
                 "/api/v1/admin/rentals",
+                "/api/v1/admin/rental-requests",
+                "/api/v1/account",
             ]
             .iter()
             .any(|prefix| path.starts_with(prefix))
@@ -153,7 +155,7 @@ pub async fn middleware(
             .into_response();
     };
     let Some(token) = bearer_token(request.headers()).or_else(|| {
-        (path == "/api/v1/admin/events")
+        (matches!(path, "/api/v1/admin/events" | "/api/v1/account/events"))
             .then(|| request.uri().query())
             .flatten()
             .and_then(|query| {
@@ -205,6 +207,7 @@ fn is_public_path(path: &str) -> bool {
     path == "/"
         || path == "/register"
         || path == "/account"
+        || path.starts_with("/account/")
         || path.starts_with("/admin")
         || path == "/login"
         || path.starts_with("/login/")
@@ -485,12 +488,23 @@ async fn create_personal_access_token(
     Json(request): Json<CreatePersonalAccessTokenRequest>,
 ) -> Result<(StatusCode, Json<PersonalAccessTokenResponse>), ApiError> {
     let (database, _) = database(&state).await?;
+    if request.name.trim().is_empty()
+        || request.name.chars().count() > 120
+        || request
+            .expires_in_days
+            .is_some_and(|days| !(1..=3650).contains(&days))
+    {
+        return Err(ApiError::bad_request(
+            "令牌名称为 1 至 120 个字符，有效期为 1 至 3650 天",
+        ));
+    }
     let expires_at = request
         .expires_in_days
         .map(|days| Utc::now() + chrono::Duration::days(i64::from(days.max(1))));
     let token = database
         .create_personal_access_token(user.id, &request.name, expires_at)
         .await?;
+    state.admin_events.invalidate(&["users"]);
     Ok((
         StatusCode::CREATED,
         Json(PersonalAccessTokenResponse {
@@ -509,6 +523,7 @@ async fn revoke_personal_access_token(
 ) -> Result<StatusCode, ApiError> {
     let (database, _) = database(&state).await?;
     if database.revoke_personal_access_token(user.id, id).await? {
+        state.admin_events.invalidate(&["users"]);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found("personal access token not found"))
