@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type AuthUser } from "@/api/client";
 import { Button } from "@/components/ui/button";
+import { ListToolbar } from "@/components/list-toolbar";
 import { Notice } from "@/components/forms";
 
 export default function Account() {
@@ -30,22 +31,20 @@ export default function Account() {
   }
   return (
     <div className="page">
-      <header className="page-header">
-        <div>
-          <p className="eyebrow">ACCOUNT</p>
-          <h1>账号与访问令牌</h1>
-        </div>
-        <Button
-          variant="outline"
-          onClick={() => {
-            void api.logout().finally(() => {
-              window.location.href = "/login";
-            });
-          }}
-        >
-          退出登录
-        </Button>
-      </header>
+      <ListToolbar
+        actions={
+          <Button
+            variant="outline"
+            onClick={() => {
+              void api.logout().finally(() => {
+                window.location.href = "/login";
+              });
+            }}
+          >
+            退出登录
+          </Button>
+        }
+      />
       {error && <Notice>{error}</Notice>}
       <section className="settings-grid">
         <article className="card">

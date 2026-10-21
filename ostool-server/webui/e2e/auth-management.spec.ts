@@ -26,9 +26,7 @@ test("registration, member/admin access, user/role events and settings navigatio
     .fill("browser-password-123");
   await page.getByRole("button", { name: "创建账号", exact: true }).click();
   await expect(page).toHaveURL(`${base}/account`);
-  await expect(
-    page.getByRole("heading", { name: "账号与访问令牌" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "当前账号" })).toBeVisible();
   await page.goto(`${base}/admin/users`);
   await expect(
     page.getByText("你的账号没有管理后台权限，请联系管理员分配角色。"),

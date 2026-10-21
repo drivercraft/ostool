@@ -57,14 +57,6 @@ export default function Users() {
     setEditor((e) => (e ? { ...e, draft: { ...e.draft, ...value } } : e));
   return (
     <>
-      <header className="page-header">
-        <div>
-          <h1>用户列表</h1>
-          <p className="heading-description">
-            管理用户账号、角色、状态与登录凭据。
-          </p>
-        </div>
-      </header>
       {!deployment?.database_connected && (
         <Notice>用户管理需要连接 PostgreSQL。</Notice>
       )}

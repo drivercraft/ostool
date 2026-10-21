@@ -17,14 +17,6 @@ export default function SystemSettings() {
     : "server";
   return (
     <>
-      <header className="page-header">
-        <div>
-          <h1>系统设置</h1>
-          <p className="heading-description">
-            按配置组管理服务参数。部署参数在服务启动时读取。
-          </p>
-        </div>
-      </header>
       <Tabs value={tab} onValueChange={(value) => setParams({ tab: value })}>
         <TabsList variant="line" className="system-tabs">
           <TabsTrigger value="server">网络与上传</TabsTrigger>

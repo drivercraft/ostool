@@ -43,9 +43,6 @@ export function Tftp() {
   const status = useResource("tftp_status");
   return (
     <>
-      <header className="page-header">
-        <h1>TFTP</h1>
-      </header>
       {source ? (
         <TftpForm source={source} />
       ) : (
@@ -208,9 +205,6 @@ export function Server() {
   const source = useResource("server");
   return (
     <>
-      <header className="page-header">
-        <h1>Server 配置</h1>
-      </header>
       {source ? (
         <ServerForm source={source} />
       ) : (

@@ -74,14 +74,6 @@ export default function Rentals() {
   );
   return (
     <>
-      <header className="page-header">
-        <div>
-          <h1>租赁列表</h1>
-          <p className="heading-description">
-            为用户分配指定时间段的开发板；同一开发板的时间段不可重叠。
-          </p>
-        </div>
-      </header>
       <ListToolbar
         actions={
           <Button

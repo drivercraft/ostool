@@ -194,13 +194,10 @@ function Editor({ board }: { board?: BoardConfig }) {
   );
   return (
     <>
-      <header className="page-header">
-        <div>
-          <Link className="back-link" to="/boards">
-            开发板 /
-          </Link>
-          <h1>{board ? "编辑开发板" : "新建开发板"}</h1>
-        </div>
+      <div className="editor-actions">
+        <Button asChild variant="outline" size="sm">
+          <Link to="/boards">返回开发板列表</Link>
+        </Button>
         {board && (
           <ConfirmAction
             label="删除开发板"
@@ -212,7 +209,7 @@ function Editor({ board }: { board?: BoardConfig }) {
             }}
           />
         )}
-      </header>
+      </div>
       {conflict && (
         <Notice>
           服务器配置已被其他操作修改。你的草稿已保留，请载入最新配置后重新编辑。

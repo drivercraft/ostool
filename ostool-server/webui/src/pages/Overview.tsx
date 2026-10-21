@@ -7,9 +7,6 @@ export default function Overview() {
   const overview = useResource("overview");
   return (
     <>
-      <header className="page-header">
-        <h1>总览</h1>
-      </header>
       {!overview ? (
         <Skeleton className="h-40 w-full" />
       ) : (

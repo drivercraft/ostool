@@ -106,12 +106,6 @@ export default function Dtbs() {
   const [editing, setEditing] = useState<DtbFileResponse | null>(null);
   return (
     <>
-      <header className="page-header">
-        <h1>DTB</h1>
-      </header>
-      <p className="page-description">
-        管理板卡启动使用的设备树文件，单个文件最大 10 MiB。
-      </p>
       <ListToolbar actions={<DtbUpload />} count={`${filtered.length} 个文件`}>
         <TextField
           label="搜索 DTB"

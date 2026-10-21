@@ -180,7 +180,7 @@ test("all management modules, DTB CRUD, session release and narrow viewport", as
   page.on("pageerror", (e) => consoleErrors.push(e.message));
   await page.goto("/admin/overview");
   await expect(
-    page.getByRole("heading", { name: "总览", exact: true }),
+    page.getByRole("link", { name: "可用开发板", exact: false }),
   ).toBeVisible();
   await page.getByRole("link", { name: "DTB 管理", exact: true }).click();
   await page.getByRole("button", { name: "上传 DTB", exact: true }).click();

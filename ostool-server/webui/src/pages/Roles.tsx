@@ -54,14 +54,6 @@ export default function Roles() {
     setEditor((e) => (e ? { ...e, draft: { ...e.draft, ...value } } : e));
   return (
     <>
-      <header className="page-header">
-        <div>
-          <h1>用户角色</h1>
-          <p className="heading-description">
-            角色可授予普通板卡访问或完整后台管理权限。内置角色权限固定。
-          </p>
-        </div>
-      </header>
       {!deployment?.database_connected && (
         <Notice>角色管理需要连接 PostgreSQL。</Notice>
       )}

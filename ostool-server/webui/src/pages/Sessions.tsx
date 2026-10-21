@@ -31,10 +31,6 @@ export default function Sessions() {
   );
   return (
     <>
-      <header className="page-header">
-        <h1>会话租约</h1>
-      </header>
-      <p className="page-description">租约释放及失败恢复状态实时同步。</p>
       <ListToolbar
         actions={
           <Button asChild variant="outline">

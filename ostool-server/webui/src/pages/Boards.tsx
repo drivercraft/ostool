@@ -67,22 +67,6 @@ export default function Boards() {
   );
   return (
     <>
-      <header className="page-header">
-        <div>
-          <h1>开发板</h1>
-          <p className="heading-description">
-            共 {boards.length} 台 ·{" "}
-            {
-              boards.filter(
-                (b) =>
-                  !b.disabled &&
-                  (runtimes[b.id]?.lease_state ?? "idle") === "idle",
-              ).length
-            }{" "}
-            台可用
-          </p>
-        </div>
-      </header>
       {quarantined.length > 0 && (
         <Notice>
           <details>

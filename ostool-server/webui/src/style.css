@@ -2141,3 +2141,20 @@
     width: 100%;
   }
 }
+
+/* Page context comes from navigation; content starts with controls or data. */
+.admin-topbar {
+  margin-bottom: 20px;
+}
+.editor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.page > .listing-toolbar {
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 8px;
+}
