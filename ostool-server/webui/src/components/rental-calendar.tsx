@@ -51,6 +51,12 @@ export function RentalCalendar({
   const [view, setView] = useState<View>("month");
   const [preview, setPreview] = useState<TimeWindow>();
   const [error, setError] = useState("");
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, []);
+  const cutoff = Math.ceil(now / 60000) * 60000;
   const root = useRef<HTMLElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const drag = useRef<{
@@ -73,14 +79,30 @@ export function RentalCalendar({
   const reservations = rentalConflicts(bookings, start, end, excludeId).sort(
     (a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at),
   );
-  const free = freeWindows(bookings, start, end, excludeId);
+  const free = freeWindows(bookings, Math.max(start, cutoff), end, excludeId);
+  const available = (window: TimeWindow) =>
+    freeWindows(
+      bookings,
+      Math.max(window.start, cutoff),
+      window.end,
+      excludeId,
+    );
+  const unavailable = (window: TimeWindow) =>
+    window.end <= cutoff ||
+    (view === "day"
+      ? rentalConflicts(bookings, window.start, window.end, excludeId).length >
+        0
+      : available(window).length === 0);
   const range =
     preview ??
     (endsAt
       ? { start: Date.parse(startsAt), end: Date.parse(endsAt) }
       : undefined);
   const selectedRange = (window: TimeWindow) =>
-    !!range && window.start < range.end && window.end > range.start;
+    !unavailable(window) &&
+    !!range &&
+    window.start < range.end &&
+    window.end > range.start;
 
   function select(window: TimeWindow) {
     const from = Math.max(window.start, Math.ceil(Date.now() / 60000) * 60000);
@@ -94,6 +116,15 @@ export function RentalCalendar({
     }
     setError("");
     onSelect(new Date(from), new Date(window.end));
+  }
+  function selectSingle(window: TimeWindow) {
+    if (unavailable(window)) return;
+    const choice = view === "day" ? window : available(window)[0];
+    if (choice) select(choice);
+    if (view === "year") {
+      setAnchor(new Date(window.start));
+      setView("day");
+    }
   }
   function cellAt(x: number, y: number): TimeWindow | undefined {
     const cell = document
@@ -110,7 +141,7 @@ export function RentalCalendar({
     const cell = (event.target as HTMLElement).closest<HTMLElement>(
       "[data-calendar-start]",
     );
-    if (!cell) return;
+    if (!cell || cell.matches(":disabled")) return;
     event.preventDefault();
     cell.focus({ preventScroll: true });
     const window = {
@@ -147,11 +178,8 @@ export function RentalCalendar({
     const single = current.first.start === current.last.start;
     cancel();
     event.currentTarget.releasePointerCapture(event.pointerId);
-    if (view === "day" || !single) select(window);
-    else if (view === "year") {
-      setAnchor(new Date(window.start));
-      setView("day");
-    }
+    if (single) selectSingle(window);
+    else select(window);
   }
   function navigate(direction: number) {
     cancel();
@@ -211,7 +239,7 @@ export function RentalCalendar({
             excludeId,
           );
           const hours =
-            freeWindows(bookings, window.start, window.end, excludeId).reduce(
+            available(window).reduce(
               (sum, item) => sum + item.end - item.start,
               0,
             ) / 3600000;
@@ -219,21 +247,21 @@ export function RentalCalendar({
             <button
               type="button"
               key={date.toISOString()}
-              className={`rental-day${date.getMonth() !== month.getMonth() ? " outside" : ""}${sameDay(date, today) ? " today" : ""}${selectedRange(window) ? " is-selected" : ""}`}
+              className={`rental-day${unavailable(window) ? " unavailable" : ""}${date.getMonth() !== month.getMonth() ? " outside" : ""}${sameDay(date, today) ? " today" : ""}${selectedRange(window) ? " is-selected" : ""}`}
               data-calendar-start={window.start}
               data-calendar-end={window.end}
               aria-label={`${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日，${entries.length} 条租赁，空闲 ${Number(hours.toFixed(1))} 小时`}
-              aria-pressed={sameDay(date, selected)}
+              disabled={unavailable(window)}
+              aria-pressed={
+                selectedRange(window) || (!range && sameDay(date, selected))
+              }
               onClick={(event) => {
                 if (event.detail === 0) {
-                  setSelected(date);
-                  if (compact) {
-                    setAnchor(date);
-                    setView("day");
-                  }
+                  selectSingle(window);
                 }
               }}
               onDoubleClick={() => {
+                if (unavailable(window)) return;
                 setAnchor(date);
                 setSelected(date);
                 setView("day");
@@ -262,7 +290,11 @@ export function RentalCalendar({
                   {entries.length > 2 && (
                     <span>另 {entries.length - 2} 条租赁</span>
                   )}
-                  {!entries.length && <span className="day-free">空闲</span>}
+                  {!entries.length && (
+                    <span className="day-free">
+                      {window.end <= cutoff ? "已结束" : "空闲"}
+                    </span>
+                  )}
                 </div>
               )}
               {compact && entries.length > 0 && (
@@ -402,8 +434,8 @@ export function RentalCalendar({
         >
           {error ||
             (view === "day"
-              ? "拖拽选择半小时时段 · 按浏览器时区显示"
-              : "拖拽选择连续日期，双击进入日视图 · 浏览器时区")}
+              ? "单击或拖拽选择时段，灰色不可选 · 浏览器时区"
+              : "单击重新选择日期，拖拽多选，双击查看时段")}
         </p>
       </div>
       <div className="rental-calendar-body" ref={body}>
@@ -437,23 +469,33 @@ export function RentalCalendar({
                 excludeId,
               );
               const label = `${clock(window.start, showSlotZone)}–${window.end === dayEnd(anchor).getTime() ? "24:00" : clock(window.end, showSlotZone)}`;
+              const status =
+                window.end <= cutoff
+                  ? "已结束"
+                  : entries.length
+                    ? "已有租赁"
+                    : "空闲";
               return (
                 <button
                   key={window.start}
                   type="button"
-                  className={`calendar-time-slot${entries.length ? " busy" : ""}${selectedRange(window) ? " is-selected" : ""}`}
+                  className={`calendar-time-slot${unavailable(window) ? " unavailable" : ""}${entries.length ? " busy" : ""}${selectedRange(window) ? " is-selected" : ""}`}
                   data-calendar-start={window.start}
                   data-calendar-end={window.end}
-                  aria-label={`${label}，${entries.length ? "已有租赁" : "空闲"}`}
+                  aria-label={`${label}，${status}`}
+                  disabled={unavailable(window)}
+                  aria-pressed={selectedRange(window)}
                   onClick={(event) => {
-                    if (event.detail === 0) select(window);
+                    if (event.detail === 0) selectSingle(window);
                   }}
                 >
                   <time>{label}</time>
                   <span>
-                    {entries
-                      .map((item) => item.label || "已有租赁")
-                      .join("、") || "空闲"}
+                    {status === "已结束"
+                      ? status
+                      : entries
+                          .map((item) => item.label || "已有租赁")
+                          .join("、") || "空闲"}
                   </span>
                 </button>
               );

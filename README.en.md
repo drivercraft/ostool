@@ -23,6 +23,7 @@ Local and public editions use the same PostgreSQL persistence. Local edition hid
 
 Public login/registration require image CAPTCHA by default; email verification is optional and disabled by default. TOTP, session management/revocation, rate limits and recent identity checks are available in public edition; local edition remains anonymous. See [security configuration](ostool-server/deploy/security.md).
 Public edition uses Redis for rate limits and verification cooldowns; local edition needs no Redis. System settings include branding, contacts, filing details, maintenance notices and versioned legal documents, with per-user registration consent. See [site and identity schema](ostool-server/deploy/site-and-data.md).
+Member rental applications use a separate editor sharing the admin calendar and form layout. The console navigation is labeled “设备管理 → 设备列表” (device management → device list). A click replaces the previous range, unavailable cells are gray and disabled, desktop portal content uses 80% width, and icon buttons show their background on hover.
 
 **ostool** is a Rust toolset designed specifically for operating system development, aiming to provide OS developers with convenient build, configuration, and startup environments. It's particularly suitable for embedded system development, supporting system testing and debugging through Qemu virtual machines and U-Boot bootloader.
 

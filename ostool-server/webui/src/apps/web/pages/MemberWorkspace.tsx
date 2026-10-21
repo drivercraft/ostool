@@ -1,5 +1,5 @@
 import { SecuritySettings } from "@/components/security-settings";
-import { useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent } from "react";
 import { requestStatusLabels } from "@/domain/rentals";
 import {
   Link,
@@ -8,6 +8,7 @@ import {
   Route,
   Routes,
   useLocation,
+  useNavigate,
 } from "react-router-dom";
 import {
   CalendarClock,
@@ -16,6 +17,7 @@ import {
   LayoutDashboard,
   ShieldCheck,
   UserRound,
+  Undo2,
 } from "lucide-react";
 import { api, clearBrowserSession, type AuthUser } from "@/api/client";
 import {
@@ -29,7 +31,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   TextField,
   SelectField,
-  TextareaField,
   Notice,
   DataTable,
   Row,
@@ -39,8 +40,14 @@ import {
 } from "@/components/forms";
 import { useListPage } from "@/components/list-pagination";
 import { ListLayoutProvider, ListLayoutToggle } from "@/components/list-layout";
+import { PagePanel } from "@/components/page-panel";
+import type { CatalogBoard } from "@/types/api";
 import { RentalCalendar } from "@/components/rental-calendar";
-import { localDateTime } from "@/utils/rental-calendar";
+import {
+  localDateTime,
+  rentalConflicts,
+  type RentalWindow,
+} from "@/utils/rental-calendar";
 
 const rentalLabels: Record<string, string> = {
   active: "使用期内",
@@ -103,7 +110,7 @@ export function MemberDeviceCatalog() {
               <Cell>
                 <Button asChild size="sm">
                   <Link
-                    to={`/account/requests?board=${encodeURIComponent(board.id)}`}
+                    to={`/account/requests/new?board=${encodeURIComponent(board.id)}`}
                   >
                     申请租赁
                   </Link>
@@ -163,7 +170,13 @@ export default function MemberWorkspace() {
         </nav>
         <p className="member-sidebar-note">你的开发板使用计划与账号设置</p>
       </aside>
-      <div className="member-main">
+      <div
+        className={
+          location.pathname.endsWith("/requests/new")
+            ? "member-main member-editor-main"
+            : "member-main"
+        }
+      >
         {connection === "reconnecting" && (
           <Notice>连接暂时中断，输入已保留，恢复后自动同步。</Notice>
         )}
@@ -176,6 +189,10 @@ export default function MemberWorkspace() {
           <Route path="security" element={<Security />} />
           <Route path="rentals" element={<MyRentals />} />
           <Route path="requests" element={<MyRequests />} />
+          <Route
+            path="requests/new"
+            element={<RentalRequestEditor user={user} />}
+          />
           <Route path="tokens" element={<Tokens />} />
           <Route path="*" element={<Navigate replace to="/account" />} />
         </Routes>
@@ -213,7 +230,7 @@ function Overview({ user }: { user: AuthUser }) {
         text="在这里安排开发板使用时间，管理你的账号。"
         action={
           <Button asChild>
-            <Link to="/account/requests">申请租赁</Link>
+            <Link to="/account/requests/new">申请租赁</Link>
           </Button>
         }
       />
@@ -420,7 +437,7 @@ function MyRentals() {
         text="查看分配给你的开发板及使用时段。"
         action={
           <Button asChild>
-            <Link to="/account/requests">申请租赁</Link>
+            <Link to="/account/requests/new">申请租赁</Link>
           </Button>
         }
       />
@@ -478,88 +495,169 @@ function MyRentals() {
     </>
   );
 }
-function MyRequests() {
-  const availability = useAccountResource("availability");
-  const location = useLocation();
-  const catalog = useAccountResource("catalog") ?? [],
-    requests = useAccountResource("my_requests");
-  const [board, setBoard] = useState(
-      () => new URLSearchParams(location.search).get("board") ?? "",
-    ),
-    [start, setStart] = useState(() => localDate(3600000)),
+function RentalRequestEditor({ user }: { user: AuthUser }) {
+  const catalog = useAccountResource("catalog"),
+    availability = useAccountResource("availability");
+  if (!catalog || !availability)
+    return (
+      <PagePanel>
+        <Skeleton className="h-48 w-full" />
+      </PagePanel>
+    );
+  if (!catalog.length)
+    return (
+      <PagePanel
+        className="rental-request-panel"
+        footer={
+          <Button asChild variant="outline">
+            <Link to="/account/requests">取消</Link>
+          </Button>
+        }
+      >
+        <Notice>暂无可申请的设备，请联系管理员。</Notice>
+      </PagePanel>
+    );
+  return (
+    <RentalRequestForm
+      user={user}
+      catalog={catalog}
+      availability={availability}
+    />
+  );
+}
+function RentalRequestForm({
+  user,
+  catalog,
+  availability,
+}: {
+  user: AuthUser;
+  catalog: CatalogBoard[];
+  availability: RentalWindow[];
+}) {
+  const location = useLocation(),
+    navigate = useNavigate(),
+    formId = useId(),
+    task = useAction();
+  const [board, setBoard] = useState(() => {
+    const requested = new URLSearchParams(location.search).get("board");
+    return requested ?? catalog[0]?.id ?? "";
+  });
+  const [start, setStart] = useState(() => localDate(3600000)),
     [end, setEnd] = useState(() => localDate(7200000)),
     [notes, setNotes] = useState("");
-  const [status, setStatus] = useState("");
-  const task = useAction();
-  const filtered = (requests ?? []).filter(
-      (r) => !status || r.status === status,
-    ),
-    page = useListPage(filtered, status);
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    if (
-      await task.run(
-        () =>
-          api.applyRental({
-            board_id: board || catalog[0]?.id || "",
-            starts_at: new Date(start).toISOString(),
-            ends_at: new Date(end).toISOString(),
-            notes,
-          }),
-        "申请已提交，等待管理员审核",
-      )
-    )
-      setNotes("");
-  }
+  const bookings = availability.filter((item) => item.board_id === board);
+  const conflicts = rentalConflicts(
+    bookings,
+    Date.parse(start),
+    Date.parse(end),
+  );
+  const valid =
+    Number.isFinite(Date.parse(start)) &&
+    Number.isFinite(Date.parse(end)) &&
+    Date.parse(start) < Date.parse(end);
+  const boardExists = catalog.some((item) => item.id === board);
   return (
-    <>
-      <Heading
-        title="租赁申请"
-        text="选择开发板和使用时段，提交后由管理员审核。"
-      />
-      <form className="member-card member-form" onSubmit={submit}>
-        <h2>申请开发板</h2>
-        {task.error && <Notice>{task.error}</Notice>}
-        <SelectField
-          label="申请开发板"
-          value={board || catalog[0]?.id || ""}
-          onValue={setBoard}
-          options={catalog.map((b) => ({
-            value: b.id,
-            label: `${b.id} · ${b.board_type}`,
-          }))}
-        />
-        <div className="member-form-columns">
+    <PagePanel
+      className="rental-editor-panel rental-request-panel"
+      toolbar={
+        <form
+          id={formId}
+          className="rental-editor-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void task
+              .run(async () => {
+                if (!boardExists) throw new Error("请选择可申请的设备");
+                if (!valid) throw new Error("开始时间必须早于结束时间");
+                if (conflicts.length)
+                  throw new Error("所选时段已有租赁，请选择空闲时段");
+                await api.applyRental({
+                  board_id: board,
+                  starts_at: new Date(start).toISOString(),
+                  ends_at: new Date(end).toISOString(),
+                  notes,
+                });
+              }, "申请已提交，等待管理员审核")
+              .then((ok) => {
+                if (ok) navigate("/account/requests");
+              });
+          }}
+        >
+          <TextField
+            label="申请用户"
+            value={
+              user.display_name
+                ? user.display_name + " · " + user.email
+                : user.email
+            }
+            readOnly
+          />
+          <SelectField
+            label="申请开发板"
+            value={board}
+            onValue={setBoard}
+            disabled={task.pending}
+            options={catalog.map((item) => ({
+              value: item.id,
+              label: item.id + " · " + item.board_type,
+            }))}
+          />
           <TextField
             label="开始时间"
-            step="0.001"
             type="datetime-local"
+            step="0.001"
             required
             value={start}
             onValue={setStart}
           />
           <TextField
             label="结束时间"
-            step="0.001"
             type="datetime-local"
+            step="0.001"
             required
             value={end}
             onValue={setEnd}
           />
+          <TextField
+            label="申请说明"
+            maxLength={2000}
+            value={notes}
+            onValue={setNotes}
+          />
+        </form>
+      }
+      footer={
+        <div className="editor-footer">
+          <span className="panel-status">
+            {conflicts.length
+              ? "所选时段已有租赁"
+              : "申请不预占设备，通过审核后生效"}
+          </span>
+          <div className="row-actions">
+            <Button asChild variant="outline">
+              <Link to="/account/requests">取消</Link>
+            </Button>
+            <Button
+              type="submit"
+              form={formId}
+              disabled={
+                task.pending || !boardExists || !valid || conflicts.length > 0
+              }
+            >
+              {task.pending ? "提交中…" : "提交申请"}
+            </Button>
+          </div>
         </div>
-        <TextareaField label="申请说明" value={notes} onValue={setNotes} />
-        <p className="muted">
-          提交申请不会预占或启动开发板；审核通过后可在租赁时段内使用。
-        </p>
-        <div className="member-form-actions">
-          <Button disabled={task.pending || !catalog.length}>提交申请</Button>
-        </div>
-      </form>
-      {availability ? (
+      }
+    >
+      {task.error && <Notice>{task.error}</Notice>}
+      {!boardExists && <Notice>所选设备目前不可申请，请重新选择。</Notice>}
+      {conflicts.length > 0 && (
+        <Notice>所选时段已有租赁，请调整时间或在日历中选择空闲时段。</Notice>
+      )}
+      {boardExists && (
         <RentalCalendar
-          bookings={availability.filter(
-            (r) => r.board_id === (board || catalog[0]?.id),
-          )}
+          bookings={bookings}
           startsAt={start}
           endsAt={end}
           onSelect={(from, to) => {
@@ -567,12 +665,25 @@ function MyRequests() {
             setEnd(localDateTime(to));
           }}
         />
-      ) : (
-        <Skeleton className="h-48 w-full" />
       )}
+    </PagePanel>
+  );
+}
+function MyRequests() {
+  const requests = useAccountResource("my_requests");
+  const [status, setStatus] = useState("");
+  const filtered = (requests ?? []).filter(
+    (item) => !status || item.status === status,
+  );
+  const page = useListPage(filtered, status);
+  return (
+    <>
+      <Heading title="租赁申请" text="查看你的设备租赁申请及审核结果。" />
       <MemberList storageKey="my-requests">
         <div className="member-list-tools">
-          <h2>我的申请</h2>
+          <Button asChild className="member-create-request">
+            <Link to="/account/requests/new">新增申请</Link>
+          </Button>
           <SelectField
             label="申请状态"
             value={status}
@@ -615,6 +726,7 @@ function MyRequests() {
                   {r.status === "pending" && (
                     <ConfirmAction
                       label="撤回申请"
+                      icon={Undo2}
                       description="撤回后管理员将无法批准这条申请。"
                       triggerVariant="ghost"
                       action={() => api.withdrawRentalRequest(r.id)}

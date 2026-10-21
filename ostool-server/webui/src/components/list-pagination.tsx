@@ -43,7 +43,7 @@ export function useListPage<T>(items: T[], filterKey: string) {
           <Button
             type="button"
             size="icon-sm"
-            variant="outline"
+            variant="ghost"
             aria-label="上一页"
             disabled={page === 1}
             onClick={() => setSelection({ ...selection, page: page - 1 })}
@@ -56,7 +56,7 @@ export function useListPage<T>(items: T[], filterKey: string) {
           <Button
             type="button"
             size="icon-sm"
-            variant="outline"
+            variant="ghost"
             aria-label="下一页"
             disabled={page === pages}
             onClick={() => setSelection({ ...selection, page: page + 1 })}

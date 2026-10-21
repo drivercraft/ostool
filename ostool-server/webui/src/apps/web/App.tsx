@@ -204,13 +204,16 @@ function SiteHeader() {
           <SiteThemeMenu />
           <div className="site-actions">{accountActions}</div>
         </div>
-        <button
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
           className="site-menu-toggle"
           aria-label={open ? "关闭菜单" : "打开菜单"}
           onClick={() => setOpen((value) => !value)}
         >
           {open ? <X size={20} /> : <Menu size={20} />}
-        </button>
+        </Button>
       </div>
     </header>
   );

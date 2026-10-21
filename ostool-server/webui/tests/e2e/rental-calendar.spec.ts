@@ -134,13 +134,29 @@ test("standalone rental calendar, live conflicts and persistent card layouts", a
     calendar.getByRole("button", { name: "12:00–12:30，空闲", exact: true }),
     calendar.getByRole("button", { name: "13:00–13:30，空闲", exact: true }),
   );
-  const selected = await page
+  let selected = await page
     .getByLabel("开始时间", { exact: true })
     .inputValue();
   expect(selected).toMatch(/T12:00/);
   await expect(page.getByLabel("结束时间", { exact: true })).toHaveValue(
     /T13:30/,
   );
+  await calendar
+    .getByRole("button", { name: "14:00–14:30，空闲", exact: true })
+    .click();
+  await expect(page.getByLabel("开始时间", { exact: true })).toHaveValue(
+    /T14:00/,
+  );
+  await expect(page.getByLabel("结束时间", { exact: true })).toHaveValue(
+    /T14:30/,
+  );
+  selected = await page.getByLabel("开始时间", { exact: true }).inputValue();
+  await expect(
+    calendar.getByRole("button", {
+      name: "09:30–10:00，已有租赁",
+      exact: true,
+    }),
+  ).toBeDisabled();
   await dragCells(
     calendar.getByRole("button", { name: "08:30–09:00，空闲", exact: true }),
     calendar.getByRole("button", {
@@ -180,6 +196,19 @@ test("standalone rental calendar, live conflicts and persistent card layouts", a
   await expect(page.getByLabel("结束时间", { exact: true })).toHaveValue(
     /-13T00:00/,
   );
+
+  const singleDate = await page.evaluate(
+    ({ year, month }) => new Date(year, month, 17).getTime(),
+    range,
+  );
+  await calendar.locator('[data-calendar-start="' + singleDate + '"]').click();
+  await expect(page.getByLabel("开始时间", { exact: true })).toHaveValue(
+    /-17T00:00/,
+  );
+  await expect(page.getByLabel("结束时间", { exact: true })).toHaveValue(
+    /-18T00:00/,
+  );
+  await expect(calendar.locator(".rental-day.is-selected")).toHaveCount(1);
   const calendarFit = await calendar.evaluate((element) => {
     const body = element.querySelector(".rental-calendar-body")!;
     const grid = body.querySelector(".rental-month-grid")!;
@@ -245,6 +274,22 @@ test("standalone rental calendar, live conflicts and persistent card layouts", a
     icon: getComputedStyle(element.querySelector("svg")!).width,
   }));
   expect(size).toEqual({ width: 42, height: 42, icon: "18px" });
+  await page.mouse.move(0, 0);
+  const appearance = await edit.evaluate((element) => ({
+    background: getComputedStyle(element).backgroundColor,
+    border: getComputedStyle(element).borderTopColor,
+  }));
+  expect(appearance).toEqual({
+    background: "rgba(0, 0, 0, 0)",
+    border: "rgba(0, 0, 0, 0)",
+  });
+  await edit.hover();
+  await expect
+    .poll(() =>
+      edit.evaluate((element) => getComputedStyle(element).backgroundColor),
+    )
+    .not.toBe(appearance.background);
+
   await page.getByRole("button", { name: "切换列表布局", exact: true }).click();
   await page
     .getByRole("menuitemradio", { name: "卡片视图", exact: true })

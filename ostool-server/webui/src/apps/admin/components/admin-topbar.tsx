@@ -38,7 +38,7 @@ const pageTitles: Record<string, string> = {
   "/jobs": "后台任务",
   "/operations": "运营状态",
   "/audits": "审计日志",
-  "/boards": "开发板列表",
+  "/boards": "设备列表",
   "/boards/new": "新建开发板",
   "/dtbs": "DTB 管理",
   "/sessions": "会话租约",

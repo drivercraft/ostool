@@ -31,7 +31,7 @@ test("dashboard, durable audit filters/export, discovery toolbar and shared them
     page.getByRole("heading", { name: "开发板状态分布" }),
   ).toBeVisible();
   await expect(page.getByText("用户总数", { exact: true })).toHaveCount(0);
-  await page.getByRole("link", { name: "开发板列表", exact: true }).click();
+  await page.getByRole("link", { name: "设备列表", exact: true }).click();
   await expect(page.getByRole("tablist")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /发现设备/ })).toBeVisible();
 

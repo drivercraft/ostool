@@ -327,8 +327,7 @@
   font-variant-numeric: tabular-nums;
 }
 .calendar-time-slot.busy {
-  border-left: 3px solid var(--primary);
-  background: color-mix(in oklab, var(--primary) 6%, var(--card));
+  border-left: 3px solid var(--muted-foreground);
 }
 .calendar-time-slot.busy.is-selected {
   box-shadow: inset 0 0 0 1px var(--destructive);
@@ -501,4 +500,18 @@
 .list-empty [data-slot="empty-title"] {
   font-size: 1rem;
   font-weight: 400;
+}
+
+/* Unavailable dates/slots remain visible, with native keyboard and pointer disabling. */
+.rental-day.unavailable,
+.calendar-time-slot.unavailable {
+  background: var(--muted);
+  color: var(--muted-foreground);
+  cursor: not-allowed;
+}
+.rental-day.unavailable .calendar-cell-events {
+  opacity: 0.6;
+}
+.calendar-busy {
+  background: var(--muted-foreground);
 }

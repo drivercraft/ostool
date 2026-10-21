@@ -51,7 +51,7 @@ export function ListLayoutToggle() {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          variant="outline"
+          variant="ghost"
           size="icon"
           aria-label="切换列表布局"
           title="切换列表布局"

@@ -67,21 +67,28 @@
   align-items: center;
   gap: 8px;
 }
-/* Row operations share one glyph treatment; destructive actions retain their hover cue. */
-.row-action[data-slot="button"] {
-  border: 1px solid var(--border);
-  background: var(--muted);
+/* Icon actions keep a uniform hit area and appear only as glyphs until hovered. */
+[data-slot="button"][data-size^="icon"]:not(.topbar-avatar) {
+  border-color: transparent;
+  background: transparent;
   color: var(--muted-foreground);
 }
-.row-action[data-slot="button"]:hover:not(:disabled) {
+[data-slot="button"][data-size^="icon"]:not(.topbar-avatar):hover:not(
+    :disabled
+  ),
+[data-slot="button"][data-size^="icon"]:not(
+    .topbar-avatar
+  )[aria-expanded="true"] {
   background: var(--accent);
-  color: var(--primary);
-  border-color: var(--ring);
+  color: var(--foreground);
 }
-.row-action[data-variant="destructive"]:hover:not(:disabled) {
-  background: color-mix(in oklab, var(--destructive) 10%, var(--card));
+[data-slot="button"][data-size^="icon"][data-variant="destructive"] {
   color: var(--destructive);
-  border-color: var(--destructive);
+}
+[data-slot="button"][data-size^="icon"][data-variant="destructive"]:hover:not(
+    :disabled
+  ) {
+  background: color-mix(in oklab, var(--destructive) 10%, var(--card));
 }
 [data-slot="button"].topbar-avatar[data-size] {
   border-radius: 50%;

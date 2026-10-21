@@ -90,7 +90,7 @@ export default function Boards() {
         onValueChange={setView}
         className="workspace-tabs board-workspace"
       >
-        <TabsContent value="boards" aria-label="开发板列表">
+        <TabsContent value="boards" aria-label="设备列表">
           <PagePanel
             layoutKey="boards"
             table
@@ -276,7 +276,7 @@ export default function Boards() {
                   <>
                     <Button variant="outline" onClick={() => setView("boards")}>
                       <ArrowLeft size={16} />
-                      开发板列表
+                      设备列表
                     </Button>
                     <Button asChild variant="outline">
                       <Link to="/boards/new">新建开发板</Link>
@@ -387,7 +387,7 @@ export default function Boards() {
                         onClick={() => setView("boards")}
                       >
                         <ArrowLeft size={16} />
-                        开发板列表
+                        设备列表
                       </Button>
                       <Button
                         disabled={task.pending}

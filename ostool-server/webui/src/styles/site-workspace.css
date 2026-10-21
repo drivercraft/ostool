@@ -1,5 +1,7 @@
 /* The public portal and personal workspace share a header, independent of admin. */
 .site-root {
+  --site-content-width: 80%;
+  --site-content-gutter: 10%;
   --site-bg: #f6f8fb;
   --site-card: #fff;
   --site-text: #142033;
@@ -30,7 +32,7 @@
   box-shadow: 0 1px 0 #1c304a03;
 }
 .site-root .site-header-inner {
-  width: min(1320px, calc(100% - 64px));
+  width: var(--site-content-width);
   height: 68px;
   gap: 4px;
 }
@@ -183,7 +185,7 @@
   border-color: #516681;
 }
 .member-workspace {
-  width: min(1320px, calc(100% - 64px));
+  width: var(--site-content-width);
   margin: 0 auto;
   padding: 32px 0 64px;
   display: grid;
@@ -566,7 +568,7 @@
 @media (max-width: 1050px) {
   .site-root .site-header-inner,
   .member-workspace {
-    width: calc(100% - 40px);
+    width: var(--site-content-width);
   }
   .site-root .site-logo {
     margin-right: 15px;
@@ -584,8 +586,12 @@
   }
 }
 @media (max-width: 760px) {
+  .site-root {
+    --site-content-width: calc(100% - 32px);
+    --site-content-gutter: 16px;
+  }
   .site-root .site-header-inner {
-    width: calc(100% - 32px);
+    width: var(--site-content-width);
     gap: 10px;
     height: 64px;
   }
@@ -614,7 +620,7 @@
     border-color: var(--site-border);
   }
   .member-workspace {
-    width: calc(100% - 32px);
+    width: var(--site-content-width);
     display: block;
     padding-top: 20px;
   }
@@ -681,4 +687,72 @@
   .member-list-footer {
     padding: 14px;
   }
+}
+
+/* One responsive content grid for the portal, personal workspace and footer. */
+.site-root
+  :is(
+    .public-hero-section,
+    .logo-strip,
+    .public-section,
+    .public-cta,
+    .legal-reader,
+    .member-loading
+  ) {
+  width: var(--site-content-width);
+  max-width: none;
+  margin-inline: auto;
+}
+.site-root .public-inner-page {
+  width: var(--site-content-width);
+  margin-inline: auto;
+  padding-inline: 0;
+}
+.site-root .auth-page main.auth-shell {
+  width: var(--site-content-width);
+}
+.site-root .site-footer {
+  padding-inline: var(--site-content-gutter);
+}
+.site-root .legal-reader {
+  padding-inline: 0;
+}
+.member-editor-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.site-root .rental-request-panel {
+  height: max(700px, calc(100dvh - 132px));
+  flex: none;
+  border: 1px solid var(--site-border);
+  border-radius: var(--admin-panel-radius, 12px);
+  background: var(--site-card);
+}
+.site-root .rental-request-panel .rental-calendar {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.rental-request-panel .panel-scroll {
+  min-height: 0;
+}
+.member-create-request {
+  margin-right: auto;
+}
+@media (max-width: 760px) {
+  .site-root .rental-request-panel {
+    height: max(860px, calc(100dvh - 180px));
+  }
+}
+.site-root .rental-request-panel {
+  --card: var(--site-card);
+  --card-foreground: var(--site-text);
+  --foreground: var(--site-text);
+  --muted: color-mix(in srgb, var(--site-card), var(--site-border) 60%);
+  --muted-foreground: var(--site-muted);
+  --border: var(--site-border);
+}
+/* Decorative hero glows may bleed into the gutter, never create page scrolling. */
+.site-root .public-home {
+  overflow-x: clip;
 }

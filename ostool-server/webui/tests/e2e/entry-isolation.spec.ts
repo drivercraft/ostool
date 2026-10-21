@@ -130,3 +130,58 @@ test("website and admin login/logout work independently in the same browser", as
   expect(errors).toEqual([]);
   await admin.close();
 });
+
+test("website content uses eighty percent width on desktops and keeps mobile gutters", async ({
+  page,
+}) => {
+  for (const width of [1920, 2560]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.goto("/");
+    await expect(
+      page.getByRole("navigation", { name: "网站导航" }),
+    ).toBeVisible();
+    for (const selector of [
+      ".site-header-inner",
+      ".public-hero-section",
+      ".public-section",
+      ".site-footer-main",
+    ]) {
+      const element = page.locator(selector).first();
+      await expect
+        .poll(() =>
+          element.evaluate((el) =>
+            Math.round(el.getBoundingClientRect().width),
+          ),
+        )
+        .toBe(Math.round(width * 0.8));
+    }
+    await page.goto("/devices");
+    await expect
+      .poll(() =>
+        page
+          .locator(".public-inner-page")
+          .evaluate((el) => Math.round(el.getBoundingClientRect().width)),
+      )
+      .toBe(Math.round(width * 0.8));
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const path of ["/", "/devices", "/docs"]) {
+    await page.goto(path);
+    await expect
+      .poll(() =>
+        page
+          .locator(".site-header-inner")
+          .evaluate((el) => Math.round(el.getBoundingClientRect().width)),
+      )
+      .toBe(358);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+  }
+  await page.screenshot({
+    path: "/tmp/ostool-portal-responsive.png",
+    fullPage: true,
+  });
+});

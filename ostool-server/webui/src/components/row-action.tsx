@@ -8,7 +8,7 @@ export function RowAction({
   label,
   icon: Icon,
   to,
-  variant = "outline",
+  variant = "ghost",
   ...props
 }: Omit<ComponentProps<typeof Button>, "children" | "size" | "asChild"> & {
   label: string;

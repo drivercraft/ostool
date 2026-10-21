@@ -24,7 +24,7 @@
 | 接口 | 用途 |
 | --- | --- |
 | `GET /api/v1/account` | 当前用户资料、可申请设备目录、自己的租赁、申请和令牌元数据 |
-| `GET /api/v1/account/events` | 当前用户实时投影，支持 Bearer 或 EventSource 的 `access_token` |
+| `GET /api/v1/account/events` | 当前用户实时投影，支持 OAuth Bearer 或浏览器同源 HttpOnly Cookie，URL 不携带令牌 |
 | `PUT /api/v1/account/profile` | `{email, display_name, current_password?}` |
 | `POST /api/v1/account/password` | `{current_password, new_password}` |
 | `POST /api/v1/account/rental-requests` | `{board_id, starts_at, ends_at, notes?}` |
@@ -66,13 +66,21 @@ CLI 无需登录；公网版保持管理员登录与成员租赁校验。没有�
 按浏览器时区显示，已取消租赁、待审核申请及当前编辑记录不计入占用。冲突拖拽会提示
 并保留原有时间；按 Escape 或取消指针操作可放弃选择。实时占用变化会更新日历并禁用
 冲突的保存操作，保留编辑草稿，服务器保存时仍以数据库锁重新校验。
-前台申请页使用同一日历，展示匿名占用信息。
+前台申请列表位于 `/account/requests`，从“新增申请”或设备目录进入
+`/account/requests/new?board=设备ID` 独立编辑页。使用同一顶部两列表单、占满中部的日历
+和底部提交/取消栏；当前账号固定为申请人，日历只展示匿名占用信息。实时占用推送会
+禁用冲突提交并保留申请说明等草稿。
+
+单击日期或半小时格会替换原选择，拖拽可重新多选。单击部分占用的日期会选择当天第一段
+可用时间，可双击进入日视图细选；完全占用或过期格子显示灰色并禁用。
+前台桌面内容、菜单栏和页脚统一使用窗口宽度的 80%，窄屏保留 16px 左右间距。
+图标按钮统一为 42px 点击区域、18px 图标，默认透明无可见边框，悬停时显示背景。
 
 每个数据列表右上方提供布局图标菜单，在列表和卡片视图间切换。选择按列表保存到
 浏览器的 `ostool.list-layout:*`，筛选、搜索、分页和操作按钮在两种布局中保持可用；
 切换布局不触发额外 GET，也不会修改服务器数据。
 
-管理后台位于 `/admin/`。默认 `OSTOOL_EDITION=local`，保留总览、板卡管理和底部系统设置，免登录且不显示用户/租赁管理。公开版显式设置 `OSTOOL_EDITION=public`，必须登录并校验管理员角色。
+管理后台位于 `/admin/`。默认 `OSTOOL_EDITION=local`，保留总览、设备管理和底部系统设置，免登录且不显示用户/租赁管理。公开版显式设置 `OSTOOL_EDITION=public`，必须登录并校验管理员角色。
 列表顶部统一左侧操作按钮、右侧搜索和过滤下拉框；系统设置以 Tab 区分网络、TFTP 和部署配置。
 普通按钮、图标按钮、搜索框、单行输入和下拉框采用 itexp 的 42px 高度、8px 圆角和
 16px 字号；多行输入沿用相同边框与焦点样式。表头字号与内容一致。操作列统一为

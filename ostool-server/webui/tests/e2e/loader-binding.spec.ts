@@ -166,7 +166,7 @@ test("unbound power -> real discovery -> manual MAC binding; push preserves focu
     animations: "disabled",
   });
   await peer.setViewportSize({ width: 1440, height: 900 });
-  await peer.getByRole("button", { name: "开发板列表", exact: true }).click();
+  await peer.getByRole("button", { name: "设备列表", exact: true }).click();
   await peer.screenshot({
     path: "/tmp/ostool-admin-screenshots/boards.png",
     fullPage: true,
@@ -510,7 +510,7 @@ test("viewport panels keep toolbar and footer fixed while tables/forms scroll", 
   const save = panel.getByRole("button", { name: "保存开发板", exact: true });
   await expect(save).toBeVisible();
   await expect(panel.locator(".panel-toolbar")).toHaveCount(0);
-  await expect(panel.getByRole("link", { name: "返回开发板列表" })).toHaveCount(
+  await expect(panel.getByRole("link", { name: "返回设备列表" })).toHaveCount(
     0,
   );
   const buttonY = (await save.boundingBox())!.y;
@@ -580,7 +580,7 @@ test("titlebar shares the logo theme and provides notifications, theme and works
   await page.emulateMedia({ colorScheme: "light" });
   await page.goto("/admin/boards");
   await expect(
-    page.getByRole("heading", { name: "开发板列表", exact: true }),
+    page.getByRole("heading", { name: "设备列表", exact: true }),
   ).toBeVisible();
   const layout = await page.evaluate(() => {
     const header = document.querySelector(".admin-topbar")!,
@@ -672,7 +672,7 @@ test("titlebar shares the logo theme and provides notifications, theme and works
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "切换导航", exact: true }).click();
   await expect(
-    page.getByRole("link", { name: "开发板列表", exact: true }),
+    page.getByRole("link", { name: "设备列表", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "切换导航", exact: true }).click();
   await page.getByRole("button", { name: "切换主题", exact: true }).click();

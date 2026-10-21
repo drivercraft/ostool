@@ -5,6 +5,7 @@ test("public member profile, rental request approval, theme and password lifecyc
   browser,
   request,
 }) => {
+  test.setTimeout(60000);
   const base = process.env.OSTOOL_E2E_AUTH_BASE_URL;
   test.skip(!base, "requires a disposable PostgreSQL-backed server");
   const adminEmail = process.env.OSTOOL_E2E_ADMIN_EMAIL ?? "admin@example.com";
@@ -107,10 +108,35 @@ test("public member profile, rental request approval, theme and password lifecyc
     await page.goto(`${base}/devices`);
     await page.getByLabel("搜索设备").fill(board);
     await page.getByRole("link", { name: "申请租赁", exact: true }).click();
+    await expect(page).toHaveURL(base + "/account/requests/new?board=" + board);
+    const editor = page.locator(".rental-request-panel");
+    await expect(
+      editor.getByRole("region", { name: "租赁日历" }),
+    ).toBeVisible();
+    await expect(
+      editor
+        .locator(".panel-footer")
+        .getByRole("button", { name: "提交申请", exact: true }),
+    ).toBeVisible();
+    const fieldSizes = await editor
+      .locator(".rental-editor-form input,.rental-editor-form select")
+      .evaluateAll((elements) =>
+        elements.map((el) => ({
+          height: el.getBoundingClientRect().height,
+          top: el.getBoundingClientRect().top,
+        })),
+      );
+    expect(fieldSizes.every((field) => field.height === 42)).toBe(true);
+    expect(fieldSizes[0].top).toBe(fieldSizes[1].top);
+    expect(fieldSizes[2].top).toBe(fieldSizes[3].top);
     await expect(page.getByLabel("申请开发板", { exact: true })).toHaveValue(
       board,
     );
     await page.getByLabel("申请说明").fill("浏览器端到端租赁申请");
+    await page.screenshot({
+      path: "/tmp/ostool-member-rental-editor.png",
+      fullPage: true,
+    });
     await page.getByRole("button", { name: "提交申请" }).click();
     const memberRow = page
       .getByRole("row")

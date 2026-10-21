@@ -190,7 +190,7 @@ cannot disable public authentication. `.env` defaults to the process working
 directory; `--env-file` selects an explicit file. Process variables win over file
 variables. See [.env.example](.env.example) for local defaults.
 
-The sidebar groups boards/DTBs/short sessions under **板卡管理**. Public edition
+The sidebar groups boards/DTBs/short sessions under **设备管理**. Public edition
 also has **租赁管理 → 租赁列表** and **用户管理 → 用户列表 / 用户角色**. All list
 toolbars place actions on the left and search/filter controls on the right.
 **系统设置** stays at the bottom, with grouped configuration tabs.
@@ -515,3 +515,9 @@ receive public settings over SSE. Registration requires explicit consent to curr
 versions; immutable revisions and per-user acceptances are persisted in PostgreSQL.
 See [site and identity schema](deploy/site-and-data.md). Public dev startup now also starts
 private Redis; local dev startup still needs PostgreSQL only.
+
+Member rental requests use a separate list at `/account/requests` and editor at
+`/account/requests/new`. The editor shares the administrator rental layout and calendar.
+Clicking a cell replaces a previous range; occupied/elapsed cells are gray and disabled.
+Portal content scales to 80% of desktop width, with mobile gutters. Icon actions share
+unfilled glyphs, a uniform hit area and hover backgrounds.

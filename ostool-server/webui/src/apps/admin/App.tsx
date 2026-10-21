@@ -47,7 +47,7 @@ const Users = lazy(() => import("@/apps/admin/pages/Users"));
 const Roles = lazy(() => import("@/apps/admin/pages/Roles"));
 const RentalRequests = lazy(() => import("@/apps/admin/pages/RentalRequests"));
 const boardNavigation = [
-  ["boards", "开发板列表"],
+  ["boards", "设备列表"],
   ["dtbs", "DTB 管理"],
   ["sessions", "会话租约"],
 ] as const;
@@ -205,7 +205,7 @@ function AdminConsole({ user }: { user?: AuthUser }) {
               ))}
             </SidebarGroup>
             <SidebarGroup
-              label="板卡管理"
+              label="设备管理"
               icon={<CircuitBoardIcon />}
               paths={["/boards", "/dtbs", "/sessions"]}
             >
