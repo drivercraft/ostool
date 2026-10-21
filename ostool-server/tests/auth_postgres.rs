@@ -647,11 +647,17 @@ async fn registration_roles_revocation_and_inventory_restart() {
     restarted.write_board(&edited).await.unwrap();
     assert!(!legacy.path_for_id("db-only").exists());
     assert_eq!(restarted.load_all().await.unwrap()["db-only"].id, "db-only");
-    // A settings save must not copy runtime credentials into the TOML file.
+    // Editable settings are authoritative in PostgreSQL and exclude deployment credentials.
     state.save_config().await.unwrap();
-    let stored = tokio::fs::read_to_string(&*state.config_path)
+    let stored = state
+        .database
+        .as_ref()
+        .unwrap()
+        .record::<Value>("settings")
         .await
-        .unwrap();
+        .unwrap()
+        .unwrap()
+        .to_string();
     assert!(!stored.contains("test-admin-password"));
     assert!(!stored.contains("postgres://"));
     let mut local = config.clone();

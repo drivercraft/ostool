@@ -4,8 +4,8 @@ Build once with `cargo build --release -p ostool-server`. The React bundle is
 embedded by the build script; no domain, database URL or password belongs in
 `VITE_*` variables. The same binary can run on different domains.
 
-The default local edition has no authentication or user/rental management, even
-with PostgreSQL configured. For public deployment, explicitly set
+Both editions require PostgreSQL and share the same data schema. The default
+local edition has no authentication or user/rental management. For public deployment, explicitly set
 `OSTOOL_EDITION=public`; the server enforces authentication and requires
 PostgreSQL. `OSTOOL_AUTH_ENABLED=false` is rejected in public edition. When
 upgrading an earlier authenticated deployment, add this edition variable first.
@@ -35,8 +35,12 @@ EnvironmentFile=/path/to/ostool.env
 ```
 
 Use plain `KEY=value` assignments as in the example, without shell `export` or
-shell substitution. Keep service listener, data directories, board LAN interface
-and TFTP configuration in the TOML file. See [systemd EnvironmentFile](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#EnvironmentFile=).
+shell substitution. Keep deployment listener, data directories and hardware paths
+in TOML/`.env`. Network, upload and TFTP settings are imported from TOML once and
+subsequently managed through the UI/database. `OSTOOL_DATABASE_SCHEMA` optionally
+selects a schema (1–63 ASCII letters, digits or underscores); migrations create
+it when enabled. Use the same URL/schema when switching edition to retain data.
+See [systemd EnvironmentFile](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#EnvironmentFile=).
 
 Put [Caddy](Caddyfile.example) on ports 80/443 and bind the Rust listener to
 `127.0.0.1:2999`. Configure DNS and `OSTOOL_PUBLIC_BASE_URL` for the HTTPS origin.
@@ -59,24 +63,29 @@ unassigned before changing permission level or deleting them.
 
 ## Persistence status
 
-Not all server data is in PostgreSQL. Back up the database **and** the configured
-file directories. The system settings storage tab shows this same distinction.
+Both editions use PostgreSQL for durable business data. Bootstrap deployment
+configuration and hardware assets remain external; live hardware state and
+lease artifacts have their own short lifecycle. Back up the database and
+deployment configuration; retain legacy imports as recovery backups.
 
 | Data | Current authority | Restart behavior |
 | --- | --- | --- |
 | Users, roles, OAuth sessions, device codes, PAT hashes (public only) | PostgreSQL | Persisted |
 | Scheduled board rentals (public only) | PostgreSQL | Persisted; eligibility recalculated at startup |
-| Board inventory | PostgreSQL when configured; TOML in standalone mode | One-time legacy import tracked in `storage_imports`; old files never overwrite DB after import |
-| DTB payloads | Files; metadata mirrored in PostgreSQL | Files required; DB metadata is not a full migration |
-| OTA images, jobs and device observations | Files | Existing file persistence retained |
-| Service/TFTP/network configuration | TOML + runtime environment | Runtime overrides applied on startup |
+| Board inventory | PostgreSQL in both editions | One-time legacy import tracked in `storage_imports`; old files never overwrite DB after import |
+| DTB payloads and metadata | PostgreSQL (`dtb_records.content` is BYTEA) | One-time import; readable without original files |
+| OTA images, jobs and device observations | PostgreSQL (`ota_images`, `server_records`) | One-time import; original files are no longer authoritative |
+| Editable TFTP/network/upload settings | PostgreSQL (`server_records`) | Imported once from TOML; UI changes survive restart |
+| Bootstrap listener, database URL/schema, edition, secrets, hardware paths | TOML + environment | Applied on startup; never copied into database settings |
 | Active leases, serial connections, loader discovery, power action state | Memory | No live hardware sessions restored on restart |
 | Session artifacts | Files scoped to leases | Cleaned up with lease lifecycle |
 
 Deletion of an imported board cannot resurrect it from the retained TOML backup.
 To import additional inventory after initialization, use the management API.
-This deployment work does not claim a completed migration of OTA/configuration
-data or persistent historical leases.
+Active sessions are not restored as hardware connections after restart; this
+does not provide persistent historical-lease reporting. Missing legacy DTB
+payloads or corrupt OTA sources stop first migration with an error rather than
+silently dropping records. After import, manual source-file edits have no effect.
 
 ## Verification
 
@@ -90,7 +99,7 @@ PostgreSQL integration tests use a disposable database and an isolated schema:
 
 ```bash
 OSTOOL_TEST_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54329/ostool \
-  cargo test -p ostool-server --test auth_postgres -- --ignored
+  cargo test -p ostool-server --test auth_postgres --test account_postgres --test unified_persistence -- --ignored
 ```
 
 For the full browser account-management test, start a disposable public environment
@@ -101,12 +110,16 @@ cargo build -p ostool-server
 OSTOOL_E2E_AUTH_BASE_URL=http://127.0.0.1:2999 \
 OSTOOL_E2E_ADMIN_EMAIL=admin@example.com \
 OSTOOL_E2E_ADMIN_PASSWORD=admin-password-123 \
+OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_browser_tests \
   pnpm --dir ostool-server/webui test:e2e
 ```
 
-The browser suite creates test users/roles in that environment; the ordinary
-board-management fixture is separate. Without `OSTOOL_E2E_AUTH_BASE_URL`, only
-the PostgreSQL account-management browser test is skipped.
+The local browser database must be a separate disposable database created for
+tests. The fixture uses a fresh schema per run, so imported files and existing
+boards never collide with a previous run or development inventory. CI provides
+its PostgreSQL service automatically. Public account tests create users/roles
+in the separately supplied public test environment. Without
+`OSTOOL_E2E_AUTH_BASE_URL`, those public-account tests are skipped.
 
 ## Scheduled board rentals
 

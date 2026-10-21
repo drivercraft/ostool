@@ -1,0 +1,332 @@
+.standalone-layout-tools {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.data-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+  gap: 16px;
+  padding: 18px;
+  align-content: start;
+}
+.data-card {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--card-foreground);
+  padding: 18px;
+  box-shadow: 0 2px 8px #15254004;
+}
+.data-card-title {
+  font-size: 14px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+}
+.data-card-title small {
+  font-weight: 400;
+  display: block;
+  color: var(--muted-foreground);
+  margin-top: 4px;
+}
+.data-card dl {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+.data-card-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.data-card dt {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  font-weight: 450;
+}
+.data-card dd {
+  margin: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.data-card-actions {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  margin-top: 4px;
+}
+.data-card-actions dt {
+  display: none;
+}
+.data-card .actions,
+.data-card .row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.site-root .data-card {
+  background: var(--site-card);
+  color: var(--site-text);
+  border-color: var(--site-border);
+}
+.member-list-tools > [aria-label="切换列表布局"] {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.rental-editor-grid {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  align-items: start;
+  gap: 22px;
+  padding: 18px;
+}
+.rental-editor-form {
+  display: grid;
+  gap: 22px;
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+.rental-editor-form .muted {
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--muted-foreground);
+}
+.editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+.rental-calendar {
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  min-width: 0;
+}
+.site-root .rental-calendar {
+  background: var(--site-card);
+  color: var(--site-text);
+  border-color: var(--site-border);
+}
+.rental-calendar-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.rental-calendar-heading strong,
+.rental-calendar-heading > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rental-calendar-heading strong {
+  font-size: 14px;
+  font-weight: 650;
+}
+.rental-calendar-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.rental-calendar-legend span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.rental-calendar-legend i {
+  width: 8px;
+  height: 8px;
+  display: block;
+  border-radius: 3px;
+}
+.calendar-busy {
+  background: var(--primary);
+}
+.calendar-free {
+  background: #28936a;
+}
+.rental-calendar-legend small {
+  margin-left: auto;
+  font-size: 10px;
+}
+.rental-month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 5px;
+}
+.rental-weekday {
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  padding: 0 0 8px;
+}
+.rental-day {
+  min-height: 78px;
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px;
+  background: transparent;
+  cursor: pointer;
+  min-width: 0;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.rental-day:hover {
+  background: var(--muted);
+}
+.rental-day > span {
+  font-size: 12px;
+  font-weight: 600;
+}
+.rental-day.today > span {
+  color: var(--primary);
+}
+.rental-day.outside {
+  opacity: 0.4;
+}
+.rental-day[aria-pressed="true"] {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+.rental-day small {
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rental-day em {
+  font-style: normal;
+  font-size: 9px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.rental-day .day-busy {
+  color: var(--primary);
+  background: color-mix(in oklch, var(--primary), transparent 92%);
+  border-radius: 3px;
+  padding: 2px 3px;
+}
+.rental-day .day-free {
+  color: #28936a;
+}
+.rental-day-details {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  border-top: 1px solid var(--border);
+  margin-top: 20px;
+  padding-top: 18px;
+}
+.rental-day-details h3 {
+  font-size: 12px;
+  font-weight: 650;
+  margin: 0 0 10px;
+}
+.rental-day-details p {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  line-height: 1.7;
+  margin: 0 0 8px;
+}
+.calendar-reservation {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  margin-bottom: 7px;
+  border-left: 3px solid var(--primary);
+  background: color-mix(in oklch, var(--primary), transparent 95%);
+  border-radius: 4px;
+}
+.calendar-reservation span {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.calendar-reservation strong {
+  font-size: 11px;
+  font-weight: 450;
+  overflow-wrap: anywhere;
+}
+.calendar-free-windows {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.calendar-free-windows button {
+  font-size: 10px;
+}
+@media (max-width: 1100px) {
+  .rental-editor-grid {
+    grid-template-columns: 1fr;
+  }
+  .rental-editor-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .rental-editor-form > p,
+  .rental-editor-form > [data-slot="field"]:last-of-type {
+    grid-column: 1/-1;
+  }
+}
+@media (max-width: 640px) {
+  .data-card-grid {
+    padding: 12px;
+    gap: 12px;
+  }
+  .rental-editor-grid {
+    padding: 12px;
+  }
+  .rental-editor-form {
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+  }
+  .rental-calendar {
+    padding: 12px;
+  }
+  .rental-calendar-legend small {
+    margin: 0;
+    width: 100%;
+  }
+  .rental-month-grid {
+    gap: 3px;
+  }
+  .rental-day {
+    min-height: 70px;
+    padding: 5px 3px;
+  }
+  .rental-day small {
+    font-size: 9px;
+  }
+  .rental-day em {
+    font-size: 8px;
+  }
+  .rental-day-details {
+    grid-template-columns: 1fr;
+  }
+  .editor-footer .panel-status {
+    max-width: 40%;
+    font-size: 10px;
+  }
+}

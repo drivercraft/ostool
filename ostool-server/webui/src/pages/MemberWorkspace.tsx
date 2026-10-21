@@ -36,6 +36,9 @@ import {
   useAction,
 } from "@/components/forms";
 import { useListPage } from "@/components/list-pagination";
+import { ListLayoutProvider, ListLayoutToggle } from "@/components/list-layout";
+import { RentalCalendar } from "@/components/rental-calendar";
+import { localDateTime } from "@/utils/rental-calendar";
 import type { RentalRequest } from "@/types/api";
 
 export const requestStatusLabels: Record<RentalRequest["status"], string> = {
@@ -77,7 +80,7 @@ export function MemberDeviceCatalog() {
   );
   const page = useListPage(filtered, search);
   return (
-    <section className="member-card member-list">
+    <MemberList storageKey="catalog">
       <div className="member-list-tools">
         <h2>设备目录</h2>
         <TextField
@@ -86,6 +89,7 @@ export function MemberDeviceCatalog() {
           value={search}
           onValue={setSearch}
         />
+        <ListLayoutToggle />
       </div>
       {!catalog ? (
         <Skeleton className="h-32 w-full" />
@@ -115,7 +119,7 @@ export function MemberDeviceCatalog() {
         </DataTable>
       )}
       <div className="member-list-footer">{page.footer}</div>
-    </section>
+    </MemberList>
   );
 }
 
@@ -424,7 +428,7 @@ function MyRentals() {
           </Button>
         }
       />
-      <section className="member-card member-list">
+      <MemberList storageKey="my-rentals">
         <div className="member-list-tools">
           <TextField
             label="搜索我的租赁"
@@ -444,6 +448,7 @@ function MyRentals() {
               })),
             ]}
           />
+          <ListLayoutToggle />
         </div>
         {!rentals ? (
           <Skeleton className="h-40 w-full" />
@@ -473,11 +478,12 @@ function MyRentals() {
           </DataTable>
         )}
         <div className="member-list-footer">{page.footer}</div>
-      </section>
+      </MemberList>
     </>
   );
 }
 function MyRequests() {
+  const availability = useAccountResource("availability");
   const location = useLocation();
   const catalog = useAccountResource("catalog") ?? [],
     requests = useAccountResource("my_requests");
@@ -530,6 +536,7 @@ function MyRequests() {
         <div className="member-form-columns">
           <TextField
             label="开始时间"
+            step="0.001"
             type="datetime-local"
             required
             value={start}
@@ -537,6 +544,7 @@ function MyRequests() {
           />
           <TextField
             label="结束时间"
+            step="0.001"
             type="datetime-local"
             required
             value={end}
@@ -551,7 +559,21 @@ function MyRequests() {
           <Button disabled={task.pending || !catalog.length}>提交申请</Button>
         </div>
       </form>
-      <section className="member-card member-list">
+      {availability ? (
+        <RentalCalendar
+          bookings={availability.filter(
+            (r) => r.board_id === (board || catalog[0]?.id),
+          )}
+          startsAt={start}
+          onSelect={(from, to) => {
+            setStart(localDateTime(from));
+            setEnd(localDateTime(to));
+          }}
+        />
+      ) : (
+        <Skeleton className="h-48 w-full" />
+      )}
+      <MemberList storageKey="my-requests">
         <div className="member-list-tools">
           <h2>我的申请</h2>
           <SelectField
@@ -566,6 +588,7 @@ function MyRequests() {
               })),
             ]}
           />
+          <ListLayoutToggle />
         </div>
         {!requests ? (
           <Skeleton className="h-40 w-full" />
@@ -606,7 +629,7 @@ function MyRequests() {
           </DataTable>
         )}
         <div className="member-list-footer">{page.footer}</div>
-      </section>
+      </MemberList>
     </>
   );
 }
@@ -657,8 +680,11 @@ function Tokens() {
           </div>
         )}
       </form>
-      <section className="member-card member-list">
-        <h2 className="member-list-title">已有令牌</h2>
+      <MemberList storageKey="tokens">
+        <div className="member-list-tools">
+          <h2>已有令牌</h2>
+          <ListLayoutToggle />
+        </div>
         {!tokens ? (
           <Skeleton className="h-24 w-full" />
         ) : (
@@ -682,7 +708,21 @@ function Tokens() {
             ))}
           </DataTable>
         )}
-      </section>
+      </MemberList>
     </>
+  );
+}
+
+function MemberList({
+  children,
+  storageKey,
+}: {
+  children: React.ReactNode;
+  storageKey: string;
+}) {
+  return (
+    <ListLayoutProvider storageKey={`member:${storageKey}`}>
+      <section className="member-card member-list">{children}</section>
+    </ListLayoutProvider>
   );
 }

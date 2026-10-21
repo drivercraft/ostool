@@ -1,17 +1,10 @@
 import { PagePanel } from "@/components/page-panel";
 import { useListPage } from "@/components/list-pagination";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "@/api/client";
 import { useList } from "@/api/events";
-import type { Rental, RentalInput } from "@/types/api";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
 import { ListToolbar } from "@/components/list-toolbar";
 import {
   TextField,
@@ -19,9 +12,7 @@ import {
   DataTable,
   Row,
   Cell,
-  Notice,
   ConfirmAction,
-  useAction,
 } from "@/components/forms";
 
 export const rentalStatusLabels = {
@@ -30,12 +21,6 @@ export const rentalStatusLabels = {
   expired: "已结束",
   cancelled: "已取消",
 };
-function localInput(iso: string) {
-  const date = new Date(iso);
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
-    .toISOString()
-    .slice(0, 23);
-}
 export default function Rentals() {
   const rentals = useList("rentals"),
     users = useList("users"),
@@ -44,27 +29,6 @@ export default function Rentals() {
   const [user, setUser] = useState("");
   const [board, setBoard] = useState("");
   const [search, setSearch] = useState("");
-  const [editor, setEditor] = useState<{
-    id?: string;
-    draft: RentalInput;
-  } | null>(null);
-  const task = useAction();
-  function open(rental?: Rental) {
-    setEditor({
-      id: rental?.id,
-      draft: {
-        board_id: rental?.board_id ?? boards.find((b) => !b.disabled)?.id ?? "",
-        user_id: rental?.user_id ?? users.find((u) => !u.disabled)?.id ?? "",
-        starts_at: localInput(rental?.starts_at ?? new Date().toISOString()),
-        ends_at: localInput(
-          rental?.ends_at ?? new Date(Date.now() + 3600000).toISOString(),
-        ),
-        notes: rental?.notes ?? "",
-      },
-    });
-  }
-  const patch = (change: Partial<RentalInput>) =>
-    setEditor((e) => (e ? { ...e, draft: { ...e.draft, ...change } } : e));
   const filtered = rentals.filter(
     (r) =>
       (!status || r.status === status) &&
@@ -86,13 +50,13 @@ export default function Rentals() {
           <ListToolbar
             actions={
               <Button
-                onClick={() => open()}
+                asChild
                 disabled={
                   !boards.some((b) => !b.disabled) ||
                   !users.some((u) => !u.disabled)
                 }
               >
-                新增租赁
+                <Link to="/rentals/new">新增租赁</Link>
               </Button>
             }
             count={`${filtered.length} 条`}
@@ -188,9 +152,9 @@ export default function Rentals() {
                     disabled={
                       r.status === "expired" || r.status === "cancelled"
                     }
-                    onClick={() => open(r)}
+                    asChild
                   >
-                    编辑
+                    <Link to={`/rentals/${r.id}`}>编辑</Link>
                   </Button>
                   {r.status !== "cancelled" && r.status !== "expired" && (
                     <ConfirmAction
@@ -205,106 +169,6 @@ export default function Rentals() {
           ))}
         </DataTable>
       </PagePanel>
-      <Dialog
-        open={!!editor}
-        onOpenChange={(value) => {
-          if (!value && !task.pending) setEditor(null);
-        }}
-      >
-        <DialogContent>
-          <DialogTitle>{editor?.id ? "编辑租赁" : "新增租赁"}</DialogTitle>
-          <DialogDescription>
-            时间按当前浏览器时区输入，保存为
-            UTC。时间段包含开始、不包含结束；管理员仍可执行维护操作。
-          </DialogDescription>
-          {editor && (
-            <form
-              className="management-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void task
-                  .run(async () => {
-                    const payload = {
-                      ...editor.draft,
-                      starts_at: new Date(editor.draft.starts_at).toISOString(),
-                      ends_at: new Date(editor.draft.ends_at).toISOString(),
-                    };
-                    if (
-                      new Date(payload.starts_at) >= new Date(payload.ends_at)
-                    )
-                      throw new Error("开始时间必须早于结束时间");
-                    if (editor.id) await api.updateRental(editor.id, payload);
-                    else await api.createRental(payload);
-                  }, "租赁已保存")
-                  .then((ok) => {
-                    if (ok) setEditor(null);
-                  });
-              }}
-            >
-              <SelectField
-                label="使用用户"
-                disabled={!!editor.id}
-                value={editor.draft.user_id}
-                onValue={(user_id) => patch({ user_id })}
-                options={users
-                  .filter((u) => !u.disabled || u.id === editor.draft.user_id)
-                  .map((u) => ({
-                    value: u.id,
-                    label: `${u.display_name || u.email} · ${u.email}`,
-                  }))}
-              />
-              <SelectField
-                label="指定开发板"
-                disabled={!!editor.id}
-                value={editor.draft.board_id}
-                onValue={(board_id) => patch({ board_id })}
-                options={boards
-                  .filter((b) => !b.disabled || b.id === editor.draft.board_id)
-                  .map((b) => ({
-                    value: b.id,
-                    label: `${b.id} · ${b.board_type}`,
-                  }))}
-              />
-              <TextField
-                label="开始时间"
-                type="datetime-local"
-                step="0.001"
-                required
-                value={editor.draft.starts_at}
-                onValue={(starts_at) => patch({ starts_at })}
-              />
-              <TextField
-                label="结束时间"
-                type="datetime-local"
-                step="0.001"
-                required
-                value={editor.draft.ends_at}
-                onValue={(ends_at) => patch({ ends_at })}
-              />
-              <TextField
-                label="备注"
-                maxLength={2000}
-                value={editor.draft.notes}
-                onValue={(notes) => patch({ notes })}
-              />
-              {task.error && <Notice>{task.error}</Notice>}
-              <DialogFooter>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={task.pending}
-                  onClick={() => setEditor(null)}
-                >
-                  返回
-                </Button>
-                <Button disabled={task.pending} type="submit">
-                  {task.pending ? "保存中…" : "保存租赁"}
-                </Button>
-              </DialogFooter>
-            </form>
-          )}
-        </DialogContent>
-      </Dialog>
     </>
   );
 }

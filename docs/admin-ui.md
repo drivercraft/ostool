@@ -34,7 +34,9 @@
 
 前台页面统一使用 `api/events.ts` 中的独立 account store，连接个人 SSE；不订阅管理 SSE，
 不在提交后全量 GET，也不轮询列表。个人推送始终按认证用户过滤，并移除管理投影中的
-用户列表、硬件控制命令、服务器配置和其他人的租赁。令牌只在创建响应中展示一次，
+用户列表、硬件控制命令、服务器配置和其他人的租赁详情。日历新增 `availability` 投影，
+仅包含已占用的开发板、起止时间与记录 ID，不包含其他用户的身份、申请说明或租赁备注。
+令牌只在创建响应中展示一次，
 列表仅包含名称和时间等元数据。切换账号会清理旧的投影并重新连接。
 
 本地版继续无认证，并隐藏全部个人工作台功能；个人 API 和申请管理 API 返回 404。
@@ -48,6 +50,24 @@ HTML 响应使用 `Cache-Control: no-store`，带内容哈希的静态资源可�
 `status` 和 `stop` 仍通过记录的服务器 PID 工作，其他环境保留 `nohup` 兼容方式。
 
 ## 操作流程
+
+本地版和公网版统一使用 PostgreSQL 存储板卡、DTB 内容、OTA 镜像/任务/观察记录，
+以及后台可编辑的网络、TFTP、上传设置。区别是本地版不启用账号、授权和租赁功能，
+CLI 无需登录；公网版保持管理员登录与成员租赁校验。没有数据库连接时，常规服务器
+启动会直接报错，不会回退到另一套文件存储。部署启动参数仍从 TOML/`.env` 读取，
+临时会话文件和实时串口/发现状态按生命周期管理。旧业务文件只在首次迁移时导入，
+之后不能通过修改或重新放回文件来覆盖数据库内容。
+
+新增和编辑租赁使用 `/admin/rentals/new`、`/admin/rentals/{id}` 独立页面。
+左侧为用户、开发板、起止时间及备注，右侧为月历；选择开发板后可查看当日已有租赁与
+空闲时段，点击空闲时段可填入时间。月历支持月份切换、跨天租赁、浏览器时区和相邻
+时段衔接；已取消租赁、待审核申请及当前编辑记录不计入占用。实时占用变化会更新
+日历并禁用冲突的保存操作，保留编辑草稿，服务器保存时仍以数据库锁重新校验。
+前台申请页使用同一日历，展示匿名占用信息。
+
+每个数据列表右上方提供布局图标菜单，在列表和卡片视图间切换。选择按列表保存到
+浏览器的 `ostool.list-layout:*`，筛选、搜索、分页和操作按钮在两种布局中保持可用；
+切换布局不触发额外 GET，也不会修改服务器数据。
 
 管理后台位于 `/admin/`。默认 `OSTOOL_EDITION=local`，保留总览、板卡管理和底部系统设置，免登录且不显示用户/租赁管理。公开版显式设置 `OSTOOL_EDITION=public`，必须登录并校验管理员角色。
 列表顶部统一左侧操作按钮、右侧搜索和过滤下拉框；系统设置以 Tab 区分网络、TFTP 和部署配置。
@@ -163,7 +183,7 @@ pnpm --dir ostool-server/webui build
 cargo test -p ostool-server
 cargo build -p ostool-server
 pnpm --dir ostool-server/webui exec playwright install chromium
-pnpm --dir ostool-server/webui test:e2e
+OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_browser_tests pnpm --dir ostool-server/webui test:e2e
 ```
 
 浏览器测试启动临时目录下的真实服务器及 Vite 代理，使用 TCP 4174/4175、UDP
@@ -171,13 +191,15 @@ pnpm --dir ostool-server/webui test:e2e
 使用 `OSTOOL_TEST_SERVER_BIN`，已有 Chromium 可用 `PLAYWRIGHT_CHROMIUM_EXECUTABLE`。
 测试覆盖真实电源提交、UDP/HTTP 发现、SSE 更新、双客户端冲突、Loader 无请求
 离线、DTB 管理、会话释放、配置保存和移动端布局。
+需预先创建独立的测试数据库，由 `OSTOOL_E2E_LOCAL_DATABASE_URL` 指定；每次运行自动
+使用独立 schema，避免测试记录或导入标记污染现有开发数据。CI 自动提供 PostgreSQL。
 
 ## 本地演示数据
 
 一键开发脚本默认启用 `OSTOOL_DEV_DEMO=true`。已有环境使用 `restart` 即可补充数据：
 
 ```bash
-# 本地版：不需要登录和 PostgreSQL
+# 本地版：自动启动 PostgreSQL，不需要登录
 ostool-server/scripts/dev-env.sh restart
 # 公开测试版：PostgreSQL + 登录 + 用户、角色、租赁
 OSTOOL_EDITION=public ostool-server/scripts/dev-env.sh restart
@@ -200,7 +222,7 @@ OSTOOL_EDITION=public ostool-server/scripts/dev-env.sh restart
 密码均为 `demo-user-password-123`。原有默认管理员仍为
 `admin@example.com` / `admin-password-123`。角色名称仅用于演示现有权限模型。
 
-数据通过正常数据库/文件存储和 API/SSE 展示，名称使用 `demo` / `[演示]` 标识。
+持久数据通过统一 PostgreSQL 和 API/SSE 展示，名称使用 `demo` / `[演示]` 标识。
 重复启动仅补缺失记录，保留已经修改的账号、密码、板卡、DTB 和租赁。
 会话和设备在线状态在进程运行时保活；手动释放的会话本次运行内不会重新创建。
 运行状态在重启时重新生成，已保存的租赁时间不自动改期。
@@ -216,15 +238,15 @@ DTB 不含真实硬件定义。这里用于页面展示，真实硬件联调需�
 
 ## 不兼容板卡配置的启动隔离
 
-启动逐文件读取板卡 TOML。语法错误、不支持的枚举、缺失必填字段、校验失败、
+首次导入逐文件读取板卡 TOML。语法错误、不支持的枚举、缺失必填字段、校验失败、
 文件名与 ID 不一致或重复 MAC 的文件移动到
 `<board_dir>/quarantine/<UTC时间>-<UUID>/<原文件名>`，原始字节保持不变。
 同目录的 `reason.json` 保存来源、备份路径、时间和完整原因；启动日志和开发板
 页面也显示隔离记录。备份名称不会覆盖之前的文件，下次启动不再扫描隔离目录。
 
 目录按文件名排序加载；重复 MAC 保留排序最前的有效配置，隔离后续冲突文件。
-其余有效板卡继续提供服务。修正备份文件后，管理员可将其放回板卡配置目录并
-在维护窗口重启加载；系统不自动猜测旧字段含义或自动恢复隔离文件。
+其余有效板卡继续提供服务。首次导入完成后，修正的备份内容需通过管理页面或管理 API
+重新创建板卡；仅将文件放回目录并重启不会覆盖或新增数据库记录。
 
 目录读取、文件读取或备份移动失败仍作为存储错误报告，保留源文件，不以丢失
 配置为代价继续启动。顶层服务器配置错误不属于板卡逐文件隔离范围。

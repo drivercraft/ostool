@@ -282,6 +282,7 @@ impl std::str::FromStr for Edition {
 pub struct DatabaseConfig {
     #[serde(skip_serializing)]
     pub url: Option<String>,
+    pub schema: Option<String>,
     pub max_connections: u32,
     pub migrate: bool,
 }
@@ -290,6 +291,7 @@ impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
             url: None,
+            schema: None,
             max_connections: 10,
             migrate: true,
         }

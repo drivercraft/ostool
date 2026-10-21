@@ -133,8 +133,13 @@ pub(crate) async fn projection(state: &AppState, user: Uuid) -> Result<Value, Ap
         .collect();
     let tokens = sqlx::query("SELECT id,name,expires_at,created_at FROM personal_access_tokens WHERE user_id=$1 ORDER BY created_at DESC")
         .bind(user).fetch_all(db.pool()).await.map_err(db_error)?.into_iter().map(|r| Ok(json!({"id":r.try_get::<Uuid,_>("id")?,"name":r.try_get::<String,_>("name")?,"expires_at":r.try_get::<Option<DateTime<Utc>>,_>("expires_at")?,"created_at":r.try_get::<DateTime<Utc>,_>("created_at")?}))).collect::<Result<Vec<_>,sqlx::Error>>().map_err(db_error)?;
+    let availability=sqlx::query("SELECT id,board_id,starts_at,ends_at FROM board_rentals WHERE cancelled_at IS NULL ORDER BY starts_at,id").fetch_all(db.pool()).await.map_err(db_error)?.into_iter().map(|row|Ok(json!({"id":row.try_get::<Uuid,_>("id")?,"board_id":row.try_get::<String,_>("board_id")?,"starts_at":row.try_get::<DateTime<Utc>,_>("starts_at")?,"ends_at":row.try_get::<DateTime<Utc>,_>("ends_at")?,"status":"reserved"}))).collect::<Result<Vec<_>,sqlx::Error>>().map_err(db_error)?;
+    let availability: Vec<_> = availability
+        .into_iter()
+        .filter(|row| catalog.iter().any(|board| board["id"] == row["board_id"]))
+        .collect();
     Ok(
-        json!({"profile":{"id":profile.id,"email":profile.email,"display_name":profile.display_name,"is_admin":profile.is_admin},"catalog":catalog,"my_rentals":rentals::list_for(state,Some(user)).await?,"my_requests":list_requests(state,Some(user)).await?,"personal_tokens":tokens}),
+        json!({"profile":{"id":profile.id,"email":profile.email,"display_name":profile.display_name,"is_admin":profile.is_admin},"catalog":catalog,"availability":availability,"my_rentals":rentals::list_for(state,Some(user)).await?,"my_requests":list_requests(state,Some(user)).await?,"personal_tokens":tokens}),
     )
 }
 

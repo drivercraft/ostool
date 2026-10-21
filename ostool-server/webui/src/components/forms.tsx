@@ -2,9 +2,16 @@ import {
   useId,
   useRef,
   useState,
+  Children,
+  isValidElement,
   type ReactNode,
   type ComponentProps,
 } from "react";
+import {
+  ListLayoutProvider,
+  ListLayoutToggle,
+  useListLayout,
+} from "./list-layout";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -268,6 +275,20 @@ export function DataTable({
   children: ReactNode;
   empty?: boolean;
 }) {
+  const view = useListLayout();
+  if (!view)
+    return (
+      <ListLayoutProvider
+        storageKey={`${window.location.pathname}:${headers.join("/")}`}
+      >
+        <div className="standalone-layout-tools">
+          <ListLayoutToggle />
+        </div>
+        <DataTable headers={headers} empty={empty}>
+          {children}
+        </DataTable>
+      </ListLayoutProvider>
+    );
   if (empty)
     return (
       <Empty>
@@ -276,6 +297,41 @@ export function DataTable({
           <EmptyDescription>数据发生变化时会自动显示。</EmptyDescription>
         </EmptyHeader>
       </Empty>
+    );
+  if (view.layout === "cards")
+    return (
+      <div className="data-card-grid" role="list" aria-label="卡片列表">
+        {Children.toArray(children).map((row, rowIndex) => {
+          if (!isValidElement<{ children?: ReactNode }>(row)) return null;
+          const cells = Children.toArray(row.props.children).filter(
+            isValidElement<{ children?: ReactNode }>,
+          );
+          return (
+            <article
+              className="data-card"
+              role="listitem"
+              key={row.key ?? rowIndex}
+            >
+              <div className="data-card-title">{cells[0]?.props.children}</div>
+              <dl>
+                {cells.slice(1).map((cell, index) => (
+                  <div
+                    className={
+                      headers[index + 1] === "操作"
+                        ? "data-card-actions"
+                        : "data-card-field"
+                    }
+                    key={index}
+                  >
+                    <dt>{headers[index + 1]}</dt>
+                    <dd>{cell.props.children}</dd>
+                  </div>
+                ))}
+              </dl>
+            </article>
+          );
+        })}
+      </div>
     );
   return (
     <div className="table-frame">

@@ -78,11 +78,14 @@ pub enum DeleteImageError {
     Inconsistent,
     #[error("failed to update OTA image storage: {0}")]
     Io(#[from] std::io::Error),
+    #[error("OTA database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
 }
 
 #[derive(Clone)]
 pub struct OtaStore {
     root: PathBuf,
+    database: Option<crate::database::Database>,
     image_catalog: Arc<Mutex<BTreeMap<String, Image>>>,
     jobs: Arc<Mutex<BTreeMap<String, Job>>>,
     observations: Arc<Mutex<BTreeMap<String, Observation>>>,
@@ -95,6 +98,88 @@ struct Observation {
 }
 
 impl OtaStore {
+    pub async fn open_with_database(
+        data_dir: &Path,
+        database: crate::database::Database,
+    ) -> anyhow::Result<Self> {
+        use sqlx::Row;
+        let mut tx = database.pool().begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('ota-import',2999))")
+            .execute(&mut *tx)
+            .await?;
+        let imported: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM storage_imports WHERE name='ota')")
+                .fetch_one(&mut *tx)
+                .await?;
+        if !imported {
+            let legacy = Self::open(data_dir)?;
+            for (name, payload) in [
+                (
+                    "ota-jobs",
+                    serde_json::to_value(&*legacy.jobs.lock().await)?,
+                ),
+                (
+                    "ota-observations",
+                    serde_json::to_value(&*legacy.observations.lock().await)?,
+                ),
+            ] {
+                sqlx::query("INSERT INTO server_records (name,payload) VALUES ($1,$2) ON CONFLICT DO NOTHING").bind(name).bind(payload).execute(&mut *tx).await?;
+            }
+            for image in legacy.images().await? {
+                let bytes = tokio::fs::read(legacy.image_path(&image.sha256)?).await?;
+                ensure!(
+                    format!("{:x}", Sha256::digest(&bytes)) == image.sha256,
+                    "legacy OTA image digest mismatch"
+                );
+                sqlx::query("INSERT INTO ota_images (sha256,metadata,content) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING").bind(&image.sha256).bind(serde_json::to_value(&image)?).bind(bytes).execute(&mut *tx).await?;
+            }
+            sqlx::query("INSERT INTO storage_imports (name) VALUES ('ota')")
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        let rows = sqlx::query("SELECT sha256,metadata FROM ota_images ORDER BY sha256")
+            .fetch_all(database.pool())
+            .await?;
+        let images = rows
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get::<String, _>("sha256")?,
+                    serde_json::from_value::<Image>(row.try_get("metadata")?)?,
+                ))
+            })
+            .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+        Ok(Self {
+            root: data_dir.join("loader-ota"),
+            jobs: Arc::new(Mutex::new(
+                database
+                    .record("ota-jobs")
+                    .await?
+                    .context("missing OTA jobs")?,
+            )),
+            observations: Arc::new(Mutex::new(
+                database
+                    .record("ota-observations")
+                    .await?
+                    .context("missing OTA observations")?,
+            )),
+            image_catalog: Arc::new(Mutex::new(images)),
+            database: Some(database),
+        })
+    }
+
+    pub async fn image_bytes(&self, digest: &str) -> anyhow::Result<Vec<u8>> {
+        ensure!(valid_digest(digest), "invalid image digest");
+        if let Some(db) = &self.database {
+            return sqlx::query_scalar("SELECT content FROM ota_images WHERE sha256=$1")
+                .bind(digest)
+                .fetch_optional(db.pool())
+                .await?
+                .context("OTA image not found");
+        }
+        Ok(tokio::fs::read(self.image_path(digest)?).await?)
+    }
     pub fn open(data_dir: &Path) -> anyhow::Result<Self> {
         let root = data_dir.join("loader-ota");
         fs::create_dir_all(root.join("images"))?;
@@ -115,6 +200,7 @@ impl OtaStore {
             .collect();
         Ok(Self {
             root,
+            database: None,
             image_catalog: Arc::new(Mutex::new(images)),
             jobs: Arc::new(Mutex::new(jobs)),
             observations: Arc::new(Mutex::new(observations)),
@@ -136,6 +222,17 @@ impl OtaStore {
             "invalid EFI image size"
         );
         let bytes = bytes.to_vec();
+        if let Some(db) = &self.database {
+            let mut images = self.image_catalog.lock().await;
+            let validation_bytes = bytes.clone();
+            let image =
+                tokio::task::spawn_blocking(move || validate_image(&validation_bytes, version))
+                    .await??;
+            sqlx::query("INSERT INTO ota_images (sha256,metadata,content) VALUES ($1,$2,$3) ON CONFLICT (sha256) DO UPDATE SET metadata=excluded.metadata")
+                .bind(&image.sha256).bind(serde_json::to_value(&image)?).bind(bytes).execute(db.pool()).await?;
+            images.insert(image.sha256.clone(), image.clone());
+            return Ok(image);
+        }
         let root = self.root.clone();
         let mut images = self.image_catalog.lock().await;
         let image = tokio::task::spawn_blocking(move || write_image(&root, &bytes, version))
@@ -158,6 +255,19 @@ impl OtaStore {
             {
                 return Err(DeleteImageError::InUse);
             }
+        }
+        if let Some(db) = &self.database {
+            let count = sqlx::query("DELETE FROM ota_images WHERE sha256=$1")
+                .bind(digest)
+                .execute(db.pool())
+                .await?
+                .rows_affected();
+            images.remove(digest);
+            return if count == 0 {
+                Err(DeleteImageError::NotFound)
+            } else {
+                Ok(())
+            };
         }
         let root = self.root.clone();
         let digest = digest.to_owned();
@@ -221,7 +331,7 @@ impl OtaStore {
         };
         let mut updated = jobs.clone();
         updated.insert(board_id, job.clone());
-        self.save(&updated)?;
+        self.save(&updated).await?;
         *jobs = updated;
         drop(observations);
         Ok(job)
@@ -244,8 +354,26 @@ impl OtaStore {
 
         let mut updated_observations = observations.clone();
         updated_observations.remove(board_id);
-        self.save_observations(&updated_observations)?;
-        self.save(&updated_jobs)?;
+        if let Some(db) = &self.database {
+            let mut tx = db.pool().begin().await?;
+            for (name, payload) in [
+                (
+                    "ota-observations",
+                    serde_json::to_value(&updated_observations)?,
+                ),
+                ("ota-jobs", serde_json::to_value(&updated_jobs)?),
+            ] {
+                sqlx::query("UPDATE server_records SET payload=$2,updated_at=now() WHERE name=$1")
+                    .bind(name)
+                    .bind(payload)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            tx.commit().await?;
+        } else {
+            self.save_observations(&updated_observations).await?;
+            self.save(&updated_jobs).await?;
+        }
         *observations = updated_observations;
         *jobs = updated_jobs;
         Ok(result)
@@ -271,7 +399,7 @@ impl OtaStore {
                     state: ota.clone(),
                 },
             );
-            self.save_observations(&updated)?;
+            self.save_observations(&updated).await?;
             *observations = updated;
         }
         let mut jobs = self.jobs.lock().await;
@@ -323,7 +451,7 @@ impl OtaStore {
             Decision::Wait
         };
         if changed.get(board_id).unwrap().phase != jobs.get(board_id).unwrap().phase {
-            self.save(&changed)?;
+            self.save(&changed).await?;
             *jobs = changed;
         }
         Ok(decision)
@@ -356,7 +484,7 @@ impl OtaStore {
         if job.phase == phase {
             if job.error != error {
                 job.error = error;
-                self.save(&updated)?;
+                self.save(&updated).await?;
                 *jobs = updated;
             }
             return Ok(());
@@ -391,7 +519,7 @@ impl OtaStore {
         if job.phase != phase || job.error != error {
             job.phase = phase;
             job.error = error;
-            self.save(&updated)?;
+            self.save(&updated).await?;
             *jobs = updated;
         }
         Ok(())
@@ -423,19 +551,25 @@ impl OtaStore {
             job.phase = Phase::Downloading;
         }
         let result = job.clone();
-        self.save(&updated)?;
+        self.save(&updated).await?;
         *jobs = updated;
         Ok(result)
     }
 
-    fn save(&self, jobs: &BTreeMap<String, Job>) -> anyhow::Result<()> {
+    async fn save(&self, jobs: &BTreeMap<String, Job>) -> anyhow::Result<()> {
+        if let Some(db) = &self.database {
+            return db.save_record("ota-jobs", jobs).await;
+        }
         atomic_write(&self.root.join("jobs.json"), &serde_json::to_vec(jobs)?)
     }
 
-    fn save_observations(
+    async fn save_observations(
         &self,
         observations: &BTreeMap<String, Observation>,
     ) -> anyhow::Result<()> {
+        if let Some(db) = &self.database {
+            return db.save_record("ota-observations", observations).await;
+        }
         atomic_write(
             &self.root.join("devices.json"),
             &serde_json::to_vec(observations)?,
@@ -479,7 +613,7 @@ fn read_images(root: &Path) -> anyhow::Result<Vec<Image>> {
     Ok(images)
 }
 
-fn write_image(root: &Path, bytes: &[u8], version: Option<String>) -> anyhow::Result<Image> {
+fn validate_image(bytes: &[u8], version: Option<String>) -> anyhow::Result<Image> {
     // DOS header, PE signature, AMD64 machine and EFI application subsystem.
     ensure!(
         bytes.len() >= 0x40 && &bytes[..2] == b"MZ",
@@ -521,6 +655,12 @@ fn write_image(root: &Path, bytes: &[u8], version: Option<String>) -> anyhow::Re
         size: bytes.len() as u64,
         version,
     };
+    Ok(image)
+}
+
+fn write_image(root: &Path, bytes: &[u8], version: Option<String>) -> anyhow::Result<Image> {
+    let image = validate_image(bytes, version)?;
+    let sha256 = image.sha256.clone();
     let path = image_path(root, &sha256);
     if !path.exists() {
         atomic_write(&path, bytes)?;

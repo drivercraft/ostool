@@ -20,7 +20,7 @@ use futures_util::{SinkExt, StreamExt};
 use ostool_server::{
     BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement, PowerManagementConfig,
     SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig, TftpConfig, UbootProfile,
-    UploadLimitsConfig, build_app_state, build_router,
+    UploadLimitsConfig, build_fixture_app_state as build_app_state, build_router,
     tftp::service::{TftpManager, build_tftp_manager},
 };
 use serialport::{SerialPort, TTYPort};

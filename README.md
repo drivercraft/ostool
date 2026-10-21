@@ -18,7 +18,8 @@
 axloader 网络控制（v6 串口自动绑定、v5 设备识别与 OTA、v2/v3/v4 旧识别与升级入口）、持久 MAC 绑定、Web 管理、内建 QEMU 虚拟板和本地真实 FAT 磁盘验证设计见 [docs/axloader-network-control.md](docs/axloader-network-control.md)，完整接口契约见 [docs/api.md](docs/api.md)。
 
 管理后台位于 `/admin/`，使用 React + shadcn/ui。新建开发板时可先选择电源模块并手动上电，再从实时发现列表选择或手工填写 MAC；保存后完成绑定。全部管理页面采用 SSE 推送更新，断线重连保留页面与编辑草稿。详见 [管理界面与事件协议](docs/admin-ui.md)。
-不兼容的板卡 TOML 会在启动时移入板卡目录下的 `quarantine/`，保留原文件和原因，其余有效板卡继续加载。
+首次迁移时，不兼容的板卡 TOML 会移入板卡目录下的 `quarantine/`，保留原文件和原因，其余有效板卡继续加载。
+本地版与公网版统一使用 PostgreSQL 保存业务数据；本地版隐藏账号、授权和租赁功能，`ostool` 仍可免登录直连。开发环境通过 `ostool-server/scripts/dev-env.sh start` 自动启动数据库和服务器。新增租赁使用独立页面与可用时段日历，各数据列表支持列表/卡片布局。
 
 **ostool** 是一个专为操作系统开发而设计的 Rust 工具集，旨在为 OS 开发者提供便捷的构建、配置和启动环境。它特别适合嵌入式系统开发，支持通过 Qemu 虚拟机和 U-Boot 引导程序进行系统测试和调试。
 

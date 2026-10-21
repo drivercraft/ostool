@@ -385,6 +385,12 @@ async fn member_workspace_isolation_approvals_and_security() {
     assert!(data.get("boards").is_none());
     assert!(data.get("rentals").is_none());
     assert!(data["my_rentals"].as_array().unwrap().is_empty());
+    assert_eq!(data["availability"].as_array().unwrap().len(), 1);
+    for window in data["availability"].as_array().unwrap() {
+        assert!(window.get("user_id").is_none());
+        assert!(window.get("notes").is_none());
+        assert!(window.get("user_email").is_none());
+    }
     assert!(!text.contains("first@test.local"));
     assert!(!text.contains("power_on_cmd"));
     drop(stream);

@@ -58,8 +58,19 @@ async fn main() -> anyhow::Result<()> {
         return run_virtual_lab(&config.virtual_qemu, action).await;
     }
     if cli.dev_demo {
+        let tftp = config.tftp.clone();
         ostool_server::demo::prepare(&mut config)?;
+        // Import the real editable settings, not the demo service override.
+        config.tftp = tftp;
     }
+    anyhow::ensure!(
+        config
+            .database
+            .url
+            .as_ref()
+            .is_some_and(|url| !url.trim().is_empty()),
+        "both local and public editions require PostgreSQL (OSTOOL_DATABASE_URL); use scripts/dev-env.sh for an automatically managed development database"
+    );
     let listen_addr = config.listen_addr;
     let listener = tokio::net::TcpListener::bind(listen_addr)
         .await
@@ -83,6 +94,13 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let state = build_app_state(cli.config.clone(), config, tftp_manager.clone()).await?;
+    if cli.dev_demo {
+        let mut config = state.config.write().await;
+        ostool_server::demo::prepare(&mut config)?;
+        *state.tftp_manager.write().await =
+            ostool_server::tftp::service::build_tftp_manager(&config.tftp);
+    }
+    let tftp_manager = state.tftp_manager.read().await.clone();
     state.ensure_data_dirs().await?;
     let _demo = if cli.dev_demo {
         Some(ostool_server::demo::seed(&state).await?)

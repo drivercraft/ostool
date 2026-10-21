@@ -8,6 +8,20 @@ on:
 jobs:
   check:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ostool
+          POSTGRES_PASSWORD: ostool
+          POSTGRES_DB: ostool_e2e_local
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ostool -d ostool_e2e_local"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     strategy:
       fail-fast: false
       matrix:
@@ -61,6 +75,7 @@ jobs:
     - name: Web UI integration tests
       env:
         OSTOOL_TEST_SERVER_BIN: ${{ github.workspace }}/target/${{ matrix.targets }}/debug/ostool-server
+        OSTOOL_E2E_LOCAL_DATABASE_URL: postgres://ostool:ostool@127.0.0.1:5432/ostool_e2e_local
       run: pnpm --dir ostool-server/webui test:e2e
     - name: Publish dry run
       run: cargo publish --workspace --dry-run --locked

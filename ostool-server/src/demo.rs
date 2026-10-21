@@ -348,7 +348,7 @@ fn demo_dtb(index: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{build_app_state, tftp::service::build_tftp_manager};
+    use crate::{build_fixture_app_state as build_app_state, tftp::service::build_tftp_manager};
 
     fn test_config(dir: &std::path::Path) -> ServerConfig {
         ServerConfig {

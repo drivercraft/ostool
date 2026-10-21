@@ -37,6 +37,7 @@ pub(crate) fn apply_values(
     }
     for (key, target) in [
         ("OSTOOL_DATABASE_URL", &mut config.database.url),
+        ("OSTOOL_DATABASE_SCHEMA", &mut config.database.schema),
         ("OSTOOL_PUBLIC_BASE_URL", &mut config.auth.public_base_url),
         ("OSTOOL_ADMIN_EMAIL", &mut config.auth.bootstrap_admin_email),
         (

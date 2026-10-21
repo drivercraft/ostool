@@ -5,6 +5,7 @@ mod serial_fixture;
 use futures_util::{SinkExt, StreamExt};
 use httpboot_protocol::{BootArch, BootFile, ImageFormat, LoaderAnnouncement, LoaderDeviceStatus};
 use ostool_serial::{PortLocator, SerialManager};
+use ostool_server::build_fixture_app_state as build_app_state;
 use ostool_server::{session::SessionBootCommand, tftp::service::build_tftp_manager, *};
 use serial_fixture::PtyBackend;
 use serialport::{SerialPort, TTYPort};

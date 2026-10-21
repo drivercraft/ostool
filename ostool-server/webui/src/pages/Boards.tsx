@@ -91,7 +91,10 @@ export default function Boards() {
                 <code>{q.backup_path}</code>
               </div>
             ))}
-            <p>修正备份文件后放回板卡配置目录，再重启服务加载。</p>
+            <p>
+              修正备份内容后，通过管理页面或 API
+              重新创建板卡；首次导入后，重启不会重新导入旧文件。
+            </p>
           </details>
         </Notice>
       )}
@@ -114,6 +117,7 @@ export default function Boards() {
         </TabsList>
         <TabsContent value="boards">
           <PagePanel
+            layoutKey="boards"
             table
             toolbar={
               <ListToolbar
@@ -266,6 +270,7 @@ export default function Boards() {
         </TabsContent>
         <TabsContent value="discovery">
           <PagePanel
+            layoutKey="discovery"
             table
             toolbar={
               <ListToolbar
@@ -375,6 +380,7 @@ export default function Boards() {
         {virtual?.enabled && (
           <TabsContent value="virtual">
             <PagePanel
+              layoutKey="virtual"
               table
               toolbar={
                 <ListToolbar

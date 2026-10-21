@@ -1,5 +1,5 @@
-//! PostgreSQL persistence for identity, OAuth sessions, and the gradual
-//! migration of the historical file backed stores.
+//! PostgreSQL authority shared by local and public deployments.
+//! File adapters are retained for one-time imports and isolated test fixtures.
 use std::time::Duration;
 
 use anyhow::{Context, bail};
@@ -53,13 +53,78 @@ pub struct PersonalAccessToken {
 }
 
 impl Database {
+    pub async fn record<T: serde::de::DeserializeOwned>(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<T>> {
+        let value: Option<Value> =
+            sqlx::query_scalar("SELECT payload FROM server_records WHERE name=$1")
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await?;
+        value
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(Into::into)
+    }
+    pub async fn import_record<T: serde::Serialize + serde::de::DeserializeOwned>(
+        &self,
+        name: &str,
+        initial: &T,
+    ) -> anyhow::Result<T> {
+        sqlx::query(
+            "INSERT INTO server_records (name,payload) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+        )
+        .bind(name)
+        .bind(serde_json::to_value(initial)?)
+        .execute(&self.pool)
+        .await?;
+        self.record(name).await?.context("missing imported record")
+    }
+    pub async fn save_record<T: serde::Serialize + ?Sized>(
+        &self,
+        name: &str,
+        value: &T,
+    ) -> anyhow::Result<()> {
+        sqlx::query("INSERT INTO server_records (name,payload) VALUES ($1,$2) ON CONFLICT (name) DO UPDATE SET payload=excluded.payload,updated_at=now()")
+            .bind(name).bind(serde_json::to_value(value)?).execute(&self.pool).await?;
+        Ok(())
+    }
     pub async fn connect(config: &DatabaseConfig) -> anyhow::Result<Option<Self>> {
         let Some(url) = config.url.as_deref().filter(|url| !url.trim().is_empty()) else {
             return Ok(None);
         };
+        if let Some(schema) = &config.schema
+            && (schema.is_empty()
+                || schema.len() > 63
+                || !schema
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+        {
+            bail!("database schema must contain 1..63 ASCII letters, digits or underscores");
+        }
+        let schema = config.schema.clone();
+        let migrate = config.migrate;
         let pool = PgPoolOptions::new()
             .max_connections(config.max_connections.max(1))
             .acquire_timeout(Duration::from_secs(10))
+            .after_connect(move |connection, _| {
+                let schema = schema.clone();
+                Box::pin(async move {
+                    if let Some(schema) = schema {
+                        if migrate {
+                            sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS \"{schema}\""))
+                                .execute(&mut *connection)
+                                .await?;
+                        }
+                        sqlx::query("SELECT set_config('search_path',$1,false)")
+                            .bind(format!("\"{schema}\",public"))
+                            .execute(connection)
+                            .await?;
+                    }
+                    Ok(())
+                })
+            })
             .connect(url)
             .await
             .context("failed to connect to PostgreSQL")?;

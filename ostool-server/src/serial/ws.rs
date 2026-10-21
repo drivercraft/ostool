@@ -487,7 +487,7 @@ mod tests {
         send_serial_failure_and_close,
     };
     use crate::{
-        build_app_state,
+        build_fixture_app_state as build_app_state,
         config::{
             BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
             PowerManagementConfig, PxeProfile, ServerConfig, TftpConfig,

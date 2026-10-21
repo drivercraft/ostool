@@ -95,9 +95,9 @@ async fn delete_image(
             DeleteImageError::InvalidDigest => ApiError::bad_request(error.to_string()),
             DeleteImageError::NotFound => ApiError::not_found(error.to_string()),
             DeleteImageError::InUse => ApiError::conflict(error.to_string()),
-            DeleteImageError::Inconsistent | DeleteImageError::Io(_) => {
-                ApiError::internal(error.to_string())
-            }
+            DeleteImageError::Inconsistent
+            | DeleteImageError::Io(_)
+            | DeleteImageError::Database(_) => ApiError::internal(error.to_string()),
         })?;
     state.admin_events.invalidate(&["ota"]);
     Ok(StatusCode::NO_CONTENT)
@@ -189,15 +189,11 @@ async fn download_image(
     if board_id_for_mac(&boards, job.mac_address).as_deref() != Some(job.board_id.as_str()) {
         return Err(ApiError::conflict("board MAC assignment has changed"));
     }
-    let bytes = tokio::fs::read(state.ota.image_path(&job.image.sha256)?)
+    let bytes = state
+        .ota
+        .image_bytes(&job.image.sha256)
         .await
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                ApiError::not_found("OTA image not found")
-            } else {
-                ApiError::internal(format!("failed to read OTA image: {error}"))
-            }
-        })?;
+        .map_err(|error| ApiError::internal(format!("failed to read OTA image: {error:#}")))?;
     if bytes.len() as u64 != job.image.size {
         return Err(ApiError::internal("stored image length changed"));
     }

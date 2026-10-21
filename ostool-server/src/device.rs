@@ -308,7 +308,7 @@ async fn push_ota_image(
     observed: &LoaderDeviceStatus,
     job: &Job,
 ) -> anyhow::Result<()> {
-    let bytes = tokio::fs::read(state.ota.image_path(&job.image.sha256)?).await?;
+    let bytes = state.ota.image_bytes(&job.image.sha256).await?;
     ensure!(
         bytes.len() as u64 == job.image.size && hex_sha256(&bytes) == job.image.sha256,
         "OTA image changed in storage"
@@ -537,8 +537,8 @@ mod tests {
     use crate::{
         BoardConfig, BoardNetworkIdentity, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
         PowerManagementConfig, ServerConfig, TftpConfig, UefiBootArch, UefiHttpProfile,
-        build_app_state, ota::Phase, session::SessionBootCommand, state::BoardRuntimeState,
-        tftp::service::build_tftp_manager,
+        build_fixture_app_state as build_app_state, ota::Phase, session::SessionBootCommand,
+        state::BoardRuntimeState, tftp::service::build_tftp_manager,
     };
 
     #[derive(Clone)]

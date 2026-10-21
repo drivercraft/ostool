@@ -4,6 +4,7 @@
 @import "@fontsource-variable/geist";
 
 @import "./site-workspace.css";
+@import "./list-views.css";
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

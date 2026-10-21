@@ -328,7 +328,12 @@ async fn delete_role(
 pub async fn deployment(State(state): State<AppState>) -> Json<serde_json::Value> {
     let config = state.config.read().await;
     let public = config.edition.is_public();
-    let mut storage = serde_json::json!({"boards":if state.database.is_some(){"PostgreSQL"}else{"TOML"},"dtbs":if state.database.is_some(){"文件 + PostgreSQL 元数据镜像"}else{"文件"},"ota":"文件","configuration":"TOML + 环境变量","active_sessions":"内存（重启失效）","artifacts":"文件（随租约清理）"});
+    let persistent = if state.database.is_some() {
+        "PostgreSQL"
+    } else {
+        "隔离测试文件存储"
+    };
+    let mut storage = serde_json::json!({"boards":persistent,"dtbs":persistent,"ota":persistent,"configuration":if state.database.is_some(){"PostgreSQL（部署启动参数仍来自 TOML / .env）"}else{"隔离测试配置"},"active_sessions":"进程状态（重启释放，不恢复硬件连接）","artifacts":"临时文件（随租约清理）"});
     if public {
         for key in ["users", "roles", "rentals"] {
             storage[key] = serde_json::json!("PostgreSQL");

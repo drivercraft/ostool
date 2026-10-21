@@ -8,7 +8,7 @@
 向 UDP `2998` 单向广播 MAC、架构、启动代次和设备 TCP4 端口 `2999`；
 `direct::Listener` 在该端口处理启动与 OTA。ostool-server 的
 `loader::serve_udp_discovery()` 对 v5/v6 广播调用 `device::reconcile()`，先反向
-GET 设备状态，核对 MAC、代次和架构，才从板卡 TOML 中查找当前绑定。
+GET 设备状态，核对 MAC、代次和架构，才从 PostgreSQL 板卡库存的运行投影中查找当前绑定。
 发现不要求服务端响应：直连客户端知道设备 IP 时可独立控制装载器。
 设备没有可写 ESP 或 OTA 状态区时，状态响应中的 `ota` 可以为空；服务端记录
 告警并跳过升级决策，v6 设备已有 Session 的普通启动推送仍然可用。

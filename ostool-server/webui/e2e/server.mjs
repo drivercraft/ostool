@@ -3,6 +3,7 @@ import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 const root = await mkdtemp(join(tmpdir(), "ostool-admin-e2e-"));
 await writeFile(
   join(root, "config.toml"),
@@ -36,8 +37,18 @@ await writeFile(
 const binary =
   process.env.OSTOOL_TEST_SERVER_BIN ||
   resolve("../../target/debug/ostool-server");
+if (!process.env.OSTOOL_E2E_LOCAL_DATABASE_URL)
+  throw new Error(
+    "Set OSTOOL_E2E_LOCAL_DATABASE_URL to a disposable PostgreSQL database for browser tests",
+  );
 const child = spawn(binary, ["--config", join(root, "config.toml")], {
   stdio: "inherit",
+  env: {
+    ...process.env,
+    OSTOOL_EDITION: "local",
+    OSTOOL_DATABASE_URL: process.env.OSTOOL_E2E_LOCAL_DATABASE_URL,
+    OSTOOL_DATABASE_SCHEMA: `ostool_e2e_${randomUUID().replaceAll("-", "")}`,
+  },
 });
 let stopping = false;
 for (const signal of ["SIGTERM", "SIGINT"])

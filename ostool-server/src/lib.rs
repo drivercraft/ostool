@@ -36,4 +36,6 @@ pub use config::{
     UploadLimitsConfig, VirtualQemuConfig, ZhongshengRelayPowerManagement,
 };
 pub use dtb_store::{DtbFile, DtbStore};
+#[doc(hidden)]
+pub use state::build_fixture_app_state;
 pub use state::{AppState, BoardLeaseState, build_app_state};

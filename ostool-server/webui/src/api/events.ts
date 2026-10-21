@@ -28,6 +28,7 @@ export interface Runtime {
 export interface Resources {
   profile: import("./client").AuthUser;
   catalog: import("@/types/api").CatalogBoard[];
+  availability: import("@/utils/rental-calendar").RentalWindow[];
   my_rentals: import("@/types/api").Rental[];
   my_requests: import("@/types/api").RentalRequest[];
   personal_tokens: import("@/types/api").PersonalTokenSummary[];

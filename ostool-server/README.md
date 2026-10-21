@@ -257,7 +257,9 @@ vi /etc/ostool-server/config.toml
 
 ## Local development environment
 
-The script defaults to local edition and does not require Docker/PostgreSQL:
+Both editions require PostgreSQL. The development script defaults to local
+edition and starts a private PostgreSQL 16 container automatically (Docker is
+required). Local edition needs no login and no CLI credentials:
 
 ```bash
 ostool-server/scripts/dev-env.sh start
@@ -275,6 +277,10 @@ OSTOOL_EDITION=public ostool-server/scripts/dev-env.sh stop
 Use `restart` or `clean` with the same edition. Data/log/config directories are
 `.ostool-server-dev/local` and `.ostool-server-dev/public`; `OSTOOL_DEV_DIR` can
 override that location. Default console: `http://127.0.0.1:2999/admin/overview`.
+The local/public database containers default to `ostool-server-dev-local-postgres`
+and `ostool-server-dev-public-postgres`, with ports 54328 and 54329 respectively.
+The schema and persistence code are identical; deploy either edition against the
+same database URL/schema to keep the same data when changing edition.
 Only public edition has `/login`, with bootstrap defaults `admin@example.com` /
 `admin-password-123`. Override `OSTOOL_ADMIN_EMAIL`, `OSTOOL_ADMIN_PASSWORD`,
 `OSTOOL_DEV_PG_PORT`, or `OSTOOL_DEV_SERVER_PORT` before starting as needed.
@@ -331,6 +337,26 @@ server startup and systemd deployments do not enable demo data; direct isolated
 development startup can opt in with `ostool-server --config ... --dev-demo`.
 
 ## Management console
+
+Rental creation and editing use `/admin/rentals/new` and `/admin/rentals/{id}`.
+Choose a board to see its existing reservations in a month calendar, inspect
+daily free windows, and fill start/end fields by selecting a free window. The
+calendar follows the browser timezone, handles bookings crossing midnight and
+excludes cancelled bookings and the rental being edited. Live conflicts disable
+save without overwriting the draft; PostgreSQL rechecks conflicts on save.
+The member application page uses the same calendar with anonymized occupancy.
+All data lists have a layout icon in the upper-right toolbar for table/card
+views. Selection persists per list in the browser; search, filters, pagination
+and existing actions work in both views.
+
+Board inventory, DTB bytes/metadata, OTA image bytes/metadata/jobs/observations,
+and editable network/TFTP/upload settings are authoritative in PostgreSQL for
+both editions. Old files are imported once and retained as backups, never used
+to overwrite database edits or resurrect deleted records. Deployment variables
+(database connection, edition, listen address, credentials and hardware paths)
+remain in TOML/`.env`; secrets are excluded from database settings. Live leases,
+connections and discovery remain process state, while session artifacts remain
+temporary files cleaned up with the lease. See [persistence and deployment](deploy/README.md).
 
 The public website has its own header, footer and authenticated workspace at
 `/account/*`, separate from the administrator layout at `/admin/*`. Website login

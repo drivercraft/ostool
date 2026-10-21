@@ -31,6 +31,7 @@ const Dtbs = lazy(() => import("./pages/Dtbs"));
 const Sessions = lazy(() => import("./pages/Sessions"));
 const Settings = lazy(() => import("./pages/SystemSettings"));
 const Rentals = lazy(() => import("./pages/Rentals"));
+const RentalEditor = lazy(() => import("./pages/RentalEditor"));
 const Users = lazy(() => import("./pages/Users"));
 const Roles = lazy(() => import("./pages/Roles"));
 const RentalRequests = lazy(() => import("./pages/RentalRequests"));
@@ -293,6 +294,26 @@ function AdminConsole({ user }: { user?: AuthUser }) {
                   element={
                     publicEdition ? (
                       <RentalRequests />
+                    ) : (
+                      <Navigate replace to="/overview" />
+                    )
+                  }
+                />
+                <Route
+                  path="/rentals/new"
+                  element={
+                    publicEdition ? (
+                      <RentalEditor />
+                    ) : (
+                      <Navigate replace to="/overview" />
+                    )
+                  }
+                />
+                <Route
+                  path="/rentals/:rentalId"
+                  element={
+                    publicEdition ? (
+                      <RentalEditor />
                     ) : (
                       <Navigate replace to="/overview" />
                     )

@@ -80,13 +80,15 @@ test("registration, member/admin access, user/role events and settings navigatio
     ).ok(),
   ).toBeTruthy();
   await page.getByRole("link", { name: "租赁列表", exact: true }).click();
-  await page.getByRole("button", { name: "新增租赁", exact: true }).click();
-  const dialog = page.getByRole("dialog");
-  await dialog
+  await page.getByRole("link", { name: "新增租赁", exact: true }).click();
+  await expect(page).toHaveURL(`${base}/admin/rentals/new`);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "租赁日历" })).toBeVisible();
+  await page
     .getByLabel("使用用户", { exact: true })
     .selectOption({ label: `浏览器注册用户 · ${email}` });
-  await dialog.getByLabel("指定开发板", { exact: true }).selectOption(boardId);
-  await dialog.getByRole("button", { name: "保存租赁", exact: true }).click();
+  await page.getByLabel("指定开发板", { exact: true }).selectOption(boardId);
+  await page.getByRole("button", { name: "保存租赁", exact: true }).click();
   const row = page
     .getByRole("row")
     .filter({ has: page.getByRole("cell", { name: boardId, exact: true }) });

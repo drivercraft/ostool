@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { ListLayoutToggle } from "./list-layout";
 export function ListToolbar({
   actions,
   children,
@@ -14,7 +15,10 @@ export function ListToolbar({
         {actions}
         {count && <span className="listing-meta">{count}</span>}
       </div>
-      <div className="listing-filters">{children}</div>
+      <div className="listing-filters">
+        {children}
+        <ListLayoutToggle />
+      </div>
     </div>
   );
 }

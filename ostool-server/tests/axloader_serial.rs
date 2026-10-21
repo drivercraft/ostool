@@ -9,6 +9,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use httpboot_protocol::*;
 use ostool_serial::{PortLocator, SerialManager};
+use ostool_server::build_fixture_app_state as build_app_state;
 #[path = "common/serial.rs"]
 mod serial_fixture;
 use ostool_server::{session::SessionBootCommand, tftp::service::build_tftp_manager, *};

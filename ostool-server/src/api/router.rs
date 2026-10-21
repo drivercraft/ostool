@@ -3054,7 +3054,7 @@ mod tests {
             CreateSessionRequest, SessionCreatedResponse, SessionDetailResponse,
             SharedSessionFileResponse,
         },
-        build_app_state,
+        build_fixture_app_state as build_app_state,
         config::{
             BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
             PowerManagementConfig, SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig,
