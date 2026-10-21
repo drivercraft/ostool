@@ -1,3 +1,5 @@
+import { PagePanel } from "@/components/page-panel";
+import { useListPage } from "@/components/list-pagination";
 import { ListToolbar } from "@/components/list-toolbar";
 import { useRef, useState } from "react";
 import { api } from "@/api/client";
@@ -104,41 +106,57 @@ export default function Dtbs() {
     d.name.toLowerCase().includes(search.toLowerCase()),
   );
   const [editing, setEditing] = useState<DtbFileResponse | null>(null);
+  const pagination = useListPage(filtered, search);
   return (
     <>
-      <ListToolbar actions={<DtbUpload />} count={`${filtered.length} 个文件`}>
-        <TextField
-          label="搜索 DTB"
-          value={search}
-          onValue={setSearch}
-          placeholder="按文件名筛选"
-        />
-      </ListToolbar>
-      <DataTable
-        headers={["名称", "大小", "更新时间", "TFTP 路径模板", "操作"]}
-        empty={!filtered.length}
+      <PagePanel
+        table
+        toolbar={
+          <ListToolbar
+            actions={<DtbUpload />}
+            count={`${filtered.length} 个文件`}
+          >
+            <TextField
+              label="搜索 DTB"
+              value={search}
+              onValue={setSearch}
+              placeholder="按文件名筛选"
+            />
+          </ListToolbar>
+        }
+        footer={pagination.footer}
+        scrollKey={pagination.viewKey}
       >
-        {filtered.map((d) => (
-          <Row key={d.name}>
-            <Cell className="mono">{d.name}</Cell>
-            <Cell>{formatSize(d.size)}</Cell>
-            <Cell>{new Date(d.updated_at).toLocaleString()}</Cell>
-            <Cell className="mono">{d.relative_tftp_path_template}</Cell>
-            <Cell>
-              <div className="actions">
-                <Button size="sm" variant="ghost" onClick={() => setEditing(d)}>
-                  修改
-                </Button>
-                <ConfirmAction
-                  label="删除"
-                  description={`删除 DTB ${d.name}？已被板卡引用的文件不能删除。`}
-                  action={() => api.deleteDtb(d.name)}
-                />
-              </div>
-            </Cell>
-          </Row>
-        ))}
-      </DataTable>
+        <DataTable
+          headers={["名称", "大小", "更新时间", "TFTP 路径模板", "操作"]}
+          empty={!filtered.length}
+        >
+          {pagination.rows.map((d) => (
+            <Row key={d.name}>
+              <Cell className="mono">{d.name}</Cell>
+              <Cell>{formatSize(d.size)}</Cell>
+              <Cell>{new Date(d.updated_at).toLocaleString()}</Cell>
+              <Cell className="mono">{d.relative_tftp_path_template}</Cell>
+              <Cell>
+                <div className="actions">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setEditing(d)}
+                  >
+                    修改
+                  </Button>
+                  <ConfirmAction
+                    label="删除"
+                    description={`删除 DTB ${d.name}？已被板卡引用的文件不能删除。`}
+                    action={() => api.deleteDtb(d.name)}
+                  />
+                </div>
+              </Cell>
+            </Row>
+          ))}
+        </DataTable>
+      </PagePanel>
       {editing && (
         <EditDtb
           key={editing.name}

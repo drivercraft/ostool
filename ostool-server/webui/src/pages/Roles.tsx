@@ -1,3 +1,5 @@
+import { PagePanel } from "@/components/page-panel";
+import { useListPage } from "@/components/list-pagination";
 import { ListToolbar } from "@/components/list-toolbar";
 import { useState } from "react";
 import { api } from "@/api/client";
@@ -52,72 +54,85 @@ export default function Roles() {
     });
   const patch = (value: Partial<RoleInput>) =>
     setEditor((e) => (e ? { ...e, draft: { ...e.draft, ...value } } : e));
+  const pagination = useListPage(filtered, JSON.stringify([search, kind]));
   return (
     <>
       {!deployment?.database_connected && (
         <Notice>角色管理需要连接 PostgreSQL。</Notice>
       )}
-      <ListToolbar
-        actions={
-          <Button
-            disabled={!deployment?.database_connected}
-            onClick={() => open()}
+      <PagePanel
+        table
+        toolbar={
+          <ListToolbar
+            actions={
+              <Button
+                disabled={!deployment?.database_connected}
+                onClick={() => open()}
+              >
+                创建角色
+              </Button>
+            }
+            count={`${filtered.length} 个角色`}
           >
-            创建角色
-          </Button>
+            <TextField
+              label="搜索角色"
+              value={search}
+              onValue={setSearch}
+              placeholder="角色名称"
+            />
+            <SelectField
+              label="角色权限"
+              value={kind}
+              onValue={setKind}
+              options={[
+                { value: "", label: "全部权限" },
+                { value: "true", label: "后台管理" },
+                { value: "false", label: "板卡访问" },
+              ]}
+            />
+          </ListToolbar>
         }
-        count={`${filtered.length} 个角色`}
+        footer={pagination.footer}
+        scrollKey={pagination.viewKey}
       >
-        <TextField
-          label="搜索角色"
-          value={search}
-          onValue={setSearch}
-          placeholder="角色名称"
-        />
-        <SelectField
-          label="角色权限"
-          value={kind}
-          onValue={setKind}
-          options={[
-            { value: "", label: "全部权限" },
-            { value: "true", label: "后台管理" },
-            { value: "false", label: "板卡访问" },
-          ]}
-        />
-      </ListToolbar>
-      <DataTable
-        headers={["角色", "权限", "用户数", "说明", "操作"]}
-        empty={!filtered.length}
-      >
-        {filtered.map((role) => (
-          <Row key={role.id}>
-            <Cell>
-              <strong>{role.name}</strong>
-              <small>{role.builtin ? "内置角色" : "自定义角色"}</small>
-            </Cell>
-            <Cell>
-              {role.administrator ? "后台全部管理权限" : "板卡会话访问"}
-            </Cell>
-            <Cell>{users.filter((u) => u.role_id === role.id).length}</Cell>
-            <Cell>{role.description || "—"}</Cell>
-            <Cell>
-              <div className="actions">
-                <Button variant="outline" size="sm" onClick={() => open(role)}>
-                  编辑
-                </Button>
-                {!role.builtin && (
-                  <ConfirmAction
-                    label="删除"
-                    disabled={users.some((u) => u.role_id === role.id)}
-                    description={`删除角色 ${role.name}？`}
-                    action={() => api.deleteRole(role.id)}
-                  />
-                )}
-              </div>
-            </Cell>
-          </Row>
-        ))}
-      </DataTable>
+        <DataTable
+          headers={["角色", "权限", "用户数", "说明", "操作"]}
+          empty={!filtered.length}
+        >
+          {pagination.rows.map((role) => (
+            <Row key={role.id}>
+              <Cell>
+                <strong>{role.name}</strong>
+                <small>{role.builtin ? "内置角色" : "自定义角色"}</small>
+              </Cell>
+              <Cell>
+                {role.administrator ? "后台全部管理权限" : "板卡会话访问"}
+              </Cell>
+              <Cell>{users.filter((u) => u.role_id === role.id).length}</Cell>
+              <Cell>{role.description || "—"}</Cell>
+              <Cell>
+                <div className="actions">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => open(role)}
+                  >
+                    编辑
+                  </Button>
+                  {!role.builtin && (
+                    <ConfirmAction
+                      label="删除"
+                      disabled={users.some((u) => u.role_id === role.id)}
+                      description={`删除角色 ${role.name}？`}
+                      action={() => api.deleteRole(role.id)}
+                    />
+                  )}
+                </div>
+              </Cell>
+            </Row>
+          ))}
+        </DataTable>
+      </PagePanel>
       <Dialog
         open={!!editor}
         onOpenChange={(v) => {

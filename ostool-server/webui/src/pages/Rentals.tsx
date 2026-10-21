@@ -1,3 +1,5 @@
+import { PagePanel } from "@/components/page-panel";
+import { useListPage } from "@/components/list-pagination";
 import { useState } from "react";
 import { api } from "@/api/client";
 import { useList } from "@/api/events";
@@ -72,123 +74,137 @@ export default function Rentals() {
         .toLowerCase()
         .includes(search.toLowerCase()),
   );
+  const pagination = useListPage(
+    filtered,
+    JSON.stringify([search, user, board, status]),
+  );
   return (
     <>
-      <ListToolbar
-        actions={
-          <Button
-            onClick={() => open()}
-            disabled={
-              !boards.some((b) => !b.disabled) ||
-              !users.some((u) => !u.disabled)
+      <PagePanel
+        table
+        toolbar={
+          <ListToolbar
+            actions={
+              <Button
+                onClick={() => open()}
+                disabled={
+                  !boards.some((b) => !b.disabled) ||
+                  !users.some((u) => !u.disabled)
+                }
+              >
+                新增租赁
+              </Button>
             }
+            count={`${filtered.length} 条`}
           >
-            新增租赁
-          </Button>
+            <TextField
+              label="搜索租赁"
+              value={search}
+              onValue={setSearch}
+              placeholder="开发板、用户邮箱或备注"
+            />
+            <SelectField
+              label="用户筛选"
+              value={user}
+              onValue={setUser}
+              options={[
+                { value: "", label: "全部用户" },
+                ...users.map((u) => ({
+                  value: u.id,
+                  label: u.display_name || u.email,
+                })),
+              ]}
+            />
+            <SelectField
+              label="开发板筛选"
+              value={board}
+              onValue={setBoard}
+              options={[
+                { value: "", label: "全部开发板" },
+                ...boards.map((b) => ({ value: b.id, label: b.id })),
+              ]}
+            />
+            <SelectField
+              label="租赁状态"
+              value={status}
+              onValue={setStatus}
+              options={[
+                { value: "", label: "全部状态" },
+                ...Object.entries(rentalStatusLabels).map(([value, label]) => ({
+                  value,
+                  label,
+                })),
+              ]}
+            />
+            {(search || user || board || status) && (
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setSearch("");
+                  setUser("");
+                  setBoard("");
+                  setStatus("");
+                }}
+              >
+                重置
+              </Button>
+            )}
+          </ListToolbar>
         }
-        count={`${filtered.length} 条`}
+        footer={pagination.footer}
+        scrollKey={pagination.viewKey}
       >
-        <TextField
-          label="搜索租赁"
-          value={search}
-          onValue={setSearch}
-          placeholder="开发板、用户邮箱或备注"
-        />
-        <SelectField
-          label="用户筛选"
-          value={user}
-          onValue={setUser}
-          options={[
-            { value: "", label: "全部用户" },
-            ...users.map((u) => ({
-              value: u.id,
-              label: u.display_name || u.email,
-            })),
+        <DataTable
+          headers={[
+            "开发板",
+            "使用用户",
+            "开始时间",
+            "结束时间",
+            "状态",
+            "备注",
+            "操作",
           ]}
-        />
-        <SelectField
-          label="开发板筛选"
-          value={board}
-          onValue={setBoard}
-          options={[
-            { value: "", label: "全部开发板" },
-            ...boards.map((b) => ({ value: b.id, label: b.id })),
-          ]}
-        />
-        <SelectField
-          label="租赁状态"
-          value={status}
-          onValue={setStatus}
-          options={[
-            { value: "", label: "全部状态" },
-            ...Object.entries(rentalStatusLabels).map(([value, label]) => ({
-              value,
-              label,
-            })),
-          ]}
-        />
-        {(search || user || board || status) && (
-          <Button
-            variant="ghost"
-            onClick={() => {
-              setSearch("");
-              setUser("");
-              setBoard("");
-              setStatus("");
-            }}
-          >
-            重置
-          </Button>
-        )}
-      </ListToolbar>
-      <DataTable
-        headers={[
-          "开发板",
-          "使用用户",
-          "开始时间",
-          "结束时间",
-          "状态",
-          "备注",
-          "操作",
-        ]}
-        empty={!filtered.length}
-      >
-        {filtered.map((r) => (
-          <Row key={r.id}>
-            <Cell>
-              <strong>{r.board_id}</strong>
-            </Cell>
-            <Cell>
-              {users.find((u) => u.id === r.user_id)?.display_name ||
-                users.find((u) => u.id === r.user_id)?.email ||
-                r.user_id}
-            </Cell>
-            <Cell>{new Date(r.starts_at).toLocaleString("zh-CN")}</Cell>
-            <Cell>{new Date(r.ends_at).toLocaleString("zh-CN")}</Cell>
-            <Cell>{rentalStatusLabels[r.status]}</Cell>
-            <Cell>{r.notes || "—"}</Cell>
-            <Cell>
-              <div className="actions">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={r.status === "expired" || r.status === "cancelled"}
-                  onClick={() => open(r)}
-                >
-                  编辑
-                </Button>
-                {r.status !== "cancelled" && r.status !== "expired" && (
-                  <ConfirmAction
-                    label="取消租赁"
-                    description={`取消 ${r.board_id} 的租赁？相关会话会终止，并按正常流程断电、清理文件。`}
-                    action={() => api.cancelRental(r.id)}
-                  />
-                )}
-              </div>
-            </Cell>
-          </Row>
-        ))}
-      </DataTable>
+          empty={!filtered.length}
+        >
+          {pagination.rows.map((r) => (
+            <Row key={r.id}>
+              <Cell>
+                <strong>{r.board_id}</strong>
+              </Cell>
+              <Cell>
+                {users.find((u) => u.id === r.user_id)?.display_name ||
+                  users.find((u) => u.id === r.user_id)?.email ||
+                  r.user_id}
+              </Cell>
+              <Cell>{new Date(r.starts_at).toLocaleString("zh-CN")}</Cell>
+              <Cell>{new Date(r.ends_at).toLocaleString("zh-CN")}</Cell>
+              <Cell>{rentalStatusLabels[r.status]}</Cell>
+              <Cell>{r.notes || "—"}</Cell>
+              <Cell>
+                <div className="actions">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={
+                      r.status === "expired" || r.status === "cancelled"
+                    }
+                    onClick={() => open(r)}
+                  >
+                    编辑
+                  </Button>
+                  {r.status !== "cancelled" && r.status !== "expired" && (
+                    <ConfirmAction
+                      label="取消租赁"
+                      description={`取消 ${r.board_id} 的租赁？相关会话会终止，并按正常流程断电、清理文件。`}
+                      action={() => api.cancelRental(r.id)}
+                    />
+                  )}
+                </div>
+              </Cell>
+            </Row>
+          ))}
+        </DataTable>
+      </PagePanel>
       <Dialog
         open={!!editor}
         onOpenChange={(value) => {

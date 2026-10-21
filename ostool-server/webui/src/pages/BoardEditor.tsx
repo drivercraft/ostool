@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { PagePanel } from "@/components/page-panel";
+import { ListToolbar } from "@/components/list-toolbar";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   Link,
   useNavigate,
@@ -52,6 +54,7 @@ export default function BoardEditor() {
   return <Editor key={boardId ?? "new"} board={board} />;
 }
 function Editor({ board }: { board?: BoardConfig }) {
+  const formId = useId();
   const [query] = useSearchParams();
   const navigate = useNavigate();
   const [form, setForm] = useState<BoardEditorFormState>(() => {
@@ -193,23 +196,55 @@ function Editor({ board }: { board?: BoardConfig }) {
     (d) => d.mac_address === form.network_mac.trim().toLowerCase(),
   );
   return (
-    <>
-      <div className="editor-actions">
-        <Button asChild variant="outline" size="sm">
-          <Link to="/boards">返回开发板列表</Link>
-        </Button>
-        {board && (
-          <ConfirmAction
-            label="删除开发板"
-            description={`删除 ${board.id} 的配置？`}
-            disabled={powerBusy}
-            action={async () => {
-              await api.deleteBoard(board.id);
-              navigate("/boards");
-            }}
-          />
-        )}
-      </div>
+    <PagePanel
+      toolbar={
+        <ListToolbar
+          actions={
+            <>
+              <Button asChild variant="outline" size="sm">
+                <Link to="/boards">返回开发板列表</Link>
+              </Button>
+              {board && (
+                <ConfirmAction
+                  label="删除开发板"
+                  description={`删除 ${board.id} 的配置？`}
+                  disabled={powerBusy}
+                  action={async () => {
+                    await api.deleteBoard(board.id);
+                    navigate("/boards");
+                  }}
+                />
+              )}
+            </>
+          }
+        />
+      }
+      footer={
+        <>
+          <span className="panel-status">
+            {save.pending
+              ? "正在保存…"
+              : conflict
+                ? "服务器配置已更新，草稿已保留"
+                : JSON.stringify(form) !== baseline
+                  ? "存在未保存的修改"
+                  : "配置已保存"}
+          </span>
+          <div className="panel-footer-actions">
+            <Button variant="outline" type="button" asChild>
+              <Link to="/boards">取消</Link>
+            </Button>
+            <Button
+              type="submit"
+              form={formId}
+              disabled={save.pending || powerBusy || conflict}
+            >
+              {save.pending ? "保存中…" : "保存开发板"}
+            </Button>
+          </div>
+        </>
+      }
+    >
       {conflict && (
         <Notice>
           服务器配置已被其他操作修改。你的草稿已保留，请载入最新配置后重新编辑。
@@ -228,6 +263,7 @@ function Editor({ board }: { board?: BoardConfig }) {
         <Notice>{validation || save.error}</Notice>
       )}
       <form
+        id={formId}
         onSubmit={(e) => {
           e.preventDefault();
           void submit();
@@ -630,24 +666,13 @@ function Editor({ board }: { board?: BoardConfig }) {
             </>
           )}
         </Section>
-        <footer className="form-footer">
-          <Button variant="outline" type="button" asChild>
-            <Link to="/boards">返回</Link>
-          </Button>
-          <Button
-            type="submit"
-            disabled={save.pending || powerBusy || conflict}
-          >
-            {save.pending ? "保存中…" : "保存开发板"}
-          </Button>
-        </footer>
       </form>
       {board?.network_identity &&
         board.boot.kind === "httpboot" &&
         (!board.boot.boot_arch || board.boot.boot_arch === "x86_64") && (
           <BoardOta boardId={board.id} />
         )}
-    </>
+    </PagePanel>
   );
 }
 function serialLabel(p: SerialPortSummary) {

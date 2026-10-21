@@ -1,3 +1,5 @@
+import { PagePanel } from "@/components/page-panel";
+import { useListPage } from "@/components/list-pagination";
 import { ListToolbar } from "@/components/list-toolbar";
 import { useState } from "react";
 import { Link } from "react-router-dom";
@@ -65,6 +67,15 @@ export default function Boards() {
         (b.disabled ? "disabled" : (runtimes[b.id]?.lease_state ?? "idle")) ===
           status),
   );
+  const boardPage = useListPage(
+    filtered,
+    JSON.stringify([search, type, tag, status]),
+  );
+  const discoveryPage = useListPage(
+    filteredLoaders,
+    JSON.stringify([discoverySearch, discoveryStatus]),
+  );
+  const virtualPage = useListPage(filteredVirtual, virtualSearch);
   return (
     <>
       {quarantined.length > 0 && (
@@ -84,7 +95,7 @@ export default function Boards() {
           </details>
         </Notice>
       )}
-      <Tabs defaultValue="boards">
+      <Tabs defaultValue="boards" className="workspace-tabs">
         <TabsList variant="line" className="inventory-tabs">
           <TabsTrigger value="boards">
             已配置 <span>{boards.length}</span>
@@ -102,185 +113,196 @@ export default function Boards() {
           )}
         </TabsList>
         <TabsContent value="boards">
-          <ListToolbar
-            actions={
-              <Button asChild>
-                <Link to="/boards/new">
-                  <PlusIcon data-icon="inline-start" />
-                  新建开发板
-                </Link>
-              </Button>
-            }
-            count={`${filtered.length} 台`}
-          >
-            <TextField
-              label="搜索开发板"
-              value={search}
-              onValue={setSearch}
-              placeholder="搜索名称、板型或 MAC"
-            />
-            <SelectField
-              label="板型"
-              value={type}
-              onValue={setType}
-              options={[
-                { value: "", label: "全部板型" },
-                ...Array.from(new Set(boards.map((b) => b.board_type))).map(
-                  (value) => ({ value, label: value }),
-                ),
-              ]}
-            />
-            <TextField
-              label="标签"
-              value={tag}
-              onValue={setTag}
-              placeholder="筛选标签"
-            />
-            <SelectField
-              label="状态"
-              value={status}
-              onValue={setStatus}
-              options={[
-                { value: "", label: "全部状态" },
-                ...Object.entries({ ...leaseLabels, disabled: "已禁用" }).map(
-                  ([value, label]) => ({ value, label }),
-                ),
-              ]}
-            />
-            {(search || type || tag || status) && (
-              <Button
-                variant="ghost"
-                type="button"
-                onClick={() => {
-                  setSearch("");
-                  setType("");
-                  setTag("");
-                  setStatus("");
-                }}
+          <PagePanel
+            table
+            toolbar={
+              <ListToolbar
+                actions={
+                  <Button asChild>
+                    <Link to="/boards/new">
+                      <PlusIcon data-icon="inline-start" />
+                      新建开发板
+                    </Link>
+                  </Button>
+                }
+                count={`${filtered.length} 台`}
               >
-                清除筛选
-              </Button>
-            )}
-          </ListToolbar>
-          <DataTable
-            headers={["开发板", "状态", "连接", "启动方式", "操作"]}
-            empty={!filtered.length}
+                <TextField
+                  label="搜索开发板"
+                  value={search}
+                  onValue={setSearch}
+                  placeholder="搜索名称、板型或 MAC"
+                />
+                <SelectField
+                  label="板型"
+                  value={type}
+                  onValue={setType}
+                  options={[
+                    { value: "", label: "全部板型" },
+                    ...Array.from(new Set(boards.map((b) => b.board_type))).map(
+                      (value) => ({ value, label: value }),
+                    ),
+                  ]}
+                />
+                <TextField
+                  label="标签"
+                  value={tag}
+                  onValue={setTag}
+                  placeholder="筛选标签"
+                />
+                <SelectField
+                  label="状态"
+                  value={status}
+                  onValue={setStatus}
+                  options={[
+                    { value: "", label: "全部状态" },
+                    ...Object.entries({
+                      ...leaseLabels,
+                      disabled: "已禁用",
+                    }).map(([value, label]) => ({ value, label })),
+                  ]}
+                />
+                {(search || type || tag || status) && (
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    onClick={() => {
+                      setSearch("");
+                      setType("");
+                      setTag("");
+                      setStatus("");
+                    }}
+                  >
+                    清除筛选
+                  </Button>
+                )}
+              </ListToolbar>
+            }
+            footer={boardPage.footer}
+            scrollKey={boardPage.viewKey}
           >
-            {filtered.map((b) => (
-              <Row key={b.id}>
-                <Cell>
-                  <Link
-                    className="board-name"
-                    to={`/boards/${encodeURIComponent(b.id)}`}
-                  >
-                    {b.id}
-                  </Link>
-                  <small>
-                    {b.board_type}
-                    {b.tags.length ? ` · ${b.tags.join(" · ")}` : ""}
-                  </small>
-                </Cell>
-                <Cell>
-                  <Badge
-                    variant={
-                      b.disabled
-                        ? "secondary"
-                        : runtimes[b.id]?.lease_state === "error"
-                          ? "destructive"
-                          : runtimes[b.id]?.lease_state === "using"
-                            ? "info"
-                            : runtimes[b.id]?.lease_state === "releasing"
-                              ? "warning"
-                              : "success"
-                    }
-                  >
-                    {b.disabled
-                      ? "已禁用"
-                      : leaseLabels[runtimes[b.id]?.lease_state ?? "idle"]}
-                  </Badge>
-                  {runtimes[b.id]?.last_release_error && (
-                    <small className="text-destructive">
-                      {runtimes[b.id].last_release_error}
+            <DataTable
+              headers={["开发板", "状态", "连接", "启动方式", "操作"]}
+              empty={!filtered.length}
+            >
+              {boardPage.rows.map((b) => (
+                <Row key={b.id}>
+                  <Cell>
+                    <Link
+                      className="board-name"
+                      to={`/boards/${encodeURIComponent(b.id)}`}
+                    >
+                      {b.id}
+                    </Link>
+                    <small>
+                      {b.board_type}
+                      {b.tags.length ? ` · ${b.tags.join(" · ")}` : ""}
                     </small>
-                  )}
-                </Cell>
-                <Cell className="mono">
-                  {b.boot.kind === "httpboot"
-                    ? "自动绑定"
-                    : (b.serial?.resolved_device_path ??
-                      b.serial?.key.value ??
-                      "无串口")}
-                  <small>
-                    {b.network_identity?.mac_address ?? "未绑定 MAC"}
-                  </small>
-                </Cell>
-                <Cell>
-                  {b.boot.kind === "uboot"
-                    ? "U-Boot"
-                    : b.boot.kind === "pxe"
-                      ? "PXE"
-                      : "HTTP Boot"}
-                </Cell>
-                <Cell>
-                  <div className="actions">
-                    <Button variant="outline" size="sm" asChild>
-                      <Link to={`/boards/${encodeURIComponent(b.id)}`}>
-                        编辑
-                      </Link>
-                    </Button>
-                    <ConfirmAction
-                      label="删除"
-                      triggerVariant="ghost"
-                      description={`删除开发板 ${b.id} 的配置？`}
-                      action={() => api.deleteBoard(b.id)}
-                      disabled={
-                        !!runtimes[b.id] &&
-                        runtimes[b.id].lease_state !== "idle"
+                  </Cell>
+                  <Cell>
+                    <Badge
+                      variant={
+                        b.disabled
+                          ? "secondary"
+                          : runtimes[b.id]?.lease_state === "error"
+                            ? "destructive"
+                            : runtimes[b.id]?.lease_state === "using"
+                              ? "info"
+                              : runtimes[b.id]?.lease_state === "releasing"
+                                ? "warning"
+                                : "success"
                       }
-                    />
-                  </div>
-                </Cell>
-              </Row>
-            ))}
-          </DataTable>
+                    >
+                      {b.disabled
+                        ? "已禁用"
+                        : leaseLabels[runtimes[b.id]?.lease_state ?? "idle"]}
+                    </Badge>
+                    {runtimes[b.id]?.last_release_error && (
+                      <small className="text-destructive">
+                        {runtimes[b.id].last_release_error}
+                      </small>
+                    )}
+                  </Cell>
+                  <Cell className="mono">
+                    {b.boot.kind === "httpboot"
+                      ? "自动绑定"
+                      : (b.serial?.resolved_device_path ??
+                        b.serial?.key.value ??
+                        "无串口")}
+                    <small>
+                      {b.network_identity?.mac_address ?? "未绑定 MAC"}
+                    </small>
+                  </Cell>
+                  <Cell>
+                    {b.boot.kind === "uboot"
+                      ? "U-Boot"
+                      : b.boot.kind === "pxe"
+                        ? "PXE"
+                        : "HTTP Boot"}
+                  </Cell>
+                  <Cell>
+                    <div className="actions">
+                      <Button variant="outline" size="sm" asChild>
+                        <Link to={`/boards/${encodeURIComponent(b.id)}`}>
+                          编辑
+                        </Link>
+                      </Button>
+                      <ConfirmAction
+                        label="删除"
+                        triggerVariant="ghost"
+                        description={`删除开发板 ${b.id} 的配置？`}
+                        action={() => api.deleteBoard(b.id)}
+                        disabled={
+                          !!runtimes[b.id] &&
+                          runtimes[b.id].lease_state !== "idle"
+                        }
+                      />
+                    </div>
+                  </Cell>
+                </Row>
+              ))}
+            </DataTable>
+          </PagePanel>
         </TabsContent>
         <TabsContent value="discovery">
-          <section className="page-section inventory-panel">
-            <h2>已发现设备</h2>
-            <p className="hint">
-              设备通过网络上报身份。选择设备创建配置，或在新建页手动输入 MAC。
-            </p>
-            <ListToolbar
-              actions={
-                <Button asChild variant="outline">
-                  <Link to="/boards/new">新建开发板</Link>
-                </Button>
-              }
-              count={`${filteredLoaders.length} 台`}
-            >
-              <TextField
-                label="搜索发现设备"
-                value={discoverySearch}
-                onValue={setDiscoverySearch}
-                placeholder="MAC、IP 或硬件"
-              />
-              <SelectField
-                label="发现设备状态"
-                value={discoveryStatus}
-                onValue={setDiscoveryStatus}
-                options={[
-                  { value: "", label: "全部状态" },
-                  { value: "online", label: "在线" },
-                  { value: "offline", label: "离线" },
-                  { value: "conflict", label: "MAC 冲突" },
-                ]}
-              />
-            </ListToolbar>
+          <PagePanel
+            table
+            toolbar={
+              <ListToolbar
+                actions={
+                  <Button asChild variant="outline">
+                    <Link to="/boards/new">新建开发板</Link>
+                  </Button>
+                }
+                count={`${filteredLoaders.length} 台`}
+              >
+                <TextField
+                  label="搜索发现设备"
+                  value={discoverySearch}
+                  onValue={setDiscoverySearch}
+                  placeholder="MAC、IP 或硬件"
+                />
+                <SelectField
+                  label="发现设备状态"
+                  value={discoveryStatus}
+                  onValue={setDiscoveryStatus}
+                  options={[
+                    { value: "", label: "全部状态" },
+                    { value: "online", label: "在线" },
+                    { value: "offline", label: "离线" },
+                    { value: "conflict", label: "MAC 冲突" },
+                  ]}
+                />
+              </ListToolbar>
+            }
+            footer={discoveryPage.footer}
+            scrollKey={discoveryPage.viewKey}
+          >
             <DataTable
               headers={["MAC / IP", "硬件", "架构 / Loader", "状态", "操作"]}
               empty={!filteredLoaders.length}
             >
-              {filteredLoaders.map((d) => (
+              {discoveryPage.rows.map((d) => (
                 <Row key={d.mac_address}>
                   <Cell className="mono">
                     {d.mac_address}
@@ -348,49 +370,54 @@ export default function Boards() {
                 </Row>
               ))}
             </DataTable>
-          </section>
+          </PagePanel>
         </TabsContent>
         {virtual?.enabled && (
           <TabsContent value="virtual">
-            <section className="page-section">
-              <h2>虚拟设备</h2>
-              <ListToolbar
-                actions={
-                  <>
-                    <Button
-                      disabled={task.pending}
-                      onClick={() =>
-                        void task.run(
-                          () => api.createVirtualDevice(virtualMac),
-                          "已启动虚拟设备，等待真实网络发现",
-                        )
-                      }
-                    >
-                      启动虚拟设备
-                    </Button>
-                    <TextField
-                      label="MAC 地址（可选）"
-                      value={virtualMac}
-                      onValue={setVirtualMac}
-                      placeholder="留空自动生成"
-                    />
-                  </>
-                }
-                count={`${filteredVirtual.length} 台`}
-              >
-                <TextField
-                  label="搜索虚拟设备"
-                  value={virtualSearch}
-                  onValue={setVirtualSearch}
-                  placeholder="名称、MAC 或 TAP"
-                />
-              </ListToolbar>
+            <PagePanel
+              table
+              toolbar={
+                <ListToolbar
+                  actions={
+                    <>
+                      <Button
+                        disabled={task.pending}
+                        onClick={() =>
+                          void task.run(
+                            () => api.createVirtualDevice(virtualMac),
+                            "已启动虚拟设备，等待真实网络发现",
+                          )
+                        }
+                      >
+                        启动虚拟设备
+                      </Button>
+                      <TextField
+                        label="MAC 地址（可选）"
+                        value={virtualMac}
+                        onValue={setVirtualMac}
+                        placeholder="留空自动生成"
+                      />
+                    </>
+                  }
+                  count={`${filteredVirtual.length} 台`}
+                >
+                  <TextField
+                    label="搜索虚拟设备"
+                    value={virtualSearch}
+                    onValue={setVirtualSearch}
+                    placeholder="名称、MAC 或 TAP"
+                  />
+                </ListToolbar>
+              }
+              footer={virtualPage.footer}
+              scrollKey={virtualPage.viewKey}
+            >
               {task.error && <Notice>{task.error}</Notice>}
               <DataTable
                 headers={["设备", "MAC / TAP", "电源 / 串口", "操作"]}
                 empty={!filteredVirtual.length}
               >
-                {filteredVirtual.map((d) => (
+                {virtualPage.rows.map((d) => (
                   <Row key={d.id}>
                     <Cell className="mono">
                       {d.id}
@@ -421,7 +448,7 @@ export default function Boards() {
                   </Row>
                 ))}
               </DataTable>
-            </section>
+            </PagePanel>
           </TabsContent>
         )}
       </Tabs>

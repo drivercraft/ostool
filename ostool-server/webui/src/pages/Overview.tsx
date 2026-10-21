@@ -1,3 +1,6 @@
+import { PagePanel } from "@/components/page-panel";
+import { ListToolbar } from "@/components/list-toolbar";
+import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
 import { useResource } from "@/api/events";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -6,7 +9,24 @@ import { TftpState } from "./Settings";
 export default function Overview() {
   const overview = useResource("overview");
   return (
-    <>
+    <PagePanel
+      toolbar={
+        <ListToolbar
+          actions={
+            <Button asChild>
+              <Link to="/boards/new">新建开发板</Link>
+            </Button>
+          }
+        />
+      }
+      footer={
+        <span className="panel-status">
+          {overview
+            ? `${overview.board_count_total} 台开发板 · ${overview.board_count_available} 台可用 · ${overview.active_session_count} 个会话`
+            : "正在同步…"}
+        </span>
+      }
+    >
       {!overview ? (
         <Skeleton className="h-40 w-full" />
       ) : (
@@ -59,6 +79,6 @@ export default function Overview() {
           </section>
         </>
       )}
-    </>
+    </PagePanel>
   );
 }

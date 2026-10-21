@@ -1,3 +1,5 @@
+import { PagePanel } from "@/components/page-panel";
+import { useListPage } from "@/components/list-pagination";
 import { ListToolbar } from "@/components/list-toolbar";
 import { Button } from "@/components/ui/button";
 import { useEffect, useState } from "react";
@@ -29,102 +31,121 @@ export default function Sessions() {
         .toLowerCase()
         .includes(search.toLowerCase()),
   );
+  const pagination = useListPage(
+    filtered,
+    JSON.stringify([search, board, status]),
+  );
   return (
     <>
-      <ListToolbar
-        actions={
-          <Button asChild variant="outline">
-            <Link to="/boards">查看开发板</Link>
-          </Button>
+      <PagePanel
+        table
+        toolbar={
+          <ListToolbar
+            actions={
+              <Button asChild variant="outline">
+                <Link to="/boards">查看开发板</Link>
+              </Button>
+            }
+            count={`${filtered.length} 个会话`}
+          >
+            <TextField
+              label="搜索会话"
+              value={search}
+              onValue={setSearch}
+              placeholder="会话 ID 或客户端"
+            />
+            <SelectField
+              label="开发板筛选"
+              value={board}
+              onValue={setBoard}
+              options={[
+                { value: "", label: "全部开发板" },
+                ...Array.from(new Set(sessions.map((s) => s.board_id))).map(
+                  (id) => ({ value: id, label: id }),
+                ),
+              ]}
+            />
+            <SelectField
+              label="会话状态"
+              value={status}
+              onValue={setStatus}
+              options={[
+                { value: "", label: "全部状态" },
+                { value: "active", label: "占用中" },
+                { value: "releasing", label: "释放中" },
+              ]}
+            />
+          </ListToolbar>
         }
-        count={`${filtered.length} 个会话`}
+        footer={pagination.footer}
+        scrollKey={pagination.viewKey}
       >
-        <TextField
-          label="搜索会话"
-          value={search}
-          onValue={setSearch}
-          placeholder="会话 ID 或客户端"
-        />
-        <SelectField
-          label="开发板筛选"
-          value={board}
-          onValue={setBoard}
-          options={[
-            { value: "", label: "全部开发板" },
-            ...Array.from(new Set(sessions.map((s) => s.board_id))).map(
-              (id) => ({ value: id, label: id }),
-            ),
+        <DataTable
+          headers={[
+            "Session",
+            "开发板",
+            "客户端",
+            "创建 / 到期",
+            "状态",
+            "操作",
           ]}
-        />
-        <SelectField
-          label="会话状态"
-          value={status}
-          onValue={setStatus}
-          options={[
-            { value: "", label: "全部状态" },
-            { value: "active", label: "占用中" },
-            { value: "releasing", label: "释放中" },
-          ]}
-        />
-      </ListToolbar>
-      <DataTable
-        headers={["Session", "开发板", "客户端", "创建 / 到期", "状态", "操作"]}
-        empty={!filtered.length}
-      >
-        {filtered.map((s) => (
-          <Row key={s.id}>
-            <Cell className="mono">{s.id}</Cell>
-            <Cell>
-              <Link
-                className="text-link"
-                to={`/boards/${encodeURIComponent(s.board_id)}`}
-              >
-                {s.board_id}
-              </Link>
-            </Cell>
-            <Cell>{s.client_name ?? "—"}</Cell>
-            <Cell>
-              <LeaseClock expires={s.expires_at} />
-              <small>
-                创建 {new Date(s.created_at).toLocaleString("zh-CN")}
-              </small>
-              <small>
-                到期 {new Date(s.expires_at).toLocaleString("zh-CN")}
-              </small>
-            </Cell>
-            <Cell>
-              <Badge
-                variant={
-                  runtimes[s.board_id]?.last_release_error
-                    ? "destructive"
-                    : "secondary"
-                }
-              >
-                {runtimes[s.board_id]?.last_release_error
-                  ? "释放失败，等待重试"
-                  : s.state === "releasing"
-                    ? "释放中"
-                    : "占用中"}
-              </Badge>
-              <small>
-                WebSocket {s.serial_connected ? "已连接" : "未连接"}
-              </small>
-              <SerialRuntimeDetails status={s.serial_runtime} />
-              <small className="text-destructive">
-                {runtimes[s.board_id]?.last_release_error}
-              </small>
-            </Cell>
-            <Cell>
-              <ConfirmAction
-                label="强制释放"
-                description={`请求释放 ${s.board_id} 的会话？服务器会停止任务并断电，清理完成后资源才重新可用。`}
-                action={() => api.deleteSession(s.id)}
-                disabled={s.state === "releasing"}
-              />
-            </Cell>
-          </Row>
-        ))}
-      </DataTable>
+          empty={!filtered.length}
+        >
+          {pagination.rows.map((s) => (
+            <Row key={s.id}>
+              <Cell className="mono">{s.id}</Cell>
+              <Cell>
+                <Link
+                  className="text-link"
+                  to={`/boards/${encodeURIComponent(s.board_id)}`}
+                >
+                  {s.board_id}
+                </Link>
+              </Cell>
+              <Cell>{s.client_name ?? "—"}</Cell>
+              <Cell>
+                <LeaseClock expires={s.expires_at} />
+                <small>
+                  创建 {new Date(s.created_at).toLocaleString("zh-CN")}
+                </small>
+                <small>
+                  到期 {new Date(s.expires_at).toLocaleString("zh-CN")}
+                </small>
+              </Cell>
+              <Cell>
+                <Badge
+                  variant={
+                    runtimes[s.board_id]?.last_release_error
+                      ? "destructive"
+                      : "secondary"
+                  }
+                >
+                  {runtimes[s.board_id]?.last_release_error
+                    ? "释放失败，等待重试"
+                    : s.state === "releasing"
+                      ? "释放中"
+                      : "占用中"}
+                </Badge>
+                <small>
+                  WebSocket {s.serial_connected ? "已连接" : "未连接"}
+                </small>
+                <SerialRuntimeDetails status={s.serial_runtime} />
+                <small className="text-destructive">
+                  {runtimes[s.board_id]?.last_release_error}
+                </small>
+              </Cell>
+              <Cell>
+                <ConfirmAction
+                  label="强制释放"
+                  description={`请求释放 ${s.board_id} 的会话？服务器会停止任务并断电，清理完成后资源才重新可用。`}
+                  action={() => api.deleteSession(s.id)}
+                  disabled={s.state === "releasing"}
+                />
+              </Cell>
+            </Row>
+          ))}
+        </DataTable>
+      </PagePanel>
     </>
   );
 }

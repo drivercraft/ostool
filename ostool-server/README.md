@@ -286,6 +286,9 @@ Open `/admin/` for the React + shadcn/ui console. Boards, discovery, virtual
 hardware, DTBs, leases, TFTP and server settings update through a single SSE
 connection; browser list polling is not used. Draft edits remain local until
 saved and concurrent configuration changes are reported without overwriting them.
+The workspace fills the viewport: toolbars and footer status/actions stay fixed
+while the center content scrolls. List footers provide local pagination over the
+SSE projection; editor and configuration save/cancel controls stay in the footer.
 
 A new board does not have to be saved before powering it on. Configure Custom,
 Zhongsheng relay or an existing QEMU device, then click **上电** or **下电**.

@@ -43,6 +43,10 @@ test("unbound power -> real discovery -> manual MAC binding; push preserves focu
   context,
   request,
 }) => {
+  test.skip(
+    process.env.OSTOOL_TEST_DISABLE_DISCOVERY === "true",
+    "UDP discovery is disabled for this isolated layout run",
+  );
   const consoleErrors: string[] = [];
   page.on("pageerror", (e) => consoleErrors.push(e.message));
   const reads: string[] = [];
@@ -260,6 +264,19 @@ test("all management modules, DTB CRUD, session release and narrow viewport", as
   await expect(
     page.getByText("Server 配置已保存", { exact: true }),
   ).toBeVisible();
+  await page.getByLabel("Session 文件上传上限（MiB）").fill("256");
+  await page.getByRole("tab", { name: "TFTP 服务", exact: true }).click();
+  await page.getByRole("tab", { name: "网络与上传", exact: true }).click();
+  await expect(page.getByLabel("Session 文件上传上限（MiB）")).toHaveValue(
+    "256",
+  );
+  await page
+    .getByRole("tabpanel", { name: "网络与上传" })
+    .getByRole("button", { name: "取消", exact: true })
+    .click();
+  await expect(page.getByLabel("Session 文件上传上限（MiB）")).toHaveValue(
+    "128",
+  );
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole("button", { name: "切换导航" })).toBeVisible();
   expect(
@@ -304,4 +321,127 @@ test("local edition exposes the existing workflow without any account routes", a
   await expect(
     page.getByRole("link", { name: "免费注册", exact: true }),
   ).toHaveCount(0);
+});
+
+test("viewport panels keep toolbar and footer fixed while tables/forms scroll", async ({
+  page,
+  request,
+}) => {
+  for (let i = 0; i < 27; i++) {
+    const id = `viewport-${String(i).padStart(2, "0")}`;
+    expect(
+      (
+        await request.post("http://127.0.0.1:4175/api/v1/admin/boards", {
+          data: {
+            id,
+            board_type: "viewport-test",
+            tags: [],
+            disabled: false,
+            serial: null,
+            notes: null,
+            network_identity: null,
+            boot: { kind: "pxe", notes: null },
+            power_management: {
+              kind: "custom",
+              power_on_cmd: "true",
+              power_off_cmd: "true",
+            },
+          },
+        })
+      ).ok(),
+    ).toBeTruthy();
+  }
+  await page.setViewportSize({ width: 1360, height: 800 });
+  await page.goto("/admin/boards");
+  await page.getByLabel("搜索开发板", { exact: true }).fill("viewport-");
+  const panel = page.locator(".page-panel:visible");
+  const scroll = panel.locator(".panel-scroll");
+  await expect(panel.getByText("第 1 / 2 页")).toBeVisible();
+  const before = await panel.evaluate((e) => ({
+    top: e.querySelector(".panel-toolbar")!.getBoundingClientRect().top,
+    bottom: e.querySelector(".panel-footer")!.getBoundingClientRect().bottom,
+  }));
+  await scroll.evaluate((e) => {
+    e.scrollTop = e.scrollHeight;
+  });
+  expect(await scroll.evaluate((e) => e.scrollTop)).toBeGreaterThan(0);
+  const after = await panel.evaluate((e) => ({
+    top: e.querySelector(".panel-toolbar")!.getBoundingClientRect().top,
+    bottom: e.querySelector(".panel-footer")!.getBoundingClientRect().bottom,
+  }));
+  expect(after).toEqual(before);
+  expect(before.bottom).toBeGreaterThan(750);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollHeight <= innerHeight + 1,
+    ),
+  ).toBe(true);
+  await panel.getByRole("button", { name: "下一页", exact: true }).click();
+  await expect(panel.getByText("第 2 / 2 页")).toBeVisible();
+  await expect(
+    panel.getByRole("link", { name: "viewport-26", exact: true }),
+  ).toBeVisible();
+  await page.getByLabel("搜索开发板", { exact: true }).focus();
+  await request.put("http://127.0.0.1:4175/api/v1/admin/boards/viewport-26", {
+    data: {
+      id: "viewport-26",
+      board_type: "viewport-test",
+      tags: [],
+      disabled: false,
+      serial: null,
+      notes: "live update",
+      network_identity: null,
+      boot: { kind: "pxe", notes: null },
+      power_management: {
+        kind: "custom",
+        power_on_cmd: "true",
+        power_off_cmd: "true",
+      },
+    },
+  });
+  await expect(panel.getByText("第 2 / 2 页")).toBeVisible();
+  await expect(page.getByLabel("搜索开发板", { exact: true })).toBeFocused();
+  await page.screenshot({ path: "/tmp/ostool-fixed-list.png", fullPage: true });
+  await page
+    .getByLabel("搜索开发板", { exact: true })
+    .fill("no-matching-board");
+  await expect(panel.getByText("暂无数据", { exact: true })).toBeVisible();
+  await expect(panel.getByText("第 1 / 1 页")).toBeVisible();
+  expect(
+    (await panel.locator(".panel-footer").boundingBox())!.y,
+  ).toBeGreaterThan(700);
+  await panel.getByRole("link", { name: "新建开发板", exact: true }).click();
+  await expect(page).toHaveURL(/boards\/new$/);
+  await page
+    .getByRole("textbox", { name: "板型", exact: true })
+    .fill("viewport-test");
+  await page.getByLabel("ID", { exact: true }).fill("viewport-form");
+  await page.getByLabel("上电命令", { exact: true }).fill("true");
+  await page.getByLabel("下电命令", { exact: true }).fill("true");
+  await page.getByLabel("启动方式", { exact: true }).selectOption("pxe");
+  const save = panel.getByRole("button", { name: "保存开发板", exact: true });
+  await expect(save).toBeVisible();
+  const buttonY = (await save.boundingBox())!.y;
+  await panel.locator(".panel-scroll").evaluate((e) => {
+    e.scrollTop = e.scrollHeight;
+  });
+  expect((await save.boundingBox())!.y).toBe(buttonY);
+  await save.click();
+  await expect(page).toHaveURL(/boards\/viewport-form$/);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(save).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollHeight <= innerHeight + 1,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: "/tmp/ostool-fixed-editor-mobile.png",
+    fullPage: true,
+  });
 });

@@ -1,3 +1,5 @@
+import { PagePanel } from "@/components/page-panel";
+import { useListPage } from "@/components/list-pagination";
 import { ListToolbar } from "@/components/list-toolbar";
 import { useState } from "react";
 import { api } from "@/api/client";
@@ -55,84 +57,100 @@ export default function Users() {
     });
   const patch = (value: Partial<UserInput>) =>
     setEditor((e) => (e ? { ...e, draft: { ...e.draft, ...value } } : e));
+  const pagination = useListPage(
+    filtered,
+    JSON.stringify([search, roleFilter, statusFilter]),
+  );
   return (
     <>
       {!deployment?.database_connected && (
         <Notice>用户管理需要连接 PostgreSQL。</Notice>
       )}
-      <ListToolbar
-        actions={
-          <Button
-            disabled={!deployment?.database_connected}
-            onClick={() => open()}
-          >
-            创建用户
-          </Button>
-        }
-        count={`${filtered.length} 位用户`}
-      >
-        <TextField
-          label="搜索用户"
-          value={search}
-          placeholder="邮箱或显示名称"
-          onValue={setSearch}
-        />
-        <SelectField
-          label="角色筛选"
-          value={roleFilter}
-          onValue={setRoleFilter}
-          options={[
-            { value: "", label: "全部角色" },
-            ...roles.map((r) => ({ value: r.id, label: r.name })),
-          ]}
-        />
-        <SelectField
-          label="账号状态"
-          value={statusFilter}
-          onValue={setStatusFilter}
-          options={[
-            { value: "", label: "全部状态" },
-            { value: "false", label: "正常" },
-            { value: "true", label: "已禁用" },
-          ]}
-        />
-      </ListToolbar>
-      <DataTable
-        headers={["用户", "角色", "状态", "创建时间", "操作"]}
-        empty={!filtered.length}
-      >
-        {filtered.map((user) => (
-          <Row key={user.id}>
-            <Cell>
-              <strong>{user.display_name || "未设置名称"}</strong>
-              <small>{user.email}</small>
-            </Cell>
-            <Cell>
-              {roles.find((r) => r.id === user.role_id)?.name ?? user.role_id}
-            </Cell>
-            <Cell>
-              <span
-                className={`user-status ${user.disabled ? "disabled" : "enabled"}`}
+      <PagePanel
+        table
+        toolbar={
+          <ListToolbar
+            actions={
+              <Button
+                disabled={!deployment?.database_connected}
+                onClick={() => open()}
               >
-                {user.disabled ? "已禁用" : "正常"}
-              </span>
-            </Cell>
-            <Cell>{new Date(user.created_at).toLocaleString()}</Cell>
-            <Cell>
-              <div className="actions">
-                <Button variant="outline" size="sm" onClick={() => open(user)}>
-                  编辑
-                </Button>
-                <ConfirmAction
-                  label="删除"
-                  description={`永久删除 ${user.email} 及其登录令牌？`}
-                  action={() => api.deleteUser(user.id)}
-                />
-              </div>
-            </Cell>
-          </Row>
-        ))}
-      </DataTable>
+                创建用户
+              </Button>
+            }
+            count={`${filtered.length} 位用户`}
+          >
+            <TextField
+              label="搜索用户"
+              value={search}
+              placeholder="邮箱或显示名称"
+              onValue={setSearch}
+            />
+            <SelectField
+              label="角色筛选"
+              value={roleFilter}
+              onValue={setRoleFilter}
+              options={[
+                { value: "", label: "全部角色" },
+                ...roles.map((r) => ({ value: r.id, label: r.name })),
+              ]}
+            />
+            <SelectField
+              label="账号状态"
+              value={statusFilter}
+              onValue={setStatusFilter}
+              options={[
+                { value: "", label: "全部状态" },
+                { value: "false", label: "正常" },
+                { value: "true", label: "已禁用" },
+              ]}
+            />
+          </ListToolbar>
+        }
+        footer={pagination.footer}
+        scrollKey={pagination.viewKey}
+      >
+        <DataTable
+          headers={["用户", "角色", "状态", "创建时间", "操作"]}
+          empty={!filtered.length}
+        >
+          {pagination.rows.map((user) => (
+            <Row key={user.id}>
+              <Cell>
+                <strong>{user.display_name || "未设置名称"}</strong>
+                <small>{user.email}</small>
+              </Cell>
+              <Cell>
+                {roles.find((r) => r.id === user.role_id)?.name ?? user.role_id}
+              </Cell>
+              <Cell>
+                <span
+                  className={`user-status ${user.disabled ? "disabled" : "enabled"}`}
+                >
+                  {user.disabled ? "已禁用" : "正常"}
+                </span>
+              </Cell>
+              <Cell>{new Date(user.created_at).toLocaleString()}</Cell>
+              <Cell>
+                <div className="actions">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => open(user)}
+                  >
+                    编辑
+                  </Button>
+                  <ConfirmAction
+                    label="删除"
+                    description={`永久删除 ${user.email} 及其登录令牌？`}
+                    action={() => api.deleteUser(user.id)}
+                  />
+                </div>
+              </Cell>
+            </Row>
+          ))}
+        </DataTable>
+      </PagePanel>
       <Dialog
         open={!!editor}
         onOpenChange={(v) => {

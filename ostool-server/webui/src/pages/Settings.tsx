@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { PagePanel } from "@/components/page-panel";
+import { ListToolbar } from "@/components/list-toolbar";
+import { useEffect, useId, useState } from "react";
 import { api } from "@/api/client";
 import { useResource, useList } from "@/api/events";
 import type {
@@ -41,23 +43,20 @@ export function TftpState({ status }: { status: TftpStatus }) {
 export function Tftp() {
   const source = useResource("tftp");
   const status = useResource("tftp_status");
-  return (
-    <>
-      {source ? (
-        <TftpForm source={source} />
-      ) : (
-        <Skeleton className="h-40 w-full" />
-      )}
-      {status && (
-        <section className="page-section">
-          <h2>运行状态</h2>
-          <TftpState status={status} />
-        </section>
-      )}
-    </>
+  return source ? (
+    <TftpForm source={source} status={status} />
+  ) : (
+    <Skeleton className="h-40 w-full" />
   );
 }
-function TftpForm({ source }: { source: TftpConfig }) {
+function TftpForm({
+  source,
+  status,
+}: {
+  source: TftpConfig;
+  status?: TftpStatus;
+}) {
+  const formId = useId();
   const [config, setConfig] = useState(source),
     [baseline, setBaseline] = useState(JSON.stringify(source));
   const task = useAction(),
@@ -95,110 +94,157 @@ function TftpForm({ source }: { source: TftpConfig }) {
     );
   }
   return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (!conflict)
-          void task.run(async () => {
-            const r = await api.updateTftpConfig(config);
-            setPreviousSource(live);
-            setConfig(r.tftp);
-            setBaseline(JSON.stringify(r.tftp));
-          }, "TFTP 配置已保存");
-      }}
+    <PagePanel
+      toolbar={
+        <ListToolbar
+          actions={
+            <Button
+              type="button"
+              variant="outline"
+              disabled={reconcile.pending}
+              onClick={() =>
+                void reconcile.run(
+                  () => api.reconcileTftp(),
+                  "Reconcile 已执行",
+                )
+              }
+            >
+              {reconcile.pending ? "执行中…" : "执行 Reconcile"}
+            </Button>
+          }
+        />
+      }
+      footer={
+        <>
+          <span className="panel-status">
+            {conflict
+              ? "服务器配置已更新，草稿已保留"
+              : JSON.stringify(config) !== baseline
+                ? "存在未保存的修改"
+                : "配置已保存"}
+          </span>
+          <div className="panel-footer-actions">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={task.pending}
+              onClick={() => {
+                setConfig(source);
+                setBaseline(live);
+                setPreviousSource(null);
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              type="submit"
+              form={formId}
+              disabled={task.pending || conflict}
+            >
+              {task.pending ? "保存中…" : "保存配置"}
+            </Button>
+          </div>
+        </>
+      }
     >
-      {conflict && (
-        <Notice>
-          服务器配置发生变化，草稿已保留。
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => {
-              setConfig(source);
-              setBaseline(JSON.stringify(source));
-            }}
-          >
-            载入服务器版本
-          </Button>
-        </Notice>
-      )}
-      <Section title="服务配置">
-        <SelectField
-          label="Provider"
-          value={config.provider}
-          onValue={(v) => provider(v as TftpConfig["provider"])}
-          options={[
-            { value: "builtin", label: "内建 TFTP" },
-            { value: "system_tftpd_hpa", label: "system_tftpd_hpa" },
-          ]}
-        />
-        <CheckField
-          label="启用 TFTP"
-          checked={config.enabled}
-          onChange={(v) => patch("enabled", v)}
-        />
-        <TextField
-          label="根目录"
-          value={config.root_dir}
-          onValue={(v) => patch("root_dir", v)}
-          required
-        />
-        {config.provider === "builtin" ? (
+      <form
+        id={formId}
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!conflict)
+            void task.run(async () => {
+              const r = await api.updateTftpConfig(config);
+              setPreviousSource(live);
+              setConfig(r.tftp);
+              setBaseline(JSON.stringify(r.tftp));
+            }, "TFTP 配置已保存");
+        }}
+      >
+        {conflict && (
+          <Notice>
+            服务器配置发生变化，草稿已保留。
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setConfig(source);
+                setBaseline(JSON.stringify(source));
+              }}
+            >
+              载入服务器版本
+            </Button>
+          </Notice>
+        )}
+        <Section title="服务配置">
+          <SelectField
+            label="Provider"
+            value={config.provider}
+            onValue={(v) => provider(v as TftpConfig["provider"])}
+            options={[
+              { value: "builtin", label: "内建 TFTP" },
+              { value: "system_tftpd_hpa", label: "system_tftpd_hpa" },
+            ]}
+          />
+          <CheckField
+            label="启用 TFTP"
+            checked={config.enabled}
+            onChange={(v) => patch("enabled", v)}
+          />
           <TextField
-            label="绑定地址"
-            value={config.bind_addr}
-            onValue={(v) => patch("bind_addr", v)}
+            label="根目录"
+            value={config.root_dir}
+            onValue={(v) => patch("root_dir", v)}
             required
           />
-        ) : (
-          <>
-            {(
-              [
-                ["config_path", "配置文件"],
-                ["service_name", "服务名"],
-                ["username", "运行用户"],
-                ["address", "监听地址"],
-                ["options", "启动选项"],
-              ] as const
-            ).map(([key, label]) => (
-              <TextField
-                key={key}
-                label={label}
-                value={(config as SystemTftpdHpaConfig)[key] ?? ""}
-                onValue={(v) => patch(key, v)}
+          {config.provider === "builtin" ? (
+            <TextField
+              label="绑定地址"
+              value={config.bind_addr}
+              onValue={(v) => patch("bind_addr", v)}
+              required
+            />
+          ) : (
+            <>
+              {(
+                [
+                  ["config_path", "配置文件"],
+                  ["service_name", "服务名"],
+                  ["username", "运行用户"],
+                  ["address", "监听地址"],
+                  ["options", "启动选项"],
+                ] as const
+              ).map(([key, label]) => (
+                <TextField
+                  key={key}
+                  label={label}
+                  value={(config as SystemTftpdHpaConfig)[key] ?? ""}
+                  onValue={(v) => patch(key, v)}
+                />
+              ))}
+              <CheckField
+                label="允许服务端管理配置文件与重启 service"
+                checked={config.manage_config}
+                onChange={(v) => patch("manage_config", v)}
               />
-            ))}
-            <CheckField
-              label="允许服务端管理配置文件与重启 service"
-              checked={config.manage_config}
-              onChange={(v) => patch("manage_config", v)}
-            />
-            <CheckField
-              label="启动时自动 reconcile"
-              checked={config.reconcile_on_start}
-              onChange={(v) => patch("reconcile_on_start", v)}
-            />
-          </>
-        )}
-      </Section>
-      {task.error && <Notice>{task.error}</Notice>}
-      <footer className="form-footer">
-        <Button
-          type="button"
-          variant="outline"
-          disabled={reconcile.pending}
-          onClick={() =>
-            void reconcile.run(() => api.reconcileTftp(), "Reconcile 已执行")
-          }
-        >
-          {reconcile.pending ? "执行中…" : "执行 Reconcile"}
-        </Button>
-        <Button type="submit" disabled={task.pending || conflict}>
-          {task.pending ? "保存中…" : "保存配置"}
-        </Button>
-      </footer>
-      {reconcile.error && <Notice>{reconcile.error}</Notice>}
-    </form>
+              <CheckField
+                label="启动时自动 reconcile"
+                checked={config.reconcile_on_start}
+                onChange={(v) => patch("reconcile_on_start", v)}
+              />
+            </>
+          )}
+        </Section>
+        {task.error && <Notice>{task.error}</Notice>}
+
+        {reconcile.error && <Notice>{reconcile.error}</Notice>}
+      </form>
+      {status && (
+        <section className="page-section">
+          <h2>运行状态</h2>
+          <TftpState status={status} />
+        </section>
+      )}
+    </PagePanel>
   );
 }
 export function Server() {
@@ -214,6 +260,7 @@ export function Server() {
   );
 }
 function ServerForm({ source }: { source: AdminServerConfigResponse }) {
+  const formId = useId();
   const [config, setConfig] = useState(source.editable),
     [baseline, setBaseline] = useState(JSON.stringify(source.editable));
   const networks = useList("network");
@@ -225,7 +272,40 @@ function ServerForm({ source }: { source: AdminServerConfigResponse }) {
     if (live === baseline) setPreviousSource(null);
   }, [live, baseline]);
   return (
-    <>
+    <PagePanel
+      footer={
+        <>
+          <span className="panel-status">
+            {conflict
+              ? "服务器配置已更新，草稿已保留"
+              : JSON.stringify(config) !== baseline
+                ? "存在未保存的修改"
+                : "配置已保存"}
+          </span>
+          <div className="panel-footer-actions">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={task.pending}
+              onClick={() => {
+                setConfig(source.editable);
+                setBaseline(live);
+                setPreviousSource(null);
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              type="submit"
+              form={formId}
+              disabled={task.pending || conflict}
+            >
+              {task.pending ? "保存中…" : "保存配置"}
+            </Button>
+          </div>
+        </>
+      }
+    >
       <section className="page-section">
         <h2>只读信息</h2>
         <ReadonlyInfo
@@ -240,6 +320,7 @@ function ServerForm({ source }: { source: AdminServerConfigResponse }) {
         />
       </section>
       <form
+        id={formId}
         onSubmit={(e) => {
           e.preventDefault();
           if (!conflict)
@@ -298,12 +379,7 @@ function ServerForm({ source }: { source: AdminServerConfigResponse }) {
           />
         </Section>
         {task.error && <Notice>{task.error}</Notice>}
-        <footer className="form-footer">
-          <Button type="submit" disabled={task.pending || conflict}>
-            {task.pending ? "保存中…" : "保存配置"}
-          </Button>
-        </footer>
       </form>
-    </>
+    </PagePanel>
   );
 }

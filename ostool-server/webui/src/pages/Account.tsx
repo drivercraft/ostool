@@ -1,3 +1,4 @@
+import { PagePanel } from "@/components/page-panel";
 import { useEffect, useState } from "react";
 import { api, type AuthUser } from "@/api/client";
 import { Button } from "@/components/ui/button";
@@ -30,21 +31,27 @@ export default function Account() {
     }
   }
   return (
-    <div className="page">
-      <ListToolbar
-        actions={
-          <Button
-            variant="outline"
-            onClick={() => {
-              void api.logout().finally(() => {
-                window.location.href = "/login";
-              });
-            }}
-          >
-            退出登录
-          </Button>
-        }
-      />
+    <PagePanel
+      toolbar={
+        <ListToolbar
+          actions={
+            <Button
+              variant="outline"
+              onClick={() => {
+                void api.logout().finally(() => {
+                  window.location.href = "/login";
+                });
+              }}
+            >
+              退出登录
+            </Button>
+          }
+        />
+      }
+      footer={
+        <span className="panel-status">{user?.email ?? "正在读取账号…"}</span>
+      }
+    >
       {error && <Notice>{error}</Notice>}
       <section className="settings-grid">
         <article className="card">
@@ -81,6 +88,6 @@ export default function Account() {
           )}
         </article>
       </section>
-    </div>
+    </PagePanel>
   );
 }

@@ -23,7 +23,7 @@ enabled = true
 root_dir = "${root}/httpboot"
 public_base_url = "http://127.0.0.1:4175"
 [loader_network]
-enabled = true
+enabled = ${process.env.OSTOOL_TEST_DISABLE_DISCOVERY !== "true"}
 bind_addr = "127.0.0.1:2998"
 public_base_url = "http://127.0.0.1:4175"
 `,

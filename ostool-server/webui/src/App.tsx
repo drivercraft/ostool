@@ -231,80 +231,84 @@ function AdminConsole() {
               )}
             </div>
           </header>
-          {connection === "reconnecting" && (
-            <Notice>
-              连接暂时中断，当前内容和输入已保留，恢复后自动同步。
-            </Notice>
-          )}
-          {Object.entries(errors).map(([topic, error]) => (
-            <Notice key={topic}>
-              {topic}：{error}
-            </Notice>
-          ))}
-          <Suspense fallback={<Skeleton className="h-48 w-full" />}>
-            <Routes>
-              <Route path="/" element={<Navigate replace to="/overview" />} />
-              <Route path="/overview" element={<Overview />} />
-              <Route path="/boards" element={<Boards />} />
-              <Route path="/boards/new" element={<BoardEditor />} />
-              <Route path="/boards/:boardId" element={<BoardEditor />} />
-              <Route path="/dtbs" element={<Dtbs />} />
-              <Route path="/sessions" element={<Sessions />} />
-              <Route
-                path="/tftp"
-                element={<Navigate replace to="/settings?tab=tftp" />}
-              />
-              <Route
-                path="/server"
-                element={<Navigate replace to="/settings?tab=server" />}
-              />
-              <Route path="/settings" element={<Settings />} />
-              <Route
-                path="/users"
-                element={
-                  publicEdition ? (
-                    <Users />
-                  ) : (
-                    <Navigate replace to="/overview" />
-                  )
-                }
-              />
-              <Route
-                path="/users/roles"
-                element={
-                  publicEdition ? (
-                    <Roles />
-                  ) : (
-                    <Navigate replace to="/overview" />
-                  )
-                }
-              />
-              <Route
-                path="/account"
-                element={
-                  publicEdition ? (
-                    <Account />
-                  ) : (
-                    <Navigate replace to="/overview" />
-                  )
-                }
-              />
-              <Route
-                path="/rentals"
-                element={
-                  publicEdition ? (
-                    <Rentals />
-                  ) : (
-                    <Navigate replace to="/overview" />
-                  )
-                }
-              />
-              <Route
-                path="*"
-                element={<Notice>页面不存在。请选择左侧管理模块。</Notice>}
-              />
-            </Routes>
-          </Suspense>
+          <div className="admin-notices" aria-live="polite">
+            {connection === "reconnecting" && (
+              <Notice>
+                连接暂时中断，当前内容和输入已保留，恢复后自动同步。
+              </Notice>
+            )}
+            {Object.entries(errors).map(([topic, error]) => (
+              <Notice key={topic}>
+                {topic}：{error}
+              </Notice>
+            ))}
+          </div>
+          <div className="admin-workspace">
+            <Suspense fallback={<Skeleton className="h-48 w-full" />}>
+              <Routes>
+                <Route path="/" element={<Navigate replace to="/overview" />} />
+                <Route path="/overview" element={<Overview />} />
+                <Route path="/boards" element={<Boards />} />
+                <Route path="/boards/new" element={<BoardEditor />} />
+                <Route path="/boards/:boardId" element={<BoardEditor />} />
+                <Route path="/dtbs" element={<Dtbs />} />
+                <Route path="/sessions" element={<Sessions />} />
+                <Route
+                  path="/tftp"
+                  element={<Navigate replace to="/settings?tab=tftp" />}
+                />
+                <Route
+                  path="/server"
+                  element={<Navigate replace to="/settings?tab=server" />}
+                />
+                <Route path="/settings" element={<Settings />} />
+                <Route
+                  path="/users"
+                  element={
+                    publicEdition ? (
+                      <Users />
+                    ) : (
+                      <Navigate replace to="/overview" />
+                    )
+                  }
+                />
+                <Route
+                  path="/users/roles"
+                  element={
+                    publicEdition ? (
+                      <Roles />
+                    ) : (
+                      <Navigate replace to="/overview" />
+                    )
+                  }
+                />
+                <Route
+                  path="/account"
+                  element={
+                    publicEdition ? (
+                      <Account />
+                    ) : (
+                      <Navigate replace to="/overview" />
+                    )
+                  }
+                />
+                <Route
+                  path="/rentals"
+                  element={
+                    publicEdition ? (
+                      <Rentals />
+                    ) : (
+                      <Navigate replace to="/overview" />
+                    )
+                  }
+                />
+                <Route
+                  path="*"
+                  element={<Notice>页面不存在。请选择左侧管理模块。</Notice>}
+                />
+              </Routes>
+            </Suspense>
+          </div>
         </main>
         <Toaster
           theme="light"
