@@ -1,21 +1,21 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import {
   BrowserRouter,
   NavLink,
   Navigate,
   Route,
   Routes,
+  useLocation,
 } from "react-router-dom";
 import {
   LayoutDashboardIcon,
   CircuitBoardIcon,
-  FileIcon,
-  ClockIcon,
   CalendarClockIcon,
   SettingsIcon,
   MenuIcon,
   UserCircleIcon,
   ExternalLinkIcon,
+  ChevronRightIcon,
 } from "lucide-react";
 import { EditionProvider, useEdition } from "./edition";
 import { api } from "@/api/client";
@@ -35,13 +35,13 @@ const Users = lazy(() => import("./pages/Users"));
 const Roles = lazy(() => import("./pages/Roles"));
 const Account = lazy(() => import("./pages/Account"));
 const boardNavigation = [
-  ["boards", "开发板列表", CircuitBoardIcon],
-  ["dtbs", "DTB 管理", FileIcon],
-  ["sessions", "会话租约", ClockIcon],
+  ["boards", "开发板列表"],
+  ["dtbs", "DTB 管理"],
+  ["sessions", "会话租约"],
 ] as const;
 const userNavigation = [
-  ["users", "用户列表", UserCircleIcon],
-  ["users/roles", "用户角色", SettingsIcon],
+  ["users", "用户列表"],
+  ["users/roles", "用户角色"],
 ] as const;
 export default function App() {
   return (
@@ -136,57 +136,51 @@ function AdminConsole() {
               <LayoutDashboardIcon />
               总览
             </NavLink>
-            <details className="admin-nav-group" open>
-              <summary>
-                <CircuitBoardIcon />
-                板卡管理
-              </summary>
-              <div>
-                {boardNavigation.map(([path, label, Icon]) => (
-                  <NavLink
-                    key={path}
-                    to={`/${path}`}
-                    onClick={() => setMenu(false)}
-                  >
-                    <Icon />
-                    {label}
-                  </NavLink>
-                ))}
-              </div>
-            </details>
+            <SidebarGroup
+              label="板卡管理"
+              icon={<CircuitBoardIcon />}
+              paths={["/boards", "/dtbs", "/sessions"]}
+            >
+              {boardNavigation.map(([path, label]) => (
+                <NavLink
+                  key={path}
+                  to={`/${path}`}
+                  onClick={() => setMenu(false)}
+                >
+                  <span className="admin-nav-dot" aria-hidden="true" />
+                  <span>{label}</span>
+                </NavLink>
+              ))}
+            </SidebarGroup>
             {publicEdition && (
               <>
-                <details className="admin-nav-group" open>
-                  <summary>
-                    <CalendarClockIcon />
-                    租赁管理
-                  </summary>
-                  <div>
-                    <NavLink to="/rentals" onClick={() => setMenu(false)}>
-                      <CalendarClockIcon />
-                      租赁列表
+                <SidebarGroup
+                  label="租赁管理"
+                  icon={<CalendarClockIcon />}
+                  paths={["/rentals"]}
+                >
+                  <NavLink to="/rentals" onClick={() => setMenu(false)}>
+                    <span className="admin-nav-dot" aria-hidden="true" />
+                    <span>租赁列表</span>
+                  </NavLink>
+                </SidebarGroup>
+                <SidebarGroup
+                  label="用户管理"
+                  icon={<UserCircleIcon />}
+                  paths={["/users"]}
+                >
+                  {userNavigation.map(([path, label]) => (
+                    <NavLink
+                      end={path === "users"}
+                      key={path}
+                      to={`/${path}`}
+                      onClick={() => setMenu(false)}
+                    >
+                      <span className="admin-nav-dot" aria-hidden="true" />
+                      <span>{label}</span>
                     </NavLink>
-                  </div>
-                </details>
-                <details className="admin-nav-group" open>
-                  <summary>
-                    <UserCircleIcon />
-                    用户管理
-                  </summary>
-                  <div>
-                    {userNavigation.map(([path, label, Icon]) => (
-                      <NavLink
-                        end={path === "users"}
-                        key={path}
-                        to={`/${path}`}
-                        onClick={() => setMenu(false)}
-                      >
-                        <Icon />
-                        {label}
-                      </NavLink>
-                    ))}
-                  </div>
-                </details>
+                  ))}
+                </SidebarGroup>
               </>
             )}
           </nav>
@@ -321,5 +315,34 @@ function AdminConsole() {
         />
       </div>
     </BrowserRouter>
+  );
+}
+
+function SidebarGroup({
+  label,
+  icon,
+  paths,
+  children,
+}: {
+  label: string;
+  icon: ReactNode;
+  paths: string[];
+  children: ReactNode;
+}) {
+  const { pathname } = useLocation();
+  const active = paths.some(
+    (path) => pathname === path || pathname.startsWith(`${path}/`),
+  );
+  return (
+    <details className="admin-nav-group" open>
+      <summary className={active ? "active" : undefined}>
+        {icon}
+        <span>{label}</span>
+        <span className="admin-nav-caret" aria-hidden="true">
+          <ChevronRightIcon size={18} />
+        </span>
+      </summary>
+      <div>{children}</div>
+    </details>
   );
 }
