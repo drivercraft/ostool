@@ -54,7 +54,6 @@ const topicPaths: Record<string, string> = {
   audit: "/audits",
   dashboard: "/overview",
   boards: "/boards",
-  quarantined_boards: "/boards",
   runtimes: "/boards",
   sessions: "/sessions",
   loaders: "/boards",
@@ -72,7 +71,6 @@ const topicLabels: Record<string, string> = {
   audit: "审计日志",
   dashboard: "仪表盘",
   boards: "开发板",
-  quarantined_boards: "配置隔离",
   runtimes: "板卡运行状态",
   sessions: "会话",
   loaders: "设备发现",
@@ -104,8 +102,7 @@ function Notifications({ menus }: { menus: TopbarMenus }) {
   const errors = useErrors(),
     connection = useConnection();
   const runtimes = useResource("runtimes"),
-    power = useResource("power_actions"),
-    quarantined = useResource("quarantined_boards");
+    power = useResource("power_actions");
   const notices = useMemo(() => {
     const result: AdminNotification[] = [];
     if (connection === "reconnecting")
@@ -140,15 +137,8 @@ function Notifications({ menus }: { menus: TopbarMenus }) {
           to: "/boards",
         });
     }
-    for (const board of quarantined ?? [])
-      result.push({
-        id: `quarantine:${board.backup_path}`,
-        title: "不兼容板卡配置已隔离",
-        description: board.reason,
-        to: "/boards",
-      });
     return result;
-  }, [connection, errors, runtimes, power, quarantined]);
+  }, [connection, errors, runtimes, power]);
   const [read, setRead] = useState<Record<string, string>>({});
   const unread = notices.filter(
     (notice) => read[notice.id] !== notice.description,

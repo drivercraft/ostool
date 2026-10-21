@@ -1,5 +1,4 @@
 //! PostgreSQL authority shared by local and public deployments.
-//! File adapters are retained for one-time imports and isolated test fixtures.
 use std::time::Duration;
 
 use anyhow::{Context, bail};
@@ -67,7 +66,7 @@ impl Database {
             .transpose()
             .map_err(Into::into)
     }
-    pub async fn import_record<T: serde::Serialize + serde::de::DeserializeOwned>(
+    pub async fn initialize_record<T: serde::Serialize + serde::de::DeserializeOwned>(
         &self,
         name: &str,
         initial: &T,
@@ -79,7 +78,9 @@ impl Database {
         .bind(serde_json::to_value(initial)?)
         .execute(&self.pool)
         .await?;
-        self.record(name).await?.context("missing imported record")
+        self.record(name)
+            .await?
+            .context("missing initialized record")
     }
     pub async fn save_record<T: serde::Serialize + ?Sized>(
         &self,
@@ -90,9 +91,9 @@ impl Database {
             .bind(name).bind(serde_json::to_value(value)?).execute(&self.pool).await?;
         Ok(())
     }
-    pub async fn connect(config: &DatabaseConfig) -> anyhow::Result<Option<Self>> {
+    pub async fn connect(config: &DatabaseConfig) -> anyhow::Result<Self> {
         let Some(url) = config.url.as_deref().filter(|url| !url.trim().is_empty()) else {
-            return Ok(None);
+            bail!("PostgreSQL is required (OSTOOL_DATABASE_URL)");
         };
         if let Some(schema) = &config.schema
             && (schema.is_empty()
@@ -103,10 +104,14 @@ impl Database {
         {
             bail!("database schema must contain 1..63 ASCII letters, digits or underscores");
         }
+        anyhow::ensure!(
+            config.max_connections > 0,
+            "database.max_connections must be greater than 0"
+        );
         let schema = config.schema.clone();
         let migrate = config.migrate;
         let pool = PgPoolOptions::new()
-            .max_connections(config.max_connections.max(1))
+            .max_connections(config.max_connections)
             .acquire_timeout(Duration::from_secs(10))
             .after_connect(move |connection, _| {
                 let schema = schema.clone();
@@ -134,7 +139,7 @@ impl Database {
                 .await
                 .context("failed to run PostgreSQL migrations")?;
         }
-        Ok(Some(Self { pool }))
+        Ok(Self { pool })
     }
 
     pub fn pool(&self) -> &PgPool {
@@ -459,29 +464,9 @@ impl Database {
         Ok(())
     }
 
-    pub async fn sync_dtb(
-        &self,
-        name: &str,
-        size: u64,
-        storage_path: &str,
-        sha256: &str,
-    ) -> anyhow::Result<()> {
-        sqlx::query("INSERT INTO dtb_records (name,size,storage_path,sha256) VALUES ($1,$2,$3,$4) ON CONFLICT (name) DO UPDATE SET size=excluded.size,storage_path=excluded.storage_path,sha256=excluded.sha256,updated_at=now()")
-            .bind(name).bind(size as i64).bind(storage_path).bind(sha256).execute(&self.pool).await?;
-        Ok(())
-    }
-
     pub async fn delete_board(&self, id: &str) -> anyhow::Result<()> {
         sqlx::query("DELETE FROM board_records WHERE id=$1")
             .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn delete_dtb(&self, name: &str) -> anyhow::Result<()> {
-        sqlx::query("DELETE FROM dtb_records WHERE name=$1")
-            .bind(name)
             .execute(&self.pool)
             .await?;
         Ok(())

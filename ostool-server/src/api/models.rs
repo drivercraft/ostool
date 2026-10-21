@@ -186,9 +186,6 @@ pub struct SharedSessionFileResponse {
     pub uploaded_at: DateTime<Utc>,
 }
 
-#[deprecated(note = "use SharedSessionFileResponse")]
-pub type FileResponse = SharedSessionFileResponse;
-
 impl SharedSessionFileResponse {
     pub fn from_file(file: TftpFileRef, tftp_url: Option<Url>, http_url: Option<Url>) -> Self {
         Self {
@@ -315,8 +312,6 @@ pub struct AdminOverviewResponse {
 pub struct AdminServerConfigReadonly {
     pub listen_addr: String,
     pub data_dir: String,
-    pub board_dir: String,
-    pub dtb_dir: String,
     pub http_boot_public_base_url: Option<String>,
     pub dtb_upload_max_mib: u32,
 }

@@ -287,8 +287,7 @@ export interface AdminServerConfigReadonly {
   http_boot_public_base_url: string | null;
   listen_addr: string;
   data_dir: string;
-  board_dir: string;
-  dtb_dir: string;
+
   dtb_upload_max_mib: number;
 }
 

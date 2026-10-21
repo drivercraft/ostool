@@ -40,12 +40,7 @@ export interface Resources {
   users: import("@/types/api").ManagedUser[];
   roles: import("@/types/api").UserRole[];
   deployment: import("@/types/api").DeploymentInfo;
-  quarantined_boards: {
-    original_path: string;
-    backup_path: string;
-    reason: string;
-    quarantined_at: string;
-  }[];
+
   boards: BoardConfig[];
   sessions: Session[];
   runtimes: Record<string, Runtime>;

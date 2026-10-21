@@ -1,9 +1,18 @@
 //! Deployment settings are resolved at runtime, never baked into web assets.
-use crate::ServerConfig;
+use crate::{DatabaseConfig, ServerConfig};
 use anyhow::{Context, bail};
 use std::{collections::BTreeMap, path::Path, str::FromStr};
 
 pub fn apply(config: &mut ServerConfig, file: Option<&Path>) -> anyhow::Result<()> {
+    apply_values(config, &read_values(file)?)
+}
+
+/// Resolve only database settings for offline tools; hardware and auth are irrelevant.
+pub fn apply_database(config: &mut DatabaseConfig, file: Option<&Path>) -> anyhow::Result<()> {
+    apply_database_values(config, &read_values(file)?)
+}
+
+fn read_values(file: Option<&Path>) -> anyhow::Result<BTreeMap<String, String>> {
     let path = file.unwrap_or_else(|| Path::new(".env"));
     let mut values = BTreeMap::new();
     if file.is_some() || path.exists() {
@@ -16,28 +25,15 @@ pub fn apply(config: &mut ServerConfig, file: Option<&Path>) -> anyhow::Result<(
     }
     // Process environment (including systemd EnvironmentFile) wins over .env.
     values.extend(std::env::vars());
-    apply_values(config, &values)
+    Ok(values)
 }
 
 pub(crate) fn apply_values(
     config: &mut ServerConfig,
     values: &BTreeMap<String, String>,
 ) -> anyhow::Result<()> {
-    fn parsed<T: FromStr>(
-        values: &BTreeMap<String, String>,
-        key: &str,
-        target: &mut T,
-    ) -> anyhow::Result<()> {
-        if let Some(value) = values.get(key) {
-            *target = value
-                .parse()
-                .map_err(|_| anyhow::anyhow!("invalid {key}"))?;
-        }
-        Ok(())
-    }
+    apply_database_values(&mut config.database, values)?;
     for (key, target) in [
-        ("OSTOOL_DATABASE_URL", &mut config.database.url),
-        ("OSTOOL_DATABASE_SCHEMA", &mut config.database.schema),
         ("OSTOOL_PUBLIC_BASE_URL", &mut config.auth.public_base_url),
         ("OSTOOL_ADMIN_EMAIL", &mut config.auth.bootstrap_admin_email),
         (
@@ -84,16 +80,6 @@ pub(crate) fn apply_values(
     )?;
     parsed(
         values,
-        "OSTOOL_DATABASE_MAX_CONNECTIONS",
-        &mut config.database.max_connections,
-    )?;
-    parsed(
-        values,
-        "OSTOOL_DATABASE_MIGRATE",
-        &mut config.database.migrate,
-    )?;
-    parsed(
-        values,
         "OSTOOL_ACCESS_TOKEN_TTL_SECS",
         &mut config.auth.access_token_ttl_secs,
     )?;
@@ -116,9 +102,70 @@ pub(crate) fn apply_values(
     Ok(())
 }
 
+fn parsed<T: FromStr>(
+    values: &BTreeMap<String, String>,
+    key: &str,
+    target: &mut T,
+) -> anyhow::Result<()> {
+    if let Some(value) = values.get(key) {
+        *target = value
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid {key}"))?;
+    }
+    Ok(())
+}
+
+fn apply_database_values(
+    config: &mut DatabaseConfig,
+    values: &BTreeMap<String, String>,
+) -> anyhow::Result<()> {
+    for (key, target) in [
+        ("OSTOOL_DATABASE_URL", &mut config.url),
+        ("OSTOOL_DATABASE_SCHEMA", &mut config.schema),
+    ] {
+        if let Some(value) = values.get(key) {
+            if value.trim().is_empty() {
+                bail!("{key} must not be empty");
+            }
+            *target = Some(value.clone());
+        }
+    }
+    parsed(
+        values,
+        "OSTOOL_DATABASE_MAX_CONNECTIONS",
+        &mut config.max_connections,
+    )?;
+    parsed(values, "OSTOOL_DATABASE_MIGRATE", &mut config.migrate)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn offline_database_settings_ignore_hardware_and_auth() {
+        let mut config = DatabaseConfig::default();
+        apply_database_values(
+            &mut config,
+            &BTreeMap::from([
+                (
+                    "OSTOOL_DATABASE_URL".into(),
+                    "postgres://localhost/test".into(),
+                ),
+                ("OSTOOL_DATABASE_MAX_CONNECTIONS".into(), "2".into()),
+                ("OSTOOL_AUTH_ENABLED".into(), "irrelevant".into()),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(config.max_connections, 2);
+        assert!(
+            apply_database_values(
+                &mut config,
+                &BTreeMap::from([("OSTOOL_DATABASE_MIGRATE".into(), "yes".into()),])
+            )
+            .is_err()
+        );
+    }
     #[test]
     fn edition_is_explicit_and_public_cannot_disable_authentication() {
         let mut config = ServerConfig::default();

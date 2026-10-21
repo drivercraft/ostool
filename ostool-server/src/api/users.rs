@@ -1,6 +1,6 @@
 //! Administrator user and role management. Read projections share admin SSE.
 use super::{auth::CurrentUser, error::ApiError};
-use crate::{AppState, persistence::postgres::Database};
+use crate::AppState;
 use axum::{
     Json, Router,
     extract::{Extension, Path, State},
@@ -59,12 +59,6 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/admin/deployment", get(deployment))
 }
 
-fn db(state: &AppState) -> Result<&Database, ApiError> {
-    state
-        .database
-        .as_ref()
-        .ok_or_else(|| ApiError::service_unavailable("PostgreSQL 未配置"))
-}
 fn sql_error(error: sqlx::Error) -> ApiError {
     if error
         .as_database_error()
@@ -78,9 +72,7 @@ fn sql_error(error: sqlx::Error) -> ApiError {
 }
 
 pub async fn list_users(State(state): State<AppState>) -> Result<Json<Vec<ManagedUser>>, ApiError> {
-    let Some(db) = &state.database else {
-        return Ok(Json(Vec::new()));
-    };
+    let db = &state.database;
     let rows = sqlx::query("SELECT id,email,display_name,role_id,disabled,created_at FROM users ORDER BY created_at,id")
         .fetch_all(db.pool()).await.map_err(sql_error)?;
     rows.iter()
@@ -99,9 +91,7 @@ pub async fn list_users(State(state): State<AppState>) -> Result<Json<Vec<Manage
         .map_err(sql_error)
 }
 pub async fn list_roles(State(state): State<AppState>) -> Result<Json<Vec<Role>>, ApiError> {
-    let Some(db) = &state.database else {
-        return Ok(Json(Vec::new()));
-    };
+    let db = &state.database;
     let rows = sqlx::query("SELECT * FROM roles ORDER BY builtin DESC,id")
         .fetch_all(db.pool())
         .await
@@ -145,7 +135,7 @@ async fn create_user(
         .as_deref()
         .ok_or_else(|| ApiError::bad_request("新用户需要初始密码"))?;
     let hash = crate::persistence::postgres::hash_password_async(password.to_owned()).await?;
-    let pool = db(&state)?.pool();
+    let pool = state.database.pool();
     let result = sqlx::query_scalar::<_,Uuid>("INSERT INTO users(email,display_name,password_hash,role_id,is_admin,disabled) SELECT $1,$2,$3,id,administrator,$5 FROM roles WHERE id=$4 RETURNING users.id")
         .bind(input.email.trim().to_lowercase()).bind(input.display_name).bind(hash).bind(input.role_id).bind(input.disabled).fetch_optional(pool).await.map_err(sql_error)?;
     let id = result.ok_or_else(|| ApiError::bad_request("角色不存在"))?;
@@ -166,7 +156,7 @@ async fn update_user(
         Some(ref p) => Some(crate::persistence::postgres::hash_password_async(p.clone()).await?),
         None => None,
     };
-    let mut tx = db(&state)?.pool().begin().await.map_err(sql_error)?;
+    let mut tx = state.database.pool().begin().await.map_err(sql_error)?;
     // Serializes changes to administrators, including concurrent demotions.
     sqlx::query("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE")
         .execute(&mut *tx)
@@ -211,7 +201,7 @@ async fn delete_user(
     if id == actor.id {
         return Err(ApiError::conflict("不能删除当前账号"));
     }
-    let mut tx = db(&state)?.pool().begin().await.map_err(sql_error)?;
+    let mut tx = state.database.pool().begin().await.map_err(sql_error)?;
     sqlx::query("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE")
         .execute(&mut *tx)
         .await
@@ -259,7 +249,7 @@ async fn create_role(
         .bind(input.name.trim())
         .bind(input.description)
         .bind(input.administrator)
-        .execute(db(&state)?.pool())
+        .execute(state.database.pool())
         .await
         .map_err(sql_error)?;
     state.admin_events.invalidate(&["roles"]);
@@ -271,7 +261,7 @@ async fn update_role(
     Json(input): Json<RoleInput>,
 ) -> Result<StatusCode, ApiError> {
     validate_role(&input)?;
-    let mut tx = db(&state)?.pool().begin().await.map_err(sql_error)?;
+    let mut tx = state.database.pool().begin().await.map_err(sql_error)?;
     sqlx::query("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE")
         .execute(&mut *tx)
         .await
@@ -318,7 +308,7 @@ async fn delete_role(
 ) -> Result<StatusCode, ApiError> {
     let result = sqlx::query("DELETE FROM roles WHERE id=$1 AND NOT builtin")
         .bind(id)
-        .execute(db(&state)?.pool())
+        .execute(state.database.pool())
         .await
         .map_err(sql_error)?;
     if result.rows_affected() != 1 {
@@ -330,18 +320,14 @@ async fn delete_role(
 pub async fn deployment(State(state): State<AppState>) -> Json<serde_json::Value> {
     let config = state.config.read().await;
     let public = config.edition.is_public();
-    let persistent = if state.database.is_some() {
-        "PostgreSQL"
-    } else {
-        "隔离测试文件存储"
-    };
-    let mut storage = serde_json::json!({"boards":persistent,"dtbs":persistent,"ota":persistent,"configuration":if state.database.is_some(){"PostgreSQL（部署启动参数仍来自 TOML / .env）"}else{"隔离测试配置"},"active_sessions":"进程状态（重启释放，不恢复硬件连接）","artifacts":"临时文件（随租约清理）"});
+    let persistent = "PostgreSQL";
+    let mut storage = serde_json::json!({"boards":persistent,"dtbs":persistent,"ota":persistent,"configuration":"PostgreSQL（部署启动参数仍来自 TOML / .env）","active_sessions":"进程状态（重启释放，不恢复硬件连接）","artifacts":"临时文件（随租约清理）"});
     if public {
         for key in ["users", "roles", "rentals"] {
             storage[key] = serde_json::json!("PostgreSQL");
         }
     }
     Json(
-        serde_json::json!({"edition":config.edition,"database_connected":state.database.is_some(),"auth_enabled":public,"allow_registration":public&&config.auth.allow_registration,"public_base_url":config.auth.public_base_url,"access_token_ttl_secs":config.auth.access_token_ttl_secs,"storage":storage}),
+        serde_json::json!({"edition":config.edition,"database_connected":true,"auth_enabled":public,"allow_registration":public&&config.auth.allow_registration,"public_base_url":config.auth.public_base_url,"access_token_ttl_secs":config.auth.access_token_ttl_secs,"storage":storage}),
     )
 }

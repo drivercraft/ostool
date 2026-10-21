@@ -36,27 +36,10 @@ pub use config::{
     UploadLimitsConfig, VirtualQemuConfig, ZhongshengRelayPowerManagement,
 };
 pub use persistence::{BoardStore, DtbFile, DtbStore};
-#[doc(hidden)]
-pub use state::build_fixture_app_state;
 pub use state::{AppState, BoardLeaseState, build_app_state};
 
-// Retain earlier public Rust import paths while new code uses persistence/.
-#[deprecated(note = "use persistence::postgres")]
-pub mod database {
-    pub use crate::persistence::postgres::*;
-}
-#[deprecated(note = "use persistence::boards or persistence::legacy::boards")]
-pub mod board_store {
-    pub mod fs {
-        pub use crate::persistence::boards::{BoardStore as FileBoardStore, QuarantinedBoard};
-    }
-}
-#[deprecated(note = "use persistence::dtbs")]
-pub mod dtb_store {
-    pub use crate::persistence::dtbs::*;
-}
-
-#[deprecated(note = "use static_assets")]
-pub mod web {
-    pub use crate::static_assets::*;
-}
+#[cfg(test)]
+extern crate self as ostool_server;
+#[cfg(test)]
+#[path = "../tests/support/database.rs"]
+pub(crate) mod test_support;

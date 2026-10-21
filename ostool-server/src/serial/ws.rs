@@ -487,12 +487,12 @@ mod tests {
         send_serial_failure_and_close,
     };
     use crate::{
-        build_fixture_app_state as build_app_state,
         config::{
             BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
             PowerManagementConfig, PxeProfile, ServerConfig, TftpConfig,
         },
         power::PowerActionError,
+        test_support::build_test_app_state as build_app_state,
         tftp::service::{TftpManager, build_tftp_manager},
     };
 
@@ -745,8 +745,6 @@ mod tests {
         let config = ServerConfig {
             listen_addr: "127.0.0.1:0".parse().unwrap(),
             data_dir: root.join("data"),
-            board_dir: root.join("boards"),
-            dtb_dir: root.join("dtbs"),
             tftp: TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(root.join("tftp"))),
             ..ServerConfig::default()
         };

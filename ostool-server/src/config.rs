@@ -28,8 +28,6 @@ pub struct ServerConfig {
     #[serde(default)]
     pub network_test: NetworkTestConfig,
     pub data_dir: PathBuf,
-    pub board_dir: PathBuf,
-    pub dtb_dir: PathBuf,
     pub tftp: TftpConfig,
     #[serde(default)]
     pub http_boot: HttpBootConfig,
@@ -57,8 +55,7 @@ impl ServerConfig {
         } else {
             PathBuf::from(".ostool-server")
         };
-        let board_dir = data_dir.join("boards");
-        let dtb_dir = data_dir.join("dtbs");
+
         let http_boot = HttpBootConfig::default_with_root(data_dir.join("http-boot"));
         let virtual_qemu = VirtualQemuConfig::default_with_runtime_dir(data_dir.join("qemu"));
 
@@ -78,8 +75,6 @@ impl ServerConfig {
             auth: AuthConfig::default(),
             network_test: NetworkTestConfig::default(),
             data_dir,
-            board_dir,
-            dtb_dir,
             tftp,
             http_boot,
             loader_network: LoaderNetworkConfig::default(),
@@ -173,8 +168,6 @@ impl ServerConfig {
             .unwrap_or(current_dir()?);
 
         self.data_dir = absolutize_path(&config_dir, &self.data_dir);
-        self.board_dir = absolutize_path(&config_dir, &self.board_dir);
-        self.dtb_dir = absolutize_path(&config_dir, &self.dtb_dir);
         self.http_boot.root_dir = absolutize_path(&config_dir, &self.http_boot.root_dir);
         self.virtual_qemu.runtime_dir =
             absolutize_path(&config_dir, &self.virtual_qemu.runtime_dir);
@@ -292,9 +285,8 @@ impl std::str::FromStr for Edition {
     }
 }
 
-/// PostgreSQL is optional so existing single-host installations continue to
-/// start. Setting `url` enables migrations, authentication, and database
-/// snapshots of the legacy file stores.
+/// PostgreSQL connection settings shared by local and public editions.
+/// A database URL must be supplied before starting the service.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct DatabaseConfig {
@@ -766,7 +758,7 @@ pub struct ZhongshengRelayPowerManagement {
 pub enum BootConfig {
     Uboot(UbootProfile),
     Pxe(PxeProfile),
-    #[serde(rename = "httpboot", alias = "uefi_http")]
+    #[serde(rename = "httpboot")]
     UefiHttp(UefiHttpProfile),
 }
 
@@ -994,7 +986,6 @@ mod tests {
         assert_eq!(decoded.network_test.max_duration_secs, 3600);
         assert_eq!(decoded.network.interface, "");
         assert_eq!(decoded.upload_limits.session_file_max_mib, 64);
-        assert!(decoded.dtb_dir.ends_with("dtbs"));
         assert!(decoded.http_boot.root_dir.ends_with("http-boot"));
     }
 
@@ -1004,8 +995,6 @@ mod tests {
             r#"
 listen_addr = "0.0.0.0:2999"
 data_dir = ".ostool-server"
-board_dir = ".ostool-server/boards"
-dtb_dir = ".ostool-server/dtbs"
 
 [tftp]
 provider = "builtin"
@@ -1073,8 +1062,6 @@ interface = "eth0"
             r#"
 listen_addr = "0.0.0.0:2999"
 data_dir = ".ostool-server"
-board_dir = ".ostool-server/boards"
-dtb_dir = ".ostool-server/dtbs"
 
 [http_boot]
 enabled = true
@@ -1104,11 +1091,6 @@ interface = "eth0"
     fn system_config_defaults_use_fhs_layout() {
         let config = ServerConfig::default_for_path(Path::new("/etc/ostool-server/config.toml"));
         assert_eq!(config.data_dir, PathBuf::from("/var/lib/ostool-server"));
-        assert_eq!(
-            config.board_dir,
-            PathBuf::from("/var/lib/ostool-server/boards")
-        );
-        assert_eq!(config.dtb_dir, PathBuf::from("/var/lib/ostool-server/dtbs"));
         assert_eq!(
             config.http_boot.root_dir,
             PathBuf::from("/var/lib/ostool-server/http-boot")
@@ -1179,7 +1161,7 @@ board_power_off_cmd = "shutdown"
     }
 
     #[test]
-    fn board_config_defaults_legacy_uboot_network_mode_to_dhcp() {
+    fn board_config_defaults_uboot_network_mode_to_dhcp() {
         let config = r#"
 id = "demo"
 board_type = "demo"

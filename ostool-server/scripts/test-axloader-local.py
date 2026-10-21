@@ -14,6 +14,8 @@ def main():
     parser.add_argument("--kernel", type=Path)
     parser.add_argument("--initramfs", type=Path)
     args = parser.parse_args()
+    if not os.environ.get("OSTOOL_TEST_DATABASE_URL"):
+        parser.error("set OSTOOL_TEST_DATABASE_URL to a disposable PostgreSQL database")
     tgos = args.tgos.resolve()
     workspace = Path(__file__).resolve().parents[2]
     artifacts = Path(tempfile.mkdtemp(prefix="axloader-v6-local-"))

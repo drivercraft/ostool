@@ -1,5 +1,8 @@
 //! Integration tests for serial WebSocket session lifecycle.
 #![cfg(unix)]
+#[path = "support/database.rs"]
+mod test_database;
+use test_database::build_test_app_state as build_app_state;
 
 use std::{
     io::{Read, Write},
@@ -20,7 +23,7 @@ use futures_util::{SinkExt, StreamExt};
 use ostool_server::{
     BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement, PowerManagementConfig,
     SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig, TftpConfig, UbootProfile,
-    UploadLimitsConfig, build_fixture_app_state as build_app_state, build_router,
+    UploadLimitsConfig, build_router,
     tftp::service::{TftpManager, build_tftp_manager},
 };
 use serialport::{SerialPort, TTYPort};
@@ -108,13 +111,9 @@ fn spawn_test_server_with_power_on(
 ) -> Result<TestServerHandle> {
     let config_path = root.join("config.toml");
     let data_dir = root.join("data");
-    let board_dir = root.join("boards");
-    let dtb_dir = root.join("dtbs");
     let tftp_root = root.join("tftp-root");
     let http_boot_root = root.join("http-boot");
 
-    std::fs::create_dir_all(&board_dir)
-        .with_context(|| format!("failed to create {}", board_dir.display()))?;
     let mut tftp = BuiltinTftpConfig::default_with_root(tftp_root);
     tftp.enabled = false;
 
@@ -126,8 +125,6 @@ fn spawn_test_server_with_power_on(
         auth: ostool_server::config::AuthConfig::default(),
         network_test: ostool_server::config::NetworkTestConfig::default(),
         data_dir,
-        board_dir: board_dir.clone(),
-        dtb_dir,
         tftp: TftpConfig::Builtin(tftp),
         http_boot: ostool_server::config::HttpBootConfig::default_with_root(http_boot_root),
         loader_network: ostool_server::LoaderNetworkConfig::default(),
@@ -141,10 +138,6 @@ fn spawn_test_server_with_power_on(
         .with_context(|| format!("failed to write {}", config_path.display()))?;
 
     let board = sample_board_with_power_on(serial_port, power_on_cmd);
-    let board_path = board_dir.join(format!("{}.toml", board.id));
-    std::fs::write(&board_path, toml::to_string_pretty(&board)?)
-        .with_context(|| format!("failed to write {}", board_path.display()))?;
-
     let (addr_tx, addr_rx) = mpsc::channel::<std::result::Result<(SocketAddr, Router), String>>();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let config_path_for_thread = config_path.clone();
@@ -157,7 +150,11 @@ fn spawn_test_server_with_power_on(
             .context("failed to build server runtime")?;
 
         let result: Result<()> = runtime.block_on(async move {
-            let config = ServerConfig::load_or_create(&config_path_for_thread).await?;
+            let mut config = ServerConfig::load_or_create(&config_path_for_thread).await?;
+            let database = test_database::prepare(&config_path_for_thread, &mut config).await?;
+            ostool_server::persistence::BoardStore::new(database)
+                .write_board(&board)
+                .await?;
             let tftp_manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
             let state =
                 build_app_state(config_path_for_thread, config, tftp_manager.clone()).await?;

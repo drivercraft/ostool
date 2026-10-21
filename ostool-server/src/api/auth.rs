@@ -152,10 +152,7 @@ pub async fn middleware(
     if is_public_path(path) {
         return next.run(request).await;
     }
-    let Some(database) = state.database.as_ref() else {
-        return ApiError::service_unavailable("authentication database is not configured")
-            .into_response();
-    };
+    let database = &state.database;
     let Some(token) = bearer_token(request.headers()).or_else(|| {
         (matches!(path, "/api/v1/admin/events" | "/api/v1/account/events"))
             .then(|| request.uri().query())
@@ -249,10 +246,7 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
 
 async fn database(state: &AppState) -> Result<(&Database, crate::config::AuthConfig), ApiError> {
     let config = state.config.read().await.auth.clone();
-    let database = state
-        .database
-        .as_ref()
-        .ok_or_else(|| ApiError::service_unavailable("PostgreSQL is not configured"))?;
+    let database = &state.database;
     Ok((database, config))
 }
 
@@ -636,6 +630,6 @@ fn oauth_error(status: StatusCode, error: &str, description: &str) -> Response {
 async fn auth_config(State(state): State<AppState>) -> Json<serde_json::Value> {
     let config = state.config.read().await;
     Json(
-        serde_json::json!({"edition":config.edition,"enabled":config.edition.is_public(),"allow_registration":config.edition.is_public() && config.auth.allow_registration && state.database.is_some(),"database_available":state.database.is_some()}),
+        serde_json::json!({"edition":config.edition,"enabled":config.edition.is_public(),"allow_registration":config.edition.is_public() && config.auth.allow_registration,"database_available":true}),
     )
 }

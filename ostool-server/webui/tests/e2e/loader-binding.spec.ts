@@ -120,7 +120,6 @@ test("unbound power -> real discovery -> manual MAC binding; push preserves focu
   expect(saved.serial).toBeNull();
   const peer = await context.newPage();
   await peer.goto("/admin/boards");
-  await expect(peer.getByText(/1 份不兼容配置已备份隔离/)).toBeVisible();
   await expect(
     peer.getByRole("link", { name: "e2e-board", exact: true }),
   ).toBeVisible();
@@ -448,6 +447,7 @@ test("viewport panels keep toolbar and footer fixed while tables/forms scroll", 
 
 test("titlebar shares the logo theme and provides notifications, theme and workspace menus", async ({
   page,
+  request,
 }) => {
   await page.emulateMedia({ colorScheme: "light" });
   await page.goto("/admin/boards");
@@ -474,12 +474,25 @@ test("titlebar shares the logo theme and provides notifications, theme and works
     "切换主题",
     "账号菜单",
   ]);
+  const failedPower = await request.post(
+    "http://127.0.0.1:4175/api/v1/admin/power-actions",
+    {
+      data: {
+        request_id: "e2e-notification-failure",
+        action: "on",
+        power_management: {
+          kind: "custom",
+          power_on_cmd: "false",
+          power_off_cmd: "true",
+        },
+      },
+    },
+  );
+  expect(failedPower.status()).toBe(202);
   const messages = page.getByRole("button", { name: /^消息，/ });
   await expect(messages).toHaveAttribute("aria-label", /1 条未读/);
   await messages.click();
-  await expect(
-    page.getByText("不兼容板卡配置已隔离", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("上电操作失败", { exact: true })).toBeVisible();
   await expect(page.getByTestId("notification-badge")).toHaveCount(0);
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "切换主题", exact: true }).click();

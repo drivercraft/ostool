@@ -1955,15 +1955,6 @@
     margin: 6px 0 0;
   }
 }
-.quarantine-entry {
-  margin: 12px 0;
-  overflow-wrap: anywhere;
-}
-.quarantine-entry p {
-  margin: 4px 0;
-  white-space: pre-wrap;
-}
-
 /* Grouped management navigation, following the reference shell hierarchy. */
 .sidebar > nav[aria-label="主导航"] {
   flex: 1;

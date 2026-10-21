@@ -43,7 +43,8 @@ EnvironmentFile=/path/to/ostool.env
 
 Use plain `KEY=value` assignments as in the example, without shell `export` or
 shell substitution. Keep deployment listener, data directories and hardware paths
-in TOML/`.env`. Network, upload and TFTP settings are imported from TOML once and
+in TOML/`.env`. Network, upload and TFTP settings are initialized from TOML on a
+fresh database and
 subsequently managed through the UI/database. `OSTOOL_DATABASE_SCHEMA` optionally
 selects a schema (1–63 ASCII letters, digits or underscores); migrations create
 it when enabled. Use the same URL/schema when switching edition to retain data.
@@ -73,30 +74,87 @@ unassigned before changing permission level or deleting them.
 Both editions use PostgreSQL for durable business data. Bootstrap deployment
 configuration and hardware assets remain external; live hardware state and
 lease artifacts have their own short lifecycle. Back up the database and
-deployment configuration; retain legacy imports as recovery backups.
+deployment configuration. Runtime business operations never read old files.
 
 | Data | Current authority | Restart behavior |
 | --- | --- | --- |
 | Users, roles, OAuth sessions, device codes, PAT hashes (public only) | PostgreSQL | Persisted |
 | Scheduled board rentals (public only) | PostgreSQL | Persisted; eligibility recalculated at startup |
-| Board inventory | PostgreSQL in both editions | One-time legacy import tracked in `storage_imports`; old files never overwrite DB after import |
-| DTB payloads and metadata | PostgreSQL (`dtb_records.content` is BYTEA) | One-time import; readable without original files |
-| OTA images, jobs and device observations | PostgreSQL (`ota_images`, `server_records`) | One-time import; original files are no longer authoritative |
-| Editable TFTP/network/upload settings | PostgreSQL (`server_records`) | Imported once from TOML; UI changes survive restart |
+| Board inventory | PostgreSQL in both editions | Database only; manual offline import available for existing TOMLs |
+| DTB payloads and metadata | PostgreSQL (`dtb_records.content` is BYTEA) | Persisted; source files are not used |
+| OTA images, jobs and device observations | PostgreSQL (`ota_images`, `server_records`) | Persisted; old OTA files are not imported |
+| Editable TFTP/network/upload settings | PostgreSQL (`server_records`) | Initial defaults from TOML on a fresh DB; UI changes survive restart |
 | Bootstrap listener, database URL/schema, edition, secrets, hardware paths | TOML + environment | Applied on startup; never copied into database settings |
 | Active leases, serial connections, loader discovery, power action state | Memory | No live hardware sessions restored on restart |
 | Session artifacts | Files scoped to leases | Cleaned up with lease lifecycle |
 
-Deletion of an imported board cannot resurrect it from the retained TOML backup.
-To import additional inventory after initialization, use the management API.
-Active sessions are not restored as hardware connections after restart; this
-does not provide persistent historical-lease reporting. Missing legacy DTB
-payloads or corrupt OTA sources stop first migration with an error rather than
-silently dropping records. After import, manual source-file edits have no effect.
+The server has no board/DTB directory configuration, startup file import,
+quarantine workflow or file storage fallback. Active sessions are not restored as
+hardware connections after restart; this does not provide persistent
+historical-lease reporting.
+
+## Existing board migration
+
+After deploying the new binaries, run the separate migration executable manually.
+The install/update scripts install it but never execute it. Source checkout users
+can build both binaries with `cargo build --release -p ostool-server` and use
+`scripts/migrate-boards.sh` as a launcher.
+
+Back up PostgreSQL and the existing board/DTB directories, then stop the old
+service before the actual import. Set the **target** `OSTOOL_DATABASE_URL` and,
+if needed, `OSTOOL_DATABASE_SCHEMA` in the deployment environment file. The tool
+reads only database settings from `--config` / `--env-file` and process variables;
+it does not initialize authentication, network, power, serial or hardware services.
+Process variables override the environment file.
+
+For a target schema already initialized by the new version, first check the
+migration without changing schema or business records:
+
+```bash
+ostool-server/scripts/migrate-boards.sh \
+  --env-file /path/to/ostool.env \
+  --board-dir /path/to/existing/boards \
+  --dtb-dir /path/to/existing/dtbs \
+  --dry-run
+```
+
+Run the import by removing `--dry-run`:
+
+```bash
+ostool-server/scripts/migrate-boards.sh \
+  --env-file /path/to/ostool.env \
+  --board-dir /path/to/existing/boards \
+  --dtb-dir /path/to/existing/dtbs
+```
+
+Without a checkout, invoke the installed `ostool-server-migrate-boards` with the
+same arguments. `--config /path/to/config.toml` is optional for target database
+settings. Normal import applies SQLx schema migrations first, so an empty target
+database does not require starting the hardware service. `--dry-run` requires an
+already initialized schema and disables schema migrations. If no board references
+a DTB, omit `--dtb-dir`.
+
+The tool reads direct `<board-id>.toml` files in sorted order, validates the
+current board configuration and imports only DTBs referenced by those boards.
+It does not convert obsolete board formats or import OTA/settings/account files.
+All inputs and ID/MAC/DTB conflicts are checked before insertion. New boards,
+referenced DTBs and the import audit event commit in one transaction; any failure
+rolls them all back. Identical existing records are skipped, making repeated
+runs safe. Existing IDs or DTB names with different content, duplicate MACs,
+invalid boards and missing referenced DTBs fail the whole import without
+silently overwriting or dropping inventory. Source files are never moved,
+rewritten or deleted.
+
+After success, start/restart the new server to load the imported inventory.
+Retain the source backup as needed; subsequent file edits have no effect. All
+future board/DTB operations use the management UI/API and PostgreSQL.
 
 ## Verification
 
 ```bash
+# Use a disposable database; tests create isolated schemas.
+export OSTOOL_TEST_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:5432/ostool_tests
+export RUST_TEST_THREADS=4
 cargo test -p ostool-server
 pnpm --dir ostool-server/webui test
 pnpm --dir ostool-server/webui build
@@ -105,8 +163,8 @@ pnpm --dir ostool-server/webui build
 PostgreSQL integration tests use a disposable database and an isolated schema:
 
 ```bash
-OSTOOL_TEST_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54329/ostool \
-  cargo test -p ostool-server --test auth_postgres --test account_postgres --test unified_persistence --test audit_postgres -- --ignored
+cargo test -p ostool-server --test auth_postgres --test account_postgres \
+  --test unified_persistence --test audit_postgres --test board_migration -- --ignored
 ```
 
 For the full browser account-management test, start a disposable public environment
@@ -122,7 +180,7 @@ OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_br
 ```
 
 The local browser database must be a separate disposable database created for
-tests. The fixture uses a fresh schema per run, so imported files and existing
+tests. The fixture uses a fresh schema per run, so test records and existing
 boards never collide with a previous run or development inventory. CI provides
 its PostgreSQL service automatically. Public account tests create users/roles
 in the separately supplied public test environment. Without

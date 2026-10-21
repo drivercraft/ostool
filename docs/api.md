@@ -299,8 +299,6 @@ GET /api/v1/admin/overview
   "server": {
     "listen_addr": "0.0.0.0:2999",
     "data_dir": "/var/lib/ostool-server",
-    "board_dir": "/var/lib/ostool-server/boards",
-    "dtb_dir": "/var/lib/ostool-server/dtbs",
     "http_boot_public_base_url": null,
     "dtb_upload_max_mib": 10
   }
@@ -651,8 +649,6 @@ GET /api/v1/admin/server-config
   "readonly": {
     "listen_addr": "0.0.0.0:2999",
     "data_dir": "/var/lib/ostool-server",
-    "board_dir": "/var/lib/ostool-server/boards",
-    "dtb_dir": "/var/lib/ostool-server/dtbs",
     "http_boot_public_base_url": null,
     "dtb_upload_max_mib": 10
   },

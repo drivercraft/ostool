@@ -9,7 +9,9 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use httpboot_protocol::*;
 use ostool_serial::{PortLocator, SerialManager};
-use ostool_server::build_fixture_app_state as build_app_state;
+#[path = "support/database.rs"]
+mod test_database;
+use test_database::build_test_app_state as build_app_state;
 #[path = "common/serial.rs"]
 mod serial_fixture;
 use ostool_server::{session::SessionBootCommand, tftp::service::build_tftp_manager, *};
@@ -169,8 +171,7 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
     let config_path = dir.path().join("server.toml");
     let mut config = ServerConfig::default_for_path(&config_path);
     config.data_dir = dir.path().join("data");
-    config.board_dir = dir.path().join("boards");
-    config.dtb_dir = dir.path().join("dtbs");
+
     config.tftp = TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(
         dir.path().join("files"),
     ));

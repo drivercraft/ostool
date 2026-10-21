@@ -4,7 +4,7 @@ use super::{
     error::ApiError,
     rentals::{self, RentalInput},
 };
-use crate::{AppState, persistence::postgres::Database};
+use crate::AppState;
 use axum::{
     Json, Router,
     extract::{Extension, Path, State},
@@ -79,12 +79,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/admin/rental-requests", get(admin_list))
         .route("/api/v1/admin/rental-requests/{id}/review", post(review))
 }
-fn database(state: &AppState) -> Result<&Database, ApiError> {
-    state
-        .database
-        .as_ref()
-        .ok_or_else(|| ApiError::service_unavailable("个人工作台需要 PostgreSQL"))
-}
+
 fn db_error(error: sqlx::Error) -> ApiError {
     if error
         .as_database_error()
@@ -104,7 +99,7 @@ pub async fn list_requests(
         return Ok(Vec::new());
     }
     sqlx::query_as("SELECT r.*,u.email AS user_email FROM rental_requests r JOIN users u ON u.id=r.user_id WHERE ($1::uuid IS NULL OR r.user_id=$1) ORDER BY r.created_at DESC,r.id")
-        .bind(user).fetch_all(database(state)?.pool()).await.map_err(db_error)
+        .bind(user).fetch_all(state.database.pool()).await.map_err(db_error)
 }
 async fn admin_list(State(state): State<AppState>) -> Result<Json<Vec<RentalRequest>>, ApiError> {
     list_requests(&state, None).await.map(Json)
@@ -117,7 +112,7 @@ async fn snapshot(
 }
 
 pub(crate) async fn projection(state: &AppState, user: Uuid) -> Result<Value, ApiError> {
-    let db = database(state)?;
+    let db = &state.database;
     let profile = db
         .user_by_id(user)
         .await
@@ -157,7 +152,7 @@ async fn update_profile(
     {
         return Err(ApiError::bad_request("显示名称不超过 120 个字符"));
     }
-    let db = database(&state)?;
+    let db = &state.database;
     let mut tx = db.pool().begin().await.map_err(db_error)?;
     let current = sqlx::query(
         "SELECT email,password_hash FROM users WHERE id=$1 AND NOT disabled FOR UPDATE",
@@ -204,7 +199,7 @@ async fn change_password(
     if !(12..=1024).contains(&input.new_password.len()) || input.current_password.len() > 1024 {
         return Err(ApiError::bad_request("密码长度需要 12 至 1024 个字符"));
     }
-    let db = database(&state)?;
+    let db = &state.database;
     let mut tx = db.pool().begin().await.map_err(db_error)?;
     let hash: String = sqlx::query_scalar(
         "SELECT password_hash FROM users WHERE id=$1 AND NOT disabled FOR UPDATE",
@@ -270,15 +265,15 @@ async fn submit(
     {
         return Err(ApiError::bad_request("开发板不存在或已禁用"));
     }
-    let overlap:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM board_rentals WHERE board_id=$1 AND cancelled_at IS NULL AND starts_at<$3 AND ends_at>$2)").bind(&input.board_id).bind(input.starts_at).bind(input.ends_at).fetch_one(database(&state)?.pool()).await.map_err(db_error)?;
+    let overlap:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM board_rentals WHERE board_id=$1 AND cancelled_at IS NULL AND starts_at<$3 AND ends_at>$2)").bind(&input.board_id).bind(input.starts_at).bind(input.ends_at).fetch_one(state.database.pool()).await.map_err(db_error)?;
     if overlap {
         return Err(ApiError::conflict("该时段已有租赁，请调整申请时间"));
     }
-    let duplicate:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM rental_requests WHERE user_id=$1 AND board_id=$2 AND status='pending' AND starts_at=$3 AND ends_at=$4)").bind(user.id).bind(&input.board_id).bind(input.starts_at).bind(input.ends_at).fetch_one(database(&state)?.pool()).await.map_err(db_error)?;
+    let duplicate:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM rental_requests WHERE user_id=$1 AND board_id=$2 AND status='pending' AND starts_at=$3 AND ends_at=$4)").bind(user.id).bind(&input.board_id).bind(input.starts_at).bind(input.ends_at).fetch_one(state.database.pool()).await.map_err(db_error)?;
     if duplicate {
         return Err(ApiError::conflict("相同申请正在审核中，请勿重复提交"));
     }
-    let id: Uuid = sqlx::query_scalar("INSERT INTO rental_requests (user_id,board_id,starts_at,ends_at,notes) VALUES ($1,$2,$3,$4,$5) RETURNING id").bind(user.id).bind(input.board_id).bind(input.starts_at).bind(input.ends_at).bind(input.notes).fetch_one(database(&state)?.pool()).await.map_err(db_error)?;
+    let id: Uuid = sqlx::query_scalar("INSERT INTO rental_requests (user_id,board_id,starts_at,ends_at,notes) VALUES ($1,$2,$3,$4,$5) RETURNING id").bind(user.id).bind(input.board_id).bind(input.starts_at).bind(input.ends_at).bind(input.notes).fetch_one(state.database.pool()).await.map_err(db_error)?;
     state.admin_events.invalidate(&["rental_requests"]);
     Ok((
         StatusCode::CREATED,
@@ -290,7 +285,7 @@ async fn withdraw(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let count=sqlx::query("UPDATE rental_requests SET status='cancelled' WHERE id=$1 AND user_id=$2 AND status='pending'").bind(id).bind(user.id).execute(database(&state)?.pool()).await.map_err(db_error)?.rows_affected();
+    let count=sqlx::query("UPDATE rental_requests SET status='cancelled' WHERE id=$1 AND user_id=$2 AND status='pending'").bind(id).bind(user.id).execute(state.database.pool()).await.map_err(db_error)?.rows_affected();
     if count == 0 {
         return Err(ApiError::not_found("申请不存在或已处理"));
     }
@@ -308,7 +303,7 @@ async fn review(
     }
     match input.decision.as_str() {
         "approve" => {
-            let request: RentalRequest=sqlx::query_as("SELECT r.*,u.email AS user_email FROM rental_requests r JOIN users u ON r.user_id=u.id WHERE r.id=$1").bind(id).fetch_optional(database(&state)?.pool()).await.map_err(db_error)?.ok_or_else(|| ApiError::not_found("申请不存在"))?;
+            let request: RentalRequest=sqlx::query_as("SELECT r.*,u.email AS user_email FROM rental_requests r JOIN users u ON r.user_id=u.id WHERE r.id=$1").bind(id).fetch_optional(state.database.pool()).await.map_err(db_error)?.ok_or_else(|| ApiError::not_found("申请不存在"))?;
             rentals::save_internal(
                 &state,
                 None,
@@ -324,7 +319,7 @@ async fn review(
             .await?;
         }
         "reject" => {
-            let count=sqlx::query("UPDATE rental_requests SET status='rejected',decision_note=$2,reviewed_by=$3,reviewed_at=now() WHERE id=$1 AND status='pending'").bind(id).bind(input.note).bind(user.id).execute(database(&state)?.pool()).await.map_err(db_error)?.rows_affected();
+            let count=sqlx::query("UPDATE rental_requests SET status='rejected',decision_note=$2,reviewed_by=$3,reviewed_at=now() WHERE id=$1 AND status='pending'").bind(id).bind(input.note).bind(user.id).execute(state.database.pool()).await.map_err(db_error)?.rows_affected();
             if count == 0 {
                 return Err(ApiError::conflict("申请不存在或已处理"));
             }

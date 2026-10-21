@@ -249,6 +249,7 @@ echo "==> Building updated binary..."
 
 STAGING_DIR="$(mktemp -d)"
 STAGED_BIN_PATH="${STAGING_DIR}/bin/${SERVICE_NAME}"
+STAGED_MIGRATION_PATH="${STAGING_DIR}/bin/ostool-server-migrate-boards"
 
 if [[ -n "$LOCAL_PATH" ]]; then
     if [[ ! -d "$LOCAL_PATH" ]]; then
@@ -268,6 +269,10 @@ if [[ ! -x "${STAGED_BIN_PATH}" ]]; then
     exit 1
 fi
 
+if [[ ! -x "${STAGED_MIGRATION_PATH}" ]]; then
+    echo "Failed to locate migration executable: ${STAGED_MIGRATION_PATH}" >&2
+    exit 1
+fi
 echo "Built staged binary: ${STAGED_BIN_PATH}"
 
 echo ""
@@ -286,6 +291,7 @@ run_cmd systemctl stop "${SERVICE_NAME}" || true
 run_cmd systemctl reset-failed "${SERVICE_NAME}" || true
 run_cmd mkdir -p "${SYSTEM_BIN_DIR}"
 run_cmd install -m 755 "${STAGED_BIN_PATH}" "${SYSTEM_BIN_PATH}"
+run_cmd install -m 755 "${STAGED_MIGRATION_PATH}" "${SYSTEM_BIN_DIR}/ostool-server-migrate-boards"
 echo "Installed updated binary to: ${SYSTEM_BIN_PATH}"
 
 if run_cmd systemctl start "${SERVICE_NAME}"; then

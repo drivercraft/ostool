@@ -258,16 +258,9 @@ fn db_error(error: sqlx::Error) -> ApiError {
     log::error!("audit database operation failed: {error}");
     ApiError::service_unavailable("审计数据库暂时不可用")
 }
-fn pool(state: &AppState) -> Result<&sqlx::PgPool, ApiError> {
-    state
-        .database
-        .as_ref()
-        .map(|db| db.pool())
-        .ok_or_else(|| ApiError::service_unavailable("审计日志需要 PostgreSQL"))
-}
 pub async fn page(state: &AppState, filters: &Filters) -> Result<Value, ApiError> {
     filters.validate()?;
-    let pool = pool(state)?;
+    let pool = state.database.pool();
     let total: i64 = filters
         .sql("SELECT count(*)")
         .build_query_scalar()
@@ -322,7 +315,7 @@ async fn detail(
 ) -> Result<Json<Event>, ApiError> {
     sqlx::query_as("SELECT * FROM audit_events WHERE id=$1")
         .bind(id)
-        .fetch_optional(pool(&state)?)
+        .fetch_optional(state.database.pool())
         .await
         .map_err(db_error)?
         .map(Json)
@@ -345,7 +338,7 @@ async fn export(
     Query(filters): Query<Filters>,
 ) -> Result<Response, ApiError> {
     filters.validate()?;
-    let pool = pool(&state)?;
+    let pool = state.database.pool();
     let count: i64 = filters
         .sql("SELECT count(*)")
         .build_query_scalar()
@@ -430,7 +423,7 @@ pub async fn cleanup(state: &AppState, days: u32) -> Result<u64, ApiError> {
     }
     let count = sqlx::query("DELETE FROM audit_events WHERE created_at<$1 AND result<>'pending'")
         .bind(Utc::now() - chrono::Duration::days(i64::from(days)))
-        .execute(pool(state)?)
+        .execute(state.database.pool())
         .await
         .map_err(db_error)?
         .rows_affected();
@@ -703,9 +696,6 @@ pub async fn middleware(State(state): State<AppState>, request: Request, next: N
     response
 }
 async fn audited_request(state: &AppState, request: Request, next: Next) -> Response {
-    if state.database.is_none() {
-        return next.run(request).await;
-    }
     let path = request.uri().path().to_string();
     let method = request.method().clone();
     if intent(&method, &path, &Value::Null).is_none() {
@@ -793,12 +783,7 @@ async fn audited_request(state: &AppState, request: Request, next: Next) -> Resp
         });
     if public
         && let Some(token) = token
-        && let Ok(Some(user)) = state
-            .database
-            .as_ref()
-            .expect("database")
-            .authenticate_token(&token)
-            .await
+        && let Ok(Some(user)) = state.database.authenticate_token(&token).await
     {
         actor = Actor::user(&user);
     }
@@ -960,7 +945,7 @@ async fn begin(
     details: &Value,
 ) -> Result<Uuid, ApiError> {
     let id = Uuid::new_v4();
-    let result=sqlx::query("INSERT INTO audit_events(id,request_id,actor_id,actor_name,actor_kind,source,action,summary,resource,target_id,method,route,ip,user_agent,result,details) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'pending',$15)").bind(id).bind(ctx.request_id).bind(ctx.actor.id).bind(&ctx.actor.name).bind(&ctx.actor.kind).bind(&ctx.source).bind(action).bind(summary).bind(resource).bind(target).bind(method).bind(route).bind(&ctx.ip).bind(&ctx.user_agent).bind(details).execute(pool(state)?).await;
+    let result=sqlx::query("INSERT INTO audit_events(id,request_id,actor_id,actor_name,actor_kind,source,action,summary,resource,target_id,method,route,ip,user_agent,result,details) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'pending',$15)").bind(id).bind(ctx.request_id).bind(ctx.actor.id).bind(&ctx.actor.name).bind(&ctx.actor.kind).bind(&ctx.source).bind(action).bind(summary).bind(resource).bind(target).bind(method).bind(route).bind(&ctx.ip).bind(&ctx.user_agent).bind(details).execute(state.database.pool()).await;
     if let Err(error) = result {
         state.audit.failed();
         return Err(db_error(error));
@@ -977,7 +962,7 @@ async fn finish(
     duration: i64,
     details: Option<Value>,
 ) -> Result<(), ApiError> {
-    let update=sqlx::query("UPDATE audit_events SET finished_at=now(),actor_id=$2,actor_name=$3,actor_kind=$4,result=$5,status_code=$6,duration_ms=$7,details=COALESCE($8::jsonb,details),target_id=COALESCE($8::jsonb->>'created_id',target_id) WHERE id=$1").bind(id).bind(actor.id).bind(&actor.name).bind(&actor.kind).bind(result).bind(status.map(i32::from)).bind(duration).bind(details).execute(pool(state)?).await;
+    let update=sqlx::query("UPDATE audit_events SET finished_at=now(),actor_id=$2,actor_name=$3,actor_kind=$4,result=$5,status_code=$6,duration_ms=$7,details=COALESCE($8::jsonb,details),target_id=COALESCE($8::jsonb->>'created_id',target_id) WHERE id=$1").bind(id).bind(actor.id).bind(&actor.name).bind(&actor.kind).bind(result).bind(status.map(i32::from)).bind(duration).bind(details).execute(state.database.pool()).await;
     if let Err(error) = update {
         state.audit.failed();
         return Err(db_error(error));
@@ -1017,9 +1002,6 @@ pub async fn event(
     success: bool,
     details: Value,
 ) {
-    if state.database.is_none() {
-        return;
-    }
     if let Ok(id) = begin(
         state, ctx, action, summary, resource, target, None, None, &details,
     )

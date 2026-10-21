@@ -106,9 +106,7 @@ async fn delete_image(
             DeleteImageError::InvalidDigest => ApiError::bad_request(error.to_string()),
             DeleteImageError::NotFound => ApiError::not_found(error.to_string()),
             DeleteImageError::InUse => ApiError::conflict(error.to_string()),
-            DeleteImageError::Inconsistent
-            | DeleteImageError::Io(_)
-            | DeleteImageError::Database(_) => ApiError::internal(error.to_string()),
+            DeleteImageError::Database(_) => ApiError::internal(error.to_string()),
         })?;
     state.admin_events.invalidate(&["ota"]);
     Ok(StatusCode::NO_CONTENT)

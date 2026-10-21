@@ -55,7 +55,6 @@ export default function Boards() {
         .includes(virtualSearch.toLowerCase()),
     ) ?? [];
   const task = useAction();
-  const quarantined = useList("quarantined_boards");
   const filtered = boards.filter(
     (b) =>
       (!search ||
@@ -79,26 +78,6 @@ export default function Boards() {
   const virtualPage = useListPage(filteredVirtual, virtualSearch);
   return (
     <>
-      {quarantined.length > 0 && (
-        <Notice>
-          <details>
-            <summary>
-              {quarantined.length} 份不兼容配置已备份隔离，其余开发板可正常使用
-            </summary>
-            {quarantined.map((q) => (
-              <div key={q.backup_path} className="quarantine-entry">
-                <strong>{q.original_path.split("/").pop()}</strong>
-                <p>{q.reason}</p>
-                <code>{q.backup_path}</code>
-              </div>
-            ))}
-            <p>
-              修正备份内容后，通过管理页面或 API
-              重新创建板卡；首次导入后，重启不会重新导入旧文件。
-            </p>
-          </details>
-        </Notice>
-      )}
       <Tabs
         value={view}
         onValueChange={setView}

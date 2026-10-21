@@ -18,7 +18,6 @@ use tokio::sync::{Notify, watch};
 
 pub const TOPICS: &[&str] = &[
     "boards",
-    "quarantined_boards",
     "runtimes",
     "sessions",
     "loaders",
@@ -247,7 +246,7 @@ async fn subscribe_scoped(
         .map(str::to_owned)
         .or_else(|| query.get("access_token").cloned());
     let database = if state.config.read().await.edition.is_public() {
-        state.database.clone()
+        Some(state.database.clone())
     } else {
         None
     };

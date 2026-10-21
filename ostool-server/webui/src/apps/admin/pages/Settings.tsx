@@ -312,8 +312,6 @@ function ServerForm({ source }: { source: AdminServerConfigResponse }) {
           entries={{
             监听地址: source.readonly.listen_addr,
             数据目录: source.readonly.data_dir,
-            板卡目录: source.readonly.board_dir,
-            "DTB 目录": source.readonly.dtb_dir,
             "HTTP Boot 公共地址": source.readonly.http_boot_public_base_url,
             "DTB 上传上限": `${source.readonly.dtb_upload_max_mib} MiB`,
           }}

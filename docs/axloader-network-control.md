@@ -194,7 +194,9 @@ Session 配置为 `serial: null`，server 必须自动匹配 UART、应用上报
 
 ```bash
 cargo build -p ostool-server
-python3 ostool-server/scripts/test-axloader-local.py --tgos /path/to/tgoskits-dev
+# 使用独立测试数据库，测试自动创建隔离 schema
+OSTOOL_TEST_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_tests \
+  python3 ostool-server/scripts/test-axloader-local.py --tgos /path/to/tgoskits-dev
 ```
 
 TGOS 单仓用 `cargo xtask axloader test qemu --target x86_64-unknown-uefi` 验证

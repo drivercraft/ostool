@@ -7,6 +7,7 @@ edition = "2024"
 keywords = ["embedded", "u-boot", "tftp", "serial", "server"]
 license = "MIT OR Apache-2.0"
 name = "ostool-server"
+default-run = "ostool-server"
 readme = "README.md"
 repository = "https://github.com/drivercraft/ostool"
 version = "0.9.1"
@@ -21,6 +22,10 @@ pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-{ version }
 [[bin]]
 name = "ostool-server"
 path = "src/main.rs"
+
+[[bin]]
+name = "ostool-server-migrate-boards"
+path = "tools/migrate-boards.rs"
 
 [dependencies]
 anyhow = {workspace = true}

@@ -20,21 +20,20 @@ ostool-server/
 │   │   ├── postgres.rs       # PostgreSQL pool, migrations and account storage
 │   │   ├── boards.rs         # Development-board repository
 │   │   ├── dtbs.rs           # DTB metadata and binary-content repository
-│   │   └── legacy/           # Legacy file import and explicit file fixtures
 │   ├── static_assets.rs      # Embedded website/admin document and asset delivery
 │   └── ...                   # Hardware services and application state
 ├── migrations/               # SQLx schema migrations, relative to Cargo.toml
-├── tests/                    # Rust integration tests
+├── tools/migrate-boards.rs    # Standalone offline board importer
+├── scripts/migrate-boards.sh  # Manual migration launcher
+├── tests/                    # Rust integration tests with disposable PostgreSQL
 └── webui/                    # React/Vite website and management console
 ```
 
-Production constructs repositories with `open_postgres`; both local and public
-editions require PostgreSQL. Legacy file parsing and writing live in
-`persistence/legacy`, used for one-time imports and explicit test fixtures. A
-database failure is returned to the caller and never selects the file adapter.
-Earlier public Rust module paths (`database`, `board_store::fs`, `dtb_store`,
-`web`) remain deprecated compatibility re-exports; new code uses `persistence`
-and `static_assets`. SQL schemas, runtime data paths and HTTP routes are unchanged.
+Both local and public editions use only PostgreSQL for durable business data.
+`src/persistence/` contains the database repositories; `migrations/` contains
+SQLx schema history and stays relative to `Cargo.toml`. The service never reads
+old board/DTB/OTA files and has no file backend or old module aliases. Existing
+board inventory can be imported manually with the [offline migration tool](deploy/README.md#existing-board-migration).
 
 ## Serial transport
 
@@ -94,10 +93,10 @@ The script will:
 
 - check that Node.js 18+ and pnpm are available for the embedded web UI build
 - install `ostool-server` with `cargo install`
-- install the binary to `/usr/local/bin/ostool-server`
+- install `ostool-server` and `ostool-server-migrate-boards` to `/usr/local/bin`
 - stop an existing `ostool-server` systemd service if present
 - recreate `/etc/ostool-server`
-- create the board, DTB, and TFTP/session artifact directories
+- create configuration, runtime data and TFTP/session artifact directories
 - install `/etc/systemd/system/ostool-server.service`
 - start the service if you confirm it
 
@@ -155,7 +154,8 @@ The default listen address is:
 
 The default is `OSTOOL_EDITION=local`: no login, registration, user/role or
 rental management. Existing `ostool` clients continue to use `auth_mode=disabled`.
-Connecting PostgreSQL in local edition changes inventory persistence only.
+PostgreSQL is required in local edition as well; edition only controls account
+and rental features.
 
 For public deployments, explicitly set `OSTOOL_EDITION=public`, supply
 `OSTOOL_DATABASE_URL` and initialize an administrator. Public edition always
@@ -173,10 +173,11 @@ maintenance access. Expiry/cancellation terminates member sessions through the
 existing power-off and file-cleanup coordinator; the next user must wait until
 hardware release completes. Ordinary heartbeat TTL cannot extend that interval.
 
-Board TOML records are imported once into PostgreSQL when configured. Subsequent
-inventory reads/writes use the database. DTB contents, OTA state and runtime
-leases retain their documented storage models; see the
-[persistence matrix](deploy/README.md#persistence-status).
+Board inventory, DTB content and OTA data use PostgreSQL from the first start.
+To migrate existing board TOMLs after deploying the new version, run
+`scripts/migrate-boards.sh` manually; startup and deployment scripts never import
+business files. See [migration instructions](deploy/README.md#existing-board-migration)
+and the [persistence matrix](deploy/README.md#persistence-status).
 
 The frontend reads runtime edition information from the Rust server rather than
 an independent build flag, so one binary supports both editions and UI settings
@@ -425,8 +426,8 @@ and existing actions work in both views.
 
 Board inventory, DTB bytes/metadata, OTA image bytes/metadata/jobs/observations,
 and editable network/TFTP/upload settings are authoritative in PostgreSQL for
-both editions. Old files are imported once and retained as backups, never used
-to overwrite database edits or resurrect deleted records. Deployment variables
+both editions. The running server never reads old business files. Existing boards
+and their referenced DTBs have a separate, manual migration tool. Deployment variables
 (database connection, edition, listen address, credentials and hardware paths)
 remain in TOML/`.env`; secrets are excluded from database settings. Live leases,
 connections and discovery remain process state, while session artifacts remain
@@ -493,7 +494,3 @@ Power completion means the command completed, not confirmed physical feedback.
 Leaving the page does not reverse or cancel a submitted power action.
 
 See [the management protocol and development guide](../docs/admin-ui.md).
-
-Incompatible board TOML files are moved into `board_dir/quarantine/<timestamp>-<UUID>/`
-with their original contents and a `reason.json` report. Valid boards still load;
-the console shows backup locations. Storage/backup errors remain explicit failures.

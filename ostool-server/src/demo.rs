@@ -1,9 +1,8 @@
 //! Explicit, loopback-only development fixtures. Never enabled by deployment configuration.
 use std::{net::IpAddr, time::Duration};
 
-use anyhow::{Context, bail};
+use anyhow::bail;
 use chrono::Utc;
-use sha2::{Digest, Sha256};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -137,17 +136,6 @@ pub async fn seed(state: &AppState) -> anyhow::Result<DemoRuntime> {
         if state.dtb_store.get(&name).await?.is_none() {
             state.dtb_store.write(&name, &demo_dtb(index)).await?;
         }
-        if let Some(db) = &state.database {
-            let bytes = state.dtb_store.read(&name).await?;
-            let dir = state.config.read().await.dtb_dir.clone();
-            db.sync_dtb(
-                &name,
-                bytes.len() as u64,
-                &dir.join(&name).to_string_lossy(),
-                &format!("{:x}", Sha256::digest(&bytes)),
-            )
-            .await?;
-        }
     }
     let admin = if state.config.read().await.edition.is_public() {
         seed_identity(state).await?
@@ -179,7 +167,8 @@ pub async fn seed(state: &AppState) -> anyhow::Result<DemoRuntime> {
                     )
                     .await?;
                 manager.put_session_file(&session.id, "demo/logs/boot.log", format!("[DEMO] session {}\n[DEMO] waiting for a device; no physical board attached\n", session.id).as_bytes()).await?;
-                if let (Some(db), Some(admin)) = (&state.database, admin) {
+                if let Some(admin) = admin {
+                    let db = &state.database;
                     sqlx::query("INSERT INTO session_owners (session_id,user_id) VALUES ($1,$2)")
                         .bind(&session.id)
                         .bind(admin)
@@ -244,10 +233,7 @@ fn demo_uuid(kind: u128, index: usize) -> Uuid {
 }
 
 async fn seed_identity(state: &AppState) -> anyhow::Result<Option<Uuid>> {
-    let db = state
-        .database
-        .as_ref()
-        .context("public demo requires PostgreSQL")?;
+    let db = &state.database;
     let mut tx = db.pool().begin().await?;
     for (index, name) in [
         "演示运维管理员",
@@ -348,14 +334,14 @@ fn demo_dtb(index: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{build_fixture_app_state as build_app_state, tftp::service::build_tftp_manager};
+    use crate::{
+        test_support::build_test_app_state as build_app_state, tftp::service::build_tftp_manager,
+    };
 
     fn test_config(dir: &std::path::Path) -> ServerConfig {
         ServerConfig {
             listen_addr: "127.0.0.1:0".parse().unwrap(),
             data_dir: dir.join("data"),
-            board_dir: dir.join("boards"),
-            dtb_dir: dir.join("dtbs"),
             tftp: TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(dir.join("tftp"))),
             network: crate::TftpNetworkConfig {
                 interface: "lo".into(),
@@ -379,7 +365,7 @@ mod tests {
             .unwrap();
         state.ensure_data_dirs().await.unwrap();
         let demo = seed(&state).await.unwrap();
-        let db = state.database.as_ref().unwrap();
+        let db = &state.database;
         for (query, expected) in [
             (
                 "SELECT count(*) FROM board_records WHERE id LIKE 'demo-%'",

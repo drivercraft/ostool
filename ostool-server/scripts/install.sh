@@ -269,6 +269,7 @@ echo "==> Installing ostool-server..."
 
 STAGING_DIR="$(mktemp -d)"
 STAGED_BIN_PATH="${STAGING_DIR}/bin/${SERVICE_NAME}"
+STAGED_MIGRATION_PATH="${STAGING_DIR}/bin/ostool-server-migrate-boards"
 
 if [[ -n "$LOCAL_PATH" ]]; then
     if [[ ! -d "$LOCAL_PATH" ]]; then
@@ -288,12 +289,17 @@ if [[ ! -x "${STAGED_BIN_PATH}" ]]; then
     exit 1
 fi
 
+if [[ ! -x "${STAGED_MIGRATION_PATH}" ]]; then
+    echo "Failed to locate migration executable: ${STAGED_MIGRATION_PATH}" >&2
+    exit 1
+fi
 echo "Built staged binary: ${STAGED_BIN_PATH}"
 
 echo ""
 echo "==> Installing system binary..."
 run_cmd mkdir -p "${SYSTEM_BIN_DIR}"
 run_cmd install -m 755 "${STAGED_BIN_PATH}" "${SYSTEM_BIN_PATH}"
+run_cmd install -m 755 "${STAGED_MIGRATION_PATH}" "${SYSTEM_BIN_DIR}/ostool-server-migrate-boards"
 echo "Installed system binary to: ${SYSTEM_BIN_PATH}"
 
 # --- step 6: create FHS directories ---
@@ -302,14 +308,12 @@ echo ""
 echo "==> Creating directories..."
 
 run_cmd mkdir -p "${CONFIG_DIR}"
-run_cmd mkdir -p "${DATA_DIR}/boards"
-run_cmd mkdir -p "${DATA_DIR}/dtbs"
+run_cmd mkdir -p "${DATA_DIR}"
 run_cmd mkdir -p "${TFTP_ROOT_DIR}"
 
 echo "Created:"
 echo "  ${CONFIG_DIR}"
-echo "  ${DATA_DIR}/boards"
-echo "  ${DATA_DIR}/dtbs"
+echo "  ${DATA_DIR}"
 echo "  ${TFTP_ROOT_DIR}"
 
 # --- step 7: generate default config ---

@@ -62,8 +62,7 @@ async fn complete_audit_contract_with_real_postgres() {
     let mut config = ServerConfig {
         edition: Edition::Public,
         data_dir: dir.path().join("data"),
-        board_dir: dir.path().join("boards"),
-        dtb_dir: dir.path().join("dtbs"),
+
         database: DatabaseConfig {
             url: Some(url.to_string()),
             ..Default::default()
@@ -91,7 +90,7 @@ async fn complete_audit_contract_with_real_postgres() {
     .await
     .unwrap();
     let app = build_router(state.clone());
-    let pool = state.database.as_ref().unwrap().pool();
+    let pool = state.database.pool();
     assert_eq!(
         call(
             &app,
@@ -180,8 +179,6 @@ async fn complete_audit_contract_with_real_postgres() {
     assert!(
         state
             .database
-            .as_ref()
-            .unwrap()
             .authenticate_token(backend_grant["access_token"].as_str().unwrap())
             .await
             .unwrap()

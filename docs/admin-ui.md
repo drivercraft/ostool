@@ -55,8 +55,8 @@ HTML 响应使用 `Cache-Control: no-store`，带内容哈希的静态资源可�
 以及后台可编辑的网络、TFTP、上传设置。区别是本地版不启用账号、授权和租赁功能，
 CLI 无需登录；公网版保持管理员登录与成员租赁校验。没有数据库连接时，常规服务器
 启动会直接报错，不会回退到另一套文件存储。部署启动参数仍从 TOML/`.env` 读取，
-临时会话文件和实时串口/发现状态按生命周期管理。旧业务文件只在首次迁移时导入，
-之后不能通过修改或重新放回文件来覆盖数据库内容。
+临时会话文件和实时串口/发现状态按生命周期管理。服务器不再读取旧业务文件；
+已有开发板只通过独立迁移工具手动导入，操作说明见下文。
 
 新增和编辑租赁使用 `/admin/rentals/new`、`/admin/rentals/{id}` 独立页面。
 左侧为用户、开发板、起止时间及备注，右侧为月历；选择开发板后可查看当日已有租赁与
@@ -73,8 +73,8 @@ CLI 无需登录；公网版保持管理员登录与成员租赁校验。没有�
 列表顶部统一左侧操作按钮、右侧搜索和过滤下拉框；系统设置以 Tab 区分网络、TFTP 和部署配置。
 右侧工作区填满视口高度，采用固定工具栏、独立滚动内容、固定底部状态栏的三段布局。
 全局框架左侧为导航，上方为固定标题栏；左上 Logo 区与标题栏使用相同高度和主题背景。
-标题栏右侧依次为消息、主题、账号头像。消息从 SSE 的同步错误、释放失败、电源失败和
-隔离配置中生成，不新增轮询接口；未读时显示角标，打开消息或点击“全部已读”清除本次
+标题栏右侧依次为消息、主题、账号头像。消息从 SSE 的同步错误、释放失败和电源失败
+中生成，不新增轮询接口；未读时显示角标，打开消息或点击“全部已读”清除本次
 页面会话内的未读状态，提醒内容变化后重新标记为未读。这里不是持久化站内信或聊天功能。
 主题菜单支持明亮、黑暗、跟随系统，选择保存在浏览器并在刷新后恢复；系统模式随设备
 偏好变化。公开版头像菜单包含账号、设置、网站和退出登录，本地版只保留工作区相关入口。
@@ -149,7 +149,7 @@ data: {"epoch":"...","revision":1,"kind":"snapshot","data":{"boards":[],"session
 ```
 
 后续事件名为 `update`，信封字段相同，`data` 仅包含改变的资源集合。
-集合键包括 `quarantined_boards`、`boards`、`runtimes`、`sessions`、`loaders`、`ota`（镜像和升级任务）、`virtual`、`dtbs`、
+集合键包括 `boards`、`runtimes`、`sessions`、`loaders`、`ota`（镜像和升级任务）、`virtual`、`dtbs`、
 `serial`、`serial_manager`、`network`、`server`、`tftp`、`tftp_status`、`overview`、`power_actions`。
 集合更新是该集合的完整替换；消失的实体表示删除。前端按稳定 ID/MAC/name
 合并并复用未变化的对象，不重新挂载整张表或表单。
@@ -180,7 +180,8 @@ Library 和 Playwright。构建继续复制前端到 Cargo 输出目录、冻结
 pnpm --dir ostool-server/webui install --frozen-lockfile
 pnpm --dir ostool-server/webui test
 pnpm --dir ostool-server/webui build
-cargo test -p ostool-server
+# Rust 状态测试也需要独立 PostgreSQL，每个测试使用隔离 schema
+OSTOOL_TEST_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_browser_tests RUST_TEST_THREADS=4 cargo test -p ostool-server
 cargo build -p ostool-server
 pnpm --dir ostool-server/webui exec playwright install chromium
 OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_browser_tests pnpm --dir ostool-server/webui test:e2e
@@ -192,7 +193,7 @@ OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_br
 测试覆盖真实电源提交、UDP/HTTP 发现、SSE 更新、双客户端冲突、Loader 无请求
 离线、DTB 管理、会话释放、配置保存和移动端布局。
 需预先创建独立的测试数据库，由 `OSTOOL_E2E_LOCAL_DATABASE_URL` 指定；每次运行自动
-使用独立 schema，避免测试记录或导入标记污染现有开发数据。CI 自动提供 PostgreSQL。
+使用独立 schema，避免测试记录污染现有开发数据。CI 自动提供 PostgreSQL。
 
 ## 本地演示数据
 
@@ -236,20 +237,31 @@ DTB 不含真实硬件定义。这里用于页面展示，真实硬件联调需�
 下次启动重新生成初始数据。开发脚本不得指向生产数据库或生产数据目录；正常直接启动
 和 systemd 部署不会自动开启演示模式。完整配置说明见服务器 README。
 
-## 不兼容板卡配置的启动隔离
+## 已有开发板独立迁移
 
-首次导入逐文件读取板卡 TOML。语法错误、不支持的枚举、缺失必填字段、校验失败、
-文件名与 ID 不一致或重复 MAC 的文件移动到
-`<board_dir>/quarantine/<UTC时间>-<UUID>/<原文件名>`，原始字节保持不变。
-同目录的 `reason.json` 保存来源、备份路径、时间和完整原因；启动日志和开发板
-页面也显示隔离记录。备份名称不会覆盖之前的文件，下次启动不再扫描隔离目录。
+新服务只使用 PostgreSQL，不保留旧文件仓储、旧模块别名或启动时导入。部署新版本后，
+独立运行脚本将已有 `<board-id>.toml` 和这些板卡引用的 DTB 迁移到目标数据库：
 
-目录按文件名排序加载；重复 MAC 保留排序最前的有效配置，隔离后续冲突文件。
-其余有效板卡继续提供服务。首次导入完成后，修正的备份内容需通过管理页面或管理 API
-重新创建板卡；仅将文件放回目录并重启不会覆盖或新增数据库记录。
+```bash
+cargo build -p ostool-server --release
+ostool-server/scripts/migrate-boards.sh \
+  --env-file /path/to/ostool.env \
+  --board-dir /path/to/existing/boards \
+  --dtb-dir /path/to/existing/dtbs
+```
 
-目录读取、文件读取或备份移动失败仍作为存储错误报告，保留源文件，不以丢失
-配置为代价继续启动。顶层服务器配置错误不属于板卡逐文件隔离范围。
+安装版可直接执行 `ostool-server-migrate-boards`，参数相同。工具只读取数据库配置，
+不启动认证、网络监听、串口或电源操作。实际导入前应备份数据库和源目录，并停止旧服务。
+默认先应用 SQLx 表结构迁移，所以空数据库也能导入；若目标结构已由新版本初始化，
+可先加 `--dry-run` 检查，预检不修改表结构或业务数据。板卡不引用 DTB 时可省略
+`--dtb-dir`。`--config` 可选，用于提供目标数据库配置，环境变量优先。
+
+工具先校验所有板卡、文件名/ID、MAC 及关联 DTB，再以一个事务提交数据和导入审计。
+相同记录跳过；内容冲突、重复 MAC、无效配置或缺少关联 DTB 会导致整批失败，不覆盖
+已有记录、不部分导入。源文件始终保留原样，重复运行不会新增重复记录。
+仅支持当前合法板卡格式，不转换更早的格式，不迁移旧 OTA、用户或设置文件。
+导入成功后启动或重启新服务加载板卡；之后全部通过管理界面/API 操作数据库，
+修改旧文件不再生效。完整说明见 [部署文档](../ostool-server/deploy/README.md#existing-board-migration)。
 
 U-Boot 通过串口启动，无需绑定 MAC。切换到 U-Boot 后隐藏 MAC 选择器，保存时不提交网络身份；切回网络启动时保留尚未保存的 MAC 草稿。
 

@@ -215,9 +215,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/sessions/{session_id}/files/{*path}",
-            put(reject_legacy_put_session_file)
-                .get(get_session_file)
-                .delete(delete_session_file),
+            get(get_session_file).delete(delete_session_file),
         )
         .route(
             "/api/v1/sessions/{session_id}/tftp",
@@ -417,7 +415,6 @@ async fn create_dtb(
     }
 
     let file = state.dtb_store.write(&dtb_name, &body).await?;
-    sync_dtb_database(&state, &file, &body).await?;
     Ok((
         StatusCode::CREATED,
         axum::extract::Extension(crate::audit::Target(dtb_name)),
@@ -1254,9 +1251,6 @@ async fn update_dtb(
                 }
             })?;
         rewrite_board_dtb_references(&state, &current_name, new_name).await?;
-        if let Some(database) = &state.database {
-            database.delete_dtb(&current_name).await?;
-        }
         effective_name = new_name.to_string();
     }
 
@@ -1273,8 +1267,6 @@ async fn update_dtb(
         .get(&effective_name)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("DTB `{effective_name}` not found")))?;
-    let bytes = state.dtb_store.read(&effective_name).await?;
-    sync_dtb_database(&state, &file, &bytes).await?;
     Ok(axum::Json(DtbFileResponse::from_dtb(file)))
 }
 
@@ -1297,9 +1289,6 @@ async fn delete_dtb(
         return Err(ApiError::not_found(format!("DTB `{dtb_name}` not found")));
     }
     state.dtb_store.delete(&dtb_name).await?;
-    if let Some(database) = &state.database {
-        database.delete_dtb(&dtb_name).await?;
-    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1591,14 +1580,13 @@ async fn create_session(
     {
         runtime.bind_rental_deadline(deadline).await;
     }
-    if let (Some(database), Some(Extension(super::auth::CurrentUser(user)))) =
-        (&state.database, actor)
+    if let Some(Extension(super::auth::CurrentUser(user))) = actor
         && let Err(error) =
             sqlx::query("INSERT INTO session_owners(session_id,user_id,rental_id) VALUES($1,$2,$3)")
                 .bind(&session.id)
                 .bind(user.id)
                 .bind(rental.map(|(id, _)| id))
-                .execute(database.pool())
+                .execute(state.database.pool())
                 .await
     {
         state
@@ -2298,14 +2286,6 @@ async fn get_session_file(
     ))
 }
 
-async fn reject_legacy_put_session_file(
-    Path((_session_id, _path)): Path<(String, String)>,
-) -> Result<StatusCode, ApiError> {
-    Err(ApiError::not_found(
-        "upload files via PUT /api/v1/sessions/{session_id}/files with X-File-Path",
-    ))
-}
-
 async fn delete_session_file(
     Path((session_id, path)): Path<(String, String)>,
     State(state): State<AppState>,
@@ -2644,8 +2624,6 @@ fn readonly_server_config(config: &crate::config::ServerConfig) -> AdminServerCo
     AdminServerConfigReadonly {
         listen_addr: config.listen_addr.to_string(),
         data_dir: config.data_dir.display().to_string(),
-        board_dir: config.board_dir.display().to_string(),
-        dtb_dir: config.dtb_dir.display().to_string(),
         http_boot_public_base_url: config.http_boot.public_base_url.clone(),
         dtb_upload_max_mib: DTB_UPLOAD_MAX_MIB,
     }
@@ -2951,29 +2929,6 @@ async fn rewrite_board_dtb_references(
     Ok(())
 }
 
-async fn sync_dtb_database(
-    state: &AppState,
-    file: &crate::persistence::dtbs::DtbFile,
-    bytes: &[u8],
-) -> Result<(), ApiError> {
-    if let Some(database) = &state.database {
-        let digest = Sha256::digest(bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        database
-            .sync_dtb(
-                &file.name,
-                file.size,
-                &state.dtb_store.path_for_name(&file.name).to_string_lossy(),
-                &digest,
-            )
-            .await
-            .map_err(ApiError::from)?;
-    }
-    Ok(())
-}
-
 async fn notify_admin_changes(
     State(state): State<AppState>,
     request: Request,
@@ -3017,7 +2972,6 @@ pub(crate) async fn admin_topic(
     }
     let extractor = State(state.clone());
     let value = match topic {
-        "quarantined_boards" => serde_json::to_value(state.board_store.quarantined().await?),
         "boards" => serde_json::to_value(list_boards(extractor).await?.0),
         "sessions" => serde_json::to_value(list_admin_sessions(extractor).await?.0.sessions),
         "loaders" => serde_json::to_value(list_loader_devices(extractor).await?.0),
@@ -3040,15 +2994,14 @@ pub(crate) async fn admin_topic(
         "rentals" => serde_json::to_value(super::rentals::list(extractor).await?.0),
         "dashboard" => Ok(crate::dashboard::projection(state).await),
         "audit" => {
-            let last: Option<uuid::Uuid> = if let Some(db) = &state.database {
+            let last: Option<uuid::Uuid> = {
+                let db = &state.database;
                 sqlx::query_scalar(
                     "SELECT id FROM audit_events ORDER BY created_at DESC,id DESC LIMIT 1",
                 )
                 .fetch_optional(db.pool())
                 .await
                 .map_err(|_| ApiError::service_unavailable("审计数据库暂时不可用"))?
-            } else {
-                None
             };
             Ok(serde_json::json!({"active":false,"revision":state.audit.revision(),"last_id":last}))
         }
@@ -3105,7 +3058,6 @@ mod tests {
             CreateSessionRequest, SessionCreatedResponse, SessionDetailResponse,
             SharedSessionFileResponse,
         },
-        build_fixture_app_state as build_app_state,
         config::{
             BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
             PowerManagementConfig, SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig,
@@ -3115,6 +3067,7 @@ mod tests {
         session::SessionLifecycleState,
         state::BoardLeaseState,
         static_assets::first_asset_path,
+        test_support::build_test_app_state as build_app_state,
         tftp::service::{TftpManager, build_tftp_manager},
     };
 
@@ -3141,8 +3094,6 @@ mod tests {
             auth: crate::config::AuthConfig::default(),
             network_test: crate::config::NetworkTestConfig::default(),
             data_dir: root.join("data"),
-            board_dir: root.join("boards"),
-            dtb_dir: root.join("dtbs"),
             tftp: TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(root.join("tftp"))),
             http_boot: crate::config::HttpBootConfig::default_with_root(root.join("http-boot")),
             loader_network: crate::config::LoaderNetworkConfig::default(),
@@ -5042,7 +4993,11 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(download_after_release.status(), StatusCode::CONFLICT);
+        // The asynchronous release may finish while its HTTP audit result is persisted.
+        assert!(matches!(
+            download_after_release.status(),
+            StatusCode::CONFLICT | StatusCode::NOT_FOUND
+        ));
     }
 
     #[tokio::test]
@@ -5856,7 +5811,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_slot_file_route_is_removed() {
+    async fn nested_upload_method_is_not_supported() {
         let app = test_router().await;
         assert_eq!(
             create_board(
@@ -5879,7 +5834,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
     #[tokio::test]

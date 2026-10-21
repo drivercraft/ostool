@@ -178,7 +178,8 @@ impl Monitor {
                 let rx = rate(raw.rx, previous.as_ref().and_then(|v| v.rx));
                 let tx = rate(raw.tx, previous.as_ref().and_then(|v| v.tx));
                 let ping = Instant::now();
-                let database_ok = if let Some(db) = &state.database {
+                let database_ok = {
+                    let db = &state.database;
                     matches!(
                         tokio::time::timeout(
                             Duration::from_secs(2),
@@ -187,10 +188,8 @@ impl Monitor {
                         .await,
                         Ok(Ok(_))
                     )
-                } else {
-                    false
                 };
-                let sample = json!({"ready":true,"sampled_at":Utc::now(),"hostname":raw.hostname,"cpu_percent":cpu,"load_average":raw.load,"memory_total":raw.memory_total,"memory_available":raw.memory_available,"process_rss":raw.rss,"disk_total":raw.disk_total,"disk_available":raw.disk_available,"interface":raw.interface,"rx_bytes":raw.rx,"tx_bytes":raw.tx,"rx_bytes_per_second":rx,"tx_bytes_per_second":tx,"database_ok":database_ok,"database_latency_ms":ping.elapsed().as_millis(),"pool_size":state.database.as_ref().map(|db|db.pool().size()),"pool_idle":state.database.as_ref().map(|db|db.pool().num_idle())});
+                let sample = json!({"ready":true,"sampled_at":Utc::now(),"hostname":raw.hostname,"cpu_percent":cpu,"load_average":raw.load,"memory_total":raw.memory_total,"memory_available":raw.memory_available,"process_rss":raw.rss,"disk_total":raw.disk_total,"disk_available":raw.disk_available,"interface":raw.interface,"rx_bytes":raw.rx,"tx_bytes":raw.tx,"rx_bytes_per_second":rx,"tx_bytes_per_second":tx,"database_ok":database_ok,"database_latency_ms":ping.elapsed().as_millis(),"pool_size":state.database.pool().size(),"pool_idle":state.database.pool().num_idle()});
                 *monitor.0.sample.lock().unwrap() = sample;
                 {
                     let mut history = monitor.0.history.lock().unwrap();
@@ -342,7 +341,8 @@ pub async fn projection(state: &AppState) -> Value {
     let public = state.config.read().await.edition.is_public();
     let devices = state.loader_registry.snapshots().await;
     let mut operations = json!({"boards":total,"board_states":counts,"sessions":state.sessions.read().await.len(),"devices":devices.len(),"online_devices":devices.iter().filter(|d|d.online).count(),"conflicting_devices":devices.iter().filter(|d|d.conflict).count(),"dtbs":state.dtb_store.list_all().await.map(|v|v.len()).ok(),"public":public});
-    if let Some(db) = &state.database {
+    {
+        let db = &state.database;
         let result=tokio::time::timeout(Duration::from_secs(2),sqlx::query("SELECT (SELECT count(*) FROM users) users,(SELECT count(*) FROM users WHERE NOT disabled) enabled_users,(SELECT count(*) FROM board_rentals WHERE cancelled_at IS NULL AND starts_at<=now() AND ends_at>now()) active_rentals,(SELECT count(*) FROM board_rentals WHERE cancelled_at IS NULL AND starts_at>now()) scheduled_rentals,(SELECT count(*) FROM board_rentals WHERE cancelled_at IS NOT NULL) cancelled_rentals,(SELECT count(*) FROM rental_requests WHERE status='pending') pending_requests,(SELECT count(*) FROM audit_events WHERE created_at>now()-interval '24 hours') recent_audits,(SELECT count(*) FROM audit_events WHERE created_at>now()-interval '24 hours' AND result IN ('failed','denied')) recent_failures").fetch_one(db.pool())).await;
         if let Ok(Ok(row)) = result {
             operations["database_available"] = json!(true);

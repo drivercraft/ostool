@@ -8,7 +8,7 @@ use axum::{
 use ostool_server::{
     AuthConfig, DatabaseConfig, ServerConfig, build_app_state, build_router,
     config::{BuiltinTftpConfig, TftpConfig},
-    persistence::legacy::boards::BoardFiles,
+    persistence::{BoardStore, Database},
     tftp::service::build_tftp_manager,
 };
 use serde_json::{Value, json};
@@ -83,8 +83,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
     let mut config = ServerConfig {
         edition: ostool_server::config::Edition::Public,
         data_dir: dir.path().join("data"),
-        board_dir: dir.path().join("boards"),
-        dtb_dir: dir.path().join("dtbs"),
+
         ..Default::default()
     };
     config.network.interface = "lo".into();
@@ -102,8 +101,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
     let mut tftp = BuiltinTftpConfig::default_with_root(dir.path().join("tftp"));
     tftp.enabled = false;
     config.tftp = TftpConfig::Builtin(tftp);
-    let legacy = BoardFiles::new(config.board_dir.clone());
-    legacy.ensure_dir().await.unwrap();
+    let repository = BoardStore::new(Database::connect(&config.database).await.unwrap());
     let board = ostool_server::BoardConfig {
         id: "test-board".into(),
         board_type: "test".into(),
@@ -120,7 +118,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
         notes: None,
         disabled: false,
     };
-    legacy.write_board(&board).await.unwrap();
+    repository.write_board(&board).await.unwrap();
     let state = build_app_state(
         dir.path().join("config.toml"),
         config.clone(),
@@ -633,27 +631,20 @@ async fn registration_roles_revocation_and_inventory_restart() {
         .0,
         StatusCode::NO_CONTENT
     );
-    // Retained TOML is a backup, never the inventory authority after import.
+    // Deletion remains authoritative after reopening the PostgreSQL repository.
     state.board_store.delete_board("test-board").await.unwrap();
-    let restarted = ostool_server::persistence::BoardStore::open_postgres(
-        state.database.clone().unwrap(),
-        config.board_dir.clone(),
-    )
-    .await
-    .unwrap();
+    let restarted = BoardStore::new(state.database.clone());
     assert!(restarted.load_all().await.unwrap().is_empty());
-    assert!(legacy.path_for_id("test-board").exists());
+
     let mut edited = board.clone();
     edited.id = "db-only".into();
     restarted.write_board(&edited).await.unwrap();
-    assert!(!legacy.path_for_id("db-only").exists());
+
     assert_eq!(restarted.load_all().await.unwrap()["db-only"].id, "db-only");
     // Editable settings are authoritative in PostgreSQL and exclude deployment credentials.
     state.save_config().await.unwrap();
     let stored = state
         .database
-        .as_ref()
-        .unwrap()
         .record::<Value>("settings")
         .await
         .unwrap()

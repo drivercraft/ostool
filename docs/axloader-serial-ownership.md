@@ -99,6 +99,9 @@ ostool axloader continue --device http://DEVICE:2999
 ostool 使用相关 crate 测试、Clippy、server 构建和 pnpm 测试、构建、Playwright。QEMU 的隔离夹具只列出其私有 PTY，逐字节转发 OVMF UART 并把 guest TCP4 映射到 hostfwd；不接触系统服务或实体串口。
 
 ```bash
+# 使用独立测试数据库，测试自动创建隔离 schema
+export OSTOOL_TEST_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_tests
+export RUST_TEST_THREADS=4
 cargo test -p httpboot-protocol -p ostool-serial -p ostool-server
 cargo clippy -p httpboot-protocol -p ostool-serial -p ostool-server -p ostool --all-targets -- -D warnings
 python3 ostool-server/scripts/test-axloader-local.py --tgos /path/to/tgoskits-dev

@@ -1,5 +1,5 @@
 // A private server instance. No system config, service or board is touched.
-import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { spawn } from "node:child_process";
@@ -10,8 +10,6 @@ await writeFile(
   `
 listen_addr = "127.0.0.1:4175"
 data_dir = "${root}/data"
-board_dir = "${root}/boards"
-dtb_dir = "${root}/dtbs"
 [tftp]
 provider = "builtin"
 enabled = false
@@ -28,11 +26,6 @@ enabled = ${process.env.OSTOOL_TEST_DISABLE_DISCOVERY !== "true"}
 bind_addr = "127.0.0.1:2998"
 public_base_url = "http://127.0.0.1:4175"
 `,
-);
-await mkdir(join(root, "boards"), { recursive: true });
-await writeFile(
-  join(root, "boards", "legacy.toml"),
-  "id = 'legacy'\nboard_type = 'old'\n[boot]\nkind = 'removed-version'\n",
 );
 const binary =
   process.env.OSTOOL_TEST_SERVER_BIN ||

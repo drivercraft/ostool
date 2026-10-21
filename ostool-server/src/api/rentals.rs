@@ -34,12 +34,7 @@ pub struct RentalInput {
     #[serde(default)]
     pub notes: String,
 }
-fn database(state: &AppState) -> Result<&crate::persistence::postgres::Database, ApiError> {
-    state
-        .database
-        .as_ref()
-        .ok_or_else(|| ApiError::service_unavailable("租赁管理需要 PostgreSQL"))
-}
+
 fn db_error(error: sqlx::Error) -> ApiError {
     log::error!("rental database operation failed: {error}");
     ApiError::service_unavailable("租赁数据库暂时不可用")
@@ -73,7 +68,7 @@ pub(crate) async fn list_for(
     user: Option<Uuid>,
 ) -> Result<Vec<Rental>, ApiError> {
     let rows = sqlx::query("SELECT * FROM board_rentals WHERE ($1::uuid IS NULL OR user_id=$1) ORDER BY created_at DESC,id")
-        .bind(user).fetch_all(database(state)?.pool())
+        .bind(user).fetch_all(state.database.pool())
         .await
         .map_err(db_error)?;
     let now = Utc::now();
@@ -145,7 +140,7 @@ pub(crate) async fn save_internal(
     if board.disabled {
         return Err(ApiError::conflict("已禁用的开发板不能分配租赁"));
     }
-    let mut tx = database(state)?.pool().begin().await.map_err(db_error)?;
+    let mut tx = state.database.pool().begin().await.map_err(db_error)?;
     if let Some((request_id, _, _)) = &approval {
         let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM (SELECT * FROM rental_requests WHERE id=$1 FOR UPDATE) r WHERE status='pending' AND user_id=$2 AND board_id=$3 AND starts_at=$4 AND ends_at=$5)")
             .bind(request_id).bind(input.user_id).bind(&input.board_id).bind(input.starts_at).bind(input.ends_at)
@@ -236,7 +231,7 @@ async fn cancel(
         "UPDATE board_rentals SET cancelled_at=COALESCE(cancelled_at,now()) WHERE id=$1",
     )
     .bind(id)
-    .execute(database(&state)?.pool())
+    .execute(state.database.pool())
     .await
     .map_err(db_error)?;
     if affected.rows_affected() == 0 {
@@ -254,7 +249,7 @@ pub async fn active(
     user: Uuid,
 ) -> Result<BTreeMap<String, (Uuid, DateTime<Utc>)>, ApiError> {
     let rows=sqlx::query("SELECT r.id,r.board_id,r.ends_at FROM board_rentals r JOIN users u ON r.user_id=u.id WHERE r.user_id=$1 AND NOT u.disabled AND r.cancelled_at IS NULL AND r.starts_at<=now() AND r.ends_at>now()")
-        .bind(user).fetch_all(database(state)?.pool()).await.map_err(db_error)?;
+        .bind(user).fetch_all(state.database.pool()).await.map_err(db_error)?;
     rows.iter()
         .map(|r| {
             Ok((
@@ -270,7 +265,7 @@ pub async fn active(
 /// serial cleanup. Failure to validate a public member's grant fails closed.
 pub async fn enforce(state: &AppState) -> Result<(), ApiError> {
     let rows=sqlx::query("SELECT s.session_id,r.ends_at FROM session_owners s JOIN users u ON u.id=s.user_id JOIN board_rentals r ON r.id=s.rental_id WHERE NOT u.disabled AND r.cancelled_at IS NULL AND r.starts_at<=now() AND r.ends_at>now()")
-        .fetch_all(database(state)?.pool()).await.map_err(db_error)?;
+        .fetch_all(state.database.pool()).await.map_err(db_error)?;
     let valid = rows
         .iter()
         .map(|row| {
@@ -306,7 +301,7 @@ pub fn start_deadlines(state: AppState) {
     tokio::spawn(async move {
         loop {
             let next=sqlx::query_scalar::<_,Option<DateTime<Utc>>>("SELECT min(boundary) FROM (SELECT starts_at AS boundary FROM board_rentals WHERE cancelled_at IS NULL AND starts_at>now() UNION ALL SELECT ends_at FROM board_rentals WHERE cancelled_at IS NULL AND ends_at>now()) t")
-                .fetch_one(state.database.as_ref().expect("public database").pool()).await;
+                .fetch_one(state.database.pool()).await;
             let delay = match next {
                 Ok(Some(time)) => (time - Utc::now()).to_std().unwrap_or_default(),
                 Ok(None) => std::time::Duration::from_secs(3600),
@@ -329,7 +324,7 @@ pub async fn protect_board(state: &AppState, board: &str) -> Result<(), ApiError
     if !state.config.read().await.edition.is_public() {
         return Ok(());
     }
-    let reserved:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM board_rentals WHERE board_id=$1 AND cancelled_at IS NULL AND ends_at>now())").bind(board).fetch_one(database(state)?.pool()).await.map_err(db_error)?;
+    let reserved:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM board_rentals WHERE board_id=$1 AND cancelled_at IS NULL AND ends_at>now())").bind(board).fetch_one(state.database.pool()).await.map_err(db_error)?;
     if reserved {
         return Err(ApiError::conflict("开发板有未结束的租赁，请先取消租赁"));
     }

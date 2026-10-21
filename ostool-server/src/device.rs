@@ -536,9 +536,9 @@ mod tests {
     use super::{V5_EFI_ENTRY_SYMBOL, hex_sha256, reconcile, v5_boot_manifest};
     use crate::{
         BoardConfig, BoardNetworkIdentity, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
-        PowerManagementConfig, ServerConfig, TftpConfig, UefiBootArch, UefiHttpProfile,
-        build_fixture_app_state as build_app_state, ota::Phase, session::SessionBootCommand,
-        state::BoardRuntimeState, tftp::service::build_tftp_manager,
+        PowerManagementConfig, ServerConfig, TftpConfig, UefiBootArch, UefiHttpProfile, ota::Phase,
+        session::SessionBootCommand, state::BoardRuntimeState,
+        test_support::build_test_app_state as build_app_state, tftp::service::build_tftp_manager,
     };
 
     #[derive(Clone)]
@@ -817,8 +817,7 @@ mod tests {
         let config_path = root.join("ostool-server.toml");
         let mut config = ServerConfig::default_for_path(&config_path);
         config.data_dir = root.join("data");
-        config.board_dir = root.join("boards");
-        config.dtb_dir = root.join("dtbs");
+
         config.tftp = TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(root.join("tftp")));
         config.http_boot.root_dir = root.join("http-boot");
         config.virtual_qemu.runtime_dir = root.join("qemu");

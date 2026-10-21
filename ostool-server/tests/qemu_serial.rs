@@ -5,12 +5,14 @@ mod serial_fixture;
 use futures_util::{SinkExt, StreamExt};
 use httpboot_protocol::{BootArch, BootFile, ImageFormat, LoaderAnnouncement, LoaderDeviceStatus};
 use ostool_serial::{PortLocator, SerialManager};
-use ostool_server::build_fixture_app_state as build_app_state;
+#[path = "support/database.rs"]
+mod test_database;
 use ostool_server::{session::SessionBootCommand, tftp::service::build_tftp_manager, *};
 use serial_fixture::PtyBackend;
 use serialport::{SerialPort, TTYPort};
 use sha2::{Digest, Sha256};
 use std::{path::PathBuf, sync::Arc, time::Duration};
+use test_database::build_test_app_state as build_app_state;
 use tokio::{
     net::{TcpListener, UnixStream},
     process::Command,
@@ -104,8 +106,7 @@ async fn ovmf_identity_binds_serial_null_session_and_boots_kernel() -> anyhow::R
     let config_path = root.path().join("server.toml");
     let mut config = ServerConfig::default_for_path(&config_path);
     config.data_dir = root.path().join("data");
-    config.board_dir = root.path().join("boards");
-    config.dtb_dir = root.path().join("dtbs");
+
     config.tftp = TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(
         root.path().join("files"),
     ));

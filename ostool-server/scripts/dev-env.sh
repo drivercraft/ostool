@@ -48,8 +48,6 @@ write_config() {
     cat > "$CONFIG_FILE" <<EOF
 listen_addr = "127.0.0.1:${SERVER_PORT}"
 data_dir = "${STATE_DIR}/data"
-board_dir = "${STATE_DIR}/data/boards"
-dtb_dir = "${STATE_DIR}/data/dtbs"
 
 [auth]
 enabled = true

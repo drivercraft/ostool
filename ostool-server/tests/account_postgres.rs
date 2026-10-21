@@ -8,7 +8,9 @@ use futures_util::StreamExt;
 use ostool_server::{
     AuthConfig, BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement, DatabaseConfig,
     PowerManagementConfig, PxeProfile, ServerConfig, TftpConfig, build_app_state, build_router,
-    config::Edition, persistence::legacy::boards::BoardFiles, tftp::service::build_tftp_manager,
+    config::Edition,
+    persistence::{BoardStore, Database},
+    tftp::service::build_tftp_manager,
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -62,8 +64,7 @@ async fn member_workspace_isolation_approvals_and_security() {
     let config = ServerConfig {
         edition: Edition::Public,
         data_dir: dir.path().join("data"),
-        board_dir: dir.path().join("boards"),
-        dtb_dir: dir.path().join("dtbs"),
+
         database: DatabaseConfig {
             url: Some(url.to_string()),
             ..Default::default()
@@ -83,7 +84,7 @@ async fn member_workspace_isolation_approvals_and_security() {
         },
         ..Default::default()
     };
-    let store = BoardFiles::new(config.board_dir.clone());
+    let store = BoardStore::new(Database::connect(&config.database).await.unwrap());
     store
         .write_board(&BoardConfig {
             id: "portal-board".into(),

@@ -9,7 +9,6 @@ use std::{
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock, mpsc};
 
 use crate::{
@@ -118,7 +117,7 @@ fn release_settle_delay(board: &BoardConfig) -> Option<Duration> {
 pub struct AppState {
     pub audit: crate::audit::AuditHealth,
     pub monitor: crate::dashboard::Monitor,
-    pub database: Option<Database>,
+    pub database: Database,
     pub serial_manager: ostool_serial::SerialManager,
     pub admin_events: crate::admin_events::AdminEvents,
     pub admin_power: crate::admin_power::AdminPower,
@@ -141,8 +140,8 @@ pub struct AppState {
 
 pub async fn build_app_state(
     config_path: PathBuf,
-    config: ServerConfig,
-    tftp_manager: Arc<dyn TftpManager>,
+    mut config: ServerConfig,
+    mut tftp_manager: Arc<dyn TftpManager>,
 ) -> anyhow::Result<AppState> {
     anyhow::ensure!(
         config
@@ -152,22 +151,11 @@ pub async fn build_app_state(
             .is_some_and(|url| !url.trim().is_empty()),
         "both local and public editions require PostgreSQL (OSTOOL_DATABASE_URL)"
     );
-    build_fixture_app_state(config_path, config, tftp_manager).await
-}
-
-/// File-backed fixtures are explicit and unrelated to edition selection.
-/// Production callers must use `build_app_state`, which requires PostgreSQL.
-#[doc(hidden)]
-pub async fn build_fixture_app_state(
-    config_path: PathBuf,
-    mut config: ServerConfig,
-    mut tftp_manager: Arc<dyn TftpManager>,
-) -> anyhow::Result<AppState> {
     config.auth.enabled = config.edition.is_public();
     let database = Database::connect(&config.database).await?;
-    if let Some(database) = &database {
+    {
         let settings = database
-            .import_record("settings", &StoredSettings::from(&config))
+            .initialize_record("settings", &StoredSettings::from(&config))
             .await?;
         let tftp_changed =
             serde_json::to_value(&config.tftp)? != serde_json::to_value(&settings.tftp)?;
@@ -181,54 +169,15 @@ pub async fn build_fixture_app_state(
         if config.edition.is_public() {
             database.bootstrap_admin(&config.auth).await?;
         }
-    } else if config.auth.enabled {
-        anyhow::bail!("public edition requires PostgreSQL (OSTOOL_DATABASE_URL)");
     }
-    let board_store = Arc::new(match &database {
-        Some(database) => {
-            BoardStore::open_postgres(database.clone(), config.board_dir.clone()).await?
-        }
-        None => {
-            let store = BoardStore::file_fixture(config.board_dir.clone());
-            store.ensure_dir().await?;
-            store
-        }
-    });
-    let dtb_store = Arc::new(match &database {
-        Some(database) => DtbStore::open_postgres(database.clone(), config.dtb_dir.clone()).await?,
-        None => {
-            let store = DtbStore::file_fixture(config.dtb_dir.clone());
-            store.ensure_dir().await?;
-            store
-        }
-    });
+    let board_store = Arc::new(BoardStore::new(database.clone()));
+    let dtb_store = Arc::new(DtbStore::new(database.clone()));
     let boards = board_store.load_all().await?;
-    if let Some(database) = &database {
-        for dtb in dtb_store.list_all().await? {
-            let bytes = dtb_store.read(&dtb.name).await?;
-            let digest = Sha256::digest(&bytes)
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>();
-            database
-                .sync_dtb(
-                    &dtb.name,
-                    dtb.size,
-                    &dtb_store.path_for_name(&dtb.name).to_string_lossy(),
-                    &digest,
-                )
-                .await?;
-        }
-    }
     let board_runtimes = initial_board_runtimes(&boards);
     let (release_tx, release_rx) = mpsc::unbounded_channel();
 
     let admin_events = crate::admin_events::AdminEvents::default();
-    let ota = if let Some(database) = &database {
-        OtaStore::open_with_database(&config.data_dir, database.clone()).await?
-    } else {
-        OtaStore::open(&config.data_dir)?
-    };
+    let ota = OtaStore::open(database.clone()).await?;
     let mut virtual_boards = VirtualBoardManager::new(config.virtual_qemu.clone());
     virtual_boards.set_events(admin_events.clone());
     if virtual_boards.enabled() {
@@ -628,15 +577,9 @@ impl AppState {
         execute_power_action_for_board(board, action).await
     }
 
-    pub fn board_path(&self, board_id: &str) -> std::path::PathBuf {
-        self.board_store.path_for_id(board_id)
-    }
-
     pub async fn ensure_data_dirs(&self) -> anyhow::Result<()> {
         let config = self.config.read().await.clone();
         tokio::fs::create_dir_all(&config.data_dir).await?;
-        tokio::fs::create_dir_all(&config.board_dir).await?;
-        tokio::fs::create_dir_all(&config.dtb_dir).await?;
         tokio::fs::create_dir_all(config.tftp.root_dir()).await?;
         Ok(())
     }
@@ -668,28 +611,10 @@ impl AppState {
 
     pub async fn save_config(&self) -> anyhow::Result<()> {
         let config = self.config.read().await.clone();
-        if let Some(database) = &self.database {
-            return database
-                .save_record("settings", &StoredSettings::from(&config))
-                .await;
-        }
-        // Only UI-editable groups are persisted. Never copy runtime secrets or
-        // deployment overrides into the on-disk configuration.
-        let mut stored: toml::Table = match tokio::fs::read_to_string(&*self.config_path).await {
-            Ok(content) => toml::from_str(&content)?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                toml::from_str(&toml::to_string(&config)?)?
-            }
-            Err(error) => return Err(error.into()),
-        };
-        stored.insert("network".into(), toml::Value::try_from(&config.network)?);
-        stored.insert(
-            "upload_limits".into(),
-            toml::Value::try_from(&config.upload_limits)?,
-        );
-        stored.insert("tftp".into(), toml::Value::try_from(&config.tftp)?);
-        tokio::fs::write(&*self.config_path, toml::to_string_pretty(&stored)?).await?;
-        Ok(())
+
+        self.database
+            .save_record("settings", &StoredSettings::from(&config))
+            .await
     }
 
     pub async fn sync_board_runtime_states(&self) {
@@ -1061,9 +986,9 @@ mod tests {
 
     use super::{
         BoardLeaseState, RELEASE_COMPLETION_TIMEOUT, RELEASE_RETRY_ATTEMPTS, TouchSessionError,
-        ZHONGSHENG_RELEASE_SETTLE_DELAY, build_fixture_app_state as build_app_state,
-        release_settle_delay,
+        ZHONGSHENG_RELEASE_SETTLE_DELAY, release_settle_delay,
     };
+    use crate::test_support::build_test_app_state as build_app_state;
     use crate::{
         ServerConfig,
         config::{
@@ -1261,8 +1186,6 @@ mod tests {
         let config = ServerConfig {
             listen_addr: "127.0.0.1:0".parse().unwrap(),
             data_dir: root.join("data"),
-            board_dir: root.join("boards"),
-            dtb_dir: root.join("dtbs"),
             network: crate::TftpNetworkConfig {
                 interface: "lo".into(),
             },
@@ -1358,8 +1281,6 @@ mod tests {
         let config = ServerConfig {
             listen_addr: "127.0.0.1:0".parse().unwrap(),
             data_dir: root.join("data"),
-            board_dir: root.join("boards"),
-            dtb_dir: root.join("dtbs"),
             network: crate::TftpNetworkConfig {
                 interface: "lo".into(),
             },

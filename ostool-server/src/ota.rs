@@ -1,12 +1,6 @@
 //! Persistent, board-scoped axloader upgrade assignments.
 
-use std::{
-    collections::BTreeMap,
-    fs,
-    io::Write,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::{Context, ensure};
 use httpboot_protocol::{LoaderOtaState, OtaOutcome, OtaSource};
@@ -74,18 +68,13 @@ pub enum DeleteImageError {
     NotFound,
     #[error("OTA image is referenced by an active assignment")]
     InUse,
-    #[error("OTA image storage is inconsistent")]
-    Inconsistent,
-    #[error("failed to update OTA image storage: {0}")]
-    Io(#[from] std::io::Error),
     #[error("OTA database operation failed: {0}")]
     Database(#[from] sqlx::Error),
 }
 
 #[derive(Clone)]
 pub struct OtaStore {
-    root: PathBuf,
-    database: Option<crate::persistence::postgres::Database>,
+    database: crate::persistence::postgres::Database,
     image_catalog: Arc<Mutex<BTreeMap<String, Image>>>,
     jobs: Arc<Mutex<BTreeMap<String, Job>>>,
     observations: Arc<Mutex<BTreeMap<String, Observation>>>,
@@ -98,46 +87,14 @@ struct Observation {
 }
 
 impl OtaStore {
-    pub async fn open_with_database(
-        data_dir: &Path,
-        database: crate::persistence::postgres::Database,
-    ) -> anyhow::Result<Self> {
+    pub async fn open(database: crate::persistence::postgres::Database) -> anyhow::Result<Self> {
         use sqlx::Row;
-        let mut tx = database.pool().begin().await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('ota-import',2999))")
-            .execute(&mut *tx)
+        let jobs = database
+            .initialize_record("ota-jobs", &BTreeMap::<String, Job>::new())
             .await?;
-        let imported: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM storage_imports WHERE name='ota')")
-                .fetch_one(&mut *tx)
-                .await?;
-        if !imported {
-            let legacy = Self::open(data_dir)?;
-            for (name, payload) in [
-                (
-                    "ota-jobs",
-                    serde_json::to_value(&*legacy.jobs.lock().await)?,
-                ),
-                (
-                    "ota-observations",
-                    serde_json::to_value(&*legacy.observations.lock().await)?,
-                ),
-            ] {
-                sqlx::query("INSERT INTO server_records (name,payload) VALUES ($1,$2) ON CONFLICT DO NOTHING").bind(name).bind(payload).execute(&mut *tx).await?;
-            }
-            for image in legacy.images().await? {
-                let bytes = tokio::fs::read(legacy.image_path(&image.sha256)?).await?;
-                ensure!(
-                    format!("{:x}", Sha256::digest(&bytes)) == image.sha256,
-                    "legacy OTA image digest mismatch"
-                );
-                sqlx::query("INSERT INTO ota_images (sha256,metadata,content) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING").bind(&image.sha256).bind(serde_json::to_value(&image)?).bind(bytes).execute(&mut *tx).await?;
-            }
-            sqlx::query("INSERT INTO storage_imports (name) VALUES ('ota')")
-                .execute(&mut *tx)
-                .await?;
-        }
-        tx.commit().await?;
+        let observations = database
+            .initialize_record("ota-observations", &BTreeMap::<String, Observation>::new())
+            .await?;
         let rows = sqlx::query("SELECT sha256,metadata FROM ota_images ORDER BY sha256")
             .fetch_all(database.pool())
             .await?;
@@ -151,65 +108,19 @@ impl OtaStore {
             })
             .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
         Ok(Self {
-            root: data_dir.join("loader-ota"),
-            jobs: Arc::new(Mutex::new(
-                database
-                    .record("ota-jobs")
-                    .await?
-                    .context("missing OTA jobs")?,
-            )),
-            observations: Arc::new(Mutex::new(
-                database
-                    .record("ota-observations")
-                    .await?
-                    .context("missing OTA observations")?,
-            )),
-            image_catalog: Arc::new(Mutex::new(images)),
-            database: Some(database),
-        })
-    }
-
-    pub async fn image_bytes(&self, digest: &str) -> anyhow::Result<Vec<u8>> {
-        ensure!(valid_digest(digest), "invalid image digest");
-        if let Some(db) = &self.database {
-            return sqlx::query_scalar("SELECT content FROM ota_images WHERE sha256=$1")
-                .bind(digest)
-                .fetch_optional(db.pool())
-                .await?
-                .context("OTA image not found");
-        }
-        Ok(tokio::fs::read(self.image_path(digest)?).await?)
-    }
-    pub fn open(data_dir: &Path) -> anyhow::Result<Self> {
-        let root = data_dir.join("loader-ota");
-        fs::create_dir_all(root.join("images"))?;
-        let jobs = match fs::read(root.join("jobs.json")) {
-            Ok(bytes) => serde_json::from_slice(&bytes).context("invalid persistent OTA jobs")?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
-            Err(error) => return Err(error.into()),
-        };
-        let observations = match fs::read(root.join("devices.json")) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .context("invalid persistent OTA device observations")?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
-            Err(error) => return Err(error.into()),
-        };
-        let images = read_images(&root)?
-            .into_iter()
-            .map(|image| (image.sha256.clone(), image))
-            .collect();
-        Ok(Self {
-            root,
-            database: None,
-            image_catalog: Arc::new(Mutex::new(images)),
+            database,
             jobs: Arc::new(Mutex::new(jobs)),
             observations: Arc::new(Mutex::new(observations)),
+            image_catalog: Arc::new(Mutex::new(images)),
         })
     }
-
-    pub fn image_path(&self, digest: &str) -> anyhow::Result<PathBuf> {
+    pub async fn image_bytes(&self, digest: &str) -> anyhow::Result<Vec<u8>> {
         ensure!(valid_digest(digest), "invalid image digest");
-        Ok(self.root.join("images").join(format!("{digest}.efi")))
+        sqlx::query_scalar("SELECT content FROM ota_images WHERE sha256=$1")
+            .bind(digest)
+            .fetch_optional(self.database.pool())
+            .await?
+            .context("OTA image not found")
     }
 
     pub async fn images(&self) -> anyhow::Result<Vec<Image>> {
@@ -222,22 +133,14 @@ impl OtaStore {
             "invalid EFI image size"
         );
         let bytes = bytes.to_vec();
-        if let Some(db) = &self.database {
-            let mut images = self.image_catalog.lock().await;
-            let validation_bytes = bytes.clone();
-            let image =
-                tokio::task::spawn_blocking(move || validate_image(&validation_bytes, version))
-                    .await??;
-            sqlx::query("INSERT INTO ota_images (sha256,metadata,content) VALUES ($1,$2,$3) ON CONFLICT (sha256) DO UPDATE SET metadata=excluded.metadata")
-                .bind(&image.sha256).bind(serde_json::to_value(&image)?).bind(bytes).execute(db.pool()).await?;
-            images.insert(image.sha256.clone(), image.clone());
-            return Ok(image);
-        }
-        let root = self.root.clone();
+        let db = &self.database;
+
         let mut images = self.image_catalog.lock().await;
-        let image = tokio::task::spawn_blocking(move || write_image(&root, &bytes, version))
-            .await
-            .context("OTA image write task failed")??;
+        let validation_bytes = bytes.clone();
+        let image = tokio::task::spawn_blocking(move || validate_image(&validation_bytes, version))
+            .await??;
+        sqlx::query("INSERT INTO ota_images (sha256,metadata,content) VALUES ($1,$2,$3) ON CONFLICT (sha256) DO UPDATE SET metadata=excluded.metadata")
+                .bind(&image.sha256).bind(serde_json::to_value(&image)?).bind(bytes).execute(db.pool()).await?;
         images.insert(image.sha256.clone(), image.clone());
         Ok(image)
     }
@@ -256,30 +159,19 @@ impl OtaStore {
                 return Err(DeleteImageError::InUse);
             }
         }
-        if let Some(db) = &self.database {
-            let count = sqlx::query("DELETE FROM ota_images WHERE sha256=$1")
-                .bind(digest)
-                .execute(db.pool())
-                .await?
-                .rows_affected();
-            images.remove(digest);
-            return if count == 0 {
-                Err(DeleteImageError::NotFound)
-            } else {
-                Ok(())
-            };
+        let db = &self.database;
+
+        let count = sqlx::query("DELETE FROM ota_images WHERE sha256=$1")
+            .bind(digest)
+            .execute(db.pool())
+            .await?
+            .rows_affected();
+        images.remove(digest);
+        if count == 0 {
+            Err(DeleteImageError::NotFound)
+        } else {
+            Ok(())
         }
-        let root = self.root.clone();
-        let digest = digest.to_owned();
-        let remove_digest = digest.clone();
-        let (result, still_valid) =
-            tokio::task::spawn_blocking(move || remove_image(&root, &remove_digest))
-                .await
-                .map_err(|_| DeleteImageError::Inconsistent)?;
-        if !still_valid {
-            images.remove(digest.as_str());
-        }
-        result
     }
 
     pub async fn jobs(&self) -> Vec<Job> {
@@ -354,7 +246,8 @@ impl OtaStore {
 
         let mut updated_observations = observations.clone();
         updated_observations.remove(board_id);
-        if let Some(db) = &self.database {
+        {
+            let db = &self.database;
             let mut tx = db.pool().begin().await?;
             for (name, payload) in [
                 (
@@ -371,9 +264,6 @@ impl OtaStore {
             }
             write_job_audit(&mut tx, jobs.get(board_id), &result).await?;
             tx.commit().await?;
-        } else {
-            self.save_observations(&updated_observations).await?;
-            self.save(&updated_jobs).await?;
         }
         *observations = updated_observations;
         *jobs = updated_jobs;
@@ -558,38 +448,33 @@ impl OtaStore {
     }
 
     async fn save(&self, jobs: &BTreeMap<String, Job>) -> anyhow::Result<()> {
-        if let Some(db) = &self.database {
-            let mut tx = db.pool().begin().await?;
-            let old: Option<serde_json::Value> = sqlx::query_scalar(
-                "SELECT payload FROM server_records WHERE name='ota-jobs' FOR UPDATE",
-            )
-            .fetch_optional(&mut *tx)
-            .await?;
-            let old = old
-                .map(serde_json::from_value::<BTreeMap<String, Job>>)
-                .transpose()?
-                .unwrap_or_default();
-            for (key, job) in jobs {
-                write_job_audit(&mut tx, old.get(key), job).await?;
-            }
-            sqlx::query("INSERT INTO server_records(name,payload) VALUES ('ota-jobs',$1) ON CONFLICT(name) DO UPDATE SET payload=excluded.payload,updated_at=now()").bind(serde_json::to_value(jobs)?).execute(&mut *tx).await?;
-            tx.commit().await?;
-            return Ok(());
+        let db = &self.database;
+
+        let mut tx = db.pool().begin().await?;
+        let old: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT payload FROM server_records WHERE name='ota-jobs' FOR UPDATE",
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        let old = old
+            .map(serde_json::from_value::<BTreeMap<String, Job>>)
+            .transpose()?
+            .unwrap_or_default();
+        for (key, job) in jobs {
+            write_job_audit(&mut tx, old.get(key), job).await?;
         }
-        atomic_write(&self.root.join("jobs.json"), &serde_json::to_vec(jobs)?)
+        sqlx::query("INSERT INTO server_records(name,payload) VALUES ('ota-jobs',$1) ON CONFLICT(name) DO UPDATE SET payload=excluded.payload,updated_at=now()").bind(serde_json::to_value(jobs)?).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     async fn save_observations(
         &self,
         observations: &BTreeMap<String, Observation>,
     ) -> anyhow::Result<()> {
-        if let Some(db) = &self.database {
-            return db.save_record("ota-observations", observations).await;
-        }
-        atomic_write(
-            &self.root.join("devices.json"),
-            &serde_json::to_vec(observations)?,
-        )
+        let db = &self.database;
+
+        db.save_record("ota-observations", observations).await
     }
 }
 
@@ -619,42 +504,6 @@ async fn write_job_audit(
     let details = serde_json::json!({"board_id":job.board_id,"update_id":job.update_id,"previous_phase":old.map(|old|old.phase),"phase":job.phase,"image_sha256":job.image.sha256,"delivery_attempts":job.delivery_attempts,"has_error":job.error.is_some()});
     sqlx::query("INSERT INTO audit_events(id,request_id,finished_at,actor_name,actor_kind,source,action,summary,resource,target_id,result,duration_ms,details) VALUES ($1,$1,now(),'系统','system','system',$2,$3,'ota',$4,$5,0,$6)").bind(id).bind(action).bind(if failed_delivery{"OTA 镜像投递失败"}else{"OTA 任务状态变化"}).bind(&job.update_id).bind(result).bind(details).execute(&mut **tx).await?;
     Ok(())
-}
-
-fn image_path(root: &Path, digest: &str) -> PathBuf {
-    root.join("images").join(format!("{digest}.efi"))
-}
-
-fn read_image(root: &Path, digest: &str) -> anyhow::Result<Image> {
-    ensure!(valid_digest(digest), "invalid image digest");
-    let bytes = fs::read(root.join("images").join(format!("{digest}.json")))?;
-    let image: Image = serde_json::from_slice(&bytes)?;
-    ensure!(
-        image.sha256 == digest && image_path(root, digest).is_file(),
-        "missing OTA image"
-    );
-    Ok(image)
-}
-
-fn read_images(root: &Path) -> anyhow::Result<Vec<Image>> {
-    let mut images = Vec::new();
-    for entry in fs::read_dir(root.join("images"))? {
-        let entry = entry?;
-        if let Some(name) = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| name.strip_suffix(".json"))
-        {
-            match read_image(root, name) {
-                Ok(image) => images.push(image),
-                Err(error) => {
-                    log::warn!("ignoring inconsistent OTA image metadata `{name}`: {error:#}")
-                }
-            }
-        }
-    }
-    images.sort_by(|a, b| a.sha256.cmp(&b.sha256));
-    Ok(images)
 }
 
 fn validate_image(bytes: &[u8], version: Option<String>) -> anyhow::Result<Image> {
@@ -702,79 +551,18 @@ fn validate_image(bytes: &[u8], version: Option<String>) -> anyhow::Result<Image
     Ok(image)
 }
 
-fn write_image(root: &Path, bytes: &[u8], version: Option<String>) -> anyhow::Result<Image> {
-    let image = validate_image(bytes, version)?;
-    let sha256 = image.sha256.clone();
-    let path = image_path(root, &sha256);
-    if !path.exists() {
-        atomic_write(&path, bytes)?;
-    } else {
-        ensure!(
-            format!("{:x}", Sha256::digest(fs::read(&path)?)) == sha256,
-            "existing image digest mismatch"
-        );
-    }
-    atomic_write(
-        &root.join("images").join(format!("{sha256}.json")),
-        &serde_json::to_vec(&image)?,
-    )?;
-    Ok(image)
-}
-
-fn remove_image(root: &Path, digest: &str) -> (Result<(), DeleteImageError>, bool) {
-    let result = remove_image_files(root, digest);
-    let still_valid = read_image(root, digest).is_ok();
-    (result, still_valid)
-}
-
-fn remove_image_files(root: &Path, digest: &str) -> Result<(), DeleteImageError> {
-    let directory = root.join("images");
-    let metadata = directory.join(format!("{digest}.json"));
-    let image = image_path(root, digest);
-    if !metadata.exists() && !image.exists() {
-        return Err(DeleteImageError::NotFound);
-    }
-    if metadata.is_file() {
-        fs::remove_file(&metadata)?;
-        fs::File::open(&directory)?.sync_all()?;
-    } else if metadata.exists() {
-        return Err(DeleteImageError::Inconsistent);
-    }
-    if image.is_file() {
-        fs::remove_file(&image)?;
-        fs::File::open(&directory)?.sync_all()?;
-    } else if image.exists() {
-        return Err(DeleteImageError::Inconsistent);
-    }
-    Ok(())
-}
-
 fn valid_digest(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    let tmp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
-    let result = (|| -> anyhow::Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        fs::rename(&tmp, path)?;
-        fs::File::open(path.parent().context("OTA path without parent")?)?.sync_all()?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    async fn test_store(path: &std::path::Path) -> OtaStore {
+        OtaStore::open(crate::test_support::database(path).await.unwrap())
+            .await
+            .unwrap()
+    }
     use httpboot_protocol::{LoaderOtaState, OtaOutcome, OtaSource};
 
     fn efi_image() -> Vec<u8> {
@@ -791,7 +579,7 @@ mod tests {
     #[tokio::test]
     async fn duplicate_phase_reports_are_idempotent() {
         let dir = tempfile::tempdir().unwrap();
-        let store = OtaStore::open(dir.path()).unwrap();
+        let store = test_store(dir.path()).await;
         let image = store
             .put_image(&efi_image(), Some("first".into()))
             .await
@@ -865,7 +653,7 @@ mod tests {
     #[tokio::test]
     async fn delivery_failures_are_persisted_and_bounded() {
         let dir = tempfile::tempdir().unwrap();
-        let store = OtaStore::open(dir.path()).unwrap();
+        let store = test_store(dir.path()).await;
         let image = store.put_image(&efi_image(), None).await.unwrap();
         let mac = "02:00:00:00:00:01".parse().unwrap();
         let job = store
@@ -886,7 +674,7 @@ mod tests {
         assert_eq!(first.delivery_attempts, 1);
         drop(store);
 
-        let store = OtaStore::open(dir.path()).unwrap();
+        let store = test_store(dir.path()).await;
         for attempt in 2..=MAX_DELIVERY_ATTEMPTS {
             let updated = store
                 .record_delivery_failure(
@@ -920,7 +708,7 @@ mod tests {
     #[tokio::test]
     async fn update_survives_restart_and_confirms_its_own_trial_while_board_is_busy() {
         let dir = tempfile::tempdir().unwrap();
-        let store = OtaStore::open(dir.path()).unwrap();
+        let store = test_store(dir.path()).await;
         let image = store
             .put_image(&efi_image(), Some("test".into()))
             .await
@@ -937,7 +725,7 @@ mod tests {
                 .is_err()
         );
         drop(store);
-        let store = OtaStore::open(dir.path()).unwrap();
+        let store = test_store(dir.path()).await;
         let mut state = LoaderOtaState {
             active_sha256: "11".repeat(32),
             running_sha256: "11".repeat(32),
@@ -968,7 +756,7 @@ mod tests {
             matches!(store.decide("board-1", mac, &state, false).await.unwrap(), Decision::Confirm(id) if id == job.update_id)
         );
         drop(store);
-        let store = OtaStore::open(dir.path()).unwrap();
+        let store = test_store(dir.path()).await;
         assert_eq!(store.job("board-1").await.unwrap().phase, Phase::Confirming);
         state.trial = false;
         state.pending_update_id = None;
@@ -991,7 +779,7 @@ mod tests {
             Decision::Wait
         ));
         drop(store);
-        let store = OtaStore::open(dir.path()).unwrap();
+        let store = test_store(dir.path()).await;
         assert!(
             store
                 .queue("board-1".into(), mac, &candidate.sha256)
@@ -1003,7 +791,7 @@ mod tests {
     #[tokio::test]
     async fn active_update_can_be_cancelled_and_replaced_after_restart() {
         let dir = tempfile::tempdir().unwrap();
-        let store = OtaStore::open(dir.path()).unwrap();
+        let store = test_store(dir.path()).await;
         let image = store
             .put_image(&efi_image(), Some("first".into()))
             .await
@@ -1037,7 +825,7 @@ mod tests {
         assert!(store.cancel("board-1", &job.update_id).await.is_err());
 
         drop(store);
-        let store = OtaStore::open(dir.path()).unwrap();
+        let store = test_store(dir.path()).await;
         assert_eq!(store.job("board-1").await.unwrap().phase, Phase::Cancelled);
         assert!(!store.observations.lock().await.contains_key("board-1"));
         let mut replacement = efi_image();
@@ -1057,7 +845,7 @@ mod tests {
     #[tokio::test]
     async fn image_delete_rejects_active_assignment_and_survives_restart() {
         let dir = tempfile::tempdir().unwrap();
-        let store = OtaStore::open(dir.path()).unwrap();
+        let store = test_store(dir.path()).await;
         let image = store
             .put_image(&efi_image(), Some("delete-me".into()))
             .await
@@ -1068,13 +856,8 @@ mod tests {
             .queue("board-1".into(), mac, &image.sha256)
             .await
             .unwrap();
-        let image_path = store.image_path(&image.sha256).unwrap();
-        let metadata_path = store
-            .root
-            .join("images")
-            .join(format!("{}.json", image.sha256));
-        assert!(image_path.is_file());
-        assert!(metadata_path.is_file());
+        let digest = image.sha256.clone();
+        assert!(store.image_bytes(&digest).await.is_ok());
 
         assert!(matches!(
             store.delete_image(&image.sha256).await,
@@ -1083,8 +866,8 @@ mod tests {
         store.cancel("board-1", &job.update_id).await.unwrap();
         store.delete_image(&image.sha256).await.unwrap();
         assert!(store.images().await.unwrap().is_empty());
-        assert!(!image_path.exists());
-        assert!(!metadata_path.exists());
+        assert!(store.image_bytes(&digest).await.is_err());
+
         let retained = store.job("board-1").await.unwrap();
         assert_eq!(retained.image.sha256, image.sha256);
         assert_eq!(retained.image.size, image.size);
@@ -1098,52 +881,18 @@ mod tests {
             .put_image(&efi_image(), Some("delete-me".into()))
             .await
             .unwrap();
-        fs::remove_file(&metadata_path).unwrap();
+
         store.delete_image(&image.sha256).await.unwrap();
-        assert!(!image_path.exists());
-        assert!(!metadata_path.exists());
+        assert!(store.image_bytes(&digest).await.is_err());
 
         drop(store);
-        let store = OtaStore::open(dir.path()).unwrap();
+        let store = test_store(dir.path()).await;
         assert!(store.images().await.unwrap().is_empty());
         let retained = store.job("board-1").await.unwrap();
         assert_eq!(retained.phase, Phase::Cancelled);
         assert_eq!(retained.image.sha256, image.sha256);
         assert_eq!(retained.image.size, image.size);
         assert_eq!(retained.image.version, image.version);
-        assert!(!image_path.exists());
-        assert!(!metadata_path.exists());
-    }
-
-    #[tokio::test]
-    async fn inconsistent_delete_evicts_the_cached_image_and_does_not_block_restart() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = OtaStore::open(dir.path()).unwrap();
-        let image = store.put_image(&efi_image(), None).await.unwrap();
-        let image_path = store.image_path(&image.sha256).unwrap();
-        fs::remove_file(&image_path).unwrap();
-        fs::create_dir(&image_path).unwrap();
-
-        assert!(matches!(
-            store.delete_image(&image.sha256).await,
-            Err(DeleteImageError::Inconsistent)
-        ));
-        assert!(store.images().await.unwrap().is_empty());
-
-        drop(store);
-        let store = OtaStore::open(dir.path()).unwrap();
-        assert!(store.images().await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn inconsistent_image_metadata_does_not_prevent_restart() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = OtaStore::open(dir.path()).unwrap();
-        let image = store.put_image(&efi_image(), None).await.unwrap();
-        fs::remove_file(store.image_path(&image.sha256).unwrap()).unwrap();
-        drop(store);
-
-        let store = OtaStore::open(dir.path()).unwrap();
-        assert!(store.images().await.unwrap().is_empty());
+        assert!(store.image_bytes(&digest).await.is_err());
     }
 }
