@@ -280,12 +280,10 @@ impl BoardServerClient {
     }
 
     pub async fn list_board_types(&self) -> Result<Vec<BoardTypeSummary>, BoardServerClientError> {
-        let response = self
+        let request = self
             .request(Method::GET, self.endpoint("/api/v1/board-types"))
-            .await?
-            .send()
-            .await
-            .map_err(Self::request_error)?;
+            .await?;
+        let response = self.send(request).await?;
         self.decode_json(response).await
     }
 
@@ -317,7 +315,7 @@ impl BoardServerClient {
         board_type: &str,
         board_id: Option<&str>,
     ) -> Result<SessionCreatedResponse, BoardServerClientError> {
-        let response = self
+        let request = self
             .request(Method::POST, self.endpoint("/api/v1/sessions"))
             .await?
             .json(&CreateSessionRequestWithBoardId {
@@ -325,10 +323,8 @@ impl BoardServerClient {
                 board_id: board_id.map(ToOwned::to_owned),
                 required_tags: vec![],
                 client_name: Some("ostool".to_string()),
-            })
-            .send()
-            .await
-            .map_err(Self::request_error)?;
+            });
+        let response = self.send(request).await?;
         let session: SessionCreatedResponse = self.decode_json(response).await?;
         if let Some(requested_board_id) = board_id
             && session.board_id != requested_board_id
@@ -356,28 +352,24 @@ impl BoardServerClient {
         &self,
         session_id: &str,
     ) -> Result<HeartbeatResponse, BoardServerClientError> {
-        let response = self
+        let request = self
             .request(
                 Method::POST,
                 self.endpoint_segments(&["api", "v1", "sessions", session_id, "heartbeat"]),
             )
-            .await?
-            .send()
-            .await
-            .map_err(Self::request_error)?;
+            .await?;
+        let response = self.send(request).await?;
         self.decode_json(response).await
     }
 
     pub async fn delete_session(&self, session_id: &str) -> Result<(), BoardServerClientError> {
-        let response = self
+        let request = self
             .request(
                 Method::DELETE,
                 self.endpoint_segments(&["api", "v1", "sessions", session_id]),
             )
-            .await?
-            .send()
-            .await
-            .map_err(Self::request_error)?;
+            .await?;
+        let response = self.send(request).await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(());
         }
@@ -388,15 +380,13 @@ impl BoardServerClient {
         &self,
         session_id: &str,
     ) -> Result<BootProfileResponse, BoardServerClientError> {
-        let response = self
+        let request = self
             .request(
                 Method::GET,
                 self.endpoint_segments(&["api", "v1", "sessions", session_id, "boot-profile"]),
             )
-            .await?
-            .send()
-            .await
-            .map_err(Self::request_error)?;
+            .await?;
+        let response = self.send(request).await?;
         self.decode_json(response).await
     }
 
@@ -404,15 +394,13 @@ impl BoardServerClient {
         &self,
         session_id: &str,
     ) -> Result<SerialStatusResponse, BoardServerClientError> {
-        let response = self
+        let request = self
             .request(
                 Method::GET,
                 self.endpoint(&format!("/api/v1/sessions/{session_id}/serial")),
             )
-            .await?
-            .send()
-            .await
-            .map_err(Self::request_error)?;
+            .await?;
+        let response = self.send(request).await?;
         self.decode_json(response).await
     }
 
@@ -420,15 +408,13 @@ impl BoardServerClient {
         &self,
         session_id: &str,
     ) -> Result<LoaderStatusResponse, BoardServerClientError> {
-        let response = self
+        let request = self
             .request(
                 Method::GET,
                 self.endpoint_segments(&["api", "v1", "sessions", session_id, "loader-status"]),
             )
-            .await?
-            .send()
-            .await
-            .map_err(Self::request_error)?;
+            .await?;
+        let response = self.send(request).await?;
         self.decode_json(response).await
     }
 
@@ -436,15 +422,13 @@ impl BoardServerClient {
         &self,
         session_id: &str,
     ) -> Result<TftpSessionResponse, BoardServerClientError> {
-        let response = self
+        let request = self
             .request(
                 Method::GET,
                 self.endpoint(&format!("/api/v1/sessions/{session_id}/tftp")),
             )
-            .await?
-            .send()
-            .await
-            .map_err(Self::request_error)?;
+            .await?;
+        let response = self.send(request).await?;
         self.decode_json(response).await
     }
 
@@ -452,15 +436,13 @@ impl BoardServerClient {
         &self,
         session_id: &str,
     ) -> Result<SessionDtbResponse, BoardServerClientError> {
-        let response = self
+        let request = self
             .request(
                 Method::GET,
                 self.endpoint(&format!("/api/v1/sessions/{session_id}/dtb")),
             )
-            .await?
-            .send()
-            .await
-            .map_err(Self::request_error)?;
+            .await?;
+        let response = self.send(request).await?;
         self.decode_json(response).await
     }
 
@@ -468,41 +450,35 @@ impl BoardServerClient {
         &self,
         session_id: &str,
     ) -> Result<Vec<u8>, BoardServerClientError> {
-        let response = self
+        let request = self
             .request(
                 Method::GET,
                 self.endpoint(&format!("/api/v1/sessions/{session_id}/dtb/download")),
             )
-            .await?
-            .send()
-            .await
-            .map_err(Self::request_error)?;
+            .await?;
+        let response = self.send(request).await?;
         self.decode_bytes(response).await
     }
 
     pub async fn power_on_board(&self, session_id: &str) -> Result<(), BoardServerClientError> {
-        let response = self
+        let request = self
             .request(
                 Method::POST,
                 self.endpoint(&format!("/api/v1/sessions/{session_id}/board/power-on")),
             )
-            .await?
-            .send()
-            .await
-            .map_err(Self::request_error)?;
+            .await?;
+        let response = self.send(request).await?;
         self.decode_empty(response).await
     }
 
     pub async fn power_off_board(&self, session_id: &str) -> Result<(), BoardServerClientError> {
-        let response = self
+        let request = self
             .request(
                 Method::POST,
                 self.endpoint(&format!("/api/v1/sessions/{session_id}/board/power-off")),
             )
-            .await?
-            .send()
-            .await
-            .map_err(Self::request_error)?;
+            .await?;
+        let response = self.send(request).await?;
         self.decode_empty(response).await
     }
 
@@ -512,17 +488,15 @@ impl BoardServerClient {
         relative_path: &str,
         bytes: Vec<u8>,
     ) -> Result<SharedSessionFileResponse, BoardServerClientError> {
-        let response = self
+        let request = self
             .request(
                 Method::PUT,
                 self.endpoint_segments(&["api", "v1", "sessions", session_id, "files"]),
             )
             .await?
             .header("X-File-Path", relative_path)
-            .body(bytes)
-            .send()
-            .await
-            .map_err(Self::request_error)?;
+            .body(bytes);
+        let response = self.send(request).await?;
         self.decode_json(response).await
     }
 
@@ -532,17 +506,15 @@ impl BoardServerClient {
         relative_path: &str,
         bytes: Vec<u8>,
     ) -> Result<HttpBootFileResponse, BoardServerClientError> {
-        let response = self
+        let request = self
             .request(
                 Method::PUT,
                 self.endpoint(&format!("/api/v1/sessions/{session_id}/http-boot/files")),
             )
             .await?
             .header("X-File-Path", relative_path)
-            .body(bytes)
-            .send()
-            .await
-            .map_err(Self::request_error)?;
+            .body(bytes);
+        let response = self.send(request).await?;
         self.decode_json(response).await
     }
 
@@ -574,35 +546,30 @@ impl BoardServerClient {
         if let Some(cmdline) = upload.cmdline {
             request = request.header("X-HttpBoot-Cmdline", cmdline);
         }
-        let response = request
-            .body(upload.bytes)
-            .send()
-            .await
-            .map_err(Self::request_error)?;
+        let response = self.send(request.body(upload.bytes)).await?;
         self.decode_json(response).await
     }
 
     pub fn resolve_ws_url(&self, ws_url: &str) -> anyhow::Result<Url> {
-        if ws_url.starts_with("ws://") || ws_url.starts_with("wss://") {
-            let url =
-                Url::parse(ws_url).with_context(|| format!("invalid websocket URL `{ws_url}`"))?;
-            // A server-provided absolute URL must not redirect a Bearer token
-            // to another origin. Relative URLs are resolved against ws_base_url below.
-            if self.endpoint.auth_mode == AuthMode::Required
-                && (url.scheme() != self.ws_base_url.scheme()
-                    || url.host() != self.ws_base_url.host()
-                    || url.port_or_known_default() != self.ws_base_url.port_or_known_default())
-            {
-                anyhow::bail!(
-                    "refusing to send authentication credentials to cross-origin websocket URL `{url}`"
-                );
-            }
-            return Ok(url);
-        }
-
-        self.ws_base_url
+        let url = self
+            .ws_base_url
             .join(ws_url)
-            .with_context(|| format!("failed to resolve websocket URL `{ws_url}`"))
+            .with_context(|| format!("failed to resolve websocket URL `{ws_url}`"))?;
+        if !matches!(url.scheme(), "ws" | "wss") {
+            anyhow::bail!("serial websocket URL must use ws or wss");
+        }
+        // Validate after resolution: network-path references (`//host/path`) and
+        // backslash-normalized URLs must never bypass the Bearer origin check.
+        if self.endpoint.auth_mode == AuthMode::Required
+            && (url.scheme() != self.ws_base_url.scheme()
+                || url.host() != self.ws_base_url.host()
+                || url.port_or_known_default() != self.ws_base_url.port_or_known_default())
+        {
+            anyhow::bail!(
+                "refusing to send authentication credentials to cross-origin websocket URL `{url}`"
+            );
+        }
+        Ok(url)
     }
 
     fn endpoint(&self, path: &str) -> Url {
@@ -646,6 +613,70 @@ impl BoardServerClient {
         }
     }
 
+    async fn send(
+        &self,
+        builder: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, BoardServerClientError> {
+        let request = builder.build().map_err(Self::request_error)?;
+        let token = request
+            .headers()
+            .get(reqwest::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .map(str::to_owned);
+        let retry = request.try_clone();
+        let response = self
+            .client
+            .execute(request)
+            .await
+            .map_err(Self::request_error)?;
+        if response.status() != StatusCode::UNAUTHORIZED {
+            return Ok(response);
+        }
+        let Some(rejected) = token else {
+            return Ok(response);
+        };
+        // Middleware rejects authentication before applying a board mutation.
+        // Retry once only when another process has already saved a newer token.
+        match self
+            .token_manager
+            .recover_after_unauthorized(&rejected)
+            .await
+        {
+            Ok(Some(new_token)) => {
+                if let Some(mut request) = retry {
+                    let Ok(mut value) =
+                        format!("Bearer {new_token}").parse::<reqwest::header::HeaderValue>()
+                    else {
+                        return Ok(response);
+                    };
+                    value.set_sensitive(true);
+                    request
+                        .headers_mut()
+                        .insert(reqwest::header::AUTHORIZATION, value);
+                    drop(response);
+                    let response = self
+                        .client
+                        .execute(request)
+                        .await
+                        .map_err(Self::request_error)?;
+                    if response.status() == StatusCode::UNAUTHORIZED
+                        && let Err(error) = self
+                            .token_manager
+                            .recover_after_unauthorized(&new_token)
+                            .await
+                    {
+                        log::warn!("failed to reconcile rejected board credentials: {error:#}");
+                    }
+                    return Ok(response);
+                }
+            }
+            Ok(None) => {}
+            Err(error) => log::warn!("failed to reconcile rejected board credentials: {error:#}"),
+        }
+        Ok(response)
+    }
+
     async fn decode_json<T: DeserializeOwned>(
         &self,
         response: reqwest::Response,
@@ -653,8 +684,6 @@ impl BoardServerClient {
         if response.status().is_success() {
             response.json::<T>().await.map_err(Self::request_error)
         } else {
-            self.clear_invalid_credential_if_unauthorized(&response)
-                .await;
             Err(Self::api_error(response).await)
         }
     }
@@ -666,8 +695,6 @@ impl BoardServerClient {
         if response.status().is_success() {
             Ok(())
         } else {
-            self.clear_invalid_credential_if_unauthorized(&response)
-                .await;
             Err(Self::api_error(response).await)
         }
     }
@@ -683,19 +710,7 @@ impl BoardServerClient {
                 .map(|bytes| bytes.to_vec())
                 .map_err(Self::request_error)
         } else {
-            self.clear_invalid_credential_if_unauthorized(&response)
-                .await;
             Err(Self::api_error(response).await)
-        }
-    }
-
-    async fn clear_invalid_credential_if_unauthorized(&self, response: &reqwest::Response) {
-        // Do not keep a credential the gateway has explicitly rejected. The next
-        // command must authenticate again instead of silently falling back to LAN mode.
-        if response.status() == StatusCode::UNAUTHORIZED
-            && let Err(error) = self.token_manager.invalidate_after_unauthorized().await
-        {
-            log::warn!("failed to remove rejected board credentials: {error:#}");
         }
     }
 
@@ -873,6 +888,24 @@ mod tests {
             client
                 .resolve_ws_url("wss://203.0.113.11:8443/api/v1/sessions/demo/serial/ws")
                 .is_err()
+        );
+        for value in [
+            "//203.0.113.11:8443/serial",
+            "///203.0.113.11:8443/serial",
+            r"\\203.0.113.11:8443/serial",
+            "https://203.0.113.10:8443/serial",
+        ] {
+            assert!(
+                client.resolve_ws_url(value).is_err(),
+                "accepted unsafe websocket reference {value}"
+            );
+        }
+        assert_eq!(
+            client
+                .resolve_ws_url("/api/v1/sessions/one/serial/ws")
+                .unwrap()
+                .as_str(),
+            "wss://203.0.113.10:8443/api/v1/sessions/one/serial/ws"
         );
     }
 

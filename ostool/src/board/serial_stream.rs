@@ -141,8 +141,9 @@ pub(crate) fn websocket_request(
         .context("failed to build serial websocket request")?;
     if let Some(token) = authorization {
         // The URL was origin-checked by BoardServerClient before this point.
-        let value = HeaderValue::from_str(&format!("Bearer {token}"))
+        let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
             .context("invalid websocket authorization header")?;
+        value.set_sensitive(true);
         request.headers_mut().insert(AUTHORIZATION, value);
     }
     Ok(request)
@@ -577,5 +578,6 @@ mod tests {
             request.headers().get("authorization").unwrap(),
             "Bearer token-value"
         );
+        assert!(!format!("{:?}", request.headers()).contains("token-value"));
     }
 }

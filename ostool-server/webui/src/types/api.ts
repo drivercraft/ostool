@@ -317,6 +317,7 @@ export interface FileResponse {
   filename: string;
   relative_path: string;
   tftp_url: string | null;
+  http_url: string | null;
   size: number;
   uploaded_at: string;
 }
@@ -576,4 +577,13 @@ export interface DashboardInfo {
   }[];
   ota_jobs: LoaderUpdateJob[];
   audit_retention_days: number | null;
+}
+
+/** Session API never returns administrator-only hardware configuration. */
+export interface SessionDetailResponse {
+  session: Session;
+  board: PublicDevice;
+  serial_available: boolean;
+  serial_connected: boolean;
+  files: FileResponse[];
 }

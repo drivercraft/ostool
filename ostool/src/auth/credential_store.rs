@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, env, fs, path::PathBuf};
+use std::{collections::BTreeMap, env, fs, io::Write, path::PathBuf};
 
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
@@ -71,6 +71,7 @@ impl CredentialStore {
             "warning: the system credential store is unavailable; storing ostool credentials in a user-only file"
         );
         let path = credential_file_path()?;
+        let _lock = lock_file_records(&path)?;
         let mut records = read_file_records(&path)?;
         records.insert(self.server_key.clone(), record.clone());
         write_file_records(&path, &records)
@@ -82,6 +83,7 @@ impl CredentialStore {
         }
 
         let path = credential_file_path()?;
+        let _lock = lock_file_records(&path)?;
         let mut records = read_file_records(&path)?;
         if records.remove(&self.server_key).is_some() {
             write_file_records(&path, &records)?;
@@ -112,16 +114,105 @@ fn write_file_records(
     records: &BTreeMap<String, CredentialRecord>,
 ) -> anyhow::Result<()> {
     let parent = path.parent().expect("credential path has parent");
-    // This is an explicit fallback for hosts without a usable system credential store.
-    // Keep the file private even though the OS cannot provide keyring protection here.
-    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
-    fs::write(path, serde_json::to_vec_pretty(records)?)
-        .with_context(|| format!("failed to write {}", path.display()))?;
+    ensure_private_directory(parent)?;
+    // tempfile creates the file privately before writing any secret. Replacement
+    // is atomic: readers never see partial JSON and an existing symlink is not followed.
+    let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    file.write_all(&serde_json::to_vec_pretty(records)?)?;
+    file.as_file().sync_all()?;
+    file.persist(path)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    Ok(())
+}
+
+fn ensure_private_directory(parent: &std::path::Path) -> anyhow::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("failed to protect {}", path.display()))?;
+        use std::os::unix::fs::DirBuilderExt as _;
+        builder.mode(0o700);
     }
+    builder
+        .create(parent)
+        .with_context(|| format!("failed to create {}", parent.display()))?;
     Ok(())
+}
+
+// All fallback mutations share a lock, including changes for different gateways.
+// The lock is separate from hosts.json, since that file is atomically replaced.
+fn lock_file_records(path: &std::path::Path) -> anyhow::Result<fs::File> {
+    ensure_private_directory(path.parent().expect("credential path has parent"))?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let file = options.open(path.with_extension("lock"))?;
+    fs4::FileExt::lock(&file)?;
+    Ok(file)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    fn records() -> BTreeMap<String, CredentialRecord> {
+        BTreeMap::from([(
+            "test-server".into(),
+            CredentialRecord::PersonalAccessToken {
+                token: "test-private-token".into(),
+                expires_at: None,
+                scope: None,
+            },
+        )])
+    }
+
+    #[test]
+    fn fallback_credentials_are_private_on_creation_and_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("ostool/hosts.json");
+        write_file_records(&path, &records()).unwrap();
+        assert_eq!(
+            fs::metadata(path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        // Upgrading an older permissive file replaces it with a private inode.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        write_file_records(&path, &BTreeMap::new()).unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(read_file_records(&path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn atomic_replacement_does_not_overwrite_a_symlink_target() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("unrelated-file");
+        fs::write(&target, b"leave intact").unwrap();
+        let path = root.path().join("hosts.json");
+        symlink(&target, &path).unwrap();
+        write_file_records(&path, &records()).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"leave intact");
+        assert!(
+            !fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(read_file_records(&path).unwrap().len(), 1);
+    }
 }

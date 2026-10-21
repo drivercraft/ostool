@@ -24,6 +24,17 @@ pub struct PublicDevice {
     pub disabled: bool,
 }
 
+impl From<&BoardConfig> for PublicDevice {
+    fn from(board: &BoardConfig) -> Self {
+        Self {
+            id: board.id.clone(),
+            board_type: board.board_type.clone(),
+            tags: board.tags.clone(),
+            disabled: board.disabled,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub code: String,
@@ -70,7 +81,8 @@ pub struct SessionCreatedResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionDetailResponse {
     pub session: Session,
-    pub board: BoardConfig,
+    /// Operational configuration is available only through the management API.
+    pub board: PublicDevice,
     pub serial_available: bool,
     pub serial_connected: bool,
     pub files: Vec<SharedSessionFileResponse>,

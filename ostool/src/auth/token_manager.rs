@@ -73,21 +73,30 @@ impl TokenManager {
                 access_expires_at,
                 ..
             } if access_expires_at > Utc::now() + Duration::seconds(60) => Ok(Some(access_token)),
-            CredentialRecord::OAuthRefresh { refresh_token, .. } => {
+            CredentialRecord::OAuthRefresh { .. } => {
                 // Refresh-token rotation makes concurrent refreshes unsafe. Lock,
                 // then reload storage so another process can satisfy this request.
                 let _refresh_lock = RefreshLock::acquire(&self.endpoint.base_url).await?;
-                if let Some(CredentialRecord::OAuthRefresh {
+                let latest = self.load_record().await?;
+                let Some(CredentialRecord::OAuthRefresh {
+                    refresh_token,
                     access_token,
                     access_expires_at,
                     ..
-                }) = self.load_record().await?
-                    && access_expires_at > Utc::now() + Duration::seconds(60)
-                {
-                    *cached = self.load_record().await?;
-                    return Ok(Some(access_token));
+                }) = latest.as_ref()
+                else {
+                    *cached = None;
+                    bail!(
+                        "stored credentials changed; retry the command or run `ostool login` again"
+                    );
+                };
+                if *access_expires_at > Utc::now() + Duration::seconds(60) {
+                    *cached = latest.clone();
+                    return Ok(Some(access_token.clone()));
                 }
-                let refreshed = self.auth.refresh(&refresh_token).await;
+                // Even short-lived tokens may have rotated in another process.
+                // Always refresh the record read under the cross-process lock.
+                let refreshed = self.auth.refresh(refresh_token).await;
                 match refreshed {
                     Ok(record) => {
                         let access_token = match &record {
@@ -119,8 +128,10 @@ impl TokenManager {
             bail!("the configured board server has authentication disabled");
         }
         let record = complete_device_login(&self.auth).await?;
+        let mut cached = self.cached.lock().await;
+        let _refresh_lock = RefreshLock::acquire(&self.endpoint.base_url).await?;
         self.save_record(record.clone()).await?;
-        *self.cached.lock().await = Some(record);
+        *cached = Some(record);
         Ok(())
     }
 
@@ -137,8 +148,10 @@ impl TokenManager {
             expires_at: None,
             scope: None,
         };
+        let mut cached = self.cached.lock().await;
+        let _refresh_lock = RefreshLock::acquire(&self.endpoint.base_url).await?;
         self.save_record(record.clone()).await?;
-        *self.cached.lock().await = Some(record);
+        *cached = Some(record);
         Ok(())
     }
 
@@ -177,6 +190,8 @@ impl TokenManager {
     }
 
     pub async fn logout(&self) -> anyhow::Result<()> {
+        let mut cached = self.cached.lock().await;
+        let _refresh_lock = RefreshLock::acquire(&self.endpoint.base_url).await?;
         let record = self.load_record().await?;
         if let Some(CredentialRecord::OAuthRefresh { refresh_token, .. }) = record
             && let Err(error) = self.auth.revoke(&refresh_token).await
@@ -184,18 +199,34 @@ impl TokenManager {
             eprintln!("warning: failed to revoke OAuth session remotely: {error:#}");
         }
         self.delete_record().await?;
-        *self.cached.lock().await = None;
+        *cached = None;
         Ok(())
     }
 
-    pub async fn invalidate_after_unauthorized(&self) -> anyhow::Result<()> {
-        // An environment token belongs to this process, not the saved browser login.
+    /// Reconcile a rejected request with the token currently saved for this server.
+    /// A newer credential may be retried once; an actually rejected saved token is removed.
+    pub async fn recover_after_unauthorized(
+        &self,
+        rejected: &str,
+    ) -> anyhow::Result<Option<String>> {
+        // Environment credentials never own or invalidate the saved browser login.
         if environment_token().is_some() {
-            return Ok(());
+            return Ok(None);
+        }
+        let mut cached = self.cached.lock().await;
+        let _refresh_lock = RefreshLock::acquire(&self.endpoint.base_url).await?;
+        let latest = self.load_record().await?;
+        let current = latest.as_ref().map(|record| match record {
+            CredentialRecord::OAuthRefresh { access_token, .. } => access_token.clone(),
+            CredentialRecord::PersonalAccessToken { token, .. } => token.clone(),
+        });
+        if current.as_deref().is_some_and(|token| token != rejected) {
+            *cached = latest;
+            return Ok(current);
         }
         self.delete_record().await?;
-        *self.cached.lock().await = None;
-        Ok(())
+        *cached = None;
+        Ok(None)
     }
 
     // Linux's synchronous Secret Service implementation may create its own Tokio

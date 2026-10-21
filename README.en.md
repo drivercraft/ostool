@@ -466,6 +466,8 @@ The website `/devices` shows all configured devices as searchable cards without 
 
 CLI keyring operations run on blocking threads to avoid nested async runtimes. Rejecting an environment token leaves an independently saved login intact.
 
+For public CLI operations, set `board.auth_mode = "required"` and `board.server` to the HTTPS site. `login --server` does not rewrite global configuration. See the [public CLI authorization review](ostool-server/deploy/cli-auth-review.md) for device login, automatic refresh, concurrent credential recovery, rental enforcement and deployment boundaries.
+
 Public authentication requires HTTPS. The client verifies certificates only through the system trust store; deployments using a private CA must install its root certificate on client systems. Do not use HTTP, bypass certificate verification, or put tokens in configuration files.
 
 ## 🛠️ Subproject Details

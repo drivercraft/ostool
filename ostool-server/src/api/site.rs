@@ -134,12 +134,7 @@ pub(crate) async fn device_catalog(state: &AppState) -> Vec<super::models::Publi
         .read()
         .await
         .values()
-        .map(|board| super::models::PublicDevice {
-            id: board.id.clone(),
-            board_type: board.board_type.clone(),
-            tags: board.tags.clone(),
-            disabled: board.disabled,
-        })
+        .map(super::models::PublicDevice::from)
         .collect()
 }
 

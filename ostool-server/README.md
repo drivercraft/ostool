@@ -543,3 +543,15 @@ cargo test -p ostool-server --test cli_rental_contract -- --ignored
 
 The fixture uses loopback HTTP only; production CLI authenticated endpoints still
 require HTTPS. This test does not replace physical firmware/TFTP validation.
+
+
+Public CLI deployment and the security review are documented in
+[the CLI authorization review](deploy/cli-auth-review.md). CLI configuration must
+explicitly select `auth_mode = "required"`; `login --server` does not change the
+server used by later board commands. Device-code approval requires terminal-code
+confirmation. Established serial sockets require an unexpired current access
+grant in the same login family, so normal refresh preserves the socket while
+expiry without refresh closes it. CLI tokens cannot access personal-account APIs,
+and session details return a device summary instead of power commands or internal
+notes. Fallback credentials are privately and atomically replaced; refresh and 401
+recovery coordinate across processes without deleting a newer saved login.

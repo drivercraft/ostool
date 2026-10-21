@@ -88,6 +88,7 @@ async fn website_rentals_authorize_real_ostool_clients() -> Result<()> {
     };
     config.listen_addr = listener.local_addr()?;
     config.auth.public_base_url = Some(base.clone());
+    config.auth.access_token_ttl_secs = 60;
     // The loopback client represents an Internet user in this fixture. Hardware-only
     // anonymous traffic is tested separately; it must not mask missing CLI credentials.
     config.security.hardware_allowed_networks = vec!["192.0.2.0/24".into()];
@@ -111,10 +112,10 @@ async fn website_rentals_authorize_real_ostool_clients() -> Result<()> {
             ..Default::default()
         }),
         power_management: PowerManagementConfig::Custom(CustomPowerManagement {
-            power_on_cmd: "true".into(),
+            power_on_cmd: "true # private-power-credential".into(),
             power_off_cmd: "true".into(),
         }),
-        notes: None,
+        notes: Some("private-operator-notes".into()),
         network_identity: None,
         disabled: false,
     };
@@ -259,6 +260,32 @@ async fn website_rentals_authorize_real_ostool_clients() -> Result<()> {
     )
     .await;
 
+    // board:operate does not grant profile/settings access; offline_access alone
+    // must not grant board operations, even if the user owns an active rental.
+    request(
+        &client,
+        &base,
+        "GET",
+        "/api/v1/account",
+        Some(oauth),
+        Value::Null,
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+    let narrow = database
+        .issue_grant(member.clone(), "ostool-cli", "offline_access", &config.auth)
+        .await?;
+    request(
+        &client,
+        &base,
+        "GET",
+        "/api/v1/board-types",
+        Some(&narrow.access_token),
+        Value::Null,
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+
     for scenario in ["cancel", "expire", "revoke"] {
         let pat = if scenario != "cancel" {
             Some(
@@ -290,6 +317,16 @@ async fn website_rentals_authorize_real_ostool_clients() -> Result<()> {
             Some(&web.access_token),
             json!({"board_id":board.id,"starts_at":start,"ends_at":end,"notes":scenario}),
             StatusCode::CREATED,
+        )
+        .await;
+        request(
+            &client,
+            &base,
+            "POST",
+            "/api/v1/sessions",
+            Some(oauth),
+            json!({"board_type":"contract-test"}),
+            StatusCode::FORBIDDEN,
         )
         .await;
         let account = request(
@@ -343,8 +380,16 @@ async fn website_rentals_authorize_real_ostool_clients() -> Result<()> {
             .args(["--ignored", "--exact", "cli_transport_probe", "--nocapture"])
             .env("OSTOOL_CONTRACT_BASE", &base)
             .env(
+                "OSTOOL_CONTRACT_DEVICE_LOGIN",
+                if scenario == "cancel" {
+                    "true"
+                } else {
+                    "false"
+                },
+            )
+            .env(
                 "OSTOOL_BOARD_ACCESS_TOKEN",
-                if scenario == "expire" { "" } else { token },
+                if scenario != "revoke" { "" } else { token },
             )
             .env(
                 "OSTOOL_CONTRACT_STORED_TOKEN",
@@ -373,6 +418,27 @@ async fn website_rentals_authorize_real_ostool_clients() -> Result<()> {
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .spawn()?;
+        if scenario == "cancel" {
+            // Approve the code produced by TokenManager::login_device in the child.
+            // Browser CAPTCHA/MFA have their own real browser tests; no CLI bypass.
+            let code: String = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let code: Option<String> = sqlx::query_scalar("SELECT user_code FROM oauth_device_codes WHERE user_id IS NULL AND expires_at>now() ORDER BY expires_at DESC LIMIT 1").fetch_optional(database.pool()).await.unwrap();
+                    if let Some(code) = code { break code; }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            }).await?;
+            request(
+                &client,
+                &base,
+                "POST",
+                "/api/v1/auth/device/authorize",
+                Some(&web.access_token),
+                json!({"user_code":code}),
+                StatusCode::NO_CONTENT,
+            )
+            .await;
+        }
         if let Err(error) = wait_file(&checkpoint.with_extension("connected")).await {
             let _ = probe.kill().await;
             let output = probe.wait_with_output().await?;
@@ -391,6 +457,37 @@ async fn website_rentals_authorize_real_ostool_clients() -> Result<()> {
                 .await?;
         assert_eq!(owner, (member.id, rental.parse()?));
         if scenario == "cancel" {
+            let detail = request(
+                &client,
+                &base,
+                "GET",
+                &format!("/api/v1/sessions/{sid}"),
+                Some(oauth),
+                Value::Null,
+                StatusCode::OK,
+            )
+            .await;
+            assert_eq!(detail["board"].as_object().unwrap().len(), 4);
+            assert!(detail["board"].get("power_management").is_none());
+            assert!(detail["board"].get("serial").is_none());
+            assert!(!detail.to_string().contains("private-power-credential"));
+            assert!(!detail.to_string().contains("private-operator-notes"));
+            let management = request(
+                &client,
+                &base,
+                "GET",
+                "/api/v1/admin/boards/contract-board",
+                Some(&admin.access_token),
+                Value::Null,
+                StatusCode::OK,
+            )
+            .await;
+            assert!(
+                management["power_management"]["power_on_cmd"]
+                    .as_str()
+                    .unwrap()
+                    .contains("private-power-credential")
+            );
             // Exact paths used by ostool, plus downloads and serial upgrade: neither
             // a missing credential nor another user may access this leased session.
             for (method, suffix) in [
@@ -550,14 +647,57 @@ async fn cli_transport_probe() -> Result<()> {
     let revoked = std::env::var("OSTOOL_CONTRACT_REVOKED")? == "true";
     let manager = ostool::auth::token_manager::TokenManager::new(endpoint(&base))?;
     let stored_token = std::env::var("OSTOOL_CONTRACT_STORED_TOKEN")?;
-    manager
-        .import_personal_access_token(stored_token.clone())
-        .await?;
+    let stored =
+        std::path::PathBuf::from(std::env::var("XDG_CONFIG_HOME")?).join("ostool/hosts.json");
+    let device_login = std::env::var("OSTOOL_CONTRACT_DEVICE_LOGIN")? == "true";
+    if device_login {
+        manager.login_device().await?;
+        // Keep the first client on a locally optimistic deadline. The second client
+        // will force a real refresh; the first must then recover its rejected token.
+        let mut records: Value = serde_json::from_slice(&tokio::fs::read(&stored).await?)?;
+        let record = records
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap();
+        record["access_expires_at"] = json!(Utc::now() + ChronoDuration::minutes(10));
+        tokio::fs::write(&stored, serde_json::to_vec(&records)?).await?;
+    } else {
+        manager
+            .import_personal_access_token(stored_token.clone())
+            .await?;
+    }
     let client = BoardServerClient::new_with_endpoint(endpoint(&base))?;
     assert_eq!(
         client.list_board_types().await?[0].board_type,
         "contract-test"
     );
+    if device_login {
+        // Access TTL=60 seconds exercises two independent caches: the second client
+        // rotates storage, then the first must reload that refresh token under lock.
+        let mut records: Value = serde_json::from_slice(&tokio::fs::read(&stored).await?)?;
+        records
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap()["access_expires_at"] = json!(Utc::now() - ChronoDuration::seconds(1));
+        tokio::fs::write(&stored, serde_json::to_vec(&records)?).await?;
+        let second = BoardServerClient::new_with_endpoint(endpoint(&base))?;
+        assert_eq!(
+            second.list_board_types().await?[0].board_type,
+            "contract-test"
+        );
+        assert_eq!(
+            client.list_board_types().await?[0].board_type,
+            "contract-test"
+        );
+        // The first client's 401 must recover from the newer saved grant without
+        // deleting it. Next, exercise short-TTL refresh with two stale caches.
+        second.list_board_types().await?;
+        client.list_board_types().await?;
+    }
     let lease = client
         .create_session_with_board_id("contract-test", "contract-board")
         .await?;
@@ -620,7 +760,8 @@ async fn cli_transport_probe() -> Result<()> {
         StatusCode::BAD_REQUEST
     );
     let url = client.resolve_ws_url(lease.ws_url.as_deref().context("serial websocket URL")?)?;
-    let (writer, mut reader, tasks) = connect_serial_stream(url, Some(token)).await?;
+    let (writer, mut reader, tasks) =
+        connect_serial_stream(url, client.websocket_authorization().await?).await?;
     tokio::fs::write(checkpoint.with_extension("connected"), sid).await?;
     let mut payload = vec![0u8; b"contract serial payload\n".len()];
     tokio::time::timeout(
@@ -660,19 +801,27 @@ async fn cli_transport_probe() -> Result<()> {
             StatusCode::FORBIDDEN
         }
     );
-    // Rejecting the process-only token must preserve the independently stored login.
-    let stored =
-        std::path::PathBuf::from(std::env::var("XDG_CONFIG_HOME")?).join("ostool/hosts.json");
-    assert!(
-        tokio::fs::read_to_string(&stored)
-            .await?
-            .contains(&stored_token)
-    );
+    // Rejecting a process token preserves a separate saved login; explicit logout
+    // removes saved PAT credentials and revokes a saved OAuth refresh family.
+    let text = tokio::fs::read_to_string(&stored).await?;
+    if !device_login {
+        assert!(text.contains(&stored_token));
+    } else {
+        assert!(
+            serde_json::from_str::<Value>(&text)?
+                .as_object()
+                .unwrap()
+                .values()
+                .any(|record| record["refresh_token"].is_string())
+        );
+    }
     manager.logout().await?;
     assert!(
-        !tokio::fs::read_to_string(&stored)
-            .await?
-            .contains(&stored_token)
+        serde_json::from_slice::<Value>(&tokio::fs::read(&stored).await?)?
+            .as_object()
+            .unwrap()
+            .is_empty()
     );
+
     Ok(())
 }

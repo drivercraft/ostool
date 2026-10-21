@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   login: vi.fn(),
   me: vi.fn(),
   captcha: vi.fn(),
+  authorizeDevice: vi.fn(),
   devices: [] as {
     id: string;
     board_type: string;
@@ -44,6 +45,7 @@ vi.mock("@/api/client", () => ({
     login: mocks.login,
     me: mocks.me,
     captcha: mocks.captcha,
+    authorizeDevice: mocks.authorizeDevice,
   },
   notifyAuthChanged: () => {
     localStorage.setItem("ostool.website.session-state", "signed-in");
@@ -82,6 +84,7 @@ beforeEach(() => {
   });
   mocks.register.mockResolvedValue({ authenticated: true });
   mocks.login.mockResolvedValue({ authenticated: true });
+  mocks.authorizeDevice.mockResolvedValue(undefined);
   mocks.captcha.mockImplementation((action: string) =>
     Promise.resolve({
       id: "00000000-0000-0000-0000-000000000001",
@@ -289,5 +292,27 @@ describe("public device directory", () => {
       screen.queryByRole("link", { name: /申请租赁|登录后申请/ }),
     ).toBeNull();
     expect(mocks.me).not.toHaveBeenCalled();
+  });
+});
+
+describe("CLI device authorization", () => {
+  it("requires explicit confirmation before logging in and approving a terminal code", async () => {
+    window.history.replaceState({}, "", "/login?user_code=ABCD-EFGH");
+    const user = userEvent.setup();
+    render(<PublicApp />);
+    await user.type(await screen.findByLabelText("邮箱"), "member@test.local");
+    await user.type(screen.getByLabelText("密码"), "member-password-123");
+    await user.type(await screen.findByLabelText("图形验证码"), "AB29Q");
+    const submit = screen.getByRole("button", { name: "登录并批准" });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    await user.click(submit);
+    expect(mocks.login).not.toHaveBeenCalled();
+    expect(mocks.authorizeDevice).not.toHaveBeenCalled();
+    await user.click(
+      screen.getByRole("checkbox", { name: "确认由我发起并核对终端验证码" }),
+    );
+    await user.click(submit);
+    await screen.findByText("设备登录已批准，可以返回 ostool CLI。");
+    expect(mocks.authorizeDevice).toHaveBeenCalledWith("ABCD-EFGH");
   });
 });

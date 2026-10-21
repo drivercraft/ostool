@@ -315,7 +315,10 @@ impl Database {
 
     pub async fn credential_active(&self, credential: &Credential) -> anyhow::Result<bool> {
         if let Some(session) = credential.session_id {
-            Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM oauth_sessions s JOIN users u ON u.id=s.user_id WHERE s.family_id=(SELECT family_id FROM oauth_sessions WHERE id=$1) AND s.revoked_at IS NULL AND s.absolute_expires_at>now() AND s.last_seen_at>now()-interval '1 day' AND s.security_version=u.security_version AND NOT u.disabled)").bind(session).fetch_one(&self.pool).await?)
+            // A rotated family keeps an established socket alive only while its
+            // current access grant is valid. An unrefreshed expired token must not
+            // become a day-long credential merely by holding a WebSocket open.
+            Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM oauth_sessions s JOIN users u ON u.id=s.user_id WHERE s.family_id=(SELECT family_id FROM oauth_sessions WHERE id=$1) AND s.revoked_at IS NULL AND s.access_expires_at>now() AND s.absolute_expires_at>now() AND s.last_seen_at>now()-interval '1 day' AND s.security_version=u.security_version AND NOT u.disabled)").bind(session).fetch_one(&self.pool).await?)
         } else {
             Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM personal_access_tokens p JOIN users u ON u.id=p.user_id WHERE p.token_hash=$1 AND (p.expires_at IS NULL OR p.expires_at>now()) AND NOT u.disabled)").bind(&credential.token_hash).fetch_one(&self.pool).await?)
         }

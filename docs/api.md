@@ -7,13 +7,15 @@
 
 CLI 只调用 OAuth、Board REST 和串口 WebSocket；管理 API `/api/v1/admin/...` 要求后台管理员身份，CLI 凭据不能调用这些接口。
 
+CLI 凭据的 `board:operate` scope 仅允许 Board REST、会话文件及串口操作；不允许读取或修改个人账号、创建令牌或管理登录设备。仅有 `offline_access` 的凭据不授予板卡操作权。登录页需要用户明确确认自己发起了设备登录并核对终端验证码。
+
 ### 公开设备目录和租赁授权
 
 `GET /api/v1/site/devices` 在两种版本中均允许匿名访问，返回全部已配置设备（包括禁用设备），每项仅含 `id`、`board_type`、`tags`、`disabled`。网站 `/devices` 始终以卡片展示，通过公开的 `/api/v1/site/events` 订阅 `device_catalog` 更新；该流仅公开 `site` 和 `device_catalog`，不公开管理投影。禁用设备不可申请租赁。
 
 公网版普通用户登录后申请租赁，管理员审批后与后台直接新增租赁一样写入 `board_rentals`。申请本身不占用设备。有效时段为 `[starts_at, ends_at)`；尚未开始、已到期或取消的租赁不授予使用权。CLI 的板型发现仅返回当前获分配设备，建立的会话通过 `session_owners.rental_id` 绑定正式租赁；心跳不能超出租赁结束时间。所有会话 API、串口升级、会话文件下载都校验当前身份和租赁归属；其他用户访问返回 404，无凭据返回 401。管理员账号有完整板卡访问权限。
 
-取消、缩短租赁或到期会停止相关运行会话；撤销 OAuth 登录或 PAT 会关闭现有串口连接并释放设备（凭据复核最多间隔 5 秒）。OAuth 刷新属于同一登录族，不应中断正常串口连接。
+取消、缩短租赁或到期会停止相关运行会话；撤销 OAuth 登录或 PAT 会关闭现有串口连接并释放设备（凭据复核最多间隔 5 秒）。OAuth 刷新属于同一登录族，不应中断正常串口连接；如果该登录族没有新的有效 access token，现有串口也会在 5 秒内关闭。
 
 设备侧 TFTP 不支持用户 Bearer 鉴权；loader 与启动/共享文件允许配置的设备网段匿名访问，以兼容固件和板上下载命令。`http_url` 是设备可访问的文件地址，CLI 不会把用户 token 注入板上命令。公网 HTTP 下载则需要当前有效凭据和会话归属。独立吞吐测试监听器同样没有用户认证；部署时只向公网暴露 Caddy 的 HTTPS 入口，限制设备端口和设备网段，见 [安全配置](../ostool-server/deploy/security.md)。
 
@@ -800,26 +802,6 @@ GET /api/v1/sessions/{session_id}
     "id": "rk3568-01",
     "board_type": "rk3568",
     "tags": ["lab"],
-    "serial": null,
-    "power_management": {
-      "kind": "custom",
-      "power_on_cmd": "power-on",
-      "power_off_cmd": "power-off"
-    },
-    "boot": {
-      "kind": "uboot",
-      "use_tftp": true,
-      "dtb_name": null,
-      "kernel_load_addr": null,
-      "fit_load_addr": null,
-      "bootm_addr": null,
-      "network_mode": "dhcp",
-      "board_ip": null,
-      "server_ip": null,
-      "netmask": null,
-      "gatewayip": null
-    },
-    "notes": null,
     "disabled": false
   },
   "serial_available": false,
@@ -828,7 +810,7 @@ GET /api/v1/sessions/{session_id}
 }
 ```
 
-`session.state` 为会话生命周期状态；`board.serial`、`board.notes` 可为 `null`。`files` 的元素使用下方“上传会话文件”中的文件响应格式。
+`session.state` 为会话生命周期状态。`board` 始终为设备摘要，不包含电源命令、串口设备路径、内部备注和完整启动配置；特权配置仅由管理 API 返回。`files` 的元素使用下方“上传会话文件”中的文件响应格式。
 
 ### 会话保活与释放
 

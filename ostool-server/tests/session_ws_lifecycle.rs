@@ -653,6 +653,15 @@ fn serial_open_failure_reports_error_and_releases_session() -> Result<()> {
 
 #[test]
 fn revoked_public_login_closes_serial_and_releases_the_board() -> Result<()> {
+    public_credential_ending_closes_serial(false)
+}
+
+#[test]
+fn unrefreshed_expired_access_closes_serial_and_releases_the_board() -> Result<()> {
+    public_credential_ending_closes_serial(true)
+}
+
+fn public_credential_ending_closes_serial(expire_access: bool) -> Result<()> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     let temp = tempfile::tempdir()?;
     let (_serial_master, mut serial_handle) = TTYPort::pair()?;
@@ -714,11 +723,20 @@ fn revoked_public_login_closes_serial_and_releases_the_board() -> Result<()> {
                 .await
                 .contains_key(&created.session_id)
         );
-        server
-            .state
-            .database
-            .revoke_refresh(&refreshed.refresh_token)
+        if expire_access {
+            sqlx::query(
+                "UPDATE oauth_sessions SET access_expires_at=now()-interval '1 second' WHERE id=$1",
+            )
+            .bind(refreshed.session_id)
+            .execute(server.state.database.pool())
             .await?;
+        } else {
+            server
+                .state
+                .database
+                .revoke_refresh(&refreshed.refresh_token)
+                .await?;
+        }
         tokio::time::timeout(Duration::from_secs(8), async {
             while let Some(message) = socket.next().await {
                 match message? {
@@ -730,7 +748,7 @@ fn revoked_public_login_closes_serial_and_releases_the_board() -> Result<()> {
             Ok(())
         })
         .await
-        .context("revoked credential did not close serial within 8 seconds")??;
+        .context("invalid credential did not close serial within 8 seconds")??;
         server.state.config.write().await.edition = ostool_server::config::Edition::Local;
         wait_for_session_release(&server.app, &created.session_id).await
     });

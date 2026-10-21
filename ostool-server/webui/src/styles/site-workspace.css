@@ -808,6 +808,16 @@
 .site-root .auth-page main.auth-shell {
   width: var(--site-content-width);
 }
+.site-root .auth-card .auth-device-confirmation {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
+}
+.site-root .auth-device-confirmation [data-slot="checkbox"] {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
 .site-root .site-footer {
   padding-inline: var(--site-content-gutter);
 }
@@ -852,4 +862,10 @@
 /* Decorative hero glows may bleed into the gutter, never create page scrolling. */
 .site-root .public-home {
   overflow-x: clip;
+}
+
+.site-root .auth-device-warning {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--site-muted);
 }

@@ -306,7 +306,9 @@ pub async fn gate(
         return next.run(request).await;
     }
     let path = request.uri().path();
-    if path.starts_with("/api/v1/loaders/") && !hardware_allowed(&config, &client) {
+    if (path.starts_with("/api/v1/loaders/") || path.starts_with("/api/v1/loader-updates/"))
+        && !hardware_allowed(&config, &client)
+    {
         return ApiError::forbidden("装载器接口只允许受信任的设备网络访问").into_response();
     }
     if (path.starts_with("/admin") || path.starts_with("/api/v1/admin/"))

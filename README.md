@@ -438,6 +438,8 @@ OAuth 登录会自动刷新短期 access token；PAT 直接用于 Bearer 认证�
 
 CLI 的系统密钥环操作在阻塞线程中执行，避免与异步运行时冲突；环境变量令牌被拒绝不会删除独立保存的登录。
 
+公网 CLI 必须将 `board.auth_mode` 配为 `"required"`，并将 `board.server` 配为实际 HTTPS 站点；仅执行 `login --server` 不会改写全局配置。完整设备登录、自动刷新、并发凭据恢复、租赁校验和已知部署边界见 [公网 CLI 鉴权审查](ostool-server/deploy/cli-auth-review.md)。
+
 公网认证必须使用 HTTPS。客户端仅使用系统信任库验证证书；部署组织私有 CA 时，需由运维将其根证书安装到客户端系统。不要使用 HTTP、跳过证书验证或把 token 放进配置文件。
 
 ## 🛠️ 子项目详解

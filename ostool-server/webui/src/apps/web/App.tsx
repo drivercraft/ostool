@@ -3,6 +3,7 @@ import {
   useSiteSettings,
 } from "@/components/site-settings";
 import { AuthLegal } from "@/components/auth-legal";
+import { Checkbox } from "@/components/ui/checkbox";
 import { FormEvent, useEffect, useState } from "react";
 import {
   ArrowRight,
@@ -694,6 +695,8 @@ function Login() {
   const location = useLocation();
   const query = new URLSearchParams(location.search);
   const userCode = query.get("user_code") ?? "";
+  const [deviceConfirmed, setDeviceConfirmed] = useState(false);
+  useEffect(() => setDeviceConfirmed(false), [userCode]);
   const registering =
     location.pathname === "/register" || query.get("register") === "1";
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -723,6 +726,10 @@ function Login() {
   const [busy, setBusy] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (userCode && !deviceConfirmed) {
+      setMessage("请确认由您发起登录，并核对终端验证码。");
+      return;
+    }
     if (registering && password !== confirmPassword) {
       setMessage("两次输入的密码不一致");
       return;
@@ -817,10 +824,15 @@ function Login() {
             </p>
           </div>
           {userCode && (
-            <div className="auth-code">
-              <span>设备验证码</span>
-              <code>{userCode}</code>
-            </div>
+            <>
+              <div className="auth-code">
+                <span>设备验证码</span>
+                <code>{userCode}</code>
+              </div>
+              <p className="auth-device-warning">
+                仅批准您刚在自己的终端发起的登录，请核对验证码，不要代他人批准登录链接。
+              </p>
+            </>
           )}
           {registering && registrationAllowed === false && (
             <p role="alert">当前站点未开放注册，请联系管理员。</p>
@@ -976,11 +988,22 @@ function Login() {
               onChange={setAccepted}
             />
           )}
+          {userCode && (
+            <label className="auth-device-confirmation">
+              <Checkbox
+                checked={deviceConfirmed}
+                onCheckedChange={(value) => setDeviceConfirmed(value === true)}
+                aria-label="确认由我发起并核对终端验证码"
+              />
+              <span>确认由我发起并核对终端验证码</span>
+            </label>
+          )}
           <Button
             className="auth-submit"
             type="submit"
             disabled={
               busy ||
+              (!!userCode && !deviceConfirmed) ||
               (!challenge && !proof?.captcha_code) ||
               (registering && (registrationAllowed !== true || !accepted)) ||
               (emailRequired && (!emailChallenge || !emailCode))

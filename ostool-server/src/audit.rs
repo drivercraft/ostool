@@ -480,19 +480,19 @@ pub fn client_ip(peer: Option<IpAddr>, headers: &HeaderMap, trusted: &[IpAddr]) 
     if !trusted.contains(&address) {
         return Some(address);
     }
-    if let Some(header) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        let chain = header
-            .split(',')
-            .map(|ip| ip.trim().parse::<IpAddr>())
-            .collect::<Result<Vec<_>, _>>();
-        if let Ok(chain) = chain {
-            for next in chain.into_iter().rev() {
-                if !trusted.contains(&address) {
-                    break;
-                }
-                address = next.to_canonical();
-            }
+    // Unknown/malformed forwarding from a trusted proxy must not inherit the
+    // proxy's loopback/private IP and accidentally acquire hardware-network access.
+    let header = headers.get("x-forwarded-for")?.to_str().ok()?;
+    let chain = header
+        .split(',')
+        .map(|ip| ip.trim().parse::<IpAddr>())
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    for next in chain.into_iter().rev() {
+        if !trusted.contains(&address) {
+            break;
         }
+        address = next.to_canonical();
     }
     Some(address)
 }
@@ -1059,6 +1059,17 @@ mod tests {
             client_ip(Some(peer), &headers, &[peer, "10.0.0.2".parse().unwrap()]),
             Some("1.2.3.4".parse().unwrap())
         );
+    }
+    #[test]
+    fn invalid_forwarding_never_inherits_a_trusted_proxy_address() {
+        let peer = "127.0.0.1".parse().unwrap();
+        let mut headers = HeaderMap::new();
+        assert_eq!(client_ip(Some(peer), &headers, &[peer]), None);
+        for value in ["", "invalid", "invalid, 203.0.113.10", "203.0.113.10,"] {
+            headers.insert("x-forwarded-for", HeaderValue::from_str(value).unwrap());
+            assert_eq!(client_ip(Some(peer), &headers, &[peer]), None);
+            assert_eq!(client_ip(Some(peer), &headers, &[]), Some(peer));
+        }
     }
     #[test]
     fn csv_neutralizes_formulas_and_escapes_quotes() {

@@ -1042,3 +1042,83 @@ async fn redis_windows_are_shared_atomic_expiring_and_fail_closed() {
             .is_err()
     );
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn hardware_access_rejects_external_and_invalid_proxy_sources() {
+    let f = Fixture::new(true).await;
+    // Direct public sources cannot claim loopback through an untrusted XFF.
+    for path in [
+        "/api/v1/loaders/poll",
+        "/api/v1/loader-updates/missing/image",
+    ] {
+        let method = if path.ends_with("poll") {
+            "POST"
+        } else {
+            "GET"
+        };
+        assert_eq!(
+            f.request(method, path, None, Value::Null).await.status,
+            StatusCode::FORBIDDEN
+        );
+    }
+    let proxy = "127.0.0.1".parse::<std::net::IpAddr>().unwrap();
+    f.state.config.write().await.audit.trusted_proxies = vec![proxy];
+    for forwarded in [
+        None,
+        Some("invalid, 203.0.113.10"),
+        Some("203.0.113.10"),
+        Some(""),
+    ] {
+        for (method, path, expected) in [
+            ("POST", "/api/v1/loaders/poll", StatusCode::FORBIDDEN),
+            (
+                "GET",
+                "/api/v1/loader-updates/missing/image",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/share/sessions/missing/probe",
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "GET",
+                "/boot/sessions/missing/probe",
+                StatusCode::UNAUTHORIZED,
+            ),
+        ] {
+            let mut request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json");
+            if let Some(value) = forwarded {
+                request = request.header("x-forwarded-for", value);
+            }
+            let mut request = request.body(Body::from("{}")).unwrap();
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(std::net::SocketAddr::new(proxy, 40000)));
+            assert_eq!(
+                f.app.clone().oneshot(request).await.unwrap().status(),
+                expected,
+                "{path} {forwarded:?}"
+            );
+        }
+    }
+    // An actual private device source needs no user token. Missing assignments
+    // reach their handler and return 404, rather than being mistaken for user APIs.
+    let mut request = Request::builder()
+        .uri("/api/v1/loader-updates/missing/image")
+        .body(Body::empty())
+        .unwrap();
+    request.extensions_mut().insert(ConnectInfo(
+        "192.168.20.10:40000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    assert_eq!(
+        f.app.clone().oneshot(request).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+}

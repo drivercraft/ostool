@@ -167,7 +167,9 @@ pub async fn middleware(
         return next.run(request).await;
     }
     let hardware_config = state.config.read().await.clone();
-    if (path.starts_with("/share/sessions/") || path.starts_with("/boot/sessions/"))
+    if (path.starts_with("/share/sessions/")
+        || path.starts_with("/boot/sessions/")
+        || path.starts_with("/api/v1/loader-updates/"))
         && request
             .extensions()
             .get::<crate::security::store::ClientContext>()
@@ -240,6 +242,21 @@ pub async fn middleware(
     if path.starts_with("/api/v1/admin/") && (!user.is_admin || credential.client_id != "admin-web")
     {
         return ApiError::forbidden("请使用管理员账号登录管理后台").into_response();
+    }
+    if credential.client_id == "ostool-cli" && path != "/api/v1/auth/me" {
+        let board_operation = path == "/api/v1/board-types"
+            || path == "/api/v1/sessions"
+            || path.starts_with("/api/v1/sessions/")
+            || path.starts_with("/share/sessions/")
+            || path.starts_with("/boot/sessions/");
+        if !board_operation
+            || !credential
+                .scope
+                .split_whitespace()
+                .any(|scope| scope == "board:operate")
+        {
+            return ApiError::forbidden("CLI 凭据仅可在授权范围内操作开发板").into_response();
+        }
     }
     if credential.client_id == "pat"
         && (path.starts_with("/api/v1/account")

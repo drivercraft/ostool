@@ -1652,7 +1652,7 @@ async fn get_session(
 
     Ok(axum::Json(SessionDetailResponse {
         session,
-        board: board.clone(),
+        board: (&board).into(),
         serial_available: board.serial_available(),
         serial_connected: connected,
         files,
