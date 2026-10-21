@@ -554,4 +554,11 @@ grant in the same login family, so normal refresh preserves the socket while
 expiry without refresh closes it. CLI tokens cannot access personal-account APIs,
 and session details return a device summary instead of power commands or internal
 notes. Fallback credentials are privately and atomically replaced; refresh and 401
-recovery coordinate across processes without deleting a newer saved login.
+cleanup coordinate across processes without deleting a newer saved login.
+Rental/authentication features do not require a synchronized CLI upgrade. Client
+patches only fix confirmed defects and preserve the existing OAuth/Board wire
+protocol. A 401 is returned unchanged and never causes an automatic replay
+against an existing gateway. Rental allocation keeps the established
+busy/not-found error messages understood by the original CLI waiting loop.
+`cargo test -p ostool-server --test cli_gateway_contract` checks the baseline
+wire contract against a separate mock gateway.

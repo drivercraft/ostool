@@ -624,56 +624,22 @@ impl BoardServerClient {
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.strip_prefix("Bearer "))
             .map(str::to_owned);
-        let retry = request.try_clone();
         let response = self
             .client
             .execute(request)
             .await
             .map_err(Self::request_error)?;
-        if response.status() != StatusCode::UNAUTHORIZED {
-            return Ok(response);
-        }
-        let Some(rejected) = token else {
-            return Ok(response);
-        };
-        // Middleware rejects authentication before applying a board mutation.
-        // Retry once only when another process has already saved a newer token.
-        match self
-            .token_manager
-            .recover_after_unauthorized(&rejected)
-            .await
+        if response.status() == StatusCode::UNAUTHORIZED
+            && let Some(rejected) = token
+            && let Err(error) = self
+                .token_manager
+                .invalidate_rejected_token(Some(&rejected))
+                .await
         {
-            Ok(Some(new_token)) => {
-                if let Some(mut request) = retry {
-                    let Ok(mut value) =
-                        format!("Bearer {new_token}").parse::<reqwest::header::HeaderValue>()
-                    else {
-                        return Ok(response);
-                    };
-                    value.set_sensitive(true);
-                    request
-                        .headers_mut()
-                        .insert(reqwest::header::AUTHORIZATION, value);
-                    drop(response);
-                    let response = self
-                        .client
-                        .execute(request)
-                        .await
-                        .map_err(Self::request_error)?;
-                    if response.status() == StatusCode::UNAUTHORIZED
-                        && let Err(error) = self
-                            .token_manager
-                            .recover_after_unauthorized(&new_token)
-                            .await
-                    {
-                        log::warn!("failed to reconcile rejected board credentials: {error:#}");
-                    }
-                    return Ok(response);
-                }
-            }
-            Ok(None) => {}
-            Err(error) => log::warn!("failed to reconcile rejected board credentials: {error:#}"),
+            log::warn!("failed to reconcile rejected board credentials: {error:#}");
         }
+        // Preserve the original gateway contract: return 401 without replaying
+        // a request, especially POST/PUT whose server-side effects are unknown.
         Ok(response)
     }
 

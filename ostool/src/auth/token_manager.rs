@@ -203,15 +203,19 @@ impl TokenManager {
         Ok(())
     }
 
-    /// Reconcile a rejected request with the token currently saved for this server.
-    /// A newer credential may be retried once; an actually rejected saved token is removed.
-    pub async fn recover_after_unauthorized(
+    /// Invalidate the current login without changing the original public API.
+    pub async fn invalidate_after_unauthorized(&self) -> anyhow::Result<()> {
+        self.invalidate_rejected_token(None).await
+    }
+
+    /// A stale HTTP response must not delete credentials saved by another command.
+    pub(crate) async fn invalidate_rejected_token(
         &self,
-        rejected: &str,
-    ) -> anyhow::Result<Option<String>> {
+        rejected: Option<&str>,
+    ) -> anyhow::Result<()> {
         // Environment credentials never own or invalidate the saved browser login.
         if environment_token().is_some() {
-            return Ok(None);
+            return Ok(());
         }
         let mut cached = self.cached.lock().await;
         let _refresh_lock = RefreshLock::acquire(&self.endpoint.base_url).await?;
@@ -220,13 +224,17 @@ impl TokenManager {
             CredentialRecord::OAuthRefresh { access_token, .. } => access_token.clone(),
             CredentialRecord::PersonalAccessToken { token, .. } => token.clone(),
         });
-        if current.as_deref().is_some_and(|token| token != rejected) {
+        if rejected.is_some_and(|rejected| {
+            current
+                .as_deref()
+                .is_some_and(|current| current != rejected)
+        }) {
             *cached = latest;
-            return Ok(current);
+            return Ok(());
         }
         self.delete_record().await?;
         *cached = None;
-        Ok(None)
+        Ok(())
     }
 
     // Linux's synchronous Secret Service implementation may create its own Tokio

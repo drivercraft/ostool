@@ -1530,12 +1530,27 @@ async fn create_session(
             .await
             .map_err(|error| match error {
                 BoardAllocationWithIdStatus::NoAvailableBoard => {
-                    ApiError::conflict("已分配的开发板正在使用、释放或已禁用，请稍后重试")
+                    // Existing ostool clients classify these exact errors to wait
+                    // for a busy board. Rental authorization must keep that contract.
+                    ApiError::conflict(match board_id {
+                        Some(id) => format!("board `{id}` is not available"),
+                        None => format!("no available board for type `{}`", request.board_type),
+                    })
                 }
-                BoardAllocationWithIdStatus::BoardTypeMismatch { .. } => {
-                    ApiError::bad_request("开发板与请求板型不匹配")
+                BoardAllocationWithIdStatus::BoardTypeMismatch {
+                    board_id,
+                    board_type,
+                    actual_board_type,
+                } => ApiError::bad_request(format!(
+                    "board `{board_id}` has type `{actual_board_type}`, not `{board_type}`"
+                )),
+                BoardAllocationWithIdStatus::BoardTypeNotFound => {
+                    ApiError::not_found(format!("board type `{}` not found", request.board_type))
                 }
-                _ => ApiError::not_found("没有匹配请求的开发板"),
+                BoardAllocationWithIdStatus::BoardNotFound => ApiError::not_found(match board_id {
+                    Some(id) => format!("board `{id}` not found"),
+                    None => "board not found".into(),
+                }),
             })?
     } else {
         match board_id {

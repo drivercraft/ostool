@@ -690,11 +690,22 @@ async fn cli_transport_probe() -> Result<()> {
             "contract-test"
         );
         assert_eq!(
-            client.list_board_types().await?[0].board_type,
-            "contract-test"
+            client
+                .create_session("contract-test")
+                .await
+                .unwrap_err()
+                .status,
+            StatusCode::UNAUTHORIZED
         );
-        // The first client's 401 must recover from the newer saved grant without
-        // deleting it. Next, exercise short-TTL refresh with two stale caches.
+        // Preserve a gateway's 401 instead of transparently replaying a mutation.
+        // The newer stored login survives and is used by the next explicit command.
+        assert!(
+            !serde_json::from_slice::<Value>(&tokio::fs::read(&stored).await?)?
+                .as_object()
+                .unwrap()
+                .is_empty()
+        );
+        // Next, exercise short-TTL refresh with two stale caches.
         second.list_board_types().await?;
         client.list_board_types().await?;
     }
@@ -702,6 +713,29 @@ async fn cli_transport_probe() -> Result<()> {
         .create_session_with_board_id("contract-test", "contract-board")
         .await?;
     let sid = &lease.session_id;
+    // Rental-aware allocation must preserve the errors understood by the
+    // pre-existing CLI waiting loop; no client retry-rule changes are needed.
+    assert!(
+        client
+            .create_session("contract-test")
+            .await
+            .unwrap_err()
+            .is_no_available_board_for("contract-test")
+    );
+    assert!(
+        client
+            .create_session_with_board_id("contract-test", "contract-board")
+            .await
+            .unwrap_err()
+            .is_no_available_board_id("contract-board")
+    );
+    assert!(
+        client
+            .create_session("missing-contract-type")
+            .await
+            .unwrap_err()
+            .is_board_type_not_found_for("missing-contract-type")
+    );
     client.heartbeat(sid).await?;
     client.get_boot_profile(sid).await?;
     client.get_serial_status(sid).await?;

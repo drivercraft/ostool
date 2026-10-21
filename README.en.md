@@ -466,6 +466,8 @@ The website `/devices` shows all configured devices as searchable cards without 
 
 CLI keyring operations run on blocking threads to avoid nested async runtimes. Rejecting an environment token leaves an independently saved login intact.
 
+Rental and public authorization features are implemented in `ostool-server` without requiring a synchronized CLI change. Client patches address confirmed defects and preserve the original OAuth/Bearer/Board API contract; a 401 is returned without automatically replaying the request.
+
 For public CLI operations, set `board.auth_mode = "required"` and `board.server` to the HTTPS site. `login --server` does not rewrite global configuration. See the [public CLI authorization review](ostool-server/deploy/cli-auth-review.md) for device login, automatic refresh, concurrent credential recovery, rental enforcement and deployment boundaries.
 
 Public authentication requires HTTPS. The client verifies certificates only through the system trust store; deployments using a private CA must install its root certificate on client systems. Do not use HTTP, bypass certificate verification, or put tokens in configuration files.
