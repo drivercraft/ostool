@@ -369,7 +369,29 @@ test("viewport panels keep toolbar and footer fixed while tables/forms scroll", 
     bottom: e.querySelector(".panel-footer")!.getBoundingClientRect().bottom,
   }));
   expect(after).toEqual(before);
-  expect(before.bottom).toBeGreaterThan(750);
+  expect(before.bottom).toBe(800);
+  const bottomNavigation = page.getByRole("navigation", { name: "系统导航" });
+  await expect(bottomNavigation.getByRole("link")).toHaveCount(1);
+  await expect(
+    bottomNavigation.getByRole("link", { name: "系统设置" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("navigation", { name: "主导航" }).getByRole("link").last(),
+  ).toHaveText("审计日志");
+  const statusHeight = (await panel.locator(".panel-footer").boundingBox())!
+    .height;
+  await expect
+    .poll(async () => (await bottomNavigation.boundingBox())!.height)
+    .toBe(statusHeight);
+  expect(
+    await page.evaluate(() => {
+      const backgrounds = [".admin-workspace", ".sidebar", ".admin-topbar"].map(
+        (selector) =>
+          getComputedStyle(document.querySelector(selector)!).backgroundColor,
+      );
+      return new Set(backgrounds).size;
+    }),
+  ).toBe(1);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollHeight <= innerHeight + 1,
@@ -405,6 +427,72 @@ test("viewport panels keep toolbar and footer fixed while tables/forms scroll", 
     .getByLabel("搜索开发板", { exact: true })
     .fill("no-matching-board");
   await expect(panel.getByText("暂无数据", { exact: true })).toBeVisible();
+  await expect(
+    panel.getByRole("columnheader", { name: "开发板", exact: true }),
+  ).toBeVisible();
+  await expect(
+    panel.getByRole("status", { name: "暂无数据" }).locator("svg"),
+  ).toBeVisible();
+  async function expectCenteredEmpty() {
+    const center = await scroll.evaluate((element) => {
+      const empty = element
+        .querySelector('[data-slot="empty-header"]')!
+        .getBoundingClientRect();
+      const heading = element.querySelector("thead")?.getBoundingClientRect();
+      const box = element.getBoundingClientRect();
+      const css = getComputedStyle(element);
+      const top = heading?.bottom ?? box.top;
+      const bottom = box.bottom - parseFloat(css.paddingBottom);
+      return {
+        actual: empty.top + empty.height / 2,
+        expected: (top + bottom) / 2,
+        actualX: empty.left + empty.width / 2,
+        expectedX:
+          box.left +
+          parseFloat(css.paddingLeft) +
+          (element.clientWidth -
+            parseFloat(css.paddingLeft) -
+            parseFloat(css.paddingRight)) /
+            2,
+      };
+    });
+    expect(Math.abs(center.actual - center.expected)).toBeLessThan(2);
+    expect(Math.abs(center.actualX - center.expectedX)).toBeLessThan(2);
+  }
+  await expectCenteredEmpty();
+  await page.screenshot({ path: "/tmp/ostool-empty-list.png", fullPage: true });
+  await panel.getByRole("button", { name: "切换列表布局" }).click();
+  await page.getByRole("menuitemradio", { name: "卡片视图" }).click();
+  await expect(panel.getByRole("table")).toHaveCount(0);
+  await expect(page.getByRole("menu")).not.toBeVisible();
+  await expectCenteredEmpty();
+  await page.screenshot({
+    path: "/tmp/ostool-empty-cards.png",
+    fullPage: true,
+  });
+  await page.getByLabel("搜索开发板", { exact: true }).fill("viewport-");
+  await expect(panel.getByRole("list", { name: "卡片列表" })).toBeVisible();
+  const cardRadius = await panel
+    .locator(".data-card")
+    .first()
+    .evaluate((element) => getComputedStyle(element).borderRadius);
+  expect(
+    await panel
+      .locator(".panel-toolbar")
+      .evaluate((element) => getComputedStyle(element).borderRadius),
+  ).toBe(cardRadius);
+  expect(
+    await panel
+      .locator(".panel-footer")
+      .evaluate((element) => getComputedStyle(element).borderRadius),
+  ).toBe(cardRadius);
+  await page.screenshot({
+    path: "/tmp/ostool-unified-cards.png",
+    fullPage: true,
+  });
+  await page
+    .getByLabel("搜索开发板", { exact: true })
+    .fill("no-matching-board");
   await expect(panel.getByText("第 1 / 1 页")).toBeVisible();
   expect(
     (await panel.locator(".panel-footer").boundingBox())!.y,
@@ -427,8 +515,39 @@ test("viewport panels keep toolbar and footer fixed while tables/forms scroll", 
   expect((await save.boundingBox())!.y).toBe(buttonY);
   await save.click();
   await expect(page).toHaveURL(/boards\/viewport-form$/);
+  // The saved record arrives over SSE after navigation; wait for the edit view.
+  await expect(
+    page.getByRole("button", { name: "删除开发板", exact: true }),
+  ).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(save).toBeVisible();
+  const mobileFooter = panel.locator(".panel-footer");
+  await expect
+    .poll(async () =>
+      mobileFooter.evaluate(
+        (element) => element.getBoundingClientRect().bottom,
+      ),
+    )
+    .toBe(844);
+  await page.getByRole("button", { name: "切换导航", exact: true }).click();
+  await expect(bottomNavigation).toBeVisible();
+  await expect
+    .poll(async () =>
+      bottomNavigation.evaluate(
+        (element) => element.getBoundingClientRect().height,
+      ),
+    )
+    .toBe(
+      await mobileFooter.evaluate(
+        (element) => element.getBoundingClientRect().height,
+      ),
+    );
+  expect(
+    await bottomNavigation.evaluate(
+      (element) => element.getBoundingClientRect().bottom,
+    ),
+  ).toBe(844);
+  await page.getByRole("button", { name: "切换导航", exact: true }).click();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

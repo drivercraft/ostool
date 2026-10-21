@@ -20,6 +20,22 @@ export function PagePanel({
   className?: string;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
+  const statusBar = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const footer = statusBar.current;
+    const shell = footer?.closest<HTMLElement>(".app-shell");
+    if (!footer || !shell) return;
+    const alignSidebar = () => {
+      const height = footer.getBoundingClientRect().height;
+      // Settings tabs stay mounted; hidden footers must not replace the active height.
+      if (height > 0)
+        shell.style.setProperty("--admin-footer-height", `${height}px`);
+    };
+    alignSidebar();
+    const observer = new ResizeObserver(alignSidebar);
+    observer.observe(footer);
+    return () => observer.disconnect();
+  }, []);
   useLayoutEffect(() => {
     if (scroller.current) scroller.current.scrollTop = 0;
   }, [scrollKey]);
@@ -37,7 +53,7 @@ export function PagePanel({
       >
         {children}
       </div>
-      <footer className="panel-footer">
+      <footer className="panel-footer" ref={statusBar}>
         {footer ?? <span className="panel-status">数据实时同步</span>}
       </footer>
     </section>

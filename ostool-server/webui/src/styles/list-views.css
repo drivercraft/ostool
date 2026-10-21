@@ -14,7 +14,7 @@
 .data-card {
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--admin-panel-radius, 10px);
   background: var(--card);
   color: var(--card-foreground);
   padding: 18px;
@@ -97,7 +97,7 @@
   min-width: 0;
   padding: 20px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--admin-panel-radius, 10px);
   background: var(--card);
 }
 .rental-editor-form .muted {
@@ -116,7 +116,7 @@
   background: var(--card);
   color: var(--card-foreground);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--admin-panel-radius, 10px);
   padding: 20px;
   min-width: 0;
 }
@@ -335,4 +335,30 @@
     max-width: 40%;
     font-size: 10px;
   }
+}
+
+/* Empty lists retain their column headers and fill the available workspace. */
+.table-frame.is-empty {
+  display: flex;
+  flex-direction: column;
+  min-height: 240px;
+}
+.table-frame.is-empty > [data-slot="table-container"] {
+  flex: 0 0 auto;
+}
+.list-empty {
+  min-height: 180px;
+  color: var(--muted-foreground);
+}
+.list-empty [data-slot="empty-icon"] {
+  margin: 0 0 4px;
+}
+.list-empty [data-slot="empty-icon"] svg {
+  width: 44px;
+  height: 44px;
+  stroke-width: 1.5;
+}
+.list-empty [data-slot="empty-title"] {
+  font-size: 1rem;
+  font-weight: 400;
 }

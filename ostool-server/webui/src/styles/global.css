@@ -968,7 +968,7 @@
 }
 .sidebar {
   width: 240px;
-  padding: 0 0 18px;
+  padding: 0;
   background: #fff;
   border-right-color: #e5ebf3;
   box-shadow: 5px 0 22px rgba(31, 57, 95, 0.035);
@@ -1641,7 +1641,7 @@
     position: static;
     width: auto;
     padding: 16px;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 0;
   }
   .sidebar .brand {
     display: none;
@@ -2072,10 +2072,18 @@
   background: var(--primary);
   opacity: 1;
 }
-.admin-bottom-nav {
+.sidebar .admin-bottom-nav {
+  display: flex;
+  align-items: center;
+  flex: 0 0 var(--admin-footer-height, 60px);
+  height: var(--admin-footer-height, 60px);
   border-top: 1px solid var(--border);
-  padding: 12px;
-  margin-top: 0;
+  padding: 8px 12px;
+  margin: 0;
+}
+.sidebar .admin-bottom-nav a {
+  width: 100%;
+  padding-block: 8px;
 }
 .sidebar .connection {
   margin-top: 0;
@@ -2270,12 +2278,13 @@ body:has(.app-shell) {
   margin-block: 8px;
 }
 .admin-workspace {
+  background: var(--admin-header-bg);
   display: flex;
   flex-direction: column;
   flex: 1 1 0;
   min-width: 0;
   min-height: 0;
-  padding: 16px;
+  padding: 0;
   overflow: hidden;
   gap: 12px;
 }
@@ -2299,13 +2308,14 @@ body:has(.app-shell) {
 .panel-toolbar {
   flex: 0 0 auto;
   min-width: 0;
-  border-bottom: 1px solid var(--border);
+  border-radius: var(--admin-panel-radius, var(--radius-lg));
 }
 .panel-toolbar > .listing-toolbar {
   margin: 0;
   border: 0;
-  border-radius: 0;
+  border-radius: inherit;
   padding: 12px 16px;
+  background: transparent;
 }
 .panel-scroll {
   position: relative;
@@ -2315,7 +2325,7 @@ body:has(.app-shell) {
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  padding: 0;
+  padding: 0 16px 16px;
 }
 .panel-scroll:focus-visible {
   outline: 2px solid var(--ring);
@@ -2334,14 +2344,14 @@ body:has(.app-shell) {
   padding: 22px;
   margin: 0 0 16px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--admin-panel-radius);
   background: var(--card);
 }
 .app-shell .rental-editor-grid {
   padding: 0;
 }
 .app-shell .data-card-grid {
-  padding-inline: 0;
+  padding: 0;
 }
 .panel-footer {
   flex: 0 0 auto;
@@ -2352,7 +2362,8 @@ body:has(.app-shell) {
   min-height: 60px;
   padding: 10px 16px;
   border-top: 1px solid var(--border);
-  background: var(--card);
+  border-radius: var(--admin-panel-radius, var(--radius-lg));
+  background: transparent;
 }
 .panel-status {
   color: var(--muted-foreground);
@@ -2368,7 +2379,15 @@ body:has(.app-shell) {
   margin-left: auto;
 }
 .table-panel .panel-scroll {
-  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.table-panel .panel-scroll > * {
+  flex-shrink: 0;
+}
+.table-panel .panel-scroll > .is-empty,
+.table-panel .panel-scroll > .list-empty {
+  flex: 1 0 auto;
 }
 .table-panel .table-frame {
   border: 0;
@@ -2385,10 +2404,6 @@ body:has(.app-shell) {
   z-index: 1;
   background: var(--muted);
   box-shadow: 0 1px 0 var(--border);
-}
-.table-panel .panel-scroll > [data-slot="empty"] {
-  height: 100%;
-  min-height: 160px;
 }
 .list-pagination {
   display: flex;
@@ -2424,7 +2439,7 @@ body:has(.app-shell) {
 }
 .workspace-tabs > [data-slot="tabs-list"] {
   flex-shrink: 0;
-  margin: 0 0 12px;
+  margin: 12px 16px;
 }
 .workspace-tabs > [data-slot="tabs-content"] {
   display: flex;
@@ -2461,11 +2476,11 @@ body:has(.app-shell) {
     padding-inline: 16px;
   }
   .admin-workspace {
-    padding: 8px;
+    padding: 0;
     gap: 8px;
   }
   .panel-scroll {
-    padding: 0;
+    padding: 0 12px 12px;
   }
   .app-shell .page-panel .form-section,
   .app-shell .panel-scroll > .page-section,
@@ -2487,7 +2502,7 @@ body:has(.app-shell) {
     inset: 52px auto 0 0;
     width: min(280px, calc(100vw - 32px));
     height: auto;
-    padding: 0 0 12px;
+    padding: 0;
     border-right: 1px solid var(--border);
     box-shadow: 10px 0 30px #0002;
   }
@@ -2503,9 +2518,10 @@ body:has(.app-shell) {
 /* One fixed application frame, with a shared header/logo theme. */
 .app-shell {
   --admin-header-height: 64px;
+  --admin-panel-radius: 12px;
   --admin-header-bg: var(--card);
   --admin-header-fg: var(--foreground);
-  background: var(--muted);
+  background: var(--admin-header-bg);
   color: var(--foreground);
 }
 .app-shell > .sidebar {
@@ -2756,7 +2772,7 @@ body:has(.app-shell) {
   color: currentColor;
 }
 .app-shell .table-frame {
-  background: var(--card);
+  background: transparent;
 }
 .app-shell .editor-actions,
 .app-shell .card {

@@ -13,6 +13,7 @@ import {
   useListLayout,
 } from "./list-layout";
 import { toast } from "sonner";
+import { Inbox } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -44,7 +45,7 @@ import {
   Empty,
   EmptyHeader,
   EmptyTitle,
-  EmptyDescription,
+  EmptyMedia,
 } from "@/components/ui/empty";
 
 export function TextField({
@@ -289,15 +290,7 @@ export function DataTable({
         </DataTable>
       </ListLayoutProvider>
     );
-  if (empty)
-    return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyTitle>暂无数据</EmptyTitle>
-          <EmptyDescription>数据发生变化时会自动显示。</EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    );
+  if (view.layout === "cards" && empty) return <ListEmpty />;
   if (view.layout === "cards")
     return (
       <div className="data-card-grid" role="list" aria-label="卡片列表">
@@ -340,18 +333,31 @@ export function DataTable({
       </div>
     );
   return (
-    <div className="table-frame">
+    <div className={`table-frame${empty ? " is-empty" : ""}`}>
       <Table>
         <TableHeader>
           <TableRow>
-            {headers.map((h) => (
-              <TableHead key={h}>{h}</TableHead>
+            {headers.map((h, index) => (
+              <TableHead key={`${index}:${h}`}>{h}</TableHead>
             ))}
           </TableRow>
         </TableHeader>
-        <TableBody>{children}</TableBody>
+        <TableBody>{empty ? null : children}</TableBody>
       </Table>
+      {empty && <ListEmpty />}
     </div>
+  );
+}
+function ListEmpty() {
+  return (
+    <Empty className="list-empty" role="status" aria-label="暂无数据">
+      <EmptyHeader>
+        <EmptyMedia>
+          <Inbox aria-hidden="true" />
+        </EmptyMedia>
+        <EmptyTitle>暂无数据</EmptyTitle>
+      </EmptyHeader>
+    </Empty>
   );
 }
 export { TableRow as Row, TableCell as Cell };

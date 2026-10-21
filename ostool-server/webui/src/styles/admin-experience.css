@@ -117,9 +117,6 @@
   font-family: inherit;
   font-size: var(--admin-caption-size);
 }
-.app-shell .sidebar .admin-bottom-nav {
-  padding-bottom: 14px;
-}
 /* Portals and member forms use the same readable control size as admin pages. */
 [data-slot="dialog-content"],
 [data-slot="dialog-content"]
@@ -152,12 +149,7 @@
   min-width: 0;
 }
 .dashboard-panel .panel-scroll {
-  padding: 0;
-}
-.dashboard-panel .panel-footer {
-  padding-inline: 0;
-  border-top: 0;
-  background: transparent;
+  padding: 16px;
 }
 .dashboard-footer-status {
   display: flex;
@@ -180,7 +172,7 @@
     color-mix(in oklch, var(--primary), var(--card) 95%),
     var(--card)
   );
-  border-radius: 12px;
+  border-radius: var(--admin-panel-radius);
   padding: 22px;
 }
 .dashboard-banner > div {
@@ -253,7 +245,7 @@
   gap: 15px;
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: var(--admin-panel-radius);
   background: var(--card);
   padding: 20px;
   color: var(--foreground);
@@ -337,7 +329,7 @@ a.dashboard-metric:hover {
   min-width: 0;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: var(--admin-panel-radius);
   padding: 21px;
 }
 .dashboard-card > header {

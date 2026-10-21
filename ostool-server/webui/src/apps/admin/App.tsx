@@ -216,12 +216,12 @@ function AdminConsole({ user }: { user?: AuthUser }) {
                 </SidebarGroup>
               </>
             )}
-          </nav>
-          <nav className="admin-bottom-nav" aria-label="系统导航">
             <NavLink to="/audits" onClick={() => setMenu(false)}>
               <ScrollTextIcon />
               审计日志
             </NavLink>
+          </nav>
+          <nav className="admin-bottom-nav" aria-label="系统导航">
             <NavLink to="/settings" onClick={() => setMenu(false)}>
               <SettingsIcon />
               系统设置

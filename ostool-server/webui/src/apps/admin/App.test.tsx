@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import App from "@/apps/admin/App";
 import userEvent from "@testing-library/user-event";
 const mocks = vi.hoisted(() => ({
@@ -56,6 +62,17 @@ describe("edition navigation and authentication", () => {
     expect(screen.queryByText("用户管理")).toBeNull();
     expect(screen.queryByText("租赁管理")).toBeNull();
     expect(screen.queryByText("我的账号")).toBeNull();
+    const mainNavigation = screen.getByRole("navigation", { name: "主导航" });
+    expect(
+      within(mainNavigation).getAllByRole("link").at(-1)?.textContent,
+    ).toBe("审计日志");
+    const systemNavigation = screen.getByRole("navigation", {
+      name: "系统导航",
+    });
+    expect(within(systemNavigation).getAllByRole("link")).toHaveLength(1);
+    expect(
+      within(systemNavigation).getByRole("link", { name: "系统设置" }),
+    ).toBeTruthy();
     expect(mocks.me).not.toHaveBeenCalled();
     await waitFor(() => expect(mocks.connect).toHaveBeenCalledTimes(1));
   });
