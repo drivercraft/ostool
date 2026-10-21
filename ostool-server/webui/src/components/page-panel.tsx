@@ -9,6 +9,7 @@ export function PagePanel({
   table = false,
   scrollKey,
   layoutKey,
+  className = "",
 }: {
   toolbar?: ReactNode;
   footer?: ReactNode;
@@ -16,13 +17,16 @@ export function PagePanel({
   table?: boolean;
   scrollKey?: string;
   layoutKey?: string;
+  className?: string;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (scroller.current) scroller.current.scrollTop = 0;
   }, [scrollKey]);
   const content = (
-    <section className={`page-panel${table ? " table-panel" : ""}`}>
+    <section
+      className={`page-panel${table ? " table-panel" : ""} ${className}`}
+    >
       {toolbar && <div className="panel-toolbar">{toolbar}</div>}
       <div
         className="panel-scroll"

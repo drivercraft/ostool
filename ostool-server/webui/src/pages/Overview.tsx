@@ -17,7 +17,6 @@ import { Link } from "react-router-dom";
 import { admin, useConnection, useResource } from "@/api/events";
 import { useEdition } from "@/edition";
 import { PagePanel } from "@/components/page-panel";
-import { ListToolbar } from "@/components/list-toolbar";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DataTable, Row, Cell, Notice } from "@/components/forms";
@@ -192,38 +191,7 @@ export default function Overview({
     publicEdition = useEdition().edition === "public";
   return (
     <PagePanel
-      toolbar={
-        <ListToolbar
-          actions={
-            <>
-              <Button asChild>
-                <Link to="/boards/new">
-                  <CircuitBoard size={16} />
-                  新建开发板
-                </Link>
-              </Button>
-              <Button asChild variant="outline">
-                <Link to="/settings">系统设置</Link>
-              </Button>
-            </>
-          }
-        >
-          <span className={`dashboard-connection ${connection}`} role="status">
-            <i />
-            {connection === "connected"
-              ? "实时已连接"
-              : connection === "connecting"
-                ? "正在连接…"
-                : "连接中断"}
-          </span>
-          {connection !== "connected" && (
-            <Button variant="outline" onClick={admin.restart}>
-              <RefreshCw size={15} />
-              重连
-            </Button>
-          )}
-        </ListToolbar>
-      }
+      className="dashboard-panel"
       footer={
         <div className="dashboard-footer">
           <span>
@@ -231,12 +199,31 @@ export default function Overview({
               ? `${data.operations.boards} 台开发板 · ${data.operations.board_states.idle ?? 0} 台可用 · ${data.operations.sessions} 个会话`
               : "正在同步…"}
           </span>
-          <span>
-            采样时间{" "}
-            {data?.runtime.sample.sampled_at
-              ? date(data.runtime.sample.sampled_at)
-              : "正在采集"}
-          </span>
+          <div className="dashboard-footer-status">
+            <span
+              className={`dashboard-connection ${connection}`}
+              role="status"
+            >
+              <i />
+              {connection === "connected"
+                ? "实时已连接"
+                : connection === "connecting"
+                  ? "正在连接…"
+                  : "连接中断"}
+            </span>
+            {connection !== "connected" && (
+              <Button variant="outline" size="sm" onClick={admin.restart}>
+                <RefreshCw size={15} />
+                重连
+              </Button>
+            )}
+            <span>
+              采样时间{" "}
+              {data?.runtime.sample.sampled_at
+                ? date(data.runtime.sample.sampled_at)
+                : "正在采集"}
+            </span>
+          </div>
         </div>
       }
     >

@@ -345,7 +345,7 @@ and PostgreSQL health every five seconds and pushes updates over the existing SS
 connection. Unsupported metrics remain unavailable. Charts contain up to five
 minutes of samples from this process, not historical monitoring data. Local
 edition hides account and rental metrics. Connection status appears in the
-dashboard toolbar; board discovery opens from the board-list toolbar.
+dashboard status bar; board discovery opens from the board-list toolbar.
 
 `/admin/audits` provides PostgreSQL-backed, server-paginated audit records with
 action/resource/result, actor, IP, source and date filters, details and CSV export.

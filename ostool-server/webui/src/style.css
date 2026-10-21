@@ -2301,9 +2301,9 @@ body:has(.app-shell) {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 .panel-toolbar {
   flex: 0 0 auto;
@@ -2324,7 +2324,7 @@ body:has(.app-shell) {
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  padding: 16px 20px;
+  padding: 0;
 }
 .panel-scroll:focus-visible {
   outline: 2px solid var(--ring);
@@ -2335,7 +2335,22 @@ body:has(.app-shell) {
 }
 .panel-scroll > .form-section:first-child,
 .panel-scroll > form > .form-section:first-child {
-  border-top: 0;
+  margin-top: 0;
+}
+.app-shell .page-panel .form-section,
+.app-shell .panel-scroll > .page-section,
+.app-shell .panel-scroll > .facts {
+  padding: 22px;
+  margin: 0 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+.app-shell .rental-editor-grid {
+  padding: 0;
+}
+.app-shell .data-card-grid {
+  padding-inline: 0;
 }
 .panel-footer {
   flex: 0 0 auto;
@@ -2459,7 +2474,12 @@ body:has(.app-shell) {
     gap: 8px;
   }
   .panel-scroll {
-    padding: 12px;
+    padding: 0;
+  }
+  .app-shell .page-panel .form-section,
+  .app-shell .panel-scroll > .page-section,
+  .app-shell .panel-scroll > .facts {
+    padding: 16px;
   }
   .panel-footer {
     min-height: 56px;

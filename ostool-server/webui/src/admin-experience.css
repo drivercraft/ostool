@@ -145,8 +145,26 @@
 .dashboard-content {
   display: grid;
   gap: 22px;
-  padding: 22px;
+  padding: 0;
   min-width: 0;
+}
+.dashboard-panel .panel-scroll {
+  padding: 0;
+}
+.dashboard-panel .panel-footer {
+  padding-inline: 0;
+  border-top: 0;
+  background: transparent;
+}
+.dashboard-footer-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.dashboard-footer .dashboard-connection {
+  padding: 0;
 }
 .dashboard-banner {
   display: flex;
@@ -636,7 +654,7 @@ a.dashboard-metric:hover {
 }
 @media (max-width: 760px) {
   .dashboard-content {
-    padding: 14px;
+    padding: 0;
     gap: 16px;
   }
   .dashboard-columns {
