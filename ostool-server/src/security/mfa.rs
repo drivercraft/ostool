@@ -164,7 +164,7 @@ async fn complete_login(
     if input.code.len() > 128 {
         return Err(invalid());
     }
-    store::limit(state.database.pool(), "mfa-ip", &client.ip, 12, 60).await?;
+    store::limit(&state.security_cache, "mfa-ip", &client.ip, 12, 60).await?;
     let user: Option<Uuid> = sqlx::query_scalar(
         "SELECT user_id FROM security_challenges WHERE id=$1 AND purpose='mfa-login'",
     )
@@ -173,7 +173,7 @@ async fn complete_login(
     .await?
     .flatten();
     let user = user.ok_or_else(invalid)?;
-    store::limit(state.database.pool(), "mfa-user", &user.to_string(), 6, 900).await?;
+    store::limit(&state.security_cache, "mfa-user", &user.to_string(), 6, 900).await?;
     let config = state.config.read().await.clone();
     let encryption = key(&config.security)?;
     let mut tx = state.database.pool().begin().await?;
@@ -207,7 +207,7 @@ async fn complete_login(
     let surface: Surface =
         serde_json::from_value(payload["surface"].clone()).map_err(|_| invalid())?;
     tx.commit().await?;
-    store::clear_limit(state.database.pool(), "mfa-user", &user.to_string()).await?;
+    store::clear_limit(&state.security_cache, "mfa-user", &user.to_string()).await?;
     let user = state
         .database
         .user_by_id(user)
@@ -233,7 +233,7 @@ async fn step_up(
     Json(input): Json<StepUp>,
 ) -> Result<Response, ApiError> {
     store::limit(
-        state.database.pool(),
+        &state.security_cache,
         "step-up",
         &format!("{}:{}", user.id, client.ip),
         6,
@@ -378,7 +378,7 @@ async fn confirm(
 ) -> Result<Json<Value>, ApiError> {
     web::require_step_up(&credential)?;
     store::limit(
-        state.database.pool(),
+        &state.security_cache,
         "mfa-enroll",
         &user.id.to_string(),
         6,

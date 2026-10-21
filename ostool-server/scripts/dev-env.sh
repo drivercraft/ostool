@@ -16,6 +16,8 @@ LOG_FILE="$STATE_DIR/server.log"
 PG_CONTAINER=${OSTOOL_DEV_PG_CONTAINER:-ostool-server-dev-${EDITION}-postgres}
 if [[ "$EDITION" == "local" ]]; then DEFAULT_PG_PORT=54328; else DEFAULT_PG_PORT=54329; fi
 PG_PORT=${OSTOOL_DEV_PG_PORT:-$DEFAULT_PG_PORT}
+REDIS_CONTAINER=${OSTOOL_DEV_REDIS_CONTAINER:-ostool-server-dev-public-redis}
+REDIS_PORT=${OSTOOL_DEV_REDIS_PORT:-56380}
 SERVER_PORT=${OSTOOL_DEV_SERVER_PORT:-2999}
 DB_USER=${OSTOOL_DEV_DB_USER:-ostool}
 DB_PASSWORD=${OSTOOL_DEV_DB_PASSWORD:-ostool}
@@ -101,6 +103,23 @@ ensure_postgres() {
     die "PostgreSQL did not become ready; see: docker logs $PG_CONTAINER"
 }
 
+ensure_redis() {
+    [[ "$EDITION" == "public" ]] || return 0
+    mkdir -p "$STATE_DIR/redis"
+    if ! docker inspect "$REDIS_CONTAINER" >/dev/null 2>&1; then
+        docker run -d --name "$REDIS_CONTAINER" -p "127.0.0.1:${REDIS_PORT}:6379" \
+            -v "$STATE_DIR/redis:/data" redis:7-alpine \
+            redis-server --appendonly yes --maxmemory 64mb --maxmemory-policy noeviction >/dev/null
+    elif [[ $(docker inspect -f '{{.State.Running}}' "$REDIS_CONTAINER") != "true" ]]; then
+        docker start "$REDIS_CONTAINER" >/dev/null
+    fi
+    for _ in {1..30}; do
+        if [[ $(docker exec "$REDIS_CONTAINER" redis-cli ping 2>/dev/null) == "PONG" ]]; then return; fi
+        sleep 1
+    done
+    die "Redis did not become ready"
+}
+
 start_server() {
     require_command cargo
     require_command pnpm
@@ -114,6 +133,7 @@ start_server() {
     fi
     rm -f "$PID_FILE"
     ensure_postgres
+    ensure_redis
     log "starting ostool-server; log: $LOG_FILE"
     # Use an explicit empty env file and edition-specific overrides so a repo
     # .env for a production deployment is never used by the local test launcher.
@@ -129,6 +149,7 @@ start_server() {
     if [[ "$EDITION" == "public" ]]; then
         server_env+=("OSTOOL_DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${PG_PORT}/${DB_NAME}"
             "OSTOOL_ADMIN_EMAIL=$ADMIN_EMAIL" "OSTOOL_ADMIN_PASSWORD=$ADMIN_PASSWORD" "OSTOOL_AUTH_ENABLED=true"
+            "OSTOOL_REDIS_URL=redis://127.0.0.1:${REDIS_PORT}/0"
             "OSTOOL_MFA_ENCRYPTION_KEY=$(cat "$STATE_DIR/mfa.key")")
     fi
     local -a server_args=()
@@ -184,6 +205,9 @@ stop_server() {
         log "ostool-server is not running"
     fi
     rm -f "$PID_FILE"
+    if [[ "$EDITION" == "public" ]] && command -v docker >/dev/null 2>&1; then
+        docker stop "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    fi
     if command -v docker >/dev/null 2>&1 && docker inspect "$PG_CONTAINER" >/dev/null 2>&1; then
         local running
         running=$(docker inspect -f '{{.State.Running}}' "$PG_CONTAINER" 2>/dev/null || true)
@@ -200,6 +224,9 @@ status() {
         echo "ostool-server: stopped"
     fi
     echo "edition: $EDITION"
+    if [[ "$EDITION" == "public" ]]; then
+        echo "redis: $(docker inspect -f '{{.State.Running}}' "$REDIS_CONTAINER" 2>/dev/null || echo 'not created') ($REDIS_CONTAINER, port $REDIS_PORT)"
+    fi
     if command -v docker >/dev/null 2>&1; then
         local running
         running=$(docker inspect -f '{{.State.Running}}' "$PG_CONTAINER" 2>/dev/null || true)
@@ -222,6 +249,13 @@ case "${1:-start}" in
             # container's root user to remove it without requiring sudo.
             docker run --rm -v "$STATE_DIR/postgres:/data" postgres:16 \
                 bash -c 'rm -rf /data/* /data/.[!.]* /data/..?*' >/dev/null
+        fi
+        if [[ "$EDITION" == "public" ]] && command -v docker >/dev/null 2>&1; then
+            docker rm "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+            if [[ -d "$STATE_DIR/redis" ]]; then
+                docker run --rm -v "$STATE_DIR/redis:/data" --entrypoint sh redis:7-alpine \
+                    -c 'rm -rf /data/* /data/.[!.]* /data/..?*' >/dev/null
+            fi
         fi
         rm -rf "$STATE_DIR"
         log "removed $STATE_DIR"

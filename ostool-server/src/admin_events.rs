@@ -17,6 +17,9 @@ use std::{
 use tokio::sync::{Notify, watch};
 
 pub const TOPICS: &[&str] = &[
+    "site",
+    "legal_history",
+    "mail_deliveries",
     "security_revision",
     "boards",
     "runtimes",
@@ -211,6 +214,14 @@ pub async fn subscribe(
     subscribe_scoped(state, headers, query, None).await
 }
 
+pub async fn subscribe_site(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(mut query): Query<BTreeMap<String, String>>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, crate::api::error::ApiError> {
+    query.insert("public_site".into(), "1".into());
+    subscribe_scoped(state, headers, query, None).await
+}
 pub async fn subscribe_account(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -269,7 +280,8 @@ async fn subscribe_scoped(
             let name = surface.cookie_name(false, crate::security::web::secure(&cookie_config));
             crate::security::web::cookie(&headers, &name).map(str::to_owned)
         });
-    let database = if state.config.read().await.edition.is_public() {
+    let public_site = query.get("public_site").is_some_and(|v| v == "1");
+    let database = if !public_site && state.config.read().await.edition.is_public() {
         Some(state.database.clone())
     } else {
         None
@@ -302,6 +314,7 @@ async fn subscribe_scoped(
         finished: false,
         account,
         security_only,
+        public_site,
         current_session,
         state,
         audit_filters,
@@ -341,7 +354,9 @@ async fn subscribe_scoped(
                     tokio::time::Instant::now() + std::time::Duration::from_secs(15);
             }
             if let Some(mut update) = subscription.queue.pop_front() {
-                if let Some(user) = subscription.account {
+                if subscription.public_site {
+                    update.data.retain(|key, _| key == "site");
+                } else if let Some(user) = subscription.account {
                     let relevant = update.kind == "snapshot"
                         || [
                             "users",
@@ -413,6 +428,7 @@ struct Subscription {
     finished: bool,
     account: Option<uuid::Uuid>,
     security_only: bool,
+    public_site: bool,
     current_session: Option<uuid::Uuid>,
     state: AppState,
     audit_filters: Option<crate::audit::Filters>,

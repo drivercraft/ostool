@@ -168,6 +168,7 @@ async function request<T>(
 }
 
 export type AuthConfig = {
+  site?:import("@/types/site").SiteView;
   edition: "local" | "public";
   enabled: boolean;
   allow_registration: boolean;
@@ -178,6 +179,9 @@ export type AuthConfig = {
 };
 let authConfigRequest: Promise<AuthConfig> | undefined;
 export const api = {
+  updateSite(revision:number,settings:import("@/types/site").SiteSettings) {
+    return request<void>("/api/v1/admin/site-settings",{method:"PUT",bodyJson:{revision,settings}});
+  },
   auditViewed() {
     return request<void>("/api/v1/admin/audits/view", { method: "POST" });
   },
@@ -324,6 +328,7 @@ export const api = {
     displayName: string,
     verification: HumanProof,
     emailChallenge?: { id: string; code: string },
+    legal?:import("@/types/site").LegalConsent,
   ) {
     return request<LoginResult>("/api/v1/auth/register", {
       method: "POST",
@@ -331,6 +336,7 @@ export const api = {
         email,
         password,
         display_name: displayName || null,
+        legal,
         verification,
         email_challenge_id: emailChallenge?.id,
         email_code: emailChallenge?.code,

@@ -28,6 +28,8 @@ name = "ostool-server-migrate-boards"
 path = "tools/migrate-boards.rs"
 
 [dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+redis = { version = "1.7", default-features = false, features = ["tokio-rustls-comp", "connection-manager", "script", "tls-rustls-webpki-roots"] }
 captcha = { version = "1.0", default-features = false }
 ring = "0.17"
 subtle = "2.6"

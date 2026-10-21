@@ -26,6 +26,7 @@ test("registration, member/admin access, user/role events and settings navigatio
     .getByLabel("确认密码", { exact: true })
     .fill("browser-password-123");
   await solveCaptcha(page);
+  await page.getByRole("checkbox",{name:"我已阅读并同意用户协议和隐私政策"}).check();
   await page.getByRole("button", { name: "创建账号", exact: true }).click();
   await expect(page).toHaveURL(`${base}/account`);
   await expect(page.getByRole("heading", { name: "当前账号" })).toBeVisible();

@@ -73,6 +73,7 @@ const DTB_UPLOAD_MAX_MIB: u32 = 10;
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
+        .merge(super::site::routes())
         .merge(super::auth::routes())
         .merge(super::users::routes())
         .merge(super::rentals::routes())
@@ -106,6 +107,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/devices/{*path}", get(serve_site_history))
         .route("/docs", get(serve_site_index))
         .route("/docs/{*path}", get(serve_site_history))
+        .route("/legal/terms", get(crate::static_assets::serve_site_index))
+        .route(
+            "/legal/privacy",
+            get(crate::static_assets::serve_site_index),
+        )
         .route("/about", get(serve_site_index))
         .route("/about/{*path}", get(serve_site_history))
         .route(
@@ -2988,7 +2994,9 @@ async fn notify_admin_changes(
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             state.admin_events.invalidate(&["security_revision"]);
         }
-        let topics: &[&str] = if path.contains("/loaders/") {
+        let topics: &[&str] = if path.contains("/auth/") {
+            &["mail_deliveries"]
+        } else if path.contains("/loaders/") {
             &["loaders"]
         } else if path.contains("/boards") {
             &["boards"]
@@ -3015,12 +3023,18 @@ pub(crate) async fn admin_topic(
     topic: &str,
 ) -> Result<serde_json::Value, ApiError> {
     if !state.config.read().await.edition.is_public()
-        && matches!(topic, "users" | "roles" | "rentals")
+        && matches!(
+            topic,
+            "users" | "roles" | "rentals" | "rental_requests" | "mail_deliveries"
+        )
     {
         return Ok(serde_json::json!([]));
     }
     let extractor = State(state.clone());
     let value = match topic {
+        "site" => serde_json::to_value(super::site::view(state).await?),
+        "legal_history" => Ok(super::site::history(extractor).await?.0),
+        "mail_deliveries" => Ok(super::site::mail_deliveries(extractor).await?.0),
         "security_revision" => Ok(serde_json::json!(
             state
                 .security_revision

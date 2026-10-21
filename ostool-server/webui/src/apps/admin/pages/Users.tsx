@@ -113,7 +113,15 @@ export default function Users() {
         scrollKey={pagination.viewKey}
       >
         <DataTable
-          headers={["用户", "角色", "状态", "创建时间", "操作"]}
+          headers={[
+            "用户",
+            "角色",
+            "状态",
+            "账号安全",
+            "最近登录",
+            "创建时间",
+            "操作",
+          ]}
           empty={!filtered.length}
         >
           {pagination.rows.map((user) => (
@@ -131,6 +139,20 @@ export default function Users() {
                 >
                   {user.disabled ? "已禁用" : "正常"}
                 </span>
+              </Cell>
+              <Cell>
+                <span>
+                  {user.email_verified_at ? "邮箱已验证" : "邮箱未验证"}
+                </span>
+                <small>
+                  {user.mfa_enabled ? "双重验证已启用" : "双重验证未启用"}
+                </small>
+              </Cell>
+              <Cell>
+                {user.last_login_at
+                  ? new Date(user.last_login_at).toLocaleString()
+                  : "尚未登录"}
+                <small>{user.last_login_ip}</small>
               </Cell>
               <Cell>{new Date(user.created_at).toLocaleString()}</Cell>
               <Cell>

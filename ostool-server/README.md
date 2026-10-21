@@ -158,7 +158,7 @@ PostgreSQL is required in local edition as well; edition only controls account
 and rental features.
 
 For public deployments, explicitly set `OSTOOL_EDITION=public`, supply
-`OSTOOL_DATABASE_URL` and initialize an administrator. Public edition always
+`OSTOOL_DATABASE_URL` and initialize an administrator. Public edition additionally requires OSTOOL_REDIS_URL for security counters and always
 requires authentication for board APIs and administrator credentials for admin
 APIs; disabling auth is not supported. Missing PostgreSQL fails startup.
 Use [the public environment example](deploy/public.env.example) with Caddy.
@@ -506,3 +506,12 @@ Power completion means the command completed, not confirmed physical feedback.
 Leaving the page does not reverse or cancel a submitted power action.
 
 See [the management protocol and development guide](../docs/admin-ui.md).
+
+### Site configuration and legal documents
+
+System settings include site branding, contact/operator/filing details, maintenance notices,
+versioned user agreements and privacy policies. The website, footer and authentication pages
+receive public settings over SSE. Registration requires explicit consent to current legal
+versions; immutable revisions and per-user acceptances are persisted in PostgreSQL.
+See [site and identity schema](deploy/site-and-data.md). Public dev startup now also starts
+private Redis; local dev startup still needs PostgreSQL only.

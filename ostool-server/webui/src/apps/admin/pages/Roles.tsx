@@ -98,7 +98,7 @@ export default function Roles() {
         scrollKey={pagination.viewKey}
       >
         <DataTable
-          headers={["角色", "权限", "用户数", "说明", "操作"]}
+          headers={["角色", "权限", "用户数", "说明", "更新时间", "操作"]}
           empty={!filtered.length}
         >
           {pagination.rows.map((role) => (
@@ -112,6 +112,11 @@ export default function Roles() {
               </Cell>
               <Cell>{users.filter((u) => u.role_id === role.id).length}</Cell>
               <Cell>{role.description || "—"}</Cell>
+              <Cell>
+                {role.updated_at
+                  ? new Date(role.updated_at).toLocaleString()
+                  : "—"}
+              </Cell>
               <Cell>
                 <div className="actions">
                   <RowAction

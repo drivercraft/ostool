@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   captcha: vi.fn(),
 }));
 vi.mock("@/api/events", () => ({
+  site:{connect:vi.fn(),disconnect:vi.fn()},
+  useSiteResource:()=>undefined,
   account: {
     connect: vi.fn(),
     disconnect: vi.fn(),
@@ -39,6 +41,7 @@ vi.mock("@/api/client", () => ({
   },
 }));
 beforeEach(() => {
+  vi.stubGlobal("ResizeObserver",class { observe(){} unobserve(){} disconnect(){} });
   vi.clearAllMocks();
   localStorage.clear();
   Object.defineProperty(window, "matchMedia", {
@@ -166,6 +169,7 @@ describe("registration", () => {
     await user.type(screen.getByLabelText("确认密码"), "different-password");
     if (!(screen.getByLabelText("图形验证码") as HTMLInputElement).value)
       await user.type(screen.getByLabelText("图形验证码"), "AB29Q");
+    await user.click(screen.getByRole("checkbox",{name:"我已阅读并同意用户协议和隐私政策"}));
     await user.click(screen.getByRole("button", { name: /创建账号/ }));
     expect(screen.getByRole("alert").textContent).toContain(
       "两次输入的密码不一致",
@@ -186,6 +190,7 @@ describe("registration", () => {
         captcha_code: "AB29Q",
       },
       undefined,
+      {accepted:true,terms_version:1,privacy_version:1},
     );
   });
   it("shows registration closed without sending a request", async () => {

@@ -89,6 +89,11 @@ pub async fn browser_grant(
     client: &ClientContext,
 ) -> Result<Response, ApiError> {
     sqlx::query("UPDATE oauth_sessions SET ip=$2,user_agent=$3,step_up_until=now()+interval '3 minutes' WHERE id=$1").bind(grant.session_id).bind(&client.ip).bind(&client.user_agent).execute(state.database.pool()).await?;
+    sqlx::query("UPDATE users SET last_login_at=now(),last_login_ip=$2 WHERE id=$1")
+        .bind(grant.user.id)
+        .bind(&client.ip)
+        .execute(state.database.pool())
+        .await?;
     cookie_grant(state, grant, surface).await
 }
 pub async fn refreshed_grant(
@@ -351,7 +356,7 @@ pub async fn gate(
         || path.starts_with("/api/v1/admin/auth/")
         || path.starts_with("/oauth/"))
         && !matches!(*request.method(), Method::GET | Method::HEAD)
-        && let Err(error) = store::limit(state.database.pool(), "auth-ip", &client.ip, 90, 60).await
+        && let Err(error) = store::limit(&state.security_cache, "auth-ip", &client.ip, 90, 60).await
     {
         return error.into_response();
     }

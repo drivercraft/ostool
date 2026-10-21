@@ -118,3 +118,67 @@
     flex-wrap: wrap;
   }
 }
+
+.auth-legal {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+  line-height: 1.7;
+  flex-wrap: wrap;
+}
+.auth-legal label {
+  flex: 1;
+  min-width: 0;
+}
+.auth-legal [data-slot="checkbox"] {
+  margin-top: 5px;
+}
+.auth-legal a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  margin: 0 3px;
+}
+.legal-reader {
+  width: min(900px, 100%);
+  margin: 0 auto;
+  padding: 48px 24px;
+}
+.legal-reader h1 {
+  font-size: 1.75rem;
+}
+.legal-reader article {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.9;
+  margin: 32px 0;
+  font-size: 1rem;
+}
+.legal-settings textarea {
+  min-height: 240px;
+  resize: vertical;
+}
+.site-maintenance {
+  padding: 12px 24px;
+  text-align: center;
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+.site-logo .logo-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.system-tabs {
+  overflow-x: auto;
+  flex-shrink: 0;
+  justify-content: flex-start;
+}
+.legal-settings .form-section {
+  grid-template-columns: minmax(0, 1fr);
+}
+.legal-settings .form-fields {
+  grid-template-columns: minmax(0, 1fr);
+}

@@ -1,3 +1,8 @@
+import {
+  SiteSettingsProvider,
+  useSiteSettings,
+} from "@/components/site-settings";
+import { AuthLegal } from "@/components/auth-legal";
 import { FormEvent, useEffect, useState } from "react";
 import {
   ArrowRight,
@@ -63,20 +68,26 @@ const publicNavigation = [
 ] as const;
 
 function Logo({ light = false }: { light?: boolean }) {
+  const { settings } = useSiteSettings();
   return (
     <Link className={`site-logo${light ? " site-logo-light" : ""}`} to="/">
       <span className="logo-mark">
-        <CircuitBoard size={18} strokeWidth={2.5} />
+        {settings.logo_url ? (
+          <img src={settings.logo_url} alt="" />
+        ) : (
+          <CircuitBoard size={18} strokeWidth={2.5} />
+        )}
       </span>
       <span className="site-logo-copy">
-        <strong>ostool</strong>
-        <small>BOARD PLATFORM</small>
+        <strong>{settings.short_name}</strong>
+        <small>{settings.tagline}</small>
       </span>
     </Link>
   );
 }
 
 function SiteHeader() {
+  const { settings } = useSiteSettings();
   const publicEdition = useEdition().edition === "public";
   const [open, setOpen] = useState(false);
   const location = useLocation();
@@ -91,8 +102,8 @@ function SiteHeader() {
           : (publicNavigation.find(
               ([path]) => path === location.pathname,
             )?.[1] ?? "开发板协作平台");
-    document.title = `${title} · ostool`;
-  }, [location.pathname]);
+    document.title = title + " · " + settings.name;
+  }, [location.pathname, settings.name]);
   const { user } = useSiteSession();
   const accountActions = !publicEdition ? (
     <Button asChild size="sm">
@@ -206,6 +217,7 @@ function SiteHeader() {
 }
 
 function SiteFooter() {
+  const { settings } = useSiteSettings();
   const { user } = useSiteSession();
   const publicEdition = useEdition().edition === "public";
   return (
@@ -213,7 +225,7 @@ function SiteFooter() {
       <div className="site-footer-main">
         <div className="footer-brand">
           <Logo light />
-          <p>为嵌入式团队打造的开发板协作平台。</p>
+          <p>{settings.description}</p>
         </div>
         <div className="footer-column">
           <strong>产品</strong>
@@ -227,7 +239,24 @@ function SiteFooter() {
           <strong>资源</strong>
           <Link to="/docs#cli">ostool CLI</Link>
           <Link to="/docs#api">API 参考</Link>
-          <a href="https://github.com/drivercraft/ostool">GitHub</a>
+          {settings.github_url && (
+            <a href={settings.github_url} rel="noopener noreferrer">
+              GitHub
+            </a>
+          )}
+          {publicEdition && (
+            <>
+              <Link to="/legal/terms">{settings.terms_title}</Link>
+              <Link to="/legal/privacy">{settings.privacy_title}</Link>
+            </>
+          )}
+          {settings.support_email && (
+            <a href={"mailto:" + settings.support_email}>
+              {settings.support_email}
+            </a>
+          )}
+          {settings.support_phone && <span>{settings.support_phone}</span>}
+          {settings.support_url && <a href={settings.support_url}>联系支持</a>}
         </div>
         <div className="footer-column">
           <strong>开始使用</strong>
@@ -242,10 +271,24 @@ function SiteFooter() {
       </div>
       <div className="site-footer-bottom">
         <span>
-          © {new Date().getFullYear()} ostool. Built for hardware teams.
+          © {new Date().getFullYear()} {settings.copyright}
+          {settings.operator && <span> · {settings.operator}</span>}
+          {settings.address && <span> · {settings.address}</span>}
         </span>
         <span className="footer-social">
-          <Github size={15} /> Open source tooling
+          {settings.icp_number && (
+            <a href={settings.icp_url || undefined} rel="noopener noreferrer">
+              {settings.icp_number}
+            </a>
+          )}
+          {settings.police_number && (
+            <a
+              href={settings.police_url || undefined}
+              rel="noopener noreferrer"
+            >
+              {settings.police_number}
+            </a>
+          )}
         </span>
       </div>
     </footer>
@@ -253,9 +296,15 @@ function SiteFooter() {
 }
 
 function PublicLayout({ children }: { children: React.ReactNode }) {
+  const { settings } = useSiteSettings();
   return (
     <div className="public-site">
       <SiteHeader />
+      {settings.maintenance && (
+        <div className="site-maintenance" role="status">
+          {settings.maintenance_message}
+        </div>
+      )}
       {children}
       <SiteFooter />
     </div>
@@ -668,6 +717,13 @@ function Login() {
     location.pathname === "/register" || query.get("register") === "1";
   const [confirmPassword, setConfirmPassword] = useState("");
   const authConfig = useEdition();
+  const legalSite = useSiteSettings();
+  const [accepted, setAccepted] = useState(false);
+  useEffect(
+    () => setAccepted(false),
+    [legalSite.terms_version, legalSite.privacy_version],
+  );
+
   const registrationAllowed = authConfig.allow_registration;
   const emailRequired =
     registering && authConfig.registration_email_verification;
@@ -710,6 +766,11 @@ function Login() {
               emailChallenge
                 ? { id: emailChallenge.challenge_id, code: emailCode }
                 : undefined,
+              {
+                accepted,
+                terms_version: legalSite.terms_version,
+                privacy_version: legalSite.privacy_version,
+              },
             )
           : await api.login(email, password, proof ?? {});
       if (result.mfa_required) {
@@ -927,13 +988,20 @@ function Login() {
               {message}
             </p>
           )}
+          {!challenge && (
+            <AuthLegal
+              registration={registering}
+              accepted={accepted}
+              onChange={setAccepted}
+            />
+          )}
           <Button
             className="auth-submit"
             type="submit"
             disabled={
               busy ||
               (!challenge && !proof?.captcha_code) ||
-              (registering && registrationAllowed !== true) ||
+              (registering && (registrationAllowed !== true || !accepted)) ||
               (emailRequired && (!emailChallenge || !emailCode))
             }
           >
@@ -993,15 +1061,47 @@ export default function PublicApp() {
       disableTransitionOnChange
     >
       <EditionProvider>
-        <SiteSessionProvider>
-          <SecurityVerification />
-          <div className="site-root">
-            <PublicRoutes />
-          </div>
-          <Toaster position="top-right" richColors closeButton />
-        </SiteSessionProvider>
+        <SiteSettingsProvider>
+          <SiteSessionProvider>
+            <SecurityVerification />
+            <div className="site-root">
+              <PublicRoutes />
+            </div>
+            <Toaster position="top-right" richColors closeButton />
+          </SiteSessionProvider>
+        </SiteSettingsProvider>
       </EditionProvider>
     </ThemeProvider>
+  );
+}
+function LegalPage() {
+  const view = useSiteSettings(),
+    privacy = useLocation().pathname.endsWith("/privacy"),
+    s = view.settings;
+  useEffect(() => {
+    document.title =
+      (privacy ? s.privacy_title : s.terms_title) + " · " + s.name;
+  }, [privacy, s]);
+  const published = privacy
+    ? view.privacy_published_at
+    : view.terms_published_at;
+  return (
+    <PublicLayout>
+      <main className="legal-reader">
+        <h1>{privacy ? s.privacy_title : s.terms_title}</h1>
+        <p className="muted">
+          版本 {privacy ? view.privacy_version : view.terms_version}
+          {published ? " · " + new Date(published).toLocaleDateString() : ""}
+        </p>
+        <article>{privacy ? s.privacy_body : s.terms_body}</article>
+        {s.support_email && (
+          <p>
+            联系邮箱：
+            <a href={"mailto:" + s.support_email}>{s.support_email}</a>
+          </p>
+        )}
+      </main>
+    </PublicLayout>
   );
 }
 function PublicRoutes() {
@@ -1012,6 +1112,8 @@ function PublicRoutes() {
         <Route path="/" element={<Home />} />
         <Route path="/devices" element={<Devices />} />
         <Route path="/docs" element={<Docs />} />
+        <Route path="/legal/terms" element={<LegalPage />} />
+        <Route path="/legal/privacy" element={<LegalPage />} />
         <Route path="/about" element={<About />} />
         <Route
           path="/login"

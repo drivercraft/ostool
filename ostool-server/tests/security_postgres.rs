@@ -78,10 +78,13 @@ impl Fixture {
         method: &str,
         path: &str,
         cookies: Option<&str>,
-        body: Value,
+        mut body: Value,
         origin: Option<&str>,
         bearer: Option<&str>,
     ) -> Reply {
+        if path == "/api/v1/auth/register" && body.get("legal").is_none() {
+            body["legal"] = json!({"accepted":true,"terms_version":1,"privacy_version":1});
+        }
         let mut request = Request::builder()
             .method(method)
             .uri(path)
@@ -497,6 +500,7 @@ async fn local_edition_keeps_anonymous_board_access_and_hides_identity_features(
         "/api/v1/account",
         "/api/v1/admin/users",
         "/api/v1/admin/rentals",
+        "/api/v1/admin/mail-deliveries",
     ] {
         assert_eq!(
             f.request("GET", path, None, Value::Null).await.status,
@@ -624,9 +628,11 @@ async fn optional_smtp_verification_and_password_recovery_revoke_old_credentials
         json!({"email":email,"password":"initial-mail-password-123","verification":f.proof("register").await,
         "email_challenge_id":sent.body["challenge_id"],"email_code":code})).await;
     assert_eq!(reused.status, StatusCode::BAD_REQUEST);
-    sqlx::query("DELETE FROM security_buckets WHERE key=$1")
-        .bind(crypto::hash(&format!("email-resend:{email}")))
-        .execute(f.state.database.pool())
+    f.state
+        .security_cache
+        .as_ref()
+        .unwrap()
+        .clear("email-resend", email)
         .await
         .unwrap();
     let reset = f.request("POST", "/api/v1/auth/email-code", None,
@@ -636,6 +642,22 @@ async fn optional_smtp_verification_and_password_recovery_revoke_old_credentials
     let changed = f.request("POST", "/api/v1/auth/password-reset", None,
         json!({"challenge_id":reset.body["challenge_id"],"code":reset_code,"new_password":"replacement-mail-password-123"})).await;
     assert_eq!(changed.status, StatusCode::OK, "{}", changed.body);
+    let history: i64 = sqlx::query_scalar("SELECT count(*) FROM password_change_events")
+        .fetch_one(f.state.database.pool())
+        .await
+        .unwrap();
+    assert_eq!(history, 1);
+    let delivery_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM mail_deliveries WHERE status='sent' AND completed_at IS NOT NULL",
+    )
+    .fetch_one(f.state.database.pool())
+    .await
+    .unwrap();
+    assert_eq!(delivery_count, 2);
+    let consumed:bool=sqlx::query_scalar("SELECT consumed_at IS NOT NULL AND length(code_hash)=64 FROM password_reset_tokens WHERE id=$1")
+        .bind(reset.body["challenge_id"].as_str().unwrap().parse::<Uuid>().unwrap()).fetch_one(f.state.database.pool()).await.unwrap();
+    assert!(consumed);
+
     assert_eq!(
         f.request("GET", "/api/v1/auth/me", Some(&cookies), Value::Null)
             .await
@@ -778,4 +800,174 @@ async fn administrator_enrollment_is_restricted_and_session_revocation_is_owner_
         assert!(cookie.contains("; Secure"));
         assert!(!cookie.contains("Domain="));
     }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn legal_publication_consent_and_configuration_are_atomic_and_versioned() {
+    let f = Fixture::new(true).await;
+    let logged = f.login(true).await;
+    let cookies = test_security::cookie_header(&logged.headers);
+    let initial = f.request("GET", "/api/v1/site", None, Value::Null).await;
+    assert_eq!(initial.status, StatusCode::OK);
+    let mut settings = initial.body["settings"].clone();
+    settings["name"] = json!("安全测试站点");
+    settings["terms_body"] =
+        json!("新用户协议\n禁止未授权访问设备。\n<script>not executable</script>");
+    let updated = f
+        .request(
+            "PUT",
+            "/api/v1/admin/site-settings",
+            Some(&cookies),
+            json!({"revision":initial.body["revision"],"settings":settings}),
+        )
+        .await;
+    assert_eq!(updated.status, StatusCode::OK, "{}", updated.body);
+    let stale = f
+        .request(
+            "PUT",
+            "/api/v1/admin/site-settings",
+            Some(&cookies),
+            json!({"revision":initial.body["revision"],"settings":settings}),
+        )
+        .await;
+    assert_eq!(stale.status, StatusCode::CONFLICT);
+    let current = f.request("GET", "/api/v1/site", None, Value::Null).await;
+    assert_eq!(current.body["terms_version"], 2);
+    assert_eq!(current.body["privacy_version"], 1);
+    let old = f
+        .request("GET", "/api/v1/site/legal/terms/1", None, Value::Null)
+        .await;
+    assert_eq!(old.body["body"], initial.body["settings"]["terms_body"]);
+    assert!(
+        sqlx::query(
+            "UPDATE legal_document_versions SET body='tampered' WHERE kind='terms' AND version=1"
+        )
+        .execute(f.state.database.pool())
+        .await
+        .is_err()
+    );
+
+    let mut register = json!({"email":"consent@security.test","password":"consent-password-123",
+        "verification":f.proof("register").await,"legal":{"accepted":false,"terms_version":2,"privacy_version":1}});
+    assert_eq!(
+        f.request("POST", "/api/v1/auth/register", None, register.clone())
+            .await
+            .status,
+        StatusCode::BAD_REQUEST
+    );
+    register["legal"]["accepted"] = json!(true);
+    register["legal"]["terms_version"] = json!(1);
+    register["verification"] = f.proof("register").await;
+    let expired = f
+        .request("POST", "/api/v1/auth/register", None, register.clone())
+        .await;
+    assert_eq!(expired.body["code"], "legal_changed");
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM users WHERE email='consent@security.test'")
+            .fetch_one(f.state.database.pool())
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+    register["legal"]["terms_version"] = json!(2);
+    register["verification"] = f.proof("register").await;
+    let created = f
+        .request("POST", "/api/v1/auth/register", None, register)
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+    let proofs:i64=sqlx::query_scalar("SELECT count(*) FROM user_legal_acceptances a JOIN users u ON u.id=a.user_id WHERE u.email='consent@security.test' AND length(ip_hash)=64 AND length(user_agent_hash)=64").fetch_one(f.state.database.pool()).await.unwrap();
+    assert_eq!(proofs, 2);
+    let metadata:bool=sqlx::query_scalar("SELECT last_login_at IS NOT NULL AND updated_at>=created_at FROM users WHERE email='consent@security.test'").fetch_one(f.state.database.pool()).await.unwrap();
+    assert!(metadata);
+    settings["support_url"] = json!("javascript:alert(1)");
+    let invalid = f
+        .request(
+            "PUT",
+            "/api/v1/admin/site-settings",
+            Some(&cookies),
+            json!({"revision":current.body["revision"],"settings":settings}),
+        )
+        .await;
+    assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+}
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn public_site_stream_cannot_expose_management_or_identity_data() {
+    use futures_util::StreamExt;
+    let f = Fixture::new(true).await;
+    let response = f
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/site/events")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body().into_data_stream();
+    let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let text = String::from_utf8(chunk.to_vec()).unwrap();
+    let body: Value = serde_json::from_str(
+        text.lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .unwrap(),
+    )
+    .unwrap();
+    let data = body["data"].as_object().unwrap();
+    assert_eq!(data.len(), 1);
+    assert!(data.contains_key("site"));
+    assert!(!text.contains("password_hash"));
+    assert!(!text.contains("mail_deliveries"));
+    assert!(!text.contains("admin@security.test"));
+}
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn redis_windows_are_shared_atomic_expiring_and_fail_closed() {
+    let f = Fixture::new(true).await;
+    let first = f.state.security_cache.as_ref().unwrap().clone();
+    let second =
+        ostool_server::security::cache::SecurityCache::connect(&*f.state.config.read().await)
+            .await
+            .unwrap();
+    let key = Uuid::new_v4().to_string();
+    let mut operations = Vec::new();
+    for n in 0..30 {
+        let cache = if n % 2 == 0 {
+            first.clone()
+        } else {
+            second.clone()
+        };
+        let key = key.clone();
+        operations.push(tokio::spawn(async move {
+            cache.limit("parallel-test", &key, 5, 1).await.is_ok()
+        }));
+    }
+    let mut allowed = 0;
+    for operation in operations {
+        allowed += usize::from(operation.await.unwrap());
+    }
+    assert_eq!(allowed, 5);
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    assert!(second.limit("parallel-test", &key, 5, 1).await.is_ok());
+    assert_eq!(
+        ostool_server::security::store::limit(&None, "failure", "test", 1, 60)
+            .await
+            .unwrap_err()
+            .status,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let mut config = f.state.config.read().await.clone();
+    config.security.redis_url = None;
+    assert!(
+        ostool_server::security::cache::SecurityCache::connect(&config)
+            .await
+            .is_err()
+    );
 }

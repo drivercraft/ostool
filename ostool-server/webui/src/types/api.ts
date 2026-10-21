@@ -360,6 +360,12 @@ export interface ManagedUser {
   role_id: string;
   disabled: boolean;
   created_at: string;
+  updated_at?:string;
+  email_verified_at?:string|null;
+  last_login_at?:string|null;
+  last_login_ip?:string|null;
+  password_changed_at?:string;
+  mfa_enabled?:boolean;
 }
 export interface UserInput {
   email: string;
@@ -374,12 +380,16 @@ export interface RoleInput {
   administrator: boolean;
 }
 export interface UserRole extends RoleInput {
+  created_at?:string;
+  updated_at?:string;
   id: string;
   builtin: boolean;
 }
 export interface DeploymentInfo {
   edition: "local" | "public";
   database_connected: boolean;
+  redis_connected?:boolean;
+  security?:Record<string,string|number|boolean|null>;
   auth_enabled: boolean;
   allow_registration: boolean;
   public_base_url: string | null;
@@ -513,6 +523,7 @@ export interface DashboardInfo {
       tx_bytes?: number | null;
       rx_bytes_per_second?: number | null;
       tx_bytes_per_second?: number | null;
+      redis_ok?:boolean|null;
       database_ok?: boolean;
       database_latency_ms?: number;
       pool_size?: number;

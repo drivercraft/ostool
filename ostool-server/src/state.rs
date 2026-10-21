@@ -115,6 +115,7 @@ fn release_settle_delay(board: &BoardConfig) -> Option<Duration> {
 
 #[derive(Clone)]
 pub struct AppState {
+    pub security_cache: Option<crate::security::cache::SecurityCache>,
     pub security_revision: Arc<std::sync::atomic::AtomicU64>,
     pub audit: crate::audit::AuditHealth,
     pub monitor: crate::dashboard::Monitor,
@@ -172,7 +173,13 @@ pub async fn build_app_state(
             "public edition requires HTTPS, except on loopback"
         );
     }
+    let security_cache = if config.edition.is_public() {
+        Some(crate::security::cache::SecurityCache::connect(&config).await?)
+    } else {
+        None
+    };
     let database = Database::connect(&config.database).await?;
+    crate::api::site::initialize(&database).await?;
     {
         let settings = database
             .initialize_record("settings", &StoredSettings::from(&config))
@@ -222,6 +229,7 @@ pub async fn build_app_state(
             virtual_boards: virtual_boards.clone(),
         }));
     let state = AppState {
+        security_cache,
         security_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         audit: crate::audit::AuditHealth::default(),
         monitor: crate::dashboard::Monitor::default(),

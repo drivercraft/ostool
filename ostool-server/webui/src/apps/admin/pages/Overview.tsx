@@ -262,9 +262,11 @@ function Runtime({ data }: { data: DashboardInfo }) {
           </div>
         </div>
         <span
-          className={`dashboard-health ${sample.database_ok ? "healthy" : "warning"}`}
+          className={`dashboard-health ${sample.database_ok && sample.redis_ok !== false ? "healthy" : "warning"}`}
         >
-          {sample.database_ok ? "服务运行正常" : "数据库状态待确认"}
+          {sample.database_ok && sample.redis_ok !== false
+            ? "服务运行正常"
+            : "服务依赖状态待确认"}
         </span>
       </div>
       <div className="dashboard-metrics">
@@ -368,6 +370,20 @@ function Runtime({ data }: { data: DashboardInfo }) {
                   {sample.database_ok ? "连接正常" : "未连接 / 采样中"}
                 </span>,
               ],
+              ...(sample.redis_ok != null
+                ? [
+                    [
+                      "Redis",
+                      <span
+                        className={
+                          sample.redis_ok ? "status-good" : "status-bad"
+                        }
+                      >
+                        {sample.redis_ok ? "连接正常" : "连接异常"}
+                      </span>,
+                    ] as [string, React.ReactNode],
+                  ]
+                : []),
               [
                 "数据库响应",
                 sample.database_ok ? `${sample.database_latency_ms} ms` : "—",

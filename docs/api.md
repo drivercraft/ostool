@@ -1220,3 +1220,17 @@ SMTP 是可选功能，未配置时对应入口不显示。邮件码十分钟、
 超限统一返回 429、`code=rate_limited`、`Retry-After` 响应头；
 Cookie 写请求拒绝不匹配/缺失的 Origin。配置、部署与升级说明见
 [服务器安全文档](../ostool-server/deploy/security.md)。
+
+## 站点配置与注册协议版本
+
+公网版新增 Redis 连接配置 OSTOOL_REDIS_URL，用于认证入口限流和冷却计数；
+用户/会话/验证证明仍以 PostgreSQL 为准，本地版不连接 Redis。
+
+公开站点配置和协议版本通过 GET /api/v1/site/events 推送，仅含 site 主题。
+管理页保存使用 PUT /api/v1/admin/site-settings，提交 revision 和完整 settings；
+版本冲突返回 409。协议正文与标题发布新版本，旧版本不可改写。
+
+注册请求新增 legal 对象，其中 accepted 必须为 true，terms_version 和 privacy_version
+必须匹配当前已发布版本；缺失同意时拒绝注册，版本变化返回 409 legal_changed。
+注册与同意记录在同一事务完成，不会创建缺少对应同意记录的账号。
+配置字段、协议接口、历史版本及数据表见 [站点与数据结构说明](../ostool-server/deploy/site-and-data.md)。

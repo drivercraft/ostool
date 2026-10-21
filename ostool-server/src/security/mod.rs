@@ -1,4 +1,5 @@
 //! Public-edition authentication protections. Local edition remains anonymous.
+pub mod cache;
 pub mod captcha;
 pub mod config;
 pub mod crypto;

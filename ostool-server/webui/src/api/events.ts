@@ -27,6 +27,9 @@ export interface Runtime {
   last_release_error: string | null;
 }
 export interface Resources {
+  site: import("@/types/site").SiteView;
+  legal_history: import("@/types/site").LegalVersion[];
+  mail_deliveries: import("@/types/site").MailDelivery[];
   security: import("./client").SecurityStatus;
   security_sessions: { sessions: import("./client").SecuritySession[] };
   security_revision: number;
@@ -264,4 +267,9 @@ export function useSecurityResource<K extends "security" | "security_sessions">(
 }
 export function useSecurityErrors() {
   return useSyncExternalStore(security.subscribe, security.getErrors);
+}
+
+export const site = new AdminStore("/api/v1/site/events",true);
+export function useSiteResource() {
+  return useSyncExternalStore(site.subscribe,()=>site.get("site"));
 }

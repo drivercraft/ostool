@@ -11,7 +11,7 @@ other. The proxy must forward `/assets/*` as well as `/admin/*` and website rout
 the Caddy example proxies all of them. Custom prebuilt frontend directories must
 contain `index.html`, `admin/index.html` and `assets/`.
 
-Both editions require PostgreSQL and share the same data schema. The default
+Both editions require PostgreSQL and share the same data schema. Public edition additionally requires Redis for transient security counters; local edition does not connect to Redis. The default
 local edition has no authentication or user/rental management. For public deployment, explicitly set
 `OSTOOL_EDITION=public`; the server enforces authentication and requires
 PostgreSQL. `OSTOOL_AUTH_ENABLED=false` is rejected in public edition. When
@@ -73,6 +73,8 @@ per-board or individual-operation permission rules. Disabling/deleting a user
 and changing its role/password revoke credentials. Built-in roles cannot be
 deleted or have their permission level changed. In-use custom roles must be
 unassigned before changing permission level or deleting them.
+
+See [site settings and identity schema](site-and-data.md) for branding, contacts, versioned legal documents, consent records and account security metadata.
 
 ## Persistence status
 
@@ -160,6 +162,7 @@ future board/DTB operations use the management UI/API and PostgreSQL.
 # Use a disposable database; tests create isolated schemas.
 export OSTOOL_TEST_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:5432/ostool_tests
 export RUST_TEST_THREADS=4
+export OSTOOL_TEST_REDIS_URL=redis://127.0.0.1:6379/0
 cargo test -p ostool-server
 pnpm --dir ostool-server/webui test
 pnpm --dir ostool-server/webui build
@@ -180,6 +183,7 @@ UDP 2998 must be available):
 ```bash
 cargo build -p ostool-server
 OSTOOL_E2E_PUBLIC=true \
+OSTOOL_E2E_REDIS_URL=redis://127.0.0.1:6379/0 \
 OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:5432/ostool_tests \
   pnpm --dir ostool-server/webui test:e2e
 ```

@@ -97,36 +97,61 @@ async fn issue(
     if config.smtp_host.is_none() || config.smtp_from.is_none() {
         return Err(ApiError::service_unavailable("邮箱验证尚未配置"));
     }
-    store::limit(state.database.pool(), "email-ip", &client.ip, 8, 3600).await?;
-    store::limit(state.database.pool(), "email-resend", email, 1, 60).await?;
-    store::limit(state.database.pool(), "email-hour", email, 5, 3600).await?;
+    store::limit(&state.security_cache, "email-ip", &client.ip, 8, 3600).await?;
+    store::limit(&state.security_cache, "email-resend", email, 1, 60).await?;
+    store::limit(&state.security_cache, "email-hour", email, 5, 3600).await?;
     let code = format!("{:06}", rand::random_range(0..1_000_000));
     let subject = crypto::hash(email);
-    sqlx::query("DELETE FROM security_challenges WHERE purpose=$1 AND subject=$2")
-        .bind(purpose)
-        .bind(&subject)
+    let table = proof_table(purpose);
+    let id = Uuid::new_v4();
+    let mut tx = state.database.pool().begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(29992027)")
+        .execute(&mut *tx)
+        .await?;
+    let active:i64=sqlx::query_scalar("SELECT (SELECT count(*) FROM email_verification_tokens WHERE consumed_at IS NULL AND invalidated_at IS NULL AND expires_at>now())+(SELECT count(*) FROM password_reset_tokens WHERE consumed_at IS NULL AND invalidated_at IS NULL AND expires_at>now())")
+        .fetch_one(&mut *tx).await?;
+    if active >= 10000 {
+        return Err(ApiError::service_unavailable("验证服务繁忙，请稍后重试"));
+    }
+    sqlx::query(&format!("UPDATE {table} SET invalidated_at=now() WHERE purpose=$1 AND email_hash=$2 AND consumed_at IS NULL AND invalidated_at IS NULL"))
+        .bind(purpose).bind(&subject).execute(&mut *tx).await?;
+    sqlx::query(&format!("INSERT INTO {table}(id,purpose,user_id,email_hash,code_hash,security_version,request_ip_hash,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()+interval '10 minutes')"))
+        .bind(id).bind(purpose).bind(user.as_ref().map(|u|u.id)).bind(&subject)
+        .bind(crypto::proof_hash(purpose,id,&code)).bind(user.as_ref().map(|u|u.security_version))
+        .bind(crypto::hash(&client.ip)).execute(&mut *tx).await?;
+    tx.commit().await?;
+    if purpose != "email:reset" || user.is_some() {
+        let delivery:Uuid=sqlx::query_scalar("INSERT INTO mail_deliveries(challenge_id,user_id,purpose,recipient_email,recipient_hash) VALUES($1,$2,$3,$4,$5) RETURNING id")
+            .bind(id).bind(user.as_ref().map(|u|u.id)).bind(purpose).bind(email).bind(subject).fetch_one(state.database.pool()).await?;
+        let result = send(&config, email, &code).await;
+        sqlx::query(
+            "UPDATE mail_deliveries SET status=$2,error_code=$3,completed_at=now() WHERE id=$1",
+        )
+        .bind(delivery)
+        .bind(if result.is_ok() { "sent" } else { "failed" })
+        .bind(if result.is_ok() {
+            None
+        } else {
+            Some("smtp_delivery_failed")
+        })
         .execute(state.database.pool())
         .await?;
-    let id = store::challenge(
-        state.database.pool(),
-        purpose,
-        &subject,
-        &code,
-        json!({"version":user.as_ref().map(|u|u.security_version)}),
-        user.as_ref().map(|u| u.id),
-        600,
-    )
-    .await?;
-    // Recovery requests never disclose whether the recipient has an enabled account.
-    if (purpose != "email:reset" || user.is_some())
-        && let Err(error) = send(&config, email, &code).await
-    {
-        sqlx::query("DELETE FROM security_challenges WHERE id=$1")
+        if let Err(error) = result {
+            sqlx::query(&format!(
+                "UPDATE {table} SET invalidated_at=now() WHERE id=$1"
+            ))
             .bind(id)
             .execute(state.database.pool())
             .await?;
-        return Err(error);
+            state.admin_events.invalidate(&["mail_deliveries"]);
+            return Err(error);
+        }
+        sqlx::query(&format!("UPDATE {table} SET sent_at=now() WHERE id=$1"))
+            .bind(id)
+            .execute(state.database.pool())
+            .await?;
     }
+    state.admin_events.invalidate(&["mail_deliveries"]);
     Ok(Json(
         json!({"challenge_id":id,"expires_in":600,"resend_after":60,"message":"如该邮箱可以接收验证码，邮件将很快送达"}),
     ))
@@ -156,7 +181,14 @@ async fn request(
     )
     .await
 }
-/// Unlike CAPTCHA, a mail proof allows five attempts, all serialized in PostgreSQL.
+fn proof_table(purpose: &str) -> &'static str {
+    if purpose == "email:reset" {
+        "password_reset_tokens"
+    } else {
+        "email_verification_tokens"
+    }
+}
+/// Each proof retains its lifecycle metadata; only code hashes are persisted.
 async fn consume(
     state: &AppState,
     id: Uuid,
@@ -167,34 +199,38 @@ async fn consume(
     if code.len() != 6 || !code.bytes().all(|c| c.is_ascii_digit()) {
         return Ok(None);
     }
+    let table = proof_table(purpose);
     let mut tx = state.database.pool().begin().await?;
-    let row=sqlx::query("SELECT purpose,subject,secret_hash,user_id,payload,expires_at,attempts FROM security_challenges WHERE id=$1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await?;
+    let row = sqlx::query(&format!("SELECT * FROM {table} WHERE id=$1 FOR UPDATE"))
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
     let Some(row) = row else { return Ok(None) };
     let valid = row.try_get::<String, _>("purpose")? == purpose
         && row.try_get::<DateTime<Utc>, _>("expires_at")? > Utc::now()
+        && row
+            .try_get::<Option<DateTime<Utc>>, _>("consumed_at")?
+            .is_none()
+        && row
+            .try_get::<Option<DateTime<Utc>>, _>("invalidated_at")?
+            .is_none()
         && row.try_get::<i32, _>("attempts")? < 5
-        && email.is_none_or(|email| {
-            row.try_get::<String, _>("subject")
-                .is_ok_and(|s| s == crypto::hash(email))
+        && email.is_none_or(|value| {
+            row.try_get::<String, _>("email_hash")
+                .is_ok_and(|h| h == crypto::hash(value))
         })
         && crypto::equal(
-            &row.try_get::<String, _>("secret_hash")?,
+            &row.try_get::<String, _>("code_hash")?,
             &crypto::proof_hash(purpose, id, code),
         );
-    if valid {
-        sqlx::query("DELETE FROM security_challenges WHERE id=$1")
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    } else {
-        sqlx::query("UPDATE security_challenges SET attempts=LEAST(attempts+1,5) WHERE id=$1")
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
+    sqlx::query(&format!("UPDATE {table} SET attempts=LEAST(attempts+1,5),consumed_at=CASE WHEN $2 THEN now() ELSE consumed_at END WHERE id=$1"))
+        .bind(id).bind(valid).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(if valid {
-        Some((row.try_get("user_id")?, row.try_get("payload")?))
+        Some((
+            row.try_get("user_id")?,
+            json!({"version":row.try_get::<Option<i64>,_>("security_version")?}),
+        ))
     } else {
         None
     })
@@ -228,7 +264,7 @@ async fn reset(
     Extension(client): Extension<ClientContext>,
     Json(input): Json<ResetRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    store::limit(state.database.pool(), "reset-confirm", &client.ip, 10, 900).await?;
+    store::limit(&state.security_cache, "reset-confirm", &client.ip, 10, 900).await?;
     crypto::validate_password(&input.new_password)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     let (user, payload) = consume(
@@ -278,7 +314,7 @@ async fn confirm_email(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Json(input): Json<VerifyEmail>,
 ) -> Result<Json<Value>, ApiError> {
-    let (owner, _) = consume(
+    let (owner, payload) = consume(
         &state,
         input.challenge_id,
         "email:verify",
@@ -287,7 +323,7 @@ async fn confirm_email(
     )
     .await?
     .ok_or_else(|| ApiError::bad_request("验证码错误或已过期"))?;
-    if owner != Some(user.id) {
+    if owner != Some(user.id) || payload["version"].as_i64() != Some(user.security_version) {
         return Err(ApiError::bad_request("验证码不匹配"));
     }
     let result = sqlx::query(

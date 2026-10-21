@@ -189,7 +189,12 @@ impl Monitor {
                         Ok(Ok(_))
                     )
                 };
-                let sample = json!({"ready":true,"sampled_at":Utc::now(),"hostname":raw.hostname,"cpu_percent":cpu,"load_average":raw.load,"memory_total":raw.memory_total,"memory_available":raw.memory_available,"process_rss":raw.rss,"disk_total":raw.disk_total,"disk_available":raw.disk_available,"interface":raw.interface,"rx_bytes":raw.rx,"tx_bytes":raw.tx,"rx_bytes_per_second":rx,"tx_bytes_per_second":tx,"database_ok":database_ok,"database_latency_ms":ping.elapsed().as_millis(),"pool_size":state.database.pool().size(),"pool_idle":state.database.pool().num_idle()});
+                let db_latency = ping.elapsed().as_millis();
+                let redis_ok = match &state.security_cache {
+                    Some(cache) => Some(cache.ping().await.is_ok()),
+                    None => None,
+                };
+                let sample = json!({"redis_ok":redis_ok,"ready":true,"sampled_at":Utc::now(),"hostname":raw.hostname,"cpu_percent":cpu,"load_average":raw.load,"memory_total":raw.memory_total,"memory_available":raw.memory_available,"process_rss":raw.rss,"disk_total":raw.disk_total,"disk_available":raw.disk_available,"interface":raw.interface,"rx_bytes":raw.rx,"tx_bytes":raw.tx,"rx_bytes_per_second":rx,"tx_bytes_per_second":tx,"database_ok":database_ok,"database_latency_ms":db_latency,"pool_size":state.database.pool().size(),"pool_idle":state.database.pool().num_idle()});
                 *monitor.0.sample.lock().unwrap() = sample;
                 {
                     let mut history = monitor.0.history.lock().unwrap();
@@ -199,7 +204,11 @@ impl Monitor {
                     }
                 }
                 previous = Some(raw);
-                monitor.task_finished("runtime", database_ok, started.elapsed());
+                monitor.task_finished(
+                    "runtime",
+                    database_ok && redis_ok.unwrap_or(true),
+                    started.elapsed(),
+                );
                 state.admin_events.invalidate(&["dashboard"]);
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }

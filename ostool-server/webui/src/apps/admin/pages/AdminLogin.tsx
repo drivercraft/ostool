@@ -1,3 +1,5 @@
+import { AuthLegal } from "@/components/auth-legal";
+import { useSiteSettings } from "@/components/site-settings";
 import { useEffect, useState, type FormEvent } from "react";
 import { CircuitBoard, ArrowRight, ShieldCheck } from "lucide-react";
 import { api, notifyAuthChanged, type HumanProof } from "@/api/client";
@@ -12,6 +14,7 @@ export default function AdminLogin() {
   const [email, setEmail] = useState(""),
     [password, setPassword] = useState("");
   const config = useEdition();
+  const { settings } = useSiteSettings();
   const [proof, setProof] = useState<HumanProof>();
   const [refreshKey, setRefreshKey] = useState(0);
   const [challenge, setChallenge] = useState<string>();
@@ -53,9 +56,17 @@ export default function AdminLogin() {
       <header className="admin-login-header">
         <a href="/admin/login" className="admin-login-brand">
           <span className="logo-mark">
-            <CircuitBoard size={19} />
+            {settings.logo_url ? (
+              <img
+                src={settings.logo_url}
+                alt=""
+                className="size-full object-contain"
+              />
+            ) : (
+              <CircuitBoard size={19} />
+            )}
           </span>
-          <strong>ostool</strong>
+          <strong>{settings.short_name}</strong>
           <span>管理后台</span>
         </a>
         <SiteThemeMenu label="切换后台主题" />
@@ -103,6 +114,7 @@ export default function AdminLogin() {
           />
         )}
         {error && <Notice>{error}</Notice>}
+        {!challenge && <AuthLegal />}
         <Button
           type="submit"
           disabled={busy || (!challenge && !proof?.captcha_code)}

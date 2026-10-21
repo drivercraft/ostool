@@ -94,6 +94,7 @@ impl Database {
         Ok(())
     }
     pub async fn connect(config: &DatabaseConfig) -> anyhow::Result<Self> {
+        crate::security::crypto::initialize_tls();
         let Some(url) = config.url.as_deref().filter(|url| !url.trim().is_empty()) else {
             bail!("PostgreSQL is required (OSTOOL_DATABASE_URL)");
         };
@@ -298,6 +299,10 @@ impl Database {
         if let Some(id) = session_id {
             sqlx::query("UPDATE oauth_sessions SET last_seen_at=now() WHERE id=$1 AND last_seen_at<now()-interval '1 minute'").bind(id).execute(&self.pool).await?;
         }
+        if session_id.is_none() {
+            sqlx::query("UPDATE personal_access_tokens SET last_used_at=now() WHERE token_hash=$1 AND (last_used_at IS NULL OR last_used_at<now()-interval '1 minute')")
+                .bind(token_hash(token)).execute(&self.pool).await?;
+        }
         Ok(Some(Credential {
             user: user_from_row(&row),
             session_id,
@@ -429,6 +434,10 @@ impl Database {
             .await?;
         let session_id:Uuid=sqlx::query_scalar("INSERT INTO oauth_sessions(user_id,client_id,scope,access_token_hash,refresh_token_hash,access_expires_at,refresh_expires_at,absolute_expires_at,family_id,security_version,ip,user_agent,step_up_until,created_at) SELECT user_id,client_id,scope,$1,$2,$3,absolute_expires_at,absolute_expires_at,family_id,security_version,ip,user_agent,step_up_until,created_at FROM oauth_sessions WHERE id=$4 RETURNING id")
             .bind(token_hash(&access_token)).bind(token_hash(&refresh_token)).bind(access_expires_at).bind(row.try_get::<Uuid,_>("id")?).fetch_one(&mut *tx).await?;
+        sqlx::query("UPDATE oauth_sessions SET last_refreshed_at=now() WHERE id=$1")
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         Ok(Some(AccessGrant {
             session_id,

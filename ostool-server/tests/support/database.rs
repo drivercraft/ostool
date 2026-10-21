@@ -6,6 +6,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub async fn prepare(config_path: &Path, config: &mut ServerConfig) -> anyhow::Result<Database> {
+    if config.edition.is_public() {
+        config.security.redis_url = Some(
+            std::env::var("OSTOOL_TEST_REDIS_URL")
+                .map_err(|_| anyhow::anyhow!("public tests require OSTOOL_TEST_REDIS_URL"))?,
+        );
+    }
     if config.edition.is_public() && config.auth.public_base_url.is_none() {
         config.auth.public_base_url = Some("http://127.0.0.1:2999".into());
     }

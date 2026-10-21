@@ -43,6 +43,7 @@ const child = spawn(
     env: {
       ...process.env,
       OSTOOL_EDITION: "public",
+      OSTOOL_REDIS_URL:process.env.OSTOOL_E2E_REDIS_URL,
       OSTOOL_DATABASE_URL: database,
       OSTOOL_DATABASE_SCHEMA: schema,
       OSTOOL_PUBLIC_BASE_URL: "http://127.0.0.1:4191",

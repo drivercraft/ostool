@@ -45,6 +45,8 @@ pub struct RevokeForm {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RegisterRequest {
+    #[serde(default)]
+    pub legal: super::site::LegalConsent,
     pub email: String,
     pub password: String,
     pub display_name: Option<String>,
@@ -153,6 +155,7 @@ pub async fn middleware(
                 "/api/v1/admin/roles",
                 "/api/v1/admin/rentals",
                 "/api/v1/admin/rental-requests",
+                "/api/v1/admin/mail-deliveries",
                 "/api/v1/account",
             ]
             .iter()
@@ -297,6 +300,10 @@ fn is_public_path(path: &str) -> bool {
         || path == "/about"
         || path.starts_with("/about/")
         || path.starts_with("/oauth/")
+        || path == "/api/v1/site"
+        || path.starts_with("/api/v1/site/")
+        || path == "/legal/terms"
+        || path == "/legal/privacy"
         || path == "/api/v1/auth/config"
         || path == "/api/v1/auth/register"
         || path == "/api/v1/auth/login"
@@ -524,11 +531,12 @@ async fn register(
     Extension(client): Extension<crate::security::store::ClientContext>,
     Json(request): Json<RegisterRequest>,
 ) -> Result<Response, ApiError> {
-    let (database, config) = database(&state).await?;
+    let (_, config) = database(&state).await?;
     if !config.allow_registration {
         return Err(ApiError::forbidden("注册暂未开放"));
     }
-    crate::security::store::limit(database.pool(), "register-ip", &client.ip, 6, 3600).await?;
+    crate::security::store::limit(&state.security_cache, "register-ip", &client.ip, 6, 3600)
+        .await?;
     crate::security::captcha::verify(
         &state,
         &client,
@@ -555,24 +563,16 @@ async fn register(
         request.email_code.as_deref(),
     )
     .await?;
-    let user = database
-        .create_user(
-            &email,
-            &request.password,
-            request.display_name.as_deref(),
-            false,
-        )
-        .await
-        .map_err(|error| {
-            log::warn!("registration could not complete: {error}");
-            ApiError::bad_request("无法完成注册，请检查注册信息或登录已有账号")
-        })?;
-    if verified {
-        sqlx::query("UPDATE users SET email_verified_at=now() WHERE id=$1")
-            .bind(user.id)
-            .execute(database.pool())
-            .await?;
-    }
+    let user = super::site::register(
+        &state,
+        &request.legal,
+        &client,
+        &email,
+        &request.password,
+        request.display_name.as_deref(),
+        verified,
+    )
+    .await?;
     state.admin_events.invalidate(&["users"]);
     let mut response = crate::security::mfa::begin_login(
         &state,
@@ -599,7 +599,7 @@ async fn password_login(
     let config = state.config.read().await.security.clone();
     let identity = format!("{}:{}", request.email.trim().to_lowercase(), client.ip);
     store::limit(
-        database.pool(),
+        &state.security_cache,
         if admin { "admin-login" } else { "web-login" },
         &identity,
         config.login_max_failures as i32,
@@ -607,7 +607,7 @@ async fn password_login(
     )
     .await?;
     store::limit(
-        database.pool(),
+        &state.security_cache,
         "login-account",
         &request.email.trim().to_lowercase(),
         config.login_max_failures as i32 * 3,
@@ -634,13 +634,13 @@ async fn password_login(
         .filter(|user| !admin || user.is_admin)
         .ok_or_else(|| ApiError::unauthorized("邮箱或密码不正确"))?;
     store::clear_limit(
-        database.pool(),
+        &state.security_cache,
         if admin { "admin-login" } else { "web-login" },
         &identity,
     )
     .await?;
     store::clear_limit(
-        database.pool(),
+        &state.security_cache,
         "login-account",
         &request.email.trim().to_lowercase(),
     )
@@ -816,9 +816,10 @@ fn oauth_error(status: StatusCode, error: &str, description: &str) -> Response {
         .into_response()
 }
 
-async fn auth_config(State(state): State<AppState>) -> Json<serde_json::Value> {
+async fn auth_config(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let site = super::site::view(&state).await?;
     let config = state.config.read().await;
-    Json(
-        serde_json::json!({"edition":config.edition,"enabled":config.edition.is_public(),"allow_registration":config.edition.is_public() && config.auth.allow_registration,"database_available":true,"captcha_required":config.edition.is_public(),"registration_email_verification":config.edition.is_public() && config.security.registration_email_verification,"email_security_available":config.edition.is_public() && config.security.smtp_host.is_some()}),
-    )
+    Ok(Json(
+        serde_json::json!({"site":site,"edition":config.edition,"enabled":config.edition.is_public(),"allow_registration":config.edition.is_public() && config.auth.allow_registration,"database_available":true,"captcha_required":config.edition.is_public(),"registration_email_verification":config.edition.is_public() && config.security.registration_email_verification,"email_security_available":config.edition.is_public() && config.security.smtp_host.is_some()}),
+    ))
 }

@@ -18,6 +18,8 @@ vi.mock("@/api/client", () => ({
   api: { authConfig: mocks.config, me: mocks.me },
 }));
 vi.mock("@/api/events", () => ({
+  site:{connect:vi.fn(),disconnect:vi.fn()},
+  useSiteResource:()=>undefined,
   admin: { connect: mocks.connect, disconnect: mocks.disconnect },
   useConnection: () => "connected",
   useErrors: () => ({}),
@@ -27,6 +29,7 @@ vi.mock("@/apps/admin/pages/Overview", () => ({
   default: () => <div>本地设备总览</div>,
 }));
 beforeEach(() => {
+  vi.stubGlobal("ResizeObserver",class { observe(){} unobserve(){} disconnect(){} });
   vi.stubGlobal(
     "matchMedia",
     vi.fn().mockImplementation((query) => ({

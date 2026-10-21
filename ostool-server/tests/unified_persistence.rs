@@ -124,6 +124,7 @@ async fn postgres_survives_restart_and_edition_switch_without_file_storage() {
     assert!(!path.exists());
     std::fs::remove_dir_all(&config.data_dir).unwrap();
     config.edition = Edition::Public;
+    config.security.redis_url = Some(std::env::var("OSTOOL_TEST_REDIS_URL").unwrap());
     config.auth.public_base_url = Some("http://127.0.0.1:2999".into());
     config.auth.bootstrap_admin_email = Some("storage-admin@test.local".into());
     config.auth.bootstrap_admin_password = Some("storage-password-123".into());

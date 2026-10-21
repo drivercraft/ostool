@@ -146,6 +146,7 @@ fn apply_security_values(
     values: &BTreeMap<String, String>,
 ) -> anyhow::Result<()> {
     for (key, target) in [
+        ("OSTOOL_REDIS_URL", &mut config.redis_url),
         ("OSTOOL_MFA_ENCRYPTION_KEY", &mut config.mfa_encryption_key),
         ("OSTOOL_TURNSTILE_SITE_KEY", &mut config.turnstile_site_key),
         ("OSTOOL_TURNSTILE_SECRET", &mut config.turnstile_secret),
@@ -158,6 +159,9 @@ fn apply_security_values(
             anyhow::ensure!(!value.trim().is_empty(), "{key} must not be empty");
             *target = Some(value.clone());
         }
+    }
+    if let Some(value) = values.get("OSTOOL_REDIS_PREFIX") {
+        config.redis_prefix = value.clone();
     }
     if let Some(value) = values.get("OSTOOL_CAPTCHA_PROVIDER") {
         config.captcha_provider = match value.as_str() {

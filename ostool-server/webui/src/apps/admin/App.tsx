@@ -1,3 +1,7 @@
+import {
+  SiteSettingsProvider,
+  useSiteSettings,
+} from "@/components/site-settings";
 import { loginUrl } from "@/auth-session";
 import { SecurityVerification } from "@/components/security-verification";
 import { SecuritySettings } from "@/components/security-settings";
@@ -65,8 +69,10 @@ export default function App() {
       disableTransitionOnChange
     >
       <EditionProvider>
-        <SecurityVerification />
-        <AdminEntry />
+        <SiteSettingsProvider>
+          <SecurityVerification />
+          <AdminEntry />
+        </SiteSettingsProvider>
       </EditionProvider>
     </ThemeProvider>
   );
@@ -148,6 +154,7 @@ function AdminEntry() {
   return <AdminConsole user={currentUser} />;
 }
 function AdminConsole({ user }: { user?: AuthUser }) {
+  const { settings } = useSiteSettings();
   const publicEdition = useEdition().edition === "public";
   const connection = useConnection(),
     errors = useErrors();
@@ -165,11 +172,19 @@ function AdminConsole({ user }: { user?: AuthUser }) {
         >
           <NavLink to="/overview" className="brand">
             <span className="logo-mark">
-              <CircuitBoardIcon size={17} />
+              {settings.logo_url ? (
+                <img
+                  src={settings.logo_url}
+                  alt=""
+                  className="size-full object-contain"
+                />
+              ) : (
+                <CircuitBoardIcon size={17} />
+              )}
             </span>
             <span>
-              <strong>ostool</strong>
-              <small>BOARD PLATFORM</small>
+              <strong>{settings.short_name}</strong>
+              <small>{settings.tagline}</small>
             </span>
           </NavLink>
           <nav aria-label="主导航">

@@ -149,6 +149,7 @@ test("unbound power -> real discovery -> manual MAC binding; push preserves focu
   expect(
     reads.every(
       (url) =>
+        url.endsWith("/api/v1/site/events") ||
         url.endsWith("/api/v1/admin/events") ||
         url.endsWith("/api/v1/auth/config"),
     ),

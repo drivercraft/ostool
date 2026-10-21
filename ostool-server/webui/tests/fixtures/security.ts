@@ -113,6 +113,7 @@ export async function apiRegister(
       email,
       password,
       display_name,
+      legal:{accepted:true,terms_version:1,privacy_version:1},
       verification: await proof(request, base, "register"),
     },
   });

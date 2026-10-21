@@ -28,38 +28,29 @@ impl ClientContext {
         crypto::hash(&serde_json::to_string(&(&self.ip, &self.user_agent)).expect("string tuple"))
     }
 }
-/// Fixed windows use PostgreSQL's atomic upsert, shared across worker processes.
+/// Redis scripts atomically set and increment TTL-bound distributed limits.
 pub async fn limit(
-    pool: &PgPool,
+    cache: &Option<super::cache::SecurityCache>,
     scope: &str,
     identity: &str,
     max: i32,
     seconds: i64,
 ) -> Result<(), ApiError> {
-    sqlx::query("DELETE FROM security_buckets WHERE expires_at<=now()")
-        .execute(pool)
-        .await?;
-    let key = crypto::hash(&format!("{scope}:{identity}"));
-    let row=sqlx::query("INSERT INTO security_buckets(key,count,expires_at) SELECT $1,1,now()+make_interval(secs=>$2::double precision) WHERE EXISTS(SELECT 1 FROM security_buckets WHERE key=$1) OR (SELECT count(*) FROM security_buckets)<100000 ON CONFLICT(key) DO UPDATE SET count=CASE WHEN security_buckets.expires_at<=now() THEN 1 ELSE LEAST(security_buckets.count+1,$3+1) END,expires_at=CASE WHEN security_buckets.expires_at<=now() THEN excluded.expires_at ELSE security_buckets.expires_at END RETURNING count,expires_at")
-        .bind(&key).bind(seconds as f64).bind(max).fetch_optional(pool).await?.ok_or_else(||ApiError::service_unavailable("验证服务繁忙，请稍后重试"))?;
-    let count: i32 = row.try_get("count")?;
-    if count > max {
-        let expiry: DateTime<Utc> = row.try_get("expires_at")?;
-        return Err(ApiError::new(
-            axum::http::StatusCode::TOO_MANY_REQUESTS,
-            "rate_limited",
-            "操作过于频繁，请稍后重试",
-        )
-        .with_retry_after((expiry - Utc::now()).num_seconds().max(1) as u32));
-    }
-    Ok(())
+    let cache = cache
+        .as_ref()
+        .ok_or_else(|| ApiError::service_unavailable("验证服务未配置"))?;
+    cache.limit(scope, identity, max, seconds).await
 }
-pub async fn clear_limit(pool: &PgPool, scope: &str, identity: &str) -> Result<(), ApiError> {
-    sqlx::query("DELETE FROM security_buckets WHERE key=$1")
-        .bind(crypto::hash(&format!("{scope}:{identity}")))
-        .execute(pool)
-        .await?;
-    Ok(())
+pub async fn clear_limit(
+    cache: &Option<super::cache::SecurityCache>,
+    scope: &str,
+    identity: &str,
+) -> Result<(), ApiError> {
+    cache
+        .as_ref()
+        .ok_or_else(|| ApiError::service_unavailable("验证服务未配置"))?
+        .clear(scope, identity)
+        .await
 }
 pub async fn challenge(
     pool: &PgPool,

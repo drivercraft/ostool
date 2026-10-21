@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct SecurityConfig {
+    #[serde(skip_serializing)]
+    pub redis_url: Option<String>,
+    pub redis_prefix: String,
     pub captcha_provider: CaptchaProvider,
     pub turnstile_site_key: Option<String>,
     #[serde(skip_serializing)]
@@ -50,6 +53,8 @@ pub enum SmtpTls {
 impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
+            redis_url: None,
+            redis_prefix: "ostool".into(),
             captcha_provider: CaptchaProvider::Image,
             turnstile_site_key: None,
             turnstile_secret: None,
@@ -85,6 +90,22 @@ impl SecurityConfig {
     pub fn validate(&self, public: bool) -> anyhow::Result<()> {
         if !public {
             return Ok(());
+        }
+        ensure!(
+            !self.redis_prefix.is_empty()
+                && self.redis_prefix.len() <= 80
+                && self
+                    .redis_prefix
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+            "invalid Redis prefix"
+        );
+        if let Some(value) = &self.redis_url {
+            let value = url::Url::parse(value).map_err(|_| anyhow::anyhow!("invalid Redis URL"))?;
+            ensure!(
+                matches!(value.scheme(), "redis" | "rediss"),
+                "Redis URL must use redis or rediss"
+            );
         }
         ensure!(
             (3..=20).contains(&self.login_max_failures),

@@ -11,7 +11,7 @@
 - 默认不要求邮箱验证，也不需要 SMTP。注册邮箱不等于已经验证邮箱。
 - 新建/修改密码至少 15 个字符、最多 1024 字节；拒绝简单重复口令，允许长口令与 Unicode。
   已有密码继续可登录，不会在升级时改写。密码采用 Argon2，并限制并行计算数量。
-- 数据库保存限流与验证状态，多进程共享。登录按账户及 IP 限制，默认六次失败后等待
+- Redis 保存高频限流与冷却计数，使用带 TTL 的原子脚本；一次性验证证明和凭据仍保存在 PostgreSQL。登录按账户及 IP 限制，默认六次失败后等待
   15 分钟；认证入口另有每 IP 每分钟 90 次总限制。超限返回 429 和 Retry-After。
   图形验证码不是 DDoS 防护，公网入口仍可按部署需求配置连接数/流量限制。
 - 浏览器仅使用 HttpOnly、SameSite=Strict、host-only Cookie；HTTPS 使用 Secure 和
@@ -97,6 +97,7 @@ Bearer/PAT 协议继续兼容，不增加图形验证码到 CLI。
 ```bash
 export OSTOOL_TEST_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:5432/ostool_tests
 export RUST_TEST_THREADS=4
+export OSTOOL_TEST_REDIS_URL=redis://127.0.0.1:6379/0
 cargo test -p ostool-server
 cargo test -p ostool-server --test security_postgres --test auth_postgres \
   --test account_postgres --test audit_postgres -- --ignored
@@ -118,3 +119,23 @@ IP 网段使用 ipnet，验证器二维码使用 qrcode，SMTP 使用 lettre。�
 设计依据包括 [OWASP 认证建议](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html)、
 [OWASP 会话建议](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)
 及 [RFC 6238](https://www.rfc-editor.org/rfc/rfc6238)。
+
+## Redis 与持久账号数据
+
+公网版新增必填 `OSTOOL_REDIS_URL`，可设置 `OSTOOL_REDIS_PREFIX` 区分应用。
+连接串只在服务启动时读取，不发送到浏览器，也不写回 TOML。Redis 启动连接失败会阻止
+公网服务启动；运行中限流命令失败时验证操作返回 503，不降级为内存或跳过检查。
+本地版不连接 Redis，继续直接使用 PostgreSQL 和匿名板卡接口。
+
+Redis 的用途是登录失败窗口、认证入口流量、验证码签发频率、MFA 尝试节流和邮件发送冷却。
+用户、OAuth 会话、PAT、凭据版本、邮箱验证、密码重置和审计仍以 PostgreSQL 为准。
+撤销权限不会依赖可被淘汰的缓存。Redis Lua 原子操作同时设置计数与期限，
+被限流的请求不会延长锁定窗口。键包含数据库/schema 的命名空间和摘要，不暴露邮箱。
+
+部署 Redis 时绑定私有接口，配置访问凭据/ACL，远程连接使用 TLS；
+为安全计数使用 `maxmemory-policy noeviction` 并分配适当容量。需要在 Redis 重启后
+保留锁定窗口时启用 AOF。Redis 全量清空会重置尚未到期的限流计数。
+一键开发脚本在公网模式下自动启动仅绑定回环的 Redis 7 容器，并启用 AOF 和 noeviction。
+服务状态可在仪表盘查看；`stop` 会关闭对应开发实例的 Redis，`start` 保留其数据。
+
+数据结构及站点配置见 [站点与数据结构说明](site-and-data.md)。

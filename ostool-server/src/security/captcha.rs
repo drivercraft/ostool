@@ -65,7 +65,7 @@ async fn create(
 ) -> Result<Json<Challenge>, ApiError> {
     let config = state.config.read().await.security.clone();
     store::limit(
-        state.database.pool(),
+        &state.security_cache,
         "captcha",
         &format!("{}:{}", client.ip, query.action.name()),
         20,

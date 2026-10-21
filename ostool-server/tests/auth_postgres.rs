@@ -41,6 +41,9 @@ async fn call(
         } else {
             ostool_server::security::captcha::HumanAction::Login
         };
+        if path.ends_with("/register") {
+            body["legal"] = json!({"accepted":true,"terms_version":1,"privacy_version":1});
+        }
         body["verification"] =
             test_security::proof(TEST_DATABASE.get().unwrap(), action, &client).await;
     }
@@ -144,6 +147,8 @@ async fn registration_roles_revocation_and_inventory_restart() {
         disabled: false,
     };
     repository.write_board(&board).await.unwrap();
+    config.security.redis_url =
+        Some(std::env::var("OSTOOL_TEST_REDIS_URL").expect("disposable Redis required"));
     let state = build_app_state(
         dir.path().join("config.toml"),
         config.clone(),

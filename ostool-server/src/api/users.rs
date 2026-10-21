@@ -19,6 +19,8 @@ pub struct Role {
     pub description: String,
     pub administrator: bool,
     pub builtin: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ManagedUser {
@@ -28,6 +30,12 @@ pub struct ManagedUser {
     pub role_id: String,
     pub disabled: bool,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub email_verified_at: Option<DateTime<Utc>>,
+    pub last_login_at: Option<DateTime<Utc>>,
+    pub last_login_ip: Option<String>,
+    pub password_changed_at: DateTime<Utc>,
+    pub mfa_enabled: bool,
 }
 #[derive(Deserialize)]
 pub struct UserInput {
@@ -73,7 +81,7 @@ fn sql_error(error: sqlx::Error) -> ApiError {
 
 pub async fn list_users(State(state): State<AppState>) -> Result<Json<Vec<ManagedUser>>, ApiError> {
     let db = &state.database;
-    let rows = sqlx::query("SELECT id,email,display_name,role_id,disabled,created_at FROM users ORDER BY created_at,id")
+    let rows = sqlx::query("SELECT u.*,EXISTS(SELECT 1 FROM mfa_credentials m WHERE m.user_id=u.id) AS mfa_enabled FROM users u ORDER BY created_at,id")
         .fetch_all(db.pool()).await.map_err(sql_error)?;
     rows.iter()
         .map(|r| {
@@ -84,6 +92,12 @@ pub async fn list_users(State(state): State<AppState>) -> Result<Json<Vec<Manage
                 role_id: r.try_get("role_id")?,
                 disabled: r.try_get("disabled")?,
                 created_at: r.try_get("created_at")?,
+                updated_at: r.try_get("updated_at")?,
+                email_verified_at: r.try_get("email_verified_at")?,
+                last_login_at: r.try_get("last_login_at")?,
+                last_login_ip: r.try_get("last_login_ip")?,
+                password_changed_at: r.try_get("password_changed_at")?,
+                mfa_enabled: r.try_get("mfa_enabled")?,
             })
         })
         .collect::<Result<Vec<_>, sqlx::Error>>()
@@ -104,6 +118,8 @@ pub async fn list_roles(State(state): State<AppState>) -> Result<Json<Vec<Role>>
                 description: r.try_get("description")?,
                 administrator: r.try_get("administrator")?,
                 builtin: r.try_get("builtin")?,
+                created_at: r.try_get("created_at")?,
+                updated_at: r.try_get("updated_at")?,
             })
         })
         .collect::<Result<Vec<_>, sqlx::Error>>()
@@ -317,6 +333,27 @@ async fn delete_role(
 pub async fn deployment(State(state): State<AppState>) -> Json<serde_json::Value> {
     let config = state.config.read().await;
     let public = config.edition.is_public();
+    let redis_connected = match &state.security_cache {
+        Some(cache) => cache.ping().await.is_ok(),
+        None => false,
+    };
+    let security = if public {
+        serde_json::json!({
+            "图形验证方式":config.security.captcha_provider,
+            "注册要求邮箱验证":config.security.registration_email_verification,
+            "登录失败阈值":config.security.login_max_failures,
+            "登录锁定秒数":config.security.login_lock_secs,
+            "管理员强制双重验证":config.security.require_admin_mfa,
+            "SMTP 主机":config.security.smtp_host,
+            "SMTP 端口":config.security.smtp_port,
+            "SMTP TLS":config.security.smtp_tls,
+            "发件人":config.security.smtp_from,
+            "SMTP 密码已配置":config.security.smtp_password.is_some(),
+            "双重验证加密密钥已配置":config.security.mfa_encryption_key.is_some()
+        })
+    } else {
+        serde_json::json!({})
+    };
     let persistent = "PostgreSQL";
     let mut storage = serde_json::json!({"boards":persistent,"dtbs":persistent,"ota":persistent,"configuration":"PostgreSQL（部署启动参数仍来自 TOML / .env）","active_sessions":"进程状态（重启释放，不恢复硬件连接）","artifacts":"临时文件（随租约清理）"});
     if public {
@@ -325,6 +362,6 @@ pub async fn deployment(State(state): State<AppState>) -> Json<serde_json::Value
         }
     }
     Json(
-        serde_json::json!({"edition":config.edition,"database_connected":true,"auth_enabled":public,"allow_registration":public&&config.auth.allow_registration,"public_base_url":config.auth.public_base_url,"access_token_ttl_secs":config.auth.access_token_ttl_secs,"storage":storage}),
+        serde_json::json!({"edition":config.edition,"database_connected":true,"redis_connected":redis_connected,"security":security,"auth_enabled":public,"allow_registration":public&&config.auth.allow_registration,"public_base_url":config.auth.public_base_url,"access_token_ttl_secs":config.auth.access_token_ttl_secs,"storage":storage}),
     )
 }

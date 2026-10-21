@@ -547,6 +547,7 @@ fn intent(method: &Method, path: &str, payload: &Value) -> Option<Intent> {
         ("roles", _, "GET") => ("role.view", "查看角色信息"),
         ("server-config", _, "GET") => ("settings.view", "查看系统设置"),
         ("tftp", _, "GET") => ("tftp.view", "查看 TFTP 配置"),
+        ("site-settings", _, _) => ("system.site.update", "更新站点与协议配置"),
         ("auth", Some("login"), _) if path.starts_with("/api/v1/admin/") => {
             ("auth.admin_login", "管理员登录")
         }

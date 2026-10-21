@@ -22,6 +22,7 @@
 
 - 服务器测试需要独立的 PostgreSQL，设置 `OSTOOL_TEST_DATABASE_URL` 和
   `RUST_TEST_THREADS=4` 后优先运行 `cargo test -p ostool-server`；禁止使用生产数据库。
+- 公网身份集成测试还需要一次性 Redis，设置 OSTOOL_TEST_REDIS_URL；不得连接生产 Redis。
 - 注意：该 crate 的 `build.rs` 会触发 `pnpm install --frozen-lockfile` 和
   `pnpm run build`，依赖 Node.js 和 pnpm，并会在 Cargo target 目录下生成 web 依赖和
   构建输出。工具不可用时，说明跳过了该检查，不要通过改变工具来源或提交生成产物来
