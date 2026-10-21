@@ -7,7 +7,9 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
 } from "./ui/dropdown-menu";
-export function SiteThemeMenu() {
+export function SiteThemeMenu({
+  label = "切换网站主题",
+}: { label?: string } = {}) {
   const { theme, resolvedTheme } = useTheme();
   const Icon =
     theme === "system" ? Monitor : resolvedTheme === "dark" ? Moon : Sun;
@@ -18,7 +20,7 @@ export function SiteThemeMenu() {
           size="icon"
           variant="ghost"
           className="site-theme-button"
-          aria-label="切换网站主题"
+          aria-label={label}
         >
           <Icon size={18} />
         </Button>

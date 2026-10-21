@@ -1,3 +1,5 @@
+import { accessToken, loginUrl } from "@/auth-session";
+import AdminLogin from "./pages/AdminLogin";
 import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import {
   BrowserRouter,
@@ -63,6 +65,7 @@ export default function App() {
 }
 function AdminEntry() {
   const config = useEdition();
+  const loginPage = /^\/admin\/login\/?$/.test(window.location.pathname);
   const [gate, setGate] = useState<"checking" | "allowed" | "denied" | "error">(
     "checking",
   );
@@ -72,13 +75,16 @@ function AdminEntry() {
     let active = true;
     (async () => {
       if (config.edition === "local") {
+        if (loginPage) {
+          window.location.replace("/admin/overview");
+          return;
+        }
         if (active) setGate("allowed");
         return;
       }
-      if (!localStorage.getItem("ostool.access_token")) {
-        window.location.assign(
-          `/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`,
-        );
+      if (loginPage) return;
+      if (!accessToken("admin")) {
+        window.location.replace(loginUrl("admin"));
         return;
       }
       const user = await api.me();
@@ -95,7 +101,8 @@ function AdminEntry() {
     return () => {
       active = false;
     };
-  }, [config]);
+  }, [config, loginPage]);
+  if (loginPage && config.edition === "public") return <AdminLogin />;
   if (gate === "checking")
     return (
       <div className="admin-gate">
@@ -111,7 +118,7 @@ function AdminEntry() {
             : message}
         </Notice>
         <a href="/account">个人中心</a>
-        <a href="/login">重新登录</a>
+        <a href="/admin/login">重新登录后台</a>
       </div>
     );
   return <AdminConsole user={currentUser} />;

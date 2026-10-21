@@ -29,9 +29,15 @@ test("registration, member/admin access, user/role events and settings navigatio
   await expect(page.getByRole("heading", { name: "当前账号" })).toBeVisible();
   await page.goto(`${base}/admin/users`);
   await expect(
-    page.getByText("你的账号没有管理后台权限，请联系管理员分配角色。"),
+    page.getByRole("heading", { name: "管理后台登录" }),
   ).toBeVisible();
-  await page.goto(`${base}/login?redirect=/admin/overview`);
+  await page.getByLabel("邮箱", { exact: true }).fill(email);
+  await page.getByLabel("密码", { exact: true }).fill("browser-password-123");
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await expect(
+    page.getByText("该账号没有管理后台权限", { exact: true }),
+  ).toBeVisible();
+  await page.goto(`${base}/admin/login?redirect=/admin/overview`);
   await page
     .getByLabel("邮箱", { exact: true })
     .fill(process.env.OSTOOL_E2E_ADMIN_EMAIL ?? "admin@example.com");
@@ -53,7 +59,7 @@ test("registration, member/admin access, user/role events and settings navigatio
   await page.getByRole("button", { name: "保存角色", exact: true }).click();
   await expect(page.getByText(role, { exact: true })).toBeVisible();
   const token = await page.evaluate(() =>
-    localStorage.getItem("ostool.access_token"),
+    localStorage.getItem("ostool.admin.access_token"),
   );
   const headers = { authorization: `Bearer ${token}` };
   const boardId = `rental-board-${Date.now()}`;

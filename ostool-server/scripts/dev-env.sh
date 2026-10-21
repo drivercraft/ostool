@@ -150,7 +150,10 @@ start_server() {
         if command -v curl >/dev/null 2>&1 && curl --noproxy '*' -fsS "http://127.0.0.1:${SERVER_PORT}/" >/dev/null 2>&1; then
             log "ready: http://127.0.0.1:${SERVER_PORT}/"
             log "admin: http://127.0.0.1:${SERVER_PORT}/admin/overview"
-            if [[ "$EDITION" == "public" ]]; then log "login: http://127.0.0.1:${SERVER_PORT}/login"; fi
+            if [[ "$EDITION" == "public" ]]; then
+                log "website login: http://127.0.0.1:${SERVER_PORT}/login"
+                log "admin login: http://127.0.0.1:${SERVER_PORT}/admin/login"
+            fi
             return
         fi
         sleep 1

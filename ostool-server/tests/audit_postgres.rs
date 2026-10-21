@@ -126,6 +126,70 @@ async fn complete_audit_contract_with_real_postgres() {
     assert_eq!(
         call(
             &app,
+            "POST",
+            "/api/v1/admin/auth/login",
+            None,
+            json!({"email":"member@audit.test","password":"member-password-NEVER_COPY_PASSWORD"})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, backend_grant) = call(
+        &app,
+        "POST",
+        "/api/v1/admin/auth/login",
+        None,
+        json!({"email":"admin@audit.test","password":"audit-admin-password-NEVER_COPY_PASSWORD"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(backend_grant["access_token"], grant["access_token"]);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM oauth_sessions WHERE client_id='admin-web'"
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap(),
+        1
+    );
+    let logout = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/oauth/revoke")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    url::form_urlencoded::Serializer::new(String::new())
+                        .append_pair("token", backend_grant["refresh_token"].as_str().unwrap())
+                        .finish(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(logout.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        call(&app, "GET", "/api/v1/auth/me", Some(admin), Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert!(
+        state
+            .database
+            .as_ref()
+            .unwrap()
+            .authenticate_token(backend_grant["access_token"].as_str().unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        call(
+            &app,
             "GET",
             "/api/v1/admin/audits",
             Some(member),
@@ -358,6 +422,8 @@ async fn complete_audit_contract_with_real_postgres() {
         "NEVER_COPY_OTA_ERROR",
         admin,
         grant["refresh_token"].as_str().unwrap(),
+        backend_grant["access_token"].as_str().unwrap(),
+        backend_grant["refresh_token"].as_str().unwrap(),
     ] {
         assert!(
             !serialized.contains(secret),
@@ -435,6 +501,7 @@ async fn complete_audit_contract_with_real_postgres() {
     .await
     .unwrap();
     let local_app = build_router(local.clone());
+    assert_eq!(call(&local_app,"POST","/api/v1/admin/auth/login",None,json!({"email":"admin@audit.test","password":"audit-admin-password-NEVER_COPY_PASSWORD"})).await.0,StatusCode::NOT_FOUND);
     assert_eq!(
         call(&local_app, "GET", "/api/v1/admin/audits", None, Value::Null)
             .await

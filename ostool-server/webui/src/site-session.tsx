@@ -35,6 +35,13 @@ export function SiteSessionProvider({ children }: { children: ReactNode }) {
         setSession({ checking: false, error: "" });
         return;
       }
+      // An initial sign-in stays pending until its identity loads; token refresh
+      // for an existing user preserves the mounted editing page.
+      setSession((previous) => ({
+        ...previous,
+        checking: !previous.user,
+        error: "",
+      }));
       try {
         const user = await api.me();
         if (active && current === generation) {

@@ -339,7 +339,7 @@ function AccountMenu({ user, menus }: { user?: AuthUser; menus: TopbarMenus }) {
                 void api
                   .logout()
                   .catch(() => {})
-                  .finally(() => window.location.assign("/login"));
+                  .finally(() => window.location.assign("/admin/login"));
               }}
             >
               <LogOut />

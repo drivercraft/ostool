@@ -553,6 +553,9 @@ fn intent(method: &Method, path: &str, payload: &Value) -> Option<Intent> {
         ("roles", _, "GET") => ("role.view", "查看角色信息"),
         ("server-config", _, "GET") => ("settings.view", "查看系统设置"),
         ("tftp", _, "GET") => ("tftp.view", "查看 TFTP 配置"),
+        ("auth", Some("login"), _) if path.starts_with("/api/v1/admin/") => {
+            ("auth.admin_login", "管理员登录")
+        }
         ("auth", Some("login"), _) => ("auth.login", "用户登录"),
         ("auth", Some("register"), _) => ("auth.register", "用户注册"),
         ("auth", Some("device"), _) => ("auth.device.authorize", "授权 CLI 设备登录"),
@@ -826,8 +829,10 @@ async fn audited_request(state: &AppState, request: Request, next: Next) -> Resp
     {
         details["requested_name"] = json!(text(name, 256));
     }
-    if matches!(intent.action.as_str(), "auth.login" | "auth.register")
-        && let Some(email) = payload["email"].as_str()
+    if matches!(
+        intent.action.as_str(),
+        "auth.login" | "auth.admin_login" | "auth.register"
+    ) && let Some(email) = payload["email"].as_str()
     {
         details["claimed_identity"] = json!(text(email, 254));
     }

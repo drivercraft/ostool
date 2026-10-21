@@ -678,16 +678,12 @@ function Login() {
         await api.authorizeDevice(userCode);
         setMessage("设备登录已批准，可以返回 ostool CLI。");
       } else {
-        const user = await api.me();
         const redirect = query.get("redirect");
-        if (user.is_admin && redirect?.startsWith("/admin/"))
-          window.location.assign(redirect);
-        else
-          navigate(
-            redirect?.startsWith("/account") && !redirect.startsWith("//")
-              ? redirect
-              : "/account",
-          );
+        navigate(
+          redirect?.startsWith("/account") && !redirect.startsWith("//")
+            ? redirect
+            : "/account",
+        );
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "登录失败");

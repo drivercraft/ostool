@@ -1,3 +1,4 @@
+import { accessToken, loginUrl } from "@/auth-session";
 import { api, refreshAuth, isPublicEdition } from "./client";
 import { useSyncExternalStore } from "react";
 import type {
@@ -165,7 +166,7 @@ export class AdminStore {
   connect = () => {
     if (this.source) return;
     const token = isPublicEdition()
-      ? localStorage.getItem("ostool.access_token")
+      ? accessToken(this.member ? "website" : "admin")
       : null;
     const parameters = new URLSearchParams();
     if (token) parameters.set("access_token", token);
@@ -196,12 +197,14 @@ export class AdminStore {
         .then(() => api.me())
         .then((user) => {
           if (!this.member && !user.is_admin) {
-            window.location.assign("/account");
+            window.location.assign("/admin/login");
             return;
           }
           this.restart();
         })
-        .catch(() => window.location.assign("/login"));
+        .catch(() =>
+          window.location.assign(loginUrl(this.member ? "website" : "admin")),
+        );
     });
     this.source.onopen = () => {
       if (this.source !== source) return;

@@ -63,7 +63,10 @@ use crate::{
         service::build_tftp_manager,
         status::resolve_interface_ipv4,
     },
-    web::{serve_admin_asset, serve_admin_history, serve_admin_index},
+    web::{
+        serve_admin_asset, serve_admin_history, serve_admin_index, serve_site_history,
+        serve_site_index,
+    },
 };
 
 const DTB_UPLOAD_MAX_MIB: u32 = 10;
@@ -86,23 +89,24 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/admin/power-actions/{id}",
             get(crate::admin_power::get),
         )
-        .route("/", get(serve_admin_index))
+        .route("/", get(serve_site_index))
         .route("/admin", get(serve_admin_index))
         .route("/admin/", get(serve_admin_index))
         .route("/admin/assets/{*path}", get(serve_admin_asset))
+        .route("/assets/{*path}", get(serve_admin_asset))
         .route("/admin/{*path}", get(serve_admin_history))
-        .route("/register", get(serve_admin_index))
-        .route("/account", get(serve_admin_index))
-        .route("/account/{*path}", get(serve_admin_history))
-        .route("/login", get(serve_admin_index))
-        .route("/login/", get(serve_admin_index))
-        .route("/login/{*path}", get(serve_admin_history))
-        .route("/devices", get(serve_admin_index))
-        .route("/devices/{*path}", get(serve_admin_history))
-        .route("/docs", get(serve_admin_index))
-        .route("/docs/{*path}", get(serve_admin_history))
-        .route("/about", get(serve_admin_index))
-        .route("/about/{*path}", get(serve_admin_history))
+        .route("/register", get(serve_site_index))
+        .route("/account", get(serve_site_index))
+        .route("/account/{*path}", get(serve_site_history))
+        .route("/login", get(serve_site_index))
+        .route("/login/", get(serve_site_index))
+        .route("/login/{*path}", get(serve_site_history))
+        .route("/devices", get(serve_site_index))
+        .route("/devices/{*path}", get(serve_site_history))
+        .route("/docs", get(serve_site_index))
+        .route("/docs/{*path}", get(serve_site_history))
+        .route("/about", get(serve_site_index))
+        .route("/about/{*path}", get(serve_site_history))
         .route(
             "/boot/sessions/{session_id}/{*path}",
             get(get_http_boot_file),
@@ -3533,7 +3537,50 @@ mod tests {
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let body = String::from_utf8(body.to_vec()).unwrap();
-        assert!(body.contains("ostool-server 管理台"));
+        assert!(body.contains("ostool · 管理后台"));
+        assert!(!body.contains("开发板协作平台"));
+    }
+
+    #[tokio::test]
+    async fn website_and_admin_documents_have_independent_entries() {
+        let app = test_router().await;
+        let mut documents = Vec::new();
+        for path in [
+            "/",
+            "/devices",
+            "/account/profile",
+            "/login",
+            "/admin/login",
+            "/admin/boards",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            let body = String::from_utf8(
+                to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap()
+                    .to_vec(),
+            )
+            .unwrap();
+            if path.starts_with("/admin/") {
+                assert!(body.contains("ostool · 管理后台"));
+                assert!(body.contains("/assets/admin-"));
+                assert!(!body.contains("/assets/website-"));
+            } else {
+                assert!(body.contains("开发板协作平台"));
+                assert!(!body.contains("管理后台"));
+                assert!(body.contains("/assets/website-"));
+                assert!(!body.contains("/assets/admin-"));
+            }
+            documents.push(body);
+        }
+        assert_eq!(documents[0], documents[1]);
+        assert_ne!(documents[0], documents[4]);
     }
 
     #[tokio::test]

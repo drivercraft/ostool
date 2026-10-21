@@ -281,7 +281,7 @@ The local/public database containers default to `ostool-server-dev-local-postgre
 and `ostool-server-dev-public-postgres`, with ports 54328 and 54329 respectively.
 The schema and persistence code are identical; deploy either edition against the
 same database URL/schema to keep the same data when changing edition.
-Only public edition has `/login`, with bootstrap defaults `admin@example.com` /
+Only public edition has website `/login` and backend `/admin/login`, with bootstrap defaults `admin@example.com` /
 `admin-password-123`. Override `OSTOOL_ADMIN_EMAIL`, `OSTOOL_ADMIN_PASSWORD`,
 `OSTOOL_DEV_PG_PORT`, or `OSTOOL_DEV_SERVER_PORT` before starting as needed.
 The script does not read the repository `.env`, modify systemd or touch `/etc`.
@@ -409,6 +409,23 @@ opens the personal workspace for members and administrators alike. Its avatar
 menu links to profile, security, rentals and applications; administrators also
 get an explicit management-console link. Light/dark/system theme preferences
 are stored independently for the website and console.
+
+The website and console are independent HTML/JavaScript entries, rather than a
+single application that chooses its surface after loading. Website pages use
+`index.html`; `/admin/*` uses `admin/index.html`. Each has its own initial document
+title and login screen. `/login` always enters the website's `/account` workspace;
+backend login uses `/admin/login` and `POST /api/v1/admin/auth/login`, which rejects
+non-administrators. Browser access/refresh credentials are stored separately;
+logging into or out of one surface does not sign into or out of the other.
+The account database, role checks and CLI authentication remain shared. Existing
+website credentials are retained; upgrading requires a separate backend login.
+Local edition continues to open the console without authentication.
+
+`pnpm --dir ostool-server/webui build` builds both entries together. A prebuilt
+`OSTOOL_SERVER_WEB_DIST_DIR` must contain both `index.html` and `admin/index.html`,
+plus `assets/`. Vite development serves the website at `/` and the console at
+`/admin/`, matching Rust routing. Deployment proxies must forward `/assets/*`
+as well as website, backend, API, OAuth, WebSocket and SSE routes to the server.
 
 Members can edit their name/email (email changes require their password), change
 password, manage CLI personal access tokens, view their own rentals and submit

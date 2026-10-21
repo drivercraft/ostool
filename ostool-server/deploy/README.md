@@ -4,6 +4,13 @@ Build once with `cargo build --release -p ostool-server`. The React bundle is
 embedded by the build script; no domain, database URL or password belongs in
 `VITE_*` variables. The same binary can run on different domains.
 
+The binary embeds separate website and console entries. Website login is
+`/login`; administrator login is `/admin/login`. Both use the same PostgreSQL
+accounts with separate browser sessions, so one login/logout does not affect the
+other. The proxy must forward `/assets/*` as well as `/admin/*` and website routes;
+the Caddy example proxies all of them. Custom prebuilt frontend directories must
+contain `index.html`, `admin/index.html` and `assets/`.
+
 Both editions require PostgreSQL and share the same data schema. The default
 local edition has no authentication or user/rental management. For public deployment, explicitly set
 `OSTOOL_EDITION=public`; the server enforces authentication and requires

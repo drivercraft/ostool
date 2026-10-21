@@ -66,6 +66,30 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("registration", () => {
+  it("keeps the account route pending while a newly saved login identity loads", async () => {
+    let finish!: (value: unknown) => void;
+    mocks.me.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    render(<PublicApp />);
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText("邮箱"), "member@test.local");
+    await user.type(screen.getByLabelText("密码"), "member-password-123");
+    await user.click(screen.getByRole("button", { name: "登录" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/account"));
+    expect(screen.queryByRole("heading", { name: "当前账号" })).toBeNull();
+    finish({
+      id: "member",
+      email: "member@test.local",
+      display_name: "Member",
+      is_admin: false,
+    });
+    await screen.findByRole("heading", { name: "当前账号" });
+    expect(window.location.pathname).toBe("/account");
+  });
   it("keeps administrators in the public workspace after a normal website login", async () => {
     mocks.me.mockResolvedValue({
       id: "admin",

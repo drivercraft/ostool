@@ -109,6 +109,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/auth/config", get(auth_config))
         .route("/api/v1/auth/register", post(register))
         .route("/api/v1/auth/login", post(login))
+        .route("/api/v1/admin/auth/login", post(admin_login))
         .route("/api/v1/auth/me", get(me))
         .route("/api/v1/auth/device/authorize", post(authorize_device))
         .route("/api/v1/auth/device/{user_code}", get(device_status))
@@ -133,6 +134,7 @@ pub async fn middleware(
         if path.starts_with("/oauth/")
             || (path.starts_with("/api/v1/auth/") && path != "/api/v1/auth/config")
             || [
+                "/api/v1/admin/auth",
                 "/api/v1/admin/users",
                 "/api/v1/admin/roles",
                 "/api/v1/admin/rentals",
@@ -226,6 +228,8 @@ fn is_public_path(path: &str) -> bool {
         || path.starts_with("/api/v1/loaders/")
         || path == "/healthz"
         || path.starts_with("/admin/assets/")
+        || path.starts_with("/assets/")
+        || path == "/api/v1/admin/auth/login"
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
@@ -484,6 +488,27 @@ async fn login(
         .ok_or_else(|| ApiError::unauthorized("email or password is incorrect"))?;
     let grant = database
         .issue_grant(user, "web", "board:operate offline_access", &config)
+        .await?;
+    Ok((
+        Extension(CurrentUser(grant.user.clone())),
+        Json(token_response(grant)),
+    ))
+}
+
+async fn admin_login(
+    State(state): State<AppState>,
+    Json(request): Json<LoginRequest>,
+) -> Result<(Extension<CurrentUser>, Json<TokenResponse>), ApiError> {
+    let (database, config) = database(&state).await?;
+    let user = database
+        .authenticate_password(&request.email, &request.password)
+        .await?
+        .ok_or_else(|| ApiError::unauthorized("邮箱或密码不正确"))?;
+    if !user.is_admin {
+        return Err(ApiError::forbidden("该账号没有管理后台权限"));
+    }
+    let grant = database
+        .issue_grant(user, "admin-web", "board:operate offline_access", &config)
         .await?;
     Ok((
         Extension(CurrentUser(grant.user.clone())),

@@ -63,7 +63,7 @@ describe("edition navigation and authentication", () => {
       enabled: true,
       database_available: true,
     });
-    localStorage.setItem("ostool.access_token", "member");
+    localStorage.setItem("ostool.admin.access_token", "member");
     mocks.me.mockResolvedValue({ is_admin: false });
     render(<App />);
     await screen.findByText("你的账号没有管理后台权限，请联系管理员分配角色。");
@@ -75,7 +75,7 @@ describe("edition navigation and authentication", () => {
       enabled: true,
       database_available: true,
     });
-    localStorage.setItem("ostool.access_token", "admin");
+    localStorage.setItem("ostool.admin.access_token", "admin");
     mocks.me.mockResolvedValue({ is_admin: true });
     render(<App />);
     await screen.findByRole("link", { name: "租赁列表" });

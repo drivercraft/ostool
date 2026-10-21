@@ -1,3 +1,4 @@
+import { accessToken, refreshToken, authKeys } from "@/auth-session";
 import type { UserInput, RoleInput } from "@/types/api";
 import type {
   AdminBoardUpsertRequest,
@@ -41,7 +42,7 @@ let refreshing: Promise<void> | undefined;
 export async function refreshAuth() {
   if (!refreshing)
     refreshing = (async () => {
-      const refresh = localStorage.getItem("ostool.refresh_token");
+      const refresh = refreshToken();
       if (!refresh) throw new Error("请重新登录");
       const response = await fetch("/oauth/token", {
         method: "POST",
@@ -77,9 +78,9 @@ async function requestResponse(
   let response = await fetch(path, {
     ...options,
     headers: (() => {
-      const accessToken = localStorage.getItem("ostool.access_token");
-      if (isPublicEdition() && accessToken)
-        headers.set("authorization", `Bearer ${accessToken}`);
+      const credential = accessToken();
+      if (isPublicEdition() && credential)
+        headers.set("authorization", `Bearer ${credential}`);
       return headers;
     })(),
     body,
@@ -90,14 +91,15 @@ async function requestResponse(
   if (
     isPublicEdition() &&
     response.status === 401 &&
-    localStorage.getItem("ostool.refresh_token") &&
-    !["/api/v1/auth/login", "/api/v1/auth/register"].includes(path)
+    refreshToken() &&
+    ![
+      "/api/v1/auth/login",
+      "/api/v1/auth/register",
+      "/api/v1/admin/auth/login",
+    ].includes(path)
   ) {
     await refreshAuth();
-    headers.set(
-      "authorization",
-      `Bearer ${localStorage.getItem("ostool.access_token")}`,
-    );
+    headers.set("authorization", `Bearer ${accessToken()}`);
     response = await fetch(path, { ...options, headers, body });
   }
   if (!response.ok) {
@@ -241,7 +243,7 @@ export const api = {
     return request<void>(`/api/v1/admin/roles/${id}`, { method: "DELETE" });
   },
   async logout() {
-    const refresh = localStorage.getItem("ostool.refresh_token");
+    const refresh = refreshToken();
     try {
       if (refresh)
         await fetch("/oauth/revoke", {
@@ -252,6 +254,12 @@ export const api = {
     } finally {
       clearAuthToken();
     }
+  },
+  adminLogin(email: string, password: string) {
+    return request<AuthToken>("/api/v1/admin/auth/login", {
+      method: "POST",
+      bodyJson: { email, password },
+    });
   },
   login(email: string, password: string) {
     return request<AuthToken>("/api/v1/auth/login", {
@@ -486,13 +494,13 @@ export interface PersonalAccessToken {
 }
 
 export function saveAuthToken(token: AuthToken) {
-  localStorage.setItem("ostool.access_token", token.access_token);
-  localStorage.setItem("ostool.refresh_token", token.refresh_token);
-  window.dispatchEvent(new Event("ostool:auth"));
+  localStorage.setItem(authKeys().access, token.access_token);
+  localStorage.setItem(authKeys().refresh, token.refresh_token);
+  window.dispatchEvent(new Event(authKeys().event));
 }
 
 export function clearAuthToken() {
-  localStorage.removeItem("ostool.access_token");
-  localStorage.removeItem("ostool.refresh_token");
-  window.dispatchEvent(new Event("ostool:auth"));
+  localStorage.removeItem(authKeys().access);
+  localStorage.removeItem(authKeys().refresh);
+  window.dispatchEvent(new Event(authKeys().event));
 }

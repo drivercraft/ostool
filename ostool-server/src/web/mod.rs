@@ -12,11 +12,19 @@ use rust_embed::RustEmbed;
 struct WebUiAssets;
 
 pub async fn serve_admin_index() -> Response {
-    index_response()
+    asset_response("admin/index.html".into())
 }
 
 pub async fn serve_admin_history(Path(_path): Path<String>) -> Response {
-    index_response()
+    serve_admin_index().await
+}
+
+pub async fn serve_site_index() -> Response {
+    asset_response("index.html".into())
+}
+
+pub async fn serve_site_history(Path(_path): Path<String>) -> Response {
+    serve_site_index().await
 }
 
 pub async fn serve_admin_asset(Path(path): Path<String>) -> Response {
@@ -28,10 +36,6 @@ pub(crate) fn first_asset_path() -> Option<String> {
     WebUiAssets::iter()
         .map(|name| name.to_string())
         .find(|name| name.starts_with("assets/"))
-}
-
-fn index_response() -> Response {
-    asset_response("index.html".to_string())
 }
 
 fn asset_response(path: String) -> Response {
@@ -48,7 +52,7 @@ fn asset_response(path: String) -> Response {
     );
     response.headers_mut().insert(
         header::CACHE_CONTROL,
-        HeaderValue::from_static(if path == "index.html" {
+        HeaderValue::from_static(if path == "index.html" || path == "admin/index.html" {
             "no-store"
         } else {
             "public, max-age=31536000, immutable"

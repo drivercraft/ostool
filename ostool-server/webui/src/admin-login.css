@@ -1,0 +1,99 @@
+.admin-login-page {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--muted);
+  color: var(--foreground);
+  padding: 0 24px;
+  font-size: 1rem;
+}
+.admin-login-header {
+  width: 100%;
+  max-width: 1280px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 0;
+}
+.admin-login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+  color: inherit;
+}
+.admin-login-brand strong {
+  font-size: 22px;
+  letter-spacing: -0.04em;
+}
+.admin-login-brand > span:last-child {
+  border-left: 1px solid var(--border);
+  padding-left: 12px;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+}
+.admin-login-card {
+  display: grid;
+  gap: 20px;
+  margin: auto 0;
+  width: min(100%, 430px);
+  padding: 36px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: 0 15px 50px #152c4510;
+}
+.admin-login-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--primary);
+}
+.admin-login-card h1 {
+  margin: 0;
+  font-size: 24px;
+}
+.admin-login-card p {
+  margin: -10px 0 2px;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+.admin-login-card :is(input, [data-slot="button"], [data-slot="field-label"]) {
+  font-size: 1rem;
+}
+.admin-login-card :is(input, [data-slot="button"]) {
+  min-height: 42px;
+}
+.admin-login-site {
+  text-align: center;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+.admin-login-site:hover {
+  color: var(--primary);
+}
+.admin-login-page > footer {
+  padding: 28px 0;
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+}
+@media (max-width: 480px) {
+  .admin-login-page {
+    padding: 0 16px;
+  }
+  .admin-login-card {
+    padding: 24px;
+  }
+  .admin-login-header {
+    padding: 20px 0;
+  }
+}

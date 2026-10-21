@@ -10,6 +10,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed={EMBED_WEB_DIR_ENV}");
     for path in [
         "webui/index.html",
+        "webui/admin",
         "webui/package.json",
         "webui/components.json",
         "webui/pnpm-lock.yaml",
@@ -39,6 +40,10 @@ fn main() {
                 index_html.display()
             );
         }
+        assert!(
+            existing_dist_dir.join("admin/index.html").exists(),
+            "{EMBED_WEB_DIR_ENV} must include admin/index.html as well as index.html"
+        );
         println!(
             "cargo:rustc-env={EMBED_WEB_DIR_ENV}={}",
             existing_dist_dir.display()
@@ -77,6 +82,10 @@ fn main() {
             index_html.display()
         );
     }
+    assert!(
+        web_dist_dir.join("admin/index.html").exists(),
+        "admin frontend entry was not produced"
+    );
 }
 
 fn recreate_dir(dir: &Path) {
