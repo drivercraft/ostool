@@ -68,7 +68,7 @@
   position: relative;
   padding: 8px 14px;
   color: var(--site-muted);
-  font-size: 14px;
+  font-size: 1rem;
 }
 .site-root .site-nav > a.active {
   color: var(--site-accent);
@@ -141,7 +141,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 0.875rem;
   font-weight: 600;
 }
 .site-user-copy small {
@@ -212,7 +212,7 @@
 }
 .member-identity strong {
   display: block;
-  font-size: 14px;
+  font-size: 1rem;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -222,7 +222,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--site-muted);
-  font-size: 11px;
+  font-size: 0.875rem;
   margin-top: 4px;
 }
 .member-sidebar nav {
@@ -236,7 +236,7 @@
   border-radius: 7px;
   padding: 11px 14px;
   color: var(--site-muted);
-  font-size: 13px;
+  font-size: 1rem;
   text-decoration: none;
 }
 .member-sidebar nav a:hover {
@@ -248,7 +248,7 @@
   font-weight: 600;
 }
 .member-sidebar-note {
-  font-size: 11px;
+  font-size: 0.875rem;
   color: var(--site-muted);
   border-top: 1px solid var(--site-border);
   margin-top: 20px;
@@ -276,7 +276,7 @@
 .member-heading p {
   margin: 0;
   color: var(--site-muted);
-  font-size: 13px;
+  font-size: 0.875rem;
   line-height: 1.8;
 }
 .member-heading .section-label {
@@ -299,7 +299,7 @@
 .member-card p,
 .member-card .muted {
   color: var(--site-muted);
-  font-size: 13px;
+  font-size: 0.875rem;
   line-height: 1.7;
 }
 .member-metrics {
@@ -318,7 +318,7 @@
   color: var(--site-text);
 }
 .member-metrics span {
-  font-size: 12px;
+  font-size: 0.875rem;
   color: var(--site-muted);
 }
 .member-metrics strong {
@@ -327,7 +327,7 @@
   line-height: 1;
 }
 .member-metrics small {
-  font-size: 11px;
+  font-size: 0.875rem;
   color: var(--site-accent);
 }
 .member-facts {
@@ -338,12 +338,12 @@
 }
 .member-facts dt {
   color: var(--site-muted);
-  font-size: 11px;
+  font-size: 0.875rem;
   margin-bottom: 8px;
 }
 .member-facts dd {
   margin: 0;
-  font-size: 13px;
+  font-size: 1rem;
   overflow-wrap: anywhere;
 }
 .member-cli {
@@ -363,7 +363,7 @@
   padding: 14px;
 }
 .member-cli > a {
-  font-size: 12px;
+  font-size: 0.875rem;
   color: var(--site-accent);
 }
 .member-form {
@@ -426,7 +426,7 @@
   color: var(--site-text);
 }
 .member-list table {
-  font-size: 12px;
+  font-size: 1rem;
   min-width: 640px;
 }
 .member-list th {
@@ -459,7 +459,7 @@
   display: inline-flex;
   padding: 3px 8px;
   border-radius: 5px;
-  font-size: 11px;
+  font-size: 0.875rem;
   background: var(--site-bg);
   color: var(--site-muted);
   white-space: nowrap;
@@ -631,7 +631,7 @@
   .member-sidebar nav a {
     flex-shrink: 0;
     padding: 10px;
-    font-size: 12px;
+    font-size: 0.875rem;
     gap: 6px;
   }
   .member-heading {
@@ -641,7 +641,7 @@
     font-size: 22px;
   }
   .member-heading > a {
-    font-size: 12px;
+    font-size: 0.875rem;
   }
   .member-card {
     padding: 20px;

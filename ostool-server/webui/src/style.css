@@ -1188,7 +1188,7 @@
       "Noto Sans CJK SC",
       "Microsoft YaHei",
       sans-serif;
-    font-size: 14px;
+    font-size: 1rem;
   }
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]) {

@@ -67,7 +67,7 @@ test("dashboard, durable audit filters/export, discovery toolbar and shared them
     });
   });
   expect(fonts[0]).toEqual(fonts[1]);
-  expect(fonts[0].size).toBe("13px");
+  expect(fonts[0].size).toBe("16px");
 
   const reads: string[] = [];
   page.on("request", (r) => {
@@ -125,7 +125,7 @@ test("dashboard, durable audit filters/export, discovery toolbar and shared them
       ),
     }));
   expect(siteStyle).toEqual(adminStyle);
-  expect(siteStyle).toEqual({ font: "13px", icon: 16 });
+  expect(siteStyle).toEqual({ font: "16px", icon: 16 });
   await page.getByRole("menuitemradio", { name: "黑暗", exact: true }).click();
   await expect(page.locator("html")).toHaveClass(/dark/);
   await page.getByRole("button", { name: "切换网站主题", exact: true }).click();

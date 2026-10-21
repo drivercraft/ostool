@@ -16,7 +16,7 @@
     "Noto Sans CJK SC",
     "Microsoft YaHei",
     sans-serif;
-  font-size: 13px;
+  font-size: 1rem;
 }
 [data-slot="dropdown-menu-content"] [role="menuitem"],
 [data-slot="dropdown-menu-content"] [role="menuitemradio"] {
@@ -25,7 +25,7 @@
   gap: 9px;
   min-height: 34px;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 1rem;
   line-height: 1.4;
   cursor: pointer;
 }
@@ -54,8 +54,8 @@
   margin: 0;
 }
 .app-shell {
-  --admin-text-size: 13px;
-  --admin-caption-size: 11px;
+  --admin-text-size: 1rem;
+  --admin-caption-size: 0.875rem;
   font-family:
     var(--font-sans, "Geist Variable"),
     -apple-system,
@@ -67,6 +67,7 @@
   font-size: var(--admin-text-size);
 }
 .app-shell .sidebar nav a,
+.app-shell .sidebar .admin-nav-group > div a,
 .app-shell .sidebar .admin-nav-group summary {
   font-family: inherit;
   font-size: var(--admin-text-size);
@@ -85,7 +86,7 @@
 }
 .app-shell .page-panel [data-slot="table-head"] {
   font-family: inherit;
-  font-size: 12px;
+  font-size: 0.875rem;
   font-weight: 550;
 }
 .app-shell .page-panel small,
@@ -96,6 +97,28 @@
 }
 .app-shell .sidebar .admin-bottom-nav {
   padding-bottom: 14px;
+}
+/* Portals and member forms use the same readable control size as admin pages. */
+[data-slot="dialog-content"],
+[data-slot="dialog-content"]
+  :is(input, textarea, select, [data-slot="button"], [data-slot="field-label"]),
+.site-root
+  :is(
+    [data-slot="input"],
+    [data-slot="textarea"],
+    [data-slot="native-select"],
+    [data-slot="button"],
+    [data-slot="table-cell"],
+    [data-slot="field-label"]
+  ) {
+  font-size: 1rem;
+  line-height: 1.5;
+}
+.app-shell .panel-footer,
+.app-shell .listing-meta,
+.app-shell .list-pagination,
+.app-shell .list-pagination select {
+  font-size: var(--admin-caption-size);
 }
 .board-workspace {
   gap: 0;
@@ -142,7 +165,7 @@
   overflow-wrap: anywhere;
 }
 .dashboard-banner p {
-  font-size: 12px;
+  font-size: 0.875rem;
   color: var(--muted-foreground);
   margin: 5px 0 0;
 }
@@ -153,7 +176,7 @@
   gap: 7px;
   border-radius: 6px;
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: 0.875rem;
   white-space: nowrap;
 }
 .dashboard-health.healthy {
@@ -206,7 +229,7 @@ a.dashboard-metric:hover {
   align-items: center;
   gap: 9px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: 0.875rem;
 }
 .dashboard-metric-head > svg {
   margin-left: auto;
@@ -248,7 +271,7 @@ a.dashboard-metric:hover {
 }
 .dashboard-metric > small {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: 0.875rem;
   line-height: 1.7;
 }
 .dashboard-gauge {
@@ -285,13 +308,13 @@ a.dashboard-metric:hover {
   margin-bottom: 22px;
 }
 .dashboard-card h2 {
-  font-size: 14px;
+  font-size: 1rem;
   font-weight: 650;
   margin: 0;
 }
 .dashboard-card > header > span,
 .dashboard-card > header > a {
-  font-size: 11px;
+  font-size: 0.875rem;
   color: var(--muted-foreground);
 }
 .dashboard-card > header > svg {
@@ -302,7 +325,7 @@ a.dashboard-metric:hover {
   align-items: center;
   gap: 6px;
   margin-top: 18px;
-  font-size: 12px;
+  font-size: 0.875rem;
   color: var(--primary);
   text-decoration: none;
 }
@@ -316,7 +339,7 @@ a.dashboard-metric:hover {
   align-items: start;
   justify-content: space-between;
   gap: 16px;
-  font-size: 13px;
+  font-size: 1rem;
 }
 .dashboard-facts dt {
   color: var(--muted-foreground);
@@ -338,7 +361,7 @@ a.dashboard-metric:hover {
   justify-content: space-between;
   gap: 16px;
   width: 100%;
-  font-size: 11px;
+  font-size: 0.875rem;
   color: var(--muted-foreground);
 }
 .dashboard-trend svg {
@@ -381,7 +404,7 @@ a.dashboard-metric:hover {
   display: flex;
   align-items: center;
   gap: 15px;
-  font-size: 11px;
+  font-size: 0.875rem;
   color: var(--muted-foreground);
 }
 .trend-legend {
@@ -409,14 +432,14 @@ a.dashboard-metric:hover {
 .trend-range {
   justify-content: space-between;
   margin-top: 10px;
-  font-size: 10px;
+  font-size: 0.75rem;
 }
 .dashboard-empty-chart {
   height: 145px;
   display: grid;
   place-items: center;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: 0.875rem;
 }
 .dashboard-breakdown {
   display: grid;
@@ -428,7 +451,7 @@ a.dashboard-metric:hover {
   grid-template-columns: 70px 1fr 28px;
   align-items: center;
   gap: 12px;
-  font-size: 12px;
+  font-size: 0.875rem;
 }
 .dashboard-breakdown i {
   height: 8px;
@@ -475,7 +498,7 @@ a.dashboard-metric:hover {
   justify-content: space-between;
   gap: 12px;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: 0.875rem;
 }
 .audit-pagination > div {
   display: flex;
@@ -508,7 +531,7 @@ a.dashboard-metric:hover {
   max-width: 220px;
 }
 .audit-advanced > [data-slot="field"] label {
-  font-size: 11px;
+  font-size: 0.875rem;
 }
 .audit-result {
   display: inline-flex;
@@ -516,7 +539,7 @@ a.dashboard-metric:hover {
   white-space: nowrap;
   padding: 3px 8px;
   border-radius: 5px;
-  font-size: 11px;
+  font-size: 0.875rem;
 }
 .audit-result.success {
   background: #eaf7ef;
@@ -545,7 +568,7 @@ a.dashboard-metric:hover {
   max-width: min(760px, calc(100vw - 32px));
   max-height: calc(100dvh - 48px);
   overflow-y: auto;
-  font-size: 13px;
+  font-size: 0.875rem;
 }
 .audit-detail-dialog .facts {
   gap: 0;
@@ -560,7 +583,7 @@ a.dashboard-metric:hover {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--muted);
-  font-size: 12px;
+  font-size: 0.875rem;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -621,10 +644,10 @@ a.dashboard-metric:hover {
     display: none;
   }
   .dashboard-banner p {
-    font-size: 11px;
+    font-size: 0.875rem;
   }
   .dashboard-health {
-    font-size: 10px;
+    font-size: 0.75rem;
   }
   .dashboard-card {
     padding: 17px;
