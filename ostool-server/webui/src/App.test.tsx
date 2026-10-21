@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import App from "./App";
+import userEvent from "@testing-library/user-event";
 const mocks = vi.hoisted(() => ({
   config: vi.fn(),
   me: vi.fn(),
@@ -14,14 +15,31 @@ vi.mock("@/api/events", () => ({
   admin: { connect: mocks.connect, disconnect: mocks.disconnect },
   useConnection: () => "connected",
   useErrors: () => ({}),
+  useResource: () => undefined,
 }));
 vi.mock("./pages/Overview", () => ({ default: () => <div>本地设备总览</div> }));
 beforeEach(() => {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn().mockImplementation((query) => ({
+      matches: false,
+      media: query,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  );
   vi.clearAllMocks();
   localStorage.clear();
   window.history.replaceState({}, "", "/admin/overview");
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  document.documentElement.classList.remove("dark", "light");
+});
 describe("edition navigation and authentication", () => {
   it("local edition opens without login and hides user and rental modules", async () => {
     mocks.config.mockResolvedValue({
@@ -30,6 +48,8 @@ describe("edition navigation and authentication", () => {
       database_available: true,
     });
     render(<App />);
+    await screen.findByRole("button", { name: "账号菜单" });
+    await userEvent.click(screen.getByRole("button", { name: "账号菜单" }));
     await screen.findByText("本地版 · 免登录");
     expect(screen.queryByText("用户管理")).toBeNull();
     expect(screen.queryByText("租赁管理")).toBeNull();

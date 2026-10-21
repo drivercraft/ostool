@@ -289,6 +289,10 @@ saved and concurrent configuration changes are reported without overwriting them
 The workspace fills the viewport: toolbars and footer status/actions stay fixed
 while the center content scrolls. List footers provide local pagination over the
 SSE projection; editor and configuration save/cancel controls stay in the footer.
+The global titlebar shares its theme with the logo area and provides live
+operational notifications, a light/dark/system theme menu, and an account avatar
+menu. Theme selection persists in the browser. Local edition shows workspace
+actions without authentication entries; public edition exposes account/logout.
 
 A new board does not have to be saved before powering it on. Configure Custom,
 Zhongsheng relay or an existing QEMU device, then click **上电** or **下电**.

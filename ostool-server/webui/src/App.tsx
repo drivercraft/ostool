@@ -12,13 +12,13 @@ import {
   CircuitBoardIcon,
   CalendarClockIcon,
   SettingsIcon,
-  MenuIcon,
   UserCircleIcon,
-  ExternalLinkIcon,
   ChevronRightIcon,
 } from "lucide-react";
 import { EditionProvider, useEdition } from "./edition";
-import { api } from "@/api/client";
+import { api, type AuthUser } from "@/api/client";
+import { ThemeProvider } from "next-themes";
+import { AdminTopbar } from "@/components/admin-topbar";
 import { admin, useConnection, useErrors } from "@/api/events";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -45,9 +45,17 @@ const userNavigation = [
 ] as const;
 export default function App() {
   return (
-    <EditionProvider>
-      <AdminEntry />
-    </EditionProvider>
+    <ThemeProvider
+      attribute="class"
+      defaultTheme="system"
+      enableSystem
+      storageKey="ostool.admin.theme"
+      disableTransitionOnChange
+    >
+      <EditionProvider>
+        <AdminEntry />
+      </EditionProvider>
+    </ThemeProvider>
   );
 }
 function AdminEntry() {
@@ -56,6 +64,7 @@ function AdminEntry() {
     "checking",
   );
   const [message, setMessage] = useState("");
+  const [currentUser, setCurrentUser] = useState<AuthUser>();
   useEffect(() => {
     let active = true;
     (async () => {
@@ -68,7 +77,10 @@ function AdminEntry() {
         return;
       }
       const user = await api.me();
-      if (active) setGate(user.is_admin ? "allowed" : "denied");
+      if (active) {
+        setCurrentUser(user);
+        setGate(user.is_admin ? "allowed" : "denied");
+      }
     })().catch((e) => {
       if (active) {
         setGate("error");
@@ -97,9 +109,9 @@ function AdminEntry() {
         <a href="/login">重新登录</a>
       </div>
     );
-  return <AdminConsole />;
+  return <AdminConsole user={currentUser} />;
 }
-function AdminConsole() {
+function AdminConsole({ user }: { user?: AuthUser }) {
   const publicEdition = useEdition().edition === "public";
   const connection = useConnection(),
     errors = useErrors();
@@ -111,17 +123,10 @@ function AdminConsole() {
   return (
     <BrowserRouter basename="/admin">
       <div className="app-shell">
-        <header className="mobile-header">
-          <strong>ostool</strong>
-          <Button
-            variant="ghost"
-            aria-label="切换导航"
-            onClick={() => setMenu((v) => !v)}
-          >
-            <MenuIcon />
-          </Button>
-        </header>
-        <aside className={menu ? "sidebar expanded" : "sidebar"}>
+        <aside
+          id="admin-sidebar"
+          className={menu ? "sidebar expanded" : "sidebar"}
+        >
           <NavLink to="/overview" className="brand">
             <span className="logo-mark">
               <CircuitBoardIcon size={17} />
@@ -211,26 +216,11 @@ function AdminConsole() {
           </div>
         </aside>
         <main>
-          <header className="admin-topbar">
-            <div>
-              <span className="admin-breadcrumb">Workspace</span>
-              <span className="admin-separator">/</span>
-              <strong>设备管理控制台</strong>
-            </div>
-            <div className="admin-top-actions">
-              <a href="/" className="admin-site-link">
-                访问网站 <ExternalLinkIcon size={14} />
-              </a>
-              {publicEdition ? (
-                <NavLink className="admin-user-chip" to="/account">
-                  <UserCircleIcon size={17} />
-                  <span>我的账号</span>
-                </NavLink>
-              ) : (
-                <span className="admin-user-chip">本地版 · 免登录</span>
-              )}
-            </div>
-          </header>
+          <AdminTopbar
+            user={user}
+            menuOpen={menu}
+            onMenuToggle={() => setMenu((value) => !value)}
+          />
           <div className="admin-notices" aria-live="polite">
             {connection === "reconnecting" && (
               <Notice>
@@ -310,13 +300,7 @@ function AdminConsole() {
             </Suspense>
           </div>
         </main>
-        <Toaster
-          theme="light"
-          position="top-right"
-          duration={2500}
-          richColors
-          closeButton
-        />
+        <Toaster position="top-right" duration={2500} richColors closeButton />
       </div>
     </BrowserRouter>
   );

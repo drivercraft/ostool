@@ -2482,3 +2482,319 @@ body:has(.app-shell) {
     padding: 10px 12px;
   }
 }
+
+/* One fixed application frame, with a shared header/logo theme. */
+.app-shell {
+  --admin-header-height: 64px;
+  --admin-header-bg: var(--card);
+  --admin-header-fg: var(--foreground);
+  background: var(--muted);
+  color: var(--foreground);
+}
+.app-shell > .sidebar {
+  padding-top: 0;
+  background: var(--card);
+  border-right-color: var(--border);
+}
+.sidebar .brand {
+  flex: 0 0 var(--admin-header-height);
+  height: var(--admin-header-height);
+  min-height: var(--admin-header-height);
+  background: var(--admin-header-bg);
+  color: var(--admin-header-fg);
+  border-bottom-color: var(--border);
+}
+.sidebar .brand small {
+  color: var(--muted-foreground);
+}
+.admin-topbar {
+  position: relative;
+  z-index: 10;
+  flex: 0 0 var(--admin-header-height);
+  height: var(--admin-header-height);
+  padding: 0 20px;
+  border-bottom-color: var(--border);
+  background: var(--admin-header-bg);
+  color: var(--admin-header-fg);
+}
+.topbar-title-area {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.admin-topbar .topbar-page-title {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.admin-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.topbar-icon {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  color: var(--muted-foreground);
+}
+.topbar-icon:hover,
+.topbar-icon[aria-expanded="true"] {
+  color: var(--foreground);
+  background: var(--muted);
+}
+.topbar-icon > svg {
+  width: 19px;
+  height: 19px;
+}
+.topbar-badge {
+  position: absolute;
+  top: -3px;
+  right: -5px;
+  display: grid;
+  place-items: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--destructive);
+  color: white;
+  box-shadow: 0 0 0 2px var(--admin-header-bg);
+  font-size: 10px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.topbar-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--primary), #8b5cf6);
+  color: white;
+  font-size: 14px;
+  font-weight: 650;
+  box-shadow: 0 3px 8px color-mix(in oklch, var(--primary), transparent 80%);
+}
+.topbar-avatar:hover,
+.topbar-avatar[aria-expanded="true"] {
+  background: linear-gradient(135deg, var(--primary), #8b5cf6);
+  color: white;
+  filter: brightness(1.08);
+}
+.topbar-avatar > svg {
+  width: 18px;
+  height: 18px;
+}
+.topbar-nav-toggle,
+.topbar-mobile-brand {
+  display: none;
+}
+.topbar-dropdown {
+  min-width: 172px;
+  border-radius: 10px;
+  padding: 6px;
+}
+.theme-option-icon {
+  width: 15px;
+  height: 15px;
+  margin-right: 8px;
+}
+.account-dropdown {
+  width: 248px;
+}
+.account-menu-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 8px;
+  min-width: 0;
+}
+.account-menu-avatar {
+  display: grid;
+  place-items: center;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  color: var(--primary);
+  background: color-mix(in oklch, var(--primary), transparent 90%);
+}
+.account-menu-avatar svg {
+  width: 18px;
+  height: 18px;
+}
+.account-menu-card > span:last-child {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+.account-menu-card strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+.account-menu-card small {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 400;
+}
+.notification-menu {
+  width: min(360px, calc(100vw - 24px));
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+.notification-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.notification-heading strong {
+  font-size: 14px;
+}
+.notification-heading [data-slot="button"] {
+  font-size: 11px;
+}
+.notification-items {
+  max-height: min(400px, 60dvh);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.notification-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--foreground);
+  text-decoration: none;
+}
+.notification-item:last-child {
+  border-bottom: 0;
+}
+.notification-item:hover {
+  background: var(--muted);
+}
+.notification-item > span:last-child {
+  min-width: 0;
+}
+.notification-item strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.notification-item small {
+  margin-top: 5px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.notification-item-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  color: var(--warning);
+  background: color-mix(in oklch, var(--warning), transparent 90%);
+  border-radius: 8px;
+}
+.notification-empty {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 32px 20px;
+  color: var(--muted-foreground);
+}
+.notification-empty > svg {
+  width: 26px;
+  height: 26px;
+  opacity: 0.6;
+}
+.notification-empty strong {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--foreground);
+}
+.notification-empty > span {
+  font-size: 11px;
+}
+.app-shell .connection,
+.app-shell .admin-bottom-nav {
+  border-top-color: var(--border);
+}
+.app-shell .sidebar nav a.active svg {
+  color: currentColor;
+}
+.app-shell .table-frame {
+  background: var(--card);
+}
+.app-shell .editor-actions,
+.app-shell .card {
+  color: var(--foreground);
+}
+.dark {
+  --primary: oklch(0.65 0.19 259);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.62 0.17 259);
+  --sidebar-accent: oklch(0.3 0.04 259);
+  --sidebar-accent-foreground: oklch(0.8 0.12 259);
+  --success: oklch(0.72 0.14 155);
+  --warning: oklch(0.77 0.13 70);
+}
+@media (max-width: 640px) {
+  .app-shell {
+    --admin-header-height: 56px;
+  }
+  .app-shell > main {
+    height: 100%;
+  }
+  .admin-topbar {
+    padding-inline: 12px;
+  }
+  .admin-top-actions {
+    gap: 6px;
+  }
+  .topbar-title-area {
+    gap: 4px;
+  }
+  .topbar-nav-toggle {
+    display: inline-flex;
+    color: var(--muted-foreground);
+  }
+  .topbar-mobile-brand {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-left: 3px;
+    color: var(--admin-header-fg);
+    text-decoration: none;
+  }
+  .admin-topbar .topbar-page-title {
+    display: none;
+  }
+  .topbar-mobile-brand strong {
+    font-size: 17px;
+    letter-spacing: -0.04em;
+    color: inherit;
+  }
+  .topbar-mobile-brand .logo-mark {
+    width: 26px;
+    height: 26px;
+  }
+  .app-shell > .sidebar.expanded {
+    top: var(--admin-header-height);
+  }
+}

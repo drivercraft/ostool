@@ -297,7 +297,9 @@ test("local edition exposes the existing workflow without any account routes", a
   request,
 }) => {
   await page.goto("/admin/overview");
+  await page.getByRole("button", { name: "账号菜单", exact: true }).click();
   await expect(page.getByText("本地版 · 免登录")).toBeVisible();
+  await page.keyboard.press("Escape");
   await expect(
     page.getByRole("link", { name: "用户列表", exact: true }),
   ).toHaveCount(0);
@@ -442,6 +444,111 @@ test("viewport panels keep toolbar and footer fixed while tables/forms scroll", 
   ).toBe(true);
   await page.screenshot({
     path: "/tmp/ostool-fixed-editor-mobile.png",
+    fullPage: true,
+  });
+});
+
+test("titlebar shares the logo theme and provides notifications, theme and workspace menus", async ({
+  page,
+}) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.goto("/admin/boards");
+  await expect(
+    page.getByRole("heading", { name: "开发板列表", exact: true }),
+  ).toBeVisible();
+  const layout = await page.evaluate(() => {
+    const header = document.querySelector(".admin-topbar")!,
+      logo = document.querySelector(".sidebar .brand")!;
+    return {
+      headerBackground: getComputedStyle(header).backgroundColor,
+      logoBackground: getComputedStyle(logo).backgroundColor,
+      headerHeight: header.getBoundingClientRect().height,
+      logoHeight: logo.getBoundingClientRect().height,
+      actions: Array.from(
+        document.querySelectorAll(".admin-top-actions > button"),
+      ).map((e) => e.getAttribute("aria-label")),
+    };
+  });
+  expect(layout.headerBackground).toBe(layout.logoBackground);
+  expect(layout.headerHeight).toBe(layout.logoHeight);
+  expect(layout.actions).toEqual([
+    expect.stringMatching(/^消息，/),
+    "切换主题",
+    "账号菜单",
+  ]);
+  const messages = page.getByRole("button", { name: /^消息，/ });
+  await expect(messages).toHaveAttribute("aria-label", /1 条未读/);
+  await messages.click();
+  await expect(
+    page.getByText("不兼容板卡配置已隔离", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByTestId("notification-badge")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "切换主题", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: "黑暗", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "切换主题", exact: true }),
+  ).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("menu")).not.toBeVisible();
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  expect(
+    await page.evaluate(() => localStorage.getItem("ostool.admin.theme")),
+  ).toBe("dark");
+  await page.screenshot({
+    path: "/tmp/ostool-titlebar-dark.png",
+    fullPage: true,
+  });
+  await page.reload();
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  await page.getByRole("button", { name: "切换主题", exact: true }).click();
+  await page
+    .getByRole("menuitemradio", { name: "跟随系统", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "切换主题", exact: true }),
+  ).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("menu")).not.toBeVisible();
+  await expect(page.locator("html")).not.toHaveClass(/dark/);
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  await page.getByRole("button", { name: "切换主题", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: "明亮", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "切换主题", exact: true }),
+  ).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("menu")).not.toBeVisible();
+  await expect(page.locator("html")).not.toHaveClass(/dark/);
+  await page.getByRole("button", { name: "账号菜单", exact: true }).click();
+  await expect(
+    page.getByText("本地版 · 免登录", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("menuitem", { name: "我的账号", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("menuitem", { name: "退出登录", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("menuitem", { name: "系统设置", exact: true }).click();
+  await expect(page).toHaveURL(/\/admin\/settings$/);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "切换导航", exact: true }).click();
+  await expect(
+    page.getByRole("link", { name: "开发板列表", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "切换导航", exact: true }).click();
+  await page.getByRole("button", { name: "切换主题", exact: true }).click();
+  await expect(
+    page.getByRole("menuitemradio", { name: "跟随系统", exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth <= innerWidth &&
+        document.documentElement.scrollHeight <= innerHeight + 1,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: "/tmp/ostool-titlebar-mobile.png",
     fullPage: true,
   });
 });
