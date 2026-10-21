@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   updateProfile: vi.fn(),
   resources: {} as Record<string, unknown>,
 }));
-vi.mock("@/site-session", () => ({
+vi.mock("@/apps/web/session", () => ({
   useSiteSession: () => ({ user: mocks.user, checking: false, error: "" }),
 }));
 vi.mock("@/api/client", () => ({

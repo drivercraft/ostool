@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import PublicApp from "./PublicApp";
+import PublicApp from "@/apps/web/App";
 
 const mocks = vi.hoisted(() => ({
   config: vi.fn(),
@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   login: vi.fn(),
   me: vi.fn(),
 }));
-vi.mock("./api/events", () => ({
+vi.mock("@/api/events", () => ({
   account: {
     connect: vi.fn(),
     disconnect: vi.fn(),
@@ -20,7 +20,7 @@ vi.mock("./api/events", () => ({
   useAccountConnection: () => "connected",
   useAccountErrors: () => ({}),
 }));
-vi.mock("./api/client", () => ({
+vi.mock("@/api/client", () => ({
   api: {
     authConfig: mocks.config,
     register: mocks.register,

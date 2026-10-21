@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { requestStatusLabels } from "@/domain/rentals";
 import {
   Link,
   NavLink,
@@ -21,7 +22,7 @@ import {
   useAccountErrors,
   useAccountResource,
 } from "@/api/events";
-import { useSiteSession } from "@/site-session";
+import { useSiteSession } from "@/apps/web/session";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -39,14 +40,7 @@ import { useListPage } from "@/components/list-pagination";
 import { ListLayoutProvider, ListLayoutToggle } from "@/components/list-layout";
 import { RentalCalendar } from "@/components/rental-calendar";
 import { localDateTime } from "@/utils/rental-calendar";
-import type { RentalRequest } from "@/types/api";
 
-export const requestStatusLabels: Record<RentalRequest["status"], string> = {
-  pending: "待审核",
-  approved: "已通过",
-  rejected: "已拒绝",
-  cancelled: "已撤回",
-};
 const rentalLabels: Record<string, string> = {
   active: "使用期内",
   scheduled: "未开始",

@@ -5,8 +5,8 @@ import {
   buildRequestPayload,
   validateForm,
   buildPowerManagementConfig,
-} from "./board-form";
-import type { BoardConfig } from "./types/api";
+} from "@/apps/admin/board-form";
+import type { BoardConfig } from "@/types/api";
 describe("board configuration contracts", () => {
   it("hides manual serial in axloader payload and restores the U-Boot draft", () => {
     const f = defaultFormState();

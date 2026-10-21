@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import App from "./App";
+import App from "@/apps/admin/App";
 import userEvent from "@testing-library/user-event";
 const mocks = vi.hoisted(() => ({
   config: vi.fn(),
@@ -17,7 +17,9 @@ vi.mock("@/api/events", () => ({
   useErrors: () => ({}),
   useResource: () => undefined,
 }));
-vi.mock("./pages/Overview", () => ({ default: () => <div>本地设备总览</div> }));
+vi.mock("@/apps/admin/pages/Overview", () => ({
+  default: () => <div>本地设备总览</div>,
+}));
 beforeEach(() => {
   vi.stubGlobal(
     "matchMedia",

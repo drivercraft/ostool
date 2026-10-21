@@ -1,5 +1,5 @@
 import { accessToken, loginUrl } from "@/auth-session";
-import AdminLogin from "./pages/AdminLogin";
+import AdminLogin from "@/apps/admin/pages/AdminLogin";
 import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import {
   BrowserRouter,
@@ -18,27 +18,27 @@ import {
   ChevronRightIcon,
   ScrollTextIcon,
 } from "lucide-react";
-import { EditionProvider, useEdition } from "./edition";
+import { EditionProvider, useEdition } from "@/edition";
 import { api, type AuthUser } from "@/api/client";
 import { ThemeProvider } from "next-themes";
-import { AdminTopbar } from "@/components/admin-topbar";
+import { AdminTopbar } from "@/apps/admin/components/admin-topbar";
 import { admin, useConnection, useErrors } from "@/api/events";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { Notice } from "@/components/forms";
-const Boards = lazy(() => import("./pages/Boards"));
-const BoardEditor = lazy(() => import("./pages/BoardEditor"));
-const Overview = lazy(() => import("./pages/Overview"));
-const Audits = lazy(() => import("./pages/Audits"));
-const Dtbs = lazy(() => import("./pages/Dtbs"));
-const Sessions = lazy(() => import("./pages/Sessions"));
-const Settings = lazy(() => import("./pages/SystemSettings"));
-const Rentals = lazy(() => import("./pages/Rentals"));
-const RentalEditor = lazy(() => import("./pages/RentalEditor"));
-const Users = lazy(() => import("./pages/Users"));
-const Roles = lazy(() => import("./pages/Roles"));
-const RentalRequests = lazy(() => import("./pages/RentalRequests"));
+const Boards = lazy(() => import("@/apps/admin/pages/Boards"));
+const BoardEditor = lazy(() => import("@/apps/admin/pages/BoardEditor"));
+const Overview = lazy(() => import("@/apps/admin/pages/Overview"));
+const Audits = lazy(() => import("@/apps/admin/pages/Audits"));
+const Dtbs = lazy(() => import("@/apps/admin/pages/Dtbs"));
+const Sessions = lazy(() => import("@/apps/admin/pages/Sessions"));
+const Settings = lazy(() => import("@/apps/admin/pages/SystemSettings"));
+const Rentals = lazy(() => import("@/apps/admin/pages/Rentals"));
+const RentalEditor = lazy(() => import("@/apps/admin/pages/RentalEditor"));
+const Users = lazy(() => import("@/apps/admin/pages/Users"));
+const Roles = lazy(() => import("@/apps/admin/pages/Roles"));
+const RentalRequests = lazy(() => import("@/apps/admin/pages/RentalRequests"));
 const boardNavigation = [
   ["boards", "开发板列表"],
   ["dtbs", "DTB 管理"],

@@ -19,9 +19,11 @@
   color: var(--card-foreground);
   padding: 18px;
   box-shadow: 0 2px 8px #15254004;
+  font-size: 1rem;
+  line-height: 1.5;
 }
 .data-card-title {
-  font-size: 14px;
+  font-size: 1rem;
   font-weight: 400;
   overflow-wrap: anywhere;
   border-bottom: 1px solid var(--border);
@@ -29,6 +31,7 @@
   margin-bottom: 14px;
 }
 .data-card-title small {
+  font-size: 0.875rem;
   font-weight: 400;
   display: block;
   color: var(--muted-foreground);
@@ -45,15 +48,18 @@
   min-width: 0;
 }
 .data-card dt {
-  font-size: 11px;
+  font-size: 0.875rem;
   color: var(--muted-foreground);
   font-weight: 400;
 }
 .data-card dd {
   margin: 0;
-  font-size: 12px;
+  font-size: 1rem;
   overflow-wrap: anywhere;
   min-width: 0;
+}
+.data-card small {
+  font-size: 0.875rem;
 }
 .data-card-actions {
   border-top: 1px solid var(--border);

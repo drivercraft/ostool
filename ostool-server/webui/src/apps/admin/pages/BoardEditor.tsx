@@ -16,7 +16,7 @@ import {
   buildRequestPayload,
   validateForm,
   type BoardEditorFormState,
-} from "@/board-form";
+} from "@/apps/admin/board-form";
 import type {
   BoardConfig,
   SerialPortSummary,
@@ -35,9 +35,9 @@ import {
   useAction,
   options,
 } from "@/components/forms";
-import { MacPicker } from "@/components/mac-picker";
+import { MacPicker } from "@/apps/admin/components/mac-picker";
 import { DtbUpload } from "./Dtbs";
-import { SerialRuntimeDetails } from "@/components/serial-runtime";
+import { SerialRuntimeDetails } from "@/apps/admin/components/serial-runtime";
 import { BoardOta } from "./BoardOta";
 
 export default function BoardEditor() {

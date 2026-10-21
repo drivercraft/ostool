@@ -108,6 +108,9 @@
   font-size: 0.875rem;
   font-weight: 400;
 }
+.app-shell .page-panel [data-slot="table-cell"].mono {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
 .app-shell .page-panel small,
 .app-shell .page-panel .muted,
 .app-shell .page-panel [data-slot="field-description"] {

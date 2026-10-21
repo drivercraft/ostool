@@ -1,4 +1,4 @@
-import { ThemeOptions } from "./theme-options";
+import { ThemeOptions } from "@/components/theme-options";
 import { useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useTheme } from "next-themes";

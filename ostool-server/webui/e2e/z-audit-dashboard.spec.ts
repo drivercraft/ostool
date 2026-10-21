@@ -68,6 +68,51 @@ test("dashboard, durable audit filters/export, discovery toolbar and shared them
   });
   expect(fonts[0]).toEqual(fonts[1]);
   expect(fonts[0].size).toBe("16px");
+  const tableRow = page
+    .getByRole("row")
+    .filter({ has: page.getByRole("link", { name: id, exact: true }) });
+  const listStyles = await tableRow.evaluate((row) => {
+    const style = (element: Element) => {
+      const css = getComputedStyle(element);
+      return {
+        size: css.fontSize,
+        family: css.fontFamily,
+        weight: css.fontWeight,
+      };
+    };
+    return {
+      name: style(row.querySelector(".board-name")!),
+      connection: style(row.querySelectorAll("td")[2]),
+      secondary: style(row.querySelector("small")!),
+    };
+  });
+  await page.getByRole("button", { name: "切换列表布局", exact: true }).click();
+  await page
+    .getByRole("menuitemradio", { name: "卡片视图", exact: true })
+    .click();
+  const card = page
+    .getByRole("listitem")
+    .filter({ has: page.getByRole("link", { name: id, exact: true }) });
+  const cardStyles = await card.evaluate((card) => {
+    const style = (element: Element) => {
+      const css = getComputedStyle(element);
+      return {
+        size: css.fontSize,
+        family: css.fontFamily,
+        weight: css.fontWeight,
+      };
+    };
+    return {
+      name: style(card.querySelector(".board-name")!),
+      connection: style(card.querySelectorAll("dd")[1]),
+      secondary: style(card.querySelector("small")!),
+    };
+  });
+  expect(cardStyles).toEqual(listStyles);
+  await page.getByRole("button", { name: "切换列表布局", exact: true }).click();
+  await page
+    .getByRole("menuitemradio", { name: "列表视图", exact: true })
+    .click();
 
   const reads: string[] = [];
   page.on("request", (r) => {

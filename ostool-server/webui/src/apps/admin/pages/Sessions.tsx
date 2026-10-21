@@ -14,7 +14,7 @@ import {
   TextField,
   SelectField,
 } from "@/components/forms";
-import { SerialRuntimeDetails } from "@/components/serial-runtime";
+import { SerialRuntimeDetails } from "@/apps/admin/components/serial-runtime";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "react-router-dom";
 export default function Sessions() {

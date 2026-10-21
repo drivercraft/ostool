@@ -338,6 +338,9 @@ development startup can opt in with `ostool-server --config ... --dev-demo`.
 
 ## Management console
 
+See [frontend structure](webui/README.md) for the independent `src/apps/admin`
+and `src/apps/web` applications, shared components and build entries.
+
 The dashboard groups runtime health (`/admin/overview`), actual background tasks
 (`/admin/jobs`) and board/user/rental operations (`/admin/operations`). The server
 samples CPU, memory, process RSS, data-disk capacity, configured-interface traffic

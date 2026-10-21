@@ -304,7 +304,7 @@ export function DataTable({
         {Children.toArray(children).map((row, rowIndex) => {
           if (!isValidElement<{ children?: ReactNode }>(row)) return null;
           const cells = Children.toArray(row.props.children).filter(
-            isValidElement<{ children?: ReactNode }>,
+            isValidElement<{ children?: ReactNode; className?: string }>,
           );
           return (
             <article
@@ -312,7 +312,11 @@ export function DataTable({
               role="listitem"
               key={row.key ?? rowIndex}
             >
-              <div className="data-card-title">{cells[0]?.props.children}</div>
+              <div
+                className={`data-card-title ${cells[0]?.props.className ?? ""}`}
+              >
+                {cells[0]?.props.children}
+              </div>
               <dl>
                 {cells.slice(1).map((cell, index) => (
                   <div
@@ -324,7 +328,9 @@ export function DataTable({
                     key={index}
                   >
                     <dt>{headers[index + 1]}</dt>
-                    <dd>{cell.props.children}</dd>
+                    <dd className={cell.props.className}>
+                      {cell.props.children}
+                    </dd>
                   </div>
                 ))}
               </dl>

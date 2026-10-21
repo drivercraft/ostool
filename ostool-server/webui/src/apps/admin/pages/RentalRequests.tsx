@@ -23,7 +23,7 @@ import {
   Cell,
   useAction,
 } from "@/components/forms";
-import { requestStatusLabels } from "./MemberWorkspace";
+import { requestStatusLabels } from "@/domain/rentals";
 export default function RentalRequests() {
   const requests = useList("rental_requests"),
     [status, setStatus] = useState(""),

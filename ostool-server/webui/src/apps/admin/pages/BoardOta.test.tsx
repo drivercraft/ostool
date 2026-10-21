@@ -45,16 +45,17 @@ it("disables deletion while any active assignment references the image", async (
   applyOta(job("downloading"));
   render(<BoardOta boardId="board-1" />);
 
-  await userEvent.setup().selectOptions(
-    screen.getByLabelText("待下发镜像"),
-    image.sha256,
-  );
+  await userEvent
+    .setup()
+    .selectOptions(screen.getByLabelText("待下发镜像"), image.sha256);
   expect(screen.getByRole("button", { name: "删除镜像" })).toBeDisabled();
 });
 
 it("deletes an image referenced only by a terminal assignment", async () => {
   applyOta(job("succeeded"));
-  const remove = vi.spyOn(api, "deleteLoaderImage").mockResolvedValue(undefined);
+  const remove = vi
+    .spyOn(api, "deleteLoaderImage")
+    .mockResolvedValue(undefined);
   render(<BoardOta boardId="board-1" />);
   const user = userEvent.setup();
   const select = screen.getByLabelText("待下发镜像");

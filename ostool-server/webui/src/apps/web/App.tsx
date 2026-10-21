@@ -26,12 +26,14 @@ import {
   useLocation,
   useNavigate,
 } from "react-router-dom";
-import { EditionProvider, useEdition } from "./edition";
-import MemberWorkspace, { MemberDeviceCatalog } from "./pages/MemberWorkspace";
-import { SiteSessionProvider, useSiteSession } from "./site-session";
-import { SiteThemeMenu } from "./components/site-theme-menu";
+import { EditionProvider, useEdition } from "@/edition";
+import MemberWorkspace, {
+  MemberDeviceCatalog,
+} from "@/apps/web/pages/MemberWorkspace";
+import { SiteSessionProvider, useSiteSession } from "@/apps/web/session";
+import { SiteThemeMenu } from "@/components/site-theme-menu";
 import { ThemeProvider } from "next-themes";
-import { Toaster } from "./components/ui/sonner";
+import { Toaster } from "@/components/ui/sonner";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -39,9 +41,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-} from "./components/ui/dropdown-menu";
-import { api, saveAuthToken } from "./api/client";
-import { Button } from "./components/ui/button";
+} from "@/components/ui/dropdown-menu";
+import { api, saveAuthToken } from "@/api/client";
+import { Button } from "@/components/ui/button";
 
 const publicNavigation = [
   ["/", "首页"],
