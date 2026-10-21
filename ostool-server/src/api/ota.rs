@@ -49,7 +49,14 @@ async fn list_images(State(state): State<AppState>) -> Result<Json<Vec<Image>>, 
 async fn upload_image(
     State(state): State<AppState>,
     request: Request<Body>,
-) -> Result<(StatusCode, Json<Image>), ApiError> {
+) -> Result<
+    (
+        StatusCode,
+        axum::extract::Extension<crate::audit::Target>,
+        Json<Image>,
+    ),
+    ApiError,
+> {
     let length = request
         .headers()
         .get(header::CONTENT_LENGTH)
@@ -80,7 +87,11 @@ async fn upload_image(
         .await
         .map_err(|error| ApiError::bad_request(format!("{error:#}")))?;
     state.admin_events.invalidate(&["ota"]);
-    Ok((StatusCode::CREATED, Json(image)))
+    Ok((
+        StatusCode::CREATED,
+        axum::extract::Extension(crate::audit::Target(image.sha256.clone())),
+        Json(image),
+    ))
 }
 
 async fn delete_image(

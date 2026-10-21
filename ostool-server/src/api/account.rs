@@ -253,7 +253,7 @@ async fn submit(
     State(state): State<AppState>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Json(input): Json<RequestInput>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<(StatusCode, Extension<crate::audit::Target>), ApiError> {
     if input.starts_at >= input.ends_at || input.ends_at <= Utc::now() || input.notes.len() > 2000 {
         return Err(ApiError::bad_request(
             "请选择有效的起止时间，申请说明不能超过 2000 字符",
@@ -278,9 +278,12 @@ async fn submit(
     if duplicate {
         return Err(ApiError::conflict("相同申请正在审核中，请勿重复提交"));
     }
-    sqlx::query("INSERT INTO rental_requests (user_id,board_id,starts_at,ends_at,notes) VALUES ($1,$2,$3,$4,$5)").bind(user.id).bind(input.board_id).bind(input.starts_at).bind(input.ends_at).bind(input.notes).execute(database(&state)?.pool()).await.map_err(db_error)?;
+    let id: Uuid = sqlx::query_scalar("INSERT INTO rental_requests (user_id,board_id,starts_at,ends_at,notes) VALUES ($1,$2,$3,$4,$5) RETURNING id").bind(user.id).bind(input.board_id).bind(input.starts_at).bind(input.ends_at).bind(input.notes).fetch_one(database(&state)?.pool()).await.map_err(db_error)?;
     state.admin_events.invalidate(&["rental_requests"]);
-    Ok(StatusCode::CREATED)
+    Ok((
+        StatusCode::CREATED,
+        Extension(crate::audit::Target(id.to_string())),
+    ))
 }
 async fn withdraw(
     State(state): State<AppState>,

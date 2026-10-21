@@ -338,6 +338,51 @@ development startup can opt in with `ostool-server --config ... --dev-demo`.
 
 ## Management console
 
+The dashboard groups runtime health (`/admin/overview`), actual background tasks
+(`/admin/jobs`) and board/user/rental operations (`/admin/operations`). The server
+samples CPU, memory, process RSS, data-disk capacity, configured-interface traffic
+and PostgreSQL health every five seconds and pushes updates over the existing SSE
+connection. Unsupported metrics remain unavailable. Charts contain up to five
+minutes of samples from this process, not historical monitoring data. Local
+edition hides account and rental metrics. Connection status appears in the
+dashboard toolbar; board discovery opens from the board-list toolbar.
+
+`/admin/audits` provides PostgreSQL-backed, server-paginated audit records with
+action/resource/result, actor, IP, source and date filters, details and CSV export.
+Records include request ID, actor identity, target, outcome, HTTP status and elapsed
+time. Login/registration, permission denials, board/session/file/power/OTA actions,
+user/role/rental changes, settings changes and audit viewing/export/cleanup are
+recorded. Asynchronous power/release results and OTA state changes are separate
+events. Passwords, tokens, raw request/response bodies, file contents and shell
+commands are excluded. Data starts when this feature is enabled; existing business
+records are not converted into invented audit history.
+
+Public edition restricts audit APIs to administrators. Local edition records
+anonymous local operators without enabling authentication. Mutating API requests
+write an audit intent before executing; unavailable audit storage returns HTTP
+503 without executing the operation. If result recording fails afterward, the
+intent remains `pending` (outcome unconfirmed) and the response has
+`X-Audit-Status: pending`; the runtime dashboard reports audit write failures.
+Device polls and session heartbeats are excluded from HTTP audit noise.
+
+Audit records are retained indefinitely by default. Set
+`OSTOOL_AUDIT_RETENTION_DAYS=1..3650` before startup to enable hourly retention;
+`0` disables automatic cleanup. The cleanup dialog executes a single cleanup and
+does not change that environment setting. Unconfirmed records are retained.
+`OSTOOL_TRUSTED_PROXY_IPS` is a comma-separated list of trusted reverse-proxy IPs;
+only those peers may supply the `X-Forwarded-For` chain. For Caddy on the same host,
+set it to `127.0.0.1,::1`. These deployment settings require a server restart and
+are not frontend build variables.
+
+Audit API routes: `GET /api/v1/admin/audits`, `GET /api/v1/admin/audits/{id}`,
+`GET /api/v1/admin/audits/export`, `POST /api/v1/admin/audits/view` and
+`POST /api/v1/admin/audits/cleanup` (`{"keep_days":180}`). List/export filters are
+`q`, `action`, `resource`, `result`, `source`, `actor`, `ip`, RFC3339 `from`/`to`,
+`page`, and `page_size` (maximum 100). CSV exports contain at most 10,000 records;
+larger selections return an error asking for narrower filters. Management SSE
+supports `audit_view=1` with `audit_`-prefixed filters; browsers use this subscription
+for list updates. `GET /api/v1/admin/dashboard` also exposes the runtime snapshot.
+
 Rental creation and editing use `/admin/rentals/new` and `/admin/rentals/{id}`.
 Choose a board to see its existing reservations in a month calendar, inspect
 daily free windows, and fill start/end fields by selecting a free window. The

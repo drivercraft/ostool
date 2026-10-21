@@ -58,9 +58,7 @@ test("unbound power -> real discovery -> manual MAC binding; push preserves focu
       reads.push(r.url());
   });
   await page.goto("/admin/boards/new");
-  await expect(
-    page.getByRole("status").filter({ hasText: "实时已连接" }),
-  ).toBeVisible();
+  await expect(page.getByLabel("板型", { exact: true })).toBeVisible();
   await page.getByLabel("上电命令", { exact: true }).fill("true");
   await page.getByLabel("下电命令", { exact: true }).fill("true");
   await page.getByRole("button", { name: "上电", exact: true }).click();
@@ -142,7 +140,7 @@ test("unbound power -> real discovery -> manual MAC binding; push preserves focu
   await expect(page.getByLabel("备注", { exact: true })).toHaveValue(
     "changed by peer",
   );
-  await peer.getByRole("tab", { name: /发现设备/ }).click();
+  await peer.getByRole("button", { name: /发现设备/ }).click();
   // No new loader requests: the server deadline itself must publish offline.
   await expect(
     peer.getByRole("table").getByText("离线", { exact: true }),
@@ -168,7 +166,7 @@ test("unbound power -> real discovery -> manual MAC binding; push preserves focu
     animations: "disabled",
   });
   await peer.setViewportSize({ width: 1440, height: 900 });
-  await peer.getByRole("tab", { name: /已配置/ }).click();
+  await peer.getByRole("button", { name: "开发板列表", exact: true }).click();
   await peer.screenshot({
     path: "/tmp/ostool-admin-screenshots/boards.png",
     fullPage: true,
@@ -184,7 +182,7 @@ test("all management modules, DTB CRUD, session release and narrow viewport", as
   page.on("pageerror", (e) => consoleErrors.push(e.message));
   await page.goto("/admin/overview");
   await expect(
-    page.getByRole("link", { name: "可用开发板", exact: false }),
+    page.getByRole("heading", { name: "服务运行状态", exact: true }),
   ).toBeVisible();
   await page.getByRole("link", { name: "DTB 管理", exact: true }).click();
   await page.getByRole("button", { name: "上传 DTB", exact: true }).click();

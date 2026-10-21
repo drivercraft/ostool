@@ -432,3 +432,135 @@ export interface PersonalTokenSummary {
   expires_at: string | null;
   created_at: string;
 }
+export interface AuditFilters {
+  q?: string;
+  action?: string;
+  resource?: string;
+  result?: string;
+  source?: string;
+  actor?: string;
+  ip?: string;
+  from?: string;
+  to?: string;
+  page?: number;
+  page_size?: number;
+}
+export interface AuditEvent {
+  id: string;
+  request_id: string;
+  created_at: string;
+  finished_at: string | null;
+  actor_id: string | null;
+  actor_name: string;
+  actor_kind: string;
+  source: string;
+  action: string;
+  summary: string;
+  resource: string;
+  target_id: string | null;
+  method: string | null;
+  route: string | null;
+  ip: string | null;
+  user_agent: string | null;
+  result: string;
+  status_code: number | null;
+  duration_ms: number | null;
+  details: Record<string, unknown>;
+}
+export interface AuditPage {
+  query?: AuditFilters;
+  active: boolean;
+  items?: AuditEvent[];
+  total?: number;
+  page?: number;
+  page_size?: number;
+  actions?: { value: string; label: string }[];
+  resources?: string[];
+  retention_days?: number | null;
+}
+export interface DashboardTask {
+  id: string;
+  name: string;
+  state: string;
+  interval_secs: number;
+  runs: number;
+  last_run: string | null;
+  next_run: string | null;
+  last_duration_ms: number | null;
+  last_ok: boolean | null;
+}
+export interface DashboardInfo {
+  runtime: {
+    started_at: string;
+    uptime_secs: number;
+    version: string;
+    platform: string;
+    arch: string;
+    pid: number;
+    logical_cpus: number | null;
+    sample: {
+      ready: boolean;
+      sampled_at?: string;
+      hostname?: string | null;
+      cpu_percent?: number | null;
+      load_average?: number[] | null;
+      memory_total?: number | null;
+      memory_available?: number | null;
+      process_rss?: number | null;
+      disk_total?: number | null;
+      disk_available?: number | null;
+      interface?: string;
+      rx_bytes?: number | null;
+      tx_bytes?: number | null;
+      rx_bytes_per_second?: number | null;
+      tx_bytes_per_second?: number | null;
+      database_ok?: boolean;
+      database_latency_ms?: number;
+      pool_size?: number;
+      pool_idle?: number;
+    };
+    history: {
+      at: string;
+      cpu_percent: number | null;
+      memory_percent: number | null;
+      rx: number | null;
+      tx: number | null;
+    }[];
+    tasks: DashboardTask[];
+    http: {
+      requests: number;
+      errors: number;
+      inflight: number;
+      mean_latency_ms: number;
+      sse_connections: number;
+    };
+  };
+  operations: {
+    boards: number;
+    board_states: Record<string, number>;
+    sessions: number;
+    devices: number;
+    online_devices: number;
+    conflicting_devices: number;
+    dtbs: number | null;
+    public: boolean;
+    database_available?: boolean;
+    users?: number;
+    enabled_users?: number;
+    active_rentals?: number;
+    scheduled_rentals?: number;
+    cancelled_rentals?: number;
+    pending_requests?: number;
+    recent_audits?: number;
+    recent_failures?: number;
+  };
+  audit: { healthy: boolean; write_failures: number };
+  power_actions: {
+    id: string;
+    action: string;
+    state: string;
+    message: string | null;
+  }[];
+  ota_jobs: LoaderUpdateJob[];
+  audit_retention_days: number | null;
+}

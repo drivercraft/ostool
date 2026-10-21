@@ -199,8 +199,10 @@ pub async fn middleware(
             }
         }
     }
-    request.extensions_mut().insert(CurrentUser(user));
-    next.run(request).await
+    request.extensions_mut().insert(CurrentUser(user.clone()));
+    let mut response = next.run(request).await;
+    response.extensions_mut().insert(CurrentUser(user));
+    response
 }
 
 fn is_public_path(path: &str) -> bool {
@@ -296,7 +298,7 @@ async fn device_code(
 async fn token(
     State(state): State<AppState>,
     Form(form): Form<TokenForm>,
-) -> Result<Json<TokenResponse>, Response> {
+) -> Result<(Extension<CurrentUser>, Json<TokenResponse>), Response> {
     let (database, config) = database(&state)
         .await
         .map_err(IntoResponse::into_response)?;
@@ -388,16 +390,22 @@ async fn token(
             ));
         }
     };
-    Ok(Json(token_response(grant)))
+    Ok((
+        Extension(CurrentUser(grant.user.clone())),
+        Json(token_response(grant)),
+    ))
 }
 
 async fn revoke(
     State(state): State<AppState>,
     Form(form): Form<RevokeForm>,
-) -> Result<StatusCode, Response> {
+) -> Result<Response, Response> {
     let (database, _) = database(&state)
         .await
         .map_err(IntoResponse::into_response)?;
+    let actor = database.refresh_owner(&form.token).await.map_err(|_| {
+        ApiError::service_unavailable("unable to resolve logout identity").into_response()
+    })?;
     database.revoke_refresh(&form.token).await.map_err(|e| {
         oauth_error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -405,13 +413,17 @@ async fn revoke(
             &e.to_string(),
         )
     })?;
-    Ok(StatusCode::NO_CONTENT)
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    if let Some(actor) = actor {
+        response.extensions_mut().insert(CurrentUser(actor));
+    }
+    Ok(response)
 }
 
 async fn register(
     State(state): State<AppState>,
     Json(request): Json<RegisterRequest>,
-) -> Result<(StatusCode, Json<TokenResponse>), ApiError> {
+) -> Result<(StatusCode, Extension<CurrentUser>, Json<TokenResponse>), ApiError> {
     let (database, config) = database(&state).await?;
     if !config.allow_registration {
         return Err(ApiError::forbidden("registration is disabled"));
@@ -454,23 +466,29 @@ async fn register(
     let grant = database
         .issue_grant(user, "web", "board:operate offline_access", &config)
         .await?;
-    Ok((StatusCode::CREATED, Json(token_response(grant))))
+    Ok((
+        StatusCode::CREATED,
+        Extension(CurrentUser(grant.user.clone())),
+        Json(token_response(grant)),
+    ))
 }
 
 async fn login(
     State(state): State<AppState>,
     Json(request): Json<LoginRequest>,
-) -> Result<Json<TokenResponse>, ApiError> {
+) -> Result<(Extension<CurrentUser>, Json<TokenResponse>), ApiError> {
     let (database, config) = database(&state).await?;
     let user = database
         .authenticate_password(&request.email, &request.password)
         .await?
         .ok_or_else(|| ApiError::unauthorized("email or password is incorrect"))?;
-    Ok(Json(token_response(
-        database
-            .issue_grant(user, "web", "board:operate offline_access", &config)
-            .await?,
-    )))
+    let grant = database
+        .issue_grant(user, "web", "board:operate offline_access", &config)
+        .await?;
+    Ok((
+        Extension(CurrentUser(grant.user.clone())),
+        Json(token_response(grant)),
+    ))
 }
 
 async fn me(Extension(CurrentUser(user)): Extension<CurrentUser>) -> Json<UserResponse> {

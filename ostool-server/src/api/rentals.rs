@@ -100,9 +100,12 @@ pub(crate) async fn list_for(
 async fn create(
     State(state): State<AppState>,
     Json(input): Json<RentalInput>,
-) -> Result<StatusCode, ApiError> {
-    save(&state, None, input).await?;
-    Ok(StatusCode::CREATED)
+) -> Result<(StatusCode, axum::extract::Extension<crate::audit::Target>), ApiError> {
+    let id = save(&state, None, input).await?;
+    Ok((
+        StatusCode::CREATED,
+        axum::extract::Extension(crate::audit::Target(id.to_string())),
+    ))
 }
 async fn update(
     Path(id): Path<Uuid>,

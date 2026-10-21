@@ -369,6 +369,7 @@ impl OtaStore {
                     .execute(&mut *tx)
                     .await?;
             }
+            write_job_audit(&mut tx, jobs.get(board_id), &result).await?;
             tx.commit().await?;
         } else {
             self.save_observations(&updated_observations).await?;
@@ -558,7 +559,22 @@ impl OtaStore {
 
     async fn save(&self, jobs: &BTreeMap<String, Job>) -> anyhow::Result<()> {
         if let Some(db) = &self.database {
-            return db.save_record("ota-jobs", jobs).await;
+            let mut tx = db.pool().begin().await?;
+            let old: Option<serde_json::Value> = sqlx::query_scalar(
+                "SELECT payload FROM server_records WHERE name='ota-jobs' FOR UPDATE",
+            )
+            .fetch_optional(&mut *tx)
+            .await?;
+            let old = old
+                .map(serde_json::from_value::<BTreeMap<String, Job>>)
+                .transpose()?
+                .unwrap_or_default();
+            for (key, job) in jobs {
+                write_job_audit(&mut tx, old.get(key), job).await?;
+            }
+            sqlx::query("INSERT INTO server_records(name,payload) VALUES ('ota-jobs',$1) ON CONFLICT(name) DO UPDATE SET payload=excluded.payload,updated_at=now()").bind(serde_json::to_value(jobs)?).execute(&mut *tx).await?;
+            tx.commit().await?;
+            return Ok(());
         }
         atomic_write(&self.root.join("jobs.json"), &serde_json::to_vec(jobs)?)
     }
@@ -575,6 +591,34 @@ impl OtaStore {
             &serde_json::to_vec(observations)?,
         )
     }
+}
+
+async fn write_job_audit(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    old: Option<&Job>,
+    job: &Job,
+) -> anyhow::Result<()> {
+    let transition = old.is_none_or(|old| old.phase != job.phase || old.update_id != job.update_id);
+    let failed_delivery = old.is_some_and(|old| job.delivery_attempts > old.delivery_attempts);
+    if !transition && !failed_delivery {
+        return Ok(());
+    }
+    let action = if failed_delivery {
+        "ota.delivery_failed"
+    } else {
+        "ota.phase_changed"
+    };
+    let result = if failed_delivery || matches!(job.phase, Phase::Failed | Phase::RolledBack) {
+        "failed"
+    } else if job.phase.is_terminal() {
+        "success"
+    } else {
+        "accepted"
+    };
+    let id = uuid::Uuid::new_v4();
+    let details = serde_json::json!({"board_id":job.board_id,"update_id":job.update_id,"previous_phase":old.map(|old|old.phase),"phase":job.phase,"image_sha256":job.image.sha256,"delivery_attempts":job.delivery_attempts,"has_error":job.error.is_some()});
+    sqlx::query("INSERT INTO audit_events(id,request_id,finished_at,actor_name,actor_kind,source,action,summary,resource,target_id,result,duration_ms,details) VALUES ($1,$1,now(),'系统','system','system',$2,$3,'ota',$4,$5,0,$6)").bind(id).bind(action).bind(if failed_delivery{"OTA 镜像投递失败"}else{"OTA 任务状态变化"}).bind(&job.update_id).bind(result).bind(details).execute(&mut **tx).await?;
+    Ok(())
 }
 
 fn image_path(root: &Path, digest: &str) -> PathBuf {

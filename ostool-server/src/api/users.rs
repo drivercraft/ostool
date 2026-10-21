@@ -138,7 +138,7 @@ fn validate(input: &UserInput) -> Result<(), ApiError> {
 async fn create_user(
     State(state): State<AppState>,
     Json(input): Json<UserInput>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<(StatusCode, axum::extract::Extension<crate::audit::Target>), ApiError> {
     validate(&input)?;
     let password = input
         .password
@@ -146,13 +146,14 @@ async fn create_user(
         .ok_or_else(|| ApiError::bad_request("新用户需要初始密码"))?;
     let hash = crate::database::hash_password_async(password.to_owned()).await?;
     let pool = db(&state)?.pool();
-    let result = sqlx::query("INSERT INTO users(email,display_name,password_hash,role_id,is_admin,disabled) SELECT $1,$2,$3,id,administrator,$5 FROM roles WHERE id=$4")
-        .bind(input.email.trim().to_lowercase()).bind(input.display_name).bind(hash).bind(input.role_id).bind(input.disabled).execute(pool).await.map_err(sql_error)?;
-    if result.rows_affected() != 1 {
-        return Err(ApiError::bad_request("角色不存在"));
-    }
+    let result = sqlx::query_scalar::<_,Uuid>("INSERT INTO users(email,display_name,password_hash,role_id,is_admin,disabled) SELECT $1,$2,$3,id,administrator,$5 FROM roles WHERE id=$4 RETURNING users.id")
+        .bind(input.email.trim().to_lowercase()).bind(input.display_name).bind(hash).bind(input.role_id).bind(input.disabled).fetch_optional(pool).await.map_err(sql_error)?;
+    let id = result.ok_or_else(|| ApiError::bad_request("角色不存在"))?;
     state.admin_events.invalidate(&["users"]);
-    Ok(StatusCode::CREATED)
+    Ok((
+        StatusCode::CREATED,
+        axum::extract::Extension(crate::audit::Target(id.to_string())),
+    ))
 }
 async fn update_user(
     Path(id): Path<Uuid>,
@@ -250,10 +251,11 @@ fn validate_role(input: &RoleInput) -> Result<(), ApiError> {
 async fn create_role(
     State(state): State<AppState>,
     Json(input): Json<RoleInput>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<(StatusCode, Extension<crate::audit::Target>), ApiError> {
     validate_role(&input)?;
+    let id = Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO roles(id,name,description,administrator) VALUES($1,$2,$3,$4)")
-        .bind(Uuid::new_v4().to_string())
+        .bind(&id)
         .bind(input.name.trim())
         .bind(input.description)
         .bind(input.administrator)
@@ -261,7 +263,7 @@ async fn create_role(
         .await
         .map_err(sql_error)?;
     state.admin_events.invalidate(&["roles"]);
-    Ok(StatusCode::CREATED)
+    Ok((StatusCode::CREATED, Extension(crate::audit::Target(id))))
 }
 async fn update_role(
     Path(id): Path<String>,

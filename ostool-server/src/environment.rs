@@ -53,6 +53,20 @@ pub(crate) fn apply_values(
         }
     }
     parsed(values, "OSTOOL_EDITION", &mut config.edition)?;
+    if let Some(value) = values.get("OSTOOL_AUDIT_RETENTION_DAYS") {
+        let days: u32 = value
+            .parse()
+            .context("invalid OSTOOL_AUDIT_RETENTION_DAYS")?;
+        config.audit.retention_days = (days > 0).then_some(days);
+    }
+    if let Some(value) = values.get("OSTOOL_TRUSTED_PROXY_IPS") {
+        config.audit.trusted_proxies = value
+            .split(',')
+            .filter(|ip| !ip.trim().is_empty())
+            .map(|ip| ip.trim().parse())
+            .collect::<Result<_, _>>()
+            .context("invalid OSTOOL_TRUSTED_PROXY_IPS")?;
+    }
     parsed(values, "OSTOOL_LISTEN_ADDR", &mut config.listen_addr)?;
     parsed(values, "OSTOOL_AUTH_ENABLED", &mut config.auth.enabled)?;
     if config.edition.is_public()

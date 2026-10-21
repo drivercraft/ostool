@@ -3,11 +3,11 @@ import { useListPage } from "@/components/list-pagination";
 import { ListToolbar } from "@/components/list-toolbar";
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { PlusIcon } from "lucide-react";
+import { ArrowLeft, Radar, Monitor, PlusIcon } from "lucide-react";
 import { api } from "@/api/client";
 import { useList, useResource } from "@/api/events";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import {
   DataTable,
@@ -30,6 +30,7 @@ export default function Boards() {
     loaders = useList("loaders"),
     runtimes = useResource("runtimes") ?? {},
     virtual = useResource("virtual");
+  const [view, setView] = useState("boards");
   const [search, setSearch] = useState("");
   const [type, setType] = useState(""),
     [tag, setTag] = useState(""),
@@ -98,36 +99,47 @@ export default function Boards() {
           </details>
         </Notice>
       )}
-      <Tabs defaultValue="boards" className="workspace-tabs">
-        <TabsList variant="line" className="inventory-tabs">
-          <TabsTrigger value="boards">
-            已配置 <span>{boards.length}</span>
-          </TabsTrigger>
-          <TabsTrigger value="discovery">
-            发现设备{" "}
-            <span>
-              {loaders.filter((d) => !d.bound_board_id).length} 未绑定
-            </span>
-          </TabsTrigger>
-          {virtual?.enabled && (
-            <TabsTrigger value="virtual">
-              虚拟设备 <span>{virtual.devices.length}</span>
-            </TabsTrigger>
-          )}
-        </TabsList>
-        <TabsContent value="boards">
+      <Tabs
+        value={view}
+        onValueChange={setView}
+        className="workspace-tabs board-workspace"
+      >
+        <TabsContent value="boards" aria-label="开发板列表">
           <PagePanel
             layoutKey="boards"
             table
             toolbar={
               <ListToolbar
                 actions={
-                  <Button asChild>
-                    <Link to="/boards/new">
-                      <PlusIcon data-icon="inline-start" />
-                      新建开发板
-                    </Link>
-                  </Button>
+                  <>
+                    <Button asChild>
+                      <Link to="/boards/new">
+                        <PlusIcon data-icon="inline-start" />
+                        新建开发板
+                      </Link>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => setView("discovery")}
+                    >
+                      <Radar size={16} />
+                      发现设备
+                      {loaders.some((d) => !d.bound_board_id) && (
+                        <Badge variant="secondary">
+                          {loaders.filter((d) => !d.bound_board_id).length}
+                        </Badge>
+                      )}
+                    </Button>
+                    {virtual?.enabled && (
+                      <Button
+                        variant="outline"
+                        onClick={() => setView("virtual")}
+                      >
+                        <Monitor size={16} />
+                        虚拟设备
+                      </Button>
+                    )}
+                  </>
                 }
                 count={`${filtered.length} 台`}
               >
@@ -268,16 +280,22 @@ export default function Boards() {
             </DataTable>
           </PagePanel>
         </TabsContent>
-        <TabsContent value="discovery">
+        <TabsContent value="discovery" aria-label="发现设备">
           <PagePanel
             layoutKey="discovery"
             table
             toolbar={
               <ListToolbar
                 actions={
-                  <Button asChild variant="outline">
-                    <Link to="/boards/new">新建开发板</Link>
-                  </Button>
+                  <>
+                    <Button variant="outline" onClick={() => setView("boards")}>
+                      <ArrowLeft size={16} />
+                      开发板列表
+                    </Button>
+                    <Button asChild variant="outline">
+                      <Link to="/boards/new">新建开发板</Link>
+                    </Button>
+                  </>
                 }
                 count={`${filteredLoaders.length} 台`}
               >
@@ -386,6 +404,13 @@ export default function Boards() {
                 <ListToolbar
                   actions={
                     <>
+                      <Button
+                        variant="outline"
+                        onClick={() => setView("boards")}
+                      >
+                        <ArrowLeft size={16} />
+                        开发板列表
+                      </Button>
                       <Button
                         disabled={task.pending}
                         onClick={() =>

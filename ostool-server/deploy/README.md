@@ -99,7 +99,7 @@ PostgreSQL integration tests use a disposable database and an isolated schema:
 
 ```bash
 OSTOOL_TEST_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54329/ostool \
-  cargo test -p ostool-server --test auth_postgres --test account_postgres --test unified_persistence -- --ignored
+  cargo test -p ostool-server --test auth_postgres --test account_postgres --test unified_persistence --test audit_postgres -- --ignored
 ```
 
 For the full browser account-management test, start a disposable public environment

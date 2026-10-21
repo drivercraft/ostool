@@ -17,6 +17,8 @@ const SYSTEM_DATA_DIR: &str = "/var/lib/ostool-server";
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ServerConfig {
     #[serde(default)]
+    pub audit: AuditConfig,
+    #[serde(default)]
     pub edition: Edition,
     pub listen_addr: SocketAddr,
     #[serde(default)]
@@ -69,6 +71,7 @@ impl ServerConfig {
         ));
 
         Self {
+            audit: AuditConfig::default(),
             edition: Edition::Local,
             listen_addr: SocketAddr::from(([0, 0, 0, 0], 2999)),
             database: DatabaseConfig::default(),
@@ -196,6 +199,13 @@ impl ServerConfig {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        if self
+            .audit
+            .retention_days
+            .is_some_and(|days| days == 0 || days > 3650)
+        {
+            bail!("audit.retention_days must be 1..3650, or omitted to retain all logs");
+        }
         if !(60..=86400).contains(&self.auth.access_token_ttl_secs)
             || !(300..=31536000).contains(&self.auth.refresh_token_ttl_secs)
             || !(60..=1800).contains(&self.auth.device_code_ttl_secs)
@@ -248,6 +258,14 @@ impl ServerConfig {
         self.virtual_qemu.validate()?;
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct AuditConfig {
+    pub retention_days: Option<u32>,
+    #[schemars(with = "Vec<String>")]
+    pub trusted_proxies: Vec<std::net::IpAddr>,
 }
 
 /// Runtime edition is authoritative for both browser features and API security.

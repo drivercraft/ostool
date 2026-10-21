@@ -99,9 +99,11 @@ async fn main() -> anyhow::Result<()> {
         ostool_server::demo::prepare(&mut config)?;
         *state.tftp_manager.write().await =
             ostool_server::tftp::service::build_tftp_manager(&config.tftp);
+        state.admin_events.invalidate(&["tftp", "server"]);
     }
     let tftp_manager = state.tftp_manager.read().await.clone();
     state.ensure_data_dirs().await?;
+    state.monitor.start(state.clone());
     let _demo = if cli.dev_demo {
         Some(ostool_server::demo::seed(&state).await?)
     } else {
@@ -120,10 +122,17 @@ async fn main() -> anyhow::Result<()> {
         tftp_manager.reconcile().await?;
     }
     let gc_state = state.clone();
+    state.monitor.register("session_gc", "会话租约清理", 1);
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            if let Err(err) = gc_state.cleanup_expired_sessions().await {
+            let start = std::time::Instant::now();
+            gc_state.monitor.task_started("session_gc");
+            let result = gc_state.cleanup_expired_sessions().await;
+            gc_state
+                .monitor
+                .task_finished("session_gc", result.is_ok(), start.elapsed());
+            if let Err(err) = result {
                 log::warn!("failed to cleanup expired sessions: {err:#}");
             }
         }
@@ -132,14 +141,18 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(target_os = "linux")]
     let _admin_monitors =
         ostool_server::admin_monitor::start(&state).context("failed to start admin OS monitors")?;
+    start_audit_retention(&state).await;
     let app = build_router(state.clone());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut servers = JoinSet::new();
     servers.spawn(async move {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(wait_for_shutdown(shutdown_rx))
-            .await
-            .context("management listener failed")
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(wait_for_shutdown(shutdown_rx))
+        .await
+        .context("management listener failed")
     });
     info!("ostoold management API listening on {listen_addr}");
     if let Some(test_listener) = network_test_listener {
@@ -186,6 +199,40 @@ async fn main() -> anyhow::Result<()> {
     }
     state.virtual_boards.shutdown().await;
     serve_result
+}
+
+async fn start_audit_retention(state: &ostool_server::AppState) {
+    ostool_server::audit::system_event(
+        state,
+        "system.started",
+        "服务器启动",
+        "system",
+        None,
+        true,
+        serde_json::json!({"version":env!("CARGO_PKG_VERSION")}),
+    )
+    .await;
+    let Some(days) = state.config.read().await.audit.retention_days else {
+        return;
+    };
+    state
+        .monitor
+        .register("audit_retention", "审计日志保留策略", 3600);
+    let state = state.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+            let start = std::time::Instant::now();
+            state.monitor.task_started("audit_retention");
+            let result = ostool_server::audit::run_retention(&state, days).await;
+            state
+                .monitor
+                .task_finished("audit_retention", result.is_ok(), start.elapsed());
+            if let Err(error) = result {
+                log::warn!("audit retention failed: {}", error.message);
+            }
+        }
+    });
 }
 
 async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {

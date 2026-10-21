@@ -14,6 +14,7 @@ import {
   SettingsIcon,
   UserCircleIcon,
   ChevronRightIcon,
+  ScrollTextIcon,
 } from "lucide-react";
 import { EditionProvider, useEdition } from "./edition";
 import { api, type AuthUser } from "@/api/client";
@@ -27,6 +28,7 @@ import { Notice } from "@/components/forms";
 const Boards = lazy(() => import("./pages/Boards"));
 const BoardEditor = lazy(() => import("./pages/BoardEditor"));
 const Overview = lazy(() => import("./pages/Overview"));
+const Audits = lazy(() => import("./pages/Audits"));
 const Dtbs = lazy(() => import("./pages/Dtbs"));
 const Sessions = lazy(() => import("./pages/Sessions"));
 const Settings = lazy(() => import("./pages/SystemSettings"));
@@ -140,10 +142,22 @@ function AdminConsole({ user }: { user?: AuthUser }) {
             </span>
           </NavLink>
           <nav aria-label="主导航">
-            <NavLink to="/overview" onClick={() => setMenu(false)}>
-              <LayoutDashboardIcon />
-              总览
-            </NavLink>
+            <SidebarGroup
+              label="仪表盘"
+              icon={<LayoutDashboardIcon />}
+              paths={["/overview", "/jobs", "/operations"]}
+            >
+              {[
+                ["/overview", "运行状态"],
+                ["/jobs", "后台任务"],
+                ["/operations", "运营状态"],
+              ].map(([path, label]) => (
+                <NavLink key={path} to={path} onClick={() => setMenu(false)}>
+                  <span className="admin-nav-dot" aria-hidden="true" />
+                  <span>{label}</span>
+                </NavLink>
+              ))}
+            </SidebarGroup>
             <SidebarGroup
               label="板卡管理"
               icon={<CircuitBoardIcon />}
@@ -197,30 +211,15 @@ function AdminConsole({ user }: { user?: AuthUser }) {
             )}
           </nav>
           <nav className="admin-bottom-nav" aria-label="系统导航">
+            <NavLink to="/audits" onClick={() => setMenu(false)}>
+              <ScrollTextIcon />
+              审计日志
+            </NavLink>
             <NavLink to="/settings" onClick={() => setMenu(false)}>
               <SettingsIcon />
               系统设置
             </NavLink>
           </nav>
-          <div className="connection" role="status">
-            <span
-              className={
-                connection === "connected"
-                  ? "connection-dot connected"
-                  : "connection-dot"
-              }
-            />
-            {connection === "connected"
-              ? "实时已连接"
-              : connection === "connecting"
-                ? "正在连接…"
-                : "连接中断，正在重连…"}
-            {connection !== "connected" && (
-              <Button variant="ghost" size="sm" onClick={admin.restart}>
-                重连
-              </Button>
-            )}
-          </div>
         </aside>
         <main>
           <AdminTopbar
@@ -245,6 +244,16 @@ function AdminConsole({ user }: { user?: AuthUser }) {
               <Routes>
                 <Route path="/" element={<Navigate replace to="/overview" />} />
                 <Route path="/overview" element={<Overview />} />
+                <Route path="/jobs" element={<Overview view="jobs" />} />
+                <Route
+                  path="/operations"
+                  element={<Overview view="operations" />}
+                />
+                <Route path="/audits" element={<Audits />} />
+                <Route
+                  path="/dashboard"
+                  element={<Navigate replace to="/overview" />}
+                />
                 <Route path="/boards" element={<Boards />} />
                 <Route path="/boards/new" element={<BoardEditor />} />
                 <Route path="/boards/:boardId" element={<BoardEditor />} />

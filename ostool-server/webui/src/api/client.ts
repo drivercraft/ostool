@@ -62,10 +62,10 @@ export async function refreshAuth() {
   return refreshing;
 }
 
-async function request<T>(
+async function requestResponse(
   path: string,
   options: RequestOptions = {},
-): Promise<T> {
+): Promise<Response> {
   const headers = new Headers(options.headers);
   let body = options.body;
 
@@ -106,7 +106,13 @@ async function request<T>(
     throw new Error(error?.message || `请求失败：${response.status}`);
   }
 
-  return (await readJsonBody<T>(response)) as T;
+  return response;
+}
+async function request<T>(
+  path: string,
+  options: RequestOptions = {},
+): Promise<T> {
+  return (await readJsonBody<T>(await requestResponse(path, options))) as T;
 }
 
 export type AuthConfig = {
@@ -117,6 +123,29 @@ export type AuthConfig = {
 };
 let authConfigRequest: Promise<AuthConfig> | undefined;
 export const api = {
+  auditViewed() {
+    return request<void>("/api/v1/admin/audits/view", { method: "POST" });
+  },
+  auditDetail(id: string) {
+    return request<import("@/types/api").AuditEvent>(
+      `/api/v1/admin/audits/${encodeURIComponent(id)}`,
+    );
+  },
+  async exportAudit(filters: import("@/types/api").AuditFilters) {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters)) {
+      if (value !== undefined && value !== "") params.set(key, String(value));
+    }
+    return (
+      await requestResponse(`/api/v1/admin/audits/export?${params}`)
+    ).blob();
+  },
+  cleanupAudit(keep_days: number) {
+    return request<{ deleted: number }>("/api/v1/admin/audits/cleanup", {
+      method: "POST",
+      bodyJson: { keep_days },
+    });
+  },
   updateProfile(payload: {
     email: string;
     display_name: string;

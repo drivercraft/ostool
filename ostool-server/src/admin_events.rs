@@ -38,6 +38,8 @@ pub const TOPICS: &[&str] = &[
     "deployment",
     "rentals",
     "rental_requests",
+    "dashboard",
+    "audit",
 ];
 const HISTORY_LIMIT: usize = 256;
 
@@ -101,6 +103,12 @@ impl AdminEvents {
                     dirty.insert("boards");
                 }
                 _ => {}
+            }
+            if !matches!(*topic, "dashboard" | "audit") {
+                dirty.insert("dashboard");
+            }
+            if *topic == "ota" {
+                dirty.insert("audit");
             }
         }
         drop(dirty);
@@ -199,7 +207,7 @@ pub async fn subscribe(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<BTreeMap<String, String>>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, crate::api::error::ApiError> {
     subscribe_scoped(state, headers, query, None).await
 }
 
@@ -210,7 +218,7 @@ pub async fn subscribe_account(
     axum::extract::Extension(crate::api::auth::CurrentUser(user)): axum::extract::Extension<
         crate::api::auth::CurrentUser,
     >,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, crate::api::error::ApiError> {
     subscribe_scoped(state, headers, query, Some(user.id)).await
 }
 
@@ -219,7 +227,7 @@ async fn subscribe_scoped(
     headers: HeaderMap,
     query: BTreeMap<String, String>,
     account: Option<uuid::Uuid>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, crate::api::error::ApiError> {
     let events = state.admin_events.clone();
     let mut changed = events.changed.subscribe();
     // Subscribe before checking readiness; publication and its cursor share a lock.
@@ -243,108 +251,119 @@ async fn subscribe_scoped(
     } else {
         None
     };
-    let stream = stream::unfold(
-        (
-            events,
-            changed,
-            cursor,
-            VecDeque::<Update>::new(),
-            database,
-            credential,
-            tokio::time::Instant::now(),
-            false,
-            account.map(|id| (state, id)),
-        ),
-        |(
-            events,
-            mut changed,
-            mut cursor,
-            mut queue,
-            database,
-            credential,
-            mut check_at,
-            finished,
-            account,
-        )| async move {
-            if finished {
-                return None;
-            }
-            loop {
-                if tokio::time::Instant::now() >= check_at {
-                    if let Some(db) = &database {
-                        let valid = if let Some(token) = &credential {
-                            db.authenticate_token(token)
-                                .await
-                                .ok()
-                                .flatten()
-                                .is_some_and(|u| {
-                                    account.as_ref().map_or(u.is_admin, |(_, id)| u.id == *id)
-                                })
-                        } else {
-                            false
-                        };
-                        if !valid {
-                            return Some((
-                                Ok(Event::default()
-                                    .event("auth-expired")
-                                    .data("reauthenticate")),
-                                (
-                                    events, changed, cursor, queue, database, credential, check_at,
-                                    true, account,
-                                ),
-                            ));
-                        }
+    let audit_filters =
+        if account.is_none() && query.get("audit_view").is_some_and(|value| value == "1") {
+            Some(crate::audit::Filters::from_stream(&query)?)
+        } else {
+            None
+        };
+    let guard = state.monitor.stream();
+    let initial = Subscription {
+        events,
+        changed,
+        cursor,
+        queue: VecDeque::new(),
+        database,
+        credential,
+        check_at: tokio::time::Instant::now(),
+        finished: false,
+        account,
+        state,
+        audit_filters,
+        _guard: guard,
+    };
+    let stream = stream::unfold(initial, |mut subscription| async move {
+        if subscription.finished {
+            return None;
+        }
+        loop {
+            if tokio::time::Instant::now() >= subscription.check_at {
+                if let Some(db) = &subscription.database {
+                    let valid = if let Some(token) = &subscription.credential {
+                        db.authenticate_token(token)
+                            .await
+                            .ok()
+                            .flatten()
+                            .is_some_and(|user| {
+                                subscription
+                                    .account
+                                    .map_or(user.is_admin, |id| user.id == id)
+                            })
+                    } else {
+                        false
+                    };
+                    if !valid {
+                        subscription.finished = true;
+                        return Some((
+                            Ok(Event::default()
+                                .event("auth-expired")
+                                .data("reauthenticate")),
+                            subscription,
+                        ));
                     }
-                    check_at = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
                 }
-                if let Some(mut update) = queue.pop_front() {
-                    if let Some((state, user)) = &account {
-                        let relevant = update.kind == "snapshot"
-                            || ["users", "rentals", "rental_requests", "boards"]
-                                .iter()
-                                .any(|key| update.data.contains_key(*key));
-                        // Never serialize the management projection for a member.
-                        update.data.clear();
-                        if relevant {
-                            match crate::api::account::projection(state, *user).await {
-                                Ok(serde_json::Value::Object(data)) => update.data.extend(data),
-                                Ok(_) => unreachable!("account projection is an object"),
-                                Err(error) => {
-                                    update.data.insert(
-                                        "profile".into(),
-                                        serde_json::json!({"error":error.message}),
-                                    );
-                                }
+                subscription.check_at =
+                    tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+            }
+            if let Some(mut update) = subscription.queue.pop_front() {
+                if let Some(user) = subscription.account {
+                    let relevant = update.kind == "snapshot"
+                        || ["users", "rentals", "rental_requests", "boards"]
+                            .iter()
+                            .any(|key| update.data.contains_key(*key));
+                    update.data.clear();
+                    if relevant {
+                        match crate::api::account::projection(&subscription.state, user).await {
+                            Ok(Value::Object(data)) => update.data.extend(data),
+                            Ok(_) => unreachable!("object projection"),
+                            Err(error) => {
+                                update.data.insert(
+                                    "profile".into(),
+                                    serde_json::json!({"error":error.message}),
+                                );
                             }
                         }
                     }
-                    let id = format!("{}:{}", update.epoch, update.revision);
-                    cursor = Some(id.clone());
-                    let event = Event::default()
-                        .id(id)
-                        .event(update.kind)
-                        .json_data(&update)
-                        .expect("JSON projection is serializable");
-                    return Some((
-                        Ok(event),
-                        (
-                            events, changed, cursor, queue, database, credential, check_at, false,
-                            account,
-                        ),
-                    ));
+                } else if update.data.contains_key("audit")
+                    && let Some(filters) = &subscription.audit_filters
+                {
+                    let data = crate::audit::page(&subscription.state, filters)
+                        .await
+                        .unwrap_or_else(|error| serde_json::json!({"error":error.message}));
+                    update.data.insert("audit".into(), data);
                 }
-                queue = events.after(cursor.as_deref());
-                if !queue.is_empty() {
-                    continue;
-                }
-                tokio::select! {
-                    result=changed.changed()=>{if result.is_err(){return None;}},
-                    _=tokio::time::sleep_until(check_at)=>{}
-                }
+                let id = format!("{}:{}", update.epoch, update.revision);
+                subscription.cursor = Some(id.clone());
+                let event = Event::default()
+                    .id(id)
+                    .event(update.kind)
+                    .json_data(update)
+                    .expect("serializable projection");
+                return Some((Ok(event), subscription));
             }
-        },
-    );
-    Sse::new(stream).keep_alive(KeepAlive::default())
+            subscription.queue = subscription.events.after(subscription.cursor.as_deref());
+            if !subscription.queue.is_empty() {
+                continue;
+            }
+            tokio::select! {result=subscription.changed.changed()=>{if result.is_err(){return None;}},_=tokio::time::sleep_until(subscription.check_at)=>{}}
+        }
+    });
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+struct Subscription {
+    events: AdminEvents,
+    changed: watch::Receiver<u64>,
+    cursor: Option<String>,
+    queue: VecDeque<Update>,
+    database: Option<crate::database::Database>,
+    credential: Option<String>,
+    check_at: tokio::time::Instant,
+    finished: bool,
+    account: Option<uuid::Uuid>,
+    state: AppState,
+    audit_filters: Option<crate::audit::Filters>,
+    _guard: crate::dashboard::StreamGuard,
 }
 
 #[cfg(test)]

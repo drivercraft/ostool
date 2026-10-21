@@ -120,6 +120,7 @@ pub async fn get(
 }
 pub async fn create(
     State(state): State<AppState>,
+    context: Option<axum::extract::Extension<crate::audit::Context>>,
     Json(request): Json<PowerRequest>,
 ) -> Result<(StatusCode, Json<PowerResult>), ApiError> {
     if request.request_id.trim().is_empty() || request.request_id.len() > 128 {
@@ -208,7 +209,9 @@ pub async fn create(
     state.admin_events.invalidate(&["power_actions"]);
     let job_state = state.clone();
     tokio::spawn(async move {
+        let started = std::time::Instant::now();
         let outcome = run(&job_state, &request).await;
+        let success = outcome.is_ok();
         {
             let mut actions = job_state.admin_power.0.lock().unwrap();
             let (_, result) = actions
@@ -231,6 +234,9 @@ pub async fn create(
         job_state
             .admin_events
             .invalidate(&["power_actions", "virtual"]);
+        if let Some(context) = context {
+            crate::audit::event(&job_state,&context.0,if success {"power.completed"}else{"power.failed"},if success {"电源操作完成"}else{"电源操作失败"},"power-actions",Some(&request.request_id),success,serde_json::json!({"action":request.action,"duration_ms":started.elapsed().as_millis() as i64})).await;
+        }
     });
     Ok((StatusCode::ACCEPTED, Json(result)))
 }

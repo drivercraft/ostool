@@ -26,6 +26,8 @@ export interface Runtime {
   last_release_error: string | null;
 }
 export interface Resources {
+  audit: import("@/types/api").AuditPage;
+  dashboard: import("@/types/api").DashboardInfo;
   profile: import("./client").AuthUser;
   catalog: import("@/types/api").CatalogBoard[];
   availability: import("@/utils/rental-calendar").RentalWindow[];
@@ -101,6 +103,15 @@ function reconcile(previous: unknown, next: unknown): unknown {
   return next;
 }
 export class AdminStore {
+  private auditFilters: import("@/types/api").AuditFilters | null = null;
+  setAuditFilters = (filters: import("@/types/api").AuditFilters | null) => {
+    if (JSON.stringify(filters) === JSON.stringify(this.auditFilters)) return;
+    this.auditFilters = filters;
+    if (this.source) {
+      this.disconnect();
+      this.connect();
+    }
+  };
   constructor(
     private endpoint = "/api/v1/admin/events",
     private member = false,
@@ -156,9 +167,20 @@ export class AdminStore {
     const token = isPublicEdition()
       ? localStorage.getItem("ostool.access_token")
       : null;
-    const suffix = token ? `?access_token=${encodeURIComponent(token)}` : "";
+    const parameters = new URLSearchParams();
+    if (token) parameters.set("access_token", token);
+    if (this.auditFilters) {
+      parameters.set("audit_view", "1");
+      for (const [key, value] of Object.entries(this.auditFilters)) {
+        if (value !== undefined && value !== "")
+          parameters.set(`audit_${key}`, String(value));
+      }
+    }
+    const suffix = parameters.toString() ? `?${parameters}` : "";
     this.source = new EventSource(`${this.endpoint}${suffix}`);
+    const source = this.source;
     const receive = (event: MessageEvent) => {
+      if (this.source !== source) return;
       try {
         this.apply(JSON.parse(event.data));
       } catch {
@@ -168,6 +190,7 @@ export class AdminStore {
     this.source.addEventListener("snapshot", receive as EventListener);
     this.source.addEventListener("update", receive as EventListener);
     this.source.addEventListener("auth-expired", () => {
+      if (this.source !== source) return;
       this.disconnect();
       void refreshAuth()
         .then(() => api.me())
@@ -181,12 +204,14 @@ export class AdminStore {
         .catch(() => window.location.assign("/login"));
     });
     this.source.onopen = () => {
+      if (this.source !== source) return;
       if (this.epoch) {
         this.connection = "connected";
         this.emit();
       }
     };
     this.source.onerror = () => {
+      if (this.source !== source) return;
       this.connection = "reconnecting";
       this.emit();
     };

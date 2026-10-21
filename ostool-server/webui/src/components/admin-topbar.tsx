@@ -1,3 +1,4 @@
+import { ThemeOptions } from "./theme-options";
 import { useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useTheme } from "next-themes";
@@ -28,14 +29,15 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
 const pageTitles: Record<string, string> = {
-  "/overview": "总览",
+  "/overview": "运行状态",
+  "/jobs": "后台任务",
+  "/operations": "运营状态",
+  "/audits": "审计日志",
   "/boards": "开发板列表",
   "/boards/new": "新建开发板",
   "/dtbs": "DTB 管理",
@@ -49,6 +51,8 @@ const pageTitles: Record<string, string> = {
   "/account": "我的账号",
 };
 const topicPaths: Record<string, string> = {
+  audit: "/audits",
+  dashboard: "/overview",
   boards: "/boards",
   quarantined_boards: "/boards",
   runtimes: "/boards",
@@ -65,6 +69,8 @@ const topicPaths: Record<string, string> = {
   power_actions: "/boards",
 };
 const topicLabels: Record<string, string> = {
+  audit: "审计日志",
+  dashboard: "仪表盘",
   boards: "开发板",
   quarantined_boards: "配置隔离",
   runtimes: "板卡运行状态",
@@ -232,7 +238,7 @@ function Notifications({ menus }: { menus: TopbarMenus }) {
 }
 
 function ThemeMenu({ menus }: { menus: TopbarMenus }) {
-  const { theme, setTheme, resolvedTheme } = useTheme();
+  const { theme, resolvedTheme } = useTheme();
   const Icon =
     theme === "system" ? Monitor : resolvedTheme === "dark" ? Moon : Sun;
   return (
@@ -254,28 +260,10 @@ function ThemeMenu({ menus }: { menus: TopbarMenus }) {
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
-        className="topbar-dropdown"
+        className="topbar-dropdown theme-menu-panel"
         onCloseAutoFocus={menus.restoreFocus}
       >
-        <DropdownMenuLabel>主题</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuRadioGroup
-          value={theme ?? "system"}
-          onValueChange={setTheme}
-        >
-          <DropdownMenuRadioItem value="light">
-            <Sun className="theme-option-icon" />
-            明亮
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="dark">
-            <Moon className="theme-option-icon" />
-            黑暗
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="system">
-            <Monitor className="theme-option-icon" />
-            跟随系统
-          </DropdownMenuRadioItem>
-        </DropdownMenuRadioGroup>
+        <ThemeOptions />
       </DropdownMenuContent>
     </DropdownMenu>
   );

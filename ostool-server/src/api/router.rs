@@ -74,6 +74,8 @@ pub fn build_router(state: AppState) -> Router {
         .merge(super::users::routes())
         .merge(super::rentals::routes())
         .merge(super::account::routes())
+        .merge(crate::audit::routes())
+        .route("/api/v1/admin/dashboard", get(crate::dashboard::get))
         .merge(super::ota::routes())
         .route("/api/v1/admin/events", get(crate::admin_events::subscribe))
         .route(
@@ -224,6 +226,10 @@ pub fn build_router(state: AppState) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             super::auth::middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::audit::middleware,
         ))
         .with_state(state)
 }
@@ -386,7 +392,14 @@ async fn get_dtb(
 async fn create_dtb(
     State(state): State<AppState>,
     request: Request,
-) -> Result<(StatusCode, axum::Json<DtbFileResponse>), ApiError> {
+) -> Result<
+    (
+        StatusCode,
+        axum::extract::Extension<crate::audit::Target>,
+        axum::Json<DtbFileResponse>,
+    ),
+    ApiError,
+> {
     let headers = request.headers();
     let dtb_name = dtb_name_header(headers, "X-Dtb-Name")?;
     let body = read_limited_body(request, DTB_UPLOAD_MAX_MIB, "DTB").await?;
@@ -403,6 +416,7 @@ async fn create_dtb(
     sync_dtb_database(&state, &file, &body).await?;
     Ok((
         StatusCode::CREATED,
+        axum::extract::Extension(crate::audit::Target(dtb_name)),
         axum::Json(DtbFileResponse::from_dtb(file)),
     ))
 }
@@ -421,7 +435,14 @@ fn serial_exclusion_error(error: anyhow::Error) -> ApiError {
 async fn create_board(
     State(state): State<AppState>,
     axum::Json(request): axum::Json<AdminBoardUpsertRequest>,
-) -> Result<(StatusCode, axum::Json<BoardConfig>), ApiError> {
+) -> Result<
+    (
+        StatusCode,
+        axum::extract::Extension<crate::audit::Target>,
+        axum::Json<BoardConfig>,
+    ),
+    ApiError,
+> {
     let _inventory_guard = state.board_inventory_gate.lock().await;
     let board = build_board_config_for_create(&state, request).await?;
     validate_board_config(&board)?;
@@ -456,7 +477,11 @@ async fn create_board(
         .insert(board.id.clone(), board.clone());
     state.sync_board_runtime_states().await;
     state.refresh_serial_exclusions().await?;
-    Ok((StatusCode::CREATED, axum::Json(board)))
+    Ok((
+        StatusCode::CREATED,
+        axum::extract::Extension(crate::audit::Target(board.id.clone())),
+        axum::Json(board),
+    ))
 }
 
 async fn update_board(
@@ -1452,7 +1477,14 @@ async fn create_session(
     State(state): State<AppState>,
     actor: Option<Extension<super::auth::CurrentUser>>,
     axum::Json(request): axum::Json<CreateSessionRequestWithBoardId>,
-) -> Result<(StatusCode, axum::Json<SessionCreatedResponse>), ApiError> {
+) -> Result<
+    (
+        StatusCode,
+        Extension<crate::audit::Target>,
+        axum::Json<SessionCreatedResponse>,
+    ),
+    ApiError,
+> {
     if request.board_type.trim().is_empty() {
         return Err(ApiError::bad_request("board_type must not be empty"));
     }
@@ -1587,6 +1619,7 @@ async fn create_session(
 
     Ok((
         StatusCode::CREATED,
+        Extension(crate::audit::Target(session.id.clone())),
         axum::Json(SessionCreatedResponse {
             session_id: session.id,
             board_id: board.id.clone(),
@@ -3001,6 +3034,20 @@ pub(crate) async fn admin_topic(
         "roles" => serde_json::to_value(super::users::list_roles(extractor).await?.0),
         "deployment" => Ok(super::users::deployment(extractor).await.0),
         "rentals" => serde_json::to_value(super::rentals::list(extractor).await?.0),
+        "dashboard" => Ok(crate::dashboard::projection(state).await),
+        "audit" => {
+            let last: Option<uuid::Uuid> = if let Some(db) = &state.database {
+                sqlx::query_scalar(
+                    "SELECT id FROM audit_events ORDER BY created_at DESC,id DESC LIMIT 1",
+                )
+                .fetch_optional(db.pool())
+                .await
+                .map_err(|_| ApiError::service_unavailable("审计数据库暂时不可用"))?
+            } else {
+                None
+            };
+            Ok(serde_json::json!({"active":false,"revision":state.audit.revision(),"last_id":last}))
+        }
         "rental_requests" => {
             serde_json::to_value(super::account::list_requests(state, None).await?)
         }
@@ -3083,6 +3130,7 @@ mod tests {
 
     fn test_server_config(root: &std::path::Path) -> ServerConfig {
         ServerConfig {
+            audit: Default::default(),
             edition: crate::config::Edition::Local,
             listen_addr: "127.0.0.1:0".parse().unwrap(),
             database: crate::config::DatabaseConfig::default(),

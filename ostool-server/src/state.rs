@@ -116,6 +116,8 @@ fn release_settle_delay(board: &BoardConfig) -> Option<Duration> {
 
 #[derive(Clone)]
 pub struct AppState {
+    pub audit: crate::audit::AuditHealth,
+    pub monitor: crate::dashboard::Monitor,
     pub database: Option<Database>,
     pub serial_manager: ostool_serial::SerialManager,
     pub admin_events: crate::admin_events::AdminEvents,
@@ -245,6 +247,8 @@ pub async fn build_fixture_app_state(
             virtual_boards: virtual_boards.clone(),
         }));
     let state = AppState {
+        audit: crate::audit::AuditHealth::default(),
+        monitor: crate::dashboard::Monitor::default(),
         database,
         serial_manager,
         admin_events: admin_events.clone(),
@@ -834,6 +838,7 @@ impl AppState {
         let mut board_powered_off = false;
         let mut release_settled = false;
         let mut tftp_cleaned = false;
+        let mut failure_audited = false;
 
         loop {
             let mut errors = Vec::new();
@@ -905,7 +910,24 @@ impl AppState {
                     .complete_session_release(&snapshot.board_id, &snapshot.id)
                     .await
                 {
-                    Ok(()) => return,
+                    Ok(()) => {
+                        let state = self.clone();
+                        let id = snapshot.id.clone();
+                        let board = snapshot.board_id.clone();
+                        tokio::spawn(async move {
+                            crate::audit::system_event(
+                                &state,
+                                "session.released",
+                                "会话释放完成",
+                                "sessions",
+                                Some(&id),
+                                true,
+                                serde_json::json!({"board_id":board}),
+                            )
+                            .await;
+                        });
+                        return;
+                    }
                     Err(err) => errors.push(format!("failed to mark board idle: {err:#}")),
                 }
             }
@@ -920,6 +942,24 @@ impl AppState {
                     snapshot.board_id,
                     snapshot.id
                 );
+            }
+            if !failure_audited {
+                failure_audited = true;
+                let state = self.clone();
+                let id = snapshot.id.clone();
+                let board = snapshot.board_id.clone();
+                tokio::spawn(async move {
+                    crate::audit::system_event(
+                        &state,
+                        "session.release_failed",
+                        "会话释放失败，将继续重试",
+                        "sessions",
+                        Some(&id),
+                        false,
+                        serde_json::json!({"board_id":board}),
+                    )
+                    .await;
+                });
             }
             log::warn!(
                 "release for session `{}` failed and will retry in {:?}: {}",

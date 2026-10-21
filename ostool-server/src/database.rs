@@ -363,6 +363,17 @@ impl Database {
             .context("failed to revoke OAuth session")?;
         Ok(())
     }
+    pub async fn refresh_owner(&self, token: &str) -> anyhow::Result<Option<User>> {
+        let id: Option<Uuid> =
+            sqlx::query_scalar("SELECT user_id FROM oauth_sessions WHERE refresh_token_hash=$1")
+                .bind(token_hash(token))
+                .fetch_optional(&self.pool)
+                .await?;
+        match id {
+            Some(id) => self.user_by_id(id).await,
+            None => Ok(None),
+        }
+    }
 
     pub async fn create_device_code(
         &self,

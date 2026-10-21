@@ -5,6 +5,7 @@
 
 @import "./site-workspace.css";
 @import "./list-views.css";
+@import "./admin-experience.css";
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
