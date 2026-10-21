@@ -1,4 +1,22 @@
 /* The same menu skin applies to public/admin Radix portals. */
+/* Ordinary fields and controls use regular weight; section headings retain emphasis. */
+[data-slot="button"],
+[data-slot="label"],
+[data-slot="field-label"],
+[data-slot="input"],
+[data-slot="textarea"],
+[data-slot="native-select"],
+[data-slot="badge"],
+[data-slot="tabs-trigger"],
+[data-slot="table-cell"],
+[data-slot="table-footer"],
+[data-slot="table-cell"] :is(strong, b),
+.data-card :is(strong, b),
+.app-shell .sidebar nav a,
+.site-account-menu strong,
+.site-root .auth-card label {
+  font-weight: 400;
+}
 [data-slot="dropdown-menu-content"] {
   z-index: 80;
   min-width: 168px;
@@ -28,6 +46,7 @@
   font-size: 1rem;
   line-height: 1.4;
   cursor: pointer;
+  font-weight: 400;
 }
 [data-slot="dropdown-menu-content"] [role="menuitemradio"] {
   position: relative;
@@ -87,7 +106,7 @@
 .app-shell .page-panel [data-slot="table-head"] {
   font-family: inherit;
   font-size: 0.875rem;
-  font-weight: 550;
+  font-weight: 400;
 }
 .app-shell .page-panel small,
 .app-shell .page-panel .muted,
@@ -161,7 +180,7 @@
 .dashboard-banner strong {
   display: block;
   font-size: 17px;
-  font-weight: 650;
+  font-weight: 400;
   overflow-wrap: anywhere;
 }
 .dashboard-banner p {
@@ -265,7 +284,7 @@ a.dashboard-metric:hover {
 }
 .dashboard-metric > strong {
   font-size: 25px;
-  font-weight: 650;
+  font-weight: 400;
   line-height: 1.2;
   letter-spacing: -0.03em;
 }
@@ -482,7 +501,7 @@ a.dashboard-metric:hover {
 }
 .dashboard-breakdown strong {
   text-align: right;
-  font-weight: 500;
+  font-weight: 400;
 }
 .dashboard-task-list .table-frame {
   box-shadow: none;
@@ -611,6 +630,7 @@ a.dashboard-metric:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .dashboard-metric > strong {
+    font-weight: 400;
     font-size: 23px;
   }
 }
@@ -631,6 +651,7 @@ a.dashboard-metric:hover {
     gap: 12px;
   }
   .dashboard-metric > strong {
+    font-weight: 400;
     font-size: 20px;
   }
   .dashboard-banner {
@@ -638,6 +659,7 @@ a.dashboard-metric:hover {
     align-items: flex-start;
   }
   .dashboard-banner strong {
+    font-weight: 400;
     font-size: 15px;
   }
   .dashboard-banner-icon {

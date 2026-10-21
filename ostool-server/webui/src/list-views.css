@@ -22,7 +22,7 @@
 }
 .data-card-title {
   font-size: 14px;
-  font-weight: 650;
+  font-weight: 400;
   overflow-wrap: anywhere;
   border-bottom: 1px solid var(--border);
   padding-bottom: 12px;
@@ -47,7 +47,7 @@
 .data-card dt {
   font-size: 11px;
   color: var(--muted-foreground);
-  font-weight: 450;
+  font-weight: 400;
 }
 .data-card dd {
   margin: 0;
@@ -198,7 +198,7 @@
 }
 .rental-day > span {
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
 }
 .rental-day.today > span {
   color: var(--primary);
@@ -266,7 +266,7 @@
 }
 .calendar-reservation strong {
   font-size: 11px;
-  font-weight: 450;
+  font-weight: 400;
   overflow-wrap: anywhere;
 }
 .calendar-free-windows {

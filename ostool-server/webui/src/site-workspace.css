@@ -65,6 +65,7 @@
   margin-left: 0;
 }
 .site-root .site-nav > a {
+  font-weight: 400;
   position: relative;
   padding: 8px 14px;
   color: var(--site-muted);
@@ -72,7 +73,7 @@
 }
 .site-root .site-nav > a.active {
   color: var(--site-accent);
-  font-weight: 650;
+  font-weight: 400;
 }
 .site-root .site-nav > a.active::after {
   content: "";
@@ -142,7 +143,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.875rem;
-  font-weight: 600;
+  font-weight: 400;
 }
 .site-user-copy small {
   font-size: 10px;
@@ -211,6 +212,7 @@
   min-width: 0;
 }
 .member-identity strong {
+  font-weight: 400;
   display: block;
   font-size: 1rem;
   overflow: hidden;
@@ -245,7 +247,7 @@
 .member-sidebar nav a.active {
   color: var(--site-accent);
   background: color-mix(in srgb, var(--site-accent) 10%, var(--site-card));
-  font-weight: 600;
+  font-weight: 400;
 }
 .member-sidebar-note {
   font-size: 0.875rem;
@@ -323,7 +325,7 @@
 }
 .member-metrics strong {
   font-size: 30px;
-  font-weight: 650;
+  font-weight: 400;
   line-height: 1;
 }
 .member-metrics small {
@@ -570,6 +572,7 @@
     margin-right: 15px;
   }
   .site-root .site-nav > a {
+    font-weight: 400;
     padding-inline: 10px;
   }
   .member-workspace {
@@ -601,6 +604,7 @@
     padding: 10px 16px 18px;
   }
   .site-root .site-nav > a {
+    font-weight: 400;
     padding: 12px;
   }
   .site-root .site-nav > a.active::after {
@@ -663,6 +667,7 @@
     font-size: 10px;
   }
   .member-metrics strong {
+    font-weight: 400;
     font-size: 25px;
   }
   .member-facts,

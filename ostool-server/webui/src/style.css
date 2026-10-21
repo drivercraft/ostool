@@ -324,7 +324,7 @@
 .console-nav.active {
   color: #2b67dc;
   background: #eaf1ff;
-  font-weight: 650;
+  font-weight: 400;
 }
 .console-content {
   padding: 24px 25px;
@@ -356,7 +356,7 @@
   gap: 5px;
   color: #29a876;
   font-size: 9px;
-  font-weight: 750;
+  font-weight: 400;
   letter-spacing: 0.08em;
 }
 .console-live i {
@@ -383,6 +383,7 @@
   font-size: 9px;
 }
 .console-metrics strong {
+  font-weight: 400;
   display: block;
   margin: 6px 0 3px;
   color: #263952;
@@ -599,12 +600,14 @@
   color: #d1dded;
 }
 .terminal-lines b {
+  font-weight: 400;
   color: #67a0ff;
 }
 .terminal-lines .dim {
   color: #71849e;
 }
 .terminal-lines strong {
+  font-weight: 400;
   color: #80d7b4;
 }
 .terminal-lines .blue {
@@ -634,7 +637,7 @@
   gap: 8px;
   color: #2568dc;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 400;
   text-decoration: none;
 }
 .text-arrow-link:hover {
@@ -905,7 +908,7 @@
   gap: 7px;
   color: #43556e;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 400;
 }
 .auth-card input {
   width: 100%;
@@ -934,7 +937,7 @@
 .auth-code code {
   color: #2869d8;
   font-size: 14px;
-  font-weight: 750;
+  font-weight: 400;
   letter-spacing: 0.08em;
 }
 .auth-submit {
@@ -1306,7 +1309,7 @@
   .auth-card label {
     display: grid;
     gap: 7px;
-    font-weight: 550;
+    font-weight: 400;
   }
   .auth-card input {
     width: 100%;
@@ -1903,7 +1906,7 @@
 }
 .board-name {
   color: var(--foreground);
-  font-weight: 600;
+  font-weight: 400;
 }
 .board-name:hover {
   color: var(--primary);
@@ -2643,7 +2646,7 @@ body:has(.app-shell) {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 400;
 }
 .account-menu-card small {
   margin: 0;
@@ -2695,7 +2698,7 @@ body:has(.app-shell) {
 }
 .notification-item strong {
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
 }
 .notification-item small {
   margin-top: 5px;
