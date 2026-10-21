@@ -17,6 +17,7 @@ use std::{
 use tokio::sync::{Notify, watch};
 
 pub const TOPICS: &[&str] = &[
+    "security_revision",
     "boards",
     "runtimes",
     "sessions",
@@ -221,6 +222,18 @@ pub async fn subscribe_account(
     subscribe_scoped(state, headers, query, Some(user.id)).await
 }
 
+pub async fn subscribe_security(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(mut query): Query<BTreeMap<String, String>>,
+    axum::extract::Extension(crate::api::auth::CurrentUser(user)): axum::extract::Extension<
+        crate::api::auth::CurrentUser,
+    >,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, crate::api::error::ApiError> {
+    query.insert("security_view".into(), "1".into());
+    subscribe_scoped(state, headers, query, Some(user.id)).await
+}
+
 async fn subscribe_scoped(
     state: AppState,
     headers: HeaderMap,
@@ -239,12 +252,23 @@ async fn subscribe_scoped(
         .get("last-event-id")
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
+    let cookie_config = state.config.read().await.clone();
     let credential = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(str::to_owned)
-        .or_else(|| query.get("access_token").cloned());
+        .or_else(|| {
+            let surface = if query.get("surface").is_some_and(|value| value == "admin") {
+                crate::security::web::Surface::Admin
+            } else if account.is_some() {
+                crate::security::web::Surface::Website
+            } else {
+                crate::security::web::Surface::Admin
+            };
+            let name = surface.cookie_name(false, crate::security::web::secure(&cookie_config));
+            crate::security::web::cookie(&headers, &name).map(str::to_owned)
+        });
     let database = if state.config.read().await.edition.is_public() {
         Some(state.database.clone())
     } else {
@@ -256,6 +280,16 @@ async fn subscribe_scoped(
         } else {
             None
         };
+    let security_only = query.get("security_view").is_some_and(|value| value == "1");
+    let current_session = if let Some(token) = credential.as_ref() {
+        state
+            .database
+            .authenticate_credential(token)
+            .await?
+            .and_then(|value| value.session_id)
+    } else {
+        None
+    };
     let guard = state.monitor.stream();
     let initial = Subscription {
         events,
@@ -267,6 +301,8 @@ async fn subscribe_scoped(
         check_at: tokio::time::Instant::now(),
         finished: false,
         account,
+        security_only,
+        current_session,
         state,
         audit_filters,
         _guard: guard,
@@ -307,12 +343,28 @@ async fn subscribe_scoped(
             if let Some(mut update) = subscription.queue.pop_front() {
                 if let Some(user) = subscription.account {
                     let relevant = update.kind == "snapshot"
-                        || ["users", "rentals", "rental_requests", "boards"]
-                            .iter()
-                            .any(|key| update.data.contains_key(*key));
+                        || [
+                            "users",
+                            "rentals",
+                            "rental_requests",
+                            "boards",
+                            "security_revision",
+                        ]
+                        .iter()
+                        .any(|key| update.data.contains_key(*key));
                     update.data.clear();
                     if relevant {
-                        match crate::api::account::projection(&subscription.state, user).await {
+                        let projection = if subscription.security_only {
+                            crate::security::projection(
+                                &subscription.state,
+                                user,
+                                subscription.current_session,
+                            )
+                            .await
+                        } else {
+                            crate::api::account::projection(&subscription.state, user).await
+                        };
+                        match projection {
                             Ok(Value::Object(data)) => update.data.extend(data),
                             Ok(_) => unreachable!("object projection"),
                             Err(error) => {
@@ -360,6 +412,8 @@ struct Subscription {
     check_at: tokio::time::Instant,
     finished: bool,
     account: Option<uuid::Uuid>,
+    security_only: bool,
+    current_session: Option<uuid::Uuid>,
     state: AppState,
     audit_filters: Option<crate::audit::Filters>,
     _guard: crate::dashboard::StreamGuard,

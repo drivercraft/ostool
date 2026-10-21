@@ -1,3 +1,4 @@
+import { solveCaptcha, apiLogin, apiRegister } from "../fixtures/security";
 import { expect, test } from "playwright/test";
 test("standalone rental calendar, live conflicts and persistent card layouts", async ({
   page,
@@ -7,12 +8,8 @@ test("standalone rental calendar, live conflicts and persistent card layouts", a
   test.skip(!base, "requires disposable PostgreSQL public server");
   const email = process.env.OSTOOL_E2E_ADMIN_EMAIL ?? "admin@example.com",
     password = process.env.OSTOOL_E2E_ADMIN_PASSWORD ?? "admin-password-123";
-  const login = await (
-    await request.post(`${base}/api/v1/auth/login`, {
-      data: { email, password },
-    })
-  ).json();
-  const headers = { authorization: `Bearer ${login.access_token}` };
+  const login = await apiLogin(request, base!, email, password);
+  const headers = { authorization: "Bearer " + login.accessToken };
   const me = await (
     await request.get(`${base}/api/v1/auth/me`, { headers })
   ).json();
@@ -60,6 +57,7 @@ test("standalone rental calendar, live conflicts and persistent card layouts", a
   await page.goto(`${base}/admin/login?redirect=/admin/rentals`);
   await page.getByLabel("邮箱", { exact: true }).fill(email);
   await page.getByLabel("密码", { exact: true }).fill(password);
+  await solveCaptcha(page);
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await expect(page).toHaveURL(`${base}/admin/rentals`);
   await page.getByRole("link", { name: "新增租赁", exact: true }).click();

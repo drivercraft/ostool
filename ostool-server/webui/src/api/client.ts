@@ -1,4 +1,9 @@
-import { accessToken, refreshToken, authKeys } from "@/auth-session";
+import {
+  authSurface,
+  clearBrowserSession,
+  notifyAuthChanged,
+} from "@/auth-session";
+export { clearBrowserSession, notifyAuthChanged } from "@/auth-session";
 import type { UserInput, RoleInput } from "@/types/api";
 import type {
   AdminBoardUpsertRequest,
@@ -38,29 +43,55 @@ async function readJsonBody<T>(response: Response): Promise<T | undefined> {
 
 let runtimeEdition: "local" | "public" = "local";
 export const isPublicEdition = () => runtimeEdition === "public";
+export class ApiRequestError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public status: number,
+    public details?: Record<string, unknown>,
+  ) {
+    super(message);
+  }
+}
 let refreshing: Promise<void> | undefined;
 export async function refreshAuth() {
+  const refresh = async () => {
+    const response = await fetch("/api/v1/auth/refresh", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "x-ostool-surface": authSurface() },
+    });
+    if (!response.ok) {
+      clearBrowserSession();
+      throw new ApiRequestError("登录已过期，请重新登录", "unauthorized", 401);
+    }
+  };
   if (!refreshing)
-    refreshing = (async () => {
-      const refresh = refreshToken();
-      if (!refresh) throw new Error("请重新登录");
-      const response = await fetch("/oauth/token", {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          grant_type: "refresh_token",
-          refresh_token: refresh,
-        }),
-      });
-      if (!response.ok) {
-        clearAuthToken();
-        throw new Error("登录已过期，请重新登录");
-      }
-      saveAuthToken(await response.json());
-    })().finally(() => {
+    refreshing = (
+      navigator.locks
+        ? navigator.locks.request<void>(
+            `ostool:${authSurface()}:refresh`,
+            async () => {
+              await refresh();
+            },
+          )
+        : refresh()
+    ).finally(() => {
       refreshing = undefined;
     });
   return refreshing;
+}
+let stepUp: Promise<void> | undefined;
+function verifyIdentity() {
+  if (!stepUp)
+    stepUp = new Promise<void>((resolve, reject) =>
+      window.dispatchEvent(
+        new CustomEvent("ostool:step-up", { detail: { resolve, reject } }),
+      ),
+    ).finally(() => {
+      stepUp = undefined;
+    });
+  return stepUp;
 }
 
 async function requestResponse(
@@ -75,37 +106,56 @@ async function requestResponse(
     body = JSON.stringify(options.bodyJson);
   }
 
-  let response = await fetch(path, {
-    ...options,
-    headers: (() => {
-      const credential = accessToken();
-      if (isPublicEdition() && credential)
-        headers.set("authorization", `Bearer ${credential}`);
-      return headers;
-    })(),
-    body,
-  }).catch(() => {
-    throw new Error(NETWORK_ERROR_MESSAGE);
-  });
-
+  headers.set("x-ostool-surface", authSurface());
+  const send = () =>
+    fetch(path, {
+      ...options,
+      credentials: "same-origin",
+      headers,
+      body,
+    }).catch(() => {
+      throw new Error(NETWORK_ERROR_MESSAGE);
+    });
+  let response = await send();
+  const authentication =
+    path.startsWith("/api/v1/auth/") &&
+    ![
+      "/api/v1/auth/me",
+      "/api/v1/auth/device/authorize",
+      "/api/v1/auth/personal-access-tokens",
+    ].includes(path) &&
+    !path.startsWith("/api/v1/auth/security");
   if (
     isPublicEdition() &&
     response.status === 401 &&
-    refreshToken() &&
-    ![
-      "/api/v1/auth/login",
-      "/api/v1/auth/register",
-      "/api/v1/admin/auth/login",
-    ].includes(path)
+    !authentication &&
+    path !== "/api/v1/admin/auth/login"
   ) {
     await refreshAuth();
-    headers.set("authorization", `Bearer ${accessToken()}`);
-    response = await fetch(path, { ...options, headers, body });
+    response = await send();
   }
   if (!response.ok) {
     const error =
       (await readJsonBody<ErrorResponse>(response).catch(() => null)) ?? null;
-    throw new Error(error?.message || `请求失败：${response.status}`);
+    if (
+      response.status === 403 &&
+      error?.code === "reauth_required" &&
+      path !== "/api/v1/auth/step-up"
+    ) {
+      await verifyIdentity();
+      response = await send();
+      if (response.ok) return response;
+    }
+    const failure = response.bodyUsed
+      ? error
+      : ((await readJsonBody<ErrorResponse>(response).catch(() => null)) ??
+        error);
+    throw new ApiRequestError(
+      failure?.message || `请求失败：${response.status}`,
+      failure?.code || "request_failed",
+      response.status,
+      failure?.details as Record<string, unknown> | undefined,
+    );
   }
 
   return response;
@@ -122,6 +172,9 @@ export type AuthConfig = {
   enabled: boolean;
   allow_registration: boolean;
   database_available: boolean;
+  captcha_required: boolean;
+  registration_email_verification: boolean;
+  email_security_available: boolean;
 };
 let authConfigRequest: Promise<AuthConfig> | undefined;
 export const api = {
@@ -243,40 +296,132 @@ export const api = {
     return request<void>(`/api/v1/admin/roles/${id}`, { method: "DELETE" });
   },
   async logout() {
-    const refresh = refreshToken();
     try {
-      if (refresh)
-        await fetch("/oauth/revoke", {
-          method: "POST",
-          headers: { "content-type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({ token: refresh }),
-        });
+      await fetch("/api/v1/auth/logout", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "x-ostool-surface": authSurface() },
+      });
     } finally {
-      clearAuthToken();
+      clearBrowserSession();
     }
   },
-  adminLogin(email: string, password: string) {
-    return request<AuthToken>("/api/v1/admin/auth/login", {
+  adminLogin(email: string, password: string, verification: HumanProof) {
+    return request<LoginResult>("/api/v1/admin/auth/login", {
       method: "POST",
-      bodyJson: { email, password },
+      bodyJson: { email, password, verification },
     });
   },
-  login(email: string, password: string) {
-    return request<AuthToken>("/api/v1/auth/login", {
+  login(email: string, password: string, verification: HumanProof) {
+    return request<LoginResult>("/api/v1/auth/login", {
       method: "POST",
-      bodyJson: { email, password },
+      bodyJson: { email, password, verification },
     });
   },
-  register(email: string, password: string, displayName?: string) {
-    return request<AuthToken>("/api/v1/auth/register", {
+  register(
+    email: string,
+    password: string,
+    displayName: string,
+    verification: HumanProof,
+    emailChallenge?: { id: string; code: string },
+  ) {
+    return request<LoginResult>("/api/v1/auth/register", {
       method: "POST",
-      bodyJson: { email, password, display_name: displayName || null },
+      bodyJson: {
+        email,
+        password,
+        display_name: displayName || null,
+        verification,
+        email_challenge_id: emailChallenge?.id,
+        email_code: emailChallenge?.code,
+      },
     });
   },
-  authorizeDevice(userCode: string) {
+  captcha(action: HumanAction) {
+    return request<HumanChallenge>(`/api/v1/auth/captcha?action=${action}`);
+  },
+  verifyMfa(challenge_id: string, code: string) {
+    return request<LoginResult>("/api/v1/auth/mfa/verify", {
+      method: "POST",
+      bodyJson: { challenge_id, code },
+    });
+  },
+  stepUp(password: string, code: string) {
+    return request<void>("/api/v1/auth/step-up", {
+      method: "POST",
+      bodyJson: { password, code },
+    });
+  },
+  securityStatus() {
+    return request<SecurityStatus>("/api/v1/auth/security");
+  },
+  enrollMfa() {
+    return request<MfaEnrollment>("/api/v1/auth/security/enrollment", {
+      method: "POST",
+    });
+  },
+  confirmMfa(challenge_id: string, code: string) {
+    return request<{ recovery_codes: string[] }>(
+      "/api/v1/auth/security/confirm",
+      { method: "POST", bodyJson: { challenge_id, code } },
+    );
+  },
+  disableMfa() {
+    return request<void>("/api/v1/auth/security/mfa", { method: "DELETE" });
+  },
+  regenerateRecoveryCodes() {
+    return request<{ recovery_codes: string[] }>(
+      "/api/v1/auth/security/recovery-codes",
+      { method: "POST" },
+    );
+  },
+  securitySessions() {
+    return request<{ sessions: SecuritySession[] }>(
+      "/api/v1/auth/security/sessions",
+    );
+  },
+  revokeSession(id: string) {
+    return request<{ current: boolean }>(
+      `/api/v1/auth/security/sessions/${id}`,
+      { method: "DELETE" },
+    );
+  },
+  revokeOtherSessions() {
+    return request<void>("/api/v1/auth/security/sessions/others", {
+      method: "POST",
+    });
+  },
+  emailCode(
+    email: string,
+    action: "register" | "password_reset",
+    verification: HumanProof,
+  ) {
+    return request<EmailChallenge>("/api/v1/auth/email-code", {
+      method: "POST",
+      bodyJson: { email, action, verification },
+    });
+  },
+  resetPassword(challenge_id: string, code: string, new_password: string) {
+    return request<void>("/api/v1/auth/password-reset", {
+      method: "POST",
+      bodyJson: { challenge_id, code, new_password },
+    });
+  },
+  verifyEmailSend() {
+    return request<EmailChallenge>("/api/v1/auth/security/email", {
+      method: "POST",
+    });
+  },
+  verifyEmailConfirm(challenge_id: string, code: string) {
+    return request<void>("/api/v1/auth/security/email/confirm", {
+      method: "POST",
+      bodyJson: { challenge_id, code },
+    });
+  },
+  authorizeDevice(user_code: string) {
     return request<void>("/api/v1/auth/device/authorize", {
       method: "POST",
-      bodyJson: { user_code: userCode },
+      bodyJson: { user_code },
     });
   },
   me() {
@@ -471,12 +616,57 @@ export const api = {
   },
 };
 
-export interface AuthToken {
-  access_token: string;
-  refresh_token: string;
-  token_type: string;
+export type HumanAction =
+  | "login"
+  | "admin_login"
+  | "register"
+  | "registration_email"
+  | "password_reset";
+export interface HumanProof {
+  captcha_id?: string;
+  captcha_code?: string;
+}
+export interface HumanChallenge {
+  id: string;
+  action: HumanAction;
+  provider: "image" | "turnstile";
+  image_data_url?: string;
+  site_key?: string;
   expires_in: number;
-  scope: string;
+}
+export type LoginResult =
+  | { authenticated: true; enrollment_required?: boolean; mfa_required?: false }
+  | { mfa_required: true; challenge_id: string; expires_in: number };
+export interface SecurityStatus {
+  enabled: boolean;
+  available: boolean;
+  recovery_codes_remaining: number;
+  email_verified: boolean;
+  email_verification_available: boolean;
+  require_admin_mfa: boolean;
+}
+export interface MfaEnrollment {
+  challenge_id: string;
+  secret: string;
+  otpauth_uri: string;
+  qr_image: string;
+  expires_in: number;
+}
+export interface SecuritySession {
+  id: string;
+  client: string;
+  created_at: string;
+  last_seen_at: string;
+  expires_at: string;
+  ip: string | null;
+  user_agent: string | null;
+  current: boolean;
+}
+export interface EmailChallenge {
+  challenge_id: string;
+  expires_in: number;
+  resend_after: number;
+  message: string;
 }
 
 export interface AuthUser {
@@ -484,6 +674,7 @@ export interface AuthUser {
   email: string;
   display_name: string | null;
   is_admin: boolean;
+  mfa_enrollment_required?: boolean;
 }
 
 export interface PersonalAccessToken {
@@ -491,16 +682,4 @@ export interface PersonalAccessToken {
   token: string;
   name: string;
   expires_at: string | null;
-}
-
-export function saveAuthToken(token: AuthToken) {
-  localStorage.setItem(authKeys().access, token.access_token);
-  localStorage.setItem(authKeys().refresh, token.refresh_token);
-  window.dispatchEvent(new Event(authKeys().event));
-}
-
-export function clearAuthToken() {
-  localStorage.removeItem(authKeys().access);
-  localStorage.removeItem(authKeys().refresh);
-  window.dispatchEvent(new Event(authKeys().event));
 }

@@ -43,16 +43,24 @@ pub struct RevokeForm {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RegisterRequest {
     pub email: String,
     pub password: String,
     pub display_name: Option<String>,
+    #[serde(default)]
+    pub verification: crate::security::captcha::HumanProof,
+    pub email_challenge_id: Option<Uuid>,
+    pub email_code: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
+    #[serde(default)]
+    pub verification: crate::security::captcha::HumanProof,
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,6 +119,12 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/admin/auth/login", post(admin_login))
         .route("/api/v1/auth/me", get(me))
+        .route("/api/v1/auth/refresh", post(browser_refresh))
+        .route("/api/v1/auth/logout", post(browser_logout))
+        .merge(crate::security::captcha::routes())
+        .merge(crate::security::mfa::routes())
+        .merge(crate::security::mail::routes())
+        .merge(crate::security::sessions::routes())
         .route("/api/v1/auth/device/authorize", post(authorize_device))
         .route("/api/v1/auth/device/{user_code}", get(device_status))
         .route(
@@ -149,37 +163,97 @@ pub async fn middleware(
         }
         return next.run(request).await;
     }
+    let hardware_config = state.config.read().await.clone();
+    if (path.starts_with("/share/sessions/") || path.starts_with("/boot/sessions/"))
+        && request
+            .extensions()
+            .get::<crate::security::store::ClientContext>()
+            .is_some_and(|client| crate::security::web::hardware_allowed(&hardware_config, client))
+    {
+        return next.run(request).await;
+    }
     if is_public_path(path) {
         return next.run(request).await;
     }
-    let database = &state.database;
-    let Some(token) = bearer_token(request.headers()).or_else(|| {
-        (matches!(path, "/api/v1/admin/events" | "/api/v1/account/events"))
-            .then(|| request.uri().query())
-            .flatten()
-            .and_then(|query| {
-                query
-                    .split('&')
-                    .find_map(|part| part.strip_prefix("access_token="))
-            })
-    }) else {
-        return ApiError::unauthorized("Bearer access token is required").into_response();
+    let config = state.config.read().await.clone();
+    let surface =
+        crate::security::web::Surface::from_request(request.headers(), path, request.uri().query());
+    let supplied_bearer = bearer_token(request.headers());
+    let cookie_name = surface.cookie_name(false, crate::security::web::secure(&config));
+    let token =
+        supplied_bearer.or_else(|| crate::security::web::cookie(request.headers(), &cookie_name));
+    let Some(token) = token else {
+        return ApiError::unauthorized("请登录后继续操作").into_response();
     };
-    let user = match database.authenticate_token(token).await {
-        Ok(Some(user)) => user,
-        Ok(None) => {
-            return ApiError::unauthorized("access token is invalid or expired").into_response();
-        }
+    let mut credential = match state.database.authenticate_credential(token).await {
+        Ok(Some(credential)) => credential,
+        Ok(None) => return ApiError::unauthorized("登录已过期，请重新登录").into_response(),
         Err(error) => {
-            return ApiError::service_unavailable(format!("authentication unavailable: {error:#}"))
-                .into_response();
+            log::error!("authentication failed: {error:#}");
+            return ApiError::service_unavailable("身份验证暂时不可用").into_response();
         }
     };
-    if path.starts_with("/api/v1/admin") && !user.is_admin {
-        return ApiError::forbidden("administrator role is required").into_response();
+    if supplied_bearer.is_none() && credential.client_id != surface.client() {
+        return ApiError::unauthorized("请登录当前站点").into_response();
+    }
+    let user = credential.user.clone();
+    // A deployment may enable mandatory MFA while older administrator sessions exist.
+    if config.security.require_admin_mfa && user.is_admin && credential.client_id == "admin-web" {
+        let enrolled: bool = match sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM mfa_credentials WHERE user_id=$1)",
+        )
+        .bind(user.id)
+        .fetch_one(state.database.pool())
+        .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                log::error!("MFA policy lookup failed: {error}");
+                return ApiError::service_unavailable("身份验证暂时不可用").into_response();
+            }
+        };
+        if !enrolled {
+            credential.scope = "mfa:enroll".into();
+        }
+    }
+    if credential.scope == "mfa:enroll"
+        && !matches!(
+            path,
+            "/api/v1/auth/me"
+                | "/api/v1/auth/security"
+                | "/api/v1/auth/security/events"
+                | "/api/v1/auth/step-up"
+                | "/api/v1/auth/security/enrollment"
+                | "/api/v1/auth/security/confirm"
+        )
+    {
+        return ApiError::new(
+            StatusCode::FORBIDDEN,
+            "mfa_enrollment_required",
+            "请先启用管理员双重验证",
+        )
+        .into_response();
+    }
+    if path.starts_with("/api/v1/admin/") && (!user.is_admin || credential.client_id != "admin-web")
+    {
+        return ApiError::forbidden("请使用管理员账号登录管理后台").into_response();
+    }
+    if credential.client_id == "pat"
+        && (path.starts_with("/api/v1/account")
+            || (path.starts_with("/api/v1/auth/") && path != "/api/v1/auth/me"))
+    {
+        return ApiError::forbidden("个人访问令牌仅用于 CLI 板卡操作").into_response();
+    }
+    if crate::security::web::sensitive(request.method(), path)
+        && let Err(error) = crate::security::web::require_step_up(&credential)
+    {
+        return error.into_response();
     }
     if !user.is_admin
-        && let Some(tail) = path.strip_prefix("/api/v1/sessions/")
+        && let Some(tail) = path
+            .strip_prefix("/api/v1/sessions/")
+            .or_else(|| path.strip_prefix("/share/sessions/"))
+            .or_else(|| path.strip_prefix("/boot/sessions/"))
     {
         let session_id = tail.split('/').next().unwrap_or_default();
         match sqlx::query_scalar::<_, bool>(
@@ -187,7 +261,7 @@ pub async fn middleware(
         )
         .bind(session_id)
         .bind(user.id)
-        .fetch_one(database.pool())
+        .fetch_one(state.database.pool())
         .await
         {
             Ok(true) => {}
@@ -198,6 +272,9 @@ pub async fn middleware(
             }
         }
     }
+    request
+        .extensions_mut()
+        .insert(crate::security::web::CurrentCredential(credential));
     request.extensions_mut().insert(CurrentUser(user.clone()));
     let mut response = next.run(request).await;
     response.extensions_mut().insert(CurrentUser(user));
@@ -207,6 +284,7 @@ pub async fn middleware(
 fn is_public_path(path: &str) -> bool {
     path == "/"
         || path == "/register"
+        || path == "/password-reset"
         || path == "/account"
         || path.starts_with("/account/")
         || path.starts_with("/admin")
@@ -222,6 +300,12 @@ fn is_public_path(path: &str) -> bool {
         || path == "/api/v1/auth/config"
         || path == "/api/v1/auth/register"
         || path == "/api/v1/auth/login"
+        || path == "/api/v1/auth/captcha"
+        || path == "/api/v1/auth/email-code"
+        || path == "/api/v1/auth/password-reset"
+        || path == "/api/v1/auth/mfa/verify"
+        || path == "/api/v1/auth/refresh"
+        || path == "/api/v1/auth/logout"
         || path.starts_with("/api/v1/loaders/")
         || path == "/healthz"
         || path.starts_with("/admin/assets/")
@@ -267,14 +351,25 @@ async fn device_code(
     let scope = form
         .scope
         .unwrap_or_else(|| "board:operate offline_access".into());
+    if scope
+        .split_whitespace()
+        .any(|scope| !matches!(scope, "board:operate" | "offline_access"))
+    {
+        return Err(oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_scope",
+            "unsupported scope",
+        ));
+    }
     let (device_code, user_code, expires_at, interval) = database
         .create_device_code(&form.client_id, &scope, &config)
         .await
         .map_err(|error| {
+            log::error!("OAuth operation failed: {error:#}");
             oauth_error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "server_error",
-                &error.to_string(),
+                "authentication temporarily unavailable",
             )
         })?;
     let origin = config
@@ -323,11 +418,12 @@ async fn token(
             match database
                 .poll_device_code(code, &config)
                 .await
-                .map_err(|e| {
+                .map_err(|error| {
+                    log::error!("OAuth operation failed: {error:#}");
                     oauth_error(
                         StatusCode::SERVICE_UNAVAILABLE,
                         "server_error",
-                        &e.to_string(),
+                        "authentication temporarily unavailable",
                     )
                 })? {
                 DevicePoll::Pending => {
@@ -363,13 +459,14 @@ async fn token(
                 ));
             };
             database
-                .refresh(refresh, &config)
+                .refresh_for_client(refresh, &config, Some(DEVICE_CLIENT_ID))
                 .await
-                .map_err(|e| {
+                .map_err(|error| {
+                    log::error!("OAuth operation failed: {error:#}");
                     oauth_error(
                         StatusCode::SERVICE_UNAVAILABLE,
                         "server_error",
-                        &e.to_string(),
+                        "authentication temporarily unavailable",
                     )
                 })?
                 .ok_or_else(|| {
@@ -404,13 +501,17 @@ async fn revoke(
     let actor = database.refresh_owner(&form.token).await.map_err(|_| {
         ApiError::service_unavailable("unable to resolve logout identity").into_response()
     })?;
-    database.revoke_refresh(&form.token).await.map_err(|e| {
-        oauth_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "server_error",
-            &e.to_string(),
-        )
-    })?;
+    database
+        .revoke_refresh(&form.token)
+        .await
+        .map_err(|error| {
+            log::error!("OAuth revocation failed: {error:#}");
+            oauth_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_error",
+                "authentication temporarily unavailable",
+            )
+        })?;
     let mut response = StatusCode::NO_CONTENT.into_response();
     if let Some(actor) = actor {
         response.extensions_mut().insert(CurrentUser(actor));
@@ -420,103 +521,195 @@ async fn revoke(
 
 async fn register(
     State(state): State<AppState>,
+    Extension(client): Extension<crate::security::store::ClientContext>,
     Json(request): Json<RegisterRequest>,
-) -> Result<(StatusCode, Extension<CurrentUser>, Json<TokenResponse>), ApiError> {
+) -> Result<Response, ApiError> {
     let (database, config) = database(&state).await?;
     if !config.allow_registration {
-        return Err(ApiError::forbidden("registration is disabled"));
+        return Err(ApiError::forbidden("注册暂未开放"));
     }
+    crate::security::store::limit(database.pool(), "register-ip", &client.ip, 6, 3600).await?;
+    crate::security::captcha::verify(
+        &state,
+        &client,
+        crate::security::captcha::HumanAction::Register,
+        &request.verification,
+    )
+    .await?;
+    crate::security::crypto::validate_password(&request.password)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
     if request
         .display_name
         .as_ref()
-        .is_some_and(|name| name.len() > 120)
+        .is_some_and(|v| v.chars().count() > 120)
     {
         return Err(ApiError::bad_request("显示名称不超过 120 个字符"));
     }
+    let email = crate::persistence::postgres::normalize_email(&request.email)
+        .map_err(|_| ApiError::bad_request("邮箱格式无效"))?;
+    // Consume optional one-time email proof before creating the account.
+    let verified = crate::security::mail::registration_proof(
+        &state,
+        &email,
+        request.email_challenge_id,
+        request.email_code.as_deref(),
+    )
+    .await?;
     let user = database
         .create_user(
-            &request.email,
+            &email,
             &request.password,
             request.display_name.as_deref(),
             false,
         )
         .await
         .map_err(|error| {
-            if error
-                .chain()
-                .filter_map(|e| e.downcast_ref::<sqlx::Error>())
-                .any(|e| {
-                    e.as_database_error()
-                        .is_some_and(|e| e.is_unique_violation())
-                })
-            {
-                ApiError::conflict("该邮箱已注册，请直接登录")
-            } else if request.password.len() < 12 || request.password.len() > 1024 {
-                ApiError::bad_request("密码长度需要 12 至 1024 个字符")
-            } else if crate::persistence::postgres::normalize_email(&request.email).is_err() {
-                ApiError::bad_request("邮箱格式无效")
-            } else {
-                log::error!("registration failed: {error:#}");
-                ApiError::service_unavailable("注册暂时不可用，请稍后重试")
-            }
+            log::warn!("registration could not complete: {error}");
+            ApiError::bad_request("无法完成注册，请检查注册信息或登录已有账号")
         })?;
+    if verified {
+        sqlx::query("UPDATE users SET email_verified_at=now() WHERE id=$1")
+            .bind(user.id)
+            .execute(database.pool())
+            .await?;
+    }
     state.admin_events.invalidate(&["users"]);
-    let grant = database
-        .issue_grant(user, "web", "board:operate offline_access", &config)
-        .await?;
-    Ok((
-        StatusCode::CREATED,
-        Extension(CurrentUser(grant.user.clone())),
-        Json(token_response(grant)),
-    ))
+    let mut response = crate::security::mfa::begin_login(
+        &state,
+        user,
+        crate::security::web::Surface::Website,
+        &client,
+    )
+    .await?;
+    *response.status_mut() = StatusCode::CREATED;
+    Ok(response)
 }
-
+async fn password_login(
+    state: &AppState,
+    client: &crate::security::store::ClientContext,
+    request: LoginRequest,
+    admin: bool,
+) -> Result<Response, ApiError> {
+    use crate::security::{
+        captcha::{self, HumanAction},
+        store,
+        web::Surface,
+    };
+    let (database, _) = database(state).await?;
+    let config = state.config.read().await.security.clone();
+    let identity = format!("{}:{}", request.email.trim().to_lowercase(), client.ip);
+    store::limit(
+        database.pool(),
+        if admin { "admin-login" } else { "web-login" },
+        &identity,
+        config.login_max_failures as i32,
+        config.login_lock_secs as i64,
+    )
+    .await?;
+    store::limit(
+        database.pool(),
+        "login-account",
+        &request.email.trim().to_lowercase(),
+        config.login_max_failures as i32 * 3,
+        config.login_lock_secs as i64,
+    )
+    .await?;
+    captcha::verify(
+        state,
+        client,
+        if admin {
+            HumanAction::AdminLogin
+        } else {
+            HumanAction::Login
+        },
+        &request.verification,
+    )
+    .await?;
+    if request.email.len() > 320 || request.password.len() > 1024 {
+        return Err(ApiError::unauthorized("邮箱或密码不正确"));
+    }
+    let user = database
+        .authenticate_password(&request.email, &request.password)
+        .await?
+        .filter(|user| !admin || user.is_admin)
+        .ok_or_else(|| ApiError::unauthorized("邮箱或密码不正确"))?;
+    store::clear_limit(
+        database.pool(),
+        if admin { "admin-login" } else { "web-login" },
+        &identity,
+    )
+    .await?;
+    store::clear_limit(
+        database.pool(),
+        "login-account",
+        &request.email.trim().to_lowercase(),
+    )
+    .await?;
+    crate::security::mfa::begin_login(
+        state,
+        user,
+        if admin {
+            Surface::Admin
+        } else {
+            Surface::Website
+        },
+        client,
+    )
+    .await
+}
 async fn login(
     State(state): State<AppState>,
+    Extension(client): Extension<crate::security::store::ClientContext>,
     Json(request): Json<LoginRequest>,
-) -> Result<(Extension<CurrentUser>, Json<TokenResponse>), ApiError> {
-    let (database, config) = database(&state).await?;
-    let user = database
-        .authenticate_password(&request.email, &request.password)
-        .await?
-        .ok_or_else(|| ApiError::unauthorized("email or password is incorrect"))?;
-    let grant = database
-        .issue_grant(user, "web", "board:operate offline_access", &config)
-        .await?;
-    Ok((
-        Extension(CurrentUser(grant.user.clone())),
-        Json(token_response(grant)),
-    ))
+) -> Result<Response, ApiError> {
+    password_login(&state, &client, request, false).await
 }
-
 async fn admin_login(
     State(state): State<AppState>,
+    Extension(client): Extension<crate::security::store::ClientContext>,
     Json(request): Json<LoginRequest>,
-) -> Result<(Extension<CurrentUser>, Json<TokenResponse>), ApiError> {
-    let (database, config) = database(&state).await?;
-    let user = database
-        .authenticate_password(&request.email, &request.password)
+) -> Result<Response, ApiError> {
+    password_login(&state, &client, request, true).await
+}
+async fn browser_refresh(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Extension(client): Extension<crate::security::store::ClientContext>,
+) -> Result<Response, ApiError> {
+    let config = state.config.read().await.clone();
+    let surface = crate::security::web::Surface::from_request(&headers, "", None);
+    let name = surface.cookie_name(true, crate::security::web::secure(&config));
+    let token = crate::security::web::cookie(&headers, &name)
+        .ok_or_else(|| ApiError::unauthorized("请重新登录"))?;
+    let grant = state
+        .database
+        .refresh_for_client(token, &config.auth, Some(surface.client()))
         .await?
-        .ok_or_else(|| ApiError::unauthorized("邮箱或密码不正确"))?;
-    if !user.is_admin {
-        return Err(ApiError::forbidden("该账号没有管理后台权限"));
+        .ok_or_else(|| ApiError::unauthorized("请重新登录"))?;
+    crate::security::web::refreshed_grant(&state, grant, surface, &client).await
+}
+async fn browser_logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let config = state.config.read().await.clone();
+    let surface = crate::security::web::Surface::from_request(&headers, "", None);
+    let name = surface.cookie_name(true, crate::security::web::secure(&config));
+    if let Some(token) = crate::security::web::cookie(&headers, &name) {
+        state.database.revoke_refresh(token).await?;
     }
-    let grant = database
-        .issue_grant(user, "admin-web", "board:operate offline_access", &config)
-        .await?;
-    Ok((
-        Extension(CurrentUser(grant.user.clone())),
-        Json(token_response(grant)),
-    ))
+    Ok(crate::security::web::clear_cookies(&state, surface).await)
 }
 
-async fn me(Extension(CurrentUser(user)): Extension<CurrentUser>) -> Json<UserResponse> {
-    Json(UserResponse {
-        id: user.id,
-        email: user.email,
-        display_name: user.display_name,
-        is_admin: user.is_admin,
-    })
+async fn me(
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Extension(crate::security::web::CurrentCredential(credential)): Extension<
+        crate::security::web::CurrentCredential,
+    >,
+) -> Json<serde_json::Value> {
+    Json(
+        serde_json::json!({"id":user.id,"email":user.email,"display_name":user.display_name,"is_admin":user.is_admin,"mfa_enrollment_required":credential.scope=="mfa:enroll"}),
+    )
 }
 
 async fn create_personal_access_token(
@@ -529,15 +722,14 @@ async fn create_personal_access_token(
         || request.name.chars().count() > 120
         || request
             .expires_in_days
-            .is_some_and(|days| !(1..=3650).contains(&days))
+            .is_some_and(|days| !(1..=365).contains(&days))
     {
         return Err(ApiError::bad_request(
-            "令牌名称为 1 至 120 个字符，有效期为 1 至 3650 天",
+            "令牌名称为 1 至 120 个字符，有效期为 1 至 365 天",
         ));
     }
-    let expires_at = request
-        .expires_in_days
-        .map(|days| Utc::now() + chrono::Duration::days(i64::from(days.max(1))));
+    let expires_at =
+        Some(Utc::now() + chrono::Duration::days(i64::from(request.expires_in_days.unwrap_or(90))));
     let token = database
         .create_personal_access_token(user.id, &request.name, expires_at)
         .await?;
@@ -594,16 +786,13 @@ async fn device_status(
         sqlx::query("SELECT authorized_at,expires_at FROM oauth_device_codes WHERE user_code=$1")
             .bind(user_code.to_uppercase())
             .fetch_optional(database.pool())
-            .await
-            .map_err(|error| ApiError::service_unavailable(error.to_string()))?;
+            .await?;
     let Some(row) = status else {
         return Err(ApiError::not_found("device code not found"));
     };
-    let expires_at: DateTime<Utc> = sqlx::Row::try_get(&row, "expires_at")
-        .map_err(|error| ApiError::service_unavailable(error.to_string()))?;
-    let authorized = sqlx::Row::try_get::<Option<DateTime<Utc>>, _>(&row, "authorized_at")
-        .map_err(|error| ApiError::service_unavailable(error.to_string()))?
-        .is_some();
+    let expires_at: DateTime<Utc> = sqlx::Row::try_get(&row, "expires_at")?;
+    let authorized =
+        sqlx::Row::try_get::<Option<DateTime<Utc>>, _>(&row, "authorized_at")?.is_some();
     Ok(Json(
         serde_json::json!({"authorized": authorized, "expired": expires_at <= Utc::now()}),
     ))
@@ -630,6 +819,6 @@ fn oauth_error(status: StatusCode, error: &str, description: &str) -> Response {
 async fn auth_config(State(state): State<AppState>) -> Json<serde_json::Value> {
     let config = state.config.read().await;
     Json(
-        serde_json::json!({"edition":config.edition,"enabled":config.edition.is_public(),"allow_registration":config.edition.is_public() && config.auth.allow_registration,"database_available":true}),
+        serde_json::json!({"edition":config.edition,"enabled":config.edition.is_public(),"allow_registration":config.edition.is_public() && config.auth.allow_registration,"database_available":true,"captcha_required":config.edition.is_public(),"registration_email_verification":config.edition.is_public() && config.security.registration_email_verification,"email_security_available":config.edition.is_public() && config.security.smtp_host.is_some()}),
     )
 }

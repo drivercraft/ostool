@@ -1,4 +1,4 @@
-import { accessToken, loginUrl } from "@/auth-session";
+import { loginUrl, authSurface } from "@/auth-session";
 import { api, refreshAuth, isPublicEdition } from "./client";
 import { useSyncExternalStore } from "react";
 import type {
@@ -27,6 +27,9 @@ export interface Runtime {
   last_release_error: string | null;
 }
 export interface Resources {
+  security: import("./client").SecurityStatus;
+  security_sessions: { sessions: import("./client").SecuritySession[] };
+  security_revision: number;
   audit: import("@/types/api").AuditPage;
   dashboard: import("@/types/api").DashboardInfo;
   profile: import("./client").AuthUser;
@@ -160,11 +163,8 @@ export class AdminStore {
   };
   connect = () => {
     if (this.source) return;
-    const token = isPublicEdition()
-      ? accessToken(this.member ? "website" : "admin")
-      : null;
     const parameters = new URLSearchParams();
-    if (token) parameters.set("access_token", token);
+    if (isPublicEdition()) parameters.set("surface", authSurface());
     if (this.auditFilters) {
       parameters.set("audit_view", "1");
       for (const [key, value] of Object.entries(this.auditFilters)) {
@@ -197,9 +197,7 @@ export class AdminStore {
           }
           this.restart();
         })
-        .catch(() =>
-          window.location.assign(loginUrl(this.member ? "website" : "admin")),
-        );
+        .catch(() => window.location.assign(loginUrl(authSurface())));
     });
     this.source.onopen = () => {
       if (this.source !== source) return;
@@ -256,4 +254,14 @@ export function useConnection() {
 }
 export function useErrors() {
   return useSyncExternalStore(admin.subscribe, admin.getErrors);
+}
+
+export const security = new AdminStore("/api/v1/auth/security/events", true);
+export function useSecurityResource<K extends "security" | "security_sessions">(
+  topic: K,
+) {
+  return useSyncExternalStore(security.subscribe, () => security.get(topic));
+}
+export function useSecurityErrors() {
+  return useSyncExternalStore(security.subscribe, security.getErrors);
 }

@@ -523,6 +523,10 @@ test("viewport panels keep toolbar and footer fixed while tables/forms scroll", 
   await expect(
     page.getByRole("button", { name: "删除开发板", exact: true }),
   ).toBeVisible();
+  // Dismiss the successful save notification before opening the mobile drawer.
+  // Toast timers pause while the pointer is over them.
+  const closeToast = page.locator("[data-sonner-toast] [data-close-button]").first();
+  if (await closeToast.count()) await closeToast.click();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(save).toBeVisible();
   const mobileFooter = panel.locator(".panel-footer");

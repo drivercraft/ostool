@@ -1,11 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  api,
-  clearAuthToken,
-  saveAuthToken,
-  type AuthToken,
-} from "./api/client";
-import { accessToken, safeAdminRedirect } from "./auth-session";
+import { api, clearBrowserSession, notifyAuthChanged } from "./api/client";
+import { sessionSignalKey, safeAdminRedirect } from "./auth-session";
 
 afterEach(() => {
   localStorage.clear();
@@ -14,28 +9,32 @@ afterEach(() => {
 });
 describe("independent browser sessions", () => {
   it("admin login and logout leave the website session valid", async () => {
-    const grant = (id: string) =>
-      ({ access_token: id, refresh_token: `${id}-refresh` }) as AuthToken;
     window.history.replaceState({}, "", "/login");
-    saveAuthToken(grant("website"));
+    notifyAuthChanged();
+    const website = localStorage.getItem(sessionSignalKey("website"));
     window.history.replaceState({}, "", "/admin/login");
-    expect(accessToken()).toBeNull();
-    saveAuthToken(grant("admin"));
+    notifyAuthChanged();
     const fetch = vi
       .fn()
       .mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetch);
     await api.logout();
-    expect(new URLSearchParams(fetch.mock.calls[0][1].body).get("token")).toBe(
-      "admin-refresh",
-    );
-    expect(accessToken("admin")).toBeNull();
-    expect(accessToken("website")).toBe("website");
-    saveAuthToken(grant("admin-again"));
+    expect(fetch.mock.calls[0][0]).toBe("/api/v1/auth/logout");
+    expect(fetch.mock.calls[0][1].headers["x-ostool-surface"]).toBe("admin");
+    expect(fetch.mock.calls[0][1].body).toBeUndefined();
+    expect(localStorage.getItem(sessionSignalKey("admin"))).toBeNull();
+    expect(localStorage.getItem(sessionSignalKey("website"))).toBe(website);
+    notifyAuthChanged();
+    const admin = localStorage.getItem(sessionSignalKey("admin"));
     window.history.replaceState({}, "", "/account");
-    clearAuthToken();
-    expect(accessToken("admin")).toBe("admin-again");
-    expect(accessToken("website")).toBeNull();
+    clearBrowserSession();
+    expect(localStorage.getItem(sessionSignalKey("admin"))).toBe(admin);
+    expect(localStorage.getItem(sessionSignalKey("website"))).toBeNull();
+    expect(
+      Object.keys(localStorage).some((key) =>
+        /access_token|refresh_token/.test(key),
+      ),
+    ).toBe(false);
   });
   it("backend redirects stay within backend routes", () => {
     for (const value of [

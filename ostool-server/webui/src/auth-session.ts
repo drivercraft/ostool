@@ -2,6 +2,14 @@ export type AuthSurface = "admin" | "website";
 let applicationSurface: AuthSurface | undefined;
 export function configureAuthSurface(surface: AuthSurface) {
   applicationSurface = surface;
+  // Browser credentials are exclusively HttpOnly cookies.
+  for (const key of [
+    "ostool.access_token",
+    "ostool.refresh_token",
+    "ostool.admin.access_token",
+    "ostool.admin.refresh_token",
+  ])
+    localStorage.removeItem(key);
 }
 export const authSurface = (): AuthSurface =>
   applicationSurface ??
@@ -9,17 +17,19 @@ export const authSurface = (): AuthSurface =>
   window.location.pathname.startsWith("/admin/")
     ? "admin"
     : "website");
-export const authKeys = (surface: AuthSurface = authSurface()) => ({
-  access:
-    surface === "admin" ? "ostool.admin.access_token" : "ostool.access_token",
-  refresh:
-    surface === "admin" ? "ostool.admin.refresh_token" : "ostool.refresh_token",
-  event: surface === "admin" ? "ostool:admin-auth" : "ostool:auth",
-});
-export const accessToken = (surface?: AuthSurface) =>
-  localStorage.getItem(authKeys(surface).access);
-export const refreshToken = (surface?: AuthSurface) =>
-  localStorage.getItem(authKeys(surface).refresh);
+export const authEvent = (surface: AuthSurface = authSurface()) =>
+  surface === "admin" ? "ostool:admin-auth" : "ostool:auth";
+export const sessionSignalKey = (surface: AuthSurface = authSurface()) =>
+  `ostool.${surface}.session-state`;
+export function notifyAuthChanged() {
+  localStorage.setItem(sessionSignalKey(), crypto.randomUUID());
+  window.dispatchEvent(new Event(authEvent()));
+}
+export function clearBrowserSession() {
+  const present = localStorage.getItem(sessionSignalKey()) !== null;
+  localStorage.removeItem(sessionSignalKey());
+  if (present) window.dispatchEvent(new Event(authEvent()));
+}
 export function loginUrl(surface: AuthSurface = authSurface()) {
   if (surface === "website") return "/login";
   const redirect = window.location.pathname + window.location.search;

@@ -42,7 +42,17 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { api, saveAuthToken } from "@/api/client";
+import { TextField } from "@/components/forms";
+import { useCountdown } from "@/components/security-hooks";
+import { HumanVerification } from "@/components/human-verification";
+import { PasswordReset } from "@/components/password-reset";
+import { SecurityVerification } from "@/components/security-verification";
+import {
+  api,
+  notifyAuthChanged,
+  type HumanProof,
+  type EmailChallenge,
+} from "@/api/client";
 import { Button } from "@/components/ui/button";
 
 const publicNavigation = [
@@ -657,7 +667,18 @@ function Login() {
   const registering =
     location.pathname === "/register" || query.get("register") === "1";
   const [confirmPassword, setConfirmPassword] = useState("");
-  const registrationAllowed = useEdition().allow_registration;
+  const authConfig = useEdition();
+  const registrationAllowed = authConfig.allow_registration;
+  const emailRequired =
+    registering && authConfig.registration_email_verification;
+  const [proof, setProof] = useState<HumanProof>();
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [challenge, setChallenge] = useState<string>();
+  const [otp, setOtp] = useState("");
+  const [emailChallenge, setEmailChallenge] = useState<EmailChallenge>();
+  const [emailCode, setEmailCode] = useState("");
+  const [emailUntil, setEmailUntil] = useState(0);
+  const resendRemaining = useCountdown(emailUntil);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -672,10 +693,32 @@ function Login() {
     setBusy(true);
     setMessage("");
     try {
-      const token = registering
-        ? await api.register(email, password, displayName)
-        : await api.login(email, password);
-      saveAuthToken(token);
+      if (
+        registering &&
+        (Array.from(password).length < 15 ||
+          new TextEncoder().encode(password).length > 1024)
+      )
+        throw new Error("密码需要至少 15 个字符，且不超过 1024 字节");
+      const result = challenge
+        ? await api.verifyMfa(challenge, otp)
+        : registering
+          ? await api.register(
+              email,
+              password,
+              displayName,
+              proof ?? {},
+              emailChallenge
+                ? { id: emailChallenge.challenge_id, code: emailCode }
+                : undefined,
+            )
+          : await api.login(email, password, proof ?? {});
+      if (result.mfa_required) {
+        setChallenge(result.challenge_id);
+        setPassword("");
+        setOtp("");
+        return;
+      }
+      notifyAuthChanged();
       if (userCode) {
         await api.authorizeDevice(userCode);
         setMessage("设备登录已批准，可以返回 ostool CLI。");
@@ -689,6 +732,7 @@ function Login() {
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "登录失败");
+      if (!challenge) setRefreshKey((v) => v + 1);
     } finally {
       setBusy(false);
     }
@@ -739,54 +783,141 @@ function Login() {
           {registering && registrationAllowed === false && (
             <p role="alert">当前站点未开放注册，请联系管理员。</p>
           )}
-          <label>
-            邮箱
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              autoComplete="email"
-              placeholder="you@company.com"
-            />
-          </label>
-          {registering && (
-            <label>
-              显示名称
-              <input
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="你的名字"
+          {!challenge ? (
+            <>
+              <label>
+                邮箱
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    setEmailChallenge(undefined);
+                    setEmailCode("");
+                  }}
+                  autoComplete="email"
+                  placeholder="you@company.com"
+                />
+              </label>
+              {registering && (
+                <label>
+                  显示名称
+                  <input
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder="你的名字"
+                  />
+                </label>
+              )}
+              <label>
+                密码
+                <input
+                  type="password"
+                  required
+                  maxLength={1024}
+                  minLength={registering ? 15 : undefined}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete={
+                    registering ? "new-password" : "current-password"
+                  }
+                  placeholder="至少 15 个字符"
+                />
+              </label>
+              {registering && (
+                <label>
+                  确认密码
+                  <input
+                    type="password"
+                    required
+                    minLength={registering ? 15 : undefined}
+                    maxLength={1024}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    autoComplete="new-password"
+                    placeholder="再次输入密码"
+                  />
+                </label>
+              )}
+              {emailRequired && (
+                <div className="security-form">
+                  {emailChallenge ? (
+                    <>
+                      <TextField
+                        label="邮箱验证码"
+                        value={emailCode}
+                        onValue={setEmailCode}
+                        required
+                        maxLength={6}
+                        inputMode="numeric"
+                      />
+                      <p role="status">验证码已发送，十分钟内有效。</p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={resendRemaining > 0}
+                        onClick={() => {
+                          setEmailChallenge(undefined);
+                          setEmailCode("");
+                          setRefreshKey((v) => v + 1);
+                        }}
+                      >
+                        {resendRemaining
+                          ? `${resendRemaining} 秒后可重新获取验证码`
+                          : "重新获取邮箱验证码"}
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={busy || !email || !proof?.captcha_code}
+                      onClick={() => {
+                        setBusy(true);
+                        setMessage("");
+                        void api
+                          .emailCode(email, "register", proof ?? {})
+                          .then((value) => {
+                            setEmailChallenge(value);
+                            setEmailUntil(
+                              Date.now() + value.resend_after * 1000,
+                            );
+                          })
+                          .catch((e) => setMessage(e.message))
+                          .finally(() => {
+                            setBusy(false);
+                            setRefreshKey((v) => v + 1);
+                          });
+                      }}
+                    >
+                      发送邮箱验证码
+                    </Button>
+                  )}
+                </div>
+              )}
+              <HumanVerification
+                action={
+                  emailRequired && !emailChallenge
+                    ? "registration_email"
+                    : registering
+                      ? "register"
+                      : "login"
+                }
+                refreshKey={refreshKey}
+                disabled={busy}
+                onChange={setProof}
               />
-            </label>
-          )}
-          <label>
-            密码
-            <input
-              type="password"
+            </>
+          ) : (
+            <TextField
+              label="验证码或恢复码"
+              value={otp}
+              onValue={setOtp}
+              autoComplete="one-time-code"
+              maxLength={128}
               required
-              maxLength={1024}
-              minLength={12}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete={registering ? "new-password" : "current-password"}
-              placeholder="至少 12 个字符"
             />
-          </label>
-          {registering && (
-            <label>
-              确认密码
-              <input
-                type="password"
-                required
-                minLength={12}
-                maxLength={1024}
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                autoComplete="new-password"
-                placeholder="再次输入密码"
-              />
-            </label>
           )}
           {query.get("password_changed") === "1" && (
             <p role="status">密码已更新，请使用新密码重新登录。</p>
@@ -799,17 +930,40 @@ function Login() {
           <Button
             className="auth-submit"
             type="submit"
-            disabled={busy || (registering && registrationAllowed !== true)}
+            disabled={
+              busy ||
+              (!challenge && !proof?.captcha_code) ||
+              (registering && registrationAllowed !== true) ||
+              (emailRequired && (!emailChallenge || !emailCode))
+            }
           >
             {busy
               ? "处理中…"
-              : userCode
-                ? "登录并批准"
-                : registering
-                  ? "创建账号"
-                  : "登录"}{" "}
+              : challenge
+                ? "验证并登录"
+                : userCode
+                  ? "登录并批准"
+                  : registering
+                    ? "创建账号"
+                    : "登录"}{" "}
             <ArrowRight size={15} />
           </Button>
+          {challenge && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setChallenge(undefined);
+                setOtp("");
+                setRefreshKey((v) => v + 1);
+              }}
+            >
+              重新登录
+            </Button>
+          )}
+          {!registering && authConfig.email_security_available && (
+            <Link to="/password-reset">忘记密码</Link>
+          )}
           {!userCode && (
             <Link
               className="auth-switch"
@@ -832,10 +986,15 @@ export default function PublicApp() {
       defaultTheme="system"
       enableSystem
       storageKey="ostool.web.theme"
+      nonce={
+        document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')
+          ?.content
+      }
       disableTransitionOnChange
     >
       <EditionProvider>
         <SiteSessionProvider>
+          <SecurityVerification />
           <div className="site-root">
             <PublicRoutes />
           </div>
@@ -857,6 +1016,24 @@ function PublicRoutes() {
         <Route
           path="/login"
           element={publicEdition ? <Login /> : <Navigate replace to="/" />}
+        />
+        <Route
+          path="/password-reset"
+          element={
+            publicEdition ? (
+              <PublicLayout>
+                <main className="auth-shell">
+                  <div className="auth-aside">
+                    <h1>安全恢复账号</h1>
+                    <p>验证邮箱后设置新密码。</p>
+                  </div>
+                  <PasswordReset />
+                </main>
+              </PublicLayout>
+            ) : (
+              <Navigate replace to="/" />
+            )
+          }
         />
         <Route
           path="/register"

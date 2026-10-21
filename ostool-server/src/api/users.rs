@@ -116,12 +116,9 @@ fn validate(input: &UserInput) -> Result<(), ApiError> {
     if input.display_name.as_ref().is_some_and(|s| s.len() > 120) {
         return Err(ApiError::bad_request("显示名称过长"));
     }
-    if input
-        .password
-        .as_ref()
-        .is_some_and(|s| s.len() < 12 || s.len() > 1024)
-    {
-        return Err(ApiError::bad_request("密码需要 12 至 1024 个字符"));
+    if let Some(password) = input.password.as_deref() {
+        crate::security::crypto::validate_password(password)
+            .map_err(|error| ApiError::bad_request(error.to_string()))?;
     }
     Ok(())
 }

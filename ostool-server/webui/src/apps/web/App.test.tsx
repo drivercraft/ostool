@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   register: vi.fn(),
   login: vi.fn(),
   me: vi.fn(),
+  captcha: vi.fn(),
 }));
 vi.mock("@/api/events", () => ({
   account: {
@@ -26,13 +27,14 @@ vi.mock("@/api/client", () => ({
     register: mocks.register,
     login: mocks.login,
     me: mocks.me,
+    captcha: mocks.captcha,
   },
-  saveAuthToken: (token: { access_token: string }) => {
-    localStorage.setItem("ostool.access_token", token.access_token);
+  notifyAuthChanged: () => {
+    localStorage.setItem("ostool.website.session-state", "signed-in");
     window.dispatchEvent(new Event("ostool:auth"));
   },
-  clearAuthToken: () => {
-    localStorage.clear();
+  clearBrowserSession: () => {
+    localStorage.removeItem("ostool.website.session-state");
     window.dispatchEvent(new Event("ostool:auth"));
   },
 }));
@@ -53,14 +55,29 @@ beforeEach(() => {
     allow_registration: true,
     database_available: true,
   });
-  mocks.register.mockResolvedValue({ access_token: "member-token" });
-  mocks.login.mockResolvedValue({ access_token: "member-token" });
-  mocks.me.mockResolvedValue({
-    id: "member",
-    email: "member@test.local",
-    display_name: "Member",
-    is_admin: false,
-  });
+  mocks.register.mockResolvedValue({ authenticated: true });
+  mocks.login.mockResolvedValue({ authenticated: true });
+  mocks.captcha.mockImplementation((action: string) =>
+    Promise.resolve({
+      id: "00000000-0000-0000-0000-000000000001",
+      action,
+      provider: "image",
+      image_data_url: "data:image/png;base64,iVBORw0KGgo=",
+      expires_in: 120,
+    }),
+  );
+  mocks.me.mockImplementation(() =>
+    localStorage.getItem("ostool.website.session-state")
+      ? Promise.resolve({
+          id: "member",
+          email: "member@test.local",
+          display_name: "Member",
+          is_admin: false,
+        })
+      : Promise.reject(
+          Object.assign(new Error("not logged in"), { status: 401 }),
+        ),
+  );
   window.history.replaceState({}, "", "/login");
 });
 afterEach(cleanup);
@@ -78,6 +95,7 @@ describe("registration", () => {
     const user = userEvent.setup();
     await user.type(await screen.findByLabelText("邮箱"), "member@test.local");
     await user.type(screen.getByLabelText("密码"), "member-password-123");
+    await user.type(await screen.findByLabelText("图形验证码"), "AB29Q");
     await user.click(screen.getByRole("button", { name: "登录" }));
     await waitFor(() => expect(window.location.pathname).toBe("/account"));
     expect(screen.queryByRole("heading", { name: "当前账号" })).toBeNull();
@@ -101,6 +119,7 @@ describe("registration", () => {
     render(<PublicApp />);
     await user.type(await screen.findByLabelText("邮箱"), "admin@test.local");
     await user.type(screen.getByLabelText("密码"), "admin-password-123");
+    await user.type(await screen.findByLabelText("图形验证码"), "AB29Q");
     await user.click(screen.getByRole("button", { name: "登录" }));
     await screen.findByRole("heading", { name: "当前账号" });
     expect(window.location.pathname).toBe("/account");
@@ -145,6 +164,8 @@ describe("registration", () => {
     await user.type(screen.getByLabelText("显示名称"), "Member");
     await user.type(screen.getByLabelText("密码"), "member-password-123");
     await user.type(screen.getByLabelText("确认密码"), "different-password");
+    if (!(screen.getByLabelText("图形验证码") as HTMLInputElement).value)
+      await user.type(screen.getByLabelText("图形验证码"), "AB29Q");
     await user.click(screen.getByRole("button", { name: /创建账号/ }));
     expect(screen.getByRole("alert").textContent).toContain(
       "两次输入的密码不一致",
@@ -152,12 +173,19 @@ describe("registration", () => {
     expect(mocks.register).not.toHaveBeenCalled();
     await user.clear(screen.getByLabelText("确认密码"));
     await user.type(screen.getByLabelText("确认密码"), "member-password-123");
+    if (!(screen.getByLabelText("图形验证码") as HTMLInputElement).value)
+      await user.type(screen.getByLabelText("图形验证码"), "AB29Q");
     await user.click(screen.getByRole("button", { name: /创建账号/ }));
     await waitFor(() => expect(window.location.pathname).toBe("/account"));
     expect(mocks.register).toHaveBeenCalledWith(
       "member@test.local",
       "member-password-123",
       "Member",
+      {
+        captcha_id: "00000000-0000-0000-0000-000000000001",
+        captcha_code: "AB29Q",
+      },
+      undefined,
     );
   });
   it("shows registration closed without sending a request", async () => {

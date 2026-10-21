@@ -23,10 +23,12 @@ pub struct User {
     pub email: String,
     pub display_name: Option<String>,
     pub is_admin: bool,
+    pub security_version: i64,
 }
 
 #[derive(Debug, Clone)]
 pub struct AccessGrant {
+    pub session_id: Uuid,
     pub user: User,
     pub access_token: String,
     pub refresh_token: String,
@@ -158,10 +160,12 @@ impl Database {
         let (Some(email), Some(password)) = (email, password) else {
             return Ok(());
         };
-        if password.len() < 12 || password.len() > 1024 {
-            bail!("bootstrap admin password must contain at least 12 characters");
-        }
-        if self.find_user(&email).await?.is_none() {
+        let email = normalize_email(&email)?;
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE email=$1)")
+            .bind(&email)
+            .fetch_one(&self.pool)
+            .await?;
+        if !exists {
             self.create_user(&email, &password, Some("Administrator"), true)
                 .await?;
         }
@@ -176,12 +180,10 @@ impl Database {
         is_admin: bool,
     ) -> anyhow::Result<User> {
         let email = normalize_email(email)?;
-        if password.len() < 12 || password.len() > 1024 {
-            bail!("password must contain at least 12 characters");
-        }
+        crate::security::crypto::validate_password(password)?;
         let password_hash = hash_password_async(password.to_owned()).await?;
         let row = sqlx::query(
-            "INSERT INTO users (email, password_hash, display_name, is_admin, role_id) VALUES ($1,$2,$3,$4,CASE WHEN $4 THEN 'admin' ELSE 'member' END) RETURNING id,email,display_name,is_admin",
+            "INSERT INTO users (email, password_hash, display_name, is_admin, role_id) VALUES ($1,$2,$3,$4,CASE WHEN $4 THEN 'admin' ELSE 'member' END) RETURNING id,email,display_name,is_admin,security_version",
         )
         .bind(email)
         .bind(password_hash)
@@ -196,7 +198,7 @@ impl Database {
     pub async fn find_user(&self, email: &str) -> anyhow::Result<Option<User>> {
         let email = normalize_email(email)?;
         let row = sqlx::query(
-            "SELECT id,email,display_name,is_admin FROM users WHERE email=$1 AND disabled=false",
+            "SELECT id,email,display_name,is_admin,security_version FROM users WHERE email=$1 AND disabled=false",
         )
         .bind(email)
         .fetch_optional(&self.pool)
@@ -207,7 +209,7 @@ impl Database {
 
     pub async fn user_by_id(&self, id: Uuid) -> anyhow::Result<Option<User>> {
         let row = sqlx::query(
-            "SELECT id,email,display_name,is_admin FROM users WHERE id=$1 AND disabled=false",
+            "SELECT id,email,display_name,is_admin,security_version FROM users WHERE id=$1 AND disabled=false",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -221,21 +223,23 @@ impl Database {
         email: &str,
         password: &str,
     ) -> anyhow::Result<Option<User>> {
-        let email = normalize_email(email)?;
-        let row = sqlx::query("SELECT id,email,display_name,is_admin,password_hash FROM users WHERE email=$1 AND disabled=false")
-            .bind(email)
-            .fetch_optional(&self.pool)
-            .await
-            .context("failed to query credentials")?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        let hash: String = row.try_get("password_hash")?;
-        let password = password.to_owned();
-        if !tokio::task::spawn_blocking(move || verify_password(&password, &hash)).await? {
+        const DUMMY: &str = "$argon2id$v=19$m=19456,p=1,t=2$JQJyPZZI+mzpA7cCcrNBZg$vJ/LwJ+M2FACLdPhhSHhklaajIlQueOj55VYf7nL604";
+        if password.len() > 1024 {
             return Ok(None);
         }
-        Ok(Some(user_from_row(&row)))
+        let email = normalize_email(email).unwrap_or_default();
+        let row=sqlx::query("SELECT id,email,display_name,is_admin,security_version,password_hash FROM users WHERE email=$1 AND NOT disabled").bind(email).fetch_optional(&self.pool).await?;
+        let hash = row
+            .as_ref()
+            .map(|row| row.try_get::<String, _>("password_hash"))
+            .transpose()?
+            .unwrap_or_else(|| DUMMY.into());
+        let valid = verify_password_async(password.to_owned(), hash).await?;
+        Ok(if valid {
+            row.as_ref().map(user_from_row)
+        } else {
+            None
+        })
     }
 
     pub async fn issue_grant(
@@ -248,37 +252,77 @@ impl Database {
         let access_token = random_token();
         let refresh_token = random_token();
         let now = Utc::now();
-        let access_expires_at =
-            now + chrono::Duration::seconds(auth.access_token_ttl_secs.max(60) as i64);
+        let access_expires_at = now + chrono::Duration::seconds(auth.access_token_ttl_secs as i64);
         let refresh_expires_at =
-            now + chrono::Duration::seconds(auth.refresh_token_ttl_secs.max(300) as i64);
-        sqlx::query("INSERT INTO oauth_sessions (user_id,client_id,scope,access_token_hash,refresh_token_hash,access_expires_at,refresh_expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
-            .bind(user.id).bind(client_id).bind(scope)
-            .bind(token_hash(&access_token)).bind(token_hash(&refresh_token))
-            .bind(access_expires_at).bind(refresh_expires_at)
-            .execute(&self.pool).await.context("failed to create OAuth session")?;
+            now + chrono::Duration::seconds(auth.refresh_token_ttl_secs as i64);
+        let mut tx = self.pool.begin().await?;
+        let exists: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM users WHERE id=$1 AND security_version=$2 AND NOT disabled FOR UPDATE",
+        )
+        .bind(user.id)
+        .bind(user.security_version)
+        .fetch_optional(&mut *tx)
+        .await?;
+        anyhow::ensure!(
+            exists.is_some(),
+            "credentials changed during authentication"
+        );
+        sqlx::query("UPDATE oauth_sessions SET revoked_at=now() WHERE id IN (SELECT id FROM oauth_sessions WHERE user_id=$1 AND client_id=$2 AND revoked_at IS NULL AND refresh_expires_at>now() ORDER BY created_at DESC,id OFFSET 9)").bind(user.id).bind(client_id).execute(&mut *tx).await?;
+        let session_id:Uuid=sqlx::query_scalar("INSERT INTO oauth_sessions(user_id,client_id,scope,access_token_hash,refresh_token_hash,access_expires_at,refresh_expires_at,absolute_expires_at,security_version) VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8) RETURNING id")
+            .bind(user.id).bind(client_id).bind(scope).bind(token_hash(&access_token)).bind(token_hash(&refresh_token)).bind(access_expires_at).bind(refresh_expires_at).bind(user.security_version).fetch_one(&mut *tx).await?;
+        tx.commit().await?;
         Ok(AccessGrant {
+            session_id,
             user,
             access_token,
             refresh_token,
             access_expires_at,
             refresh_expires_at,
-            scope: scope.to_string(),
+            scope: scope.to_owned(),
         })
     }
-
     pub async fn authenticate_token(&self, token: &str) -> anyhow::Result<Option<User>> {
-        let row = sqlx::query("SELECT u.id,u.email,u.display_name,u.is_admin FROM oauth_sessions s JOIN users u ON u.id=s.user_id WHERE s.access_token_hash=$1 AND s.revoked_at IS NULL AND s.access_expires_at > now() AND u.disabled=false UNION ALL SELECT u.id,u.email,u.display_name,u.is_admin FROM personal_access_tokens p JOIN users u ON u.id=p.user_id WHERE p.token_hash=$1 AND (p.expires_at IS NULL OR p.expires_at > now()) AND u.disabled=false LIMIT 1")
-            .bind(token_hash(token)).fetch_optional(&self.pool).await.context("failed to validate access token")?;
-        Ok(row.as_ref().map(user_from_row))
+        Ok(self
+            .authenticate_credential(token)
+            .await?
+            .map(|credential| credential.user))
+    }
+    pub async fn authenticate_credential(&self, token: &str) -> anyhow::Result<Option<Credential>> {
+        if token.len() > 256 {
+            return Ok(None);
+        }
+        let row=sqlx::query("SELECT u.id,u.email,u.display_name,u.is_admin,u.security_version,s.id AS session_id,s.client_id,s.scope,s.step_up_until FROM oauth_sessions s JOIN users u ON u.id=s.user_id WHERE s.access_token_hash=$1 AND s.revoked_at IS NULL AND s.access_expires_at>now() AND s.absolute_expires_at>now() AND s.last_seen_at>now()-interval '1 day' AND s.security_version=u.security_version AND NOT u.disabled UNION ALL SELECT u.id,u.email,u.display_name,u.is_admin,u.security_version,NULL::uuid,'pat','board:operate',NULL::timestamptz FROM personal_access_tokens p JOIN users u ON u.id=p.user_id WHERE p.token_hash=$1 AND (p.expires_at IS NULL OR p.expires_at>now()) AND NOT u.disabled LIMIT 1")
+            .bind(token_hash(token)).fetch_optional(&self.pool).await?;
+        let Some(row) = row else { return Ok(None) };
+        let session_id: Option<Uuid> = row.try_get("session_id")?;
+        if let Some(id) = session_id {
+            sqlx::query("UPDATE oauth_sessions SET last_seen_at=now() WHERE id=$1 AND last_seen_at<now()-interval '1 minute'").bind(id).execute(&self.pool).await?;
+        }
+        Ok(Some(Credential {
+            user: user_from_row(&row),
+            session_id,
+            client_id: row.try_get("client_id")?,
+            scope: row.try_get("scope")?,
+            step_up_until: row.try_get("step_up_until")?,
+            token_hash: token_hash(token),
+        }))
     }
 
+    pub async fn credential_active(&self, credential: &Credential) -> anyhow::Result<bool> {
+        if let Some(session) = credential.session_id {
+            Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM oauth_sessions s JOIN users u ON u.id=s.user_id WHERE s.family_id=(SELECT family_id FROM oauth_sessions WHERE id=$1) AND s.revoked_at IS NULL AND s.absolute_expires_at>now() AND s.last_seen_at>now()-interval '1 day' AND s.security_version=u.security_version AND NOT u.disabled)").bind(session).fetch_one(&self.pool).await?)
+        } else {
+            Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM personal_access_tokens p JOIN users u ON u.id=p.user_id WHERE p.token_hash=$1 AND (p.expires_at IS NULL OR p.expires_at>now()) AND NOT u.disabled)").bind(&credential.token_hash).fetch_one(&self.pool).await?)
+        }
+    }
     pub async fn create_personal_access_token(
         &self,
         user_id: Uuid,
         name: &str,
         expires_at: Option<DateTime<Utc>>,
     ) -> anyhow::Result<PersonalAccessToken> {
+        let expires_at =
+            Some(expires_at.unwrap_or_else(|| Utc::now() + chrono::Duration::days(90)));
         let name = name.trim();
         if name.is_empty() || name.len() > 120 {
             bail!("personal access token name must contain 1 to 120 characters");
@@ -318,50 +362,87 @@ impl Database {
         token: &str,
         auth: &AuthConfig,
     ) -> anyhow::Result<Option<AccessGrant>> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .context("failed to start token refresh")?;
-        let row = sqlx::query("SELECT s.id,s.user_id,s.scope,u.id as uid,u.email,u.display_name,u.is_admin FROM oauth_sessions s JOIN users u ON u.id=s.user_id WHERE s.refresh_token_hash=$1 AND s.revoked_at IS NULL AND s.refresh_expires_at > now() AND u.disabled=false FOR UPDATE")
-            .bind(token_hash(token)).fetch_optional(&mut *tx).await.context("failed to query refresh token")?;
-        let Some(row) = row else {
+        self.refresh_for_client(token, auth, None).await
+    }
+    pub async fn refresh_for_client(
+        &self,
+        token: &str,
+        auth: &AuthConfig,
+        client: Option<&str>,
+    ) -> anyhow::Result<Option<AccessGrant>> {
+        let mut tx = self.pool.begin().await?;
+        let owner: Option<Uuid> =
+            sqlx::query_scalar("SELECT user_id FROM oauth_sessions WHERE refresh_token_hash=$1")
+                .bind(token_hash(token))
+                .fetch_optional(&mut *tx)
+                .await?;
+        let Some(owner) = owner else { return Ok(None) };
+        let alive: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM users WHERE id=$1 AND NOT disabled FOR UPDATE")
+                .bind(owner)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if alive.is_none() {
             return Ok(None);
-        };
-        let session_id: Uuid = row.try_get("id")?;
+        }
+        let row=sqlx::query("SELECT s.*,u.email,u.display_name,u.is_admin,u.security_version AS current_version FROM oauth_sessions s JOIN users u ON u.id=s.user_id WHERE s.refresh_token_hash=$1 AND NOT u.disabled FOR UPDATE OF s").bind(token_hash(token)).fetch_optional(&mut *tx).await?;
+        let Some(row) = row else { return Ok(None) };
+        if client.is_some_and(|client| {
+            row.try_get::<String, _>("client_id")
+                .is_ok_and(|value| value != client)
+        }) {
+            return Ok(None);
+        }
+        let family: Uuid = row.try_get("family_id")?;
+        if row
+            .try_get::<Option<DateTime<Utc>>, _>("revoked_at")?
+            .is_some()
+        {
+            sqlx::query("UPDATE oauth_sessions SET revoked_at=now() WHERE family_id=$1 AND revoked_at IS NULL").bind(family).execute(&mut *tx).await?;
+            tx.commit().await?;
+            return Ok(None);
+        }
+        let now = Utc::now();
+        if row.try_get::<DateTime<Utc>, _>("refresh_expires_at")? <= now
+            || row.try_get::<DateTime<Utc>, _>("absolute_expires_at")? <= now
+            || row.try_get::<DateTime<Utc>, _>("last_seen_at")? < now - chrono::Duration::days(1)
+            || row.try_get::<i64, _>("security_version")?
+                != row.try_get::<i64, _>("current_version")?
+        {
+            return Ok(None);
+        }
         let user = User {
-            id: row.try_get("uid")?,
+            id: row.try_get("user_id")?,
             email: row.try_get("email")?,
             display_name: row.try_get("display_name")?,
             is_admin: row.try_get("is_admin")?,
+            security_version: row.try_get("current_version")?,
         };
-        sqlx::query("UPDATE oauth_sessions SET revoked_at=now() WHERE id=$1")
-            .bind(session_id)
-            .execute(&mut *tx)
-            .await?;
         let scope: String = row.try_get("scope")?;
         let access_token = random_token();
         let refresh_token = random_token();
-        let now = Utc::now();
-        let access_expires_at =
-            now + chrono::Duration::seconds(auth.access_token_ttl_secs.max(60) as i64);
-        let refresh_expires_at =
-            now + chrono::Duration::seconds(auth.refresh_token_ttl_secs.max(300) as i64);
-        sqlx::query("INSERT INTO oauth_sessions (user_id,client_id,scope,access_token_hash,refresh_token_hash,access_expires_at,refresh_expires_at) SELECT user_id,client_id,scope,$1,$2,$3,$4 FROM oauth_sessions WHERE id=$5")
-            .bind(token_hash(&access_token)).bind(token_hash(&refresh_token)).bind(access_expires_at).bind(refresh_expires_at).bind(session_id).execute(&mut *tx).await?;
+        let access_expires_at = now + chrono::Duration::seconds(auth.access_token_ttl_secs as i64);
+        let refresh_expires_at: DateTime<Utc> = row.try_get("absolute_expires_at")?;
+        sqlx::query("UPDATE oauth_sessions SET revoked_at=now() WHERE id=$1")
+            .bind(row.try_get::<Uuid, _>("id")?)
+            .execute(&mut *tx)
+            .await?;
+        let session_id:Uuid=sqlx::query_scalar("INSERT INTO oauth_sessions(user_id,client_id,scope,access_token_hash,refresh_token_hash,access_expires_at,refresh_expires_at,absolute_expires_at,family_id,security_version,ip,user_agent,step_up_until,created_at) SELECT user_id,client_id,scope,$1,$2,$3,absolute_expires_at,absolute_expires_at,family_id,security_version,ip,user_agent,step_up_until,created_at FROM oauth_sessions WHERE id=$4 RETURNING id")
+            .bind(token_hash(&access_token)).bind(token_hash(&refresh_token)).bind(access_expires_at).bind(row.try_get::<Uuid,_>("id")?).fetch_one(&mut *tx).await?;
         tx.commit().await?;
         Ok(Some(AccessGrant {
+            session_id,
             user,
+            scope,
             access_token,
             refresh_token,
             access_expires_at,
             refresh_expires_at,
-            scope,
         }))
     }
 
     pub async fn revoke_refresh(&self, token: &str) -> anyhow::Result<()> {
-        sqlx::query("UPDATE oauth_sessions SET revoked_at=now() WHERE refresh_token_hash=$1")
+        sqlx::query("UPDATE oauth_sessions SET revoked_at=now() WHERE family_id IN (SELECT family_id FROM oauth_sessions WHERE refresh_token_hash=$1)")
             .bind(token_hash(token))
             .execute(&self.pool)
             .await
@@ -414,7 +495,7 @@ impl Database {
         device_code: &str,
         auth: &AuthConfig,
     ) -> anyhow::Result<DevicePoll> {
-        let row = sqlx::query("SELECT d.*,u.id as uid,u.email,u.display_name,u.is_admin FROM oauth_device_codes d LEFT JOIN users u ON u.id=d.user_id WHERE d.device_code_hash=$1")
+        let row = sqlx::query("SELECT d.*,u.id as uid,u.email,u.display_name,u.is_admin,u.security_version FROM oauth_device_codes d LEFT JOIN users u ON u.id=d.user_id WHERE d.device_code_hash=$1")
             .bind(token_hash(device_code)).fetch_optional(&self.pool).await?;
         let Some(row) = row else {
             return Ok(DevicePoll::Expired);
@@ -450,6 +531,7 @@ impl Database {
             email: row.try_get("email")?,
             display_name: row.try_get("display_name")?,
             is_admin: row.try_get("is_admin")?,
+            security_version: row.try_get("security_version")?,
         };
         let scope: String = row.try_get("scope")?;
         Ok(DevicePoll::Authorized(
@@ -479,6 +561,9 @@ fn user_from_row(row: &sqlx::postgres::PgRow) -> User {
         email: row.try_get("email").expect("user email"),
         display_name: row.try_get("display_name").ok(),
         is_admin: row.try_get("is_admin").unwrap_or(false),
+        security_version: row
+            .try_get("security_version")
+            .expect("user security version"),
     }
 }
 
@@ -488,6 +573,7 @@ pub(crate) fn normalize_email(email: &str) -> anyhow::Result<String> {
         || email.chars().any(char::is_whitespace)
         || email.split('@').count() != 2
         || email.split('@').any(str::is_empty)
+        || email.parse::<lettre::Address>().is_err()
     {
         bail!("invalid email address");
     }
@@ -516,7 +602,7 @@ fn verify_password(password: &str, hash: &str) -> bool {
 }
 
 fn random_token() -> String {
-    Uuid::new_v4().to_string().replace('-', "")
+    crate::security::crypto::random_token()
 }
 fn token_hash(token: &str) -> String {
     Sha256::digest(token.as_bytes())
@@ -526,11 +612,37 @@ fn token_hash(token: &str) -> String {
 }
 
 pub(crate) async fn hash_password_async(password: String) -> anyhow::Result<String> {
-    tokio::task::spawn_blocking(move || hash_password(&password)).await?
+    crate::security::crypto::validate_password(&password)?;
+    let permit = password_slot().await?;
+    tokio::task::spawn_blocking(move || {
+        // Keep the permit even if the HTTP request is cancelled while Argon2 runs.
+        let _permit = permit;
+        hash_password(&password)
+    })
+    .await?
 }
 
 pub(crate) async fn verify_password_async(password: String, hash: String) -> anyhow::Result<bool> {
-    tokio::task::spawn_blocking(move || verify_password(&password, &hash))
-        .await
-        .map_err(Into::into)
+    let permit = password_slot().await?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        verify_password(&password, &hash)
+    })
+    .await
+    .map_err(Into::into)
+}
+
+#[derive(Clone, Debug)]
+pub struct Credential {
+    pub user: User,
+    pub session_id: Option<Uuid>,
+    pub client_id: String,
+    pub scope: String,
+    pub step_up_until: Option<DateTime<Utc>>,
+    pub token_hash: String,
+}
+async fn password_slot() -> anyhow::Result<tokio::sync::SemaphorePermit<'static>> {
+    static SLOTS: std::sync::LazyLock<tokio::sync::Semaphore> =
+        std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(4));
+    Ok(tokio::time::timeout(std::time::Duration::from_secs(3), SLOTS.acquire()).await??)
 }

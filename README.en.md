@@ -21,6 +21,8 @@ The management console at `/admin/` uses React + shadcn/ui. In the new-board for
 The running service reads and writes PostgreSQL only, without a file backend or startup import. Existing boards and their referenced DTBs are migrated manually using `ostool-server/scripts/migrate-boards.sh`; validation and import are transactional, and source files remain unchanged. See [migration instructions](ostool-server/deploy/README.md#existing-board-migration).
 Local and public editions use the same PostgreSQL persistence. Local edition hides account, authorization and rental features, allowing `ostool` to connect without login. `ostool-server/scripts/dev-env.sh start` starts the development database and server automatically. Rental creation uses a dedicated page with an availability calendar, and data lists support table/card layouts.
 
+Public login/registration require image CAPTCHA by default; email verification is optional and disabled by default. TOTP, session management/revocation, rate limits and recent identity checks are available in public edition; local edition remains anonymous. See [security configuration](ostool-server/deploy/security.md).
+
 **ostool** is a Rust toolset designed specifically for operating system development, aiming to provide OS developers with convenient build, configuration, and startup environments. It's particularly suitable for embedded system development, supporting system testing and debugging through Qemu virtual machines and U-Boot bootloader.
 
 ### ✨ Core Features

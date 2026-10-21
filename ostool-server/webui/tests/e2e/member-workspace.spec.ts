@@ -1,3 +1,4 @@
+import { solveCaptcha, apiLogin, apiRegister } from "../fixtures/security";
 import { expect, test } from "playwright/test";
 
 test("public member profile, rental request approval, theme and password lifecycle", async ({
@@ -9,11 +10,12 @@ test("public member profile, rental request approval, theme and password lifecyc
   const adminEmail = process.env.OSTOOL_E2E_ADMIN_EMAIL ?? "admin@example.com";
   const adminPassword =
     process.env.OSTOOL_E2E_ADMIN_PASSWORD ?? "admin-password-123";
-  const login = await request.post(`${base}/api/v1/auth/login`, {
-    data: { email: adminEmail, password: adminPassword },
-  });
-  expect(login.ok()).toBeTruthy();
-  const adminToken = (await login.json()).access_token;
+  const { accessToken: adminToken } = await apiLogin(
+    request,
+    base!,
+    adminEmail,
+    adminPassword,
+  );
   const headers = { authorization: `Bearer ${adminToken}` };
   const suffix = Date.now();
   const board = `member-board-${suffix}`;
@@ -42,13 +44,13 @@ test("public member profile, rental request approval, theme and password lifecyc
   const email = `workspace-${suffix}@test.local`;
   expect(
     (
-      await request.post(`${base}/api/v1/auth/register`, {
-        data: {
-          email,
-          password: "member-password-123",
-          display_name: "浏览器租赁成员",
-        },
-      })
+      await apiRegister(
+        request,
+        base!,
+        email,
+        "member-password-123",
+        "浏览器租赁成员",
+      )
     ).ok(),
   ).toBeTruthy();
   const memberContext = await browser.newContext({
@@ -83,6 +85,7 @@ test("public member profile, rental request approval, theme and password lifecyc
     await page.goto(`${base}/login`);
     await page.getByLabel("邮箱", { exact: true }).fill(email);
     await page.getByLabel("密码", { exact: true }).fill("member-password-123");
+    await solveCaptcha(page);
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await expect(page).toHaveURL(`${base}/account`);
     await expect(page.getByRole("heading", { name: "当前账号" })).toBeVisible();
@@ -94,9 +97,9 @@ test("public member profile, rental request approval, theme and password lifecyc
     await page.getByRole("menuitem", { name: "基本信息", exact: true }).click();
     await page.getByLabel("显示名称", { exact: true }).fill("已更新的租赁成员");
     await page.getByRole("button", { name: "保存资料" }).click();
-    await expect(page.locator(".site-actions .site-user-copy strong")).toHaveText(
-      "已更新的租赁成员",
-    );
+    await expect(
+      page.locator(".site-actions .site-user-copy strong"),
+    ).toHaveText("已更新的租赁成员");
     await page.reload();
     await expect(page.getByLabel("显示名称", { exact: true })).toHaveValue(
       "已更新的租赁成员",
@@ -120,6 +123,7 @@ test("public member profile, rental request approval, theme and password lifecyc
     await admin.goto(`${base}/admin/rental-requests`);
     await admin.getByLabel("邮箱", { exact: true }).fill(adminEmail);
     await admin.getByLabel("密码", { exact: true }).fill(adminPassword);
+    await solveCaptcha(admin);
     await admin.getByRole("button", { name: "登录", exact: true }).click();
     await expect(admin).toHaveURL(`${base}/admin/rental-requests`);
     await admin.getByLabel("搜索申请").fill(email);
@@ -174,6 +178,7 @@ test("public member profile, rental request approval, theme and password lifecyc
     await page
       .getByLabel("密码", { exact: true })
       .fill("changed-member-password-123");
+    await solveCaptcha(page);
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await expect(page).toHaveURL(`${base}/account`);
     expect(errors).toEqual([]);

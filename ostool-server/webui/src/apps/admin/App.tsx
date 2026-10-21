@@ -1,4 +1,7 @@
-import { accessToken, loginUrl } from "@/auth-session";
+import { loginUrl } from "@/auth-session";
+import { SecurityVerification } from "@/components/security-verification";
+import { SecuritySettings } from "@/components/security-settings";
+import { PagePanel } from "@/components/page-panel";
 import AdminLogin from "@/apps/admin/pages/AdminLogin";
 import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import {
@@ -55,9 +58,14 @@ export default function App() {
       defaultTheme="system"
       enableSystem
       storageKey="ostool.admin.theme"
+      nonce={
+        document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')
+          ?.content
+      }
       disableTransitionOnChange
     >
       <EditionProvider>
+        <SecurityVerification />
         <AdminEntry />
       </EditionProvider>
     </ThemeProvider>
@@ -83,16 +91,16 @@ function AdminEntry() {
         return;
       }
       if (loginPage) return;
-      if (!accessToken("admin")) {
-        window.location.replace(loginUrl("admin"));
-        return;
-      }
       const user = await api.me();
       if (active) {
         setCurrentUser(user);
         setGate(user.is_admin ? "allowed" : "denied");
       }
     })().catch((e) => {
+      if (e instanceof Error && "status" in e && e.status === 401) {
+        window.location.replace(loginUrl("admin"));
+        return;
+      }
       if (active) {
         setGate("error");
         setMessage(e instanceof Error ? e.message : "无法验证登录状态");
@@ -120,6 +128,22 @@ function AdminEntry() {
         <a href="/account">个人中心</a>
         <a href="/admin/login">重新登录后台</a>
       </div>
+    );
+  if (currentUser?.mfa_enrollment_required)
+    return (
+      <main className="security-enrollment-page">
+        <h1>启用管理员双重验证</h1>
+        <p>先完成身份验证器设置并保存恢复码，即可进入管理后台。</p>
+        <SecuritySettings enrollmentOnly />
+        <Button
+          variant="outline"
+          onClick={() =>
+            void api.logout().then(() => location.replace("/admin/login"))
+          }
+        >
+          退出登录
+        </Button>
+      </main>
     );
   return <AdminConsole user={currentUser} />;
 }
@@ -299,7 +323,9 @@ function AdminConsole({ user }: { user?: AuthUser }) {
                   path="/account"
                   element={
                     publicEdition ? (
-                      <AccountRedirect />
+                      <PagePanel>
+                        <SecuritySettings />
+                      </PagePanel>
                     ) : (
                       <Navigate replace to="/overview" />
                     )
@@ -386,9 +412,4 @@ function SidebarGroup({
       <div>{children}</div>
     </details>
   );
-}
-
-function AccountRedirect() {
-  useEffect(() => window.location.replace("/account"), []);
-  return <Notice>正在打开个人中心…</Notice>;
 }

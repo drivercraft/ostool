@@ -48,6 +48,7 @@ enum ClientShutdownMode {
 struct TestServerHandle {
     base_url: String,
     app: Router,
+    state: ostool_server::AppState,
     shutdown_tx: Option<oneshot::Sender<()>>,
     join: thread::JoinHandle<Result<()>>,
 }
@@ -118,6 +119,7 @@ fn spawn_test_server_with_power_on(
     tftp.enabled = false;
 
     let config = ServerConfig {
+        security: Default::default(),
         audit: Default::default(),
         edition: ostool_server::config::Edition::Local,
         listen_addr: "127.0.0.1:0".parse().unwrap(),
@@ -138,7 +140,9 @@ fn spawn_test_server_with_power_on(
         .with_context(|| format!("failed to write {}", config_path.display()))?;
 
     let board = sample_board_with_power_on(serial_port, power_on_cmd);
-    let (addr_tx, addr_rx) = mpsc::channel::<std::result::Result<(SocketAddr, Router), String>>();
+    let (addr_tx, addr_rx) = mpsc::channel::<
+        std::result::Result<(SocketAddr, Router, ostool_server::AppState), String>,
+    >();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let config_path_for_thread = config_path.clone();
     let addr_tx_for_start = addr_tx.clone();
@@ -183,7 +187,7 @@ fn spawn_test_server_with_power_on(
             let listener = tokio::net::TcpListener::bind(listen_addr).await?;
             let local_addr = listener.local_addr()?;
             addr_tx_for_start
-                .send(Ok((local_addr, app.clone())))
+                .send(Ok((local_addr, app.clone(), state)))
                 .map_err(|_| anyhow!("failed to publish test server listen address"))?;
 
             axum::serve(listener, app)
@@ -200,7 +204,7 @@ fn spawn_test_server_with_power_on(
         result
     });
 
-    let (addr, app) = match addr_rx.recv_timeout(Duration::from_secs(5)) {
+    let (addr, app, state) = match addr_rx.recv_timeout(Duration::from_secs(5)) {
         Ok(Ok(server)) => server,
         Ok(Err(err)) => return Err(anyhow!("test server failed to start: {err}")),
         Err(_) => return Err(anyhow!("timed out waiting for test server listen address")),
@@ -209,6 +213,7 @@ fn spawn_test_server_with_power_on(
     Ok(TestServerHandle {
         base_url: format!("http://{addr}"),
         app,
+        state,
         shutdown_tx: Some(shutdown_tx),
         join,
     })
@@ -423,19 +428,26 @@ async fn wait_for_server_ready(base_url: &str) -> Result<()> {
 // Exercise REST setup and assertions directly through the router; the listener is only needed for
 // the WebSocket lifecycle under test.
 async fn create_session(app: &Router) -> Result<SessionCreatedResponse> {
+    create_session_with_token(app, None).await
+}
+async fn create_session_with_token(
+    app: &Router,
+    token: Option<&str>,
+) -> Result<SessionCreatedResponse> {
     let request = serde_json::json!({
         "board_type": TEST_BOARD_TYPE,
         "required_tags": [],
         "client_name": "integration-test",
     })
     .to_string();
+    let mut builder =
+        Request::post("/api/v1/sessions").header(header::CONTENT_TYPE, "application/json");
+    if let Some(token) = token {
+        builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+    }
     let response = app
         .clone()
-        .oneshot(
-            Request::post("/api/v1/sessions")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(request))?,
-        )
+        .oneshot(builder.body(Body::from(request))?)
         .await
         .expect("router service is infallible");
     let status = response.status();
@@ -633,6 +645,94 @@ fn serial_open_failure_reports_error_and_releases_session() -> Result<()> {
         let next = create_session(&server.app).await?;
         anyhow::ensure!(next.board_id == TEST_BOARD_ID);
         Ok(())
+    });
+    let shutdown = server.shutdown();
+    result?;
+    shutdown
+}
+
+#[test]
+fn revoked_public_login_closes_serial_and_releases_the_board() -> Result<()> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let temp = tempfile::tempdir()?;
+    let (_serial_master, mut serial_handle) = TTYPort::pair()?;
+    serial_handle.set_exclusive(false)?;
+    let serial_port = serial_handle.name().context("PTY path")?;
+    drop(serial_handle);
+    let server = spawn_test_server(temp.path(), serial_port)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let result = runtime.block_on(async {
+        {
+            let mut config = server.state.config.write().await;
+            config.edition = ostool_server::config::Edition::Public;
+            config.auth.enabled = true;
+            config.auth.public_base_url = Some(server.base_url.clone());
+        }
+        let user = server
+            .state
+            .database
+            .create_user(
+                "serial@security.test",
+                "serial-security-password-123",
+                None,
+                true,
+            )
+            .await?;
+        let auth = server.state.config.read().await.auth.clone();
+        let grant = server
+            .state
+            .database
+            .issue_grant(user, "ostool-cli", "board:operate offline_access", &auth)
+            .await?;
+        let created = create_session_with_token(&server.app, Some(&grant.access_token)).await?;
+        let ws_url = resolve_ws_url(
+            &server.base_url,
+            created.ws_url.as_deref().context("WS URL")?,
+        )?;
+        let mut request = ws_url.as_str().into_client_request()?;
+        request.headers_mut().insert(
+            "authorization",
+            format!("Bearer {}", grant.access_token).parse()?,
+        );
+        let (mut socket, _) = tokio_tungstenite::connect_async(request).await?;
+        wait_for_opened(&mut socket).await?;
+        // Rotation belongs to the same family and must not tear down an active serial link.
+        let refreshed = server
+            .state
+            .database
+            .refresh(&grant.refresh_token, &auth)
+            .await?
+            .context("refresh")?;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            server
+                .state
+                .sessions
+                .read()
+                .await
+                .contains_key(&created.session_id)
+        );
+        server
+            .state
+            .database
+            .revoke_refresh(&refreshed.refresh_token)
+            .await?;
+        tokio::time::timeout(Duration::from_secs(8), async {
+            while let Some(message) = socket.next().await {
+                match message? {
+                    Message::Close(_) => return Ok::<_, anyhow::Error>(()),
+                    Message::Text(text) if text.contains(r#""type":"closed""#) => return Ok(()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        })
+        .await
+        .context("revoked credential did not close serial within 8 seconds")??;
+        server.state.config.write().await.edition = ostool_server::config::Edition::Local;
+        wait_for_session_release(&server.app, &created.session_id).await
     });
     let shutdown = server.shutdown();
     result?;

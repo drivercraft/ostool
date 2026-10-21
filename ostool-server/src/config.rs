@@ -17,6 +17,8 @@ const SYSTEM_DATA_DIR: &str = "/var/lib/ostool-server";
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ServerConfig {
     #[serde(default)]
+    pub security: crate::security::config::SecurityConfig,
+    #[serde(default)]
     pub audit: AuditConfig,
     #[serde(default)]
     pub edition: Edition,
@@ -68,6 +70,7 @@ impl ServerConfig {
         ));
 
         Self {
+            security: crate::security::config::SecurityConfig::default(),
             audit: AuditConfig::default(),
             edition: Edition::Local,
             listen_addr: SocketAddr::from(([0, 0, 0, 0], 2999)),
@@ -287,7 +290,7 @@ impl std::str::FromStr for Edition {
 
 /// PostgreSQL connection settings shared by local and public editions.
 /// A database URL must be supplied before starting the service.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct DatabaseConfig {
     #[serde(skip_serializing)]
@@ -295,6 +298,16 @@ pub struct DatabaseConfig {
     pub schema: Option<String>,
     pub max_connections: u32,
     pub migrate: bool,
+}
+
+impl std::fmt::Debug for DatabaseConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DatabaseConfig")
+            .field("schema", &self.schema)
+            .field("max_connections", &self.max_connections)
+            .field("migrate", &self.migrate)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for DatabaseConfig {
@@ -308,10 +321,10 @@ impl Default for DatabaseConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct AuthConfig {
-    /// Require a Bearer token for management and board APIs.
+    /// Require browser cookies or CLI Bearer credentials in public edition.
     pub enabled: bool,
     pub access_token_ttl_secs: u64,
     pub refresh_token_ttl_secs: u64,
@@ -321,6 +334,16 @@ pub struct AuthConfig {
     pub bootstrap_admin_email: Option<String>,
     #[serde(skip_serializing)]
     pub bootstrap_admin_password: Option<String>,
+}
+
+impl std::fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthConfig")
+            .field("enabled", &self.enabled)
+            .field("allow_registration", &self.allow_registration)
+            .field("public_base_url", &self.public_base_url)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for AuthConfig {

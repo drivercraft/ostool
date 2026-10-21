@@ -33,6 +33,7 @@ pub(crate) fn apply_values(
     values: &BTreeMap<String, String>,
 ) -> anyhow::Result<()> {
     apply_database_values(&mut config.database, values)?;
+    apply_security_values(&mut config.security, values)?;
     for (key, target) in [
         ("OSTOOL_PUBLIC_BASE_URL", &mut config.auth.public_base_url),
         ("OSTOOL_ADMIN_EMAIL", &mut config.auth.bootstrap_admin_email),
@@ -98,6 +99,7 @@ pub(crate) fn apply_values(
         "OSTOOL_NETWORK_TEST_ENABLED",
         &mut config.network_test.enabled,
     )?;
+    config.security.validate(config.edition.is_public())?;
     config.validate()?;
     Ok(())
 }
@@ -136,6 +138,86 @@ fn apply_database_values(
         &mut config.max_connections,
     )?;
     parsed(values, "OSTOOL_DATABASE_MIGRATE", &mut config.migrate)?;
+    Ok(())
+}
+
+fn apply_security_values(
+    config: &mut crate::security::config::SecurityConfig,
+    values: &BTreeMap<String, String>,
+) -> anyhow::Result<()> {
+    for (key, target) in [
+        ("OSTOOL_MFA_ENCRYPTION_KEY", &mut config.mfa_encryption_key),
+        ("OSTOOL_TURNSTILE_SITE_KEY", &mut config.turnstile_site_key),
+        ("OSTOOL_TURNSTILE_SECRET", &mut config.turnstile_secret),
+        ("OSTOOL_SMTP_HOST", &mut config.smtp_host),
+        ("OSTOOL_SMTP_USERNAME", &mut config.smtp_username),
+        ("OSTOOL_SMTP_PASSWORD", &mut config.smtp_password),
+        ("OSTOOL_SMTP_FROM", &mut config.smtp_from),
+    ] {
+        if let Some(value) = values.get(key) {
+            anyhow::ensure!(!value.trim().is_empty(), "{key} must not be empty");
+            *target = Some(value.clone());
+        }
+    }
+    if let Some(value) = values.get("OSTOOL_CAPTCHA_PROVIDER") {
+        config.captcha_provider = match value.as_str() {
+            "image" => crate::security::config::CaptchaProvider::Image,
+            "turnstile" => crate::security::config::CaptchaProvider::Turnstile,
+            _ => bail!("OSTOOL_CAPTCHA_PROVIDER must be image or turnstile"),
+        };
+    }
+    if let Some(value) = values.get("OSTOOL_SMTP_TLS") {
+        config.smtp_tls = match value.as_str() {
+            "starttls" => crate::security::config::SmtpTls::Starttls,
+            "tls" => crate::security::config::SmtpTls::Tls,
+            "loopback_plaintext" => crate::security::config::SmtpTls::LoopbackPlaintext,
+            _ => bail!("invalid OSTOOL_SMTP_TLS"),
+        };
+    }
+    for (key, target) in [
+        (
+            "OSTOOL_ADMIN_ALLOWED_NETWORKS",
+            &mut config.admin_allowed_networks,
+        ),
+        (
+            "OSTOOL_HARDWARE_ALLOWED_NETWORKS",
+            &mut config.hardware_allowed_networks,
+        ),
+        (
+            "OSTOOL_TURNSTILE_HOSTNAMES",
+            &mut config.turnstile_hostnames,
+        ),
+    ] {
+        if let Some(value) = values.get(key) {
+            *target = value
+                .split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned)
+                .collect();
+        }
+    }
+    parsed(
+        values,
+        "OSTOOL_REQUIRE_ADMIN_MFA",
+        &mut config.require_admin_mfa,
+    )?;
+    parsed(
+        values,
+        "OSTOOL_REGISTRATION_EMAIL_VERIFICATION",
+        &mut config.registration_email_verification,
+    )?;
+    parsed(
+        values,
+        "OSTOOL_LOGIN_MAX_FAILURES",
+        &mut config.login_max_failures,
+    )?;
+    parsed(
+        values,
+        "OSTOOL_LOGIN_LOCK_SECS",
+        &mut config.login_lock_secs,
+    )?;
+    parsed(values, "OSTOOL_SMTP_PORT", &mut config.smtp_port)?;
     Ok(())
 }
 

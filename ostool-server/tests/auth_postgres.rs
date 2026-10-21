@@ -1,5 +1,10 @@
 //! Run with OSTOOL_TEST_DATABASE_URL pointing to a disposable PostgreSQL DB.
 //! Each run creates an isolated schema; no existing tables are modified.
+#[path = "support/security.rs"]
+mod test_security;
+use test_security::access_cookie;
+static TEST_DATABASE: std::sync::OnceLock<ostool_server::persistence::Database> =
+    std::sync::OnceLock::new();
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -19,8 +24,26 @@ async fn call(
     method: &str,
     path: &str,
     token: Option<&str>,
-    body: Value,
-) -> (StatusCode, Value) {
+    mut body: Value,
+) -> (StatusCode, Value, axum::http::HeaderMap) {
+    if method == "POST"
+        && matches!(
+            path,
+            "/api/v1/auth/login" | "/api/v1/admin/auth/login" | "/api/v1/auth/register"
+        )
+    {
+        let headers = axum::http::HeaderMap::new();
+        let client = ostool_server::security::store::ClientContext::new("unknown".into(), &headers);
+        let action = if path.ends_with("register") {
+            ostool_server::security::captcha::HumanAction::Register
+        } else if path.starts_with("/api/v1/admin/") {
+            ostool_server::security::captcha::HumanAction::AdminLogin
+        } else {
+            ostool_server::security::captcha::HumanAction::Login
+        };
+        body["verification"] =
+            test_security::proof(TEST_DATABASE.get().unwrap(), action, &client).await;
+    }
     let mut req = Request::builder()
         .method(method)
         .uri(path)
@@ -34,10 +57,12 @@ async fn call(
         .await
         .unwrap();
     let status = response.status();
+    let headers = response.headers().clone();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     (
         status,
         serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        headers,
     )
 }
 
@@ -126,27 +151,28 @@ async fn registration_roles_revocation_and_inventory_restart() {
     )
     .await
     .unwrap();
+    TEST_DATABASE.set(state.database.clone()).unwrap();
     let app = build_router(state.clone());
-    let (status, login) = call(
+    let (status, _login, _login_headers) = call(
         &app,
         "POST",
-        "/api/v1/auth/login",
+        "/api/v1/admin/auth/login",
         None,
         json!({"email":"admin@test.local","password":"test-admin-password"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let admin = login["access_token"].as_str().unwrap();
+    let admin = access_cookie(&_login_headers);
     let payload = json!({"email":"member@test.local","password":"test-member-password","display_name":"Member"});
-    let (status, registered) =
+    let (status, _registered, _registered_headers) =
         call(&app, "POST", "/api/v1/auth/register", None, payload.clone()).await;
     assert_eq!(status, StatusCode::CREATED);
-    let member = registered["access_token"].as_str().unwrap();
+    let member = access_cookie(&_registered_headers);
     assert_eq!(
         call(&app, "POST", "/api/v1/auth/register", None, payload)
             .await
             .0,
-        StatusCode::CONFLICT
+        StatusCode::BAD_REQUEST
     );
     assert_eq!(
         call(
@@ -190,7 +216,8 @@ async fn registration_roles_revocation_and_inventory_restart() {
         .0,
         StatusCode::FORBIDDEN
     );
-    let (_, me) = call(&app, "GET", "/api/v1/auth/me", Some(member), Value::Null).await;
+    let (_, me, _me_headers) =
+        call(&app, "GET", "/api/v1/auth/me", Some(member), Value::Null).await;
     assert_eq!(me["is_admin"], false);
     let id = me["id"].as_str().unwrap();
     let (_, device) = form(
@@ -358,7 +385,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
     );
     assert!([first.0, second.0].contains(&StatusCode::CREATED));
     assert!([first.0, second.0].contains(&StatusCode::CONFLICT));
-    let (_, rentals) = call(
+    let (_, rentals, _rentals_headers) = call(
         &app,
         "GET",
         "/api/v1/admin/rentals",
@@ -387,7 +414,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
         StatusCode::CONFLICT
     );
     // Member leases are isolated from other users, including serial/file paths.
-    let (status, lease) = call(
+    let (status, lease, _lease_headers) = call(
         &app,
         "POST",
         "/api/v1/sessions",
@@ -402,7 +429,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
         call(&app, "GET", &path, Some(member), Value::Null).await.0,
         StatusCode::OK
     );
-    let (_, other) = call(
+    let (_, _other, _other_headers) = call(
         &app,
         "POST",
         "/api/v1/auth/register",
@@ -415,7 +442,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
             &app,
             "GET",
             &path,
-            other["access_token"].as_str(),
+            Some(access_cookie(&_other_headers)),
             Value::Null
         )
         .await
@@ -440,7 +467,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
     .await
     .unwrap();
     // A serial-style heartbeat cannot extend beyond the allocation deadline.
-    let (_, leased) = call(
+    let (_, leased, _leased_headers) = call(
         &app,
         "POST",
         "/api/v1/sessions",
@@ -498,7 +525,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
         .0,
         StatusCode::CREATED
     );
-    let (_, list) = call(
+    let (_, list, _list_headers) = call(
         &app,
         "GET",
         "/api/v1/admin/rentals",
@@ -514,7 +541,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
         .unwrap()["id"]
         .as_str()
         .unwrap();
-    let (_, leased) = call(
+    let (_, leased, _leased_headers) = call(
         &app,
         "POST",
         "/api/v1/sessions",
@@ -567,7 +594,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
         .0,
         StatusCode::CREATED
     );
-    let (_, roles) = call(&app, "GET", roles_path, Some(admin), Value::Null).await;
+    let (_, roles, _roles_headers) = call(&app, "GET", roles_path, Some(admin), Value::Null).await;
     let role = roles
         .as_array()
         .unwrap()
@@ -594,7 +621,8 @@ async fn registration_roles_revocation_and_inventory_restart() {
         .0,
         StatusCode::CONFLICT
     );
-    let (_, admin_me) = call(&app, "GET", "/api/v1/auth/me", Some(admin), Value::Null).await;
+    let (_, admin_me, _admin_me_headers) =
+        call(&app, "GET", "/api/v1/auth/me", Some(admin), Value::Null).await;
     assert_eq!(
         call(
             &app,

@@ -1,4 +1,9 @@
 //! Durable audit identity, secrets exclusion, pagination/export, retention and fail-closed writes.
+#[path = "support/security.rs"]
+mod test_security;
+use test_security::{access_cookie, refresh_cookie};
+static TEST_DATABASE: std::sync::OnceLock<ostool_server::persistence::Database> =
+    std::sync::OnceLock::new();
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -18,8 +23,28 @@ async fn call(
     method: &str,
     path: &str,
     token: Option<&str>,
-    body: Value,
-) -> (StatusCode, Value) {
+    mut body: Value,
+) -> (StatusCode, Value, axum::http::HeaderMap) {
+    if method == "POST"
+        && matches!(
+            path,
+            "/api/v1/auth/login" | "/api/v1/admin/auth/login" | "/api/v1/auth/register"
+        )
+    {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("user-agent", "audit integration test".parse().unwrap());
+        let client =
+            ostool_server::security::store::ClientContext::new("198.51.100.7".into(), &headers);
+        let action = if path.ends_with("register") {
+            ostool_server::security::captcha::HumanAction::Register
+        } else if path.starts_with("/api/v1/admin/") {
+            ostool_server::security::captcha::HumanAction::AdminLogin
+        } else {
+            ostool_server::security::captcha::HumanAction::Login
+        };
+        body["verification"] =
+            test_security::proof(TEST_DATABASE.get().unwrap(), action, &client).await;
+    }
     let mut request = Request::builder()
         .method(method)
         .uri(path)
@@ -36,10 +61,12 @@ async fn call(
     ));
     let response = app.clone().oneshot(request).await.unwrap();
     let status = response.status();
+    let headers = response.headers().clone();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     (
         status,
         serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        headers,
     )
 }
 fn board(id: &str) -> Value {
@@ -68,6 +95,7 @@ async fn complete_audit_contract_with_real_postgres() {
             ..Default::default()
         },
         auth: AuthConfig {
+            public_base_url: Some("http://127.0.0.1:2999".into()),
             bootstrap_admin_email: Some("admin@audit.test".into()),
             bootstrap_admin_password: Some("audit-admin-password-NEVER_COPY_PASSWORD".into()),
             ..Default::default()
@@ -89,6 +117,7 @@ async fn complete_audit_contract_with_real_postgres() {
     )
     .await
     .unwrap();
+    TEST_DATABASE.set(state.database.clone()).unwrap();
     let app = build_router(state.clone());
     let pool = state.database.pool();
     assert_eq!(
@@ -103,7 +132,7 @@ async fn complete_audit_contract_with_real_postgres() {
         .0,
         StatusCode::UNAUTHORIZED
     );
-    let (status, grant) = call(
+    let (status, _grant, _grant_headers) = call(
         &app,
         "POST",
         "/api/v1/auth/login",
@@ -112,8 +141,8 @@ async fn complete_audit_contract_with_real_postgres() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let admin = grant["access_token"].as_str().unwrap();
-    let (_, member) = call(
+    let admin = access_cookie(&_grant_headers);
+    let (_, _member, _member_headers) = call(
         &app,
         "POST",
         "/api/v1/auth/register",
@@ -121,7 +150,7 @@ async fn complete_audit_contract_with_real_postgres() {
         json!({"email":"member@audit.test","password":"member-password-NEVER_COPY_PASSWORD"}),
     )
     .await;
-    let member = member["access_token"].as_str().unwrap();
+    let member = access_cookie(&_member_headers);
     assert_eq!(
         call(
             &app,
@@ -132,9 +161,9 @@ async fn complete_audit_contract_with_real_postgres() {
         )
         .await
         .0,
-        StatusCode::FORBIDDEN
+        StatusCode::UNAUTHORIZED
     );
-    let (status, backend_grant) = call(
+    let (status, _backend_grant, _backend_grant_headers) = call(
         &app,
         "POST",
         "/api/v1/admin/auth/login",
@@ -143,7 +172,10 @@ async fn complete_audit_contract_with_real_postgres() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_ne!(backend_grant["access_token"], grant["access_token"]);
+    assert_ne!(
+        access_cookie(&_backend_grant_headers),
+        access_cookie(&_grant_headers)
+    );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM oauth_sessions WHERE client_id='admin-web'"
@@ -162,7 +194,7 @@ async fn complete_audit_contract_with_real_postgres() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(
                     url::form_urlencoded::Serializer::new(String::new())
-                        .append_pair("token", backend_grant["refresh_token"].as_str().unwrap())
+                        .append_pair("token", refresh_cookie(&_backend_grant_headers))
                         .finish(),
                 ))
                 .unwrap(),
@@ -179,11 +211,21 @@ async fn complete_audit_contract_with_real_postgres() {
     assert!(
         state
             .database
-            .authenticate_token(backend_grant["access_token"].as_str().unwrap())
+            .authenticate_token(access_cookie(&_backend_grant_headers))
             .await
             .unwrap()
             .is_none()
     );
+    let (_, _, active_admin_headers) = call(
+        &app,
+        "POST",
+        "/api/v1/admin/auth/login",
+        None,
+        json!({"email":"admin@audit.test","password":"audit-admin-password-NEVER_COPY_PASSWORD"}),
+    )
+    .await;
+    let admin = access_cookie(&active_admin_headers);
+
     assert_eq!(
         call(
             &app,
@@ -221,7 +263,7 @@ async fn complete_audit_contract_with_real_postgres() {
         .0,
         StatusCode::CREATED
     );
-    let (status, logs) = call(
+    let (status, logs, _logs_headers) = call(
         &app,
         "GET",
         "/api/v1/admin/audits?action=board.create&page_size=1",
@@ -237,7 +279,7 @@ async fn complete_audit_contract_with_real_postgres() {
     assert_eq!(item["actor_kind"], "admin");
     assert_eq!(item["result"], "success");
     let first_id = item["id"].as_str().unwrap();
-    let (_, detail) = call(
+    let (_, detail, _detail_headers) = call(
         &app,
         "GET",
         &format!("/api/v1/admin/audits/{first_id}"),
@@ -253,7 +295,7 @@ async fn complete_audit_contract_with_real_postgres() {
             .iter()
             .any(|v| v == "power_management")
     );
-    let (_, lease) = call(
+    let (_, lease, _lease_headers) = call(
         &app,
         "POST",
         "/api/v1/sessions",
@@ -338,7 +380,19 @@ async fn complete_audit_contract_with_real_postgres() {
         StatusCode::BAD_REQUEST
     );
     // Each subscribed view is independently paginated; no full-history browser download.
-    let response=app.clone().oneshot(Request::builder().uri(format!("/api/v1/admin/events?access_token={admin}&audit_view=1&audit_action=board.create&audit_page_size=1")).body(Body::empty()).unwrap()).await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(
+                    "/api/v1/admin/events?audit_view=1&audit_action=board.create&audit_page_size=1",
+                )
+                .header("authorization", format!("Bearer {admin}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let mut stream = response.into_body().into_data_stream();
     let frame = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
@@ -418,9 +472,9 @@ async fn complete_audit_contract_with_real_postgres() {
         "NEVER_COPY_HEADER",
         "NEVER_COPY_OTA_ERROR",
         admin,
-        grant["refresh_token"].as_str().unwrap(),
-        backend_grant["access_token"].as_str().unwrap(),
-        backend_grant["refresh_token"].as_str().unwrap(),
+        refresh_cookie(&_grant_headers),
+        access_cookie(&_backend_grant_headers),
+        refresh_cookie(&_backend_grant_headers),
     ] {
         assert!(
             !serialized.contains(secret),
@@ -463,7 +517,7 @@ async fn complete_audit_contract_with_real_postgres() {
         .unwrap();
     let pending = Uuid::new_v4();
     sqlx::query("INSERT INTO audit_events(id,request_id,created_at,actor_name,actor_kind,source,action,summary,resource,result) VALUES ($1,$1,now()-interval '500 days','system','system','system','pending.fixture','Pending fixture','system','pending')").bind(pending).execute(pool).await.unwrap();
-    let (status, cleaned) = call(
+    let (status, cleaned, _cleaned_headers) = call(
         &app,
         "POST",
         "/api/v1/admin/audits/cleanup",

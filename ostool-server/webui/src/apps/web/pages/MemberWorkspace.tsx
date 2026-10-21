@@ -1,3 +1,4 @@
+import { SecuritySettings } from "@/components/security-settings";
 import { useState, type FormEvent } from "react";
 import { requestStatusLabels } from "@/domain/rentals";
 import {
@@ -16,7 +17,7 @@ import {
   ShieldCheck,
   UserRound,
 } from "lucide-react";
-import { api, clearAuthToken, type AuthUser } from "@/api/client";
+import { api, clearBrowserSession, type AuthUser } from "@/api/client";
 import {
   useAccountConnection,
   useAccountErrors,
@@ -350,7 +351,7 @@ function Security() {
     await task.run(async () => {
       if (password !== confirmation) throw new Error("两次输入的密码不一致");
       await api.changePassword(current, password);
-      clearAuthToken();
+      clearBrowserSession();
       window.location.assign("/login?password_changed=1");
     });
   }
@@ -375,7 +376,7 @@ function Security() {
           label="新密码"
           type="password"
           required
-          minLength={12}
+          minLength={15}
           maxLength={1024}
           value={password}
           onValue={setPassword}
@@ -385,19 +386,20 @@ function Security() {
           label="确认新密码"
           type="password"
           required
-          minLength={12}
+          minLength={15}
           maxLength={1024}
           value={confirmation}
           onValue={setConfirmation}
           autoComplete="new-password"
         />
         <p className="muted">
-          密码至少 12 个字符。修改后所有登录与个人访问令牌失效，需要重新登录。
+          密码至少 15 个字符。修改后所有登录与个人访问令牌失效，需要重新登录。
         </p>
         <div className="member-form-actions">
           <Button disabled={task.pending}>更新密码</Button>
         </div>
       </form>
+      <SecuritySettings />
     </>
   );
 }
@@ -662,7 +664,7 @@ function Tokens() {
           type="number"
           required
           min={1}
-          max={3650}
+          max={365}
           value={days}
           onValue={setDays}
         />

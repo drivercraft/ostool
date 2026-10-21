@@ -1144,3 +1144,79 @@ Board REST 和 Management API 业务处理器产生的错误使用以下格式�
 `GET /api/v1/admin/power-actions/{id}`。快照、重放、错误恢复以及电源请求
 幂等语义见 [管理界面与事件协议](admin-ui.md)。现有 CLI/loader REST 和串口
 WebSocket 契约保持不变。
+
+## ostool-server 浏览器认证与账号安全
+
+本节仅适用于 `OSTOOL_EDITION=public` 的网页端。上述 CLI Device Authorization、
+`/oauth/token`、`/oauth/revoke`、Bearer/PAT 协议保持不变。本地版隐藏身份/租赁 API，
+使用 `auth_mode=disabled`；两种版本的业务数据均由 PostgreSQL 存储。
+
+浏览器认证使用 HttpOnly、SameSite=Strict 的独立前台/后台 Cookie，不返回访问/刷新令牌。
+HTTPS Cookie 带 Secure 和 `__Host-` 前缀。网页请求同源并携带 Cookie，
+后台共享身份接口使用 `X-Ostool-Surface: admin`；网站默认为 website。
+SSE 使用同源 Cookie，可用 `surface=admin` 指定后台，禁止将令牌放在 URL 查询中。
+
+1. `GET /api/v1/auth/config` 返回运行版本、是否允许注册、人机验证与邮件可用性。
+2. `GET /api/v1/auth/captcha?action=login|admin_login|register|registration_email|password_reset`
+   返回 `id`、`provider`、`expires_in`。默认 image 还返回 `image_data_url`（PNG）。
+   Turnstile 返回 `site_key`/`action`；服务端校验 action/hostname，不能直接跳过。
+3. `POST /api/v1/auth/login` 或 `POST /api/v1/admin/auth/login`：
+
+   ```json
+   {
+     "email": "user@example.com",
+     "password": "your long passphrase",
+     "verification": {"captcha_id": "UUID", "captcha_code": "AB29Q"}
+   }
+   ```
+
+   图形验证码每次提交消耗，绑定用途、来源 IP 和 User-Agent，120 秒后失效。
+   Turnstile 将 token 放在 `captcha_code`，同时提交服务器给出的 `captcha_id`。
+   登录成功返回 200 `{"authenticated":true,"enrollment_required":false}` 并设置 Cookie；
+   需要双重验证时返回 202 `{"mfa_required":true,"challenge_id":"UUID","expires_in":300}`，
+   此时尚未登录。提交
+   `POST /api/v1/auth/mfa/verify {"challenge_id":"UUID","code":"动态码或恢复码"}`
+   完成验证，最多五次尝试。
+
+4. `POST /api/v1/auth/register` 在上述登录字段基础上可带 `display_name`，
+   CAPTCHA action 必须为 register。默认不需要邮件验证码。
+   开启 `OSTOOL_REGISTRATION_EMAIL_VERIFICATION=true` 后还必须带
+   `email_challenge_id` 和 `email_code`。注册成功 201，设置网站 Cookie。
+   新建/修改密码至少 15 个字符、最多 1024 字节；注册失败使用通用 400 提示。
+5. `POST /api/v1/auth/refresh` 使用刷新 Cookie，轮换 Cookie；重复使用已轮换令牌撤销
+   整个登录链。`POST /api/v1/auth/logout` 撤销当前客户端登录并清 Cookie。
+   网站与后台退出相互独立。`GET /api/v1/auth/me` 返回当前用户与
+   `mfa_enrollment_required`；后者为 true 时仅能完成管理员验证器设置。
+
+| 接口 | 行为 |
+| --- | --- |
+| GET /api/v1/auth/security | 验证器启用状态、剩余恢复码数、邮箱状态与功能可用性 |
+| GET /api/v1/auth/security/events | 当前用户安全状态/登录设备 SSE，无管理或他人信息 |
+| POST /api/v1/auth/step-up | `password`、可选 `code`；验证成功授权当前会话敏感操作 180 秒 |
+| POST /api/v1/auth/security/enrollment | 生成临时 challenge_id、secret、qr_image，须确认才生效 |
+| POST /api/v1/auth/security/confirm | `challenge_id`、`code`；绑定验证器，返回八个只展示一次的恢复码 |
+| DELETE /api/v1/auth/security/mfa | 关闭验证器；强制验证策略下的管理员不可关闭 |
+| POST /api/v1/auth/security/recovery-codes | 重新生成恢复码，旧码立即失效 |
+| GET /api/v1/auth/security/sessions | 当前用户的登录设备，隐藏令牌和摘要 |
+| DELETE /api/v1/auth/security/sessions/{id} | 撤销所属登录链；不能访问其他用户会话 |
+| POST /api/v1/auth/security/sessions/others | 撤销其他登录链，保留当前会话 |
+
+安全设置、后台变更、审计导出、PAT 创建和设备码授权等敏感操作需要最近身份验证。
+超时返回 403、`code=reauth_required`，客户端完成 step-up 后重试一次。
+MFA 设置变更会撤销其他会话/PAT，保留当前已验证会话。
+会话默认绝对 30 天、请求空闲一天；刷新不延长绝对期限或 step-up 期限。
+
+SMTP 是可选功能，未配置时对应入口不显示。邮件码十分钟、五次尝试、成功后一次消费。
+以下邮件接口均使用 JSON：
+
+- `POST /api/v1/auth/email-code`：`email`、`action=register|password_reset`、
+  `verification`（对应 CAPTCHA action 为 registration_email 或 password_reset），返回
+  `challenge_id`、`expires_in`、`resend_after` 和统一提示。
+- `POST /api/v1/auth/password-reset`：`challenge_id`、`code`、`new_password`。
+  成功撤销原凭据，已启用的双重验证保留。
+- `POST /api/v1/auth/security/email`：为当前账号发验证邮件，需要最近身份验证。
+- `POST /api/v1/auth/security/email/confirm`：`challenge_id`、`code`，验证当前邮箱。
+
+超限统一返回 429、`code=rate_limited`、`Retry-After` 响应头；
+Cookie 写请求拒绝不匹配/缺失的 Origin。配置、部署与升级说明见
+[服务器安全文档](../ostool-server/deploy/security.md)。

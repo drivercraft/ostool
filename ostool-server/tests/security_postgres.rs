@@ -1,0 +1,781 @@
+//! Public security boundaries with real PostgreSQL; no production bypass switches.
+#[path = "support/database.rs"]
+mod test_database;
+#[path = "support/security.rs"]
+mod test_security;
+use axum::{
+    Router,
+    body::{Body, to_bytes},
+    extract::ConnectInfo,
+    http::{HeaderMap, Request, StatusCode},
+};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use chrono::Utc;
+use ostool_server::{
+    AppState, AuthConfig, BuiltinTftpConfig, ServerConfig, TftpConfig, build_app_state,
+    build_router, config::Edition, security::crypto, tftp::service::build_tftp_manager,
+};
+use serde_json::{Value, json};
+use tower::ServiceExt;
+use uuid::Uuid;
+struct Reply {
+    status: StatusCode,
+    body: Value,
+    headers: HeaderMap,
+}
+struct Fixture {
+    state: AppState,
+    app: Router,
+    _root: tempfile::TempDir,
+    origin: String,
+}
+impl Fixture {
+    async fn new(public: bool) -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = ServerConfig {
+            edition: if public {
+                Edition::Public
+            } else {
+                Edition::Local
+            },
+            data_dir: root.path().join("data"),
+            auth: AuthConfig {
+                public_base_url: Some("http://127.0.0.1:4190".into()),
+                bootstrap_admin_email: Some("admin@security.test".into()),
+                bootstrap_admin_password: Some("security-admin-password-123".into()),
+                ..Default::default()
+            },
+            tftp: TftpConfig::Builtin(BuiltinTftpConfig {
+                enabled: false,
+                ..BuiltinTftpConfig::default_with_root(root.path().join("tftp"))
+            }),
+            ..Default::default()
+        };
+        config.security.mfa_encryption_key = Some(STANDARD.encode([7u8; 32]));
+        test_database::prepare(&root.path().join("config.toml"), &mut config)
+            .await
+            .unwrap();
+        let state = build_app_state(
+            root.path().join("config.toml"),
+            config.clone(),
+            build_tftp_manager(&config.tftp),
+        )
+        .await
+        .unwrap();
+        Self {
+            app: build_router(state.clone()),
+            state,
+            _root: root,
+            origin: "http://127.0.0.1:4190".into(),
+        }
+    }
+    async fn request(&self, method: &str, path: &str, cookies: Option<&str>, body: Value) -> Reply {
+        self.custom(method, path, cookies, body, Some(&self.origin), None)
+            .await
+    }
+    async fn custom(
+        &self,
+        method: &str,
+        path: &str,
+        cookies: Option<&str>,
+        body: Value,
+        origin: Option<&str>,
+        bearer: Option<&str>,
+    ) -> Reply {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", "application/json")
+            .header("user-agent", "ostool-security-test")
+            .header(
+                "x-ostool-surface",
+                if cookies.is_some_and(|c| c.contains("ostool-admin-")) {
+                    "admin"
+                } else {
+                    "website"
+                },
+            )
+            .header("x-forwarded-for", "127.0.0.1");
+        if let Some(cookies) = cookies {
+            request = request.header("cookie", cookies);
+        }
+        if let Some(origin) = origin {
+            request = request.header("origin", origin);
+        }
+        if let Some(token) = bearer {
+            request = request.header("authorization", format!("Bearer {token}"));
+        }
+        let mut request = request.body(Body::from(body.to_string())).unwrap();
+        request.extensions_mut().insert(ConnectInfo(
+            "203.0.113.5:4190".parse::<std::net::SocketAddr>().unwrap(),
+        ));
+        let response = self.app.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
+            .await
+            .unwrap();
+        Reply {
+            status,
+            headers,
+            body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        }
+    }
+    async fn proof(&self, action: &str) -> Value {
+        let result = self
+            .request(
+                "GET",
+                &format!("/api/v1/auth/captcha?action={action}"),
+                None,
+                Value::Null,
+            )
+            .await;
+        assert_eq!(result.status, StatusCode::OK, "{}", result.body);
+        let id: Uuid = result.body["id"].as_str().unwrap().parse().unwrap();
+        sqlx::query("UPDATE security_challenges SET secret_hash=$2 WHERE id=$1")
+            .bind(id)
+            .bind(crypto::proof_hash(
+                &format!("captcha:{action}"),
+                id,
+                "AB29Q",
+            ))
+            .execute(self.state.database.pool())
+            .await
+            .unwrap();
+        json!({"captcha_id":id,"captcha_code":"AB29Q"})
+    }
+    async fn login(&self, admin: bool) -> Reply {
+        self.request("POST",if admin{"/api/v1/admin/auth/login"}else{"/api/v1/auth/login"},None,json!({"email":"admin@security.test","password":"security-admin-password-123","verification":self.proof(if admin{"admin_login"}else{"login"}).await})).await
+    }
+}
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn captcha_is_png_single_use_action_bound_expiring_and_server_required() {
+    let f = Fixture::new(true).await;
+    let image = f
+        .request(
+            "GET",
+            "/api/v1/auth/captcha?action=login",
+            None,
+            Value::Null,
+        )
+        .await;
+    assert_eq!(image.status, StatusCode::OK);
+    let png = STANDARD
+        .decode(
+            image.body["image_data_url"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("data:image/png;base64,")
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    assert_eq!(image.headers["cache-control"], "no-store");
+    let missing = f
+        .request(
+            "POST",
+            "/api/v1/auth/login",
+            None,
+            json!({"email":"admin@security.test","password":"security-admin-password-123"}),
+        )
+        .await;
+    assert_eq!(missing.status, StatusCode::BAD_REQUEST);
+    let wrong_action = f.proof("register").await;
+    let failed=f.request("POST","/api/v1/auth/login",None,json!({"email":"admin@security.test","password":"security-admin-password-123","verification":wrong_action})).await;
+    assert_eq!(failed.body["code"], "captcha_invalid");
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM security_challenges WHERE id=$1)")
+            .bind(
+                wrong_action["captcha_id"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<Uuid>()
+                    .unwrap(),
+            )
+            .fetch_one(f.state.database.pool())
+            .await
+            .unwrap();
+    assert!(!exists);
+    let proof = f.proof("login").await;
+    let first=f.request("POST","/api/v1/auth/login",None,json!({"email":"admin@security.test","password":"security-admin-password-123","verification":proof})).await;
+    assert_eq!(first.status, StatusCode::OK);
+    assert!(first.body.get("access_token").is_none());
+    assert!(first.body.get("refresh_token").is_none());
+    let second=f.request("POST","/api/v1/auth/login",None,json!({"email":"admin@security.test","password":"security-admin-password-123","verification":proof})).await;
+    assert_eq!(second.status, StatusCode::BAD_REQUEST);
+    let expired = f.proof("admin_login").await;
+    sqlx::query("UPDATE security_challenges SET expires_at=now()-interval '1 second' WHERE id=$1")
+        .bind(
+            expired["captcha_id"]
+                .as_str()
+                .unwrap()
+                .parse::<Uuid>()
+                .unwrap(),
+        )
+        .execute(f.state.database.pool())
+        .await
+        .unwrap();
+    let result=f.request("POST","/api/v1/admin/auth/login",None,json!({"email":"admin@security.test","password":"security-admin-password-123","verification":expired})).await;
+    assert_eq!(result.status, StatusCode::BAD_REQUEST);
+}
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn cookies_are_http_only_surfaces_are_isolated_csrf_and_step_up_are_enforced() {
+    let f = Fixture::new(true).await;
+    let web = f.login(false).await;
+    let website = test_security::cookie_header(&web.headers);
+    assert_eq!(
+        f.request("GET", "/api/v1/admin/users", Some(&website), Value::Null)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    let backend = f.login(true).await;
+    assert_eq!(backend.status, StatusCode::OK);
+    for cookie in backend.headers.get_all("set-cookie") {
+        let value = cookie.to_str().unwrap();
+        assert!(
+            value.contains("HttpOnly")
+                && value.contains("SameSite=Strict")
+                && value.contains("Path=/")
+        );
+    }
+    let cookies = test_security::cookie_header(&backend.headers);
+    assert_eq!(
+        f.request("GET", "/api/v1/admin/users", Some(&cookies), Value::Null)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        f.custom(
+            "POST",
+            "/api/v1/auth/step-up",
+            Some(&cookies),
+            json!({"password":"security-admin-password-123"}),
+            Some("https://evil.test"),
+            None
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        f.custom(
+            "POST",
+            "/api/v1/auth/step-up",
+            Some(&cookies),
+            json!({"password":"security-admin-password-123"}),
+            None,
+            None
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    sqlx::query("UPDATE oauth_sessions SET step_up_until=now()-interval '1 second'")
+        .execute(f.state.database.pool())
+        .await
+        .unwrap();
+    let blocked = f
+        .request(
+            "POST",
+            "/api/v1/admin/roles",
+            Some(&cookies),
+            json!({"name":"test role","description":"","administrator":false}),
+        )
+        .await;
+    assert_eq!(blocked.body["code"], "reauth_required");
+    let verified = f
+        .request(
+            "POST",
+            "/api/v1/auth/step-up",
+            Some(&cookies),
+            json!({"password":"security-admin-password-123"}),
+        )
+        .await;
+    assert_eq!(verified.status, StatusCode::OK, "{}", verified.body);
+    let allowed = f
+        .request(
+            "POST",
+            "/api/v1/admin/roles",
+            Some(&cookies),
+            json!({"name":"test role","description":"","administrator":false}),
+        )
+        .await;
+    assert_eq!(allowed.status, StatusCode::CREATED, "{}", allowed.body);
+    let headers = f
+        .request("GET", "/admin/login", None, Value::Null)
+        .await
+        .headers;
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert_eq!(headers["x-frame-options"], "DENY");
+    assert!(
+        headers["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("nonce-")
+    );
+    assert_eq!(
+        f.request("POST", "/api/v1/loaders/poll", None, json!({}))
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+}
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn failed_logins_are_bounded_and_forwarded_ip_cannot_bypass_limits() {
+    let f = Fixture::new(true).await;
+    for _ in 0..6 {
+        let result=f.request("POST","/api/v1/auth/login",None,json!({"email":"admin@security.test","password":"incorrect-password","verification":f.proof("login").await})).await;
+        assert_eq!(result.status, StatusCode::UNAUTHORIZED, "{}", result.body);
+    }
+    let locked = f.login(false).await;
+    assert_eq!(locked.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(locked.headers.contains_key("retry-after"));
+    assert!(
+        locked.body["details"]["retry_after_seconds"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(!locked.body.to_string().contains("password_hash"));
+}
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn refresh_rotation_preserves_absolute_expiry_and_detects_replay() {
+    let f = Fixture::new(true).await;
+    let login = f.login(false).await;
+    let cookies = test_security::cookie_header(&login.headers);
+    let original: chrono::DateTime<Utc> =
+        sqlx::query_scalar("SELECT absolute_expires_at FROM oauth_sessions")
+            .fetch_one(f.state.database.pool())
+            .await
+            .unwrap();
+    let refreshed = f
+        .request("POST", "/api/v1/auth/refresh", Some(&cookies), Value::Null)
+        .await;
+    assert_eq!(refreshed.status, StatusCode::OK, "{}", refreshed.body);
+    let next = test_security::cookie_header(&refreshed.headers);
+    let latest: chrono::DateTime<Utc> = sqlx::query_scalar(
+        "SELECT absolute_expires_at FROM oauth_sessions WHERE revoked_at IS NULL",
+    )
+    .fetch_one(f.state.database.pool())
+    .await
+    .unwrap();
+    assert_eq!(original, latest);
+    assert_eq!(
+        f.request("GET", "/api/v1/auth/me", Some(&next), Value::Null)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        f.request("POST", "/api/v1/auth/refresh", Some(&cookies), Value::Null)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        f.request("GET", "/api/v1/auth/me", Some(&next), Value::Null)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+}
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn totp_enrollment_login_recovery_codes_and_administrator_requirement() {
+    let f = Fixture::new(true).await;
+    let login = f.login(true).await;
+    let cookies = test_security::cookie_header(&login.headers);
+    let enrollment = f
+        .request(
+            "POST",
+            "/api/v1/auth/security/enrollment",
+            Some(&cookies),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(enrollment.status, StatusCode::OK, "{}", enrollment.body);
+    let secret = data_encoding::BASE32_NOPAD
+        .decode(enrollment.body["secret"].as_str().unwrap().as_bytes())
+        .unwrap();
+    let confirmation=f.request("POST","/api/v1/auth/security/confirm",Some(&cookies),json!({"challenge_id":enrollment.body["challenge_id"],"code":crypto::totp(&secret,Utc::now().timestamp()/30)})).await;
+    assert_eq!(confirmation.status, StatusCode::OK, "{}", confirmation.body);
+    let recovery = confirmation.body["recovery_codes"].as_array().unwrap();
+    assert_eq!(recovery.len(), 8);
+    let stored: String = sqlx::query_scalar("SELECT secret_ciphertext FROM mfa_credentials")
+        .fetch_one(f.state.database.pool())
+        .await
+        .unwrap();
+    assert!(!stored.contains(enrollment.body["secret"].as_str().unwrap()));
+    assert_eq!(
+        f.request("GET", "/api/v1/auth/me", Some(&cookies), Value::Null)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    f.request("POST", "/api/v1/auth/logout", Some(&cookies), Value::Null)
+        .await;
+    let pending = f.login(true).await;
+    assert_eq!(pending.status, StatusCode::ACCEPTED, "{}", pending.body);
+    assert!(!pending.headers.contains_key("set-cookie"));
+    let invalid = f
+        .request(
+            "POST",
+            "/api/v1/auth/mfa/verify",
+            None,
+            json!({"challenge_id":pending.body["challenge_id"],"code":""}),
+        )
+        .await;
+    assert_eq!(invalid.status, StatusCode::UNAUTHORIZED);
+    let authenticated=f.request("POST","/api/v1/auth/mfa/verify",None,json!({"challenge_id":pending.body["challenge_id"],"code":crypto::totp(&secret,Utc::now().timestamp()/30+1)})).await;
+    assert_eq!(
+        authenticated.status,
+        StatusCode::OK,
+        "{}",
+        authenticated.body
+    );
+    let second = f.login(true).await;
+    let recovered = f
+        .request(
+            "POST",
+            "/api/v1/auth/mfa/verify",
+            None,
+            json!({"challenge_id":second.body["challenge_id"],"code":recovery[0]}),
+        )
+        .await;
+    assert_eq!(recovered.status, StatusCode::OK, "{}", recovered.body);
+    let third = f.login(true).await;
+    let replay = f
+        .request(
+            "POST",
+            "/api/v1/auth/mfa/verify",
+            None,
+            json!({"challenge_id":third.body["challenge_id"],"code":recovery[0]}),
+        )
+        .await;
+    assert_eq!(replay.status, StatusCode::UNAUTHORIZED);
+    let restored = test_security::cookie_header(&recovered.headers);
+    f.state.config.write().await.security.require_admin_mfa = true;
+    assert_eq!(
+        f.request(
+            "DELETE",
+            "/api/v1/auth/security/mfa",
+            Some(&restored),
+            Value::Null
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    let details: Vec<String> = sqlx::query_scalar("SELECT details::text FROM audit_events")
+        .fetch_all(f.state.database.pool())
+        .await
+        .unwrap();
+    let text = details.join(" ");
+    assert!(!text.contains("security-admin-password-123"));
+    assert!(!text.contains(recovery[0].as_str().unwrap()));
+    assert!(!text.contains(enrollment.body["secret"].as_str().unwrap()));
+}
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn local_edition_keeps_anonymous_board_access_and_hides_identity_features() {
+    let f = Fixture::new(false).await;
+    assert_eq!(
+        f.request("GET", "/api/v1/board-types", None, Value::Null)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    for path in [
+        "/api/v1/auth/captcha?action=login",
+        "/api/v1/auth/security",
+        "/api/v1/account",
+        "/api/v1/admin/users",
+        "/api/v1/admin/rentals",
+    ] {
+        assert_eq!(
+            f.request("GET", path, None, Value::Null).await.status,
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
+    }
+    let config = f
+        .request("GET", "/api/v1/auth/config", None, Value::Null)
+        .await;
+    assert_eq!(config.body["captcha_required"], false);
+    assert_eq!(config.body["enabled"], false);
+}
+
+/// A loopback SMTP sink exercises the real mail transport, without external delivery.
+async fn smtp_sink() -> (
+    u16,
+    tokio::sync::mpsc::Receiver<String>,
+    tokio::task::JoinHandle<()>,
+) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (sender, receiver) = tokio::sync::mpsc::channel(8);
+    let task = tokio::spawn(async move {
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            let sender = sender.clone();
+            tokio::spawn(async move {
+                let (read, mut write) = socket.into_split();
+                write
+                    .write_all(b"220 localhost test SMTP\r\n")
+                    .await
+                    .unwrap();
+                let mut lines = BufReader::new(read).lines();
+                let mut data = false;
+                let mut message = String::new();
+                while let Some(line) = lines.next_line().await.unwrap() {
+                    if data {
+                        if line == "." {
+                            sender.send(message.clone()).await.unwrap();
+                            write.write_all(b"250 accepted\r\n").await.unwrap();
+                            data = false;
+                        } else {
+                            message.push_str(&line);
+                            message.push_str("\r\n");
+                        }
+                    } else if line.starts_with("EHLO") || line.starts_with("HELO") {
+                        write.write_all(b"250 localhost\r\n").await.unwrap();
+                    } else if line == "DATA" {
+                        write.write_all(b"354 send message\r\n").await.unwrap();
+                        data = true;
+                    } else if line == "QUIT" {
+                        write.write_all(b"221 goodbye\r\n").await.unwrap();
+                        break;
+                    } else {
+                        write.write_all(b"250 ok\r\n").await.unwrap();
+                    }
+                }
+            });
+        }
+    });
+    (port, receiver, task)
+}
+async fn mail_code(receiver: &mut tokio::sync::mpsc::Receiver<String>) -> String {
+    let message = tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let (headers, body) = message.split_once("\r\n\r\n").unwrap();
+    let body = if headers
+        .to_lowercase()
+        .contains("content-transfer-encoding: base64")
+    {
+        String::from_utf8(
+            STANDARD
+                .decode(body.split_whitespace().collect::<String>())
+                .unwrap(),
+        )
+        .unwrap()
+    } else {
+        body.replace("=\r\n", "")
+    };
+    body.split(|c: char| !c.is_ascii_digit())
+        .find(|part| part.len() == 6)
+        .expect("mail contains a six digit code")
+        .to_owned()
+}
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn optional_smtp_verification_and_password_recovery_revoke_old_credentials() {
+    let f = Fixture::new(true).await;
+    let (port, mut messages, mail_task) = smtp_sink().await;
+    {
+        let mut config = f.state.config.write().await;
+        config.security.smtp_host = Some("127.0.0.1".into());
+        config.security.smtp_from = Some("security@ostool.test".into());
+        config.security.smtp_port = port;
+        config.security.smtp_tls = ostool_server::security::config::SmtpTls::LoopbackPlaintext;
+        config.security.registration_email_verification = true;
+        config.security.validate(true).unwrap();
+    }
+    let email = "mail-member@security.test";
+    let missing = f.request("POST", "/api/v1/auth/register", None,
+        json!({"email":email,"password":"initial-mail-password-123","verification":f.proof("register").await})).await;
+    assert_eq!(missing.status, StatusCode::BAD_REQUEST);
+    let sent = f.request("POST", "/api/v1/auth/email-code", None,
+        json!({"email":email,"action":"register","verification":f.proof("registration_email").await})).await;
+    assert_eq!(sent.status, StatusCode::OK, "{}", sent.body);
+    let code = mail_code(&mut messages).await;
+    assert!(!sent.body.to_string().contains(&code));
+    let register = f.request("POST", "/api/v1/auth/register", None,
+        json!({"email":email,"password":"initial-mail-password-123","verification":f.proof("register").await,
+        "email_challenge_id":sent.body["challenge_id"],"email_code":code})).await;
+    assert_eq!(register.status, StatusCode::CREATED, "{}", register.body);
+    let cookies = test_security::cookie_header(&register.headers);
+    let verified: bool =
+        sqlx::query_scalar("SELECT email_verified_at IS NOT NULL FROM users WHERE email=$1")
+            .bind(email)
+            .fetch_one(f.state.database.pool())
+            .await
+            .unwrap();
+    assert!(verified);
+    let reused = f.request("POST", "/api/v1/auth/register", None,
+        json!({"email":email,"password":"initial-mail-password-123","verification":f.proof("register").await,
+        "email_challenge_id":sent.body["challenge_id"],"email_code":code})).await;
+    assert_eq!(reused.status, StatusCode::BAD_REQUEST);
+    sqlx::query("DELETE FROM security_buckets WHERE key=$1")
+        .bind(crypto::hash(&format!("email-resend:{email}")))
+        .execute(f.state.database.pool())
+        .await
+        .unwrap();
+    let reset = f.request("POST", "/api/v1/auth/email-code", None,
+        json!({"email":email,"action":"password_reset","verification":f.proof("password_reset").await})).await;
+    assert_eq!(reset.status, StatusCode::OK, "{}", reset.body);
+    let reset_code = mail_code(&mut messages).await;
+    let changed = f.request("POST", "/api/v1/auth/password-reset", None,
+        json!({"challenge_id":reset.body["challenge_id"],"code":reset_code,"new_password":"replacement-mail-password-123"})).await;
+    assert_eq!(changed.status, StatusCode::OK, "{}", changed.body);
+    assert_eq!(
+        f.request("GET", "/api/v1/auth/me", Some(&cookies), Value::Null)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    let login = f.request("POST", "/api/v1/auth/login", None,
+        json!({"email":email,"password":"replacement-mail-password-123","verification":f.proof("login").await})).await;
+    assert_eq!(login.status, StatusCode::OK, "{}", login.body);
+    let unknown = f.request("POST", "/api/v1/auth/email-code", None,
+        json!({"email":"unknown@security.test","action":"password_reset","verification":f.proof("password_reset").await})).await;
+    assert_eq!(unknown.status, StatusCode::OK);
+    assert_eq!(unknown.body["message"], reset.body["message"]);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), messages.recv())
+            .await
+            .is_err()
+    );
+    mail_task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn administrator_enrollment_is_restricted_and_session_revocation_is_owner_scoped() {
+    let f = Fixture::new(true).await;
+    f.state.config.write().await.security.require_admin_mfa = true;
+    let enrollment = f.login(true).await;
+    assert_eq!(enrollment.body["enrollment_required"], true);
+    let restricted = test_security::cookie_header(&enrollment.headers);
+    assert_eq!(
+        f.request("GET", "/api/v1/admin/users", Some(&restricted), Value::Null)
+            .await
+            .body["code"],
+        "mfa_enrollment_required"
+    );
+    assert_eq!(
+        f.request(
+            "GET",
+            "/api/v1/auth/security",
+            Some(&restricted),
+            Value::Null
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    f.state.config.write().await.security.require_admin_mfa = false;
+    let first = f.login(true).await;
+    let old = test_security::cookie_header(&first.headers);
+    f.state.config.write().await.security.require_admin_mfa = true;
+    assert_eq!(
+        f.request("GET", "/api/v1/admin/users", Some(&old), Value::Null)
+            .await
+            .body["code"],
+        "mfa_enrollment_required"
+    );
+    assert_eq!(
+        f.request("GET", "/api/v1/auth/me", Some(&old), Value::Null)
+            .await
+            .body["mfa_enrollment_required"],
+        true
+    );
+    f.state.config.write().await.security.require_admin_mfa = false;
+    let current = test_security::cookie_header(&first.headers);
+    let other = f.login(false).await;
+    let other_cookie = test_security::cookie_header(&other.headers);
+    let outsider = f
+        .state
+        .database
+        .create_user(
+            "outsider@security.test",
+            "outsider-password-123",
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let auth = f.state.config.read().await.auth.clone();
+    let outsider_grant = f
+        .state
+        .database
+        .issue_grant(
+            outsider,
+            "ostool-cli",
+            "board:operate offline_access",
+            &auth,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        f.request(
+            "DELETE",
+            &format!(
+                "/api/v1/auth/security/sessions/{}",
+                outsider_grant.session_id
+            ),
+            Some(&current),
+            Value::Null
+        )
+        .await
+        .status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        f.request(
+            "POST",
+            "/api/v1/auth/security/sessions/others",
+            Some(&current),
+            Value::Null
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        f.request("GET", "/api/v1/auth/me", Some(&current), Value::Null)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        f.request("GET", "/api/v1/auth/me", Some(&other_cookie), Value::Null)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(
+        f.state
+            .database
+            .authenticate_token(&outsider_grant.access_token)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    f.state.config.write().await.auth.public_base_url = Some("https://boards.example.test".into());
+    let secure = f.login(true).await;
+    for cookie in secure.headers.get_all("set-cookie") {
+        let cookie = cookie.to_str().unwrap();
+        assert!(cookie.starts_with("__Host-ostool-admin-"));
+        assert!(cookie.contains("; Secure"));
+        assert!(!cookie.contains("Domain="));
+    }
+}

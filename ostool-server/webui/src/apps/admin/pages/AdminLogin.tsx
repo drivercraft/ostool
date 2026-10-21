@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { CircuitBoard, ArrowRight, ShieldCheck } from "lucide-react";
-import { api, saveAuthToken } from "@/api/client";
+import { api, notifyAuthChanged, type HumanProof } from "@/api/client";
+import { HumanVerification } from "@/components/human-verification";
+import { useEdition } from "@/edition";
 import { safeAdminRedirect } from "@/auth-session";
 import { SiteThemeMenu } from "@/components/site-theme-menu";
 import { Button } from "@/components/ui/button";
@@ -9,6 +11,11 @@ import { TextField, Notice } from "@/components/forms";
 export default function AdminLogin() {
   const [email, setEmail] = useState(""),
     [password, setPassword] = useState("");
+  const config = useEdition();
+  const [proof, setProof] = useState<HumanProof>();
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [challenge, setChallenge] = useState<string>();
+  const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   useEffect(() => {
@@ -19,8 +26,16 @@ export default function AdminLogin() {
     setBusy(true);
     setError("");
     try {
-      const grant = await api.adminLogin(email, password);
-      saveAuthToken(grant);
+      const result = challenge
+        ? await api.verifyMfa(challenge, code)
+        : await api.adminLogin(email, password, proof ?? {});
+      if (result.mfa_required) {
+        setChallenge(result.challenge_id);
+        setPassword("");
+        setCode("");
+        return;
+      }
+      notifyAuthChanged();
       window.location.replace(
         safeAdminRedirect(
           new URLSearchParams(window.location.search).get("redirect"),
@@ -28,6 +43,7 @@ export default function AdminLogin() {
       );
     } catch (error) {
       setError(error instanceof Error ? error.message : "后台登录失败");
+      if (!challenge) setRefreshKey((value) => value + 1);
     } finally {
       setBusy(false);
     }
@@ -50,28 +66,66 @@ export default function AdminLogin() {
         </span>
         <h1>管理后台登录</h1>
         <p>使用管理员账号登录开发板管理后台。</p>
-        <TextField
-          label="邮箱"
-          type="email"
-          autoComplete="username"
-          required
-          value={email}
-          onValue={setEmail}
-        />
-        <TextField
-          label="密码"
-          type="password"
-          autoComplete="current-password"
-          required
-          maxLength={1024}
-          value={password}
-          onValue={setPassword}
-        />
+        {!challenge ? (
+          <>
+            <TextField
+              label="邮箱"
+              type="email"
+              autoComplete="username"
+              required
+              value={email}
+              onValue={setEmail}
+            />
+            <TextField
+              label="密码"
+              type="password"
+              autoComplete="current-password"
+              required
+              maxLength={1024}
+              value={password}
+              onValue={setPassword}
+            />
+            <HumanVerification
+              action="admin_login"
+              refreshKey={refreshKey}
+              disabled={busy}
+              onChange={setProof}
+            />
+          </>
+        ) : (
+          <TextField
+            label="验证码或恢复码"
+            value={code}
+            onValue={setCode}
+            autoComplete="one-time-code"
+            maxLength={128}
+            required
+          />
+        )}
         {error && <Notice>{error}</Notice>}
-        <Button type="submit" disabled={busy}>
-          {busy ? "正在登录…" : "登录"}
+        <Button
+          type="submit"
+          disabled={busy || (!challenge && !proof?.captcha_code)}
+        >
+          {busy ? "正在登录…" : challenge ? "验证并登录" : "登录"}
           <ArrowRight size={17} />
         </Button>
+        {challenge && (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setChallenge(undefined);
+              setRefreshKey((v) => v + 1);
+              setCode("");
+            }}
+          >
+            重新登录
+          </Button>
+        )}
+        {config.email_security_available && (
+          <a href="/password-reset?surface=admin">忘记密码</a>
+        )}
         <a className="admin-login-site" href="/">
           返回网站首页
         </a>

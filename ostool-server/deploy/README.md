@@ -59,9 +59,14 @@ on private interfaces. Hardware uses the LAN endpoint while users/CLI use the
 public HTTPS origin. The Caddy example excludes hardware endpoints from public
 ingress; it does not make hardware protocols into authenticated public APIs.
 
-Registration is email/password account creation, not email verification or an
-email delivery workflow. Passwords use Argon2; duplicates return HTTP 409. New
-accounts receive the member role and cannot enter the administrator console.
+Public registration/login require one-shot image CAPTCHA by default. Email verification
+is optional and disabled by default; SMTP also enables email verification and password
+recovery. Passwords use Argon2 with a 15-character minimum for new/changed passwords.
+Registration failures use a generic HTTP 400 response. New accounts receive the member
+role and cannot enter the administrator console. Browser credentials use isolated
+HttpOnly cookies; CLI OAuth/PATs continue to use Bearer tokens.
+See [security settings and upgrade notes](security.md) for TOTP/recovery codes,
+recent identity checks, session revocation, CSRF, network restrictions and rate limits.
 Admins manage users and roles through `/admin/users` and `/admin/users/roles`.
 Roles currently grant either board access or full administration, without
 per-board or individual-operation permission rules. Disabling/deleting a user
@@ -164,27 +169,30 @@ PostgreSQL integration tests use a disposable database and an isolated schema:
 
 ```bash
 cargo test -p ostool-server --test auth_postgres --test account_postgres \
-  --test unified_persistence --test audit_postgres --test board_migration -- --ignored
+  --test unified_persistence --test audit_postgres --test board_migration --test security_postgres -- --ignored
 ```
 
-For the full browser account-management test, start a disposable public environment
-using `OSTOOL_EDITION=public scripts/dev-env.sh start`, build the current server, then run:
+Browser tests require an explicitly disposable loopback PostgreSQL database. The
+following command starts isolated local and public server fixtures, runs both sets
+of browser tests, and stops the fixtures automatically (ports 4174, 4175, 4191 and
+UDP 2998 must be available):
 
 ```bash
 cargo build -p ostool-server
-OSTOOL_E2E_AUTH_BASE_URL=http://127.0.0.1:2999 \
-OSTOOL_E2E_ADMIN_EMAIL=admin@example.com \
-OSTOOL_E2E_ADMIN_PASSWORD=admin-password-123 \
-OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_browser_tests \
+OSTOOL_E2E_PUBLIC=true \
+OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:5432/ostool_tests \
   pnpm --dir ostool-server/webui test:e2e
 ```
 
-The local browser database must be a separate disposable database created for
-tests. The fixture uses a fresh schema per run, so test records and existing
-boards never collide with a previous run or development inventory. CI provides
-its PostgreSQL service automatically. Public account tests create users/roles
-in the separately supplied public test environment. Without
-`OSTOOL_E2E_AUTH_BASE_URL`, those public-account tests are skipped.
+Each fixture creates a fresh `ostool_e2e_...` schema. Public tests create users/roles,
+enable MFA and replace CAPTCHA digests directly in that isolated test database.
+There is no CAPTCHA bypass in the application. Without `OSTOOL_E2E_PUBLIC=true`
+or an explicit separately configured public test server, public-account tests are
+skipped. An externally launched public test fixture must provide matching
+`OSTOOL_E2E_AUTH_BASE_URL`, `OSTOOL_E2E_AUTH_DATABASE_URL`,
+`OSTOOL_E2E_AUTH_DATABASE_SCHEMA`, `OSTOOL_E2E_ADMIN_EMAIL` and
+`OSTOOL_E2E_ADMIN_PASSWORD`; only loopback hosts and explicit `ostool_e2e_` schemas
+are accepted. Never use a development/production inventory. See [security testing](security.md#升级与检查).
 
 ## Scheduled board rentals
 

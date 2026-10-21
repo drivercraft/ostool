@@ -1,3 +1,4 @@
+import { solveCaptcha, apiLogin, apiRegister } from "../fixtures/security";
 import { expect, test } from "playwright/test";
 
 // Optional second server with PostgreSQL; the ordinary fixture stays isolated.
@@ -24,6 +25,7 @@ test("registration, member/admin access, user/role events and settings navigatio
   await page
     .getByLabel("确认密码", { exact: true })
     .fill("browser-password-123");
+  await solveCaptcha(page);
   await page.getByRole("button", { name: "创建账号", exact: true }).click();
   await expect(page).toHaveURL(`${base}/account`);
   await expect(page.getByRole("heading", { name: "当前账号" })).toBeVisible();
@@ -33,9 +35,10 @@ test("registration, member/admin access, user/role events and settings navigatio
   ).toBeVisible();
   await page.getByLabel("邮箱", { exact: true }).fill(email);
   await page.getByLabel("密码", { exact: true }).fill("browser-password-123");
+  await solveCaptcha(page);
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await expect(
-    page.getByText("该账号没有管理后台权限", { exact: true }),
+    page.getByText("邮箱或密码不正确", { exact: true }),
   ).toBeVisible();
   await page.goto(`${base}/admin/login?redirect=/admin/overview`);
   await page
@@ -44,6 +47,7 @@ test("registration, member/admin access, user/role events and settings navigatio
   await page
     .getByLabel("密码", { exact: true })
     .fill(process.env.OSTOOL_E2E_ADMIN_PASSWORD ?? "admin-password-123");
+  await solveCaptcha(page);
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await expect(page).toHaveURL(`${base}/admin/overview`);
   await page.getByRole("link", { name: "用户列表", exact: true }).click();
@@ -58,9 +62,9 @@ test("registration, member/admin access, user/role events and settings navigatio
   await page.getByLabel("角色名称", { exact: true }).fill(role);
   await page.getByRole("button", { name: "保存角色", exact: true }).click();
   await expect(page.getByText(role, { exact: true })).toBeVisible();
-  const token = await page.evaluate(() =>
-    localStorage.getItem("ostool.admin.access_token"),
-  );
+  const token = (await page.context().cookies()).find(
+    (cookie) => cookie.name === "ostool-admin-access",
+  )!.value;
   const headers = { authorization: `Bearer ${token}` };
   const boardId = `rental-board-${Date.now()}`;
   expect(

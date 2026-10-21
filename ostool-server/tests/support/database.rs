@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub async fn prepare(config_path: &Path, config: &mut ServerConfig) -> anyhow::Result<Database> {
+    if config.edition.is_public() && config.auth.public_base_url.is_none() {
+        config.auth.public_base_url = Some("http://127.0.0.1:2999".into());
+    }
     if config.network.interface.is_empty() {
         config.network.interface = "lo".into();
     }

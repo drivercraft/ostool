@@ -475,7 +475,8 @@ fn text(value: &str, limit: usize) -> String {
         .collect()
 }
 pub fn client_ip(peer: Option<IpAddr>, headers: &HeaderMap, trusted: &[IpAddr]) -> Option<IpAddr> {
-    let mut address = peer?;
+    let mut address = peer?.to_canonical();
+    let trusted: Vec<IpAddr> = trusted.iter().map(|ip| ip.to_canonical()).collect();
     if !trusted.contains(&address) {
         return Some(address);
     }
@@ -489,7 +490,7 @@ pub fn client_ip(peer: Option<IpAddr>, headers: &HeaderMap, trusted: &[IpAddr]) 
                 if !trusted.contains(&address) {
                     break;
                 }
-                address = next;
+                address = next.to_canonical();
             }
         }
     }
@@ -551,6 +552,13 @@ fn intent(method: &Method, path: &str, payload: &Value) -> Option<Intent> {
         }
         ("auth", Some("login"), _) => ("auth.login", "用户登录"),
         ("auth", Some("register"), _) => ("auth.register", "用户注册"),
+        ("auth", Some("mfa"), _) => ("auth.mfa.verify", "双重验证登录"),
+        ("auth", Some("step-up"), _) => ("auth.step_up", "敏感操作身份复核"),
+        ("auth", Some("email-code"), _) => ("auth.email.send", "发送邮箱验证码"),
+        ("auth", Some("password-reset"), _) => ("auth.password.reset", "通过邮箱重置密码"),
+        ("auth", Some("logout"), _) => ("auth.logout", "退出登录"),
+        ("auth", Some("refresh"), _) => ("auth.refresh", "轮换浏览器登录会话"),
+        ("auth", Some("security"), _) => ("auth.security", "维护账号安全设置"),
         ("auth", Some("device"), _) => ("auth.device.authorize", "授权 CLI 设备登录"),
         ("auth", Some("personal-access-tokens"), "DELETE") => {
             ("auth.pat.revoke", "撤销个人访问凭据")

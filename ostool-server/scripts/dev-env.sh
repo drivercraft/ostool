@@ -118,13 +118,18 @@ start_server() {
     # Use an explicit empty env file and edition-specific overrides so a repo
     # .env for a production deployment is never used by the local test launcher.
     : > "$STATE_DIR/server.env"
+    if [[ "$EDITION" == "public" && ! -f "$STATE_DIR/mfa.key" ]]; then
+        require_command node
+        (umask 077; node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64"))' > "$STATE_DIR/mfa.key")
+    fi
     local -a server_env=(env -u OSTOOL_DATABASE_URL -u OSTOOL_ADMIN_EMAIL -u OSTOOL_ADMIN_PASSWORD
         "OSTOOL_EDITION=$EDITION" "OSTOOL_LISTEN_ADDR=127.0.0.1:${SERVER_PORT}"
         "OSTOOL_DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${PG_PORT}/${DB_NAME}"
         "OSTOOL_PUBLIC_BASE_URL=http://127.0.0.1:${SERVER_PORT}" "OSTOOL_NETWORK_TEST_ENABLED=false")
     if [[ "$EDITION" == "public" ]]; then
         server_env+=("OSTOOL_DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${PG_PORT}/${DB_NAME}"
-            "OSTOOL_ADMIN_EMAIL=$ADMIN_EMAIL" "OSTOOL_ADMIN_PASSWORD=$ADMIN_PASSWORD" "OSTOOL_AUTH_ENABLED=true")
+            "OSTOOL_ADMIN_EMAIL=$ADMIN_EMAIL" "OSTOOL_ADMIN_PASSWORD=$ADMIN_PASSWORD" "OSTOOL_AUTH_ENABLED=true"
+            "OSTOOL_MFA_ENCRYPTION_KEY=$(cat "$STATE_DIR/mfa.key")")
     fi
     local -a server_args=()
     if [[ "$DEMO" == "true" ]]; then

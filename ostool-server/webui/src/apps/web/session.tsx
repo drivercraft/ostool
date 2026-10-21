@@ -9,6 +9,7 @@ import {
 import { api, type AuthUser } from "@/api/client";
 import { account, useAccountResource } from "@/api/events";
 import { useEdition } from "@/edition";
+import { sessionSignalKey } from "@/auth-session";
 
 const SessionContext = createContext<{
   user?: AuthUser;
@@ -23,14 +24,14 @@ export function SiteSessionProvider({ children }: { children: ReactNode }) {
     error: string;
   }>({ checking: true, error: "" });
   const profile = useAccountResource("profile");
-  const connectedToken = useRef<string | null>(null);
+  const connectedIdentity = useRef<string | null>(null);
   useEffect(() => {
     let generation = 0;
     let active = true;
     const load = async () => {
       const current = ++generation;
-      if (!publicEdition || !localStorage.getItem("ostool.access_token")) {
-        connectedToken.current = null;
+      if (!publicEdition) {
+        connectedIdentity.current = null;
         account.reset();
         setSession({ checking: false, error: "" });
         return;
@@ -46,9 +47,9 @@ export function SiteSessionProvider({ children }: { children: ReactNode }) {
         const user = await api.me();
         if (active && current === generation) {
           if (account.get("profile")?.id !== user.id) account.reset();
-          const token = localStorage.getItem("ostool.access_token");
-          if (connectedToken.current !== token) account.disconnect();
-          connectedToken.current = token;
+          const token = user.id;
+          if (connectedIdentity.current !== token) account.disconnect();
+          connectedIdentity.current = token;
           setSession({ user, checking: false, error: "" });
           account.connect();
         }
@@ -57,7 +58,14 @@ export function SiteSessionProvider({ children }: { children: ReactNode }) {
           account.reset();
           setSession({
             checking: false,
-            error: error instanceof Error ? error.message : "无法读取登录状态",
+            error:
+              error instanceof Error &&
+              "status" in error &&
+              error.status === 401
+                ? ""
+                : error instanceof Error
+                  ? error.message
+                  : "无法读取登录状态",
           });
         }
       }
@@ -66,7 +74,7 @@ export function SiteSessionProvider({ children }: { children: ReactNode }) {
       if (
         event instanceof StorageEvent &&
         event.key !== null &&
-        event.key !== "ostool.access_token"
+        event.key !== sessionSignalKey("website")
       )
         return;
       void load();

@@ -115,6 +115,7 @@ fn release_settle_delay(board: &BoardConfig) -> Option<Duration> {
 
 #[derive(Clone)]
 pub struct AppState {
+    pub security_revision: Arc<std::sync::atomic::AtomicU64>,
     pub audit: crate::audit::AuditHealth,
     pub monitor: crate::dashboard::Monitor,
     pub database: Database,
@@ -152,6 +153,25 @@ pub async fn build_app_state(
         "both local and public editions require PostgreSQL (OSTOOL_DATABASE_URL)"
     );
     config.auth.enabled = config.edition.is_public();
+    config.security.validate(config.edition.is_public())?;
+    if config.edition.is_public() {
+        let origin = config
+            .auth
+            .public_base_url
+            .as_deref()
+            .context("public edition requires OSTOOL_PUBLIC_BASE_URL")?;
+        let url = url::Url::parse(origin)?;
+        anyhow::ensure!(
+            url.scheme() == "https"
+                || (url.scheme() == "http"
+                    && url.host().is_some_and(|host| match host {
+                        url::Host::Domain(host) => host == "localhost",
+                        url::Host::Ipv4(ip) => ip.is_loopback(),
+                        url::Host::Ipv6(ip) => ip.is_loopback(),
+                    })),
+            "public edition requires HTTPS, except on loopback"
+        );
+    }
     let database = Database::connect(&config.database).await?;
     {
         let settings = database
@@ -202,6 +222,7 @@ pub async fn build_app_state(
             virtual_boards: virtual_boards.clone(),
         }));
     let state = AppState {
+        security_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         audit: crate::audit::AuditHealth::default(),
         monitor: crate::dashboard::Monitor::default(),
         database,

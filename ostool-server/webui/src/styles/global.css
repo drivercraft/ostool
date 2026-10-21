@@ -7,6 +7,7 @@
 @import "./list-views.css";
 @import "./admin-experience.css";
 @import "./controls.css";
+@import "./security.css";
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

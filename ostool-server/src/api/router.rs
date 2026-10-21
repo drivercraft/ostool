@@ -96,6 +96,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/assets/{*path}", get(serve_admin_asset))
         .route("/admin/{*path}", get(serve_admin_history))
         .route("/register", get(serve_site_index))
+        .route("/password-reset", get(serve_site_index))
         .route("/account", get(serve_site_index))
         .route("/account/{*path}", get(serve_site_history))
         .route("/login", get(serve_site_index))
@@ -231,7 +232,15 @@ pub fn build_router(state: AppState) -> Router {
         ))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
+            crate::security::web::gate,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
             crate::audit::middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::security::web::transport,
         ))
         .with_state(state)
 }
@@ -1868,6 +1877,7 @@ fn with_resolved_serial_config(mut board: BoardConfig) -> BoardConfig {
 async fn serial_ws(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
+    credential: Option<Extension<crate::security::web::CurrentCredential>>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
     let session = state
@@ -1886,7 +1896,34 @@ async fn serial_ws(
         return Err(ApiError::conflict("serial websocket already connected"));
     }
 
-    Ok(ws.on_upgrade(move |socket| run_serial_ws(socket, state, session)))
+    Ok(ws.on_upgrade(move |socket| async move {
+        let watcher = credential.map(
+            |Extension(crate::security::web::CurrentCredential(credential))| {
+                let state = state.clone();
+                let id = session_id.clone();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        if !state
+                            .database
+                            .credential_active(&credential)
+                            .await
+                            .unwrap_or(false)
+                        {
+                            state
+                                .request_session_stop(&id, SessionStopReason::SerialClosed)
+                                .await;
+                            break;
+                        }
+                    }
+                })
+            },
+        );
+        run_serial_ws(socket, state, session).await;
+        if let Some(watcher) = watcher {
+            watcher.abort();
+        }
+    }))
 }
 
 async fn power_on_board(
@@ -2939,6 +2976,18 @@ async fn notify_admin_changes(
     let path = request.uri().path().to_owned();
     let response = next.run(request).await;
     if mutation {
+        if response.status().is_success()
+            && (path.starts_with("/api/v1/auth/")
+                || path.starts_with("/api/v1/admin/auth/")
+                || path.starts_with("/oauth/")
+                || path.starts_with("/api/v1/admin/users")
+                || path.starts_with("/api/v1/admin/roles"))
+        {
+            state
+                .security_revision
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            state.admin_events.invalidate(&["security_revision"]);
+        }
         let topics: &[&str] = if path.contains("/loaders/") {
             &["loaders"]
         } else if path.contains("/boards") {
@@ -2972,6 +3021,11 @@ pub(crate) async fn admin_topic(
     }
     let extractor = State(state.clone());
     let value = match topic {
+        "security_revision" => Ok(serde_json::json!(
+            state
+                .security_revision
+                .load(std::sync::atomic::Ordering::Relaxed)
+        )),
         "boards" => serde_json::to_value(list_boards(extractor).await?.0),
         "sessions" => serde_json::to_value(list_admin_sessions(extractor).await?.0.sessions),
         "loaders" => serde_json::to_value(list_loader_devices(extractor).await?.0),
@@ -3087,6 +3141,7 @@ mod tests {
 
     fn test_server_config(root: &std::path::Path) -> ServerConfig {
         ServerConfig {
+            security: Default::default(),
             audit: Default::default(),
             edition: crate::config::Edition::Local,
             listen_addr: "127.0.0.1:0".parse().unwrap(),
@@ -3496,6 +3551,7 @@ mod tests {
     async fn website_and_admin_documents_have_independent_entries() {
         let app = test_router().await;
         let mut documents = Vec::new();
+        let mut nonces = std::collections::HashSet::new();
         for path in [
             "/",
             "/devices",
@@ -3528,7 +3584,18 @@ mod tests {
                 assert!(body.contains("/assets/website-"));
                 assert!(!body.contains("/assets/admin-"));
             }
-            documents.push(body);
+            let nonce = body
+                .split_once("name=\"csp-nonce\" content=\"")
+                .unwrap()
+                .1
+                .split('"')
+                .next()
+                .unwrap();
+            assert!(
+                nonces.insert(nonce.to_owned()),
+                "HTML nonce must be unique per response"
+            );
+            documents.push(body.replace(nonce, "REQUEST_NONCE"));
         }
         assert_eq!(documents[0], documents[1]);
         assert_ne!(documents[0], documents[4]);

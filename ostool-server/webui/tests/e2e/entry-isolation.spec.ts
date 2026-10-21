@@ -1,3 +1,4 @@
+import { solveCaptcha, apiLogin, apiRegister } from "../fixtures/security";
 import { expect, test } from "playwright/test";
 
 test("server and dev host serve independent website and admin entry documents", async ({
@@ -45,11 +46,17 @@ test("website and admin login/logout work independently in the same browser", as
   await page.goto(`${base}/login?redirect=/admin/overview`);
   await page.getByLabel("邮箱", { exact: true }).fill(email);
   await page.getByLabel("密码", { exact: true }).fill(password);
+  await solveCaptcha(page);
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await expect(page).toHaveURL(`${base}/account`);
-  const websiteToken = await page.evaluate(() =>
-    localStorage.getItem("ostool.access_token"),
-  );
+  const websiteToken = (await context.cookies()).find(
+    (cookie) => cookie.name === "ostool-website-access",
+  )!.value;
+  expect(
+    (await context.cookies()).find(
+      (cookie) => cookie.name === "ostool-website-access",
+    ),
+  ).toMatchObject({ httpOnly: true, sameSite: "Strict" });
   expect(websiteToken).toBeTruthy();
   const admin = await context.newPage();
   admin.on("pageerror", (error) => errors.push(error.message));
@@ -66,15 +73,18 @@ test("website and admin login/logout work independently in the same browser", as
   );
   await admin.getByLabel("邮箱", { exact: true }).fill(email);
   await admin.getByLabel("密码", { exact: true }).fill(password);
+  await solveCaptcha(admin);
   await admin.getByRole("button", { name: "登录", exact: true }).click();
   await expect(admin).toHaveURL(`${base}/admin/overview`);
   expect(
-    await admin.evaluate(() =>
-      localStorage.getItem("ostool.admin.access_token"),
+    (await context.cookies()).find(
+      (cookie) => cookie.name === "ostool-admin-access",
     ),
-  ).toBeTruthy();
+  ).toMatchObject({ httpOnly: true, sameSite: "Strict" });
   expect(
-    await admin.evaluate(() => localStorage.getItem("ostool.access_token")),
+    (await context.cookies()).find(
+      (cookie) => cookie.name === "ostool-website-access",
+    )?.value,
   ).toBe(websiteToken);
   await admin.getByRole("button", { name: "账号菜单", exact: true }).click();
   await admin.getByRole("menuitem", { name: "退出登录", exact: true }).click();
@@ -87,10 +97,13 @@ test("website and admin login/logout work independently in the same browser", as
   await page.reload();
   await expect(page.getByRole("heading", { name: "当前账号" })).toBeVisible();
   expect(
-    await page.evaluate(() => localStorage.getItem("ostool.access_token")),
+    (await context.cookies()).find(
+      (cookie) => cookie.name === "ostool-website-access",
+    )?.value,
   ).toBe(websiteToken);
   await admin.getByLabel("邮箱", { exact: true }).fill(email);
   await admin.getByLabel("密码", { exact: true }).fill(password);
+  await solveCaptcha(admin);
   await admin.getByRole("button", { name: "登录", exact: true }).click();
   await expect(admin).toHaveURL(`${base}/admin/overview`);
   await page

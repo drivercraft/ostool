@@ -165,6 +165,11 @@ Use [the public environment example](deploy/public.env.example) with Caddy.
 Existing authenticated deployments must add `OSTOOL_EDITION=public` when upgrading.
 The database connection alone no longer enables account features.
 
+Public login/registration require image CAPTCHA by default. Email verification is
+optional and disabled by default. Optional SMTP, TOTP/recovery codes, device/session
+revocation, recent identity verification, rate limits and deployment settings are
+documented in [security.md](deploy/security.md). Local edition needs none of these settings.
+
 Public edition supports `/register`, `/login`, OAuth Device Authorization and
 PATs compatible with `ostool login` / `ostool login --with-token`. Rental
 administration assigns a board to a user for a UTC time interval. Members can
@@ -453,7 +458,9 @@ backend login uses `/admin/login` and `POST /api/v1/admin/auth/login`, which rej
 non-administrators. Browser access/refresh credentials are stored separately;
 logging into or out of one surface does not sign into or out of the other.
 The account database, role checks and CLI authentication remain shared. Existing
-website credentials are retained; upgrading requires a separate backend login.
+browser credentials must be refreshed by logging in again after this security upgrade.
+Cookies are HttpOnly and separate for each surface; no access/refresh tokens remain
+in browser localStorage or SSE URLs.
 Local edition continues to open the console without authentication.
 
 `pnpm --dir ostool-server/webui build` builds both entries together. A prebuilt

@@ -18,6 +18,7 @@ pub mod ota;
 pub mod persistence;
 pub mod power;
 pub mod process;
+pub mod security;
 pub mod serial;
 pub mod session;
 pub mod state;

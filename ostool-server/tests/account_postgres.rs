@@ -1,4 +1,9 @@
 //! Member isolation, atomic application approval and account security against real PostgreSQL.
+#[path = "support/security.rs"]
+mod test_security;
+use test_security::access_cookie;
+static TEST_DATABASE: std::sync::OnceLock<ostool_server::persistence::Database> =
+    std::sync::OnceLock::new();
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -20,8 +25,26 @@ async fn call(
     method: &str,
     path: &str,
     token: Option<&str>,
-    body: Value,
-) -> (StatusCode, Value) {
+    mut body: Value,
+) -> (StatusCode, Value, axum::http::HeaderMap) {
+    if method == "POST"
+        && matches!(
+            path,
+            "/api/v1/auth/login" | "/api/v1/admin/auth/login" | "/api/v1/auth/register"
+        )
+    {
+        let headers = axum::http::HeaderMap::new();
+        let client = ostool_server::security::store::ClientContext::new("unknown".into(), &headers);
+        let action = if path.ends_with("register") {
+            ostool_server::security::captcha::HumanAction::Register
+        } else if path.starts_with("/api/v1/admin/") {
+            ostool_server::security::captcha::HumanAction::AdminLogin
+        } else {
+            ostool_server::security::captcha::HumanAction::Login
+        };
+        body["verification"] =
+            test_security::proof(TEST_DATABASE.get().unwrap(), action, &client).await;
+    }
     let mut request = Request::builder()
         .method(method)
         .uri(path)
@@ -35,14 +58,17 @@ async fn call(
         .await
         .unwrap();
     let status = response.status();
+    let headers = response.headers().clone();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     (
         status,
         serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        headers,
     )
 }
 async fn account(app: &Router, token: &str) -> Value {
-    let (status, value) = call(app, "GET", "/api/v1/account", Some(token), Value::Null).await;
+    let (status, value, _value_headers) =
+        call(app, "GET", "/api/v1/account", Some(token), Value::Null).await;
     assert_eq!(status, StatusCode::OK);
     value
 }
@@ -71,6 +97,7 @@ async fn member_workspace_isolation_approvals_and_security() {
         },
         auth: AuthConfig {
             enabled: true,
+            public_base_url: Some("http://127.0.0.1:2999".into()),
             bootstrap_admin_email: Some("admin@test.local".into()),
             bootstrap_admin_password: Some("test-admin-password".into()),
             ..Default::default()
@@ -109,17 +136,18 @@ async fn member_workspace_isolation_approvals_and_security() {
     )
     .await
     .unwrap();
+    TEST_DATABASE.set(state.database.clone()).unwrap();
     let app = build_router(state.clone());
-    let (_, grant) = call(
+    let (_, _grant, _grant_headers) = call(
         &app,
         "POST",
-        "/api/v1/auth/login",
+        "/api/v1/admin/auth/login",
         None,
         json!({"email":"admin@test.local","password":"test-admin-password"}),
     )
     .await;
-    let admin = grant["access_token"].as_str().unwrap();
-    let (_, first) = call(
+    let admin = access_cookie(&_grant_headers);
+    let (_, _first, _first_headers) = call(
         &app,
         "POST",
         "/api/v1/auth/register",
@@ -127,8 +155,8 @@ async fn member_workspace_isolation_approvals_and_security() {
         json!({"email":"first@test.local","password":"first-password-123"}),
     )
     .await;
-    let first = first["access_token"].as_str().unwrap();
-    let (_, second) = call(
+    let first = access_cookie(&_first_headers);
+    let (_, _second, _second_headers) = call(
         &app,
         "POST",
         "/api/v1/auth/register",
@@ -136,7 +164,7 @@ async fn member_workspace_isolation_approvals_and_security() {
         json!({"email":"second@test.local","password":"second-password-123"}),
     )
     .await;
-    let second = second["access_token"].as_str().unwrap();
+    let second = access_cookie(&_second_headers);
     assert_eq!(
         call(&app, "GET", "/api/v1/account", None, Value::Null)
             .await
@@ -357,7 +385,8 @@ async fn member_workspace_isolation_approvals_and_security() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/api/v1/account/events?access_token={second}"))
+                .uri("/api/v1/account/events")
+                .header("authorization", format!("Bearer {second}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -437,7 +466,7 @@ async fn member_workspace_isolation_approvals_and_security() {
         StatusCode::CONFLICT
     );
     assert_eq!(call(&app,"PUT","/api/v1/account/profile",Some(first),json!({"email":"changed@test.local","current_password":"first-password-123","display_name":"Updated member"})).await.0,StatusCode::NO_CONTENT);
-    let (_, pat) = call(
+    let (_, pat, _pat_headers) = call(
         &app,
         "POST",
         "/api/v1/auth/personal-access-tokens",

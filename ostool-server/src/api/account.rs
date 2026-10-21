@@ -141,6 +141,9 @@ pub(crate) async fn projection(state: &AppState, user: Uuid) -> Result<Value, Ap
 async fn update_profile(
     State(state): State<AppState>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Extension(crate::security::web::CurrentCredential(credential)): Extension<
+        crate::security::web::CurrentCredential,
+    >,
     Json(input): Json<ProfileInput>,
 ) -> Result<StatusCode, ApiError> {
     let email = crate::persistence::postgres::normalize_email(&input.email)
@@ -151,6 +154,9 @@ async fn update_profile(
         .is_some_and(|name| name.chars().count() > 120)
     {
         return Err(ApiError::bad_request("显示名称不超过 120 个字符"));
+    }
+    if input.email.trim().to_lowercase() != user.email {
+        crate::security::web::require_step_up(&credential)?;
     }
     let db = &state.database;
     let mut tx = db.pool().begin().await.map_err(db_error)?;
@@ -196,8 +202,10 @@ async fn change_password(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Json(input): Json<PasswordInput>,
 ) -> Result<StatusCode, ApiError> {
-    if !(12..=1024).contains(&input.new_password.len()) || input.current_password.len() > 1024 {
-        return Err(ApiError::bad_request("密码长度需要 12 至 1024 个字符"));
+    crate::security::crypto::validate_password(&input.new_password)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    if input.current_password.len() > 1024 {
+        return Err(ApiError::bad_request("当前密码过长"));
     }
     let db = &state.database;
     let mut tx = db.pool().begin().await.map_err(db_error)?;
