@@ -264,7 +264,7 @@ async fn seed_identity(state: &AppState) -> anyhow::Result<Option<Uuid>> {
             .bind(format!("demo-role-{index}" )).bind(name).bind("[演示] 用于检查角色列表、过滤和编辑；权限仍由管理员标记决定")
             .bind(index == 0).execute(&mut *tx).await?;
     }
-    let password = crate::database::hash_password_async(DEMO_PASSWORD.into()).await?;
+    let password = crate::persistence::postgres::hash_password_async(DEMO_PASSWORD.into()).await?;
     for index in 0..USER_COUNT {
         let display_name = match index % 4 {
             0 => Some(format!("演示用户 {:02} · 操作系统研发团队", index + 1)),

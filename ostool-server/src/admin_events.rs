@@ -356,7 +356,7 @@ struct Subscription {
     changed: watch::Receiver<u64>,
     cursor: Option<String>,
     queue: VecDeque<Update>,
-    database: Option<crate::database::Database>,
+    database: Option<crate::persistence::postgres::Database>,
     credential: Option<String>,
     check_at: tokio::time::Instant,
     finished: bool,

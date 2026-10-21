@@ -9,7 +9,7 @@ use crate::{
         BoardConfig, BoardNetworkIdentity, BootConfig, PowerManagementConfig, SerialConfig,
         SerialPortKeyKind, TftpConfig, TftpNetworkConfig, UploadLimitsConfig,
     },
-    dtb_store::DtbFile,
+    persistence::dtbs::DtbFile,
     session::Session,
     state::BoardLeaseState,
     tftp::{files::TftpFileRef, status::TftpStatus},

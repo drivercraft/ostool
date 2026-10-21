@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     api::error::ApiError,
-    database::{AccessGrant, Database, DevicePoll, User},
+    persistence::postgres::{AccessGrant, Database, DevicePoll, User},
     state::AppState,
 };
 
@@ -459,7 +459,7 @@ async fn register(
                 ApiError::conflict("该邮箱已注册，请直接登录")
             } else if request.password.len() < 12 || request.password.len() > 1024 {
                 ApiError::bad_request("密码长度需要 12 至 1024 个字符")
-            } else if crate::database::normalize_email(&request.email).is_err() {
+            } else if crate::persistence::postgres::normalize_email(&request.email).is_err() {
                 ApiError::bad_request("邮箱格式无效")
             } else {
                 log::error!("registration failed: {error:#}");

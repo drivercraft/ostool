@@ -17,12 +17,12 @@ use crate::{
         BoardAllocationStatus, BoardAllocationWithIdStatus, allocate_board,
         allocate_board_with_board_id,
     },
-    board_store::fs::FileBoardStore,
     config::{BoardConfig, PowerManagementConfig, ServerConfig},
-    database::Database,
-    dtb_store::DtbStore,
     loader::LoaderRegistry,
     ota::OtaStore,
+    persistence::boards::BoardStore,
+    persistence::dtbs::DtbStore,
+    persistence::postgres::Database,
     power::{PowerAction, PowerActionError, execute_power_action_for_board},
     session::{Session, SessionState, SessionStopReason},
     tftp::service::TftpManager,
@@ -133,7 +133,7 @@ pub struct AppState {
     pub(crate) board_inventory_gate: Arc<Mutex<()>>,
     pub(crate) rental_gate: Arc<Mutex<()>>,
     pub(crate) rental_changed: Arc<tokio::sync::Notify>,
-    pub board_store: Arc<FileBoardStore>,
+    pub board_store: Arc<BoardStore>,
     pub dtb_store: Arc<DtbStore>,
     pub tftp_manager: Arc<RwLock<Arc<dyn TftpManager>>>,
     release_tx: mpsc::UnboundedSender<ReleaseJob>,
@@ -184,18 +184,24 @@ pub async fn build_fixture_app_state(
     } else if config.auth.enabled {
         anyhow::bail!("public edition requires PostgreSQL (OSTOOL_DATABASE_URL)");
     }
-    let mut board_store = FileBoardStore::new(config.board_dir.clone());
-    board_store.ensure_dir().await?;
-    if let Some(database) = &database {
-        board_store = board_store.with_database(database.clone()).await?;
-    }
-    let board_store = Arc::new(board_store);
-    let mut dtb_store = DtbStore::new(config.dtb_dir.clone());
-    dtb_store.ensure_dir().await?;
-    if let Some(database) = &database {
-        dtb_store = dtb_store.with_database(database.clone()).await?;
-    }
-    let dtb_store = Arc::new(dtb_store);
+    let board_store = Arc::new(match &database {
+        Some(database) => {
+            BoardStore::open_postgres(database.clone(), config.board_dir.clone()).await?
+        }
+        None => {
+            let store = BoardStore::file_fixture(config.board_dir.clone());
+            store.ensure_dir().await?;
+            store
+        }
+    });
+    let dtb_store = Arc::new(match &database {
+        Some(database) => DtbStore::open_postgres(database.clone(), config.dtb_dir.clone()).await?,
+        None => {
+            let store = DtbStore::file_fixture(config.dtb_dir.clone());
+            store.ensure_dir().await?;
+            store
+        }
+    });
     let boards = board_store.load_all().await?;
     if let Some(database) = &database {
         for dtb in dtb_store.list_all().await? {

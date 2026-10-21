@@ -42,9 +42,9 @@ use crate::{
     config::{
         BoardConfig, BootConfig, PowerManagementConfig, ServerConfig, TftpConfig, UbootNetworkMode,
     },
-    dtb_store::normalize_dtb_name,
     http_boot::publish::{KernelPublishInput, publish_kernel},
     loader::RegistrationError,
+    persistence::dtbs::normalize_dtb_name,
     power::{PowerAction, PowerActionError},
     serial::{
         discovery::list_serial_ports as discover_serial_ports,
@@ -58,14 +58,14 @@ use crate::{
     session::SessionStopReason,
     session::{LoaderStatusUpdateError, SessionBootCommand, SessionState},
     state::{AppState, BoardLeaseState, TouchSessionError},
+    static_assets::{
+        serve_admin_asset, serve_admin_history, serve_admin_index, serve_site_history,
+        serve_site_index,
+    },
     tftp::{
         files::{TftpFileRef, normalize_relative_path},
         service::build_tftp_manager,
         status::resolve_interface_ipv4,
-    },
-    web::{
-        serve_admin_asset, serve_admin_history, serve_admin_index, serve_site_history,
-        serve_site_index,
     },
 };
 
@@ -2953,7 +2953,7 @@ async fn rewrite_board_dtb_references(
 
 async fn sync_dtb_database(
     state: &AppState,
-    file: &crate::dtb_store::DtbFile,
+    file: &crate::persistence::dtbs::DtbFile,
     bytes: &[u8],
 ) -> Result<(), ApiError> {
     if let Some(database) = &state.database {
@@ -3114,8 +3114,8 @@ mod tests {
         },
         session::SessionLifecycleState,
         state::BoardLeaseState,
+        static_assets::first_asset_path,
         tftp::service::{TftpManager, build_tftp_manager},
-        web::first_asset_path,
     };
 
     #[cfg(unix)]

@@ -27,12 +27,14 @@ webui/
 │   ├── api/                     # Shared HTTP client and SSE transport
 │   ├── domain/                  # Shared business labels and rules
 │   ├── types/                   # API contracts
-│   ├── styles/                  # Shared theme, typography and scoped styles
+│   ├── styles/                  # global.css, shared typography and scoped styles
 │   ├── utils/                   # Shared pure helpers
 │   ├── lib/                     # UI utilities
 │   ├── auth-session.ts          # Separate website/admin credential namespaces
 │   └── edition.tsx              # Runtime local/public edition
-└── e2e/                         # Browser integration tests
+└── tests/
+    ├── e2e/                     # Playwright browser integration tests
+    └── fixtures/server.mjs      # Isolated backend process for browser tests
 ```
 
 Pages and components private to one application stay in its `apps/` directory.
@@ -40,6 +42,10 @@ An application must not import the other application's pages or private
 components. Move genuinely shared UI to `components/`, business labels/rules to
 `domain/`, and transport/types to `api/` and `types/`. Tests live beside the code
 they cover. Shared styles use application classes where their rules differ.
+`styles/global.css` is the common stylesheet entry and the configured shadcn CSS
+target. Browser tests are discovered from `tests/e2e` by `playwright.config.ts`;
+their server launcher is in `tests/fixtures`. They are excluded from Vitest's
+unit-test discovery and from the runtime application entry graph.
 
 The table/card switch presents the same records with the same typography:
 values and names use `1rem` (normally 16px), labels and secondary text use

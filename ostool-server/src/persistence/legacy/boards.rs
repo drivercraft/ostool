@@ -1,3 +1,4 @@
+//! Legacy TOML import and explicit file-backed test fixtures.
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
@@ -18,52 +19,13 @@ pub struct QuarantinedBoard {
 }
 
 #[derive(Debug)]
-pub struct FileBoardStore {
+pub struct BoardFiles {
     board_dir: PathBuf,
-    database: Option<crate::database::Database>,
 }
 
-impl FileBoardStore {
+impl BoardFiles {
     pub fn new(board_dir: PathBuf) -> Self {
-        Self {
-            board_dir,
-            database: None,
-        }
-    }
-
-    /// Import legacy files once; thereafter PostgreSQL is the source of truth.
-    pub async fn with_database(
-        mut self,
-        database: crate::database::Database,
-    ) -> anyhow::Result<Self> {
-        use sqlx::Row;
-        let mut tx = database.pool().begin().await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(29992001)")
-            .execute(&mut *tx)
-            .await?;
-        let done = sqlx::query("SELECT name FROM storage_imports WHERE name='boards'")
-            .fetch_optional(&mut *tx)
-            .await?;
-        if done.is_none() {
-            for board in self.load_all().await?.values() {
-                sqlx::query("INSERT INTO board_records(id,payload) VALUES($1,$2) ON CONFLICT(id) DO NOTHING")
-                    .bind(&board.id).bind(serde_json::to_value(board)?).execute(&mut *tx).await?;
-            }
-            sqlx::query("INSERT INTO storage_imports(name) VALUES('boards')")
-                .execute(&mut *tx)
-                .await?;
-        }
-        // Decode before commit so invalid database records fail startup clearly.
-        for row in sqlx::query("SELECT payload FROM board_records")
-            .fetch_all(&mut *tx)
-            .await?
-        {
-            let board: BoardConfig = serde_json::from_value(row.try_get("payload")?)?;
-            board.validate()?;
-        }
-        tx.commit().await?;
-        self.database = Some(database);
-        Ok(self)
+        Self { board_dir }
     }
 
     pub fn path_for_id(&self, board_id: &str) -> PathBuf {
@@ -76,29 +38,6 @@ impl FileBoardStore {
     }
 
     pub async fn load_all(&self) -> anyhow::Result<BTreeMap<String, BoardConfig>> {
-        if let Some(database) = &self.database {
-            use sqlx::Row;
-            let mut boards = BTreeMap::new();
-            let mut macs = BTreeSet::new();
-            for row in sqlx::query("SELECT id,payload FROM board_records ORDER BY id")
-                .fetch_all(database.pool())
-                .await?
-            {
-                let id: String = row.try_get("id")?;
-                let board: BoardConfig = serde_json::from_value(row.try_get("payload")?)?;
-                board.validate()?;
-                if board.id != id {
-                    bail!("board database id mismatch: {id}");
-                }
-                if let Some(identity) = &board.network_identity
-                    && !macs.insert(identity.mac_address)
-                {
-                    bail!("duplicate board MAC in PostgreSQL");
-                }
-                boards.insert(id, board);
-            }
-            return Ok(boards);
-        }
         let mut boards = BTreeMap::new();
         let mut network_identities = BTreeSet::new();
         let mut dir = fs::read_dir(&self.board_dir).await?;
@@ -229,11 +168,6 @@ impl FileBoardStore {
     }
 
     pub async fn write_board(&self, board: &BoardConfig) -> anyhow::Result<()> {
-        if let Some(database) = &self.database {
-            return database
-                .sync_board(&board.id, &serde_json::to_value(board)?)
-                .await;
-        }
         self.ensure_dir().await?;
         let path = self.path_for_id(&board.id);
         let temp_path = path.with_extension("toml.tmp");
@@ -244,9 +178,6 @@ impl FileBoardStore {
     }
 
     pub async fn delete_board(&self, board_id: &str) -> anyhow::Result<()> {
-        if let Some(database) = &self.database {
-            return database.delete_board(board_id).await;
-        }
         let path = self.path_for_id(board_id);
         match fs::remove_file(&path).await {
             Ok(()) => Ok(()),
@@ -260,7 +191,7 @@ impl FileBoardStore {
 mod tests {
     use tempfile::tempdir;
 
-    use super::FileBoardStore;
+    use super::BoardFiles;
     use crate::config::{
         BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig, PxeProfile,
     };
@@ -268,7 +199,7 @@ mod tests {
     #[tokio::test]
     async fn incompatible_board_is_moved_without_preventing_valid_boards_loading() {
         let dir = tempdir().unwrap();
-        let store = FileBoardStore::new(dir.path().to_path_buf());
+        let store = BoardFiles::new(dir.path().to_path_buf());
         let invalid = b"id = 'old'\nboard_type = 'legacy'\n[boot]\nkind = 'removed-boot-kind'\n";
         tokio::fs::write(dir.path().join("old.toml"), invalid)
             .await
@@ -313,7 +244,7 @@ mod tests {
     #[tokio::test]
     async fn valid_boards_survive_validation_errors_and_duplicate_macs() {
         let dir = tempdir().unwrap();
-        let store = FileBoardStore::new(dir.path().to_path_buf());
+        let store = BoardFiles::new(dir.path().to_path_buf());
         store.write_board(&valid_board("valid")).await.unwrap();
         let mut missing_mac = valid_board("old-http");
         missing_mac.boot = BootConfig::UefiHttp(crate::config::UefiHttpProfile {
@@ -352,7 +283,7 @@ mod tests {
     #[tokio::test]
     async fn backups_do_not_overwrite_and_backup_failure_retains_source() {
         let dir = tempdir().unwrap();
-        let store = FileBoardStore::new(dir.path().to_path_buf());
+        let store = BoardFiles::new(dir.path().to_path_buf());
         let path = dir.path().join("old.toml");
         for bytes in [b"invalid-one".as_slice(), b"\xff\xfe".as_slice()] {
             tokio::fs::write(&path, bytes).await.unwrap();
@@ -373,7 +304,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            FileBoardStore::new(blocked.path().to_path_buf())
+            BoardFiles::new(blocked.path().to_path_buf())
                 .load_all()
                 .await
                 .is_err()
@@ -395,7 +326,7 @@ mod tests {
     #[tokio::test]
     async fn board_store_round_trip_per_file() {
         let dir = tempdir().unwrap();
-        let store = FileBoardStore::new(dir.path().to_path_buf());
+        let store = BoardFiles::new(dir.path().to_path_buf());
         let board = BoardConfig {
             id: "rk3568-01".into(),
             board_type: "rk3568".into(),

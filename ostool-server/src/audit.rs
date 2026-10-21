@@ -2,7 +2,7 @@
 use crate::{
     AppState,
     api::{auth::CurrentUser, error::ApiError},
-    database::User,
+    persistence::postgres::User,
 };
 use axum::{
     Json, Router,

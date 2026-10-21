@@ -3,7 +3,7 @@ import { defineConfig } from "playwright/test";
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE;
 
 export default defineConfig({
-  testDir: "./e2e",
+  testDir: "./tests/e2e",
   fullyParallel: false,
   workers: 1,
   use: {
@@ -13,7 +13,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "node e2e/server.mjs",
+      command: "node tests/fixtures/server.mjs",
       url: "http://127.0.0.1:4175/admin/",
       reuseExistingServer: false,
     },

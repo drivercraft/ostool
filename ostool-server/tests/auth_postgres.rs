@@ -6,10 +6,9 @@ use axum::{
     http::{Request, StatusCode},
 };
 use ostool_server::{
-    AuthConfig, DatabaseConfig, ServerConfig,
-    board_store::fs::FileBoardStore,
-    build_app_state, build_router,
+    AuthConfig, DatabaseConfig, ServerConfig, build_app_state, build_router,
     config::{BuiltinTftpConfig, TftpConfig},
+    persistence::legacy::boards::BoardFiles,
     tftp::service::build_tftp_manager,
 };
 use serde_json::{Value, json};
@@ -103,7 +102,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
     let mut tftp = BuiltinTftpConfig::default_with_root(dir.path().join("tftp"));
     tftp.enabled = false;
     config.tftp = TftpConfig::Builtin(tftp);
-    let legacy = FileBoardStore::new(config.board_dir.clone());
+    let legacy = BoardFiles::new(config.board_dir.clone());
     legacy.ensure_dir().await.unwrap();
     let board = ostool_server::BoardConfig {
         id: "test-board".into(),
@@ -636,10 +635,12 @@ async fn registration_roles_revocation_and_inventory_restart() {
     );
     // Retained TOML is a backup, never the inventory authority after import.
     state.board_store.delete_board("test-board").await.unwrap();
-    let restarted = FileBoardStore::new(config.board_dir.clone())
-        .with_database(state.database.clone().unwrap())
-        .await
-        .unwrap();
+    let restarted = ostool_server::persistence::BoardStore::open_postgres(
+        state.database.clone().unwrap(),
+        config.board_dir.clone(),
+    )
+    .await
+    .unwrap();
     assert!(restarted.load_all().await.unwrap().is_empty());
     assert!(legacy.path_for_id("test-board").exists());
     let mut edited = board.clone();

@@ -34,7 +34,7 @@ pub struct RentalInput {
     #[serde(default)]
     pub notes: String,
 }
-fn database(state: &AppState) -> Result<&crate::database::Database, ApiError> {
+fn database(state: &AppState) -> Result<&crate::persistence::postgres::Database, ApiError> {
     state
         .database
         .as_ref()

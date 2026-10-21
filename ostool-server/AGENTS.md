@@ -13,6 +13,10 @@
 - `build.rs` 会复制 web UI 并运行 pnpm 构建嵌入资源。保持该行为可复现，不要提交
   `webui/dist`、`node_modules` 或其他生成的依赖输出。
 - 电源管理和串口发现改动应保持保守：保留稳定设备身份处理，并让失败模式对调用方可见。
+- 数据库连接和板卡、DTB 仓储位于 `src/persistence/`；历史文件适配位于其 `legacy/`
+  子目录，仅用于一次性导入和显式测试夹具。生产构造使用 `open_postgres`，不要新增
+  数据库失败后回退文件的路径。新代码使用规范模块路径，旧模块重导出只用于兼容。
+- `src/static_assets.rs` 负责嵌入前端资源；SQLx 迁移继续放在 package 根的 `migrations/`。
 
 ## 验证
 

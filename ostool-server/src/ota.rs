@@ -85,7 +85,7 @@ pub enum DeleteImageError {
 #[derive(Clone)]
 pub struct OtaStore {
     root: PathBuf,
-    database: Option<crate::database::Database>,
+    database: Option<crate::persistence::postgres::Database>,
     image_catalog: Arc<Mutex<BTreeMap<String, Image>>>,
     jobs: Arc<Mutex<BTreeMap<String, Job>>>,
     observations: Arc<Mutex<BTreeMap<String, Observation>>>,
@@ -100,7 +100,7 @@ struct Observation {
 impl OtaStore {
     pub async fn open_with_database(
         data_dir: &Path,
-        database: crate::database::Database,
+        database: crate::persistence::postgres::Database,
     ) -> anyhow::Result<Self> {
         use sqlx::Row;
         let mut tx = database.pool().begin().await?;

@@ -18,6 +18,9 @@
 
 - 页面数据统一订阅 `src/api/events.ts`；不要新增轮询或 mutation 后全量 GET。
 - 使用官方 shadcn 组件和统一设计 token；推送不得覆盖编辑草稿、焦点或滚动位置。
+- 前后台私有代码分别放在 `src/apps/admin/` 和 `src/apps/web/`；共享组件、接口和业务
+  定义放在公共目录，两个应用不得相互导入私有页面。全局样式入口为 `src/styles/global.css`。
+- 浏览器测试放在 `tests/e2e/`，服务端测试夹具放在 `tests/fixtures/`；单元测试与源码同目录。
 
 ## 验证
 

@@ -4,7 +4,7 @@ use super::{
     error::ApiError,
     rentals::{self, RentalInput},
 };
-use crate::{AppState, database::Database};
+use crate::{AppState, persistence::postgres::Database};
 use axum::{
     Json, Router,
     extract::{Extension, Path, State},
@@ -148,7 +148,7 @@ async fn update_profile(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Json(input): Json<ProfileInput>,
 ) -> Result<StatusCode, ApiError> {
-    let email = crate::database::normalize_email(&input.email)
+    let email = crate::persistence::postgres::normalize_email(&input.email)
         .map_err(|_| ApiError::bad_request("邮箱格式无效"))?;
     if input
         .display_name
@@ -173,7 +173,7 @@ async fn update_profile(
             .map_err(db_error)?;
         let password = input.current_password.unwrap_or_default();
         if password.len() > 1024
-            || !crate::database::verify_password_async(password, hash)
+            || !crate::persistence::postgres::verify_password_async(password, hash)
                 .await
                 .map_err(ApiError::from)?
         {
@@ -213,13 +213,13 @@ async fn change_password(
     .fetch_one(&mut *tx)
     .await
     .map_err(db_error)?;
-    if !crate::database::verify_password_async(input.current_password, hash)
+    if !crate::persistence::postgres::verify_password_async(input.current_password, hash)
         .await
         .map_err(ApiError::from)?
     {
         return Err(ApiError::bad_request("当前密码不正确"));
     }
-    let new_hash = crate::database::hash_password_async(input.new_password)
+    let new_hash = crate::persistence::postgres::hash_password_async(input.new_password)
         .await
         .map_err(ApiError::from)?;
     sqlx::query("UPDATE users SET password_hash=$2 WHERE id=$1")

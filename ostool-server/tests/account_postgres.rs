@@ -7,8 +7,8 @@ use axum::{
 use futures_util::StreamExt;
 use ostool_server::{
     AuthConfig, BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement, DatabaseConfig,
-    PowerManagementConfig, PxeProfile, ServerConfig, TftpConfig, board_store::fs::FileBoardStore,
-    build_app_state, build_router, config::Edition, tftp::service::build_tftp_manager,
+    PowerManagementConfig, PxeProfile, ServerConfig, TftpConfig, build_app_state, build_router,
+    config::Edition, persistence::legacy::boards::BoardFiles, tftp::service::build_tftp_manager,
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -83,7 +83,7 @@ async fn member_workspace_isolation_approvals_and_security() {
         },
         ..Default::default()
     };
-    let store = FileBoardStore::new(config.board_dir.clone());
+    let store = BoardFiles::new(config.board_dir.clone());
     store
         .write_board(&BoardConfig {
             id: "portal-board".into(),

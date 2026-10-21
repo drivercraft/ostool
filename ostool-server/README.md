@@ -10,6 +10,32 @@ It provides:
 - HTTP network throughput tests on a dedicated port
 - a systemd-friendly deployment model on Linux
 
+## Source layout
+
+```text
+ostool-server/
+├── src/
+│   ├── api/                  # HTTP API, request/response contracts
+│   ├── persistence/
+│   │   ├── postgres.rs       # PostgreSQL pool, migrations and account storage
+│   │   ├── boards.rs         # Development-board repository
+│   │   ├── dtbs.rs           # DTB metadata and binary-content repository
+│   │   └── legacy/           # Legacy file import and explicit file fixtures
+│   ├── static_assets.rs      # Embedded website/admin document and asset delivery
+│   └── ...                   # Hardware services and application state
+├── migrations/               # SQLx schema migrations, relative to Cargo.toml
+├── tests/                    # Rust integration tests
+└── webui/                    # React/Vite website and management console
+```
+
+Production constructs repositories with `open_postgres`; both local and public
+editions require PostgreSQL. Legacy file parsing and writing live in
+`persistence/legacy`, used for one-time imports and explicit test fixtures. A
+database failure is returned to the caller and never selects the file adapter.
+Earlier public Rust module paths (`database`, `board_store::fs`, `dtb_store`,
+`web`) remain deprecated compatibility re-exports; new code uses `persistence`
+and `static_assets`. SQL schemas, runtime data paths and HTTP routes are unchanged.
+
 ## Serial transport
 
 On Unix, a dedicated thread drains physical serial input independently of the

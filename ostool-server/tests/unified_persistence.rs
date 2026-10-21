@@ -6,12 +6,11 @@ use axum::{
 };
 use ostool_server::{
     BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement, PowerManagementConfig,
-    PxeProfile, ServerConfig, TftpConfig,
-    board_store::fs::FileBoardStore,
-    build_app_state, build_router,
+    PxeProfile, ServerConfig, TftpConfig, build_app_state, build_router,
     config::{DatabaseConfig, Edition},
-    dtb_store::DtbStore,
     ota::OtaStore,
+    persistence::legacy::boards::BoardFiles,
+    persistence::legacy::dtbs::DtbFiles,
     tftp::service::build_tftp_manager,
 };
 use serde_json::{Value, json};
@@ -109,7 +108,7 @@ async fn durable_data_survives_file_loss_and_edition_switch_without_local_login(
         },
         ..Default::default()
     };
-    let legacy = FileBoardStore::new(config.board_dir.clone());
+    let legacy = BoardFiles::new(config.board_dir.clone());
     let board = BoardConfig {
         id: "board-one".into(),
         board_type: "fixture".into(),
@@ -125,7 +124,7 @@ async fn durable_data_survives_file_loss_and_edition_switch_without_local_login(
         }),
     };
     legacy.write_board(&board).await.unwrap();
-    let dtbs = DtbStore::new(config.dtb_dir.clone());
+    let dtbs = DtbFiles::new(config.dtb_dir.clone());
     dtbs.write("legacy.dtb", b"legacy payload").await.unwrap();
     let old_ota = OtaStore::open(&config.data_dir).unwrap();
     let old_image = old_ota

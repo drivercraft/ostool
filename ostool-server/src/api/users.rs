@@ -1,6 +1,6 @@
 //! Administrator user and role management. Read projections share admin SSE.
 use super::{auth::CurrentUser, error::ApiError};
-use crate::{AppState, database::Database};
+use crate::{AppState, persistence::postgres::Database};
 use axum::{
     Json, Router,
     extract::{Extension, Path, State},
@@ -121,7 +121,7 @@ pub async fn list_roles(State(state): State<AppState>) -> Result<Json<Vec<Role>>
         .map_err(sql_error)
 }
 fn validate(input: &UserInput) -> Result<(), ApiError> {
-    crate::database::normalize_email(&input.email)
+    crate::persistence::postgres::normalize_email(&input.email)
         .map_err(|_| ApiError::bad_request("邮箱格式无效"))?;
     if input.display_name.as_ref().is_some_and(|s| s.len() > 120) {
         return Err(ApiError::bad_request("显示名称过长"));
@@ -144,7 +144,7 @@ async fn create_user(
         .password
         .as_deref()
         .ok_or_else(|| ApiError::bad_request("新用户需要初始密码"))?;
-    let hash = crate::database::hash_password_async(password.to_owned()).await?;
+    let hash = crate::persistence::postgres::hash_password_async(password.to_owned()).await?;
     let pool = db(&state)?.pool();
     let result = sqlx::query_scalar::<_,Uuid>("INSERT INTO users(email,display_name,password_hash,role_id,is_admin,disabled) SELECT $1,$2,$3,id,administrator,$5 FROM roles WHERE id=$4 RETURNING users.id")
         .bind(input.email.trim().to_lowercase()).bind(input.display_name).bind(hash).bind(input.role_id).bind(input.disabled).fetch_optional(pool).await.map_err(sql_error)?;
@@ -163,7 +163,7 @@ async fn update_user(
 ) -> Result<StatusCode, ApiError> {
     validate(&input)?;
     let hash = match input.password {
-        Some(ref p) => Some(crate::database::hash_password_async(p.clone()).await?),
+        Some(ref p) => Some(crate::persistence::postgres::hash_password_async(p.clone()).await?),
         None => None,
     };
     let mut tx = db(&state)?.pool().begin().await.map_err(sql_error)?;
