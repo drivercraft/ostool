@@ -80,6 +80,7 @@ zbus = { version = "5", default-features = false, features = ["tokio"] }
 nix = { version = "0.30", features = ["signal", "process"] }
 
 [dev-dependencies]
+ostool = { version = "0.31.1", path = "../ostool" }
 nix = {version="0.30", features=["term"]}
 tempfile = "3"
 tokio-modbus = {version = "0.17.0", default-features = false, features = ["rtu", "rtu-server"]}

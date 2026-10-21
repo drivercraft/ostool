@@ -3033,6 +3033,7 @@ pub(crate) async fn admin_topic(
     let extractor = State(state.clone());
     let value = match topic {
         "site" => serde_json::to_value(super::site::view(state).await?),
+        "device_catalog" => Ok(serde_json::json!(super::site::device_catalog(state).await)),
         "legal_history" => Ok(super::site::history(extractor).await?.0),
         "mail_deliveries" => Ok(super::site::mail_deliveries(extractor).await?.0),
         "security_revision" => Ok(serde_json::json!(

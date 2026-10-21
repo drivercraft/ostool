@@ -18,6 +18,7 @@ use tokio::sync::{Notify, watch};
 
 pub const TOPICS: &[&str] = &[
     "site",
+    "device_catalog",
     "legal_history",
     "mail_deliveries",
     "security_revision",
@@ -91,7 +92,7 @@ impl AdminEvents {
             dirty.insert(topic);
             match *topic {
                 "boards" => {
-                    dirty.extend(["runtimes", "loaders", "overview"]);
+                    dirty.extend(["runtimes", "loaders", "overview", "device_catalog"]);
                 }
                 "sessions" | "runtimes" => {
                     dirty.extend(["sessions", "runtimes", "overview"]);
@@ -355,7 +356,9 @@ async fn subscribe_scoped(
             }
             if let Some(mut update) = subscription.queue.pop_front() {
                 if subscription.public_site {
-                    update.data.retain(|key, _| key == "site");
+                    update
+                        .data
+                        .retain(|key, _| matches!(key.as_str(), "site" | "device_catalog"));
                 } else if let Some(user) = subscription.account {
                     let relevant = update.kind == "snapshot"
                         || [

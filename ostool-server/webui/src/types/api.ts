@@ -435,6 +435,9 @@ export interface CatalogBoard {
   board_type: string;
   tags: string[];
 }
+export interface PublicDevice extends CatalogBoard {
+  disabled: boolean;
+}
 export interface PersonalTokenSummary {
   id: string;
   name: string;

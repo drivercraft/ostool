@@ -15,6 +15,15 @@ use crate::{
     tftp::{files::TftpFileRef, status::TftpStatus},
 };
 
+/// Anonymous device directory. Never serialize BoardConfig into this response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicDevice {
+    pub id: String,
+    pub board_type: String,
+    pub tags: Vec<String>,
+    pub disabled: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub code: String,

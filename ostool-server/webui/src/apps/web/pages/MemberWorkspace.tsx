@@ -72,59 +72,6 @@ const navigation = [
   ["/account/tokens", "访问令牌", KeyRound],
 ] as const;
 
-export function MemberDeviceCatalog() {
-  const catalog = useAccountResource("catalog");
-  const [search, setSearch] = useState("");
-  const filtered = (catalog ?? []).filter((b) =>
-    `${b.id} ${b.board_type} ${b.tags.join(" ")}`
-      .toLowerCase()
-      .includes(search.toLowerCase()),
-  );
-  const page = useListPage(filtered, search);
-  return (
-    <MemberList storageKey="catalog">
-      <div className="member-list-tools">
-        <h2>设备目录</h2>
-        <TextField
-          label="搜索设备"
-          placeholder="板型、名称或标签"
-          value={search}
-          onValue={setSearch}
-        />
-        <ListLayoutToggle />
-      </div>
-      {!catalog ? (
-        <Skeleton className="h-32 w-full" />
-      ) : (
-        <DataTable
-          headers={["开发板", "板型", "标签", "操作"]}
-          empty={!filtered.length}
-        >
-          {page.rows.map((board) => (
-            <Row key={board.id}>
-              <Cell>
-                <strong>{board.id}</strong>
-              </Cell>
-              <Cell>{board.board_type}</Cell>
-              <Cell>{board.tags.join(" · ") || "—"}</Cell>
-              <Cell>
-                <Button asChild size="sm">
-                  <Link
-                    to={`/account/requests/new?board=${encodeURIComponent(board.id)}`}
-                  >
-                    申请租赁
-                  </Link>
-                </Button>
-              </Cell>
-            </Row>
-          ))}
-        </DataTable>
-      )}
-      <div className="member-list-footer">{page.footer}</div>
-    </MemberList>
-  );
-}
-
 export default function MemberWorkspace() {
   const { user, checking, error } = useSiteSession();
   const connection = useAccountConnection(),
@@ -145,7 +92,7 @@ export default function MemberWorkspace() {
     ) : (
       <Navigate
         replace
-        to={`/login?redirect=${encodeURIComponent(location.pathname)}`}
+        to={`/login?redirect=${encodeURIComponent(location.pathname + location.search)}`}
       />
     );
   return (

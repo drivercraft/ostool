@@ -27,6 +27,7 @@ export interface Runtime {
   last_release_error: string | null;
 }
 export interface Resources {
+  device_catalog: import("@/types/api").PublicDevice[];
   site: import("@/types/site").SiteView;
   legal_history: import("@/types/site").LegalVersion[];
   mail_deliveries: import("@/types/site").MailDelivery[];
@@ -269,7 +270,10 @@ export function useSecurityErrors() {
   return useSyncExternalStore(security.subscribe, security.getErrors);
 }
 
-export const site = new AdminStore("/api/v1/site/events",true);
+export const site = new AdminStore("/api/v1/site/events", true);
 export function useSiteResource() {
-  return useSyncExternalStore(site.subscribe,()=>site.get("site"));
+  return useSyncExternalStore(site.subscribe, () => site.get("site"));
+}
+export function usePublicDevices() {
+  return useSyncExternalStore(site.subscribe, () => site.get("device_catalog"));
 }

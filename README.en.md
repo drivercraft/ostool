@@ -462,6 +462,10 @@ ostool logout --server https://203.0.113.10:8443
 
 OAuth sign-in automatically refreshes short-lived access tokens. A PAT is sent directly as a Bearer token and is never refreshed. Credentials are stored in the system credential store when available, with a warned user-level credential-file fallback. Automation can use `OSTOOL_BOARD_ACCESS_TOKEN`; it is neither stored nor refreshed.
 
+The website `/devices` shows all configured devices as searchable cards without login, including unavailable devices. Public members can use an assigned board through `ostool` only during an approved rental window; cancellation or expiry releases its session. HTTP and serial WebSocket requests share Bearer identity and rental ownership checks. Keep device-side TFTP, loader traffic and the separate throughput-test listener on the board network; see [API authorization boundaries](docs/api.md).
+
+CLI keyring operations run on blocking threads to avoid nested async runtimes. Rejecting an environment token leaves an independently saved login intact.
+
 Public authentication requires HTTPS. The client verifies certificates only through the system trust store; deployments using a private CA must install its root certificate on client systems. Do not use HTTP, bypass certificate verification, or put tokens in configuration files.
 
 ## 🛠️ Subproject Details

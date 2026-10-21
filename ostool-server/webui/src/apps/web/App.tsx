@@ -32,9 +32,8 @@ import {
   useNavigate,
 } from "react-router-dom";
 import { EditionProvider, useEdition } from "@/edition";
-import MemberWorkspace, {
-  MemberDeviceCatalog,
-} from "@/apps/web/pages/MemberWorkspace";
+import MemberWorkspace from "@/apps/web/pages/MemberWorkspace";
+import { DeviceCatalog } from "@/apps/web/pages/DeviceCatalog";
 import { SiteSessionProvider, useSiteSession } from "@/apps/web/session";
 import { SiteThemeMenu } from "@/components/site-theme-menu";
 import { ThemeProvider } from "next-themes";
@@ -584,7 +583,6 @@ function FeatureCard({
 }
 
 function Devices() {
-  const { user } = useSiteSession();
   const publicEdition = useEdition().edition === "public";
   return (
     <PublicLayout>
@@ -597,27 +595,7 @@ function Devices() {
             虚拟设备，团队成员可以在同一个工作区中发现、分配和操作它们。
           </p>
         </div>
-        {publicEdition && user ? (
-          <MemberDeviceCatalog />
-        ) : (
-          <div className="device-showcase">
-            <div className="device-showcase-card">
-              <CircuitBoard size={28} />
-              <strong>设备租约</strong>
-              <span>按需分配，自动释放</span>
-            </div>
-            <div className="device-showcase-card">
-              <Radio size={28} />
-              <strong>串口会话</strong>
-              <span>实时传输，状态透明</span>
-            </div>
-            <div className="device-showcase-card">
-              <Zap size={28} />
-              <strong>远程电源</strong>
-              <span>支持多种电源控制器</span>
-            </div>
-          </div>
-        )}
+        <DeviceCatalog />
         <div className="inner-callout">
           <div>
             <h2>准备好连接设备了吗？</h2>

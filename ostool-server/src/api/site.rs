@@ -84,6 +84,7 @@ pub struct LegalConsent {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/site", get(public))
+        .route("/api/v1/site/devices", get(devices))
         .route(
             "/api/v1/site/events",
             get(crate::admin_events::subscribe_site),
@@ -125,6 +126,25 @@ pub async fn view(state: &AppState) -> Result<SiteView, ApiError> {
 }
 async fn public(State(state): State<AppState>) -> Result<Json<SiteView>, ApiError> {
     Ok(Json(view(&state).await?))
+}
+
+pub(crate) async fn device_catalog(state: &AppState) -> Vec<super::models::PublicDevice> {
+    state
+        .boards
+        .read()
+        .await
+        .values()
+        .map(|board| super::models::PublicDevice {
+            id: board.id.clone(),
+            board_type: board.board_type.clone(),
+            tags: board.tags.clone(),
+            disabled: board.disabled,
+        })
+        .collect()
+}
+
+async fn devices(State(state): State<AppState>) -> Json<Vec<super::models::PublicDevice>> {
+    Json(device_catalog(&state).await)
 }
 fn validate(s: &SiteSettings) -> Result<(), ApiError> {
     for (text, max) in [

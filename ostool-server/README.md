@@ -471,8 +471,12 @@ as well as website, backend, API, OAuth, WebSocket and SSE routes to the server.
 
 Members can edit their name/email (email changes require their password), change
 password, manage CLI personal access tokens, view their own rentals and submit
-or withdraw rental applications. The authenticated devices page lists boards
-that can be requested. Administrators review applications under rental management.
+or withdraw rental applications. The public `/devices` page lists all configured
+boards as cards in both editions, including disabled boards with an unavailable
+state. Visitors can search without logging in; applying requires a public account.
+`GET /api/v1/site/devices` and public SSE `device_catalog` expose only the device
+ID, board type, tags and disabled flag. Management details remain private.
+Administrators review applications under rental management.
 Approval rechecks availability and creates the exclusive rental in the same
 PostgreSQL transaction; applying alone reserves no time or hardware. All personal
 queries and SSE updates are scoped to the authenticated user, excluding management
@@ -521,3 +525,21 @@ Member rental requests use a separate list at `/account/requests` and editor at
 Clicking a cell replaces a previous range; occupied/elapsed cells are gray and disabled.
 Portal content scales to 80% of desktop width, with mobile gutters. Icon actions share
 unfilled glyphs, a uniform hit area and hover backgrounds.
+
+The website and CLI share the same scheduled allocation: an approved application
+or administrator-created rental grants access during `[starts_at, ends_at)`.
+Member sessions bind to that rental; heartbeats cannot extend its deadline.
+Cancelling/expiring the rental releases the session, and OAuth/PAT revocation
+closes active serial connections. Device-side TFTP and trusted-network loader/file
+traffic remain separate from user authentication; restrict those listeners to the
+board network. See [API authorization boundaries](../docs/api.md).
+
+A cross-package regression test uses the real ostool HTTP/WebSocket clients and a
+PTY serial device against an isolated server (PostgreSQL and Redis required):
+
+```bash
+cargo test -p ostool-server --test cli_rental_contract -- --ignored
+```
+
+The fixture uses loopback HTTP only; production CLI authenticated endpoints still
+require HTTPS. This test does not replace physical firmware/TFTP validation.

@@ -708,6 +708,103 @@
   margin-inline: auto;
   padding-inline: 0;
 }
+.site-root .device-directory {
+  margin-top: 32px;
+}
+.device-directory-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.device-directory-tools h2 {
+  font-size: 20px;
+  font-weight: 600;
+}
+.device-directory-tools [data-slot="field"] {
+  flex: 0 1 360px;
+  min-width: min(240px, 100%);
+}
+.device-directory-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: 20px;
+}
+.device-directory-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  border: 1px solid var(--site-border);
+  border-radius: var(--admin-panel-radius, 12px);
+  background: var(--site-card);
+  min-width: 0;
+  font-size: 16px;
+}
+.device-directory-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.device-directory-card-top svg {
+  width: 28px;
+  height: 28px;
+  color: var(--site-accent);
+}
+.device-directory-card-top span {
+  font-size: 14px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--site-bg);
+}
+.device-directory-card h3 {
+  font-size: 18px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.device-directory-card p {
+  font-size: 16px;
+  color: var(--site-muted);
+  overflow-wrap: anywhere;
+}
+.device-directory-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1;
+}
+.device-directory-tags span {
+  font-size: 14px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--site-bg);
+  overflow-wrap: anywhere;
+}
+.device-unavailable {
+  color: var(--site-muted);
+}
+.device-enabled {
+  color: var(--site-accent);
+}
+.device-directory-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-height: 300px;
+  color: var(--site-muted);
+}
+.device-directory-empty svg {
+  width: 40px;
+  height: 40px;
+}
+.device-directory-footer {
+  margin-top: 20px;
+}
 .site-root .auth-page main.auth-shell {
   width: var(--site-content-width);
 }

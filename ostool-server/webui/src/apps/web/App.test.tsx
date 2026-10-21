@@ -3,16 +3,30 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import PublicApp from "@/apps/web/App";
 
+const emptyErrors = {};
 const mocks = vi.hoisted(() => ({
   config: vi.fn(),
   register: vi.fn(),
   login: vi.fn(),
   me: vi.fn(),
   captcha: vi.fn(),
+  devices: [] as {
+    id: string;
+    board_type: string;
+    tags: string[];
+    disabled: boolean;
+  }[],
 }));
 vi.mock("@/api/events", () => ({
-  site:{connect:vi.fn(),disconnect:vi.fn()},
-  useSiteResource:()=>undefined,
+  site: {
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    subscribe: () => () => {},
+    getErrors: () => emptyErrors,
+    getConnection: () => "connected",
+  },
+  usePublicDevices: () => mocks.devices,
+  useSiteResource: () => undefined,
   account: {
     connect: vi.fn(),
     disconnect: vi.fn(),
@@ -41,8 +55,16 @@ vi.mock("@/api/client", () => ({
   },
 }));
 beforeEach(() => {
-  vi.stubGlobal("ResizeObserver",class { observe(){} unobserve(){} disconnect(){} });
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   vi.clearAllMocks();
+  mocks.devices = [];
   localStorage.clear();
   Object.defineProperty(window, "matchMedia", {
     writable: true,
@@ -169,7 +191,11 @@ describe("registration", () => {
     await user.type(screen.getByLabelText("确认密码"), "different-password");
     if (!(screen.getByLabelText("图形验证码") as HTMLInputElement).value)
       await user.type(screen.getByLabelText("图形验证码"), "AB29Q");
-    await user.click(screen.getByRole("checkbox",{name:"我已阅读并同意用户协议和隐私政策"}));
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "我已阅读并同意用户协议和隐私政策",
+      }),
+    );
     await user.click(screen.getByRole("button", { name: /创建账号/ }));
     expect(screen.getByRole("alert").textContent).toContain(
       "两次输入的密码不一致",
@@ -190,7 +216,7 @@ describe("registration", () => {
         captcha_code: "AB29Q",
       },
       undefined,
-      {accepted:true,terms_version:1,privacy_version:1},
+      { accepted: true, terms_version: 1, privacy_version: 1 },
     );
   });
   it("shows registration closed without sending a request", async () => {
@@ -206,5 +232,62 @@ describe("registration", () => {
         .disabled,
     ).toBe(true);
     expect(mocks.register).not.toHaveBeenCalled();
+  });
+});
+
+describe("public device directory", () => {
+  it("shows all devices as cards without authentication and preserves the selected board through login", async () => {
+    mocks.devices = [
+      {
+        id: "rk board/1",
+        board_type: "rk3568",
+        tags: ["arm64"],
+        disabled: false,
+      },
+      { id: "offline-board", board_type: "qemu", tags: [], disabled: true },
+    ];
+    window.history.replaceState({}, "", "/devices");
+    render(<PublicApp />);
+    await screen.findByRole("heading", { name: "rk board/1" });
+    expect(screen.getByRole("heading", { name: "offline-board" })).toBeTruthy();
+    expect(document.querySelectorAll(".device-directory-card")).toHaveLength(2);
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(
+      (screen.getByRole("button", { name: "暂不可申请" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    const link = screen.getByRole("link", { name: "登录后申请" });
+    expect(
+      new URL(
+        link.getAttribute("href")!,
+        window.location.origin,
+      ).searchParams.get("redirect"),
+    ).toBe("/account/requests/new?board=rk%20board%2F1");
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("搜索设备"), "arm64");
+    expect(screen.queryByRole("heading", { name: "offline-board" })).toBeNull();
+  });
+  it("keeps the same catalog in local edition without rental or login actions", async () => {
+    mocks.config.mockResolvedValue({
+      edition: "local",
+      enabled: false,
+      allow_registration: false,
+    });
+    mocks.devices = [
+      {
+        id: "local-board",
+        board_type: "local-test",
+        tags: [],
+        disabled: false,
+      },
+    ];
+    window.history.replaceState({}, "", "/devices");
+    render(<PublicApp />);
+    await screen.findByRole("heading", { name: "local-board" });
+    expect(screen.getByRole("link", { name: "查看设备" })).toBeTruthy();
+    expect(
+      screen.queryByRole("link", { name: /申请租赁|登录后申请/ }),
+    ).toBeNull();
+    expect(mocks.me).not.toHaveBeenCalled();
   });
 });

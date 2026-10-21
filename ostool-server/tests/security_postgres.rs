@@ -895,6 +895,74 @@ async fn legal_publication_consent_and_configuration_are_atomic_and_versioned() 
 async fn public_site_stream_cannot_expose_management_or_identity_data() {
     use futures_util::StreamExt;
     let f = Fixture::new(true).await;
+    for disabled in [false, true] {
+        let board = ostool_server::BoardConfig {
+            id: if disabled {
+                "disabled-device"
+            } else {
+                "enabled-device"
+            }
+            .into(),
+            board_type: "public-test".into(),
+            tags: vec!["arm64".into()],
+            serial: None,
+            power_management: ostool_server::PowerManagementConfig::Custom(
+                ostool_server::CustomPowerManagement {
+                    power_on_cmd: "private-power-credential".into(),
+                    power_off_cmd: "private-power-command".into(),
+                },
+            ),
+            boot: ostool_server::BootConfig::Pxe(Default::default()),
+            network_identity: None,
+            notes: Some("private-operator-notes".into()),
+            disabled,
+        };
+        ostool_server::persistence::BoardStore::new(f.state.database.clone())
+            .write_board(&board)
+            .await
+            .unwrap();
+        f.state.boards.write().await.insert(board.id.clone(), board);
+    }
+    f.state.admin_events.invalidate(&["boards"]);
+    let catalog = f
+        .request("GET", "/api/v1/site/devices", None, Value::Null)
+        .await;
+    assert_eq!(catalog.status, StatusCode::OK);
+    let rows = catalog.body.as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(row.as_object().unwrap().len(), 4);
+        assert_eq!(row["board_type"], "public-test");
+        assert_eq!(row["tags"], json!(["arm64"]));
+    }
+    assert!(rows.iter().any(|row| row["disabled"] == true));
+    // Wait on one SSE subscription until the device projection is published.
+    let response = f
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/site/events")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut changes = response.into_body().into_data_stream();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while let Some(chunk) = changes.next().await {
+            let chunk = chunk.unwrap();
+            let text = String::from_utf8_lossy(&chunk);
+            if text.contains("enabled-device") && text.contains("disabled-device") {
+                return;
+            }
+        }
+        panic!("public device stream ended");
+    })
+    .await
+    .unwrap();
+    drop(changes);
+
     let response = f
         .app
         .clone()
@@ -921,8 +989,11 @@ async fn public_site_stream_cannot_expose_management_or_identity_data() {
     )
     .unwrap();
     let data = body["data"].as_object().unwrap();
-    assert_eq!(data.len(), 1);
+    assert_eq!(data.len(), 2);
     assert!(data.contains_key("site"));
+    assert_eq!(data["device_catalog"], catalog.body);
+    assert!(!text.contains("private-power"));
+    assert!(!text.contains("private-operator"));
     assert!(!text.contains("password_hash"));
     assert!(!text.contains("mail_deliveries"));
     assert!(!text.contains("admin@security.test"));
