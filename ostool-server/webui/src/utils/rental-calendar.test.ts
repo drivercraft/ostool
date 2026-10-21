@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
 import {
   busyWindows,
+  calendarDaySlots,
+  calendarSelection,
   freeWindows,
   rentalConflicts,
   type RentalWindow,
@@ -64,4 +66,24 @@ it("keeps PostgreSQL microsecond ends occupied until the next selectable millise
   ]);
   expect(rentalConflicts([booking], end, end + 1)).toHaveLength(1);
   expect(rentalConflicts([booking], end + 1, end + 1000)).toHaveLength(0);
+});
+
+it("builds continuous local-day slots through daylight-saving boundaries", () => {
+  for (const day of [new Date(2026, 2, 8), new Date(2026, 10, 1)]) {
+    const end = new Date(
+      day.getFullYear(),
+      day.getMonth(),
+      day.getDate() + 1,
+    ).getTime();
+    const slots = calendarDaySlots(day);
+    expect(slots[0].start).toBe(day.getTime());
+    expect(slots.at(-1)?.end).toBe(end);
+    expect(slots.length).toBe((end - day.getTime()) / (30 * 60000));
+    for (let i = 1; i < slots.length; i++)
+      expect(slots[i].start).toBe(slots[i - 1].end);
+    expect(calendarSelection(slots[2], slots[0])).toEqual({
+      start: slots[0].start,
+      end: slots[2].end,
+    });
+  }
 });

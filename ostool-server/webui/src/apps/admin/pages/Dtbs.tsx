@@ -1,3 +1,5 @@
+import { Pencil as ActionEdit, Trash2 as ActionDelete } from "lucide-react";
+import { RowAction } from "@/components/row-action";
 import { PagePanel } from "@/components/page-panel";
 import { useListPage } from "@/components/list-pagination";
 import { ListToolbar } from "@/components/list-toolbar";
@@ -139,14 +141,13 @@ export default function Dtbs() {
               <Cell className="mono">{d.relative_tftp_path_template}</Cell>
               <Cell>
                 <div className="actions">
-                  <Button
-                    size="sm"
-                    variant="ghost"
+                  <RowAction
+                    label="修改"
+                    icon={ActionEdit}
                     onClick={() => setEditing(d)}
-                  >
-                    修改
-                  </Button>
+                  />
                   <ConfirmAction
+                    icon={ActionDelete}
                     label="删除"
                     description={`删除 DTB ${d.name}？已被板卡引用的文件不能删除。`}
                     action={() => api.deleteDtb(d.name)}

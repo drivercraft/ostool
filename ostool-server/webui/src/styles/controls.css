@@ -1,0 +1,88 @@
+/* itexp's standard controls share a 42px height and 8px radius. */
+:root {
+  --control-height: 42px;
+  --control-radius: 8px;
+  --control-icon-size: 18px;
+}
+[data-slot="button"][data-size] {
+  height: var(--control-height);
+  min-height: var(--control-height);
+  min-width: 88px;
+  border-radius: var(--control-radius);
+  padding: 0 16px;
+  gap: 8px;
+  font-size: 1rem;
+  line-height: 1;
+}
+[data-slot="button"][data-size^="icon"] {
+  width: var(--control-height);
+  min-width: var(--control-height);
+  padding: 0;
+}
+[data-slot="button"][data-size] > svg,
+[data-slot="native-select-wrapper"] > svg {
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
+  flex-shrink: 0;
+  stroke-width: 1.8;
+}
+[data-slot="input"],
+[data-slot="native-select"],
+[data-slot="textarea"] {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  background: var(--card);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 1rem;
+}
+[data-slot="input"],
+[data-slot="native-select"] {
+  height: var(--control-height);
+  min-height: var(--control-height);
+  padding: 0 14px;
+}
+[data-slot="native-select"] {
+  padding-right: 38px;
+}
+[data-slot="textarea"] {
+  min-height: 80px;
+  padding: 10px 14px;
+  resize: vertical;
+}
+[data-slot="input"][type="file"] {
+  padding-block: 7px;
+}
+[data-slot="input"]:focus-visible,
+[data-slot="native-select"]:focus-visible,
+[data-slot="textarea"]:focus-visible {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring), transparent 84%);
+  outline: none;
+}
+.actions,
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* Row operations share one glyph treatment; destructive actions retain their hover cue. */
+.row-action[data-slot="button"] {
+  border: 1px solid var(--border);
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+.row-action[data-slot="button"]:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--primary);
+  border-color: var(--ring);
+}
+.row-action[data-variant="destructive"]:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--destructive) 10%, var(--card));
+  color: var(--destructive);
+  border-color: var(--destructive);
+}
+[data-slot="button"].topbar-avatar[data-size] {
+  border-radius: 50%;
+}

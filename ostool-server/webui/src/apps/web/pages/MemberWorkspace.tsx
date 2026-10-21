@@ -559,6 +559,7 @@ function MyRequests() {
             (r) => r.board_id === (board || catalog[0]?.id),
           )}
           startsAt={start}
+          endsAt={end}
           onSelect={(from, to) => {
             setStart(localDateTime(from));
             setEnd(localDateTime(to));

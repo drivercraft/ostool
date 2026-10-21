@@ -508,6 +508,10 @@ test("viewport panels keep toolbar and footer fixed while tables/forms scroll", 
   await page.getByLabel("启动方式", { exact: true }).selectOption("pxe");
   const save = panel.getByRole("button", { name: "保存开发板", exact: true });
   await expect(save).toBeVisible();
+  await expect(panel.locator(".panel-toolbar")).toHaveCount(0);
+  await expect(panel.getByRole("link", { name: "返回开发板列表" })).toHaveCount(
+    0,
+  );
   const buttonY = (await save.boundingBox())!.y;
   await panel.locator(".panel-scroll").evaluate((e) => {
     e.scrollTop = e.scrollHeight;

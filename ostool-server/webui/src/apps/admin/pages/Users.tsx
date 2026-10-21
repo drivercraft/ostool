@@ -1,3 +1,5 @@
+import { Pencil as ActionEdit, Trash2 as ActionDelete } from "lucide-react";
+import { RowAction } from "@/components/row-action";
 import { PagePanel } from "@/components/page-panel";
 import { useListPage } from "@/components/list-pagination";
 import { ListToolbar } from "@/components/list-toolbar";
@@ -133,14 +135,13 @@ export default function Users() {
               <Cell>{new Date(user.created_at).toLocaleString()}</Cell>
               <Cell>
                 <div className="actions">
-                  <Button
-                    variant="outline"
-                    size="sm"
+                  <RowAction
+                    label="编辑"
+                    icon={ActionEdit}
                     onClick={() => open(user)}
-                  >
-                    编辑
-                  </Button>
+                  />
                   <ConfirmAction
+                    icon={ActionDelete}
                     label="删除"
                     description={`永久删除 ${user.email} 及其登录令牌？`}
                     action={() => api.deleteUser(user.id)}

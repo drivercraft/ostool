@@ -1,5 +1,4 @@
 import { PagePanel } from "@/components/page-panel";
-import { ListToolbar } from "@/components/list-toolbar";
 import { useEffect, useId, useRef, useState } from "react";
 import {
   Link,
@@ -197,28 +196,6 @@ function Editor({ board }: { board?: BoardConfig }) {
   );
   return (
     <PagePanel
-      toolbar={
-        <ListToolbar
-          actions={
-            <>
-              <Button asChild variant="outline" size="sm">
-                <Link to="/boards">返回开发板列表</Link>
-              </Button>
-              {board && (
-                <ConfirmAction
-                  label="删除开发板"
-                  description={`删除 ${board.id} 的配置？`}
-                  disabled={powerBusy}
-                  action={async () => {
-                    await api.deleteBoard(board.id);
-                    navigate("/boards");
-                  }}
-                />
-              )}
-            </>
-          }
-        />
-      }
       footer={
         <>
           <span className="panel-status">
@@ -231,6 +208,17 @@ function Editor({ board }: { board?: BoardConfig }) {
                   : "配置已保存"}
           </span>
           <div className="panel-footer-actions">
+            {board && (
+              <ConfirmAction
+                label="删除开发板"
+                description={`删除 ${board.id} 的配置？`}
+                disabled={powerBusy}
+                action={async () => {
+                  await api.deleteBoard(board.id);
+                  navigate("/boards");
+                }}
+              />
+            )}
             <Button variant="outline" type="button" asChild>
               <Link to="/boards">取消</Link>
             </Button>

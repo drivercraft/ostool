@@ -1,3 +1,10 @@
+import {
+  Pencil as ActionEdit,
+  Trash2 as ActionDelete,
+  Eye as ActionView,
+  Plus as ActionCreate,
+} from "lucide-react";
+import { RowAction } from "@/components/row-action";
 import { PagePanel } from "@/components/page-panel";
 import { useListPage } from "@/components/list-pagination";
 import { ListToolbar } from "@/components/list-toolbar";
@@ -237,14 +244,14 @@ export default function Boards() {
                   </Cell>
                   <Cell>
                     <div className="actions">
-                      <Button variant="outline" size="sm" asChild>
-                        <Link to={`/boards/${encodeURIComponent(b.id)}`}>
-                          编辑
-                        </Link>
-                      </Button>
+                      <RowAction
+                        label="编辑"
+                        icon={ActionEdit}
+                        to={`/boards/${encodeURIComponent(b.id)}`}
+                      />
                       <ConfirmAction
+                        icon={ActionDelete}
                         label="删除"
-                        triggerVariant="ghost"
                         description={`删除开发板 ${b.id} 的配置？`}
                         action={() => api.deleteBoard(b.id)}
                         disabled={
@@ -347,26 +354,18 @@ export default function Boards() {
                   </Cell>
                   <Cell>
                     {d.bound_board_id ? (
-                      <Link
-                        className="text-link"
+                      <RowAction
+                        label="查看配置"
+                        icon={ActionView}
                         to={`/boards/${encodeURIComponent(d.bound_board_id)}`}
-                      >
-                        查看配置
-                      </Link>
+                      />
                     ) : (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        asChild
+                      <RowAction
+                        label="创建配置"
+                        icon={ActionCreate}
                         disabled={d.conflict}
-                      >
-                        <Link
-                          aria-disabled={d.conflict}
-                          to={`/boards/new?mac=${encodeURIComponent(d.mac_address)}`}
-                        >
-                          创建配置
-                        </Link>
-                      </Button>
+                        to={`/boards/new?mac=${encodeURIComponent(d.mac_address)}`}
+                      />
                     )}
                   </Cell>
                 </Row>
@@ -445,6 +444,7 @@ export default function Boards() {
                     </Cell>
                     <Cell>
                       <ConfirmAction
+                        icon={ActionDelete}
                         label="清理"
                         description="停止并清理这个未绑定的虚拟设备？"
                         action={() => api.deleteVirtualDevice(d.id)}

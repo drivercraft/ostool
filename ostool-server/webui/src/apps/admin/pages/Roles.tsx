@@ -1,3 +1,5 @@
+import { Pencil as ActionEdit, Trash2 as ActionDelete } from "lucide-react";
+import { RowAction } from "@/components/row-action";
 import { PagePanel } from "@/components/page-panel";
 import { useListPage } from "@/components/list-pagination";
 import { ListToolbar } from "@/components/list-toolbar";
@@ -112,15 +114,14 @@ export default function Roles() {
               <Cell>{role.description || "—"}</Cell>
               <Cell>
                 <div className="actions">
-                  <Button
-                    variant="outline"
-                    size="sm"
+                  <RowAction
+                    label="编辑"
+                    icon={ActionEdit}
                     onClick={() => open(role)}
-                  >
-                    编辑
-                  </Button>
+                  />
                   {!role.builtin && (
                     <ConfirmAction
+                      icon={ActionDelete}
                       label="删除"
                       disabled={users.some((u) => u.role_id === role.id)}
                       description={`删除角色 ${role.name}？`}

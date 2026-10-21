@@ -77,3 +77,32 @@ export function localDateTime(value: Date) {
     .toISOString()
     .slice(0, 23);
 }
+
+/** Actual half-hour intervals, including 23/25-hour daylight-saving days. */
+export function calendarDaySlots(day: Date): TimeWindow[] {
+  const start = new Date(
+    day.getFullYear(),
+    day.getMonth(),
+    day.getDate(),
+  ).getTime();
+  const end = new Date(
+    day.getFullYear(),
+    day.getMonth(),
+    day.getDate() + 1,
+  ).getTime();
+  const slots: TimeWindow[] = [];
+  for (let cursor = start; cursor < end; cursor += 30 * 60000) {
+    slots.push({ start: cursor, end: Math.min(cursor + 30 * 60000, end) });
+  }
+  return slots;
+}
+
+export function calendarSelection(
+  first: TimeWindow,
+  last: TimeWindow,
+): TimeWindow {
+  return {
+    start: Math.min(first.start, last.start),
+    end: Math.max(first.end, last.end),
+  };
+}

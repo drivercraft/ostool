@@ -1,3 +1,5 @@
+import { Pencil as ActionEdit, CircleX as ActionCancel } from "lucide-react";
+import { RowAction } from "@/components/row-action";
 import { PagePanel } from "@/components/page-panel";
 import { useListPage } from "@/components/list-pagination";
 import { useState } from "react";
@@ -146,18 +148,17 @@ export default function Rentals() {
               <Cell>{r.notes || "—"}</Cell>
               <Cell>
                 <div className="actions">
-                  <Button
-                    size="sm"
-                    variant="outline"
+                  <RowAction
+                    label="编辑"
+                    icon={ActionEdit}
                     disabled={
                       r.status === "expired" || r.status === "cancelled"
                     }
-                    asChild
-                  >
-                    <Link to={`/rentals/${r.id}`}>编辑</Link>
-                  </Button>
+                    to={`/rentals/${r.id}`}
+                  />
                   {r.status !== "cancelled" && r.status !== "expired" && (
                     <ConfirmAction
+                      icon={ActionCancel}
                       label="取消租赁"
                       description={`取消 ${r.board_id} 的租赁？相关会话会终止，并按正常流程断电、清理文件。`}
                       action={() => api.cancelRental(r.id)}

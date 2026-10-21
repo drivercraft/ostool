@@ -1,3 +1,4 @@
+import { RowAction } from "@/components/row-action";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronLeft,
@@ -399,14 +400,11 @@ export default function Audits() {
                   </small>
                 </Cell>
                 <Cell>
-                  <Button
-                    size="sm"
-                    variant="outline"
+                  <RowAction
+                    label="详情"
+                    icon={Eye}
                     onClick={() => void open(row.id)}
-                  >
-                    <Eye size={14} />
-                    详情
-                  </Button>
+                  />
                 </Cell>
               </Row>
             ))}

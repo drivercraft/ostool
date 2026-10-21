@@ -414,11 +414,16 @@ supports `audit_view=1` with `audit_`-prefixed filters; browsers use this subscr
 for list updates. `GET /api/v1/admin/dashboard` also exposes the runtime snapshot.
 
 Rental creation and editing use `/admin/rentals/new` and `/admin/rentals/{id}`.
-Choose a board to see its existing reservations in a month calendar, inspect
-daily free windows, and fill start/end fields by selecting a free window. The
-calendar follows the browser timezone, handles bookings crossing midnight and
-excludes cancelled bookings and the rental being edited. Live conflicts disable
-save without overwriting the draft; PostgreSQL rechecks conflicts on save.
+A two-column form at the top selects user/board and start/end times; the calendar
+fills the remaining workspace. Year/month/day views support year/month navigation,
+dragging consecutive dates (end exclusive at the next midnight), and dragging
+half-hour slots in day view. Double-click a date to open day view; keyboard Enter
+selects a focused time slot. Expand the day's available windows to inspect bookings
+or select a free window. Browsing does not change the draft; conflicting drags are
+rejected and Escape cancels a selection. The calendar follows the browser timezone,
+handles bookings crossing midnight and excludes cancelled bookings and the rental
+being edited. Live conflicts disable save without overwriting the draft;
+PostgreSQL rechecks conflicts on save.
 The member application page uses the same calendar with anonymized occupancy.
 All data lists have a layout icon in the upper-right toolbar for table/card
 views. Selection persists per list in the browser; search, filters, pagination

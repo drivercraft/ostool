@@ -88,6 +88,7 @@ test("standalone rental calendar, live conflicts and persistent card layouts", a
   ).toBeDisabled();
   await expect(page.getByText(/所选时段已有租赁/)).toBeVisible();
   const calendar = page.getByRole("region", { name: "租赁日历" });
+  await calendar.locator("summary").click();
   await expect(
     calendar.getByText("09:00–11:00", { exact: true }),
   ).toBeVisible();
@@ -100,6 +101,96 @@ test("standalone rental calendar, live conflicts and persistent card layouts", a
   await expect(page.getByLabel("备注", { exact: true })).toHaveValue(
     "My calendar draft",
   );
+  await calendar.locator("summary").click();
+  const fields = await page
+    .locator(".rental-editor-form input, .rental-editor-form select")
+    .evaluateAll((elements) =>
+      elements.map((element) => ({
+        height: element.getBoundingClientRect().height,
+        top: element.getBoundingClientRect().top,
+      })),
+    );
+  expect(fields.every((field) => field.height === 42)).toBe(true);
+  expect(fields[0].top).toBe(fields[1].top);
+  expect(fields[2].top).toBe(fields[3].top);
+  await expect(page.getByRole("link", { name: "返回租赁列表" })).toHaveCount(0);
+  await calendar.getByRole("button", { name: "年视图", exact: true }).click();
+  await expect(
+    calendar.getByRole("button", { name: "12 月", exact: true }),
+  ).toBeVisible();
+  await calendar.getByRole("button", { name: "日视图", exact: true }).click();
+  async function dragCells(
+    from: ReturnType<typeof calendar.locator>,
+    to: ReturnType<typeof calendar.locator>,
+  ) {
+    await from.scrollIntoViewIfNeeded();
+    await to.scrollIntoViewIfNeeded();
+    const a = (await from.boundingBox())!,
+      b = (await to.boundingBox())!;
+    await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 10 });
+    await page.mouse.up();
+  }
+  await dragCells(
+    calendar.getByRole("button", { name: "12:00–12:30，空闲", exact: true }),
+    calendar.getByRole("button", { name: "13:00–13:30，空闲", exact: true }),
+  );
+  const selected = await page
+    .getByLabel("开始时间", { exact: true })
+    .inputValue();
+  expect(selected).toMatch(/T12:00/);
+  await expect(page.getByLabel("结束时间", { exact: true })).toHaveValue(
+    /T13:30/,
+  );
+  await dragCells(
+    calendar.getByRole("button", { name: "08:30–09:00，空闲", exact: true }),
+    calendar.getByRole("button", {
+      name: "09:30–10:00，已有租赁",
+      exact: true,
+    }),
+  );
+  await expect(calendar.getByRole("alert")).toContainText("已有租赁");
+  await expect(page.getByLabel("开始时间", { exact: true })).toHaveValue(
+    selected,
+  );
+  await calendar.getByRole("button", { name: "月视图", exact: true }).click();
+  const range = await page.evaluate(() => {
+    const date = new Date();
+    const first = new Date(date.getFullYear(), date.getMonth() + 1, 10);
+    const last = new Date(first.getFullYear(), first.getMonth(), 12);
+    return {
+      year: first.getFullYear(),
+      month: first.getMonth(),
+      first: first.getTime(),
+      last: last.getTime(),
+    };
+  });
+  await calendar
+    .getByRole("combobox", { name: "显示年份" })
+    .selectOption(String(range.year));
+  await calendar
+    .getByRole("combobox", { name: "显示月份" })
+    .selectOption(String(range.month));
+  await dragCells(
+    calendar.locator(`[data-calendar-start="${range.first}"]`),
+    calendar.locator(`[data-calendar-start="${range.last}"]`),
+  );
+  await expect(page.getByLabel("开始时间", { exact: true })).toHaveValue(
+    /-10T00:00/,
+  );
+  await expect(page.getByLabel("结束时间", { exact: true })).toHaveValue(
+    /-13T00:00/,
+  );
+  const calendarFit = await calendar.evaluate((element) => {
+    const body = element.querySelector(".rental-calendar-body")!;
+    const grid = body.querySelector(".rental-month-grid")!;
+    return {
+      body: body.clientHeight,
+      grid: grid.getBoundingClientRect().height,
+    };
+  });
+  expect(calendarFit.grid).toBeLessThanOrEqual(calendarFit.body + 1);
   await page.screenshot({
     path: "/tmp/ostool-rental-calendar.png",
     fullPage: true,
@@ -144,6 +235,18 @@ test("standalone rental calendar, live conflicts and persistent card layouts", a
   }
   await page.goto(`${base}/admin/boards`);
   await page.getByLabel("搜索开发板", { exact: true }).fill(boardId);
+  const head = page.getByRole("columnheader", { name: "开发板", exact: true });
+  await expect(head).toBeVisible();
+  expect(
+    await head.evaluate((element) => getComputedStyle(element).fontSize),
+  ).toBe("16px");
+  const edit = page.getByRole("link", { name: "编辑", exact: true });
+  const size = await edit.evaluate((element) => ({
+    width: element.getBoundingClientRect().width,
+    height: element.getBoundingClientRect().height,
+    icon: getComputedStyle(element.querySelector("svg")!).width,
+  }));
+  expect(size).toEqual({ width: 42, height: 42, icon: "18px" });
   await page.getByRole("button", { name: "切换列表布局", exact: true }).click();
   await page
     .getByRole("menuitemradio", { name: "卡片视图", exact: true })

@@ -1,17 +1,9 @@
 import { useId, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
 import { PagePanel } from "@/components/page-panel";
-import { ListToolbar } from "@/components/list-toolbar";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Notice,
-  TextField,
-  SelectField,
-  TextareaField,
-  useAction,
-} from "@/components/forms";
+import { Notice, TextField, SelectField, useAction } from "@/components/forms";
 import { RentalCalendar } from "@/components/rental-calendar";
 import { api } from "@/api/client";
 import { useResource } from "@/api/events";
@@ -109,56 +101,8 @@ function RentalForm({
   );
   return (
     <PagePanel
+      className="rental-editor-panel"
       toolbar={
-        <ListToolbar
-          actions={
-            <Button asChild variant="ghost">
-              <Link to="/rentals">
-                <ArrowLeft size={16} />
-                返回租赁列表
-              </Link>
-            </Button>
-          }
-        />
-      }
-      footer={
-        <div className="editor-footer">
-          <span className="panel-status">
-            {conflicts.length
-              ? `所选时段有 ${conflicts.length} 条租赁冲突`
-              : "日历与已有租赁实时同步"}
-          </span>
-          <div className="row-actions">
-            {back}
-            <Button
-              type="submit"
-              form={formId}
-              disabled={
-                task.pending ||
-                finished ||
-                !draft.board_id ||
-                !draft.user_id ||
-                conflicts.length > 0
-              }
-            >
-              {task.pending ? "保存中…" : "保存租赁"}
-            </Button>
-          </div>
-        </div>
-      }
-    >
-      {task.error && <Notice>{task.error}</Notice>}
-      {initial && JSON.stringify(current) !== original.current && (
-        <Notice>
-          该租赁状态已更新，当前编辑内容已保留，请结合最新日历确认。
-        </Notice>
-      )}
-      {conflicts.length > 0 && (
-        <Notice>
-          所选时段已有租赁。请在右侧日历选择空闲时段，或修改起止时间。
-        </Notice>
-      )}
-      <div className="rental-editor-grid">
         <form
           id={formId}
           className="rental-editor-form"
@@ -236,28 +180,63 @@ function RentalForm({
             value={draft.ends_at}
             onValue={(ends_at) => patch({ ends_at })}
           />
-          <TextareaField
+          <TextField
             label="备注"
             value={draft.notes}
             onValue={(notes) => patch({ notes })}
           />
-          <p className="muted">
-            按浏览器时区输入并保存为
-            UTC。选择开发板后，日历显示该板卡全部有效租赁；相邻时段可以首尾衔接。
-          </p>
         </form>
-        <RentalCalendar
-          bookings={bookings}
-          startsAt={draft.starts_at}
-          excludeId={initial?.id}
-          onSelect={(start, end) =>
-            patch({
-              starts_at: localDateTime(start),
-              ends_at: localDateTime(end),
-            })
-          }
-        />
-      </div>
+      }
+      footer={
+        <div className="editor-footer">
+          <span className="panel-status">
+            {conflicts.length
+              ? `所选时段有 ${conflicts.length} 条租赁冲突`
+              : "日历与已有租赁实时同步"}
+          </span>
+          <div className="row-actions">
+            {back}
+            <Button
+              type="submit"
+              form={formId}
+              disabled={
+                task.pending ||
+                finished ||
+                !draft.board_id ||
+                !draft.user_id ||
+                conflicts.length > 0
+              }
+            >
+              {task.pending ? "保存中…" : "保存租赁"}
+            </Button>
+          </div>
+        </div>
+      }
+    >
+      {task.error && <Notice>{task.error}</Notice>}
+      {initial && JSON.stringify(current) !== original.current && (
+        <Notice>
+          该租赁状态已更新，当前编辑内容已保留，请结合最新日历确认。
+        </Notice>
+      )}
+      {conflicts.length > 0 && (
+        <Notice>
+          所选时段已有租赁。请在日历中选择空闲时段，或修改起止时间。
+        </Notice>
+      )}
+
+      <RentalCalendar
+        bookings={bookings}
+        startsAt={draft.starts_at}
+        endsAt={draft.ends_at}
+        excludeId={initial?.id}
+        onSelect={(start, end) =>
+          patch({
+            starts_at: localDateTime(start),
+            ends_at: localDateTime(end),
+          })
+        }
+      />
     </PagePanel>
   );
 }

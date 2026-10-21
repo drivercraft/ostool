@@ -1,3 +1,5 @@
+import { Check as ActionApprove, X as ActionReject } from "lucide-react";
+import { RowAction } from "@/components/row-action";
 import { useState } from "react";
 import { api } from "@/api/client";
 import { useList } from "@/api/events";
@@ -110,16 +112,16 @@ export default function RentalRequests() {
               <Cell>
                 {r.status === "pending" && (
                   <div className="row-actions">
-                    <Button size="sm" onClick={() => open(r, "approve")}>
-                      批准
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
+                    <RowAction
+                      label="批准"
+                      icon={ActionApprove}
+                      onClick={() => open(r, "approve")}
+                    />
+                    <RowAction
+                      label="拒绝"
+                      icon={ActionReject}
                       onClick={() => open(r, "reject")}
-                    >
-                      拒绝
-                    </Button>
+                    />
                   </div>
                 )}
               </Cell>

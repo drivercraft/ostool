@@ -13,7 +13,8 @@ import {
   useListLayout,
 } from "./list-layout";
 import { toast } from "sonner";
-import { Inbox } from "lucide-react";
+import { Inbox, type LucideIcon } from "lucide-react";
+import { RowAction } from "./row-action";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -212,26 +213,38 @@ export function ConfirmAction({
   action,
   disabled,
   triggerVariant = "destructive",
+  icon,
 }: {
   label: string;
   description: string;
   action: () => Promise<unknown>;
   disabled?: boolean;
   triggerVariant?: "ghost" | "destructive";
+  icon?: LucideIcon;
 }) {
   const [open, setOpen] = useState(false);
   const task = useAction();
   return (
     <>
-      <Button
-        type="button"
-        variant={triggerVariant}
-        size="sm"
-        disabled={disabled}
-        onClick={() => setOpen(true)}
-      >
-        {label}
-      </Button>
+      {icon ? (
+        <RowAction
+          label={label}
+          icon={icon}
+          variant={triggerVariant}
+          disabled={disabled}
+          onClick={() => setOpen(true)}
+        />
+      ) : (
+        <Button
+          type="button"
+          variant={triggerVariant}
+          size="sm"
+          disabled={disabled}
+          onClick={() => setOpen(true)}
+        >
+          {label}
+        </Button>
+      )}
       <Dialog
         open={open}
         onOpenChange={(v) => {

@@ -6,6 +6,7 @@
 @import "./site-workspace.css";
 @import "./list-views.css";
 @import "./admin-experience.css";
+@import "./controls.css";
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -2327,6 +2328,9 @@ body:has(.app-shell) {
   scrollbar-gutter: stable;
   padding: 0 16px 16px;
 }
+.page-panel:not(:has(> .panel-toolbar)) > .panel-scroll {
+  padding-top: 16px;
+}
 .panel-scroll:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: -2px;
@@ -2346,9 +2350,6 @@ body:has(.app-shell) {
   border: 1px solid var(--border);
   border-radius: var(--admin-panel-radius);
   background: var(--card);
-}
-.app-shell .rental-editor-grid {
-  padding: 0;
 }
 .app-shell .data-card-grid {
   padding: 0;

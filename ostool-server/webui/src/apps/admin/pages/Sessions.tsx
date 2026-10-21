@@ -1,3 +1,4 @@
+import { Unplug as ActionRelease } from "lucide-react";
 import { PagePanel } from "@/components/page-panel";
 import { useListPage } from "@/components/list-pagination";
 import { ListToolbar } from "@/components/list-toolbar";
@@ -136,6 +137,7 @@ export default function Sessions() {
               </Cell>
               <Cell>
                 <ConfirmAction
+                  icon={ActionRelease}
                   label="强制释放"
                   description={`请求释放 ${s.board_id} 的会话？服务器会停止任务并断电，清理完成后资源才重新可用。`}
                   action={() => api.deleteSession(s.id)}
