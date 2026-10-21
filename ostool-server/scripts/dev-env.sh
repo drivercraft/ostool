@@ -110,6 +110,7 @@ start_server() {
     local pid
     if pid=$(server_pid); then
         log "ostool-server is already running (pid $pid)"
+        log "use restart to rebuild embedded web assets and Rust, then load the updated executable"
         return
     fi
     rm -f "$PID_FILE"
@@ -130,7 +131,12 @@ start_server() {
         server_args+=(--dev-demo)
         log "demo fixtures enabled (demo-*); hardware discovery and startup power-off disabled"
     fi
-    nohup "${server_env[@]}" \
+    # A separate session survives callers that terminate their process group
+    # after this launcher exits (IDE terminals and command runners). Keep the
+    # foreground child PID so stop/status still address the actual server.
+    local -a detach=()
+    if command -v setsid >/dev/null 2>&1; then detach=(setsid); fi
+    nohup "${detach[@]}" "${server_env[@]}" \
         bash -c 'cd "$1" && shift && exec cargo run -p ostool-server -- --config "$1" --env-file "$2" "${@:3}"' \
         dev-env "$REPO_DIR" "$CONFIG_FILE" "$STATE_DIR/server.env" "${server_args[@]}" \
         >"$LOG_FILE" 2>&1 < /dev/null &
