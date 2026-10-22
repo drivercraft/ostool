@@ -58,7 +58,7 @@ Run from the repository root:
 pnpm --dir ostool-server/webui test
 pnpm --dir ostool-server/webui build
 cargo build -p ostool-server
-OSTOOL_EDITION=public ostool-server/scripts/dev-env.sh restart
+OSTOOL_EDITION=public ostool-server/scripts/dev.sh restart
 ```
 
 `pnpm --dir ostool-server/webui dev` serves the website at `/` and management at

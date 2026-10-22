@@ -19,7 +19,7 @@ axloader 网络控制（v6 串口自动绑定、v5 设备识别与 OTA、v2/v3/v
 
 管理后台位于 `/admin/`，使用 React + shadcn/ui。新建开发板时可先选择电源模块并手动上电，再从实时发现列表选择或手工填写 MAC；保存后完成绑定。全部管理页面采用 SSE 推送更新，断线重连保留页面与编辑草稿。详见 [管理界面与事件协议](docs/admin-ui.md)。
 服务运行时只读写 PostgreSQL，不保留旧文件存储或启动导入。已有开发板及其引用的 DTB 通过独立脚本 `ostool-server/scripts/migrate-boards.sh` 手动迁移；校验和导入以事务完成，源文件保持不变。详见 [迁移说明](docs/admin-ui.md#已有开发板独立迁移)。
-本地版与公网版统一使用 PostgreSQL 保存业务数据；本地版隐藏账号、授权和租赁功能，`ostool` 仍可免登录直连。开发环境通过 `ostool-server/scripts/dev-env.sh start` 自动启动数据库和服务器。新增租赁使用独立页面与可用时段日历，各数据列表支持列表/卡片布局。
+本地版与公网版统一使用 PostgreSQL 保存业务数据；本地版隐藏账号、授权和租赁功能，`ostool` 仍可免登录直连。开发环境通过 `ostool-server/scripts/dev.sh start` 自动启动数据库和服务器。新增租赁使用独立页面与可用时段日历，各数据列表支持列表/卡片布局。
 
 公网版登录/注册默认要求图形验证码，邮箱验证作为可选配置且默认关闭；另提供双重验证、登录设备管理、会话撤销、限流及敏感操作身份复核，本地版仍免登录。详见 [安全配置](ostool-server/deploy/security.md)。
 公网版使用 Redis 处理限流与验证冷却（本地版无需 Redis）。系统设置支持站点、联系方式、备案、维护提示和版本化协议，注册会记录同意版本。详见 [站点与数据结构](ostool-server/deploy/site-and-data.md)。

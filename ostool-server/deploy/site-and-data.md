@@ -90,13 +90,13 @@ SMTP 密码、Redis URL、数据库 URL、MFA 加密密钥、公开域名与安�
 公网新增必填 `OSTOOL_REDIS_URL`。开发环境继续使用同一个启动脚本：
 
 ```bash
-OSTOOL_EDITION=public ostool-server/scripts/dev-env.sh start
-OSTOOL_EDITION=public ostool-server/scripts/dev-env.sh stop
+OSTOOL_EDITION=public ostool-server/scripts/dev.sh start
+OSTOOL_EDITION=public ostool-server/scripts/dev.sh stop
 # 修改代码后重新构建并重启
-OSTOOL_EDITION=public ostool-server/scripts/dev-env.sh restart
+OSTOOL_EDITION=public ostool-server/scripts/dev.sh restart
 ```
 
-本地版使用 `ostool-server/scripts/dev-env.sh start|stop|restart`，无需 Redis。
+本地版使用 `ostool-server/scripts/dev.sh start|stop|restart`，无需 Redis。
 
 检查使用一次性 PostgreSQL 和 Redis，分别设置 `OSTOOL_TEST_DATABASE_URL`、
 `OSTOOL_TEST_REDIS_URL`、`RUST_TEST_THREADS=4`，运行 `cargo test -p ostool-server`；

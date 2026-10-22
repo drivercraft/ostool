@@ -69,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
             .url
             .as_ref()
             .is_some_and(|url| !url.trim().is_empty()),
-        "both local and public editions require PostgreSQL (OSTOOL_DATABASE_URL); use scripts/dev-env.sh for an automatically managed development database"
+        "both local and public editions require PostgreSQL (OSTOOL_DATABASE_URL); use scripts/dev.sh for an automatically managed development database"
     );
     let listen_addr = config.listen_addr;
     let listener = tokio::net::TcpListener::bind(listen_addr)

@@ -221,9 +221,9 @@ OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_br
 
 ```bash
 # 本地版：自动启动 PostgreSQL，不需要登录
-ostool-server/scripts/dev-env.sh restart
+ostool-server/scripts/dev.sh restart
 # 公开测试版：PostgreSQL + 登录 + 用户、角色、租赁
-OSTOOL_EDITION=public ostool-server/scripts/dev-env.sh restart
+OSTOOL_EDITION=public ostool-server/scripts/dev.sh restart
 ```
 
 按当前版本选择其中一条；默认端口相同，切换版本先以原版本执行 `stop`，

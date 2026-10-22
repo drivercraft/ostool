@@ -27,8 +27,8 @@ ADMIN_PASSWORD=${OSTOOL_ADMIN_PASSWORD:-admin-password-123}
 DEMO=${OSTOOL_DEV_DEMO:-true}
 [[ "$DEMO" == "true" || "$DEMO" == "false" ]] || { echo "OSTOOL_DEV_DEMO must be true or false" >&2; exit 2; }
 
-die() { echo "dev-env: $*" >&2; exit 1; }
-log() { echo "dev-env: $*"; }
+die() { echo "dev: $*" >&2; exit 1; }
+log() { echo "dev: $*"; }
 
 require_command() {
     command -v "$1" >/dev/null 2>&1 || die "missing required command: $1";
@@ -164,7 +164,7 @@ start_server() {
     if command -v setsid >/dev/null 2>&1; then detach=(setsid); fi
     nohup "${detach[@]}" "${server_env[@]}" \
         bash -c 'cd "$1" && shift && exec cargo run -p ostool-server -- --config "$1" --env-file "$2" "${@:3}"' \
-        dev-env "$REPO_DIR" "$CONFIG_FILE" "$STATE_DIR/server.env" "${server_args[@]}" \
+        dev "$REPO_DIR" "$CONFIG_FILE" "$STATE_DIR/server.env" "${server_args[@]}" \
         >"$LOG_FILE" 2>&1 < /dev/null &
     echo $! > "$PID_FILE"
     for _ in {1..30}; do

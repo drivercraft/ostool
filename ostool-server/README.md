@@ -294,16 +294,16 @@ edition and starts a private PostgreSQL 16 container automatically (Docker is
 required). Local edition needs no login and no CLI credentials:
 
 ```bash
-ostool-server/scripts/dev-env.sh start
-ostool-server/scripts/dev-env.sh status
-ostool-server/scripts/dev-env.sh stop
+ostool-server/scripts/dev.sh start
+ostool-server/scripts/dev.sh status
+ostool-server/scripts/dev.sh stop
 ```
 
 To test authenticated public edition with a private PostgreSQL 16 container:
 
 ```bash
-OSTOOL_EDITION=public ostool-server/scripts/dev-env.sh start
-OSTOOL_EDITION=public ostool-server/scripts/dev-env.sh stop
+OSTOOL_EDITION=public ostool-server/scripts/dev.sh start
+OSTOOL_EDITION=public ostool-server/scripts/dev.sh stop
 ```
 
 Use `restart` or `clean` with the same edition. Data/log/config directories are
@@ -325,9 +325,9 @@ The development launcher enables demo data by default (`OSTOOL_DEV_DEMO=true`).
 Restart an existing environment to populate it:
 
 ```bash
-ostool-server/scripts/dev-env.sh restart
+ostool-server/scripts/dev.sh restart
 # Authenticated demo, including users/roles/rentals:
-OSTOOL_EDITION=public ostool-server/scripts/dev-env.sh restart
+OSTOOL_EDITION=public ostool-server/scripts/dev.sh restart
 ```
 
 Choose the command for your edition. Both default to the same port; stop the old
@@ -360,7 +360,7 @@ sessions stay released until restart. Runtime snapshots are recreated on restart
 These fixtures are intended for UI inspection, not hardware/boot verification.
 
 To launch without adding/refreshing fixtures, use
-`OSTOOL_DEV_DEMO=false ostool-server/scripts/dev-env.sh restart` (or the same
+`OSTOOL_DEV_DEMO=false ostool-server/scripts/dev.sh restart` (or the same
 prefix with `OSTOOL_EDITION=public`). This restores normal hardware startup behavior
 and retains already stored demo records. `clean` deletes **all data for the chosen
 development edition**; starting again recreates fresh fixtures. Never point the
