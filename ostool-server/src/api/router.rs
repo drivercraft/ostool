@@ -3178,6 +3178,7 @@ mod tests {
 
     fn test_server_config(root: &std::path::Path) -> ServerConfig {
         ServerConfig {
+            development: false,
             security: Default::default(),
             audit: Default::default(),
             edition: crate::config::Edition::Local,

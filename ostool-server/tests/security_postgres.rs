@@ -1347,3 +1347,73 @@ async fn account_settings_are_validated_private_versioned_persistent_and_enforce
         StatusCode::NOT_FOUND
     );
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn public_development_preserves_auth_and_accepts_only_private_same_origin() {
+    let f = Fixture::new(true).await;
+    f.state.config.write().await.development = true;
+    for (origin, host, expected) in [
+        (
+            "http://192.168.20.10:4190",
+            "192.168.20.10:4190",
+            StatusCode::OK,
+        ),
+        ("http://127.0.0.1:4190", "127.0.0.1:4190", StatusCode::OK),
+        (
+            "http://192.168.20.11:4190",
+            "192.168.20.10:4190",
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "http://192.168.20.10:4190/path",
+            "192.168.20.10:4190",
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "http://attacker.example",
+            "attacker.example",
+            StatusCode::FORBIDDEN,
+        ),
+        ("http://8.8.8.8:4190", "8.8.8.8:4190", StatusCode::FORBIDDEN),
+    ] {
+        let proof = f.proof("admin_login").await;
+        let mut request = Request::builder().method("POST").uri("/api/v1/admin/auth/login")
+            .header("host",host).header("origin",origin).header("content-type","application/json").header("user-agent","ostool-security-test")
+            .body(Body::from(json!({"email":"admin@security.test","password":"security-admin-password-123","verification":proof}).to_string())).unwrap();
+        request.extensions_mut().insert(ConnectInfo(
+            "203.0.113.5:4190".parse::<std::net::SocketAddr>().unwrap(),
+        ));
+        let response = f.app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), expected, "{origin} / {host}");
+        if expected == StatusCode::OK {
+            assert!(
+                response
+                    .headers()
+                    .get_all("set-cookie")
+                    .iter()
+                    .any(|value| value.to_str().unwrap().contains("HttpOnly"))
+            );
+        }
+    }
+    assert_eq!(
+        f.request("GET", "/api/v1/admin/users", None, Value::Null)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    f.state.config.write().await.development = false;
+    assert_eq!(
+        f.custom(
+            "POST",
+            "/api/v1/auth/login",
+            None,
+            json!({}),
+            Some("http://192.168.20.10:4190"),
+            None
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+}

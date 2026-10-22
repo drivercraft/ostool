@@ -166,6 +166,7 @@ pub async fn build_app_state(
         let url = url::Url::parse(origin)?;
         anyhow::ensure!(
             url.scheme() == "https"
+                || (config.development && ServerConfig::development_origin(&url))
                 || (url.scheme() == "http"
                     && url.host().is_some_and(|host| match host {
                         url::Host::Domain(host) => host == "localhost",

@@ -296,7 +296,7 @@ as data without shell execution or expansion.
 | Setting | Default |
 | --- | --- |
 | `OSTOOL_EDITION` | `local` |
-| `OSTOOL_DEV_HOST` | `0.0.0.0` locally; `127.0.0.1` for public testing |
+| `OSTOOL_DEV_HOST` | `0.0.0.0` in either development edition |
 | `OSTOOL_DEV_SERVER_PORT` | `2999` |
 | `OSTOOL_DEV_DIR` | `.ostool-server-dev/<edition>` |
 | `OSTOOL_DEV_PG_PORT` | `54328` locally; `54329` for public testing |
@@ -320,8 +320,35 @@ Its bootstrap administrator defaults to `admin@example.com` /
 before initialization. PostgreSQL data is separate per development edition;
 both defaults use HTTP port 2999, so stop the old edition before switching or
 assign distinct `OSTOOL_DEV_SERVER_PORT` values. Occupied listeners are rejected
-before backing services start. Public demo listeners and origins remain loopback
-only; an inherited LAN host must be overridden with `OSTOOL_DEV_HOST=127.0.0.1`.
+before backing services start. The launcher always passes `--dev`: local and public feature editions both support
+loopback/private LAN debugging, including HTTP. Public authentication, CAPTCHA,
+roles and rentals stay enabled. Origins must match the request host; an unrelated
+website cannot use the development exception. The flag cannot be enabled through
+TOML or environment variables and is absent from installed systemd services.
+Development mode rejects public-IP origins/listeners; it is not a deployment tool.
+
+For optional LAN HTTPS debugging on Linux Docker:
+
+```dotenv
+OSTOOL_EDITION=public
+OSTOOL_DEV_HOST=0.0.0.0
+OSTOOL_DEV_HTTPS_HOST=192.168.20.10
+OSTOOL_DEV_HTTPS_PORT=3443
+OSTOOL_DEV_DEMO=true
+```
+
+Replace the HTTPS host with this machine's actual LAN IP, then run `dev.sh restart`.
+The launcher runs the official `caddy:2-alpine` image using the host network, binds
+HTTPS only to that IP, automatically keeps the Rust backend on loopback and blocks
+hardware routes. Local edition ignores the public HTTPS options and keeps its
+normal HTTP listener, so switching edition does not require removing them.
+It exports its development root CA to `.ostool-server-dev/public/caddy/root.crt`;
+import and trust that certificate on each accessing device. It never modifies the
+host trust store automatically. Keep the Caddy data directory to retain the CA
+across restarts. `stop` shuts down Caddy, Rust, PostgreSQL and Redis; `clean` also
+removes their development data and CA. Without `OSTOOL_DEV_HTTPS_HOST`, either
+edition supports HTTP debugging on `OSTOOL_DEV_HOST`.
+
 
 Demo data includes 48 boards, 24 DTBs, 12 live sessions and 18 discovered devices.
 Public testing also adds 36 users, six roles, 72 rentals and 48 applications.
@@ -403,6 +430,11 @@ maintenance access. Frontend workflows and calendar behavior are documented in
 [the management guide](../docs/admin-ui.md).
 
 ## Public deployment
+
+Use `scripts/install.sh` for an installed service and Caddy for certificates and
+HTTPS. Do not use `scripts/dev.sh`, `--dev` or `--dev-demo` in public deployment.
+Installed services run the normal binary without development exceptions or demo
+fixtures; public edition requires HTTPS and a configured canonical origin.
 
 Build with `cargo build --release -p ostool-server`. The build embeds both React
 entries; domain names, database URLs and passwords must not be `VITE_*` variables.

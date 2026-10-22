@@ -26,8 +26,12 @@ PG_PORT=${OSTOOL_DEV_PG_PORT:-$DEFAULT_PG_PORT}
 REDIS_CONTAINER=${OSTOOL_DEV_REDIS_CONTAINER:-ostool-server-dev-public-redis}
 REDIS_PORT=${OSTOOL_DEV_REDIS_PORT:-56380}
 SERVER_PORT=${OSTOOL_DEV_SERVER_PORT:-2999}
-if [[ "$EDITION" == "local" ]]; then DEFAULT_SERVER_HOST=0.0.0.0; else DEFAULT_SERVER_HOST=127.0.0.1; fi
+DEFAULT_SERVER_HOST=0.0.0.0
 SERVER_HOST=${OSTOOL_DEV_HOST:-$DEFAULT_SERVER_HOST}
+HTTPS_HOST=
+if [[ "$EDITION" == "public" ]]; then HTTPS_HOST=${OSTOOL_DEV_HTTPS_HOST:-}; fi
+# TLS 入口由 Caddy 绑定局域网，HTTP 调试监听选项不会把代理后端暴露出去。
+if [[ -n "$HTTPS_HOST" ]]; then SERVER_HOST=127.0.0.1; fi
 LISTEN_HOST=$SERVER_HOST
 [[ "$LISTEN_HOST" == *:* ]] && LISTEN_HOST="[$LISTEN_HOST]"
 case "$SERVER_HOST" in
@@ -36,6 +40,14 @@ case "$SERVER_HOST" in
     *) CHECK_HOST=$LISTEN_HOST ;;
 esac
 CHECK_URL="http://${CHECK_HOST}:${SERVER_PORT}"
+HTTPS_PORT=${OSTOOL_DEV_HTTPS_PORT:-3443}
+CADDY_CONTAINER=${OSTOOL_DEV_CADDY_CONTAINER:-ostool-server-dev-public-caddy}
+PUBLIC_URL=$CHECK_URL
+if [[ -n "$HTTPS_HOST" ]]; then
+    HTTPS_ADDRESS=$HTTPS_HOST
+    [[ "$HTTPS_ADDRESS" == *:* ]] && HTTPS_ADDRESS="[$HTTPS_ADDRESS]"
+    PUBLIC_URL="https://${HTTPS_ADDRESS}:${HTTPS_PORT}"
+fi
 DB_USER=${OSTOOL_DEV_DB_USER:-ostool}
 DB_PASSWORD=${OSTOOL_DEV_DB_PASSWORD:-ostool}
 DB_NAME=${OSTOOL_DEV_DB_NAME:-ostool}
@@ -150,12 +162,42 @@ ensure_redis() {
     die "Redis did not become ready"
 }
 
+
+start_caddy() {
+    local directory="$STATE_DIR/caddy"
+    mkdir -p "$directory/data" "$directory/config"
+    chmod 700 "$directory/data"
+    node "$SCRIPT_DIR/dev-config.mjs" --caddyfile "$HTTPS_HOST" "$HTTPS_PORT" "$SERVER_PORT" > "$directory/Caddyfile"
+    if docker inspect "$CADDY_CONTAINER" >/dev/null 2>&1; then
+        [[ $(docker inspect -f '{{index .Config.Labels "ostool.dev"}}' "$CADDY_CONTAINER") == "$STATE_DIR" ]] || die "Caddy 容器名称被其他实例使用：$CADDY_CONTAINER"
+        docker rm -f "$CADDY_CONTAINER" >/dev/null
+    fi
+    docker run -d --name "$CADDY_CONTAINER" --network host --label "ostool.dev=$STATE_DIR" \
+        -v "$directory/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$directory/data:/data" -v "$directory/config:/config" \
+        caddy:2-alpine >/dev/null
+    for _ in {1..30}; do
+        if docker cp "$CADDY_CONTAINER:/data/caddy/pki/authorities/local/root.crt" "$directory/root.crt" >/dev/null 2>&1 \
+            && curl --noproxy '*' --cacert "$directory/root.crt" -fsS "$PUBLIC_URL/api/v1/auth/config" >/dev/null 2>&1; then
+            log "HTTPS CA certificate: $directory/root.crt (在访问设备上导入并信任，重启会保留此证书)"
+            return
+        fi
+        sleep 1
+    done
+    die "Caddy HTTPS 未就绪，请查看 docker logs $CADDY_CONTAINER"
+}
+
 start_server() {
     require_command cargo
     require_command pnpm
     require_command node
     node -e 'if (!require("node:net").isIP(process.argv[1])) process.exit(1)' "$SERVER_HOST" \
         || die "OSTOOL_DEV_HOST must be an IPv4 or IPv6 address (without brackets)"
+    node "$SCRIPT_DIR/dev-config.mjs" --check-network "$SERVER_HOST" "$SERVER_PORT" "$HTTPS_HOST" "$HTTPS_PORT" || exit 1
+    if [[ -n "$HTTPS_HOST" ]]; then
+        [[ "$EDITION" == "public" ]] || die "HTTPS 调试入口仅用于 public 版"
+        [[ $(uname -s) == Linux ]] || die "自动 Caddy 调试代理需要 Linux Docker host 网络"
+        require_command curl
+    fi
     mkdir -p "$STATE_DIR"
     write_config
     local pid
@@ -163,6 +205,13 @@ start_server() {
         log "ostool-server is already running (pid $pid)"
         log "use restart to rebuild embedded web assets and Rust, then load the updated executable"
         return
+    fi
+    if [[ -n "$HTTPS_HOST" ]]; then
+        node - "$HTTPS_HOST" "$HTTPS_PORT" <<'JS' || die "HTTPS 调试地址或端口不可用，请检查 OSTOOL_DEV_HTTPS_HOST/OSTOOL_DEV_HTTPS_PORT"
+const server = require("node:net").createServer();
+server.on("error", () => { process.exitCode = 1; });
+server.listen({host:process.argv[2],port:Number(process.argv[3])},()=>server.close());
+JS
     fi
     # Do not mistake another edition's HTTP response for this process being ready.
     # Probe before starting databases or spawning a build in the background.
@@ -177,6 +226,7 @@ JS
     rm -f "$PID_FILE"
     ensure_postgres
     ensure_redis
+    log "仅启动调试环境（local/public 功能可选）；正式部署请使用 scripts/install.sh 与 Caddy"
     log "starting ostool-server; log: $LOG_FILE"
     # Only allowlisted development settings are loaded above. The server itself
     # receives an empty env file and explicit development database/service URLs.
@@ -188,14 +238,15 @@ JS
     local -a server_env=(env -u OSTOOL_DATABASE_URL -u OSTOOL_ADMIN_EMAIL -u OSTOOL_ADMIN_PASSWORD -u OSTOOL_SERVER_WEB_DIST_DIR
         "OSTOOL_EDITION=$EDITION" "OSTOOL_LISTEN_ADDR=${LISTEN_HOST}:${SERVER_PORT}"
         "OSTOOL_DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${PG_PORT}/${DB_NAME}"
-        "OSTOOL_PUBLIC_BASE_URL=$CHECK_URL" "OSTOOL_NETWORK_TEST_ENABLED=false")
+        "OSTOOL_PUBLIC_BASE_URL=$PUBLIC_URL" "OSTOOL_NETWORK_TEST_ENABLED=false")
+    if [[ -n "$HTTPS_HOST" ]]; then server_env+=("OSTOOL_TRUSTED_PROXY_IPS=127.0.0.1,::1"); fi
     if [[ "$EDITION" == "public" ]]; then
         server_env+=("OSTOOL_DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${PG_PORT}/${DB_NAME}"
             "OSTOOL_ADMIN_EMAIL=$ADMIN_EMAIL" "OSTOOL_ADMIN_PASSWORD=$ADMIN_PASSWORD" "OSTOOL_AUTH_ENABLED=true"
             "OSTOOL_REDIS_URL=redis://127.0.0.1:${REDIS_PORT}/0"
             "OSTOOL_MFA_ENCRYPTION_KEY=$(cat "$STATE_DIR/mfa.key")")
     fi
-    local -a server_args=()
+    local -a server_args=(--dev)
     if [[ "$DEMO" == "true" ]]; then
         server_args+=(--dev-demo)
         log "demo fixtures enabled (demo-*); hardware discovery and startup power-off disabled"
@@ -215,8 +266,12 @@ JS
             break
         fi
         if command -v curl >/dev/null 2>&1 && curl --noproxy '*' -fsS "$CHECK_URL/" >/dev/null 2>&1; then
-            log "ready: $CHECK_URL/"
-            log "admin: $CHECK_URL/admin/overview"
+            if [[ -n "$HTTPS_HOST" ]] && ! (start_caddy); then
+                stop_server
+                die "HTTPS 调试入口启动失败，已关闭本次开发环境；请检查 Caddy 配置后重试"
+            fi
+            log "ready: $PUBLIC_URL/"
+            log "admin: $PUBLIC_URL/admin/overview"
             log "listening: ${LISTEN_HOST}:${SERVER_PORT}"
             if [[ "$SERVER_HOST" == "0.0.0.0" ]]; then
                 local lan_ip
@@ -228,8 +283,8 @@ JS
                 }')
             fi
             if [[ "$EDITION" == "public" ]]; then
-                log "website login: $CHECK_URL/login"
-                log "admin login: $CHECK_URL/admin/login"
+                log "website login: $PUBLIC_URL/login"
+                log "admin login: $PUBLIC_URL/admin/login"
             fi
             return
         fi
@@ -243,6 +298,11 @@ JS
 }
 
 stop_server() {
+    if [[ "$EDITION" == "public" ]] && command -v docker >/dev/null 2>&1; then
+        if [[ $(docker inspect -f '{{index .Config.Labels "ostool.dev"}}' "$CADDY_CONTAINER" 2>/dev/null || true) == "$STATE_DIR" ]]; then
+            docker stop -t 3 "$CADDY_CONTAINER" >/dev/null 2>&1 || true
+        fi
+    fi
     local pid
     if pid=$(server_pid); then
         log "stopping ostool-server (pid $pid)"
@@ -288,6 +348,10 @@ status() {
     else
         echo "postgres: Docker unavailable"
     fi
+    if [[ -n "$HTTPS_HOST" ]]; then
+        echo "HTTPS: $PUBLIC_URL"
+        echo "CA: $STATE_DIR/caddy/root.crt"
+    fi
     echo "state: $STATE_DIR"
 }
 
@@ -306,6 +370,12 @@ case "${1:-start}" in
                 bash -c 'rm -rf /data/* /data/.[!.]* /data/..?*' >/dev/null
         fi
         if [[ "$EDITION" == "public" ]] && command -v docker >/dev/null 2>&1; then
+            if [[ $(docker inspect -f '{{index .Config.Labels "ostool.dev"}}' "$CADDY_CONTAINER" 2>/dev/null || true) == "$STATE_DIR" ]]; then
+                docker rm "$CADDY_CONTAINER" >/dev/null 2>&1 || true
+            fi
+            if [[ -d "$STATE_DIR/caddy/data" ]]; then
+                docker run --rm -v "$STATE_DIR/caddy:/data" --entrypoint sh caddy:2-alpine -c 'rm -rf /data/* /data/.[!.]* /data/..?*' >/dev/null
+            fi
             docker rm "$REDIS_CONTAINER" >/dev/null 2>&1 || true
             if [[ -d "$STATE_DIR/redis" ]]; then
                 docker run --rm -v "$STATE_DIR/redis:/data" --entrypoint sh redis:7-alpine \
@@ -316,6 +386,7 @@ case "${1:-start}" in
         log "removed $STATE_DIR"
         ;;
     help|-h|--help)
+        echo "仅用于本机/局域网调试；正式部署使用 scripts/install.sh 与 Caddy"
         echo "usage: $0 {build|start|stop|restart|status|clean}"
         echo "  build    build embedded website/admin assets and Rust; keep running services unchanged"
         echo "  restart  rebuild and restart the selected development edition"

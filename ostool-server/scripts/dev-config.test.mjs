@@ -13,7 +13,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:net";
-import { developmentEnvironment } from "./dev-config.mjs";
+import {
+  developmentEnvironment,
+  developmentHost,
+  developmentNetwork,
+  developmentCaddyfile,
+} from "./dev-config.mjs";
 
 test("default dotenv is resolved beside the server directory, not the caller cwd", () => {
   const root = mkdtempSync(join(tmpdir(), "ostool-dev-default-env-"));
@@ -262,6 +267,135 @@ exit 69
     assert.equal(existsSync(join(root, "state/server.pid")), false);
   } finally {
     server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("development launchers reject public IPs before creating state or starting services", () => {
+  const root = mkdtempSync(join(tmpdir(), "ostool-dev-public-host-"));
+  try {
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const marker = join(root, "docker-called");
+    writeFileSync(
+      join(bin, "docker"),
+      '#!/usr/bin/env bash\nprintf called > "$OSTOOL_TEST_DOCKER_MARKER"\nexit 69\n',
+      { mode: 0o755 },
+    );
+    for (const tool of ["cargo", "pnpm"])
+      writeFileSync(join(bin, tool), "#!/usr/bin/env bash\nexit 0\n", {
+        mode: 0o755,
+      });
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith("OSTOOL_")),
+    );
+    for (const host of ["203.0.113.10", "8.8.8.8", "2001:db8::10"]) {
+      const state = join(root, "state");
+      const result = spawnSync(
+        "bash",
+        [resolve(import.meta.dirname, "dev.sh"), "start"],
+        {
+          env: {
+            ...env,
+            PATH: bin + ":" + process.env.PATH,
+            OSTOOL_DEV_CONFIG_LOADED: "1",
+            OSTOOL_EDITION: "public",
+            OSTOOL_DEV_DEMO: "true",
+            OSTOOL_DEV_HOST: host,
+            OSTOOL_DEV_DIR: state,
+            OSTOOL_TEST_DOCKER_MARKER: marker,
+          },
+          encoding: "utf8",
+        },
+      );
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      assert.match(result.stderr, /仅允许本机、局域网或通配地址/);
+      assert.equal(existsSync(marker), false);
+      assert.equal(existsSync(state), false);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("both development editions support private listeners and optional isolated HTTPS ingress", () => {
+  for (const host of [
+    "127.0.0.1",
+    "0.0.0.0",
+    "192.168.1.10",
+    "10.3.10.160",
+    "172.16.1.2",
+    "169.254.1.2",
+    "::1",
+    "::",
+    "fd00::1",
+  ]) {
+    assert.doesNotThrow(() => developmentNetwork(host, "2999"));
+  }
+  for (const host of [
+    "8.8.8.8",
+    "2001:4860:4860::8888",
+    "example.com",
+    "192.168.1.1\nadmin off",
+  ])
+    assert.equal(developmentHost(host), false);
+  assert.doesNotThrow(() =>
+    developmentNetwork("127.0.0.1", "2999", "10.3.10.160", "3443"),
+  );
+  assert.throws(() =>
+    developmentNetwork("0.0.0.0", "2999", "10.3.10.160", "3443"),
+  );
+  assert.throws(() =>
+    developmentNetwork("127.0.0.1", "2999", "0.0.0.0", "3443"),
+  );
+  assert.throws(() =>
+    developmentNetwork("127.0.0.1", "2999", "10.3.10.160", "70000"),
+  );
+  const caddy = developmentCaddyfile("10.3.10.160", "3443", "2999");
+  assert.match(caddy, /https:\/\/10\.3\.10\.160:3443/);
+  assert.match(caddy, /bind 10\.3\.10\.160/);
+  assert.match(caddy, /tls internal/);
+  assert.match(caddy, /admin off/);
+  assert.match(caddy, /reverse_proxy 127\.0\.0\.1:2999/);
+  assert.match(caddy, /respond @hardware 404/);
+});
+
+test("public HTTPS isolates the backend while local edition ignores public proxy options", () => {
+  const root = mkdtempSync(join(tmpdir(), "ostool-dev-edition-https-"));
+  try {
+    const file = join(root, "dev.env");
+    writeFileSync(
+      file,
+      "OSTOOL_EDITION=public\nOSTOOL_DEV_HOST=0.0.0.0\nOSTOOL_DEV_HTTPS_HOST=192.168.20.10\nOSTOOL_DEV_HTTPS_PORT=3443\n",
+    );
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "docker"), "#!/usr/bin/env bash\nexit 1\n", {
+      mode: 0o755,
+    });
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith("OSTOOL_")),
+    );
+    Object.assign(env, {
+      PATH: bin + ":" + process.env.PATH,
+      OSTOOL_DEV_ENV_FILE: file,
+    });
+    const script = resolve(import.meta.dirname, "dev.sh");
+    const https = spawnSync("bash", [script, "status"], {
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(https.status, 0, https.stderr);
+    assert.match(https.stdout, /requested listener: 127\.0\.0\.1:2999/);
+    assert.match(https.stdout, /HTTPS: https:\/\/192\.168\.20\.10:3443/);
+    const local = spawnSync("bash", [script, "status"], {
+      env: { ...env, OSTOOL_EDITION: "local" },
+      encoding: "utf8",
+    });
+    assert.equal(local.status, 0, local.stderr);
+    assert.match(local.stdout, /requested listener: 0\.0\.0\.0:2999/);
+    assert.doesNotMatch(local.stdout, /HTTPS:/);
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });

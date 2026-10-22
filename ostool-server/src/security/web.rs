@@ -336,7 +336,36 @@ pub async fn gate(
                 .as_deref()
                 .and_then(|value| url::Url::parse(value).ok())
                 .map(|value| value.origin().ascii_serialization());
-            if allowed.as_deref() != origin.to_str().ok() {
+            let origin_value = origin.to_str().ok();
+            let development_origin = config.development
+                && origin
+                    .to_str()
+                    .ok()
+                    .and_then(|value| url::Url::parse(value).ok())
+                    .is_some_and(|origin| {
+                        if !ServerConfig::development_origin(&origin)
+                            || origin_value != Some(origin.origin().ascii_serialization().as_str())
+                        {
+                            return false;
+                        }
+                        request
+                            .headers()
+                            .get(header::HOST)
+                            .and_then(|host| host.to_str().ok())
+                            .and_then(|host| {
+                                url::Url::parse(&format!("{}://{host}", origin.scheme())).ok()
+                            })
+                            .is_some_and(|host| {
+                                ServerConfig::development_origin(&host)
+                                    && host.path() == "/"
+                                    && host.query().is_none()
+                                    && host.fragment().is_none()
+                                    && host.origin() == origin.origin()
+                            })
+                    });
+            if (config.development && !development_origin)
+                || (!config.development && allowed.as_deref() != origin.to_str().ok())
+            {
                 return ApiError::forbidden("请求来源不受信任").into_response();
             }
         } else if request

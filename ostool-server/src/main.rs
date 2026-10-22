@@ -19,7 +19,10 @@ struct Cli {
     /// Load deployment variables from this file (defaults to .env if present).
     #[arg(long)]
     env_file: Option<PathBuf>,
-    /// Populate a UI demo (local LAN or public-edition loopback); disable hardware listeners and startup power-off.
+    /// Enable local/LAN debugging; never use this mode for an installed public service.
+    #[arg(long)]
+    dev: bool,
+    /// Populate a UI demo; disable hardware listeners and startup power-off.
     #[arg(long)]
     dev_demo: bool,
     #[command(subcommand)]
@@ -48,6 +51,7 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     let mut config = ServerConfig::load_or_create(&cli.config).await?;
+    config.development = cli.dev;
     ostool_server::environment::apply(&mut config, cli.env_file.as_deref())?;
     if let Some(Command::VirtualLab { action }) = cli.command {
         let action = match action {

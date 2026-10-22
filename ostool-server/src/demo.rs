@@ -1,4 +1,4 @@
-//! Explicit development fixtures: local LAN or public-edition loopback only.
+//! Explicit development fixtures; --dev enables LAN debugging in either edition.
 use std::{net::IpAddr, time::Duration};
 
 use anyhow::bail;
@@ -24,10 +24,10 @@ fn private_address(ip: IpAddr) -> bool {
     }
 }
 
-/// Local UI demos may be viewed on the LAN. Authenticated demos remain loopback-only.
+/// LAN demos require local edition or explicit --dev; installed services keep strict origins.
 pub fn prepare(config: &mut ServerConfig) -> anyhow::Result<()> {
     let ip = config.listen_addr.ip();
-    let local = !config.edition.is_public();
+    let local = config.development || !config.edition.is_public();
     if !(ip.is_loopback() || local && (ip.is_unspecified() || private_address(ip))) {
         bail!(
             "--dev-demo requires a loopback listener in public edition, or a local/LAN listener in local edition"
@@ -475,6 +475,26 @@ mod tests {
             assert!(!config.network_test.enabled);
             assert!(!config.virtual_qemu.enabled);
             assert!(matches!(config.tftp, TftpConfig::Builtin(ref cfg) if !cfg.enabled));
+        }
+    }
+
+    #[test]
+    fn explicit_development_allows_public_edition_lan_without_hardware() {
+        for origin in [
+            "http://192.168.20.10:2999",
+            "https://192.168.20.10:3443",
+            "http://[fd00::1]:2999",
+        ] {
+            let mut config = ServerConfig {
+                development: true,
+                edition: crate::config::Edition::Public,
+                ..Default::default()
+            };
+            config.auth.public_base_url = Some(origin.into());
+            prepare(&mut config).unwrap();
+            assert!(!config.loader_network.enabled);
+            assert!(!config.virtual_qemu.enabled);
+            assert!(!config.network_test.enabled);
         }
     }
 

@@ -119,6 +119,7 @@ fn spawn_test_server_with_power_on(
     tftp.enabled = false;
 
     let config = ServerConfig {
+        development: false,
         security: Default::default(),
         audit: Default::default(),
         edition: ostool_server::config::Edition::Local,

@@ -1,6 +1,6 @@
 use std::{
     env::current_dir,
-    net::{Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
 };
 
@@ -16,6 +16,10 @@ const SYSTEM_DATA_DIR: &str = "/var/lib/ostool-server";
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ServerConfig {
+    /// 仅由命令行 --dev 启用，安装部署不能通过配置文件开启调试例外。
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub development: bool,
     #[serde(default)]
     pub security: crate::security::config::SecurityConfig,
     #[serde(default)]
@@ -70,6 +74,7 @@ impl ServerConfig {
         ));
 
         Self {
+            development: false,
             security: crate::security::config::SecurityConfig::default(),
             audit: AuditConfig::default(),
             edition: Edition::Local,
@@ -194,7 +199,37 @@ impl ServerConfig {
         Ok(())
     }
 
+    pub(crate) fn development_address(ip: IpAddr) -> bool {
+        ip.is_loopback()
+            || match ip {
+                IpAddr::V4(ip) => ip.is_private() || ip.is_link_local(),
+                IpAddr::V6(ip) => ip.is_unique_local() || ip.is_unicast_link_local(),
+            }
+    }
+    pub(crate) fn development_origin(origin: &url::Url) -> bool {
+        matches!(origin.scheme(), "http" | "https")
+            && origin.username().is_empty()
+            && origin.password().is_none()
+            && origin.host().is_some_and(|host| match host {
+                url::Host::Domain(host) => host == "localhost",
+                url::Host::Ipv4(ip) => Self::development_address(ip.into()),
+                url::Host::Ipv6(ip) => Self::development_address(ip.into()),
+            })
+    }
     pub fn validate(&self) -> anyhow::Result<()> {
+        if self.development {
+            anyhow::ensure!(
+                self.listen_addr.ip().is_unspecified()
+                    || Self::development_address(self.listen_addr.ip()),
+                "调试模式仅允许本机、局域网或通配监听"
+            );
+            if let Some(origin) = &self.auth.public_base_url {
+                anyhow::ensure!(
+                    Self::development_origin(&url::Url::parse(origin)?),
+                    "调试模式仅允许本机或局域网 HTTP(S) 地址，正式部署请使用 install.sh 与 Caddy"
+                );
+            }
+        }
         if self
             .audit
             .retention_days
@@ -1608,4 +1643,29 @@ kind = "pxe"
             "unexpected error: {message}"
         );
     }
+}
+
+#[cfg(test)]
+#[test]
+fn development_is_cli_only_and_rejects_public_network_configuration() {
+    let mut config = ServerConfig {
+        development: true,
+        ..Default::default()
+    };
+    config.network.interface = "lo".into();
+    config.auth.public_base_url = Some("http://192.168.20.10:2999".into());
+    config.validate().unwrap();
+    config.listen_addr = "8.8.8.8:2999".parse().unwrap();
+    assert!(config.validate().is_err());
+    config.listen_addr = "127.0.0.1:2999".parse().unwrap();
+    config.auth.public_base_url = Some("https://boards.example.com".into());
+    assert!(config.validate().is_err());
+    let mut value = serde_json::to_value(&config).unwrap();
+    assert!(value.get("development").is_none());
+    value["development"] = serde_json::json!(true);
+    assert!(
+        !serde_json::from_value::<ServerConfig>(value)
+            .unwrap()
+            .development
+    );
 }
