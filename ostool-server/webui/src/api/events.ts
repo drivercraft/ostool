@@ -71,7 +71,7 @@ export interface Envelope {
   kind: "snapshot" | "update";
   data: Partial<Resources>;
 }
-type Connection = "connecting" | "connected" | "reconnecting";
+export type Connection = "connecting" | "connected" | "reconnecting";
 const empty: unknown[] = [];
 // Structural reconciliation retains unchanged rows across snapshots and reconnects.
 function reconcile(previous: unknown, next: unknown): unknown {
@@ -193,6 +193,8 @@ export class AdminStore {
     this.source.addEventListener("auth-expired", () => {
       if (this.source !== source) return;
       this.disconnect();
+      this.connection = "reconnecting";
+      this.emit();
       void refreshAuth()
         .then(() => api.me())
         .then((user) => {
@@ -204,13 +206,6 @@ export class AdminStore {
         })
         .catch(() => window.location.assign(loginUrl(authSurface())));
     });
-    this.source.onopen = () => {
-      if (this.source !== source) return;
-      if (this.epoch) {
-        this.connection = "connected";
-        this.emit();
-      }
-    };
     this.source.onerror = () => {
       if (this.source !== source) return;
       this.connection = "reconnecting";

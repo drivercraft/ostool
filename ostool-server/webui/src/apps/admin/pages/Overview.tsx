@@ -14,7 +14,13 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { Link } from "react-router-dom";
-import { admin, useConnection, useResource } from "@/api/events";
+import {
+  admin,
+  useConnection,
+  useErrors,
+  useResource,
+  type Connection,
+} from "@/api/events";
 import { useEdition } from "@/edition";
 import { PagePanel } from "@/components/page-panel";
 import { Button } from "@/components/ui/button";
@@ -222,6 +228,7 @@ export default function Overview({
 }) {
   const data = useResource("dashboard"),
     connection = useConnection(),
+    error = useErrors().dashboard,
     publicEdition = useEdition().edition === "public";
   return (
     <PagePanel
@@ -266,7 +273,7 @@ export default function Overview({
       ) : (
         <div className="dashboard-content">
           {view === "runtime" ? (
-            <Runtime data={data} />
+            <Runtime data={data} connection={connection} error={error} />
           ) : view === "operations" ? (
             <Operations data={data} publicEdition={publicEdition} />
           ) : (
@@ -277,9 +284,30 @@ export default function Overview({
     </PagePanel>
   );
 }
-function Runtime({ data }: { data: DashboardInfo }) {
+function Runtime({
+  data,
+  connection,
+  error,
+}: {
+  data: DashboardInfo;
+  connection: Connection;
+  error?: string;
+}) {
   const { runtime, audit } = data,
     sample = runtime.sample;
+  const synchronized = connection === "connected" && !error;
+  const healthy =
+    synchronized && sample.database_ok && sample.redis_ok !== false;
+  const status =
+    connection === "connecting"
+      ? "正在连接服务器"
+      : connection === "reconnecting"
+        ? "连接中断，正在重连"
+        : error
+          ? "运行状态同步异常"
+          : healthy
+            ? "服务运行正常"
+            : "服务依赖状态待确认";
   return (
     <>
       <DashboardHero
@@ -293,12 +321,11 @@ function Runtime({ data }: { data: DashboardInfo }) {
         }
         status={
           <span
-            className={`dashboard-health ${sample.database_ok && sample.redis_ok !== false ? "healthy" : "warning"}`}
+            className={`dashboard-health ${healthy ? "healthy" : "warning"}`}
+            role="status"
           >
             <i />
-            {sample.database_ok && sample.redis_ok !== false
-              ? "服务运行正常"
-              : "服务依赖状态待确认"}
+            {status}
           </span>
         }
         summary={[
@@ -400,11 +427,31 @@ function Runtime({ data }: { data: DashboardInfo }) {
           <Facts
             items={[
               [
+                "实时连接",
+                <span className={synchronized ? "status-good" : "status-bad"}>
+                  {connection === "connected"
+                    ? error
+                      ? "运行状态同步异常"
+                      : "连接正常"
+                    : connection === "connecting"
+                      ? "正在连接"
+                      : "连接中断，自动重连中"}
+                </span>,
+              ],
+              [
                 "PostgreSQL",
                 <span
-                  className={sample.database_ok ? "status-good" : "status-bad"}
+                  className={
+                    synchronized && sample.database_ok
+                      ? "status-good"
+                      : "status-bad"
+                  }
                 >
-                  {sample.database_ok ? "连接正常" : "未连接 / 采样中"}
+                  {!synchronized
+                    ? "待重新确认"
+                    : sample.database_ok
+                      ? "连接正常"
+                      : "未连接 / 采样中"}
                 </span>,
               ],
               ...(sample.redis_ok != null
@@ -413,17 +460,25 @@ function Runtime({ data }: { data: DashboardInfo }) {
                       "Redis",
                       <span
                         className={
-                          sample.redis_ok ? "status-good" : "status-bad"
+                          synchronized && sample.redis_ok
+                            ? "status-good"
+                            : "status-bad"
                         }
                       >
-                        {sample.redis_ok ? "连接正常" : "连接异常"}
+                        {!synchronized
+                          ? "待重新确认"
+                          : sample.redis_ok
+                            ? "连接正常"
+                            : "连接异常"}
                       </span>,
                     ] as [string, React.ReactNode],
                   ]
                 : []),
               [
                 "数据库响应",
-                sample.database_ok ? `${sample.database_latency_ms} ms` : "—",
+                synchronized && sample.database_ok
+                  ? `${sample.database_latency_ms} ms`
+                  : "—",
               ],
               [
                 "连接池",
@@ -447,8 +502,16 @@ function Runtime({ data }: { data: DashboardInfo }) {
               ["正在处理", runtime.http.inflight],
               [
                 "审计写入",
-                <span className={audit.healthy ? "status-good" : "status-bad"}>
-                  {audit.healthy ? "正常" : "待确认 / 写入异常"}
+                <span
+                  className={
+                    synchronized && audit.healthy ? "status-good" : "status-bad"
+                  }
+                >
+                  {!synchronized
+                    ? "待重新确认"
+                    : audit.healthy
+                      ? "正常"
+                      : "待确认 / 写入异常"}
                 </span>,
               ],
               ["累计写入失败", audit.write_failures],

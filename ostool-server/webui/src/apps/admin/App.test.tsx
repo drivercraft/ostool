@@ -13,15 +13,16 @@ const mocks = vi.hoisted(() => ({
   me: vi.fn(),
   connect: vi.fn(),
   disconnect: vi.fn(),
+  connection: vi.fn(),
 }));
 vi.mock("@/api/client", () => ({
   api: { authConfig: mocks.config, me: mocks.me },
 }));
 vi.mock("@/api/events", () => ({
-  site:{connect:vi.fn(),disconnect:vi.fn()},
-  useSiteResource:()=>undefined,
+  site: { connect: vi.fn(), disconnect: vi.fn() },
+  useSiteResource: () => undefined,
   admin: { connect: mocks.connect, disconnect: mocks.disconnect },
-  useConnection: () => "connected",
+  useConnection: () => mocks.connection(),
   useErrors: () => ({}),
   useResource: () => undefined,
 }));
@@ -29,7 +30,14 @@ vi.mock("@/apps/admin/pages/Overview", () => ({
   default: () => <div>本地设备总览</div>,
 }));
 beforeEach(() => {
-  vi.stubGlobal("ResizeObserver",class { observe(){} unobserve(){} disconnect(){} });
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   vi.stubGlobal(
     "matchMedia",
     vi.fn().mockImplementation((query) => ({
@@ -43,6 +51,7 @@ beforeEach(() => {
     })),
   );
   vi.clearAllMocks();
+  mocks.connection.mockReturnValue("connected");
   localStorage.clear();
   window.history.replaceState({}, "", "/admin/overview");
 });
@@ -78,6 +87,22 @@ describe("edition navigation and authentication", () => {
     ).toBeTruthy();
     expect(mocks.me).not.toHaveBeenCalled();
     await waitFor(() => expect(mocks.connect).toHaveBeenCalledTimes(1));
+  });
+  it("does not show a global disconnection banner above page content", async () => {
+    mocks.config.mockResolvedValue({
+      edition: "local",
+      enabled: false,
+      database_available: true,
+    });
+    mocks.connection.mockReturnValue("reconnecting");
+    render(<App />);
+    await screen.findByText("本地设备总览");
+    expect(document.querySelector(".admin-notices")?.textContent).toBe("");
+    expect(
+      screen.queryByText(
+        "连接暂时中断，当前内容和输入已保留，恢复后自动同步。",
+      ),
+    ).toBeNull();
   });
   it("public member cannot mount the management console or event stream", async () => {
     mocks.config.mockResolvedValue({

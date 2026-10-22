@@ -29,7 +29,7 @@ import { EditionProvider, useEdition } from "@/edition";
 import { api, type AuthUser } from "@/api/client";
 import { ThemeProvider } from "next-themes";
 import { AdminTopbar } from "@/apps/admin/components/admin-topbar";
-import { admin, useConnection, useErrors, useResource } from "@/api/events";
+import { admin, useErrors, useResource } from "@/api/events";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
@@ -158,8 +158,7 @@ function AdminEntry() {
 function AdminConsole({ user }: { user?: AuthUser }) {
   const { settings } = useSiteSettings();
   const publicEdition = useEdition().edition === "public";
-  const connection = useConnection(),
-    errors = useErrors();
+  const errors = useErrors();
   const [menu, setMenu] = useState(false);
   useEffect(() => {
     admin.connect();
@@ -276,11 +275,6 @@ function AdminConsole({ user }: { user?: AuthUser }) {
             onMenuToggle={() => setMenu((value) => !value)}
           />
           <div className="admin-notices" aria-live="polite">
-            {connection === "reconnecting" && (
-              <Notice>
-                连接暂时中断，当前内容和输入已保留，恢复后自动同步。
-              </Notice>
-            )}
             {Object.entries(errors).map(([topic, error]) => (
               <Notice key={topic}>
                 {topic}：{error}

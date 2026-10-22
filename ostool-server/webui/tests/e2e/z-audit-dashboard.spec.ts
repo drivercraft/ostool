@@ -182,3 +182,43 @@ test("dashboard, durable audit filters/export, discovery toolbar and shared them
   ).toBeTruthy();
   expect(errors).toEqual([]);
 });
+
+test("runtime health follows a lost event stream and recovers without a page banner", async ({
+  page,
+}) => {
+  await page.goto("/admin/overview");
+  const summary = page.getByRole("region", { name: "运行状态汇总" });
+  await expect(summary.getByRole("status")).toHaveText("服务运行正常", {
+    timeout: 15_000,
+  });
+  try {
+    await page.route("**/api/v1/admin/events**", (route) =>
+      route.abort("connectionfailed"),
+    );
+    // Loopback SSE connections can survive Chromium's offline emulation. Interrupt
+    // the subscription itself, then block actual reconnection requests instead.
+    await page.evaluate(async () => {
+      const eventModule = "/src/api/events.ts";
+      const { admin } = await import(eventModule);
+      admin.restart();
+    });
+    await expect(summary.getByRole("status")).toHaveText("连接中断，正在重连");
+    await expect(summary.getByRole("status")).toHaveClass(/warning/);
+    await expect(page.locator(".admin-notices [data-slot=alert]")).toHaveCount(
+      0,
+    );
+    await expect(page.getByText("待重新确认", { exact: true })).toHaveCount(2);
+    await expect(
+      page.getByText("连接中断，自动重连中", { exact: true }),
+    ).toBeVisible();
+  } finally {
+    await page.unroute("**/api/v1/admin/events**");
+  }
+  await expect(summary.getByRole("status")).toHaveText("服务运行正常", {
+    timeout: 15_000,
+  });
+  await expect(page.getByText("待重新确认", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole("status").filter({ hasText: "实时已连接" }),
+  ).toBeVisible();
+});
