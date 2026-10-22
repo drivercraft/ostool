@@ -20,6 +20,7 @@ pub struct Database {
 #[derive(Debug, Clone)]
 pub struct User {
     pub id: Uuid,
+    pub username: String,
     pub email: String,
     pub display_name: Option<String>,
     pub is_admin: bool,
@@ -40,7 +41,7 @@ pub struct AccessGrant {
 #[derive(Debug, Clone)]
 pub enum DevicePoll {
     Pending,
-    Authorized(AccessGrant),
+    Authorized(Box<AccessGrant>),
     Denied,
     Expired,
 }
@@ -167,29 +168,38 @@ impl Database {
             .fetch_one(&self.pool)
             .await?;
         if !exists {
-            self.create_user(&email, &password, Some("Administrator"), true)
-                .await?;
+            self.create_user(
+                auth.bootstrap_admin_username.as_deref().unwrap_or("admin"),
+                &email,
+                &password,
+                Some("Administrator"),
+                true,
+            )
+            .await?;
         }
         Ok(())
     }
 
     pub async fn create_user(
         &self,
+        username: &str,
         email: &str,
         password: &str,
         display_name: Option<&str>,
         is_admin: bool,
     ) -> anyhow::Result<User> {
+        let username = normalize_username(username)?;
         let email = normalize_email(email)?;
         crate::security::crypto::validate_password(password)?;
         let password_hash = hash_password_async(password.to_owned()).await?;
         let row = sqlx::query(
-            "INSERT INTO users (email, password_hash, display_name, is_admin, role_id) VALUES ($1,$2,$3,$4,CASE WHEN $4 THEN 'admin' ELSE 'member' END) RETURNING id,email,display_name,is_admin,security_version",
+            "INSERT INTO users (email, password_hash, display_name, is_admin, role_id, username) VALUES ($1,$2,$3,$4,CASE WHEN $4 THEN 'admin' ELSE 'member' END,$5) RETURNING id,username,email,display_name,is_admin,security_version",
         )
         .bind(email)
         .bind(password_hash)
         .bind(display_name)
         .bind(is_admin)
+        .bind(username)
         .fetch_one(&self.pool)
         .await
         .context("failed to create user")?;
@@ -199,7 +209,7 @@ impl Database {
     pub async fn find_user(&self, email: &str) -> anyhow::Result<Option<User>> {
         let email = normalize_email(email)?;
         let row = sqlx::query(
-            "SELECT id,email,display_name,is_admin,security_version FROM users WHERE email=$1 AND disabled=false",
+            "SELECT id,username,email,display_name,is_admin,security_version FROM users WHERE email=$1 AND disabled=false",
         )
         .bind(email)
         .fetch_optional(&self.pool)
@@ -210,13 +220,26 @@ impl Database {
 
     pub async fn user_by_id(&self, id: Uuid) -> anyhow::Result<Option<User>> {
         let row = sqlx::query(
-            "SELECT id,email,display_name,is_admin,security_version FROM users WHERE id=$1 AND disabled=false",
+            "SELECT id,username,email,display_name,is_admin,security_version FROM users WHERE id=$1 AND disabled=false",
         )
         .bind(id)
         .fetch_optional(&self.pool)
         .await
         .context("failed to query user")?;
         Ok(row.as_ref().map(user_from_row))
+    }
+
+    pub async fn login_subject(&self, identifier: &str) -> anyhow::Result<String> {
+        let identifier = identifier.trim().to_lowercase();
+        let id: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM users WHERE email=$1 OR lower(username)=$1")
+                .bind(&identifier)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(id.map_or_else(
+            || format!("identifier:{identifier}"),
+            |id| format!("user:{id}"),
+        ))
     }
 
     pub async fn authenticate_password(
@@ -228,8 +251,8 @@ impl Database {
         if password.len() > 1024 {
             return Ok(None);
         }
-        let email = normalize_email(email).unwrap_or_default();
-        let row=sqlx::query("SELECT id,email,display_name,is_admin,security_version,password_hash FROM users WHERE email=$1 AND NOT disabled").bind(email).fetch_optional(&self.pool).await?;
+        let identifier = email.trim().to_lowercase();
+        let row=sqlx::query("SELECT id,username,email,display_name,is_admin,security_version,password_hash FROM users WHERE (email=$1 OR lower(username)=$1) AND NOT disabled").bind(identifier).fetch_optional(&self.pool).await?;
         let hash = row
             .as_ref()
             .map(|row| row.try_get::<String, _>("password_hash"))
@@ -296,7 +319,7 @@ impl Database {
         if token.len() > 256 {
             return Ok(None);
         }
-        let row=sqlx::query("SELECT u.id,u.email,u.display_name,u.is_admin,u.security_version,s.id AS session_id,s.client_id,s.scope,s.step_up_until FROM oauth_sessions s JOIN users u ON u.id=s.user_id WHERE s.access_token_hash=$1 AND s.revoked_at IS NULL AND s.access_expires_at>now() AND s.absolute_expires_at>now() AND s.last_seen_at>now()-interval '1 day' AND s.security_version=u.security_version AND NOT u.disabled UNION ALL SELECT u.id,u.email,u.display_name,u.is_admin,u.security_version,NULL::uuid,'pat','board:operate',NULL::timestamptz FROM personal_access_tokens p JOIN users u ON u.id=p.user_id WHERE p.token_hash=$1 AND (p.expires_at IS NULL OR p.expires_at>now()) AND NOT u.disabled LIMIT 1")
+        let row=sqlx::query("SELECT u.id,u.username,u.email,u.display_name,u.is_admin,u.security_version,s.id AS session_id,s.client_id,s.scope,s.step_up_until FROM oauth_sessions s JOIN users u ON u.id=s.user_id WHERE s.access_token_hash=$1 AND s.revoked_at IS NULL AND s.access_expires_at>now() AND s.absolute_expires_at>now() AND s.last_seen_at>now()-interval '1 day' AND s.security_version=u.security_version AND NOT u.disabled UNION ALL SELECT u.id,u.username,u.email,u.display_name,u.is_admin,u.security_version,NULL::uuid,'pat','board:operate',NULL::timestamptz FROM personal_access_tokens p JOIN users u ON u.id=p.user_id WHERE p.token_hash=$1 AND (p.expires_at IS NULL OR p.expires_at>now()) AND NOT u.disabled LIMIT 1")
             .bind(token_hash(token)).fetch_optional(&self.pool).await?;
         let Some(row) = row else { return Ok(None) };
         let session_id: Option<Uuid> = row.try_get("session_id")?;
@@ -397,7 +420,7 @@ impl Database {
         if alive.is_none() {
             return Ok(None);
         }
-        let row=sqlx::query("SELECT s.*,u.email,u.display_name,u.is_admin,u.security_version AS current_version FROM oauth_sessions s JOIN users u ON u.id=s.user_id WHERE s.refresh_token_hash=$1 AND NOT u.disabled FOR UPDATE OF s").bind(token_hash(token)).fetch_optional(&mut *tx).await?;
+        let row=sqlx::query("SELECT s.*,u.username,u.email,u.display_name,u.is_admin,u.security_version AS current_version FROM oauth_sessions s JOIN users u ON u.id=s.user_id WHERE s.refresh_token_hash=$1 AND NOT u.disabled FOR UPDATE OF s").bind(token_hash(token)).fetch_optional(&mut *tx).await?;
         let Some(row) = row else { return Ok(None) };
         if client.is_some_and(|client| {
             row.try_get::<String, _>("client_id")
@@ -425,6 +448,7 @@ impl Database {
         }
         let user = User {
             id: row.try_get("user_id")?,
+            username: row.try_get("username")?,
             email: row.try_get("email")?,
             display_name: row.try_get("display_name")?,
             is_admin: row.try_get("is_admin")?,
@@ -511,7 +535,7 @@ impl Database {
         device_code: &str,
         auth: &AuthConfig,
     ) -> anyhow::Result<DevicePoll> {
-        let row = sqlx::query("SELECT d.*,u.id as uid,u.email,u.display_name,u.is_admin,u.security_version FROM oauth_device_codes d LEFT JOIN users u ON u.id=d.user_id WHERE d.device_code_hash=$1")
+        let row = sqlx::query("SELECT d.*,u.id as uid,u.username,u.email,u.display_name,u.is_admin,u.security_version FROM oauth_device_codes d LEFT JOIN users u ON u.id=d.user_id WHERE d.device_code_hash=$1")
             .bind(token_hash(device_code)).fetch_optional(&self.pool).await?;
         let Some(row) = row else {
             return Ok(DevicePoll::Expired);
@@ -544,22 +568,24 @@ impl Database {
         }
         let user = User {
             id: user_id,
+            username: row.try_get("username")?,
             email: row.try_get("email")?,
             display_name: row.try_get("display_name")?,
             is_admin: row.try_get("is_admin")?,
             security_version: row.try_get("security_version")?,
         };
         let scope: String = row.try_get("scope")?;
-        Ok(DevicePoll::Authorized(
+        Ok(DevicePoll::Authorized(Box::new(
             self.issue_grant(user, &row.try_get::<String, _>("client_id")?, &scope, auth)
                 .await?,
-        ))
+        )))
     }
 }
 
 fn user_from_row(row: &sqlx::postgres::PgRow) -> User {
     User {
         id: row.try_get("id").expect("user id"),
+        username: row.try_get("username").expect("username"),
         email: row.try_get("email").expect("user email"),
         display_name: row.try_get("display_name").ok(),
         is_admin: row.try_get("is_admin").unwrap_or(false),
@@ -567,6 +593,19 @@ fn user_from_row(row: &sqlx::postgres::PgRow) -> User {
             .try_get("security_version")
             .expect("user security version"),
     }
+}
+
+pub fn normalize_username(value: &str) -> anyhow::Result<String> {
+    let value = value.trim().to_ascii_lowercase();
+    anyhow::ensure!(
+        (3..=40).contains(&value.len())
+            && value
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+            && value.as_bytes()[0].is_ascii_alphanumeric(),
+        "用户名需为 3–40 个字母、数字、下划线或短横线，并以字母或数字开头"
+    );
+    Ok(value)
 }
 
 pub(crate) fn normalize_email(email: &str) -> anyhow::Result<String> {
@@ -647,4 +686,26 @@ async fn password_slot() -> anyhow::Result<tokio::sync::SemaphorePermit<'static>
     static SLOTS: std::sync::LazyLock<tokio::sync::Semaphore> =
         std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(4));
     Ok(tokio::time::timeout(std::time::Duration::from_secs(3), SLOTS.acquire()).await??)
+}
+
+#[cfg(test)]
+mod username_tests {
+    use super::normalize_username;
+    #[test]
+    fn usernames_have_a_single_case_and_reject_invalid_identifiers() {
+        assert_eq!(normalize_username(" Alice_01 ").unwrap(), "alice_01");
+        for invalid in [
+            "",
+            "ab",
+            "bad name",
+            "bad@email",
+            "../user",
+            "_user",
+            "张三",
+            "a/b",
+        ] {
+            assert!(normalize_username(invalid).is_err(), "{invalid}");
+        }
+        assert!(normalize_username(&"a".repeat(41)).is_err());
+    }
 }

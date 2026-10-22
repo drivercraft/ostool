@@ -121,7 +121,10 @@ describe("registration", () => {
     );
     render(<PublicApp />);
     const user = userEvent.setup();
-    await user.type(await screen.findByLabelText("邮箱"), "member@test.local");
+    await user.type(
+      await screen.findByLabelText("用户名或邮箱"),
+      "member@test.local",
+    );
     await user.type(screen.getByLabelText("密码"), "member-password-123");
     await user.type(await screen.findByLabelText("图形验证码"), "AB29Q");
     await user.click(screen.getByRole("button", { name: "登录" }));
@@ -145,7 +148,10 @@ describe("registration", () => {
     });
     const user = userEvent.setup();
     render(<PublicApp />);
-    await user.type(await screen.findByLabelText("邮箱"), "admin@test.local");
+    await user.type(
+      await screen.findByLabelText("用户名或邮箱"),
+      "admin@test.local",
+    );
     await user.type(screen.getByLabelText("密码"), "admin-password-123");
     await user.type(await screen.findByLabelText("图形验证码"), "AB29Q");
     await user.click(screen.getByRole("button", { name: "登录" }));
@@ -165,7 +171,7 @@ describe("registration", () => {
     });
     localStorage.setItem("ostool.access_token", "stale-token");
     render(<PublicApp />);
-    await screen.findByRole("heading", { name: /让每一块开发板/ });
+    await screen.findByRole("heading", { name: /连接每一块开发板/ });
     expect(window.location.pathname).toBe("/");
     expect(screen.queryByRole("link", { name: "免费注册" })).toBeNull();
     expect(screen.queryByRole("link", { name: "登录" })).toBeNull();
@@ -188,7 +194,8 @@ describe("registration", () => {
     window.history.replaceState({}, "", "/register");
     const user = userEvent.setup();
     render(<PublicApp />);
-    await user.type(await screen.findByLabelText("邮箱"), "member@test.local");
+    await user.type(await screen.findByLabelText("用户名"), "member");
+    await user.type(screen.getByLabelText("邮箱"), "member@test.local");
     await user.type(screen.getByLabelText("显示名称"), "Member");
     await user.type(screen.getByLabelText("密码"), "member-password-123");
     await user.type(screen.getByLabelText("确认密码"), "different-password");
@@ -211,6 +218,7 @@ describe("registration", () => {
     await user.click(screen.getByRole("button", { name: /创建账号/ }));
     await waitFor(() => expect(window.location.pathname).toBe("/account"));
     expect(mocks.register).toHaveBeenCalledWith(
+      "member",
       "member@test.local",
       "member-password-123",
       "Member",
@@ -300,7 +308,10 @@ describe("CLI device authorization", () => {
     window.history.replaceState({}, "", "/login?user_code=ABCD-EFGH");
     const user = userEvent.setup();
     render(<PublicApp />);
-    await user.type(await screen.findByLabelText("邮箱"), "member@test.local");
+    await user.type(
+      await screen.findByLabelText("用户名或邮箱"),
+      "member@test.local",
+    );
     await user.type(screen.getByLabelText("密码"), "member-password-123");
     await user.type(await screen.findByLabelText("图形验证码"), "AB29Q");
     const submit = screen.getByRole("button", { name: "登录并批准" });

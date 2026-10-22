@@ -43,7 +43,7 @@ export default function Users() {
     (u) =>
       (!roleFilter || u.role_id === roleFilter) &&
       (!statusFilter || String(u.disabled) === statusFilter) &&
-      `${u.email} ${u.display_name ?? ""}`
+      `${u.username} ${u.email} ${u.display_name ?? ""}`
         .toLowerCase()
         .includes(search.toLowerCase()),
   );
@@ -51,6 +51,7 @@ export default function Users() {
     setEditor({
       id: user?.id,
       draft: {
+        username: user?.username ?? "",
         email: user?.email ?? "",
         display_name: user?.display_name ?? "",
         role_id: user?.role_id ?? "member",
@@ -65,7 +66,7 @@ export default function Users() {
   );
   return (
     <>
-      {!deployment?.database_connected && (
+      {deployment && !deployment.database_connected && (
         <Notice>用户管理需要连接 PostgreSQL。</Notice>
       )}
       <PagePanel
@@ -85,7 +86,7 @@ export default function Users() {
             <TextField
               label="搜索用户"
               value={search}
-              placeholder="邮箱或显示名称"
+              placeholder="用户名、邮箱或显示名称"
               onValue={setSearch}
             />
             <SelectField
@@ -127,7 +128,8 @@ export default function Users() {
           {pagination.rows.map((user) => (
             <Row key={user.id}>
               <Cell>
-                <strong>{user.display_name || "未设置名称"}</strong>
+                <strong>{user.username}</strong>
+                {user.display_name && <small>{user.display_name}</small>}
                 <small>{user.email}</small>
               </Cell>
               <Cell>
@@ -183,7 +185,7 @@ export default function Users() {
         <DialogContent>
           <DialogTitle>{editor?.id ? "编辑用户" : "创建用户"}</DialogTitle>
           <DialogDescription>
-            修改角色、密码或状态会撤销该用户已有的登录令牌。不能禁用、删除自己或移除自己的管理权限。
+            修改用户名、角色、密码或状态会撤销该用户已有的登录令牌。不能禁用、删除自己或移除自己的管理权限。
           </DialogDescription>
           {editor && (
             <form
@@ -203,6 +205,17 @@ export default function Users() {
               }}
               className="management-form"
             >
+              <TextField
+                label="用户名"
+                required
+                minLength={3}
+                maxLength={40}
+                pattern="[A-Za-z0-9][A-Za-z0-9_-]{2,39}"
+                placeholder="3–40 位字母、数字、下划线或短横线"
+                autoComplete="off"
+                value={editor.draft.username}
+                onValue={(username) => patch({ username })}
+              />
               <TextField
                 label="邮箱"
                 type="email"

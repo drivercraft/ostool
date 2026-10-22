@@ -1,4 +1,8 @@
-import { authSurface, clearBrowserSession } from "@/auth-session";
+import {
+  authSurface,
+  clearBrowserSession,
+  readAuthBootstrap,
+} from "@/auth-session";
 export { clearBrowserSession, notifyAuthChanged } from "@/auth-session";
 import type { UserInput, RoleInput } from "@/types/api";
 import type {
@@ -31,7 +35,8 @@ async function readJsonBody<T>(response: Response): Promise<T | undefined> {
   return JSON.parse(text) as T;
 }
 
-let runtimeEdition: "local" | "public" = "local";
+let runtimeEdition: "local" | "public" =
+  readAuthBootstrap()?.edition ?? "local";
 export const isPublicEdition = () => runtimeEdition === "public";
 export class ApiRequestError extends Error {
   constructor(
@@ -342,6 +347,7 @@ export const api = {
     });
   },
   register(
+    username: string,
     email: string,
     password: string,
     displayName: string,
@@ -352,6 +358,7 @@ export const api = {
     return request<LoginResult>("/api/v1/auth/register", {
       method: "POST",
       bodyJson: {
+        username,
         email,
         password,
         display_name: displayName || null,
@@ -646,6 +653,7 @@ export interface EmailChallenge {
 
 export interface AuthUser {
   id: string;
+  username: string;
   email: string;
   display_name: string | null;
   is_admin: boolean;

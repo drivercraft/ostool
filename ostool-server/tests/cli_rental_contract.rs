@@ -144,6 +144,7 @@ async fn website_rentals_authorize_real_ostool_clients() -> Result<()> {
         .build()?;
     let member = database
         .create_user(
+            "contract",
             "contract@test.local",
             "contract-member-password",
             None,
@@ -151,10 +152,17 @@ async fn website_rentals_authorize_real_ostool_clients() -> Result<()> {
         )
         .await?;
     let admin = database
-        .create_user("admin@contract.test", "contract-admin-password", None, true)
+        .create_user(
+            "admin",
+            "admin@contract.test",
+            "contract-admin-password",
+            None,
+            true,
+        )
         .await?;
     let other = database
         .create_user(
+            "other",
             "other@contract.test",
             "contract-other-password",
             None,

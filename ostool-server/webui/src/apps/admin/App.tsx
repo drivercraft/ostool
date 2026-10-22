@@ -33,7 +33,7 @@ import { admin, useErrors, useResource } from "@/api/events";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
-import { Notice } from "@/components/forms";
+import { Notice, ListDataLoadingContext } from "@/components/forms";
 const Boards = lazy(() => import("@/apps/admin/pages/Boards"));
 const BoardEditor = lazy(() => import("@/apps/admin/pages/BoardEditor"));
 const Overview = lazy(() => import("@/apps/admin/pages/Overview"));
@@ -119,12 +119,7 @@ function AdminEntry() {
     };
   }, [config, loginPage, requireAdminMfa]);
   if (loginPage && config.edition === "public") return <AdminLogin />;
-  if (gate === "checking")
-    return (
-      <div className="admin-gate">
-        <Skeleton className="h-24 w-80" />
-      </div>
-    );
+  if (gate === "checking") return <AdminConsole pending />;
   if (gate !== "allowed")
     return (
       <div className="admin-gate">
@@ -155,244 +150,271 @@ function AdminEntry() {
     );
   return <AdminConsole user={currentUser} />;
 }
-function AdminConsole({ user }: { user?: AuthUser }) {
+function AdminConsole({
+  user,
+  pending = false,
+}: {
+  user?: AuthUser;
+  pending?: boolean;
+}) {
   const { settings } = useSiteSettings();
   const publicEdition = useEdition().edition === "public";
   const errors = useErrors();
+  const listLoading = useResource("server") === undefined && !errors.server;
   const [menu, setMenu] = useState(false);
   useEffect(() => {
+    if (pending) return;
     admin.connect();
     return admin.disconnect;
-  }, []);
+  }, [pending]);
   return (
-    <BrowserRouter basename="/admin">
-      <div className="app-shell">
-        <aside
-          id="admin-sidebar"
-          className={menu ? "sidebar expanded" : "sidebar"}
-        >
-          <NavLink to="/overview" className="brand">
-            <span className="logo-mark">
-              {settings.logo_url ? (
-                <img
-                  src={settings.logo_url}
-                  alt=""
-                  className="size-full object-contain"
-                />
-              ) : (
-                <CircuitBoardIcon size={17} />
-              )}
-            </span>
-            <span>
-              <strong>{settings.short_name}</strong>
-              <small>{settings.tagline}</small>
-            </span>
-          </NavLink>
-          <nav aria-label="主导航">
-            <SidebarGroup
-              label="仪表盘"
-              icon={<LayoutDashboardIcon />}
-              paths={["/overview", "/jobs", "/operations"]}
-            >
-              {[
-                ["/overview", "运行状态"],
-                ["/jobs", "后台任务"],
-                ["/operations", "运营状态"],
-              ].map(([path, label]) => (
-                <NavLink key={path} to={path} onClick={() => setMenu(false)}>
-                  <span className="admin-nav-dot" aria-hidden="true" />
-                  <span>{label}</span>
-                </NavLink>
-              ))}
-            </SidebarGroup>
-            <SidebarGroup
-              label="设备管理"
-              icon={<CircuitBoardIcon />}
-              paths={["/boards", "/dtbs", "/sessions"]}
-            >
-              {boardNavigation.map(([path, label]) => (
-                <NavLink
-                  key={path}
-                  to={`/${path}`}
-                  onClick={() => setMenu(false)}
-                >
-                  <span className="admin-nav-dot" aria-hidden="true" />
-                  <span>{label}</span>
-                </NavLink>
-              ))}
-            </SidebarGroup>
-            {publicEdition && (
-              <>
-                <SidebarGroup
-                  label="租赁管理"
-                  icon={<CalendarClockIcon />}
-                  paths={["/rentals", "/rental-requests"]}
-                >
-                  <NavLink to="/rentals" onClick={() => setMenu(false)}>
+    <ListDataLoadingContext.Provider value={listLoading}>
+      <BrowserRouter basename="/admin">
+        <div className="app-shell">
+          <aside
+            id="admin-sidebar"
+            className={menu ? "sidebar expanded" : "sidebar"}
+          >
+            <NavLink to="/overview" className="brand">
+              <span className="logo-mark">
+                {settings.logo_url ? (
+                  <img
+                    src={settings.logo_url}
+                    alt=""
+                    className="size-full object-contain"
+                  />
+                ) : (
+                  <CircuitBoardIcon size={17} />
+                )}
+              </span>
+              <span>
+                <strong>{settings.short_name}</strong>
+                <small>{settings.tagline}</small>
+              </span>
+            </NavLink>
+            <nav aria-label="主导航">
+              <SidebarGroup
+                label="仪表盘"
+                icon={<LayoutDashboardIcon />}
+                paths={["/overview", "/jobs", "/operations"]}
+              >
+                {[
+                  ["/overview", "运行状态"],
+                  ["/jobs", "后台任务"],
+                  ["/operations", "运营状态"],
+                ].map(([path, label]) => (
+                  <NavLink key={path} to={path} onClick={() => setMenu(false)}>
                     <span className="admin-nav-dot" aria-hidden="true" />
-                    <span>租赁列表</span>
+                    <span>{label}</span>
                   </NavLink>
-                  <NavLink to="/rental-requests" onClick={() => setMenu(false)}>
+                ))}
+              </SidebarGroup>
+              <SidebarGroup
+                label="设备管理"
+                icon={<CircuitBoardIcon />}
+                paths={["/boards", "/dtbs", "/sessions"]}
+              >
+                {boardNavigation.map(([path, label]) => (
+                  <NavLink
+                    key={path}
+                    to={`/${path}`}
+                    onClick={() => setMenu(false)}
+                  >
                     <span className="admin-nav-dot" aria-hidden="true" />
-                    <span>租赁申请</span>
+                    <span>{label}</span>
                   </NavLink>
-                </SidebarGroup>
-                <SidebarGroup
-                  label="用户管理"
-                  icon={<UserCircleIcon />}
-                  paths={["/users"]}
-                >
-                  {userNavigation.map(([path, label]) => (
+                ))}
+              </SidebarGroup>
+              {publicEdition && (
+                <>
+                  <SidebarGroup
+                    label="租赁管理"
+                    icon={<CalendarClockIcon />}
+                    paths={["/rentals", "/rental-requests"]}
+                  >
+                    <NavLink to="/rentals" onClick={() => setMenu(false)}>
+                      <span className="admin-nav-dot" aria-hidden="true" />
+                      <span>租赁列表</span>
+                    </NavLink>
                     <NavLink
-                      end={path === "users"}
-                      key={path}
-                      to={`/${path}`}
+                      to="/rental-requests"
                       onClick={() => setMenu(false)}
                     >
                       <span className="admin-nav-dot" aria-hidden="true" />
-                      <span>{label}</span>
+                      <span>租赁申请</span>
                     </NavLink>
-                  ))}
-                </SidebarGroup>
-              </>
-            )}
-            <NavLink to="/audits" onClick={() => setMenu(false)}>
-              <ScrollTextIcon />
-              审计日志
-            </NavLink>
-          </nav>
-          <nav className="admin-bottom-nav" aria-label="系统导航">
-            <NavLink to="/settings" onClick={() => setMenu(false)}>
-              <SettingsIcon />
-              系统设置
-            </NavLink>
-          </nav>
-        </aside>
-        <main>
-          <AdminTopbar
-            user={user}
-            menuOpen={menu}
-            onMenuToggle={() => setMenu((value) => !value)}
+                  </SidebarGroup>
+                  <SidebarGroup
+                    label="用户管理"
+                    icon={<UserCircleIcon />}
+                    paths={["/users"]}
+                  >
+                    {userNavigation.map(([path, label]) => (
+                      <NavLink
+                        end={path === "users"}
+                        key={path}
+                        to={`/${path}`}
+                        onClick={() => setMenu(false)}
+                      >
+                        <span className="admin-nav-dot" aria-hidden="true" />
+                        <span>{label}</span>
+                      </NavLink>
+                    ))}
+                  </SidebarGroup>
+                </>
+              )}
+              <NavLink to="/audits" onClick={() => setMenu(false)}>
+                <ScrollTextIcon />
+                审计日志
+              </NavLink>
+            </nav>
+            <nav className="admin-bottom-nav" aria-label="系统导航">
+              <NavLink to="/settings" onClick={() => setMenu(false)}>
+                <SettingsIcon />
+                系统设置
+              </NavLink>
+            </nav>
+          </aside>
+          <main>
+            <AdminTopbar
+              user={user}
+              menuOpen={menu}
+              onMenuToggle={() => setMenu((value) => !value)}
+            />
+            <div className="admin-notices" aria-live="polite">
+              {Object.entries(errors).map(([topic, error]) => (
+                <Notice key={topic}>
+                  {topic}：{error}
+                </Notice>
+              ))}
+            </div>
+            <div className="admin-workspace" aria-busy={pending}>
+              {pending ? (
+                <PageLoading />
+              ) : (
+                <Suspense fallback={<PageLoading />}>
+                  <Routes>
+                    <Route
+                      path="/"
+                      element={<Navigate replace to="/overview" />}
+                    />
+                    <Route path="/overview" element={<Overview />} />
+                    <Route path="/jobs" element={<Overview view="jobs" />} />
+                    <Route
+                      path="/operations"
+                      element={<Overview view="operations" />}
+                    />
+                    <Route path="/audits" element={<Audits />} />
+                    <Route
+                      path="/dashboard"
+                      element={<Navigate replace to="/overview" />}
+                    />
+                    <Route path="/boards" element={<Boards />} />
+                    <Route path="/boards/new" element={<BoardEditor />} />
+                    <Route path="/boards/:boardId" element={<BoardEditor />} />
+                    <Route path="/dtbs" element={<Dtbs />} />
+                    <Route path="/sessions" element={<Sessions />} />
+                    <Route
+                      path="/tftp"
+                      element={<Navigate replace to="/settings?tab=tftp" />}
+                    />
+                    <Route
+                      path="/server"
+                      element={<Navigate replace to="/settings?tab=server" />}
+                    />
+                    <Route path="/settings" element={<Settings />} />
+                    <Route
+                      path="/users"
+                      element={
+                        publicEdition ? (
+                          <Users />
+                        ) : (
+                          <Navigate replace to="/overview" />
+                        )
+                      }
+                    />
+                    <Route
+                      path="/users/roles"
+                      element={
+                        publicEdition ? (
+                          <Roles />
+                        ) : (
+                          <Navigate replace to="/overview" />
+                        )
+                      }
+                    />
+                    <Route
+                      path="/account"
+                      element={
+                        publicEdition ? (
+                          <PagePanel>
+                            <SecuritySettings />
+                          </PagePanel>
+                        ) : (
+                          <Navigate replace to="/overview" />
+                        )
+                      }
+                    />
+                    <Route
+                      path="/rental-requests"
+                      element={
+                        publicEdition ? (
+                          <RentalRequests />
+                        ) : (
+                          <Navigate replace to="/overview" />
+                        )
+                      }
+                    />
+                    <Route
+                      path="/rentals/new"
+                      element={
+                        publicEdition ? (
+                          <RentalEditor />
+                        ) : (
+                          <Navigate replace to="/overview" />
+                        )
+                      }
+                    />
+                    <Route
+                      path="/rentals/:rentalId"
+                      element={
+                        publicEdition ? (
+                          <RentalEditor />
+                        ) : (
+                          <Navigate replace to="/overview" />
+                        )
+                      }
+                    />
+                    <Route
+                      path="/rentals"
+                      element={
+                        publicEdition ? (
+                          <Rentals />
+                        ) : (
+                          <Navigate replace to="/overview" />
+                        )
+                      }
+                    />
+                    <Route
+                      path="*"
+                      element={
+                        <Notice>页面不存在。请选择左侧管理模块。</Notice>
+                      }
+                    />
+                  </Routes>
+                </Suspense>
+              )}
+            </div>
+          </main>
+          <Toaster
+            position="top-right"
+            duration={2500}
+            richColors
+            closeButton
           />
-          <div className="admin-notices" aria-live="polite">
-            {Object.entries(errors).map(([topic, error]) => (
-              <Notice key={topic}>
-                {topic}：{error}
-              </Notice>
-            ))}
-          </div>
-          <div className="admin-workspace">
-            <Suspense fallback={<Skeleton className="h-48 w-full" />}>
-              <Routes>
-                <Route path="/" element={<Navigate replace to="/overview" />} />
-                <Route path="/overview" element={<Overview />} />
-                <Route path="/jobs" element={<Overview view="jobs" />} />
-                <Route
-                  path="/operations"
-                  element={<Overview view="operations" />}
-                />
-                <Route path="/audits" element={<Audits />} />
-                <Route
-                  path="/dashboard"
-                  element={<Navigate replace to="/overview" />}
-                />
-                <Route path="/boards" element={<Boards />} />
-                <Route path="/boards/new" element={<BoardEditor />} />
-                <Route path="/boards/:boardId" element={<BoardEditor />} />
-                <Route path="/dtbs" element={<Dtbs />} />
-                <Route path="/sessions" element={<Sessions />} />
-                <Route
-                  path="/tftp"
-                  element={<Navigate replace to="/settings?tab=tftp" />}
-                />
-                <Route
-                  path="/server"
-                  element={<Navigate replace to="/settings?tab=server" />}
-                />
-                <Route path="/settings" element={<Settings />} />
-                <Route
-                  path="/users"
-                  element={
-                    publicEdition ? (
-                      <Users />
-                    ) : (
-                      <Navigate replace to="/overview" />
-                    )
-                  }
-                />
-                <Route
-                  path="/users/roles"
-                  element={
-                    publicEdition ? (
-                      <Roles />
-                    ) : (
-                      <Navigate replace to="/overview" />
-                    )
-                  }
-                />
-                <Route
-                  path="/account"
-                  element={
-                    publicEdition ? (
-                      <PagePanel>
-                        <SecuritySettings />
-                      </PagePanel>
-                    ) : (
-                      <Navigate replace to="/overview" />
-                    )
-                  }
-                />
-                <Route
-                  path="/rental-requests"
-                  element={
-                    publicEdition ? (
-                      <RentalRequests />
-                    ) : (
-                      <Navigate replace to="/overview" />
-                    )
-                  }
-                />
-                <Route
-                  path="/rentals/new"
-                  element={
-                    publicEdition ? (
-                      <RentalEditor />
-                    ) : (
-                      <Navigate replace to="/overview" />
-                    )
-                  }
-                />
-                <Route
-                  path="/rentals/:rentalId"
-                  element={
-                    publicEdition ? (
-                      <RentalEditor />
-                    ) : (
-                      <Navigate replace to="/overview" />
-                    )
-                  }
-                />
-                <Route
-                  path="/rentals"
-                  element={
-                    publicEdition ? (
-                      <Rentals />
-                    ) : (
-                      <Navigate replace to="/overview" />
-                    )
-                  }
-                />
-                <Route
-                  path="*"
-                  element={<Notice>页面不存在。请选择左侧管理模块。</Notice>}
-                />
-              </Routes>
-            </Suspense>
-          </div>
-        </main>
-        <Toaster position="top-right" duration={2500} richColors closeButton />
-      </div>
-    </BrowserRouter>
+        </div>
+      </BrowserRouter>
+    </ListDataLoadingContext.Provider>
   );
 }
 
@@ -422,5 +444,20 @@ function SidebarGroup({
       </summary>
       <div>{children}</div>
     </details>
+  );
+}
+
+function PageLoading() {
+  return (
+    <PagePanel footer={<span className="panel-status">正在加载数据…</span>}>
+      <div className="page-loading" role="status" aria-label="正在加载页面">
+        <div className="startup-metrics">
+          {[0, 1, 2].map((key) => (
+            <Skeleton key={key} className="h-28 w-full" />
+          ))}
+        </div>
+        <Skeleton className="h-80 w-full" />
+      </div>
+    </PagePanel>
   );
 }

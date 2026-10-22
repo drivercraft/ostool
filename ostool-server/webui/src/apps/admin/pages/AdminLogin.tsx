@@ -82,10 +82,10 @@ export default function AdminLogin() {
         {!challenge ? (
           <>
             <TextField
-              label="邮箱"
-              type="email"
+              label="用户名或邮箱"
+              type="text"
               autoComplete="username"
-              placeholder="you@company.com"
+              placeholder="输入用户名或邮箱"
               hint=""
               required
               value={email}

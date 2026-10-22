@@ -1,3 +1,19 @@
+import type { AuthConfig } from "@/api/client";
+export function readAuthBootstrap(): AuthConfig | undefined {
+  const element = document.getElementById("ostool-bootstrap");
+  if (!element?.textContent) return;
+  try {
+    const value = JSON.parse(element.textContent) as AuthConfig;
+    if (
+      ["local", "public"].includes(value.edition) &&
+      typeof value.enabled === "boolean"
+    )
+      return value;
+  } catch {
+    /* The regular API remains available if HTML bootstrap data is absent. */
+  }
+}
+
 export type AuthSurface = "admin" | "website";
 let applicationSurface: AuthSurface | undefined;
 export function configureAuthSurface(surface: AuthSurface) {

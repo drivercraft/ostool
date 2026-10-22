@@ -134,7 +134,7 @@ pub(crate) async fn projection(state: &AppState, user: Uuid) -> Result<Value, Ap
         .filter(|row| catalog.iter().any(|board| board["id"] == row["board_id"]))
         .collect();
     Ok(
-        json!({"profile":{"id":profile.id,"email":profile.email,"display_name":profile.display_name,"is_admin":profile.is_admin},"catalog":catalog,"availability":availability,"my_rentals":rentals::list_for(state,Some(user)).await?,"my_requests":list_requests(state,Some(user)).await?,"personal_tokens":tokens}),
+        json!({"profile":{"id":profile.id,"username":profile.username,"email":profile.email,"display_name":profile.display_name,"is_admin":profile.is_admin},"catalog":catalog,"availability":availability,"my_rentals":rentals::list_for(state,Some(user)).await?,"my_requests":list_requests(state,Some(user)).await?,"personal_tokens":tokens}),
     )
 }
 

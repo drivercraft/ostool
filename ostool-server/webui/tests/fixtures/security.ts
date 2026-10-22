@@ -110,10 +110,14 @@ export async function apiRegister(
   return request.post(base + "/api/v1/auth/register", {
     headers: { origin: base },
     data: {
+      username: email
+        .split("@")[0]
+        .replace(/[^a-zA-Z0-9_-]/g, "_")
+        .slice(0, 40),
       email,
       password,
       display_name,
-      legal:{accepted:true,terms_version:1,privacy_version:1},
+      legal: { accepted: true, terms_version: 1, privacy_version: 1 },
       verification: await proof(request, base, "register"),
     },
   });

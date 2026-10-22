@@ -84,7 +84,7 @@ test("public member profile, rental request approval, theme and password lifecyc
       .getByRole("menuitemradio", { name: "明亮", exact: true })
       .click();
     await page.goto(`${base}/login`);
-    await page.getByLabel("邮箱", { exact: true }).fill(email);
+    await page.getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true }).fill(email);
     await page.getByLabel("密码", { exact: true }).fill("member-password-123");
     await solveCaptcha(page);
     await page.getByRole("button", { name: "登录", exact: true }).click();
@@ -147,7 +147,9 @@ test("public member profile, rental request approval, theme and password lifecyc
       fullPage: true,
     });
     await admin.goto(`${base}/admin/rental-requests`);
-    await admin.getByLabel("邮箱", { exact: true }).fill(adminEmail);
+    await admin
+      .getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true })
+      .fill(adminEmail);
     await admin.getByLabel("密码", { exact: true }).fill(adminPassword);
     await solveCaptcha(admin);
     await admin.getByRole("button", { name: "登录", exact: true }).click();
@@ -200,7 +202,7 @@ test("public member profile, rental request approval, theme and password lifecyc
       .fill("changed-member-password-123");
     await page.getByRole("button", { name: "更新密码" }).click();
     await expect(page).toHaveURL(`${base}/login?password_changed=1`);
-    await page.getByLabel("邮箱", { exact: true }).fill(email);
+    await page.getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true }).fill(email);
     await page
       .getByLabel("密码", { exact: true })
       .fill("changed-member-password-123");

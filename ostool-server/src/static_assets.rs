@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Extension, Path},
+    extract::{Extension, Path, State},
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -12,33 +12,37 @@ use rust_embed::RustEmbed;
 struct WebUiAssets;
 
 pub async fn serve_admin_index(
+    State(state): State<crate::AppState>,
     Extension(nonce): Extension<crate::security::web::CspNonce>,
 ) -> Response {
-    asset_response("admin/index.html".into(), Some(&nonce.0))
+    index_response("admin/index.html", &state, &nonce.0).await
 }
 
 pub async fn serve_admin_history(
     Path(_path): Path<String>,
+    state: State<crate::AppState>,
     nonce: Extension<crate::security::web::CspNonce>,
 ) -> Response {
-    serve_admin_index(nonce).await
+    serve_admin_index(state, nonce).await
 }
 
 pub async fn serve_site_index(
+    State(state): State<crate::AppState>,
     Extension(nonce): Extension<crate::security::web::CspNonce>,
 ) -> Response {
-    asset_response("index.html".into(), Some(&nonce.0))
+    index_response("index.html", &state, &nonce.0).await
 }
 
 pub async fn serve_site_history(
     Path(_path): Path<String>,
+    state: State<crate::AppState>,
     nonce: Extension<crate::security::web::CspNonce>,
 ) -> Response {
-    serve_site_index(nonce).await
+    serve_site_index(state, nonce).await
 }
 
 pub async fn serve_admin_asset(Path(path): Path<String>) -> Response {
-    asset_response(format!("assets/{path}"), None)
+    asset_response(format!("assets/{path}"), None, None)
 }
 
 #[cfg(test)]
@@ -48,17 +52,30 @@ pub(crate) fn first_asset_path() -> Option<String> {
         .find(|name| name.starts_with("assets/"))
 }
 
-fn asset_response(path: String, nonce: Option<&str>) -> Response {
+async fn index_response(path: &str, state: &crate::AppState, nonce: &str) -> Response {
+    let config = crate::api::auth::public_config(&*state.config.read().await);
+    asset_response(path.into(), Some(nonce), Some(config))
+}
+
+fn asset_response(
+    path: String,
+    nonce: Option<&str>,
+    config: Option<serde_json::Value>,
+) -> Response {
     let Some(content) = WebUiAssets::get(&path) else {
         return (StatusCode::NOT_FOUND, "asset not found").into_response();
     };
 
     let mime = from_path(&path).first_or_octet_stream();
     let bytes = if let Some(nonce) = nonce {
+        let bootstrap = config.map(|value| {
+            let json = value.to_string().replace('<', "\\u003c");
+            format!("<script type=\"application/json\" id=\"ostool-bootstrap\" nonce=\"{nonce}\">{json}</script>")
+        }).unwrap_or_default();
         String::from_utf8_lossy(&content.data)
             .replacen(
                 "<head>",
-                &format!("<head><meta name=\"csp-nonce\" content=\"{nonce}\">"),
+                &format!("<head><meta name=\"csp-nonce\" content=\"{nonce}\">{bootstrap}"),
                 1,
             )
             .into_bytes()

@@ -143,10 +143,10 @@ async fn seed_identity(db: &Database) -> anyhow::Result<()> {
             2 => None,
             _ => Some(format!("演示用户 {:02}", index + 1)),
         };
-        sqlx::query("INSERT INTO users (id,email,password_hash,display_name,is_admin,disabled,role_id,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING")
+        sqlx::query("INSERT INTO users (id,email,password_hash,display_name,is_admin,disabled,role_id,created_at,username) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING")
             .bind(demo_uuid(1, index)).bind(format!("demo{:02}@example.test", index + 1)).bind(&password)
             .bind(display_name).bind(index % 6 == 0).bind(index >= 30).bind(format!("demo-role-{}", index % 6))
-            .bind(Utc::now() - chrono::Duration::days(index as i64 * 3)).execute(&mut *tx).await?;
+            .bind(Utc::now() - chrono::Duration::days(index as i64 * 3)).bind(format!("demo{:02}",index+1)).execute(&mut *tx).await?;
     }
     // Fixed IDs and windows are inserted once. Existing bookings/passwords/edits
     // are retained on repeated imports. Run while the server is stopped.

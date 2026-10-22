@@ -45,6 +45,7 @@ pub struct RevokeForm {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RegisterRequest {
+    pub username: String,
     #[serde(default)]
     pub legal: super::site::LegalConsent,
     pub email: String,
@@ -471,7 +472,7 @@ async fn token(
                         "the device code has expired",
                     ));
                 }
-                DevicePoll::Authorized(grant) => grant,
+                DevicePoll::Authorized(grant) => *grant,
             }
         }
         "refresh_token" => {
@@ -580,16 +581,7 @@ async fn register(
         request.email_code.as_deref(),
     )
     .await?;
-    let user = super::site::register(
-        &state,
-        &request.legal,
-        &client,
-        &email,
-        &request.password,
-        request.display_name.as_deref(),
-        verified,
-    )
-    .await?;
+    let user = super::site::register(&state, &request, &client, &email, verified).await?;
     state.admin_events.invalidate(&["users"]);
     let mut response = crate::security::mfa::begin_login(
         &state,
@@ -614,7 +606,8 @@ async fn password_login(
     };
     let (database, _) = database(state).await?;
     let config = state.config.read().await.security.clone();
-    let identity = format!("{}:{}", request.email.trim().to_lowercase(), client.ip);
+    let account = database.login_subject(&request.email).await?;
+    let identity = format!("{account}:{}", client.ip);
     store::limit(
         &state.security_cache,
         if admin { "admin-login" } else { "web-login" },
@@ -626,7 +619,7 @@ async fn password_login(
     store::limit(
         &state.security_cache,
         "login-account",
-        &request.email.trim().to_lowercase(),
+        &account,
         config.login_max_failures as i32 * 3,
         config.login_lock_secs as i64,
     )
@@ -643,25 +636,20 @@ async fn password_login(
     )
     .await?;
     if request.email.len() > 320 || request.password.len() > 1024 {
-        return Err(ApiError::unauthorized("邮箱或密码不正确"));
+        return Err(ApiError::unauthorized("用户名、邮箱或密码不正确"));
     }
     let user = database
         .authenticate_password(&request.email, &request.password)
         .await?
         .filter(|user| !admin || user.is_admin)
-        .ok_or_else(|| ApiError::unauthorized("邮箱或密码不正确"))?;
+        .ok_or_else(|| ApiError::unauthorized("用户名、邮箱或密码不正确"))?;
     store::clear_limit(
         &state.security_cache,
         if admin { "admin-login" } else { "web-login" },
         &identity,
     )
     .await?;
-    store::clear_limit(
-        &state.security_cache,
-        "login-account",
-        &request.email.trim().to_lowercase(),
-    )
-    .await?;
+    store::clear_limit(&state.security_cache, "login-account", &account).await?;
     crate::security::mfa::begin_login(
         state,
         user,
@@ -725,7 +713,7 @@ async fn me(
     >,
 ) -> Json<serde_json::Value> {
     Json(
-        serde_json::json!({"id":user.id,"email":user.email,"display_name":user.display_name,"is_admin":user.is_admin,"mfa_enrollment_required":credential.scope=="mfa:enroll"}),
+        serde_json::json!({"id":user.id,"username":user.username,"email":user.email,"display_name":user.display_name,"is_admin":user.is_admin,"mfa_enrollment_required":credential.scope=="mfa:enroll"}),
     )
 }
 
@@ -833,10 +821,12 @@ fn oauth_error(status: StatusCode, error: &str, description: &str) -> Response {
         .into_response()
 }
 
+pub(crate) fn public_config(config: &crate::ServerConfig) -> serde_json::Value {
+    serde_json::json!({"edition":config.edition,"enabled":config.edition.is_public(),"allow_registration":config.edition.is_public() && config.auth.allow_registration,"database_available":true,"captcha_required":config.edition.is_public(),"registration_email_verification":config.edition.is_public() && config.security.registration_email_verification,"email_security_available":config.edition.is_public() && config.security.smtp_available(),"password_reset_available":config.edition.is_public() && config.security.smtp_available() && config.security.password_reset_enabled})
+}
 async fn auth_config(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     let site = super::site::view(&state).await?;
-    let config = state.config.read().await;
-    Ok(Json(
-        serde_json::json!({"site":site,"edition":config.edition,"enabled":config.edition.is_public(),"allow_registration":config.edition.is_public() && config.auth.allow_registration,"database_available":true,"captcha_required":config.edition.is_public(),"registration_email_verification":config.edition.is_public() && config.security.registration_email_verification,"email_security_available":config.edition.is_public() && config.security.smtp_available(),"password_reset_available":config.edition.is_public() && config.security.smtp_available() && config.security.password_reset_enabled}),
-    ))
+    let mut result = public_config(&*state.config.read().await);
+    result["site"] = serde_json::to_value(site).map_err(anyhow::Error::from)?;
+    Ok(Json(result))
 }

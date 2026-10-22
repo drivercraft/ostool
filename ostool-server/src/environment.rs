@@ -36,6 +36,10 @@ pub(crate) fn apply_values(
     apply_security_values(&mut config.security, values)?;
     for (key, target) in [
         ("OSTOOL_PUBLIC_BASE_URL", &mut config.auth.public_base_url),
+        (
+            "OSTOOL_ADMIN_USERNAME",
+            &mut config.auth.bootstrap_admin_username,
+        ),
         ("OSTOOL_ADMIN_EMAIL", &mut config.auth.bootstrap_admin_email),
         (
             "OSTOOL_ADMIN_PASSWORD",

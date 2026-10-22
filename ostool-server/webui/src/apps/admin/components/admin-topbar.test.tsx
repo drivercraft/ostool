@@ -35,6 +35,7 @@ function Wrapper() {
             mocks.edition === "public"
               ? {
                   id: "admin",
+                  username: "admin",
                   email: "admin@example.com",
                   display_name: "Ada",
                   is_admin: true,

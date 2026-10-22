@@ -306,7 +306,17 @@ pub struct AdminTftpStatusResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminSessionsResponse {
-    pub sessions: Vec<Session>,
+    pub sessions: Vec<AdminSession>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminSession {
+    #[serde(flatten)]
+    pub session: Session,
+    pub owner_username: Option<String>,
+    pub owner_user_id: Option<uuid::Uuid>,
+    pub rental_id: Option<uuid::Uuid>,
+    pub rental_starts_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub rental_ends_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

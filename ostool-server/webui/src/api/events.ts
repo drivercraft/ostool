@@ -5,7 +5,7 @@ import type {
   AdminOverviewResponse,
   AdminServerConfigResponse,
   BoardConfig,
-  Session,
+  AdminSession,
   LoaderDeviceSummary,
   LoaderOtaResources,
   VirtualDevicesResponse,
@@ -50,7 +50,7 @@ export interface Resources {
   account_settings: import("@/types/api").AccountSettingsView;
 
   boards: BoardConfig[];
-  sessions: Session[];
+  sessions: AdminSession[];
   runtimes: Record<string, Runtime>;
   loaders: LoaderDeviceSummary[];
   ota: LoaderOtaResources;

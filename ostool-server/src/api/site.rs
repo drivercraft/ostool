@@ -58,7 +58,7 @@ impl Default for SiteSettings {
         terms_title:"用户协议".into(),
         terms_body:"本平台提供开发板访问、串口调试和租赁申请服务。\n请使用真实可联系的邮箱注册，妥善保管密码、验证器和访问令牌。不得共享他人的凭据或访问未获分配的开发板。\n使用开发板时应遵守运营者公布的使用规则与租赁时段，不得执行破坏设备、攻击网络或侵害他人权益的操作。\n维护、网络和硬件故障可能影响使用。遇到故障或账号问题，请通过站点公布的联系方式联系运营者。".into(),
         privacy_title:"隐私政策".into(),
-        privacy_body:"本平台为账号管理保存邮箱、显示名称和密码摘要，不保存明文密码。\n为验证登录和排查异常，平台处理登录时间、来源 IP、浏览器标识、安全事件及操作审计。租赁记录用于开发板分配与使用管理。\n人机验证、邮箱验证和双重验证所需的证明会设置有效期；验证码不以明文保存，验证器密钥加密保存。浏览器会使用必要的登录 Cookie 和界面偏好存储。\n数据由本站运营者管理。请通过站点公布的联系方式咨询数据访问、更正及删除事宜。".into(),
+        privacy_body:"本平台为账号管理保存用户名、邮箱、显示名称和密码摘要，不保存明文密码。\n为验证登录和排查异常，平台处理登录时间、来源 IP、浏览器标识、安全事件及操作审计。租赁记录用于开发板分配与使用管理。\n人机验证、邮箱验证和双重验证所需的证明会设置有效期；验证码不以明文保存，验证器密钥加密保存。浏览器会使用必要的登录 Cookie 和界面偏好存储。\n数据由本站运营者管理。请通过站点公布的联系方式咨询数据访问、更正及删除事宜。".into(),
     }
     }
 }
@@ -288,17 +288,18 @@ pub async fn mail_deliveries(State(state): State<AppState>) -> Result<Json<Value
 }
 pub async fn register(
     state: &AppState,
-    consent: &LegalConsent,
+    request: &super::auth::RegisterRequest,
     client: &ClientContext,
     email: &str,
-    password: &str,
-    name: Option<&str>,
     verified: bool,
 ) -> Result<crate::persistence::postgres::User, ApiError> {
+    let consent = &request.legal;
     if !consent.accepted {
         return Err(ApiError::bad_request("请阅读并同意用户协议和隐私政策"));
     }
-    let hash = crate::persistence::postgres::hash_password_async(password.to_owned()).await?;
+    let username = crate::persistence::postgres::normalize_username(&request.username)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let hash = crate::persistence::postgres::hash_password_async(request.password.clone()).await?;
     let mut tx = state.database.pool().begin().await?;
     sqlx::query("SELECT id FROM site_settings WHERE id=1 FOR SHARE")
         .fetch_one(&mut *tx)
@@ -320,8 +321,15 @@ pub async fn register(
             ));
         }
     }
-    let user:Uuid=sqlx::query_scalar("INSERT INTO users(email,password_hash,display_name,email_verified_at) VALUES($1,$2,$3,CASE WHEN $4 THEN now() ELSE NULL END) RETURNING id")
-        .bind(email).bind(hash).bind(name).bind(verified).fetch_one(&mut *tx).await.map_err(|e|{log::warn!("registration failed: {e}");ApiError::bad_request("无法完成注册，请检查注册信息或登录已有账号")})?;
+    let user:Uuid=sqlx::query_scalar("INSERT INTO users(email,password_hash,display_name,email_verified_at,username) VALUES($1,$2,$3,CASE WHEN $4 THEN now() ELSE NULL END,$5) RETURNING id")
+        .bind(email).bind(hash).bind(request.display_name.as_deref()).bind(verified).bind(username).fetch_one(&mut *tx).await.map_err(|error| {
+            if error.as_database_error().is_some_and(|error| error.is_unique_violation()) {
+                ApiError::conflict("用户名或邮箱已被使用")
+            } else {
+                log::error!("registration failed: {error}");
+                ApiError::service_unavailable("注册服务暂时不可用")
+            }
+        })?;
     for (kind, version) in [
         ("terms", consent.terms_version),
         ("privacy", consent.privacy_version),

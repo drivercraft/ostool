@@ -683,6 +683,7 @@ fn public_credential_ending_closes_serial(expire_access: bool) -> Result<()> {
             .state
             .database
             .create_user(
+                "serial",
                 "serial@security.test",
                 "serial-security-password-123",
                 None,

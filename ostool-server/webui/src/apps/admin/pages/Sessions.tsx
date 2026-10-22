@@ -28,7 +28,7 @@ export default function Sessions() {
     (s) =>
       (!board || s.board_id === board) &&
       (!status || s.state === status) &&
-      `${s.id} ${s.client_name ?? ""}`
+      `${s.id} ${s.board_id} ${s.owner_username ?? ""} ${s.client_name ?? ""}`
         .toLowerCase()
         .includes(search.toLowerCase()),
   );
@@ -53,7 +53,7 @@ export default function Sessions() {
               label="搜索会话"
               value={search}
               onValue={setSearch}
-              placeholder="会话 ID 或客户端"
+              placeholder="会话、设备、用户名或客户端"
             />
             <SelectField
               label="开发板筛选"
@@ -85,6 +85,7 @@ export default function Sessions() {
           headers={[
             "Session",
             "开发板",
+            "使用用户",
             "客户端",
             "创建 / 到期",
             "状态",
@@ -102,6 +103,19 @@ export default function Sessions() {
                 >
                   {s.board_id}
                 </Link>
+              </Cell>
+              <Cell>
+                {s.owner_username ?? "本地会话"}
+                {s.rental_id && (
+                  <small>
+                    <Link to="/rentals">租赁 {s.rental_id.slice(0, 8)}</Link>
+                  </small>
+                )}
+                {s.rental_ends_at && (
+                  <small>
+                    使用至 {new Date(s.rental_ends_at).toLocaleString("zh-CN")}
+                  </small>
+                )}
               </Cell>
               <Cell>{s.client_name ?? "—"}</Cell>
               <Cell>

@@ -82,6 +82,20 @@ impl Fixture {
         origin: Option<&str>,
         bearer: Option<&str>,
     ) -> Reply {
+        if (path == "/api/v1/auth/register" || path.starts_with("/api/v1/admin/users"))
+            && body.is_object()
+            && body.get("username").is_none()
+        {
+            body["username"] = json!(
+                body["email"]
+                    .as_str()
+                    .unwrap_or("fixture")
+                    .split('@')
+                    .next()
+                    .unwrap()
+                    .replace('.', "_")
+            );
+        }
         if path == "/api/v1/auth/register" && body.get("legal").is_none() {
             body["legal"] = json!({"accepted":true,"terms_version":1,"privacy_version":1});
         }
@@ -732,6 +746,7 @@ async fn administrator_enrollment_is_restricted_and_session_revocation_is_owner_
         .state
         .database
         .create_user(
+            "outsider",
             "outsider@security.test",
             "outsider-password-123",
             None,
@@ -1489,4 +1504,145 @@ async fn unavailable_session_storage_closes_stream_without_expiring_credentials(
         first.is_none(),
         "a storage outage must close the stream, not publish auth-expired"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn global_usernames_are_required_unique_and_support_both_login_identifiers() {
+    let f = Fixture::new(true).await;
+    let password = "username-test-password-123";
+    let registration = |username: &str, email: &str, verification: Value| json!({"username":username,"email":email,"password":password,"verification":verification});
+    let first = f
+        .request(
+            "POST",
+            "/api/v1/auth/register",
+            None,
+            registration("Alice_01", "alice@identity.test", f.proof("register").await),
+        )
+        .await;
+    assert_eq!(first.status, StatusCode::CREATED, "{}", first.body);
+    let cookie = test_security::cookie_header(&first.headers);
+    let me = f
+        .request("GET", "/api/v1/auth/me", Some(&cookie), Value::Null)
+        .await;
+    assert_eq!(me.body["username"], "alice_01");
+    let duplicate = f
+        .request(
+            "POST",
+            "/api/v1/auth/register",
+            None,
+            registration("ALICE_01", "other@identity.test", f.proof("register").await),
+        )
+        .await;
+    assert_eq!(duplicate.status, StatusCode::CONFLICT);
+    for username in ["", "ab", "bad name", "bad@email"] {
+        assert_eq!(
+            f.request(
+                "POST",
+                "/api/v1/auth/register",
+                None,
+                registration(username, "invalid@identity.test", f.proof("register").await)
+            )
+            .await
+            .status,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    for identifier in ["ALICE_01", "alice@identity.test"] {
+        let result = f.request("POST", "/api/v1/auth/login", None, json!({"email":identifier,"password":password,"verification":f.proof("login").await})).await;
+        assert_eq!(result.status, StatusCode::OK, "{}", result.body);
+    }
+    let db = &f.state.database;
+    assert_eq!(
+        db.login_subject("ALICE_01").await.unwrap(),
+        db.login_subject("alice@identity.test").await.unwrap()
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn username_and_email_share_login_failure_limits() {
+    let f = Fixture::new(true).await;
+    for index in 0..7 {
+        let identifier = if index % 2 == 0 {
+            "admin"
+        } else {
+            "admin@security.test"
+        };
+        let response = f.request("POST", "/api/v1/auth/login", None, json!({"email":identifier,"password":"incorrect-password-123","verification":f.proof("login").await})).await;
+        assert_eq!(
+            response.status,
+            if index < 6 {
+                StatusCode::UNAUTHORIZED
+            } else {
+                StatusCode::TOO_MANY_REQUESTS
+            }
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn page_bootstrap_is_safe_and_available_without_waiting_for_database_queries() {
+    let f = Fixture::new(true).await;
+    f.state.database.pool().close().await;
+    let response = f
+        .app
+        .clone()
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 4 * 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains("id=\"ostool-bootstrap\""));
+    assert!(html.contains("\"edition\":\"public\""));
+    assert!(!html.contains("security-admin-password-123"));
+    assert!(!html.contains("mfa_encryption_key"));
+    assert!(!html.contains("redis_url"));
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn username_edits_revoke_credentials_but_display_name_edits_do_not() {
+    let f = Fixture::new(true).await;
+    let login = f.login(true).await;
+    let cookie = test_security::cookie_header(&login.headers);
+    let me = f
+        .request("GET", "/api/v1/auth/me", Some(&cookie), Value::Null)
+        .await;
+    let endpoint = format!("/api/v1/admin/users/{}", me.body["id"].as_str().unwrap());
+    let mut input = json!({"username":"admin","email":"admin@security.test","display_name":"Renamed display","role_id":"admin","disabled":false});
+    assert_eq!(
+        f.request("PUT", &endpoint, Some(&cookie), input.clone())
+            .await
+            .status,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        f.request("GET", "/api/v1/auth/me", Some(&cookie), Value::Null)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    input["username"] = json!("renamed-admin");
+    assert_eq!(
+        f.request("PUT", &endpoint, Some(&cookie), input)
+            .await
+            .status,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        f.request("GET", "/api/v1/auth/me", Some(&cookie), Value::Null)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    let login = f.request("POST", "/api/v1/admin/auth/login", None, json!({"email":"RENAMED-ADMIN","password":"security-admin-password-123","verification":f.proof("admin_login").await})).await;
+    assert_eq!(login.status, StatusCode::OK);
 }

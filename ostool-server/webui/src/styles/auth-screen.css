@@ -280,3 +280,14 @@ body:has(.auth-page-fullscreen) {
     padding: 24px 18px;
   }
 }
+.auth-identity-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+@media (max-width: 480px) {
+  .auth-identity-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+}

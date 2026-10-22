@@ -1,4 +1,6 @@
 import {
+  createContext,
+  useContext,
   useId,
   useRef,
   useState,
@@ -17,6 +19,7 @@ import { Inbox, type LucideIcon } from "lucide-react";
 import { RowAction } from "./row-action";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -338,6 +341,8 @@ export function ConfirmAction({
     </>
   );
 }
+export const ListDataLoadingContext = createContext(false);
+
 export function DataTable({
   headers,
   children,
@@ -350,6 +355,7 @@ export function DataTable({
   layout?: "switchable" | "table";
 }) {
   const view = useListLayout();
+  const loading = useContext(ListDataLoadingContext);
   if (layout === "switchable" && !view)
     return (
       <ListLayoutProvider
@@ -362,6 +368,17 @@ export function DataTable({
           {children}
         </DataTable>
       </ListLayoutProvider>
+    );
+  if (layout === "switchable" && view?.layout === "cards" && loading)
+    return (
+      <div className="data-card-grid" role="status" aria-label="正在加载数据">
+        {[0, 1, 2].map((index) => (
+          <div className="data-card" key={index}>
+            <Skeleton className="h-5 w-2/3" />
+            <Skeleton className="mt-6 h-20 w-full" />
+          </div>
+        ))}
+      </div>
     );
   if (layout === "switchable" && view?.layout === "cards" && empty)
     return <ListEmpty />;
@@ -407,7 +424,7 @@ export function DataTable({
       </div>
     );
   return (
-    <div className={`table-frame${empty ? " is-empty" : ""}`}>
+    <div className={`table-frame${empty && !loading ? " is-empty" : ""}`}>
       <Table>
         <TableHeader>
           <TableRow>
@@ -416,9 +433,28 @@ export function DataTable({
             ))}
           </TableRow>
         </TableHeader>
-        <TableBody>{empty ? null : children}</TableBody>
+        <TableBody>
+          {loading
+            ? [0, 1, 2].map((row) => (
+                <TableRow key={row}>
+                  {headers.map((header, index) => (
+                    <TableCell key={`${index}:${header}`}>
+                      <Skeleton className="my-2 h-4 w-3/4" />
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))
+            : empty
+              ? null
+              : children}
+        </TableBody>
       </Table>
-      {empty && <ListEmpty />}
+      {loading && (
+        <span className="sr-only" role="status">
+          正在加载数据
+        </span>
+      )}
+      {!loading && empty && <ListEmpty />}
     </div>
   );
 }

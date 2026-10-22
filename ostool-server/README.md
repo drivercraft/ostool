@@ -345,7 +345,7 @@ CA for local IPs. Run `scripts/dev.sh cert` to export the public root certificat
 keys remain in its named volume. No trust stores are modified automatically.
 
 Set `OSTOOL_EDITION=public` for full accounts, CAPTCHA and rentals, or `local` for
-login-free operation. Set initial `OSTOOL_ADMIN_EMAIL`, `OSTOOL_ADMIN_PASSWORD` and
+login-free operation. Set initial `OSTOOL_ADMIN_USERNAME` (defaults to `admin`), `OSTOOL_ADMIN_EMAIL`, `OSTOOL_ADMIN_PASSWORD` and
 optionally a stable `OSTOOL_MFA_ENCRYPTION_KEY` before public initialization. There
 is no built-in administrator password. Edition is a product feature configuration,
 not a development/production mode. Redis is present in the unified stack; local
@@ -633,6 +633,16 @@ delete migration history or mark an unapplied migration complete to bypass check
 The service never resets data automatically. Existing board-file import is
 independent of old SQLx development history.
 
+The additive `20261022010000_global_usernames.sql` upgrade introduces mandatory,
+case-insensitive unique usernames without resetting accounts or credentials. It
+uses existing email prefixes where valid and unique; otherwise it derives a unique
+name from the account ID. Administrators can inspect and update these names in
+user management. New registrations and administrator-created accounts require a
+3–40 character username (ASCII letters/digits, underscores or hyphens, starting
+with a letter/digit); values are stored in lowercase. Login accepts either username
+or email. Both identifiers share the account's failure limits, and username changes
+revoke the account's credentials. No product/tenant account model is introduced.
+
 ## Verification
 
 Use disposable loopback PostgreSQL and Redis instances, never development or
@@ -645,7 +655,7 @@ export RUST_TEST_THREADS=4
 cargo test -p ostool-server
 cargo test -p ostool-server --test auth_postgres --test account_postgres \
   --test audit_postgres --test security_postgres --test unified_persistence \
-  --test board_migration --test cli_rental_contract -- --ignored
+  --test board_migration --test username_migration --test cli_rental_contract -- --ignored
 cargo test -p ostool-server --test cli_gateway_contract
 pnpm --dir ostool-server/webui test
 pnpm --dir ostool-server/webui build

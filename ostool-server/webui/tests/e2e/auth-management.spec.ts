@@ -25,7 +25,8 @@ test("registration, member/admin access, user/role events and settings navigatio
     page.getByRole("heading", { name: "创建你的账号" }),
   ).toBeVisible();
   const email = `browser-${Date.now()}@test.local`;
-  await page.getByLabel("邮箱", { exact: true }).fill(email);
+  await page.getByLabel("用户名", { exact: true }).fill(email.split("@")[0]);
+  await page.getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true }).fill(email);
   await page.getByLabel("显示名称", { exact: true }).fill("浏览器注册用户");
   await page.getByLabel("密码", { exact: true }).fill("browser-password-123");
   await page
@@ -42,16 +43,16 @@ test("registration, member/admin access, user/role events and settings navigatio
   await expect(
     page.getByRole("heading", { name: "管理后台登录" }),
   ).toBeVisible();
-  await page.getByLabel("邮箱", { exact: true }).fill(email);
+  await page.getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true }).fill(email);
   await page.getByLabel("密码", { exact: true }).fill("browser-password-123");
   await solveCaptcha(page);
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await expect(
-    page.getByText("邮箱或密码不正确", { exact: true }),
+    page.getByText("用户名、邮箱或密码不正确", { exact: true }),
   ).toBeVisible();
   await page.goto(`${base}/admin/login?redirect=/admin/overview`);
   await page
-    .getByLabel("邮箱", { exact: true })
+    .getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true })
     .fill(process.env.OSTOOL_E2E_ADMIN_EMAIL ?? "admin@example.com");
   await page
     .getByLabel("密码", { exact: true })
@@ -103,9 +104,12 @@ test("registration, member/admin access, user/role events and settings navigatio
   await expect(page).toHaveURL(`${base}/admin/rentals/new`);
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("region", { name: "租赁日历" })).toBeVisible();
-  await page
-    .getByLabel("使用用户", { exact: true })
-    .selectOption({ label: `浏览器注册用户 · ${email}` });
+  const userSelect = page.getByLabel("使用用户", { exact: true });
+  const userValue = await userSelect
+    .locator("option")
+    .filter({ hasText: email })
+    .getAttribute("value");
+  await userSelect.selectOption(userValue!);
   await page.getByLabel("指定开发板", { exact: true }).selectOption(boardId);
   await page.getByRole("button", { name: "保存租赁", exact: true }).click();
   const row = page
@@ -152,7 +156,7 @@ test("temporary refresh failures preserve the administrator login and unsaved de
   test.setTimeout(60000);
   await page.goto(base + "/admin/login?redirect=/admin/boards/new");
   await page
-    .getByLabel("邮箱", { exact: true })
+    .getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true })
     .fill(process.env.OSTOOL_E2E_ADMIN_EMAIL!);
   await page
     .getByLabel("密码", { exact: true })

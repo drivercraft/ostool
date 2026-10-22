@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ListLayoutProvider, ListLayoutToggle } from "./list-layout";
-import { DataTable, Row, Cell } from "./forms";
+import { DataTable, Row, Cell, ListDataLoadingContext } from "./forms";
 afterEach(() => {
   cleanup();
   localStorage.clear();
@@ -62,4 +62,28 @@ it("keeps empty list headers and uses an icon with text in both layouts", async 
   await user.click(screen.getByRole("button", { name: "切换列表布局" }));
   await user.click(screen.getByRole("menuitemradio", { name: /列表视图/ }));
   expect(screen.getAllByRole("columnheader")).toHaveLength(3);
+});
+
+it("keeps table headers and skeletons until the first data snapshot arrives", async () => {
+  const user = userEvent.setup();
+  const App = ({ loading }: { loading: boolean }) => (
+    <ListDataLoadingContext.Provider value={loading}>
+      <ListLayoutProvider storageKey="loading-list">
+        <ListLayoutToggle />
+        <DataTable headers={["设备", "状态"]} empty>
+          {null}
+        </DataTable>
+      </ListLayoutProvider>
+    </ListDataLoadingContext.Provider>
+  );
+  const app = render(<App loading />);
+  expect(screen.getAllByRole("columnheader")).toHaveLength(2);
+  expect(screen.getByRole("status").textContent).toBe("正在加载数据");
+  expect(screen.queryByText("暂无数据")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "切换列表布局" }));
+  await user.click(screen.getByRole("menuitemradio", { name: /卡片视图/ }));
+  expect(screen.getByRole("status", { name: "正在加载数据" })).toBeTruthy();
+  expect(screen.queryByText("暂无数据")).toBeNull();
+  app.rerender(<App loading={false} />);
+  expect(screen.getByRole("status", { name: "暂无数据" })).toBeTruthy();
 });

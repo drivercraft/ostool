@@ -44,7 +44,7 @@ test("website and admin login/logout work independently in the same browser", as
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`${base}/login?redirect=/admin/overview`);
-  await page.getByLabel("邮箱", { exact: true }).fill(email);
+  await page.getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true }).fill(email);
   await page.getByLabel("密码", { exact: true }).fill(password);
   await solveCaptcha(page);
   await page.getByRole("button", { name: "登录", exact: true }).click();
@@ -71,7 +71,7 @@ test("website and admin login/logout work independently in the same browser", as
   await expect(admin.getByRole("navigation", { name: "网站导航" })).toHaveCount(
     0,
   );
-  await admin.getByLabel("邮箱", { exact: true }).fill(email);
+  await admin.getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true }).fill(email);
   await admin.getByLabel("密码", { exact: true }).fill(password);
   await solveCaptcha(admin);
   await admin.getByRole("button", { name: "登录", exact: true }).click();
@@ -101,7 +101,7 @@ test("website and admin login/logout work independently in the same browser", as
       (cookie) => cookie.name === "ostool-website-access",
     )?.value,
   ).toBe(websiteToken);
-  await admin.getByLabel("邮箱", { exact: true }).fill(email);
+  await admin.getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true }).fill(email);
   await admin.getByLabel("密码", { exact: true }).fill(password);
   await solveCaptcha(admin);
   await admin.getByRole("button", { name: "登录", exact: true }).click();

@@ -25,6 +25,7 @@ pub struct Role {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ManagedUser {
     pub id: Uuid,
+    pub username: String,
     pub email: String,
     pub display_name: Option<String>,
     pub role_id: String,
@@ -39,6 +40,7 @@ pub struct ManagedUser {
 }
 #[derive(Deserialize)]
 pub struct UserInput {
+    pub username: String,
     pub email: String,
     pub display_name: Option<String>,
     pub role_id: String,
@@ -72,7 +74,7 @@ fn sql_error(error: sqlx::Error) -> ApiError {
         .as_database_error()
         .is_some_and(|e| e.is_unique_violation() || e.is_foreign_key_violation())
     {
-        ApiError::conflict("邮箱或角色名称已存在，或该角色仍在使用")
+        ApiError::conflict("用户名、邮箱或角色名称已存在，或该角色仍在使用")
     } else {
         log::error!("user management database error: {error}");
         ApiError::service_unavailable("用户数据库操作失败")
@@ -87,6 +89,7 @@ pub async fn list_users(State(state): State<AppState>) -> Result<Json<Vec<Manage
         .map(|r| {
             Ok(ManagedUser {
                 id: r.try_get("id")?,
+                username: r.try_get("username")?,
                 email: r.try_get("email")?,
                 display_name: r.try_get("display_name")?,
                 role_id: r.try_get("role_id")?,
@@ -127,6 +130,8 @@ pub async fn list_roles(State(state): State<AppState>) -> Result<Json<Vec<Role>>
         .map_err(sql_error)
 }
 fn validate(input: &UserInput) -> Result<(), ApiError> {
+    crate::persistence::postgres::normalize_username(&input.username)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
     crate::persistence::postgres::normalize_email(&input.email)
         .map_err(|_| ApiError::bad_request("邮箱格式无效"))?;
     if input.display_name.as_ref().is_some_and(|s| s.len() > 120) {
@@ -149,8 +154,8 @@ async fn create_user(
         .ok_or_else(|| ApiError::bad_request("新用户需要初始密码"))?;
     let hash = crate::persistence::postgres::hash_password_async(password.to_owned()).await?;
     let pool = state.database.pool();
-    let result = sqlx::query_scalar::<_,Uuid>("INSERT INTO users(email,display_name,password_hash,role_id,is_admin,disabled) SELECT $1,$2,$3,id,administrator,$5 FROM roles WHERE id=$4 RETURNING users.id")
-        .bind(input.email.trim().to_lowercase()).bind(input.display_name).bind(hash).bind(input.role_id).bind(input.disabled).fetch_optional(pool).await.map_err(sql_error)?;
+    let result = sqlx::query_scalar::<_,Uuid>("INSERT INTO users(email,display_name,password_hash,role_id,is_admin,disabled,username) SELECT $1,$2,$3,id,administrator,$5,$6 FROM roles WHERE id=$4 RETURNING users.id")
+        .bind(input.email.trim().to_lowercase()).bind(input.display_name).bind(hash).bind(input.role_id).bind(input.disabled).bind(input.username.trim().to_ascii_lowercase()).fetch_optional(pool).await.map_err(sql_error)?;
     let id = result.ok_or_else(|| ApiError::bad_request("角色不存在"))?;
     state.admin_events.invalidate(&["users"]);
     Ok((
@@ -185,23 +190,14 @@ async fn update_user(
     if id == actor.id && (input.disabled || !administrator) {
         return Err(ApiError::conflict("不能禁用自己或移除自己的管理权限"));
     }
-    let result=sqlx::query("UPDATE users SET email=$1,display_name=$2,role_id=$3,is_admin=$4,disabled=$5,password_hash=COALESCE($6,password_hash) WHERE id=$7")
-        .bind(input.email.trim().to_lowercase()).bind(input.display_name).bind(input.role_id).bind(administrator).bind(input.disabled).bind(hash.as_deref()).bind(id).execute(&mut *tx).await.map_err(sql_error)?;
+    let result=sqlx::query("UPDATE users SET email=$1,display_name=$2,role_id=$3,is_admin=$4,disabled=$5,password_hash=COALESCE($6,password_hash),username=$8 WHERE id=$7")
+        .bind(input.email.trim().to_lowercase()).bind(input.display_name).bind(input.role_id).bind(administrator).bind(input.disabled).bind(hash.as_deref()).bind(id).bind(input.username.trim().to_ascii_lowercase()).execute(&mut *tx).await.map_err(sql_error)?;
     if result.rows_affected() != 1 {
         return Err(ApiError::not_found("用户不存在"));
     }
     ensure_admin(&mut tx).await?;
-    // Role/status/password edits invalidate previously issued credentials.
-    sqlx::query("UPDATE oauth_sessions SET revoked_at=now() WHERE user_id=$1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await
-        .map_err(sql_error)?;
-    sqlx::query("DELETE FROM personal_access_tokens WHERE user_id=$1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await
-        .map_err(sql_error)?;
+    // The database trigger revokes credentials for identity, role, status and
+    // password changes. Ordinary display-name edits keep valid sessions alive.
     tx.commit().await.map_err(sql_error)?;
     state.admin_events.invalidate(&["users"]);
     Ok(StatusCode::NO_CONTENT)

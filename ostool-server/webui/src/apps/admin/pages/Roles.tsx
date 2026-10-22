@@ -59,7 +59,7 @@ export default function Roles() {
   const pagination = useListPage(filtered, JSON.stringify([search, kind]));
   return (
     <>
-      {!deployment?.database_connected && (
+      {deployment && !deployment.database_connected && (
         <Notice>角色管理需要连接 PostgreSQL。</Notice>
       )}
       <PagePanel

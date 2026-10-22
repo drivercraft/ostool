@@ -34,6 +34,9 @@ import {
 } from "react-router-dom";
 import { EditionProvider, useEdition } from "@/edition";
 import MemberWorkspace from "@/apps/web/pages/MemberWorkspace";
+import { BoardVisual } from "@/apps/web/components/board-visual";
+import { Documentation } from "@/apps/web/pages/Documentation";
+import { Skeleton } from "@/components/ui/skeleton";
 import { DeviceCatalog } from "@/apps/web/pages/DeviceCatalog";
 import { SiteSessionProvider, useSiteSession } from "@/apps/web/session";
 import { ThemeMenu } from "@/components/theme-menu";
@@ -105,11 +108,13 @@ function SiteHeader() {
             )?.[1] ?? "开发板协作平台");
     document.title = title + " · " + settings.name;
   }, [location.pathname, settings.name]);
-  const { user } = useSiteSession();
+  const { user, checking } = useSiteSession();
   const accountActions = !publicEdition ? (
     <Button asChild size="sm">
       <a href="/admin/overview">打开控制台</a>
     </Button>
+  ) : checking ? (
+    <Skeleton className="h-9 w-32" aria-label="正在读取登录状态" />
   ) : user ? (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -243,8 +248,8 @@ function SiteFooter() {
         </div>
         <div className="footer-column">
           <strong>资源</strong>
-          <Link to="/docs#cli">ostool CLI</Link>
-          <Link to="/docs#api">API 参考</Link>
+          <Link to="/docs?page=cli">ostool CLI</Link>
+          <Link to="/docs?page=api">API 参考</Link>
           {settings.github_url && (
             <a href={settings.github_url} rel="noopener noreferrer">
               GitHub
@@ -337,14 +342,14 @@ function Home() {
           <div className="hero-copy">
             <div className="hero-kicker">
               <span className="status-pulse" /> 开发板协作平台{" "}
-              <span className="hero-kicker-divider" /> v0.9
+              <span className="hero-kicker-divider" /> OPEN SOURCE
             </div>
             <h1>
-              让每一块开发板，<em>随时可用。</em>
+              连接每一块开发板，<em>专注每一次创新。</em>
             </h1>
             <p className="hero-subtitle">
-              从设备租约、串口会话到 OTA 发布，ostool
-              将分散的硬件工作流组织成一个清晰、可靠的团队平台。
+              从构建、启动到串口调试，ostool 将真实开发板、QEMU
+              与团队工作流连在一起。 在浏览器管理资源，在终端完成开发。
             </p>
             <div className="hero-actions">
               <Button asChild size="lg">
@@ -370,76 +375,9 @@ function Home() {
               </span>
             </div>
           </div>
-          <div className="hero-console" aria-label="ostool 控制台预览">
-            <div className="console-window-bar">
-              <span className="window-dot red" />
-              <span className="window-dot yellow" />
-              <span className="window-dot green" />
-              <span className="console-address">app.ostool.dev / overview</span>
-            </div>
-            <div className="console-body">
-              <aside>
-                <div className="console-mini-logo">
-                  <span className="logo-mark">
-                    <CircuitBoard size={12} />
-                  </span>{" "}
-                  ostool
-                </div>
-                <span className="console-nav active">
-                  <Radio size={13} /> 总览
-                </span>
-                <span className="console-nav">
-                  <CircuitBoard size={13} /> 开发板
-                </span>
-                <span className="console-nav">
-                  <Terminal size={13} /> 会话
-                </span>
-                <span className="console-nav">
-                  <FileText size={13} /> 文件
-                </span>
-              </aside>
-              <div className="console-content">
-                <div className="console-heading">
-                  <div>
-                    <span>Workspace / Overview</span>
-                    <strong>设备总览</strong>
-                  </div>
-                  <span className="console-live">
-                    <i /> LIVE
-                  </span>
-                </div>
-                <div className="console-metrics">
-                  <div>
-                    <span>在线设备</span>
-                    <strong>12</strong>
-                    <small>+3 本周</small>
-                  </div>
-                  <div>
-                    <span>活跃会话</span>
-                    <strong>08</strong>
-                    <small>稳定运行</small>
-                  </div>
-                  <div>
-                    <span>可用率</span>
-                    <strong>99.8%</strong>
-                    <small>过去 30 天</small>
-                  </div>
-                </div>
-                <div className="console-chart">
-                  <div className="chart-label">
-                    <span>设备连接趋势</span>
-                    <small>最近 24 小时</small>
-                  </div>
-                  <div className="chart-bars">
-                    {[35, 48, 42, 67, 54, 76, 62, 91, 74, 84, 68, 96].map(
-                      (height, index) => (
-                        <i key={index} style={{ height: `${height}%` }} />
-                      ),
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
+          <div className="hero-product">
+            <BoardVisual />
+            <span className="hero-visual-note">设备工作流示意</span>
           </div>
         </section>
         <section className="logo-strip">
@@ -457,7 +395,9 @@ function Home() {
             <span className="section-label">ONE WORKSPACE</span>
             <h2>硬件开发，也可以很从容。</h2>
             <p>
-              把设备、文件、会话和权限放在同一个上下文里，让团队更快地发现问题、复现问题和交付结果。
+              {publicEdition
+                ? "把设备、文件、会话和权限放在同一个上下文里，让团队更快地发现问题、复现问题和交付结果。"
+                : "把设备配置、文件投递与串口调试放在同一个工作区，专注本地构建、启动和系统验证。"}
             </p>
           </div>
           <div className="feature-grid">
@@ -511,7 +451,7 @@ function Home() {
                   <p className="dim">Connected to local board server</p>
                 )}
                 <p>
-                  <b>$</b> ostool board run --type rk3568
+                  <b>$</b> ostool board run --board-type rk3568
                 </p>
                 <p className="blue">● lease acquired · serial connected</p>
               </div>
@@ -593,29 +533,79 @@ function Devices() {
   const publicEdition = useEdition().edition === "public";
   return (
     <PublicLayout>
-      <main className="public-inner-page">
-        <div className="inner-hero">
-          <span className="section-label">DEVICE CLOUD</span>
-          <h1>设备，在这里保持可见。</h1>
-          <p>
-            连接真实开发板或 QEMU
-            虚拟设备，团队成员可以在同一个工作区中发现、分配和操作它们。
-          </p>
-        </div>
+      <main className="public-inner-page devices-page">
+        <section className="device-product-hero">
+          <div className="inner-hero">
+            <span className="section-label">YOUR HARDWARE. ONE WORKSPACE.</span>
+            <h1>
+              让硬件资源，
+              <br />
+              <em>成为研发的助力。</em>
+            </h1>
+            <p>
+              从一块开发板到整个实验室，统一管理设备配置、启动方式与调试入口。用清晰的资源目录，连接每一次构建与验证。
+            </p>
+            <div className="hero-actions">
+              <Button asChild>
+                <a href="#device-catalog">
+                  浏览设备 <ArrowRight size={16} />
+                </a>
+              </Button>
+              <Button asChild variant="outline">
+                <Link to="/docs?page=devices">设备使用指南</Link>
+              </Button>
+            </div>
+            <div className="device-capabilities">
+              <span>
+                <CircuitBoard /> 实体与虚拟设备
+              </span>
+              <span>
+                <Terminal /> 串口与命令行
+              </span>
+              <span>
+                <ShieldCheck />{" "}
+                {publicEdition ? "按授权时段使用" : "本地免登录直连"}
+              </span>
+            </div>
+          </div>
+          <BoardVisual label="DEVICE PLATFORM" compact />
+        </section>
+        <section className="device-value-strip" aria-label="设备平台能力">
+          <div>
+            <span>01 / CONNECT</span>
+            <h2>发现与配置</h2>
+            <p>集中维护板型、启动配置和设备标识。</p>
+          </div>
+          <div>
+            <span>02 / WORK</span>
+            <h2>开发与调试</h2>
+            <p>通过 CLI 连接串口、投递固件和启动系统。</p>
+          </div>
+          <div>
+            <span>03 / COLLABORATE</span>
+            <h2>{publicEdition ? "时段与协作" : "本地工作流"}</h2>
+            <p>
+              {publicEdition
+                ? "查看使用日历，按需申请设备使用时间。"
+                : "直接连接本地控制器，管理设备与短期会话。"}
+            </p>
+          </div>
+        </section>
         <DeviceCatalog />
         <div className="inner-callout">
           <div>
-            <h2>准备好连接设备了吗？</h2>
+            <span className="section-label">BUILD WHAT COMES NEXT</span>
+            <h2>开始你的下一次硬件验证。</h2>
             <p>
               {publicEdition
-                ? "登录个人工作台，查看租赁并申请开发板使用时段。"
-                : "打开本地控制台，查看开发板和当前会话。"}
+                ? "进入个人工作台，查看租赁并申请设备使用时段。"
+                : "打开本地控制台，配置你的第一块开发板。"}
             </p>
           </div>
           <Button asChild>
             <a href={publicEdition ? "/account" : "/admin/overview"}>
-              {publicEdition ? "个人工作台" : "进入控制台"}{" "}
-              <ArrowRight size={15} />
+              {publicEdition ? "个人工作台" : "进入控制台"}
+              <ArrowRight size={16} />
             </a>
           </Button>
         </div>
@@ -623,53 +613,10 @@ function Devices() {
     </PublicLayout>
   );
 }
-
 function Docs() {
   return (
     <PublicLayout>
-      <main className="public-inner-page docs-page">
-        <div className="inner-hero">
-          <span className="section-label">DOCUMENTATION</span>
-          <h1>清晰的文档，少走弯路。</h1>
-          <p>
-            从第一次安装到自动化流水线，按你的工作方式查找 ostool 的使用指南。
-          </p>
-        </div>
-        <div className="docs-grid">
-          <a
-            id="cli"
-            className="docs-card"
-            href="https://github.com/drivercraft/ostool"
-          >
-            <Terminal />
-            <div>
-              <strong>ostool CLI</strong>
-              <span>登录、构建、启动和串口会话的命令行工作流。</span>
-            </div>
-            <ArrowRight />
-          </a>
-          <a
-            id="api"
-            className="docs-card"
-            href="https://github.com/drivercraft/ostool"
-          >
-            <FileText />
-            <div>
-              <strong>API 参考</strong>
-              <span>服务端 API、实时事件和设备会话契约。</span>
-            </div>
-            <ArrowRight />
-          </a>
-          <a className="docs-card" href="https://github.com/drivercraft/ostool">
-            <Command />
-            <div>
-              <strong>部署指南</strong>
-              <span>PostgreSQL、systemd 和私有化部署配置。</span>
-            </div>
-            <ArrowRight />
-          </a>
-        </div>
-      </main>
+      <Documentation />
     </PublicLayout>
   );
 }
@@ -731,6 +678,7 @@ function Login() {
   const [emailCode, setEmailCode] = useState("");
   const [emailUntil, setEmailUntil] = useState(0);
   const resendRemaining = useCountdown(emailUntil);
+  const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -759,6 +707,7 @@ function Login() {
         ? await api.verifyMfa(challenge, otp)
         : registering
           ? await api.register(
+              username,
               email,
               password,
               displayName,
@@ -889,9 +838,31 @@ function Login() {
               )}
               {!challenge ? (
                 <>
+                  {registering && (
+                    <div className="auth-identity-fields">
+                      <TextField
+                        label="用户名"
+                        required
+                        minLength={3}
+                        maxLength={40}
+                        pattern="[A-Za-z0-9][A-Za-z0-9_-]{2,39}"
+                        autoComplete="username"
+                        placeholder="3–40 位字母、数字、_ 或 -"
+                        value={username}
+                        onValue={setUsername}
+                      />
+                      <TextField
+                        label="显示名称"
+                        value={displayName}
+                        onValue={setDisplayName}
+                        placeholder="你的名字"
+                        hint=""
+                      />
+                    </div>
+                  )}
                   <TextField
-                    label="邮箱"
-                    type="email"
+                    label={registering ? "邮箱" : "用户名或邮箱"}
+                    type={registering ? "email" : "text"}
                     required
                     value={email}
                     onValue={(value) => {
@@ -899,19 +870,13 @@ function Login() {
                       setEmailChallenge(undefined);
                       setEmailCode("");
                     }}
-                    autoComplete="email"
-                    placeholder="you@company.com"
+                    autoComplete={registering ? "email" : "username"}
+                    placeholder={
+                      registering ? "you@company.com" : "输入用户名或邮箱"
+                    }
                     hint=""
                   />
-                  {registering && (
-                    <TextField
-                      label="显示名称"
-                      value={displayName}
-                      onValue={setDisplayName}
-                      placeholder="你的名字"
-                      hint=""
-                    />
-                  )}
+
                   <TextField
                     label="密码"
                     type="password"

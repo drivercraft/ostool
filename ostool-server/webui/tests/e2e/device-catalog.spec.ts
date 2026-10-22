@@ -89,7 +89,7 @@ test("anonymous device cards receive updates and keep the selected board after l
       .filter({ has: page.getByRole("heading", { name: devices[0].id }) })
       .getByRole("link", { name: "登录后申请" })
       .click();
-    await page.getByLabel("邮箱", { exact: true }).fill(email);
+    await page.getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true }).fill(email);
     await page.getByLabel("密码", { exact: true }).fill("catalog-password-123");
     await solveCaptcha(page);
     await page.getByRole("button", { name: "登录", exact: true }).click();

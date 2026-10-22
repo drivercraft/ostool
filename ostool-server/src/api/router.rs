@@ -1341,9 +1341,40 @@ async fn delete_board(
 async fn list_admin_sessions(
     State(state): State<AppState>,
 ) -> Result<axum::Json<AdminSessionsResponse>, ApiError> {
-    Ok(axum::Json(AdminSessionsResponse {
-        sessions: session_snapshots(&state).await,
-    }))
+    use sqlx::Row;
+    let sessions = session_snapshots(&state).await;
+    let ids: Vec<_> = sessions.iter().map(|session| session.id.clone()).collect();
+    let owners = sqlx::query("SELECT s.session_id,s.user_id,u.username,s.rental_id,r.starts_at,r.ends_at FROM session_owners s LEFT JOIN users u ON u.id=s.user_id LEFT JOIN board_rentals r ON r.id=s.rental_id WHERE s.session_id=ANY($1)")
+        .bind(ids).fetch_all(state.database.pool()).await?;
+    let sessions = sessions
+        .into_iter()
+        .map(|session| {
+            let owner = owners
+                .iter()
+                .find(|row| row.get::<String, _>("session_id") == session.id);
+            Ok(super::models::AdminSession {
+                session,
+                owner_username: owner
+                    .map(|row| row.try_get("username"))
+                    .transpose()?
+                    .flatten(),
+                owner_user_id: owner.map(|row| row.try_get("user_id")).transpose()?,
+                rental_id: owner
+                    .map(|row| row.try_get("rental_id"))
+                    .transpose()?
+                    .flatten(),
+                rental_starts_at: owner
+                    .map(|row| row.try_get("starts_at"))
+                    .transpose()?
+                    .flatten(),
+                rental_ends_at: owner
+                    .map(|row| row.try_get("ends_at"))
+                    .transpose()?
+                    .flatten(),
+            })
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
+    Ok(axum::Json(AdminSessionsResponse { sessions }))
 }
 
 async fn delete_admin_session(

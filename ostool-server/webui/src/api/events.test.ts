@@ -115,14 +115,13 @@ describe("management event projection", () => {
     }
     vi.stubGlobal("EventSource", Source);
     vi.spyOn(client, "isPublicEdition").mockReturnValue(true);
-    const me = vi
-      .spyOn(client.api, "me")
-      .mockResolvedValue({
-        id: "a",
-        email: "admin@test.local",
-        display_name: null,
-        is_admin: true,
-      });
+    const me = vi.spyOn(client.api, "me").mockResolvedValue({
+      id: "a",
+      username: "admin",
+      email: "admin@test.local",
+      display_name: null,
+      is_admin: true,
+    });
     const store = new AdminStore();
     store.connect();
     (sources[0] as Source).onerror?.();

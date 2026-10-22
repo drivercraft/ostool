@@ -261,8 +261,15 @@ export interface Session {
   state: "active" | "releasing";
 }
 
+export interface AdminSession extends Session {
+  owner_username: string | null;
+  owner_user_id: string | null;
+  rental_id: string | null;
+  rental_starts_at: string | null;
+  rental_ends_at: string | null;
+}
 export interface AdminSessionsResponse {
-  sessions: Session[];
+  sessions: AdminSession[];
 }
 
 export interface AdminTftpConfigResponse {
@@ -356,6 +363,7 @@ export interface SerialRuntimeStatus {
 
 export interface ManagedUser {
   id: string;
+  username: string;
   email: string;
   display_name: string | null;
   role_id: string;
@@ -369,6 +377,7 @@ export interface ManagedUser {
   mfa_enabled?: boolean;
 }
 export interface UserInput {
+  username: string;
   email: string;
   display_name: string | null;
   role_id: string;

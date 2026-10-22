@@ -664,6 +664,7 @@ fn safe_details(payload: &Value) -> Value {
     }
     if let Some(fields) = payload.as_object() {
         let known = [
+            "username",
             "email",
             "display_name",
             "password",

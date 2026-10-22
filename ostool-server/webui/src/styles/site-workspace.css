@@ -502,7 +502,6 @@
     .auth-aside h1,
     .auth-card h2,
     .feature-card h3,
-    .docs-card strong,
     .device-showcase-card strong
   ) {
   color: var(--site-text);
@@ -518,7 +517,6 @@
     .inner-callout p,
     .auth-aside p,
     .auth-card p,
-    .docs-card span,
     .device-showcase-card span,
     .hero-trust,
     .logo-strip,
@@ -531,7 +529,6 @@
   .site-root
   :is(
     .feature-card,
-    .docs-card,
     .device-showcase-card,
     .inner-callout,
     .auth-card,

@@ -356,6 +356,7 @@ pub struct AuthConfig {
     pub public_base_url: Option<String>,
     /// Additional browser origins explicitly trusted for CSRF checks.
     pub allowed_origins: Vec<String>,
+    pub bootstrap_admin_username: Option<String>,
     pub bootstrap_admin_email: Option<String>,
     #[serde(skip_serializing)]
     pub bootstrap_admin_password: Option<String>,
@@ -382,6 +383,7 @@ impl Default for AuthConfig {
             max_active_sessions: 10,
             public_base_url: None,
             allowed_origins: Vec::new(),
+            bootstrap_admin_username: None,
             bootstrap_admin_email: None,
             bootstrap_admin_password: None,
         }

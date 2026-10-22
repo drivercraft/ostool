@@ -1,5 +1,11 @@
-import { Children, cloneElement, isValidElement, type ReactNode } from "react";
-import { SelectField, TextField } from "./forms";
+import {
+  useContext,
+  Children,
+  cloneElement,
+  isValidElement,
+  type ReactNode,
+} from "react";
+import { SelectField, TextField, ListDataLoadingContext } from "./forms";
 import { ListLayoutToggle } from "./list-layout";
 export function ListToolbar({
   actions,
@@ -10,11 +16,14 @@ export function ListToolbar({
   children?: ReactNode;
   count?: string;
 }) {
+  const loading = useContext(ListDataLoadingContext);
   return (
     <div className="listing-toolbar" role="toolbar" aria-label="列表快捷工具栏">
       <div className="listing-actions">
         {actions}
-        {count && <span className="listing-meta">{count}</span>}
+        {count && (
+          <span className="listing-meta">{loading ? "正在加载…" : count}</span>
+        )}
       </div>
       <div className="listing-filters">
         {Children.map(children, (child) =>

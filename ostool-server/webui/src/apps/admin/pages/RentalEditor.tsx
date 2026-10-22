@@ -149,7 +149,7 @@ function RentalForm({
               .filter((u) => !u.disabled || u.id === draft.user_id)
               .map((u) => ({
                 value: u.id,
-                label: `${u.display_name || u.email} · ${u.email}`,
+                label: `${u.username} · ${u.email}${u.display_name ? ` · ${u.display_name}` : ""}`,
               }))}
           />
           <SelectField

@@ -90,7 +90,7 @@ jobs:
     - name: Server PostgreSQL integration and offline migration
       env:
         OSTOOL_TEST_DATABASE_URL: postgres://ostool:ostool@127.0.0.1:5432/ostool_e2e_local
-      run: cargo test -p ostool-server --target ${{ matrix.targets }} --test cli_rental_contract --test security_postgres --test auth_postgres --test account_postgres --test audit_postgres --test unified_persistence --test board_migration -- --ignored
+      run: cargo test -p ostool-server --target ${{ matrix.targets }} --test cli_rental_contract --test security_postgres --test auth_postgres --test account_postgres --test audit_postgres --test unified_persistence --test board_migration --test username_migration -- --ignored
     - name: Install browser for admin integration tests
       run: pnpm --dir ostool-server/webui exec playwright install --with-deps chromium
     - name: Web UI integration tests

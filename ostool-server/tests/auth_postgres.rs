@@ -26,6 +26,20 @@ async fn call(
     token: Option<&str>,
     mut body: Value,
 ) -> (StatusCode, Value, axum::http::HeaderMap) {
+    if (path == "/api/v1/auth/register" || path.starts_with("/api/v1/admin/users"))
+        && body.is_object()
+        && body.get("username").is_none()
+    {
+        body["username"] = json!(
+            body["email"]
+                .as_str()
+                .unwrap_or("fixture")
+                .split('@')
+                .next()
+                .unwrap()
+                .replace('.', "_")
+        );
+    }
     if method == "POST"
         && matches!(
             path,
@@ -177,7 +191,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
         call(&app, "POST", "/api/v1/auth/register", None, payload)
             .await
             .0,
-        StatusCode::BAD_REQUEST
+        StatusCode::CONFLICT
     );
     assert_eq!(
         call(

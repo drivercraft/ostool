@@ -79,8 +79,17 @@ export default function MemberWorkspace() {
   const location = useLocation();
   if (checking)
     return (
-      <main className="member-loading">
-        <Skeleton className="h-48 w-full" />
+      <main className="member-workspace" aria-busy="true">
+        <MemberSidebar />
+        <div className="member-main">
+          <Skeleton className="h-20 w-full" />
+          <div className="startup-metrics">
+            {[0, 1, 2].map((key) => (
+              <Skeleton key={key} className="h-28 w-full" />
+            ))}
+          </div>
+          <Skeleton className="h-72 w-full" />
+        </div>
       </main>
     );
   if (!user)
@@ -97,26 +106,7 @@ export default function MemberWorkspace() {
     );
   return (
     <main className="member-workspace">
-      <aside className="member-sidebar">
-        <div className="member-identity">
-          <span className="site-avatar">
-            {(user.display_name || user.email).slice(0, 1)}
-          </span>
-          <div>
-            <strong>{user.display_name || "我的工作台"}</strong>
-            <small>{user.email}</small>
-          </div>
-        </div>
-        <nav aria-label="个人中心导航">
-          {navigation.map(([path, label, Icon]) => (
-            <NavLink key={path} to={path} end={path === "/account"}>
-              <Icon size={17} />
-              {label}
-            </NavLink>
-          ))}
-        </nav>
-        <p className="member-sidebar-note">你的开发板使用计划与账号设置</p>
-      </aside>
+      <MemberSidebar user={user} />
       <div
         className={
           location.pathname.endsWith("/requests/new")
@@ -145,6 +135,36 @@ export default function MemberWorkspace() {
         </Routes>
       </div>
     </main>
+  );
+}
+function MemberSidebar({ user }: { user?: AuthUser }) {
+  return (
+    <aside className="member-sidebar">
+      <div className="member-identity">
+        {user ? (
+          <span className="site-avatar">
+            {(user.display_name || user.username).slice(0, 1).toUpperCase()}
+          </span>
+        ) : (
+          <Skeleton className="size-9" />
+        )}
+        <div>
+          <strong>
+            {user?.display_name || user?.username || "个人工作台"}
+          </strong>
+          <small>{user ? user.email : "正在验证登录状态…"}</small>
+        </div>
+      </div>
+      <nav aria-label="个人中心导航">
+        {navigation.map(([path, label, Icon]) => (
+          <NavLink key={path} to={path} end={path === "/account"}>
+            <Icon size={17} />
+            {label}
+          </NavLink>
+        ))}
+      </nav>
+      <p className="member-sidebar-note">你的开发板使用计划与账号设置</p>
+    </aside>
   );
 }
 function Heading({
@@ -262,6 +282,7 @@ function Profile({ user }: { user: AuthUser }) {
       <Heading title="基本信息" text="管理对外显示的名称和登录邮箱。" />
       <form className="member-card member-form" onSubmit={save}>
         {task.error && <Notice>{task.error}</Notice>}
+        <TextField label="用户名" value={user.username} readOnly hint="" />
         <TextField
           label="显示名称"
           value={name}

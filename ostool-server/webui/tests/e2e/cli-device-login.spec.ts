@@ -41,7 +41,7 @@ test("website approves CLI device login only after terminal confirmation", async
       page.getByRole("heading", { name: "批准 CLI 登录" }),
     ).toBeVisible();
     await expect(page.locator(".auth-code code")).toHaveText(device.user_code);
-    await page.getByLabel("邮箱", { exact: true }).fill(email);
+    await page.getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true }).fill(email);
     await page
       .getByLabel("密码", { exact: true })
       .fill("device-login-password-123");
