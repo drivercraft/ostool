@@ -48,6 +48,7 @@ test("image captcha, encrypted MFA enrollment, recovery login and recent identit
   const secret = await page.locator(".mfa-secret").innerText();
   await page.getByLabel("身份验证器验证码", { exact: true }).fill(totp(secret));
   await page.getByRole("button", { name: "确认启用", exact: true }).click();
+  await expect(page.locator(".recovery-codes code")).toHaveCount(8);
   const recovery = await page.locator(".recovery-codes code").allTextContents();
   expect(recovery).toHaveLength(8);
   await page.getByRole("button", { name: "已安全保存", exact: true }).click();
@@ -84,6 +85,7 @@ test("image captcha, encrypted MFA enrollment, recovery login and recent identit
   await page.getByLabel("验证码或恢复码", { exact: true }).fill(recovery[0]);
   await page.getByRole("button", { name: "验证身份", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("保存恢复码");
+  await expect(page.locator(".recovery-codes code")).toHaveCount(8);
   const replaced = await page.locator(".recovery-codes code").allTextContents();
   expect(replaced).toHaveLength(8);
   expect(replaced).not.toContain(recovery[0]);

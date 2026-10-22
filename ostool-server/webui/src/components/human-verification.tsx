@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   api,
   type HumanAction,
   type HumanChallenge,
   type HumanProof,
 } from "@/api/client";
-import { TextField, Notice } from "./forms";
+import { Notice } from "./forms";
 import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { Field, FieldLabel } from "./ui/field";
 
 type Turnstile = {
   render: (element: HTMLElement, options: Record<string, unknown>) => string;
@@ -86,6 +88,7 @@ export function HumanVerification({
   disabled?: boolean;
   onChange: (proof: HumanProof | undefined) => void;
 }) {
+  const inputId = useId();
   const [challenge, setChallenge] = useState<HumanChallenge>();
   const [answer, setAnswer] = useState(""),
     [error, setError] = useState(""),
@@ -145,40 +148,43 @@ export function HumanVerification({
           </Button>
         </>
       ) : (
-        <div className="captcha-row">
-          <TextField
-            label="图形验证码"
-            value={answer}
-            onValue={fill}
-            placeholder="输入图片中的字符"
-            required
-            autoComplete="off"
-            maxLength={8}
-            disabled={disabled || loading}
-          />
-          <Button
-            className="captcha-image"
-            type="button"
-            variant="outline"
-            aria-label="刷新图形验证码"
-            title="刷新图形验证码"
-            disabled={disabled || loading}
-            onClick={() => setRevision((v) => v + 1)}
-          >
-            {challenge?.image_data_url ? (
-              <img
-                src={challenge.image_data_url}
-                alt="图形验证码"
-                width={160}
-                height={42}
-              />
-            ) : loading ? (
-              "加载中…"
-            ) : (
-              "重新加载"
-            )}
-          </Button>
-        </div>
+        <Field className="captcha-field">
+          <FieldLabel htmlFor={inputId}>图形验证码</FieldLabel>
+          <div className="captcha-input">
+            <Input
+              id={inputId}
+              value={answer}
+              onChange={(event) => fill(event.target.value)}
+              placeholder="输入图片中的字符"
+              required
+              autoComplete="off"
+              maxLength={8}
+              disabled={disabled || loading}
+            />
+            <Button
+              className="captcha-image"
+              type="button"
+              variant="ghost"
+              aria-label="刷新图形验证码"
+              title="刷新图形验证码"
+              disabled={disabled || loading}
+              onClick={() => setRevision((v) => v + 1)}
+            >
+              {challenge?.image_data_url ? (
+                <img
+                  src={challenge.image_data_url}
+                  alt="图形验证码"
+                  width={160}
+                  height={42}
+                />
+              ) : loading ? (
+                "加载中…"
+              ) : (
+                "重新加载"
+              )}
+            </Button>
+          </div>
+        </Field>
       )}
       {error && (
         <p className="security-error" role="alert">

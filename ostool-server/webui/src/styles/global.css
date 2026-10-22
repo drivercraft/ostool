@@ -8,6 +8,7 @@
 @import "./admin-experience.css";
 @import "./controls.css";
 @import "./security.css";
+@import "./auth-screen.css";
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -953,12 +954,6 @@
   color: #2869d8;
   font-size: 12px;
   cursor: pointer;
-}
-.auth-legal {
-  margin-top: 4px;
-  text-align: center;
-  color: #a0adbd !important;
-  font-size: 10px !important;
 }
 .auth-message {
   color: #d64d59 !important;

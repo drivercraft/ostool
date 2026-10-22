@@ -30,7 +30,7 @@ test("site settings publish through SSE, legal pages and explicit versioned sign
   await page.getByLabel("站点简称", { exact: true }).fill("协作测试");
   await page.getByRole("button", { name: "保存配置", exact: true }).click();
   await expect(
-    website.locator(".site-header .site-logo-copy strong"),
+    website.locator(".auth-aside .site-logo-copy strong"),
   ).toHaveText("协作测试");
   await expect(website).toHaveTitle(/开发板协作测试/);
   await page.getByRole("tab", { name: "协议与隐私", exact: true }).click();

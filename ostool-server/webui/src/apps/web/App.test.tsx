@@ -173,11 +173,11 @@ describe("registration", () => {
     expect(mocks.login).not.toHaveBeenCalled();
     localStorage.clear();
   });
-  it("switches a mounted login page to registration through the header", async () => {
+  it("switches a mounted login page to registration through the form link", async () => {
     const user = userEvent.setup();
     render(<PublicApp />);
     await user.click(
-      (await screen.findAllByRole("link", { name: "免费注册" }))[0],
+      await screen.findByRole("link", { name: "还没有账号？免费注册" }),
     );
     expect(
       await screen.findByRole("heading", { name: "创建你的账号" }),

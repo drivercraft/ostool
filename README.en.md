@@ -27,6 +27,8 @@ The launcher reads development settings from `ostool-server/.env`; see `ostool-s
 
 The server now uses one complete initial SQLx schema migration. Existing databases from the unreleased development chain require a fresh database/schema or an explicit reset of disposable test data; see [database initialization](ostool-server/deploy/site-and-data.md#数据库初始迁移). Future changes after release must use incremental migrations.
 
+Website login/registration use a separate full viewport split layout with a wider form, inline consent checkbox/text, an inset CAPTCHA image and a scrollable form on small screens.
+
 Public login/registration require image CAPTCHA by default; email verification is optional and disabled by default. TOTP, session management/revocation, rate limits and recent identity checks are available in public edition; local edition remains anonymous. See [security configuration](ostool-server/deploy/security.md).
 Public edition uses Redis for rate limits and verification cooldowns; local edition needs no Redis. System settings include branding, contacts, filing details, maintenance notices and versioned legal documents, with per-user registration consent. See [site and identity schema](ostool-server/deploy/site-and-data.md).
 Member rental applications use a separate editor sharing the admin calendar and form layout. The console navigation is labeled “设备管理 → 设备列表” (device management → device list). A click replaces the previous range, unavailable cells are gray and disabled, desktop portal content uses 80% width, and icon buttons show their background on hover.

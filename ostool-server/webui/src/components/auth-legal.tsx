@@ -31,7 +31,9 @@ export function AuthLegal({
         checked={accepted}
         onCheckedChange={(value) => onChange?.(value === true)}
       />
-      <label htmlFor={id}>我已阅读并同意{links}</label>
+      <label className="auth-legal-copy" htmlFor={id}>
+        我已阅读并同意{links}
+      </label>
     </div>
   ) : (
     <p className="auth-legal">登录前请阅读{links}。</p>

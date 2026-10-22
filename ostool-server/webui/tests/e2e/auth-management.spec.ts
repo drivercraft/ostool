@@ -12,7 +12,7 @@ test("registration, member/admin access, user/role events and settings navigatio
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`${base}/login`);
   await page
-    .getByRole("link", { name: "免费注册", exact: true })
+    .getByRole("link", { name: "还没有账号？免费注册", exact: true })
     .first()
     .click();
   await expect(

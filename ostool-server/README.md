@@ -625,3 +625,11 @@ against an existing gateway. Rental allocation keeps the established
 busy/not-found error messages understood by the original CLI waiting loop.
 `cargo test -p ostool-server --test cli_gateway_contract` checks the baseline
 wire contract against a separate mock gateway.
+
+
+Website login and registration use a full viewport split layout: introduction on
+the left and a wider form on the right. Narrow screens show the form with internal
+scrolling; site navigation/footer are omitted on these authentication routes.
+Registration consent stays beside its checkbox, and image CAPTCHA appears inside
+the right end of the input. The shared CAPTCHA component also updates backend
+login and other security forms without merging their separate authentication pages.
