@@ -242,48 +242,29 @@ OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_br
 
 ## 本地演示数据
 
-一键开发脚本默认启用 `OSTOOL_DEV_DEMO=true`。已有环境使用 `restart` 即可补充数据：
+`ostool-server/scripts/dev.sh` 使用 Docker Compose 构建和运行正式 release 镜像，
+统一启动 Rust、PostgreSQL、Redis 与 Caddy。修改源码后运行 `restart`；`stop` 关闭
+容器并保留数据卷。脚本读取 `ostool-server/.env`，没有调试专用鉴权或来源校验例外。
+
+本机及局域网均通过 Caddy HTTPS 访问；在 `.env` 中设置主站地址
+`OSTOOL_PUBLIC_BASE_URL`、附加来源 `OSTOOL_ALLOWED_ORIGINS` 与 Caddy 站点
+`OSTOOL_SITE_ADDRESSES`。运行 `scripts/dev.sh cert` 导出根证书，在访问设备上信任。
+local 版仍然免登录；public 版完整启用登录、验证码、用户和租赁功能。两版共享数据库，
+仅功能配置不同。公网正式安装继续使用 `install.sh` 和 Caddy。
+
+演示数据不再随服务启动自动生成，单独执行：
 
 ```bash
-# 本地版：自动启动 PostgreSQL，不需要登录
-ostool-server/scripts/dev.sh restart
-# 公开测试版：PostgreSQL + 登录 + 用户、角色、租赁
-OSTOOL_EDITION=public ostool-server/scripts/dev.sh restart
+ostool-server/scripts/dev.sh seed
 ```
 
-按当前版本选择其中一条；默认端口相同，切换版本先以原版本执行 `stop`，
-或通过 `OSTOOL_DEV_SERVER_PORT` 给两个版本分配不同端口。
-
-访问 `http://127.0.0.1:2999/` 或 `/admin/overview`。首次填充包括：
-
-- 48 块开发板：六种板型、三种启动方式、不同标签、长文本与空备注，包含空闲、
-  使用中、释放中、异常及禁用状态。
-- 24 个展示用 DTB、12 个持续保活的会话，以及会话下可下载的文本与日志文件。
-- 18 个发现设备：在线、离线、冲突和未绑定设备；顶部消息菜单也包含演示错误通知。
-- 公开测试版另有 36 个用户（含禁用账号）、6 个自定义角色、72 条过去、当前、未来和
-  已取消的租赁，以及 48 条待审核、已批准、已拒绝和已撤回的申请。
-  可检查搜索、过滤、分页及编辑效果。
-
-公开测试版演示管理员 `demo01@example.test`、普通用户 `demo02@example.test`，
-密码均为 `demo-user-password-123`。原有默认管理员仍为
-`admin@example.com` / `admin-password-123`。角色名称仅用于演示现有权限模型。
-
-持久数据通过统一 PostgreSQL 和 API/SSE 展示，名称使用 `demo` / `[演示]` 标识。
-重复启动仅补缺失记录，保留已经修改的账号、密码、板卡、DTB 和租赁。
-会话和设备在线状态在进程运行时保活；手动释放的会话本次运行内不会重新创建。
-运行状态在重启时重新生成，已保存的租赁时间不自动改期。
-
-`dev.sh` 始终传入仅供调试的 `--dev`，两种版本均支持本机与局域网 HTTP 调试；public 版
-仍启用完整登录、验证码、用户及租赁权限。可通过 `OSTOOL_DEV_HTTPS_HOST` 开启 Caddy
-局域网 HTTPS 调试，客户端需信任开发目录中的根证书。正式部署使用 `install.sh` 和 Caddy，
-不传入 `--dev` 或 `--dev-demo`。演示模式关闭设备发现监听、QEMU、网络测试、
-TFTP 服务启动及启动自动断电。演示板卡电源命令为空操作，设备 IP 使用文档地址段，
-DTB 不含真实硬件定义。这里用于页面展示，真实硬件联调需关闭演示模式。
-
-使用 `OSTOOL_DEV_DEMO=false` 加同版 `restart` 可停止填充并恢复正常硬件启动流程，
-已经持久化的示例数据仍会保留。`clean` 会删除所选开发版目录内的**全部数据**，
-下次启动重新生成初始数据。开发脚本不得指向生产数据库或生产数据目录；正常直接启动
-和 systemd 部署不会自动开启演示模式。完整配置说明见服务器 README。
+命令暂停网站服务，导入 48 块开发板和 24 个展示用 DTB；public 版额外导入 36 个用户、
+6 个角色、72 条租赁和 48 条申请，之后启动服务。重复导入保留已有记录和修改。
+不再生成假的在线设备、持续保活会话、电源结果或运行状态。
+演示管理员 `demo01@example.test`、普通用户 `demo02@example.test`，密码均为
+`demo-user-password-123`。正式管理员凭据由 `.env` 设置，没有内置默认密码。
+演示数据仅应导入可丢弃的数据库。旧宿主进程的开发目录不会被自动迁移或删除。
+完整地址、证书及硬件容器映射说明见[服务器 README](../ostool-server/README.md#local-development-environment)。
 
 ## 已有开发板独立迁移
 

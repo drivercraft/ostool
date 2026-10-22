@@ -27,6 +27,10 @@ path = "src/main.rs"
 name = "ostool-server-migrate-boards"
 path = "tools/migrate-boards.rs"
 
+[[bin]]
+name = "ostool-server-seed-demo"
+path = "tools/seed-demo.rs"
+
 [dependencies]
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 redis = { version = "1.7", default-features = false, features = ["tokio-rustls-comp", "connection-manager", "script", "tls-rustls-webpki-roots"] }

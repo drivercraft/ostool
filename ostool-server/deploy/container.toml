@@ -1,0 +1,24 @@
+# 容器内使用正式服务配置，数据库与站点设置通过环境变量提供。
+listen_addr = "127.0.0.1:2999"
+data_dir = "/var/lib/ostool-server"
+
+[network]
+interface = ""
+
+# 按实际硬件部署调整配置与设备映射；容器默认不启动硬件监听。
+[tftp]
+provider = "builtin"
+enabled = false
+root_dir = "/var/lib/ostool-server/tftp"
+bind_addr = "0.0.0.0:69"
+
+[loader_network]
+enabled = false
+bind_addr = "0.0.0.0:2998"
+
+[network_test]
+enabled = false
+
+[http_boot]
+enabled = false
+root_dir = "/var/lib/ostool-server/http-boot"

@@ -22,10 +22,10 @@ axloader 网络控制（v6 串口自动绑定、v5 设备识别与 OTA、v2/v3/v
 部署、安全配置和已有板卡迁移见 [服务器说明](ostool-server/README.md)，界面与 SSE 协议见
 [管理界面文档](docs/admin-ui.md)。
 
-开发环境使用 `ostool-server/scripts/dev.sh start|stop|status`；`build` 仅构建，
-修改源码后使用 `restart` 重新构建并启动。脚本读取 `ostool-server/.env`，本地版默认允许
-局域网访问，可用 `OSTOOL_DEV_HOST=127.0.0.1` 限制为本机。配置和演示账号见
-[开发环境说明](ostool-server/README.md#local-development-environment)。
+开发环境使用 `ostool-server/scripts/dev.sh start|stop|status` 运行统一的 Docker Compose
+release 环境；`build` 仅构建镜像，修改源码后使用 `restart`。配置来自
+`ostool-server/.env`，本机和局域网通过 Caddy HTTPS 访问，`seed` 独立导入演示数据。
+配置与证书说明见[开发环境说明](ostool-server/README.md#local-development-environment)。
 
 **ostool** 是一个专为操作系统开发而设计的 Rust 工具集，旨在为 OS 开发者提供便捷的构建、配置和启动环境。它特别适合嵌入式系统开发，支持通过 Qemu 虚拟机和 U-Boot 引导程序进行系统测试和调试。
 

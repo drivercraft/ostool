@@ -23,11 +23,12 @@ and scheduled board rentals. See the [server guide](ostool-server/README.md) for
 deployment, security and existing board migration, and the
 [management interface guide](docs/admin-ui.md) for UI and SSE behavior.
 
-Use `ostool-server/scripts/dev.sh start|stop|status` for development; `build` only
-builds, while `restart` rebuilds and starts updated source. The launcher reads
-`ostool-server/.env` and defaults to LAN access locally; set
-`OSTOOL_DEV_HOST=127.0.0.1` for loopback-only access. Settings and demo accounts are
-in the [development guide](ostool-server/README.md#local-development-environment).
+Use `ostool-server/scripts/dev.sh start|stop|status` for the unified Docker Compose
+release environment; `build` only builds the image, and `restart` applies source
+changes. Settings come from `ostool-server/.env`; Caddy HTTPS serves loopback and
+LAN addresses. `seed` imports demonstration data separately. See the
+[development guide](ostool-server/README.md#local-development-environment) for
+configuration and certificate trust.
 
 **ostool** is a Rust toolset designed specifically for operating system development, aiming to provide OS developers with convenient build, configuration, and startup environments. It's particularly suitable for embedded system development, supporting system testing and debugging through Qemu virtual machines and U-Boot bootloader.
 

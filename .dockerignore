@@ -1,0 +1,14 @@
+.git
+itexp
+**/target
+**/node_modules
+**/dist
+**/test-results
+**/playwright-report
+**/.env
+**/.env.*
+**/*.key
+**/AGENTS.md
+.ostool-server*
+.codex
+assets

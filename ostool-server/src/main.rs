@@ -19,12 +19,6 @@ struct Cli {
     /// Load deployment variables from this file (defaults to .env if present).
     #[arg(long)]
     env_file: Option<PathBuf>,
-    /// Enable local/LAN debugging; never use this mode for an installed public service.
-    #[arg(long)]
-    dev: bool,
-    /// Populate a UI demo; disable hardware listeners and startup power-off.
-    #[arg(long)]
-    dev_demo: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -51,7 +45,6 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     let mut config = ServerConfig::load_or_create(&cli.config).await?;
-    config.development = cli.dev;
     ostool_server::environment::apply(&mut config, cli.env_file.as_deref())?;
     if let Some(Command::VirtualLab { action }) = cli.command {
         let action = match action {
@@ -60,12 +53,6 @@ async fn main() -> anyhow::Result<()> {
             VirtualLabCommand::Down => VirtualLabAction::Down,
         };
         return run_virtual_lab(&config.virtual_qemu, action).await;
-    }
-    if cli.dev_demo {
-        let tftp = config.tftp.clone();
-        ostool_server::demo::prepare(&mut config)?;
-        // Import the real editable settings, not the demo service override.
-        config.tftp = tftp;
     }
     anyhow::ensure!(
         config
@@ -98,26 +85,14 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let state = build_app_state(cli.config.clone(), config, tftp_manager.clone()).await?;
-    if cli.dev_demo {
-        let mut config = state.config.write().await;
-        ostool_server::demo::prepare(&mut config)?;
-        *state.tftp_manager.write().await =
-            ostool_server::tftp::service::build_tftp_manager(&config.tftp);
-        state.admin_events.invalidate(&["tftp", "server"]);
-    }
     let tftp_manager = state.tftp_manager.read().await.clone();
     state.ensure_data_dirs().await?;
     state.monitor.start(state.clone());
-    let _demo = if cli.dev_demo {
-        Some(ostool_server::demo::seed(&state).await?)
-    } else {
-        for (board_id, err) in state.power_off_all_boards_on_startup().await {
-            log::warn!(
-                "failed to power off board `{board_id}` during server startup; marking it disabled for this process: {err}"
-            );
-        }
-        None
-    };
+    for (board_id, err) in state.power_off_all_boards_on_startup().await {
+        log::warn!(
+            "failed to power off board `{board_id}` during server startup; marking it disabled for this process: {err}"
+        );
+    }
     let discovery_task = start_udp_discovery(state.clone()).await?;
     tftp_manager.start_if_needed().await?;
     if let ostool_server::TftpConfig::SystemTftpdHpa(cfg) = &state.config.read().await.tftp

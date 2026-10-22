@@ -70,7 +70,7 @@ jobs:
     - name: Check development launcher configuration
       run: |
         bash -n ostool-server/scripts/dev.sh
-        node --test ostool-server/scripts/dev-config.test.mjs
+        docker compose --env-file ostool-server/.env.example -f ostool-server/deploy/compose.yaml config --quiet
     - name: Check rust version
       run: rustc --version --verbose
     - name: Check code format

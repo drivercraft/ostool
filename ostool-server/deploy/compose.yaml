@@ -1,0 +1,96 @@
+# 本机与服务器运行相同的 release 镜像；仅地址、证书和密钥等环境配置不同。
+services:
+  server:
+    image: ostool-server:release
+    build:
+      context: ../..
+      dockerfile: ostool-server/deploy/Dockerfile
+    env_file:
+      - path: ${OSTOOL_ENV_FILE:-../.env}
+        required: false
+    environment:
+      OSTOOL_EDITION: ${OSTOOL_EDITION:-local}
+      OSTOOL_LISTEN_ADDR: ${OSTOOL_LISTEN_ADDR:-127.0.0.1:2999}
+      OSTOOL_DATABASE_URL: postgres://ostool:${OSTOOL_POSTGRES_PASSWORD:?请在 .env 中设置数据库密码}@127.0.0.1:${OSTOOL_POSTGRES_PORT:-54329}/ostool
+      OSTOOL_REDIS_URL: redis://127.0.0.1:${OSTOOL_REDIS_PORT:-56380}/0
+      OSTOOL_PUBLIC_BASE_URL: ${OSTOOL_PUBLIC_BASE_URL:-https://127.0.0.1:3443}
+      OSTOOL_ALLOWED_ORIGINS: ${OSTOOL_ALLOWED_ORIGINS:-}
+      OSTOOL_TRUSTED_PROXY_IPS: 127.0.0.1,::1
+    volumes:
+      - server-data:/var/lib/ostool-server
+    # 与 systemd 部署使用相同的回环 API 和主机网络，不需要代理 IP 推断。
+    network_mode: host
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD-SHELL, 'curl --fail --silent "http://$$OSTOOL_LISTEN_ADDR/api/v1/auth/config"']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ostool
+      POSTGRES_PASSWORD: ${OSTOOL_POSTGRES_PASSWORD:?请在 .env 中设置数据库密码}
+      POSTGRES_DB: ostool
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${OSTOOL_POSTGRES_PORT:-54329}:5432"
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U ostool -d ostool']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: [redis-server, --appendonly, 'yes', --maxmemory, 64mb, --maxmemory-policy, noeviction]
+    volumes:
+      - redis-data:/data
+    ports:
+      - "127.0.0.1:${OSTOOL_REDIS_PORT:-56380}:6379"
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      OSTOOL_SITE_ADDRESSES: ${OSTOOL_SITE_ADDRESSES:-https://127.0.0.1 https://localhost}
+      OSTOOL_HTTPS_PORT: ${OSTOOL_HTTPS_PORT:-3443}
+      OSTOOL_HTTPS_BIND: ${OSTOOL_HTTPS_BIND:-0.0.0.0}
+      OSTOOL_UPSTREAM: ${OSTOOL_LISTEN_ADDR:-127.0.0.1:2999}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    # IP HTTPS 客户端不发送 SNI；host 网络保留目标 IP，便于选择匹配的证书。
+    network_mode: host
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  server-data:
+  postgres-data:
+  redis-data:
+  caddy-data:
+  caddy-config:

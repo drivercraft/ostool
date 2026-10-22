@@ -62,35 +62,6 @@ fn keys(config: &PowerManagementConfig) -> BTreeSet<String> {
     result
 }
 impl AdminPower {
-    /// Display fixtures only; does not invoke the power command executor.
-    pub(crate) fn seed_demo(&self) {
-        let mut actions = self.0.lock().unwrap();
-        for (index, state) in ["succeeded", "failed"].into_iter().enumerate() {
-            let id = format!("demo-power-{}", index + 1);
-            let request = PowerRequest {
-                request_id: id.clone(),
-                action: Action::Off,
-                power_management: PowerManagementConfig::Custom(crate::CustomPowerManagement {
-                    power_on_cmd: "true # ostool-demo".into(),
-                    power_off_cmd: "true # ostool-demo".into(),
-                }),
-            };
-            let result = PowerResult {
-                id: id.clone(),
-                action: Action::Off,
-                state,
-                message: Some(
-                    if index == 0 {
-                        "[演示] 电源操作成功，无硬件操作"
-                    } else {
-                        "[演示] 电源操作超时，用于展示失败通知"
-                    }
-                    .into(),
-                ),
-            };
-            actions.records.entry(id).or_insert((request, result));
-        }
-    }
     pub fn is_busy(&self, config: &PowerManagementConfig) -> bool {
         !self.0.lock().unwrap().busy.is_disjoint(&keys(config))
     }

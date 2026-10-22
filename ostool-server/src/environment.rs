@@ -49,6 +49,14 @@ pub(crate) fn apply_values(
             *target = Some(value.clone());
         }
     }
+    if let Some(value) = values.get("OSTOOL_ALLOWED_ORIGINS") {
+        config.auth.allowed_origins = value
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect();
+    }
     parsed(values, "OSTOOL_EDITION", &mut config.edition)?;
     if let Some(value) = values.get("OSTOOL_AUDIT_RETENTION_DAYS") {
         let days: u32 = value

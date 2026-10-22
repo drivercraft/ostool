@@ -77,66 +77,6 @@ pub enum RegistrationError {
 }
 
 impl LoaderRegistry {
-    pub(crate) async fn seed_demo_devices(&self) {
-        let mut state = self.state.lock().await;
-        for index in 0..18 {
-            // Include unbound devices so the discovery/import flow is visible.
-            let suffix = if index % 3 == 0 {
-                0x80 + index
-            } else {
-                index + 1
-            };
-            let mac = format!("02:de:00:00:00:{suffix:02x}")
-                .parse()
-                .expect("demo MAC");
-            state.devices.entry(mac).or_insert_with(|| DeviceRecord {
-                current_mac_address: mac,
-                // RFC 5737 documentation addresses: no actual device endpoints.
-                ip_address: format!("192.0.2.{}", index + 1),
-                arch: [
-                    httpboot_protocol::BootArch::X86_64,
-                    httpboot_protocol::BootArch::Aarch64,
-                    httpboot_protocol::BootArch::Riscv64,
-                    httpboot_protocol::BootArch::Loongarch64,
-                ][index % 4],
-                loader_version: format!("demo-0.{}.0", index % 3 + 1),
-                hardware: LoaderHardwareInfo {
-                    manufacturer: Some("[演示] ostool lab".into()),
-                    product: Some(format!("Demo device {:02}", index + 1)),
-                    version: Some("UI fixture".into()),
-                    serial: Some(format!("DEMO-{:04}", index + 1)),
-                },
-                last_seen_at: Utc::now()
-                    - if index < 12 {
-                        Duration::zero()
-                    } else {
-                        Duration::minutes(30)
-                    },
-                current_registration_id: format!("ostool-demo-device-{index}"),
-                conflict: index == 11,
-            });
-        }
-        drop(state);
-        self.events.invalidate(&["loaders"]);
-        self.deadline_changed.notify_one();
-    }
-
-    pub(crate) async fn refresh_demo_devices(&self) {
-        let mut state = self.state.lock().await;
-        for device in state.devices.values_mut() {
-            if device
-                .current_registration_id
-                .strip_prefix("ostool-demo-device-")
-                .and_then(|index| index.parse::<usize>().ok())
-                .is_some_and(|index| index < 12)
-            {
-                device.last_seen_at = Utc::now();
-            }
-        }
-        drop(state);
-        self.events.invalidate(&["loaders"]);
-        self.deadline_changed.notify_one();
-    }
     pub async fn accept_announcement(
         &self,
         announcement: &LoaderAnnouncement,

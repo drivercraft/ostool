@@ -1,6 +1,6 @@
 use std::{
     env::current_dir,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
 };
 
@@ -16,10 +16,6 @@ const SYSTEM_DATA_DIR: &str = "/var/lib/ostool-server";
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ServerConfig {
-    /// 仅由命令行 --dev 启用，安装部署不能通过配置文件开启调试例外。
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub development: bool,
     #[serde(default)]
     pub security: crate::security::config::SecurityConfig,
     #[serde(default)]
@@ -74,7 +70,6 @@ impl ServerConfig {
         ));
 
         Self {
-            development: false,
             security: crate::security::config::SecurityConfig::default(),
             audit: AuditConfig::default(),
             edition: Edition::Local,
@@ -199,37 +194,7 @@ impl ServerConfig {
         Ok(())
     }
 
-    pub(crate) fn development_address(ip: IpAddr) -> bool {
-        ip.is_loopback()
-            || match ip {
-                IpAddr::V4(ip) => ip.is_private() || ip.is_link_local(),
-                IpAddr::V6(ip) => ip.is_unique_local() || ip.is_unicast_link_local(),
-            }
-    }
-    pub(crate) fn development_origin(origin: &url::Url) -> bool {
-        matches!(origin.scheme(), "http" | "https")
-            && origin.username().is_empty()
-            && origin.password().is_none()
-            && origin.host().is_some_and(|host| match host {
-                url::Host::Domain(host) => host == "localhost",
-                url::Host::Ipv4(ip) => Self::development_address(ip.into()),
-                url::Host::Ipv6(ip) => Self::development_address(ip.into()),
-            })
-    }
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.development {
-            anyhow::ensure!(
-                self.listen_addr.ip().is_unspecified()
-                    || Self::development_address(self.listen_addr.ip()),
-                "调试模式仅允许本机、局域网或通配监听"
-            );
-            if let Some(origin) = &self.auth.public_base_url {
-                anyhow::ensure!(
-                    Self::development_origin(&url::Url::parse(origin)?),
-                    "调试模式仅允许本机或局域网 HTTP(S) 地址，正式部署请使用 install.sh 与 Caddy"
-                );
-            }
-        }
         if self
             .audit
             .retention_days
@@ -251,9 +216,13 @@ impl ServerConfig {
         if self.database.max_connections == 0 {
             bail!("database.max_connections must be greater than 0");
         }
-        if let Some(base) = &self.auth.public_base_url {
-            let url =
-                url::Url::parse(base).context("auth.public_base_url must be an absolute URL")?;
+        for base in self
+            .auth
+            .public_base_url
+            .iter()
+            .chain(&self.auth.allowed_origins)
+        {
+            let url = url::Url::parse(base).context("auth origins must be absolute URLs")?;
             if !matches!(url.scheme(), "http" | "https")
                 || url.host_str().is_none()
                 || url.path() != "/"
@@ -263,9 +232,24 @@ impl ServerConfig {
                 || url.password().is_some()
             {
                 bail!(
-                    "auth.public_base_url must be an HTTP(S) origin without credentials, path, query or fragment"
+                    "auth origins must be HTTP(S) origins without credentials, path, query or fragment"
                 );
             }
+            let loopback = url.host().is_some_and(|host| match host {
+                url::Host::Domain(host) => host == "localhost",
+                url::Host::Ipv4(ip) => ip.is_loopback(),
+                url::Host::Ipv6(ip) => ip.is_loopback(),
+            });
+            anyhow::ensure!(
+                !self.edition.is_public() || url.scheme() == "https" || loopback,
+                "authentication origins require HTTPS, except on loopback"
+            );
+            anyhow::ensure!(
+                self.auth.public_base_url.as_ref().is_none_or(|primary| {
+                    url::Url::parse(primary).is_ok_and(|primary| primary.scheme() == url.scheme())
+                }),
+                "authentication origins must use the same scheme as public_base_url"
+            );
         }
         self.network_test.validate(self.listen_addr)?;
         if self.network.interface.trim().is_empty() {
@@ -370,6 +354,8 @@ pub struct AuthConfig {
     pub allow_registration: bool,
     pub max_active_sessions: u32,
     pub public_base_url: Option<String>,
+    /// Additional browser origins explicitly trusted for CSRF checks.
+    pub allowed_origins: Vec<String>,
     pub bootstrap_admin_email: Option<String>,
     #[serde(skip_serializing)]
     pub bootstrap_admin_password: Option<String>,
@@ -395,6 +381,7 @@ impl Default for AuthConfig {
             allow_registration: true,
             max_active_sessions: 10,
             public_base_url: None,
+            allowed_origins: Vec::new(),
             bootstrap_admin_email: None,
             bootstrap_admin_password: None,
         }
@@ -1647,25 +1634,33 @@ kind = "pxe"
 
 #[cfg(test)]
 #[test]
-fn development_is_cli_only_and_rejects_public_network_configuration() {
+fn authentication_origins_require_explicit_secure_configuration() {
     let mut config = ServerConfig {
-        development: true,
+        edition: Edition::Public,
         ..Default::default()
     };
     config.network.interface = "lo".into();
-    config.auth.public_base_url = Some("http://192.168.20.10:2999".into());
+    config.auth.public_base_url = Some("https://192.168.20.10:3443".into());
+    config.auth.allowed_origins = vec![
+        "https://127.0.0.1:3443".into(),
+        "https://boards.example.com".into(),
+    ];
     config.validate().unwrap();
-    config.listen_addr = "8.8.8.8:2999".parse().unwrap();
+    for invalid in [
+        "http://192.168.20.10",
+        "https://example.com/path",
+        "https://user@example.com",
+        "https://example.com?x=1",
+        "https://example.com#x",
+        "file:///tmp",
+        "http://localhost:3443",
+    ] {
+        config.auth.allowed_origins = vec![invalid.into()];
+        assert!(config.validate().is_err(), "{invalid}");
+    }
+    config.auth.public_base_url = Some("http://127.0.0.1:2999".into());
+    config.auth.allowed_origins = vec!["http://localhost:2999".into()];
+    config.validate().unwrap();
+    config.auth.public_base_url = Some("http://192.168.20.10:2999".into());
     assert!(config.validate().is_err());
-    config.listen_addr = "127.0.0.1:2999".parse().unwrap();
-    config.auth.public_base_url = Some("https://boards.example.com".into());
-    assert!(config.validate().is_err());
-    let mut value = serde_json::to_value(&config).unwrap();
-    assert!(value.get("development").is_none());
-    value["development"] = serde_json::json!(true);
-    assert!(
-        !serde_json::from_value::<ServerConfig>(value)
-            .unwrap()
-            .development
-    );
 }

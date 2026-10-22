@@ -158,24 +158,12 @@ pub async fn build_app_state(
         .security
         .validate_deployment(config.edition.is_public())?;
     if config.edition.is_public() {
-        let origin = config
-            .auth
-            .public_base_url
-            .as_deref()
-            .context("public edition requires OSTOOL_PUBLIC_BASE_URL")?;
-        let url = url::Url::parse(origin)?;
         anyhow::ensure!(
-            url.scheme() == "https"
-                || (config.development && ServerConfig::development_origin(&url))
-                || (url.scheme() == "http"
-                    && url.host().is_some_and(|host| match host {
-                        url::Host::Domain(host) => host == "localhost",
-                        url::Host::Ipv4(ip) => ip.is_loopback(),
-                        url::Host::Ipv6(ip) => ip.is_loopback(),
-                    })),
-            "public edition requires HTTPS, except on loopback"
+            config.auth.public_base_url.is_some(),
+            "public edition requires OSTOOL_PUBLIC_BASE_URL"
         );
     }
+    config.validate()?;
     let security_cache = if config.edition.is_public() {
         Some(crate::security::cache::SecurityCache::connect(&config).await?)
     } else {

@@ -8,7 +8,6 @@ pub mod audit;
 pub mod board_pool;
 pub mod config;
 pub mod dashboard;
-pub mod demo;
 pub mod device;
 pub mod environment;
 pub mod http_boot;

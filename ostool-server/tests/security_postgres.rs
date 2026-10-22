@@ -1350,50 +1350,42 @@ async fn account_settings_are_validated_private_versioned_persistent_and_enforce
 
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL and Redis"]
-async fn public_development_preserves_auth_and_accepts_only_private_same_origin() {
-    let f = Fixture::new(true).await;
-    f.state.config.write().await.development = true;
-    for (origin, host, expected) in [
-        (
-            "http://192.168.20.10:4190",
-            "192.168.20.10:4190",
-            StatusCode::OK,
-        ),
-        ("http://127.0.0.1:4190", "127.0.0.1:4190", StatusCode::OK),
-        (
-            "http://192.168.20.11:4190",
-            "192.168.20.10:4190",
-            StatusCode::FORBIDDEN,
-        ),
-        (
-            "http://192.168.20.10:4190/path",
-            "192.168.20.10:4190",
-            StatusCode::FORBIDDEN,
-        ),
-        (
-            "http://attacker.example",
-            "attacker.example",
-            StatusCode::FORBIDDEN,
-        ),
-        ("http://8.8.8.8:4190", "8.8.8.8:4190", StatusCode::FORBIDDEN),
+async fn explicit_origins_preserve_auth_and_reject_unlisted_websites() {
+    let mut f = Fixture::new(true).await;
+    f.origin = "https://192.168.20.10:3443".into();
+    // The same configuration supports localhost, LAN addresses and extra domains.
+    {
+        let mut config = f.state.config.write().await;
+        config.auth.public_base_url = Some(f.origin.clone());
+        config.auth.allowed_origins = vec![
+            "https://127.0.0.1:3443".into(),
+            "https://boards.example.com".into(),
+        ];
+        config.validate().unwrap();
+    }
+    for (origin, expected) in [
+        ("https://192.168.20.10:3443", StatusCode::OK),
+        ("https://127.0.0.1:3443", StatusCode::OK),
+        ("https://boards.example.com", StatusCode::OK),
+        ("http://192.168.20.10:4190", StatusCode::FORBIDDEN),
+        ("http://localhost:4190/path", StatusCode::FORBIDDEN),
+        ("http://localhost:4191", StatusCode::FORBIDDEN),
+        ("http://attacker.example", StatusCode::FORBIDDEN),
     ] {
         let proof = f.proof("admin_login").await;
-        let mut request = Request::builder().method("POST").uri("/api/v1/admin/auth/login")
-            .header("host",host).header("origin",origin).header("content-type","application/json").header("user-agent","ostool-security-test")
-            .body(Body::from(json!({"email":"admin@security.test","password":"security-admin-password-123","verification":proof}).to_string())).unwrap();
-        request.extensions_mut().insert(ConnectInfo(
-            "203.0.113.5:4190".parse::<std::net::SocketAddr>().unwrap(),
-        ));
-        let response = f.app.clone().oneshot(request).await.unwrap();
-        assert_eq!(response.status(), expected, "{origin} / {host}");
+        let response = f.custom(
+            "POST", "/api/v1/admin/auth/login", None,
+            json!({"email":"admin@security.test","password":"security-admin-password-123","verification":proof}),
+            Some(origin), None,
+        ).await;
+        assert_eq!(response.status, expected, "{origin}");
         if expected == StatusCode::OK {
-            assert!(
-                response
-                    .headers()
-                    .get_all("set-cookie")
-                    .iter()
-                    .any(|value| value.to_str().unwrap().contains("HttpOnly"))
-            );
+            assert!(response.headers.get_all("set-cookie").iter().any(|cookie| {
+                let cookie = cookie.to_str().unwrap();
+                cookie.starts_with("__Host-")
+                    && cookie.contains("Secure")
+                    && cookie.contains("HttpOnly")
+            }));
         }
     }
     assert_eq!(
@@ -1401,19 +1393,5 @@ async fn public_development_preserves_auth_and_accepts_only_private_same_origin(
             .await
             .status,
         StatusCode::UNAUTHORIZED
-    );
-    f.state.config.write().await.development = false;
-    assert_eq!(
-        f.custom(
-            "POST",
-            "/api/v1/auth/login",
-            None,
-            json!({}),
-            Some("http://192.168.20.10:4190"),
-            None
-        )
-        .await
-        .status,
-        StatusCode::FORBIDDEN
     );
 }

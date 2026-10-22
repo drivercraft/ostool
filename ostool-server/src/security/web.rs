@@ -234,13 +234,15 @@ pub async fn transport(
     let websocket = config
         .auth
         .public_base_url
-        .as_deref()
-        .and_then(|value| url::Url::parse(value).ok())
+        .iter()
+        .chain(&config.auth.allowed_origins)
+        .filter_map(|value| url::Url::parse(value).ok())
         .map(|mut url| {
             let _ = url.set_scheme(if url.scheme() == "https" { "wss" } else { "ws" });
             url.origin().ascii_serialization()
         })
-        .unwrap_or_default();
+        .collect::<Vec<_>>()
+        .join(" ");
     let policy = if path.starts_with("/share/") || path.starts_with("/boot/") {
         "sandbox; default-src 'none'".to_owned()
     } else {
@@ -333,39 +335,13 @@ pub async fn gate(
             let allowed = config
                 .auth
                 .public_base_url
-                .as_deref()
-                .and_then(|value| url::Url::parse(value).ok())
-                .map(|value| value.origin().ascii_serialization());
-            let origin_value = origin.to_str().ok();
-            let development_origin = config.development
-                && origin
-                    .to_str()
-                    .ok()
-                    .and_then(|value| url::Url::parse(value).ok())
-                    .is_some_and(|origin| {
-                        if !ServerConfig::development_origin(&origin)
-                            || origin_value != Some(origin.origin().ascii_serialization().as_str())
-                        {
-                            return false;
-                        }
-                        request
-                            .headers()
-                            .get(header::HOST)
-                            .and_then(|host| host.to_str().ok())
-                            .and_then(|host| {
-                                url::Url::parse(&format!("{}://{host}", origin.scheme())).ok()
-                            })
-                            .is_some_and(|host| {
-                                ServerConfig::development_origin(&host)
-                                    && host.path() == "/"
-                                    && host.query().is_none()
-                                    && host.fragment().is_none()
-                                    && host.origin() == origin.origin()
-                            })
-                    });
-            if (config.development && !development_origin)
-                || (!config.development && allowed.as_deref() != origin.to_str().ok())
-            {
+                .iter()
+                .chain(&config.auth.allowed_origins)
+                .filter_map(|value| url::Url::parse(value).ok())
+                .any(|value| {
+                    Some(value.origin().ascii_serialization().as_str()) == origin.to_str().ok()
+                });
+            if !allowed {
                 return ApiError::forbidden("请求来源不受信任").into_response();
             }
         } else if request

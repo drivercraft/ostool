@@ -267,9 +267,13 @@ vi /etc/ostool-server/config.toml
 
 ## Local development environment
 
-Run from the repository root with Rust, Node.js, pnpm and Docker available:
+Use Docker Engine on Linux with the Compose plugin and host networking. The
+container build installs the declared Rust,
+Node.js 24 and pnpm 10.33.0 tools; no host Rust/Node installation is needed.
 
 ```bash
+cp ostool-server/.env.example ostool-server/.env
+# Edit .env for your addresses, passwords and feature edition first.
 ostool-server/scripts/dev.sh start
 ostool-server/scripts/dev.sh status
 ostool-server/scripts/dev.sh build
@@ -277,92 +281,70 @@ ostool-server/scripts/dev.sh restart
 ostool-server/scripts/dev.sh stop
 ```
 
-`start` starts the private PostgreSQL container and server, building when needed;
-starting an already running edition keeps that process. `build` only builds the
-website, console and Rust executable. Use `restart` after source or listener
-changes to rebuild embedded assets and replace the process. `stop` stops the
-selected edition's server and backing containers. `clean` additionally deletes
-**all data belonging to that development edition**; use it only for disposable
-data. The launcher does not change systemd or `/etc/ostool-server`.
+The launcher runs the same release binary as deployment, together with PostgreSQL,
+Redis and Caddy. It has no development authentication/origin bypass or simulated
+runtime. `start` and `restart` build current source and apply Compose configuration;
+`build` only builds the image. `stop` removes the containers and retains named data
+volumes. It never changes systemd or `/etc/ostool-server`. Containers use the Compose
+project name `ostool-server`; both feature editions share the same data volumes.
 
-The launcher reads `ostool-server/.env` regardless of the working directory;
-copy [.env.example](.env.example) as needed. Process variables take precedence.
-Only `OSTOOL_DEV_*`, `OSTOOL_EDITION`, `OSTOOL_ADMIN_EMAIL` and
-`OSTOOL_ADMIN_PASSWORD` are imported; deployment database URLs, listener and
-security settings do not redirect the launcher's private services.
-`OSTOOL_DEV_ENV_FILE` selects another file. Node's dotenv parser treats values
-as data without shell execution or expansion.
+The launcher reads `ostool-server/.env` through Compose, independent of the working
+directory. Process variables override Compose interpolation values (such as edition
+and published ports); other server settings come from the environment file.
+`OSTOOL_ENV_FILE` can select
+another environment file; the same file supplies the container's runtime settings.
+There is no shell evaluation of dotenv contents and no `OSTOOL_DEV_*` settings.
+The previous host-process data directory is not imported or deleted automatically.
 
-| Setting | Default |
-| --- | --- |
-| `OSTOOL_EDITION` | `local` |
-| `OSTOOL_DEV_HOST` | `0.0.0.0` in either development edition |
-| `OSTOOL_DEV_SERVER_PORT` | `2999` |
-| `OSTOOL_DEV_DIR` | `.ostool-server-dev/<edition>` |
-| `OSTOOL_DEV_PG_PORT` | `54328` locally; `54329` for public testing |
-| `OSTOOL_DEV_REDIS_PORT` | `56380`, public testing only |
-| `OSTOOL_DEV_DEMO` | `true` |
-
-Open `http://127.0.0.1:2999/` or `/admin/overview`; local development also accepts
-`http://<server-LAN-IP>:2999/`. Set `OSTOOL_DEV_HOST=127.0.0.1` for loopback-only
-access. `OSTOOL_LISTEN_ADDR` controls direct Rust startup; the launcher generates
-its listener from `OSTOOL_DEV_HOST` and `OSTOOL_DEV_SERVER_PORT`.
-The local anonymous listener belongs on a trusted network.
-
-For the authenticated development edition:
-
-```bash
-OSTOOL_EDITION=public ostool-server/scripts/dev.sh start
-```
-
-Its bootstrap administrator defaults to `admin@example.com` /
-`admin-password-123`; override `OSTOOL_ADMIN_EMAIL` and `OSTOOL_ADMIN_PASSWORD`
-before initialization. PostgreSQL data is separate per development edition;
-both defaults use HTTP port 2999, so stop the old edition before switching or
-assign distinct `OSTOOL_DEV_SERVER_PORT` values. Occupied listeners are rejected
-before backing services start. The launcher always passes `--dev`: local and public feature editions both support
-loopback/private LAN debugging, including HTTP. Public authentication, CAPTCHA,
-roles and rentals stay enabled. Origins must match the request host; an unrelated
-website cannot use the development exception. The flag cannot be enabled through
-TOML or environment variables and is absent from installed systemd services.
-Development mode rejects public-IP origins/listeners; it is not a deployment tool.
-
-For optional LAN HTTPS debugging on Linux Docker:
+Caddy is the HTTPS entry, defaulting to `https://127.0.0.1:3443` and
+`https://localhost:3443`. PostgreSQL, Redis and the Rust API listen only on host
+loopback (54329, 56380 and 2999 by default). Caddy and Rust use host networking,
+matching the normal installation topology and preserving destination IPs for TLS
+certificate selection when clients connect without SNI. No fixed Docker subnet or
+proxy IP is required.
+For simultaneous loopback and LAN access, configure the actual IP:
 
 ```dotenv
-OSTOOL_EDITION=public
-OSTOOL_DEV_HOST=0.0.0.0
-OSTOOL_DEV_HTTPS_HOST=192.168.20.10
-OSTOOL_DEV_HTTPS_PORT=3443
-OSTOOL_DEV_DEMO=true
+OSTOOL_PUBLIC_BASE_URL=https://192.168.20.10:3443
+OSTOOL_ALLOWED_ORIGINS=https://127.0.0.1:3443,https://localhost:3443
+OSTOOL_SITE_ADDRESSES="https://192.168.20.10 https://127.0.0.1 https://localhost"
+OSTOOL_HTTPS_BIND=0.0.0.0
+OSTOOL_HTTPS_PORT=3443
 ```
 
-Replace the HTTPS host with this machine's actual LAN IP, then run `dev.sh restart`.
-The launcher runs the official `caddy:2-alpine` image using the host network, binds
-HTTPS only to that IP, automatically keeps the Rust backend on loopback and blocks
-hardware routes. Local edition ignores the public HTTPS options and keeps its
-normal HTTP listener, so switching edition does not require removing them.
-It exports its development root CA to `.ostool-server-dev/public/caddy/root.crt`;
-import and trust that certificate on each accessing device. It never modifies the
-host trust store automatically. Keep the Caddy data directory to retain the CA
-across restarts. `stop` shuts down Caddy, Rust, PostgreSQL and Redis; `clean` also
-removes their development data and CA. Without `OSTOOL_DEV_HTTPS_HOST`, either
-edition supports HTTP debugging on `OSTOOL_DEV_HOST`.
+`OSTOOL_PUBLIC_BASE_URL` is the canonical origin for device authorization and email
+links. Additional origins are explicitly allowlisted, including scheme and port;
+all must use the same scheme so secure cookies work consistently. Non-loopback
+origins require HTTPS in every environment. Caddy automatically uses its internal
+CA for local IPs. Run `scripts/dev.sh cert` to export the public root certificate to
+`.ostool-server-dev/root.crt`, then trust it on accessing devices. Caddy's private
+keys remain in its named volume. No trust stores are modified automatically.
 
+Set `OSTOOL_EDITION=public` for full accounts, CAPTCHA and rentals, or `local` for
+login-free operation. Set initial `OSTOOL_ADMIN_EMAIL`, `OSTOOL_ADMIN_PASSWORD` and
+optionally a stable `OSTOOL_MFA_ENCRYPTION_KEY` before public initialization. There
+is no built-in administrator password. Edition is a product feature configuration,
+not a development/production mode. Redis is present in the unified stack; local
+edition does not use it for authentication.
 
-Demo data includes 48 boards, 24 DTBs, 12 live sessions and 18 discovered devices.
-Public testing also adds 36 users, six roles, 72 rentals and 48 applications.
-Records use `demo` / `[演示]` names; existing edits are preserved. Public demo
-accounts `demo01@example.test` (administrator) and `demo02@example.test` (member)
-both use `demo-user-password-123`. These credentials are for development only.
+The container image also includes an offline demonstration-data tool:
 
-Demo mode disables actual discovery, QEMU, network testing, TFTP startup and
-startup power-off; sample power commands are no-ops and sample DTBs are display
-fixtures. Runtime fixtures are recreated at startup; released sessions stay
-released until restart. `OSTOOL_DEV_DEMO=false` with `restart` disables fixture
-creation and restores normal hardware startup, while retaining persisted data.
-Normal direct/systemd startup does not enable demo mode. Do not point development
-or test services at production data.
+```bash
+ostool-server/scripts/dev.sh seed
+```
+
+This explicitly imports 48 boards and 24 display-only DTBs; public edition also
+imports 36 users, six roles, 72 rentals and 48 requests. Existing records and edits
+are retained. The command stops the web services before import and starts them
+afterward. It never fabricates live sessions, discovered hardware or task status.
+Demo accounts `demo01@example.test` and `demo02@example.test` use
+`demo-user-password-123`; import fixtures only into disposable data.
+
+For formal installation use `scripts/install.sh` and Caddy as described below. The
+binary and security checks are identical. Domain/port/certificate settings change
+with the deployment. The container defaults disable hardware listeners; physical
+board access requires explicit serial/USB device mapping and suitable network/TFTP
+configuration. The container does not get privileged access to the host by default.
 
 ## Management console
 
@@ -432,9 +414,9 @@ maintenance access. Frontend workflows and calendar behavior are documented in
 ## Public deployment
 
 Use `scripts/install.sh` for an installed service and Caddy for certificates and
-HTTPS. Do not use `scripts/dev.sh`, `--dev` or `--dev-demo` in public deployment.
-Installed services run the normal binary without development exceptions or demo
-fixtures; public edition requires HTTPS and a configured canonical origin.
+HTTPS. Installed services and containers run the same release binary without
+development exceptions or automatic demo fixtures. Public edition requires HTTPS
+and a configured canonical origin.
 
 Build with `cargo build --release -p ostool-server`. The build embeds both React
 entries; domain names, database URLs and passwords must not be `VITE_*` variables.
@@ -553,8 +535,7 @@ secrets. TOTP secrets use AES-256-GCM; eight single-use recovery codes are store
 only as hashes. TOTP uses 30-second steps and rejects replay. Keep clocks in sync.
 `OSTOOL_REQUIRE_ADMIN_MFA=true` restricts unenrolled admins to enrollment; ordinary
 members use their own MFA preference. Changes revoke other sessions/PATs. Public
-development retains its generated key under `.ostool-server-dev/public/mfa.key`;
-production must manage its own secret.
+deployments must provide and back up the same stable key through their environment.
 
 Optional SMTP enables verification of the current email and password recovery.
 Configure `OSTOOL_SMTP_HOST`, `OSTOOL_SMTP_FROM` and the port/TLS/credential settings
