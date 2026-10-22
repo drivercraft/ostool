@@ -119,7 +119,7 @@ export function HumanVerification({
     };
   }, [action, refreshKey, revision]);
   useEffect(() => {
-    if (!challenge) return;
+    if (challenge?.provider !== "turnstile") return;
     const timer = setTimeout(
       () => setRevision((v) => v + 1),
       challenge.expires_in * 1000,

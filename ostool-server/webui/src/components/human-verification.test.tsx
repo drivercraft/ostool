@@ -71,19 +71,43 @@ it("clears the previous answer before requesting a replacement challenge", async
   expect(screen.getByLabelText("图形验证码")).toHaveValue("");
   expect(changed).toHaveBeenLastCalledWith(undefined);
 });
-it("expires an unused challenge without retaining its answer", async () => {
-  vi.useFakeTimers();
-  mocks.captcha.mockResolvedValue(challenge("current"));
-  const changed = vi.fn();
-  render(<HumanVerification action="login" onChange={changed} />);
-  await act(async () => {});
-  fireEvent.change(screen.getByLabelText("图形验证码"), {
-    target: { value: "AB29Q" },
-  });
-  await act(async () => {
-    vi.advanceTimersByTime(120000);
-  });
-  expect(mocks.captcha).toHaveBeenCalledTimes(2);
-  expect(screen.getByLabelText("图形验证码")).toHaveValue("");
-  expect(changed).toHaveBeenLastCalledWith(undefined);
-});
+it.each(["login", "register", "admin_login"] as const)(
+  "%s keeps the image and input until the user requests a refresh, even after expiry",
+  async (action) => {
+    vi.useFakeTimers();
+    mocks.captcha
+      .mockResolvedValueOnce(challenge("current"))
+      .mockResolvedValueOnce(challenge("replacement"));
+    const changed = vi.fn();
+    const view = render(
+      <HumanVerification action={action} onChange={changed} />,
+    );
+    await act(async () => {});
+    fireEvent.change(screen.getByLabelText("图形验证码"), {
+      target: { value: "AB29Q" },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(600000);
+    });
+    expect(mocks.captcha).toHaveBeenCalledTimes(1);
+    expect(view.container.firstChild).toHaveAttribute(
+      "data-captcha-id",
+      "current",
+    );
+    expect(screen.getByLabelText("图形验证码")).toHaveValue("AB29Q");
+    expect(changed).toHaveBeenLastCalledWith({
+      captcha_id: "current",
+      captcha_code: "AB29Q",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新图形验证码" }));
+    await act(async () => {});
+    expect(mocks.captcha).toHaveBeenCalledTimes(2);
+    expect(view.container.firstChild).toHaveAttribute(
+      "data-captcha-id",
+      "replacement",
+    );
+    expect(screen.getByLabelText("图形验证码")).toHaveValue("");
+    expect(changed).toHaveBeenLastCalledWith(undefined);
+  },
+);
