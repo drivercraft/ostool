@@ -901,6 +901,7 @@ function Login() {
                     }}
                     autoComplete="email"
                     placeholder="you@company.com"
+                    hint=""
                   />
                   {registering && (
                     <TextField
@@ -908,6 +909,7 @@ function Login() {
                       value={displayName}
                       onValue={setDisplayName}
                       placeholder="你的名字"
+                      hint=""
                     />
                   )}
                   <TextField

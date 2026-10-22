@@ -148,8 +148,7 @@ p.auth-legal {
 }
 .auth-legal a {
   color: var(--primary);
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  text-decoration: none;
   margin: 0 3px;
 }
 .legal-reader {

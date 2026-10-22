@@ -15,11 +15,11 @@ export function AuthLegal({
   const links = (
     <>
       <a href="/legal/terms" target="_blank" rel="noopener noreferrer">
-        {site.settings.terms_title}
+        《{site.settings.terms_title}》
       </a>
       和
       <a href="/legal/privacy" target="_blank" rel="noopener noreferrer">
-        {site.settings.privacy_title}
+        《{site.settings.privacy_title}》
       </a>
     </>
   );

@@ -83,6 +83,8 @@ export default function AdminLogin() {
               label="邮箱"
               type="email"
               autoComplete="username"
+              placeholder="you@company.com"
+              hint=""
               required
               value={email}
               onValue={setEmail}
@@ -91,6 +93,7 @@ export default function AdminLogin() {
               label="密码"
               type="password"
               autoComplete="current-password"
+              placeholder="输入登录密码"
               required
               maxLength={1024}
               value={password}
@@ -106,6 +109,7 @@ export default function AdminLogin() {
         ) : (
           <TextField
             label="验证码或恢复码"
+            placeholder="输入验证码或恢复码"
             value={code}
             onValue={setCode}
             autoComplete="one-time-code"
