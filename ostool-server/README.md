@@ -294,9 +294,26 @@ edition and starts a private PostgreSQL 16 container automatically (Docker is
 required). Local edition needs no login and no CLI credentials:
 
 ```bash
+ostool-server/scripts/dev.sh build   # build website/admin assets and Rust without starting services
 ostool-server/scripts/dev.sh start
 ostool-server/scripts/dev.sh status
 ostool-server/scripts/dev.sh stop
+```
+
+`build` runs `cargo build -p ostool-server` from the repository root. The existing
+Cargo `build.rs` builds both React entries and embeds their assets in the Rust
+executable when sources change. It builds this checkout's UI, ignoring an external
+`OSTOOL_SERVER_WEB_DIST_DIR`, and does not start PostgreSQL, Redis or the server.
+Local/public editions use the same executable, so one build serves either edition.
+Build failures return a nonzero exit status.
+
+If a server is already running, `build` does not replace that process. Use
+`restart` after editing code to rebuild and run the new executable; `start` leaves
+an already running process alone:
+
+```bash
+ostool-server/scripts/dev.sh build    # prepare updated executable only
+ostool-server/scripts/dev.sh restart  # rebuild and apply changes to the running environment
 ```
 
 To test authenticated public edition with a private PostgreSQL 16 container:

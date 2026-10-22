@@ -51,6 +51,19 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || die "missing required command: $1";
 }
 
+build_server() {
+    require_command cargo
+    require_command pnpm
+    require_command node
+    log "building frontend and Rust server (Cargo build.rs embeds both website and admin assets)"
+    (
+        cd -- "$REPO_DIR"
+        # Always build this checkout's UI instead of an externally supplied dist.
+        env -u OSTOOL_SERVER_WEB_DIST_DIR cargo build -p ostool-server
+    )
+    log "build complete; use restart to load the updated executable if the server is running"
+}
+
 server_pid() {
     [[ -f "$PID_FILE" ]] || return 1
     local pid
@@ -162,7 +175,7 @@ start_server() {
         require_command node
         (umask 077; node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64"))' > "$STATE_DIR/mfa.key")
     fi
-    local -a server_env=(env -u OSTOOL_DATABASE_URL -u OSTOOL_ADMIN_EMAIL -u OSTOOL_ADMIN_PASSWORD
+    local -a server_env=(env -u OSTOOL_DATABASE_URL -u OSTOOL_ADMIN_EMAIL -u OSTOOL_ADMIN_PASSWORD -u OSTOOL_SERVER_WEB_DIST_DIR
         "OSTOOL_EDITION=$EDITION" "OSTOOL_LISTEN_ADDR=${LISTEN_HOST}:${SERVER_PORT}"
         "OSTOOL_DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${PG_PORT}/${DB_NAME}"
         "OSTOOL_PUBLIC_BASE_URL=$CHECK_URL" "OSTOOL_NETWORK_TEST_ENABLED=false")
@@ -269,6 +282,7 @@ status() {
 }
 
 case "${1:-start}" in
+    build) build_server ;;
     start) start_server ;;
     stop) stop_server ;;
     restart) stop_server; start_server ;;
@@ -291,8 +305,13 @@ case "${1:-start}" in
         rm -rf "$STATE_DIR"
         log "removed $STATE_DIR"
         ;;
+    help|-h|--help)
+        echo "usage: $0 {build|start|stop|restart|status|clean}"
+        echo "  build    build embedded website/admin assets and Rust; keep running services unchanged"
+        echo "  restart  rebuild and restart the selected development edition"
+        ;;
     *)
-        echo "usage: $0 {start|stop|restart|status|clean}" >&2
+        echo "usage: $0 {build|start|stop|restart|status|clean}" >&2
         exit 2
         ;;
 esac

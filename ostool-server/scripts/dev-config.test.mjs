@@ -2,6 +2,8 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import {
   mkdtempSync,
+  readFileSync,
+  existsSync,
   writeFileSync,
   rmSync,
   mkdirSync,
@@ -145,6 +147,66 @@ test("launcher applies dotenv before resolving edition/listener and works from a
     });
     assert.equal(missing.status, 1);
     assert.match(missing.stderr, /failed to load development environment/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("build uses the repository root, propagates failures and never starts services", () => {
+  const root = mkdtempSync(join(tmpdir(), "ostool-dev-build-"));
+  try {
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const log = join(root, "cargo.log");
+    const envFile = join(root, "dev.env");
+    const state = join(root, "unused-state");
+    writeFileSync(envFile, `OSTOOL_EDITION=local\nOSTOOL_DEV_DIR='${state}'\n`);
+    writeFileSync(
+      join(bin, "cargo"),
+      `#!/usr/bin/env bash
+printf '%s\\n' "$PWD" "$@" > "$OSTOOL_TEST_BUILD_LOG"
+[[ -z "\u0024{OSTOOL_SERVER_WEB_DIST_DIR+x}" ]] || exit 56
+exit "\u0024{OSTOOL_TEST_BUILD_EXIT:-0}"
+`,
+      { mode: 0o755 },
+    );
+    writeFileSync(join(bin, "docker"), "#!/usr/bin/env bash\nexit 57\n", {
+      mode: 0o755,
+    });
+    const env = {
+      ...process.env,
+      PATH: bin + ":" + process.env.PATH,
+      OSTOOL_DEV_ENV_FILE: envFile,
+      OSTOOL_DEV_DIR: state,
+      OSTOOL_TEST_BUILD_LOG: log,
+      OSTOOL_SERVER_WEB_DIST_DIR: "/tmp/stale-prebuilt-assets",
+    };
+    delete env.OSTOOL_DEV_CONFIG_LOADED;
+    const script = resolve(import.meta.dirname, "dev.sh");
+    const result = spawnSync("bash", [script, "build"], {
+      env,
+      cwd: root,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      readFileSync(log, "utf8"),
+      resolve(import.meta.dirname, "../..") + "\nbuild\n-p\nostool-server\n",
+    );
+    assert.equal(
+      existsSync(state),
+      false,
+      "build must not create database/config/PID state",
+    );
+    assert.match(result.stdout, /build complete; use restart/);
+    const failed = spawnSync("bash", [script, "build"], {
+      env: { ...env, OSTOOL_TEST_BUILD_EXIT: "42" },
+      cwd: root,
+      encoding: "utf8",
+    });
+    assert.equal(failed.status, 42);
+    assert.doesNotMatch(failed.stdout, /build complete/);
+    assert.equal(existsSync(state), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
