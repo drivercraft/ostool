@@ -284,13 +284,15 @@ export function DataTable({
   headers,
   children,
   empty,
+  layout = "switchable",
 }: {
   headers: string[];
   children: ReactNode;
   empty?: boolean;
+  layout?: "switchable" | "table";
 }) {
   const view = useListLayout();
-  if (!view)
+  if (layout === "switchable" && !view)
     return (
       <ListLayoutProvider
         storageKey={`${window.location.pathname}:${headers.join("/")}`}
@@ -303,8 +305,9 @@ export function DataTable({
         </DataTable>
       </ListLayoutProvider>
     );
-  if (view.layout === "cards" && empty) return <ListEmpty />;
-  if (view.layout === "cards")
+  if (layout === "switchable" && view?.layout === "cards" && empty)
+    return <ListEmpty />;
+  if (layout === "switchable" && view?.layout === "cards")
     return (
       <div className="data-card-grid" role="list" aria-label="卡片列表">
         {Children.toArray(children).map((row, rowIndex) => {

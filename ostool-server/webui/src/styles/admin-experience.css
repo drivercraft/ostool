@@ -143,7 +143,7 @@
 }
 .dashboard-content {
   display: grid;
-  gap: 22px;
+  gap: 18px;
   padding: 0;
   min-width: 0;
 }
@@ -160,45 +160,89 @@
 .dashboard-footer .dashboard-connection {
   padding: 0;
 }
-.dashboard-banner {
+.dashboard-hero {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 28px;
+  min-width: 0;
+  min-height: 124px;
+  padding: 22px 26px;
   border: 1px solid var(--border);
-  background: linear-gradient(
-    110deg,
-    color-mix(in oklch, var(--primary), var(--card) 95%),
-    var(--card)
-  );
   border-radius: var(--admin-panel-radius);
-  padding: 22px;
+  background:
+    radial-gradient(
+      circle at 88% 0%,
+      color-mix(in oklch, var(--primary), transparent 86%),
+      transparent 35%
+    ),
+    linear-gradient(125deg, var(--card), var(--muted));
+  overflow: hidden;
 }
-.dashboard-banner > div {
-  display: flex;
-  align-items: center;
-  gap: 14px;
+.dashboard-hero-copy {
   min-width: 0;
 }
-.dashboard-banner-icon {
-  display: grid;
-  place-items: center;
-  width: 45px;
-  height: 45px;
-  border-radius: 12px;
-  background: color-mix(in oklch, var(--primary), transparent 90%);
-  color: var(--primary);
-}
-.dashboard-banner strong {
+.dashboard-eyebrow {
   display: block;
-  font-size: 17px;
-  font-weight: 400;
+  margin-bottom: 8px;
+  color: var(--primary);
+  font-size: 0.875rem;
+  letter-spacing: 0.06em;
+}
+.dashboard-hero-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+.dashboard-hero-title h1 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: clamp(22px, 2vw, 28px);
+  font-weight: 650;
+  letter-spacing: -0.035em;
+}
+.dashboard-hero-copy > p {
+  margin: 7px 0 0;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+  line-height: 1.7;
   overflow-wrap: anywhere;
 }
-.dashboard-banner p {
+.dashboard-hero-summary {
+  display: flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+  gap: 24px;
+  margin: 0;
+}
+.dashboard-hero-summary > div {
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 100px;
+}
+.dashboard-hero-summary > div + div {
+  border-left: 1px solid var(--border);
+  padding-left: 24px;
+}
+.dashboard-hero-summary dt {
   font-size: 0.875rem;
   color: var(--muted-foreground);
-  margin: 5px 0 0;
+}
+.dashboard-hero-summary dd {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.dashboard-health i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
 }
 .dashboard-health,
 .dashboard-connection {
@@ -236,9 +280,11 @@
 .dashboard-metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
+  gap: 12px;
 }
 .dashboard-metric {
+  --metric-color: var(--primary);
+  position: relative;
   display: grid;
   align-content: start;
   gap: 15px;
@@ -250,6 +296,23 @@
   color: var(--foreground);
   text-decoration: none;
   box-shadow: 0 2px 8px #162a4503;
+  overflow: hidden;
+}
+.dashboard-metric.green {
+  --metric-color: var(--success);
+}
+.dashboard-metric.violet {
+  --metric-color: #8b5cf6;
+}
+.dashboard-metric.amber {
+  --metric-color: var(--warning);
+}
+.dashboard-metric::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 3px;
+  background: var(--metric-color);
 }
 a.dashboard-metric:hover {
   border-color: color-mix(in oklch, var(--primary), transparent 50%);
@@ -519,9 +582,6 @@ a.dashboard-metric:hover {
   box-shadow: none;
   background: var(--card);
 }
-.dashboard-task-list .standalone-layout-tools {
-  margin-top: -4px;
-}
 .audit-pagination {
   width: 100%;
   display: flex;
@@ -646,6 +706,17 @@ a.dashboard-metric:hover {
     font-size: 23px;
   }
 }
+@media (max-width: 1000px) {
+  .dashboard-hero {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 20px;
+  }
+  .dashboard-hero-summary > div {
+    flex: 1;
+    min-width: 0;
+  }
+}
 @media (max-width: 760px) {
   .dashboard-content {
     padding: 0;
@@ -666,19 +737,18 @@ a.dashboard-metric:hover {
     font-weight: 400;
     font-size: 20px;
   }
-  .dashboard-banner {
+  .dashboard-hero {
     padding: 16px;
-    align-items: flex-start;
+    gap: 18px;
   }
-  .dashboard-banner strong {
-    font-weight: 400;
-    font-size: 15px;
+  .dashboard-hero-summary {
+    gap: 14px;
   }
-  .dashboard-banner-icon {
-    display: none;
+  .dashboard-hero-summary > div + div {
+    padding-left: 14px;
   }
-  .dashboard-banner p {
-    font-size: 0.875rem;
+  .dashboard-hero-summary dd {
+    font-size: 1rem;
   }
   .dashboard-health {
     font-size: 0.75rem;

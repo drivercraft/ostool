@@ -33,6 +33,40 @@ const date = (value: string | null | undefined) =>
     : "尚未执行";
 const duration = (seconds: number) =>
   `${Math.floor(seconds / 86400)} 天 ${Math.floor((seconds % 86400) / 3600)} 小时 ${Math.floor((seconds % 3600) / 60)} 分`;
+function DashboardHero({
+  eyebrow,
+  title,
+  description,
+  status,
+  summary,
+}: {
+  eyebrow: string;
+  title: string;
+  description: React.ReactNode;
+  status?: React.ReactNode;
+  summary: [string, React.ReactNode][];
+}) {
+  return (
+    <section className="dashboard-hero" aria-label={`${title}汇总`}>
+      <div className="dashboard-hero-copy">
+        <span className="dashboard-eyebrow">{eyebrow}</span>
+        <div className="dashboard-hero-title">
+          <h1>{title}</h1>
+          {status}
+        </div>
+        <p>{description}</p>
+      </div>
+      <dl className="dashboard-hero-summary">
+        {summary.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
 function Metric({
   label,
   value,
@@ -60,11 +94,11 @@ function Metric({
     </>
   );
   return href ? (
-    <Link to={href} className="dashboard-metric">
+    <Link to={href} className={`dashboard-metric ${tone}`}>
       {content}
     </Link>
   ) : (
-    <article className="dashboard-metric">{content}</article>
+    <article className={`dashboard-metric ${tone}`}>{content}</article>
   );
 }
 function Gauge({ value }: { value: number | null | undefined }) {
@@ -248,27 +282,30 @@ function Runtime({ data }: { data: DashboardInfo }) {
     sample = runtime.sample;
   return (
     <>
-      <div className="dashboard-banner">
-        <div>
-          <span className="dashboard-banner-icon">
-            <Server />
+      <DashboardHero
+        eyebrow="服务器监控"
+        title="运行状态"
+        description={
+          <>
+            {sample.hostname || "ostool-server"} · {runtime.platform} /{" "}
+            {runtime.arch} · v{runtime.version} · PID {runtime.pid}
+          </>
+        }
+        status={
+          <span
+            className={`dashboard-health ${sample.database_ok && sample.redis_ok !== false ? "healthy" : "warning"}`}
+          >
+            <i />
+            {sample.database_ok && sample.redis_ok !== false
+              ? "服务运行正常"
+              : "服务依赖状态待确认"}
           </span>
-          <div>
-            <strong>{sample.hostname || "ostool-server"}</strong>
-            <p>
-              {runtime.platform} / {runtime.arch} · v{runtime.version} · PID{" "}
-              {runtime.pid}
-            </p>
-          </div>
-        </div>
-        <span
-          className={`dashboard-health ${sample.database_ok && sample.redis_ok !== false ? "healthy" : "warning"}`}
-        >
-          {sample.database_ok && sample.redis_ok !== false
-            ? "服务运行正常"
-            : "服务依赖状态待确认"}
-        </span>
-      </div>
+        }
+        summary={[
+          ["持续运行", duration(runtime.uptime_secs)],
+          ["HTTP 请求", runtime.http.requests],
+        ]}
+      />
       <div className="dashboard-metrics">
         <Metric
           label="持续运行"
@@ -441,6 +478,22 @@ function Operations({
   const operations = data.operations;
   return (
     <>
+      <DashboardHero
+        eyebrow="设备与使用情况"
+        title="运营状态"
+        description={
+          publicEdition
+            ? "集中查看设备供给、会话占用、用户与租赁情况。"
+            : "集中查看设备供给、会话占用和近期操作情况。"
+        }
+        summary={[
+          [
+            "可用开发板",
+            `${operations.board_states.idle ?? 0} / ${operations.boards}`,
+          ],
+          ["活跃会话", operations.sessions],
+        ]}
+      />
       <div className="dashboard-metrics">
         <Metric
           label="开发板总数"
@@ -576,6 +629,22 @@ function Jobs({ data }: { data: DashboardInfo }) {
   const { runtime, power_actions: power, ota_jobs: ota } = data;
   return (
     <>
+      <DashboardHero
+        eyebrow="调度与执行监控"
+        title="后台任务"
+        description="集中查看定时维护、电源操作和 OTA 升级的执行状态。"
+        summary={[
+          [
+            "最近成功的维护任务",
+            `${runtime.tasks.filter((task) => task.last_ok === true).length} / ${runtime.tasks.length}`,
+          ],
+          [
+            "维护与电源执行中",
+            runtime.tasks.filter((task) => task.state === "running").length +
+              power.filter((task) => task.state === "running").length,
+          ],
+        ]}
+      />
       <div className="dashboard-metrics">
         <Metric
           label="定时维护任务"
@@ -620,6 +689,7 @@ function Jobs({ data }: { data: DashboardInfo }) {
           <span>运行计划与最近执行结果</span>
         </header>
         <DataTable
+          layout="table"
           headers={[
             "任务",
             "状态",
@@ -661,6 +731,7 @@ function Jobs({ data }: { data: DashboardInfo }) {
           <span>当前进程内的异步任务</span>
         </header>
         <DataTable
+          layout="table"
           headers={["操作 ID", "动作", "结果", "说明"]}
           empty={!power.length}
         >
@@ -684,6 +755,7 @@ function Jobs({ data }: { data: DashboardInfo }) {
           <span>持久化任务</span>
         </header>
         <DataTable
+          layout="table"
           headers={["开发板", "阶段", "镜像版本", "投递次数"]}
           empty={!ota.length}
         >
