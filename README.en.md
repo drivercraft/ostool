@@ -25,6 +25,8 @@ Local and public editions use the same PostgreSQL persistence. Local edition hid
 
 The launcher reads development settings from `ostool-server/.env`; see `ostool-server/.env.example`. Process/inline environment variables take precedence. Local development listens on `0.0.0.0:2999` for LAN access at `http://<server-LAN-IP>:2999/`. Set `OSTOOL_DEV_HOST=127.0.0.1` for loopback-only access and use `restart` to apply the change. Public-edition development still defaults to loopback.
 
+`OSTOOL_LISTEN_ADDR` applies to direct Rust startup; `dev.sh` generates it from `OSTOOL_DEV_HOST` and the development port. Stop the previous edition before switching on the same port; the launcher rejects port conflicts.
+
 The server now uses one complete initial SQLx schema migration. Existing databases from the unreleased development chain require a fresh database/schema or an explicit reset of disposable test data; see [database initialization](ostool-server/deploy/site-and-data.md#数据库初始迁移). Future changes after release must use incremental migrations.
 
 Website login/registration use a separate full viewport split layout with a wider form, inline consent checkbox/text, an inset CAPTCHA image and a scrollable form on small screens.

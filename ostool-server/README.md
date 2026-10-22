@@ -327,6 +327,9 @@ Use `restart` or `clean` with the same edition. Data/log/config directories are
 `.ostool-server-dev/local` and `.ostool-server-dev/public`; `OSTOOL_DEV_DIR` can
 override that location. The default local edition listens on `0.0.0.0:2999`;
 open `http://<server-LAN-IP>:2999/` or `/admin/overview` from another LAN device.
+`dev.sh` explicitly generates `OSTOOL_LISTEN_ADDR` from `OSTOOL_DEV_HOST` and
+`OSTOOL_DEV_SERVER_PORT`; an `OSTOOL_LISTEN_ADDR=127.0.0.1:2999` line in the dotenv
+file applies to direct Rust startup and does not override the launcher.
 The launcher prints the detected IPv4 LAN URLs. PostgreSQL and Redis ports remain
 bound to loopback. Public-edition development keeps its `127.0.0.1:2999` listener.
 
@@ -389,6 +392,18 @@ OSTOOL_EDITION=public ostool-server/scripts/dev.sh restart
 
 Choose the command for your edition. Both default to the same port; stop the old
 edition before switching, or set different `OSTOOL_DEV_SERVER_PORT` values.
+`start` now rejects an occupied listener before starting database services, so a
+running public instance cannot be reported as a successful local startup.
+For example, switching from a public loopback demo to the local LAN environment:
+
+```bash
+OSTOOL_EDITION=public ostool-server/scripts/dev.sh stop
+OSTOOL_EDITION=local ostool-server/scripts/dev.sh start
+```
+
+`build` alone and `start` on an already running edition do not apply new listener
+settings. Use `restart` for that same edition. `status` prints the requested
+configuration; the actual socket can be checked with `ss -ltnp 'sport = :2999'`.
 
 Fresh demo environments contain 48 boards (six types, U-Boot/PXE/HTTP Boot,
 multiple tags, long/empty notes, enabled/disabled), 24 sample DTBs, 12 live sample

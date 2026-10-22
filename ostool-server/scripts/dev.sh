@@ -164,6 +164,16 @@ start_server() {
         log "use restart to rebuild embedded web assets and Rust, then load the updated executable"
         return
     fi
+    # Do not mistake another edition's HTTP response for this process being ready.
+    # Probe before starting databases or spawning a build in the background.
+    if ! node - "$SERVER_HOST" "$SERVER_PORT" <<'JS'
+const server = require("node:net").createServer();
+server.on("error", () => { process.exitCode = 1; });
+server.listen({host: process.argv[2], port: Number(process.argv[3])}, () => server.close());
+JS
+    then
+        die "cannot bind ${LISTEN_HOST}:${SERVER_PORT}; another edition/process may be using it. Stop that edition or change OSTOOL_DEV_SERVER_PORT"
+    fi
     rm -f "$PID_FILE"
     ensure_postgres
     ensure_redis

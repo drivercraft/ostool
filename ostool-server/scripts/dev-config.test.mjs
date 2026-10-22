@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { createServer } from "node:net";
 import { developmentEnvironment } from "./dev-config.mjs";
 
 test("default dotenv is resolved beside the server directory, not the caller cwd", () => {
@@ -208,6 +209,59 @@ exit "\u0024{OSTOOL_TEST_BUILD_EXIT:-0}"
     assert.doesNotMatch(failed.stdout, /build complete/);
     assert.equal(existsSync(state), false);
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("start rejects an occupied port before launching database services", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ostool-dev-busy-port-"));
+  const server = createServer();
+  try {
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const port = server.address().port;
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const marker = join(root, "docker-called");
+    writeFileSync(
+      join(bin, "docker"),
+      `#!/usr/bin/env bash
+printf called > "$OSTOOL_TEST_DOCKER_MARKER"
+exit 69
+`,
+      { mode: 0o755 },
+    );
+    for (const tool of ["cargo", "pnpm"])
+      writeFileSync(join(bin, tool), "#!/usr/bin/env bash\nexit 0\n", {
+        mode: 0o755,
+      });
+    const file = join(root, "dev.env");
+    writeFileSync(
+      file,
+      `OSTOOL_EDITION=local\nOSTOOL_DEV_HOST=127.0.0.1\nOSTOOL_DEV_SERVER_PORT=${port}\nOSTOOL_DEV_DIR='${join(root, "state")}'\n`,
+    );
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith("OSTOOL_")),
+    );
+    Object.assign(env, {
+      PATH: bin + ":" + process.env.PATH,
+      OSTOOL_DEV_ENV_FILE: file,
+      OSTOOL_TEST_DOCKER_MARKER: marker,
+    });
+    const result = spawnSync(
+      "bash",
+      [resolve(import.meta.dirname, "dev.sh"), "start"],
+      { env, encoding: "utf8" },
+    );
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /cannot bind 127\.0\.0\.1:/);
+    assert.match(result.stderr, /another edition\/process/);
+    assert.equal(existsSync(marker), false);
+    assert.equal(existsSync(join(root, "state/server.pid")), false);
+  } finally {
+    server.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
