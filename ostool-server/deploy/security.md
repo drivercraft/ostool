@@ -89,8 +89,9 @@ Turnstile 可替代图片：`OSTOOL_CAPTCHA_PROVIDER=turnstile`，
 
 ## 升级与检查
 
-升级前备份数据库和部署环境文件。新 SQLx 迁移增加安全表、会话期限、凭据撤销触发器，
-并给已有永久 PAT 补充创建日起 90 天的有效期；过旧 PAT 因此失效。
+部署前备份数据库和环境文件。唯一初始 SQLx 迁移直接建立安全表、会话期限和凭据撤销触发器，
+PAT 创建时即设置有效期。合并前的开发数据库不能原地套用新基线，处理方式见
+[数据库初始迁移](site-and-data.md#数据库初始迁移)。
 浏览器必须重新登录，旧 localStorage 凭据会被清理；CLI 的 OAuth Device、刷新、撤销与
 Bearer/PAT 协议继续兼容，不增加图形验证码到 CLI。
 

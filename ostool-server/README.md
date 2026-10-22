@@ -489,7 +489,12 @@ keeps an already running process. Restart rebuilds the embedded website and Rust
 executable using Cargo. HTML is served with `Cache-Control: no-store`, while
 hashed assets are immutable. Prebuilt `OSTOOL_SERVER_WEB_DIST_DIR` changes are
 also tracked by the build script. Deployment schema migrations run automatically
-on connection; the new application table preserves existing rentals.
+on connection to a fresh database/schema. The unreleased development migrations
+have been consolidated into `migrations/20261022000000_initial_schema.sql`.
+A database that has recorded the earlier development chain cannot run this new
+baseline directly; preserve it and use a fresh database/schema, or explicitly
+reset disposable development data. See [database initialization](deploy/site-and-data.md#数据库初始迁移).
+Future released schema changes must use new incremental migrations.
 
 Open `/admin/` for the React + shadcn/ui console. Boards, discovery, virtual
 hardware, DTBs, leases, TFTP and server settings update through a single SSE
