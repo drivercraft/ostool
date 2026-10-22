@@ -33,11 +33,11 @@ export default function SystemSettings() {
   return (
     <>
       <Tabs
-        className="workspace-tabs"
+        className="workspace-tabs system-settings"
         value={tab}
         onValueChange={(value) => setParams({ tab: value })}
       >
-        <TabsList variant="line" className="system-tabs">
+        <TabsList className="system-tabs" aria-label="系统设置">
           <TabsTrigger value="site">站点信息</TabsTrigger>
           <TabsTrigger value="contact">联系与备案</TabsTrigger>
           <TabsTrigger value="legal">协议与隐私</TabsTrigger>
@@ -68,20 +68,28 @@ export default function SystemSettings() {
               </span>
             }
           >
-            {source?.security && <ReadonlyInfo entries={source.security} />}
-            <DataTable
-              headers={["用途", "收件邮箱", "状态", "时间"]}
-              empty={!deliveries.length}
-            >
-              {deliveries.map((mail) => (
-                <Row key={mail.id}>
-                  <Cell>{mail.purpose}</Cell>
-                  <Cell>{mail.recipient_email}</Cell>
-                  <Cell>{mail.status}</Cell>
-                  <Cell>{new Date(mail.created_at).toLocaleString()}</Cell>
-                </Row>
-              ))}
-            </DataTable>
+            {source?.security && (
+              <section className="page-section">
+                <h2>邮件服务配置</h2>
+                <ReadonlyInfo entries={source.security} />
+              </section>
+            )}
+            <section className="page-section">
+              <h2>最近投递记录</h2>
+              <DataTable
+                headers={["用途", "收件邮箱", "状态", "时间"]}
+                empty={!deliveries.length}
+              >
+                {deliveries.map((mail) => (
+                  <Row key={mail.id}>
+                    <Cell>{mail.purpose}</Cell>
+                    <Cell>{mail.recipient_email}</Cell>
+                    <Cell>{mail.status}</Cell>
+                    <Cell>{new Date(mail.created_at).toLocaleString()}</Cell>
+                  </Row>
+                ))}
+              </DataTable>
+            </section>
           </PagePanel>
         </TabsContent>
         <TabsContent value="server" forceMount hidden={tab !== "server"}>
@@ -97,17 +105,20 @@ export default function SystemSettings() {
             }
           >
             {source && (
-              <ReadonlyInfo
-                entries={{
-                  登录验证: source.auth_enabled,
-                  允许注册: source.allow_registration,
-                  公网地址: source.public_base_url,
-                  "Access Token 有效期": `${source.access_token_ttl_secs} 秒`,
-                  "PostgreSQL 已连接": source.database_connected,
-                  "Redis 已连接": source.redis_connected,
-                  ...source.security,
-                }}
-              />
+              <section className="page-section">
+                <h2>登录与部署配置</h2>
+                <ReadonlyInfo
+                  entries={{
+                    登录验证: source.auth_enabled,
+                    允许注册: source.allow_registration,
+                    公网地址: source.public_base_url,
+                    "Access Token 有效期": `${source.access_token_ttl_secs} 秒`,
+                    "PostgreSQL 已连接": source.database_connected,
+                    "Redis 已连接": source.redis_connected,
+                    ...source.security,
+                  }}
+                />
+              </section>
             )}
             <Notice>
               部署时通过 .env、进程环境变量或 systemd EnvironmentFile
@@ -121,7 +132,12 @@ export default function SystemSettings() {
               <span className="panel-status">同时备份数据库与文件目录</span>
             }
           >
-            {source && <ReadonlyInfo entries={source.storage} />}
+            {source && (
+              <section className="page-section">
+                <h2>数据存储配置</h2>
+                <ReadonlyInfo entries={source.storage} />
+              </section>
+            )}
             <Notice>
               活动串口和板卡租约只在当前进程有效，服务重启不会恢复硬件占用。请同时备份
               PostgreSQL、TOML 配置和文件数据目录。

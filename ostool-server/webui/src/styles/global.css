@@ -9,6 +9,7 @@
 @import "./controls.css";
 @import "./security.css";
 @import "./auth-screen.css";
+@import "./system-settings.css";
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
