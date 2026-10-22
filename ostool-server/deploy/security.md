@@ -14,7 +14,7 @@
 - Redis 保存高频限流与冷却计数，使用带 TTL 的原子脚本；一次性验证证明和凭据仍保存在 PostgreSQL。登录按账户及 IP 限制，默认六次失败后等待
   15 分钟；认证入口另有每 IP 每分钟 90 次总限制。超限返回 429 和 Retry-After。
   图形验证码不是 DDoS 防护，公网入口仍可按部署需求配置连接数/流量限制。
-- 浏览器仅使用 HttpOnly、SameSite=Strict、host-only Cookie；HTTPS 使用 Secure 和
+- 浏览器仅使用 HttpOnly、SameSite=Strict、仅限当前主机的 Cookie；HTTPS 使用 Secure 和
   `__Host-` 前缀。前台与后台分别登录退出，普通用户登录后台返回统一凭据错误。
   JavaScript、localStorage、登录 JSON、SSE URL 中不存放访问/刷新令牌。
 - 访问令牌默认 15 分钟；刷新令牌轮换，重放旧刷新令牌会撤销整个登录链。
@@ -83,7 +83,7 @@ Caddy 同机代理使用 `OSTOOL_TRUSTED_PROXY_IPS=127.0.0.1,::1`，Rust 监听�
 本地版保持原有板卡工作流。不要把本地免认证实例直接转发到公网。
 
 Turnstile 可替代图片：`OSTOOL_CAPTCHA_PROVIDER=turnstile`，
-配置 site key、secret 和显式 hostname 列表；服务器校验服务商验证结果、动作、主机名和
+配置站点密钥、服务端密钥和明确的主机名列表；服务器校验服务商验证结果、动作、主机名和
 一次性本地挑战。默认图片无需第三方服务。未连通真实 Turnstile 服务时不能用图片测试
 结果代替 Turnstile 联调。
 
@@ -111,7 +111,7 @@ pnpm --dir ostool-server/webui build
 恢复和本地匿名接口。SMTP 测试使用回环收件器，不发往公网。
 
 浏览器公网测试额外要求 `OSTOOL_E2E_AUTH_DATABASE_URL` 和
-`OSTOOL_E2E_AUTH_DATABASE_SCHEMA=ostool_e2e_...`，并且服务端使用相同测试 schema，
+`OSTOOL_E2E_AUTH_DATABASE_SCHEMA=ostool_e2e_...`，并且服务端使用相同测试数据库模式，
 所有地址必须是回环地址。测试直接修改隔离数据库的挑战摘要来提交已知验证码；
 应用本身没有测试验证码、返回答案或关闭验证的接口。
 
@@ -131,7 +131,7 @@ IP 网段使用 ipnet，验证器二维码使用 qrcode，SMTP 使用 lettre。�
 Redis 的用途是登录失败窗口、认证入口流量、验证码签发频率、MFA 尝试节流和邮件发送冷却。
 用户、OAuth 会话、PAT、凭据版本、邮箱验证、密码重置和审计仍以 PostgreSQL 为准。
 撤销权限不会依赖可被淘汰的缓存。Redis Lua 原子操作同时设置计数与期限，
-被限流的请求不会延长锁定窗口。键包含数据库/schema 的命名空间和摘要，不暴露邮箱。
+被限流的请求不会延长锁定窗口。键包含数据库及数据库模式的命名空间和摘要，不暴露邮箱。
 
 部署 Redis 时绑定私有接口，配置访问凭据/ACL，远程连接使用 TLS；
 为安全计数使用 `maxmemory-policy noeviction` 并分配适当容量。需要在 Redis 重启后
@@ -145,11 +145,11 @@ Redis 的用途是登录失败窗口、认证入口流量、验证码签发频�
 ## CLI 与设备网络的审查边界
 
 [公网 CLI 鉴权审查](cli-auth-review.md) 记录设备登录、刷新、租赁、串口和文件接口的验证结果及修复项。
-CLI scope 只授予板卡操作；个人账号与后台配置不能凭 CLI token 访问。会话详情不再返回完整硬件配置。
-串口按登录族复核，只有当前有效 access grant 或未过期 PAT 才可保持；正常刷新不终止连接。
+CLI 权限范围只包含板卡操作；个人账号与后台配置不能凭 CLI 令牌访问。会话详情不再返回完整硬件配置。
+串口按登录族复核，只有当前有效的访问授权或未过期 PAT 才可保持；正常刷新不终止连接。
 
 受信任代理缺少或提供非法 X-Forwarded-For 时，来源地址按未知处理，不能继承代理的回环/内网权限。
-OTA 镜像下载与 loader 控制一样只向配置的设备网开放，不接受用普通用户 token 绕过网络限制。
+OTA 镜像下载与 loader 控制一样只向配置的设备网开放，不接受用普通用户令牌绕过网络限制。
 设备码页面要求本人发起并核对终端验证码，依据 [RFC 8628 §5.4](https://www.rfc-editor.org/rfc/rfc8628#section-5.4) 降低授权钓鱼风险。
 
 设备网络是独立信任边界：租户若能在开发板上运行任意系统或获得 root，应使用 VLAN/防火墙隔离板卡之间及板卡到服务器的访问。

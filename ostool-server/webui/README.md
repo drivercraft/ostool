@@ -64,7 +64,7 @@ OSTOOL_EDITION=public ostool-server/scripts/dev.sh restart
 `pnpm --dir ostool-server/webui dev` serves the website at `/` and management at
 `/admin/`; its API proxy expects a development backend on port 4175. See the
 [server README](../README.md#local-development-environment) for the one-command
-environment and [deployment guide](../deploy/README.md#verification) for browser
+environment and [deployment guide](../deploy/README.md#验证) for browser
 test database configuration. Building produces both HTML entries and hashed
 assets in one output directory. No database credentials or deployment hostname
 are baked into either application.

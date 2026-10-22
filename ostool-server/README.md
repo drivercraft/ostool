@@ -33,7 +33,7 @@ Both local and public editions use only PostgreSQL for durable business data.
 `src/persistence/` contains the database repositories; `migrations/` contains
 SQLx schema history and stays relative to `Cargo.toml`. The service never reads
 old board/DTB/OTA files and has no file backend or old module aliases. Existing
-board inventory can be imported manually with the [offline migration tool](deploy/README.md#existing-board-migration).
+board inventory can be imported manually with the [offline migration tool](deploy/README.md#已有开发板迁移).
 
 ## Serial transport
 
@@ -181,8 +181,8 @@ hardware release completes. Ordinary heartbeat TTL cannot extend that interval.
 Board inventory, DTB content and OTA data use PostgreSQL from the first start.
 To migrate existing board TOMLs after deploying the new version, run
 `scripts/migrate-boards.sh` manually; startup and deployment scripts never import
-business files. See [migration instructions](deploy/README.md#existing-board-migration)
-and the [persistence matrix](deploy/README.md#persistence-status).
+business files. See [migration instructions](deploy/README.md#已有开发板迁移)
+and the [persistence matrix](deploy/README.md#数据持久化情况).
 
 The frontend reads runtime edition information from the Rust server rather than
 an independent build flag, so one binary supports both editions and UI settings

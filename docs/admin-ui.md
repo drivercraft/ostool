@@ -286,7 +286,7 @@ ostool-server/scripts/migrate-boards.sh \
 已有记录、不部分导入。源文件始终保留原样，重复运行不会新增重复记录。
 仅支持当前合法板卡格式，不转换更早的格式，不迁移旧 OTA、用户或设置文件。
 导入成功后启动或重启新服务加载板卡；之后全部通过管理界面/API 操作数据库，
-修改旧文件不再生效。完整说明见 [部署文档](../ostool-server/deploy/README.md#existing-board-migration)。
+修改旧文件不再生效。完整说明见 [部署文档](../ostool-server/deploy/README.md#已有开发板迁移)。
 
 U-Boot 通过串口启动，无需绑定 MAC。切换到 U-Boot 后隐藏 MAC 选择器，保存时不提交网络身份；切回网络启动时保留尚未保存的 MAC 草稿。
 

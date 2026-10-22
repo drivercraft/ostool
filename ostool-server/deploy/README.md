@@ -1,121 +1,102 @@
-# PostgreSQL, runtime configuration and public deployment
+# PostgreSQL、运行时配置与公网部署
 
-Build once with `cargo build --release -p ostool-server`. The React bundle is
-embedded by the build script; no domain, database URL or password belongs in
-`VITE_*` variables. The same binary can run on different domains.
+使用 `cargo build --release -p ostool-server` 构建。构建脚本会嵌入 React 前端资源；
+域名、数据库连接地址和密码不应放入 `VITE_*` 变量。同一个二进制文件可部署到不同域名。
 
-The binary embeds separate website and console entries. Website login is
-`/login`; administrator login is `/admin/login`. Both use the same PostgreSQL
-accounts with separate browser sessions, so one login/logout does not affect the
-other. The proxy must forward `/assets/*` as well as `/admin/*` and website routes;
-the Caddy example proxies all of them. Custom prebuilt frontend directories must
-contain `index.html`, `admin/index.html` and `assets/`.
+二进制文件分别嵌入前台网站和管理后台入口。前台登录地址为 `/login`，管理员登录地址
+为 `/admin/login`。两者共用 PostgreSQL 账号，但浏览器会话独立，一方登录或退出不会
+影响另一方。反向代理必须同时转发 `/assets/*`、`/admin/*` 和前台路由；Caddy 示例
+已经覆盖这些路径。自定义预构建前端目录必须包含 `index.html`、`admin/index.html`
+和 `assets/`。
 
-Both editions require PostgreSQL and share the same data schema. Public edition additionally requires Redis for transient security counters; local edition does not connect to Redis. The default
-local edition has no authentication or user/rental management. For public deployment, explicitly set
-`OSTOOL_EDITION=public`; the server enforces authentication and requires
-PostgreSQL. `OSTOOL_AUTH_ENABLED=false` is rejected in public edition. When
-upgrading an earlier authenticated deployment, add this edition variable first.
+两个版本都要求 PostgreSQL，并共用数据库结构。公网版额外要求 Redis，用于临时安全
+计数；本地版不连接 Redis。默认本地版不启用身份认证、用户管理和租赁管理。公网部署
+必须显式设置 `OSTOOL_EDITION=public`，服务端会强制身份认证并要求 PostgreSQL。
+公网版拒绝 `OSTOOL_AUTH_ENABLED=false`。升级先前已启用认证的部署时，请先补充
+版本环境变量。
 
-Copy [the public environment example](public.env.example) to a private file, supply the
-database URL, hostname and bootstrap administrator, then run:
+将[公网环境变量示例](public.env.example)复制为权限受限的文件，填写数据库地址、
+域名和初始管理员凭据，然后运行：
 
 ```bash
 chmod 600 /path/to/ostool.env
 ./target/release/ostool-server --config /path/to/config.toml --env-file /path/to/ostool.env
 ```
 
-Without `--env-file`, the server reads `.env` from its working directory if it
-exists. Process variables override `.env`, and deployment variables override
-TOML. Invalid booleans, ports, pool sizes and public URLs fail startup. The
-database URL and bootstrap password are never written back to TOML or returned
-to the browser. Bootstrap creates a new admin only; it does not promote an
-existing registered account or reset its password. Remove the bootstrap password
-after first initialization.
+不指定 `--env-file` 时，服务器读取工作目录下已有的 `.env`。进程环境变量优先于
+`.env`，部署环境变量优先于 TOML。布尔值、端口、连接池大小或公网地址非法时，服务
+启动失败。数据库地址和初始管理员密码不会写回 TOML，也不会返回给浏览器。初始化
+仅创建新的管理员，不会提升已有注册账号的权限或重置其密码。首次初始化后请移除
+初始管理员密码。
 
-For systemd, the existing service may be configured with a drop-in like this
-(the example is documentation; nothing installs or modifies a unit):
+使用 systemd 时，可通过以下覆盖配置为现有服务指定环境文件（仅为文档示例，不会
+安装或修改服务单元）：
 
 ```ini
 [Service]
 EnvironmentFile=/path/to/ostool.env
 ```
 
-Use plain `KEY=value` assignments as in the example, without shell `export` or
-shell substitution. Keep deployment listener, data directories and hardware paths
-in TOML/`.env`. Network, upload and TFTP settings are initialized from TOML on a
-fresh database and
-subsequently managed through the UI/database. `OSTOOL_DATABASE_SCHEMA` optionally
-selects a schema (1–63 ASCII letters, digits or underscores); migrations create
-it when enabled. Use the same URL/schema when switching edition to retain data.
-See [systemd EnvironmentFile](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#EnvironmentFile=).
+环境文件使用示例中的 `KEY=value` 格式，不使用 shell 的 `export` 或命令替换。
+部署监听地址、数据目录和硬件路径保留在 TOML/`.env` 中。新数据库首次从 TOML 初始化
+网络、上传和 TFTP 设置，此后通过界面和数据库管理。可选的 `OSTOOL_DATABASE_SCHEMA`
+指定数据库模式名称（1–63 个 ASCII 字母、数字或下划线）；启用迁移时会创建对应模式。
+切换版本时使用相同的数据库地址和模式即可保留数据。参见
+[systemd 环境文件说明](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#EnvironmentFile=)。
 
-Put [Caddy](Caddyfile.example) on ports 80/443 and bind the Rust listener to
-`127.0.0.1:2999`. Configure DNS and `OSTOOL_PUBLIC_BASE_URL` for the HTTPS origin.
-Caddy handles TLS, WebSocket upgrades and SSE streaming without separate
-front-end servers; see the [reverse proxy documentation](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy).
-Keep PostgreSQL, TFTP, UDP discovery, boot downloads and the network test listener
-on private interfaces. Hardware uses the LAN endpoint while users/CLI use the
-public HTTPS origin. The Caddy example excludes hardware endpoints from public
-ingress; it does not make hardware protocols into authenticated public APIs.
+让 [Caddy](Caddyfile.example) 监听 80/443 端口，Rust 服务监听 `127.0.0.1:2999`。
+为 HTTPS 站点配置 DNS 和 `OSTOOL_PUBLIC_BASE_URL`。Caddy 负责 TLS、WebSocket
+连接升级和 SSE 流式传输，无需单独运行前端服务；参见
+[反向代理文档](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)。
+PostgreSQL、TFTP、UDP 发现、启动文件下载和网络测试监听器应仅在内部网络开放。
+硬件使用局域网入口，用户和 CLI 使用公网 HTTPS 入口。Caddy 示例会屏蔽公网硬件路径，
+并不会为硬件协议增加公网身份认证。
 
-Public registration/login require one-shot image CAPTCHA by default. Email verification
-is optional and disabled by default; SMTP also enables email verification and password
-recovery. Passwords use Argon2 with a 15-character minimum for new/changed passwords.
-Registration failures use a generic HTTP 400 response. New accounts receive the member
-role and cannot enter the administrator console. Browser credentials use isolated
-HttpOnly cookies; CLI OAuth/PATs continue to use Bearer tokens.
-See [security settings and upgrade notes](security.md) for TOTP/recovery codes,
-recent identity checks, session revocation, CSRF, network restrictions and rate limits.
-Admins manage users and roles through `/admin/users` and `/admin/users/roles`.
-Roles currently grant either board access or full administration, without
-per-board or individual-operation permission rules. Disabling/deleting a user
-and changing its role/password revoke credentials. Built-in roles cannot be
-deleted or have their permission level changed. In-use custom roles must be
-unassigned before changing permission level or deleting them.
+公网注册和登录默认要求一次性图形验证码。邮箱验证可选，默认关闭；配置 SMTP 后可
+使用邮箱验证和密码找回。密码使用 Argon2，新建或修改密码时至少需要 15 个字符。
+注册失败统一返回通用 HTTP 400 响应。新账号分配普通成员角色，不能进入管理后台。
+浏览器凭据使用相互隔离的 HttpOnly Cookie；CLI 的 OAuth 和个人访问令牌（PAT）
+继续使用 Bearer 令牌。TOTP、恢复码、近期身份复核、会话撤销、CSRF、网络限制和
+限流说明见[安全配置与升级说明](security.md)。管理员通过 `/admin/users` 和
+`/admin/users/roles` 管理用户与角色。目前角色授予板卡访问或完整管理权限，尚未细分到
+单块板卡或单项操作。禁用、删除用户或修改其角色、密码时会撤销凭据。内置角色不能
+删除或修改权限级别。正在使用的自定义角色必须先解除用户关联，才能修改权限级别或删除。
 
-See [site settings and identity schema](site-and-data.md) for branding, contacts, versioned legal documents, consent records and account security metadata.
+品牌、联系方式、协议版本、同意记录和账号安全元数据见[站点配置与身份数据说明](site-and-data.md)。
 
-## Persistence status
+## 数据持久化情况
 
-Both editions use PostgreSQL for durable business data. Bootstrap deployment
-configuration and hardware assets remain external; live hardware state and
-lease artifacts have their own short lifecycle. Back up the database and
-deployment configuration. Runtime business operations never read old files.
+两个版本均使用 PostgreSQL 保存持久业务数据。部署初始化配置和硬件资源仍保留在
+数据库外；实时硬件状态与会话文件有独立的短期生命周期。请备份数据库和部署配置。
+运行时业务操作不读取旧文件。
 
-| Data | Current authority | Restart behavior |
+| 数据 | 当前存储来源 | 重启后的行为 |
 | --- | --- | --- |
-| Users, roles, OAuth sessions, device codes, PAT hashes (public only) | PostgreSQL | Persisted |
-| Scheduled board rentals (public only) | PostgreSQL | Persisted; eligibility recalculated at startup |
-| Board inventory | PostgreSQL in both editions | Database only; manual offline import available for existing TOMLs |
-| DTB payloads and metadata | PostgreSQL (`dtb_records.content` is BYTEA) | Persisted; source files are not used |
-| OTA images, jobs and device observations | PostgreSQL (`ota_images`, `server_records`) | Persisted; old OTA files are not imported |
-| Editable TFTP/network/upload settings | PostgreSQL (`server_records`) | Initial defaults from TOML on a fresh DB; UI changes survive restart |
-| Bootstrap listener, database URL/schema, edition, secrets, hardware paths | TOML + environment | Applied on startup; never copied into database settings |
-| Active leases, serial connections, loader discovery, power action state | Memory | No live hardware sessions restored on restart |
-| Session artifacts | Files scoped to leases | Cleaned up with lease lifecycle |
+| 用户、角色、OAuth 会话、设备授权码、PAT 摘要（仅公网版） | PostgreSQL | 持久保留 |
+| 开发板预约租赁（仅公网版） | PostgreSQL | 持久保留；启动时重新计算使用资格 |
+| 开发板清单 | 两个版本均使用 PostgreSQL | 仅使用数据库；已有 TOML 可手动离线导入 |
+| DTB 内容与元数据 | PostgreSQL（`dtb_records.content` 为 BYTEA） | 持久保留；不再使用源文件 |
+| OTA 镜像、任务与设备观测记录 | PostgreSQL（`ota_images`、`server_records`） | 持久保留；不导入旧 OTA 文件 |
+| 可编辑的 TFTP、网络与上传设置 | PostgreSQL（`server_records`） | 新数据库从 TOML 初始化默认值；界面修改在重启后保留 |
+| 初始监听地址、数据库地址与模式、版本、密钥和硬件路径 | TOML 与环境变量 | 启动时生效；不复制到数据库设置 |
+| 活动租约、串口连接、固件加载器发现、电源操作状态 | 内存 | 重启后不恢复实时硬件会话 |
+| 会话文件 | 按租约隔离的文件 | 随租约生命周期清理 |
 
-The server has no board/DTB directory configuration, startup file import,
-quarantine workflow or file storage fallback. Active sessions are not restored as
-hardware connections after restart; this does not provide persistent
-historical-lease reporting.
+服务器不提供板卡或 DTB 目录配置、启动文件导入、隔离搬运流程或文件存储回退。
+重启后不会将活动会话恢复为硬件连接，也不提供持久化的历史会话租约报表。
 
-## Existing board migration
+## 已有开发板迁移
 
-After deploying the new binaries, run the separate migration executable manually.
-The install/update scripts install it but never execute it. Source checkout users
-can build both binaries with `cargo build --release -p ostool-server` and use
-`scripts/migrate-boards.sh` as a launcher.
+部署新的二进制文件后，手动运行独立迁移工具。安装和更新脚本只安装该工具，不会
+执行迁移。从源码构建时，使用 `cargo build --release -p ostool-server` 构建两个
+二进制文件，再通过 `scripts/migrate-boards.sh` 启动迁移。
 
-Back up PostgreSQL and the existing board/DTB directories, then stop the old
-service before the actual import. Set the **target** `OSTOOL_DATABASE_URL` and,
-if needed, `OSTOOL_DATABASE_SCHEMA` in the deployment environment file. The tool
-reads only database settings from `--config` / `--env-file` and process variables;
-it does not initialize authentication, network, power, serial or hardware services.
-Process variables override the environment file.
+先备份 PostgreSQL 和已有板卡、DTB 目录，并在正式导入前停止旧服务。在部署环境文件
+中设置**目标** `OSTOOL_DATABASE_URL`，按需设置 `OSTOOL_DATABASE_SCHEMA`。
+工具仅从 `--config`、`--env-file` 和进程环境变量读取数据库配置，不初始化认证、网络、
+电源、串口或硬件服务。进程环境变量优先于环境文件。
 
-For a target schema already initialized by the new version, first check the
-migration without changing schema or business records:
+如果目标数据库模式已由新版本初始化，可先检查迁移，不修改数据库结构或业务记录：
 
 ```bash
 ostool-server/scripts/migrate-boards.sh \
@@ -125,7 +106,7 @@ ostool-server/scripts/migrate-boards.sh \
   --dry-run
 ```
 
-Run the import by removing `--dry-run`:
+移除 `--dry-run` 后正式导入：
 
 ```bash
 ostool-server/scripts/migrate-boards.sh \
@@ -134,32 +115,25 @@ ostool-server/scripts/migrate-boards.sh \
   --dtb-dir /path/to/existing/dtbs
 ```
 
-Without a checkout, invoke the installed `ostool-server-migrate-boards` with the
-same arguments. `--config /path/to/config.toml` is optional for target database
-settings. Normal import applies SQLx schema migrations first, so an empty target
-database does not require starting the hardware service. `--dry-run` requires an
-already initialized schema and disables schema migrations. If no board references
-a DTB, omit `--dtb-dir`.
+没有源码目录时，可用相同参数调用已安装的 `ostool-server-migrate-boards`。
+可选参数 `--config /path/to/config.toml` 可提供目标数据库配置。正式导入先执行 SQLx
+数据库迁移，因此空目标数据库无需先启动硬件服务。`--dry-run` 要求数据库模式已经
+初始化，且不会执行数据库迁移。没有板卡引用 DTB 时，可省略 `--dtb-dir`。
 
-The tool reads direct `<board-id>.toml` files in sorted order, validates the
-current board configuration and imports only DTBs referenced by those boards.
-It does not convert obsolete board formats or import OTA/settings/account files.
-All inputs and ID/MAC/DTB conflicts are checked before insertion. New boards,
-referenced DTBs and the import audit event commit in one transaction; any failure
-rolls them all back. Identical existing records are skipped, making repeated
-runs safe. Existing IDs or DTB names with different content, duplicate MACs,
-invalid boards and missing referenced DTBs fail the whole import without
-silently overwriting or dropping inventory. Source files are never moved,
-rewritten or deleted.
+工具按名称排序读取指定目录中的直接子文件 `<board-id>.toml`，校验当前板卡配置，
+仅导入这些板卡引用的 DTB。不转换更早的板卡格式，也不导入 OTA、设置或账号文件。
+写入前检查全部输入以及 ID、MAC、DTB 冲突。新板卡、引用的 DTB 和导入审计事件在
+同一事务中提交，任一步失败均整体回滚。已有且内容相同的记录会跳过，可安全重复运行。
+已有 ID 或 DTB 名称对应不同内容、MAC 重复、板卡无效或引用的 DTB 缺失时，整体导入
+失败，不会静默覆盖或丢弃设备。源文件不会被移动、改写或删除。
 
-After success, start/restart the new server to load the imported inventory.
-Retain the source backup as needed; subsequent file edits have no effect. All
-future board/DTB operations use the management UI/API and PostgreSQL.
+成功后启动或重启新服务器以加载导入的设备。按需保留源文件备份；此后修改这些文件
+不会生效。后续所有板卡与 DTB 操作均通过管理界面、API 和 PostgreSQL 完成。
 
-## Verification
+## 验证
 
 ```bash
-# Use a disposable database; tests create isolated schemas.
+# 使用一次性测试数据库；测试会创建隔离的数据库模式。
 export OSTOOL_TEST_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:5432/ostool_tests
 export RUST_TEST_THREADS=4
 export OSTOOL_TEST_REDIS_URL=redis://127.0.0.1:6379/0
@@ -168,17 +142,16 @@ pnpm --dir ostool-server/webui test
 pnpm --dir ostool-server/webui build
 ```
 
-PostgreSQL integration tests use a disposable database and an isolated schema:
+PostgreSQL 集成测试使用一次性数据库和隔离的数据库模式：
 
 ```bash
 cargo test -p ostool-server --test auth_postgres --test account_postgres \
   --test unified_persistence --test audit_postgres --test board_migration --test security_postgres -- --ignored
 ```
 
-Browser tests require an explicitly disposable loopback PostgreSQL database. The
-following command starts isolated local and public server fixtures, runs both sets
-of browser tests, and stops the fixtures automatically (ports 4174, 4175, 4191 and
-UDP 2998 must be available):
+浏览器测试要求明确指定一次性、仅回环访问的 PostgreSQL 数据库。以下命令会启动
+隔离的本地版和公网版测试服务，运行两组浏览器测试，并自动停止测试服务
+（需确保 4174、4175、4191 和 UDP 2998 端口可用）：
 
 ```bash
 cargo build -p ostool-server
@@ -188,34 +161,28 @@ OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:5432/ostool_tes
   pnpm --dir ostool-server/webui test:e2e
 ```
 
-Each fixture creates a fresh `ostool_e2e_...` schema. Public tests create users/roles,
-enable MFA and replace CAPTCHA digests directly in that isolated test database.
-There is no CAPTCHA bypass in the application. Without `OSTOOL_E2E_PUBLIC=true`
-or an explicit separately configured public test server, public-account tests are
-skipped. An externally launched public test fixture must provide matching
-`OSTOOL_E2E_AUTH_BASE_URL`, `OSTOOL_E2E_AUTH_DATABASE_URL`,
-`OSTOOL_E2E_AUTH_DATABASE_SCHEMA`, `OSTOOL_E2E_ADMIN_EMAIL` and
-`OSTOOL_E2E_ADMIN_PASSWORD`; only loopback hosts and explicit `ostool_e2e_` schemas
-are accepted. Never use a development/production inventory. See [security testing](security.md#升级与检查).
+每个测试服务创建新的 `ostool_e2e_...` 数据库模式。公网测试在隔离测试数据库中创建
+用户和角色、启用双重验证，并直接替换验证码摘要。应用中没有绕过验证码的接口。
+未设置 `OSTOOL_E2E_PUBLIC=true` 且未显式配置独立公网测试服务时，会跳过公网账号
+测试。外部启动的公网测试服务必须提供配套的 `OSTOOL_E2E_AUTH_BASE_URL`、
+`OSTOOL_E2E_AUTH_DATABASE_URL`、`OSTOOL_E2E_AUTH_DATABASE_SCHEMA`、
+`OSTOOL_E2E_ADMIN_EMAIL` 和 `OSTOOL_E2E_ADMIN_PASSWORD`；仅接受回环主机和
+明确使用 `ostool_e2e_` 前缀的数据库模式。不要使用开发或生产设备数据。
+参见[安全测试说明](security.md#升级与检查)。
 
-## Scheduled board rentals
+## 开发板预约租赁
 
-`/admin/rentals` assigns an enabled user a specific enabled board for a UTC
-interval `[starts_at, ends_at)`. Intervals for the same board cannot overlap;
-adjacent intervals are allowed. The server serializes admission and mutations,
-and uses a per-board PostgreSQL advisory transaction lock for overlap checks.
+`/admin/rentals` 为已启用的用户分配指定开发板，开发板也须处于启用状态。
+使用 UTC 时间区间 `[starts_at, ends_at)`，同一开发板的租赁时段不能重叠，相邻时段
+可以衔接。服务器串行处理会话准入和变更，并通过每块板卡的 PostgreSQL 事务级咨询锁
+检查时段冲突。
 
-Members see only currently allocated board types and can obtain a session only
-on an allocated board. An existing short session still needs its usual heartbeat.
-The session deadline is capped by the rental end, including serial-generated
-heartbeats. At expiry/cancellation, the existing release coordinator closes
-serial streams, powers off and cleans artifacts. Actual physical release may
-finish later than the scheduled cutoff; the next allocation never bypasses a
-board's releasing/error state. Administrators may acquire idle boards for
-maintenance without a rental.
+普通成员仅能看到当前已分配的板型，只能在已分配的板卡上建立会话。已有短期会话仍需
+正常发送心跳。会话截止时间不超过租赁结束时间，串口活动触发的心跳同样受限。
+到期或取消时，现有释放协调器关闭串口流、断电并清理会话文件。实际硬件释放可能晚于
+预定截止时间；下一次分配不会绕过板卡正在释放或出错的状态。管理员可不经过租赁，
+获取空闲板卡进行维护。
 
-New rentals do not power on hardware. Editing a rental preserves its board and
-user; cancel and create another to change those fields. Cancelled/expired
-records remain visible. Renaming/deleting a board with unfinished rentals is
-blocked until those rentals are cancelled. Local edition exposes none of these
-APIs and does not change existing `ostool` session behavior.
+新增租赁不会为硬件上电。编辑租赁时保留原用户和板卡；需要更换时，取消后重新创建。
+已取消或已到期的记录仍可查看。板卡存在未完成租赁时，须先取消租赁才能重命名或删除
+板卡。本地版不开放这些 API，保持现有 `ostool` 会话行为。
