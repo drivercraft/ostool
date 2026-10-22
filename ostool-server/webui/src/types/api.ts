@@ -361,12 +361,12 @@ export interface ManagedUser {
   role_id: string;
   disabled: boolean;
   created_at: string;
-  updated_at?:string;
-  email_verified_at?:string|null;
-  last_login_at?:string|null;
-  last_login_ip?:string|null;
-  password_changed_at?:string;
-  mfa_enabled?:boolean;
+  updated_at?: string;
+  email_verified_at?: string | null;
+  last_login_at?: string | null;
+  last_login_ip?: string | null;
+  password_changed_at?: string;
+  mfa_enabled?: boolean;
 }
 export interface UserInput {
   email: string;
@@ -381,16 +381,16 @@ export interface RoleInput {
   administrator: boolean;
 }
 export interface UserRole extends RoleInput {
-  created_at?:string;
-  updated_at?:string;
+  created_at?: string;
+  updated_at?: string;
   id: string;
   builtin: boolean;
 }
 export interface DeploymentInfo {
   edition: "local" | "public";
   database_connected: boolean;
-  redis_connected?:boolean;
-  security?:Record<string,string|number|boolean|null>;
+  redis_connected?: boolean;
+  security?: Record<string, string | number | boolean | null>;
   auth_enabled: boolean;
   allow_registration: boolean;
   public_base_url: string | null;
@@ -527,7 +527,7 @@ export interface DashboardInfo {
       tx_bytes?: number | null;
       rx_bytes_per_second?: number | null;
       tx_bytes_per_second?: number | null;
-      redis_ok?:boolean|null;
+      redis_ok?: boolean | null;
       database_ok?: boolean;
       database_latency_ms?: number;
       pool_size?: number;
@@ -587,3 +587,66 @@ export interface SessionDetailResponse {
   serial_connected: boolean;
   files: FileResponse[];
 }
+
+export interface SiteSettings {
+  name: string;
+  short_name: string;
+  tagline: string;
+  description: string;
+  logo_url: string;
+  favicon_url: string;
+  support_email: string;
+  support_phone: string;
+  support_url: string;
+  operator: string;
+  address: string;
+  copyright: string;
+  icp_number: string;
+  icp_url: string;
+  police_number: string;
+  police_url: string;
+  github_url: string;
+  maintenance: boolean;
+  maintenance_message: string;
+  terms_title: string;
+  terms_body: string;
+  privacy_title: string;
+  privacy_body: string;
+}
+export interface SiteView {
+  revision: number;
+  terms_version: number;
+  privacy_version: number;
+  updated_at: string;
+  terms_published_at?: string;
+  privacy_published_at?: string;
+  settings: SiteSettings;
+}
+export interface LegalConsent {
+  accepted: boolean;
+  terms_version: number;
+  privacy_version: number;
+}
+export interface LegalVersion {
+  kind: "terms" | "privacy";
+  version: number;
+  title: string;
+  content_hash: string;
+  published_at: string;
+}
+export interface MailDelivery {
+  id: string;
+  purpose: string;
+  recipient_email: string;
+  status: "sending" | "sent" | "failed";
+  error_code: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export const requestStatusLabels: Record<RentalRequest["status"], string> = {
+  pending: "待审核",
+  approved: "已通过",
+  rejected: "已拒绝",
+  cancelled: "已撤回",
+};

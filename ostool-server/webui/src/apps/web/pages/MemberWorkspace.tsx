@@ -1,6 +1,6 @@
 import { SecuritySettings } from "@/components/security-settings";
 import { useId, useState, type FormEvent } from "react";
-import { requestStatusLabels } from "@/domain/rentals";
+import { requestStatusLabels } from "@/types/api";
 import {
   Link,
   NavLink,

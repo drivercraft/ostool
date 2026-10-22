@@ -17,7 +17,7 @@ CLI 凭据的 `board:operate` scope 仅允许 Board REST、会话文件及串口
 
 取消、缩短租赁或到期会停止相关运行会话；撤销 OAuth 登录或 PAT 会关闭现有串口连接并释放设备（凭据复核最多间隔 5 秒）。OAuth 刷新属于同一登录族，不应中断正常串口连接；如果该登录族没有新的有效 access token，现有串口也会在 5 秒内关闭。
 
-设备侧 TFTP 不支持用户 Bearer 鉴权；loader 与启动/共享文件允许配置的设备网段匿名访问，以兼容固件和板上下载命令。`http_url` 是设备可访问的文件地址，CLI 不会把用户 token 注入板上命令。公网 HTTP 下载则需要当前有效凭据和会话归属。独立吞吐测试监听器同样没有用户认证；部署时只向公网暴露 Caddy 的 HTTPS 入口，限制设备端口和设备网段，见 [安全配置](../ostool-server/deploy/security.md)。
+设备侧 TFTP 不支持用户 Bearer 鉴权；loader 与启动/共享文件允许配置的设备网段匿名访问，以兼容固件和板上下载命令。`http_url` 是设备可访问的文件地址，CLI 不会把用户 token 注入板上命令。公网 HTTP 下载则需要当前有效凭据和会话归属。独立吞吐测试监听器同样没有用户认证；部署时只向公网暴露 Caddy 的 HTTPS 入口，限制设备端口和设备网段，见 [安全配置](../ostool-server/README.md#security-configuration)。
 
 服务地址来自全局或项目配置中的 `board.server`（完整 URL，可包含路径前缀），可被命令行 `--server` 覆盖；可选的 `board.port` 或 `--port` 用于覆盖 URL 中的端口。`auth_mode = "disabled"` 时该地址指向局域网 `ostool-server`；`auth_mode = "required"` 时该地址指向认证后端，OAuth 和受认证的 Board API 共用这个 Base URL。为兼容旧的局域网配置，`board.server` 为裸 IPv4 或 IPv6 地址时客户端自动补为 `http://`。基线版本写出的 `board.server_ip` / `board.port` 也会在读取时迁移为 `board.server` / `board.port`，下一次保存配置时只写新格式；无 scheme 的主机名不支持。
 
@@ -1211,7 +1211,7 @@ SMTP 是可选功能，未配置时对应入口不显示。邮件码十分钟、
 
 超限统一返回 429、`code=rate_limited`、`Retry-After` 响应头；
 Cookie 写请求拒绝不匹配/缺失的 Origin。配置、部署与升级说明见
-[服务器安全文档](../ostool-server/deploy/security.md)。
+[服务器安全文档](../ostool-server/README.md#security-configuration)。
 
 ## 站点配置与注册协议版本
 
@@ -1225,4 +1225,20 @@ Cookie 写请求拒绝不匹配/缺失的 Origin。配置、部署与升级说�
 注册请求新增 legal 对象，其中 accepted 必须为 true，terms_version 和 privacy_version
 必须匹配当前已发布版本；缺失同意时拒绝注册，版本变化返回 409 legal_changed。
 注册与同意记录在同一事务完成，不会创建缺少对应同意记录的账号。
-配置字段、协议接口、历史版本及数据表见 [站点与数据结构说明](../ostool-server/deploy/site-and-data.md)。
+站点配置包括名称、简称、标语、描述、标志和图标路径、联系方式、备案信息、版权、
+维护提示以及用户协议和隐私政策。设置保存到 PostgreSQL，部署密钥与连接凭据不返回浏览器。
+
+| 接口 | 行为 |
+| --- | --- |
+| `GET /api/v1/site` | 公开配置与协议版本 |
+| `GET /api/v1/site/events` | 仅公开配置与设备目录的 SSE，不含私人或后台数据 |
+| `PUT /api/v1/admin/site-settings` | 管理员提交 `revision` 与完整 `settings`，需近期身份复核 |
+| `GET /api/v1/admin/legal-history` | 最近 100 个协议发布版本 |
+| `GET /api/v1/site/legal/{terms|privacy}/{version}` | 指定历史版本的 JSON |
+| `GET /api/v1/admin/mail-deliveries` | 最近 100 次邮件投递，网页通过后台 SSE 更新 |
+
+`site_settings` 保存配置修订，`legal_document_versions` 保存不可变协议版本，
+`user_legal_acceptances` 保存逐用户同意记录。邮箱验证、密码重置与密码修改事件使用独立表，
+验证码仅存摘要；成功、过期、超限或凭据版本变化后不可复用。完整字段和约束以
+[初始迁移](../ostool-server/migrations/20261022000000_initial_schema.sql)为准，
+配置和密钥管理见[服务器说明](../ostool-server/README.md#security-configuration)。

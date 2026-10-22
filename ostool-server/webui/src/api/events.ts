@@ -28,9 +28,9 @@ export interface Runtime {
 }
 export interface Resources {
   device_catalog: import("@/types/api").PublicDevice[];
-  site: import("@/types/site").SiteView;
-  legal_history: import("@/types/site").LegalVersion[];
-  mail_deliveries: import("@/types/site").MailDelivery[];
+  site: import("@/types/api").SiteView;
+  legal_history: import("@/types/api").LegalVersion[];
+  mail_deliveries: import("@/types/api").MailDelivery[];
   security: import("./client").SecurityStatus;
   security_sessions: { sessions: import("./client").SecuritySession[] };
   security_revision: number;

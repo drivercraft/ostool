@@ -6,7 +6,7 @@ import { api, notifyAuthChanged, type HumanProof } from "@/api/client";
 import { HumanVerification } from "@/components/human-verification";
 import { useEdition } from "@/edition";
 import { safeAdminRedirect } from "@/auth-session";
-import { SiteThemeMenu } from "@/components/site-theme-menu";
+import { ThemeMenu } from "@/components/theme-menu";
 import { Button } from "@/components/ui/button";
 import { TextField, Notice } from "@/components/forms";
 
@@ -69,7 +69,7 @@ export default function AdminLogin() {
           <strong>{settings.short_name}</strong>
           <span>管理后台</span>
         </a>
-        <SiteThemeMenu label="切换后台主题" />
+        <ThemeMenu label="切换后台主题" />
       </header>
       <form className="admin-login-card" onSubmit={submit}>
         <span className="admin-login-icon">

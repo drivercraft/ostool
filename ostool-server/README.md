@@ -33,7 +33,7 @@ Both local and public editions use only PostgreSQL for durable business data.
 `src/persistence/` contains the database repositories; `migrations/` contains
 SQLx schema history and stays relative to `Cargo.toml`. The service never reads
 old board/DTB/OTA files and has no file backend or old module aliases. Existing
-board inventory can be imported manually with the [offline migration tool](deploy/README.md#已有开发板迁移).
+board inventory can be imported manually with the [offline migration tool](#existing-board-migration).
 
 ## Serial transport
 
@@ -152,48 +152,26 @@ The default listen address is:
 
 ### Local and public editions
 
-The default is `OSTOOL_EDITION=local`: no login, registration, user/role or
-rental management. Existing `ostool` clients continue to use `auth_mode=disabled`.
-PostgreSQL is required in local edition as well; edition only controls account
-and rental features.
+Both editions require PostgreSQL and use the same database schema. The default
+`OSTOOL_EDITION=local` has no authentication, account or rental management;
+`ostool` continues to connect with `auth_mode=disabled`. Public deployment must
+explicitly select `OSTOOL_EDITION=public` and configure PostgreSQL, Redis and an
+initial administrator. Public edition always enforces authentication; database
+connectivity alone does not enable account features.
 
-For public deployments, explicitly set `OSTOOL_EDITION=public`, supply
-`OSTOOL_DATABASE_URL` and initialize an administrator. Public edition additionally requires OSTOOL_REDIS_URL for security counters and always
-requires authentication for board APIs and administrator credentials for admin
-APIs; disabling auth is not supported. Missing PostgreSQL fails startup.
-Use [the public environment example](deploy/public.env.example) with Caddy.
-Existing authenticated deployments must add `OSTOOL_EDITION=public` when upgrading.
-The database connection alone no longer enables account features.
+The frontend reads the edition at runtime, so the same binary serves either
+edition. Configuration precedence is process environment, then the selected
+`.env` file, then TOML. Without `--env-file`, the server reads `.env` from its
+working directory. See [local defaults](.env.example), the
+[public environment example](deploy/public.env.example) and
+[public deployment](#public-deployment).
 
-Public login/registration require image CAPTCHA by default. Email verification is
-optional and disabled by default. Optional SMTP, TOTP/recovery codes, device/session
-revocation, recent identity verification, rate limits and deployment settings are
-documented in [security.md](deploy/security.md). Local edition needs none of these settings.
-
-Public edition supports `/register`, `/login`, OAuth Device Authorization and
-PATs compatible with `ostool login` / `ostool login --with-token`. Rental
-administration assigns a board to a user for a UTC time interval. Members can
-only acquire boards allocated to them at the current time. Administrators retain
-maintenance access. Expiry/cancellation terminates member sessions through the
-existing power-off and file-cleanup coordinator; the next user must wait until
-hardware release completes. Ordinary heartbeat TTL cannot extend that interval.
-
-Board inventory, DTB content and OTA data use PostgreSQL from the first start.
-To migrate existing board TOMLs after deploying the new version, run
-`scripts/migrate-boards.sh` manually; startup and deployment scripts never import
-business files. See [migration instructions](deploy/README.md#已有开发板迁移)
-and the [persistence matrix](deploy/README.md#数据持久化情况).
-
-The frontend reads runtime edition information from the Rust server rather than
-an independent build flag, so one binary supports both editions and UI settings
-cannot disable public authentication. `.env` defaults to the process working
-directory; `--env-file` selects an explicit file. Process variables win over file
-variables. See [.env.example](.env.example) for local defaults.
-
-The sidebar groups boards/DTBs/short sessions under **设备管理**. Public edition
-also has **租赁管理 → 租赁列表** and **用户管理 → 用户列表 / 用户角色**. All list
-toolbars place actions on the left and search/filter controls on the right.
-**系统设置** stays at the bottom, with grouped configuration tabs.
+Board inventory, DTB content, OTA images/jobs/observations and editable
+network/TFTP/upload settings are stored in PostgreSQL. Deployment addresses,
+credentials and hardware paths stay in TOML/environment variables; live hardware
+connections and discovery stay in memory, and session files expire with their
+leases. Restarting does not restore hardware connections. Existing board files
+are imported only by the [independent migration tool](#existing-board-migration).
 
 The network throughput test listener is enabled by default on `0.0.0.0:3000`.
 It has a separate router from the management listener, so board management,
@@ -289,362 +267,338 @@ vi /etc/ostool-server/config.toml
 
 ## Local development environment
 
-Both editions require PostgreSQL. The development script defaults to local
-edition and starts a private PostgreSQL 16 container automatically (Docker is
-required). Local edition needs no login and no CLI credentials:
+Run from the repository root with Rust, Node.js, pnpm and Docker available:
 
 ```bash
-ostool-server/scripts/dev.sh build   # build website/admin assets and Rust without starting services
 ostool-server/scripts/dev.sh start
 ostool-server/scripts/dev.sh status
+ostool-server/scripts/dev.sh build
+ostool-server/scripts/dev.sh restart
 ostool-server/scripts/dev.sh stop
 ```
 
-`build` runs `cargo build -p ostool-server` from the repository root. The existing
-Cargo `build.rs` builds both React entries and embeds their assets in the Rust
-executable when sources change. It builds this checkout's UI, ignoring an external
-`OSTOOL_SERVER_WEB_DIST_DIR`, and does not start PostgreSQL, Redis or the server.
-Local/public editions use the same executable, so one build serves either edition.
-Build failures return a nonzero exit status.
+`start` starts the private PostgreSQL container and server, building when needed;
+starting an already running edition keeps that process. `build` only builds the
+website, console and Rust executable. Use `restart` after source or listener
+changes to rebuild embedded assets and replace the process. `stop` stops the
+selected edition's server and backing containers. `clean` additionally deletes
+**all data belonging to that development edition**; use it only for disposable
+data. The launcher does not change systemd or `/etc/ostool-server`.
 
-If a server is already running, `build` does not replace that process. Use
-`restart` after editing code to rebuild and run the new executable; `start` leaves
-an already running process alone:
+The launcher reads `ostool-server/.env` regardless of the working directory;
+copy [.env.example](.env.example) as needed. Process variables take precedence.
+Only `OSTOOL_DEV_*`, `OSTOOL_EDITION`, `OSTOOL_ADMIN_EMAIL` and
+`OSTOOL_ADMIN_PASSWORD` are imported; deployment database URLs, listener and
+security settings do not redirect the launcher's private services.
+`OSTOOL_DEV_ENV_FILE` selects another file. Node's dotenv parser treats values
+as data without shell execution or expansion.
 
-```bash
-ostool-server/scripts/dev.sh build    # prepare updated executable only
-ostool-server/scripts/dev.sh restart  # rebuild and apply changes to the running environment
-```
+| Setting | Default |
+| --- | --- |
+| `OSTOOL_EDITION` | `local` |
+| `OSTOOL_DEV_HOST` | `0.0.0.0` locally; `127.0.0.1` for public testing |
+| `OSTOOL_DEV_SERVER_PORT` | `2999` |
+| `OSTOOL_DEV_DIR` | `.ostool-server-dev/<edition>` |
+| `OSTOOL_DEV_PG_PORT` | `54328` locally; `54329` for public testing |
+| `OSTOOL_DEV_REDIS_PORT` | `56380`, public testing only |
+| `OSTOOL_DEV_DEMO` | `true` |
 
-To test authenticated public edition with a private PostgreSQL 16 container:
+Open `http://127.0.0.1:2999/` or `/admin/overview`; local development also accepts
+`http://<server-LAN-IP>:2999/`. Set `OSTOOL_DEV_HOST=127.0.0.1` for loopback-only
+access. `OSTOOL_LISTEN_ADDR` controls direct Rust startup; the launcher generates
+its listener from `OSTOOL_DEV_HOST` and `OSTOOL_DEV_SERVER_PORT`.
+The local anonymous listener belongs on a trusted network.
+
+For the authenticated development edition:
 
 ```bash
 OSTOOL_EDITION=public ostool-server/scripts/dev.sh start
-OSTOOL_EDITION=public ostool-server/scripts/dev.sh stop
 ```
 
-Use `restart` or `clean` with the same edition. Data/log/config directories are
-`.ostool-server-dev/local` and `.ostool-server-dev/public`; `OSTOOL_DEV_DIR` can
-override that location. The default local edition listens on `0.0.0.0:2999`;
-open `http://<server-LAN-IP>:2999/` or `/admin/overview` from another LAN device.
-`dev.sh` explicitly generates `OSTOOL_LISTEN_ADDR` from `OSTOOL_DEV_HOST` and
-`OSTOOL_DEV_SERVER_PORT`; an `OSTOOL_LISTEN_ADDR=127.0.0.1:2999` line in the dotenv
-file applies to direct Rust startup and does not override the launcher.
-The launcher prints the detected IPv4 LAN URLs. PostgreSQL and Redis ports remain
-bound to loopback. Public-edition development keeps its `127.0.0.1:2999` listener.
+Its bootstrap administrator defaults to `admin@example.com` /
+`admin-password-123`; override `OSTOOL_ADMIN_EMAIL` and `OSTOOL_ADMIN_PASSWORD`
+before initialization. PostgreSQL data is separate per development edition;
+both defaults use HTTP port 2999, so stop the old edition before switching or
+assign distinct `OSTOOL_DEV_SERVER_PORT` values. Occupied listeners are rejected
+before backing services start. Public demo listeners and origins remain loopback
+only; an inherited LAN host must be overridden with `OSTOOL_DEV_HOST=127.0.0.1`.
 
-The launcher reads `ostool-server/.env` relative to its own directory, regardless
-of the calling working directory. Copy `ostool-server/.env.example` to `ostool-server/.env` if the file does not
-exist; preserve an existing file.
-For example, add these settings to `ostool-server/.env`:
+Demo data includes 48 boards, 24 DTBs, 12 live sessions and 18 discovered devices.
+Public testing also adds 36 users, six roles, 72 rentals and 48 applications.
+Records use `demo` / `[演示]` names; existing edits are preserved. Public demo
+accounts `demo01@example.test` (administrator) and `demo02@example.test` (member)
+both use `demo-user-password-123`. These credentials are for development only.
 
-```dotenv
-OSTOOL_EDITION=local
-OSTOOL_DEV_HOST=0.0.0.0
-OSTOOL_DEV_SERVER_PORT=2999
-OSTOOL_DEV_DEMO=true
-```
-
-Leaving `OSTOOL_DEV_HOST` empty selects the edition default (local `0.0.0.0`,
-public `127.0.0.1`). To use public-edition loopback testing with a file that pins a
-local LAN address, override the host to `127.0.0.1` as well as the edition.
-Process/inline environment variables take precedence over file values, then
-built-in defaults apply. `OSTOOL_DEV_ENV_FILE=/absolute/path/dev.env` selects an
-alternative file; an explicitly requested missing file is an error.
-
-Use `OSTOOL_DEV_HOST` to select a numeric IPv4/IPv6 address. For loopback-only
-local testing:
-
-```bash
-OSTOOL_DEV_HOST=127.0.0.1 ostool-server/scripts/dev.sh restart
-```
-
-Use `restart` to apply a listener change to an already running process, including
-an existing config created by an older launcher. `start` preserves an existing
-server. Local edition has no authentication, so use its LAN listener only on a
-trusted network. Public HTTPS deployment continues to use the deployment settings
-and Caddy; this does not relax public-edition origin or demo restrictions.
-The local/public database containers default to `ostool-server-dev-local-postgres`
-and `ostool-server-dev-public-postgres`, with ports 54328 and 54329 respectively.
-The schema and persistence code are identical; deploy either edition against the
-same database URL/schema to keep the same data when changing edition.
-Only public edition has website `/login` and backend `/admin/login`, with bootstrap defaults `admin@example.com` /
-`admin-password-123`. Override `OSTOOL_ADMIN_EMAIL`, `OSTOOL_ADMIN_PASSWORD`,
-`OSTOOL_DEV_PG_PORT`, or `OSTOOL_DEV_SERVER_PORT` before starting as needed.
-The launcher imports only `OSTOOL_DEV_*`, `OSTOOL_EDITION`, `OSTOOL_ADMIN_EMAIL`
-and `OSTOOL_ADMIN_PASSWORD` from the file. Deployment database URLs, listener,
-proxy and security settings in that file are not applied to the launcher; it
-continues to manage its own private PostgreSQL/Redis services. Node's built-in
-`util.parseEnv` parses the file as data, without shell execution or expansion.
-The root repository `.env` is not read. The script does not modify systemd or `/etc`.
-Where `setsid` is available, it starts the server in an independent session so
-closing a command runner does not terminate it; `stop` still uses the recorded
-server PID. Other environments retain the `nohup` fallback.
-
-The development launcher enables demo data by default (`OSTOOL_DEV_DEMO=true`).
-Restart an existing environment to populate it:
-
-```bash
-ostool-server/scripts/dev.sh restart
-# Authenticated demo, including users/roles/rentals:
-OSTOOL_EDITION=public ostool-server/scripts/dev.sh restart
-```
-
-Choose the command for your edition. Both default to the same port; stop the old
-edition before switching, or set different `OSTOOL_DEV_SERVER_PORT` values.
-`start` now rejects an occupied listener before starting database services, so a
-running public instance cannot be reported as a successful local startup.
-For example, switching from a public loopback demo to the local LAN environment:
-
-```bash
-OSTOOL_EDITION=public ostool-server/scripts/dev.sh stop
-OSTOOL_EDITION=local ostool-server/scripts/dev.sh start
-```
-
-`build` alone and `start` on an already running edition do not apply new listener
-settings. Use `restart` for that same edition. `status` prints the requested
-configuration; the actual socket can be checked with `ss -ltnp 'sport = :2999'`.
-
-Fresh demo environments contain 48 boards (six types, U-Boot/PXE/HTTP Boot,
-multiple tags, long/empty notes, enabled/disabled), 24 sample DTBs, 12 live sample
-sessions with downloadable text/log files, and 18 discovered devices (online,
-offline, conflicting and unbound). Idle, in-use, releasing and error states, plus successful
-and failed power notifications, exercise the console's filters and pagination.
-Public edition additionally has 36 users (including disabled accounts), six
-custom roles, 72 past/current/future/cancelled rentals, and 48 pending/approved/
-rejected/withdrawn rental applications. Existing records are
-preserved; fixture IDs/names start with `demo` or `[演示]`. These are actual local
-storage/database records consumed by the regular API/SSE, not browser mocks.
-
-Public demo accounts: `demo01@example.test` (administrator),
-`demo02@example.test` (member), password `demo-user-password-123` for both.
-The bootstrap administrator above is also available. Local edition continues
-without login or user management. Demo roles follow existing administrator/member
-permissions; their names do not introduce additional permission levels.
-
-`--dev-demo` accepts LAN/private or wildcard listeners in local edition; any
-configured origin must be loopback or a private IP. Public edition still requires
-both a loopback management listener and a loopback authentication origin. It disables UDP discovery, QEMU, the network-test
-listener, TFTP service startup and automatic startup power-off. Sample board power
-commands are no-ops; discovered IPs use the documentation-only `192.0.2.0/24`
-range. Sample DTBs contain a minimal display model, not real hardware definitions.
-Demo sessions receive heartbeats while the process runs; manually released
-sessions stay released until restart. Runtime snapshots are recreated on restart.
-These fixtures are intended for UI inspection, not hardware/boot verification.
-
-To launch without adding/refreshing fixtures, use
-`OSTOOL_DEV_DEMO=false ostool-server/scripts/dev.sh restart` (or the same
-prefix with `OSTOOL_EDITION=public`). This restores normal hardware startup behavior
-and retains already stored demo records. `clean` deletes **all data for the chosen
-development edition**; starting again recreates fresh fixtures. Never point the
-development launcher at a production database or data directory. Normal direct
-server startup and systemd deployments do not enable demo data; direct isolated
-development startup can opt in with `ostool-server --config ... --dev-demo`.
+Demo mode disables actual discovery, QEMU, network testing, TFTP startup and
+startup power-off; sample power commands are no-ops and sample DTBs are display
+fixtures. Runtime fixtures are recreated at startup; released sessions stay
+released until restart. `OSTOOL_DEV_DEMO=false` with `restart` disables fixture
+creation and restores normal hardware startup, while retaining persisted data.
+Normal direct/systemd startup does not enable demo mode. Do not point development
+or test services at production data.
 
 ## Management console
 
-See [frontend structure](webui/README.md) for the independent `src/apps/admin`
-and `src/apps/web` applications, shared components and build entries.
+The Rust API is in `src/api/`, persistence in `src/persistence/`, and SQLx database
+migrations in `migrations/`. `webui/` builds two independent React/Vite entries:
 
-The dashboard groups runtime health (`/admin/overview`), actual background tasks
-(`/admin/jobs`) and board/user/rental operations (`/admin/operations`). The server
-samples CPU, memory, process RSS, data-disk capacity, configured-interface traffic
-and PostgreSQL health every five seconds and pushes updates over the existing SSE
-connection. Unsupported metrics remain unavailable. Charts contain up to five
-minutes of samples from this process, not historical monitoring data. Local
-edition hides account and rental metrics. Connection status appears in the
-dashboard status bar; board discovery opens from the board-list toolbar.
+| Entry | Private source | Purpose |
+| --- | --- | --- |
+| `index.html` | `src/apps/web/` | Website, login and member workspace |
+| `admin/index.html` | `src/apps/admin/` | Console and administrator login |
 
-`/admin/audits` provides PostgreSQL-backed, server-paginated audit records with
-action/resource/result, actor, IP, source and date filters, details and CSV export.
-Records include request ID, actor identity, target, outcome, HTTP status and elapsed
-time. Login/registration, permission denials, board/session/file/power/OTA actions,
-user/role/rental changes, settings changes and audit viewing/export/cleanup are
-recorded. Asynchronous power/release results and OTA state changes are separate
-events. Passwords, tokens, raw request/response bodies, file contents and shell
-commands are excluded. Data starts when this feature is enabled; existing business
-records are not converted into invented audit history.
+Shared controls are in `src/components/`, API clients/SSE in `src/api/`, contracts
+in `src/types/api.ts`, and styles under `src/styles/` with `global.css` as the
+entry. Unit tests live beside source; Playwright tests and private server fixtures
+live in `tests/e2e/` and `tests/fixtures/`. Neither app imports the other's private
+pages. Website and console use independent browser sessions and theme settings,
+sharing PostgreSQL accounts and role checks. `/login` opens `/account/*`, while
+`/admin/login` rejects non-administrators. Logging out of one does not log out of
+the other. Local edition opens the console without login and hides account and
+rental features.
 
-Public edition restricts audit APIs to administrators. Local edition records
-anonymous local operators without enabling authentication. Mutating API requests
-write an audit intent before executing; unavailable audit storage returns HTTP
-503 without executing the operation. If result recording fails afterward, the
-intent remains `pending` (outcome unconfirmed) and the response has
-`X-Audit-Status: pending`; the runtime dashboard reports audit write failures.
-Device polls and session heartbeats are excluded from HTTP audit noise.
+The console groups devices/DTBs/short sessions, rentals, users/roles, audit logs
+and bottom system settings. Toolbars, independently scrolling content and footer
+status/actions fill the viewport. Lists support table/card layouts with shared
+filters, actions and pagination; dashboard task tables have a fixed layout.
+All updates use SSE, preserving drafts, focus and scroll position. Configuration
+conflicts require explicit resolution. See the
+[management interface and event protocol](../docs/admin-ui.md).
 
-Audit records are retained indefinitely by default. Set
-`OSTOOL_AUDIT_RETENTION_DAYS=1..3650` before startup to enable hourly retention;
-`0` disables automatic cleanup. The cleanup dialog executes a single cleanup and
-does not change that environment setting. Unconfirmed records are retained.
-`OSTOOL_TRUSTED_PROXY_IPS` is a comma-separated list of trusted reverse-proxy IPs;
-only those peers may supply the `X-Forwarded-For` chain. For Caddy on the same host,
-set it to `127.0.0.1,::1`. These deployment settings require a server restart and
-are not frontend build variables.
+The dashboard provides runtime health (`/admin/overview`), background tasks
+(`/admin/jobs`) and operational metrics (`/admin/operations`). Resource and service
+snapshots update every five seconds through SSE; charts retain at most five
+minutes from this process. Unavailable host metrics stay unavailable. Local
+edition hides user/rental metrics. The dashboard footer includes connection
+health; the device toolbar opens discovery information.
 
-Audit API routes: `GET /api/v1/admin/audits`, `GET /api/v1/admin/audits/{id}`,
-`GET /api/v1/admin/audits/export`, `POST /api/v1/admin/audits/view` and
-`POST /api/v1/admin/audits/cleanup` (`{"keep_days":180}`). List/export filters are
-`q`, `action`, `resource`, `result`, `source`, `actor`, `ip`, RFC3339 `from`/`to`,
-`page`, and `page_size` (maximum 100). CSV exports contain at most 10,000 records;
-larger selections return an error asking for narrower filters. Management SSE
-supports `audit_view=1` with `audit_`-prefixed filters; browsers use this subscription
-for list updates. `GET /api/v1/admin/dashboard` also exposes the runtime snapshot.
+`/admin/audits` provides PostgreSQL-backed pagination, filters, details and CSV
+export for identity, permissions, settings, board/session/file/power/OTA and
+user/role/rental operations. Mutations record an intent before execution; audit
+storage failure returns 503 without executing the action. If result recording
+fails, the intent remains pending and the response includes
+`X-Audit-Status: pending`. Credentials, raw request bodies, file contents and power
+commands are excluded. `OSTOOL_AUDIT_RETENTION_DAYS=0` retains all records;
+`1..3650` enables hourly cleanup. Pending intents are retained. API/filter details
+are in [the API reference](../docs/api.md).
 
-Rental creation and editing use `/admin/rentals/new` and `/admin/rentals/{id}`.
-A two-column form at the top selects user/board and start/end times; the calendar
-fills the remaining workspace. Year/month/day views support year/month navigation,
-dragging consecutive dates (end exclusive at the next midnight), and dragging
-half-hour slots in day view. Double-click a date to open day view; keyboard Enter
-selects a focused time slot. Expand the day's available windows to inspect bookings
-or select a free window. Browsing does not change the draft; conflicting drags are
-rejected and Escape cancels a selection. The calendar follows the browser timezone,
-handles bookings crossing midnight and excludes cancelled bookings and the rental
-being edited. Live conflicts disable save without overwriting the draft;
-PostgreSQL rechecks conflicts on save.
-The member application page uses the same calendar with anonymized occupancy.
-All data lists have a layout icon in the upper-right toolbar for table/card
-views. Selection persists per list in the browser; search, filters, pagination
-and existing actions work in both views.
+System settings manage branding, contacts, filing information, maintenance
+notices, versioned user agreements and privacy policies. Public settings update
+via SSE. Registration requires explicit consent to current legal versions;
+publication preserves immutable history and per-user acceptance records. Database,
+SMTP, Redis and encryption credentials remain in deployment environment files,
+not browser responses or editable site settings. Logo/favicon settings accept
+same-origin static paths; Caddy can serve those assets. Legal text is escaped
+plain text, not executable HTML.
 
-Board inventory, DTB bytes/metadata, OTA image bytes/metadata/jobs/observations,
-and editable network/TFTP/upload settings are authoritative in PostgreSQL for
-both editions. The running server never reads old business files. Existing boards
-and their referenced DTBs have a separate, manual migration tool. Deployment variables
-(database connection, edition, listen address, credentials and hardware paths)
-remain in TOML/`.env`; secrets are excluded from database settings. Live leases,
-connections and discovery remain process state, while session artifacts remain
-temporary files cleaned up with the lease. See [persistence and deployment](deploy/README.md).
+Members manage their profile, security, personal access tokens, rentals and
+applications in `/account/*`. The public device directory exposes only ID, type,
+tags and disabled state. Applications do not reserve time or grant access until
+approved. Approval and an administrator-created rental grant the same exclusive
+UTC interval `[starts_at, ends_at)`; database locking prevents overlap. Member
+sessions are bound to that rental and cannot extend its deadline through
+heartbeats. Expiry/cancellation uses normal serial shutdown, power-off and file
+cleanup; the next user must wait for physical release. Administrators retain
+maintenance access. Frontend workflows and calendar behavior are documented in
+[the management guide](../docs/admin-ui.md).
 
-The public website has its own header, footer and authenticated workspace at
-`/account/*`, separate from the administrator layout at `/admin/*`. Website login
-opens the personal workspace for members and administrators alike. Its avatar
-menu links to profile, security, rentals and applications; administrators also
-get an explicit management-console link. Light/dark/system theme preferences
-are stored independently for the website and console.
+## Public deployment
 
-The website and console are independent HTML/JavaScript entries, rather than a
-single application that chooses its surface after loading. Website pages use
-`index.html`; `/admin/*` uses `admin/index.html`. Each has its own initial document
-title and login screen. `/login` always enters the website's `/account` workspace;
-backend login uses `/admin/login` and `POST /api/v1/admin/auth/login`, which rejects
-non-administrators. Browser access/refresh credentials are stored separately;
-logging into or out of one surface does not sign into or out of the other.
-The account database, role checks and CLI authentication remain shared. Existing
-browser credentials must be refreshed by logging in again after this security upgrade.
-Cookies are HttpOnly and separate for each surface; no access/refresh tokens remain
-in browser localStorage or SSE URLs.
-Local edition continues to open the console without authentication.
+Build with `cargo build --release -p ostool-server`. The build embeds both React
+entries; domain names, database URLs and passwords must not be `VITE_*` variables.
+The same executable supports different deployment domains. A custom
+`OSTOOL_SERVER_WEB_DIST_DIR` must contain `index.html`, `admin/index.html` and
+`assets/`. HTML uses `Cache-Control: no-store`; hashed assets are immutable.
 
-`pnpm --dir ostool-server/webui build` builds both entries together. A prebuilt
-`OSTOOL_SERVER_WEB_DIST_DIR` must contain both `index.html` and `admin/index.html`,
-plus `assets/`. Vite development serves the website at `/` and the console at
-`/admin/`, matching Rust routing. Deployment proxies must forward `/assets/*`
-as well as website, backend, API, OAuth, WebSocket and SSE routes to the server.
-
-Members can edit their name/email (email changes require their password), change
-password, manage CLI personal access tokens, view their own rentals and submit
-or withdraw rental applications. The public `/devices` page lists all configured
-boards as cards in both editions, including disabled boards with an unavailable
-state. Visitors can search without logging in; applying requires a public account.
-`GET /api/v1/site/devices` and public SSE `device_catalog` expose only the device
-ID, board type, tags and disabled flag. Management details remain private.
-Administrators review applications under rental management.
-Approval rechecks availability and creates the exclusive rental in the same
-PostgreSQL transaction; applying alone reserves no time or hardware. All personal
-queries and SSE updates are scoped to the authenticated user, excluding management
-configuration and other users' data. Password changes invalidate all existing
-OAuth sessions, personal access tokens and approved device codes for that user.
-These features remain hidden and unavailable in local edition.
-
-After source changes, use `restart` for the running development edition; `start`
-keeps an already running process. Restart rebuilds the embedded website and Rust
-executable using Cargo. HTML is served with `Cache-Control: no-store`, while
-hashed assets are immutable. Prebuilt `OSTOOL_SERVER_WEB_DIST_DIR` changes are
-also tracked by the build script. Deployment schema migrations run automatically
-on connection to a fresh database/schema. The unreleased development migrations
-have been consolidated into `migrations/20261022000000_initial_schema.sql`.
-A database that has recorded the earlier development chain cannot run this new
-baseline directly; preserve it and use a fresh database/schema, or explicitly
-reset disposable development data. See [database initialization](deploy/site-and-data.md#数据库初始迁移).
-Future released schema changes must use new incremental migrations.
-
-Open `/admin/` for the React + shadcn/ui console. Boards, discovery, virtual
-hardware, DTBs, leases, TFTP and server settings update through a single SSE
-connection; browser list polling is not used. Draft edits remain local until
-saved and concurrent configuration changes are reported without overwriting them.
-The workspace fills the viewport: toolbars and footer status/actions stay fixed
-while the center content scrolls. List footers provide local pagination over the
-SSE projection; editor and configuration save/cancel controls stay in the footer.
-The global titlebar shares its theme with the logo area and provides live
-operational notifications, a light/dark/system theme menu, and an account avatar
-menu. Theme selection persists in the browser. Local edition shows workspace
-actions without authentication entries; public edition exposes account/logout.
-
-A new board does not have to be saved before powering it on. Configure Custom,
-Zhongsheng relay or an existing QEMU device, then click **上电** or **下电**.
-Choose a MAC from live discovery or enter it manually, then save the board.
-Power completion means the command completed, not confirmed physical feedback.
-Leaving the page does not reverse or cancel a submitted power action.
-
-See [the management protocol and development guide](../docs/admin-ui.md).
-
-### Site configuration and legal documents
-
-System settings include site branding, contact/operator/filing details, maintenance notices,
-versioned user agreements and privacy policies. The website, footer and authentication pages
-receive public settings over SSE. Registration requires explicit consent to current legal
-versions; immutable revisions and per-user acceptances are persisted in PostgreSQL.
-See [site and identity schema](deploy/site-and-data.md). Public dev startup now also starts
-private Redis; local dev startup still needs PostgreSQL only.
-
-Member rental requests use a separate list at `/account/requests` and editor at
-`/account/requests/new`. The editor shares the administrator rental layout and calendar.
-Clicking a cell replaces a previous range; occupied/elapsed cells are gray and disabled.
-Portal content scales to 80% of desktop width, with mobile gutters. Icon actions share
-unfilled glyphs, a uniform hit area and hover backgrounds.
-
-The website and CLI share the same scheduled allocation: an approved application
-or administrator-created rental grants access during `[starts_at, ends_at)`.
-Member sessions bind to that rental; heartbeats cannot extend its deadline.
-Cancelling/expiring the rental releases the session, and OAuth/PAT revocation
-closes active serial connections. Device-side TFTP and trusted-network loader/file
-traffic remain separate from user authentication; restrict those listeners to the
-board network. See [API authorization boundaries](../docs/api.md).
-
-A cross-package regression test uses the real ostool HTTP/WebSocket clients and a
-PTY serial device against an isolated server (PostgreSQL and Redis required):
+Copy [deploy/public.env.example](deploy/public.env.example) to a private file and
+replace its database, Redis, public URL and initial administrator values:
 
 ```bash
-cargo test -p ostool-server --test cli_rental_contract -- --ignored
+chmod 600 /path/to/ostool.env
+./target/release/ostool-server --config /path/to/config.toml --env-file /path/to/ostool.env
 ```
 
-The fixture uses loopback HTTP only; production CLI authenticated endpoints still
-require HTTPS. This test does not replace physical firmware/TFTP validation.
+Use literal `KEY=value` assignments, without shell `export` or command
+substitution. Invalid deployment settings fail startup. Initialization creates a
+new administrator only; it does not promote an existing registered account or
+reset its password. Remove the bootstrap password after initialization.
 
+An existing systemd service can load that same file through a drop-in:
 
-Public CLI deployment and the security review are documented in
-[the CLI authorization review](deploy/cli-auth-review.md). CLI configuration must
-explicitly select `auth_mode = "required"`; `login --server` does not change the
-server used by later board commands. Device-code approval requires terminal-code
-confirmation. Established serial sockets require an unexpired current access
-grant in the same login family, so normal refresh preserves the socket while
-expiry without refresh closes it. CLI tokens cannot access personal-account APIs,
-and session details return a device summary instead of power commands or internal
-notes. Fallback credentials are privately and atomically replaced; refresh and 401
-cleanup coordinate across processes without deleting a newer saved login.
-Rental/authentication features do not require a synchronized CLI upgrade. Client
-patches only fix confirmed defects and preserve the existing OAuth/Board wire
-protocol. A 401 is returned unchanged and never causes an automatic replay
-against an existing gateway. Rental allocation keeps the established
-busy/not-found error messages understood by the original CLI waiting loop.
-`cargo test -p ostool-server --test cli_gateway_contract` checks the baseline
-wire contract against a separate mock gateway.
+```ini
+[Service]
+EnvironmentFile=/path/to/ostool.env
+```
 
+Use [deploy/Caddyfile.example](deploy/Caddyfile.example) for HTTPS on ports 80/443
+and keep Rust on `127.0.0.1:2999`. Set DNS and `OSTOOL_PUBLIC_BASE_URL` to the actual
+HTTPS origin. Forward website, `/admin/*`, `/assets/*`, API, OAuth, WebSocket and
+SSE paths. Caddy supports connection upgrades and streaming without a separate
+frontend service. Same-host Caddy uses `OSTOOL_TRUSTED_PROXY_IPS=127.0.0.1,::1`;
+only trusted peers can supply `X-Forwarded-For`. Missing/invalid forwarding chains
+from trusted proxies are treated as unknown sources, not private clients.
 
-Website login and registration use a full viewport split layout: introduction on
-the left and a wider form on the right. Narrow screens show the form with internal
-scrolling; site navigation/footer are omitted on these authentication routes.
-Registration consent stays beside its checkbox, and image CAPTCHA appears inside
-the right end of the input. The shared CAPTCHA component also updates backend
-login and other security forms without merging their separate authentication pages.
+Keep PostgreSQL, Redis, TFTP, UDP discovery, hardware downloads and the network
+test listener private. `OSTOOL_HARDWARE_ALLOWED_NETWORKS` should contain actual
+board subnets; the public Caddy example blocks hardware routes. A loopback Rust
+listener requires a separate device-network ingress for board HTTP Boot, shared
+files and OTA downloads. `OSTOOL_ADMIN_ALLOWED_NETWORKS` can restrict console
+sources using comma-separated CIDRs. Do not expose a local anonymous edition as
+a public service.
+
+### Security configuration
+
+Public browser login/registration use one-shot image CAPTCHA by default, bound
+to purpose, source and browser identity, with a 120-second lifetime. Every attempt
+consumes the challenge. `OSTOOL_CAPTCHA_PROVIDER=turnstile` requires all three
+Turnstile settings from the environment example; hostname and action are checked.
+There is no CAPTCHA bypass switch. Email verification is optional and defaults
+to `OSTOOL_REGISTRATION_EMAIL_VERIFICATION=false`.
+
+New/changed passwords require at least 15 characters and at most 1024 bytes;
+Argon2 hashing is concurrency-limited. Login is limited by account and source IP,
+with six failed attempts causing a 15-minute cooldown by default. Auth entrypoints
+also have a per-IP limit; 429 includes `Retry-After`. Redis stores TTL-bound
+counters using atomic operations; PostgreSQL remains authoritative for users,
+sessions, challenges, email verification/reset proofs and audit. Redis connection
+failure prevents public startup; runtime limiter failure rejects verification
+with 503. Local edition does not connect to Redis. Keep Redis private with
+credentials/ACL, use TLS (`rediss://`) remotely, configure `noeviction`, and enable
+AOF if lockout windows must survive restart. Clearing Redis resets counters.
+
+Browser credentials use separate HttpOnly, SameSite=Strict, host-only cookies;
+HTTPS adds Secure and `__Host-`. Access/refresh tokens are absent from JavaScript
+storage, login JSON and SSE URLs. Cookie writes require the expected Origin.
+Responses include CSP, frame/MIME restrictions and private-response cache
+controls; HTML receives a per-response nonce. Access tokens default to 15 minutes,
+refresh chains to at most 30 days with a one-day idle limit and ten active chains
+per user/client. Refresh rotates credentials; replay revokes the whole chain and
+never extends its absolute or sensitive-operation deadline.
+
+Password/role changes and disabled/deleted users revoke sessions, PATs and pending
+device approvals. Built-in role permissions are fixed; assigned custom roles must
+be unassigned before changing permission level or deletion. PATs last 90 days by
+default (configurable 1–365) and grant CLI board access only. Sensitive changes,
+audit export, PAT creation and CLI authorization require identity verification
+within the last three minutes. Account security pages manage current login devices
+and revocation; SSE and serial connections recheck credentials after revocation.
+
+To enable optional TOTP MFA, generate a stable encryption key once:
+
+```bash
+openssl rand -base64 32
+```
+
+Store it as `OSTOOL_MFA_ENCRYPTION_KEY` in the protected environment file and back
+it up with the database. Replacing/losing it prevents decryption of existing MFA
+secrets. TOTP secrets use AES-256-GCM; eight single-use recovery codes are stored
+only as hashes. TOTP uses 30-second steps and rejects replay. Keep clocks in sync.
+`OSTOOL_REQUIRE_ADMIN_MFA=true` restricts unenrolled admins to enrollment; ordinary
+members use their own MFA preference. Changes revoke other sessions/PATs. Public
+development retains its generated key under `.ostool-server-dev/public/mfa.key`;
+production must manage its own secret.
+
+Optional SMTP enables verification of the current email and password recovery.
+Configure `OSTOOL_SMTP_HOST`, `OSTOOL_SMTP_FROM` and the port/TLS/credential settings
+in the public example. `starttls` normally uses port 587, `tls` port 465;
+`loopback_plaintext` is limited to local testing/mail relays. Registration requires
+email codes only with `OSTOOL_REGISTRATION_EMAIL_VERIFICATION=true`. Codes expire
+after ten minutes or five attempts, are consumed once, and have per-email/IP
+resend limits. Password recovery preserves enabled MFA and revokes old credentials.
+Email verification, password reset, password changes and legal consent have
+separate PostgreSQL records; the [initial migration](migrations/20261022000000_initial_schema.sql)
+is the source of truth for fields, indexes and lifecycle constraints.
+
+For public CLI access, configure `board.server` to the HTTPS site and
+`board.auth_mode="required"`; `login --server` affects that login only.
+Existing OAuth Device Authorization, Bearer/PAT, Board REST and WebSocket protocols
+are preserved, without adding CAPTCHA to CLI calls. CLI credentials have
+`board:operate` scope and cannot access personal-account or administrator APIs.
+Rental eligibility and session ownership are enforced on subsequent operations;
+serial sockets require an unexpired access grant in the login family or PAT.
+Normal refresh preserves the socket, while revocation or expiry closes it.
+The CLI returns 401 unchanged, without automatically replaying mutations.
+
+Device-side loader/TFTP/boot traffic has a separate network trust boundary.
+Use VLAN/firewall isolation between tenants, boards and server infrastructure.
+Lease release does not erase board storage or restore firmware; provide a verified
+reset procedure before reuse. Uploads have single-file limits but no aggregate
+per-user/session quota. Real public DNS/Caddy/TLS and physical firmware/TFTP need
+separate deployment validation; isolated application tests do not prove those
+conditions. Authentication rules and routes are in [the API reference](../docs/api.md).
+
+## Existing board migration
+
+The service only uses PostgreSQL; it has no file backend, startup import or runtime
+legacy-data compatibility. After deploying the new binaries, back up PostgreSQL
+and the old board/DTB directories, stop the old service, then import manually:
+
+```bash
+cargo build --release -p ostool-server
+ostool-server/scripts/migrate-boards.sh \
+  --env-file /path/to/ostool.env \
+  --board-dir /path/to/existing/boards \
+  --dtb-dir /path/to/existing/dtbs
+```
+
+An installed `ostool-server-migrate-boards` accepts the same arguments. Install
+and update scripts install the tool but never run it. It reads only target database
+settings from `--config`, `--env-file` and process variables, without starting
+authentication, network, serial or power services. Process values take precedence.
+Normal import initializes an empty target through SQLx migrations. `--dry-run`
+requires an already initialized schema and changes neither schema nor records.
+Omit `--dtb-dir` if the boards reference no DTBs.
+
+The tool reads direct `<board-id>.toml` files, validates current board formats and
+imports only referenced DTBs. ID/MAC/DTB conflicts and missing files fail the whole
+operation. Boards, DTBs and the import audit event commit in one transaction;
+identical records are skipped, different existing content is never overwritten.
+Source files are not moved, changed or deleted. OTA/settings/accounts and obsolete
+board formats are not imported. Start/restart the new service after success;
+subsequent board/DTB operations use the UI/API and PostgreSQL.
+
+### Database initialization
+
+`migrations/20261022000000_initial_schema.sql` is the single initial migration for
+this unreleased branch. SQLx applies it to an empty database/schema once and checks
+its history on subsequent starts. Future changes after release require incremental
+migrations. A development database with the earlier migration chain cannot use
+this baseline directly. Preserve it and use a new database or
+`OSTOOL_DATABASE_SCHEMA` (1–63 ASCII letters, digits or underscores); reset an old
+environment only if all of that edition's data is explicitly disposable. Do not
+delete migration history or mark an unapplied migration complete to bypass checks.
+The service never resets data automatically. Existing board-file import is
+independent of old SQLx development history.
+
+## Verification
+
+Use disposable loopback PostgreSQL and Redis instances, never development or
+production inventory. Tests create isolated database schemas:
+
+```bash
+export OSTOOL_TEST_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:5432/ostool_tests
+export OSTOOL_TEST_REDIS_URL=redis://127.0.0.1:6379/0
+export RUST_TEST_THREADS=4
+cargo test -p ostool-server
+cargo test -p ostool-server --test auth_postgres --test account_postgres \
+  --test audit_postgres --test security_postgres --test unified_persistence \
+  --test board_migration --test cli_rental_contract -- --ignored
+cargo test -p ostool-server --test cli_gateway_contract
+pnpm --dir ostool-server/webui test
+pnpm --dir ostool-server/webui build
+cargo build -p ostool-server
+OSTOOL_E2E_PUBLIC=true \
+OSTOOL_E2E_REDIS_URL=redis://127.0.0.1:6379/0 \
+OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:5432/ostool_tests \
+  pnpm --dir ostool-server/webui test:e2e
+```
+
+Browser tests start separate local/public servers, create fresh `ostool_e2e_...`
+schemas and stop the fixtures automatically; ports 4174, 4175, 4191 and UDP 2998
+must be available. Public tests set known CAPTCHA digests only in that isolated
+database; the application has no test bypass. Without `OSTOOL_E2E_PUBLIC=true`
+or explicitly configured public fixtures, public tests are skipped. An external
+fixture must provide matching `OSTOOL_E2E_AUTH_BASE_URL`,
+`OSTOOL_E2E_AUTH_DATABASE_URL`, `OSTOOL_E2E_AUTH_DATABASE_SCHEMA`,
+`OSTOOL_E2E_ADMIN_EMAIL` and `OSTOOL_E2E_ADMIN_PASSWORD`, with loopback hosts and an
+`ostool_e2e_` schema. See [browser test details](../docs/admin-ui.md#开发与验证).

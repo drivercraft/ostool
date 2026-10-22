@@ -1,29 +1,19 @@
-import {
-  authSurface,
-  clearBrowserSession,
-  notifyAuthChanged,
-} from "@/auth-session";
+import { authSurface, clearBrowserSession } from "@/auth-session";
 export { clearBrowserSession, notifyAuthChanged } from "@/auth-session";
 import type { UserInput, RoleInput } from "@/types/api";
 import type {
   AdminBoardUpsertRequest,
-  AdminOverviewResponse,
   AdminServerConfigResponse,
-  AdminSessionsResponse,
   AdminTftpConfigResponse,
   AdminTftpStatusResponse,
   BoardConfig,
   DtbFileResponse,
   ErrorResponse,
-  LoaderDeviceSummary,
   LoaderImage,
   LoaderUpdateJob,
-  NetworkInterfaceSummary,
-  SerialPortSummary,
   TftpConfig,
   UpdateServerConfigRequest,
   VirtualDeviceSummary,
-  VirtualDevicesResponse,
 } from "@/types/api";
 
 type RequestOptions = RequestInit & {
@@ -168,7 +158,7 @@ async function request<T>(
 }
 
 export type AuthConfig = {
-  site?:import("@/types/site").SiteView;
+  site?: import("@/types/api").SiteView;
   edition: "local" | "public";
   enabled: boolean;
   allow_registration: boolean;
@@ -179,8 +169,11 @@ export type AuthConfig = {
 };
 let authConfigRequest: Promise<AuthConfig> | undefined;
 export const api = {
-  updateSite(revision:number,settings:import("@/types/site").SiteSettings) {
-    return request<void>("/api/v1/admin/site-settings",{method:"PUT",bodyJson:{revision,settings}});
+  updateSite(revision: number, settings: import("@/types/api").SiteSettings) {
+    return request<void>("/api/v1/admin/site-settings", {
+      method: "PUT",
+      bodyJson: { revision, settings },
+    });
   },
   auditViewed() {
     return request<void>("/api/v1/admin/audits/view", { method: "POST" });
@@ -328,7 +321,7 @@ export const api = {
     displayName: string,
     verification: HumanProof,
     emailChallenge?: { id: string; code: string },
-    legal?:import("@/types/site").LegalConsent,
+    legal?: import("@/types/api").LegalConsent,
   ) {
     return request<LoginResult>("/api/v1/auth/register", {
       method: "POST",
@@ -379,11 +372,6 @@ export const api = {
     return request<{ recovery_codes: string[] }>(
       "/api/v1/auth/security/recovery-codes",
       { method: "POST" },
-    );
-  },
-  securitySessions() {
-    return request<{ sessions: SecuritySession[] }>(
-      "/api/v1/auth/security/sessions",
     );
   },
   revokeSession(id: string) {
@@ -485,18 +473,6 @@ export const api = {
       `/api/v1/admin/power-actions/${encodeURIComponent(id)}`,
     );
   },
-  getOverview() {
-    return request<AdminOverviewResponse>("/api/v1/admin/overview");
-  },
-  listBoards() {
-    return request<BoardConfig[]>("/api/v1/admin/boards");
-  },
-  listLoaderDevices() {
-    return request<LoaderDeviceSummary[]>("/api/v1/admin/loader-devices");
-  },
-  listVirtualDevices() {
-    return request<VirtualDevicesResponse>("/api/v1/admin/virtual-devices");
-  },
   createVirtualDevice(macAddress?: string) {
     return request<VirtualDeviceSummary>("/api/v1/admin/virtual-devices", {
       method: "POST",
@@ -509,19 +485,6 @@ export const api = {
       {
         method: "DELETE",
       },
-    );
-  },
-  getBoard(boardId: string) {
-    return request<BoardConfig>(
-      `/api/v1/admin/boards/${encodeURIComponent(boardId)}`,
-    );
-  },
-  listDtbs() {
-    return request<DtbFileResponse[]>("/api/v1/admin/dtbs");
-  },
-  getDtb(dtbName: string) {
-    return request<DtbFileResponse>(
-      `/api/v1/admin/dtbs/${encodeURIComponent(dtbName)}`,
     );
   },
   createDtb(dtbName: string, file: Blob) {
@@ -552,14 +515,6 @@ export const api = {
       method: "DELETE",
     });
   },
-  listSerialPorts() {
-    return request<SerialPortSummary[]>("/api/v1/admin/serial-ports");
-  },
-  listNetworkInterfaces() {
-    return request<NetworkInterfaceSummary[]>(
-      "/api/v1/admin/network-interfaces",
-    );
-  },
   createBoard(payload: AdminBoardUpsertRequest) {
     return request<BoardConfig>("/api/v1/admin/boards", {
       method: "POST",
@@ -583,9 +538,6 @@ export const api = {
       },
     );
   },
-  listSessions() {
-    return request<AdminSessionsResponse>("/api/v1/admin/sessions");
-  },
   deleteSession(sessionId: string) {
     return request<void>(
       `/api/v1/admin/sessions/${encodeURIComponent(sessionId)}`,
@@ -594,25 +546,16 @@ export const api = {
       },
     );
   },
-  getTftpConfig() {
-    return request<AdminTftpConfigResponse>("/api/v1/admin/tftp");
-  },
   updateTftpConfig(tftp: TftpConfig) {
     return request<AdminTftpConfigResponse>("/api/v1/admin/tftp", {
       method: "PUT",
       bodyJson: tftp,
     });
   },
-  getTftpStatus() {
-    return request<AdminTftpStatusResponse>("/api/v1/admin/tftp/status");
-  },
   reconcileTftp() {
     return request<AdminTftpStatusResponse>("/api/v1/admin/tftp/reconcile", {
       method: "POST",
     });
-  },
-  getServerConfig() {
-    return request<AdminServerConfigResponse>("/api/v1/admin/server-config");
   },
   updateServerConfig(payload: UpdateServerConfigRequest) {
     return request<AdminServerConfigResponse>("/api/v1/admin/server-config", {

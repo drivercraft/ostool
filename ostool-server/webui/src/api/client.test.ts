@@ -37,7 +37,7 @@ describe("api client", () => {
       vi.fn().mockRejectedValue(new TypeError("Failed to fetch")),
     );
 
-    await expect(api.getOverview()).rejects.toThrow(
+    await expect(api.me()).rejects.toThrow(
       "无法连接 ostool-server，服务可能正在安装、升级或重启，连接恢复后将自动同步状态。",
     );
   });

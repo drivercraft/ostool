@@ -36,7 +36,7 @@ import { EditionProvider, useEdition } from "@/edition";
 import MemberWorkspace from "@/apps/web/pages/MemberWorkspace";
 import { DeviceCatalog } from "@/apps/web/pages/DeviceCatalog";
 import { SiteSessionProvider, useSiteSession } from "@/apps/web/session";
-import { SiteThemeMenu } from "@/components/site-theme-menu";
+import { ThemeMenu } from "@/components/theme-menu";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "@/components/ui/sonner";
 import {
@@ -201,7 +201,7 @@ function SiteHeader() {
           <div className="mobile-nav-actions">{accountActions}</div>
         </nav>
         <div className="site-right-actions">
-          <SiteThemeMenu />
+          <ThemeMenu />
           <div className="site-actions">{accountActions}</div>
         </div>
         <Button
@@ -847,7 +847,7 @@ function Login() {
               <Logo />
             </span>
             <Link to="/">返回首页</Link>
-            <SiteThemeMenu />
+            <ThemeMenu />
           </div>
           <div className="auth-form-scroll">
             <form className="auth-card" onSubmit={submit}>

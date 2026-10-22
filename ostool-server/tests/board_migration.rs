@@ -203,8 +203,8 @@ async fn imports_boards_and_referenced_dtbs_once_without_changing_sources() {
 async fn conflicts_and_invalid_input_never_partially_import() {
     let f = Fixture::new().await;
     let initial = board("board-z");
-    f.database
-        .sync_board(&initial.id, &serde_json::to_value(&initial).unwrap())
+    ostool_server::persistence::BoardStore::new(f.database.clone())
+        .write_board(&initial)
         .await
         .unwrap();
     f.source(&board("board-a"));
@@ -241,15 +241,11 @@ async fn duplicate_macs_and_missing_referenced_dtb_are_rejected() {
     assert!(String::from_utf8_lossy(&result.stderr).contains("duplicate source MAC"));
     assert_eq!(f.count().await, 0);
     std::fs::remove_file(f.root.path().join("boards/board-b.toml")).unwrap();
-    f.database
-        .sync_board(
-            "existing",
-            &serde_json::to_value(BoardConfig {
-                id: "existing".into(),
-                ..a.clone()
-            })
-            .unwrap(),
-        )
+    ostool_server::persistence::BoardStore::new(f.database.clone())
+        .write_board(&BoardConfig {
+            id: "existing".into(),
+            ..a.clone()
+        })
         .await
         .unwrap();
     let result = f.run(false).await;

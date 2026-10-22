@@ -551,20 +551,6 @@ impl Database {
                 .await?,
         ))
     }
-
-    pub async fn sync_board(&self, id: &str, payload: &Value) -> anyhow::Result<()> {
-        sqlx::query("INSERT INTO board_records (id,payload) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET payload=excluded.payload,updated_at=now()")
-            .bind(id).bind(payload).execute(&self.pool).await?;
-        Ok(())
-    }
-
-    pub async fn delete_board(&self, id: &str) -> anyhow::Result<()> {
-        sqlx::query("DELETE FROM board_records WHERE id=$1")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
 }
 
 fn user_from_row(row: &sqlx::postgres::PgRow) -> User {

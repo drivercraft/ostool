@@ -17,23 +17,17 @@
 
 See [docs/axloader-network-control.md](docs/axloader-network-control.md) for axloader network control (v6 serial auto-binding, v5 device identification and OTA, and legacy v2/v3/v4 identification and upgrade endpoints), persistent MAC binding, web administration, built-in QEMU virtual boards, and local validation with a real FAT disk image. The complete API contract is documented in [docs/api.md](docs/api.md).
 
-The management console at `/admin/` uses React + shadcn/ui. In the new-board form, choose a power module and power it on before selecting a discovered MAC or entering one manually; saving completes the binding. All management pages receive SSE updates and preserve displayed data and drafts across reconnects. See [Admin UI and event protocol](docs/admin-ui.md).
-The running service reads and writes PostgreSQL only, without a file backend or startup import. Existing boards and their referenced DTBs are migrated manually using `ostool-server/scripts/migrate-boards.sh`; validation and import are transactional, and source files remain unchanged. See [migration instructions](ostool-server/deploy/README.md#已有开发板迁移).
-Local and public editions use the same PostgreSQL persistence. Local edition hides account, authorization and rental features, allowing `ostool` to connect without login. `ostool-server/scripts/dev.sh start` starts the development database and server automatically. Rental creation uses a dedicated page with an availability calendar, and data lists support table/card layouts.
+`ostool-server` provides an independent website and `/admin/` console with PostgreSQL
+persistence. Local edition is login-free; public edition uses Redis, authentication
+and scheduled board rentals. See the [server guide](ostool-server/README.md) for
+deployment, security and existing board migration, and the
+[management interface guide](docs/admin-ui.md) for UI and SSE behavior.
 
-`ostool-server/scripts/dev.sh build` builds the website, admin UI and Rust server without starting databases or replacing a running process. After source changes, use `ostool-server/scripts/dev.sh restart` to rebuild and run the updated executable.
-
-The launcher reads development settings from `ostool-server/.env`; see `ostool-server/.env.example`. Process/inline environment variables take precedence. Local development listens on `0.0.0.0:2999` for LAN access at `http://<server-LAN-IP>:2999/`. Set `OSTOOL_DEV_HOST=127.0.0.1` for loopback-only access and use `restart` to apply the change. Public-edition development still defaults to loopback.
-
-`OSTOOL_LISTEN_ADDR` applies to direct Rust startup; `dev.sh` generates it from `OSTOOL_DEV_HOST` and the development port. Stop the previous edition before switching on the same port; the launcher rejects port conflicts.
-
-The server now uses one complete initial SQLx schema migration. Existing databases from the unreleased development chain require a fresh database/schema or an explicit reset of disposable test data; see [database initialization](ostool-server/deploy/site-and-data.md#数据库初始迁移). Future changes after release must use incremental migrations.
-
-Website login/registration use a separate full viewport split layout with a wider form, inline consent checkbox/text, an inset CAPTCHA image and a scrollable form on small screens.
-
-Public login/registration require image CAPTCHA by default; email verification is optional and disabled by default. TOTP, session management/revocation, rate limits and recent identity checks are available in public edition; local edition remains anonymous. See [security configuration](ostool-server/deploy/security.md).
-Public edition uses Redis for rate limits and verification cooldowns; local edition needs no Redis. System settings include branding, contacts, filing details, maintenance notices and versioned legal documents, with per-user registration consent. See [site and identity schema](ostool-server/deploy/site-and-data.md).
-Member rental applications use a separate editor sharing the admin calendar and form layout. The console navigation is labeled “设备管理 → 设备列表” (device management → device list). A click replaces the previous range, unavailable cells are gray and disabled, desktop portal content uses 80% width, and icon buttons show their background on hover.
+Use `ostool-server/scripts/dev.sh start|stop|status` for development; `build` only
+builds, while `restart` rebuilds and starts updated source. The launcher reads
+`ostool-server/.env` and defaults to LAN access locally; set
+`OSTOOL_DEV_HOST=127.0.0.1` for loopback-only access. Settings and demo accounts are
+in the [development guide](ostool-server/README.md#local-development-environment).
 
 **ostool** is a Rust toolset designed specifically for operating system development, aiming to provide OS developers with convenient build, configuration, and startup environments. It's particularly suitable for embedded system development, supporting system testing and debugging through Qemu virtual machines and U-Boot bootloader.
 
@@ -478,7 +472,7 @@ CLI keyring operations run on blocking threads to avoid nested async runtimes. R
 
 Rental and public authorization features are implemented in `ostool-server` without requiring a synchronized CLI change. Client patches address confirmed defects and preserve the original OAuth/Bearer/Board API contract; a 401 is returned without automatically replaying the request.
 
-For public CLI operations, set `board.auth_mode = "required"` and `board.server` to the HTTPS site. `login --server` does not rewrite global configuration. See the [public CLI authorization review](ostool-server/deploy/cli-auth-review.md) for device login, automatic refresh, concurrent credential recovery, rental enforcement and deployment boundaries.
+For public CLI operations, set `board.auth_mode = "required"` and `board.server` to the HTTPS site. `login --server` does not rewrite global configuration. See the [public CLI authorization and deployment guide](ostool-server/README.md#security-configuration) for device login, automatic refresh, concurrent credential recovery, rental enforcement and deployment boundaries.
 
 Public authentication requires HTTPS. The client verifies certificates only through the system trust store; deployments using a private CA must install its root certificate on client systems. Do not use HTTP, bypass certificate verification, or put tokens in configuration files.
 
@@ -780,5 +774,3 @@ This project is dual-licensed:
 ## 🙏 Acknowledgments
 
 Thanks to all developers and users who have contributed to the ostool project!
-
-Local edition is login-free by default. For public edition authentication, user/role management, scheduled board rentals, runtime environment variables and Caddy/systemd deployment, see the [ostool-server deployment guide](ostool-server/deploy/README.md).

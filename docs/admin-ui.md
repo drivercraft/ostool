@@ -29,7 +29,7 @@
 | 接口 | 用途 |
 | --- | --- |
 | `GET /api/v1/account` | 当前用户资料、可申请设备目录、自己的租赁、申请和令牌元数据 |
-| `GET /api/v1/account/events` | 当前用户实时投影，支持 OAuth Bearer 或浏览器同源 HttpOnly Cookie，URL 不携带令牌 |
+| `GET /api/v1/account/events` | 当前用户实时投影，使用独立浏览器会话，CLI 令牌不可访问，URL 不携带令牌 |
 | `PUT /api/v1/account/profile` | `{email, display_name, current_password?}` |
 | `POST /api/v1/account/password` | `{current_password, new_password}` |
 | `POST /api/v1/account/rental-requests` | `{board_id, starts_at, ends_at, notes?}` |
@@ -45,7 +45,7 @@
 列表仅包含名称和时间等元数据。切换账号会清理旧的投影并重新连接。
 
 本地版继续无认证，并隐藏全部个人工作台功能；个人 API 和申请管理 API 返回 404。
-公开版首次升级时通过 SQLx 自动创建 `rental_requests` 表，不改写已有租赁数据。
+租赁申请由统一 SQLx 初始迁移创建，不包含启动时旧数据搬运。
 
 源码改动后，`start` 不会替换已运行进程，需要按当前版本执行 `restart`。该命令会通过
 `cargo run` 重新构建 React/Vite 资源并嵌入 Rust 可执行文件，然后运行新进程。
@@ -81,7 +81,7 @@ CLI 无需登录；公网版保持管理员登录与成员租赁校验。没有�
 前台桌面内容、菜单栏和页脚统一使用窗口宽度的 80%，窄屏保留 16px 左右间距。
 图标按钮统一为 42px 点击区域、18px 图标，默认透明无可见边框，悬停时显示背景。
 
-每个数据列表右上方提供布局图标菜单，在列表和卡片视图间切换。选择按列表保存到
+除仪表盘固定明细表外，数据列表右上方提供布局图标菜单，在列表和卡片视图间切换。选择按列表保存到
 浏览器的 `ostool.list-layout:*`，筛选、搜索、分页和操作按钮在两种布局中保持可用；
 切换布局不触发额外 GET，也不会修改服务器数据。
 
@@ -91,6 +91,8 @@ CLI 无需登录；公网版保持管理员登录与成员租赁校验。没有�
 16px 字号；多行输入沿用相同边框与焦点样式。表头字号与内容一致。操作列统一为
 带名称/悬停提示的图标按钮，图标为 18px；删除、释放等动作仍需确认。
 开发板和租赁编辑页不显示重复的顶部返回操作；开发板删除放在底部取消、保存按钮左侧。
+仪表盘的运行状态、后台任务和运营状态均以顶部汇总卡片展示关键指标，下面为功能卡片和固定明细表，不显示布局切换。
+系统设置按“标题＋右侧横线”分组，直接放在背景上，使用顶部圆角标签页。
 右侧工作区填满视口高度，采用固定工具栏、独立滚动内容、固定底部状态栏的三段布局。
 工作区直接使用与侧栏、标题栏相同的主题背景，不加外层卡片；功能卡片、工具栏与状态栏
 统一使用 12px 圆角。状态栏直接贴到窗口底部，分页或按钮换行时，左侧底部系统设置区
@@ -110,7 +112,7 @@ UI 验证可运行 `pnpm --dir ostool-server/webui test:e2e`。如果 UDP 2998 �
 服务使用，设置 `OSTOOL_TEST_DISABLE_DISCOVERY=true` 可测试其余页面流程，此时明确
 跳过依赖真实 UDP 发现的用例；不会停止已有服务或改变默认发现测试。
 开发板页面用紧凑筛选栏搜索名称、板型、MAC，并按板型、标签、状态筛选；
-已配置、发现设备和虚拟设备通过标签页切换。状态与常用编辑操作优先展示。
+发现设备和虚拟设备从工具栏按钮打开；状态与常用编辑操作优先展示。
 
 新建板卡的顺序为：填写电源配置 → 手动上电 → 选择发现的 MAC 或手工输入 → 保存。
 上电只要求所选电源模块的必要参数，不要求板卡 ID、MAC、串口或 Session。
@@ -194,6 +196,18 @@ Linux 使用 inotify 监听串口设备节点、netlink 监听网卡/IPv4、syst
 这些监听需要新增 `notify`、`netlink-sys`、`zbus` 依赖；命令组清理由 `nix` 提供。
 非 Linux 平台仍接收应用内部事件，系统级热插拔监听目前仅在 Linux 启用。
 
+## 源码与构建入口
+
+`ostool-server/src/api/` 实现后端接口，`src/persistence/` 实现数据库仓储；SQLx 迁移
+放在 package 根目录 `migrations/`。`webui/` 使用 React/Vite 多入口：`index.html`
+加载 `src/apps/web/main.tsx`，`admin/index.html` 加载 `src/apps/admin/main.tsx`。
+两个应用的路由、登录、会话和主题独立，公共组件、接口与类型分别位于
+`src/components/`、`src/api/` 和 `src/types/api.ts`；不能相互导入私有页面。
+
+全局样式入口为 `src/styles/global.css`。单元测试与源码同目录，浏览器测试和临时服务
+放在 `tests/e2e/`、`tests/fixtures/`，不进入运行时入口。构建同时生成两个 HTML 和共享的
+带哈希资源；Vite 开发代理默认连接 4175 后端。数据库、域名与密钥不应编入 `VITE_*`。
+
 ## 开发与验证
 
 前端使用 React、TypeScript、Vite、Tailwind 和官方 shadcn 源码组件，pnpm 固定
@@ -253,7 +267,7 @@ OSTOOL_EDITION=public ostool-server/scripts/dev.sh restart
 会话和设备在线状态在进程运行时保活；手动释放的会话本次运行内不会重新创建。
 运行状态在重启时重新生成，已保存的租赁时间不自动改期。
 
-服务端 `--dev-demo` 仅接受回环监听及回环登录地址，关闭设备发现监听、QEMU、网络测试、
+服务端 `--dev-demo` 在本地版允许私有地址或通配监听，公网测试版仅允许回环监听和登录地址；关闭设备发现监听、QEMU、网络测试、
 TFTP 服务启动及启动自动断电。演示板卡电源命令为空操作，设备 IP 使用文档地址段，
 DTB 不含真实硬件定义。这里用于页面展示，真实硬件联调需关闭演示模式。
 
@@ -264,31 +278,12 @@ DTB 不含真实硬件定义。这里用于页面展示，真实硬件联调需�
 
 ## 已有开发板独立迁移
 
-新服务只使用 PostgreSQL，不保留旧文件仓储、旧模块别名或启动时导入。部署新版本后，
-独立运行脚本将已有 `<board-id>.toml` 和这些板卡引用的 DTB 迁移到目标数据库：
+新服务只使用 PostgreSQL，不提供旧文件存储或启动导入。部署新版本后，使用独立的
+`scripts/migrate-boards.sh` 导入已有板卡及引用的 DTB；数据库备份、停止旧服务、预检、
+事务和冲突处理见[服务器迁移说明](../ostool-server/README.md#existing-board-migration)。
 
-```bash
-cargo build -p ostool-server --release
-ostool-server/scripts/migrate-boards.sh \
-  --env-file /path/to/ostool.env \
-  --board-dir /path/to/existing/boards \
-  --dtb-dir /path/to/existing/dtbs
-```
-
-安装版可直接执行 `ostool-server-migrate-boards`，参数相同。工具只读取数据库配置，
-不启动认证、网络监听、串口或电源操作。实际导入前应备份数据库和源目录，并停止旧服务。
-默认先应用 SQLx 表结构迁移，所以空数据库也能导入；若目标结构已由新版本初始化，
-可先加 `--dry-run` 检查，预检不修改表结构或业务数据。板卡不引用 DTB 时可省略
-`--dtb-dir`。`--config` 可选，用于提供目标数据库配置，环境变量优先。
-
-工具先校验所有板卡、文件名/ID、MAC 及关联 DTB，再以一个事务提交数据和导入审计。
-相同记录跳过；内容冲突、重复 MAC、无效配置或缺少关联 DTB 会导致整批失败，不覆盖
-已有记录、不部分导入。源文件始终保留原样，重复运行不会新增重复记录。
-仅支持当前合法板卡格式，不转换更早的格式，不迁移旧 OTA、用户或设置文件。
-导入成功后启动或重启新服务加载板卡；之后全部通过管理界面/API 操作数据库，
-修改旧文件不再生效。完整说明见 [部署文档](../ostool-server/deploy/README.md#已有开发板迁移)。
-
-U-Boot 通过串口启动，无需绑定 MAC。切换到 U-Boot 后隐藏 MAC 选择器，保存时不提交网络身份；切回网络启动时保留尚未保存的 MAC 草稿。
+U-Boot 通过串口启动，无需绑定 MAC。切换到 U-Boot 后隐藏 MAC 选择器，保存时不提交
+网络身份；切回网络启动时保留尚未保存的 MAC 草稿。
 
 ## 公开版租赁管理
 

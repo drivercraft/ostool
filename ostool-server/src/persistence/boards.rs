@@ -37,11 +37,18 @@ impl BoardStore {
     }
 
     pub async fn write_board(&self, board: &BoardConfig) -> anyhow::Result<()> {
-        self.database
-            .sync_board(&board.id, &serde_json::to_value(board)?)
-            .await
+        sqlx::query("INSERT INTO board_records (id,payload) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET payload=excluded.payload,updated_at=now()")
+            .bind(&board.id)
+            .bind(serde_json::to_value(board)?)
+            .execute(self.database.pool())
+            .await?;
+        Ok(())
     }
     pub async fn delete_board(&self, id: &str) -> anyhow::Result<()> {
-        self.database.delete_board(id).await
+        sqlx::query("DELETE FROM board_records WHERE id=$1")
+            .bind(id)
+            .execute(self.database.pool())
+            .await?;
+        Ok(())
     }
 }

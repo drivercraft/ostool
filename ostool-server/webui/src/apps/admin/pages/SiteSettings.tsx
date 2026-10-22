@@ -15,7 +15,7 @@ import {
 } from "@/components/forms";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { SiteSettings as Settings, SiteView } from "@/types/site";
+import type { SiteSettings as Settings, SiteView } from "@/types/api";
 const groups: Record<
   string,
   { key: keyof Settings; label: string; area?: boolean }[]

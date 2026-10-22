@@ -386,12 +386,6 @@
   color: var(--site-text);
   border-color: var(--site-border);
 }
-.member-form-columns {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 20px;
-  max-width: 580px;
-}
 .member-form-actions {
   display: flex;
   gap: 10px;
@@ -418,9 +412,6 @@
 }
 .member-list-tools h2 {
   margin: 0 auto 0 0;
-}
-.member-list-title {
-  padding: 22px 22px 0;
 }
 .member-list .table-frame {
   margin: 0;
@@ -677,8 +668,7 @@
     font-size: 25px;
   }
   .member-facts,
-  .member-cli,
-  .member-form-columns {
+  .member-cli {
     grid-template-columns: 1fr;
   }
   .member-facts {

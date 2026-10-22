@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, type ReactNode } from "react";
 import { site, useSiteResource } from "@/api/events";
 import { useEdition } from "@/edition";
-import type { SiteView } from "@/types/site";
+import type { SiteView } from "@/types/api";
 const fallback: SiteView = {
   revision: 1,
   terms_version: 1,

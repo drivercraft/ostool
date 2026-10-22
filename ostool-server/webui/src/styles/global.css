@@ -9,7 +9,6 @@
 @import "./controls.css";
 @import "./security.css";
 @import "./auth-screen.css";
-@import "./system-settings.css";
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -753,29 +752,6 @@
   font-size: 16px;
   line-height: 1.8;
 }
-.device-showcase {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-  margin-top: 75px;
-}
-.device-showcase-card {
-  display: grid;
-  gap: 12px;
-  padding: 28px;
-  border: 1px solid #e0e8f2;
-  border-radius: 9px;
-  background: #fff;
-  color: #2468dc;
-}
-.device-showcase-card strong {
-  color: #20324a;
-  font-size: 16px;
-}
-.device-showcase-card span {
-  color: #8190a4;
-  font-size: 12px;
-}
 .inner-callout {
   display: flex;
   align-items: center;
@@ -1011,12 +987,6 @@
 .sidebar nav a.active svg {
   color: #286be4;
 }
-.connection {
-  margin: auto 8px 0;
-  padding: 14px 11px 0;
-  border-top: 1px solid #edf1f6;
-  font-size: 11px;
-}
 .app-shell > main {
   margin-left: 240px;
   max-width: none;
@@ -1029,14 +999,6 @@
   justify-content: space-between;
   border-bottom: 1px solid #e5ebf3;
 }
-.admin-breadcrumb {
-  color: #96a4b7;
-  font-size: 11px;
-}
-.admin-separator {
-  margin: 0 10px;
-  color: #c1cad6;
-}
 .admin-topbar strong {
   color: #34465e;
   font-size: 12px;
@@ -1046,44 +1008,9 @@
   align-items: center;
   gap: 17px;
 }
-.admin-site-link,
-.admin-user-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  color: #7d8da3;
-  font-size: 11px;
-  text-decoration: none;
-}
-.admin-site-link:hover {
-  color: #2869d8;
-}
-.admin-user-chip {
-  padding: 7px 10px;
-  border: 1px solid #e3eaf2;
-  border-radius: 6px;
-  color: #4d617d;
-  background: #fff;
-}
-.admin-user-chip svg {
-  color: #6d91d5;
-}
-.mobile-header {
-  background: #fff;
-}
-.metrics {
-  margin-top: 20px;
-  padding: 24px 0;
-}
 .table-frame {
   background: #fff;
   box-shadow: 0 5px 18px rgba(36, 62, 101, 0.04);
-}
-.page-header {
-  margin-top: 28px;
-}
-.page-header h1 {
-  color: #182a43;
 }
 .page-section {
   padding: 0;
@@ -1220,62 +1147,9 @@
   }
 }
 @layer components {
-  .public-shell {
-    min-height: 100vh;
-    padding: 9rem max(24px, 8vw) 5rem;
-    background:
-      radial-gradient(circle at 70% 0%, oklch(0.94 0.06 259), transparent 40%),
-      var(--background);
-  }
-  main.public-shell,
   main.auth-shell {
     margin-left: 0;
     max-width: none;
-  }
-  .public-hero {
-    max-width: 760px;
-  }
-  .public-eyebrow {
-    color: var(--primary);
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.16em;
-  }
-  .public-hero h1 {
-    max-width: 700px;
-    margin: 16px 0;
-    font-size: clamp(36px, 6vw, 72px);
-    line-height: 1.05;
-  }
-  .public-lede {
-    max-width: 650px;
-    color: var(--muted-foreground);
-    font-size: 18px;
-    line-height: 1.7;
-  }
-  .public-actions {
-    display: flex;
-    gap: 12px;
-    margin-top: 30px;
-  }
-  .public-features {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 16px;
-    max-width: 900px;
-    margin-top: 110px;
-  }
-  .public-features article {
-    display: grid;
-    gap: 8px;
-    padding: 22px;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    background: color-mix(in oklch, var(--card), transparent 12%);
-  }
-  .public-features span {
-    color: var(--muted-foreground);
-    line-height: 1.5;
   }
   .auth-shell {
     min-height: 100vh;
@@ -1294,12 +1168,6 @@
     background: var(--card);
     box-shadow: 0 18px 60px #0001;
   }
-  .auth-brand {
-    color: var(--foreground);
-    font-size: 25px;
-    font-weight: 750;
-    text-decoration: none;
-  }
   .auth-card h1 {
     margin: 8px 0;
     font-size: 26px;
@@ -1316,7 +1184,6 @@
     border-radius: 7px;
     background: var(--background);
   }
-  .auth-hint,
   .auth-message {
     margin: 0;
     color: var(--muted-foreground);
@@ -1330,11 +1197,6 @@
     background: none;
     color: var(--primary);
     cursor: pointer;
-  }
-  .settings-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 18px;
   }
   .card {
     display: grid;
@@ -1373,15 +1235,6 @@
     border-radius: 6px;
     background: var(--muted);
     overflow-wrap: anywhere;
-  }
-  @media (max-width: 700px) {
-    .public-features {
-      grid-template-columns: 1fr;
-      margin-top: 70px;
-    }
-    .public-shell {
-      padding-top: 5rem;
-    }
   }
   .app-shell {
     min-height: 100vh;
@@ -1427,46 +1280,10 @@
   .sidebar nav a:hover {
     background: var(--muted);
   }
-  .connection {
-    margin-top: auto;
-    padding: 14px 8px 0;
-    font-size: 12px;
-    color: var(--muted-foreground);
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 7px;
-  }
-  .connection-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--muted-foreground);
-  }
-  .connection-dot.connected {
-    background: oklch(0.6 0.15 150);
-  }
   main {
     margin-left: 208px;
     padding: 36px clamp(24px, 3vw, 52px) 60px;
     max-width: 1800px;
-  }
-  .page-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 28px;
-  }
-  .page-description {
-    color: var(--muted-foreground);
-    margin: -12px 0 24px;
-  }
-  .back-link {
-    display: inline-block;
-    color: var(--muted-foreground);
-    font-size: 12px;
-    margin-bottom: 8px;
   }
   .text-link {
     color: var(--primary);
@@ -1543,13 +1360,6 @@
   .full-width {
     grid-column: 1/-1;
   }
-  .form-footer {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 10px;
-    padding-top: 24px;
-  }
   .power-feedback {
     margin: 12px 0;
     font-size: 13px;
@@ -1578,31 +1388,6 @@
   .facts dd {
     overflow-wrap: anywhere;
   }
-  .metrics {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    border-block: 1px solid var(--border);
-    padding: 24px 0;
-    gap: 24px;
-  }
-  .metrics a {
-    border-right: 1px solid var(--border);
-  }
-  .metrics a:last-child {
-    border: 0;
-  }
-  .metrics span {
-    color: var(--muted-foreground);
-  }
-  .metrics strong {
-    display: block;
-    font-size: 32px;
-    font-weight: 600;
-    margin-top: 8px;
-  }
-  .mobile-header {
-    display: none;
-  }
 }
 /* Layout wrappers override the primitive's default vertical stack. */
 .form-fields[data-slot="field-group"] {
@@ -1624,13 +1409,6 @@
   }
 }
 @media (max-width: 640px) {
-  .mobile-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 12px 20px;
-    border-bottom: 1px solid var(--border);
-  }
   .sidebar {
     display: none;
   }
@@ -1650,12 +1428,6 @@
   }
   .form-fields {
     grid-template-columns: 1fr;
-  }
-  .page-header {
-    align-items: flex-start;
-  }
-  .metrics {
-    grid-template-columns: repeat(2, 1fr);
   }
   .filters > [data-slot="field"] {
     width: 100%;
@@ -1780,8 +1552,7 @@
   .feature-section {
     padding: 80px 0;
   }
-  .feature-grid,
-  .device-showcase {
+  .feature-grid {
     grid-template-columns: 1fr;
   }
   .split-section {
@@ -1852,76 +1623,12 @@
   --success: oklch(0.47 0.13 155);
   --warning: oklch(0.5 0.12 70);
 }
-.heading-description {
-  margin-top: 8px;
-  color: var(--muted-foreground);
-  font-size: 13px;
-}
-.inventory-tabs {
-  margin-bottom: 20px;
-  border-bottom: 1px solid var(--border);
-  width: 100%;
-  justify-content: flex-start;
-  gap: 20px;
-}
-.inventory-tabs [data-slot="tabs-trigger"] {
-  flex: none;
-  padding: 12px 2px;
-}
-.inventory-tabs span {
-  color: var(--muted-foreground);
-  font-size: 11px;
-  font-weight: 400;
-  margin-left: 5px;
-}
-.filter-bar[data-slot="field-group"] {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 16px;
-}
-.filter-bar [data-slot="field-label"] {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-.filter-bar > [data-slot="field"] {
-  width: 140px;
-  gap: 0;
-}
-.filter-bar > [data-slot="field"]:first-child {
-  width: 240px;
-}
-.filter-count {
-  margin-left: auto;
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
 .board-name {
   color: var(--foreground);
   font-weight: 400;
 }
 .board-name:hover {
   color: var(--primary);
-}
-.inventory-panel {
-  margin-top: 0;
-}
-@media (max-width: 640px) {
-  .filter-bar > [data-slot="field"] {
-    width: calc(50% - 4px);
-  }
-  .filter-bar > [data-slot="field"]:first-child {
-    width: 100%;
-  }
-  .inventory-tabs {
-    gap: 12px;
-  }
 }
 .advanced-options {
   border: 1px solid var(--border);
@@ -2083,21 +1790,6 @@
   width: 100%;
   padding-block: 8px;
 }
-.sidebar .connection {
-  margin-top: 0;
-}
-.system-tabs {
-  width: 100%;
-  justify-content: flex-start;
-  gap: 24px;
-  margin-bottom: 24px;
-  border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-}
-.system-tabs [data-slot="tabs-trigger"] {
-  flex: none;
-  padding: 12px 3px;
-}
 .management-form {
   display: grid;
   gap: 18px;
@@ -2140,14 +1832,6 @@
   }
   .admin-topbar {
     height: 60px;
-  }
-  .admin-breadcrumb,
-  .admin-separator,
-  .admin-site-link {
-    display: none;
-  }
-  .settings-grid {
-    grid-template-columns: 1fr;
   }
 }
 
@@ -2220,13 +1904,6 @@
 
 /* Page context comes from navigation; content starts with controls or data. */
 .admin-topbar {
-  margin-bottom: 20px;
-}
-.editor-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
   margin-bottom: 20px;
 }
 .page > .listing-toolbar {
@@ -2457,10 +2134,6 @@ body:has(.app-shell) {
   .app-shell {
     display: flex;
     flex-direction: column;
-  }
-  .app-shell > .mobile-header {
-    flex: 0 0 52px;
-    padding: 8px 16px;
   }
   .app-shell > main {
     flex: 1 1 0;
@@ -2762,7 +2435,6 @@ body:has(.app-shell) {
 .notification-empty > span {
   font-size: 11px;
 }
-.app-shell .connection,
 .app-shell .admin-bottom-nav {
   border-top-color: var(--border);
 }
@@ -2772,7 +2444,6 @@ body:has(.app-shell) {
 .app-shell .table-frame {
   background: transparent;
 }
-.app-shell .editor-actions,
 .app-shell .card {
   color: var(--foreground);
 }

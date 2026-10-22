@@ -17,23 +17,15 @@
 
 axloader 网络控制（v6 串口自动绑定、v5 设备识别与 OTA、v2/v3/v4 旧识别与升级入口）、持久 MAC 绑定、Web 管理、内建 QEMU 虚拟板和本地真实 FAT 磁盘验证设计见 [docs/axloader-network-control.md](docs/axloader-network-control.md)，完整接口契约见 [docs/api.md](docs/api.md)。
 
-管理后台位于 `/admin/`，使用 React + shadcn/ui。新建开发板时可先选择电源模块并手动上电，再从实时发现列表选择或手工填写 MAC；保存后完成绑定。全部管理页面采用 SSE 推送更新，断线重连保留页面与编辑草稿。详见 [管理界面与事件协议](docs/admin-ui.md)。
-服务运行时只读写 PostgreSQL，不保留旧文件存储或启动导入。已有开发板及其引用的 DTB 通过独立脚本 `ostool-server/scripts/migrate-boards.sh` 手动迁移；校验和导入以事务完成，源文件保持不变。详见 [迁移说明](docs/admin-ui.md#已有开发板独立迁移)。
-本地版与公网版统一使用 PostgreSQL 保存业务数据；本地版隐藏账号、授权和租赁功能，`ostool` 仍可免登录直连。开发环境通过 `ostool-server/scripts/dev.sh start` 自动启动数据库和服务器。新增租赁使用独立页面与可用时段日历，各数据列表支持列表/卡片布局。
+`ostool-server` 提供独立的前台网站和 `/admin/` 管理后台，使用 PostgreSQL 持久化。
+默认本地版免登录；公网版使用 Redis、用户认证和按时段分配的开发板租赁。
+部署、安全配置和已有板卡迁移见 [服务器说明](ostool-server/README.md)，界面与 SSE 协议见
+[管理界面文档](docs/admin-ui.md)。
 
-`ostool-server/scripts/dev.sh build` 单独构建前台、后台及 Rust 服务端，不启动数据库或替换运行进程；修改代码后使用 `ostool-server/scripts/dev.sh restart` 可重新构建并重启使其生效。
-
-开发脚本自动读取 `ostool-server/.env` 中的开发配置，示例见 `ostool-server/.env.example`，命令行环境变量优先。本地版默认监听 `0.0.0.0:2999`，可通过 `http://服务器局域网IP:2999/` 访问；设置 `OSTOOL_DEV_HOST=127.0.0.1` 可限制本机访问。已有进程需执行 `restart` 生效，公网测试版仍默认监听回环地址。
-
-`OSTOOL_LISTEN_ADDR` 用于直接运行 Rust 服务；`dev.sh` 使用 `OSTOOL_DEV_HOST` 和端口生成实际监听配置。切换本地/公网测试版前须停止占用同一端口的旧版本，脚本会拒绝端口冲突。
-
-服务器的 SQLx 迁移已整理为一个完整初始结构；合并前的开发库需保留备份后改用新库/schema，或显式重建可丢弃的测试数据，详见 [数据库初始迁移](ostool-server/deploy/site-and-data.md#数据库初始迁移)。正式发布后的结构变更仍使用增量迁移。
-
-网站登录、注册采用独立的一屏式左右布局，右侧表单加宽；注册协议与复选框同行，验证码图片嵌入输入框右侧，小屏幕表单可滚动。
-
-公网版登录/注册默认要求图形验证码，邮箱验证作为可选配置且默认关闭；另提供双重验证、登录设备管理、会话撤销、限流及敏感操作身份复核，本地版仍免登录。详见 [安全配置](ostool-server/deploy/security.md)。
-公网版使用 Redis 处理限流与验证冷却（本地版无需 Redis）。系统设置支持站点、联系方式、备案、维护提示和版本化协议，注册会记录同意版本。详见 [站点与数据结构](ostool-server/deploy/site-and-data.md)。
-前台租赁申请采用独立编辑页，与后台共享日历和表单布局；单击可替换原选区，不可用格子置灰禁用。前台桌面内容宽度为 80%，导航统一为“设备管理 → 设备列表”，图标按钮默认透明、悬停显示背景。
+开发环境使用 `ostool-server/scripts/dev.sh start|stop|status`；`build` 仅构建，
+修改源码后使用 `restart` 重新构建并启动。脚本读取 `ostool-server/.env`，本地版默认允许
+局域网访问，可用 `OSTOOL_DEV_HOST=127.0.0.1` 限制为本机。配置和演示账号见
+[开发环境说明](ostool-server/README.md#local-development-environment)。
 
 **ostool** 是一个专为操作系统开发而设计的 Rust 工具集，旨在为 OS 开发者提供便捷的构建、配置和启动环境。它特别适合嵌入式系统开发，支持通过 Qemu 虚拟机和 U-Boot 引导程序进行系统测试和调试。
 
@@ -450,7 +442,7 @@ CLI 的系统密钥环操作在阻塞线程中执行，避免与异步运行时�
 
 租赁与公网鉴权优先由 `ostool-server` 实现，不强制同步改造 CLI。客户端仅保留已确认的缺陷修复，继续使用原有 OAuth/Bearer/Board API；401 原样返回，不自动重放请求。
 
-公网 CLI 必须将 `board.auth_mode` 配为 `"required"`，并将 `board.server` 配为实际 HTTPS 站点；仅执行 `login --server` 不会改写全局配置。完整设备登录、自动刷新、并发凭据恢复、租赁校验和已知部署边界见 [公网 CLI 鉴权审查](ostool-server/deploy/cli-auth-review.md)。
+公网 CLI 必须将 `board.auth_mode` 配为 `"required"`，并将 `board.server` 配为实际 HTTPS 站点；仅执行 `login --server` 不会改写全局配置。完整设备登录、自动刷新、并发凭据恢复、租赁校验和已知部署边界见 [公网 CLI 鉴权与部署说明](ostool-server/README.md#security-configuration)。
 
 公网认证必须使用 HTTPS。客户端仅使用系统信任库验证证书；部署组织私有 CA 时，需由运维将其根证书安装到客户端系统。不要使用 HTTP、跳过证书验证或把 token 放进配置文件。
 
@@ -748,5 +740,3 @@ cargo test
 ## 🙏 致谢
 
 感谢所有为 ostool 项目做出贡献的开发者和用户！
-
-默认本地版免登录；公开版的用户/角色管理、定时板卡租赁、环境变量及 Caddy/systemd 部署说明见 [ostool-server 部署指南](ostool-server/deploy/README.md)。
