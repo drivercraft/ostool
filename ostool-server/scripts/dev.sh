@@ -19,6 +19,16 @@ PG_PORT=${OSTOOL_DEV_PG_PORT:-$DEFAULT_PG_PORT}
 REDIS_CONTAINER=${OSTOOL_DEV_REDIS_CONTAINER:-ostool-server-dev-public-redis}
 REDIS_PORT=${OSTOOL_DEV_REDIS_PORT:-56380}
 SERVER_PORT=${OSTOOL_DEV_SERVER_PORT:-2999}
+if [[ "$EDITION" == "local" ]]; then DEFAULT_SERVER_HOST=0.0.0.0; else DEFAULT_SERVER_HOST=127.0.0.1; fi
+SERVER_HOST=${OSTOOL_DEV_HOST:-$DEFAULT_SERVER_HOST}
+LISTEN_HOST=$SERVER_HOST
+[[ "$LISTEN_HOST" == *:* ]] && LISTEN_HOST="[$LISTEN_HOST]"
+case "$SERVER_HOST" in
+    0.0.0.0) CHECK_HOST=127.0.0.1 ;;
+    ::) CHECK_HOST='[::1]' ;;
+    *) CHECK_HOST=$LISTEN_HOST ;;
+esac
+CHECK_URL="http://${CHECK_HOST}:${SERVER_PORT}"
 DB_USER=${OSTOOL_DEV_DB_USER:-ostool}
 DB_PASSWORD=${OSTOOL_DEV_DB_PASSWORD:-ostool}
 DB_NAME=${OSTOOL_DEV_DB_NAME:-ostool}
@@ -48,7 +58,7 @@ write_config() {
     mkdir -p "$STATE_DIR/postgres"
     [[ -f "$CONFIG_FILE" ]] && return
     cat > "$CONFIG_FILE" <<EOF
-listen_addr = "127.0.0.1:${SERVER_PORT}"
+listen_addr = "${LISTEN_HOST}:${SERVER_PORT}"
 data_dir = "${STATE_DIR}/data"
 
 [auth]
@@ -123,6 +133,9 @@ ensure_redis() {
 start_server() {
     require_command cargo
     require_command pnpm
+    require_command node
+    node -e 'if (!require("node:net").isIP(process.argv[1])) process.exit(1)' "$SERVER_HOST" \
+        || die "OSTOOL_DEV_HOST must be an IPv4 or IPv6 address (without brackets)"
     mkdir -p "$STATE_DIR"
     write_config
     local pid
@@ -143,9 +156,9 @@ start_server() {
         (umask 077; node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64"))' > "$STATE_DIR/mfa.key")
     fi
     local -a server_env=(env -u OSTOOL_DATABASE_URL -u OSTOOL_ADMIN_EMAIL -u OSTOOL_ADMIN_PASSWORD
-        "OSTOOL_EDITION=$EDITION" "OSTOOL_LISTEN_ADDR=127.0.0.1:${SERVER_PORT}"
+        "OSTOOL_EDITION=$EDITION" "OSTOOL_LISTEN_ADDR=${LISTEN_HOST}:${SERVER_PORT}"
         "OSTOOL_DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${PG_PORT}/${DB_NAME}"
-        "OSTOOL_PUBLIC_BASE_URL=http://127.0.0.1:${SERVER_PORT}" "OSTOOL_NETWORK_TEST_ENABLED=false")
+        "OSTOOL_PUBLIC_BASE_URL=$CHECK_URL" "OSTOOL_NETWORK_TEST_ENABLED=false")
     if [[ "$EDITION" == "public" ]]; then
         server_env+=("OSTOOL_DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${PG_PORT}/${DB_NAME}"
             "OSTOOL_ADMIN_EMAIL=$ADMIN_EMAIL" "OSTOOL_ADMIN_PASSWORD=$ADMIN_PASSWORD" "OSTOOL_AUTH_ENABLED=true"
@@ -171,12 +184,22 @@ start_server() {
         if ! server_pid >/dev/null; then
             break
         fi
-        if command -v curl >/dev/null 2>&1 && curl --noproxy '*' -fsS "http://127.0.0.1:${SERVER_PORT}/" >/dev/null 2>&1; then
-            log "ready: http://127.0.0.1:${SERVER_PORT}/"
-            log "admin: http://127.0.0.1:${SERVER_PORT}/admin/overview"
+        if command -v curl >/dev/null 2>&1 && curl --noproxy '*' -fsS "$CHECK_URL/" >/dev/null 2>&1; then
+            log "ready: $CHECK_URL/"
+            log "admin: $CHECK_URL/admin/overview"
+            log "listening: ${LISTEN_HOST}:${SERVER_PORT}"
+            if [[ "$SERVER_HOST" == "0.0.0.0" ]]; then
+                local lan_ip
+                while IFS= read -r lan_ip; do
+                    log "LAN: http://${lan_ip}:${SERVER_PORT}/"
+                done < <(node -e 'for (const [name, addresses] of Object.entries(require("node:os").networkInterfaces())) {
+                    if (/^(docker|veth|br-|virbr)/.test(name)) continue;
+                    for (const address of addresses ?? []) if (address.family === "IPv4" && !address.internal) console.log(address.address);
+                }')
+            fi
             if [[ "$EDITION" == "public" ]]; then
-                log "website login: http://127.0.0.1:${SERVER_PORT}/login"
-                log "admin login: http://127.0.0.1:${SERVER_PORT}/admin/login"
+                log "website login: $CHECK_URL/login"
+                log "admin login: $CHECK_URL/admin/login"
             fi
             return
         fi
@@ -224,6 +247,7 @@ status() {
         echo "ostool-server: stopped"
     fi
     echo "edition: $EDITION"
+    echo "requested listener: ${LISTEN_HOST}:${SERVER_PORT} (applied on start/restart)"
     if [[ "$EDITION" == "public" ]]; then
         echo "redis: $(docker inspect -f '{{.State.Running}}' "$REDIS_CONTAINER" 2>/dev/null || echo 'not created') ($REDIS_CONTAINER, port $REDIS_PORT)"
     fi

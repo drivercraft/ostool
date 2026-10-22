@@ -308,7 +308,23 @@ OSTOOL_EDITION=public ostool-server/scripts/dev.sh stop
 
 Use `restart` or `clean` with the same edition. Data/log/config directories are
 `.ostool-server-dev/local` and `.ostool-server-dev/public`; `OSTOOL_DEV_DIR` can
-override that location. Default console: `http://127.0.0.1:2999/admin/overview`.
+override that location. The default local edition listens on `0.0.0.0:2999`;
+open `http://<server-LAN-IP>:2999/` or `/admin/overview` from another LAN device.
+The launcher prints the detected IPv4 LAN URLs. PostgreSQL and Redis ports remain
+bound to loopback. Public-edition development keeps its `127.0.0.1:2999` listener.
+
+Use `OSTOOL_DEV_HOST` to select a numeric IPv4/IPv6 address. For loopback-only
+local testing:
+
+```bash
+OSTOOL_DEV_HOST=127.0.0.1 ostool-server/scripts/dev.sh restart
+```
+
+Use `restart` to apply a listener change to an already running process, including
+an existing config created by an older launcher. `start` preserves an existing
+server. Local edition has no authentication, so use its LAN listener only on a
+trusted network. Public HTTPS deployment continues to use the deployment settings
+and Caddy; this does not relax public-edition origin or demo restrictions.
 The local/public database containers default to `ostool-server-dev-local-postgres`
 and `ostool-server-dev-public-postgres`, with ports 54328 and 54329 respectively.
 The schema and persistence code are identical; deploy either edition against the
@@ -350,8 +366,9 @@ The bootstrap administrator above is also available. Local edition continues
 without login or user management. Demo roles follow existing administrator/member
 permissions; their names do not introduce additional permission levels.
 
-`--dev-demo` is accepted only with a loopback management listener and, if set,
-loopback authentication origin. It disables UDP discovery, QEMU, the network-test
+`--dev-demo` accepts LAN/private or wildcard listeners in local edition; any
+configured origin must be loopback or a private IP. Public edition still requires
+both a loopback management listener and a loopback authentication origin. It disables UDP discovery, QEMU, the network-test
 listener, TFTP service startup and automatic startup power-off. Sample board power
 commands are no-ops; discovered IPs use the documentation-only `192.0.2.0/24`
 range. Sample DTBs contain a minimal display model, not real hardware definitions.

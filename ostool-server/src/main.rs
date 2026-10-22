@@ -19,7 +19,7 @@ struct Cli {
     /// Load deployment variables from this file (defaults to .env if present).
     #[arg(long)]
     env_file: Option<PathBuf>,
-    /// Populate an isolated loopback-only UI demo; disable hardware listeners and startup power-off.
+    /// Populate a UI demo (local LAN or public-edition loopback); disable hardware listeners and startup power-off.
     #[arg(long)]
     dev_demo: bool,
     #[command(subcommand)]

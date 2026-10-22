@@ -1,4 +1,4 @@
-//! Explicit, loopback-only development fixtures. Never enabled by deployment configuration.
+//! Explicit development fixtures: local LAN or public-edition loopback only.
 use std::{net::IpAddr, time::Duration};
 
 use anyhow::bail;
@@ -17,10 +17,21 @@ const BOARD_COUNT: usize = 48;
 const DTB_COUNT: usize = 24;
 const USER_COUNT: usize = 36;
 
-/// Refuse public listeners/origins before writing fixtures or connecting to hardware.
+fn private_address(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => ip.is_private() || ip.is_link_local(),
+        IpAddr::V6(ip) => ip.is_unique_local() || ip.is_unicast_link_local(),
+    }
+}
+
+/// Local UI demos may be viewed on the LAN. Authenticated demos remain loopback-only.
 pub fn prepare(config: &mut ServerConfig) -> anyhow::Result<()> {
-    if !config.listen_addr.ip().is_loopback() {
-        bail!("--dev-demo requires a loopback management listener");
+    let ip = config.listen_addr.ip();
+    let local = !config.edition.is_public();
+    if !(ip.is_loopback() || local && (ip.is_unspecified() || private_address(ip))) {
+        bail!(
+            "--dev-demo requires a loopback listener in public edition, or a local/LAN listener in local edition"
+        );
     }
     if let Some(origin) = &config.auth.public_base_url {
         let origin = url::Url::parse(origin)?;
@@ -28,8 +39,14 @@ pub fn prepare(config: &mut ServerConfig) -> anyhow::Result<()> {
             .host_str()
             .unwrap_or_default()
             .trim_matches(['[', ']']);
-        if host != "localhost" && !host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()) {
-            bail!("--dev-demo requires a loopback auth.public_base_url");
+        if host != "localhost"
+            && !host
+                .parse::<IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback() || local && private_address(ip))
+        {
+            bail!(
+                "--dev-demo requires a loopback origin in public edition, or a local/LAN origin in local edition"
+            );
         }
     }
     config.loader_network.enabled = false;
@@ -438,8 +455,11 @@ mod tests {
     }
 
     #[test]
-    fn demo_requires_loopback_and_disables_hardware_services() {
-        let mut config = ServerConfig::default();
+    fn public_demo_requires_loopback_and_disables_hardware_services() {
+        let mut config = ServerConfig {
+            edition: crate::config::Edition::Public,
+            ..Default::default()
+        };
         assert!(prepare(&mut config).is_err());
         config.listen_addr = "127.0.0.1:2999".parse().unwrap();
         config.auth.public_base_url = Some("https://boards.example.com".into());
@@ -456,6 +476,38 @@ mod tests {
             assert!(!config.virtual_qemu.enabled);
             assert!(matches!(config.tftp, TftpConfig::Builtin(ref cfg) if !cfg.enabled));
         }
+    }
+
+    #[test]
+    fn local_demo_accepts_lan_without_enabling_hardware_services() {
+        for listener in [
+            "0.0.0.0:2999",
+            "192.168.20.10:2999",
+            "10.3.10.160:2999",
+            "[::]:2999",
+            "[fd00::1]:2999",
+        ] {
+            let mut config = ServerConfig {
+                listen_addr: listener.parse().unwrap(),
+                ..Default::default()
+            };
+            config.auth.public_base_url = Some("http://192.168.20.10:2999".into());
+            prepare(&mut config).unwrap();
+            assert!(!config.loader_network.enabled);
+            assert!(!config.network_test.enabled);
+            assert!(!config.virtual_qemu.enabled);
+            assert!(matches!(config.tftp, TftpConfig::Builtin(ref cfg) if !cfg.enabled));
+            config.edition = crate::config::Edition::Public;
+            assert!(prepare(&mut config).is_err());
+        }
+        let mut config = ServerConfig {
+            listen_addr: "203.0.113.10:2999".parse().unwrap(),
+            ..Default::default()
+        };
+        assert!(prepare(&mut config).is_err());
+        config.listen_addr = "127.0.0.1:2999".parse().unwrap();
+        config.auth.public_base_url = Some("https://boards.example.com".into());
+        assert!(prepare(&mut config).is_err());
     }
 
     #[tokio::test]
