@@ -837,6 +837,6 @@ async fn auth_config(State(state): State<AppState>) -> Result<Json<serde_json::V
     let site = super::site::view(&state).await?;
     let config = state.config.read().await;
     Ok(Json(
-        serde_json::json!({"site":site,"edition":config.edition,"enabled":config.edition.is_public(),"allow_registration":config.edition.is_public() && config.auth.allow_registration,"database_available":true,"captcha_required":config.edition.is_public(),"registration_email_verification":config.edition.is_public() && config.security.registration_email_verification,"email_security_available":config.edition.is_public() && config.security.smtp_host.is_some()}),
+        serde_json::json!({"site":site,"edition":config.edition,"enabled":config.edition.is_public(),"allow_registration":config.edition.is_public() && config.auth.allow_registration,"database_available":true,"captcha_required":config.edition.is_public(),"registration_email_verification":config.edition.is_public() && config.security.registration_email_verification,"email_security_available":config.edition.is_public() && config.security.smtp_available(),"password_reset_available":config.edition.is_public() && config.security.smtp_available() && config.security.password_reset_enabled}),
     ))
 }

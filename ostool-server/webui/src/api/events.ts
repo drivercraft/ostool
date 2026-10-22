@@ -47,6 +47,7 @@ export interface Resources {
   users: import("@/types/api").ManagedUser[];
   roles: import("@/types/api").UserRole[];
   deployment: import("@/types/api").DeploymentInfo;
+  account_settings: import("@/types/api").AccountSettingsView;
 
   boards: BoardConfig[];
   sessions: Session[];

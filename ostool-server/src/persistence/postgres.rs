@@ -250,6 +250,10 @@ impl Database {
         scope: &str,
         auth: &AuthConfig,
     ) -> anyhow::Result<AccessGrant> {
+        anyhow::ensure!(
+            (1..=100).contains(&auth.max_active_sessions),
+            "invalid session limit"
+        );
         let access_token = random_token();
         let refresh_token = random_token();
         let now = Utc::now();
@@ -268,7 +272,7 @@ impl Database {
             exists.is_some(),
             "credentials changed during authentication"
         );
-        sqlx::query("UPDATE oauth_sessions SET revoked_at=now() WHERE id IN (SELECT id FROM oauth_sessions WHERE user_id=$1 AND client_id=$2 AND revoked_at IS NULL AND refresh_expires_at>now() ORDER BY created_at DESC,id OFFSET 9)").bind(user.id).bind(client_id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE oauth_sessions SET revoked_at=now() WHERE id IN (SELECT id FROM oauth_sessions WHERE user_id=$1 AND client_id=$2 AND revoked_at IS NULL AND refresh_expires_at>now() ORDER BY created_at DESC,id OFFSET $3)").bind(user.id).bind(client_id).bind((auth.max_active_sessions - 1) as i64).execute(&mut *tx).await?;
         let session_id:Uuid=sqlx::query_scalar("INSERT INTO oauth_sessions(user_id,client_id,scope,access_token_hash,refresh_token_hash,access_expires_at,refresh_expires_at,absolute_expires_at,security_version) VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8) RETURNING id")
             .bind(user.id).bind(client_id).bind(scope).bind(token_hash(&access_token)).bind(token_hash(&refresh_token)).bind(access_expires_at).bind(refresh_expires_at).bind(user.security_version).fetch_one(&mut *tx).await?;
         tx.commit().await?;

@@ -871,3 +871,135 @@ a.dashboard-metric:hover {
     padding-inline: 12px;
   }
 }
+
+/* 协议编辑器与普通配置页共用底栏，正文占满剩余工作区。 */
+.settings-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.settings-history-entry,
+.legal-editor-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.legal-editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 16px 16px;
+}
+.legal-editor-toolbar > [data-slot="field"] {
+  flex: 1;
+  max-width: 680px;
+}
+.legal-editor-tools {
+  flex-shrink: 0;
+}
+.app-shell .legal-settings > .panel-scroll {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.legal-editor-form {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.legal-editor-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  flex: 1;
+  gap: 16px;
+  min-height: 0;
+}
+.legal-editor-workspace.has-preview {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.legal-source {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+.legal-source textarea[data-slot="textarea"] {
+  flex: 1;
+  min-height: 120px;
+  width: 100%;
+  padding: 16px;
+  resize: none;
+  line-height: 1.8;
+  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  background: var(--card);
+}
+.legal-preview {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  background: var(--card);
+}
+.legal-preview :is(h1, h2) {
+  font-size: 1.25rem;
+  margin: 0 0 20px;
+}
+.legal-preview > div {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.9;
+}
+.app-shell .page-panel.legal-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  padding-top: 16px;
+  background: var(--admin-header-bg);
+}
+.legal-history-dialog[data-slot="dialog-content"] {
+  z-index: 100;
+  width: min(1000px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+body:has(.legal-fullscreen) [data-slot="dialog-overlay"] {
+  z-index: 90;
+}
+.legal-history-scroll {
+  min-height: 0;
+  overflow: auto;
+}
+.legal-history-scroll .legal-preview {
+  margin-top: 16px;
+  max-height: 40vh;
+}
+@media (max-width: 760px) {
+  .legal-editor-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+    padding-inline: 12px;
+  }
+  .legal-editor-tools {
+    justify-content: flex-end;
+  }
+  .legal-editor-workspace.has-preview {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+  .legal-source textarea[data-slot="textarea"] {
+    min-height: 0;
+  }
+}

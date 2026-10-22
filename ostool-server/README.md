@@ -386,7 +386,7 @@ System settings manage branding, contacts, filing information, maintenance
 notices, versioned user agreements and privacy policies. Public settings update
 via SSE. Registration requires explicit consent to current legal versions;
 publication preserves immutable history and per-user acceptance records. Database,
-SMTP, Redis and encryption credentials remain in deployment environment files,
+SMTP passwords, Redis connections and encryption credentials remain in deployment environment files,
 not browser responses or editable site settings. Logo/favicon settings accept
 same-origin static paths; Caddy can serve those assets. Legal text is escaped
 plain text, not executable HTML.
@@ -445,6 +445,32 @@ listener requires a separate device-network ingress for board HTTP Boot, shared
 files and OTA downloads. `OSTOOL_ADMIN_ALLOWED_NETWORKS` can restrict console
 sources using comma-separated CIDRs. Do not expose a local anonymous edition as
 a public service.
+
+### Editable account and mail policies
+
+Public system settings include registration/password-recovery switches, CAPTCHA
+provider and public Turnstile settings, administrator MFA requirements, login
+failure thresholds/cooldowns, per-user/client session limits, token lifetimes,
+SMTP host/port/TLS/account/sender, and email-code expiry, attempts, resend cooldowns
+and per-email/IP rolling-window limits. These settings initialize from deployment
+configuration once, then persist in PostgreSQL `server_records` and apply when
+saved. Version checks reject concurrent edits, and SSE updates both the console
+and public registration/recovery availability. New token/code lifetimes apply to
+new issuance; existing absolute expiries are preserved. Session limits apply at
+new login; reduced email attempt limits invalidate exhausted challenges.
+
+Connection addresses, trusted networks, SMTP passwords, Turnstile secrets and the
+MFA encryption key stay in `.env`; the UI exposes only credential-presence flags.
+The server rejects incomplete SMTP/Turnstile/MFA combinations. Local edition has
+no account-policy API or authentication/rental UI.
+
+User agreements and privacy policies have separate tabs with a workspace-filling
+plain-text editor, split preview, fullscreen mode and an icon to open version
+history. Preview matches the public legal page and does not execute HTML. Loading
+a historical version only edits the draft; publishing creates a new immutable
+version. Unrelated settings updates do not replace a document draft. Site contacts
+also include support hours and a separate privacy email, falling back to the
+support email when empty.
 
 ### Security configuration
 

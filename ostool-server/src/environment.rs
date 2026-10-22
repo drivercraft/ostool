@@ -99,7 +99,9 @@ pub(crate) fn apply_values(
         "OSTOOL_NETWORK_TEST_ENABLED",
         &mut config.network_test.enabled,
     )?;
-    config.security.validate(config.edition.is_public())?;
+    config
+        .security
+        .validate_deployment(config.edition.is_public())?;
     config.validate()?;
     Ok(())
 }

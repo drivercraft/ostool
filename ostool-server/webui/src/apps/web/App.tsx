@@ -88,7 +88,8 @@ function Logo({ light = false }: { light?: boolean }) {
 
 function SiteHeader() {
   const { settings } = useSiteSettings();
-  const publicEdition = useEdition().edition === "public";
+  const edition = useEdition();
+  const publicEdition = edition.edition === "public";
   const [open, setOpen] = useState(false);
   const location = useLocation();
   useEffect(() => {
@@ -173,11 +174,13 @@ function SiteHeader() {
       <Link className="site-login" to="/login" onClick={() => setOpen(false)}>
         登录
       </Link>
-      <Button asChild size="sm">
-        <Link to="/register" onClick={() => setOpen(false)}>
-          免费注册
-        </Link>
-      </Button>
+      {edition.allow_registration && (
+        <Button asChild size="sm">
+          <Link to="/register" onClick={() => setOpen(false)}>
+            免费注册
+          </Link>
+        </Button>
+      )}
     </>
   );
   return (
@@ -259,6 +262,9 @@ function SiteFooter() {
             </a>
           )}
           {settings.support_phone && <span>{settings.support_phone}</span>}
+          {settings.support_work_hours && (
+            <span>{settings.support_work_hours}</span>
+          )}
           {settings.support_url && <a href={settings.support_url}>联系支持</a>}
         </div>
         <div className="footer-column">
@@ -944,7 +950,10 @@ function Login() {
                             maxLength={6}
                             inputMode="numeric"
                           />
-                          <p role="status">验证码已发送，十分钟内有效。</p>
+                          <p role="status">
+                            验证码已发送，签发后 {emailChallenge.expires_in}{" "}
+                            秒内有效。
+                          </p>
                           <Button
                             type="button"
                             variant="outline"
@@ -1074,9 +1083,11 @@ function Login() {
                   重新登录
                 </Button>
               )}
-              {!registering && authConfig.email_security_available && (
-                <Link to="/password-reset">忘记密码</Link>
-              )}
+              {!registering &&
+                (authConfig.password_reset_available ??
+                  authConfig.email_security_available) && (
+                  <Link to="/password-reset">忘记密码</Link>
+                )}
               {!userCode && (
                 <Link
                   className="auth-switch"
@@ -1131,6 +1142,9 @@ function LegalPage() {
   const published = privacy
     ? view.privacy_published_at
     : view.terms_published_at;
+  const contact = privacy
+    ? s.privacy_contact_email || s.support_email
+    : s.support_email;
   return (
     <PublicLayout>
       <main className="legal-reader">
@@ -1140,10 +1154,10 @@ function LegalPage() {
           {published ? " · " + new Date(published).toLocaleDateString() : ""}
         </p>
         <article>{privacy ? s.privacy_body : s.terms_body}</article>
-        {s.support_email && (
+        {contact && (
           <p>
             联系邮箱：
-            <a href={"mailto:" + s.support_email}>{s.support_email}</a>
+            <a href={"mailto:" + contact}>{contact}</a>
           </p>
         )}
       </main>

@@ -166,9 +166,24 @@ export type AuthConfig = {
   captcha_required: boolean;
   registration_email_verification: boolean;
   email_security_available: boolean;
+  password_reset_available?: boolean;
 };
 let authConfigRequest: Promise<AuthConfig> | undefined;
 export const api = {
+  legalVersion(kind: "terms" | "privacy", version: number) {
+    return request<import("@/types/api").LegalDocument>(
+      `/api/v1/site/legal/${kind}/${version}`,
+    );
+  },
+  updateAccountSettings(
+    revision: number,
+    settings: import("@/types/api").AccountSettings,
+  ) {
+    return request<void>("/api/v1/admin/account-settings", {
+      method: "PUT",
+      bodyJson: { revision, settings },
+    });
+  },
   updateSite(revision: number, settings: import("@/types/api").SiteSettings) {
     return request<void>("/api/v1/admin/site-settings", {
       method: "PUT",

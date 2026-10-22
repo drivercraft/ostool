@@ -597,6 +597,8 @@ export interface SiteSettings {
   favicon_url: string;
   support_email: string;
   support_phone: string;
+  support_work_hours: string;
+  privacy_contact_email: string;
   support_url: string;
   operator: string;
   address: string;
@@ -621,6 +623,12 @@ export interface SiteView {
   terms_published_at?: string;
   privacy_published_at?: string;
   settings: SiteSettings;
+  auth?: {
+    allow_registration: boolean;
+    registration_email_verification: boolean;
+    email_security_available: boolean;
+    password_reset_available: boolean;
+  };
 }
 export interface LegalConsent {
   accepted: boolean;
@@ -650,3 +658,48 @@ export const requestStatusLabels: Record<RentalRequest["status"], string> = {
   rejected: "已拒绝",
   cancelled: "已撤回",
 };
+
+export interface EmailPolicy {
+  ttl_secs: number;
+  resend_secs: number;
+  window_secs: number;
+  email_limit: number;
+  ip_limit: number;
+  max_attempts: number;
+}
+export interface AccountSettings {
+  allow_registration: boolean;
+  access_token_ttl_secs: number;
+  refresh_token_ttl_secs: number;
+  device_code_ttl_secs: number;
+  max_active_sessions: number;
+  captcha_provider: "image" | "turnstile";
+  turnstile_site_key: string | null;
+  turnstile_hostnames: string[];
+  require_admin_mfa: boolean;
+  registration_email_verification: boolean;
+  login_max_failures: number;
+  login_lock_secs: number;
+  smtp_enabled: boolean;
+  smtp_host: string | null;
+  smtp_port: number;
+  smtp_username: string | null;
+  smtp_from: string | null;
+  smtp_tls: "starttls" | "tls" | "loopback_plaintext";
+  password_reset_enabled: boolean;
+  password_reset_ttl_secs: number;
+  email_policy: EmailPolicy;
+  registration_email_policy: EmailPolicy;
+}
+export interface AccountSettingsView {
+  revision: number;
+  settings: AccountSettings;
+  secrets: {
+    smtp_password: boolean;
+    turnstile_secret: boolean;
+    mfa_key: boolean;
+  };
+}
+export interface LegalDocument extends LegalVersion {
+  body: string;
+}

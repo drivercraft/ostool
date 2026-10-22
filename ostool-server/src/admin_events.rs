@@ -40,6 +40,7 @@ pub const TOPICS: &[&str] = &[
     "users",
     "roles",
     "deployment",
+    "account_settings",
     "rentals",
     "rental_requests",
     "dashboard",
@@ -326,21 +327,42 @@ async fn subscribe_scoped(
             return None;
         }
         loop {
-            if tokio::time::Instant::now() >= subscription.check_at {
+            if tokio::time::Instant::now() >= subscription.check_at
+                || (subscription.account.is_none()
+                    && subscription
+                        .queue
+                        .front()
+                        .is_some_and(|update| update.data.contains_key("account_settings")))
+            {
                 if let Some(db) = &subscription.database {
-                    let valid = if let Some(token) = &subscription.credential {
-                        db.authenticate_token(token)
-                            .await
-                            .ok()
-                            .flatten()
-                            .is_some_and(|user| {
-                                subscription
-                                    .account
-                                    .map_or(user.is_admin, |id| user.id == id)
-                            })
+                    let user = if let Some(token) = &subscription.credential {
+                        db.authenticate_token(token).await.ok().flatten()
                     } else {
-                        false
+                        None
                     };
+                    let mut valid = user.as_ref().is_some_and(|user| {
+                        subscription
+                            .account
+                            .map_or(user.is_admin, |id| user.id == id)
+                    });
+                    if valid
+                        && subscription.account.is_none()
+                        && subscription
+                            .state
+                            .config
+                            .read()
+                            .await
+                            .security
+                            .require_admin_mfa
+                    {
+                        valid = sqlx::query_scalar::<_, bool>(
+                            "SELECT EXISTS(SELECT 1 FROM mfa_credentials WHERE user_id=$1)",
+                        )
+                        .bind(user.as_ref().expect("validated subscription user").id)
+                        .fetch_one(db.pool())
+                        .await
+                        .unwrap_or(false);
+                    }
                     if !valid {
                         subscription.finished = true;
                         return Some((

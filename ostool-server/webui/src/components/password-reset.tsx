@@ -6,7 +6,9 @@ import { Button } from "./ui/button";
 import { TextField, Notice, useAction } from "./forms";
 import { useCountdown } from "./security-hooks";
 export function PasswordReset() {
-  const available = useEdition().email_security_available;
+  const config = useEdition();
+  const available =
+    config.password_reset_available ?? config.email_security_available;
   const [email, setEmail] = useState(""),
     [proof, setProof] = useState<HumanProof>(),
     [challenge, setChallenge] = useState<EmailChallenge>(),
@@ -76,7 +78,8 @@ export function PasswordReset() {
           ) : (
             <>
               <p>
-                若该邮箱对应可用账号，验证码将很快送达。验证码十分钟内有效。
+                若该邮箱对应可用账号，验证码将很快送达。签发后{" "}
+                {challenge.expires_in} 秒内有效。
               </p>
               <TextField
                 label="邮箱验证码"

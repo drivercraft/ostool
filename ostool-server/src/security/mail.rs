@@ -57,7 +57,12 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/auth/security/email", post(send_verification))
         .route("/api/v1/auth/security/email/confirm", post(confirm_email))
 }
-async fn send(config: &SecurityConfig, email: &str, code: &str) -> Result<(), ApiError> {
+async fn send(
+    config: &SecurityConfig,
+    email: &str,
+    code: &str,
+    ttl_secs: u32,
+) -> Result<(), ApiError> {
     let host = config
         .smtp_host
         .as_deref()
@@ -66,7 +71,7 @@ async fn send(config: &SecurityConfig, email: &str, code: &str) -> Result<(), Ap
         .smtp_from
         .as_deref()
         .ok_or_else(|| ApiError::service_unavailable("邮箱验证尚未配置"))?;
-    let message=Message::builder().from(from.parse().map_err(|_|ApiError::service_unavailable("邮件发送配置无效"))?).to(email.parse().map_err(|_|ApiError::bad_request("邮箱格式无效"))?).subject("ostool 账号安全验证码").body(format!("你的 ostool 验证码是：{code}\n验证码 10 分钟内有效，只能使用一次。请勿向任何人提供验证码。\n如果这不是你的操作，请忽略本邮件。" )).map_err(anyhow::Error::from)?;
+    let message=Message::builder().from(from.parse().map_err(|_|ApiError::service_unavailable("邮件发送配置无效"))?).to(email.parse().map_err(|_|ApiError::bad_request("邮箱格式无效"))?).subject("ostool 账号安全验证码").body(format!("你的 ostool 验证码是：{code}\n验证码 {ttl_secs} 秒内有效，只能使用一次。请勿向任何人提供验证码。\n如果这不是你的操作，请忽略本邮件。" )).map_err(anyhow::Error::from)?;
     let mut builder = match config.smtp_tls {
         SmtpTls::Starttls => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)
             .map_err(anyhow::Error::from)?,
@@ -94,12 +99,55 @@ async fn issue(
     user: Option<crate::persistence::postgres::User>,
 ) -> Result<Json<Value>, ApiError> {
     let config = state.config.read().await.security.clone();
-    if config.smtp_host.is_none() || config.smtp_from.is_none() {
+    if !config.smtp_available() {
         return Err(ApiError::service_unavailable("邮箱验证尚未配置"));
     }
-    store::limit(&state.security_cache, "email-ip", &client.ip, 8, 3600).await?;
-    store::limit(&state.security_cache, "email-resend", email, 1, 60).await?;
-    store::limit(&state.security_cache, "email-hour", email, 5, 3600).await?;
+    if purpose == "email:reset" && !config.password_reset_enabled {
+        return Err(ApiError::forbidden("密码找回已关闭"));
+    }
+    let registration = purpose == "email:register";
+    if registration && !state.config.read().await.auth.allow_registration {
+        return Err(ApiError::forbidden("注册已关闭"));
+    }
+    let policy = if registration {
+        &config.registration_email_policy
+    } else {
+        &config.email_policy
+    };
+    let ttl_secs = if purpose == "email:reset" {
+        config.password_reset_ttl_secs
+    } else {
+        policy.ttl_secs
+    };
+    let prefix = if registration {
+        "registration-email"
+    } else {
+        "email"
+    };
+    store::limit(
+        &state.security_cache,
+        &format!("{prefix}-ip"),
+        &client.ip,
+        policy.ip_limit as i32,
+        policy.window_secs as i64,
+    )
+    .await?;
+    store::limit(
+        &state.security_cache,
+        &format!("{prefix}-resend"),
+        email,
+        1,
+        policy.resend_secs as i64,
+    )
+    .await?;
+    store::limit(
+        &state.security_cache,
+        &format!("{prefix}-hour"),
+        email,
+        policy.email_limit as i32,
+        policy.window_secs as i64,
+    )
+    .await?;
     let code = format!("{:06}", rand::random_range(0..1_000_000));
     let subject = crypto::hash(email);
     let table = proof_table(purpose);
@@ -115,15 +163,15 @@ async fn issue(
     }
     sqlx::query(&format!("UPDATE {table} SET invalidated_at=now() WHERE purpose=$1 AND email_hash=$2 AND consumed_at IS NULL AND invalidated_at IS NULL"))
         .bind(purpose).bind(&subject).execute(&mut *tx).await?;
-    sqlx::query(&format!("INSERT INTO {table}(id,purpose,user_id,email_hash,code_hash,security_version,request_ip_hash,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()+interval '10 minutes')"))
+    sqlx::query(&format!("INSERT INTO {table}(id,purpose,user_id,email_hash,code_hash,security_version,request_ip_hash,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()+make_interval(secs=>$8::double precision))"))
         .bind(id).bind(purpose).bind(user.as_ref().map(|u|u.id)).bind(&subject)
         .bind(crypto::proof_hash(purpose,id,&code)).bind(user.as_ref().map(|u|u.security_version))
-        .bind(crypto::hash(&client.ip)).execute(&mut *tx).await?;
+        .bind(crypto::hash(&client.ip)).bind(ttl_secs as f64).execute(&mut *tx).await?;
     tx.commit().await?;
     if purpose != "email:reset" || user.is_some() {
         let delivery:Uuid=sqlx::query_scalar("INSERT INTO mail_deliveries(challenge_id,user_id,purpose,recipient_email,recipient_hash) VALUES($1,$2,$3,$4,$5) RETURNING id")
             .bind(id).bind(user.as_ref().map(|u|u.id)).bind(purpose).bind(email).bind(subject).fetch_one(state.database.pool()).await?;
-        let result = send(&config, email, &code).await;
+        let result = send(&config, email, &code, ttl_secs).await;
         sqlx::query(
             "UPDATE mail_deliveries SET status=$2,error_code=$3,completed_at=now() WHERE id=$1",
         )
@@ -153,7 +201,7 @@ async fn issue(
     }
     state.admin_events.invalidate(&["mail_deliveries"]);
     Ok(Json(
-        json!({"challenge_id":id,"expires_in":600,"resend_after":60,"message":"如该邮箱可以接收验证码，邮件将很快送达"}),
+        json!({"challenge_id":id,"expires_in":ttl_secs,"resend_after":policy.resend_secs,"message":"如该邮箱可以接收验证码，邮件将很快送达"}),
     ))
 }
 async fn request(
@@ -199,6 +247,12 @@ async fn consume(
     if code.len() != 6 || !code.bytes().all(|c| c.is_ascii_digit()) {
         return Ok(None);
     }
+    let config = state.config.read().await.security.clone();
+    let max_attempts = if purpose == "email:register" {
+        config.registration_email_policy.max_attempts
+    } else {
+        config.email_policy.max_attempts
+    } as i32;
     let table = proof_table(purpose);
     let mut tx = state.database.pool().begin().await?;
     let row = sqlx::query(&format!("SELECT * FROM {table} WHERE id=$1 FOR UPDATE"))
@@ -214,7 +268,7 @@ async fn consume(
         && row
             .try_get::<Option<DateTime<Utc>>, _>("invalidated_at")?
             .is_none()
-        && row.try_get::<i32, _>("attempts")? < 5
+        && row.try_get::<i32, _>("attempts")? < max_attempts
         && email.is_none_or(|value| {
             row.try_get::<String, _>("email_hash")
                 .is_ok_and(|h| h == crypto::hash(value))
@@ -223,8 +277,8 @@ async fn consume(
             &row.try_get::<String, _>("code_hash")?,
             &crypto::proof_hash(purpose, id, code),
         );
-    sqlx::query(&format!("UPDATE {table} SET attempts=LEAST(attempts+1,5),consumed_at=CASE WHEN $2 THEN now() ELSE consumed_at END WHERE id=$1"))
-        .bind(id).bind(valid).execute(&mut *tx).await?;
+    sqlx::query(&format!("UPDATE {table} SET attempts=LEAST(attempts+1,5),consumed_at=CASE WHEN $2 THEN now() ELSE consumed_at END,invalidated_at=CASE WHEN NOT $2 AND attempts+1 >= $3 THEN COALESCE(invalidated_at,now()) ELSE invalidated_at END WHERE id=$1"))
+        .bind(id).bind(valid).bind(max_attempts).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(if valid {
         Some((
@@ -264,6 +318,9 @@ async fn reset(
     Extension(client): Extension<ClientContext>,
     Json(input): Json<ResetRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    if !state.config.read().await.security.password_reset_enabled {
+        return Err(ApiError::forbidden("密码找回已关闭"));
+    }
     store::limit(&state.security_cache, "reset-confirm", &client.ip, 10, 900).await?;
     crypto::validate_password(&input.new_password)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;

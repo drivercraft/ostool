@@ -228,8 +228,8 @@ body:has(.auth-page-fullscreen) {
     gap: 18px;
   }
   .site-root .auth-page-fullscreen .auth-card {
-    gap: 12px;
-    padding: 24px 32px;
+    gap: 8px;
+    padding: 20px 32px;
   }
   .auth-page-tools {
     padding-block: 8px;

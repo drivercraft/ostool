@@ -25,6 +25,10 @@ pub struct SiteSettings {
     pub favicon_url: String,
     pub support_email: String,
     pub support_phone: String,
+    #[serde(default)]
+    pub support_work_hours: String,
+    #[serde(default)]
+    pub privacy_contact_email: String,
     pub support_url: String,
     pub operator: String,
     pub address: String,
@@ -47,7 +51,7 @@ impl Default for SiteSettings {
         name:"ostool".into(),short_name:"ostool".into(),tagline:"BOARD PLATFORM".into(),
         description:"为嵌入式团队打造的开发板协作平台。".into(),
         logo_url:String::new(),favicon_url:String::new(),support_email:String::new(),
-        support_phone:String::new(),support_url:String::new(),operator:String::new(),address:String::new(),
+        support_phone:String::new(),support_work_hours:"工作日 09:00–18:00".into(),privacy_contact_email:String::new(),support_url:String::new(),operator:String::new(),address:String::new(),
         copyright:"ostool. Built for hardware teams.".into(),icp_number:String::new(),icp_url:String::new(),
         police_number:String::new(),police_url:String::new(),github_url:"https://github.com/drivercraft/ostool".into(),
         maintenance:false,maintenance_message:"系统正在维护，部分服务可能暂时不可用。".into(),
@@ -67,6 +71,7 @@ pub struct SiteView {
     pub privacy_published_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub settings: SiteSettings,
+    pub auth: Value,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -92,6 +97,10 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/site/legal/{kind}/{version}", get(document))
         .route("/api/v1/admin/site-settings", get(public).put(update))
         .route("/api/v1/admin/legal-history", get(history))
+        .route(
+            "/api/v1/admin/account-settings",
+            get(account_settings).put(update_account_settings),
+        )
         .route("/api/v1/admin/mail-deliveries", get(mail_deliveries))
 }
 pub async fn initialize(database: &crate::persistence::Database) -> anyhow::Result<()> {
@@ -122,6 +131,7 @@ pub async fn view(state: &AppState) -> Result<SiteView, ApiError> {
         privacy_published_at: row.try_get("privacy_published_at")?,
         updated_at: row.try_get("updated_at")?,
         settings: serde_json::from_value(row.try_get("content")?).map_err(anyhow::Error::from)?,
+        auth: public_auth(&*state.config.read().await),
     })
 }
 async fn public(State(state): State<AppState>) -> Result<Json<SiteView>, ApiError> {
@@ -148,6 +158,7 @@ fn validate(s: &SiteSettings) -> Result<(), ApiError> {
         (&s.tagline, 80),
         (&s.description, 500),
         (&s.support_phone, 40),
+        (&s.support_work_hours, 80),
         (&s.operator, 120),
         (&s.address, 300),
         (&s.copyright, 200),
@@ -200,9 +211,11 @@ fn validate(s: &SiteSettings) -> Result<(), ApiError> {
             }
         }
     }
-    if !s.support_email.is_empty() {
-        crate::persistence::postgres::normalize_email(&s.support_email)
-            .map_err(|_| ApiError::bad_request("联系邮箱格式无效"))?;
+    for email in [&s.support_email, &s.privacy_contact_email] {
+        if !email.is_empty() {
+            crate::persistence::postgres::normalize_email(email)
+                .map_err(|_| ApiError::bad_request("邮箱格式无效"))?;
+        }
     }
     Ok(())
 }
@@ -264,7 +277,7 @@ async fn document(
     ))
 }
 pub async fn history(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let rows=sqlx::query("SELECT kind,version,title,content_hash,published_at FROM legal_document_versions ORDER BY published_at DESC,kind LIMIT 100")
+    let rows=sqlx::query("SELECT kind,version,title,content_hash,published_at FROM (SELECT *,row_number() OVER(PARTITION BY kind ORDER BY version DESC) AS position FROM legal_document_versions) versions WHERE position<=100 ORDER BY published_at DESC,kind")
         .fetch_all(state.database.pool()).await?;
     Ok(Json(Value::Array(rows.into_iter().map(|r|Ok(json!({"kind":r.try_get::<String,_>("kind")?,"version":r.try_get::<i64,_>("version")?,"title":r.try_get::<String,_>("title")?,"content_hash":r.try_get::<String,_>("content_hash")?,"published_at":r.try_get::<chrono::DateTime<chrono::Utc>,_>("published_at")?}))).collect::<Result<Vec<_>,sqlx::Error>>()?)))
 }
@@ -322,4 +335,96 @@ pub async fn register(
         .user_by_id(user)
         .await?
         .ok_or_else(|| ApiError::unauthorized("账号状态已变化"))
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountSettingsRecord {
+    pub revision: i64,
+    pub settings: crate::security::config::AccountSettings,
+}
+pub async fn load_account_settings(
+    database: &crate::persistence::Database,
+    config: &mut crate::ServerConfig,
+) -> anyhow::Result<()> {
+    if let Some(stored) = database
+        .record::<AccountSettingsRecord>("account-settings")
+        .await?
+    {
+        return stored.settings.apply(config);
+    }
+    let initial = AccountSettingsRecord {
+        revision: 1,
+        settings: crate::security::config::AccountSettings::from_config(config),
+    };
+    initial.settings.apply(config)?;
+    let stored = database
+        .initialize_record("account-settings", &initial)
+        .await?;
+    stored.settings.apply(config)
+}
+pub fn public_auth(config: &crate::ServerConfig) -> Value {
+    let public = config.edition.is_public();
+    let email = public && config.security.smtp_available();
+    json!({"allow_registration":public && config.auth.allow_registration,
+        "registration_email_verification":public && config.security.registration_email_verification,
+        "email_security_available":email,
+        "password_reset_available":email && config.security.password_reset_enabled})
+}
+pub async fn account_settings(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let record: AccountSettingsRecord = state
+        .database
+        .record("account-settings")
+        .await?
+        .ok_or_else(|| ApiError::not_found("本地版不提供账号策略配置"))?;
+    let config = state.config.read().await;
+    if !config.edition.is_public() {
+        return Err(ApiError::not_found("本地版不提供账号策略配置"));
+    }
+    Ok(Json(
+        json!({"revision":record.revision,"settings":crate::security::config::AccountSettings::from_config(&config),
+        "secrets":{"smtp_password":config.security.smtp_password.is_some(),"turnstile_secret":config.security.turnstile_secret.is_some(),"mfa_key":config.security.mfa_encryption_key.is_some()}}),
+    ))
+}
+async fn update_account_settings(
+    State(state): State<AppState>,
+    Json(input): Json<AccountSettingsRecord>,
+) -> Result<Json<Value>, ApiError> {
+    let mut config = state.config.write().await;
+    if !config.edition.is_public() {
+        return Err(ApiError::not_found("本地版不提供账号策略配置"));
+    }
+    let mut next = config.clone();
+    input
+        .settings
+        .apply(&mut next)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let mut tx = state.database.pool().begin().await?;
+    let payload: Value = sqlx::query_scalar(
+        "SELECT payload FROM server_records WHERE name='account-settings' FOR UPDATE",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    let current: AccountSettingsRecord =
+        serde_json::from_value(payload).map_err(anyhow::Error::from)?;
+    if current.revision != input.revision {
+        return Err(ApiError::conflict("配置已更新，请保留草稿后载入最新版本"));
+    }
+    let saved = AccountSettingsRecord {
+        revision: current.revision + 1,
+        settings: input.settings,
+    };
+    sqlx::query(
+        "UPDATE server_records SET payload=$1,updated_at=now() WHERE name='account-settings'",
+    )
+    .bind(serde_json::to_value(&saved).map_err(anyhow::Error::from)?)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    *config = next;
+    drop(config);
+    state
+        .admin_events
+        .invalidate(&["account_settings", "site", "deployment"]);
+    Ok(Json(json!({"saved":true,"revision":saved.revision})))
 }

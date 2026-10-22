@@ -1,24 +1,27 @@
 import { PagePanel } from "@/components/page-panel";
-import { useSearchParams } from "react-router-dom";
+import {
+  useLocation,
+  useNavigationType,
+  useSearchParams,
+} from "react-router-dom";
+import { useLayoutEffect, useState } from "react";
 import { useEdition } from "@/edition";
 import { useResource } from "@/api/events";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Notice, ReadonlyInfo } from "@/components/forms";
 import SiteSettings from "./SiteSettings";
-import { useList } from "@/api/events";
-import { DataTable, Row, Cell } from "@/components/forms";
-import { Server, Tftp } from "./Settings";
+import { Server, Tftp, Accounts } from "./Settings";
 
 export default function SystemSettings() {
   const publicEdition = useEdition().edition === "public";
   const [params, setParams] = useSearchParams();
   const source = useResource("deployment");
-  const deliveries = useList("mail_deliveries");
-  const tab = (publicEdition
+  const routeTab = (publicEdition
     ? [
         "site",
         "contact",
-        "legal",
+        "terms",
+        "privacy",
         "maintenance",
         "server",
         "tftp",
@@ -26,21 +29,45 @@ export default function SystemSettings() {
         "email",
         "storage",
       ]
-    : ["site", "contact", "legal", "maintenance", "server", "tftp", "storage"]
+    : [
+        "site",
+        "contact",
+        "terms",
+        "privacy",
+        "maintenance",
+        "server",
+        "tftp",
+        "storage",
+      ]
   ).includes(params.get("tab") ?? "")
     ? params.get("tab")!
     : "site";
+  const location = useLocation();
+  const navigationType = useNavigationType();
+  const [tab, setTab] = useState(routeTab);
+  useLayoutEffect(() => {
+    // 标签点击立即更新界面；路由过渡不能将刚选择的标签切回旧值。
+    // 浏览器前后导航和外部链接仍按地址恢复标签。
+    if (navigationType === "POP" || location.state?.settingsTab !== routeTab) {
+      setTab(routeTab);
+    }
+  }, [location.key, location.state, navigationType, routeTab]);
   return (
     <>
       <Tabs
         className="workspace-tabs system-settings"
+        activationMode="manual"
         value={tab}
-        onValueChange={(value) => setParams({ tab: value })}
+        onValueChange={(value) => {
+          setTab(value);
+          setParams({ tab: value }, { state: { settingsTab: value } });
+        }}
       >
         <TabsList className="system-tabs" aria-label="系统设置">
           <TabsTrigger value="site">站点信息</TabsTrigger>
           <TabsTrigger value="contact">联系与备案</TabsTrigger>
-          <TabsTrigger value="legal">协议与隐私</TabsTrigger>
+          <TabsTrigger value="terms">用户协议</TabsTrigger>
+          <TabsTrigger value="privacy">隐私政策</TabsTrigger>
           <TabsTrigger value="maintenance">维护提示</TabsTrigger>
           {publicEdition && <TabsTrigger value="email">邮件服务</TabsTrigger>}
           <TabsTrigger value="server">网络与上传</TabsTrigger>
@@ -50,7 +77,7 @@ export default function SystemSettings() {
           )}
           <TabsTrigger value="storage">数据存储</TabsTrigger>
         </TabsList>
-        {["site", "contact", "legal", "maintenance"].map((group) => (
+        {["site", "contact", "terms", "privacy", "maintenance"].map((group) => (
           <TabsContent
             key={group}
             value={group}
@@ -60,72 +87,22 @@ export default function SystemSettings() {
             <SiteSettings group={group} />
           </TabsContent>
         ))}
-        <TabsContent value="email">
-          <PagePanel
-            footer={
-              <span className="panel-status">
-                最近 100 次邮件投递，不记录正文或验证码
-              </span>
-            }
-          >
-            {source?.security && (
-              <section className="page-section">
-                <h2>邮件服务配置</h2>
-                <ReadonlyInfo entries={source.security} />
-              </section>
-            )}
-            <section className="page-section">
-              <h2>最近投递记录</h2>
-              <DataTable
-                headers={["用途", "收件邮箱", "状态", "时间"]}
-                empty={!deliveries.length}
-              >
-                {deliveries.map((mail) => (
-                  <Row key={mail.id}>
-                    <Cell>{mail.purpose}</Cell>
-                    <Cell>{mail.recipient_email}</Cell>
-                    <Cell>{mail.status}</Cell>
-                    <Cell>{new Date(mail.created_at).toLocaleString()}</Cell>
-                  </Row>
-                ))}
-              </DataTable>
-            </section>
-          </PagePanel>
-        </TabsContent>
+        {publicEdition && (
+          <TabsContent value="email" forceMount hidden={tab !== "email"}>
+            <Accounts group="email" />
+          </TabsContent>
+        )}
         <TabsContent value="server" forceMount hidden={tab !== "server"}>
           <Server />
         </TabsContent>
         <TabsContent value="tftp" forceMount hidden={tab !== "tftp"}>
           <Tftp />
         </TabsContent>
-        <TabsContent value="security">
-          <PagePanel
-            footer={
-              <span className="panel-status">部署参数在服务启动时读取</span>
-            }
-          >
-            {source && (
-              <section className="page-section">
-                <h2>登录与部署配置</h2>
-                <ReadonlyInfo
-                  entries={{
-                    登录验证: source.auth_enabled,
-                    允许注册: source.allow_registration,
-                    公网地址: source.public_base_url,
-                    "Access Token 有效期": `${source.access_token_ttl_secs} 秒`,
-                    "PostgreSQL 已连接": source.database_connected,
-                    "Redis 已连接": source.redis_connected,
-                    ...source.security,
-                  }}
-                />
-              </section>
-            )}
-            <Notice>
-              部署时通过 .env、进程环境变量或 systemd EnvironmentFile
-              设置数据库连接、公网地址及认证开关。密码与数据库连接串不会发送到浏览器。
-            </Notice>
-          </PagePanel>
-        </TabsContent>
+        {publicEdition && (
+          <TabsContent value="security" forceMount hidden={tab !== "security"}>
+            <Accounts group="security" />
+          </TabsContent>
+        )}
         <TabsContent value="storage">
           <PagePanel
             footer={

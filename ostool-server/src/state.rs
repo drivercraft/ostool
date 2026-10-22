@@ -154,7 +154,9 @@ pub async fn build_app_state(
         "both local and public editions require PostgreSQL (OSTOOL_DATABASE_URL)"
     );
     config.auth.enabled = config.edition.is_public();
-    config.security.validate(config.edition.is_public())?;
+    config
+        .security
+        .validate_deployment(config.edition.is_public())?;
     if config.edition.is_public() {
         let origin = config
             .auth
@@ -194,6 +196,7 @@ pub async fn build_app_state(
             tftp_manager = crate::tftp::service::build_tftp_manager(&config.tftp);
         }
         if config.edition.is_public() {
+            crate::api::site::load_account_settings(&database, &mut config).await?;
             database.bootstrap_admin(&config.auth).await?;
         }
     }

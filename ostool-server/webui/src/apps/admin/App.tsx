@@ -29,7 +29,7 @@ import { EditionProvider, useEdition } from "@/edition";
 import { api, type AuthUser } from "@/api/client";
 import { ThemeProvider } from "next-themes";
 import { AdminTopbar } from "@/apps/admin/components/admin-topbar";
-import { admin, useConnection, useErrors } from "@/api/events";
+import { admin, useConnection, useErrors, useResource } from "@/api/events";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
@@ -79,6 +79,8 @@ export default function App() {
 }
 function AdminEntry() {
   const config = useEdition();
+  const requireAdminMfa =
+    useResource("account_settings")?.settings.require_admin_mfa ?? false;
   const loginPage = /^\/admin\/login\/?$/.test(window.location.pathname);
   const [gate, setGate] = useState<"checking" | "allowed" | "denied" | "error">(
     "checking",
@@ -115,7 +117,7 @@ function AdminEntry() {
     return () => {
       active = false;
     };
-  }, [config, loginPage]);
+  }, [config, loginPage, requireAdminMfa]);
   if (loginPage && config.edition === "public") return <AdminLogin />;
   if (gate === "checking")
     return (

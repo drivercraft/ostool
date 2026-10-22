@@ -210,6 +210,9 @@ impl ServerConfig {
                 "auth token lifetimes must be access: 60..86400, refresh: 300..31536000, device: 60..1800 seconds"
             );
         }
+        if !(1..=100).contains(&self.auth.max_active_sessions) {
+            bail!("auth.max_active_sessions must be 1..100");
+        }
         if self.database.max_connections == 0 {
             bail!("database.max_connections must be greater than 0");
         }
@@ -330,6 +333,7 @@ pub struct AuthConfig {
     pub refresh_token_ttl_secs: u64,
     pub device_code_ttl_secs: u64,
     pub allow_registration: bool,
+    pub max_active_sessions: u32,
     pub public_base_url: Option<String>,
     pub bootstrap_admin_email: Option<String>,
     #[serde(skip_serializing)]
@@ -354,6 +358,7 @@ impl Default for AuthConfig {
             refresh_token_ttl_secs: 30 * 24 * 60 * 60,
             device_code_ttl_secs: 600,
             allow_registration: true,
+            max_active_sessions: 10,
             public_base_url: None,
             bootstrap_admin_email: None,
             bootstrap_admin_password: None,

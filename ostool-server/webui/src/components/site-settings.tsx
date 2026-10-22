@@ -16,6 +16,8 @@ const fallback: SiteView = {
     favicon_url: "",
     support_email: "",
     support_phone: "",
+    support_work_hours: "",
+    privacy_contact_email: "",
     support_url: "",
     operator: "",
     address: "",

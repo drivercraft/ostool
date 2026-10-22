@@ -135,7 +135,8 @@ export default function AdminLogin() {
             重新登录
           </Button>
         )}
-        {config.email_security_available && (
+        {(config.password_reset_available ??
+          config.email_security_available) && (
           <a href="/password-reset?surface=admin">忘记密码</a>
         )}
         <a className="admin-login-site" href="/">

@@ -601,6 +601,8 @@ async fn optional_smtp_verification_and_password_recovery_revoke_old_credentials
         config.security.smtp_port = port;
         config.security.smtp_tls = ostool_server::security::config::SmtpTls::LoopbackPlaintext;
         config.security.registration_email_verification = true;
+        config.security.registration_email_policy.ttl_secs = 1200;
+        config.security.registration_email_policy.resend_secs = 90;
         config.security.validate(true).unwrap();
     }
     let email = "mail-member@security.test";
@@ -610,6 +612,8 @@ async fn optional_smtp_verification_and_password_recovery_revoke_old_credentials
     let sent = f.request("POST", "/api/v1/auth/email-code", None,
         json!({"email":email,"action":"register","verification":f.proof("registration_email").await})).await;
     assert_eq!(sent.status, StatusCode::OK, "{}", sent.body);
+    assert_eq!(sent.body["expires_in"], 1200);
+    assert_eq!(sent.body["resend_after"], 90);
     let code = mail_code(&mut messages).await;
     assert!(!sent.body.to_string().contains(&code));
     let register = f.request("POST", "/api/v1/auth/register", None,
@@ -1119,6 +1123,227 @@ async fn hardware_access_rejects_external_and_invalid_proxy_sources() {
     ));
     assert_eq!(
         f.app.clone().oneshot(request).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn account_settings_are_validated_private_versioned_persistent_and_enforced() {
+    let f = Fixture::new(true).await;
+    let endpoint = "/api/v1/admin/account-settings";
+    assert_eq!(
+        f.request("GET", endpoint, None, Value::Null).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    let login = f.login(true).await;
+    let cookies = test_security::cookie_header(&login.headers);
+    let initial = f
+        .request("GET", endpoint, Some(&cookies), Value::Null)
+        .await;
+    assert_eq!(initial.status, StatusCode::OK);
+    let mut settings = initial.body["settings"].clone();
+    assert!(settings.get("smtp_password").is_none());
+    assert!(settings.get("mfa_encryption_key").is_none());
+    assert!(settings.get("redis_url").is_none());
+    assert!(settings.get("turnstile_secret").is_none());
+    settings["login_max_failures"] = json!(2);
+    let invalid = f
+        .request(
+            "PUT",
+            endpoint,
+            Some(&cookies),
+            json!({"revision":1,"settings":settings}),
+        )
+        .await;
+    assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+    assert_eq!(f.state.config.read().await.security.login_max_failures, 6);
+    f.state.config.write().await.security.smtp_password = Some("deploy-smtp-secret".into());
+    settings["smtp_username"] = json!("smtp-user");
+    settings["smtp_host"] = json!("smtp.example.test");
+    settings["smtp_from"] = json!("noreply@example.test");
+    settings["login_max_failures"] = json!(3);
+    settings["allow_registration"] = json!(false);
+    settings["password_reset_enabled"] = json!(false);
+    settings["max_active_sessions"] = json!(1);
+    settings["email_policy"]["max_attempts"] = json!(2);
+    let saved = f
+        .request(
+            "PUT",
+            endpoint,
+            Some(&cookies),
+            json!({"revision":1,"settings":settings}),
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+    assert_eq!(saved.body["revision"], 2);
+    assert_eq!(
+        f.request(
+            "PUT",
+            endpoint,
+            Some(&cookies),
+            json!({"revision":1,"settings":settings})
+        )
+        .await
+        .status,
+        StatusCode::CONFLICT
+    );
+    let site = f.request("GET", "/api/v1/site", None, Value::Null).await;
+    assert_eq!(site.body["auth"]["allow_registration"], false);
+    assert_eq!(site.body["auth"]["password_reset_available"], false);
+    assert!(site.body.get("account_settings").is_none());
+    let rejected=f.request("POST","/api/v1/auth/register",None,json!({"email":"closed@security.test","password":"closed-registration-password-123","verification":f.proof("register").await})).await;
+    assert_eq!(rejected.status, StatusCode::FORBIDDEN);
+    assert_eq!(f.request("POST", "/api/v1/auth/password-reset", None, json!({"challenge_id":Uuid::new_v4(),"code":"123456","new_password":"replacement-password-123"})).await.status, StatusCode::FORBIDDEN);
+    let mut reloaded = f.state.config.read().await.clone();
+    reloaded.auth.allow_registration = true;
+    reloaded.auth.max_active_sessions = 10;
+    reloaded.security.login_max_failures = 6;
+    // 部署环境只提供密码，用户名等非密钥字段由数据库恢复。
+    reloaded.security.smtp_username = None;
+    let env_file = f._root.path().join("runtime.env");
+    std::fs::write(
+        &env_file,
+        "OSTOOL_EDITION=public\nOSTOOL_SMTP_PASSWORD=deploy-smtp-secret\n",
+    )
+    .unwrap();
+    ostool_server::environment::apply(&mut reloaded, Some(&env_file)).unwrap();
+    ostool_server::api::site::load_account_settings(&f.state.database, &mut reloaded)
+        .await
+        .unwrap();
+    assert!(!reloaded.auth.allow_registration);
+    assert_eq!(reloaded.auth.max_active_sessions, 1);
+    assert_eq!(reloaded.security.login_max_failures, 3);
+    assert_eq!(
+        reloaded.security.smtp_username.as_deref(),
+        Some("smtp-user")
+    );
+    assert_eq!(
+        reloaded.security.smtp_password.as_deref(),
+        Some("deploy-smtp-secret")
+    );
+    let persisted: Value =
+        sqlx::query_scalar("SELECT payload FROM server_records WHERE name='account-settings'")
+            .fetch_one(f.state.database.pool())
+            .await
+            .unwrap();
+    assert!(persisted["settings"].get("smtp_password").is_none());
+    assert!(!persisted.to_string().contains("deploy-smtp-secret"));
+    let local = Fixture::new(false).await;
+    let mut invalid = reloaded.clone();
+    invalid.security.smtp_username = None;
+    assert!(
+        ostool_server::api::site::load_account_settings(&local.state.database, &mut invalid)
+            .await
+            .is_err()
+    );
+    assert!(
+        local
+            .state
+            .database
+            .record::<Value>("account-settings")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // 新登录会撤销超额旧登录链；网站和后台按客户端隔离计数。
+    let next = f.login(true).await;
+    assert_eq!(next.status, StatusCode::OK);
+    assert_eq!(
+        f.request("GET", endpoint, Some(&cookies), Value::Null)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    let current = test_security::cookie_header(&next.headers);
+    let user = f
+        .state
+        .database
+        .find_user("admin@security.test")
+        .await
+        .unwrap()
+        .unwrap();
+    let proof = Uuid::new_v4();
+    sqlx::query("INSERT INTO email_verification_tokens(id,purpose,user_id,email_hash,code_hash,security_version,expires_at) VALUES($1,'email:verify',$2,$3,$4,$5,now()+interval '10 minutes')")
+        .bind(proof).bind(user.id).bind(crypto::hash(&user.email)).bind(crypto::proof_hash("email:verify",proof,"123456")).bind(user.security_version).execute(f.state.database.pool()).await.unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            f.request(
+                "POST",
+                "/api/v1/auth/security/email/confirm",
+                Some(&current),
+                json!({"challenge_id":proof,"code":"000000"})
+            )
+            .await
+            .status,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        f.request(
+            "POST",
+            "/api/v1/auth/security/email/confirm",
+            Some(&current),
+            json!({"challenge_id":proof,"code":"123456"})
+        )
+        .await
+        .status,
+        StatusCode::BAD_REQUEST
+    );
+    let invalidated: bool = sqlx::query_scalar(
+        "SELECT invalidated_at IS NOT NULL FROM email_verification_tokens WHERE id=$1",
+    )
+    .bind(proof)
+    .fetch_one(f.state.database.pool())
+    .await
+    .unwrap();
+    assert!(invalidated);
+    // 强制管理员 MFA 时，已建立但未绑定验证器的后台推送也必须停止。
+    use futures_util::StreamExt;
+    let response = f
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/admin/events")
+                .header("cookie", &current)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body().into_data_stream();
+    let snapshot = stream.next().await.unwrap().unwrap();
+    assert!(String::from_utf8_lossy(&snapshot).contains("event: snapshot"));
+    settings["require_admin_mfa"] = json!(true);
+    assert_eq!(
+        f.request(
+            "PUT",
+            endpoint,
+            Some(&current),
+            json!({"revision":2,"settings":settings})
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        while let Some(chunk) = stream.next().await {
+            if String::from_utf8_lossy(&chunk.unwrap()).contains("event: auth-expired") {
+                return;
+            }
+        }
+        panic!("administrator event stream did not enforce mandatory MFA");
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        Fixture::new(false)
+            .await
+            .request("GET", endpoint, None, Value::Null)
+            .await
+            .status,
         StatusCode::NOT_FOUND
     );
 }

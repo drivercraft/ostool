@@ -286,7 +286,7 @@ pub async fn status_projection(state: &AppState, user: Uuid) -> Result<Value, Ap
     let count: Option<i32> = row.try_get("recovery_count")?;
     let config = state.config.read().await.security.clone();
     Ok(
-        json!({"enabled":count.is_some(),"available":config.mfa_encryption_key.is_some(),"recovery_codes_remaining":count.unwrap_or(0),"email_verified":row.try_get::<bool,_>("email_verified")?,"email_verification_available":config.smtp_host.is_some(),"require_admin_mfa":config.require_admin_mfa}),
+        json!({"enabled":count.is_some(),"available":config.mfa_encryption_key.is_some(),"recovery_codes_remaining":count.unwrap_or(0),"email_verified":row.try_get::<bool,_>("email_verified")?,"email_verification_available":config.smtp_available(),"require_admin_mfa":config.require_admin_mfa}),
     )
 }
 async fn enroll(

@@ -1233,7 +1233,7 @@ Cookie 写请求拒绝不匹配/缺失的 Origin。配置、部署与升级说�
 | `GET /api/v1/site` | 公开配置与协议版本 |
 | `GET /api/v1/site/events` | 仅公开配置与设备目录的 SSE，不含私人或后台数据 |
 | `PUT /api/v1/admin/site-settings` | 管理员提交 `revision` 与完整 `settings`，需近期身份复核 |
-| `GET /api/v1/admin/legal-history` | 最近 100 个协议发布版本 |
+| `GET /api/v1/admin/legal-history` | 每类文档最近 100 个协议发布版本 |
 | `GET /api/v1/site/legal/{terms|privacy}/{version}` | 指定历史版本的 JSON |
 | `GET /api/v1/admin/mail-deliveries` | 最近 100 次邮件投递，网页通过后台 SSE 更新 |
 
@@ -1242,3 +1242,20 @@ Cookie 写请求拒绝不匹配/缺失的 Origin。配置、部署与升级说�
 验证码仅存摘要；成功、过期、超限或凭据版本变化后不可复用。完整字段和约束以
 [初始迁移](../ostool-server/migrations/20261022000000_initial_schema.sql)为准，
 配置和密钥管理见[服务器说明](../ostool-server/README.md#security-configuration)。
+
+## 账号与邮件策略配置
+
+仅公网版管理员可使用 `GET /api/v1/admin/account-settings` 和
+`PUT /api/v1/admin/account-settings`。写请求需近期身份复核，提交
+`{revision, settings}`；版本冲突返回 409，非法范围或缺少 SMTP/Turnstile/MFA 所需部署凭据
+返回 400。本地版接口返回 404，CLI 凭据不能访问。
+
+配置涵盖注册、找回密码、登录限流、会话上限、令牌时效、SMTP 非密钥参数、人机验证与
+双重验证策略，以及注册和账号邮件验证码的有效期、重发冷却、统计窗口、发送额度、尝试上限。
+保存至 `server_records` 的 `account-settings` 记录，后台 SSE 通过 `account_settings` 推送；
+公开 `site.auth` 只包含注册、邮箱验证和密码恢复可用性。配置内容和部署密钥不进入公开投影，
+管理员响应中的 `secrets` 也仅为是否已配置的布尔值。
+
+SMTP 密码、Turnstile 服务端密钥、MFA 加密密钥、数据库及 Redis 连接不接受此接口修改。
+业务策略首次由部署配置初始化，此后以数据库为准；密钥和连接参数始终由环境文件管理。
+新时效用于新签发的令牌或邮件证明，旧证明保留已记录的截止时间；尝试耗尽后不可恢复使用。

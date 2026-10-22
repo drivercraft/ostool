@@ -22,6 +22,11 @@ pub struct SecurityConfig {
     pub login_lock_secs: u32,
     pub admin_allowed_networks: Vec<String>,
     pub hardware_allowed_networks: Vec<String>,
+    pub smtp_enabled: bool,
+    pub password_reset_enabled: bool,
+    pub password_reset_ttl_secs: u32,
+    pub email_policy: EmailPolicy,
+    pub registration_email_policy: EmailPolicy,
     pub smtp_host: Option<String>,
     pub smtp_port: u16,
     pub smtp_username: Option<String>,
@@ -77,6 +82,11 @@ impl Default for SecurityConfig {
             .into_iter()
             .map(str::to_owned)
             .collect(),
+            smtp_enabled: true,
+            password_reset_enabled: true,
+            password_reset_ttl_secs: 600,
+            email_policy: EmailPolicy::default(),
+            registration_email_policy: EmailPolicy::default(),
             smtp_host: None,
             smtp_port: 587,
             smtp_username: None,
@@ -88,6 +98,13 @@ impl Default for SecurityConfig {
 }
 impl SecurityConfig {
     pub fn validate(&self, public: bool) -> anyhow::Result<()> {
+        self.validate_inner(public, true)
+    }
+    /// 启动时先校验部署值，再在数据库策略合并后校验依赖关系。
+    pub(crate) fn validate_deployment(&self, public: bool) -> anyhow::Result<()> {
+        self.validate_inner(public, false)
+    }
+    fn validate_inner(&self, public: bool, complete: bool) -> anyhow::Result<()> {
         if !public {
             return Ok(());
         }
@@ -122,7 +139,7 @@ impl SecurityConfig {
             );
         }
         ensure!(
-            !self.require_admin_mfa || self.mfa_encryption_key.is_some(),
+            !complete || !self.require_admin_mfa || self.mfa_encryption_key.is_some(),
             "administrator MFA requires OSTOOL_MFA_ENCRYPTION_KEY"
         );
         for network in self
@@ -134,7 +151,7 @@ impl SecurityConfig {
                 .parse::<ipnet::IpNet>()
                 .map_err(|_| anyhow::anyhow!("invalid admin network: {network}"))?;
         }
-        if self.captcha_provider == CaptchaProvider::Turnstile {
+        if complete && self.captcha_provider == CaptchaProvider::Turnstile {
             ensure!(
                 self.turnstile_site_key
                     .as_ref()
@@ -161,21 +178,49 @@ impl SecurityConfig {
             }
         }
         ensure!(
-            self.smtp_host.is_some() == self.smtp_from.is_some(),
+            !complete || self.smtp_host.is_some() == self.smtp_from.is_some(),
             "SMTP requires both host and from address"
         );
         ensure!(
-            self.smtp_username.is_some() == self.smtp_password.is_some(),
+            !complete || self.smtp_username.is_some() == self.smtp_password.is_some(),
             "SMTP credentials require both username and password"
         );
         ensure!(self.smtp_port > 0, "SMTP port must be nonzero");
-        if self.registration_email_verification {
+        if let Some(host) = &self.smtp_host {
             ensure!(
-                self.smtp_host.is_some() && self.smtp_from.is_some(),
+                !host.is_empty()
+                    && host.len() <= 253
+                    && !host.chars().any(char::is_whitespace)
+                    && !host.contains('/'),
+                "SMTP 主机须为主机名或 IP，不含协议或路径"
+            );
+        }
+        if let Some(from) = &self.smtp_from {
+            ensure!(
+                from.parse::<lettre::message::Mailbox>().is_ok(),
+                "发件人须为邮箱或名称 <邮箱> 格式"
+            );
+        }
+        ensure!(
+            self.smtp_username
+                .as_ref()
+                .is_none_or(|value| value.len() <= 320),
+            "SMTP 用户名过长"
+        );
+        self.email_policy.validate(86400)?;
+        self.registration_email_policy.validate(3600)?;
+        ensure!(
+            (300..=7200).contains(&self.password_reset_ttl_secs),
+            "密码恢复有效期须为 300–7200 秒"
+        );
+        if complete && self.registration_email_verification {
+            ensure!(
+                self.smtp_available(),
                 "email verification requires SMTP host and from address"
             );
         }
-        if self.smtp_tls == SmtpTls::LoopbackPlaintext
+        if complete
+            && self.smtp_tls == SmtpTls::LoopbackPlaintext
             && !matches!(
                 self.smtp_host.as_deref(),
                 Some("127.0.0.1" | "::1" | "localhost")
@@ -184,6 +229,141 @@ impl SecurityConfig {
             bail!("plaintext SMTP is restricted to loopback");
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct EmailPolicy {
+    pub ttl_secs: u32,
+    pub resend_secs: u32,
+    pub window_secs: u32,
+    pub email_limit: u32,
+    pub ip_limit: u32,
+    pub max_attempts: u32,
+}
+impl Default for EmailPolicy {
+    fn default() -> Self {
+        Self {
+            ttl_secs: 600,
+            resend_secs: 60,
+            window_secs: 3600,
+            email_limit: 5,
+            ip_limit: 8,
+            max_attempts: 5,
+        }
+    }
+}
+impl EmailPolicy {
+    fn validate(&self, max_ttl: u32) -> anyhow::Result<()> {
+        ensure!(
+            (60..=max_ttl).contains(&self.ttl_secs),
+            "邮件验证码有效期超出允许范围"
+        );
+        ensure!(
+            (30..=3600).contains(&self.resend_secs),
+            "邮件重发冷却须为 30–3600 秒"
+        );
+        ensure!(
+            (3600..=86400).contains(&self.window_secs),
+            "邮件统计窗口须为 3600–86400 秒"
+        );
+        ensure!(
+            (1..=100).contains(&self.email_limit) && (1..=5000).contains(&self.ip_limit),
+            "邮件发送额度超出允许范围"
+        );
+        ensure!(
+            (1..=5).contains(&self.max_attempts),
+            "验证码最多允许 1–5 次尝试"
+        );
+        Ok(())
+    }
+}
+impl SecurityConfig {
+    pub fn smtp_available(&self) -> bool {
+        self.smtp_enabled && self.smtp_host.is_some() && self.smtp_from.is_some()
+    }
+}
+
+/// 可由后台调整的业务策略；部署连接、网络边界和密钥不进入数据库记录。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AccountSettings {
+    pub allow_registration: bool,
+    pub access_token_ttl_secs: u64,
+    pub refresh_token_ttl_secs: u64,
+    pub device_code_ttl_secs: u64,
+    pub max_active_sessions: u32,
+    pub captcha_provider: CaptchaProvider,
+    pub turnstile_site_key: Option<String>,
+    pub turnstile_hostnames: Vec<String>,
+    pub require_admin_mfa: bool,
+    pub registration_email_verification: bool,
+    pub login_max_failures: u32,
+    pub login_lock_secs: u32,
+    pub smtp_enabled: bool,
+    pub smtp_host: Option<String>,
+    pub smtp_port: u16,
+    pub smtp_username: Option<String>,
+    pub smtp_from: Option<String>,
+    pub smtp_tls: SmtpTls,
+    pub password_reset_enabled: bool,
+    pub password_reset_ttl_secs: u32,
+    pub email_policy: EmailPolicy,
+    pub registration_email_policy: EmailPolicy,
+}
+impl AccountSettings {
+    pub fn from_config(config: &crate::ServerConfig) -> Self {
+        Self {
+            allow_registration: config.auth.allow_registration,
+            access_token_ttl_secs: config.auth.access_token_ttl_secs,
+            refresh_token_ttl_secs: config.auth.refresh_token_ttl_secs,
+            device_code_ttl_secs: config.auth.device_code_ttl_secs,
+            max_active_sessions: config.auth.max_active_sessions,
+            captcha_provider: config.security.captcha_provider,
+            turnstile_site_key: config.security.turnstile_site_key.clone(),
+            turnstile_hostnames: config.security.turnstile_hostnames.clone(),
+            require_admin_mfa: config.security.require_admin_mfa,
+            registration_email_verification: config.security.registration_email_verification,
+            login_max_failures: config.security.login_max_failures,
+            login_lock_secs: config.security.login_lock_secs,
+            smtp_enabled: config.security.smtp_enabled,
+            smtp_host: config.security.smtp_host.clone(),
+            smtp_port: config.security.smtp_port,
+            smtp_username: config.security.smtp_username.clone(),
+            smtp_from: config.security.smtp_from.clone(),
+            smtp_tls: config.security.smtp_tls,
+            password_reset_enabled: config.security.password_reset_enabled,
+            password_reset_ttl_secs: config.security.password_reset_ttl_secs,
+            email_policy: config.security.email_policy.clone(),
+            registration_email_policy: config.security.registration_email_policy.clone(),
+        }
+    }
+    pub fn apply(&self, config: &mut crate::ServerConfig) -> anyhow::Result<()> {
+        config.auth.allow_registration = self.allow_registration;
+        config.auth.access_token_ttl_secs = self.access_token_ttl_secs;
+        config.auth.refresh_token_ttl_secs = self.refresh_token_ttl_secs;
+        config.auth.device_code_ttl_secs = self.device_code_ttl_secs;
+        config.auth.max_active_sessions = self.max_active_sessions;
+        config.security.captcha_provider = self.captcha_provider;
+        config.security.turnstile_site_key = self.turnstile_site_key.clone();
+        config.security.turnstile_hostnames = self.turnstile_hostnames.clone();
+        config.security.require_admin_mfa = self.require_admin_mfa;
+        config.security.registration_email_verification = self.registration_email_verification;
+        config.security.login_max_failures = self.login_max_failures;
+        config.security.login_lock_secs = self.login_lock_secs;
+        config.security.smtp_enabled = self.smtp_enabled;
+        config.security.smtp_host = self.smtp_host.clone();
+        config.security.smtp_port = self.smtp_port;
+        config.security.smtp_username = self.smtp_username.clone();
+        config.security.smtp_from = self.smtp_from.clone();
+        config.security.smtp_tls = self.smtp_tls;
+        config.security.password_reset_enabled = self.password_reset_enabled;
+        config.security.password_reset_ttl_secs = self.password_reset_ttl_secs;
+        config.security.email_policy = self.email_policy.clone();
+        config.security.registration_email_policy = self.registration_email_policy.clone();
+        config.security.validate(config.edition.is_public())?;
+        config.validate()
     }
 }
 

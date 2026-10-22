@@ -3047,6 +3047,13 @@ pub(crate) async fn admin_topic(
     }
     let extractor = State(state.clone());
     let value = match topic {
+        "account_settings" => {
+            if state.config.read().await.edition.is_public() {
+                Ok(super::site::account_settings(extractor).await?.0)
+            } else {
+                Ok(serde_json::Value::Null)
+            }
+        }
         "site" => serde_json::to_value(super::site::view(state).await?),
         "device_catalog" => Ok(serde_json::json!(super::site::device_catalog(state).await)),
         "legal_history" => Ok(super::site::history(extractor).await?.0),
