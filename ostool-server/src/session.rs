@@ -45,9 +45,28 @@ impl SessionLifecycleState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionStopReason {
     ApiDelete,
+    AdminRelease,
+    RentalRevoked,
+    AuthorizationUnavailable,
+    ServerShutdown,
     SerialClosed,
     Expired,
     Dropped,
+}
+
+impl SessionStopReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ApiDelete => "client_released",
+            Self::AdminRelease => "admin_released",
+            Self::SerialClosed => "serial_closed",
+            Self::Expired => "lease_expired",
+            Self::Dropped => "session_dropped",
+            Self::RentalRevoked => "rental_revoked",
+            Self::AuthorizationUnavailable => "authorization_unavailable",
+            Self::ServerShutdown => "server_shutdown",
+        }
+    }
 }
 
 #[derive(Debug)]

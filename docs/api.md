@@ -269,6 +269,7 @@ token=<refresh_token>
 | QEMU 虚拟设备 | `GET /api/v1/admin/virtual-devices`；`POST /api/v1/admin/virtual-devices`；`DELETE /api/v1/admin/virtual-devices/{device_id}` |
 | DTB 列表与创建 | `GET /api/v1/admin/dtbs`；`POST /api/v1/admin/dtbs` |
 | 单个 DTB | `GET /api/v1/admin/dtbs/{dtb_name}`；`PUT /api/v1/admin/dtbs/{dtb_name}`；`DELETE /api/v1/admin/dtbs/{dtb_name}` |
+| 租约历史 | `GET /api/v1/admin/session-history` |
 | 活动会话 | `GET /api/v1/admin/sessions`；`DELETE /api/v1/admin/sessions/{session_id}` |
 | TFTP 配置 | `GET /api/v1/admin/tftp`；`PUT /api/v1/admin/tftp` |
 | TFTP 状态与协调 | `GET /api/v1/admin/tftp/status`；`POST /api/v1/admin/tftp/reconcile` |
@@ -602,6 +603,25 @@ DELETE /api/v1/admin/sessions/{session_id}
 ```
 
 成功返回 `202 Accepted` 且没有响应体。释放是异步过程，期间会话可能继续出现在列表中并处于 `releasing`；不存在时返回 `404 Not Found`。
+
+### 硬件租约历史
+
+硬件使用历史接口：`GET /api/v1/admin/session-history`。公网版仅管理员可访问；
+本地版沿用免登录管理。参数为 `q`（会话、设备、板型、用户名或客户端的字面子串）、
+`board`（精确设备 ID）、`state`（active/releasing/ended）、`reason`（结束原因）、
+`from` / `to`（创建时间，RFC3339，含起点不含终点）、`page`（从 1 开始）和
+`page_size`（1–100，默认 20）。响应包含 `items,total,page,page_size,query,active`。
+历史字段包括 `session_id,board_id,board_type,user_id,username,rental_id,client_name`、
+`created_at,last_heartbeat_at,expires_at,stop_requested_at,ended_at`，以及
+`stop_reason,end_reason,release_failures,last_release_error`。身份字段为分配时快照。
+结束原因包括 `client_released,admin_released,serial_closed,lease_expired,rental_revoked,`
+`authorization_unavailable,server_shutdown,server_interrupted,session_dropped`。
+未结束记录的 `ended_at/end_reason` 为 null。重启发现的遗留连接记为 `server_interrupted`，
+其结束时间是发现时间，最后心跳更接近最后可确认的使用时间。删除账号或设备不会删除历史。
+
+后台订阅 `GET /api/v1/admin/events?lease_view=1&lease_page=1&lease_page_size=20`，
+其他筛选参数同样加 `lease_` 前缀；`session_history` topic 推送对应分页结果。
+未开启视图时只推送修订标识，避免将全部历史载入内存。公开站点和个人工作台不推送该 topic。
 
 ### TFTP 管理
 

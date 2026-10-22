@@ -35,6 +35,7 @@ export interface Resources {
   security_sessions: { sessions: import("./client").SecuritySession[] };
   security_revision: number;
   audit: import("@/types/api").AuditPage;
+  session_history: import("@/types/api").LeasePage;
   dashboard: import("@/types/api").DashboardInfo;
   profile: import("./client").AuthUser;
   catalog: import("@/types/api").CatalogBoard[];
@@ -107,6 +108,15 @@ function reconcile(previous: unknown, next: unknown): unknown {
   return next;
 }
 export class AdminStore {
+  private leaseFilters: import("@/types/api").LeaseFilters | null = null;
+  setLeaseFilters = (filters: import("@/types/api").LeaseFilters | null) => {
+    if (JSON.stringify(filters) === JSON.stringify(this.leaseFilters)) return;
+    this.leaseFilters = filters;
+    if (this.source) {
+      this.disconnect();
+      this.connect();
+    }
+  };
   private auditFilters: import("@/types/api").AuditFilters | null = null;
   setAuditFilters = (filters: import("@/types/api").AuditFilters | null) => {
     if (JSON.stringify(filters) === JSON.stringify(this.auditFilters)) return;
@@ -179,6 +189,13 @@ export class AdminStore {
       for (const [key, value] of Object.entries(this.auditFilters)) {
         if (value !== undefined && value !== "")
           parameters.set(`audit_${key}`, String(value));
+      }
+    }
+    if (this.leaseFilters) {
+      parameters.set("lease_view", "1");
+      for (const [key, value] of Object.entries(this.leaseFilters)) {
+        if (value !== undefined && value !== "")
+          parameters.set(`lease_${key}`, String(value));
       }
     }
     const suffix = parameters.toString() ? `?${parameters}` : "";

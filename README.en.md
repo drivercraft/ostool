@@ -456,6 +456,8 @@ server = "https://203.0.113.10:8443"
 auth_mode = "required"
 ```
 
+The administrator session page includes persistent hardware usage history with filtering and pagination, including local edition. Completed usage from before the upgrade is not reconstructed.
+
 Website accounts require a globally unique username. Both website and administrator sign-in accept a username or email; upgrades generate usernames for existing accounts.
 
 Sign in through browser device authorization, or import a personal access token (PAT) created in the web UI from standard input:

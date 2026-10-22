@@ -6,6 +6,7 @@ use crate::config::BoardConfig;
 pub enum BoardAllocationStatus {
     BoardTypeNotFound,
     NoAvailableBoard,
+    DatabaseUnavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +19,7 @@ pub enum BoardAllocationWithIdStatus {
         actual_board_type: String,
     },
     NoAvailableBoard,
+    DatabaseUnavailable,
 }
 
 pub fn allocate_board(
@@ -33,6 +35,9 @@ pub fn allocate_board(
             }
             BoardAllocationWithIdStatus::NoAvailableBoard => {
                 BoardAllocationStatus::NoAvailableBoard
+            }
+            BoardAllocationWithIdStatus::DatabaseUnavailable => {
+                BoardAllocationStatus::DatabaseUnavailable
             }
             BoardAllocationWithIdStatus::BoardNotFound
             | BoardAllocationWithIdStatus::BoardTypeMismatch { .. } => {

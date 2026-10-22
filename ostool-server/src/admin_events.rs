@@ -25,6 +25,7 @@ pub const TOPICS: &[&str] = &[
     "boards",
     "runtimes",
     "sessions",
+    "session_history",
     "loaders",
     "ota",
     "virtual",
@@ -69,6 +70,7 @@ pub struct AdminEvents {
     dirty: Arc<Mutex<BTreeSet<&'static str>>>,
     wake: Arc<Notify>,
     changed: watch::Sender<u64>,
+    lease_revision: Arc<std::sync::atomic::AtomicU64>,
 }
 impl Default for AdminEvents {
     fn default() -> Self {
@@ -83,14 +85,23 @@ impl Default for AdminEvents {
             dirty: Arc::new(Mutex::new(BTreeSet::new())),
             wake: Arc::new(Notify::new()),
             changed: watch::channel(0).0,
+            lease_revision: Arc::default(),
         }
     }
 }
 impl AdminEvents {
+    pub(crate) fn lease_revision(&self) -> u64 {
+        self.lease_revision
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
     pub fn invalidate(&self, topics: &[&'static str]) {
         let mut dirty = self.dirty.lock().unwrap();
         for topic in topics {
             dirty.insert(topic);
+            if *topic == "session_history" {
+                self.lease_revision
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             match *topic {
                 "boards" => {
                     dirty.extend(["runtimes", "loaders", "overview", "device_catalog"]);
@@ -294,6 +305,15 @@ async fn subscribe_scoped(
         } else {
             None
         };
+    let lease_filters =
+        if !public_site && account.is_none() && query.get("lease_view").is_some_and(|v| v == "1") {
+            Some(
+                crate::persistence::leases::LeaseFilters::from_stream(&query)
+                    .map_err(|error| crate::api::error::ApiError::bad_request(error.to_string()))?,
+            )
+        } else {
+            None
+        };
     let security_only = query.get("security_view").is_some_and(|value| value == "1");
     let current_session = if let Some(token) = credential.as_ref() {
         state
@@ -320,6 +340,7 @@ async fn subscribe_scoped(
         current_session,
         state,
         audit_filters,
+        lease_filters,
         _guard: guard,
     };
     let stream = stream::unfold(initial, |mut subscription| async move {
@@ -439,6 +460,23 @@ async fn subscribe_scoped(
                         .unwrap_or_else(|error| serde_json::json!({"error":error.message}));
                     update.data.insert("audit".into(), data);
                 }
+                if !subscription.public_site
+                    && subscription.account.is_none()
+                    && update.data.contains_key("session_history")
+                    && let Some(filters) = &subscription.lease_filters
+                {
+                    let data = subscription
+                        .state
+                        .database
+                        .lease_page(filters)
+                        .await
+                        .and_then(|page| Ok(serde_json::to_value(page)?))
+                        .unwrap_or_else(|error| {
+                            log::warn!("lease history query failed: {error:#}");
+                            serde_json::json!({"error":"租约历史数据库暂时不可用"})
+                        });
+                    update.data.insert("session_history".into(), data);
+                }
                 let id = format!("{}:{}", update.epoch, update.revision);
                 subscription.cursor = Some(id.clone());
                 let event = Event::default()
@@ -473,6 +511,7 @@ struct Subscription {
     current_session: Option<uuid::Uuid>,
     state: AppState,
     audit_filters: Option<crate::audit::Filters>,
+    lease_filters: Option<crate::persistence::leases::LeaseFilters>,
     _guard: crate::dashboard::StreamGuard,
 }
 

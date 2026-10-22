@@ -80,6 +80,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(super::account::routes())
         .merge(crate::audit::routes())
         .route("/api/v1/admin/dashboard", get(crate::dashboard::get))
+        .route("/api/v1/admin/session-history", get(list_session_history))
         .merge(super::ota::routes())
         .route("/api/v1/admin/events", get(crate::admin_events::subscribe))
         .route(
@@ -1377,12 +1378,27 @@ async fn list_admin_sessions(
     Ok(axum::Json(AdminSessionsResponse { sessions }))
 }
 
+async fn list_session_history(
+    State(state): State<AppState>,
+    axum::extract::Query(filters): axum::extract::Query<crate::persistence::leases::LeaseFilters>,
+) -> Result<axum::Json<crate::persistence::leases::LeasePage>, ApiError> {
+    filters
+        .validate()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    state
+        .database
+        .lease_page(&filters)
+        .await
+        .map(axum::Json)
+        .map_err(ApiError::from)
+}
+
 async fn delete_admin_session(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, ApiError> {
     let removed = state
-        .request_session_stop(&session_id, SessionStopReason::ApiDelete)
+        .request_session_stop(&session_id, SessionStopReason::AdminRelease)
         .await;
     if removed.is_none() {
         return Err(ApiError::not_found(format!(
@@ -1560,6 +1576,9 @@ async fn create_session(
             )
             .await
             .map_err(|error| match error {
+                BoardAllocationWithIdStatus::DatabaseUnavailable => {
+                    ApiError::service_unavailable("租约数据库暂时不可用")
+                }
                 BoardAllocationWithIdStatus::NoAvailableBoard => {
                     // Existing ostool clients classify these exact errors to wait
                     // for a busy board. Rental authorization must keep that contract.
@@ -1594,6 +1613,9 @@ async fn create_session(
                 )
                 .await
                 .map_err(|err| match err {
+                    BoardAllocationWithIdStatus::DatabaseUnavailable => {
+                        ApiError::service_unavailable("租约数据库暂时不可用")
+                    }
                     BoardAllocationWithIdStatus::BoardTypeNotFound => ApiError::not_found(format!(
                         "board type `{}` not found",
                         request.board_type
@@ -1620,6 +1642,9 @@ async fn create_session(
                 )
                 .await
                 .map_err(|err| match err {
+                    BoardAllocationStatus::DatabaseUnavailable => {
+                        ApiError::service_unavailable("租约数据库暂时不可用")
+                    }
                     BoardAllocationStatus::BoardTypeNotFound => ApiError::not_found(format!(
                         "board type `{}` not found",
                         request.board_type
@@ -1641,22 +1666,30 @@ async fn create_session(
     {
         runtime.bind_rental_deadline(deadline).await;
     }
-    if let Some(Extension(super::auth::CurrentUser(user))) = actor
-        && let Err(error) =
+    if let Some(Extension(super::auth::CurrentUser(user))) = actor {
+        let ownership = async {
+            let mut tx = state.database.pool().begin().await?;
+            let updated=sqlx::query("UPDATE session_history SET user_id=$2,username=$3,rental_id=$4,expires_at=LEAST(expires_at,COALESCE($5,expires_at)) WHERE session_id=$1 AND ended_at IS NULL")
+                .bind(&session.id).bind(user.id).bind(&user.username).bind(rental.map(|(id,_)|id)).bind(rental.map(|(_,deadline)|deadline))
+                .execute(&mut *tx).await?;
+            if updated.rows_affected()!=1 { return Err(sqlx::Error::RowNotFound); }
             sqlx::query("INSERT INTO session_owners(session_id,user_id,rental_id) VALUES($1,$2,$3)")
-                .bind(&session.id)
-                .bind(user.id)
-                .bind(rental.map(|(id, _)| id))
-                .execute(state.database.pool())
-                .await
-    {
+                .bind(&session.id).bind(user.id).bind(rental.map(|(id, _)| id))
+                .execute(&mut *tx).await?;
+            tx.commit().await
+        }.await;
+        if let Err(error) = ownership {
+            state
+                .request_session_stop(&session.id, SessionStopReason::AuthorizationUnavailable)
+                .await;
+            log::error!("failed to persist session owner: {error}");
+            return Err(ApiError::service_unavailable(
+                "failed to record session owner",
+            ));
+        }
         state
-            .request_session_stop(&session.id, SessionStopReason::ApiDelete)
-            .await;
-        log::error!("failed to persist session owner: {error}");
-        return Err(ApiError::service_unavailable(
-            "failed to record session owner",
-        ));
+            .admin_events
+            .invalidate(&["sessions", "session_history"]);
     }
     let session = state
         .get_session(&session.id)
@@ -3096,6 +3129,9 @@ pub(crate) async fn admin_topic(
         )),
         "boards" => serde_json::to_value(list_boards(extractor).await?.0),
         "sessions" => serde_json::to_value(list_admin_sessions(extractor).await?.0.sessions),
+        "session_history" => {
+            Ok(serde_json::json!({"active":false,"revision":state.admin_events.lease_revision()}))
+        }
         "loaders" => serde_json::to_value(list_loader_devices(extractor).await?.0),
         "ota" => Ok(
             serde_json::json!({ "jobs": state.ota.jobs().await, "images": state.ota.images().await? }),

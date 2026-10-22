@@ -643,6 +643,22 @@ with a letter/digit); values are stored in lowercase. Login accepts either usern
 or email. Both identifiers share the account's failure limits, and username changes
 revoke the account's credentials. No product/tenant account model is introduced.
 
+Hardware usage history is stored in `session_history` in both editions. The
+administrator's session page links to a paginated history view with device,
+identity, date, state and end-reason filters. Device type, username, user ID and
+rental ID are captured at allocation time and survive later renaming/deletion.
+Release failures retain their diagnostics and remain unfinished until hardware
+cleanup succeeds. Normal shutdown requests release; the next controller startup
+marks any remaining open records `server_interrupted`, without restoring old
+connections. For these records, `ended_at` is detection time, not a claim about
+when the process or hardware stopped; `last_heartbeat_at` records last observed
+activity. History starts with this upgrade; earlier completed usage cannot be
+reconstructed. There is no automatic history deletion.
+
+Each inventory/database schema must have one active hardware controller. Running
+multiple controllers against the same inventory is unsupported. Browser login
+sessions and rentals remain independent of these short-lived hardware leases.
+
 ## Verification
 
 Use disposable loopback PostgreSQL and Redis instances, never development or
@@ -655,7 +671,7 @@ export RUST_TEST_THREADS=4
 cargo test -p ostool-server
 cargo test -p ostool-server --test auth_postgres --test account_postgres \
   --test audit_postgres --test security_postgres --test unified_persistence \
-  --test board_migration --test username_migration --test cli_rental_contract -- --ignored
+  --test board_migration --test username_migration --test lease_history --test cli_rental_contract -- --ignored
 cargo test -p ostool-server --test cli_gateway_contract
 pnpm --dir ostool-server/webui test
 pnpm --dir ostool-server/webui build

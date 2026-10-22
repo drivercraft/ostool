@@ -17,8 +17,17 @@ import {
 } from "@/components/forms";
 import { SerialRuntimeDetails } from "@/apps/admin/components/serial-runtime";
 import { Badge } from "@/components/ui/badge";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
+import LeaseHistory from "./LeaseHistory";
 export default function Sessions() {
+  const [params] = useSearchParams();
+  return params.get("view") === "history" ? (
+    <LeaseHistory />
+  ) : (
+    <ActiveSessions />
+  );
+}
+function ActiveSessions() {
   const sessions = useList("sessions"),
     runtimes = useResource("runtimes") ?? {};
   const [search, setSearch] = useState("");
@@ -44,7 +53,7 @@ export default function Sessions() {
           <ListToolbar
             actions={
               <Button asChild variant="outline">
-                <Link to="/boards">查看开发板</Link>
+                <Link to="/sessions?view=history">租约历史</Link>
               </Button>
             }
             count={`${filtered.length} 个会话`}

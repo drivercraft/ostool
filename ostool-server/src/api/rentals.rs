@@ -291,7 +291,11 @@ pub async fn enforce(state: &AppState) -> Result<(), ApiError> {
         if let Some(deadline) = valid.get(&snapshot.id) {
             session.bind_rental_deadline(*deadline).await;
         } else {
-            session.request_stop(SessionStopReason::Expired);
+            session.request_stop(if snapshot.expires_at <= Utc::now() {
+                SessionStopReason::Expired
+            } else {
+                SessionStopReason::RentalRevoked
+            });
         }
     }
     Ok(())

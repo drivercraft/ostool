@@ -171,6 +171,7 @@ pub async fn build_app_state(
     };
     let database = Database::connect(&config.database).await?;
     crate::api::site::initialize(&database).await?;
+    database.recover_interrupted_leases().await?;
     {
         let settings = database
             .initialize_record("settings", &StoredSettings::from(&config))
@@ -302,6 +303,9 @@ impl AppState {
                 BoardAllocationWithIdStatus::NoAvailableBoard => {
                     BoardAllocationStatus::NoAvailableBoard
                 }
+                BoardAllocationWithIdStatus::DatabaseUnavailable => {
+                    BoardAllocationStatus::DatabaseUnavailable
+                }
                 BoardAllocationWithIdStatus::BoardNotFound
                 | BoardAllocationWithIdStatus::BoardTypeMismatch { .. } => {
                     unreachable!("board ID errors are impossible without a requested board ID")
@@ -374,6 +378,9 @@ impl AppState {
                 )?,
                 None => allocate_board(&boards, &unavailable_board_ids, board_type, required_tags)
                     .map_err(|status| match status {
+                        BoardAllocationStatus::DatabaseUnavailable => {
+                            BoardAllocationWithIdStatus::DatabaseUnavailable
+                        }
                         BoardAllocationStatus::BoardTypeNotFound => {
                             BoardAllocationWithIdStatus::BoardTypeNotFound
                         }
@@ -390,11 +397,24 @@ impl AppState {
                 continue;
             }
 
+            let info =
+                Session::new_with_id(session_id.clone(), board.id.clone(), client_name.clone());
+            if let Err(error) = self.database.start_lease(&info, &board).await {
+                // No actor or hardware task exists yet; undo only the reservation.
+                self.board_runtimes
+                    .write()
+                    .await
+                    .insert(board.id.clone(), BoardRuntimeState::default());
+                self.admin_events.invalidate(&["runtimes"]);
+                log::error!("failed to record lease allocation: {error:#}");
+                return Err(BoardAllocationWithIdStatus::DatabaseUnavailable);
+            }
             let session =
                 SessionState::new_with_actor(session_id, board, client_name.clone(), self.clone());
             let info = session.snapshot().await;
             self.sessions.write().await.insert(info.id.clone(), session);
-            self.admin_events.invalidate(&["sessions"]);
+            self.admin_events
+                .invalidate(&["sessions", "session_history"]);
             return Ok(info);
         }
     }
@@ -415,7 +435,13 @@ impl AppState {
         if session.is_releasing() {
             return Err(TouchSessionError::Releasing);
         }
-        Ok(session.heartbeat().await)
+        let snapshot = session.heartbeat().await;
+        if let Err(error) = self.database.touch_lease(&snapshot).await {
+            log::warn!("failed to persist lease heartbeat: {error:#}");
+            session.request_stop(SessionStopReason::AuthorizationUnavailable);
+            return Err(TouchSessionError::Releasing);
+        }
+        Ok(snapshot)
     }
 
     pub async fn request_session_stop(
@@ -440,6 +466,26 @@ impl AppState {
         Ok(snapshot)
     }
 
+    pub async fn shutdown_sessions(&self) -> anyhow::Result<()> {
+        let sessions = self
+            .sessions
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut ids = Vec::new();
+        for session in sessions {
+            ids.push(session.snapshot().await.id);
+            session.request_stop(SessionStopReason::ServerShutdown);
+        }
+        for id in ids {
+            self.wait_for_session_removed(&id, RELEASE_COMPLETION_TIMEOUT)
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn cleanup_expired_sessions(&self) -> anyhow::Result<Vec<String>> {
         if self.config.read().await.edition.is_public() && !self.sessions.read().await.is_empty() {
             let _gate = self.rental_gate.lock().await;
@@ -448,7 +494,7 @@ impl AppState {
                 // failed authorization lookup. Local/admin sessions are exempt.
                 for session in self.sessions.read().await.values() {
                     if session.rental_deadline.read().await.is_some() {
-                        session.request_stop(SessionStopReason::Expired);
+                        session.request_stop(SessionStopReason::AuthorizationUnavailable);
                     }
                 }
                 log::warn!("failed to validate active rentals: {}", error.message);
@@ -464,8 +510,10 @@ impl AppState {
             .collect::<Vec<_>>();
         let mut expired_ids = Vec::new();
 
-        for session in sessions {
+        let mut checkpoints = Vec::new();
+        for session in &sessions {
             let snapshot = session.snapshot().await;
+            checkpoints.push(snapshot.clone());
             if snapshot.state == crate::session::SessionLifecycleState::Releasing {
                 continue;
             }
@@ -475,6 +523,20 @@ impl AppState {
             }
         }
 
+        match self.database.touch_leases(&checkpoints).await {
+            Ok(changed) => {
+                if changed > 0 {
+                    self.admin_events
+                        .invalidate(&["sessions", "session_history"]);
+                }
+            }
+            Err(error) => {
+                for session in sessions {
+                    session.request_stop(SessionStopReason::AuthorizationUnavailable);
+                }
+                return Err(error);
+            }
+        }
         Ok(expired_ids)
     }
 
@@ -794,6 +856,14 @@ impl AppState {
 
         loop {
             let mut errors = Vec::new();
+            if let Err(error) = self
+                .database
+                .stopping_lease(&snapshot.id, job.reason.as_str())
+                .await
+            {
+                errors.push(format!("failed to record lease stop: {error:#}"));
+            }
+            self.admin_events.invalidate(&["session_history"]);
 
             if !session_tasks_stopped {
                 match self
@@ -803,6 +873,12 @@ impl AppState {
                     Ok(()) => session_tasks_stopped = true,
                     Err(err) => errors.push(err),
                 }
+            }
+
+            if session_tasks_stopped
+                && let Err(error) = self.database.touch_lease(&session.snapshot().await).await
+            {
+                errors.push(format!("failed to checkpoint lease: {error:#}"));
             }
 
             if !board_powered_off {
@@ -858,11 +934,18 @@ impl AppState {
                 && release_settled
                 && tftp_cleaned
             {
-                match self
-                    .complete_session_release(&snapshot.board_id, &snapshot.id)
-                    .await
-                {
+                let completion = async {
+                    self.database
+                        .finish_lease(&snapshot.id, job.reason.as_str())
+                        .await?;
+                    self.complete_session_release(&snapshot.board_id, &snapshot.id)
+                        .await
+                }
+                .await;
+                match completion {
                     Ok(()) => {
+                        self.admin_events
+                            .invalidate(&["sessions", "session_history"]);
                         let state = self.clone();
                         let id = snapshot.id.clone();
                         let board = snapshot.board_id.clone();
@@ -885,6 +968,14 @@ impl AppState {
             }
 
             let message = errors.join("; ");
+            if let Err(error) = self
+                .database
+                .lease_release_failed(&snapshot.id, &message)
+                .await
+            {
+                log::warn!("failed to record lease release error: {error:#}");
+            }
+            self.admin_events.invalidate(&["session_history"]);
             if let Err(err) = self
                 .mark_board_error(&snapshot.board_id, &snapshot.id, message.clone())
                 .await
@@ -1336,6 +1427,11 @@ mod tests {
         state.sync_board_runtime_states().await;
         let session =
             SessionState::new_with_actor("session-1".into(), board.clone(), None, state.clone());
+        state
+            .database
+            .start_lease(&session.snapshot().await, &board)
+            .await
+            .unwrap();
         state.claim_board_for_session(&board.id, "session-1").await;
         state
             .sessions
@@ -1366,6 +1462,21 @@ mod tests {
         assert!(
             runtime
                 .last_release_error
+                .unwrap()
+                .contains("tftp cleanup failed")
+        );
+        let history = state
+            .database
+            .lease_page(&crate::persistence::leases::LeaseFilters::default())
+            .await
+            .unwrap();
+        assert!(history.items[0].ended_at.is_none());
+        assert!(history.items[0].stop_requested_at.is_some());
+        assert!(history.items[0].release_failures > 0);
+        assert!(
+            history.items[0]
+                .last_release_error
+                .as_deref()
                 .unwrap()
                 .contains("tftp cleanup failed")
         );
@@ -1403,6 +1514,11 @@ mod tests {
         state.sync_board_runtime_states().await;
         let session =
             SessionState::new_with_actor("session-1".into(), board.clone(), None, state.clone());
+        state
+            .database
+            .start_lease(&session.snapshot().await, &board)
+            .await
+            .unwrap();
         state.claim_board_for_session(&board.id, "session-1").await;
         state
             .sessions
@@ -1428,6 +1544,17 @@ mod tests {
         })
         .await
         .unwrap();
+        let history = state
+            .database
+            .lease_page(&crate::persistence::leases::LeaseFilters::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            history.items[0].end_reason.as_deref(),
+            Some("client_released")
+        );
+        assert!(history.items[0].release_failures > 0);
+        assert!(history.items[0].last_release_error.is_some());
     }
 
     #[tokio::test]

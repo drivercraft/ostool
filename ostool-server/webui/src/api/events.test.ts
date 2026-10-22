@@ -207,3 +207,45 @@ describe("management event projection", () => {
     expect(store.getErrors()).toEqual({});
   });
 });
+
+it("subscribes to bounded lease history filters and preserves projections when changing pages", () => {
+  const urls: string[] = [];
+  const close = vi.fn();
+  vi.stubGlobal(
+    "EventSource",
+    class extends EventTarget {
+      close = close;
+      onerror = null;
+      constructor(url: string) {
+        super();
+        urls.push(url);
+      }
+    },
+  );
+  vi.spyOn(client, "isPublicEdition").mockReturnValue(false);
+  const store = new AdminStore();
+  store.connect();
+  store.apply({
+    epoch: "history",
+    revision: 1,
+    kind: "snapshot",
+    data: { boards: [] },
+  });
+  const old = store.get("boards");
+  store.setLeaseFilters({
+    board: "device/one",
+    q: "user_%",
+    page: 2,
+    page_size: 10,
+  });
+  const query = new URL(urls.at(-1)!, "http://localhost").searchParams;
+  expect(query.get("lease_view")).toBe("1");
+  expect(query.get("lease_board")).toBe("device/one");
+  expect(query.get("lease_q")).toBe("user_%");
+  expect(query.get("lease_page")).toBe("2");
+  expect(store.get("boards")).toBe(old);
+  expect(close).toHaveBeenCalledTimes(1);
+  store.setLeaseFilters(null);
+  expect(urls.at(-1)).toBe("/api/v1/admin/events");
+  store.disconnect();
+});

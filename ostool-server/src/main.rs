@@ -160,6 +160,9 @@ async fn main() -> anyhow::Result<()> {
         },
     };
     shutdown_tx.send_replace(true);
+    if let Err(error) = state.shutdown_sessions().await {
+        log::warn!("session cleanup incomplete during shutdown: {error:#}");
+    }
     while let Some(completed) = servers.join_next().await {
         let result = completed
             .context("server listener task failed")

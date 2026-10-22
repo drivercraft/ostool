@@ -712,3 +712,40 @@ export interface AccountSettingsView {
 export interface LegalDocument extends LegalVersion {
   body: string;
 }
+
+export interface LeaseRecord {
+  session_id: string;
+  board_id: string;
+  board_type: string;
+  user_id: string | null;
+  username: string | null;
+  rental_id: string | null;
+  client_name: string | null;
+  created_at: string;
+  last_heartbeat_at: string;
+  expires_at: string;
+  stop_requested_at: string | null;
+  ended_at: string | null;
+  stop_reason: string | null;
+  end_reason: string | null;
+  release_failures: number;
+  last_release_error: string | null;
+}
+export interface LeaseFilters {
+  q?: string;
+  board?: string;
+  state?: string;
+  reason?: string;
+  from?: string;
+  to?: string;
+  page?: number;
+  page_size?: number;
+}
+export interface LeasePage {
+  active: boolean;
+  query?: LeaseFilters;
+  items?: LeaseRecord[];
+  total?: number;
+  page?: number;
+  page_size?: number;
+}
