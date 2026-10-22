@@ -72,10 +72,12 @@ export default function AdminLogin() {
         <ThemeMenu label="切换后台主题" />
       </header>
       <form className="admin-login-card" onSubmit={submit}>
-        <span className="admin-login-icon">
-          <ShieldCheck size={25} />
-        </span>
-        <h1>管理后台登录</h1>
+        <div className="admin-login-heading">
+          <span className="admin-login-icon" aria-hidden="true">
+            <ShieldCheck size={25} />
+          </span>
+          <h1>管理后台登录</h1>
+        </div>
         <p>使用管理员账号登录开发板管理后台。</p>
         {!challenge ? (
           <>

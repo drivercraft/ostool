@@ -38,27 +38,35 @@
 }
 .admin-login-card {
   display: grid;
-  gap: 20px;
+  gap: 16px;
   margin: auto 0;
-  width: min(100%, 430px);
+  width: min(100%, 560px);
   padding: 36px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 16px;
   background: var(--card);
   box-shadow: 0 15px 50px #152c4510;
+}
+.admin-login-heading {
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
 .admin-login-icon {
   display: grid;
   place-items: center;
-  width: 52px;
-  height: 52px;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
   border-radius: 12px;
   background: var(--accent);
   color: var(--primary);
 }
 .admin-login-card h1 {
   margin: 0;
-  font-size: 24px;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.25;
 }
 .admin-login-card p {
   margin: -10px 0 2px;
@@ -92,6 +100,9 @@
   }
   .admin-login-card {
     padding: 24px;
+  }
+  .admin-login-card h1 {
+    font-size: 24px;
   }
   .admin-login-header {
     padding: 20px 0;
