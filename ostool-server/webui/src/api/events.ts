@@ -1,5 +1,5 @@
 import { loginUrl, authSurface } from "@/auth-session";
-import { api, refreshAuth, isPublicEdition } from "./client";
+import { api, refreshAuth, isPublicEdition, ApiRequestError } from "./client";
 import { useSyncExternalStore } from "react";
 import type {
   AdminOverviewResponse,
@@ -127,6 +127,9 @@ export class AdminStore {
   private revision = 0;
   private connection: Connection = "connecting";
   private errors: Record<string, string> = {};
+  private retryTimer?: ReturnType<typeof setTimeout>;
+  private retryDelay = 1000;
+  private generation = 0;
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => {
@@ -164,6 +167,7 @@ export class AdminStore {
     this.data = data as Partial<Resources>;
     this.errors = reconcile(this.errors, errors) as Record<string, string>;
     this.connection = "connected";
+    this.retryDelay = 1000;
     this.emit();
   };
   connect = () => {
@@ -191,28 +195,61 @@ export class AdminStore {
     this.source.addEventListener("snapshot", receive as EventListener);
     this.source.addEventListener("update", receive as EventListener);
     this.source.addEventListener("auth-expired", () => {
-      if (this.source !== source) return;
-      this.disconnect();
-      this.connection = "reconnecting";
-      this.emit();
-      void refreshAuth()
-        .then(() => api.me())
-        .then((user) => {
-          if (!this.member && !user.is_admin) {
-            window.location.assign("/admin/login");
-            return;
-          }
-          this.restart();
-        })
-        .catch(() => window.location.assign(loginUrl(authSurface())));
+      void this.recover(source, true);
     });
     this.source.onerror = () => {
       if (this.source !== source) return;
       this.connection = "reconnecting";
       this.emit();
+      // Native EventSource retries transport interruptions, but closes permanently
+      // after rejected HTTP responses, including an expired access cookie.
+      if (source.readyState === EventSource.CLOSED) {
+        if (isPublicEdition() && this.endpoint !== "/api/v1/site/events") {
+          void this.recover(source, false);
+        } else {
+          this.disconnect();
+          this.retry();
+        }
+      }
     };
   };
+  private retry() {
+    const generation = this.generation;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = undefined;
+      if (generation === this.generation) this.connect();
+    }, this.retryDelay);
+    this.retryDelay = Math.min(this.retryDelay * 2, 30000);
+  }
+  private async recover(source: EventSource, refresh: boolean) {
+    if (this.source !== source) return;
+    this.disconnect();
+    const generation = this.generation;
+    this.connection = "reconnecting";
+    this.emit();
+    try {
+      if (refresh) await refreshAuth();
+      const user = await api.me();
+      if (generation !== this.generation) return;
+      if (!this.member && !user.is_admin) {
+        window.location.assign("/admin/login");
+        return;
+      }
+      this.connect();
+    } catch (error) {
+      if (generation !== this.generation) return;
+      if (error instanceof ApiRequestError && error.status === 401) {
+        window.location.assign(loginUrl(authSurface()));
+      } else {
+        // A restart/outage must not erase a valid persistent login or editor draft.
+        this.retry();
+      }
+    }
+  }
   disconnect = () => {
+    ++this.generation;
+    clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
     this.source?.close();
     this.source = undefined;
   };

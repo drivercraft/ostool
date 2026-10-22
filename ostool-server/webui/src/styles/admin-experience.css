@@ -831,38 +831,6 @@ a.dashboard-metric:hover {
 .app-shell .system-settings .page-panel > .panel-scroll {
   padding-top: 0;
 }
-.app-shell .system-settings .page-panel .form-section,
-.app-shell .system-settings .panel-scroll > .page-section {
-  display: block;
-  padding: 0;
-  margin: 0 0 24px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-.system-settings .form-section > div > h2,
-.system-settings .page-section > h2 {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 20px;
-  margin: 0 0 16px;
-  color: var(--foreground);
-  font-size: 1rem;
-  font-weight: 650;
-  line-height: 20px;
-}
-.system-settings .form-section > div > h2::after,
-.system-settings .page-section > h2::after {
-  content: "";
-  flex: 1;
-  min-width: 24px;
-  border-top: 1px solid var(--border);
-}
-.system-settings .form-section .hint {
-  margin: -8px 0 16px;
-}
 @media (max-width: 640px) {
   .system-settings.workspace-tabs > .system-tabs {
     margin-inline: 12px;
@@ -889,13 +857,10 @@ a.dashboard-metric:hover {
 .legal-editor-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 16px 16px;
-}
-.legal-editor-toolbar > [data-slot="field"] {
-  flex: 1;
-  max-width: 680px;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
 }
 .legal-editor-tools {
   flex-shrink: 0;
@@ -907,6 +872,7 @@ a.dashboard-metric:hover {
 }
 .legal-editor-form {
   display: flex;
+  gap: 16px;
   flex: 1;
   flex-direction: column;
   min-height: 0;
@@ -924,9 +890,12 @@ a.dashboard-metric:hover {
 .legal-source {
   display: flex;
   flex-direction: column;
-  gap: 8px;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  background: var(--card);
 }
 .legal-source textarea[data-slot="textarea"] {
   flex: 1;
@@ -936,9 +905,9 @@ a.dashboard-metric:hover {
   resize: none;
   line-height: 1.8;
   font: inherit;
-  border: 1px solid var(--border);
-  border-radius: var(--control-radius);
-  background: var(--card);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 .legal-preview {
   min-width: 0;
@@ -987,10 +956,7 @@ body:has(.legal-fullscreen) [data-slot="dialog-overlay"] {
 }
 @media (max-width: 760px) {
   .legal-editor-toolbar {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 8px;
-    padding-inline: 12px;
+    padding-inline: 8px;
   }
   .legal-editor-tools {
     justify-content: flex-end;

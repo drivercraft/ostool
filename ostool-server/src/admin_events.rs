@@ -336,7 +336,15 @@ async fn subscribe_scoped(
             {
                 if let Some(db) = &subscription.database {
                     let user = if let Some(token) = &subscription.credential {
-                        db.authenticate_token(token).await.ok().flatten()
+                        match db.authenticate_token(token).await {
+                            Ok(user) => user,
+                            Err(error) => {
+                                log::warn!(
+                                    "closing event stream: credential store unavailable: {error:#}"
+                                );
+                                return None;
+                            }
+                        }
                     } else {
                         None
                     };
@@ -355,13 +363,21 @@ async fn subscribe_scoped(
                             .security
                             .require_admin_mfa
                     {
-                        valid = sqlx::query_scalar::<_, bool>(
+                        let enrolled = sqlx::query_scalar::<_, bool>(
                             "SELECT EXISTS(SELECT 1 FROM mfa_credentials WHERE user_id=$1)",
                         )
                         .bind(user.as_ref().expect("validated subscription user").id)
                         .fetch_one(db.pool())
-                        .await
-                        .unwrap_or(false);
+                        .await;
+                        valid = match enrolled {
+                            Ok(enrolled) => enrolled,
+                            Err(error) => {
+                                log::warn!(
+                                    "closing event stream: MFA store unavailable: {error:#}"
+                                );
+                                return None;
+                            }
+                        };
                     }
                     if !valid {
                         subscription.finished = true;

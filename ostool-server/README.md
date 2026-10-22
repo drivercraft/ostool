@@ -173,6 +173,30 @@ connections and discovery stay in memory, and session files expire with their
 leases. Restarting does not restore hardware connections. Existing board files
 are imported only by the [independent migration tool](#existing-board-migration).
 
+The persistence model separates durable identity and scheduling from live I/O:
+
+| Resource | Stored data |
+| --- | --- |
+| Users and roles | Identity, password hash, role/status, verification and login/change timestamps; MFA, email proofs, password resets, consent and audits have their own tables |
+| Board inventory | Complete typed board profile in JSONB; generated/indexed board type, status, tags, MAC and boot kind support lookup and uniqueness |
+| DTBs | Name, size, SHA-256, binary content and update timestamp |
+| Browser/CLI sign-ins | Hashed access/refresh credentials, client/scope, rotation family, expiry, revocation and security version in `oauth_sessions` |
+| Scheduled rentals | Users, boards and time windows in `board_rentals` and `rental_requests` |
+| Live board sessions | In-process leases and serial/socket handles; `session_owners` stores their authorization association, not a recoverable hardware session |
+
+Restarting the same database-backed deployment preserves valid login credentials
+and scheduled rentals. Browser refresh distinguishes credential rejection (401)
+from temporary network/service errors: outages retain the login and draft, retry
+connection with backoff, and reauthorize before receiving protected updates.
+A database failure closes protected streams without declaring the credentials
+expired. Normal expiry and explicit revocation still require login.
+
+The current board controller is a single-process service. A restart ends its live
+hardware sessions; it does not automatically reconnect serial handles or restore
+exclusive hardware use. Multi-controller scheduling or durable session history
+would require a separate lease/owner-heartbeat design and recovery checks; sharing
+PostgreSQL alone does not make active hardware sessions work across replicas.
+
 The network throughput test listener is enabled by default on `0.0.0.0:3000`.
 It has a separate router from the management listener, so board management,
 session file uploads, and `/admin/` stay on port 2999. The test listener has no

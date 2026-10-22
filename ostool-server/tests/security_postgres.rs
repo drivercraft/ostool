@@ -1395,3 +1395,98 @@ async fn explicit_origins_preserve_auth_and_reject_unlisted_websites() {
         StatusCode::UNAUTHORIZED
     );
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn durable_browser_sessions_survive_server_state_recreation_and_refresh() {
+    let f = Fixture::new(true).await;
+    let website_login = f.login(false).await;
+    let admin_login = f.login(true).await;
+    assert_eq!(website_login.status, StatusCode::OK);
+    assert_eq!(admin_login.status, StatusCode::OK);
+    let website_cookie = test_security::cookie_header(&website_login.headers);
+    let admin_cookie = test_security::cookie_header(&admin_login.headers);
+    let config = f.state.config.read().await.clone();
+    let path = f._root.path().join("config.toml");
+    drop(f.app);
+    drop(f.state);
+    let state = build_app_state(path, config.clone(), build_tftp_manager(&config.tftp))
+        .await
+        .unwrap();
+    let restarted = Fixture {
+        app: build_router(state.clone()),
+        state,
+        origin: f.origin,
+        _root: f._root,
+    };
+    for cookie in [&website_cookie, &admin_cookie] {
+        assert_eq!(
+            restarted
+                .request("GET", "/api/v1/auth/me", Some(cookie), Value::Null)
+                .await
+                .status,
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        restarted
+            .request(
+                "GET",
+                "/api/v1/admin/users",
+                Some(&admin_cookie),
+                Value::Null
+            )
+            .await
+            .status,
+        StatusCode::OK
+    );
+    sqlx::query("UPDATE oauth_sessions SET access_expires_at=now()-interval '1 minute'")
+        .execute(restarted.state.database.pool())
+        .await
+        .unwrap();
+    for cookie in [&website_cookie, &admin_cookie] {
+        let refresh = restarted
+            .request("POST", "/api/v1/auth/refresh", Some(cookie), Value::Null)
+            .await;
+        assert_eq!(refresh.status, StatusCode::OK, "{}", refresh.body);
+        let renewed = test_security::cookie_header(&refresh.headers);
+        assert_eq!(
+            restarted
+                .request("GET", "/api/v1/auth/me", Some(&renewed), Value::Null)
+                .await
+                .status,
+            StatusCode::OK
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn unavailable_session_storage_closes_stream_without_expiring_credentials() {
+    use futures_util::StreamExt;
+    let f = Fixture::new(true).await;
+    let login = f.login(true).await;
+    assert_eq!(login.status, StatusCode::OK);
+    let response = f
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/admin/events")
+                .header("cookie", test_security::cookie_header(&login.headers))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    f.state.database.pool().close().await;
+    let mut stream = response.into_body().into_data_stream();
+    let first = tokio::time::timeout(std::time::Duration::from_secs(3), stream.next())
+        .await
+        .unwrap();
+    assert!(
+        first.is_none(),
+        "a storage outage must close the stream, not publish auth-expired"
+    );
+}

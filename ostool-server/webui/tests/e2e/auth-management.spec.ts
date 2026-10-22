@@ -1,4 +1,10 @@
-import { solveCaptcha, apiLogin, apiRegister } from "../fixtures/security";
+import {
+  solveCaptcha,
+  securityDb,
+  apiLogin,
+  apiRegister,
+} from "../fixtures/security";
+import { createHash } from "node:crypto";
 import { expect, test } from "playwright/test";
 
 // Optional second server with PostgreSQL; the ordinary fixture stays isolated.
@@ -26,7 +32,9 @@ test("registration, member/admin access, user/role events and settings navigatio
     .getByLabel("确认密码", { exact: true })
     .fill("browser-password-123");
   await solveCaptcha(page);
-  await page.getByRole("checkbox",{name:"我已阅读并同意用户协议和隐私政策"}).check();
+  await page
+    .getByRole("checkbox", { name: "我已阅读并同意用户协议和隐私政策" })
+    .check();
   await page.getByRole("button", { name: "创建账号", exact: true }).click();
   await expect(page).toHaveURL(`${base}/account`);
   await expect(page.getByRole("heading", { name: "当前账号" })).toBeVisible();
@@ -115,10 +123,10 @@ test("registration, member/admin access, user/role events and settings navigatio
   await page.getByLabel("租赁状态", { exact: true }).selectOption("active");
   await expect(row).toHaveCount(0);
   await page.getByRole("link", { name: "系统设置", exact: true }).click();
-  await page.getByRole("tab", { name: "数据存储", exact: true }).click();
-  await expect(page).toHaveURL(/tab=storage/);
+  await page.getByRole("tab", { name: "网络与上传", exact: true }).click();
+  await expect(page).toHaveURL(/tab=server/);
   await page.reload();
-  await expect(page.getByRole("tab", { name: "数据存储" })).toHaveAttribute(
+  await expect(page.getByRole("tab", { name: "网络与上传" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -133,4 +141,69 @@ test("registration, member/admin access, user/role events and settings navigatio
     fullPage: true,
   });
   expect(errors).toEqual([]);
+});
+
+test("temporary refresh failures preserve the administrator login and unsaved device draft", async ({
+  page,
+  context,
+}) => {
+  const base = process.env.OSTOOL_E2E_AUTH_BASE_URL;
+  test.skip(!base, "requires disposable public PostgreSQL and Redis fixtures");
+  test.setTimeout(60000);
+  await page.goto(base + "/admin/login?redirect=/admin/boards/new");
+  await page
+    .getByLabel("邮箱", { exact: true })
+    .fill(process.env.OSTOOL_E2E_ADMIN_EMAIL!);
+  await page
+    .getByLabel("密码", { exact: true })
+    .fill(process.env.OSTOOL_E2E_ADMIN_PASSWORD!);
+  await solveCaptcha(page);
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await expect(page).toHaveURL(base + "/admin/boards/new");
+  await page
+    .getByLabel("备注", { exact: true })
+    .fill("keep this draft across a restart");
+  const original = (await context.cookies()).find(
+    (cookie) => cookie.name === "ostool-admin-access",
+  )!;
+  let attempts = 0;
+  await page.route("**/api/v1/auth/refresh", async (route) => {
+    attempts++;
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({
+        code: "service_unavailable",
+        message: "temporarily restarting",
+      }),
+    });
+  });
+  try {
+    await securityDb((client) =>
+      client.query(
+        "UPDATE oauth_sessions SET access_expires_at=now()-interval '1 minute' WHERE access_token_hash=$1",
+        [createHash("sha256").update(original.value).digest("hex")],
+      ),
+    );
+    await expect.poll(() => attempts, { timeout: 25000 }).toBeGreaterThan(0);
+    await expect(page).toHaveURL(base + "/admin/boards/new");
+    await expect(page.getByLabel("备注", { exact: true })).toHaveValue(
+      "keep this draft across a restart",
+    );
+  } finally {
+    await page.unroute("**/api/v1/auth/refresh");
+  }
+  await expect
+    .poll(
+      async () =>
+        (await context.cookies()).find(
+          (cookie) => cookie.name === "ostool-admin-access",
+        )?.value !== original.value,
+      { timeout: 20000 },
+    )
+    .toBe(true);
+  await expect(page).toHaveURL(base + "/admin/boards/new");
+  await expect(page.getByLabel("备注", { exact: true })).toHaveValue(
+    "keep this draft across a restart",
+  );
 });

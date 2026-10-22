@@ -16,6 +16,7 @@ import {
   useAction,
 } from "@/components/forms";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
@@ -287,48 +288,6 @@ function Editor({ source, group }: { source: SiteView; group: string }) {
   return (
     <PagePanel
       className={`${legal ? "legal-settings" : ""}${fullscreen ? " legal-fullscreen" : ""}`}
-      toolbar={
-        legal && (
-          <div className="legal-editor-toolbar">
-            <TextField
-              label={`${label}标题`}
-              value={current[titleKey]}
-              maxLength={80}
-              disabled={task.pending}
-              required
-              placeholder="文档标题，最多 80 个字符"
-              onValue={(value) => changed(titleKey, value)}
-            />
-            <div className="legal-editor-tools">
-              <span className="panel-status">
-                已发布 v
-                {group === "privacy"
-                  ? source.privacy_version
-                  : source.terms_version}
-              </span>
-              <RowAction
-                label={preview ? "关闭预览" : "预览"}
-                icon={Eye}
-                aria-pressed={preview}
-                onClick={() => setPreview((value) => !value)}
-              />
-              <RowAction
-                label="发布历史"
-                icon={History}
-                onClick={() => {
-                  setVersion(undefined);
-                  setHistoryOpen(true);
-                }}
-              />
-              <RowAction
-                label={fullscreen ? "退出全屏" : "全屏"}
-                icon={fullscreen ? Minimize : Maximize}
-                onClick={() => setFullscreen((value) => !value)}
-              />
-            </div>
-          </div>
-        )
-      }
       footer={
         <>
           <span className="panel-status">
@@ -390,28 +349,72 @@ function Editor({ source, group }: { source: SiteView; group: string }) {
         }}
       >
         {legal ? (
-          <div
-            className={`legal-editor-workspace${preview ? " has-preview" : ""}`}
-          >
-            <div className="legal-source">
-              <label htmlFor={`${id}-body`}>{label}正文</label>
-              <textarea
-                id={`${id}-body`}
-                data-slot="textarea"
-                disabled={task.pending}
-                value={current[bodyKey]}
-                required
-                placeholder="请输入正文；支持换行，前台按纯文本安全展示。发布会生成新的不可变版本。"
-                onChange={(event) => changed(bodyKey, event.target.value)}
-              />
+          <>
+            <Input
+              aria-label={`${label}标题`}
+              value={current[titleKey]}
+              maxLength={80}
+              disabled={task.pending}
+              required
+              placeholder="文档标题，最多 80 个字符"
+              onChange={(event) => changed(titleKey, event.target.value)}
+            />
+            <div
+              className={`legal-editor-workspace${preview ? " has-preview" : ""}`}
+            >
+              <div className="legal-source">
+                <div
+                  className="legal-editor-toolbar"
+                  role="toolbar"
+                  aria-label={`${label}编辑工具栏`}
+                >
+                  <div className="legal-editor-tools">
+                    <span className="panel-status">
+                      已发布 v
+                      {group === "privacy"
+                        ? source.privacy_version
+                        : source.terms_version}
+                    </span>
+                    <RowAction
+                      label={preview ? "关闭预览" : "预览"}
+                      icon={Eye}
+                      aria-pressed={preview}
+                      onClick={() => setPreview((value) => !value)}
+                    />
+                    <RowAction
+                      label="发布历史"
+                      icon={History}
+                      onClick={() => {
+                        setVersion(undefined);
+                        setHistoryOpen(true);
+                      }}
+                    />
+                    <RowAction
+                      label={fullscreen ? "退出全屏" : "全屏"}
+                      icon={fullscreen ? Minimize : Maximize}
+                      onClick={() => setFullscreen((value) => !value)}
+                    />
+                  </div>
+                </div>
+                <textarea
+                  aria-label={`${label}正文`}
+                  id={`${id}-body`}
+                  data-slot="textarea"
+                  disabled={task.pending}
+                  value={current[bodyKey]}
+                  required
+                  placeholder="请输入正文；支持换行，前台按纯文本安全展示。发布会生成新的不可变版本。"
+                  onChange={(event) => changed(bodyKey, event.target.value)}
+                />
+              </div>
+              {preview && (
+                <article className="legal-preview" aria-label={`${label}预览`}>
+                  <h1>{current[titleKey]}</h1>
+                  <div>{current[bodyKey]}</div>
+                </article>
+              )}
             </div>
-            {preview && (
-              <article className="legal-preview" aria-label={`${label}预览`}>
-                <h1>{current[titleKey]}</h1>
-                <div>{current[bodyKey]}</div>
-              </article>
-            )}
-          </div>
+          </>
         ) : (
           groups[group]?.map((section) => (
             <Section key={section.title} title={section.title}>

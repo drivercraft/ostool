@@ -10,10 +10,10 @@ test("site settings publish through SSE, legal pages and explicit versioned sign
   const website = await context.newPage();
   await website.goto(base + "/login");
   await expect(
-    website.getByRole("link", { name: "用户协议", exact: true }).first(),
+    website.getByRole("link", { name: "《用户协议》", exact: true }).first(),
   ).toBeVisible();
   await expect(
-    website.getByRole("link", { name: "隐私政策", exact: true }).first(),
+    website.getByRole("link", { name: "《隐私政策》", exact: true }).first(),
   ).toBeVisible();
   await page.goto(base + "/admin/login?redirect=/admin/settings");
   await page
@@ -34,6 +34,20 @@ test("site settings publish through SSE, legal pages and explicit versioned sign
   ).toHaveText("协作测试");
   await expect(website).toHaveTitle(/开发板协作测试/);
   await page.getByRole("tab", { name: "用户协议", exact: true }).click();
+  const legalPanel = page.locator(".legal-settings:visible");
+  await expect(legalPanel.locator("label")).toHaveCount(0);
+  await expect(
+    legalPanel
+      .locator(".legal-source")
+      .getByRole("button", { name: "预览", exact: true }),
+  ).toBeVisible();
+  const titleBounds = await page
+    .getByLabel("用户协议标题", { exact: true })
+    .boundingBox();
+  const toolsBounds = await legalPanel
+    .getByRole("toolbar", { name: "用户协议编辑工具栏" })
+    .boundingBox();
+  expect(toolsBounds!.y).toBeGreaterThan(titleBounds!.y + titleBounds!.height);
   const text = "版本化用户协议：只能在授权时段使用开发板。";
   await page.getByLabel("用户协议正文", { exact: true }).fill(text);
   await page.getByRole("button", { name: "预览", exact: true }).click();
@@ -89,7 +103,7 @@ test("site settings publish through SSE, legal pages and explicit versioned sign
   await expect(
     page.getByRole("button", { name: "保存配置", exact: true }),
   ).toBeDisabled();
-  await page.getByRole("tab", { name: "登录与部署", exact: true }).click();
+  await page.getByRole("tab", { name: "登录与安全", exact: true }).click();
   const registration = page.getByRole("checkbox", {
     name: "允许站点用户注册",
     exact: true,
@@ -113,7 +127,7 @@ test("site settings publish through SSE, legal pages and explicit versioned sign
     "placeholder",
     "smtp.example.com",
   );
-  await expect(page.getByLabel("SMTP 密码", { exact: true })).toBeDisabled();
+  await expect(page.getByLabel("SMTP 密码", { exact: true })).toHaveCount(0);
   await website.goto(base + "/legal/privacy");
   await expect(
     website.getByRole("link", { name: "privacy@test.local", exact: true }),

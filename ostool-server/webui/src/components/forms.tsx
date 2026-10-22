@@ -80,10 +80,12 @@ export function TextField({
   label,
   hint,
   onValue,
+  inlineHint = false,
   ...props
 }: ComponentProps<typeof Input> & {
   label: string;
   hint?: string;
+  inlineHint?: boolean;
   onValue?: (value: string) => void;
 }) {
   const id = useId();
@@ -94,12 +96,15 @@ export function TextField({
       <Input
         id={id}
         {...props}
+        placeholder={
+          props.placeholder ?? (inlineHint ? description : undefined)
+        }
         aria-describedby={
-          description ? `${id}-hint` : props["aria-describedby"]
+          description && !inlineHint ? `${id}-hint` : props["aria-describedby"]
         }
         onChange={onValue ? (e) => onValue(e.target.value) : props.onChange}
       />
-      {description && (
+      {description && !inlineHint && (
         <FieldDescription id={`${id}-hint`}>{description}</FieldDescription>
       )}
     </Field>

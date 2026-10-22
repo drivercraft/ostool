@@ -55,18 +55,20 @@ export function SiteSessionProvider({ children }: { children: ReactNode }) {
         }
       } catch (error) {
         if (active && current === generation) {
-          account.reset();
-          setSession({
-            checking: false,
-            error:
-              error instanceof Error &&
-              "status" in error &&
-              error.status === 401
-                ? ""
-                : error instanceof Error
-                  ? error.message
-                  : "无法读取登录状态",
-          });
+          const expired =
+            error instanceof Error && "status" in error && error.status === 401;
+          if (expired) {
+            connectedIdentity.current = null;
+            account.reset();
+            setSession({ checking: false, error: "" });
+          } else {
+            setSession((previous) => ({
+              ...previous,
+              checking: false,
+              error:
+                error instanceof Error ? error.message : "无法读取登录状态",
+            }));
+          }
         }
       }
     };

@@ -1864,11 +1864,11 @@
   margin-left: auto;
 }
 .listing-filters > [data-slot="field"] {
-  width: 140px;
+  width: 180px;
   gap: 0;
 }
 .listing-filters > [data-slot="field"]:first-child {
-  width: 200px;
+  width: 280px;
 }
 .listing-filters [data-slot="field-label"] {
   position: absolute;
@@ -2017,13 +2017,35 @@ body:has(.app-shell) {
   margin-top: 0;
 }
 .app-shell .page-panel .form-section,
-.app-shell .panel-scroll > .page-section,
-.app-shell .panel-scroll > .facts {
-  padding: 22px;
+.app-shell .panel-scroll > .page-section {
+  display: block;
+  padding: 0;
+  margin: 0 0 24px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.app-shell .form-section > div > h2,
+.app-shell .page-section > h2 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 20px;
   margin: 0 0 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--admin-panel-radius);
-  background: var(--card);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 20px;
+}
+.app-shell .form-section > div > h2::after,
+.app-shell .page-section > h2::after {
+  content: "";
+  flex: 1;
+  min-width: 24px;
+  border-top: 1px solid var(--border);
+}
+.app-shell .form-section > div > .hint {
+  margin: -8px 0 16px;
 }
 .app-shell .data-card-grid {
   padding: 0;
@@ -2152,11 +2174,6 @@ body:has(.app-shell) {
   }
   .panel-scroll {
     padding: 0 12px 12px;
-  }
-  .app-shell .page-panel .form-section,
-  .app-shell .panel-scroll > .page-section,
-  .app-shell .panel-scroll > .facts {
-    padding: 16px;
   }
   .panel-footer {
     min-height: 56px;

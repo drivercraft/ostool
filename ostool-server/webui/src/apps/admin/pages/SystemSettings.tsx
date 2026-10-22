@@ -1,4 +1,3 @@
-import { PagePanel } from "@/components/page-panel";
 import {
   useLocation,
   useNavigationType,
@@ -6,16 +5,13 @@ import {
 } from "react-router-dom";
 import { useLayoutEffect, useState } from "react";
 import { useEdition } from "@/edition";
-import { useResource } from "@/api/events";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Notice, ReadonlyInfo } from "@/components/forms";
 import SiteSettings from "./SiteSettings";
 import { Server, Tftp, Accounts } from "./Settings";
 
 export default function SystemSettings() {
   const publicEdition = useEdition().edition === "public";
   const [params, setParams] = useSearchParams();
-  const source = useResource("deployment");
   const routeTab = (publicEdition
     ? [
         "site",
@@ -27,18 +23,8 @@ export default function SystemSettings() {
         "tftp",
         "security",
         "email",
-        "storage",
       ]
-    : [
-        "site",
-        "contact",
-        "terms",
-        "privacy",
-        "maintenance",
-        "server",
-        "tftp",
-        "storage",
-      ]
+    : ["site", "contact", "terms", "privacy", "maintenance", "server", "tftp"]
   ).includes(params.get("tab") ?? "")
     ? params.get("tab")!
     : "site";
@@ -73,9 +59,8 @@ export default function SystemSettings() {
           <TabsTrigger value="server">网络与上传</TabsTrigger>
           <TabsTrigger value="tftp">TFTP 服务</TabsTrigger>
           {publicEdition && (
-            <TabsTrigger value="security">登录与部署</TabsTrigger>
+            <TabsTrigger value="security">登录与安全</TabsTrigger>
           )}
-          <TabsTrigger value="storage">数据存储</TabsTrigger>
         </TabsList>
         {["site", "contact", "terms", "privacy", "maintenance"].map((group) => (
           <TabsContent
@@ -103,24 +88,6 @@ export default function SystemSettings() {
             <Accounts group="security" />
           </TabsContent>
         )}
-        <TabsContent value="storage">
-          <PagePanel
-            footer={
-              <span className="panel-status">同时备份数据库与文件目录</span>
-            }
-          >
-            {source && (
-              <section className="page-section">
-                <h2>数据存储配置</h2>
-                <ReadonlyInfo entries={source.storage} />
-              </section>
-            )}
-            <Notice>
-              活动串口和板卡租约只在当前进程有效，服务重启不会恢复硬件占用。请同时备份
-              PostgreSQL、TOML 配置和文件数据目录。
-            </Notice>
-          </PagePanel>
-        </TabsContent>
       </Tabs>
     </>
   );

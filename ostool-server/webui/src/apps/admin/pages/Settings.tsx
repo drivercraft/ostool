@@ -315,17 +315,6 @@ function ServerForm({ source }: { source: AdminServerConfigResponse }) {
         </>
       }
     >
-      <section className="page-section">
-        <h2>只读信息</h2>
-        <ReadonlyInfo
-          entries={{
-            监听地址: source.readonly.listen_addr,
-            数据目录: source.readonly.data_dir,
-            "HTTP Boot 公共地址": source.readonly.http_boot_public_base_url,
-            "DTB 上传上限": `${source.readonly.dtb_upload_max_mib} MiB`,
-          }}
-        />
-      </section>
       <form
         id={formId}
         onSubmit={(e) => {
@@ -596,7 +585,6 @@ function AccountForm({
   const id = useId(),
     task = useAction(),
     deliveries = useList("mail_deliveries");
-  const deployment = useResource("deployment");
   const [draft, setDraft] = useState<
     Partial<import("@/types/api").AccountSettings>
   >({});
@@ -808,50 +796,6 @@ function AccountForm({
             ))}
         </fieldset>
       </form>
-      {group === "security" && deployment && (
-        <Section title="部署参数">
-          <TextField
-            label="公网地址"
-            value={deployment.public_base_url ?? ""}
-            disabled
-            hint="通过 OSTOOL_PUBLIC_BASE_URL 配置，必须是实际 HTTPS 站点；更换后重启服务。"
-          />
-          <TextField
-            label="PostgreSQL 状态"
-            value={deployment.database_connected ? "已连接" : "未连接"}
-            disabled
-            hint="连接地址由 OSTOOL_DATABASE_URL 管理，不返回数据库凭据。"
-          />
-          <TextField
-            label="Redis 状态"
-            value={deployment.redis_connected ? "已连接" : "未连接"}
-            disabled
-            hint="公网认证计数依赖 Redis，连接地址由 OSTOOL_REDIS_URL 管理。"
-          />
-        </Section>
-      )}
-      <Section title="部署凭据状态">
-        <TextField
-          label={group === "email" ? "SMTP 密码" : "Turnstile 服务端密钥"}
-          value={
-            source.secrets[
-              group === "email" ? "smtp_password" : "turnstile_secret"
-            ]
-              ? "已配置"
-              : "未配置"
-          }
-          disabled
-          hint={`密钥仅由服务器 .env 中的 ${group === "email" ? "OSTOOL_SMTP_PASSWORD" : "OSTOOL_TURNSTILE_SECRET"} 管理，不返回浏览器。`}
-        />
-        {group === "security" && (
-          <TextField
-            label="双重验证加密密钥"
-            value={source.secrets.mfa_key ? "已配置" : "未配置"}
-            disabled
-            hint="通过 OSTOOL_MFA_ENCRYPTION_KEY 配置；生成后长期保留，并随数据库备份。"
-          />
-        )}
-      </Section>
       {group === "email" && (
         <div className="settings-history-entry">
           <RowAction

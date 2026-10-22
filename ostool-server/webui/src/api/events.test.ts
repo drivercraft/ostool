@@ -1,7 +1,12 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { AdminStore } from "./events";
+import * as client from "./client";
 import type { BoardConfig } from "@/types/api";
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 describe("management event projection", () => {
   it("waits for fresh data after reconnecting and preserves the previous projection", () => {
     const source = new (class extends EventTarget {
@@ -11,9 +16,12 @@ describe("management event projection", () => {
     })();
     vi.stubGlobal(
       "EventSource",
-      vi.fn(function () {
-        return source;
-      }),
+      Object.assign(
+        vi.fn(function () {
+          return source;
+        }),
+        { CLOSED: 2 },
+      ),
     );
     const store = new AdminStore();
     store.connect();
@@ -40,6 +48,88 @@ describe("management event projection", () => {
     expect(store.get("boards")).toBe(previous);
     snapshot("recovered");
     expect(store.getConnection()).toBe("connected");
+    store.disconnect();
+  });
+  it("retries an authentication outage without losing data and cancels retries on teardown", async () => {
+    vi.useFakeTimers();
+    class Source extends EventTarget {
+      static CLOSED = 2;
+      readyState = 1;
+      onerror: (() => void) | null = null;
+      close = vi.fn();
+      constructor() {
+        super();
+        sources.push(this);
+      }
+    }
+    const sources: Source[] = [];
+    vi.stubGlobal("EventSource", Source);
+    vi.spyOn(client, "isPublicEdition").mockReturnValue(true);
+    vi.spyOn(client, "refreshAuth").mockRejectedValue(
+      new client.ApiRequestError("restarting", "service_unavailable", 503),
+    );
+    const store = new AdminStore();
+    store.connect();
+    store.apply({
+      epoch: "e",
+      revision: 1,
+      kind: "snapshot",
+      data: { boards: [] },
+    });
+    const previous = store.get("boards");
+    sources[0].dispatchEvent(new Event("auth-expired"));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(store.getConnection()).toBe("reconnecting");
+    expect(store.get("boards")).toBe(previous);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(sources).toHaveLength(2);
+    sources[1].dispatchEvent(
+      new MessageEvent("snapshot", {
+        data: JSON.stringify({
+          epoch: "new",
+          revision: 1,
+          kind: "snapshot",
+          data: { boards: [] },
+        }),
+      }),
+    );
+    expect(store.getConnection()).toBe("connected");
+    sources[1].dispatchEvent(new Event("auth-expired"));
+    await vi.advanceTimersByTimeAsync(500);
+    store.disconnect();
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(sources).toHaveLength(2);
+  });
+
+  it("reauthorizes a permanently closed stream before reconnecting", async () => {
+    const sources: EventTarget[] = [];
+    class Source extends EventTarget {
+      static CLOSED = 2;
+      readyState = 2;
+      onerror: (() => void) | null = null;
+      close = vi.fn();
+      constructor() {
+        super();
+        sources.push(this);
+      }
+    }
+    vi.stubGlobal("EventSource", Source);
+    vi.spyOn(client, "isPublicEdition").mockReturnValue(true);
+    const me = vi
+      .spyOn(client.api, "me")
+      .mockResolvedValue({
+        id: "a",
+        email: "admin@test.local",
+        display_name: null,
+        is_admin: true,
+      });
+    const store = new AdminStore();
+    store.connect();
+    (sources[0] as Source).onerror?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(me).toHaveBeenCalledOnce();
+    expect(sources).toHaveLength(2);
     store.disconnect();
   });
   it("reconciles rows by ID, removes deleted rows, and preserves unchanged references", () => {

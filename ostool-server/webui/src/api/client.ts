@@ -52,8 +52,19 @@ export async function refreshAuth() {
       headers: { "x-ostool-surface": authSurface() },
     });
     if (!response.ok) {
-      clearBrowserSession();
-      throw new ApiRequestError("登录已过期，请重新登录", "unauthorized", 401);
+      const failure = await readJsonBody<ErrorResponse>(response).catch(
+        () => undefined,
+      );
+      if (response.status === 401) clearBrowserSession();
+      throw new ApiRequestError(
+        failure?.message ??
+          (response.status === 401
+            ? "登录已过期，请重新登录"
+            : NETWORK_ERROR_MESSAGE),
+        failure?.code ??
+          (response.status === 401 ? "unauthorized" : "service_unavailable"),
+        response.status,
+      );
     }
   };
   if (!refreshing)

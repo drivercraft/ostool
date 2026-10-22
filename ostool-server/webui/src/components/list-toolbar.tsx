@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { Children, cloneElement, isValidElement, type ReactNode } from "react";
+import { SelectField, TextField } from "./forms";
 import { ListLayoutToggle } from "./list-layout";
 export function ListToolbar({
   actions,
@@ -16,7 +17,15 @@ export function ListToolbar({
         {count && <span className="listing-meta">{count}</span>}
       </div>
       <div className="listing-filters">
-        {children}
+        {Children.map(children, (child) =>
+          isValidElement<{ inlineHint?: boolean; hint?: string }>(child)
+            ? child.type === TextField
+              ? cloneElement(child, { inlineHint: true })
+              : child.type === SelectField
+                ? cloneElement(child, { hint: "" })
+                : child
+            : child,
+        )}
         <ListLayoutToggle />
       </div>
     </div>
