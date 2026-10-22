@@ -67,6 +67,10 @@ jobs:
         sudo apt install u-boot-tools -y
     - name: Install lib libudev-dev
       run: sudo apt install libudev-dev -y
+    - name: Check development launcher configuration
+      run: |
+        bash -n ostool-server/scripts/dev.sh
+        node --test ostool-server/scripts/dev-config.test.mjs
     - name: Check rust version
       run: rustc --version --verbose
     - name: Check code format

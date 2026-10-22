@@ -7,6 +7,13 @@ set -Eeuo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_DIR=$(cd -- "$SCRIPT_DIR/../.." && pwd)
+DEV_ENV_FILE=${OSTOOL_DEV_ENV_FILE:-"$SCRIPT_DIR/../.env"}
+if [[ "${OSTOOL_DEV_CONFIG_LOADED:-}" != "1" ]]; then
+    if [[ -f "$DEV_ENV_FILE" || -v OSTOOL_DEV_ENV_FILE ]]; then
+        command -v node >/dev/null 2>&1 || { echo "dev: Node.js is required to read .env" >&2; exit 1; }
+        exec node "$SCRIPT_DIR/dev-config.mjs" "$DEV_ENV_FILE" "$SCRIPT_DIR/dev.sh" "$@"
+    fi
+fi
 EDITION=${OSTOOL_EDITION:-local}
 [[ "$EDITION" == "local" || "$EDITION" == "public" ]] || { echo "OSTOOL_EDITION must be local or public" >&2; exit 2; }
 STATE_DIR=${OSTOOL_DEV_DIR:-"$REPO_DIR/.ostool-server-dev/$EDITION"}
@@ -148,8 +155,8 @@ start_server() {
     ensure_postgres
     ensure_redis
     log "starting ostool-server; log: $LOG_FILE"
-    # Use an explicit empty env file and edition-specific overrides so a repo
-    # .env for a production deployment is never used by the local test launcher.
+    # Only allowlisted development settings are loaded above. The server itself
+    # receives an empty env file and explicit development database/service URLs.
     : > "$STATE_DIR/server.env"
     if [[ "$EDITION" == "public" && ! -f "$STATE_DIR/mfa.key" ]]; then
         require_command node

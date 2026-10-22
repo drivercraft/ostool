@@ -21,7 +21,7 @@ axloader 网络控制（v6 串口自动绑定、v5 设备识别与 OTA、v2/v3/v
 服务运行时只读写 PostgreSQL，不保留旧文件存储或启动导入。已有开发板及其引用的 DTB 通过独立脚本 `ostool-server/scripts/migrate-boards.sh` 手动迁移；校验和导入以事务完成，源文件保持不变。详见 [迁移说明](docs/admin-ui.md#已有开发板独立迁移)。
 本地版与公网版统一使用 PostgreSQL 保存业务数据；本地版隐藏账号、授权和租赁功能，`ostool` 仍可免登录直连。开发环境通过 `ostool-server/scripts/dev.sh start` 自动启动数据库和服务器。新增租赁使用独立页面与可用时段日历，各数据列表支持列表/卡片布局。
 
-开发脚本的本地版默认监听 `0.0.0.0:2999`，可通过 `http://服务器局域网IP:2999/` 访问；改用 `OSTOOL_DEV_HOST=127.0.0.1` 可限制本机访问。已有进程需执行 `restart` 生效，公网测试版仍默认监听回环地址。
+开发脚本自动读取 `ostool-server/.env` 中的开发配置，示例见 `ostool-server/.env.example`，命令行环境变量优先。本地版默认监听 `0.0.0.0:2999`，可通过 `http://服务器局域网IP:2999/` 访问；设置 `OSTOOL_DEV_HOST=127.0.0.1` 可限制本机访问。已有进程需执行 `restart` 生效，公网测试版仍默认监听回环地址。
 
 服务器的 SQLx 迁移已整理为一个完整初始结构；合并前的开发库需保留备份后改用新库/schema，或显式重建可丢弃的测试数据，详见 [数据库初始迁移](ostool-server/deploy/site-and-data.md#数据库初始迁移)。正式发布后的结构变更仍使用增量迁移。
 

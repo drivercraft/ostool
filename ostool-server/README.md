@@ -313,6 +313,25 @@ open `http://<server-LAN-IP>:2999/` or `/admin/overview` from another LAN device
 The launcher prints the detected IPv4 LAN URLs. PostgreSQL and Redis ports remain
 bound to loopback. Public-edition development keeps its `127.0.0.1:2999` listener.
 
+The launcher reads `ostool-server/.env` relative to its own directory, regardless
+of the calling working directory. Copy `ostool-server/.env.example` to `ostool-server/.env` if the file does not
+exist; preserve an existing file.
+For example, add these settings to `ostool-server/.env`:
+
+```dotenv
+OSTOOL_EDITION=local
+OSTOOL_DEV_HOST=0.0.0.0
+OSTOOL_DEV_SERVER_PORT=2999
+OSTOOL_DEV_DEMO=true
+```
+
+Leaving `OSTOOL_DEV_HOST` empty selects the edition default (local `0.0.0.0`,
+public `127.0.0.1`). To use public-edition loopback testing with a file that pins a
+local LAN address, override the host to `127.0.0.1` as well as the edition.
+Process/inline environment variables take precedence over file values, then
+built-in defaults apply. `OSTOOL_DEV_ENV_FILE=/absolute/path/dev.env` selects an
+alternative file; an explicitly requested missing file is an error.
+
 Use `OSTOOL_DEV_HOST` to select a numeric IPv4/IPv6 address. For loopback-only
 local testing:
 
@@ -332,7 +351,12 @@ same database URL/schema to keep the same data when changing edition.
 Only public edition has website `/login` and backend `/admin/login`, with bootstrap defaults `admin@example.com` /
 `admin-password-123`. Override `OSTOOL_ADMIN_EMAIL`, `OSTOOL_ADMIN_PASSWORD`,
 `OSTOOL_DEV_PG_PORT`, or `OSTOOL_DEV_SERVER_PORT` before starting as needed.
-The script does not read the repository `.env`, modify systemd or touch `/etc`.
+The launcher imports only `OSTOOL_DEV_*`, `OSTOOL_EDITION`, `OSTOOL_ADMIN_EMAIL`
+and `OSTOOL_ADMIN_PASSWORD` from the file. Deployment database URLs, listener,
+proxy and security settings in that file are not applied to the launcher; it
+continues to manage its own private PostgreSQL/Redis services. Node's built-in
+`util.parseEnv` parses the file as data, without shell execution or expansion.
+The root repository `.env` is not read. The script does not modify systemd or `/etc`.
 Where `setsid` is available, it starts the server in an independent session so
 closing a command runner does not terminate it; `stop` still uses the recorded
 server PID. Other environments retain the `nohup` fallback.
