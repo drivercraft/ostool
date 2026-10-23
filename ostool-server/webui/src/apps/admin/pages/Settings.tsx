@@ -96,7 +96,7 @@ function TftpForm({
             service_name: "tftpd-hpa",
             username: "tftp",
             address: ":69",
-            options: "-l -s -c",
+            options: "-l -s --map-file /etc/ostool-server-tftp.rules",
             manage_config: false,
             reconcile_on_start: false,
           },
@@ -322,10 +322,11 @@ function ServerForm({ source }: { source: AdminServerConfigResponse }) {
           if (!conflict)
             void task.run(async () => {
               if (
-                !Number.isInteger(config.upload_limits.session_file_max_mib) ||
-                config.upload_limits.session_file_max_mib < 1
+                Object.values(config.upload_limits).some(
+                  (value) => !Number.isInteger(value) || value < 1,
+                )
               )
-                throw new Error("上传上限必须是大于零的整数 MiB");
+                throw new Error("上传限制必须填写大于零的整数");
               const r = await api.updateServerConfig(config);
               setPreviousSource(live);
               setConfig(r.editable);
@@ -369,10 +370,65 @@ function ServerForm({ source }: { source: AdminServerConfigResponse }) {
             onValue={(v) =>
               setConfig((c) => ({
                 ...c,
-                upload_limits: { session_file_max_mib: Number(v) },
+                upload_limits: {
+                  ...c.upload_limits,
+                  session_file_max_mib: Number(v),
+                },
               }))
             }
           />
+          {(
+            [
+              [
+                "session_total_max_mib",
+                "会话文件总容量（MiB）",
+                "全部文件合计容量，不小于单文件上限",
+              ],
+              ["session_max_files", "会话最多文件数", "同名覆盖不增加文件数量"],
+              [
+                "storage_max_mib",
+                "全部会话存储上限（MiB）",
+                "限制所有会话文件的总容量",
+              ],
+              [
+                "user_total_max_mib",
+                "账号文件总容量（MiB）",
+                "限制同一账号全部活动会话的文件总量",
+              ],
+              [
+                "user_max_concurrent_uploads",
+                "单账号上传并发数",
+                "1–32；同一会话同时只允许一个上传",
+              ],
+              [
+                "max_concurrent_uploads",
+                "全局上传并发数",
+                "1–32；每个会话同时仅允许一个上传",
+              ],
+              [
+                "upload_timeout_secs",
+                "上传总时限（秒）",
+                "15–3600；连续 15 秒无数据也会终止",
+              ],
+            ] as const
+          ).map(([key, label, placeholder]) => (
+            <TextField
+              key={key}
+              label={label}
+              type="number"
+              min={1}
+              step={1}
+              hint=""
+              placeholder={placeholder}
+              value={config.upload_limits[key]}
+              onValue={(v) =>
+                setConfig((c) => ({
+                  ...c,
+                  upload_limits: { ...c.upload_limits, [key]: Number(v) },
+                }))
+              }
+            />
+          ))}
         </Section>
         {task.error && <Notice>{task.error}</Notice>}
       </form>

@@ -702,6 +702,7 @@ fn safe_details(payload: &Value) -> Value {
             "current_password",
             "new_password",
             "power_management",
+            "reset_command",
             "serial",
             "boot",
             "network",

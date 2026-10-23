@@ -167,17 +167,6 @@ pub async fn middleware(
         }
         return next.run(request).await;
     }
-    let hardware_config = state.config.read().await.clone();
-    if (path.starts_with("/share/sessions/")
-        || path.starts_with("/boot/sessions/")
-        || path.starts_with("/api/v1/loader-updates/"))
-        && request
-            .extensions()
-            .get::<crate::security::store::ClientContext>()
-            .is_some_and(|client| crate::security::web::hardware_allowed(&hardware_config, client))
-    {
-        return next.run(request).await;
-    }
     if is_public_path(path) {
         return next.run(request).await;
     }
@@ -331,7 +320,6 @@ fn is_public_path(path: &str) -> bool {
         || path == "/api/v1/auth/mfa/verify"
         || path == "/api/v1/auth/refresh"
         || path == "/api/v1/auth/logout"
-        || path.starts_with("/api/v1/loaders/")
         || path == "/healthz"
         || path.starts_with("/admin/assets/")
         || path.starts_with("/assets/")

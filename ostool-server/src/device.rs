@@ -36,16 +36,20 @@ pub async fn reconcile(
     let device_addr = SocketAddr::new(peer.ip(), announcement.http_port);
     let endpoint = format!("http://{device_addr}");
     let client = Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(3))
+        .read_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(300))
         .build()?;
-    let observed: LoaderDeviceStatus = client
-        .get(format!("{endpoint}/api/v1/status"))
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let observed = read_status(
+        client
+            .get(format!("{endpoint}/api/v1/status"))
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await?,
+    )
+    .await?;
     if state
         .loader_registry
         .accept_announcement(&announcement, &observed, peer.ip().to_string())
@@ -120,13 +124,14 @@ pub async fn reconcile(
                     .send()
                     .await?;
                 require_status(response, 200).await?;
-                let confirmed: LoaderDeviceStatus = client
-                    .get(format!("{endpoint}/api/v1/status"))
-                    .send()
-                    .await?
-                    .error_for_status()?
-                    .json()
-                    .await?;
+                let confirmed = read_status(
+                    client
+                        .get(format!("{endpoint}/api/v1/status"))
+                        .timeout(Duration::from_secs(5))
+                        .send()
+                        .await?,
+                )
+                .await?;
                 let active = confirmed
                     .ota
                     .as_ref()
@@ -366,7 +371,7 @@ async fn push_boot(
     ensure!(
         response.status().as_u16() == 201 || response.status().as_u16() == 200,
         "device refused boot job: {}",
-        response.text().await?
+        String::from_utf8_lossy(&read_body(response).await?)
     );
     session
         .update_loader_status(epoch.into(), &command.boot_id, LoaderStatusPhase::Accepted)
@@ -484,12 +489,33 @@ async fn require_status(response: Response, expected: u16) -> anyhow::Result<()>
     require_status_in(response, &[expected]).await
 }
 
+async fn read_body(mut response: Response) -> anyhow::Result<Vec<u8>> {
+    ensure!(
+        response.content_length().is_none_or(|n| n <= 64 * 1024),
+        "device response too large"
+    );
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        ensure!(
+            body.len() + chunk.len() <= 64 * 1024,
+            "device response too large"
+        );
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+async fn read_status(response: Response) -> anyhow::Result<LoaderDeviceStatus> {
+    Ok(serde_json::from_slice(
+        &read_body(response.error_for_status()?).await?,
+    )?)
+}
+
 async fn require_status_in(response: Response, expected: &[u16]) -> anyhow::Result<()> {
     let status = response.status();
     ensure!(
         expected.contains(&status.as_u16()),
         "device HTTP {status}: {}",
-        response.text().await?
+        String::from_utf8_lossy(&read_body(response).await?)
     );
     Ok(())
 }
@@ -824,6 +850,7 @@ mod tests {
         let manager = build_tftp_manager(&config.tftp);
         let state = build_app_state(config_path, config, manager).await.unwrap();
         let board = BoardConfig {
+            reset_command: None,
             id: "board-1".into(),
             board_type: "x86_64-uefi-http".into(),
             tags: vec![],

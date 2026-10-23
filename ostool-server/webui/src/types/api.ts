@@ -32,6 +32,13 @@ export interface TftpNetworkConfig {
 
 export interface UploadLimitsConfig {
   session_file_max_mib: number;
+  session_total_max_mib: number;
+  session_max_files: number;
+  storage_max_mib: number;
+  max_concurrent_uploads: number;
+  user_max_concurrent_uploads: number;
+  user_total_max_mib: number;
+  upload_timeout_secs: number;
 }
 
 export interface TftpStatus {
@@ -145,6 +152,7 @@ export interface AxloaderSerialParameters {
 export type BootConfig = UbootProfile | PxeProfile | UefiHttpProfile;
 
 export interface BoardConfig {
+  reset_command?: string | null;
   id: string;
   board_type: string;
   tags: string[];
@@ -157,6 +165,7 @@ export interface BoardConfig {
 }
 
 export interface AdminBoardUpsertRequest {
+  reset_command?: string | null;
   id: string | null;
   board_type: string;
   tags: string[];

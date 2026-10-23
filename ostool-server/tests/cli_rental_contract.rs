@@ -95,6 +95,7 @@ async fn website_rentals_authorize_real_ostool_clients() -> Result<()> {
     config.http_boot.root_dir = root.path().join("http-boot");
     let database = test_database::prepare(&root.path().join("config.toml"), &mut config).await?;
     let board = BoardConfig {
+        reset_command: Some("true # private-restore-credential".into()),
         id: "contract-board".into(),
         board_type: "contract-test".into(),
         tags: vec!["arm64".into()],
@@ -480,6 +481,7 @@ async fn website_rentals_authorize_real_ostool_clients() -> Result<()> {
             assert!(detail["board"].get("serial").is_none());
             assert!(!detail.to_string().contains("private-power-credential"));
             assert!(!detail.to_string().contains("private-operator-notes"));
+            assert!(!detail.to_string().contains("private-restore-credential"));
             let management = request(
                 &client,
                 &base,

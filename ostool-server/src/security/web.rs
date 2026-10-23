@@ -291,16 +291,6 @@ pub async fn transport(
     }
     response
 }
-pub fn hardware_allowed(config: &ServerConfig, client: &ClientContext) -> bool {
-    client.ip.parse::<std::net::IpAddr>().is_ok_and(|ip| {
-        config
-            .security
-            .hardware_allowed_networks
-            .iter()
-            .filter_map(|n| n.parse::<ipnet::IpNet>().ok())
-            .any(|n| n.contains(&ip))
-    })
-}
 pub async fn gate(
     State(state): State<AppState>,
     Extension(client): Extension<ClientContext>,
@@ -312,10 +302,8 @@ pub async fn gate(
         return next.run(request).await;
     }
     let path = request.uri().path();
-    if (path.starts_with("/api/v1/loaders/") || path.starts_with("/api/v1/loader-updates/"))
-        && !hardware_allowed(&config, &client)
-    {
-        return ApiError::forbidden("装载器接口只允许受信任的设备网络访问").into_response();
+    if path.starts_with("/api/v1/loaders/") || path.starts_with("/api/v1/loader-updates/") {
+        return ApiError::forbidden("装载器接口仅通过独立设备入口访问").into_response();
     }
     if (path.starts_with("/admin") || path.starts_with("/api/v1/admin/"))
         && !config.security.admin_allowed_networks.is_empty()

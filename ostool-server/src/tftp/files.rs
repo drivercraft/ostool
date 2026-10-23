@@ -20,6 +20,10 @@ pub struct TftpFileRef {
 
 pub fn normalize_relative_path(path: &str) -> anyhow::Result<String> {
     let normalized = path.trim().replace('\\', "/");
+    anyhow::ensure!(
+        normalized.len() <= 1024 && normalized.split('/').count() <= 32,
+        "文件路径最长 1024 字节、最多 32 层"
+    );
     if normalized.is_empty() {
         bail!("X-File-Path must contain a file path");
     }
@@ -37,6 +41,7 @@ pub fn normalize_relative_path(path: &str) -> anyhow::Result<String> {
                     .map(str::trim)
                     .filter(|segment| !segment.is_empty())
                     .ok_or_else(|| anyhow::anyhow!("file path contains an invalid segment"))?;
+                anyhow::ensure!(segment.len() <= 255, "文件路径的单层名称不能超过 255 字节");
                 parts.push(segment.to_string());
             }
             Component::CurDir => bail!("file path must not contain `.` segments"),
@@ -78,11 +83,13 @@ pub fn put_session_file(
 ) -> anyhow::Result<TftpFileRef> {
     let normalized_relative_path = normalize_relative_path(relative_path)?;
     let path = session_root(root_dir, session_id).join(&normalized_relative_path);
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("invalid file path: {}", path.display()))?;
-    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    prepare_session_parent(root_dir, session_id, relative_path)?;
     fs::write(&path, bytes).with_context(|| format!("failed to write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))?;
+    }
 
     Ok(TftpFileRef {
         filename: filename_from_relative_path(&normalized_relative_path)?,
@@ -91,6 +98,26 @@ pub fn put_session_file(
         size: bytes.len() as u64,
         uploaded_at: Utc::now(),
     })
+}
+/// Published paths are traversable/readable by a separate unprivileged tftpd-hpa user.
+pub(crate) fn prepare_session_parent(root: &Path, sid: &str, path: &str) -> anyhow::Result<()> {
+    let destination = disk_path(root, sid, path)?;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("invalid session path"))?;
+    fs::create_dir_all(parent)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut current = parent;
+        while current != root {
+            fs::set_permissions(current, fs::Permissions::from_mode(0o755))?;
+            current = current
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("invalid session root"))?;
+        }
+    }
+    Ok(())
 }
 
 pub fn get_session_file(
@@ -268,6 +295,9 @@ mod tests {
 
     #[test]
     fn normalize_relative_path_rejects_invalid_inputs() {
+        assert!(normalize_relative_path(&format!("new-parent/{}", "x".repeat(256))).is_err());
+        assert!(normalize_relative_path(&vec!["x"; 33].join("/")).is_err());
+
         for path in [
             "",
             "   ",

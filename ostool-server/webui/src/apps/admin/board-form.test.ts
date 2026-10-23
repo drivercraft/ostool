@@ -35,6 +35,7 @@ describe("board configuration contracts", () => {
   });
   it("round trips all existing U-Boot and power fields", () => {
     const b: BoardConfig = {
+      reset_command: "restore-board --baseline",
       id: "a",
       board_type: "arm",
       tags: ["x", "y"],
@@ -62,6 +63,7 @@ describe("board configuration contracts", () => {
     };
     expect(buildRequestPayload(boardToFormState(b))).toEqual({
       ...b,
+      reset_command: b.reset_command,
       network_identity: null,
     });
   });

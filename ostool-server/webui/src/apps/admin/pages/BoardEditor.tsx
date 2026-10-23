@@ -519,6 +519,15 @@ function Editor({ board }: { board?: BoardConfig }) {
             </Notice>
           )}
         </div>
+        <Section title="设备恢复">
+          <TextField
+            label="释放后恢复命令"
+            value={form.reset_command}
+            onValue={(v) => setForm((f) => ({ ...f, reset_command: v }))}
+            hint=""
+            placeholder="可选的幂等恢复命令；在断电后执行，失败时设备继续保留。纯 RAM 启动可留空。"
+          />
+        </Section>
         <Section title="启动与绑定">
           <SelectField
             label="启动方式"

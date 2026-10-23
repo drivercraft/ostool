@@ -11,7 +11,7 @@ use tokio_serial::{DataBits, Parity, SerialPortBuilderExt, StopBits};
 
 use crate::{
     config::{BoardConfig, CustomPowerManagement, PowerManagementConfig, SerialPortKeyKind},
-    process::run_shell_command,
+    process::run_admin_shell_command,
     serial::discovery::resolve_serial_key,
 };
 
@@ -71,7 +71,7 @@ pub async fn execute_power_action(
                     action.label()
                 )));
             }
-            run_shell_command(command).await?;
+            run_admin_shell_command(command).await?;
             Ok(format!("executed `{command}`"))
         }
         PowerManagementConfig::ZhongshengRelay(relay) => {
@@ -177,6 +177,7 @@ mod tests {
 
     fn board_with_power_management(power_management: PowerManagementConfig) -> BoardConfig {
         BoardConfig {
+            reset_command: None,
             id: "demo".into(),
             board_type: "demo".into(),
             tags: vec![],

@@ -110,6 +110,20 @@ The native backend runs as `ostool`, with `/etc/ostool-server/.env` and
 serial access uses `dialout` where available. Additional writable hardware paths
 need an explicit service override.
 
+Docker serial deployments can add the least-privilege override:
+
+```bash
+# Set OSTOOL_SERIAL_DEVICE=/dev/ttyUSB0 and OSTOOL_SERIAL_GID to the device's group ID in .env.
+ostool-server/scripts/deploy.sh docker up --compose-file ostool-server/deploy/compose.serial.yaml
+# The same override is accepted by the Docker development launcher.
+ostool-server/scripts/dev.sh start --compose-file ostool-server/deploy/compose.serial.yaml
+```
+
+The override maps only the chosen character device, adds its numeric group and
+mounts the udev database read-only. Use actual ttyUSB/ttyACM nodes; keep stable USB
+identity in the board configuration. For several ports, extend the standard Compose
+override's `devices`/`group_add` lists. It does not require privileged containers.
+
 Public native deployment uses the installed, standard `caddy.service` and
 `/etc/caddy/Caddyfile`. It manages only `/etc/caddy/ostool-server.caddy`, appends one
 `import ostool-server.caddy` if needed, validates the complete candidate configuration,
@@ -456,9 +470,40 @@ The CLI returns 401 unchanged, without automatically replaying mutations.
 
 Device-side loader/TFTP/boot traffic has a separate network trust boundary.
 Use VLAN/firewall isolation between tenants, boards and server infrastructure.
-Lease release does not erase board storage or restore firmware; provide a verified
-reset procedure before reuse. Uploads have single-file limits but no aggregate
-per-user/session quota. Real public DNS/Caddy/TLS and physical firmware/TFTP need
+Public user APIs remain on loopback behind Caddy. A second, device-only HTTP listener
+uses the configured network interface's private IPv4 and the same port by default;
+it exposes boot/shared downloads and loader endpoints, never user/admin/session-control
+APIs. Explicit overrides are `OSTOOL_HARDWARE_LISTEN_ADDR` and
+`OSTOOL_HARDWARE_ALLOWED_NETWORKS`. Automatic source ranges are limited to the selected
+interface subnet and loopback, resolved at startup; forwarding headers do not grant
+access to the device listener. Interface/listener changes require a backend restart.
+UDP discovery and the separate public-edition throughput listener enforce the same
+source networks. Device callbacks reject redirects, bypass proxies, bound status bodies
+and concurrency, and unverified announcements cannot cancel an in-progress operation.
+
+The built-in TFTP server rejects WRQ and binds the private device interface in public
+edition. For an existing tftpd-hpa service, enable the installed
+`--map-file /etc/ostool-server-tftp.rules` in its actual service configuration;
+the bundled `Pa .*` rule rejects all PUTs ([tftpd-hpa remapping](https://manpages.debian.org/bookworm/tftpd-hpa/in.tftpd.8.en.html#FILENAME_REMAPPING)).
+Installing the rule does not change another service's running configuration.
+Keep UDP TFTP ports confined to the device network with the host/network firewall.
+
+Uploads stream into private temporary files and commit atomically after checking
+the current credential, rental and session. Release cancels in-flight uploads and
+serializes file cleanup with commits. Startup removes interrupted temporary uploads
+and directories whose durable session history confirms an ended lease, preserving
+unmanaged paths. System settings provide single-file (64 MiB), session (512 MiB/128 files),
+account (1024 MiB), global storage (4096 MiB), upload concurrency (4 globally/2 per
+account/1 per session), and total timeout (300 s) defaults. A 15-second idle timeout
+also applies. Downloads stream with bounded buffering, 16 global/2 per-session slots,
+and stop on session termination or the configured transfer timeout.
+
+An optional board `reset_command` restores the baseline after power-off and before
+reuse, including startup. It must be idempotent, completes within 60 seconds, and
+failure keeps the device reserved until recovery succeeds. It runs only when an
+administrator configures it; RAM-only boot devices may leave it unset. Persistent
+storage/firmware isolation still requires a verified board-specific recovery procedure.
+Real public DNS/Caddy/TLS and physical firmware/TFTP need
 separate deployment validation; isolated application tests do not prove those
 conditions. Authentication rules and routes are in [the API reference](../docs/api.md).
 

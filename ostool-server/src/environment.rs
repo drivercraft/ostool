@@ -167,6 +167,16 @@ pub(crate) fn apply_values(
             .context("invalid OSTOOL_TRUSTED_PROXY_IPS")?;
     }
     parsed(values, "OSTOOL_LISTEN_ADDR", &mut config.listen_addr)?;
+    if let Some(value) = values
+        .get("OSTOOL_HARDWARE_LISTEN_ADDR")
+        .filter(|v| !v.is_empty())
+    {
+        config.hardware_listen_addr = Some(
+            value
+                .parse()
+                .context("invalid OSTOOL_HARDWARE_LISTEN_ADDR")?,
+        );
+    }
     parsed(values, "OSTOOL_AUTH_ENABLED", &mut config.auth.enabled)?;
     if config.edition.is_public()
         && values

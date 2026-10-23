@@ -979,6 +979,7 @@ async fn public_site_stream_cannot_expose_management_or_identity_data() {
     let f = Fixture::new(true).await;
     for disabled in [false, true] {
         let board = ostool_server::BoardConfig {
+            reset_command: None,
             id: if disabled {
                 "disabled-device"
             } else {
@@ -1188,8 +1189,7 @@ async fn hardware_access_rejects_external_and_invalid_proxy_sources() {
             );
         }
     }
-    // An actual private device source needs no user token. Missing assignments
-    // reach their handler and return 404, rather than being mistaken for user APIs.
+    // The public user listener never grants device access based on a private source alone.
     let mut request = Request::builder()
         .uri("/api/v1/loader-updates/missing/image")
         .body(Body::empty())
@@ -1201,6 +1201,29 @@ async fn hardware_access_rejects_external_and_invalid_proxy_sources() {
     ));
     assert_eq!(
         f.app.clone().oneshot(request).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    f.state
+        .config
+        .write()
+        .await
+        .security
+        .hardware_allowed_networks = vec!["192.168.20.0/24".into()];
+    let mut request = Request::builder()
+        .uri("/api/v1/loader-updates/missing/image")
+        .body(Body::empty())
+        .unwrap();
+    request.extensions_mut().insert(ConnectInfo(
+        "192.168.20.10:40000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    assert_eq!(
+        ostool_server::hardware::build_router(f.state.clone())
+            .oneshot(request)
+            .await
+            .unwrap()
+            .status(),
         StatusCode::NOT_FOUND
     );
 }

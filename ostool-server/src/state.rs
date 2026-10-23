@@ -115,6 +115,7 @@ fn release_settle_delay(board: &BoardConfig) -> Option<Duration> {
 
 #[derive(Clone)]
 pub struct AppState {
+    pub(crate) uploads: crate::uploads::Uploads,
     pub security_cache: Option<crate::security::cache::SecurityCache>,
     pub security_revision: Arc<std::sync::atomic::AtomicU64>,
     pub audit: crate::audit::AuditHealth,
@@ -191,6 +192,14 @@ pub async fn build_app_state(
         }
     }
     let board_store = Arc::new(BoardStore::new(database.clone()));
+    config.hardware_listen_addr = crate::hardware::listen_address(&config)?;
+    crate::hardware::resolve_networks(&mut config)?;
+    let mut restricted = config.tftp.clone();
+    crate::hardware::restrict_tftp(&config, &mut restricted)?;
+    if serde_json::to_value(&restricted)? != serde_json::to_value(&config.tftp)? {
+        config.tftp = restricted;
+        tftp_manager = crate::tftp::service::build_tftp_manager(&config.tftp);
+    }
     let dtb_store = Arc::new(DtbStore::new(database.clone()));
     let boards = board_store.load_all().await?;
     let board_runtimes = initial_board_runtimes(&boards);
@@ -222,6 +231,7 @@ pub async fn build_app_state(
             virtual_boards: virtual_boards.clone(),
         }));
     let state = AppState {
+        uploads: crate::uploads::Uploads::default(),
         security_cache,
         security_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         audit: crate::audit::AuditHealth::default(),
@@ -678,10 +688,14 @@ impl AppState {
         let mut failures = Vec::new();
 
         for board in boards {
-            if let Err(err) = self
-                .execute_board_power_action(&board, PowerAction::Off)
-                .await
-            {
+            let result = async {
+                self.execute_board_power_action(&board, PowerAction::Off)
+                    .await?;
+                self.restore_board(&board).await?;
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
+            if let Err(err) = result {
                 failures.push((board.id.clone(), err.to_string()));
                 if let Some(stored) = self.boards.write().await.get_mut(&board.id) {
                     stored.disabled = true;
@@ -690,6 +704,13 @@ impl AppState {
         }
 
         failures
+    }
+    async fn restore_board(&self, board: &BoardConfig) -> anyhow::Result<()> {
+        let Some(command) = board.reset_command.as_deref() else {
+            return Ok(());
+        };
+        let result = crate::process::run_admin_shell_command(command).await;
+        result.map_err(|_| anyhow::anyhow!("设备恢复命令执行失败"))
     }
 
     pub async fn save_config(&self) -> anyhow::Result<()> {
@@ -850,6 +871,7 @@ impl AppState {
 
         let mut session_tasks_stopped = false;
         let mut board_powered_off = false;
+        let mut board_restored = board.reset_command.is_none();
         let mut release_settled = false;
         let mut tftp_cleaned = false;
         let mut failure_audited = false;
@@ -907,7 +929,14 @@ impl AppState {
                 release_settled = true;
             }
 
+            if !board_restored && release_settled {
+                match self.restore_board(&board).await {
+                    Ok(()) => board_restored = true,
+                    Err(error) => errors.push(error.to_string()),
+                }
+            }
             if !tftp_cleaned {
+                let _files = session.file_gate.lock().await;
                 match retry_release_step(RELEASE_RETRY_ATTEMPTS, RELEASE_RETRY_DELAY, || {
                     let manager = self.tftp_manager.clone();
                     let session_id = snapshot.id.clone();
@@ -931,6 +960,7 @@ impl AppState {
             if errors.is_empty()
                 && session_tasks_stopped
                 && board_powered_off
+                && board_restored
                 && release_settled
                 && tftp_cleaned
             {
@@ -1117,6 +1147,7 @@ mod tests {
 
     fn sample_board(board_id: &str) -> BoardConfig {
         BoardConfig {
+            reset_command: None,
             id: board_id.into(),
             board_type: "demo".into(),
             tags: vec![],
@@ -1406,6 +1437,7 @@ mod tests {
         });
 
         let board = BoardConfig {
+            reset_command: None,
             id: "board-1".into(),
             board_type: "demo".into(),
             tags: vec![],
@@ -1493,6 +1525,7 @@ mod tests {
         });
 
         let board = BoardConfig {
+            reset_command: None,
             id: "board-1".into(),
             board_type: "demo".into(),
             tags: vec![],
@@ -1565,6 +1598,7 @@ mod tests {
         let state = test_state(&root).await;
 
         let board = BoardConfig {
+            reset_command: None,
             id: "board-1".into(),
             board_type: "demo".into(),
             tags: vec![],
@@ -1610,6 +1644,7 @@ mod tests {
         let (relay_port, _relay_handle, server, mut requests, stop_tx) = spawn_relay_test_server();
 
         let board = BoardConfig {
+            reset_command: None,
             id: "board-1".into(),
             board_type: "demo".into(),
             tags: vec![],

@@ -1,6 +1,5 @@
 use std::{
     io::ErrorKind,
-    net::IpAddr,
     path::Path,
     process::Command,
     sync::{
@@ -21,8 +20,8 @@ use crate::{
             remove_session_dir, remove_session_file,
         },
         status::{
-            TftpStatus, clear_last_error, current_last_error, ipv4_unspecified, run_capture,
-            set_last_error, system_service_state, udp_port_69_is_listening,
+            TftpStatus, clear_last_error, current_last_error, run_capture, set_last_error,
+            system_service_state, udp_port_69_is_listening,
         },
     },
 };
@@ -99,11 +98,10 @@ impl TftpManager for BuiltinTftpManager {
         let mut config = Config::default();
         config.directory = self.config.root_dir.clone();
         config.send_directory = config.directory.clone();
+        config.receive_directory = config.directory.clone();
+        config.read_only = true;
         config.port = self.config.bind_addr.port();
-        config.ip_address = match self.config.bind_addr.ip() {
-            IpAddr::V4(ip) => IpAddr::V4(ip),
-            IpAddr::V6(_) => IpAddr::V4(ipv4_unspecified()),
-        };
+        config.ip_address = self.config.bind_addr.ip();
 
         let last_error = Arc::new(Mutex::new(None));
         let error_store = last_error.clone();

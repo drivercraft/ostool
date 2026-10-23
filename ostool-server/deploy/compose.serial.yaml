@@ -1,0 +1,15 @@
+# 真实串口部署时通过 --compose-file 加载；只映射明确指定的设备，不使用 privileged。
+# 多个串口可复制此文件，在 devices/group_add 中逐项列出设备及属组。
+services:
+  server:
+    devices:
+      - "${OSTOOL_SERIAL_DEVICE:?请设置宿主机串口设备路径}:${OSTOOL_SERIAL_DEVICE}:rw"
+    group_add:
+      - "${OSTOOL_SERIAL_GID:?请设置串口设备的属组 GID}"
+    volumes:
+      - type: bind
+        source: /run/udev
+        target: /run/udev
+        read_only: true
+        bind:
+          create_host_path: false

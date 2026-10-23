@@ -7,6 +7,7 @@ REPO_DIR=$(cd -- "$SERVER_DIR/.." && pwd -P)
 ENV_FILE=${OSTOOL_ENV_FILE:-"$SERVER_DIR/.env"}
 ACTION= LOG_SERVICE= EDITION=local
 COMPOSE=()
+COMPOSE_FILES=()
 ALL_COMPOSE=()
 BOLD= RESET= BLUE=
 if [[ -t 1 && ${TERM:-} != dumb && -z ${NO_COLOR+x} ]]; then
@@ -33,6 +34,7 @@ dev_usage() {
 
 选项：
   --env-file <路径>         唯一启动配置，默认 ostool-server/.env
+  --compose-file <路径>     Docker 叠加配置，可重复；真实串口使用 deploy/compose.serial.yaml
 
 示例：
   ostool-server/scripts/dev.sh start
@@ -58,9 +60,10 @@ dev_parse_args() {
     esac
     while (($#)); do
         case $1 in
-            --env-file)
-                [[ $# -ge 2 && -n $2 && $2 != --* ]] || { printf '[错误] --env-file 缺少路径。\n' >&2; exit 2; }
-                ENV_FILE=$2; shift 2;;
+            --env-file|--compose-file)
+                [[ $# -ge 2 && -n $2 && $2 != --* ]] || { printf '[错误] %s 缺少路径。\n' "$1" >&2; exit 2; }
+                if [[ $1 == --env-file ]]; then ENV_FILE=$2; else COMPOSE_FILES+=("$2"); fi
+                shift 2;;
             -h|--help) dev_usage; exit 0;;
             *)
                 if [[ $ACTION == logs && -z $LOG_SERVICE && $1 != -* ]]; then LOG_SERVICE=$1; shift;
@@ -82,6 +85,7 @@ dev_prepare() {
     # profile 由当前入口选择，不继承其他 Compose 项目的终端设置。
     export COMPOSE_PROFILES=
     COMPOSE=(docker compose --project-name ostool-server --env-file "$ENV_FILE" -f "$SERVER_DIR/deploy/compose.yaml")
+    for file in "${COMPOSE_FILES[@]}"; do COMPOSE+=(-f "$file"); done
     ALL_COMPOSE=("${COMPOSE[@]}" --profile gateway)
     local resolved line edition=local origin= allowed= listener=127.0.0.1:2999 site
     local sites=()

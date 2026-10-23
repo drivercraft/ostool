@@ -126,6 +126,7 @@ async fn ovmf_identity_binds_serial_null_session_and_boots_kernel() -> anyhow::R
     }));
     let mac = "02:00:00:00:00:42".parse()?;
     let board = BoardConfig {
+        reset_command: None,
         id: "qemu-auto".into(),
         board_type: "uefi".into(),
         tags: vec![],

@@ -6,7 +6,7 @@ use std::sync::{
 use chrono::{DateTime, Duration, Utc};
 use httpboot_protocol::{BootArch, ImageFormat, LoaderStatusPhase, LoaderStatusResponse};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{RwLock, mpsc, watch};
+use tokio::sync::{Mutex, RwLock, mpsc, watch};
 
 use crate::{config::BoardConfig, state::AppState};
 
@@ -119,6 +119,9 @@ impl Session {
 
 #[derive(Debug)]
 pub struct SessionState {
+    pub(crate) upload_gate: Arc<Mutex<()>>,
+    pub(crate) file_gate: Mutex<()>,
+    pub(crate) downloads: Arc<tokio::sync::Semaphore>,
     pub(crate) rental_deadline: RwLock<Option<chrono::DateTime<chrono::Utc>>>,
     pub serial_runtime: Arc<crate::serial::runtime::SessionSerialRuntime>,
     boot_generation: watch::Sender<u64>,
@@ -182,6 +185,9 @@ impl SessionState {
     ) -> Arc<Self> {
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
         Arc::new(Self {
+            upload_gate: Arc::new(Mutex::new(())),
+            file_gate: Mutex::new(()),
+            downloads: Arc::new(tokio::sync::Semaphore::new(2)),
             rental_deadline: RwLock::new(None),
             serial_runtime: Arc::default(),
             boot_generation: watch::channel(0).0,
@@ -414,6 +420,7 @@ mod tests {
 
     fn sample_board() -> BoardConfig {
         BoardConfig {
+            reset_command: None,
             id: "demo".into(),
             board_type: "demo".into(),
             tags: vec![],

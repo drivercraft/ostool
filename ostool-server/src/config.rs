@@ -23,6 +23,8 @@ pub struct ServerConfig {
     pub edition: Edition,
     pub listen_addr: SocketAddr,
     #[serde(default)]
+    pub hardware_listen_addr: Option<SocketAddr>,
+    #[serde(default)]
     pub database: DatabaseConfig,
     #[serde(default)]
     pub auth: AuthConfig,
@@ -73,6 +75,7 @@ impl ServerConfig {
             audit: AuditConfig::default(),
             edition: Edition::Local,
             listen_addr: SocketAddr::from(([0, 0, 0, 0], 2999)),
+            hardware_listen_addr: None,
             database: DatabaseConfig::default(),
             auth: AuthConfig::default(),
             network_test: NetworkTestConfig::default(),
@@ -118,6 +121,20 @@ impl ServerConfig {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        if let Some(address) = self.hardware_listen_addr {
+            anyhow::ensure!(
+                !self.edition.is_public() || crate::hardware::private_address(address.ip()),
+                "公网版设备入口必须绑定私有设备网或回环地址"
+            );
+            anyhow::ensure!(
+                !address.ip().is_unspecified() && address.port() != 0,
+                "设备监听须为具体设备网 IP 和有效端口"
+            );
+            anyhow::ensure!(
+                address != self.listen_addr,
+                "设备入口不能与用户入口使用相同的监听地址"
+            );
+        }
         if self
             .audit
             .retention_days
@@ -180,9 +197,7 @@ impl ServerConfig {
                 "network.interface must be configured or auto-detected from a non-loopback interface"
             );
         }
-        if self.upload_limits.session_file_max_mib == 0 {
-            bail!("upload_limits.session_file_max_mib must be greater than 0");
-        }
+        self.upload_limits.validate()?;
         if self.loader_network.bind_addr.port() != httpboot_protocol::DISCOVERY_PORT {
             bail!(
                 "loader_network.bind_addr must use UDP port {}",
@@ -453,15 +468,61 @@ impl Default for HttpBootConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
 pub struct UploadLimitsConfig {
     pub session_file_max_mib: u32,
+    pub session_total_max_mib: u32,
+    pub session_max_files: u32,
+    pub storage_max_mib: u32,
+    pub max_concurrent_uploads: u32,
+    pub user_max_concurrent_uploads: u32,
+    pub user_total_max_mib: u32,
+    pub upload_timeout_secs: u32,
 }
 
 impl Default for UploadLimitsConfig {
     fn default() -> Self {
         Self {
             session_file_max_mib: 64,
+            session_total_max_mib: 512,
+            session_max_files: 128,
+            storage_max_mib: 4096,
+            max_concurrent_uploads: 4,
+            user_max_concurrent_uploads: 2,
+            user_total_max_mib: 1024,
+            upload_timeout_secs: 300,
         }
+    }
+}
+impl UploadLimitsConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            (1..=1024).contains(&self.session_file_max_mib),
+            "单文件上限须为 1–1024 MiB"
+        );
+        anyhow::ensure!(
+            self.session_total_max_mib >= self.session_file_max_mib
+                && self.storage_max_mib >= self.session_total_max_mib,
+            "存储总量必须不小于会话容量，会话容量必须不小于单文件上限"
+        );
+        anyhow::ensure!(
+            (1..=10000).contains(&self.session_max_files),
+            "会话文件数须为 1–10000"
+        );
+        anyhow::ensure!(
+            (1..=32).contains(&self.max_concurrent_uploads),
+            "上传并发须为 1–32"
+        );
+        anyhow::ensure!(
+            (1..=32).contains(&self.user_max_concurrent_uploads)
+                && self.user_total_max_mib >= self.session_file_max_mib,
+            "账号上传并发须为 1–32，账号容量须不小于单文件上限"
+        );
+        anyhow::ensure!(
+            (15..=3600).contains(&self.upload_timeout_secs),
+            "上传总时限须为 15–3600 秒"
+        );
+        Ok(())
     }
 }
 
@@ -539,7 +600,7 @@ impl Default for SystemTftpdHpaConfig {
             service_name: "tftpd-hpa".to_string(),
             username: Some("tftp".to_string()),
             address: ":69".to_string(),
-            options: "-l -s -c".to_string(),
+            options: "-l -s --map-file /etc/ostool-server-tftp.rules".to_string(),
             manage_config: false,
             reconcile_on_start: true,
         }
@@ -556,6 +617,8 @@ fn absolutize_path(base_dir: &Path, path: &Path) -> PathBuf {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BoardConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_command: Option<String>,
     pub id: String,
     pub board_type: String,
     #[serde(default)]
@@ -576,6 +639,12 @@ impl BoardConfig {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.reset_command
+                .as_ref()
+                .is_none_or(|c| !c.trim().is_empty() && c.len() <= 8192),
+            "设备恢复命令不能为空且不能超过 8192 字节"
+        );
         if let BootConfig::Uboot(profile) = &self.boot {
             profile.validate()?;
         }
@@ -1146,6 +1215,7 @@ network_mode = "static_ip"
     #[test]
     fn board_config_serialization_omits_removed_fields() {
         let board = BoardConfig {
+            reset_command: None,
             id: "demo-1".into(),
             board_type: "demo".into(),
             tags: vec!["lab".into()],
@@ -1205,6 +1275,7 @@ bootm_addr = "0x82200000"
     #[test]
     fn board_config_round_trip_supports_httpboot_boot() {
         let board = BoardConfig {
+            reset_command: None,
             id: "uefi-http-01".into(),
             board_type: "x86_64-uefi-http".into(),
             tags: vec!["uefi-http".into()],
@@ -1250,6 +1321,7 @@ bootm_addr = "0x82200000"
             flow_control: AxloaderSerialFlowControl::RtsCts,
         };
         let board = BoardConfig {
+            reset_command: None,
             id: "uefi-http-serial".into(),
             board_type: "x86_64-uefi-http".into(),
             tags: vec![],
@@ -1282,6 +1354,7 @@ bootm_addr = "0x82200000"
     #[test]
     fn physical_httpboot_rejects_host_unsupported_serial_modes() {
         let mut board = BoardConfig {
+            reset_command: None,
             id: "uefi-http-serial-invalid".into(),
             board_type: "x86_64-uefi-http".into(),
             tags: vec![],
@@ -1321,6 +1394,7 @@ bootm_addr = "0x82200000"
     #[test]
     fn httpboot_board_requires_persistent_network_identity() {
         let mut board = BoardConfig {
+            reset_command: None,
             id: "uefi-http-01".into(),
             board_type: "x86_64-uefi-http".into(),
             tags: vec![],
@@ -1354,6 +1428,7 @@ bootm_addr = "0x82200000"
     #[test]
     fn qemu_board_requires_httpboot_and_derives_virtual_serial() {
         let mut board = BoardConfig {
+            reset_command: None,
             id: "qemu-01".into(),
             board_type: "qemu-x86_64".into(),
             tags: vec![],
@@ -1423,6 +1498,7 @@ mac = "1c:69:7a:dc:f3:47"
     #[test]
     fn board_config_round_trip_supports_relay_power_management_key() {
         let board = BoardConfig {
+            reset_command: None,
             id: "demo-relay".into(),
             board_type: "demo".into(),
             tags: vec![],

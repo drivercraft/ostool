@@ -10,6 +10,7 @@ pub mod config;
 pub mod dashboard;
 pub mod device;
 pub mod environment;
+pub mod hardware;
 pub mod http_boot;
 pub mod loader;
 pub mod network_test;
@@ -23,6 +24,7 @@ pub mod session;
 pub mod state;
 pub mod static_assets;
 pub mod tftp;
+pub mod uploads;
 pub mod virtual_lab;
 pub mod virtual_qemu;
 

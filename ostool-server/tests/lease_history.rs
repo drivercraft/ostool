@@ -101,6 +101,7 @@ impl Fixture {
 }
 fn board() -> BoardConfig {
     BoardConfig {
+        reset_command: None,
         id: "history-board".into(),
         board_type: "history-fixture".into(),
         tags: vec![],

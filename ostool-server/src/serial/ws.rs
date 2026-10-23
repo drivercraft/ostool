@@ -757,6 +757,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let output_path = dir.path().join("power.log");
         let board = BoardConfig {
+            reset_command: None,
             id: "demo".into(),
             board_type: "demo".into(),
             tags: vec![],
@@ -789,6 +790,7 @@ mod tests {
         let output_path = dir.path().join("power.log");
         let state = test_state(dir.path()).await;
         let board = BoardConfig {
+            reset_command: None,
             id: "demo".into(),
             board_type: "demo".into(),
             tags: vec![],

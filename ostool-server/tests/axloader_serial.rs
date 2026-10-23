@@ -184,6 +184,7 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
     .unwrap();
     state.serial_manager = SerialManager::new(backend);
     let board = BoardConfig {
+        reset_command: None,
         id: "auto".into(),
         board_type: "uefi".into(),
         tags: vec![],
@@ -209,6 +210,7 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
     board.validate().unwrap();
     state.boards.write().await.insert(board.id.clone(), board);
     let relay = BoardConfig {
+        reset_command: None,
         id: "relay".into(),
         board_type: "relay".into(),
         tags: vec![],

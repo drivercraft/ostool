@@ -80,6 +80,10 @@ async fn main() -> anyhow::Result<()> {
         "both local and public editions require PostgreSQL (OSTOOL_DATABASE_URL); use scripts/dev.sh for an automatically managed development database"
     );
     let listen_addr = config.listen_addr;
+    anyhow::ensure!(
+        !config.edition.is_public() || listen_addr.ip().is_loopback(),
+        "public 用户 API 必须使用回环监听，由 HTTPS 网关转发"
+    );
     let listener = tokio::net::TcpListener::bind(listen_addr)
         .await
         .with_context(|| format!("failed to bind management listener at {listen_addr}"))?;
@@ -109,8 +113,20 @@ async fn main() -> anyhow::Result<()> {
         tftp_manager.clone(),
     )
     .await?;
+    let device_config = state.config.read().await.clone();
+    let hardware_listener =
+        if let Some(addr) = ostool_server::hardware::listen_address(&device_config)? {
+            Some(
+                tokio::net::TcpListener::bind(addr)
+                    .await
+                    .with_context(|| format!("failed to bind device-network listener at {addr}"))?,
+            )
+        } else {
+            None
+        };
     let tftp_manager = state.tftp_manager.read().await.clone();
     state.ensure_data_dirs().await?;
+    ostool_server::uploads::cleanup_interrupted(&state).await?;
     state.monitor.start(state.clone());
     for (board_id, err) in state.power_off_all_boards_on_startup().await {
         log::warn!(
@@ -158,10 +174,28 @@ async fn main() -> anyhow::Result<()> {
         .context("management listener failed")
     });
     info!("ostoold management API listening on {listen_addr}");
+    if let Some(listener) = hardware_listener {
+        let addr = listener.local_addr()?;
+        let shutdown = shutdown_tx.subscribe();
+        let app = ostool_server::hardware::build_router(state.clone());
+        servers.spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(wait_for_shutdown(shutdown))
+            .await
+            .context("device-network listener failed")
+        });
+        info!("ostoold device-only HTTP listening on {addr}");
+    }
     if let Some(test_listener) = network_test_listener {
         let test_shutdown = shutdown_tx.subscribe();
         let test_addr = network_test_config.listen_addr;
-        let test_app = ostool_server::network_test::build_router(network_test_config);
+        let mut test_app = ostool_server::network_test::build_router(network_test_config);
+        if state.config.read().await.edition.is_public() {
+            test_app = ostool_server::hardware::protect(test_app, state.clone());
+        }
         servers.spawn(async move {
             axum::serve(
                 test_listener,

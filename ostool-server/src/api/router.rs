@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use axum::{
     Router,
-    body::{Bytes, to_bytes},
+    body::{Body, Bytes, to_bytes},
     extract::{Extension, Path, Request, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
@@ -70,6 +70,21 @@ use crate::{
 };
 
 const DTB_UPLOAD_MAX_MIB: u32 = 10;
+
+pub(crate) fn hardware_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/boot/sessions/{session_id}/{*path}",
+            get(get_http_boot_file),
+        )
+        .route(
+            "/share/sessions/{session_id}/{*path}",
+            get(get_shared_session_file),
+        )
+        .route("/api/v1/loaders/poll", post(poll_loader))
+        .route("/api/v1/loaders/status", post(report_loader_status))
+        .merge(super::ota::hardware_routes())
+}
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
@@ -924,9 +939,13 @@ async fn report_loader_status(
 async fn parse_loader_json<T: serde::de::DeserializeOwned>(
     request: Request,
 ) -> Result<T, ApiError> {
-    let body = to_bytes(request.into_body(), 64 * 1024)
-        .await
-        .map_err(|_| ApiError::bad_request("failed to read loader JSON body"))?;
+    let body = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        to_bytes(request.into_body(), 64 * 1024),
+    )
+    .await
+    .map_err(|_| ApiError::bad_request("loader JSON body timed out"))?
+    .map_err(|_| ApiError::bad_request("failed to read loader JSON body"))?;
     serde_json::from_slice(&body)
         .map_err(|error| ApiError::bad_request(format!("invalid loader JSON: {error}")))
 }
@@ -961,6 +980,10 @@ pub(crate) fn board_id_for_mac(
 
 fn loader_reject(error: RegistrationError) -> LoaderPollResponse {
     let (code, message) = match error {
+        RegistrationError::Capacity => (
+            "discovery_busy",
+            "device discovery capacity reached; retry later",
+        ),
         RegistrationError::ProtocolVersion => {
             ("unsupported_protocol", "unsupported protocol version")
         }
@@ -988,6 +1011,10 @@ fn loader_reject(error: RegistrationError) -> LoaderPollResponse {
 
 fn registration_api_error(error: RegistrationError) -> ApiError {
     let (code, message) = match error {
+        RegistrationError::Capacity => (
+            "discovery_busy",
+            "device discovery capacity reached; retry later",
+        ),
         RegistrationError::ProtocolVersion => {
             ("unsupported_protocol", "unsupported protocol version")
         }
@@ -1207,6 +1234,7 @@ fn allocate_board_id(boards: &BTreeMap<String, BoardConfig>, board_type: &str) -
 impl AdminBoardUpsertRequest {
     fn into_board_config(self, board_id: String) -> BoardConfig {
         BoardConfig {
+            reset_command: self.reset_command,
             id: board_id,
             board_type: self.board_type,
             tags: self.tags,
@@ -1417,8 +1445,17 @@ async fn get_tftp_config(
 
 async fn update_tftp_config(
     State(state): State<AppState>,
-    axum::Json(tftp): axum::Json<TftpConfig>,
+    axum::Json(mut tftp): axum::Json<TftpConfig>,
 ) -> Result<axum::Json<AdminTftpConfigResponse>, ApiError> {
+    let _admission = state.rental_gate.lock().await;
+    if tftp.root_dir() != state.tftp_manager.read().await.root_dir()
+        && !state.sessions.read().await.is_empty()
+    {
+        return Err(ApiError::conflict("请先释放所有会话，再修改文件存储目录"));
+    }
+
+    crate::hardware::restrict_tftp(&*state.config.read().await, &mut tftp)
+        .map_err(ApiError::from)?;
     tokio::fs::create_dir_all(tftp.root_dir())
         .await
         .map_err(|err| ApiError::internal(err.to_string()))?;
@@ -1477,11 +1514,10 @@ async fn update_server_config(
     if request.network.interface.trim().is_empty() {
         return Err(ApiError::bad_request("network.interface must not be empty"));
     }
-    if request.upload_limits.session_file_max_mib == 0 {
-        return Err(ApiError::bad_request(
-            "upload_limits.session_file_max_mib must be greater than 0",
-        ));
-    }
+    request
+        .upload_limits
+        .validate()
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
 
     {
         let mut config = state.config.write().await;
@@ -2089,77 +2125,100 @@ async fn read_session_file_response(
     let content_type = HeaderValue::from_str(&content_type).map_err(|err| {
         ApiError::service_unavailable(format!("invalid content type `{content_type}`: {err}"))
     })?;
-    if let Some(range) = headers
+    let range = headers
         .get(header::RANGE)
-        .and_then(|value| value.to_str().ok())
-        && let Some((start, end)) = parse_single_byte_range(range, file_len)
-    {
-        let chunk = read_file_range(&disk_path, start, end).await?;
-        return Ok((
-            StatusCode::PARTIAL_CONTENT,
-            [
-                (header::CONTENT_TYPE, content_type),
-                (
-                    header::CONTENT_LENGTH,
-                    HeaderValue::from_str(&chunk.len().to_string()).map_err(|err| {
-                        ApiError::service_unavailable(format!(
-                            "invalid content length header: {err}"
-                        ))
-                    })?,
-                ),
-                (
-                    header::CONTENT_RANGE,
-                    HeaderValue::from_str(&format!("bytes {start}-{end}/{file_len}")).map_err(
-                        |err| {
-                            ApiError::service_unavailable(format!(
-                                "invalid content range header: {err}"
-                            ))
-                        },
-                    )?,
-                ),
-                (header::ACCEPT_RANGES, HeaderValue::from_static("bytes")),
-            ],
-            chunk,
-        )
-            .into_response());
-    }
-
-    let body = fs::read(&disk_path)
-        .await
-        .map_err(|err| ApiError::from(anyhow::Error::from(err)))?;
-    let content_length = HeaderValue::from_str(&body.len().to_string()).map_err(|err| {
-        ApiError::service_unavailable(format!("invalid content length header: {err}"))
-    })?;
-    Ok((
-        [
-            (header::CONTENT_TYPE, content_type),
-            (header::CONTENT_LENGTH, content_length),
-        ],
-        body,
-    )
-        .into_response())
-}
-
-async fn read_file_range(
-    path: &std::path::Path,
-    start: usize,
-    end: usize,
-) -> Result<Vec<u8>, ApiError> {
-    let len = end
-        .checked_sub(start)
-        .and_then(|value| value.checked_add(1))
-        .ok_or_else(|| ApiError::bad_request("invalid byte range"))?;
-    let mut file = File::open(path)
-        .await
-        .map_err(|err| ApiError::from(anyhow::Error::from(err)))?;
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| parse_single_byte_range(v, file_len));
+    let (start, length) = range
+        .map(|(start, end)| (start, end - start + 1))
+        .unwrap_or((0, file_len));
+    let mut file = File::open(&disk_path).await.map_err(anyhow::Error::from)?;
     file.seek(SeekFrom::Start(start as u64))
         .await
-        .map_err(|err| ApiError::from(anyhow::Error::from(err)))?;
-    let mut chunk = vec![0; len];
-    file.read_exact(&mut chunk)
+        .map_err(anyhow::Error::from)?;
+    let session = state
+        .session_state(session_id)
         .await
-        .map_err(|err| ApiError::from(anyhow::Error::from(err)))?;
-    Ok(chunk)
+        .ok_or_else(|| ApiError::not_found("session not found"))?;
+    let global = state
+        .uploads
+        .downloads
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "download_busy",
+                "下载并发已满",
+            )
+            .with_retry_after(2)
+        })?;
+    let own = session.downloads.clone().try_acquire_owned().map_err(|_| {
+        ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "download_busy",
+            "该会话下载并发已满",
+        )
+        .with_retry_after(2)
+    })?;
+    let mut shutdown = session.subscribe_shutdown();
+    let timeout = std::time::Duration::from_secs(
+        state.config.read().await.upload_limits.upload_timeout_secs as u64,
+    );
+    let (sender, receiver) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(async move {
+        let _slots = (global, own);
+        let transfer = async {
+            let mut remaining = length;
+            while remaining > 0 {
+                let mut chunk = vec![0u8; remaining.min(64 * 1024)];
+                let n = file.read(&mut chunk).await?;
+                if n == 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "file changed during download",
+                    ));
+                }
+                chunk.truncate(n);
+                remaining -= n;
+                sender.send(Ok(Bytes::from(chunk))).await.map_err(|_| {
+                    std::io::Error::new(std::io::ErrorKind::BrokenPipe, "download closed")
+                })?;
+            }
+            Ok::<_, std::io::Error>(())
+        };
+        let result = tokio::select! {
+            biased;
+            _=shutdown.wait_for(|stopped|*stopped)=>Err(std::io::Error::other("session ended")),
+            result=tokio::time::timeout(timeout,transfer)=>result.unwrap_or_else(|_|Err(std::io::Error::new(std::io::ErrorKind::TimedOut,"download timed out"))),
+        };
+        if let Err(error) = result {
+            let _ = sender.try_send(Err(error));
+        }
+    });
+    let stream = futures_util::stream::unfold(receiver, |mut receiver| async move {
+        receiver.recv().await.map(|chunk| (chunk, receiver))
+    });
+    let mut response = Response::new(Body::from_stream(stream));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, content_type);
+    response.headers_mut().insert(
+        header::CONTENT_LENGTH,
+        HeaderValue::from_str(&length.to_string()).expect("numeric length"),
+    );
+    response
+        .headers_mut()
+        .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    if let Some((start, end)) = range {
+        *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+        response.headers_mut().insert(
+            header::CONTENT_RANGE,
+            HeaderValue::from_str(&format!("bytes {start}-{end}/{file_len}"))
+                .expect("numeric byte range"),
+        );
+    }
+    Ok(response)
 }
 
 fn parse_single_byte_range(range: &str, len: usize) -> Option<(usize, usize)> {
@@ -2422,6 +2481,10 @@ async fn delete_session_file(
             "session `{session_id}` is releasing"
         )));
     }
+    let _files = session.file_gate.lock().await;
+    if session.is_stop_requested() {
+        return Err(ApiError::conflict("会话已结束"));
+    }
     let manager = state.tftp_manager.read().await.clone();
     manager
         .remove_session_file(&session_id, &relative_path)
@@ -2485,16 +2548,7 @@ async fn put_session_file_bytes_from_request(
     request: Request,
     body_label: &'static str,
 ) -> Result<(TftpFileRef, u64, String), ApiError> {
-    let max_mib = state.config.read().await.upload_limits.session_file_max_mib;
-    let body = read_limited_body(request, max_mib, body_label).await?;
-    let size = body.len() as u64;
-    let sha256 = hex_sha256(&body);
-    let manager = state.tftp_manager.read().await.clone();
-    let file = manager
-        .put_session_file(session_id, relative_path, &body)
-        .await
-        .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
-    Ok((file, size, sha256))
+    crate::uploads::store(state, session_id, relative_path, request, body_label).await
 }
 
 fn required_relative_path_header(
@@ -2661,6 +2715,9 @@ pub(crate) fn http_boot_public_base_url(config: &ServerConfig) -> Result<Url, Ap
     {
         return Url::parse(public_base_url.trim())
             .map_err(|err| ApiError::bad_request(format!("invalid HTTP Boot public URL: {err}")));
+    }
+    if let Some(address) = config.hardware_listen_addr {
+        return server_http_base_url(&address.ip().to_string(), address.port());
     }
 
     if let Some(network) = resolve_server_network(config)?
@@ -2886,8 +2943,11 @@ async fn resolved_shared_network(
 }
 
 async fn shared_http_base_url(state: &AppState, server_ip: &str) -> Result<Url, ApiError> {
-    let port = state.config.read().await.listen_addr.port();
-    server_http_base_url(server_ip, port)
+    let config = state.config.read().await.clone();
+    if let Some(address) = config.hardware_listen_addr {
+        return server_http_base_url(&address.ip().to_string(), address.port());
+    }
+    server_http_base_url(server_ip, config.listen_addr.port())
 }
 
 fn server_http_base_url(server_ip: &str, port: u16) -> Result<Url, ApiError> {
@@ -3243,6 +3303,7 @@ mod tests {
 
     fn test_server_config(root: &std::path::Path) -> ServerConfig {
         ServerConfig {
+            hardware_listen_addr: None,
             security: Default::default(),
             audit: Default::default(),
             edition: crate::config::Edition::Local,
@@ -3531,6 +3592,7 @@ mod tests {
 
     fn sample_board(board_id: &str) -> BoardConfig {
         BoardConfig {
+            reset_command: None,
             id: board_id.into(),
             board_type: "rk3568".into(),
             tags: vec!["lab".into(), "usb".into()],
@@ -3817,6 +3879,7 @@ mod tests {
     #[test]
     fn board_config_new_uboot_profile_supports_use_tftp() {
         let board = BoardConfig {
+            reset_command: None,
             id: "demo".into(),
             board_type: "demo".into(),
             tags: vec![],
@@ -5822,6 +5885,7 @@ mod tests {
     #[test]
     fn normalize_board_upsert_request_trims_uboot_load_addresses() {
         let request = AdminBoardUpsertRequest {
+            reset_command: None,
             id: Some("demo".into()),
             board_type: "demo".into(),
             tags: vec![],

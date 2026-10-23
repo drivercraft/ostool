@@ -12,6 +12,7 @@ type BootKind = "uboot" | "pxe" | "httpboot";
 export interface BoardEditorFormState {
   id: string;
   board_type: string;
+  reset_command: string;
   tags_text: string;
   notes: string;
   disabled: boolean;
@@ -55,6 +56,7 @@ export function defaultFormState(): BoardEditorFormState {
     board_type: "",
     tags_text: "",
     notes: "",
+    reset_command: "",
     disabled: false,
     serial_enabled: false,
     serial_key_kind: "serial_number",
@@ -95,6 +97,7 @@ export function boardToFormState(board: BoardConfig): BoardEditorFormState {
   next.board_type = board.board_type;
   next.tags_text = board.tags.join(", ");
   next.notes = board.notes ?? "";
+  next.reset_command = board.reset_command ?? "";
   next.disabled = board.disabled;
   next.network_mac = board.network_identity?.mac_address ?? "";
 
@@ -234,6 +237,7 @@ export function buildRequestPayload(
 ): AdminBoardUpsertRequest {
   return {
     id: trimToNull(form.id),
+    reset_command: trimToNull(form.reset_command),
     board_type: form.board_type.trim(),
     tags: splitTags(form.tags_text),
     notes: trimToNull(form.notes),

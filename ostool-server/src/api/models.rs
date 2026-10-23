@@ -117,6 +117,8 @@ pub struct SerialPortSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminBoardUpsertRequest {
+    #[serde(default)]
+    pub reset_command: Option<String>,
     pub id: Option<String>,
     pub board_type: String,
     #[serde(default)]

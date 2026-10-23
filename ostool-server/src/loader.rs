@@ -68,6 +68,7 @@ pub struct LoaderRegistry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegistrationError {
+    Capacity,
     ProtocolVersion,
     Unknown,
     Expired,
@@ -96,6 +97,9 @@ impl LoaderRegistry {
         let now = Utc::now();
         let mut state = self.state.lock().await;
         prune(&mut state, now);
+        if state.devices.len() >= 4096 && !state.devices.contains_key(&device.mac_address) {
+            return Err(RegistrationError::Capacity);
+        }
         let conflict = state
             .devices
             .get(&device.mac_address)
@@ -227,6 +231,9 @@ impl LoaderRegistry {
         let registration_id = uuid::Uuid::new_v4().to_string();
         let mut state = self.state.lock().await;
         prune(&mut state, now);
+        if state.registrations.len() >= 4096 {
+            return Err(RegistrationError::Capacity);
+        }
         state.registrations.insert(
             registration_id.clone(),
             Registration {
@@ -494,9 +501,14 @@ async fn serve_udp_discovery(
         httpboot_protocol::MacAddress,
         (String, tokio::task::AbortHandle),
     >::new()));
+    let slots = Arc::new(tokio::sync::Semaphore::new(16));
     loop {
         let (length, peer) = socket.recv_from(&mut buffer).await?;
         if length > MAX_DISCOVERY_DATAGRAM_BYTES {
+            continue;
+        }
+        if server_config.edition.is_public() && !crate::hardware::allowed(&server_config, peer.ip())
+        {
             continue;
         }
         if let Ok(announcement) = serde_json::from_slice::<LoaderAnnouncement>(&buffer[..length])
@@ -511,17 +523,19 @@ async fn serve_udp_discovery(
                 .await;
             let mac = announcement.mac_address;
             let mut running = in_progress.lock().await;
-            if let Some((epoch, task)) = running.get(&mac) {
-                if *epoch == announcement.boot_epoch {
-                    continue;
-                }
-                task.abort();
+            // An unverified announcement must not cancel an established device operation.
+            if running.contains_key(&mac) {
+                continue;
             }
+            let Ok(slot) = slots.clone().try_acquire_owned() else {
+                continue;
+            };
             let active = in_progress.clone();
             let device_state = state.clone();
             let epoch = announcement.boot_epoch.clone();
             let active_epoch = epoch.clone();
             let task = tokio::spawn(async move {
+                let _slot = slot;
                 if let Err(error) = crate::device::reconcile(device_state, announcement, peer).await
                 {
                     log::warn!("device {} at {}: {error:#}", mac, peer);
@@ -745,5 +759,67 @@ mod tests {
             .unwrap();
 
         assert!(registry.snapshots().await[0].online);
+    }
+}
+
+#[cfg(test)]
+mod network_boundary_tests {
+    #[tokio::test]
+    async fn discovery_rejects_untrusted_udp_before_any_device_http_callback() {
+        use crate::{
+            BuiltinTftpConfig, ServerConfig, TftpConfig, config::Edition,
+            tftp::service::build_tftp_manager,
+        };
+        use httpboot_protocol::{BootArch, DEVICE_PROTOCOL_VERSION, LoaderAnnouncement};
+        use tokio::net::{TcpListener, UdpSocket};
+        let root = tempfile::tempdir().unwrap();
+        let mut config = ServerConfig {
+            edition: Edition::Public,
+            data_dir: root.path().join("data"),
+            tftp: TftpConfig::Builtin(BuiltinTftpConfig {
+                enabled: false,
+                ..BuiltinTftpConfig::default_with_root(root.path().join("tftp"))
+            }),
+            ..Default::default()
+        };
+        config.security.hardware_allowed_networks = vec!["192.0.2.0/24".into()];
+        crate::test_support::prepare(&root.path().join("test.env"), &mut config)
+            .await
+            .unwrap();
+        let state = crate::build_app_state(
+            root.path().join("test.env"),
+            config.clone(),
+            build_tftp_manager(&config.tftp),
+        )
+        .await
+        .unwrap();
+        let http = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let address = udp.local_addr().unwrap();
+        let server = tokio::spawn(super::serve_udp_discovery(state, config, udp));
+        let mac = "02:00:00:00:00:01".parse().unwrap();
+        let announcement = LoaderAnnouncement {
+            protocol_version: DEVICE_PROTOCOL_VERSION,
+            mac_address: mac,
+            current_mac_address: mac,
+            arch: BootArch::X86_64,
+            loader_version: "test".into(),
+            boot_epoch: "test-epoch".into(),
+            http_port: http.local_addr().unwrap().port(),
+            serial_id: None,
+            serial_ready: false,
+        };
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client
+            .send_to(&serde_json::to_vec(&announcement).unwrap(), address)
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(200), http.accept())
+                .await
+                .is_err()
+        );
+        server.abort();
+        let _ = server.await;
     }
 }

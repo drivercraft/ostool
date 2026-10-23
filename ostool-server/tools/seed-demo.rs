@@ -85,6 +85,7 @@ fn board(index: usize) -> BoardConfig {
         }),
     };
     BoardConfig {
+        reset_command: None,
         power_management: PowerManagementConfig::Custom(CustomPowerManagement {
             power_on_cmd: format!("true # ostool-demo {id} on"),
             power_off_cmd: format!("true # ostool-demo {id} off"),

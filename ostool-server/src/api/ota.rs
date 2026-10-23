@@ -41,6 +41,14 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/api/v1/loaders/ota-status", post(report_status))
 }
+pub(crate) fn hardware_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/api/v1/loader-updates/{update_id}/image",
+            get(download_image),
+        )
+        .route("/api/v1/loaders/ota-status", post(report_status))
+}
 
 async fn list_images(State(state): State<AppState>) -> Result<Json<Vec<Image>>, ApiError> {
     Ok(Json(state.ota.images().await?))

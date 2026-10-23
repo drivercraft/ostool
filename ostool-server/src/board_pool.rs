@@ -127,6 +127,7 @@ mod tests {
 
     fn board(id: &str, board_type: &str) -> BoardConfig {
         BoardConfig {
+            reset_command: None,
             id: id.to_string(),
             board_type: board_type.to_string(),
             tags: Vec::new(),

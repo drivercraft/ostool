@@ -70,18 +70,7 @@ impl Default for SecurityConfig {
             login_max_failures: 6,
             login_lock_secs: 900,
             admin_allowed_networks: vec![],
-            hardware_allowed_networks: [
-                "127.0.0.0/8",
-                "10.0.0.0/8",
-                "172.16.0.0/12",
-                "192.168.0.0/16",
-                "::1/128",
-                "fc00::/7",
-                "fe80::/10",
-            ]
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
+            hardware_allowed_networks: Vec::new(),
             smtp_enabled: true,
             password_reset_enabled: true,
             password_reset_ttl_secs: 600,

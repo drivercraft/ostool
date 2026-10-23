@@ -35,6 +35,7 @@ deploy_usage() {
 
 选项：
   --env-file <路径>         唯一启动配置，默认 ostool-server/.env
+  --compose-file <路径>     Docker 叠加配置，可重复；真实串口使用 deploy/compose.serial.yaml
   --dry-run                 只显示计划，不构建、不安装、不重启
   --output-dir <目录>       systemd up/restart 专用，只生成安装文件
 
@@ -51,6 +52,7 @@ deploy_usage() {
 EOF
 }
 
+COMPOSE_FILES=()
 deploy_parse_args() {
     if (($# == 0)); then deploy_usage; exit 0; fi
     case $1 in help|-h|--help) deploy_usage; exit 0;; esac
@@ -61,9 +63,9 @@ deploy_parse_args() {
     case $ACTION in up|down|restart|build|status|logs|check) ;; *) printf '[错误] 未知命令：%s\n' "$ACTION" >&2; exit 2;; esac
     while (($#)); do
         case $1 in
-            --env-file|--output-dir)
+            --env-file|--output-dir|--compose-file)
                 [[ $# -ge 2 && -n $2 && $2 != --* ]] || { printf '[错误] %s 缺少路径。\n' "$1" >&2; exit 2; }
-                if [[ $1 == --env-file ]]; then ENV_FILE=$2; else OUTPUT_DIR=$2; fi
+                if [[ $1 == --env-file ]]; then ENV_FILE=$2; elif [[ $1 == --output-dir ]]; then OUTPUT_DIR=$2; else COMPOSE_FILES+=("$2"); fi
                 shift 2;;
             --dry-run) DRY_RUN=true; shift;;
             -h|--help) deploy_usage; exit 0;;
@@ -73,6 +75,7 @@ deploy_parse_args() {
     if [[ -n $OUTPUT_DIR && ( $MODE != systemd || ( $ACTION != up && $ACTION != restart ) ) ]]; then
         printf '[错误] --output-dir 只用于 systemd up/restart。\n' >&2; exit 2
     fi
+    if [[ $MODE != docker && ${#COMPOSE_FILES[@]} -gt 0 ]]; then printf '[错误] --compose-file 只用于 Docker 部署。\n' >&2; exit 2; fi
 }
 
 deploy_setting() {
@@ -100,6 +103,7 @@ deploy_prepare() {
     # profile 由当前入口选择，不继承其他 Compose 项目的终端设置。
     export COMPOSE_PROFILES=
     COMPOSE=(docker compose --project-name ostool-server --env-file "$ENV_FILE" -f "$SERVER_DIR/deploy/compose.yaml")
+    for file in "${COMPOSE_FILES[@]}"; do COMPOSE+=(-f "$file"); done
     if [[ $MODE == docker ]]; then
         command -v docker >/dev/null && docker compose version >/dev/null || { printf '[错误] 需要 Docker 和 Compose 插件。\n' >&2; exit 1; }
     else
@@ -168,6 +172,7 @@ deploy_systemd() {
     if [[ -n $OUTPUT_DIR || $ACTION == up || $ACTION == restart ]]; then
         install -m 600 "$ENV_FILE" "$STAGING_DIR/.env"
         install -m 644 "$SERVER_DIR/deploy/ostool-server.service" "$STAGING_DIR/ostool-server.service"
+        install -m 644 "$SERVER_DIR/deploy/tftpd.readonly.rules" "$STAGING_DIR/ostool-server-tftp.rules"
         if [[ $EDITION == public ]]; then
             install -m 644 "$SERVER_DIR/deploy/ostool-server.caddy" "$STAGING_DIR/ostool-server.caddy"
             node --input-type=commonjs - "$ENV_FILE" "$STAGING_DIR/ostool-server.caddy" <<'JS'
@@ -207,6 +212,7 @@ JS
     done
     "${SUDO[@]}" install -m 600 -o ostool -g ostool "$STAGING_DIR/.env" /etc/ostool-server/.env
     "${SUDO[@]}" install -m 644 "$STAGING_DIR/ostool-server.service" /etc/systemd/system/ostool-server.service
+    "${SUDO[@]}" install -m 644 "$SERVER_DIR/deploy/tftpd.readonly.rules" /etc/ostool-server-tftp.rules
     if getent group dialout >/dev/null; then "${SUDO[@]}" usermod -aG dialout ostool; fi
     "${SUDO[@]}" systemctl daemon-reload
     "${SUDO[@]}" systemctl enable ostool-server

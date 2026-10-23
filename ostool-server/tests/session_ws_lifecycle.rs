@@ -73,6 +73,7 @@ struct SessionCreatedResponse {
 
 fn sample_board_with_power_on(serial_port: String, power_on_cmd: String) -> BoardConfig {
     BoardConfig {
+        reset_command: None,
         id: TEST_BOARD_ID.into(),
         board_type: TEST_BOARD_TYPE.into(),
         tags: vec![],
@@ -119,6 +120,7 @@ fn spawn_test_server_with_power_on(
     tftp.enabled = false;
 
     let config = ServerConfig {
+        hardware_listen_addr: None,
         security: Default::default(),
         audit: Default::default(),
         edition: ostool_server::config::Edition::Local,

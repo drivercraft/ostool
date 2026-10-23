@@ -52,6 +52,7 @@ env_logger = {workspace = true}
 dotenvy = "0.15"
 futures-util = "0.3"
 fs4 = "1.1"
+tempfile = "3"
 httpboot-protocol = { workspace = true }
 ostool-serial = { workspace = true }
 log = {workspace = true}
@@ -86,7 +87,6 @@ nix = { version = "0.30", features = ["signal", "process"] }
 [dev-dependencies]
 ostool = { version = "0.31.1", path = "../ostool" }
 nix = {version="0.30", features=["term"]}
-tempfile = "3"
 tokio-modbus = {version = "0.17.0", default-features = false, features = ["rtu", "rtu-server"]}
 tokio-tungstenite = "0.28"
 tower = {version = "0.5", features = ["util"]}
