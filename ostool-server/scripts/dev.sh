@@ -28,7 +28,7 @@ dev_usage() {
   check                     检查 Compose 与访问配置，不启动容器
   status                    显示容器状态
   logs [服务]               查看最近日志，可指定 server、postgres、redis、caddy
-  seed                      独立导入演示数据，然后重启后端
+  seed                      独立导入预置业务数据，然后重启后端
   cert                      导出 public 模式内部 CA 根证书
   help, -h, --help          显示使用说明
 
@@ -45,7 +45,7 @@ dev_usage() {
 说明：
   仅管理 Docker，不调用 deploy.sh，不操作宿主机 systemd 或 /etc。
   local 直接使用 HTTP；public 启动标准 Caddy 容器提供 HTTPS。
-  使用与正式部署相同的 release 程序、数据库和鉴权；演示数据仅由 seed 导入。
+  使用与正式部署相同的 release 程序、数据库和鉴权；预置业务数据仅由 seed 导入。
   与 deploy.sh docker 使用同一 Compose 项目及数据卷，不要同时管理同一环境。
 EOF
 }
@@ -145,7 +145,7 @@ dev_run() {
             "${COMPOSE[@]}" stop server
             "${COMPOSE[@]}" run --build --rm --no-deps --entrypoint ostool-server-seed-demo server --env-file /dev/null
             "${COMPOSE[@]}" up -d --wait
-            printf '[完成] 演示数据已导入，已有记录保留。\n';;
+            printf '[完成] 预置业务数据已导入，已有记录保留。\n';;
         cert)
             [[ $EDITION == public ]] || { printf '[信息] local 使用 HTTP，无需证书。\n'; return; }
             mkdir -p "$REPO_DIR/.ostool-server-dev"
