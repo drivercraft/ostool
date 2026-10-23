@@ -35,9 +35,9 @@ for (const theme of ["light", "dark"] as const) {
     const buttons: Record<string, unknown>[] = [];
     try {
       for (const [path, label] of [
-        [base + "/login", "用户名或邮箱"],
+        [base + "/login", "账号"],
         [base + "/register", "用户名"],
-        [base + "/admin/login", "用户名或邮箱"],
+        [base + "/admin/login", "账号"],
         [base + "/devices", "搜索设备"],
         ["http://127.0.0.1:4174/admin/boards/new", "板型"],
       ]) {

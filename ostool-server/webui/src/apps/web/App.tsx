@@ -861,7 +861,7 @@ function Login() {
                     </div>
                   )}
                   <TextField
-                    label={registering ? "邮箱" : "用户名或邮箱"}
+                    label={registering ? "邮箱" : "账号"}
                     type={registering ? "email" : "text"}
                     required
                     value={email}

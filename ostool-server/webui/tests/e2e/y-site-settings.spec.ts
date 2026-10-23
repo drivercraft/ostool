@@ -17,7 +17,7 @@ test("site settings publish through SSE, legal pages and explicit versioned sign
   ).toBeVisible();
   await page.goto(base + "/admin/login?redirect=/admin/settings");
   await page
-    .getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true })
+    .getByLabel(/^(邮箱|账号)$/, { exact: true })
     .fill(process.env.OSTOOL_E2E_ADMIN_EMAIL!);
   await page
     .getByLabel("密码", { exact: true })
@@ -145,7 +145,7 @@ test("site settings publish through SSE, legal pages and explicit versioned sign
     .getByLabel("用户名", { exact: true })
     .fill("legal_" + Date.now());
   await website
-    .getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true })
+    .getByLabel(/^(邮箱|账号)$/, { exact: true })
     .fill("legal-" + Date.now() + "@test.local");
   await website.getByLabel("显示名称", { exact: true }).fill("协议测试成员");
   await website

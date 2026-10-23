@@ -122,7 +122,7 @@ describe("registration", () => {
     render(<PublicApp />);
     const user = userEvent.setup();
     await user.type(
-      await screen.findByLabelText("用户名或邮箱"),
+      await screen.findByLabelText("账号"),
       "member@test.local",
     );
     await user.type(screen.getByLabelText("密码"), "member-password-123");
@@ -149,7 +149,7 @@ describe("registration", () => {
     const user = userEvent.setup();
     render(<PublicApp />);
     await user.type(
-      await screen.findByLabelText("用户名或邮箱"),
+      await screen.findByLabelText("账号"),
       "admin@test.local",
     );
     await user.type(screen.getByLabelText("密码"), "admin-password-123");
@@ -309,7 +309,7 @@ describe("CLI device authorization", () => {
     const user = userEvent.setup();
     render(<PublicApp />);
     await user.type(
-      await screen.findByLabelText("用户名或邮箱"),
+      await screen.findByLabelText("账号"),
       "member@test.local",
     );
     await user.type(screen.getByLabelText("密码"), "member-password-123");

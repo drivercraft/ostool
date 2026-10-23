@@ -151,7 +151,7 @@ export default function AdminLogin() {
               {!challenge ? (
                 <>
                   <TextField
-                    label="用户名或邮箱"
+                    label="账号"
                     type="text"
                     autoComplete="username"
                     placeholder="输入用户名或邮箱"

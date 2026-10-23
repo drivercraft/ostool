@@ -55,7 +55,7 @@ test("standalone rental calendar, live conflicts and persistent card layouts", a
     ).ok(),
   ).toBeTruthy();
   await page.goto(`${base}/admin/login?redirect=/admin/rentals`);
-  await page.getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true }).fill(email);
+  await page.getByLabel(/^(邮箱|账号)$/, { exact: true }).fill(email);
   await page.getByLabel("密码", { exact: true }).fill(password);
   await solveCaptcha(page);
   await page.getByRole("button", { name: "登录", exact: true }).click();

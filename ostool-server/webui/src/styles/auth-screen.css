@@ -175,6 +175,9 @@ body:has(.auth-page-fullscreen) {
   background: var(--card);
   box-shadow: 0 12px 40px #14203306;
 }
+.auth-page-fullscreen .auth-card [data-slot="field-label"] {
+  font-weight: 600;
+}
 .auth-page-fullscreen .auth-card h2 {
   margin: 0 0 8px;
   font-size: 28px;

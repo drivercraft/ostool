@@ -8,7 +8,7 @@ test("system settings write encrypted credentials without echoing them and prote
   test.skip(!base, "requires disposable public fixtures");
   await page.goto(base + "/admin/login?redirect=/admin/settings");
   await page
-    .getByLabel("用户名或邮箱", { exact: true })
+    .getByLabel("账号", { exact: true })
     .fill(process.env.OSTOOL_E2E_ADMIN_EMAIL!);
   await page
     .getByLabel("密码", { exact: true })

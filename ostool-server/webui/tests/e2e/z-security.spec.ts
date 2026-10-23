@@ -36,7 +36,7 @@ test("image captcha, encrypted MFA enrollment, recovery login and recent identit
   await expect(
     page.getByRole("button", { name: "登录", exact: true }),
   ).toBeDisabled();
-  await page.getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true }).fill(email);
+  await page.getByLabel(/^(邮箱|账号)$/, { exact: true }).fill(email);
   await page.getByLabel("密码", { exact: true }).fill(password);
   await solveCaptcha(page);
   await page.getByRole("button", { name: "登录", exact: true }).click();
@@ -92,7 +92,7 @@ test("image captcha, encrypted MFA enrollment, recovery login and recent identit
   await page.getByRole("button", { name: "已安全保存", exact: true }).click();
   await page.getByRole("button", { name: "账号菜单", exact: true }).click();
   await page.getByRole("menuitem", { name: "退出登录", exact: true }).click();
-  await page.getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true }).fill(email);
+  await page.getByLabel(/^(邮箱|账号)$/, { exact: true }).fill(email);
   await page.getByLabel("密码", { exact: true }).fill(password);
   await solveCaptcha(page);
   await page.getByRole("button", { name: "登录", exact: true }).click();

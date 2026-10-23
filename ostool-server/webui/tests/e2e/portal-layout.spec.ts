@@ -102,7 +102,7 @@ test("username signup and login are independent of email", async ({ page }) => {
   await expect(page).toHaveURL(base + "/");
   await page.goto(base + "/login");
   await page
-    .getByLabel("用户名或邮箱", { exact: true })
+    .getByLabel("账号", { exact: true })
     .fill(username.toUpperCase());
   await page
     .getByLabel("密码", { exact: true })

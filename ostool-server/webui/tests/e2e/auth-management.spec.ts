@@ -26,7 +26,7 @@ test("registration, member/admin access, user/role events and settings navigatio
   ).toBeVisible();
   const email = `browser-${Date.now()}@test.local`;
   await page.getByLabel("用户名", { exact: true }).fill(email.split("@")[0]);
-  await page.getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true }).fill(email);
+  await page.getByLabel(/^(邮箱|账号)$/, { exact: true }).fill(email);
   await page.getByLabel("显示名称", { exact: true }).fill("浏览器注册用户");
   await page.getByLabel("密码", { exact: true }).fill("browser-password-123");
   await page
@@ -43,7 +43,7 @@ test("registration, member/admin access, user/role events and settings navigatio
   await expect(
     page.getByRole("heading", { name: "管理后台登录" }),
   ).toBeVisible();
-  await page.getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true }).fill(email);
+  await page.getByLabel(/^(邮箱|账号)$/, { exact: true }).fill(email);
   await page.getByLabel("密码", { exact: true }).fill("browser-password-123");
   await solveCaptcha(page);
   await page.getByRole("button", { name: "登录", exact: true }).click();
@@ -52,7 +52,7 @@ test("registration, member/admin access, user/role events and settings navigatio
   ).toBeVisible();
   await page.goto(`${base}/admin/login?redirect=/admin/overview`);
   await page
-    .getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true })
+    .getByLabel(/^(邮箱|账号)$/, { exact: true })
     .fill(process.env.OSTOOL_E2E_ADMIN_EMAIL ?? "admin@example.com");
   await page
     .getByLabel("密码", { exact: true })
@@ -156,7 +156,7 @@ test("temporary refresh failures preserve the administrator login and unsaved de
   test.setTimeout(60000);
   await page.goto(base + "/admin/login?redirect=/admin/boards/new");
   await page
-    .getByLabel(/^(邮箱|用户名或邮箱)$/, { exact: true })
+    .getByLabel(/^(邮箱|账号)$/, { exact: true })
     .fill(process.env.OSTOOL_E2E_ADMIN_EMAIL!);
   await page
     .getByLabel("密码", { exact: true })
