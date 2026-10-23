@@ -237,7 +237,8 @@ ostool-server/scripts/dev.sh stop
 
 The independent Docker-only launcher runs the same release binary as deployment,
 together with PostgreSQL/Redis and, for public edition, a standard Caddy container. It has no development authentication/origin bypass or simulated
-runtime. `start` and `restart` build current source and apply Compose configuration;
+runtime. `start` and `restart` build current source, apply Compose configuration and
+reload the development gateway configuration;
 `build` only builds the image. `stop` removes backend/database/cache containers and retains named data
 volumes. It never changes systemd or `/etc/ostool-server`. Containers use the Compose
 project name `ostool-server`; both feature editions share the same data volumes.
@@ -351,8 +352,8 @@ remains uncached and hashed assets keep their long-lived immutable cache policy.
 ## Public deployment
 
 Use `scripts/deploy.sh docker up` or `scripts/deploy.sh systemd up` with the same
-`.env`, selecting `OSTOOL_EDITION=public`. Native deployment uses the existing standard Caddy service for this edition; Docker deployment connects to the existing gateway. The bundled Caddyfile filters hardware boot/update routes from
-the public website. Do not expose the loopback backend to the Internet.
+`.env`, selecting `OSTOOL_EDITION=public`. Native deployment uses the existing standard Caddy service for this edition; Docker deployment connects to the existing gateway. The bundled Caddyfile filters loader/update routes from
+the public website; session downloads go through the normal authentication middleware. Do not expose the loopback backend to the Internet.
 
 For a direct binary launch:
 
@@ -470,16 +471,35 @@ The CLI returns 401 unchanged, without automatically replaying mutations.
 
 Device-side loader/TFTP/boot traffic has a separate network trust boundary.
 Use VLAN/firewall isolation between tenants, boards and server infrastructure.
-Public user APIs remain on loopback behind Caddy. A second, device-only HTTP listener
-uses the configured network interface's private IPv4 and the same port by default;
-it exposes boot/shared downloads and loader endpoints, never user/admin/session-control
-APIs. Explicit overrides are `OSTOOL_HARDWARE_LISTEN_ADDR` and
-`OSTOOL_HARDWARE_ALLOWED_NETWORKS`. Automatic source ranges are limited to the selected
-interface subnet and loopback, resolved at startup; forwarding headers do not grant
-access to the device listener. Interface/listener changes require a backend restart.
+Local and public editions share the same user API paths. Local edition does not
+require credentials. Public user APIs remain on loopback behind HTTPS Caddy;
+uploads, downloads and serial WebSockets all check the user and active rental.
+Returned file URLs use the public HTTPS origin, never the device-network origin.
+The device-only download listener binds the selected private interface and the
+backend port, and exposes only boot/shared file reads, without management, user,
+loader or session-control routes. It is used by server-expanded guest commands;
+its address is not returned by the user API. No separate device-listener setting
+is required. Source ranges default to that interface subnet and loopback;
+`OSTOOL_HARDWARE_ALLOWED_NETWORKS` can restrict them explicitly. Actual TCP peers
+are checked, ignoring forwarding headers. Keep this listener and device ports
+behind the device-network firewall, with no Internet port forwarding.
+Interface changes require a backend restart.
 UDP discovery and the separate public-edition throughput listener enforce the same
 source networks. Device callbacks reject redirects, bypass proxies, bound status bodies
 and concurrency, and unverified announcements cannot cancel an in-progress operation.
+
+New clients use `server_side_operations` in the boot profile to select server-side
+U-Boot orchestration. They request preparation, open the authenticated serial
+WebSocket, receive RAM load addresses, generate/upload a FIT image and request boot.
+The server configures the device network and performs TFTP or serial transfer.
+Shared-file shell templates are registered as opaque command IDs and expanded on
+the server when sent over the existing serial connection. Public boot/serial/TFTP
+responses omit device-network addresses, UART paths and binding IDs; public power
+responses never expose control commands. Device v6 is actively controlled by the server;
+legacy loader polling is unavailable through public user routes. New CLI clients
+still use the existing client orchestration when connected to a server that does
+not advertise this capability. The protocol extension is required to move the
+original U-Boot orchestration off the client, rather than to implement login.
 
 The built-in TFTP server rejects WRQ and binds the private device interface in public
 edition. For an existing tftpd-hpa service, enable the installed

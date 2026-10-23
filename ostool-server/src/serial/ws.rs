@@ -85,6 +85,7 @@ pub(super) struct ClientControlMessage {
     pub(super) kind: String,
     encoding: Option<String>,
     data: Option<String>,
+    pub(super) id: Option<uuid::Uuid>,
 }
 
 pub async fn run_serial_ws(
@@ -116,6 +117,14 @@ async fn run_serial_ws_inner(
     let session_id = session.snapshot().await.id;
     let board = session.board().clone();
     let automatic = matches!(board.boot, BootConfig::UefiHttp(_));
+    let public = state.config.read().await.edition.is_public();
+    let error_message = |err: &anyhow::Error| {
+        if public {
+            "设备连接失败，请联系管理员".to_owned()
+        } else {
+            format!("{err:#}")
+        }
+    };
     let opened = async {
         let reservation = if automatic {
             None
@@ -149,7 +158,7 @@ async fn run_serial_ws_inner(
             Err(err) => {
                 let _ = tokio::time::timeout(
                     SERIAL_CLOSE_TIMEOUT,
-                    send_serial_failure_and_close(&mut socket, &format!("{err:#}")),
+                    send_serial_failure_and_close(&mut socket, &error_message(&err)),
                 )
                 .await;
                 return Err(err);
@@ -170,17 +179,37 @@ async fn run_serial_ws_inner(
     let mut shutdown_rx = session.subscribe_shutdown();
 
     let (ready_tx, ready_rx) = tokio::sync::watch::channel(false);
+    let managed_request = session.uboot.request.lock().await.take();
     let result = {
-        let transport = super::transport::run(
-            &mut serial_rx,
-            &mut serial_tx,
-            &mut ws_sender,
-            &mut ws_receiver,
-            ready_rx,
-            || async {
-                let _ = session.heartbeat().await;
-            },
-        );
+        let transport = async {
+            let link = super::transport::Link {
+                ready: ready_rx,
+                heartbeat: || async {
+                    let _ = session.heartbeat().await;
+                },
+                commands: Some((state, session.as_ref())),
+            };
+            if let Some(request) = managed_request {
+                super::uboot::run(
+                    &mut serial_rx,
+                    &mut serial_tx,
+                    &mut ws_sender,
+                    &mut ws_receiver,
+                    link,
+                    request,
+                )
+                .await
+            } else {
+                super::transport::run(
+                    &mut serial_rx,
+                    &mut serial_tx,
+                    &mut ws_sender,
+                    &mut ws_receiver,
+                    link,
+                )
+                .await
+            }
+        };
         let power_on = async {
             let result = power_on_task.as_mut().expect("power-on task exists").await;
             power_on_task = None;
@@ -191,9 +220,10 @@ async fn run_serial_ws_inner(
             std::future::pending::<anyhow::Result<()>>().await
         };
         tokio::select! {
+            biased;
+            _ = shutdown_rx.wait_for(|shutdown| *shutdown) => Ok(()),
             result = transport => result,
             result = power_on => result,
-            _ = shutdown_rx.wait_for(|shutdown| *shutdown) => Ok(()),
         }
     };
 
@@ -201,7 +231,7 @@ async fn run_serial_ws_inner(
     // sees an explicit error when writable, otherwise it sees the connection close.
     let _ = tokio::time::timeout(SERIAL_CLOSE_TIMEOUT, async {
         if let Err(err) = &result {
-            send_serial_failure_and_close(&mut ws_sender, &format!("{err:#}")).await;
+            send_serial_failure_and_close(&mut ws_sender, &error_message(err)).await;
         } else {
             let _ = ws_sender
                 .send(Message::Text(r#"{"type":"closed"}"#.into()))

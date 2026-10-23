@@ -192,7 +192,6 @@ pub async fn build_app_state(
         }
     }
     let board_store = Arc::new(BoardStore::new(database.clone()));
-    config.hardware_listen_addr = crate::hardware::listen_address(&config)?;
     crate::hardware::resolve_networks(&mut config)?;
     let mut restricted = config.tftp.clone();
     crate::hardware::restrict_tftp(&config, &mut restricted)?;

@@ -234,3 +234,30 @@ fn script_help_is_plain_in_pipes_and_invalid_arguments_fail_before_environment_c
         );
     }
 }
+
+#[test]
+fn public_executable_rejects_plaintext_origins_and_exposed_backends_before_startup() {
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join(".env");
+    for (address, origin, valid) in [
+        ("127.0.0.1:2999", "http://192.168.7.10:2999", false),
+        ("0.0.0.0:2999", "https://boards.example.com", false),
+        ("127.0.0.1:2999", "https://boards.example.com", true),
+    ] {
+        fs::write(&file,format!("OSTOOL_EDITION=public\nOSTOOL_LISTEN_ADDR={address}\nOSTOOL_PUBLIC_BASE_URL={origin}\nOSTOOL_NETWORK_INTERFACE=lo\nOSTOOL_DATABASE_URL=postgres://unreachable.invalid/unused\n")).unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_ostool-server"))
+            .current_dir(root.path())
+            .args(["--env-file"])
+            .arg(&file)
+            .arg("--check-config")
+            .output()
+            .unwrap();
+        assert_eq!(
+            result.status.success(),
+            valid,
+            "{address} {origin}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+}

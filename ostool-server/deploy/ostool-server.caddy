@@ -1,9 +1,9 @@
 # 将本站点块加入现有 /etc/caddy/Caddyfile，或通过 import 引入。
 # 不设置全局选项，不影响其他网站；正式域名由 Caddy 自动申请证书。
 boards.example.com {
-    @assets path /assets/*
-    encode @assets zstd gzip
-    @hardware path /api/v1/loaders/* /api/v1/loader-updates/* /boot/* /share/*
-    respond @hardware 404
-    reverse_proxy 127.0.0.1:2999
+	@assets path /assets/*
+	encode @assets zstd gzip
+	@hardware path /api/v1/loaders/* /api/v1/loader-updates/*
+	respond @hardware 404
+	reverse_proxy 127.0.0.1:2999
 }

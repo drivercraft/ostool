@@ -23,8 +23,6 @@ pub struct ServerConfig {
     pub edition: Edition,
     pub listen_addr: SocketAddr,
     #[serde(default)]
-    pub hardware_listen_addr: Option<SocketAddr>,
-    #[serde(default)]
     pub database: DatabaseConfig,
     #[serde(default)]
     pub auth: AuthConfig,
@@ -75,7 +73,6 @@ impl ServerConfig {
             audit: AuditConfig::default(),
             edition: Edition::Local,
             listen_addr: SocketAddr::from(([0, 0, 0, 0], 2999)),
-            hardware_listen_addr: None,
             database: DatabaseConfig::default(),
             auth: AuthConfig::default(),
             network_test: NetworkTestConfig::default(),
@@ -121,20 +118,6 @@ impl ServerConfig {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
-        if let Some(address) = self.hardware_listen_addr {
-            anyhow::ensure!(
-                !self.edition.is_public() || crate::hardware::private_address(address.ip()),
-                "公网版设备入口必须绑定私有设备网或回环地址"
-            );
-            anyhow::ensure!(
-                !address.ip().is_unspecified() && address.port() != 0,
-                "设备监听须为具体设备网 IP 和有效端口"
-            );
-            anyhow::ensure!(
-                address != self.listen_addr,
-                "设备入口不能与用户入口使用相同的监听地址"
-            );
-        }
         if self
             .audit
             .retention_days

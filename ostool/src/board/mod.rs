@@ -472,7 +472,10 @@ pub async fn run_prepared_board_with_request(
         if !board_session_setup_required(&board_config, !session_files.is_empty()) {
             return Ok(());
         }
-        let context = session.context().await?;
+        let server_side = client
+            .get_boot_profile(&session.info().session_id)
+            .await?
+            .server_side_operations;
         let mut uploaded_files = BTreeMap::new();
         for upload in session_files {
             let relative_path = upload.relative_path().to_string();
@@ -480,7 +483,39 @@ pub async fn run_prepared_board_with_request(
             let shared_file = session.upload_shared_file(&relative_path, bytes).await?;
             uploaded_files.insert(relative_path, shared_file.http_url);
         }
-        expand_board_session_variables(&mut board_config, &context, &uploaded_files)
+        if server_side {
+            let mut indices = Vec::new();
+            let mut commands = Vec::new();
+            for (index, step) in board_config.shell_check_steps.iter().enumerate() {
+                if let Some(command) = &step.shell_cmd
+                    && (command.contains("${boardServer") || command.contains("${sessionFile"))
+                {
+                    indices.push(index);
+                    commands.push(command.clone());
+                }
+            }
+            if !commands.is_empty() {
+                let ids = client
+                    .register_shell_commands(&session.info().session_id, &commands)
+                    .await?;
+                anyhow::ensure!(
+                    ids.len() == indices.len(),
+                    "server returned invalid command references"
+                );
+                for (index, id) in indices.into_iter().zip(ids) {
+                    anyhow::ensure!(
+                        crate::board::serial_stream::valid_command_id(&id),
+                        "server returned invalid command id"
+                    );
+                    board_config.shell_check_steps[index].shell_cmd =
+                        Some(format!("\u{1e}{id}\u{1f}"));
+                }
+            }
+            Ok(())
+        } else {
+            let context = session.context().await?;
+            expand_board_session_variables(&mut board_config, &context, &uploaded_files)
+        }
     }
     .await;
 

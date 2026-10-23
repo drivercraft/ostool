@@ -446,6 +446,13 @@ paths, `..`, symlink escapes, duplicate paths, and missing files are rejected
 before the run starts. The interface does not support aliases or renamed
 uploads.
 
+Servers advertising `server_side_operations` handle U-Boot network setup,
+TFTP/serial loading and shared-file command expansion. ostool receives RAM load
+addresses, uploads the FIT and requests boot; device-network addresses are kept
+out of the user API. Both editions use the same routes; public uploads, downloads
+and serial connections carry login credentials over HTTPS/WSS. Servers without
+this capability continue to use the original client boot flow.
+
 ### Public board authentication
 
 Direct LAN connections to `ostool-server` keep the anonymous HTTP configuration above. A public authentication gateway uses a complete HTTPS URL:
@@ -472,8 +479,6 @@ ostool logout --server https://203.0.113.10:8443
 ```
 
 OAuth sign-in automatically refreshes short-lived access tokens. A PAT is sent directly as a Bearer token and is never refreshed. Credentials are stored in the system credential store when available, with a warned user-level credential-file fallback. Automation can use `OSTOOL_BOARD_ACCESS_TOKEN`; it is neither stored nor refreshed.
-
-Active-session heartbeats retry temporary network/server failures and rate limits only within the last confirmed lease deadline. They do not retry `401/403`. The existing server protocol is unchanged.
 
 The website `/devices` shows all configured devices as searchable cards without login, including unavailable devices. Public members can use an assigned board through `ostool` only during an approved rental window; cancellation or expiry releases its session. HTTP and serial WebSocket requests share Bearer identity and rental ownership checks. Keep device-side TFTP, loader traffic and the separate throughput-test listener on the board network; see [API authorization boundaries](docs/api.md).
 

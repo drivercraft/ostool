@@ -213,27 +213,10 @@ async fn run_heartbeat_loop(
             }
         }
 
-        let result = tokio::select! {
-            result=client.heartbeat(&session_id)=>result,
-            _=stop_rx.wait_for(|stop|*stop)=>break,
-        };
-        let heartbeat = match result {
-            Ok(heartbeat) => heartbeat,
-            Err(error)
-                if (error.status.is_server_error()
-                    || error.status == reqwest::StatusCode::TOO_MANY_REQUESTS)
-                    && Utc::now() < *lease_expires_at.read().await =>
-            {
-                log::warn!(
-                    "session `{session_id}` heartbeat temporarily failed; retrying within the existing lease: {error}"
-                );
-                continue;
-            }
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("heartbeat failed for session `{session_id}`"));
-            }
-        };
+        let heartbeat = client
+            .heartbeat(&session_id)
+            .await
+            .with_context(|| format!("heartbeat failed for session `{session_id}`"))?;
         log::debug!(
             "Session {} heartbeat extended lease to {}",
             heartbeat.session_id,
@@ -477,79 +460,5 @@ mod tests {
 
         assert_eq!(result.unwrap_err().message, "board type `rk3568` not found");
         assert!(sleeps.lock().unwrap().is_empty());
-    }
-    #[tokio::test]
-    async fn heartbeat_recovers_from_temporary_failure_and_stops_on_unauthorized() {
-        use tokio::{
-            io::{AsyncReadExt, AsyncWriteExt},
-            net::TcpListener,
-            sync::{RwLock, watch},
-        };
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let expected = Utc::now() + chrono::Duration::seconds(20);
-        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let count = attempts.clone();
-        let server = tokio::spawn(async move {
-            for status in ["503 Service Unavailable", "200 OK", "401 Unauthorized"] {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = [0u8; 4096];
-                let received = socket.read(&mut request).await.unwrap();
-                assert!(received > 0);
-                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let body = if status.starts_with("200") {
-                    serde_json::json!({"session_id":"heartbeat-test","lease_expires_at":expected})
-                        .to_string()
-                } else {
-                    serde_json::json!({"code":"test_error","message":"temporary or rejected"})
-                        .to_string()
-                };
-                socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
-            }
-        });
-        let client = crate::board::client::BoardServerClient::new("127.0.0.1", port).unwrap();
-        let expires = Arc::new(RwLock::new(Utc::now() + chrono::Duration::seconds(10)));
-        let (_stop, rx) = watch::channel(false);
-        let result = tokio::time::timeout(
-            Duration::from_secs(8),
-            super::run_heartbeat_loop(client, "heartbeat-test".into(), expires.clone(), rx),
-        )
-        .await
-        .unwrap();
-        assert!(result.is_err());
-        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 3);
-        assert_eq!(*expires.read().await, expected);
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn stopping_a_session_cancels_a_stalled_heartbeat_without_waiting_for_http_timeout() {
-        use tokio::{
-            net::TcpListener,
-            sync::{RwLock, watch},
-        };
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let client = crate::board::client::BoardServerClient::new(
-            "127.0.0.1",
-            listener.local_addr().unwrap().port(),
-        )
-        .unwrap();
-        let (stop, rx) = watch::channel(false);
-        let heartbeat = tokio::spawn(super::run_heartbeat_loop(
-            client,
-            "heartbeat-test".into(),
-            Arc::new(RwLock::new(Utc::now() + chrono::Duration::seconds(10))),
-            rx,
-        ));
-        let (_socket, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
-            .await
-            .unwrap()
-            .unwrap();
-        stop.send_replace(true);
-        tokio::time::timeout(Duration::from_millis(500), heartbeat)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
     }
 }

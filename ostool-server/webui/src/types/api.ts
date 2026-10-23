@@ -323,10 +323,29 @@ export interface UpdateServerConfigRequest {
 }
 
 export interface BootProfileResponse {
+  server_side_operations: boolean;
+  http_base_url: string | null;
   boot: BootConfig;
   server_ip: string | null;
   netmask: string | null;
   interface: string | null;
+}
+
+export interface UbootPrepareRequest {
+  commands?: string[];
+  kernel_load_addr?: number | null;
+  fit_load_addr?: number | null;
+  bootm_addr?: number | null;
+  timeout_secs?: number | null;
+}
+export interface UbootPrepared {
+  kernel_load_addr: number;
+  fit_load_addr: number;
+  fdt_load_addr: number | null;
+}
+export interface UbootBootRequest {
+  path: string;
+  cmdline?: string | null;
 }
 
 export interface FileResponse {

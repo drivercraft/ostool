@@ -32,6 +32,17 @@ pub struct SerialRuntimeStatus {
     pub error: Option<String>,
     pub warning: Option<String>,
 }
+impl SerialRuntimeStatus {
+    /// Only connection state belongs in the user API; UART identity stays on the host.
+    pub fn public_view(self) -> Self {
+        Self {
+            phase: self.phase,
+            error: self.error.map(|_| "串口连接失败，请联系管理员".into()),
+            warning: self.warning.map(|_| "串口连接异常，请联系管理员".into()),
+            ..Default::default()
+        }
+    }
+}
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SerialRuntimePhase {

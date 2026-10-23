@@ -255,13 +255,26 @@ token=<refresh_token>
 
 公网版管理 API 检查管理员身份、后台登录来源和 CSRF 来源；后台操作不要求再次验证密码或 MFA，登录时的 MFA 策略仍生效。管理页面使用独立的 `/admin/login`。网站 Cookie、普通成员、CLI OAuth 和 PAT 不能代替后台管理员登录。本地版保持免登录，仅适合可信内网。部署时由 Caddy 提供 HTTPS，并限制 Rust 原始监听端口和设备端口的访问范围。
 
-公网版用户 API 与设备 HTTP 使用独立监听：用户入口保持回环地址，经 Caddy 提供 HTTPS；
-设备入口默认使用系统设置中所选网卡的私有 IPv4 和相同端口，只注册 `/share/sessions/...`、
-`/boot/sessions/...`、设备 loader/OTA 路由。它不注册用户、管理员或会话控制 API。
-来源默认限制为所选网卡子网和回环地址，使用 TCP 实际来源地址判断，不信任转发头；
-`OSTOOL_HARDWARE_LISTEN_ADDR`、`OSTOOL_HARDWARE_ALLOWED_NETWORKS` 可显式覆盖。
-公网用户入口不会仅因请求来自私网而跳过账号与会话鉴权。UDP 发现与独立吞吐监听同样限制设备来源。
-本地版沿用单入口、免登录行为。设备间的交换机/VLAN 隔离仍由实际部署网络负责。
+本地版和公网版共用用户 API 路径：本地免登录，公网请求必须携带有效账号凭据并符合租赁及会话归属。
+公网用户入口保持回环地址，经 Caddy 提供 HTTPS，包含上传、文件下载和 WebSocket；私网来源不能跳过鉴权。
+用户接口的下载 URL 使用公网 HTTPS 来源，不返回设备下载地址；启动配置、串口和 TFTP 响应不返回设备网地址、
+宿主机串口路径或绑定标识。管理接口仍向已登录管理员提供维护设备所需的配置。
+设备下载只绑定所选设备网的私有地址及后端端口，且只提供 `/share/sessions/...`、`/boot/sessions/...` 文件读取，
+不提供用户、管理、装载器或会话控制接口。来源限制为所选网卡子网及回环地址，按 TCP 实际来源判断，忽略转发头。
+设备网设置沿用已有配置，不另设设备监听环境变量；`OSTOOL_HARDWARE_ALLOWED_NETWORKS` 可收紧来源网段。
+该通道用于服务端展开的板端命令，不得向互联网转发。UDP 发现和 TFTP 也应仅用于设备内部网络。
+公网设备使用服务端主动控制协议；旧装载器轮询不对公网开放。本地版沿用免登录入口。
+
+`GET /api/v1/sessions/{id}/boot-profile` 返回 `server_side_operations: true` 表示支持服务端编排。
+`POST /api/v1/sessions/{id}/uboot/prepare` 接收可选命令数组、加载地址和 1–600 秒的超时，先于串口连接提交。
+连接原有串口 WebSocket 后，`GET .../uboot/prepare` 等待准备完成，仅返回 `kernel_load_addr`、`fit_load_addr`、
+`fdt_load_addr` 等 RAM 地址。客户端生成并上传 FIT 后，以 `POST .../uboot/boot` 提交会话内 `path` 和可选 `cmdline`。
+服务端读取设备配置、设置网络并执行 TFTP 或串口加载；启动后同一 WebSocket 继续用于终端交互。
+所有新增路径同样检查公网账号、会话归属和有效租赁，取消或断开连接会结束编排并释放设备。
+`POST .../commands` 接收共享文件命令模板数组，只返回对应 UUID 数组。
+串口控制消息 `{"type":"command","id":"UUID"}` 执行当前会话中注册的模板；变量仅在服务端展开。
+命令内容通过设备串口发送，不会在宿主机 shell 执行。命令上限每会话 64 条、总计 64 KiB。
+新客户端按能力字段选择此流程，连接未提供该字段的原有服务端时继续使用原有协议。
 
 会话文件上传为流式临时文件加原子提交，释放会话会取消上传；提交重新检查当前凭据与租赁。
 单文件、会话、账号及全局容量，以及文件数、并发和超时在系统设置的网络与上传组中配置。
@@ -900,7 +913,7 @@ GET /api/v1/sessions/{session_id}/boot-profile
 }
 ```
 
-`boot.kind` 可为 `uboot`、`pxe` 或 `httpboot`（客户端也接受别名 `uefi_http`）。`pxe` 的对象仅含可选 `notes`；`httpboot` 的对象含可选 `boot_arch`（`x86_64`、`aarch64`、`loongarch64`、`riscv64` 或 `other`）。HTTP Boot 的 MAC 位于顶层 `network_identity.mac_address`，不属于 boot profile。顶层 `server_ip`、`netmask`、`interface`、`http_base_url` 均可为 `null`。`server_ip` 和 `http_base_url` 使用板端可访问的网络地址，不一定等于管理网地址。
+`boot.kind` 可为 `uboot`、`pxe` 或 `httpboot`（客户端也接受别名 `uefi_http`）。`pxe` 的对象仅含可选 `notes`；`httpboot` 的对象含可选 `boot_arch`（`x86_64`、`aarch64`、`loongarch64`、`riscv64` 或 `other`）。HTTP Boot 的 MAC 位于顶层 `network_identity.mac_address`，不属于 boot profile。顶层 `server_ip`、`netmask`、`interface`、`http_base_url` 均可为 `null`。本地版的 `server_ip` 和 `http_base_url` 可使用板端网络地址；公网版的设备网参数为 `null`，HTTP URL 使用公网 HTTPS 来源，实际设备编排由服务端完成。
 
 ### 获取串口状态
 

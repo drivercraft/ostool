@@ -323,6 +323,7 @@ pub struct AdminSession {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BootProfileResponse {
+    pub server_side_operations: bool,
     pub boot: BootConfig,
     pub server_ip: Option<String>,
     pub netmask: Option<String>,

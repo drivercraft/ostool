@@ -315,73 +315,6 @@ async fn stalled_upload_times_out_and_releases_its_slot_and_tempfile() -> anyhow
 }
 
 #[tokio::test]
-#[ignore = "requires disposable PostgreSQL and Redis"]
-async fn device_listener_serves_files_but_never_user_or_admin_apis() -> anyhow::Result<()> {
-    let f = Fixture::new().await?;
-    let sid = f.acquire("board-one").await?;
-    assert_eq!(
-        f.put(&sid, "payload.bin", b"only device data".to_vec())
-            .await?,
-        StatusCode::CREATED
-    );
-    f.state
-        .config
-        .write()
-        .await
-        .security
-        .hardware_allowed_networks = vec!["192.168.7.0/24".into()];
-    let router = hardware::build_router(f.state.clone());
-    let path = format!("/share/sessions/{sid}/payload.bin");
-    for (uri, peer, forwarded, expected) in [
-        (path.as_str(), "192.168.7.10:40000", None, StatusCode::OK),
-        (
-            path.as_str(),
-            "203.0.113.1:40000",
-            Some("192.168.7.10"),
-            StatusCode::FORBIDDEN,
-        ),
-        (
-            "/api/v1/admin/users",
-            "192.168.7.10:40000",
-            None,
-            StatusCode::NOT_FOUND,
-        ),
-        (
-            "/api/v1/board-types",
-            "192.168.7.10:40000",
-            None,
-            StatusCode::NOT_FOUND,
-        ),
-    ] {
-        let mut request = Request::builder().uri(uri);
-        if let Some(value) = forwarded {
-            request = request.header("x-forwarded-for", value);
-        }
-        let mut request = request.body(Body::empty())?;
-        request
-            .extensions_mut()
-            .insert(ConnectInfo(peer.parse::<std::net::SocketAddr>()?));
-        let response = router.clone().oneshot(request).await?;
-        assert_eq!(response.status(), expected, "{uri}");
-        if expected == StatusCode::OK {
-            assert_eq!(
-                to_bytes(response.into_body(), 1024).await?.as_ref(),
-                b"only device data"
-            );
-        }
-    }
-    let mut request = Request::builder().uri(path).body(Body::empty())?;
-    request.extensions_mut().insert(ConnectInfo(
-        "192.168.7.10:40000".parse::<std::net::SocketAddr>()?,
-    ));
-    assert_eq!(
-        f.app.oneshot(request).await?.status(),
-        StatusCode::UNAUTHORIZED
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn builtin_tftp_rejects_write_requests_and_preserves_downloads() -> anyhow::Result<()> {
     use std::{
         net::UdpSocket,
@@ -632,10 +565,11 @@ async fn stalled_downloads_are_bounded_and_cancelled_when_the_session_ends() -> 
         f.put(&sid, "large.bin", vec![1; 256 * 1024]).await?,
         StatusCode::CREATED
     );
-    let router = hardware::build_router(f.state.clone());
+    let router = f.app.clone();
     let request = || {
         let mut request = Request::builder()
             .uri(format!("/share/sessions/{sid}/large.bin"))
+            .header("authorization", format!("Bearer {}", f.grant.access_token))
             .body(Body::empty())
             .unwrap();
         request.extensions_mut().insert(ConnectInfo(
@@ -669,32 +603,22 @@ async fn stalled_downloads_are_bounded_and_cancelled_when_the_session_ends() -> 
 
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL and Redis"]
-async fn returned_download_url_reaches_the_device_listener_without_exposing_management()
+async fn public_download_url_uses_the_authenticated_user_api_without_internal_addresses()
 -> anyhow::Result<()> {
     let f = Fixture::new().await?;
     let user_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let device_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let user_address = user_listener.local_addr()?;
-    let device_address = device_listener.local_addr()?;
     {
         let mut c = f.state.config.write().await;
         c.listen_addr = user_address;
-        c.hardware_listen_addr = Some(device_address);
+        c.auth.public_base_url = Some("https://boards.example.com".into());
+        c.http_boot.public_base_url = Some("http://192.168.7.10:4999".into());
     }
     let user_app = f.app.clone();
-    let device_app = hardware::build_router(f.state.clone());
     let users = tokio::spawn(async move {
         axum::serve(
             user_listener,
             user_app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    });
-    let devices = tokio::spawn(async move {
-        axum::serve(
-            device_listener,
-            device_app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .await
         .unwrap();
@@ -724,10 +648,16 @@ async fn returned_download_url_reaches_the_device_listener_without_exposing_mana
         .json()
         .await?;
     let url = reqwest::Url::parse(uploaded["http_url"].as_str().unwrap())?;
-    assert_eq!(url.port(), Some(device_address.port()));
+    assert_eq!(
+        url.origin().ascii_serialization(),
+        "https://boards.example.com"
+    );
+    assert!(uploaded["tftp_url"].is_null());
+    let backend_url = format!("http://{user_address}{}", url.path());
     assert_eq!(
         client
-            .get(url.clone())
+            .get(&backend_url)
+            .bearer_auth(&f.grant.access_token)
             .send()
             .await?
             .error_for_status()?
@@ -737,25 +667,554 @@ async fn returned_download_url_reaches_the_device_listener_without_exposing_mana
         b"device route"
     );
     assert_eq!(
-        client
-            .get(format!("http://{user_address}{}", url.path()))
-            .send()
-            .await?
-            .status(),
+        client.get(&backend_url).send().await?.status(),
         StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(
-        client
-            .get(format!("http://{device_address}/api/v1/admin/users"))
-            .send()
-            .await?
-            .status(),
-        StatusCode::NOT_FOUND
     );
     f.state
         .request_session_stop(sid, session::SessionStopReason::ApiDelete)
         .await;
     users.abort();
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn public_httpboot_responses_keep_device_network_and_uart_configuration_on_server()
+-> anyhow::Result<()> {
+    let f = Fixture::new().await?;
+    {
+        let mut boards = f.state.boards.write().await;
+        let board = boards.get_mut("board-one").unwrap();
+        board.boot = serde_json::from_value(json!({"kind":"httpboot","boot_arch":"x86_64",
+            "serial_parameters":{"baud_rate":115200,"data_bits":8,"parity":"none","stop_bits":"one","flow_control":"none"}}))?;
+        f.state.board_store.write_board(board).await?;
+    }
+    f.state.config.write().await.auth.public_base_url = Some("https://boards.example.com".into());
+    let sid = f.acquire("board-one").await?;
+    for suffix in ["boot-profile", "tftp", "serial", ""] {
+        let path = if suffix.is_empty() {
+            format!("/api/v1/sessions/{sid}")
+        } else {
+            format!("/api/v1/sessions/{sid}/{suffix}")
+        };
+        let response = f
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header("authorization", format!("Bearer {}", f.grant.access_token))
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK, "{suffix}");
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await?)?;
+        assert!(body["server_ip"].is_null());
+        assert!(body["netmask"].is_null());
+        assert!(body["interface"].is_null());
+        assert!(body["port"].is_null());
+        assert!(body["boot"]["serial_parameters"].is_null());
+        if suffix == "boot-profile" {
+            assert_eq!(body["http_base_url"], "https://boards.example.com/");
+            // Deserialize with the existing ostool model, without adding client protocol changes.
+            let profile: ostool::board::client::BootProfileResponse = serde_json::from_value(body)?;
+            assert!(matches!(
+                profile.boot,
+                ostool::board::client::BootConfig::UefiHttp(_)
+            ));
+        }
+    }
+    let response = f
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/v1/sessions/{sid}/http-boot/files"))
+                .header("authorization", format!("Bearer {}", f.grant.access_token))
+                .header("x-file-path", "kernel.bin")
+                .body(Body::from("kernel"))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await?)?;
+    assert_eq!(
+        body["http_url"],
+        format!("https://boards.example.com/boot/sessions/{sid}/kernel.bin")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn both_editions_share_user_routes_and_only_local_bypasses_authentication()
+-> anyhow::Result<()> {
+    let f = Fixture::new().await?;
+    let sid = f.acquire("board-one").await?;
+    f.put(&sid, "data.bin", b"private data".to_vec()).await?;
+    for peer in ["127.0.0.1:4567", "192.168.7.10:4567", "203.0.113.10:4567"] {
+        for (method, tail) in [
+            ("GET", ""),
+            ("GET", "/boot-profile"),
+            ("GET", "/serial"),
+            ("GET", "/serial/ws"),
+            ("POST", "/uboot/prepare"),
+            ("GET", "/uboot/prepare"),
+            ("POST", "/uboot/boot"),
+            ("POST", "/commands"),
+            ("POST", "/heartbeat"),
+            ("POST", "/board/power-on"),
+            ("POST", "/board/power-off"),
+            ("PUT", "/files"),
+            ("DELETE", "/files/data.bin"),
+            ("PUT", "/http-boot/files"),
+            ("PUT", "/http-boot/kernel"),
+            ("DELETE", ""),
+        ] {
+            let mut request = Request::builder()
+                .method(method)
+                .uri(format!("/api/v1/sessions/{sid}{tail}"))
+                .header("x-forwarded-for", "127.0.0.1")
+                .header("x-file-path", "data.bin")
+                .body(Body::empty())?;
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(peer.parse::<std::net::SocketAddr>()?));
+            assert_eq!(
+                f.app.clone().oneshot(request).await?.status(),
+                StatusCode::UNAUTHORIZED,
+                "{method} {tail} from {peer}"
+            );
+        }
+        for prefix in ["share", "boot"] {
+            let mut request = Request::builder()
+                .uri(format!("/{prefix}/sessions/{sid}/data.bin"))
+                .header("x-forwarded-for", "127.0.0.1")
+                .body(Body::empty())?;
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(peer.parse::<std::net::SocketAddr>()?));
+            assert_eq!(
+                f.app.clone().oneshot(request).await?.status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+    }
+    f.state.config.write().await.edition = Edition::Local;
+    for path in [
+        format!("/api/v1/sessions/{sid}"),
+        format!("/api/v1/sessions/{sid}/boot-profile"),
+        format!("/share/sessions/{sid}/data.bin"),
+    ] {
+        assert_eq!(
+            f.app
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty())?)
+                .await?
+                .status(),
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        f.app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{sid}/files"))
+                    .header("x-file-path", "local.bin")
+                    .body(Body::from("local data"))?
+            )
+            .await?
+            .status(),
+        StatusCode::CREATED
+    );
+    Ok(())
+}
+
+// The fixture emulates a running TFTP service while exercising the real file store.
+// UDP RRQ/WRQ behavior is tested separately above, in an isolated server subprocess.
+struct ReadyTftp(Arc<dyn TftpManager>);
+#[async_trait::async_trait]
+impl TftpManager for ReadyTftp {
+    async fn start_if_needed(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn reconcile(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn status(&self) -> anyhow::Result<ostool_server::tftp::status::TftpStatus> {
+        let mut status = self.0.status().await?;
+        status.enabled = true;
+        status.healthy = true;
+        Ok(status)
+    }
+    async fn put_session_file(
+        &self,
+        id: &str,
+        path: &str,
+        data: &[u8],
+    ) -> anyhow::Result<ostool_server::tftp::files::TftpFileRef> {
+        self.0.put_session_file(id, path, data).await
+    }
+    async fn get_session_file(
+        &self,
+        id: &str,
+        path: &str,
+    ) -> anyhow::Result<Option<ostool_server::tftp::files::TftpFileRef>> {
+        self.0.get_session_file(id, path).await
+    }
+    async fn list_session_files(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<Vec<ostool_server::tftp::files::TftpFileRef>> {
+        self.0.list_session_files(id).await
+    }
+    async fn remove_session_file(&self, id: &str, path: &str) -> anyhow::Result<()> {
+        self.0.remove_session_file(id, path).await
+    }
+    async fn remove_session_dir(&self, id: &str) -> anyhow::Result<()> {
+        self.0.remove_session_dir(id).await
+    }
+    fn root_dir(&self) -> &std::path::Path {
+        self.0.root_dir()
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn managed_uboot_keeps_tftp_and_shared_command_addresses_on_the_server() -> anyhow::Result<()>
+{
+    exercise_managed_boot(true, false).await
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn managed_uboot_uses_server_serial_transfer_without_tftp() -> anyhow::Result<()> {
+    exercise_managed_boot(false, false).await
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn managed_uboot_disconnect_cancels_preparation_and_releases_the_device() -> anyhow::Result<()>
+{
+    exercise_managed_boot(true, true).await
+}
+
+#[cfg(unix)]
+async fn exercise_managed_boot(tftp: bool, disconnect: bool) -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio_serial::SerialPort;
+    let f = Fixture::new().await?;
+    let (mut master, mut slave) = tokio_serial::SerialStream::pair()?;
+    slave.set_exclusive(false)?;
+    let path = slave.name().unwrap();
+    drop(slave);
+    let user_listener = tokio::net::TcpListener::bind("127.0.0.2:0").await?;
+    let user_address = user_listener.local_addr()?;
+    {
+        let mut config = f.state.config.write().await;
+        config.listen_addr = user_address;
+        config.auth.public_base_url = Some("https://boards.example.com".into());
+    }
+    let device_address = hardware::download_address(&*f.state.config.read().await)?.unwrap();
+    let device_listener = tokio::net::TcpListener::bind(device_address).await?;
+    {
+        let mut boards = f.state.boards.write().await;
+        let board = boards.get_mut("board-one").unwrap();
+        board.serial = Some(SerialConfig {
+            key: SerialPortKey {
+                kind: SerialPortKeyKind::UsbPath,
+                value: path,
+            },
+            baud_rate: 115200,
+            resolved_device_path: None,
+            resolved_usb_path: None,
+        });
+        board.boot = BootConfig::Uboot(UbootProfile {
+            use_tftp: true,
+            server_ip: Some("192.168.44.1".into()),
+            board_ip: Some("192.168.44.2".into()),
+            network_mode: UbootNetworkMode::StaticIp,
+            netmask: Some("255.255.255.0".into()),
+            ..Default::default()
+        });
+        f.state.board_store.write_board(board).await?;
+    }
+    let manager = f.state.tftp_manager.read().await.clone();
+    if tftp {
+        *f.state.tftp_manager.write().await = Arc::new(ReadyTftp(manager.clone()));
+    }
+    let transcript = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let recorded = transcript.clone();
+    let emulator = tokio::spawn(async move {
+        let mut line = Vec::new();
+        let mut booted = false;
+        loop {
+            let byte = match master.read_u8().await {
+                Ok(byte) => byte,
+                Err(error) if error.raw_os_error() == Some(5) => {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
+            if byte == 3 {
+                line.clear();
+                master.write_all(b"=> <INTERRUPT>\n").await?;
+                continue;
+            }
+            if byte != b'\n' {
+                line.push(byte);
+                master.write_all(&[byte]).await?;
+                continue;
+            }
+            let command = String::from_utf8(std::mem::take(&mut line))?;
+            recorded.lock().unwrap().push(command.clone());
+            if command.starts_with("bootm ") {
+                booted = true;
+                master.write_all(b"\nfixture guest ready\n# ").await?;
+            } else if command.starts_with("loady ") {
+                master.write_all(b"\nC").await?;
+                for block in 0..2 {
+                    let marker = master.read_u8().await?;
+                    anyhow::ensure!(marker == 1 || marker == 2, "wrong YMODEM marker");
+                    let mut packet = vec![0; 2 + if marker == 1 { 128 } else { 1024 } + 2];
+                    master.read_exact(&mut packet).await?;
+                    anyhow::ensure!(
+                        packet[0] == block && packet[1] == !block,
+                        "wrong YMODEM sequence"
+                    );
+                    let data = &packet[2..packet.len() - 2];
+                    let crc = u16::from_be_bytes(packet[packet.len() - 2..].try_into()?);
+                    anyhow::ensure!(
+                        uboot_shell::crc::crc16_ccitt(0, data) == crc,
+                        "wrong YMODEM CRC"
+                    );
+                    if block == 1 {
+                        anyhow::ensure!(
+                            data.starts_with(b"fixture FIT"),
+                            "wrong serial image bytes"
+                        );
+                    }
+                    master.write_all(&[6]).await?;
+                }
+                anyhow::ensure!(master.read_u8().await? == 4, "missing EOT");
+                master.write_all(&[6]).await?;
+                let mut last = [0; 133];
+                master.read_exact(&mut last).await?;
+                anyhow::ensure!(
+                    last[0] == 1 && last[1] == 0 && last[3] == 0,
+                    "wrong end block"
+                );
+                master.write_all(b"\x06C\n=> ").await?;
+            } else if booted {
+                if let Some(url) = command.strip_prefix("curl ") {
+                    let response = reqwest::Client::builder()
+                        .no_proxy()
+                        .build()?
+                        .get(url)
+                        .send()
+                        .await?
+                        .error_for_status()?
+                        .bytes()
+                        .await?;
+                    anyhow::ensure!(
+                        response == b"shared fixture bytes".as_slice(),
+                        "wrong shared file"
+                    );
+                    master.write_all(b"\nshared-command-ok\n# ").await?;
+                }
+            } else {
+                let value = if command.starts_with("echo $kernel_addr_r") {
+                    "80200000"
+                } else if command.starts_with("echo $kernel_comp_addr_r") {
+                    "84000000"
+                } else if command.starts_with("echo $fdt_addr_r") {
+                    "88000000"
+                } else {
+                    ""
+                };
+                master
+                    .write_all(format!("\n{value}\ncmd-ok\n=> ").as_bytes())
+                    .await?;
+            }
+        }
+        #[allow(unreachable_code)]
+        Ok::<_, anyhow::Error>(())
+    });
+    let user_app = f.app.clone();
+    let users = tokio::spawn(async move {
+        axum::serve(
+            user_listener,
+            user_app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap()
+    });
+    let device_app = hardware::download_router(f.state.clone());
+    let devices = tokio::spawn(async move {
+        axum::serve(
+            device_listener,
+            device_app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap()
+    });
+    let sid = f.acquire("board-one").await?;
+    f.put(&sid, "shared.txt", b"shared fixture bytes".to_vec())
+        .await?;
+    let base = format!("http://{user_address}/");
+    let mut probe = tokio::process::Command::new(std::env::current_exe()?)
+        .args([
+            "--ignored",
+            "--exact",
+            "managed_uboot_client_probe",
+            "--nocapture",
+        ])
+        .env("OSTOOL_MANAGED_TEST_BASE", &base)
+        .env("OSTOOL_MANAGED_TEST_SESSION", &sid)
+        .env(
+            "OSTOOL_MANAGED_TEST_DISCONNECT",
+            if disconnect { "true" } else { "false" },
+        )
+        .env("OSTOOL_BOARD_ACCESS_TOKEN", &f.grant.access_token)
+        .env("HOME", f._root.path())
+        .env("XDG_CONFIG_HOME", f._root.path().join("config"))
+        .env("XDG_CACHE_HOME", f._root.path().join("cache"))
+        .env("NO_PROXY", "127.0.0.1,127.0.0.2,localhost")
+        .env("no_proxy", "127.0.0.1,127.0.0.2,localhost")
+        .kill_on_drop(true)
+        .spawn()?;
+    let result = tokio::time::timeout(Duration::from_secs(30), probe.wait()).await??;
+    users.abort();
     devices.abort();
+    emulator.abort();
+    anyhow::ensure!(result.success(), "actual CLI managed boot probe failed");
+    let commands = transcript.lock().unwrap().clone();
+    if disconnect {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while f.state.get_session(&sid).await.is_some() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+        assert!(!commands.iter().any(|c| c.starts_with("bootm ")));
+    } else {
+        if tftp {
+            assert!(
+                commands
+                    .iter()
+                    .any(|c| c.starts_with("setenv serverip 192.168.44.1"))
+            );
+            assert!(
+                commands
+                    .iter()
+                    .any(|c| c.starts_with(&format!("tftp ostool/sessions/{sid}/boot/kernel.fit")))
+            );
+        } else {
+            assert!(commands.iter().any(|c| c.starts_with("loady 0x84000000")));
+            assert!(!commands.iter().any(|c| c.starts_with("tftp ")));
+        }
+        assert!(commands.iter().any(|c| c.starts_with("bootm 0x84000000")));
+        assert!(commands.iter().any(|c| c.starts_with(&format!(
+            "curl http://{device_address}/share/sessions/{sid}/shared.txt"
+        ))));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "child process of the managed U-Boot fixture"]
+async fn managed_uboot_client_probe() -> anyhow::Result<()> {
+    use ostool::board::{
+        client::{BoardServerClient, UbootPrepareRequest},
+        global_config::{AuthMode, BoardEndpoint},
+        serial_stream::connect_serial_stream_with_commands,
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio_util::compat::{FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt};
+    let Ok(base) = std::env::var("OSTOOL_MANAGED_TEST_BASE") else {
+        return Ok(());
+    };
+    let sid = std::env::var("OSTOOL_MANAGED_TEST_SESSION")?;
+    // Only the disposable loopback fixture bypasses the production HTTPS endpoint constructor.
+    let url = url::Url::parse(&base)?;
+    anyhow::ensure!(
+        url.host_str() == Some("127.0.0.2"),
+        "test endpoint must stay on loopback"
+    );
+    let client = BoardServerClient::new_with_endpoint(BoardEndpoint {
+        base_url: url,
+        auth_mode: AuthMode::Required,
+    })?;
+    let profile = client.get_boot_profile(&sid).await?;
+    assert!(profile.server_side_operations);
+    assert!(profile.server_ip.is_none());
+    assert!(profile.interface.is_none());
+    let ostool::board::client::BootConfig::Uboot(profile) = profile.boot else {
+        panic!("wrong profile")
+    };
+    assert!(profile.board_ip.is_none());
+    assert!(profile.server_ip.is_none());
+    let ids = client
+        .register_shell_commands(&sid, &["curl ${sessionFile:shared.txt}".into()])
+        .await?;
+    assert_eq!(ids.len(), 1);
+    client
+        .prepare_uboot(
+            &sid,
+            &UbootPrepareRequest {
+                timeout_secs: Some(10),
+                ..Default::default()
+            },
+        )
+        .await?;
+    let ws = client.resolve_ws_url(&format!("/api/v1/sessions/{sid}/serial/ws"))?;
+    let (tx, rx, tasks) = connect_serial_stream_with_commands(
+        ws,
+        client.websocket_authorization().await?,
+        ids.clone(),
+    )
+    .await?;
+    let mut tx = tx.compat_write();
+    let mut rx = rx.compat();
+    let addresses = client.wait_uboot_prepared(&sid).await?;
+    assert_eq!(addresses.kernel_load_addr, 0x80200000);
+    assert_eq!(addresses.fit_load_addr, 0x84000000);
+    if std::env::var("OSTOOL_MANAGED_TEST_DISCONNECT").as_deref() == Ok("true") {
+        drop(tx);
+        drop(rx);
+        tasks.shutdown_with_timeout(Duration::from_secs(2)).await?;
+        return Ok(());
+    }
+    client
+        .upload_session_file(&sid, "boot/kernel.fit", b"fixture FIT".to_vec())
+        .await?;
+    client
+        .boot_uboot(&sid, "boot/kernel.fit", Some("console=ttyS0"))
+        .await?;
+    let mut data = Vec::new();
+    while !data.ends_with(b"# ") {
+        data.push(rx.read_u8().await?);
+    }
+    assert!(String::from_utf8_lossy(&data).contains("fixture guest ready"));
+    tx.write_all(format!("\u{1e}{}\u{1f}\n", ids[0]).as_bytes())
+        .await?;
+    tx.flush().await?;
+    data.clear();
+    while !data.ends_with(b"# ") {
+        data.push(rx.read_u8().await?);
+    }
+    assert!(String::from_utf8_lossy(&data).contains("shared-command-ok"));
+    drop(tx);
+    drop(rx);
+    tasks.shutdown_with_timeout(Duration::from_secs(2)).await?;
+    client.delete_session(&sid).await?;
     Ok(())
 }

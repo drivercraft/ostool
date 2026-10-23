@@ -19,13 +19,17 @@ const QUEUE_CHUNKS: usize = 64;
 const CONTROL_MESSAGES: usize = 8;
 pub(super) const MAX_COMMAND_SIZE: usize = CHUNK_SIZE * QUEUE_CHUNKS;
 
+pub(super) struct Link<'a, F> {
+    pub ready: watch::Receiver<bool>,
+    pub heartbeat: F,
+    pub commands: Option<(&'a crate::AppState, &'a crate::session::SessionState)>,
+}
 pub(super) async fn run<R, W, S, I, E, F, H>(
     serial_rx: &mut R,
     serial_tx: &mut W,
     ws_sender: &mut S,
     ws_receiver: &mut I,
-    ready: watch::Receiver<bool>,
-    heartbeat: F,
+    link: Link<'_, F>,
 ) -> anyhow::Result<()>
 where
     R: AsyncRead + Unpin,
@@ -37,6 +41,11 @@ where
     F: Fn() -> H,
     H: Future<Output = ()>,
 {
+    let Link {
+        ready,
+        heartbeat,
+        commands,
+    } = link;
     let (output_tx, mut output_rx) = mpsc::channel(QUEUE_CHUNKS);
     let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(QUEUE_CHUNKS);
     let (control_tx, mut control_rx) = mpsc::channel(CONTROL_MESSAGES);
@@ -99,6 +108,12 @@ where
                     match control.kind.as_str() {
                         "close" => return Ok::<(), anyhow::Error>(()),
                         "tx" => Some(decode_serial_payload(control)?),
+                        "command" => {
+                            let (state, session) =
+                                commands.context("server commands unavailable")?;
+                            let id = control.id.context("missing command id")?;
+                            Some(super::commands::resolve(state, session, id).await?)
+                        }
                         other => anyhow::bail!("unsupported websocket control type `{other}`"),
                     }
                 }
@@ -235,8 +250,11 @@ mod tests {
                 &mut tx,
                 &mut sink,
                 &mut stream::pending::<Result<Message, io::Error>>(),
-                ready,
-                || async {},
+                Link {
+                    ready,
+                    heartbeat: || async {},
+                    commands: None,
+                },
             )
             .await
         });
@@ -308,8 +326,11 @@ mod tests {
                 &mut serial_tx,
                 &mut sink,
                 &mut stream::pending::<Result<Message, io::Error>>(),
-                ready,
-                || async {},
+                Link {
+                    ready,
+                    heartbeat: || async {},
+                    commands: None,
+                },
             )
             .await
         });
@@ -363,7 +384,18 @@ mod tests {
         let mut input = Box::pin(stream::poll_fn(move |cx| command_rx.poll_recv(cx)));
         let (_ready, ready) = watch::channel(initially_ready);
         let task = tokio::spawn(async move {
-            run(&mut rx, &mut tx, &mut sink, &mut input, ready, || async {}).await
+            run(
+                &mut rx,
+                &mut tx,
+                &mut sink,
+                &mut input,
+                Link {
+                    ready,
+                    heartbeat: || async {},
+                    commands: None,
+                },
+            )
+            .await
         });
         commands
             .send(Ok::<_, io::Error>(Message::Binary(vec![0x41; 128].into())))
@@ -416,8 +448,11 @@ mod tests {
                 &mut tx,
                 &mut sink,
                 &mut stream::pending::<Result<Message, io::Error>>(),
-                ready,
-                || async {},
+                Link {
+                    ready,
+                    heartbeat: || async {},
+                    commands: None,
+                },
             )
             .await
         });
@@ -453,8 +488,11 @@ mod tests {
                 &mut tx,
                 &mut sink,
                 &mut stream::pending::<Result<Message, io::Error>>(),
-                ready,
-                || async {},
+                Link {
+                    ready,
+                    heartbeat: || async {},
+                    commands: None,
+                },
             )
             .await
         });
@@ -489,9 +527,19 @@ mod tests {
         let mut input = stream::iter([Ok::<_, io::Error>(Message::Binary(
             vec![0; MAX_COMMAND_SIZE + 1].into(),
         ))]);
-        let err = run(&mut rx, &mut tx, &mut sink, &mut input, ready, || async {})
-            .await
-            .unwrap_err();
+        let err = run(
+            &mut rx,
+            &mut tx,
+            &mut sink,
+            &mut input,
+            Link {
+                ready,
+                heartbeat: || async {},
+                commands: None,
+            },
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("serial command too large"));
         drop(rx.unsplit(tx));
         let mut bytes = Vec::new();
@@ -516,7 +564,7 @@ mod tests {
         let (_ready, ready) = watch::channel(true);
         let mut incoming = stream::pending::<Result<Message, io::Error>>();
         tokio::select! {
-            _ = run(&mut rx, &mut tx, &mut sink, &mut incoming, ready, || async {}) => panic!("transport ended early"),
+            _ = run(&mut rx, &mut tx, &mut sink, &mut incoming, Link { ready, heartbeat: || async {}, commands: None }) => panic!("transport ended early"),
             _ = blocked.notified() => {}
         }
         let mut server = rx.unsplit(tx);

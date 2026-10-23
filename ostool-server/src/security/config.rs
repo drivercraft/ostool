@@ -140,6 +140,14 @@ impl SecurityConfig {
                 .parse::<ipnet::IpNet>()
                 .map_err(|_| anyhow::anyhow!("invalid admin network: {network}"))?;
         }
+        for network in &self.hardware_allowed_networks {
+            let network: ipnet::IpNet = network.parse()?;
+            ensure!(
+                crate::hardware::private_address(network.network())
+                    && crate::hardware::private_address(network.broadcast()),
+                "设备来源网段必须限制在私有网络或回环范围"
+            );
+        }
         if complete && self.captcha_provider == CaptchaProvider::Turnstile {
             ensure!(
                 self.turnstile_site_key

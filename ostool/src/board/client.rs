@@ -152,6 +152,8 @@ pub struct UefiHttpProfile {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BootProfileResponse {
+    #[serde(default)]
+    pub server_side_operations: bool,
     pub boot: BootConfig,
     pub server_ip: Option<String>,
     pub netmask: Option<String>,
@@ -159,6 +161,20 @@ pub struct BootProfileResponse {
     pub http_base_url: Option<Url>,
 }
 
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct UbootPrepareRequest {
+    pub commands: Vec<String>,
+    pub kernel_load_addr: Option<u64>,
+    pub fit_load_addr: Option<u64>,
+    pub bootm_addr: Option<u64>,
+    pub timeout_secs: Option<u64>,
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct UbootPrepared {
+    pub kernel_load_addr: u64,
+    pub fit_load_addr: u64,
+    pub fdt_load_addr: Option<u64>,
+}
 #[derive(Debug, Clone, Deserialize)]
 pub struct SerialStatusResponse {
     pub available: bool,
@@ -358,9 +374,7 @@ impl BoardServerClient {
                 self.endpoint_segments(&["api", "v1", "sessions", session_id, "heartbeat"]),
             )
             .await?;
-        let response = self
-            .send(request.timeout(std::time::Duration::from_secs(3)))
-            .await?;
+        let response = self.send(request).await?;
         self.decode_json(response).await
     }
 
@@ -388,6 +402,66 @@ impl BoardServerClient {
                 self.endpoint_segments(&["api", "v1", "sessions", session_id, "boot-profile"]),
             )
             .await?;
+        let response = self.send(request).await?;
+        self.decode_json(response).await
+    }
+
+    pub async fn prepare_uboot(
+        &self,
+        session_id: &str,
+        body: &UbootPrepareRequest,
+    ) -> Result<(), BoardServerClientError> {
+        let request = self
+            .request(
+                Method::POST,
+                self.endpoint_segments(&["api", "v1", "sessions", session_id, "uboot", "prepare"]),
+            )
+            .await?
+            .json(body);
+        let response = self.send(request).await?;
+        self.decode_empty(response).await
+    }
+    pub async fn wait_uboot_prepared(
+        &self,
+        session_id: &str,
+    ) -> Result<UbootPrepared, BoardServerClientError> {
+        let request = self
+            .request(
+                Method::GET,
+                self.endpoint_segments(&["api", "v1", "sessions", session_id, "uboot", "prepare"]),
+            )
+            .await?;
+        let response = self.send(request).await?;
+        self.decode_json(response).await
+    }
+    pub async fn boot_uboot(
+        &self,
+        session_id: &str,
+        path: &str,
+        cmdline: Option<&str>,
+    ) -> Result<(), BoardServerClientError> {
+        let request = self
+            .request(
+                Method::POST,
+                self.endpoint_segments(&["api", "v1", "sessions", session_id, "uboot", "boot"]),
+            )
+            .await?
+            .json(&serde_json::json!({"path":path,"cmdline":cmdline}));
+        let response = self.send(request).await?;
+        self.decode_empty(response).await
+    }
+    pub async fn register_shell_commands(
+        &self,
+        session_id: &str,
+        commands: &[String],
+    ) -> Result<Vec<String>, BoardServerClientError> {
+        let request = self
+            .request(
+                Method::POST,
+                self.endpoint_segments(&["api", "v1", "sessions", session_id, "commands"]),
+            )
+            .await?
+            .json(commands);
         let response = self.send(request).await?;
         self.decode_json(response).await
     }
@@ -999,6 +1073,10 @@ mod tests {
         )
         .unwrap();
 
+        assert!(
+            !response.server_side_operations,
+            "original servers retain the existing boot flow"
+        );
         assert_eq!(response.server_ip.as_deref(), Some("10.0.0.2"));
         match response.boot {
             BootConfig::Uboot(profile) => {

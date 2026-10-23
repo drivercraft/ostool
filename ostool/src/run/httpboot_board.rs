@@ -20,7 +20,6 @@ use crate::{
             SerialStatusResponse, SessionCreatedResponse, UefiBootArch,
         },
         config::BoardRunConfig,
-        serial_stream::connect_serial_stream,
     },
     run::{
         execution::{RunnerExecutionSummary, RunnerExitStatus, timeout_duration},
@@ -144,7 +143,14 @@ impl HttpBootBoardRunner {
         println!("Waiting for axloader through the network control plane...");
 
         let (serial_tx, serial_rx, tasks) =
-            connect_serial_stream(ws_url, self.client.websocket_authorization().await?).await?;
+            crate::board::serial_stream::connect_serial_stream_with_commands(
+                ws_url,
+                self.client.websocket_authorization().await?,
+                crate::board::serial_stream::registered_command_ids(
+                    &self.board_config.shell_check_steps,
+                ),
+            )
+            .await?;
         let serial_rx = serial_rx.compat();
         let serial_tx = serial_tx.compat_write();
         println!("Serial is connected for target-system interaction only.");
@@ -210,10 +216,10 @@ fn loader_phase_name(phase: &LoaderStatusPhase) -> &'static str {
     }
 }
 
-struct TerminalRunOptions {
-    fail_regex: Vec<String>,
-    shell_check_steps: Vec<ShellCheckStep>,
-    timeout: Option<u64>,
+pub(super) struct TerminalRunOptions {
+    pub(super) fail_regex: Vec<String>,
+    pub(super) shell_check_steps: Vec<ShellCheckStep>,
+    pub(super) timeout: Option<u64>,
 }
 
 async fn write_board_input<W>(
@@ -239,7 +245,7 @@ where
     Ok(())
 }
 
-async fn run_terminal<R, W>(
+pub(super) async fn run_terminal<R, W>(
     serial_rx: R,
     serial_tx: W,
     options: TerminalRunOptions,

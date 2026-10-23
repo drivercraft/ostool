@@ -91,7 +91,7 @@ async fn website_rentals_authorize_real_ostool_clients() -> Result<()> {
     config.auth.access_token_ttl_secs = 60;
     // The loopback client represents an Internet user in this fixture. Hardware-only
     // anonymous traffic is tested separately; it must not mask missing CLI credentials.
-    config.security.hardware_allowed_networks = vec!["192.0.2.0/24".into()];
+    config.security.hardware_allowed_networks = vec!["192.168.250.0/24".into()];
     config.http_boot.root_dir = root.path().join("http-boot");
     let database = test_database::prepare(&root.path().join("config.toml"), &mut config).await?;
     let board = BoardConfig {
@@ -505,6 +505,10 @@ async fn website_rentals_authorize_real_ostool_clients() -> Result<()> {
                 ("DELETE", ""),
                 ("POST", "/heartbeat"),
                 ("GET", "/boot-profile"),
+                ("POST", "/uboot/prepare"),
+                ("GET", "/uboot/prepare"),
+                ("POST", "/uboot/boot"),
+                ("POST", "/commands"),
                 ("GET", "/dtb"),
                 ("GET", "/dtb/download"),
                 ("GET", "/serial"),
@@ -748,7 +752,12 @@ async fn cli_transport_probe() -> Result<()> {
     );
     client.heartbeat(sid).await?;
     client.get_boot_profile(sid).await?;
-    client.get_serial_status(sid).await?;
+    let serial = client.get_serial_status(sid).await?;
+    assert!(
+        serial.port.is_none(),
+        "host UART path must stay on the server"
+    );
+    assert!(serial.baud_rate.is_none());
     assert_eq!(
         client.get_loader_status(sid).await.unwrap_err().status,
         StatusCode::NOT_FOUND
@@ -761,6 +770,17 @@ async fn cli_transport_probe() -> Result<()> {
     );
     client.power_on_board(sid).await?;
     client.power_off_board(sid).await?;
+    let power = Client::builder()
+        .no_proxy()
+        .build()?
+        .post(format!("{base}api/v1/sessions/{sid}/board/power-on"))
+        .bearer_auth(client.websocket_authorization().await?.unwrap())
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    assert!(!power.contains("private-power-credential"));
     let file = client
         .upload_session_file(sid, "probe.txt", b"authenticated upload".to_vec())
         .await?;

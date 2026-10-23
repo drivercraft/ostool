@@ -1059,21 +1059,27 @@ async fn public_site_stream_cannot_expose_management_or_identity_data() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let mut stream = response.into_body().into_data_stream();
-    let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    let text = String::from_utf8(chunk.to_vec()).unwrap();
-    let body: Value = serde_json::from_str(
-        text.lines()
-            .find_map(|line| line.strip_prefix("data: "))
-            .unwrap(),
-    )
+    let mut data = serde_json::Map::new();
+    let mut text = String::new();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while let Some(chunk) = stream.next().await {
+            let chunk = String::from_utf8(chunk.unwrap().to_vec()).unwrap();
+            text.push_str(&chunk);
+            for line in chunk.lines().filter_map(|line| line.strip_prefix("data: ")) {
+                let body: Value = serde_json::from_str(line).unwrap();
+                if let Some(values) = body["data"].as_object() {
+                    data.extend(values.clone());
+                }
+            }
+            if data.contains_key("site") && data.contains_key("device_catalog") {
+                return;
+            }
+        }
+        panic!("public stream ended before publishing both resources");
+    })
+    .await
     .unwrap();
-    let data = body["data"].as_object().unwrap();
     assert_eq!(data.len(), 2);
-    assert!(data.contains_key("site"));
     assert_eq!(data["device_catalog"], catalog.body);
     assert!(!text.contains("private-power"));
     assert!(!text.contains("private-operator"));
@@ -1202,29 +1208,6 @@ async fn hardware_access_rejects_external_and_invalid_proxy_sources() {
     assert_eq!(
         f.app.clone().oneshot(request).await.unwrap().status(),
         StatusCode::FORBIDDEN
-    );
-    f.state
-        .config
-        .write()
-        .await
-        .security
-        .hardware_allowed_networks = vec!["192.168.20.0/24".into()];
-    let mut request = Request::builder()
-        .uri("/api/v1/loader-updates/missing/image")
-        .body(Body::empty())
-        .unwrap();
-    request.extensions_mut().insert(ConnectInfo(
-        "192.168.20.10:40000"
-            .parse::<std::net::SocketAddr>()
-            .unwrap(),
-    ));
-    assert_eq!(
-        ostool_server::hardware::build_router(f.state.clone())
-            .oneshot(request)
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::NOT_FOUND
     );
 }
 

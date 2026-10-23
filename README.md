@@ -415,6 +415,11 @@ ostool board config
 `${sessionFile:<relative-path>}`。绝对路径、`..`、符号链接逃逸、重复路径及缺失
 文件都会在运行前被拒绝；接口不提供 alias 或上传改名。
 
+支持 `server_side_operations` 的服务器负责 U-Boot 网络配置、TFTP/串口加载及共享文件命令变量展开。
+ostool 仅接收 RAM 加载地址、上传 FIT 并提交启动请求，设备内网地址不经用户 API 返回。
+本地与公网使用相同接口；公网的上传、下载和串口连接均携带登录凭据并使用 HTTPS/WSS。
+连接未声明此能力的原有服务器时，客户端继续使用原有启动流程。
+
 ### 公网开发板认证
 
 局域网直接连接 `ostool-server` 时保留上述匿名 HTTP 配置。公网认证网关使用完整 HTTPS 地址：
@@ -441,8 +446,6 @@ ostool logout --server https://203.0.113.10:8443
 ```
 
 OAuth 登录会自动刷新短期 access token；PAT 直接用于 Bearer 认证，不会刷新。凭据优先保存到系统 credential store；不可用时会警告并退回用户级凭据文件。自动化场景可设置 `OSTOOL_BOARD_ACCESS_TOKEN`，该 token 不保存也不刷新。
-
-活动会话的心跳对临时网络错误、服务端错误和限流做有界重试，只在已确认的租约期限内重试；`401/403` 不重试。此行为保持原有服务端通信协议。
 
 网站 `/devices` 无需登录即可用卡片浏览全部设备，禁用设备显示不可用。公网版普通用户只有在正式租赁的有效时段内才能通过 `ostool` 使用对应开发板；申请需经管理员审批，租赁取消或到期会释放会话。HTTP 和串口 WebSocket 使用同一 Bearer 身份与租赁归属校验。设备侧 TFTP、loader 及独立吞吐测试端口应限制在设备内网，见 [API 与鉴权边界](docs/api.md)。
 

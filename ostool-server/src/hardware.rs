@@ -1,4 +1,4 @@
-//! The device-network listener exposes no user, admin or board-control API.
+//! Network boundary for server-owned device discovery, TFTP and throughput tests.
 use crate::{AppState, ServerConfig, api::error::ApiError};
 use axum::{
     Router,
@@ -11,35 +11,42 @@ use axum::{
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use std::net::{IpAddr, SocketAddr};
 
-/// Reuse the configured device interface/port. An explicit address supports a routed device LAN.
-pub fn listen_address(config: &ServerConfig) -> anyhow::Result<Option<SocketAddr>> {
-    if !config.edition.is_public() {
+/// Device downloads use the selected private device interface, never the user origin.
+pub fn download_address(config: &ServerConfig) -> anyhow::Result<Option<SocketAddr>> {
+    let Some(ip) = crate::tftp::status::resolve_interface_ipv4(&config.network.interface)? else {
         return Ok(None);
-    }
-    if let Some(address) = config.hardware_listen_addr {
-        return Ok(Some(address));
-    }
-    let interface = NetworkInterface::show()?
-        .into_iter()
-        .find(|i| i.name == config.network.interface);
-    Ok(interface.and_then(|i| {
-        i.addr.into_iter().find_map(|a| match a {
-            Addr::V4(v) if v.ip.is_private() => {
-                Some(SocketAddr::new(v.ip.into(), config.listen_addr.port()))
-            }
-            _ => None,
-        })
-    }))
+    };
+    let ip: IpAddr = ip.parse()?;
+    Ok((private_address(ip) && ip != config.listen_addr.ip())
+        .then_some(SocketAddr::new(ip, config.listen_addr.port())))
 }
+pub fn download_base_url(config: &ServerConfig) -> anyhow::Result<url::Url> {
+    let address = if config.edition.is_public() {
+        download_address(config)?
+            .ok_or_else(|| anyhow::anyhow!("device download interface unavailable"))?
+    } else {
+        let ip = crate::tftp::status::resolve_interface_ipv4(&config.network.interface)?
+            .ok_or_else(|| anyhow::anyhow!("device network unavailable"))?;
+        SocketAddr::new(ip.parse()?, config.listen_addr.port())
+    };
+    Ok(url::Url::parse(&format!("http://{address}/"))?)
+}
+pub fn download_router(state: AppState) -> Router {
+    protect(
+        crate::api::router::device_download_routes().with_state(state.clone()),
+        state,
+    )
+}
+
 pub fn restrict_tftp(config: &ServerConfig, tftp: &mut crate::TftpConfig) -> anyhow::Result<()> {
     if config.edition.is_public()
         && let crate::TftpConfig::Builtin(tftp) = tftp
         && tftp.enabled
     {
         if tftp.bind_addr.ip().is_unspecified() {
-            let address = listen_address(config)?
-                .ok_or_else(|| anyhow::anyhow!("启用公网版 TFTP 前请配置设备网络接口"))?;
-            tftp.bind_addr.set_ip(address.ip());
+            let address = crate::tftp::status::resolve_interface_ipv4(&config.network.interface)?
+                .ok_or_else(|| anyhow::anyhow!("启用 TFTP 前请配置设备网络接口"))?;
+            tftp.bind_addr.set_ip(address.parse()?);
         }
         anyhow::ensure!(
             private_address(tftp.bind_addr.ip()),
@@ -59,12 +66,14 @@ pub fn resolve_networks(config: &mut ServerConfig) -> anyhow::Result<()> {
     if !config.security.hardware_allowed_networks.is_empty() {
         return Ok(());
     }
-    let address = config.hardware_listen_addr.map(|a| a.ip());
     let mut networks = vec!["127.0.0.1/32".to_string(), "::1/128".to_string()];
     for interface in NetworkInterface::show()? {
+        if interface.name != config.network.interface {
+            continue;
+        }
         for a in interface.addr {
             match a {
-                Addr::V4(v) if address == Some(IpAddr::V4(v.ip)) && v.ip.is_private() => {
+                Addr::V4(v) if v.ip.is_private() => {
                     if let Some(network) = v
                         .netmask
                         .and_then(|mask| ipnet::Ipv4Net::with_netmask(v.ip, mask).ok())
@@ -72,7 +81,7 @@ pub fn resolve_networks(config: &mut ServerConfig) -> anyhow::Result<()> {
                         networks.push(network.trunc().to_string());
                     }
                 }
-                Addr::V6(v) if address == Some(IpAddr::V6(v.ip)) && v.ip.is_unique_local() => {
+                Addr::V6(v) if v.ip.is_unique_local() => {
                     if let Some(network) = v
                         .netmask
                         .and_then(|mask| ipnet::Ipv6Net::with_netmask(v.ip, mask).ok())
@@ -97,25 +106,18 @@ pub fn allowed(config: &ServerConfig, ip: IpAddr) -> bool {
         .any(|n| n.contains(&ip))
 }
 
-pub fn build_router(state: AppState) -> Router {
-    protect(
-        crate::api::router::hardware_routes().with_state(state.clone()),
-        state,
-    )
-}
 pub fn protect(router: Router, state: AppState) -> Router {
     router.layer(axum::middleware::from_fn_with_state(state, admit))
 }
 async fn admit(State(state): State<AppState>, request: Request<Body>, next: Next) -> Response {
     let config = state.config.read().await;
-    let peer = request
+    let permitted = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
-        .map(|p| p.0.ip());
-    let allowed = peer.is_some_and(|ip| allowed(&config, ip));
+        .is_some_and(|peer| allowed(&config, peer.0.ip()));
     drop(config);
-    if !allowed {
-        return ApiError::forbidden("设备入口仅允许配置的设备网段访问").into_response();
+    if !permitted {
+        return ApiError::forbidden("设备接口来源不受信任").into_response();
     }
     let mut response = next.run(request).await;
     response.headers_mut().insert(
@@ -129,4 +131,26 @@ async fn admit(State(state): State<AppState>, request: Request<Body>, next: Next
         .headers_mut()
         .insert("cache-control", "no-store".parse().unwrap());
     response
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn device_source_ranges_cannot_include_internet_addresses() {
+        for (network, valid) in [
+            ("192.168.50.0/24", true),
+            ("127.0.0.1/32", true),
+            ("fd00::/8", true),
+            ("::1/128", true),
+            ("0.0.0.0/0", false),
+            ("::/0", false),
+            ("8.8.8.0/24", false),
+        ] {
+            let config = crate::security::config::SecurityConfig {
+                hardware_allowed_networks: vec![network.into()],
+                ..Default::default()
+            };
+            assert_eq!(config.validate_deployment(true).is_ok(), valid, "{network}");
+        }
+    }
 }

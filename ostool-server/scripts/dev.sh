@@ -131,6 +131,9 @@ dev_run() {
             else
                 "${COMPOSE[@]}" up -d --build --wait --wait-timeout 120
             fi
+            if [[ $EDITION == public ]]; then
+                "${COMPOSE[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+            fi
             printf '[完成] 环境已启动；访问地址使用 .env 中的 OSTOOL_PUBLIC_BASE_URL。\n';;
         stop) "${ALL_COMPOSE[@]}" down;;
         build) "${COMPOSE[@]}" build server;;

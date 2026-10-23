@@ -119,6 +119,8 @@ impl Session {
 
 #[derive(Debug)]
 pub struct SessionState {
+    pub uboot: crate::serial::uboot::UbootSession,
+    pub shell_commands: RwLock<std::collections::BTreeMap<uuid::Uuid, String>>,
     pub(crate) upload_gate: Arc<Mutex<()>>,
     pub(crate) file_gate: Mutex<()>,
     pub(crate) downloads: Arc<tokio::sync::Semaphore>,
@@ -185,6 +187,8 @@ impl SessionState {
     ) -> Arc<Self> {
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
         Arc::new(Self {
+            uboot: Default::default(),
+            shell_commands: Default::default(),
             upload_gate: Arc::new(Mutex::new(())),
             file_gate: Mutex::new(()),
             downloads: Arc::new(tokio::sync::Semaphore::new(2)),

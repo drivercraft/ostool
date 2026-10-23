@@ -281,7 +281,11 @@ pub async fn transport(
             HeaderValue::from_static("max-age=31536000"),
         );
     }
-    if path.starts_with("/api/") || path.starts_with("/oauth/") {
+    if path.starts_with("/api/")
+        || path.starts_with("/oauth/")
+        || path.starts_with("/share/")
+        || path.starts_with("/boot/")
+    {
         response
             .headers_mut()
             .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -303,7 +307,7 @@ pub async fn gate(
     }
     let path = request.uri().path();
     if path.starts_with("/api/v1/loaders/") || path.starts_with("/api/v1/loader-updates/") {
-        return ApiError::forbidden("装载器接口仅通过独立设备入口访问").into_response();
+        return ApiError::forbidden("设备内部接口不对公网用户开放").into_response();
     }
     if (path.starts_with("/admin") || path.starts_with("/api/v1/admin/"))
         && !config.security.admin_allowed_networks.is_empty()

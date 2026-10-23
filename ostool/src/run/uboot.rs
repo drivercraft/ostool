@@ -518,9 +518,104 @@ pub(crate) async fn run_uboot_remote(
     session: SessionCreatedResponse,
 ) -> anyhow::Result<()> {
     let config = UbootConfig::from_board_run_config(board_config);
+    if client
+        .get_boot_profile(&session.session_id)
+        .await?
+        .server_side_operations
+    {
+        return run_server_uboot(input, config, client, session).await;
+    }
     let backend = RemoteBackend::new(client, session);
     let mut runner = Runner::new(input, config, backend);
     runner.run().await
+}
+
+async fn run_server_uboot(
+    input: UbootRunInput,
+    config: UbootConfig,
+    client: BoardServerClient,
+    session: SessionCreatedResponse,
+) -> anyhow::Result<()> {
+    compile_fail_regexes(&config.fail_regex)?;
+    config.shell_check_matcher()?;
+    config.boot.validate()?;
+    input
+        .artifacts
+        .require_bin("U-Boot runner requires a prepared BIN artifact")?;
+    input
+        .arch
+        .context("Cannot determine architecture for FIT image generation")?;
+    let sid = &session.session_id;
+    client
+        .prepare_uboot(
+            sid,
+            &crate::board::client::UbootPrepareRequest {
+                commands: config.uboot_cmd.clone().unwrap_or_default(),
+                kernel_load_addr: config.kernel_load_addr_int(),
+                fit_load_addr: config.fit_load_addr_int(),
+                bootm_addr: config.bootm_addr_int(),
+                timeout_secs: Some(
+                    timeout_duration(config.timeout)
+                        .unwrap_or(DEFAULT_UBOOT_SHELL_TIMEOUT)
+                        .as_secs()
+                        .clamp(1, 600),
+                ),
+            },
+        )
+        .await?;
+    let ws = client.resolve_ws_url(
+        session
+            .ws_url
+            .as_deref()
+            .context("server did not return a serial websocket URL")?,
+    )?;
+    let (tx, rx, tasks) = crate::board::serial_stream::connect_serial_stream_with_commands(
+        ws,
+        client.websocket_authorization().await?,
+        crate::board::serial_stream::registered_command_ids(&config.shell_check_steps),
+    )
+    .await?;
+    let result = async {
+        let addresses = client.wait_uboot_prepared(sid).await?;
+        let mut backend = RemoteBackend::new(client.clone(), session.clone());
+        let dtb = backend.prepare_dtb(&input, &config).await?;
+        let kernel = input
+            .artifacts
+            .require_bin("U-Boot runner requires a prepared BIN artifact")?
+            .to_path_buf();
+        let generated = fit::generate_fit_image(FitInput {
+            kernel_path: kernel,
+            dtb_path: dtb.fit_source,
+            initramfs_path: config.boot.initramfs_path(),
+            arch: input
+                .arch
+                .context("Cannot determine architecture for FIT image generation")?,
+            kernel_load_addr: addresses.kernel_load_addr,
+            kernel_entry_addr: addresses.kernel_load_addr,
+            fdt_load_addr: addresses.fdt_load_addr,
+            output_path: None,
+        })
+        .await?;
+        client
+            .upload_session_file(sid, "boot/kernel.fit", fs::read(generated.path()).await?)
+            .await?;
+        client
+            .boot_uboot(sid, "boot/kernel.fit", config.boot.cmdline.as_deref())
+            .await?;
+        super::httpboot_board::run_terminal(
+            rx.compat(),
+            tx.compat_write(),
+            super::httpboot_board::TerminalRunOptions {
+                fail_regex: config.fail_regex,
+                shell_check_steps: config.shell_check_steps,
+                timeout: config.timeout,
+            },
+        )
+        .await
+    }
+    .await;
+    let cleanup = tasks.shutdown_with_timeout(Duration::from_secs(2)).await;
+    result.and(cleanup)
 }
 
 pub(crate) async fn read_uboot_config_at_path(

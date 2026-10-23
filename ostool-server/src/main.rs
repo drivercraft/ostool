@@ -46,6 +46,14 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     let config = ostool_server::environment::load(cli.env_file.as_deref())?;
+    anyhow::ensure!(
+        !config.edition.is_public() || config.listen_addr.ip().is_loopback(),
+        "public 用户 API 必须使用回环监听，由 HTTPS 网关转发"
+    );
+    anyhow::ensure!(
+        !config.edition.is_public() || config.auth.public_base_url.is_some(),
+        "public edition requires OSTOOL_PUBLIC_BASE_URL"
+    );
     if cli.check_config {
         anyhow::ensure!(
             config
@@ -54,10 +62,6 @@ async fn main() -> anyhow::Result<()> {
                 .as_ref()
                 .is_some_and(|url| !url.trim().is_empty()),
             "missing OSTOOL_DATABASE_URL"
-        );
-        anyhow::ensure!(
-            !config.edition.is_public() || config.auth.public_base_url.is_some(),
-            "public edition requires OSTOOL_PUBLIC_BASE_URL"
         );
         config.validate()?;
         println!("配置检查通过");
@@ -80,10 +84,6 @@ async fn main() -> anyhow::Result<()> {
         "both local and public editions require PostgreSQL (OSTOOL_DATABASE_URL); use scripts/dev.sh for an automatically managed development database"
     );
     let listen_addr = config.listen_addr;
-    anyhow::ensure!(
-        !config.edition.is_public() || listen_addr.ip().is_loopback(),
-        "public 用户 API 必须使用回环监听，由 HTTPS 网关转发"
-    );
     let listener = tokio::net::TcpListener::bind(listen_addr)
         .await
         .with_context(|| format!("failed to bind management listener at {listen_addr}"))?;
@@ -113,17 +113,21 @@ async fn main() -> anyhow::Result<()> {
         tftp_manager.clone(),
     )
     .await?;
-    let device_config = state.config.read().await.clone();
-    let hardware_listener =
-        if let Some(addr) = ostool_server::hardware::listen_address(&device_config)? {
-            Some(
-                tokio::net::TcpListener::bind(addr)
-                    .await
-                    .with_context(|| format!("failed to bind device-network listener at {addr}"))?,
-            )
+    let device_listener = {
+        let config = state.config.read().await;
+        if config.edition.is_public() {
+            match ostool_server::hardware::download_address(&config)? {
+                Some(address) => Some(
+                    tokio::net::TcpListener::bind(address)
+                        .await
+                        .context("设备下载监听失败")?,
+                ),
+                None => None,
+            }
         } else {
             None
-        };
+        }
+    };
     let tftp_manager = state.tftp_manager.read().await.clone();
     state.ensure_data_dirs().await?;
     ostool_server::uploads::cleanup_interrupted(&state).await?;
@@ -174,10 +178,9 @@ async fn main() -> anyhow::Result<()> {
         .context("management listener failed")
     });
     info!("ostoold management API listening on {listen_addr}");
-    if let Some(listener) = hardware_listener {
-        let addr = listener.local_addr()?;
+    if let Some(listener) = device_listener {
         let shutdown = shutdown_tx.subscribe();
-        let app = ostool_server::hardware::build_router(state.clone());
+        let app = ostool_server::hardware::download_router(state.clone());
         servers.spawn(async move {
             axum::serve(
                 listener,
@@ -185,9 +188,8 @@ async fn main() -> anyhow::Result<()> {
             )
             .with_graceful_shutdown(wait_for_shutdown(shutdown))
             .await
-            .context("device-network listener failed")
+            .context("设备下载监听失败")
         });
-        info!("ostoold device-only HTTP listening on {addr}");
     }
     if let Some(test_listener) = network_test_listener {
         let test_shutdown = shutdown_tx.subscribe();

@@ -71,24 +71,22 @@ use crate::{
 
 const DTB_UPLOAD_MAX_MIB: u32 = 10;
 
-pub(crate) fn hardware_routes() -> Router<AppState> {
+pub(crate) fn device_download_routes() -> Router<AppState> {
     Router::new()
-        .route(
-            "/boot/sessions/{session_id}/{*path}",
-            get(get_http_boot_file),
-        )
         .route(
             "/share/sessions/{session_id}/{*path}",
             get(get_shared_session_file),
         )
-        .route("/api/v1/loaders/poll", post(poll_loader))
-        .route("/api/v1/loaders/status", post(report_loader_status))
-        .merge(super::ota::hardware_routes())
+        .route(
+            "/boot/sessions/{session_id}/{*path}",
+            get(get_http_boot_file),
+        )
 }
-
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(super::site::routes())
+        .merge(crate::serial::uboot::routes())
+        .merge(crate::serial::commands::routes())
         .merge(super::auth::routes())
         .merge(super::users::routes())
         .merge(super::rentals::routes())
@@ -958,11 +956,19 @@ async fn get_loader_status(
         .session_state(&session_id)
         .await
         .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` not found")))?;
-    session
+    let mut status = session
         .loader_status()
         .await
-        .map(axum::Json)
-        .ok_or_else(|| ApiError::not_found("session has no published boot command"))
+        .ok_or_else(|| ApiError::not_found("session has no published boot command"))?;
+    if state.config.read().await.edition.is_public() {
+        status.registration_id = None;
+        if let Some(httpboot_protocol::LoaderStatusPhase::Failed { message, .. }) =
+            &mut status.status
+        {
+            *message = "设备启动失败，请联系管理员".into();
+        }
+    }
+    Ok(axum::Json(status))
 }
 
 pub(crate) fn board_id_for_mac(
@@ -1757,7 +1763,10 @@ async fn get_session(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<SessionDetailResponse>, ApiError> {
-    let session = get_session_or_404(&state, &session_id).await?;
+    let mut session = get_session_or_404(&state, &session_id).await?;
+    if state.config.read().await.edition.is_public() {
+        session.serial_runtime = session.serial_runtime.public_view();
+    }
     let board = state
         .session_board(&session_id)
         .await
@@ -1818,6 +1827,30 @@ async fn get_boot_profile(
         .session_board(&session_id)
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
+    if state.config.read().await.edition.is_public() {
+        let mut boot = board.boot;
+        match &mut boot {
+            BootConfig::UefiHttp(profile) => profile.serial_parameters = None,
+            BootConfig::Uboot(profile) => {
+                profile.use_tftp = false;
+                profile.server_ip = None;
+                profile.board_ip = None;
+                profile.netmask = None;
+                profile.gatewayip = None;
+                profile.network_mode = UbootNetworkMode::Dhcp;
+            }
+            BootConfig::Pxe(profile) => profile.notes = None,
+        }
+        let config = state.config.read().await;
+        return Ok(axum::Json(BootProfileResponse {
+            boot,
+            server_ip: None,
+            netmask: None,
+            interface: None,
+            http_base_url: Some(http_boot_public_base_url(&config)?),
+            server_side_operations: true,
+        }));
+    }
     let network = resolved_shared_network(&state, &board).await?;
     let http_base_url = match network
         .as_ref()
@@ -1832,6 +1865,7 @@ async fn get_boot_profile(
         netmask: network.as_ref().and_then(|item| item.netmask.clone()),
         interface: network.as_ref().and_then(|item| item.interface.clone()),
         http_base_url,
+        server_side_operations: true,
     }))
 }
 
@@ -1927,7 +1961,7 @@ async fn get_serial_status(
         .map(|s| s.serial_runtime.snapshot())
         .unwrap_or_default();
     let manager = *state.serial_manager.subscribe().borrow();
-    let response = if matches!(board.boot, BootConfig::UefiHttp(_)) {
+    let mut response = if matches!(board.boot, BootConfig::UefiHttp(_)) {
         SerialStatusResponse {
             available: true,
             connected,
@@ -1955,7 +1989,10 @@ async fn get_serial_status(
             format!("qemu:{}", serial.key.value)
         } else {
             resolve_serial_config(&serial)
-                .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?
+                .map_err(|err| {
+                    log::warn!("session {session_id} serial unavailable: {err:#}");
+                    ApiError::service_unavailable("设备串口暂时不可用")
+                })?
                 .current_device_path
         };
         SerialStatusResponse {
@@ -1978,6 +2015,12 @@ async fn get_serial_status(
             ws_url: None,
         }
     };
+    if state.config.read().await.edition.is_public() {
+        response.port = None;
+        response.baud_rate = None;
+        response.runtime = response.runtime.public_view();
+        response.manager = Default::default();
+    }
     Ok(axum::Json(response))
 }
 
@@ -2009,7 +2052,10 @@ async fn serial_ws(
     if !board.serial_available() {
         return Err(ApiError::conflict("board has no serial configuration"));
     }
-    if session.is_releasing() {
+    if session.is_releasing()
+        || session.is_stop_requested()
+        || session.snapshot().await.expires_at <= chrono::Utc::now()
+    {
         return Err(ApiError::conflict("session is releasing"));
     }
 
@@ -2501,18 +2547,22 @@ async fn get_session_tftp_status(
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
     let status = state.tftp_manager.read().await.status().await?;
-    let server_ip = resolved_board_network(&state, &board)
-        .await?
-        .and_then(|network| network.server_ip);
+    let hide_network = state.config.read().await.edition.is_public();
+    let network = if hide_network {
+        None
+    } else {
+        resolved_board_network(&state, &board).await?
+    };
+    let server_ip = network
+        .as_ref()
+        .and_then(|network| network.server_ip.clone());
     let files = session_file_responses(&state, &session_id, &board).await?;
 
     Ok(axum::Json(TftpSessionResponse {
         available: status.enabled && status.healthy && status.writable && server_ip.is_some(),
         provider: status.provider,
         server_ip,
-        netmask: resolved_board_network(&state, &board)
-            .await?
-            .and_then(|network| network.netmask),
+        netmask: network.and_then(|network| network.netmask),
         writable: status.writable,
         files,
     }))
@@ -2581,6 +2631,14 @@ async fn file_response_for_board(
     board: &BoardConfig,
     file: TftpFileRef,
 ) -> Result<SharedSessionFileResponse, ApiError> {
+    if state.config.read().await.edition.is_public() {
+        let http_url = shared_http_url(state, "", &file.relative_path).await?;
+        return Ok(SharedSessionFileResponse::from_file(
+            file,
+            None,
+            Some(http_url),
+        ));
+    }
     let tftp_url = resolved_board_network(state, board)
         .await?
         .and_then(|network| network.server_ip)
@@ -2630,6 +2688,11 @@ async fn run_board_power_action(
             PowerActionError::Execution(err) => ApiError::from(err),
         })?;
 
+    let message = if state.config.read().await.edition.is_public() {
+        format!("{} completed", action.label())
+    } else {
+        message
+    };
     Ok(axum::Json(ActionResponse { ok: true, message }))
 }
 
@@ -2652,7 +2715,10 @@ async fn active_session_state_or_404(
         .session_state(session_id)
         .await
         .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` not found")))?;
-    if session.is_releasing() || session.is_stop_requested() {
+    if session.is_releasing()
+        || session.is_stop_requested()
+        || session.snapshot().await.expires_at <= chrono::Utc::now()
+    {
         return Err(ApiError::conflict(format!(
             "session `{session_id}` is releasing"
         )));
@@ -2668,7 +2734,10 @@ async fn active_shared_session_or_404(
         .session_state(session_id)
         .await
         .ok_or_else(|| ApiError::not_found(format!("session `{session_id}` not found")))?;
-    if session.is_releasing() || session.is_stop_requested() {
+    if session.is_releasing()
+        || session.is_stop_requested()
+        || session.snapshot().await.expires_at <= chrono::Utc::now()
+    {
         return Err(ApiError::not_found(format!(
             "session `{session_id}` not found"
         )));
@@ -2710,14 +2779,21 @@ fn http_boot_url(
 }
 
 pub(crate) fn http_boot_public_base_url(config: &ServerConfig) -> Result<Url, ApiError> {
+    if config.edition.is_public() {
+        return config
+            .auth
+            .public_base_url
+            .as_deref()
+            .ok_or_else(|| ApiError::service_unavailable("公网访问地址尚未配置"))
+            .and_then(|url| {
+                Url::parse(url).map_err(|_| ApiError::service_unavailable("公网访问地址无效"))
+            });
+    }
     if let Some(public_base_url) = config.http_boot.public_base_url.as_deref()
         && !public_base_url.trim().is_empty()
     {
         return Url::parse(public_base_url.trim())
             .map_err(|err| ApiError::bad_request(format!("invalid HTTP Boot public URL: {err}")));
-    }
-    if let Some(address) = config.hardware_listen_addr {
-        return server_http_base_url(&address.ip().to_string(), address.port());
     }
 
     if let Some(network) = resolve_server_network(config)?
@@ -2853,10 +2929,10 @@ async fn read_limited_body(request: Request, max_mib: u32, label: &str) -> Resul
 }
 
 #[derive(Debug, Clone)]
-struct ResolvedNetwork {
-    interface: Option<String>,
-    server_ip: Option<String>,
-    netmask: Option<String>,
+pub(crate) struct ResolvedNetwork {
+    pub(crate) interface: Option<String>,
+    pub(crate) server_ip: Option<String>,
+    pub(crate) netmask: Option<String>,
 }
 
 fn resolve_server_network(config: &ServerConfig) -> Result<Option<ResolvedNetwork>, ApiError> {
@@ -2894,7 +2970,7 @@ fn resolve_server_network(config: &ServerConfig) -> Result<Option<ResolvedNetwor
     }))
 }
 
-async fn resolved_board_network(
+pub(crate) async fn resolved_board_network(
     state: &AppState,
     board: &BoardConfig,
 ) -> Result<Option<ResolvedNetwork>, ApiError> {
@@ -2944,8 +3020,8 @@ async fn resolved_shared_network(
 
 async fn shared_http_base_url(state: &AppState, server_ip: &str) -> Result<Url, ApiError> {
     let config = state.config.read().await.clone();
-    if let Some(address) = config.hardware_listen_addr {
-        return server_http_base_url(&address.ip().to_string(), address.port());
+    if config.edition.is_public() {
+        return http_boot_public_base_url(&config);
     }
     server_http_base_url(server_ip, config.listen_addr.port())
 }
@@ -3303,7 +3379,6 @@ mod tests {
 
     fn test_server_config(root: &std::path::Path) -> ServerConfig {
         ServerConfig {
-            hardware_listen_addr: None,
             security: Default::default(),
             audit: Default::default(),
             edition: crate::config::Edition::Local,

@@ -554,6 +554,9 @@ async fn serve_udp_discovery(
         let Ok(probe) = serde_json::from_slice::<LoaderDiscoveryProbe>(&buffer[..length]) else {
             continue;
         };
+        if server_config.edition.is_public() {
+            continue;
+        }
         let base_url = advertised_base_url(&server_config)?;
         let Ok(offer) = state.loader_registry.offer(&probe, base_url).await else {
             continue;
@@ -782,7 +785,7 @@ mod network_boundary_tests {
             }),
             ..Default::default()
         };
-        config.security.hardware_allowed_networks = vec!["192.0.2.0/24".into()];
+        config.security.hardware_allowed_networks = vec!["192.168.250.0/24".into()];
         crate::test_support::prepare(&root.path().join("test.env"), &mut config)
             .await
             .unwrap();

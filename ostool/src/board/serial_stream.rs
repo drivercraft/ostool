@@ -31,6 +31,19 @@ pub async fn connect_serial_stream(
     ws_url: reqwest::Url,
     authorization: Option<String>,
 ) -> anyhow::Result<(BoxedAsyncWrite, BoxedAsyncRead, SerialStreamTasks)> {
+    connect_serial_stream_with_commands(ws_url, authorization, vec![]).await
+}
+
+/// Interpret registered command references only when the server advertises this protocol.
+pub async fn connect_serial_stream_with_commands(
+    ws_url: reqwest::Url,
+    authorization: Option<String>,
+    command_ids: Vec<String>,
+) -> anyhow::Result<(BoxedAsyncWrite, BoxedAsyncRead, SerialStreamTasks)> {
+    anyhow::ensure!(
+        command_ids.iter().all(|id| valid_command_id(id)),
+        "invalid server command references"
+    );
     let request = websocket_request(&ws_url, authorization.as_deref())?;
     let (stream, _) = tokio_tungstenite::connect_async(request)
         .await
@@ -98,6 +111,7 @@ pub async fn connect_serial_stream(
         let locally_closed = locally_closed.clone();
         async move {
             let mut buffer = [0u8; 4096];
+            let mut command = None::<Vec<u8>>;
             loop {
                 let read = bridge_rx
                     .read(&mut buffer)
@@ -106,12 +120,20 @@ pub async fn connect_serial_stream(
                 if read == 0 {
                     break;
                 }
-                ws_sink
-                    .send(Message::Binary(buffer[..read].to_vec().into()))
-                    .await
-                    .context("serial websocket write failed")?;
+                let messages = command_messages(&buffer[..read], &command_ids, &mut command);
+                for message in messages {
+                    ws_sink
+                        .send(message)
+                        .await
+                        .context("serial websocket write failed")?;
+                }
             }
 
+            if let Some(pending) = command {
+                let mut raw = vec![0x1e];
+                raw.extend(pending);
+                ws_sink.send(Message::Binary(raw.into())).await?;
+            }
             locally_closed.store(true, Ordering::SeqCst);
             let _ = ws_sink
                 .send(Message::Text(r#"{"type":"close"}"#.to_string().into()))
@@ -129,6 +151,68 @@ pub async fn connect_serial_stream(
             write_task,
         },
     ))
+}
+
+pub(crate) fn valid_command_id(id: &str) -> bool {
+    id.len() == 36
+        && id.bytes().enumerate().all(|(i, b)| {
+            if [8, 13, 18, 23].contains(&i) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
+        })
+}
+pub(crate) fn registered_command_ids(steps: &[crate::run::ShellCheckStep]) -> Vec<String> {
+    steps
+        .iter()
+        .filter_map(|s| s.shell_cmd.as_deref())
+        .filter_map(|s| {
+            s.strip_prefix('\u{1e}')
+                .and_then(|s| s.strip_suffix('\u{1f}'))
+        })
+        .filter(|id| valid_command_id(id))
+        .map(str::to_owned)
+        .collect()
+}
+fn command_messages(bytes: &[u8], ids: &[String], pending: &mut Option<Vec<u8>>) -> Vec<Message> {
+    if ids.is_empty() {
+        return vec![Message::Binary(bytes.to_vec().into())];
+    }
+    let mut messages = Vec::new();
+    let mut raw = Vec::new();
+    for &byte in bytes {
+        if let Some(mut command) = pending.take() {
+            if byte == 0x1f
+                && let Some(id) = ids.iter().find(|id| id.as_bytes() == command)
+            {
+                messages.push(Message::Text(
+                    serde_json::json!({"type":"command","id":id})
+                        .to_string()
+                        .into(),
+                ));
+            } else {
+                command.push(byte);
+                if ids.iter().any(|id| id.as_bytes().starts_with(&command)) {
+                    *pending = Some(command);
+                } else {
+                    raw.push(0x1e);
+                    raw.extend(command);
+                }
+            }
+        } else if byte == 0x1e {
+            if !raw.is_empty() {
+                messages.push(Message::Binary(std::mem::take(&mut raw).into()));
+            }
+            *pending = Some(Vec::new());
+        } else {
+            raw.push(byte);
+        }
+    }
+    if !raw.is_empty() {
+        messages.push(Message::Binary(raw.into()));
+    }
+    messages
 }
 
 pub(crate) fn websocket_request(
@@ -579,5 +663,55 @@ mod tests {
             "Bearer token-value"
         );
         assert!(!format!("{:?}", request.headers()).contains("token-value"));
+    }
+}
+
+#[cfg(test)]
+mod command_reference_tests {
+    use super::*;
+    #[test]
+    fn references_survive_every_websocket_chunk_boundary_and_keep_raw_bytes_ordered() {
+        let id = "01234567-89ab-cdef-0123-456789abcdef";
+        let bytes = format!("before\u{1e}{id}\u{1f}\nafter").into_bytes();
+        for split in 0..=bytes.len() {
+            let mut pending = None;
+            let mut messages = command_messages(&bytes[..split], &[id.into()], &mut pending);
+            messages.extend(command_messages(
+                &bytes[split..],
+                &[id.into()],
+                &mut pending,
+            ));
+            assert!(pending.is_none());
+            let mut data = Vec::new();
+            let mut references = 0;
+            for message in messages {
+                match message {
+                    Message::Binary(bytes) => data.extend_from_slice(&bytes),
+                    Message::Text(text) => {
+                        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+                        assert_eq!(value["id"], id);
+                        references += 1;
+                    }
+                    _ => panic!("unexpected frame"),
+                }
+            }
+            assert_eq!(data, b"before\nafter");
+            assert_eq!(references, 1);
+        }
+    }
+    #[test]
+    fn legacy_and_unregistered_control_bytes_remain_binary() {
+        let bytes = b"\x1einvalid\x1f";
+        for ids in [vec![], vec!["01234567-89ab-cdef-0123-456789abcdef".into()]] {
+            let messages = command_messages(bytes, &ids, &mut None);
+            let raw: Vec<u8> = messages
+                .into_iter()
+                .flat_map(|m| match m {
+                    Message::Binary(b) => b.to_vec(),
+                    _ => panic!("unexpected control frame"),
+                })
+                .collect();
+            assert_eq!(raw, bytes);
+        }
     }
 }
