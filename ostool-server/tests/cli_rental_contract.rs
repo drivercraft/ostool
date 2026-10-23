@@ -341,13 +341,13 @@ async fn website_rentals_authorize_real_ostool_clients() -> Result<()> {
             &client,
             &base,
             "GET",
-            "/api/v1/account",
+            "/api/v1/account/rental-requests",
             Some(&web.access_token),
             Value::Null,
             StatusCode::OK,
         )
         .await;
-        let application = account["my_requests"]
+        let application = account["items"]
             .as_array()
             .unwrap()
             .iter()
@@ -369,13 +369,13 @@ async fn website_rentals_authorize_real_ostool_clients() -> Result<()> {
             &client,
             &base,
             "GET",
-            "/api/v1/account",
+            "/api/v1/account/rental-requests",
             Some(&web.access_token),
             Value::Null,
             StatusCode::OK,
         )
         .await;
-        let rental = account["my_requests"]
+        let rental = account["items"]
             .as_array()
             .unwrap()
             .iter()
