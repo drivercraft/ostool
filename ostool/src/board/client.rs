@@ -358,7 +358,9 @@ impl BoardServerClient {
                 self.endpoint_segments(&["api", "v1", "sessions", session_id, "heartbeat"]),
             )
             .await?;
-        let response = self.send(request).await?;
+        let response = self
+            .send(request.timeout(std::time::Duration::from_secs(3)))
+            .await?;
         self.decode_json(response).await
     }
 
