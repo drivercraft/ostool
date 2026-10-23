@@ -12,6 +12,3 @@ itexp
 .ostool-server*
 .codex
 assets
-
-# 运行中网关自行管理的配置不进入应用构建上下文。
-ostool-server/deploy/Caddyfile

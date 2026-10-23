@@ -46,6 +46,3 @@ target/
 /ostool-server/webui/playwright-report
 /ostool-server/webui/test-results
 .build.toml
-
-# 由已运行的网关自行管理，不作为应用部署模板分发。
-/ostool-server/deploy/Caddyfile

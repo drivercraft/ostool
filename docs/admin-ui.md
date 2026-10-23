@@ -253,12 +253,13 @@ OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_br
 ## 本地演示数据
 
 `ostool-server/scripts/dev.sh` 使用 Docker Compose 构建和运行正式 release 镜像，
-统一启动 Rust、PostgreSQL 与 Redis，公网入口接入已有 Caddy。修改源码后运行 `restart`；`stop` 关闭
+独立管理 Rust、PostgreSQL 与 Redis；public 模式还启动标准 Caddy 容器。修改源码后运行 `restart`；`stop` 关闭
 容器并保留数据卷。脚本读取 `ostool-server/.env`，没有调试专用鉴权或来源校验例外。
 
-local 版可直接 HTTP 访问；public 版在现有 Caddy 中加入本站点并使用 HTTPS。
+local 版直接 HTTP 访问；public 调试环境由 Docker Caddy 提供 HTTPS，正式部署接入已有 Caddy。
 `.env` 仅提供 `OSTOOL_PUBLIC_BASE_URL` 和必要的附加允许来源；证书和全局端口由
-现有 Caddyfile 管理，不另起代理服务，也不配置应用专用的 Caddy 全局参数。
+相应的 Caddyfile 管理。调试网关地址由同一 `.env` 的主站地址和附加来源派生，不使用服务端调试标志或鉴权例外。
+`dev.sh cert` 可导出调试网关根证书；`seed` 独立导入演示数据，两者不属于正式部署命令。
 local 版仍然免登录；public 版完整启用登录、验证码、用户和租赁功能。两版共享数据库，
 仅功能配置不同。公网正式安装继续使用 `deploy.sh docker|systemd up`，public 版接入现有标准 Caddy 服务。
 

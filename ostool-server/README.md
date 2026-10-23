@@ -98,7 +98,8 @@ installation artifacts and does not build, modify `/etc`, or manage host service
 Docker requires Docker/Compose and includes PostgreSQL/Redis. It uses the supplied
 connection URLs without silently rewriting them. For managed databases, configure
 the URLs and ensure the supplied containers' ports do not conflict with your services.
-Native builds require Rust, Node.js 24, pnpm 10.33.0 and the normal crate dependencies.
+Native builds require Rust, Node.js with `util.parseEnv` support (20.12+), the
+project-declared pnpm and the normal crate dependencies.
 The systemd installer uses existing database/cache services; it does not install OS
 packages or change package sources. Public systemd deployment also requires Caddy.
 
@@ -220,12 +221,21 @@ ostool-server/scripts/dev.sh restart
 ostool-server/scripts/dev.sh stop
 ```
 
-The launcher runs the same release binary as deployment, together with PostgreSQL,
-Redis. The public gateway is the existing shared Caddy instance. It has no development authentication/origin bypass or simulated
+The independent Docker-only launcher runs the same release binary as deployment,
+together with PostgreSQL/Redis and, for public edition, a standard Caddy container. It has no development authentication/origin bypass or simulated
 runtime. `start` and `restart` build current source and apply Compose configuration;
 `build` only builds the image. `stop` removes backend/database/cache containers and retains named data
 volumes. It never changes systemd or `/etc/ostool-server`. Containers use the Compose
 project name `ostool-server`; both feature editions share the same data volumes.
+
+The launcher calls Compose directly and never calls `deploy.sh`, systemd or sudo.
+It uses the `gateway` profile only for public edition, deriving gateway addresses
+from the canonical origin and allowed origins in the same `.env`. The backend has
+no debug flags, alternate authentication paths or simulated runtime. `seed` is an
+explicit offline import; it does not change the running release program. `cert`
+exports the Docker gateway CA for the client to trust. The Docker project and data
+volumes are shared with `deploy.sh docker`; do not manage the same environment
+concurrently through both commands.
 
 The launcher reads `ostool-server/.env` through Compose, independent of the working
 directory. Deployment ignores caller `OSTOOL_*` variables, so the selected file
@@ -239,7 +249,14 @@ Local edition uses direct HTTP on port 2999, including LAN addresses when listen
 on `0.0.0.0`. For public edition, set a canonical HTTPS origin and bind the backend to
 `127.0.0.1:2999`; add its site to your existing Caddy configuration. Certificate ports,
 redirects, trust and other global proxy options remain under Caddy's own configuration.
-There are no server-specific proxy global options or certificate-export helpers.
+There are no server-specific proxy global options. For the Docker debug environment,
+`dev.sh cert` exports the internal CA; production proxies use their standard certificate
+management. `dev.sh logs server` selects one service; `check` validates Compose without
+starting containers. Both scripts provide grouped help, TTY-only color, strict argument
+validation and examples with `--help`. Their usage, parsing, preparation and execution
+sections follow the organisation of the referenced
+[tgosimages scripts](https://github.com/rcore-os/tgosimages/tree/main/scripts),
+without introducing a shared wrapper framework or host-service handling in `dev.sh`.
 
 ## Management console
 

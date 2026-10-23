@@ -64,8 +64,26 @@ services:
       retries: 20
     restart: unless-stopped
 
+  # 仅 dev.sh 显式选择此 profile；正式部署继续使用已有的共享 Caddy。
+  caddy:
+    image: caddy:2-alpine
+    profiles: [gateway]
+    environment:
+      OSTOOL_GATEWAY_SITES: ${OSTOOL_GATEWAY_SITES:-https://localhost}
+      OSTOOL_GATEWAY_UPSTREAM: ${OSTOOL_GATEWAY_UPSTREAM:-127.0.0.1:2999}
+    volumes:
+      - ./gateway.Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    network_mode: host
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   server-data:
   postgres-data:
   redis-data:
+  caddy-data:
+  caddy-config:
