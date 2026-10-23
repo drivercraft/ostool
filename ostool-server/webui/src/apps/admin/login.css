@@ -74,12 +74,6 @@
   font-size: 0.875rem;
   line-height: 1.7;
 }
-.admin-login-card :is(input, [data-slot="button"], [data-slot="field-label"]) {
-  font-size: 1rem;
-}
-.admin-login-card :is(input, [data-slot="button"]) {
-  min-height: 42px;
-}
 .admin-login-site {
   text-align: center;
   color: var(--muted-foreground);

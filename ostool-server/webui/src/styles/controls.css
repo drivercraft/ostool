@@ -1,8 +1,12 @@
-/* itexp's standard controls share a 42px height and 8px radius. */
+/* 前台、登录页和管理后台共用的控件样式；页面样式只负责布局。 */
 :root {
   --control-height: 42px;
   --control-radius: 8px;
   --control-icon-size: 18px;
+}
+[data-slot="field-label"] {
+  font-size: 1rem;
+  line-height: 1.5;
 }
 [data-slot="button"][data-size] {
   height: var(--control-height);
@@ -12,7 +16,7 @@
   padding: 0 16px;
   gap: 8px;
   font-size: 1rem;
-  line-height: 1;
+  line-height: 1.5;
 }
 [data-slot="button"][data-size^="icon"] {
   width: var(--control-height);
@@ -36,6 +40,7 @@
   color: var(--foreground);
   font: inherit;
   font-size: 1rem;
+  line-height: 1.5;
 }
 [data-slot="input"],
 [data-slot="native-select"] {
@@ -54,12 +59,35 @@
 [data-slot="input"][type="file"] {
   padding-block: 7px;
 }
-[data-slot="input"]:focus-visible,
-[data-slot="native-select"]:focus-visible,
-[data-slot="textarea"]:focus-visible {
+[data-slot="input"]:focus-visible:not([aria-invalid="true"]),
+[data-slot="native-select"]:focus-visible:not([aria-invalid="true"]),
+[data-slot="textarea"]:focus-visible:not([aria-invalid="true"]),
+[data-slot="button"]:focus-visible:not([data-variant="destructive"]) {
   border-color: var(--ring);
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring), transparent 84%);
   outline: none;
+}
+:is(
+  [data-slot="input"],
+  [data-slot="native-select"],
+  [data-slot="textarea"]
+)[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+:is(
+    [data-slot="input"],
+    [data-slot="native-select"],
+    [data-slot="textarea"]
+  )[aria-invalid="true"]:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--destructive), transparent 80%);
+  outline: none;
+}
+:is(
+  [data-slot="input"],
+  [data-slot="native-select"],
+  [data-slot="textarea"]
+):disabled {
+  background: var(--muted);
 }
 .actions,
 .row-actions {

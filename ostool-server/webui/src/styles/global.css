@@ -13,7 +13,9 @@
 
 @theme inline {
   --font-heading: var(--font-sans);
-  --font-sans: "Geist Variable", sans-serif;
+  --font-sans:
+    "Geist Variable", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -121,9 +123,6 @@
   align-items: center;
   gap: 18px;
 }
-.site-actions [data-slot="button"] {
-  border-radius: 7px;
-}
 .mobile-nav-actions,
 .site-menu-toggle {
   display: none;
@@ -224,9 +223,6 @@
   display: flex;
   gap: 12px;
   margin-top: 29px;
-}
-.hero-actions [data-slot="button"] {
-  border-radius: 7px;
 }
 .hero-trust {
   display: flex;
@@ -520,20 +516,15 @@
   color: #fff;
   font-size: 12px;
 }
-.footer-column a {
+.footer-column a:not([data-slot="button"]) {
   color: #94a4b9;
   text-decoration: none;
 }
-.footer-column a:hover {
+.footer-column a:not([data-slot="button"]):hover {
   color: #fff;
 }
 .footer-column [data-slot="button"] {
   margin-top: 3px;
-  color: #d8e6fa;
-  border-color: #516681;
-}
-.footer-column [data-slot="button"]:hover {
-  background: #223852;
 }
 .site-footer-bottom {
   display: flex;
@@ -663,27 +654,6 @@
   color: #7b8ba1;
   font-size: 12px;
   line-height: 1.6;
-}
-.auth-card label {
-  display: grid;
-  gap: 7px;
-  color: #43556e;
-  font-size: 12px;
-  font-weight: 400;
-}
-.auth-card input {
-  width: 100%;
-  padding: 11px 12px;
-  border: 1px solid #dce4ef;
-  border-radius: 6px;
-  background: #fbfcfe;
-  color: #20324a;
-  font-size: 13px;
-  outline: none;
-}
-.auth-card input:focus {
-  border-color: #6e9be9;
-  box-shadow: 0 0 0 3px rgba(61, 119, 225, 0.12);
 }
 .auth-code {
   display: flex;
@@ -889,14 +859,7 @@
 @layer base {
   body {
     margin: 0;
-    font-family:
-      "Geist Variable",
-      -apple-system,
-      BlinkMacSystemFont,
-      "Segoe UI",
-      "Noto Sans CJK SC",
-      "Microsoft YaHei",
-      sans-serif;
+    font-family: var(--font-sans);
     font-size: 1rem;
   }
   button:not(:disabled),
@@ -953,18 +916,6 @@
     margin: 8px 0;
     font-size: 26px;
   }
-  .auth-card label {
-    display: grid;
-    gap: 7px;
-    font-weight: 400;
-  }
-  .auth-card input {
-    width: 100%;
-    padding: 10px 11px;
-    border: 1px solid var(--input);
-    border-radius: 7px;
-    background: var(--background);
-  }
   .auth-message {
     margin: 0;
     color: var(--muted-foreground);
@@ -993,11 +944,6 @@
   .card label {
     display: grid;
     gap: 6px;
-  }
-  .card input {
-    padding: 8px 10px;
-    border: 1px solid var(--input);
-    border-radius: 6px;
   }
   .eyebrow {
     margin: 0;

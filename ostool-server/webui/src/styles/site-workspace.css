@@ -95,14 +95,6 @@
 .site-root .site-actions {
   gap: 10px;
 }
-.site-root .site-theme-button {
-  width: 38px;
-  height: 38px;
-  border-radius: 9px;
-  border: 1px solid var(--site-border);
-  background: var(--site-bg);
-  color: var(--site-muted);
-}
 .site-root .site-login {
   padding: 8px 13px;
   color: var(--site-text);
@@ -171,6 +163,11 @@
   min-height: 36px;
 }
 .site-root .site-footer {
+  --background: #121f32;
+  --foreground: #d8e6fa;
+  --border: #516681;
+  --muted: #223852;
+  --muted-foreground: #9eafc6;
   margin-top: auto;
 }
 .site-root .site-footer .site-logo {
@@ -178,11 +175,6 @@
 }
 .site-root .site-footer .site-logo-copy small {
   color: #9eafc6;
-}
-.site-root .footer-column [data-slot="button"] {
-  background: transparent;
-  color: #d8e6fa;
-  border-color: #516681;
 }
 .member-workspace {
   width: var(--site-content-width);
@@ -377,15 +369,6 @@
 .member-form > [data-slot="field"] {
   max-width: 580px;
 }
-.member-form input,
-.member-form select,
-.member-form textarea,
-.member-list-tools input,
-.member-list-tools select {
-  background: var(--site-card);
-  color: var(--site-text);
-  border-color: var(--site-border);
-}
 .member-form-actions {
   display: flex;
   gap: 10px;
@@ -535,13 +518,6 @@
     .hero-kicker
   ) {
   background: var(--site-card);
-  border-color: var(--site-border);
-}
-.dark .site-root :is(.auth-card input, .auth-card label) {
-  color: var(--site-text);
-}
-.dark .site-root .auth-card input {
-  background: var(--site-bg);
   border-color: var(--site-border);
 }
 .dark .site-root .site-nav {
@@ -837,14 +813,6 @@
   .site-root .rental-request-panel {
     height: max(860px, calc(100dvh - 180px));
   }
-}
-.site-root .rental-request-panel {
-  --card: var(--site-card);
-  --card-foreground: var(--site-text);
-  --foreground: var(--site-text);
-  --muted: color-mix(in srgb, var(--site-card), var(--site-border) 60%);
-  --muted-foreground: var(--site-muted);
-  --border: var(--site-border);
 }
 /* Decorative hero glows may bleed into the gutter, never create page scrolling. */
 .site-root .public-home {

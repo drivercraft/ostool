@@ -187,23 +187,6 @@ body:has(.auth-page-fullscreen) {
   font-size: 14px;
   color: var(--site-muted);
 }
-.site-root .auth-page-fullscreen .auth-card [data-slot="field-label"] {
-  display: block;
-  font-size: 16px;
-  line-height: 1.4;
-  font-weight: 400;
-  color: var(--site-text);
-}
-.site-root .auth-page-fullscreen .auth-card input {
-  height: var(--control-height);
-  min-height: var(--control-height);
-  padding: 0 14px;
-  border-radius: var(--control-radius);
-  border-color: var(--site-border);
-  background: var(--site-card);
-  color: var(--site-text);
-  font-size: 16px;
-}
 .site-root .auth-page-fullscreen .auth-card .captcha-input input {
   padding-right: 154px;
 }
