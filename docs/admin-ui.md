@@ -253,14 +253,14 @@ OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_br
 ## 本地演示数据
 
 `ostool-server/scripts/dev.sh` 使用 Docker Compose 构建和运行正式 release 镜像，
-统一启动 Rust、PostgreSQL、Redis 与 Caddy。修改源码后运行 `restart`；`stop` 关闭
+统一启动 Rust、PostgreSQL 与 Redis，公网入口接入已有 Caddy。修改源码后运行 `restart`；`stop` 关闭
 容器并保留数据卷。脚本读取 `ostool-server/.env`，没有调试专用鉴权或来源校验例外。
 
-本机及局域网均通过 Caddy HTTPS 访问；在 `.env` 中设置主站地址
-`OSTOOL_PUBLIC_BASE_URL`、附加来源 `OSTOOL_ALLOWED_ORIGINS` 与 Caddy 站点
-`OSTOOL_SITE_ADDRESSES`。运行 `scripts/dev.sh cert` 导出根证书，在访问设备上信任。
+local 版可直接 HTTP 访问；public 版在现有 Caddy 中加入本站点并使用 HTTPS。
+`.env` 仅提供 `OSTOOL_PUBLIC_BASE_URL` 和必要的附加允许来源；证书和全局端口由
+现有 Caddyfile 管理，不另起代理服务，也不配置应用专用的 Caddy 全局参数。
 local 版仍然免登录；public 版完整启用登录、验证码、用户和租赁功能。两版共享数据库，
-仅功能配置不同。公网正式安装继续使用 `deploy.sh docker|systemd up`，public 版自动部署 Caddy。
+仅功能配置不同。公网正式安装继续使用 `deploy.sh docker|systemd up`，public 版接入现有标准 Caddy 服务。
 
 演示数据不再随服务启动自动生成，单独执行：
 
@@ -331,3 +331,5 @@ U-Boot 通过串口启动，无需绑定 MAC。切换到 U-Boot 后隐藏 MAC �
 的使用记录。一个设备库只能由一个活动控制进程管理。
 
 前台、登录/注册页与后台的同类控件统一由 `src/styles/controls.css` 管理尺寸、圆角、字体、边框、聚焦、禁用及错误状态；页面样式只调整布局，验证码输入框仅额外保留图片所需的右侧空间。
+
+SMTP 密码和 Turnstile 服务端密钥在相应配置 TAB 中设置，只显示已配置状态，留空保留旧值，勾选清除后保存删除。密钥使用部署主密钥加密入库；主密钥自身仍在启动配置中管理。

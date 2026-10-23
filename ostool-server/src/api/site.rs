@@ -345,9 +345,108 @@ pub async fn register(
         .ok_or_else(|| ApiError::unauthorized("账号状态已变化"))
 }
 
+// Business secrets use authenticated encryption with field-specific contexts.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountSecrets {
+    pub smtp_password: Option<String>,
+    pub turnstile_secret: Option<String>,
+}
+impl AccountSecrets {
+    fn from_config(config: &crate::ServerConfig) -> anyhow::Result<Self> {
+        let seal = |name: &str, value: &Option<String>| -> anyhow::Result<Option<String>> {
+            value
+                .as_ref()
+                .map(|value| {
+                    let key = config
+                        .security
+                        .mfa_encryption_key
+                        .as_deref()
+                        .ok_or_else(|| anyhow::anyhow!("保存敏感配置前必须配置主加密密钥"))?;
+                    crypto::seal(key, &format!("account-settings:{name}"), value.as_bytes())
+                })
+                .transpose()
+        };
+        Ok(Self {
+            smtp_password: seal("smtp_password", &config.security.smtp_password)?,
+            turnstile_secret: seal("turnstile_secret", &config.security.turnstile_secret)?,
+        })
+    }
+    fn apply(&self, config: &mut crate::ServerConfig) -> anyhow::Result<()> {
+        let open = |name: &str, value: &Option<String>| -> anyhow::Result<Option<String>> {
+            value
+                .as_ref()
+                .map(|value| {
+                    let key = config
+                        .security
+                        .mfa_encryption_key
+                        .as_deref()
+                        .ok_or_else(|| anyhow::anyhow!("读取敏感配置需要原主加密密钥"))?;
+                    Ok(String::from_utf8(crypto::open(
+                        key,
+                        &format!("account-settings:{name}"),
+                        value,
+                    )?)?)
+                })
+                .transpose()
+        };
+        config.security.smtp_password = open("smtp_password", &self.smtp_password)?;
+        config.security.turnstile_secret = open("turnstile_secret", &self.turnstile_secret)?;
+        Ok(())
+    }
+}
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecretUpdates {
+    pub smtp_password: Option<String>,
+    pub turnstile_secret: Option<String>,
+    #[serde(default)]
+    pub clear_smtp_password: bool,
+    #[serde(default)]
+    pub clear_turnstile_secret: bool,
+}
+impl SecretUpdates {
+    fn apply(&self, config: &mut crate::ServerConfig) -> anyhow::Result<()> {
+        for (value, clear, target) in [
+            (
+                &self.smtp_password,
+                self.clear_smtp_password,
+                &mut config.security.smtp_password,
+            ),
+            (
+                &self.turnstile_secret,
+                self.clear_turnstile_secret,
+                &mut config.security.turnstile_secret,
+            ),
+        ] {
+            anyhow::ensure!(
+                !(clear && value.as_ref().is_some_and(|s| !s.is_empty())),
+                "不能同时设置和清除同一密钥"
+            );
+            if clear {
+                *target = None;
+            } else if let Some(value) = value.as_ref().filter(|s| !s.is_empty()) {
+                anyhow::ensure!(value.len() <= 4096, "密钥过长");
+                *target = Some(value.clone());
+            }
+        }
+        Ok(())
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountSettingsInput {
+    pub revision: i64,
+    pub settings: crate::security::config::AccountSettings,
+    #[serde(default)]
+    pub secret_updates: SecretUpdates,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountSettingsRecord {
+    #[serde(default)]
+    pub secrets: Option<AccountSecrets>,
     pub revision: i64,
     pub settings: crate::security::config::AccountSettings,
 }
@@ -355,13 +454,23 @@ pub async fn load_account_settings(
     database: &crate::persistence::Database,
     config: &mut crate::ServerConfig,
 ) -> anyhow::Result<()> {
-    if let Some(stored) = database
+    if let Some(mut stored) = database
         .record::<AccountSettingsRecord>("account-settings")
         .await?
     {
+        if stored.secrets.is_none() {
+            stored.secrets = Some(AccountSecrets::from_config(config)?);
+            database.save_record("account-settings", &stored).await?;
+        }
+        stored
+            .secrets
+            .as_ref()
+            .expect("initialized secrets")
+            .apply(config)?;
         return stored.settings.apply(config);
     }
     let initial = AccountSettingsRecord {
+        secrets: Some(AccountSecrets::from_config(config)?),
         revision: 1,
         settings: crate::security::config::AccountSettings::from_config(config),
     };
@@ -369,6 +478,11 @@ pub async fn load_account_settings(
     let stored = database
         .initialize_record("account-settings", &initial)
         .await?;
+    stored
+        .secrets
+        .as_ref()
+        .expect("initialized secrets")
+        .apply(config)?;
     stored.settings.apply(config)
 }
 pub fn public_auth(config: &crate::ServerConfig) -> Value {
@@ -396,13 +510,17 @@ pub async fn account_settings(State(state): State<AppState>) -> Result<Json<Valu
 }
 async fn update_account_settings(
     State(state): State<AppState>,
-    Json(input): Json<AccountSettingsRecord>,
+    Json(input): Json<AccountSettingsInput>,
 ) -> Result<Json<Value>, ApiError> {
     let mut config = state.config.write().await;
     if !config.edition.is_public() {
         return Err(ApiError::not_found("本地版不提供账号策略配置"));
     }
     let mut next = config.clone();
+    input
+        .secret_updates
+        .apply(&mut next)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
     input
         .settings
         .apply(&mut next)
@@ -419,6 +537,10 @@ async fn update_account_settings(
         return Err(ApiError::conflict("配置已更新，请保留草稿后载入最新版本"));
     }
     let saved = AccountSettingsRecord {
+        secrets: Some(
+            AccountSecrets::from_config(&next)
+                .map_err(|error| ApiError::bad_request(error.to_string()))?,
+        ),
         revision: current.revision + 1,
         settings: input.settings,
     };

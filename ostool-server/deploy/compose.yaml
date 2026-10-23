@@ -64,28 +64,8 @@ services:
       retries: 20
     restart: unless-stopped
 
-  caddy:
-    image: caddy:2-alpine
-    profiles: [public]
-    environment:
-      OSTOOL_SITE_ADDRESSES: ${OSTOOL_SITE_ADDRESSES:-https://127.0.0.1 https://localhost}
-      OSTOOL_HTTPS_PORT: ${OSTOOL_HTTPS_PORT:-3443}
-      OSTOOL_HTTPS_BIND: ${OSTOOL_HTTPS_BIND:-0.0.0.0}
-      OSTOOL_UPSTREAM: ${OSTOOL_LISTEN_ADDR:-127.0.0.1:2999}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    # IP HTTPS 客户端不发送 SNI；host 网络保留目标 IP，便于选择匹配的证书。
-    network_mode: host
-    depends_on:
-      server:
-        condition: service_healthy
-    restart: unless-stopped
 
 volumes:
   server-data:
   postgres-data:
   redis-data:
-  caddy-data:
-  caddy-config:

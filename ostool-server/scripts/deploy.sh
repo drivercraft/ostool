@@ -9,7 +9,7 @@ usage() {
   --env-file 路径    唯一配置文件，默认 ostool-server/.env
   --dry-run         仅显示执行计划，不构建、不安装、不重启
   --output-dir 路径  systemd 专用：只生成安装文件，不修改宿主系统
-Docker 模式管理 PostgreSQL、Redis 和服务容器；public 版额外启动 Caddy。
+Docker 模式管理 PostgreSQL、Redis 和后端；公网入口接入现有 Caddy。
 systemd 模式使用已配置的 PostgreSQL/Redis；up/restart 构建后安装服务。
 首次部署或更新使用 up；已有配置和数据库不会被清空。
 EOF
@@ -69,32 +69,27 @@ run() {
 }
 if [[ $MODE == docker ]]; then
     [[ -z $OUTPUT_DIR ]] || { echo '--output-dir 仅适用于 systemd' >&2; exit 2; }
-    if [[ $EDITION == public ]]; then COMPOSE+=(--profile public); fi
     case $ACTION in
         up|restart)
-            if [[ $EDITION == local ]]; then run "${COMPOSE[@]}" stop caddy; fi
-            run "${COMPOSE[@]}" up -d --build --remove-orphans --wait --wait-timeout 120;;
-        down) run "${COMPOSE[@]}" --profile public down;;
+            run "${COMPOSE[@]}" up -d --build --wait --wait-timeout 120;;
+        down) run "${COMPOSE[@]}" down;;
         build) run "${COMPOSE[@]}" build server;;
         check) run "${COMPOSE[@]}" config --quiet;;
-        status) run "${COMPOSE[@]}" --profile public ps -a;;
-        logs) run "${COMPOSE[@]}" --profile public logs --tail 100;;
+        status) run "${COMPOSE[@]}" ps -a;;
+        logs) run "${COMPOSE[@]}" logs --tail 100;;
         seed)
             run "${COMPOSE[@]}" up -d --wait postgres redis
-            run "${COMPOSE[@]}" stop caddy server
+            run "${COMPOSE[@]}" stop server
             run "${COMPOSE[@]}" run --build --rm --no-deps --entrypoint ostool-server-seed-demo server --env-file /dev/null
             run "${COMPOSE[@]}" up -d --wait;;
-        cert)
-            [[ $EDITION == public ]] || { echo 'local 版不启用 Caddy，无需导出证书。'; exit 0; }
-            run mkdir -p "$REPO_DIR/.ostool-server-dev"
-            run "${COMPOSE[@]}" cp caddy:/data/caddy/pki/authorities/local/root.crt "$REPO_DIR/.ostool-server-dev/root.crt";;
+        cert) echo '证书由现有 Caddy 管理；内部 CA 根证书位于其数据目录，请按 Caddy 标准文档导出。';;
     esac
     exit 0
 fi
 # 仅下列安装动作需要提权；check、dry-run 和输出到临时目录不会修改系统。
 if $DRY_RUN; then
     echo "计划：systemd $ACTION（$EDITION），配置 $ENV_FILE；保留现有数据。"
-    if [[ $EDITION == public ]]; then echo '计划：额外安装 ostool-server-caddy.service 与 Caddyfile。'; fi
+    if [[ $EDITION == public ]]; then echo '计划：仅更新本站点片段，验证整份 Caddyfile 后 reload 默认 caddy.service，保留其他站点。'; fi
     exit 0
 fi
 if [[ $ACTION == check ]]; then
@@ -112,25 +107,15 @@ if [[ -n $OUTPUT_DIR || $ACTION == up || $ACTION == restart ]]; then
     install -m 600 "$ENV_FILE" "$STAGING_DIR/.env"
     install -m 644 "$SERVER_DIR/deploy/ostool-server.service" "$STAGING_DIR/ostool-server.service"
     if [[ $EDITION == public ]]; then
-        install -m 644 "$SERVER_DIR/deploy/Caddyfile" "$STAGING_DIR/Caddyfile"
-        install -m 644 "$SERVER_DIR/deploy/ostool-server-caddy.service" "$STAGING_DIR/ostool-server-caddy.service"
-        # 代理只接收其自身参数，不获得数据库、SMTP 或 MFA 密钥。
-        for key in OSTOOL_SITE_ADDRESSES OSTOOL_HTTPS_PORT OSTOOL_HTTPS_BIND; do
-            value=$(setting "$key")
-            value=${value//\\/\\\\}
-            if [[ -n $value ]]; then printf '%s="%s"\n' "$key" "${value//\"/\\\"}"; fi
-        done > "$STAGING_DIR/caddy.env"
-        printf 'OSTOOL_UPSTREAM="%s"\n' "$(setting OSTOOL_LISTEN_ADDR 127.0.0.1:2999)" >> "$STAGING_DIR/caddy.env"
-        chmod 600 "$STAGING_DIR/caddy.env"
-        # 将非敏感代理参数渲染到 unit，不再生成第二份运行环境文件。
-        node --input-type=commonjs - "$STAGING_DIR" <<'JS'
-const fs=require('node:fs'),path=require('node:path'),{parseEnv}=require('node:util');
-const directory=process.argv[2];
-const file=path.join(directory,'ostool-server-caddy.service');
-const environment=parseEnv(fs.readFileSync(path.join(directory,'caddy.env'),'utf8'));
-const directives=Object.entries(environment).map(([key,value])=>'Environment='+JSON.stringify(key+'='+value)).join('\n');
-fs.writeFileSync(file,fs.readFileSync(file,'utf8').replace('[Service]','[Service]\n'+directives));
-fs.unlinkSync(path.join(directory,'caddy.env'));
+        install -m 644 "$SERVER_DIR/deploy/ostool-server.caddy" "$STAGING_DIR/ostool-server.caddy"
+        node --input-type=commonjs - "$ENV_FILE" "$STAGING_DIR/ostool-server.caddy" <<'JS'
+const fs=require('node:fs'),{parseEnv}=require('node:util');
+const env=parseEnv(fs.readFileSync(process.argv[2],'utf8'));
+const origin=new URL(env.OSTOOL_PUBLIC_BASE_URL);
+if(origin.protocol!=='https:' || origin.pathname!=='/' || origin.username || origin.password || origin.search || origin.hash)throw Error('主站地址必须是 HTTPS 来源');
+const upstream=env.OSTOOL_LISTEN_ADDR || '127.0.0.1:2999';
+if(!/^127\.0\.0\.1:[0-9]+$/.test(upstream))throw Error('公网 API 必须使用回环地址');
+fs.writeFileSync(process.argv[3],fs.readFileSync(process.argv[3],'utf8').replace('boards.example.com',origin.origin).replace('127.0.0.1:2999',upstream));
 JS
     fi
     if [[ -n $OUTPUT_DIR ]]; then
@@ -148,10 +133,13 @@ fi
 SUDO=(); if [[ $(id -u) != 0 ]]; then SUDO=(sudo); fi
 if [[ $ACTION == down ]]; then
     "${SUDO[@]}" systemctl disable --now ostool-server
-    if systemctl cat ostool-server-caddy >/dev/null 2>&1; then "${SUDO[@]}" systemctl disable --now ostool-server-caddy; fi
     exit 0
 fi
 if [[ $EDITION == public ]]; then command -v caddy >/dev/null || { echo '请先安装 Caddy，再重新部署；脚本不修改系统包源。' >&2; exit 1; }; fi
+if [[ $EDITION == local ]] && "${SUDO[@]}" test -f /etc/caddy/ostool-server.caddy; then
+    echo '本站点仍有公网 Caddy 配置；请先移除该站点并 reload caddy，再切换免登录 local 版。' >&2
+    exit 1
+fi
 getent passwd ostool >/dev/null || "${SUDO[@]}" useradd --system --user-group --home-dir /var/lib/ostool-server --shell /usr/sbin/nologin ostool
 "${SUDO[@]}" install -d -m 750 -o ostool -g ostool /etc/ostool-server /var/lib/ostool-server
 # 不删除旧目录，替换配置前保留备份。
@@ -163,15 +151,44 @@ done
 "${SUDO[@]}" install -m 600 -o ostool -g ostool "$STAGING_DIR/.env" /etc/ostool-server/.env
 "${SUDO[@]}" install -m 644 "$STAGING_DIR/ostool-server.service" /etc/systemd/system/ostool-server.service
 if getent group dialout >/dev/null; then "${SUDO[@]}" usermod -aG dialout ostool; fi
-if [[ $EDITION == public ]]; then
-    getent passwd ostool-caddy >/dev/null || "${SUDO[@]}" useradd --system --user-group --home-dir /var/lib/ostool-server-proxy --shell /usr/sbin/nologin ostool-caddy
-    "${SUDO[@]}" install -d -m 750 -o ostool-caddy -g ostool-caddy /etc/ostool-server-proxy /var/lib/ostool-server-proxy
-    "${SUDO[@]}" install -m 644 -o ostool-caddy -g ostool-caddy "$STAGING_DIR/Caddyfile" /etc/ostool-server-proxy/Caddyfile
-    "${SUDO[@]}" install -m 644 "$STAGING_DIR/ostool-server-caddy.service" /etc/systemd/system/ostool-server-caddy.service
-else
-    if systemctl cat ostool-server-caddy >/dev/null 2>&1; then "${SUDO[@]}" systemctl disable --now ostool-server-caddy; fi
-fi
 "${SUDO[@]}" systemctl daemon-reload
 "${SUDO[@]}" systemctl enable ostool-server
 "${SUDO[@]}" systemctl restart ostool-server
-if [[ $EDITION == public ]]; then "${SUDO[@]}" systemctl enable ostool-server-caddy; "${SUDO[@]}" systemctl restart ostool-server-caddy; fi
+if [[ $EDITION == public ]]; then
+    # 仅管理本站点片段；不更换默认服务、不重启 Caddy、不覆盖其他站点。
+    CADDY_MAIN=/etc/caddy/Caddyfile
+    CADDY_SITE=/etc/caddy/ostool-server.caddy
+    "${SUDO[@]}" test -f "$CADDY_MAIN" || { echo '请先按 Caddy 官方方式初始化 /etc/caddy/Caddyfile。' >&2; exit 1; }
+    "${SUDO[@]}" cat "$CADDY_MAIN" > "$STAGING_DIR/Caddyfile.previous"
+    cp "$STAGING_DIR/Caddyfile.previous" "$STAGING_DIR/Caddyfile.next"
+    if ! grep -Eq '^[[:space:]]*import[[:space:]]+(/etc/caddy/)?ostool-server\.caddy[[:space:]]*$' "$STAGING_DIR/Caddyfile.next"; then
+        printf '\nimport ostool-server.caddy\n' >> "$STAGING_DIR/Caddyfile.next"
+    fi
+    SITE_EXISTED=false
+    if "${SUDO[@]}" test -f "$CADDY_SITE"; then
+        SITE_EXISTED=true
+        "${SUDO[@]}" cat "$CADDY_SITE" > "$STAGING_DIR/site.previous"
+    fi
+    restore_site() {
+        if $SITE_EXISTED; then "${SUDO[@]}" install -m 644 "$STAGING_DIR/site.previous" "$CADDY_SITE";
+        else "${SUDO[@]}" unlink "$CADDY_SITE"; fi
+    }
+    "${SUDO[@]}" install -m 644 "$STAGING_DIR/ostool-server.caddy" "$CADDY_SITE"
+    # 候选文件仍放在 /etc/caddy，保持现有相对 import 的解析目录。
+    "${SUDO[@]}" install -m 600 "$STAGING_DIR/Caddyfile.next" /etc/caddy/.ostool-Caddyfile.next
+    if ! "${SUDO[@]}" caddy validate --config /etc/caddy/.ostool-Caddyfile.next --adapter caddyfile; then
+        restore_site
+        "${SUDO[@]}" unlink /etc/caddy/.ostool-Caddyfile.next
+        echo 'Caddy 验证失败，已恢复本站点片段，现有主配置及运行站点未改动。' >&2; exit 1
+    fi
+    "${SUDO[@]}" install -m 600 "$STAGING_DIR/Caddyfile.previous" "/etc/caddy/Caddyfile.backup.$(date +%Y%m%d%H%M%S)"
+    "${SUDO[@]}" install -m 644 "$STAGING_DIR/Caddyfile.next" "$CADDY_MAIN"
+    "${SUDO[@]}" unlink /etc/caddy/.ostool-Caddyfile.next
+    if systemctl is-active --quiet caddy; then
+        if ! "${SUDO[@]}" systemctl reload caddy; then
+            "${SUDO[@]}" install -m 644 "$STAGING_DIR/Caddyfile.previous" "$CADDY_MAIN"
+            restore_site
+            echo 'Caddy reload 失败，已恢复原配置；未停止现有服务。' >&2; exit 1
+        fi
+    else "${SUDO[@]}" systemctl enable --now caddy; fi
+fi

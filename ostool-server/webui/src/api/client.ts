@@ -194,10 +194,11 @@ export const api = {
   updateAccountSettings(
     revision: number,
     settings: import("@/types/api").AccountSettings,
+    secret_updates?: import("@/types/api").SecretUpdates,
   ) {
     return request<void>("/api/v1/admin/account-settings", {
       method: "PUT",
-      bodyJson: { revision, settings },
+      bodyJson: { revision, settings, secret_updates },
     });
   },
   updateSite(revision: number, settings: import("@/types/api").SiteSettings) {

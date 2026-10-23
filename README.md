@@ -425,7 +425,7 @@ server = "https://203.0.113.10:8443"
 auth_mode = "required"
 ```
 
-服务器统一使用一份 `.env`，前端从 API 获取运行配置。部署入口为 `ostool-server/scripts/deploy.sh docker up` 或 `systemd up`；local 直接使用 HTTP，public 自动启用 Caddy HTTPS。
+服务器统一使用一份 `.env`，前端从 API 获取运行配置。部署入口为 `ostool-server/scripts/deploy.sh docker up` 或 `systemd up`；local 直接使用 HTTP，public 接入现有 Caddy HTTPS 服务。
 
 管理后台“会话租约 → 租约历史”提供持久化的设备使用记录，支持筛选和分页；本地版也会记录，升级前已结束的使用不补造历史。
 

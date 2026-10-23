@@ -127,7 +127,11 @@ test("site settings publish through SSE, legal pages and explicit versioned sign
     "placeholder",
     "smtp.example.com",
   );
-  await expect(page.getByLabel("SMTP 密码", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("SMTP 密码", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("SMTP 密码", { exact: true })).toHaveAttribute(
+    "type",
+    "password",
+  );
   await website.goto(base + "/legal/privacy");
   await expect(
     website.getByRole("link", { name: "privacy@test.local", exact: true }),

@@ -102,22 +102,38 @@ Native builds require Rust, Node.js 24, pnpm 10.33.0 and the normal crate depend
 The systemd installer uses existing database/cache services; it does not install OS
 packages or change package sources. Public systemd deployment also requires Caddy.
 
-`deploy/` contains the Dockerfile, Compose definition, Caddyfile and systemd units.
+`deploy/` contains the Dockerfile, Compose definition, the backend systemd unit and
+one Caddy site block. There is no application-specific Caddy service or Caddy user.
 The native backend runs as `ostool`, with `/etc/ostool-server/.env` and
-`/var/lib/ostool-server`. Public deployment installs a separate
-`ostool-server-caddy.service`, using its own user/data directory and generated,
-restricted proxy parameters rendered into its unit. Its Caddyfile is installed in
-`/etc/ostool-server-proxy`; there is no second user-managed environment file. It does not overwrite
-an existing `caddy.service` or other sites. The Caddy service gets no database,
-SMTP or MFA credentials. Native power commands must be executable by `ostool`;
+`/var/lib/ostool-server`. Native power commands must be executable by `ostool`;
 serial access uses `dialout` where available. Additional writable hardware paths
 need an explicit service override.
 
-Local edition exposes HTTP directly and does not install/start Caddy. Public
-edition requires `OSTOOL_LISTEN_ADDR=127.0.0.1:2999`, HTTPS canonical origin, explicit
-site addresses and a configured administrator. Set the actual public domain and
-`OSTOOL_HTTPS_PORT=443` for Internet deployment. LAN IP HTTPS uses the internal CA;
-trust its root on clients. These are deployment differences, not debug bypasses.
+Public native deployment uses the installed, standard `caddy.service` and
+`/etc/caddy/Caddyfile`. It manages only `/etc/caddy/ostool-server.caddy`, appends one
+`import ostool-server.caddy` if needed, validates the complete candidate configuration,
+and reloads Caddy. Existing sites and global options remain intact. Failed validation
+restores the site fragment without replacing the main file or stopping the running
+service. Failed reload restores the previous files. Local deployment does not install
+or start Caddy. Switching an installed public site to local requires removing its
+public site block and reloading Caddy before exposing an anonymous backend.
+
+Docker deployment manages only the backend, PostgreSQL and Redis. Connect its
+loopback API to your existing Caddy, whether that Caddy uses the official systemd
+service or the official container. Copy the site block from `deploy/ostool-server.caddy` into
+the existing configuration, substitute your domain/upstream, run `caddy validate`,
+and reload the same Caddy instance. The script never stops or replaces a shared proxy.
+
+TOML and dotenv are configuration formats, not application tiers. This project keeps
+one small dotenv bootstrap file because Compose and systemd can consume it directly.
+Both React apps use runtime API settings. Database connections, listener/data paths,
+initial administrator and the root encryption key belong to bootstrap configuration.
+Site information, legal text, registration, CAPTCHA/session policies, SMTP and
+Turnstile belong to database-backed system settings. SMTP passwords and Turnstile
+secrets use AES-256-GCM with field-specific authenticated contexts; the UI writes
+replacement values or explicit clears, and receives only configured-state flags.
+The root key must stay outside the database it decrypts; replacing it needs a planned
+re-encryption of existing settings and MFA seeds, not an ordinary settings edit.
 
 ### Local and public editions
 
@@ -205,9 +221,9 @@ ostool-server/scripts/dev.sh stop
 ```
 
 The launcher runs the same release binary as deployment, together with PostgreSQL,
-Redis, with Caddy added only for public edition. It has no development authentication/origin bypass or simulated
+Redis. The public gateway is the existing shared Caddy instance. It has no development authentication/origin bypass or simulated
 runtime. `start` and `restart` build current source and apply Compose configuration;
-`build` only builds the image. `stop` removes the containers and retains named data
+`build` only builds the image. `stop` removes backend/database/cache containers and retains named data
 volumes. It never changes systemd or `/etc/ostool-server`. Containers use the Compose
 project name `ostool-server`; both feature editions share the same data volumes.
 
@@ -219,57 +235,11 @@ another environment file; the same file supplies the container's runtime setting
 There is no shell evaluation of dotenv contents and no `OSTOOL_DEV_*` settings.
 The previous host-process data directory is not imported or deleted automatically.
 
-In public edition, Caddy is the HTTPS entry, defaulting to `https://127.0.0.1:3443` and
-`https://localhost:3443`. PostgreSQL/Redis remain on loopback (54329/56380); the public Rust API must
-also bind loopback (2999). Local edition uses direct HTTP on 2999, including LAN. Caddy and Rust use host networking,
-matching the normal installation topology and preserving destination IPs for TLS
-certificate selection when clients connect without SNI. No fixed Docker subnet or
-proxy IP is required.
-For simultaneous loopback and LAN access, configure the actual IP:
-
-```dotenv
-OSTOOL_EDITION=public
-OSTOOL_LISTEN_ADDR=127.0.0.1:2999
-OSTOOL_PUBLIC_BASE_URL=https://192.168.20.10:3443
-OSTOOL_ALLOWED_ORIGINS=https://127.0.0.1:3443,https://localhost:3443
-OSTOOL_SITE_ADDRESSES="https://192.168.20.10 https://127.0.0.1 https://localhost"
-OSTOOL_HTTPS_BIND=0.0.0.0
-OSTOOL_HTTPS_PORT=3443
-```
-
-`OSTOOL_PUBLIC_BASE_URL` is the canonical origin for device authorization and email
-links. Additional origins are explicitly allowlisted, including scheme and port;
-all must use the same scheme so secure cookies work consistently. Non-loopback
-origins require HTTPS in every environment. Caddy automatically uses its internal
-CA for local IPs. Run `scripts/dev.sh cert` to export the public root certificate to
-`.ostool-server-dev/root.crt`, then trust it on accessing devices. Caddy's private
-keys remain in its named volume. No trust stores are modified automatically.
-
-Set `OSTOOL_EDITION=public` for full accounts, CAPTCHA and rentals, or `local` for
-login-free operation. Set initial `OSTOOL_ADMIN_USERNAME` (defaults to `admin`), `OSTOOL_ADMIN_EMAIL`, `OSTOOL_ADMIN_PASSWORD` and
-optionally a stable `OSTOOL_MFA_ENCRYPTION_KEY` before public initialization. There
-is no built-in administrator password. Edition is a product feature configuration,
-not a development/production mode. Redis is present in the unified stack; local
-edition does not use it for authentication.
-
-The container image also includes an offline demonstration-data tool:
-
-```bash
-ostool-server/scripts/dev.sh seed
-```
-
-This explicitly imports 48 boards and 24 display-only DTBs; public edition also
-imports 36 users, six roles, 72 rentals and 48 requests. Existing records and edits
-are retained. The command stops the web services before import and starts them
-afterward. It never fabricates live sessions, discovered hardware or task status.
-Demo accounts `demo01@example.test` and `demo02@example.test` use
-`demo-user-password-123`; import fixtures only into disposable data.
-
-For formal installation use `scripts/deploy.sh docker up` or `scripts/deploy.sh systemd up`. The
-binary and security checks are identical. Domain/port/certificate settings change
-with the deployment. The container defaults disable hardware listeners; physical
-board access requires explicit serial/USB device mapping and suitable network/TFTP
-configuration. The container does not get privileged access to the host by default.
+Local edition uses direct HTTP on port 2999, including LAN addresses when listening
+on `0.0.0.0`. For public edition, set a canonical HTTPS origin and bind the backend to
+`127.0.0.1:2999`; add its site to your existing Caddy configuration. Certificate ports,
+redirects, trust and other global proxy options remain under Caddy's own configuration.
+There are no server-specific proxy global options or certificate-export helpers.
 
 ## Management console
 
@@ -320,7 +290,7 @@ System settings manage branding, contacts, filing information, maintenance
 notices, versioned user agreements and privacy policies. Public settings update
 via SSE. Registration requires explicit consent to current legal versions;
 publication preserves immutable history and per-user acceptance records. Database,
-SMTP passwords, Redis connections and encryption credentials remain in deployment environment files,
+SMTP/Turnstile secrets are encrypted in PostgreSQL; Redis connections and the root encryption key remain in the protected bootstrap file,
 not browser responses or editable site settings. Logo/favicon settings accept
 same-origin static paths; Caddy can serve those assets. Legal text is escaped
 plain text, not executable HTML.
@@ -339,8 +309,7 @@ maintenance access. Frontend workflows and calendar behavior are documented in
 ## Public deployment
 
 Use `scripts/deploy.sh docker up` or `scripts/deploy.sh systemd up` with the same
-`.env`, selecting `OSTOOL_EDITION=public`. The script installs/starts Caddy only
-for this edition. The bundled Caddyfile filters hardware boot/update routes from
+`.env`, selecting `OSTOOL_EDITION=public`. Native deployment uses the existing standard Caddy service for this edition; Docker deployment connects to the existing gateway. The bundled Caddyfile filters hardware boot/update routes from
 the public website. Do not expose the loopback backend to the Internet.
 
 For a direct binary launch:
@@ -370,8 +339,7 @@ and public registration/recovery availability. New token/code lifetimes apply to
 new issuance; existing absolute expiries are preserved. Session limits apply at
 new login; reduced email attempt limits invalidate exhausted challenges.
 
-Connection addresses, trusted networks, SMTP passwords, Turnstile secrets and the
-MFA encryption key stay in `.env`; the UI exposes only credential-presence flags.
+Connection addresses and the root MFA/settings encryption key stay in `.env`. SMTP passwords and Turnstile secrets are editable, encrypted database settings; responses expose only credential-presence flags.
 The server rejects incomplete SMTP/Turnstile/MFA combinations. Local edition has
 no account-policy API or authentication/rental UI.
 
@@ -388,7 +356,7 @@ support email when empty.
 Public browser login/registration use one-shot image CAPTCHA by default, bound
 to purpose, source and browser identity, with a 120-second lifetime. Every attempt
 consumes the challenge. `OSTOOL_CAPTCHA_PROVIDER=turnstile` requires all three
-Turnstile settings from the environment example; hostname and action are checked.
+Turnstile settings in the management console; hostname and action are checked.
 There is no CAPTCHA bypass switch. Email verification is optional and defaults
 to `OSTOOL_REGISTRATION_EMAIL_VERIFICATION=false`.
 

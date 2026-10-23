@@ -1646,3 +1646,101 @@ async fn username_edits_revoke_credentials_but_display_name_edits_do_not() {
     let login = f.request("POST", "/api/v1/admin/auth/login", None, json!({"email":"RENAMED-ADMIN","password":"security-admin-password-123","verification":f.proof("admin_login").await})).await;
     assert_eq!(login.status, StatusCode::OK);
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn settings_secrets_are_encrypted_write_only_versioned_and_recoverable() {
+    let f = Fixture::new(true).await;
+    let login = f.login(true).await;
+    let cookies = test_security::cookie_header(&login.headers);
+    let endpoint = "/api/v1/admin/account-settings";
+    let mut view = f
+        .request("GET", endpoint, Some(&cookies), Value::Null)
+        .await
+        .body;
+    view["settings"]["smtp_username"] = json!("smtp-account");
+    view["settings"]["smtp_host"] = json!("smtp.example.test");
+    view["settings"]["smtp_from"] = json!("noreply@example.test");
+    let saved=f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_password":"private-smtp-password","turnstile_secret":"private-turnstile-key"}})).await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+    let payload = f
+        .state
+        .database
+        .record::<Value>("account-settings")
+        .await
+        .unwrap()
+        .unwrap();
+    let text = payload.to_string();
+    assert!(!text.contains("private-smtp-password"));
+    assert!(!text.contains("private-turnstile-key"));
+    assert!(
+        payload["secrets"]["smtp_password"]
+            .as_str()
+            .unwrap()
+            .starts_with("v1:")
+    );
+    let mut restarted = f.state.config.read().await.clone();
+    restarted.security.smtp_password = None;
+    restarted.security.turnstile_secret = None;
+    ostool_server::api::site::load_account_settings(&f.state.database, &mut restarted)
+        .await
+        .unwrap();
+    assert_eq!(
+        restarted.security.smtp_password.as_deref(),
+        Some("private-smtp-password")
+    );
+    assert_eq!(
+        restarted.security.turnstile_secret.as_deref(),
+        Some("private-turnstile-key")
+    );
+    let mut wrong_key = restarted.clone();
+    wrong_key.security.mfa_encryption_key = Some(STANDARD.encode([8u8; 32]));
+    assert!(
+        ostool_server::api::site::load_account_settings(&f.state.database, &mut wrong_key)
+            .await
+            .is_err()
+    );
+    view = f
+        .request("GET", endpoint, Some(&cookies), Value::Null)
+        .await
+        .body;
+    assert_eq!(view["secrets"]["smtp_password"], true);
+    assert_eq!(view["secrets"]["turnstile_secret"], true);
+    assert!(!view.to_string().contains("private-smtp-password"));
+    let unchanged=f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_password":""}})).await;
+    assert_eq!(unchanged.status, StatusCode::OK);
+    assert_eq!(
+        f.state
+            .config
+            .read()
+            .await
+            .security
+            .smtp_password
+            .as_deref(),
+        Some("private-smtp-password")
+    );
+    assert_eq!(f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_password":"stale-edit"}})).await.status,StatusCode::CONFLICT);
+    view = f
+        .request("GET", endpoint, Some(&cookies), Value::Null)
+        .await
+        .body;
+    view["settings"]["smtp_username"] = Value::Null;
+    let cleared=f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"clear_smtp_password":true,"clear_turnstile_secret":true}})).await;
+    assert_eq!(cleared.status, StatusCode::OK, "{}", cleared.body);
+    view = f
+        .request("GET", endpoint, Some(&cookies), Value::Null)
+        .await
+        .body;
+    assert_eq!(view["secrets"]["smtp_password"], false);
+    assert_eq!(view["secrets"]["turnstile_secret"], false);
+    let audit = sqlx::query_scalar::<_, String>("SELECT details::text FROM audit_events")
+        .fetch_all(f.state.database.pool())
+        .await
+        .unwrap()
+        .join(" ");
+    assert!(!audit.contains("private-smtp-password"));
+    assert!(!audit.contains("private-turnstile-key"));
+    f.state.config.write().await.security.mfa_encryption_key = None;
+    view["settings"]["smtp_username"] = json!("smtp-account");
+    assert_eq!(f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_password":"must-not-store-without-key"}})).await.status,StatusCode::BAD_REQUEST);
+}

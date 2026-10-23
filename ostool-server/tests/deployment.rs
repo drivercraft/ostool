@@ -40,17 +40,19 @@ fn native_render_selects_proxy_by_edition_and_does_not_expose_backend_secrets() 
             fs::read(file).unwrap()
         );
         assert!(output.join("ostool-server.service").exists());
-        assert_eq!(output.join("Caddyfile").exists(), edition == "public");
         assert_eq!(
-            output.join("ostool-server-caddy.service").exists(),
+            output.join("ostool-server.caddy").exists(),
             edition == "public"
         );
+        assert!(!output.join("ostool-server-caddy.service").exists());
         assert!(!root.path().join("unexpected").exists());
         if edition == "public" {
-            let proxy = fs::read_to_string(output.join("ostool-server-caddy.service")).unwrap();
+            let proxy = fs::read_to_string(output.join("ostool-server.caddy")).unwrap();
             assert!(!proxy.contains("sensitive-password"));
             assert!(!proxy.contains("SMTP"));
-            assert!(proxy.contains("OSTOOL_UPSTREAM=127.0.0.1:2999"));
+            assert!(proxy.contains("reverse_proxy 127.0.0.1:2999"));
+            assert!(proxy.contains("https://boards.example.com"));
+            assert!(!proxy.contains("admin off"));
         }
         #[cfg(unix)]
         {

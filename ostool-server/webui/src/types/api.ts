@@ -749,3 +749,10 @@ export interface LeasePage {
   page?: number;
   page_size?: number;
 }
+
+export interface SecretUpdates {
+  smtp_password?: string;
+  turnstile_secret?: string;
+  clear_smtp_password?: boolean;
+  clear_turnstile_secret?: boolean;
+}

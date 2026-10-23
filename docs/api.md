@@ -1277,5 +1277,10 @@ Cookie 写请求拒绝不匹配/缺失的 Origin。配置、部署与升级说�
 管理员响应中的 `secrets` 也仅为是否已配置的布尔值。
 
 SMTP 密码、Turnstile 服务端密钥、MFA 加密密钥、数据库及 Redis 连接不接受此接口修改。
-业务策略首次由部署配置初始化，此后以数据库为准；密钥和连接参数始终由环境文件管理。
+业务策略首次由部署配置初始化，此后以数据库为准；SMTP/Turnstile 密钥加密入库并可由系统设置更新；数据库连接和主加密密钥仍由部署配置管理。
 新时效用于新签发的令牌或邮件证明，旧证明保留已记录的截止时间；尝试耗尽后不可恢复使用。
+
+账号策略 PUT `/api/v1/admin/account-settings` 可带 `secret_updates`，其字段包括
+`smtp_password`、`turnstile_secret`、`clear_smtp_password`、`clear_turnstile_secret`。
+密钥字段省略或空字符串表示保留；清除需显式传对应布尔值 true，不能与替换同时操作。
+此接口继续检查管理员身份、最近身份验证和配置 revision；GET/SSE 只返回配置状态。

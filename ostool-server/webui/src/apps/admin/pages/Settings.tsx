@@ -544,7 +544,7 @@ const policySections: Record<
         {
           key: "smtp_username",
           label: "SMTP 用户名",
-          hint: "服务商提供的认证账号，通常为完整邮箱；密码通过 OSTOOL_SMTP_PASSWORD 配置。",
+          hint: "服务商提供的认证账号，通常为完整邮箱；密码在下方单独设置，更改后保存即可生效。",
           placeholder: "noreply@example.com",
         },
         {
@@ -588,23 +588,34 @@ function AccountForm({
   const [draft, setDraft] = useState<
     Partial<import("@/types/api").AccountSettings>
   >({});
+  const [secretDraft, setSecretDraft] = useState<
+    import("@/types/api").SecretUpdates
+  >({});
+  const [baselineRevision, setBaselineRevision] = useState(source.revision);
   const [baseline, setBaseline] = useState(source.settings),
     [awaiting, setAwaiting] = useState(0),
     [historyOpen, setHistoryOpen] = useState(false);
-  const dirty = Object.keys(draft).length > 0 && !awaiting;
+  const dirty =
+    (Object.keys(draft).length > 0 || Object.keys(secretDraft).length > 0) &&
+    !awaiting;
   const current = {
     ...source.settings,
     ...(dirty || awaiting > source.revision ? draft : {}),
   };
+  const secretDirty = Object.keys(secretDraft).length > 0;
   const conflict =
-    dirty &&
-    (Object.keys(draft) as (keyof typeof draft)[]).some(
-      (key) =>
-        JSON.stringify(source.settings[key]) !== JSON.stringify(baseline[key]),
-    );
+    (secretDirty && source.revision !== baselineRevision) ||
+    (dirty &&
+      (Object.keys(draft) as (keyof typeof draft)[]).some(
+        (key) =>
+          JSON.stringify(source.settings[key]) !==
+          JSON.stringify(baseline[key]),
+      ));
   useEffect(() => {
     if (awaiting && source.revision >= awaiting) {
+      setBaselineRevision(source.revision);
       setDraft({});
+      setSecretDraft({});
       setAwaiting(0);
     }
   }, [awaiting, source.revision]);
@@ -612,7 +623,10 @@ function AccountForm({
     if (awaiting) {
       setAwaiting(0);
       setBaseline(current);
-    } else if (!dirty) setBaseline(source.settings);
+    } else if (!dirty) {
+      setBaseline(source.settings);
+      setBaselineRevision(source.revision);
+    }
     setDraft((d) => ({ ...d, [key]: value }));
   };
   return (
@@ -629,8 +643,10 @@ function AccountForm({
               disabled={task.pending}
               onClick={() => {
                 setDraft({});
+                setSecretDraft({});
                 setAwaiting(0);
                 setBaseline(source.settings);
+                setBaselineRevision(source.revision);
               }}
             >
               取消
@@ -658,7 +674,12 @@ function AccountForm({
           event.preventDefault();
           if (!conflict)
             void task.run(async () => {
-              await api.updateAccountSettings(source.revision, current);
+              await api.updateAccountSettings(
+                secretDirty ? baselineRevision : source.revision,
+                current,
+                secretDraft,
+              );
+              setSecretDraft({});
               setAwaiting(source.revision + 1);
             }, "策略已保存");
         }}
@@ -723,6 +744,70 @@ function AccountForm({
               })}
             </Section>
           ))}
+          <Section
+            title={group === "email" ? "邮件认证密码" : "人机验证服务密钥"}
+          >
+            {(
+              [
+                group === "email" ? "smtp_password" : "turnstile_secret",
+              ] as const
+            ).map((key) => (
+              <div key={key}>
+                <TextField
+                  label={
+                    key === "smtp_password"
+                      ? "SMTP 密码"
+                      : "Turnstile 服务端密钥"
+                  }
+                  type="password"
+                  autoComplete="new-password"
+                  maxLength={4096}
+                  placeholder={
+                    source.secrets[key]
+                      ? "已配置；留空保留原值，输入新值可替换"
+                      : "未配置；输入密钥后保存"
+                  }
+                  hint="密钥加密存储，不回显原值。"
+                  value={secretDraft[key] ?? ""}
+                  disabled={
+                    !source.secrets.mfa_key || !!secretDraft[`clear_${key}`]
+                  }
+                  onValue={(value) => {
+                    if (!dirty) {
+                      setBaseline(source.settings);
+                      setBaselineRevision(source.revision);
+                    }
+                    setSecretDraft((old) => ({ ...old, [key]: value }));
+                  }}
+                />
+                <CheckField
+                  label={
+                    key === "smtp_password"
+                      ? "清除已保存的 SMTP 密码"
+                      : "清除已保存的 Turnstile 密钥"
+                  }
+                  checked={!!secretDraft[`clear_${key}`]}
+                  disabled={!source.secrets[key]}
+                  onChange={(value) => {
+                    if (!dirty) {
+                      setBaseline(source.settings);
+                      setBaselineRevision(source.revision);
+                    }
+                    setSecretDraft((old) => ({
+                      ...old,
+                      [key]: undefined,
+                      [`clear_${key}`]: value,
+                    }));
+                  }}
+                />
+              </div>
+            ))}
+            {!source.secrets.mfa_key && (
+              <Notice>
+                保存敏感配置前，请先配置部署主加密密钥；主密钥不在数据库中保存。
+              </Notice>
+            )}
+          </Section>
           {group === "email" &&
             (
               [
