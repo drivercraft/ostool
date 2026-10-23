@@ -400,9 +400,12 @@ never extends its absolute or sensitive-operation deadline.
 Password/role changes and disabled/deleted users revoke sessions, PATs and pending
 device approvals. Built-in role permissions are fixed; assigned custom roles must
 be unassigned before changing permission level or deletion. PATs last 90 days by
-default (configurable 1–365) and grant CLI board access only. Sensitive changes,
-audit export, PAT creation and CLI authorization require identity verification
-within the last three minutes. Account security pages manage current login devices
+default (configurable 1–365) and grant CLI board access only. Admin-console operations,
+including audit export and security management, use the authenticated administrator
+session without additional password/MFA confirmation. Login-time MFA and administrator
+permissions remain enforced. Website personal-account changes, PAT creation and CLI
+authorization require identity verification within the last three minutes.
+Account security pages manage current login devices
 and revocation; SSE and serial connections recheck credentials after revocation.
 
 To enable optional TOTP MFA, generate a stable encryption key once:

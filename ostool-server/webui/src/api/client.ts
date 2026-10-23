@@ -146,6 +146,7 @@ async function requestResponse(
     if (
       response.status === 403 &&
       error?.code === "reauth_required" &&
+      authSurface() === "website" &&
       path !== "/api/v1/auth/step-up"
     ) {
       await verifyIdentity();

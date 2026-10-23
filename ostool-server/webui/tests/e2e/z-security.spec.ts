@@ -17,7 +17,7 @@ function totp(secret: string) {
     (digest.readUInt32BE(digest[19] & 15) & 0x7fffffff) % 1000000,
   ).padStart(6, "0");
 }
-test("image captcha, encrypted MFA enrollment, recovery login and recent identity confirmation", async ({
+test("image captcha, encrypted MFA enrollment and recovery login without admin step-up", async ({
   page,
   context,
 }) => {
@@ -80,10 +80,6 @@ test("image captcha, encrypted MFA enrollment, recovery login and recent identit
   await page
     .getByRole("button", { name: "重新生成恢复码", exact: true })
     .click();
-  await expect(page.getByRole("dialog")).toContainText("验证当前身份");
-  await page.getByLabel("当前密码", { exact: true }).fill(password);
-  await page.getByLabel("验证码或恢复码", { exact: true }).fill(recovery[0]);
-  await page.getByRole("button", { name: "验证身份", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("保存恢复码");
   await expect(page.locator(".recovery-codes code")).toHaveCount(8);
   const replaced = await page.locator(".recovery-codes code").allTextContents();

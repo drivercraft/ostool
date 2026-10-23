@@ -253,7 +253,7 @@ token=<refresh_token>
 
 `ostool-server` 的管理页面位于 `/admin`，页面使用同源的 `/api/v1/admin/...` 接口维护开发板、DTB、活动会话、TFTP 和服务器可编辑配置。除 DTB 上传使用原始字节外，请求和响应均使用 JSON。
 
-公网版管理 API 安装了管理员身份、后台登录来源、CSRF 来源和敏感操作身份复核中间件；管理页面使用独立的 `/admin/login`。网站 Cookie、普通成员、CLI OAuth 和 PAT 不能代替后台管理员登录。本地版保持免登录，仅适合可信内网。部署时由 Caddy 提供 HTTPS，并限制 Rust 原始监听端口和设备端口的访问范围。
+公网版管理 API 检查管理员身份、后台登录来源和 CSRF 来源；后台操作不要求再次验证密码或 MFA，登录时的 MFA 策略仍生效。管理页面使用独立的 `/admin/login`。网站 Cookie、普通成员、CLI OAuth 和 PAT 不能代替后台管理员登录。本地版保持免登录，仅适合可信内网。部署时由 Caddy 提供 HTTPS，并限制 Rust 原始监听端口和设备端口的访问范围。
 
 ### 接口索引
 
@@ -1213,8 +1213,10 @@ SSE 使用同源 Cookie，可用 `surface=admin` 指定后台，禁止将令牌�
 | DELETE /api/v1/auth/security/sessions/{id} | 撤销所属登录链；不能访问其他用户会话 |
 | POST /api/v1/auth/security/sessions/others | 撤销其他登录链，保留当前会话 |
 
-安全设置、后台变更、审计导出、PAT 创建和设备码授权等敏感操作需要最近身份验证。
-超时返回 403、`code=reauth_required`，客户端完成 step-up 后重试一次。
+前台个人中心的安全设置、PAT 创建和设备码授权等敏感操作需要最近身份验证。
+超时返回 403、`code=reauth_required`，前台客户端完成 step-up 后重试一次。
+管理后台的变更、审计导出及账号安全管理使用当前管理员登录会话，不再要求密码或 MFA 二次验证；
+该规则依据数据库中的管理员身份和后台会话类型判断，不能通过请求头切换来绕过前台验证。
 MFA 设置变更会撤销其他会话/PAT，保留当前已验证会话。
 会话默认绝对 30 天、请求空闲一天；刷新不延长绝对期限或 step-up 期限。
 
@@ -1226,7 +1228,7 @@ SMTP 是可选功能，未配置时对应入口不显示。邮件码十分钟、
   `challenge_id`、`expires_in`、`resend_after` 和统一提示。
 - `POST /api/v1/auth/password-reset`：`challenge_id`、`code`、`new_password`。
   成功撤销原凭据，已启用的双重验证保留。
-- `POST /api/v1/auth/security/email`：为当前账号发验证邮件，需要最近身份验证。
+- `POST /api/v1/auth/security/email`：为当前账号发验证邮件；前台会话需要最近身份验证。
 - `POST /api/v1/auth/security/email/confirm`：`challenge_id`、`code`，验证当前邮箱。
 
 超限统一返回 429、`code=rate_limited`、`Retry-After` 响应头；
@@ -1283,4 +1285,4 @@ SMTP 密码、Turnstile 服务端密钥、MFA 加密密钥、数据库及 Redis 
 账号策略 PUT `/api/v1/admin/account-settings` 可带 `secret_updates`，其字段包括
 `smtp_password`、`turnstile_secret`、`clear_smtp_password`、`clear_turnstile_secret`。
 密钥字段省略或空字符串表示保留；清除需显式传对应布尔值 true，不能与替换同时操作。
-此接口继续检查管理员身份、最近身份验证和配置 revision；GET/SSE 只返回配置状态。
+此接口检查管理员身份、后台会话、CSRF 来源和配置 revision；GET/SSE 只返回配置状态。

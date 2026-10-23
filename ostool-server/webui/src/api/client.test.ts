@@ -41,6 +41,30 @@ describe("api client", () => {
     await expect(api.deleteSession("demo-session")).resolves.toBeUndefined();
   });
 
+  it("reports admin errors directly without opening identity confirmation", async () => {
+    window.history.replaceState({}, "", "/admin/overview");
+    const verify = vi.fn();
+    window.addEventListener("ostool:step-up", verify);
+    const fetch = vi.fn().mockResolvedValue(
+      Response.json(
+        { code: "reauth_required", message: "verification rejected" },
+        { status: 403 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    try {
+      await expect(api.deleteSession("demo-session")).rejects.toMatchObject({
+        code: "reauth_required",
+        status: 403,
+      });
+      expect(verify).not.toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener("ostool:step-up", verify);
+      window.history.replaceState({}, "", "/");
+    }
+  });
+
   it("deletes a loader image using its encoded digest path", async () => {
     const fetch = vi
       .fn()

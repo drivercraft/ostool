@@ -163,6 +163,14 @@ pub async fn clear_cookies(state: &AppState, surface: Surface) -> Response {
     response
 }
 pub fn require_step_up(credential: &Credential) -> Result<(), ApiError> {
+    // The admin console relies on its authenticated administrator session.
+    // Use the stored client identity, never the request's surface header.
+    if credential.user.is_admin
+        && credential.client_id == Surface::Admin.client()
+        && credential.session_id.is_some()
+    {
+        return Ok(());
+    }
     if credential.session_id.is_some()
         && credential
             .step_up_until
@@ -179,11 +187,6 @@ pub fn require_step_up(credential: &Credential) -> Result<(), ApiError> {
 }
 pub fn sensitive(method: &Method, path: &str) -> bool {
     (path == "/api/v1/account/password" && method == Method::POST)
-        || (path.starts_with("/api/v1/admin/")
-            && !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
-            && path != "/api/v1/admin/auth/login"
-            && path != "/api/v1/admin/audits/view")
-        || path == "/api/v1/admin/audits/export"
         || (method == Method::POST
             && matches!(
                 path,

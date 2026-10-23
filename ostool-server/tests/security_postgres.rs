@@ -238,12 +238,31 @@ async fn captcha_is_png_single_use_action_bound_expiring_and_server_required() {
 }
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
-async fn cookies_are_http_only_surfaces_are_isolated_csrf_and_step_up_are_enforced() {
+async fn admin_actions_skip_step_up_but_keep_session_isolation_and_csrf() {
     let f = Fixture::new(true).await;
     let web = f.login(false).await;
     let website = test_security::cookie_header(&web.headers);
     assert_eq!(
         f.request("GET", "/api/v1/admin/users", Some(&website), Value::Null)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        f.custom(
+            "POST",
+            "/api/v1/admin/roles",
+            None,
+            json!({"name":"forbidden role","administrator":false}),
+            Some(&f.origin),
+            Some(test_security::access_cookie(&web.headers)),
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        f.request("POST", "/api/v1/admin/roles", None, json!({}))
             .await
             .status,
         StatusCode::UNAUTHORIZED
@@ -268,7 +287,7 @@ async fn cookies_are_http_only_surfaces_are_isolated_csrf_and_step_up_are_enforc
     assert_eq!(
         f.custom(
             "POST",
-            "/api/v1/auth/step-up",
+            "/api/v1/admin/roles",
             Some(&cookies),
             json!({"password":"security-admin-password-123"}),
             Some("https://evil.test"),
@@ -281,7 +300,7 @@ async fn cookies_are_http_only_surfaces_are_isolated_csrf_and_step_up_are_enforc
     assert_eq!(
         f.custom(
             "POST",
-            "/api/v1/auth/step-up",
+            "/api/v1/admin/roles",
             Some(&cookies),
             json!({"password":"security-admin-password-123"}),
             None,
@@ -295,12 +314,56 @@ async fn cookies_are_http_only_surfaces_are_isolated_csrf_and_step_up_are_enforc
         .execute(f.state.database.pool())
         .await
         .unwrap();
-    let blocked = f
+    let allowed = f
         .request(
             "POST",
             "/api/v1/admin/roles",
             Some(&cookies),
             json!({"name":"test role","description":"","administrator":false}),
+        )
+        .await;
+    assert_eq!(allowed.status, StatusCode::CREATED, "{}", allowed.body);
+    let sessions = f
+        .request(
+            "POST",
+            "/api/v1/auth/security/sessions/others",
+            Some(&cookies),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(sessions.status, StatusCode::OK, "{}", sessions.body);
+    let enrollment = f
+        .request(
+            "POST",
+            "/api/v1/auth/security/enrollment",
+            Some(&cookies),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(enrollment.status, StatusCode::OK, "{}", enrollment.body);
+    // An admin's website session still follows personal-account verification rules.
+    let blocked = f
+        .request(
+            "POST",
+            "/api/v1/auth/personal-access-tokens",
+            Some(&website),
+            json!({"name":"website token"}),
+        )
+        .await;
+    // Revoking other sessions above also revokes the first website session.
+    assert_eq!(blocked.status, StatusCode::UNAUTHORIZED);
+    let web = f.login(false).await;
+    let website = test_security::cookie_header(&web.headers);
+    sqlx::query("UPDATE oauth_sessions SET step_up_until=NULL WHERE client_id='web'")
+        .execute(f.state.database.pool())
+        .await
+        .unwrap();
+    let blocked = f
+        .request(
+            "POST",
+            "/api/v1/auth/personal-access-tokens",
+            Some(&website),
+            json!({"name":"website token"}),
         )
         .await;
     assert_eq!(blocked.body["code"], "reauth_required");
@@ -308,7 +371,7 @@ async fn cookies_are_http_only_surfaces_are_isolated_csrf_and_step_up_are_enforc
         .request(
             "POST",
             "/api/v1/auth/step-up",
-            Some(&cookies),
+            Some(&website),
             json!({"password":"security-admin-password-123"}),
         )
         .await;
@@ -316,9 +379,9 @@ async fn cookies_are_http_only_surfaces_are_isolated_csrf_and_step_up_are_enforc
     let allowed = f
         .request(
             "POST",
-            "/api/v1/admin/roles",
-            Some(&cookies),
-            json!({"name":"test role","description":"","administrator":false}),
+            "/api/v1/auth/personal-access-tokens",
+            Some(&website),
+            json!({"name":"website token"}),
         )
         .await;
     assert_eq!(allowed.status, StatusCode::CREATED, "{}", allowed.body);

@@ -3,7 +3,6 @@ import {
   useSiteSettings,
 } from "@/components/site-settings";
 import { loginUrl } from "@/auth-session";
-import { SecurityVerification } from "@/components/security-verification";
 import { SecuritySettings } from "@/components/security-settings";
 import { PagePanel } from "@/components/page-panel";
 import AdminLogin from "@/apps/admin/pages/AdminLogin";
@@ -70,7 +69,6 @@ export default function App() {
     >
       <EditionProvider>
         <SiteSettingsProvider>
-          <SecurityVerification />
           <AdminEntry />
         </SiteSettingsProvider>
       </EditionProvider>
