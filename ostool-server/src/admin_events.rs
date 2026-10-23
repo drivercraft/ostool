@@ -6,7 +6,7 @@ use axum::{
     http::HeaderMap,
     response::sse::{Event, KeepAlive, Sse},
 };
-use futures_util::{Stream, stream};
+use futures_util::{Stream, StreamExt, stream};
 use serde::Serialize;
 use serde_json::Value;
 use std::{
@@ -71,6 +71,7 @@ pub struct AdminEvents {
     wake: Arc<Notify>,
     changed: watch::Sender<u64>,
     lease_revision: Arc<std::sync::atomic::AtomicU64>,
+    revisions: Arc<Mutex<BTreeMap<&'static str, u64>>>,
 }
 impl Default for AdminEvents {
     fn default() -> Self {
@@ -86,10 +87,14 @@ impl Default for AdminEvents {
             wake: Arc::new(Notify::new()),
             changed: watch::channel(0).0,
             lease_revision: Arc::default(),
+            revisions: Arc::default(),
         }
     }
 }
 impl AdminEvents {
+    pub(crate) fn revision(&self, topic: &str) -> u64 {
+        *self.revisions.lock().unwrap().get(topic).unwrap_or(&0)
+    }
     pub(crate) fn lease_revision(&self) -> u64 {
         self.lease_revision
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -97,12 +102,16 @@ impl AdminEvents {
     pub fn invalidate(&self, topics: &[&'static str]) {
         let mut dirty = self.dirty.lock().unwrap();
         for topic in topics {
+            *self.revisions.lock().unwrap().entry(topic).or_default() += 1;
             dirty.insert(topic);
             if *topic == "session_history" {
                 self.lease_revision
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             match *topic {
+                "users" => {
+                    dirty.insert("roles");
+                }
                 "boards" => {
                     dirty.extend(["runtimes", "loaders", "overview", "device_catalog"]);
                 }
@@ -184,36 +193,44 @@ impl AdminEvents {
         tokio::spawn(async move {
             loop {
                 events.wake.notified().await;
+                // Merge bursts of mutations into one projection pass.
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 let mut topics = std::mem::take(&mut *events.dirty.lock().unwrap());
                 let overview = topics.remove("overview");
-                let mut values = BTreeMap::new();
-                for topic in topics {
-                    let value = match crate::api::router::admin_topic(&state, topic).await {
-                        Ok(value) => value,
-                        Err(error) => serde_json::json!({"error": error.message}),
-                    };
-                    values.insert(topic.to_string(), value);
+                let mut reads = futures_util::stream::FuturesUnordered::new();
+                while !topics.is_empty() || !reads.is_empty() {
+                    while reads.len() < 4 {
+                        let Some(topic) = topics.pop_first() else {
+                            break;
+                        };
+                        let state = state.clone();
+                        reads.push(async move {
+                            (topic, crate::api::router::admin_topic(&state, topic).await)
+                        });
+                    }
+                    if let Some((topic, result)) = reads.next().await {
+                        let value = result
+                            .unwrap_or_else(|error| serde_json::json!({"error":error.message}));
+                        // Publish each ready resource without waiting for unrelated I/O.
+                        events.publish(BTreeMap::from([(topic.to_string(), value)]));
+                    }
                 }
                 if overview {
-                    let status = values
-                        .get("tftp_status")
-                        .cloned()
-                        .or_else(|| {
-                            events
-                                .projection
-                                .lock()
-                                .unwrap()
-                                .data
-                                .get("tftp_status")
-                                .cloned()
-                        })
-                        .unwrap_or(Value::Null);
+                    let status = {
+                        events
+                            .projection
+                            .lock()
+                            .unwrap()
+                            .data
+                            .get("tftp_status")
+                            .cloned()
+                    }
+                    .unwrap_or(Value::Null);
                     let value = crate::api::router::projected_overview(&state, status)
                         .await
                         .unwrap_or_else(|error| serde_json::json!({"error":error.message}));
-                    values.insert("overview".into(), value);
+                    events.publish(BTreeMap::from([("overview".into(), value)]));
                 }
-                events.publish(values);
             }
         });
     }
@@ -315,6 +332,31 @@ async fn subscribe_scoped(
             None
         };
     let security_only = query.get("security_view").is_some_and(|value| value == "1");
+    let requested_topics = if !public_site && account.is_none() {
+        query
+            .get("topics")
+            .map(|value| value.split(',').map(str::to_owned).collect::<BTreeSet<_>>())
+    } else {
+        None
+    };
+    if requested_topics.as_ref().is_some_and(|topics| {
+        topics.iter().any(|topic| {
+            !TOPICS.contains(&topic.as_str())
+                && !matches!(topic.as_str(), "listing" | "rental_editor")
+        })
+    }) {
+        return Err(crate::api::error::ApiError::bad_request("未知订阅资源"));
+    }
+    let listing = if !security_only && !public_site {
+        crate::api::listing::Filters::from_stream(&query)?
+    } else {
+        None
+    };
+    let editor = if !security_only && !public_site {
+        crate::api::listing::EditorFilters::from_stream(&query)?
+    } else {
+        None
+    };
     let current_session = if let Some(token) = credential.as_ref() {
         state
             .database
@@ -341,6 +383,9 @@ async fn subscribe_scoped(
         state,
         audit_filters,
         lease_filters,
+        listing,
+        editor,
+        requested_topics,
         _guard: guard,
     };
     let stream = stream::unfold(initial, |mut subscription| async move {
@@ -414,6 +459,27 @@ async fn subscribe_scoped(
                     tokio::time::Instant::now() + std::time::Duration::from_secs(15);
             }
             if let Some(mut update) = subscription.queue.pop_front() {
+                if !subscription.public_site && subscription.account.is_none() {
+                    if let Some(filters) = &subscription.listing
+                        && (update.kind == "snapshot" || filters.affected(&update.data))
+                    {
+                        let value = crate::api::listing::page(&subscription.state, filters)
+                            .await
+                            .unwrap_or_else(|error| serde_json::json!({"error":error.message}));
+                        update.data.insert("listing".into(), value);
+                    }
+                    if let Some(filters) = &subscription.editor
+                        && (update.kind == "snapshot"
+                            || ["users", "rentals"]
+                                .iter()
+                                .any(|key| update.data.contains_key(*key)))
+                    {
+                        let value = crate::api::listing::editor(&subscription.state, filters)
+                            .await
+                            .unwrap_or_else(|error| serde_json::json!({"error":error.message}));
+                        update.data.insert("rental_editor".into(), value);
+                    }
+                }
                 if subscription.public_site {
                     update
                         .data
@@ -431,6 +497,37 @@ async fn subscribe_scoped(
                         .any(|key| update.data.contains_key(*key));
                     update.data.clear();
                     if relevant {
+                        if let Some(filters) = &subscription.editor {
+                            match crate::api::account::availability(&subscription.state, filters)
+                                .await
+                            {
+                                Ok(value) => {
+                                    update
+                                        .data
+                                        .insert("availability".into(), value["items"].clone());
+                                    update.data.insert(
+                                        "availability_query".into(),
+                                        value["query"].clone(),
+                                    );
+                                }
+                                Err(error) => {
+                                    update.data.insert(
+                                        "availability".into(),
+                                        serde_json::json!({"error":error.message}),
+                                    );
+                                }
+                            }
+                        }
+                        if let Some(filters) = &subscription.listing {
+                            let page = crate::api::listing::scoped_page(
+                                &subscription.state,
+                                filters,
+                                Some(user),
+                            )
+                            .await
+                            .unwrap_or_else(|error| serde_json::json!({"error":error.message}));
+                            update.data.insert("listing".into(), page);
+                        }
                         let projection = if subscription.security_only {
                             crate::security::projection(
                                 &subscription.state,
@@ -477,6 +574,9 @@ async fn subscribe_scoped(
                         });
                     update.data.insert("session_history".into(), data);
                 }
+                if let Some(topics) = &subscription.requested_topics {
+                    update.data.retain(|topic, _| topics.contains(topic));
+                }
                 let id = format!("{}:{}", update.epoch, update.revision);
                 subscription.cursor = Some(id.clone());
                 let event = Event::default()
@@ -512,6 +612,9 @@ struct Subscription {
     state: AppState,
     audit_filters: Option<crate::audit::Filters>,
     lease_filters: Option<crate::persistence::leases::LeaseFilters>,
+    listing: Option<crate::api::listing::Filters>,
+    editor: Option<crate::api::listing::EditorFilters>,
+    requested_topics: Option<BTreeSet<String>>,
     _guard: crate::dashboard::StreamGuard,
 }
 

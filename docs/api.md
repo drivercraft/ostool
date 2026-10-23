@@ -1157,6 +1157,31 @@ Board REST 和 Management API 业务处理器产生的错误使用以下格式�
 幂等语义见 [管理界面与事件协议](admin-ui.md)。现有 CLI/loader REST 和串口
 WebSocket 契约保持不变。
 
+后台 SSE 可携带 `topics=site,server,audit` 选择资源；未选择的资源不会进入响应，游标仍保持连续。
+初始快照可能只含已就绪资源，随后通过 update 补齐，客户端不能把缺少资源当成空列表。
+`users`、`rentals`、`rental_requests` 全局 topic 只包含 `{revision}` 变更通知。
+使用 `list_view=users|rentals|rental_requests` 和 `list_page`、`list_page_size` 查询当前页，
+结果在 `listing` topic 中返回。可选筛选为 `list_q`、`list_status`、`list_role`、`list_board`、
+`list_user`（用户 ID、用户名或邮箱），会按资源类型应用。
+对应 GET `/api/v1/admin/users`、`/api/v1/admin/rentals`、`/api/v1/admin/rental-requests`
+接受不带 `list_` 前缀的参数，统一返回 `{active,query,items,total,page,page_size}`，默认 20 条，最多 100 条。
+查询使用固定排序和同一数据库快照，越界页收敛到最后一页；总数为筛选后的总数。
+`list_status`：用户为 `true|false`（是否禁用），租赁为 `scheduled|active|expired|cancelled`，
+申请为 `pending|approved|rejected|cancelled`；空值表示全部。
+
+个人 GET `/api/v1/account` 返回 `profile`、`catalog`、`account_summary`、`personal_tokens`，
+其中汇总字段为 `active`、`scheduled`、`pending`，不再附带全部租赁或申请。
+GET `/api/v1/account/rentals`、`/api/v1/account/rental-requests` 及个人 SSE 的 `list_view`
+使用相同分页结构，服务端额外固定当前用户 ID，传入其他用户筛选不能扩大数据范围。
+
+后台租赁编辑通过 `editor_view=1`、`editor_id?`、`editor_user?`、`editor_q?`、`editor_board`、
+`editor_from`、`editor_to` 订阅 `rental_editor`：包含当前租赁、最多 50 个用户搜索结果、
+`more_users` 和范围内 `bookings`。当前选择的用户优先保留，查询范围最长 370 天。
+个人 SSE 使用相同设备/时间参数返回匿名 `availability` 和 `availability_query`；
+GET `/api/v1/account/availability?board=...&from=...&to=...` 返回 `{query,items}`，
+不包含其他用户姓名、邮箱和备注。每个日历范围最多 10000 条，超出时要求缩小范围。
+审计筛选选项共享缓存 60 秒；日志行及分页总数仍实时查询。
+
 ## ostool-server 浏览器认证与账号安全
 
 本节仅适用于 `OSTOOL_EDITION=public` 的网页端。上述 CLI Device Authorization、

@@ -21,22 +21,7 @@ pub struct Role {
     pub builtin: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ManagedUser {
-    pub id: Uuid,
-    pub username: String,
-    pub email: String,
-    pub display_name: Option<String>,
-    pub role_id: String,
-    pub disabled: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub email_verified_at: Option<DateTime<Utc>>,
-    pub last_login_at: Option<DateTime<Utc>>,
-    pub last_login_ip: Option<String>,
-    pub password_changed_at: DateTime<Utc>,
-    pub mfa_enabled: bool,
+    pub user_count: i64,
 }
 #[derive(Deserialize)]
 pub struct UserInput {
@@ -81,35 +66,16 @@ fn sql_error(error: sqlx::Error) -> ApiError {
     }
 }
 
-pub async fn list_users(State(state): State<AppState>) -> Result<Json<Vec<ManagedUser>>, ApiError> {
-    let db = &state.database;
-    let rows = sqlx::query("SELECT u.*,EXISTS(SELECT 1 FROM mfa_credentials m WHERE m.user_id=u.id) AS mfa_enabled FROM users u ORDER BY created_at,id")
-        .fetch_all(db.pool()).await.map_err(sql_error)?;
-    rows.iter()
-        .map(|r| {
-            Ok(ManagedUser {
-                id: r.try_get("id")?,
-                username: r.try_get("username")?,
-                email: r.try_get("email")?,
-                display_name: r.try_get("display_name")?,
-                role_id: r.try_get("role_id")?,
-                disabled: r.try_get("disabled")?,
-                created_at: r.try_get("created_at")?,
-                updated_at: r.try_get("updated_at")?,
-                email_verified_at: r.try_get("email_verified_at")?,
-                last_login_at: r.try_get("last_login_at")?,
-                last_login_ip: r.try_get("last_login_ip")?,
-                password_changed_at: r.try_get("password_changed_at")?,
-                mfa_enabled: r.try_get("mfa_enabled")?,
-            })
-        })
-        .collect::<Result<Vec<_>, sqlx::Error>>()
-        .map(Json)
-        .map_err(sql_error)
+pub async fn list_users(
+    State(state): State<AppState>,
+    axum::extract::Query(mut filters): axum::extract::Query<super::listing::Filters>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    filters.view = "users".into();
+    super::listing::page(&state, &filters).await.map(Json)
 }
 pub async fn list_roles(State(state): State<AppState>) -> Result<Json<Vec<Role>>, ApiError> {
     let db = &state.database;
-    let rows = sqlx::query("SELECT * FROM roles ORDER BY builtin DESC,id")
+    let rows = sqlx::query("SELECT r.*,(SELECT count(*) FROM users u WHERE u.role_id=r.id) AS user_count FROM roles r ORDER BY builtin DESC,id")
         .fetch_all(db.pool())
         .await
         .map_err(sql_error)?;
@@ -121,6 +87,7 @@ pub async fn list_roles(State(state): State<AppState>) -> Result<Json<Vec<Role>>
                 description: r.try_get("description")?,
                 administrator: r.try_get("administrator")?,
                 builtin: r.try_get("builtin")?,
+                user_count: r.try_get("user_count")?,
                 created_at: r.try_get("created_at")?,
                 updated_at: r.try_get("updated_at")?,
             })

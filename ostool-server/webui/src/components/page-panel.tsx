@@ -1,5 +1,6 @@
-import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { useContext, useLayoutEffect, useRef, type ReactNode } from "react";
 import { ListLayoutProvider } from "./list-layout";
+import { ListDataLoadingContext } from "./forms";
 
 /** Fixed header/footer with a single independently scrolling content region. */
 export function PagePanel({
@@ -10,6 +11,8 @@ export function PagePanel({
   scrollKey,
   layoutKey,
   className = "",
+  loading,
+  updating = false,
 }: {
   toolbar?: ReactNode;
   footer?: ReactNode;
@@ -18,7 +21,11 @@ export function PagePanel({
   scrollKey?: string;
   layoutKey?: string;
   className?: string;
+  loading?: boolean;
+  updating?: boolean;
 }) {
+  const parentLoading = useContext(ListDataLoadingContext);
+  const pending = loading ?? parentLoading;
   const scroller = useRef<HTMLDivElement>(null);
   const statusBar = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
@@ -42,8 +49,14 @@ export function PagePanel({
   const content = (
     <section
       className={`page-panel${table ? " table-panel" : ""} ${className}`}
+      aria-busy={pending || updating || undefined}
     >
       {toolbar && <div className="panel-toolbar">{toolbar}</div>}
+      {updating && (
+        <span role="status" className="sr-only">
+          正在更新数据
+        </span>
+      )}
       <div
         className="panel-scroll"
         ref={scroller}
@@ -58,7 +71,7 @@ export function PagePanel({
       </footer>
     </section>
   );
-  return table ? (
+  const panel = table ? (
     <ListLayoutProvider
       storageKey={`${window.location.pathname}:${layoutKey ?? "main"}`}
     >
@@ -66,5 +79,10 @@ export function PagePanel({
     </ListLayoutProvider>
   ) : (
     content
+  );
+  return (
+    <ListDataLoadingContext.Provider value={pending}>
+      {panel}
+    </ListDataLoadingContext.Provider>
   );
 }

@@ -158,7 +158,6 @@ function AdminConsole({
   const { settings } = useSiteSettings();
   const publicEdition = useEdition().edition === "public";
   const errors = useErrors();
-  const listLoading = useResource("server") === undefined && !errors.server;
   const [menu, setMenu] = useState(false);
   useEffect(() => {
     if (pending) return;
@@ -166,130 +165,127 @@ function AdminConsole({
     return admin.disconnect;
   }, [pending]);
   return (
-    <ListDataLoadingContext.Provider value={listLoading}>
-      <BrowserRouter basename="/admin">
-        <div className="app-shell">
-          <aside
-            id="admin-sidebar"
-            className={menu ? "sidebar expanded" : "sidebar"}
-          >
-            <NavLink to="/overview" className="brand">
-              <span className="logo-mark">
-                {settings.logo_url ? (
-                  <img
-                    src={settings.logo_url}
-                    alt=""
-                    className="size-full object-contain"
-                  />
-                ) : (
-                  <CircuitBoardIcon size={17} />
-                )}
-              </span>
-              <span>
-                <strong>{settings.short_name}</strong>
-                <small>{settings.tagline}</small>
-              </span>
-            </NavLink>
-            <nav aria-label="主导航">
-              <SidebarGroup
-                label="仪表盘"
-                icon={<LayoutDashboardIcon />}
-                paths={["/overview", "/jobs", "/operations"]}
-              >
-                {[
-                  ["/overview", "运行状态"],
-                  ["/jobs", "后台任务"],
-                  ["/operations", "运营状态"],
-                ].map(([path, label]) => (
-                  <NavLink key={path} to={path} onClick={() => setMenu(false)}>
+    <BrowserRouter basename="/admin">
+      <div className="app-shell">
+        <aside
+          id="admin-sidebar"
+          className={menu ? "sidebar expanded" : "sidebar"}
+        >
+          <NavLink to="/overview" className="brand">
+            <span className="logo-mark">
+              {settings.logo_url ? (
+                <img
+                  src={settings.logo_url}
+                  alt=""
+                  className="size-full object-contain"
+                />
+              ) : (
+                <CircuitBoardIcon size={17} />
+              )}
+            </span>
+            <span>
+              <strong>{settings.short_name}</strong>
+              <small>{settings.tagline}</small>
+            </span>
+          </NavLink>
+          <nav aria-label="主导航">
+            <SidebarGroup
+              label="仪表盘"
+              icon={<LayoutDashboardIcon />}
+              paths={["/overview", "/jobs", "/operations"]}
+            >
+              {[
+                ["/overview", "运行状态"],
+                ["/jobs", "后台任务"],
+                ["/operations", "运营状态"],
+              ].map(([path, label]) => (
+                <NavLink key={path} to={path} onClick={() => setMenu(false)}>
+                  <span className="admin-nav-dot" aria-hidden="true" />
+                  <span>{label}</span>
+                </NavLink>
+              ))}
+            </SidebarGroup>
+            <SidebarGroup
+              label="设备管理"
+              icon={<CircuitBoardIcon />}
+              paths={["/boards", "/dtbs", "/sessions"]}
+            >
+              {boardNavigation.map(([path, label]) => (
+                <NavLink
+                  key={path}
+                  to={`/${path}`}
+                  onClick={() => setMenu(false)}
+                >
+                  <span className="admin-nav-dot" aria-hidden="true" />
+                  <span>{label}</span>
+                </NavLink>
+              ))}
+            </SidebarGroup>
+            {publicEdition && (
+              <>
+                <SidebarGroup
+                  label="租赁管理"
+                  icon={<CalendarClockIcon />}
+                  paths={["/rentals", "/rental-requests"]}
+                >
+                  <NavLink to="/rentals" onClick={() => setMenu(false)}>
                     <span className="admin-nav-dot" aria-hidden="true" />
-                    <span>{label}</span>
+                    <span>租赁列表</span>
                   </NavLink>
-                ))}
-              </SidebarGroup>
-              <SidebarGroup
-                label="设备管理"
-                icon={<CircuitBoardIcon />}
-                paths={["/boards", "/dtbs", "/sessions"]}
-              >
-                {boardNavigation.map(([path, label]) => (
-                  <NavLink
-                    key={path}
-                    to={`/${path}`}
-                    onClick={() => setMenu(false)}
-                  >
+                  <NavLink to="/rental-requests" onClick={() => setMenu(false)}>
                     <span className="admin-nav-dot" aria-hidden="true" />
-                    <span>{label}</span>
+                    <span>租赁申请</span>
                   </NavLink>
-                ))}
-              </SidebarGroup>
-              {publicEdition && (
-                <>
-                  <SidebarGroup
-                    label="租赁管理"
-                    icon={<CalendarClockIcon />}
-                    paths={["/rentals", "/rental-requests"]}
-                  >
-                    <NavLink to="/rentals" onClick={() => setMenu(false)}>
-                      <span className="admin-nav-dot" aria-hidden="true" />
-                      <span>租赁列表</span>
-                    </NavLink>
+                </SidebarGroup>
+                <SidebarGroup
+                  label="用户管理"
+                  icon={<UserCircleIcon />}
+                  paths={["/users"]}
+                >
+                  {userNavigation.map(([path, label]) => (
                     <NavLink
-                      to="/rental-requests"
+                      end={path === "users"}
+                      key={path}
+                      to={`/${path}`}
                       onClick={() => setMenu(false)}
                     >
                       <span className="admin-nav-dot" aria-hidden="true" />
-                      <span>租赁申请</span>
+                      <span>{label}</span>
                     </NavLink>
-                  </SidebarGroup>
-                  <SidebarGroup
-                    label="用户管理"
-                    icon={<UserCircleIcon />}
-                    paths={["/users"]}
-                  >
-                    {userNavigation.map(([path, label]) => (
-                      <NavLink
-                        end={path === "users"}
-                        key={path}
-                        to={`/${path}`}
-                        onClick={() => setMenu(false)}
-                      >
-                        <span className="admin-nav-dot" aria-hidden="true" />
-                        <span>{label}</span>
-                      </NavLink>
-                    ))}
-                  </SidebarGroup>
-                </>
-              )}
-              <NavLink to="/audits" onClick={() => setMenu(false)}>
-                <ScrollTextIcon />
-                审计日志
-              </NavLink>
-            </nav>
-            <nav className="admin-bottom-nav" aria-label="系统导航">
-              <NavLink to="/settings" onClick={() => setMenu(false)}>
-                <SettingsIcon />
-                系统设置
-              </NavLink>
-            </nav>
-          </aside>
-          <main>
-            <AdminTopbar
-              user={user}
-              menuOpen={menu}
-              onMenuToggle={() => setMenu((value) => !value)}
-            />
-            <div className="admin-notices" aria-live="polite">
-              {Object.entries(errors).map(([topic, error]) => (
-                <Notice key={topic}>
-                  {topic}：{error}
-                </Notice>
-              ))}
-            </div>
-            <div className="admin-workspace" aria-busy={pending}>
-              {pending ? (
-                <PageLoading />
-              ) : (
+                  ))}
+                </SidebarGroup>
+              </>
+            )}
+            <NavLink to="/audits" onClick={() => setMenu(false)}>
+              <ScrollTextIcon />
+              审计日志
+            </NavLink>
+          </nav>
+          <nav className="admin-bottom-nav" aria-label="系统导航">
+            <NavLink to="/settings" onClick={() => setMenu(false)}>
+              <SettingsIcon />
+              系统设置
+            </NavLink>
+          </nav>
+        </aside>
+        <main>
+          <AdminTopbar
+            user={user}
+            menuOpen={menu}
+            onMenuToggle={() => setMenu((value) => !value)}
+          />
+          <div className="admin-notices" aria-live="polite">
+            {Object.entries(errors).map(([topic, error]) => (
+              <Notice key={topic}>
+                {topic}：{error}
+              </Notice>
+            ))}
+          </div>
+          <div className="admin-workspace" aria-busy={pending}>
+            {pending ? (
+              <PageLoading />
+            ) : (
+              <ResourceLoading>
                 <Suspense fallback={<PageLoading />}>
                   <Routes>
                     <Route
@@ -401,17 +397,83 @@ function AdminConsole({
                     />
                   </Routes>
                 </Suspense>
-              )}
-            </div>
-          </main>
-          <Toaster
-            position="top-right"
-            duration={2500}
-            richColors
-            closeButton
-          />
-        </div>
-      </BrowserRouter>
+              </ResourceLoading>
+            )}
+          </div>
+        </main>
+        <Toaster position="top-right" duration={2500} richColors closeButton />
+      </div>
+    </BrowserRouter>
+  );
+}
+function ResourceLoading({ children }: { children: ReactNode }) {
+  const { pathname } = useLocation();
+  const topic = pathname.startsWith("/users/roles")
+    ? "roles"
+    : pathname.startsWith("/boards")
+      ? "boards"
+      : pathname.startsWith("/dtbs")
+        ? "dtbs"
+        : pathname.startsWith("/sessions")
+          ? "sessions"
+          : "server";
+  const data = useResource(topic),
+    errors = useErrors();
+  useEffect(() => {
+    const common = [
+      "site",
+      "account_settings",
+      "server",
+      "deployment",
+      "runtimes",
+      "power_actions",
+    ];
+    const topics = ["/overview", "/jobs", "/operations"].some((path) =>
+      pathname.startsWith(path),
+    )
+      ? ["dashboard"]
+      : pathname.startsWith("/boards/")
+        ? [
+            "boards",
+            "serial",
+            "dtbs",
+            "loaders",
+            "virtual",
+            "tftp_status",
+            "sessions",
+            "serial_manager",
+            "ota",
+          ]
+        : pathname === "/boards"
+          ? ["boards", "loaders", "virtual"]
+          : pathname.startsWith("/dtbs")
+            ? ["dtbs"]
+            : pathname.startsWith("/sessions")
+              ? ["sessions", "session_history"]
+              : pathname.startsWith("/users")
+                ? ["roles", "listing"]
+                : pathname.startsWith("/rentals")
+                  ? ["boards", "listing", "rental_editor"]
+                  : pathname.startsWith("/rental-requests")
+                    ? ["listing"]
+                    : pathname.startsWith("/audits")
+                      ? ["audit"]
+                      : pathname.startsWith("/settings")
+                        ? [
+                            "legal_history",
+                            "network",
+                            "tftp",
+                            "tftp_status",
+                            "mail_deliveries",
+                          ]
+                        : [];
+    admin.setTopics([...common, ...topics]);
+  }, [pathname]);
+  return (
+    <ListDataLoadingContext.Provider
+      value={data === undefined && !errors[topic]}
+    >
+      {children}
     </ListDataLoadingContext.Provider>
   );
 }

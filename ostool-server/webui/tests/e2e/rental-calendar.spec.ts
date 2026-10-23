@@ -121,6 +121,7 @@ test("standalone rental calendar, live conflicts and persistent card layouts", a
     from: ReturnType<typeof calendar.locator>,
     to: ReturnType<typeof calendar.locator>,
   ) {
+    await expect(calendar).toHaveAttribute("aria-busy", "false");
     await from.scrollIntoViewIfNeeded();
     await to.scrollIntoViewIfNeeded();
     const a = (await from.boundingBox())!,

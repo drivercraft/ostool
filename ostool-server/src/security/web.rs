@@ -186,12 +186,13 @@ pub fn require_step_up(credential: &Credential) -> Result<(), ApiError> {
     }
 }
 pub fn sensitive(method: &Method, path: &str) -> bool {
-    (path == "/api/v1/account/password" && method == Method::POST)
-        || (method == Method::POST
-            && matches!(
-                path,
-                "/api/v1/auth/personal-access-tokens" | "/api/v1/auth/device/authorize"
-            ))
+    (method == Method::POST
+        && matches!(
+            path,
+            "/api/v1/account/password"
+                | "/api/v1/auth/personal-access-tokens"
+                | "/api/v1/auth/device/authorize"
+        ))
         || (path.starts_with("/api/v1/auth/security/") && method != Method::GET)
 }
 /// Context/security headers are common; all identity restrictions remain public-only.

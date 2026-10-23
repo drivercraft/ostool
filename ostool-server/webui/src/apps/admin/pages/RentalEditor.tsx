@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { PagePanel } from "@/components/page-panel";
 import { Button } from "@/components/ui/button";
@@ -6,27 +6,39 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Notice, TextField, SelectField, useAction } from "@/components/forms";
 import { RentalCalendar } from "@/components/rental-calendar";
 import { api } from "@/api/client";
-import { useResource } from "@/api/events";
+import { admin, useErrors, useResource } from "@/api/events";
+import { queryKey } from "@/components/server-list";
 import { localDateTime, rentalConflicts } from "@/utils/rental-calendar";
 import type {
   BoardConfig,
-  ManagedUser,
+  RentalEditorData,
   Rental,
   RentalInput,
 } from "@/types/api";
 
 export default function RentalEditor() {
   const { rentalId } = useParams();
-  const users = useResource("users"),
-    boards = useResource("boards"),
-    rentals = useResource("rentals");
-  if (!users || !boards || !rentals)
+  const boards = useResource("boards"),
+    context = useResource("rental_editor"),
+    error = useErrors().rental_editor;
+  useEffect(() => {
+    if (!context || (context.query.id ?? undefined) !== rentalId)
+      admin.setEditorFilters({ id: rentalId });
+    return () => admin.setEditorFilters(null);
+  }, [rentalId]);
+  if (error && !context)
+    return (
+      <PagePanel>
+        <Notice>{error}</Notice>
+      </PagePanel>
+    );
+  if (!context || (context.query.id ?? undefined) !== rentalId || !boards)
     return (
       <PagePanel>
         <Skeleton className="h-48 w-full" />
       </PagePanel>
     );
-  const rental = rentals.find((r) => r.id === rentalId);
+  const rental = context.rental ?? undefined;
   if (rentalId && !rental)
     return (
       <PagePanel
@@ -43,23 +55,21 @@ export default function RentalEditor() {
     <RentalForm
       key={rentalId ?? "new"}
       initial={rental}
-      users={users}
       boards={boards}
-      rentals={rentals}
+      context={context}
     />
   );
 }
 function RentalForm({
   initial,
-  users,
   boards,
-  rentals,
+  context,
 }: {
   initial?: Rental;
-  users: ManagedUser[];
   boards: BoardConfig[];
-  rentals: Rental[];
+  context: RentalEditorData;
 }) {
+  const users = context.users;
   const [draft, setDraft] = useState<RentalInput>(() => ({
     board_id: initial?.board_id ?? boards.find((b) => !b.disabled)?.id ?? "",
     user_id: initial?.user_id ?? users.find((u) => !u.disabled)?.id ?? "",
@@ -68,19 +78,43 @@ function RentalForm({
     notes: initial?.notes ?? "",
   }));
   const original = useRef(JSON.stringify(initial));
-  const current = rentals.find((r) => r.id === initial?.id);
+  const current = context.rental;
+  const [userSearch, setUserSearch] = useState("");
+  const [range, setRange] = useState<{ from?: string; to?: string }>({});
+  const onRangeChange = useCallback(
+    (from: Date, to: Date) =>
+      setRange((old) =>
+        old.from === from.toISOString() && old.to === to.toISOString()
+          ? old
+          : { from: from.toISOString(), to: to.toISOString() },
+      ),
+    [],
+  );
+  const filters = {
+    id: initial?.id,
+    user: draft.user_id || undefined,
+    q: userSearch,
+    board: draft.board_id,
+    ...range,
+  };
+  const identity = queryKey(filters);
+  const previousSearch = useRef(userSearch);
+  useEffect(() => {
+    const delayed = previousSearch.current !== userSearch;
+    previousSearch.current = userSearch;
+    if (!delayed) {
+      admin.setEditorFilters(filters);
+      return;
+    }
+    const timer = setTimeout(() => admin.setEditorFilters(filters), 300);
+    return () => clearTimeout(timer);
+  }, [identity]);
+  const ready = queryKey(context.query) === identity;
+  const error = useErrors().rental_editor;
   const task = useAction(),
     navigate = useNavigate(),
     formId = useId();
-  const bookings = rentals
-    .filter((r) => r.board_id === draft.board_id)
-    .map((r) => ({
-      ...r,
-      label:
-        users.find((u) => u.id === r.user_id)?.display_name ||
-        users.find((u) => u.id === r.user_id)?.email ||
-        "已有租赁",
-    }));
+  const bookings = context.bookings;
   const conflicts = rentalConflicts(
     bookings,
     Date.parse(draft.starts_at),
@@ -127,6 +161,7 @@ function RentalForm({
                   ).length
                 )
                   throw new Error("该时段已被租用，请调整时间");
+                if (!ready || error) throw new Error("请等待日历同步完成");
                 const payload = {
                   ...draft,
                   starts_at: start.toISOString(),
@@ -180,6 +215,20 @@ function RentalForm({
             value={draft.ends_at}
             onValue={(ends_at) => patch({ ends_at })}
           />
+          {(context.more_users || userSearch) && (
+            <div className="rental-user-search">
+              <TextField
+                label="搜索使用用户"
+                value={userSearch}
+                onValue={setUserSearch}
+                placeholder={
+                  context.more_users
+                    ? "输入用户名或邮箱缩小范围（显示前 50 项）"
+                    : "按用户名、邮箱或显示名称搜索"
+                }
+              />
+            </div>
+          )}
           <TextField
             label="备注"
             value={draft.notes}
@@ -190,9 +239,11 @@ function RentalForm({
       footer={
         <div className="editor-footer">
           <span className="panel-status">
-            {conflicts.length
-              ? `所选时段有 ${conflicts.length} 条租赁冲突`
-              : "日历与已有租赁实时同步"}
+            {!ready
+              ? "正在同步日历…"
+              : conflicts.length
+                ? `所选时段有 ${conflicts.length} 条租赁冲突`
+                : "日历与已有租赁实时同步"}
           </span>
           <div className="row-actions">
             {back}
@@ -201,6 +252,8 @@ function RentalForm({
               form={formId}
               disabled={
                 task.pending ||
+                !ready ||
+                !!error ||
                 finished ||
                 !draft.board_id ||
                 !draft.user_id ||
@@ -213,6 +266,7 @@ function RentalForm({
         </div>
       }
     >
+      {error && <Notice>{error}</Notice>}
       {task.error && <Notice>{task.error}</Notice>}
       {initial && JSON.stringify(current) !== original.current && (
         <Notice>
@@ -227,6 +281,8 @@ function RentalForm({
 
       <RentalCalendar
         bookings={bookings}
+        disabled={!ready || !!error}
+        onRangeChange={onRangeChange}
         startsAt={draft.starts_at}
         endsAt={draft.ends_at}
         excludeId={initial?.id}

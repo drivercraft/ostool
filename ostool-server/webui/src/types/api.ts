@@ -390,6 +390,7 @@ export interface RoleInput {
   administrator: boolean;
 }
 export interface UserRole extends RoleInput {
+  user_count: number;
   created_at?: string;
   updated_at?: string;
   id: string;
@@ -415,10 +416,46 @@ export interface RentalInput {
   notes: string;
 }
 export interface Rental extends RentalInput {
+  user_username?: string;
+  user_email?: string;
+  user_display_name?: string | null;
   id: string;
   status: "scheduled" | "active" | "expired" | "cancelled";
   cancelled_at: string | null;
   created_at: string;
+}
+export interface ListFilters {
+  view: "users" | "rentals" | "rental_requests";
+  q?: string;
+  role?: string;
+  status?: string;
+  board?: string;
+  user?: string;
+  page?: number;
+  page_size?: number;
+}
+export interface ListPage<T> {
+  active: boolean;
+  query: ListFilters;
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+export interface RentalEditorFilters {
+  id?: string;
+  user?: string;
+  q?: string;
+  board?: string;
+  from?: string;
+  to?: string;
+}
+export interface RentalEditorData {
+  query: RentalEditorFilters;
+  users: ManagedUser[];
+  more_users: boolean;
+  rental: Rental | null;
+  bookings: import("@/utils/rental-calendar").RentalWindow[];
 }
 export interface RentalRequest {
   id: string;

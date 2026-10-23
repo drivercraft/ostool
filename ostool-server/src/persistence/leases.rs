@@ -191,6 +191,9 @@ impl Database {
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             .execute(&mut *tx)
             .await?;
+        sqlx::query("SET LOCAL statement_timeout='5s'")
+            .execute(&mut *tx)
+            .await?;
         let total: i64 = filters
             .sql("SELECT count(*)")
             .build_query_scalar()

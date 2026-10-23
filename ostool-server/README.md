@@ -323,6 +323,17 @@ cleanup; the next user must wait for physical release. Administrators retain
 maintenance access. Frontend workflows and calendar behavior are documented in
 [the management guide](../docs/admin-ui.md).
 
+Growing user, rental, application, audit and lease-history lists use database
+pagination (default 20, maximum 100 rows), including personal workspace lists.
+The admin event stream accepts topic selection and sends resources as they become
+ready; list changes carry revision markers rather than complete user/rental histories.
+Search is debounced, loading keeps table headers, and updates preserve displayed
+rows and editor drafts. Calendars query only the visible device/time range, and user
+selection searches at most 50 results. Audit filter options share a 60-second cache.
+SQLx migrations add pagination indexes without changing existing migration checksums.
+Bundled Caddy configurations compress hashed static assets with zstd/gzip; HTML
+remains uncached and hashed assets keep their long-lived immutable cache policy.
+
 ## Public deployment
 
 Use `scripts/deploy.sh docker up` or `scripts/deploy.sh systemd up` with the same

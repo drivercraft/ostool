@@ -1,5 +1,11 @@
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
-import { cleanup, render, screen, fireEvent } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import RentalEditor from "./RentalEditor";
@@ -8,26 +14,55 @@ const mocks = vi.hoisted(() => ({
   resources: {} as Record<string, unknown>,
   createRental: vi.fn(),
   updateRental: vi.fn(),
+  listeners: new Set<() => void>(),
 }));
-vi.mock("@/api/events", () => ({
-  useResource: (topic: string) => mocks.resources[topic],
-}));
+vi.mock("@/api/events", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    useErrors: () => ({}),
+    useResource: (topic: string) =>
+      useSyncExternalStore(
+        (fn) => {
+          mocks.listeners.add(fn);
+          return () => {
+            mocks.listeners.delete(fn);
+          };
+        },
+        () => mocks.resources[topic],
+      ),
+    admin: {
+      setEditorFilters: (query: unknown) => {
+        if (!query) return;
+        mocks.resources.rental_editor = {
+          ...(mocks.resources.rental_editor as object),
+          query,
+        };
+        queueMicrotask(() => mocks.listeners.forEach((fn) => fn()));
+      },
+    },
+  };
+});
 vi.mock("@/api/client", () => ({
   api: { createRental: mocks.createRental, updateRental: mocks.updateRental },
 }));
 beforeEach(() => {
   window.history.replaceState({}, "", "/admin/rentals/new");
   mocks.resources = {
-    users: [
-      {
-        id: "u1",
-        email: "user@test.local",
-        display_name: "User",
-        disabled: false,
-      },
-    ],
+    rental_editor: {
+      query: {},
+      rental: null,
+      bookings: [],
+      more_users: false,
+      users: [
+        {
+          id: "u1",
+          email: "user@test.local",
+          display_name: "User",
+          disabled: false,
+        },
+      ],
+    },
     boards: [{ id: "board-one", board_type: "fixture", disabled: false }],
-    rentals: [],
   };
 });
 afterEach(cleanup);
@@ -54,11 +89,13 @@ it("uses a full page and updates calendar conflicts without overwriting the edit
     target: { value: localDateTime(end) },
   });
   await user.type(screen.getByLabelText("备注"), "Keep my draft");
-  expect(
-    (screen.getByRole("button", { name: "保存租赁" }) as HTMLButtonElement)
-      .disabled,
-  ).toBe(false);
-  mocks.resources.rentals = [
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "保存租赁" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false),
+  );
+  (mocks.resources.rental_editor as { bookings: unknown[] }).bookings = [
     {
       id: "other",
       board_id: "board-one",

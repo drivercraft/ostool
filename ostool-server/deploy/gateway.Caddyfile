@@ -2,5 +2,7 @@
 {$OSTOOL_GATEWAY_SITES} {
     @hardware path /api/v1/loaders/* /api/v1/loader-updates/* /boot/* /share/*
     respond @hardware 404
+    @assets path /assets/*
+    encode @assets zstd gzip
     reverse_proxy {$OSTOOL_GATEWAY_UPSTREAM}
 }

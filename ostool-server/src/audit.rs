@@ -67,11 +67,18 @@ pub struct Context {
     pub ip: Option<String>,
     pub user_agent: Option<String>,
 }
+#[derive(Clone)]
+struct AuditFacets {
+    at: Instant,
+    actions: Value,
+    resources: Vec<String>,
+}
 #[derive(Clone, Default)]
 pub struct AuditHealth {
     revision: Arc<AtomicU64>,
     failures: Arc<AtomicU64>,
     healthy: Arc<AtomicBool>,
+    facets: Arc<tokio::sync::Mutex<Option<AuditFacets>>>,
 }
 impl AuditHealth {
     pub fn revision(&self) -> u64 {
@@ -261,10 +268,19 @@ fn db_error(error: sqlx::Error) -> ApiError {
 pub async fn page(state: &AppState, filters: &Filters) -> Result<Value, ApiError> {
     filters.validate()?;
     let pool = state.database.pool();
+    let mut tx = pool.begin().await.map_err(db_error)?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
+    sqlx::query("SET LOCAL statement_timeout='5s'")
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
     let total: i64 = filters
         .sql("SELECT count(*)")
         .build_query_scalar()
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(db_error)?;
     let page_size = filters.page_size.unwrap_or(20);
@@ -279,17 +295,32 @@ pub async fn page(state: &AppState, filters: &Filters) -> Result<Value, ApiError
         .push(" OFFSET ")
         .push_bind((page - 1) * page_size)
         .build_query_as::<Event>()
-        .fetch_all(pool)
+        .fetch_all(&mut *tx)
         .await
         .map_err(db_error)?;
-    let actions=sqlx::query("SELECT action,max(summary) AS label FROM audit_events GROUP BY action ORDER BY action").fetch_all(pool).await.map_err(db_error)?.into_iter().map(|row|Ok(json!({"value":row.try_get::<String,_>("action")?,"label":row.try_get::<String,_>("label")?}))).collect::<Result<Vec<_>,sqlx::Error>>().map_err(db_error)?;
-    let resources: Vec<String> =
-        sqlx::query_scalar("SELECT DISTINCT resource FROM audit_events ORDER BY resource")
-            .fetch_all(pool)
-            .await
-            .map_err(db_error)?;
+    tx.commit().await.map_err(db_error)?;
+    // Shared facets change rarely. Do not aggregate the entire log for every page/subscriber.
+    let mut facets = state.audit.facets.lock().await;
+    if facets
+        .as_ref()
+        .is_none_or(|facets| facets.at.elapsed().as_secs() >= 60)
+    {
+        let actions=sqlx::query("SELECT action,max(summary) AS label FROM audit_events GROUP BY action ORDER BY action").fetch_all(pool).await.map_err(db_error)?.into_iter().map(|row|Ok(json!({"value":row.try_get::<String,_>("action")?,"label":row.try_get::<String,_>("label")?}))).collect::<Result<Vec<_>,sqlx::Error>>().map_err(db_error)?;
+        let resources: Vec<String> =
+            sqlx::query_scalar("SELECT DISTINCT resource FROM audit_events ORDER BY resource")
+                .fetch_all(pool)
+                .await
+                .map_err(db_error)?;
+        *facets = Some(AuditFacets {
+            at: Instant::now(),
+            actions: Value::Array(actions),
+            resources,
+        });
+    }
+    let cached = facets.as_ref().expect("initialized audit facets").clone();
+    drop(facets);
     Ok(
-        json!({"active":true,"query":filters,"items":items,"total":total,"page":page,"page_size":page_size,"actions":actions,"resources":resources,"retention_days":state.config.read().await.audit.retention_days}),
+        json!({"active":true,"query":filters,"items":items,"total":total,"page":page,"page_size":page_size,"actions":cached.actions,"resources":cached.resources,"retention_days":state.config.read().await.audit.retention_days}),
     )
 }
 pub fn routes() -> Router<AppState> {

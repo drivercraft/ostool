@@ -29,7 +29,6 @@ import {
 
 export default function Roles() {
   const roles = useList("roles"),
-    users = useList("users"),
     deployment = useResource("deployment");
   const [editor, setEditor] = useState<{
     id?: string;
@@ -110,7 +109,7 @@ export default function Roles() {
               <Cell>
                 {role.administrator ? "后台全部管理权限" : "板卡会话访问"}
               </Cell>
-              <Cell>{users.filter((u) => u.role_id === role.id).length}</Cell>
+              <Cell>{role.user_count}</Cell>
               <Cell>{role.description || "—"}</Cell>
               <Cell>
                 {role.updated_at
@@ -128,7 +127,7 @@ export default function Roles() {
                     <ConfirmAction
                       icon={ActionDelete}
                       label="删除"
-                      disabled={users.some((u) => u.role_id === role.id)}
+                      disabled={role.user_count > 0}
                       description={`删除角色 ${role.name}？`}
                       action={() => api.deleteRole(role.id)}
                     />
@@ -185,7 +184,8 @@ export default function Roles() {
                 label="授予全部后台管理权限"
                 checked={editor.draft.administrator}
                 disabled={
-                  editor.builtin || users.some((u) => u.role_id === editor.id)
+                  editor.builtin ||
+                  roles.some((r) => r.id === editor.id && r.user_count > 0)
                 }
                 onChange={(administrator) => patch({ administrator })}
               />

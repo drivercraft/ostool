@@ -1807,3 +1807,204 @@ async fn settings_secrets_are_encrypted_write_only_versioned_and_recoverable() {
     view["settings"]["smtp_username"] = json!("smtp-account");
     assert_eq!(f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_password":"must-not-store-without-key"}})).await.status,StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn management_pages_are_bounded_filtered_and_member_scoped() {
+    use futures_util::StreamExt;
+    let f = Fixture::new(true).await;
+    let admin = f.login(true).await;
+    let cookies = test_security::cookie_header(&admin.headers);
+    let pool = f.state.database.pool();
+    sqlx::query("INSERT INTO users(username,email,password_hash) SELECT 'page_user_'||lpad(n::text,3,'0'),'page_user_'||n||'@security.test',password_hash FROM users CROSS JOIN generate_series(1,150) n WHERE is_admin")
+        .execute(pool).await.unwrap();
+    f.state.admin_events.invalidate(&["users"]);
+    let first = f
+        .request(
+            "GET",
+            "/api/v1/admin/users?page_size=10",
+            Some(&cookies),
+            Value::Null,
+        )
+        .await;
+    let second = f
+        .request(
+            "GET",
+            "/api/v1/admin/users?page=2&page_size=10",
+            Some(&cookies),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.body);
+    assert_eq!(first.body["total"], 151);
+    assert_eq!(first.body["items"].as_array().unwrap().len(), 10);
+    assert_eq!(second.body["page"], 2);
+    for row in first.body["items"].as_array().unwrap() {
+        assert!(
+            !second.body["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|other| other["id"] == row["id"])
+        );
+        assert!(row.get("password_hash").is_none());
+        assert!(row.get("security_version").is_none());
+    }
+    let literal = f
+        .request(
+            "GET",
+            "/api/v1/admin/users?q=%25",
+            Some(&cookies),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(literal.body["total"], 0);
+    let search = f
+        .request(
+            "GET",
+            "/api/v1/admin/users?q=page_user_00",
+            Some(&cookies),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(search.body["total"], 9);
+    for query in [
+        "page_size=101",
+        "page=0",
+        "status=unknown",
+        "page=9223372036854775807",
+    ] {
+        assert_eq!(
+            f.request(
+                "GET",
+                &format!("/api/v1/admin/users?{query}"),
+                Some(&cookies),
+                Value::Null
+            )
+            .await
+            .status,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE username='page_user_001'")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let base = Utc::now() + chrono::Duration::days(2);
+    sqlx::query("INSERT INTO board_rentals(board_id,user_id,starts_at,ends_at) SELECT 'page-board',$1,$2+n*interval '1 hour',$2+(n+1)*interval '1 hour' FROM generate_series(0,119) n")
+        .bind(owner).bind(base).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO board_rentals(board_id,user_id,starts_at,ends_at) SELECT 'other-board',id,$1,$1+interval '1 hour' FROM users WHERE is_admin")
+        .bind(base).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO rental_requests(board_id,user_id,starts_at,ends_at) SELECT board_id,user_id,starts_at,ends_at FROM board_rentals")
+        .execute(pool).await.unwrap();
+    f.state
+        .admin_events
+        .invalidate(&["rentals", "rental_requests"]);
+    let rentals = f
+        .request(
+            "GET",
+            "/api/v1/admin/rentals?page_size=10&status=scheduled",
+            Some(&cookies),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(rentals.body["total"], 121, "{}", rentals.body);
+    assert_eq!(rentals.body["items"].as_array().unwrap().len(), 10);
+    let requests = f
+        .request(
+            "GET",
+            "/api/v1/admin/rental-requests?page_size=10&status=pending",
+            Some(&cookies),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(requests.body["total"], 121);
+    let member=f.request("POST","/api/v1/auth/login",None,json!({"email":"page_user_001","password":"security-admin-password-123","verification":f.proof("login").await})).await;
+    assert_eq!(member.status, StatusCode::OK, "{}", member.body);
+    let member_cookie = test_security::cookie_header(&member.headers);
+    for endpoint in ["rentals", "rental-requests"] {
+        let page = f
+            .request(
+                "GET",
+                &format!("/api/v1/account/{endpoint}?page=2&page_size=10"),
+                Some(&member_cookie),
+                Value::Null,
+            )
+            .await;
+        assert_eq!(page.body["total"], 120, "{}", page.body);
+        assert_eq!(page.body["items"].as_array().unwrap().len(), 10);
+        assert!(
+            page.body["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row["user_id"] == owner.to_string())
+        );
+        let admin_id: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE is_admin")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let scoped = f
+            .request(
+                "GET",
+                &format!("/api/v1/account/{endpoint}?user={admin_id}"),
+                Some(&member_cookie),
+                Value::Null,
+            )
+            .await;
+        assert_eq!(scoped.body["total"], 0);
+    }
+    let summary = f
+        .request("GET", "/api/v1/account", Some(&member_cookie), Value::Null)
+        .await;
+    assert_eq!(summary.body["account_summary"]["scheduled"], 120);
+    assert!(summary.body.get("my_rentals").is_none());
+    assert!(summary.body.get("my_requests").is_none());
+    let context = ostool_server::api::listing::editor(
+        &f.state,
+        &ostool_server::api::listing::EditorFilters {
+            board: "page-board".into(),
+            user: Some(owner),
+            from: Some(base - chrono::Duration::minutes(1)),
+            to: Some(base + chrono::Duration::hours(1)),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(context["bookings"].as_array().unwrap().len(), 1);
+    assert_eq!(context["users"].as_array().unwrap().len(), 50);
+    assert_eq!(context["more_users"], true);
+    assert_eq!(context["users"][0]["id"], owner.to_string());
+    assert!(context["users"][0].get("password_hash").is_none());
+    let response=f.app.clone().oneshot(Request::builder()
+        .uri("/api/v1/admin/events?surface=admin&topics=listing,users&list_view=users&list_page_size=10")
+        .header("cookie",&cookies).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body().into_data_stream();
+    let frame = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let frame = String::from_utf8(frame.to_vec()).unwrap();
+    let event: Value = serde_json::from_str(
+        frame
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(event["data"]["listing"]["total"], 151);
+    assert!(
+        event["data"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|key| key == "listing" || key == "users")
+    );
+    if let Some(marker) = event["data"].get("users") {
+        assert!(marker.get("revision").is_some());
+    }
+    assert!(frame.len() < 30000);
+}

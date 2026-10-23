@@ -27,6 +27,12 @@ export interface Runtime {
   last_release_error: string | null;
 }
 export interface Resources {
+  listing: import("@/types/api").ListPage<
+    | import("@/types/api").ManagedUser
+    | import("@/types/api").Rental
+    | import("@/types/api").RentalRequest
+  >;
+  rental_editor: import("@/types/api").RentalEditorData;
   device_catalog: import("@/types/api").PublicDevice[];
   site: import("@/types/api").SiteView;
   legal_history: import("@/types/api").LegalVersion[];
@@ -39,13 +45,13 @@ export interface Resources {
   dashboard: import("@/types/api").DashboardInfo;
   profile: import("./client").AuthUser;
   catalog: import("@/types/api").CatalogBoard[];
+  availability_query: import("@/types/api").RentalEditorFilters;
   availability: import("@/utils/rental-calendar").RentalWindow[];
-  my_rentals: import("@/types/api").Rental[];
-  my_requests: import("@/types/api").RentalRequest[];
+  account_summary: { active: number; scheduled: number; pending: number };
   personal_tokens: import("@/types/api").PersonalTokenSummary[];
-  rental_requests: import("@/types/api").RentalRequest[];
-  rentals: import("@/types/api").Rental[];
-  users: import("@/types/api").ManagedUser[];
+  rental_requests: { revision: number };
+  rentals: { revision: number };
+  users: { revision: number };
   roles: import("@/types/api").UserRole[];
   deployment: import("@/types/api").DeploymentInfo;
   account_settings: import("@/types/api").AccountSettingsView;
@@ -108,6 +114,37 @@ function reconcile(previous: unknown, next: unknown): unknown {
   return next;
 }
 export class AdminStore {
+  private topics: string[] | null = null;
+  setTopics = (topics: string[]) => {
+    const next = [...new Set(topics)].sort();
+    if (JSON.stringify(next) === JSON.stringify(this.topics)) return;
+    this.topics = next;
+    if (this.source) {
+      this.disconnect();
+      this.connect();
+    }
+  };
+  private listingFilters: import("@/types/api").ListFilters | null = null;
+  setListingFilters = (filters: import("@/types/api").ListFilters | null) => {
+    if (JSON.stringify(filters) === JSON.stringify(this.listingFilters)) return;
+    this.listingFilters = filters;
+    if (this.source) {
+      this.disconnect();
+      this.connect();
+    }
+  };
+  private editorFilters: import("@/types/api").RentalEditorFilters | null =
+    null;
+  setEditorFilters = (
+    filters: import("@/types/api").RentalEditorFilters | null,
+  ) => {
+    if (JSON.stringify(filters) === JSON.stringify(this.editorFilters)) return;
+    this.editorFilters = filters;
+    if (this.source) {
+      this.disconnect();
+      this.connect();
+    }
+  };
   private leaseFilters: import("@/types/api").LeaseFilters | null = null;
   setLeaseFilters = (filters: import("@/types/api").LeaseFilters | null) => {
     if (JSON.stringify(filters) === JSON.stringify(this.leaseFilters)) return;
@@ -183,6 +220,7 @@ export class AdminStore {
   connect = () => {
     if (this.source) return;
     const parameters = new URLSearchParams();
+    if (this.topics) parameters.set("topics", this.topics.join(","));
     if (isPublicEdition()) parameters.set("surface", authSurface());
     if (this.auditFilters) {
       parameters.set("audit_view", "1");
@@ -197,6 +235,17 @@ export class AdminStore {
         if (value !== undefined && value !== "")
           parameters.set(`lease_${key}`, String(value));
       }
+    }
+    if (this.listingFilters) {
+      for (const [key, value] of Object.entries(this.listingFilters))
+        if (value !== undefined && value !== "")
+          parameters.set(`list_${key}`, String(value));
+    }
+    if (this.editorFilters) {
+      parameters.set("editor_view", "1");
+      for (const [key, value] of Object.entries(this.editorFilters))
+        if (value !== undefined && value !== "")
+          parameters.set(`editor_${key}`, String(value));
     }
     const suffix = parameters.toString() ? `?${parameters}` : "";
     this.source = new EventSource(`${this.endpoint}${suffix}`);

@@ -1,5 +1,5 @@
 import { SecuritySettings } from "@/components/security-settings";
-import { useId, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useState, type FormEvent } from "react";
 import { requestStatusLabels } from "@/types/api";
 import {
   Link,
@@ -24,6 +24,7 @@ import {
   useAccountConnection,
   useAccountErrors,
   useAccountResource,
+  account,
 } from "@/api/events";
 import { useSiteSession } from "@/apps/web/session";
 import { Button } from "@/components/ui/button";
@@ -37,8 +38,9 @@ import {
   Cell,
   ConfirmAction,
   useAction,
+  ListDataLoadingContext,
 } from "@/components/forms";
-import { useListPage } from "@/components/list-pagination";
+import { useServerList, queryKey } from "@/components/server-list";
 import { ListLayoutProvider, ListLayoutToggle } from "@/components/list-layout";
 import { PagePanel } from "@/components/page-panel";
 import type { CatalogBoard } from "@/types/api";
@@ -188,8 +190,7 @@ function Heading({
   );
 }
 function Overview({ user }: { user: AuthUser }) {
-  const rentals = useAccountResource("my_rentals") ?? [],
-    requests = useAccountResource("my_requests") ?? [];
+  const summary = useAccountResource("account_summary");
   return (
     <>
       <Heading
@@ -203,21 +204,9 @@ function Overview({ user }: { user: AuthUser }) {
       />
       <div className="member-metrics">
         {[
-          [
-            "使用中的租赁",
-            rentals.filter((r) => r.status === "active").length,
-            "/account/rentals",
-          ],
-          [
-            "即将开始",
-            rentals.filter((r) => r.status === "scheduled").length,
-            "/account/rentals",
-          ],
-          [
-            "待审核申请",
-            requests.filter((r) => r.status === "pending").length,
-            "/account/requests",
-          ],
+          ["使用中的租赁", summary?.active ?? "—", "/account/rentals"],
+          ["即将开始", summary?.scheduled ?? "—", "/account/rentals"],
+          ["待审核申请", summary?.pending ?? "—", "/account/requests"],
         ].map(([label, count, path]) => (
           <Link key={label} to={String(path)}>
             <span>{label}</span>
@@ -389,15 +378,9 @@ function Security() {
   );
 }
 function MyRentals() {
-  const rentals = useAccountResource("my_rentals");
   const [search, setSearch] = useState(""),
     [status, setStatus] = useState("");
-  const filtered = (rentals ?? []).filter(
-    (r) =>
-      (!status || r.status === status) &&
-      `${r.board_id} ${r.notes}`.toLowerCase().includes(search.toLowerCase()),
-  );
-  const page = useListPage(filtered, JSON.stringify([search, status]));
+  const page = useServerList("rentals", { q: search, status }, "account");
   return (
     <>
       <Heading
@@ -431,12 +414,11 @@ function MyRentals() {
           />
           <ListLayoutToggle />
         </div>
-        {!rentals ? (
-          <Skeleton className="h-40 w-full" />
-        ) : (
+        {page.error && <Notice>{page.error}</Notice>}
+        <ListDataLoadingContext.Provider value={page.loading}>
           <DataTable
             headers={["开发板", "使用时间", "状态", "备注"]}
-            empty={!filtered.length}
+            empty={!page.rows.length}
           >
             {page.rows.map((r) => (
               <Row key={r.id}>
@@ -457,7 +439,7 @@ function MyRentals() {
               </Row>
             ))}
           </DataTable>
-        )}
+        </ListDataLoadingContext.Provider>
         <div className="member-list-footer">{page.footer}</div>
       </MemberList>
     </>
@@ -465,8 +447,8 @@ function MyRentals() {
 }
 function RentalRequestEditor({ user }: { user: AuthUser }) {
   const catalog = useAccountResource("catalog"),
-    availability = useAccountResource("availability");
-  if (!catalog || !availability)
+    availability = useAccountResource("availability") ?? [];
+  if (!catalog)
     return (
       <PagePanel>
         <Skeleton className="h-48 w-full" />
@@ -513,6 +495,25 @@ function RentalRequestForm({
   const [start, setStart] = useState(() => localDate(3600000)),
     [end, setEnd] = useState(() => localDate(7200000)),
     [notes, setNotes] = useState("");
+  const [range, setRange] = useState<{ from?: string; to?: string }>({});
+  const onRangeChange = useCallback(
+    (from: Date, to: Date) =>
+      setRange((old) =>
+        old.from === from.toISOString() && old.to === to.toISOString()
+          ? old
+          : { from: from.toISOString(), to: to.toISOString() },
+      ),
+    [],
+  );
+  const filters = { board, ...range },
+    identity = queryKey(filters);
+  useEffect(() => {
+    account.setEditorFilters(filters);
+  }, [identity]);
+  useEffect(() => () => account.setEditorFilters(null), []);
+  const query = useAccountResource("availability_query"),
+    error = useAccountErrors().availability;
+  const ready = !!query && queryKey(query) === identity && !error;
   const bookings = availability.filter((item) => item.board_id === board);
   const conflicts = rentalConflicts(
     bookings,
@@ -539,6 +540,7 @@ function RentalRequestForm({
                 if (!valid) throw new Error("开始时间必须早于结束时间");
                 if (conflicts.length)
                   throw new Error("所选时段已有租赁，请选择空闲时段");
+                if (!ready) throw new Error("请等待日历同步完成");
                 await api.applyRental({
                   board_id: board,
                   starts_at: new Date(start).toISOString(),
@@ -609,7 +611,11 @@ function RentalRequestForm({
               type="submit"
               form={formId}
               disabled={
-                task.pending || !boardExists || !valid || conflicts.length > 0
+                task.pending ||
+                !ready ||
+                !boardExists ||
+                !valid ||
+                conflicts.length > 0
               }
             >
               {task.pending ? "提交中…" : "提交申请"}
@@ -618,6 +624,7 @@ function RentalRequestForm({
         </div>
       }
     >
+      {error && <Notice>{error}</Notice>}
       {task.error && <Notice>{task.error}</Notice>}
       {!boardExists && <Notice>所选设备目前不可申请，请重新选择。</Notice>}
       {conflicts.length > 0 && (
@@ -625,6 +632,8 @@ function RentalRequestForm({
       )}
       {boardExists && (
         <RentalCalendar
+          disabled={!ready}
+          onRangeChange={onRangeChange}
           bookings={bookings}
           startsAt={start}
           endsAt={end}
@@ -638,12 +647,8 @@ function RentalRequestForm({
   );
 }
 function MyRequests() {
-  const requests = useAccountResource("my_requests");
   const [status, setStatus] = useState("");
-  const filtered = (requests ?? []).filter(
-    (item) => !status || item.status === status,
-  );
-  const page = useListPage(filtered, status);
+  const page = useServerList("rental_requests", { status }, "account");
   return (
     <>
       <Heading title="租赁申请" text="查看你的设备租赁申请及审核结果。" />
@@ -666,12 +671,11 @@ function MyRequests() {
           />
           <ListLayoutToggle />
         </div>
-        {!requests ? (
-          <Skeleton className="h-40 w-full" />
-        ) : (
+        {page.error && <Notice>{page.error}</Notice>}
+        <ListDataLoadingContext.Provider value={page.loading}>
           <DataTable
             headers={["开发板 / 说明", "申请时段", "状态 / 审核意见", "操作"]}
-            empty={!filtered.length}
+            empty={!page.rows.length}
           >
             {page.rows.map((r) => (
               <Row key={r.id}>
@@ -704,7 +708,7 @@ function MyRequests() {
               </Row>
             ))}
           </DataTable>
-        )}
+        </ListDataLoadingContext.Provider>
         <div className="member-list-footer">{page.footer}</div>
       </MemberList>
     </>

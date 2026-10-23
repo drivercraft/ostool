@@ -412,7 +412,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
         Value::Null,
     )
     .await;
-    let active_id = rentals
+    let active_id = rentals["items"]
         .as_array()
         .unwrap()
         .iter()
@@ -552,7 +552,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
         Value::Null,
     )
     .await;
-    let cancel_id = list
+    let cancel_id = list["items"]
         .as_array()
         .unwrap()
         .iter()

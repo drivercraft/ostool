@@ -229,3 +229,22 @@ it("disables past dates and elapsed half-hour slots", async () => {
     ).disabled,
   ).toBe(false);
 });
+
+it("queries all 42 visible month cells, including the trailing days of a short month", () => {
+  const onRangeChange = vi.fn();
+  const view = render(
+    <RentalCalendar
+      bookings={[]}
+      startsAt={localDateTime(new Date(2027, 1, 1))}
+      onSelect={vi.fn()}
+      onRangeChange={onRangeChange}
+    />,
+  );
+  const [from, to] = onRangeChange.mock.calls.at(-1)! as [Date, Date];
+  const cells = [
+    ...view.container.querySelectorAll<HTMLElement>("[data-calendar-start]"),
+  ];
+  expect(cells).toHaveLength(42);
+  expect(from.getTime()).toBe(Number(cells[0].dataset.calendarStart));
+  expect(to.getTime()).toBe(Number(cells.at(-1)!.dataset.calendarEnd));
+});

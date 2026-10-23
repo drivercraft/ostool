@@ -8,23 +8,11 @@ use axum::{
     routing::{get, put},
 };
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sqlx::Row;
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Rental {
-    pub id: Uuid,
-    pub board_id: String,
-    pub user_id: Uuid,
-    pub starts_at: DateTime<Utc>,
-    pub ends_at: DateTime<Utc>,
-    pub notes: String,
-    pub cancelled_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub status: String,
-}
 #[derive(Debug, Deserialize)]
 pub struct RentalInput {
     pub board_id: String,
@@ -44,53 +32,12 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/admin/rentals", get(list).post(create))
         .route("/api/v1/admin/rentals/{id}", put(update).delete(cancel))
 }
-fn status(
-    starts: DateTime<Utc>,
-    ends: DateTime<Utc>,
-    cancelled: bool,
-    now: DateTime<Utc>,
-) -> &'static str {
-    if cancelled {
-        "cancelled"
-    } else if now >= ends {
-        "expired"
-    } else if now < starts {
-        "scheduled"
-    } else {
-        "active"
-    }
-}
-pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Rental>>, ApiError> {
-    list_for(&state, None).await.map(Json)
-}
-pub(crate) async fn list_for(
-    state: &AppState,
-    user: Option<Uuid>,
-) -> Result<Vec<Rental>, ApiError> {
-    let rows = sqlx::query("SELECT * FROM board_rentals WHERE ($1::uuid IS NULL OR user_id=$1) ORDER BY created_at DESC,id")
-        .bind(user).fetch_all(state.database.pool())
-        .await
-        .map_err(db_error)?;
-    let now = Utc::now();
-    rows.iter()
-        .map(|row| {
-            let starts_at = row.try_get("starts_at")?;
-            let ends_at = row.try_get("ends_at")?;
-            let cancelled_at: Option<DateTime<Utc>> = row.try_get("cancelled_at")?;
-            Ok(Rental {
-                id: row.try_get("id")?,
-                board_id: row.try_get("board_id")?,
-                user_id: row.try_get("user_id")?,
-                starts_at,
-                ends_at,
-                notes: row.try_get("notes")?,
-                cancelled_at,
-                created_at: row.try_get("created_at")?,
-                status: status(starts_at, ends_at, cancelled_at.is_some(), now).into(),
-            })
-        })
-        .collect::<Result<Vec<_>, sqlx::Error>>()
-        .map_err(db_error)
+pub async fn list(
+    State(state): State<AppState>,
+    axum::extract::Query(mut filters): axum::extract::Query<super::listing::Filters>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    filters.view = "rentals".into();
+    super::listing::page(&state, &filters).await.map(Json)
 }
 async fn create(
     State(state): State<AppState>,
@@ -333,17 +280,4 @@ pub async fn protect_board(state: &AppState, board: &str) -> Result<(), ApiError
         return Err(ApiError::conflict("开发板有未结束的租赁，请先取消租赁"));
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn status_uses_half_open_intervals() {
-        let start = Utc::now();
-        let end = start + chrono::Duration::hours(1);
-        assert_eq!(status(start, end, false, start), "active");
-        assert_eq!(status(start, end, false, end), "expired");
-        assert_eq!(status(start, end, true, start), "cancelled");
-    }
 }

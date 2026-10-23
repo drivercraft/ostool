@@ -3146,10 +3146,11 @@ pub(crate) async fn admin_topic(
         "tftp_status" => serde_json::to_value(get_tftp_status(extractor).await?.0.status),
         "overview" => serde_json::to_value(get_admin_overview(extractor).await?.0),
         "power_actions" => serde_json::to_value(state.admin_power.snapshots()),
-        "users" => serde_json::to_value(super::users::list_users(extractor).await?.0),
+        "users" | "rentals" | "rental_requests" => {
+            Ok(serde_json::json!({"revision":state.admin_events.revision(topic)}))
+        }
         "roles" => serde_json::to_value(super::users::list_roles(extractor).await?.0),
         "deployment" => Ok(super::users::deployment(extractor).await.0),
-        "rentals" => serde_json::to_value(super::rentals::list(extractor).await?.0),
         "dashboard" => Ok(crate::dashboard::projection(state).await),
         "audit" => {
             let last: Option<uuid::Uuid> = {
@@ -3162,9 +3163,6 @@ pub(crate) async fn admin_topic(
                 .map_err(|_| ApiError::service_unavailable("审计数据库暂时不可用"))?
             };
             Ok(serde_json::json!({"active":false,"revision":state.audit.revision(),"last_id":last}))
-        }
-        "rental_requests" => {
-            serde_json::to_value(super::account::list_requests(state, None).await?)
         }
         "runtimes" => {
             let mut values = BTreeMap::new();

@@ -8,7 +8,7 @@ import {
   Filter,
   Trash2,
 } from "lucide-react";
-import { admin, useResource } from "@/api/events";
+import { admin, useErrors, useResource } from "@/api/events";
 import { api } from "@/api/client";
 import { PagePanel } from "@/components/page-panel";
 import { ListToolbar } from "@/components/list-toolbar";
@@ -111,6 +111,8 @@ export default function Audits() {
     [advanced, setAdvanced] = useState(false),
     [from, setFrom] = useState(""),
     [to, setTo] = useState("");
+  const error = useErrors().audit;
+  const previousSearch = useRef<string | undefined>(undefined);
   const data = useResource("audit"),
     viewed = useRef(false),
     [details, setDetails] = useState<AuditEvent | null>(null),
@@ -127,7 +129,15 @@ export default function Audits() {
   const identity = useMemo(() => key(filters), [filters]);
   useEffect(() => {
     if (filterError) return;
-    const timer = setTimeout(() => admin.setAuditFilters(filters), 250);
+    const delayed =
+      previousSearch.current !== undefined &&
+      previousSearch.current !== filters.q;
+    previousSearch.current = filters.q;
+    if (!delayed) {
+      admin.setAuditFilters(filters);
+      return;
+    }
+    const timer = setTimeout(() => admin.setAuditFilters(filters), 300);
     return () => clearTimeout(timer);
   }, [identity, filterError]);
   useEffect(() => {
@@ -138,7 +148,7 @@ export default function Audits() {
     return () => admin.setAuditFilters(null);
   }, []);
   const ready = !!data?.active && key(data.query ?? {}) === identity,
-    rows = ready ? (data?.items ?? []) : [],
+    rows = data?.active ? (data?.items ?? []) : [],
     total = data?.total ?? 0,
     page = data?.page ?? 1,
     size = data?.page_size ?? filters.page_size ?? 20,
@@ -208,6 +218,8 @@ export default function Audits() {
     <>
       <PagePanel
         table
+        loading={!data?.active && !error}
+        updating={!ready && !!data?.active && !error}
         scrollKey={identity}
         toolbar={
           <>
@@ -350,66 +362,63 @@ export default function Audits() {
       >
         {filterError && <Notice>{filterError}</Notice>}
         {task.error && !detailOpen && !cleanup && <Notice>{task.error}</Notice>}
-        {!ready ? (
-          <Skeleton className="h-48 w-full" />
-        ) : (
-          <DataTable
-            headers={[
-              "时间",
-              "操作者 / 来源",
-              "操作",
-              "资源 / 对象",
-              "结果",
-              "IP / 耗时",
-              "操作",
-            ]}
-            empty={!rows.length}
-          >
-            {rows.map((row) => (
-              <Row key={row.id}>
-                <Cell>{date(row.created_at)}</Cell>
-                <Cell>
-                  <strong>{row.actor_name}</strong>
-                  <small className="block">
-                    {actors[row.actor_kind] ?? row.actor_kind} ·{" "}
-                    {sources[row.source] ?? row.source}
-                  </small>
-                </Cell>
-                <Cell>
-                  {row.summary}
-                  <small className="block audit-code">{row.action}</small>
-                </Cell>
-                <Cell>
-                  {resources[row.resource] ?? row.resource}
-                  <small className="block audit-target">
-                    {row.target_id || "—"}
-                  </small>
-                </Cell>
-                <Cell>
-                  <span className={`audit-result ${row.result}`}>
-                    {results[row.result] ?? row.result}
-                  </span>
-                  <small className="block">
-                    {row.status_code ? `HTTP ${row.status_code}` : "系统事件"}
-                  </small>
-                </Cell>
-                <Cell>
-                  {row.ip || "—"}
-                  <small className="block">
-                    {row.duration_ms == null ? "—" : `${row.duration_ms} ms`}
-                  </small>
-                </Cell>
-                <Cell>
-                  <RowAction
-                    label="详情"
-                    icon={Eye}
-                    onClick={() => void open(row.id)}
-                  />
-                </Cell>
-              </Row>
-            ))}
-          </DataTable>
-        )}
+        {error && <Notice>{error}</Notice>}
+        <DataTable
+          headers={[
+            "时间",
+            "操作者 / 来源",
+            "操作",
+            "资源 / 对象",
+            "结果",
+            "IP / 耗时",
+            "操作",
+          ]}
+          empty={!rows.length}
+        >
+          {rows.map((row) => (
+            <Row key={row.id}>
+              <Cell>{date(row.created_at)}</Cell>
+              <Cell>
+                <strong>{row.actor_name}</strong>
+                <small className="block">
+                  {actors[row.actor_kind] ?? row.actor_kind} ·{" "}
+                  {sources[row.source] ?? row.source}
+                </small>
+              </Cell>
+              <Cell>
+                {row.summary}
+                <small className="block audit-code">{row.action}</small>
+              </Cell>
+              <Cell>
+                {resources[row.resource] ?? row.resource}
+                <small className="block audit-target">
+                  {row.target_id || "—"}
+                </small>
+              </Cell>
+              <Cell>
+                <span className={`audit-result ${row.result}`}>
+                  {results[row.result] ?? row.result}
+                </span>
+                <small className="block">
+                  {row.status_code ? `HTTP ${row.status_code}` : "系统事件"}
+                </small>
+              </Cell>
+              <Cell>
+                {row.ip || "—"}
+                <small className="block">
+                  {row.duration_ms == null ? "—" : `${row.duration_ms} ms`}
+                </small>
+              </Cell>
+              <Cell>
+                <RowAction
+                  label="详情"
+                  icon={Eye}
+                  onClick={() => void open(row.id)}
+                />
+              </Cell>
+            </Row>
+          ))}
+        </DataTable>
       </PagePanel>
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         <DialogContent className="audit-detail-dialog">

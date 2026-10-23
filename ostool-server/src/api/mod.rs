@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod error;
+pub mod listing;
 pub mod models;
 pub mod ota;
 pub mod router;

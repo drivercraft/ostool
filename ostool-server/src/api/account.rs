@@ -65,13 +65,18 @@ struct PasswordInput {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/account", get(snapshot))
+        .route("/api/v1/account/rentals", get(member_rentals))
+        .route("/api/v1/account/availability", get(member_availability))
         .route(
             "/api/v1/account/events",
             get(crate::admin_events::subscribe_account),
         )
         .route("/api/v1/account/profile", put(update_profile))
         .route("/api/v1/account/password", post(change_password))
-        .route("/api/v1/account/rental-requests", post(submit))
+        .route(
+            "/api/v1/account/rental-requests",
+            get(member_requests).post(submit),
+        )
         .route(
             "/api/v1/account/rental-requests/{id}",
             axum::routing::delete(withdraw),
@@ -91,24 +96,71 @@ fn db_error(error: sqlx::Error) -> ApiError {
     ApiError::service_unavailable("账号数据库暂时不可用")
 }
 
-pub async fn list_requests(
-    state: &AppState,
-    user: Option<Uuid>,
-) -> Result<Vec<RentalRequest>, ApiError> {
-    if !state.config.read().await.edition.is_public() {
-        return Ok(Vec::new());
-    }
-    sqlx::query_as("SELECT r.*,u.email AS user_email FROM rental_requests r JOIN users u ON u.id=r.user_id WHERE ($1::uuid IS NULL OR r.user_id=$1) ORDER BY r.created_at DESC,r.id")
-        .bind(user).fetch_all(state.database.pool()).await.map_err(db_error)
-}
-async fn admin_list(State(state): State<AppState>) -> Result<Json<Vec<RentalRequest>>, ApiError> {
-    list_requests(&state, None).await.map(Json)
+async fn admin_list(
+    State(state): State<AppState>,
+    axum::extract::Query(mut filters): axum::extract::Query<super::listing::Filters>,
+) -> Result<Json<Value>, ApiError> {
+    filters.view = "rental_requests".into();
+    super::listing::page(&state, &filters).await.map(Json)
 }
 async fn snapshot(
     State(state): State<AppState>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
 ) -> Result<Json<Value>, ApiError> {
     projection(&state, user.id).await.map(Json)
+}
+async fn member_rentals(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    axum::extract::Query(mut filters): axum::extract::Query<super::listing::Filters>,
+) -> Result<Json<Value>, ApiError> {
+    filters.view = "rentals".into();
+    super::listing::scoped_page(&state, &filters, Some(user.id))
+        .await
+        .map(Json)
+}
+async fn member_requests(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    axum::extract::Query(mut filters): axum::extract::Query<super::listing::Filters>,
+) -> Result<Json<Value>, ApiError> {
+    filters.view = "rental_requests".into();
+    super::listing::scoped_page(&state, &filters, Some(user.id))
+        .await
+        .map(Json)
+}
+
+async fn member_availability(
+    State(state): State<AppState>,
+    axum::extract::Query(filters): axum::extract::Query<super::listing::EditorFilters>,
+) -> Result<Json<Value>, ApiError> {
+    availability(&state, &filters).await.map(Json)
+}
+pub(crate) async fn availability(
+    state: &AppState,
+    filters: &super::listing::EditorFilters,
+) -> Result<Value, ApiError> {
+    filters.validate()?;
+    let from = filters.from.unwrap_or_else(Utc::now);
+    let to = filters.to.unwrap_or(from + chrono::Duration::days(32));
+    let visible = state
+        .boards
+        .read()
+        .await
+        .get(&filters.board)
+        .is_some_and(|board| !board.disabled);
+    let rows: Vec<Value> = if visible {
+        sqlx::query_scalar("SELECT jsonb_build_object('id',id,'board_id',board_id,'starts_at',starts_at,'ends_at',ends_at,'status','reserved') FROM board_rentals WHERE board_id=$1 AND cancelled_at IS NULL AND starts_at<$3 AND ends_at>$2 ORDER BY starts_at,id LIMIT 10001")
+            .bind(&filters.board).bind(from).bind(to).fetch_all(state.database.pool()).await.map_err(db_error)?
+    } else {
+        Vec::new()
+    };
+    if rows.len() > 10000 {
+        return Err(ApiError::bad_request(
+            "该日历范围的租赁过多，请缩小时间范围",
+        ));
+    }
+    Ok(json!({"query":filters,"items":rows}))
 }
 
 pub(crate) async fn projection(state: &AppState, user: Uuid) -> Result<Value, ApiError> {
@@ -128,13 +180,9 @@ pub(crate) async fn projection(state: &AppState, user: Uuid) -> Result<Value, Ap
         .collect();
     let tokens = sqlx::query("SELECT id,name,expires_at,created_at FROM personal_access_tokens WHERE user_id=$1 ORDER BY created_at DESC")
         .bind(user).fetch_all(db.pool()).await.map_err(db_error)?.into_iter().map(|r| Ok(json!({"id":r.try_get::<Uuid,_>("id")?,"name":r.try_get::<String,_>("name")?,"expires_at":r.try_get::<Option<DateTime<Utc>>,_>("expires_at")?,"created_at":r.try_get::<DateTime<Utc>,_>("created_at")?}))).collect::<Result<Vec<_>,sqlx::Error>>().map_err(db_error)?;
-    let availability=sqlx::query("SELECT id,board_id,starts_at,ends_at FROM board_rentals WHERE cancelled_at IS NULL ORDER BY starts_at,id").fetch_all(db.pool()).await.map_err(db_error)?.into_iter().map(|row|Ok(json!({"id":row.try_get::<Uuid,_>("id")?,"board_id":row.try_get::<String,_>("board_id")?,"starts_at":row.try_get::<DateTime<Utc>,_>("starts_at")?,"ends_at":row.try_get::<DateTime<Utc>,_>("ends_at")?,"status":"reserved"}))).collect::<Result<Vec<_>,sqlx::Error>>().map_err(db_error)?;
-    let availability: Vec<_> = availability
-        .into_iter()
-        .filter(|row| catalog.iter().any(|board| board["id"] == row["board_id"]))
-        .collect();
+    let summary: Value = sqlx::query_scalar("SELECT jsonb_build_object('active',(SELECT count(*) FROM board_rentals WHERE user_id=$1 AND cancelled_at IS NULL AND starts_at<=now() AND ends_at>now()),'scheduled',(SELECT count(*) FROM board_rentals WHERE user_id=$1 AND cancelled_at IS NULL AND starts_at>now()),'pending',(SELECT count(*) FROM rental_requests WHERE user_id=$1 AND status='pending'))").bind(user).fetch_one(db.pool()).await.map_err(db_error)?;
     Ok(
-        json!({"profile":{"id":profile.id,"username":profile.username,"email":profile.email,"display_name":profile.display_name,"is_admin":profile.is_admin},"catalog":catalog,"availability":availability,"my_rentals":rentals::list_for(state,Some(user)).await?,"my_requests":list_requests(state,Some(user)).await?,"personal_tokens":tokens}),
+        json!({"profile":{"id":profile.id,"username":profile.username,"email":profile.email,"display_name":profile.display_name,"is_admin":profile.is_admin},"catalog":catalog,"account_summary":summary,"personal_tokens":tokens}),
     )
 }
 

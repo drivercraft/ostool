@@ -37,8 +37,12 @@ export function RentalCalendar({
   endsAt,
   excludeId,
   onSelect,
+  onRangeChange,
+  disabled = false,
 }: {
   bookings: RentalWindow[];
+  onRangeChange?: (from: Date, to: Date) => void;
+  disabled?: boolean;
   startsAt: string;
   endsAt?: string;
   excludeId?: string;
@@ -71,6 +75,30 @@ export function RentalCalendar({
       setAnchor(dateOnly(date));
     }
   }, [startsAt]);
+  const anchorTime = anchor.getTime();
+  useEffect(() => {
+    const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+    const gridStart = new Date(first);
+    gridStart.setDate(1 - ((first.getDay() + 6) % 7));
+
+    const start =
+      view === "year"
+        ? new Date(anchor.getFullYear(), 0, 1)
+        : view === "month"
+          ? gridStart
+          : dateOnly(anchor);
+    const end =
+      view === "year"
+        ? new Date(anchor.getFullYear() + 1, 0, 1)
+        : view === "month"
+          ? new Date(
+              gridStart.getFullYear(),
+              gridStart.getMonth(),
+              gridStart.getDate() + 42,
+            )
+          : dayEnd(anchor);
+    onRangeChange?.(start, end);
+  }, [view, anchorTime, onRangeChange]);
   const today = new Date();
   const slots = calendarDaySlots(anchor);
   const showSlotZone = slots.length !== 48;
@@ -88,6 +116,7 @@ export function RentalCalendar({
       excludeId,
     );
   const unavailable = (window: TimeWindow) =>
+    disabled ||
     window.end <= cutoff ||
     (view === "day"
       ? rentalConflicts(bookings, window.start, window.end, excludeId).length >
@@ -105,6 +134,7 @@ export function RentalCalendar({
     window.end > range.start;
 
   function select(window: TimeWindow) {
+    if (disabled) return;
     const from = Math.max(window.start, Math.ceil(Date.now() / 60000) * 60000);
     if (from >= window.end) {
       setError("请选择尚未结束的时段。");
@@ -118,6 +148,7 @@ export function RentalCalendar({
     onSelect(new Date(from), new Date(window.end));
   }
   function selectSingle(window: TimeWindow) {
+    if (disabled) return;
     if (unavailable(window)) return;
     const choice = view === "day" ? window : available(window)[0];
     if (choice) select(choice);
@@ -243,6 +274,9 @@ export function RentalCalendar({
               (sum, item) => sum + item.end - item.start,
               0,
             ) / 3600000;
+          const disabledCell =
+            unavailable(window) ||
+            (compact && date.getMonth() !== month.getMonth());
           return (
             <button
               type="button"
@@ -251,7 +285,7 @@ export function RentalCalendar({
               data-calendar-start={window.start}
               data-calendar-end={window.end}
               aria-label={`${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日，${entries.length} 条租赁，空闲 ${Number(hours.toFixed(1))} 小时`}
-              disabled={unavailable(window)}
+              disabled={disabledCell}
               aria-pressed={
                 selectedRange(window) || (!range && sameDay(date, selected))
               }
@@ -261,7 +295,7 @@ export function RentalCalendar({
                 }
               }}
               onDoubleClick={() => {
-                if (unavailable(window)) return;
+                if (disabledCell) return;
                 setAnchor(date);
                 setSelected(date);
                 setView("day");
@@ -312,6 +346,7 @@ export function RentalCalendar({
       ref={root}
       className="rental-calendar"
       aria-label="租赁日历"
+      aria-busy={disabled}
       onPointerDown={pointerDown}
       onPointerMove={pointerMove}
       onPointerUp={pointerUp}

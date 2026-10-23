@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   updateProfile: vi.fn(),
   applyRental: vi.fn(),
   resources: {} as Record<string, unknown>,
+  errors: {},
+  listeners: new Set<() => void>(),
 }));
 vi.mock("@/apps/web/session", () => ({
   useSiteSession: () => ({ user: mocks.user, checking: false, error: "" }),
@@ -21,11 +23,37 @@ vi.mock("@/api/client", () => ({
   api: { updateProfile: mocks.updateProfile, applyRental: mocks.applyRental },
   clearAuthToken: vi.fn(),
 }));
-vi.mock("@/api/events", () => ({
-  useAccountResource: (key: string) => mocks.resources[key],
-  useAccountConnection: () => "connected",
-  useAccountErrors: () => ({}),
-}));
+vi.mock("@/api/events", async () => {
+  const { useSyncExternalStore } = await import("react");
+  const subscribe = (fn: () => void) => {
+    mocks.listeners.add(fn);
+    return () => {
+      mocks.listeners.delete(fn);
+    };
+  };
+  return {
+    useAccountResource: (key: string) =>
+      useSyncExternalStore(subscribe, () => mocks.resources[key]),
+    useAccountConnection: () => "connected",
+    useAccountErrors: () => mocks.errors,
+    account: {
+      subscribe,
+      get: (key: string) => mocks.resources[key],
+      getErrors: () => mocks.errors,
+      setListingFilters: vi.fn(),
+      setEditorFilters: (query: unknown) => {
+        if (
+          !query ||
+          JSON.stringify(query) ===
+            JSON.stringify(mocks.resources.availability_query)
+        )
+          return;
+        mocks.resources.availability_query = query;
+        queueMicrotask(() => mocks.listeners.forEach((fn) => fn()));
+      },
+    },
+  };
+});
 beforeEach(() => {
   vi.stubGlobal(
     "ResizeObserver",

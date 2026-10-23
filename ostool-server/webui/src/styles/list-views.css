@@ -518,3 +518,7 @@
 .calendar-busy {
   background: var(--muted-foreground);
 }
+
+.rental-editor-form .rental-user-search {
+  grid-column: 1 / -1;
+}

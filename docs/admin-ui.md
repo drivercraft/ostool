@@ -29,13 +29,16 @@
 
 | 接口 | 用途 |
 | --- | --- |
-| `GET /api/v1/account` | 当前用户资料、可申请设备目录、自己的租赁、申请和令牌元数据 |
+| `GET /api/v1/account` | 当前用户资料、可申请设备目录、租赁/申请数量汇总和令牌元数据 |
+| `GET /api/v1/account/rentals` | 当前用户租赁的数据库分页结果 |
+| `GET /api/v1/account/rental-requests` | 当前用户申请的数据库分页结果 |
+| `GET /api/v1/account/availability` | 按 `board`、`from`、`to` 查询匿名占用，最多一年 |
 | `GET /api/v1/account/events` | 当前用户实时投影，使用独立浏览器会话，CLI 令牌不可访问，URL 不携带令牌 |
 | `PUT /api/v1/account/profile` | `{email, display_name, current_password?}` |
 | `POST /api/v1/account/password` | `{current_password, new_password}` |
 | `POST /api/v1/account/rental-requests` | `{board_id, starts_at, ends_at, notes?}` |
 | `DELETE /api/v1/account/rental-requests/{id}` | 撤回自己的待审核申请 |
-| `GET /api/v1/admin/rental-requests` | 管理员申请列表，通过 `rental_requests` topic 同步 |
+| `GET /api/v1/admin/rental-requests` | 管理员申请分页列表，通过 `listing` topic 同步 |
 | `POST /api/v1/admin/rental-requests/{id}/review` | `{decision: "approve" \| "reject", note?}` |
 
 前台页面统一使用 `api/events.ts` 中的独立 account store，连接个人 SSE；不订阅管理 SSE，
@@ -48,19 +51,17 @@
 本地版继续无认证，并隐藏全部个人工作台功能；个人 API 和申请管理 API 返回 404。
 租赁申请由统一 SQLx 初始迁移创建，不包含启动时旧数据搬运。
 
-源码改动后，`start` 不会替换已运行进程，需要按当前版本执行 `restart`。该命令会通过
-`cargo run` 重新构建 React/Vite 资源并嵌入 Rust 可执行文件，然后运行新进程。
+源码改动后，执行 `scripts/dev.sh restart` 重新构建 Docker 发行版镜像并替换运行容器。
 HTML 响应使用 `Cache-Control: no-store`，带内容哈希的静态资源可长期缓存。
 使用 `OSTOOL_SERVER_WEB_DIST_DIR` 提供预构建资源时，其环境变量和目录变化也会触发构建。
-开发脚本在系统提供 `setsid` 时启动独立会话，避免调用终端退出时连带结束服务器；
-`status` 和 `stop` 仍通过记录的服务器 PID 工作，其他环境保留 `nohup` 兼容方式。
+开发环境由 Docker Compose 管理，`status` 查看容器状态，`stop` 停止容器并保留数据卷。
 
 ## 操作流程
 
 本地版和公网版统一使用 PostgreSQL 存储板卡、DTB 内容、OTA 镜像/任务/观察记录，
 以及后台可编辑的网络、TFTP、上传设置。区别是本地版不启用账号、授权和租赁功能，
 CLI 无需登录；公网版保持管理员登录与成员租赁校验。没有数据库连接时，常规服务器
-启动会直接报错，不会回退到另一套文件存储。部署启动参数仍从 TOML/`.env` 读取，
+启动会直接报错，不会回退到另一套文件存储。部署启动参数从选定的 `.env` 及进程环境读取，
 临时会话文件和实时串口/发现状态按生命周期管理。服务器不再读取旧业务文件；
 已有开发板只通过独立迁移工具手动导入，操作说明见下文。
 
@@ -115,7 +116,14 @@ SMTP 密码、Turnstile 服务端密钥及 MFA 加密密钥由 `.env` 管理，�
 页面会话内的未读状态，提醒内容变化后重新标记为未读。这里不是持久化站内信或聊天功能。
 主题菜单支持明亮、黑暗、跟随系统，选择保存在浏览器并在刷新后恢复；系统模式随设备
 偏好变化。公开版头像菜单包含账号、设置、网站和退出登录，本地版只保留工作区相关入口。
-列表底栏支持每页 10/20/50/100 条和前后翻页；分页在现有 SSE 数据中完成，不增加 GET 或轮询。
+列表底栏支持每页 10/20/50/100 条和前后翻页。用户、租赁、申请、审计和租约历史由数据库
+执行筛选与分页；设备、DTB 和活动连接等受当前设备规模约束的运行列表在 SSE 投影内分页。
+个人中心的租赁、申请同样使用数据库分页，用户归属由服务端认证会话确定。
+后台通过 `topics` 只订阅当前页面和公共标题栏所需资源，首次数据按资源就绪顺序逐项推送。
+用户、租赁、申请的全局 topic 仅推送变更 revision；当前查询页通过 `listing` 推送。
+搜索输入防抖 300ms；首次加载保留表头并显示骨架，翻页、筛选和重连保留已展示内容及编辑草稿。
+日历仅查询当前设备、可见时间范围的占用，范围最长一年；用户选择按搜索加载前 50 项。
+以上查询均通过现有 SSE 完成，不增加轮询或 mutation 后全量 GET。
 筛选改变后返回第一页，实时推送保留当前页和滚动位置；记录删除后自动收敛到有效页。
 开发板编辑和系统配置的保存、取消按钮固定在底栏，表单校验和并发修改提示继续生效。
 UI 验证可运行 `pnpm --dir ostool-server/webui test:e2e`。如果 UDP 2998 正被已有
@@ -292,7 +300,7 @@ U-Boot 通过串口启动，无需绑定 MAC。切换到 U-Boot 后隐藏 MAC �
 租赁是用户对指定开发板在 `[starts_at, ends_at)` 之间的使用权，与现有短期会话租约独立。
 同一开发板的非取消租赁不可重叠，相邻时间段允许。时间使用 RFC3339（建议 UTC），UI 按浏览器时区输入和显示。
 
-- `GET /api/v1/admin/rentals`：租赁列表，同步通过 SSE `rentals` topic 推送。
+- `GET /api/v1/admin/rentals`：数据库分页租赁列表，同步通过 SSE `listing` topic 推送。
 - `POST /api/v1/admin/rentals`：新增，成功返回 201。
 - `PUT /api/v1/admin/rentals/{id}`：修改未取消、未结束的租赁时间和备注，成功返回 204。
 - `DELETE /api/v1/admin/rentals/{id}`：取消，保留记录，成功返回 204。相关会话通过原有流程终止、断电并清理文件。

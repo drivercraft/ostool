@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ChevronLeft, ChevronRight, Eye } from "lucide-react";
 import { useEdition } from "@/edition";
@@ -71,6 +71,7 @@ export default function LeaseHistory() {
   const [details, setDetails] = useState<LeaseRecord | null>(null);
   const data = useResource("session_history");
   const error = useErrors().session_history;
+  const previousSearch = useRef<string | undefined>(undefined);
   const identity = useMemo(() => key(filters), [filters]);
   const filterError =
     from && to && Date.parse(from) >= Date.parse(to)
@@ -78,12 +79,20 @@ export default function LeaseHistory() {
       : "";
   useEffect(() => {
     if (filterError) return;
-    const timer = setTimeout(() => admin.setLeaseFilters(filters), 250);
+    const delayed =
+      previousSearch.current !== undefined &&
+      previousSearch.current !== filters.q;
+    previousSearch.current = filters.q;
+    if (!delayed) {
+      admin.setLeaseFilters(filters);
+      return;
+    }
+    const timer = setTimeout(() => admin.setLeaseFilters(filters), 300);
     return () => clearTimeout(timer);
   }, [identity, filterError]);
   useEffect(() => () => admin.setLeaseFilters(null), []);
   const ready = !!data?.active && key(data.query ?? {}) === identity;
-  const rows = ready ? (data.items ?? []) : [];
+  const rows = data?.active ? (data.items ?? []) : [];
   const total = data?.total ?? 0,
     page = data?.page ?? 1,
     size = data?.page_size ?? filters.page_size ?? 20;
@@ -133,6 +142,7 @@ export default function LeaseHistory() {
     <>
       <PagePanel
         table
+        updating={!ready && !!data?.active && !error}
         layoutKey="history"
         scrollKey={identity}
         footer={footer}
@@ -208,7 +218,7 @@ export default function LeaseHistory() {
         {filterError && <Notice>{filterError}</Notice>}
         {error && <Notice>{error}</Notice>}
         <ListDataLoadingContext.Provider
-          value={!ready && !error && !filterError}
+          value={!data?.active && !error && !filterError}
         >
           <DataTable
             headers={[

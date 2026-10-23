@@ -150,7 +150,7 @@ test("unbound power -> real discovery -> manual MAC binding; push preserves focu
     reads.every(
       (url) =>
         url.endsWith("/api/v1/site/events") ||
-        url.endsWith("/api/v1/admin/events") ||
+        new URL(url).pathname === "/api/v1/admin/events" ||
         url.endsWith("/api/v1/auth/config"),
     ),
   ).toBeTruthy();
@@ -526,7 +526,9 @@ test("viewport panels keep toolbar and footer fixed while tables/forms scroll", 
   ).toBeVisible();
   // Dismiss the successful save notification before opening the mobile drawer.
   // Toast timers pause while the pointer is over them.
-  const closeToast = page.locator("[data-sonner-toast] [data-close-button]").first();
+  const closeToast = page
+    .locator("[data-sonner-toast] [data-close-button]")
+    .first();
   if (await closeToast.count()) await closeToast.click();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(save).toBeVisible();

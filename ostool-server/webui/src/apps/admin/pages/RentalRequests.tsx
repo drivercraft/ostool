@@ -2,11 +2,10 @@ import { Check as ActionApprove, X as ActionReject } from "lucide-react";
 import { RowAction } from "@/components/row-action";
 import { useState } from "react";
 import { api } from "@/api/client";
-import { useList } from "@/api/events";
 import type { RentalRequest } from "@/types/api";
 import { PagePanel } from "@/components/page-panel";
 import { ListToolbar } from "@/components/list-toolbar";
-import { useListPage } from "@/components/list-pagination";
+import { useServerList } from "@/components/server-list";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,8 +26,7 @@ import {
 } from "@/components/forms";
 import { requestStatusLabels } from "@/types/api";
 export default function RentalRequests() {
-  const requests = useList("rental_requests"),
-    [status, setStatus] = useState(""),
+  const [status, setStatus] = useState(""),
     [search, setSearch] = useState("");
   const [editor, setEditor] = useState<{
       request: RentalRequest;
@@ -36,32 +34,20 @@ export default function RentalRequests() {
     } | null>(null),
     [note, setNote] = useState("");
   const task = useAction();
-  const filtered = requests.filter(
-    (r) =>
-      (!status || r.status === status) &&
-      `${r.board_id} ${r.user_email} ${r.notes}`
-        .toLowerCase()
-        .includes(search.toLowerCase()),
-  );
-  const page = useListPage(filtered, JSON.stringify([search, status]));
+  const page = useServerList("rental_requests", { q: search, status });
   function open(request: RentalRequest, decision: "approve" | "reject") {
     setNote("");
     setEditor({ request, decision });
   }
   return (
     <>
+      {page.error && <Notice>{page.error}</Notice>}
       <PagePanel
         table
+        loading={page.loading}
+        updating={page.updating}
         toolbar={
-          <ListToolbar
-            actions={
-              <span>
-                待审核 {requests.filter((r) => r.status === "pending").length}{" "}
-                条
-              </span>
-            }
-            count={`${filtered.length} 条`}
-          >
+          <ListToolbar count={`${page.total} 条`}>
             <TextField
               label="搜索申请"
               placeholder="开发板、邮箱或说明"
@@ -91,7 +77,7 @@ export default function RentalRequests() {
             "状态 / 审核意见",
             "操作",
           ]}
-          empty={!filtered.length}
+          empty={!page.rows.length}
         >
           {page.rows.map((r) => (
             <Row key={r.id}>

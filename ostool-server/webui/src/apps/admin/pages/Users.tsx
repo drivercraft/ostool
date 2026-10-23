@@ -1,7 +1,7 @@
 import { Pencil as ActionEdit, Trash2 as ActionDelete } from "lucide-react";
 import { RowAction } from "@/components/row-action";
 import { PagePanel } from "@/components/page-panel";
-import { useListPage } from "@/components/list-pagination";
+import { useServerList } from "@/components/server-list";
 import { ListToolbar } from "@/components/list-toolbar";
 import { useState } from "react";
 import { api } from "@/api/client";
@@ -28,8 +28,7 @@ import {
 } from "@/components/forms";
 
 export default function Users() {
-  const users = useList("users"),
-    roles = useList("roles"),
+  const roles = useList("roles"),
     deployment = useResource("deployment");
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
@@ -39,14 +38,6 @@ export default function Users() {
     draft: UserInput;
   } | null>(null);
   const task = useAction();
-  const filtered = users.filter(
-    (u) =>
-      (!roleFilter || u.role_id === roleFilter) &&
-      (!statusFilter || String(u.disabled) === statusFilter) &&
-      `${u.username} ${u.email} ${u.display_name ?? ""}`
-        .toLowerCase()
-        .includes(search.toLowerCase()),
-  );
   const open = (user?: ManagedUser) =>
     setEditor({
       id: user?.id,
@@ -60,17 +51,21 @@ export default function Users() {
     });
   const patch = (value: Partial<UserInput>) =>
     setEditor((e) => (e ? { ...e, draft: { ...e.draft, ...value } } : e));
-  const pagination = useListPage(
-    filtered,
-    JSON.stringify([search, roleFilter, statusFilter]),
-  );
+  const pagination = useServerList("users", {
+    q: search,
+    role: roleFilter,
+    status: statusFilter,
+  });
   return (
     <>
       {deployment && !deployment.database_connected && (
         <Notice>用户管理需要连接 PostgreSQL。</Notice>
       )}
+      {pagination.error && <Notice>{pagination.error}</Notice>}
       <PagePanel
         table
+        loading={pagination.loading}
+        updating={pagination.updating}
         toolbar={
           <ListToolbar
             actions={
@@ -81,7 +76,7 @@ export default function Users() {
                 创建用户
               </Button>
             }
-            count={`${filtered.length} 位用户`}
+            count={`${pagination.total} 位用户`}
           >
             <TextField
               label="搜索用户"
@@ -123,7 +118,7 @@ export default function Users() {
             "创建时间",
             "操作",
           ]}
-          empty={!filtered.length}
+          empty={!pagination.rows.length}
         >
           {pagination.rows.map((user) => (
             <Row key={user.id}>

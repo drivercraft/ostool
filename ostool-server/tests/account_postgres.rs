@@ -84,9 +84,17 @@ async fn call(
     )
 }
 async fn account(app: &Router, token: &str) -> Value {
-    let (status, value, _value_headers) =
+    let (status, mut value, _value_headers) =
         call(app, "GET", "/api/v1/account", Some(token), Value::Null).await;
     assert_eq!(status, StatusCode::OK);
+    for (field, path) in [
+        ("my_rentals", "/api/v1/account/rentals"),
+        ("my_requests", "/api/v1/account/rental-requests"),
+    ] {
+        let (status, page, _) = call(app, "GET", path, Some(token), Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        value[field] = page["items"].clone();
+    }
     value
 }
 
@@ -404,7 +412,7 @@ async fn member_workspace_isolation_approvals_and_security() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/api/v1/account/events")
+                .uri(format!("/api/v1/account/events?list_view=rentals&list_page=1&list_page_size=20&editor_view=1&editor_board=portal-board&editor_from={}&editor_to={}",(start-chrono::Duration::days(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),(start+chrono::Duration::days(3)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true)))
                 .header("authorization", format!("Bearer {second}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -433,7 +441,7 @@ async fn member_workspace_isolation_approvals_and_security() {
     assert!(data.get("users").is_none());
     assert!(data.get("boards").is_none());
     assert!(data.get("rentals").is_none());
-    assert!(data["my_rentals"].as_array().unwrap().is_empty());
+    assert!(data["listing"]["items"].as_array().unwrap().is_empty());
     assert_eq!(data["availability"].as_array().unwrap().len(), 1);
     for window in data["availability"].as_array().unwrap() {
         assert!(window.get("user_id").is_none());
@@ -485,7 +493,24 @@ async fn member_workspace_isolation_approvals_and_security() {
         StatusCode::CONFLICT
     );
     assert_eq!(call(&app,"PUT","/api/v1/account/profile",Some(first),json!({"email":"changed@test.local","current_password":"first-password-123","display_name":"Updated member"})).await.0,StatusCode::NO_CONTENT);
-    let (_, pat, _pat_headers) = call(
+    // Changing the login email revokes the previous credentials.
+    assert_eq!(
+        call(&app, "GET", "/api/v1/account", Some(first), Value::Null)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, _, login_headers) = call(
+        &app,
+        "POST",
+        "/api/v1/auth/login",
+        None,
+        json!({"email":"changed@test.local","password":"first-password-123"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let first = access_cookie(&login_headers);
+    let (pat_status, pat, _pat_headers) = call(
         &app,
         "POST",
         "/api/v1/auth/personal-access-tokens",
@@ -493,6 +518,7 @@ async fn member_workspace_isolation_approvals_and_security() {
         json!({"name":"CLI test","expires_in_days":1}),
     )
     .await;
+    assert_eq!(pat_status, StatusCode::CREATED, "{pat}");
     let pat = pat["token"].as_str().unwrap();
     assert_eq!(
         account(&app, first).await["personal_tokens"]

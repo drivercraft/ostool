@@ -1,7 +1,7 @@
 import { Pencil as ActionEdit, CircleX as ActionCancel } from "lucide-react";
 import { RowAction } from "@/components/row-action";
 import { PagePanel } from "@/components/page-panel";
-import { useListPage } from "@/components/list-pagination";
+import { useServerList } from "@/components/server-list";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/api/client";
@@ -15,6 +15,7 @@ import {
   Row,
   Cell,
   ConfirmAction,
+  Notice,
 } from "@/components/forms";
 
 export const rentalStatusLabels = {
@@ -24,44 +25,32 @@ export const rentalStatusLabels = {
   cancelled: "已取消",
 };
 export default function Rentals() {
-  const rentals = useList("rentals"),
-    users = useList("users"),
-    boards = useList("boards");
+  const boards = useList("boards");
   const [status, setStatus] = useState("");
   const [user, setUser] = useState("");
   const [board, setBoard] = useState("");
   const [search, setSearch] = useState("");
-  const filtered = rentals.filter(
-    (r) =>
-      (!status || r.status === status) &&
-      (!user || r.user_id === user) &&
-      (!board || r.board_id === board) &&
-      `${r.board_id} ${users.find((u) => u.id === r.user_id)?.email ?? ""} ${r.notes}`
-        .toLowerCase()
-        .includes(search.toLowerCase()),
-  );
-  const pagination = useListPage(
-    filtered,
-    JSON.stringify([search, user, board, status]),
-  );
+  const pagination = useServerList("rentals", {
+    q: search,
+    user,
+    board,
+    status,
+  });
   return (
     <>
+      {pagination.error && <Notice>{pagination.error}</Notice>}
       <PagePanel
         table
+        loading={pagination.loading}
+        updating={pagination.updating}
         toolbar={
           <ListToolbar
             actions={
-              <Button
-                asChild
-                disabled={
-                  !boards.some((b) => !b.disabled) ||
-                  !users.some((u) => !u.disabled)
-                }
-              >
+              <Button asChild disabled={!boards.some((b) => !b.disabled)}>
                 <Link to="/rentals/new">新增租赁</Link>
               </Button>
             }
-            count={`${filtered.length} 条`}
+            count={`${pagination.total} 条`}
           >
             <TextField
               label="搜索租赁"
@@ -69,17 +58,11 @@ export default function Rentals() {
               onValue={setSearch}
               placeholder="开发板、用户邮箱或备注"
             />
-            <SelectField
+            <TextField
               label="用户筛选"
               value={user}
               onValue={setUser}
-              options={[
-                { value: "", label: "全部用户" },
-                ...users.map((u) => ({
-                  value: u.id,
-                  label: u.display_name || u.email,
-                })),
-              ]}
+              placeholder="用户名、邮箱或用户 ID"
             />
             <SelectField
               label="开发板筛选"
@@ -130,7 +113,7 @@ export default function Rentals() {
             "备注",
             "操作",
           ]}
-          empty={!filtered.length}
+          empty={!pagination.rows.length}
         >
           {pagination.rows.map((r) => (
             <Row key={r.id}>
@@ -138,8 +121,9 @@ export default function Rentals() {
                 <strong>{r.board_id}</strong>
               </Cell>
               <Cell>
-                {users.find((u) => u.id === r.user_id)?.display_name ||
-                  users.find((u) => u.id === r.user_id)?.email ||
+                {r.user_display_name ||
+                  r.user_username ||
+                  r.user_email ||
                   r.user_id}
               </Cell>
               <Cell>{new Date(r.starts_at).toLocaleString("zh-CN")}</Cell>

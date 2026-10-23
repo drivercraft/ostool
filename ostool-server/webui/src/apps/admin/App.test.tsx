@@ -21,7 +21,11 @@ vi.mock("@/api/client", () => ({
 vi.mock("@/api/events", () => ({
   site: { connect: vi.fn(), disconnect: vi.fn() },
   useSiteResource: () => undefined,
-  admin: { connect: mocks.connect, disconnect: mocks.disconnect },
+  admin: {
+    setTopics: vi.fn(),
+    connect: mocks.connect,
+    disconnect: mocks.disconnect,
+  },
   useConnection: () => mocks.connection(),
   useErrors: () => ({}),
   useResource: () => undefined,
