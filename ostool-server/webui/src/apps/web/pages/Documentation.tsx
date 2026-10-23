@@ -336,8 +336,9 @@ export function Documentation() {
         content: (
           <>
             <p>
-              本地验证通过 Docker Compose 运行正式 release
-              程序。正式安装使用安装脚本与 Caddy，具体参数见仓库部署说明。
+              本地验证通过 Docker Compose 运行正式 release 程序。部署使用
+              deploy.sh docker up 或 deploy.sh systemd up；两者共用一份
+              .env，公网版自动启用 Caddy。
             </p>
             <CommandBlock>
               {

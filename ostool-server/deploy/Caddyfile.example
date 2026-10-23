@@ -1,7 +1,0 @@
-# 将此示例加载到 Caddy 前，请先替换为实际域名。
-boards.example.com {
-    # 硬件启动接口仅应在开发板局域网开放，公网入口屏蔽这些路径。
-    @hardware path /api/v1/loaders/* /api/v1/loader-updates/* /boot/* /share/*
-    respond @hardware 404
-    reverse_proxy 127.0.0.1:2999
-}

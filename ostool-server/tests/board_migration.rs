@@ -25,8 +25,6 @@ impl Fixture {
         std::fs::create_dir(root.path().join("boards")).unwrap();
         std::fs::create_dir(root.path().join("dtbs")).unwrap();
         std::fs::write(root.path().join("empty.env"), "").unwrap();
-        std::fs::write(root.path().join("target.toml"),
-            "listen_addr='unused-by-tool'\n[database]\nurl='postgres://unreachable/unused'\nschema='unused'\n").unwrap();
         Self {
             root,
             database,
@@ -51,8 +49,6 @@ impl Fixture {
             let mut command = Command::new(env!("CARGO_BIN_EXE_ostool-server-migrate-boards"));
             command
                 .args([
-                    "--config",
-                    path.join("target.toml").to_str().unwrap(),
                     "--board-dir",
                     path.join("boards").to_str().unwrap(),
                     "--dtb-dir",

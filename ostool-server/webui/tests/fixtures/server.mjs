@@ -1,32 +1,10 @@
 // A private server instance. No system config, service or board is touched.
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 const root = await mkdtemp(join(tmpdir(), "ostool-admin-e2e-"));
-await writeFile(
-  join(root, "config.toml"),
-  `
-listen_addr = "127.0.0.1:4175"
-data_dir = "${root}/data"
-[tftp]
-provider = "builtin"
-enabled = false
-root_dir = "${root}/tftp"
-bind_addr = "127.0.0.1:0"
-[network]
-interface = "lo"
-[http_boot]
-enabled = true
-root_dir = "${root}/httpboot"
-public_base_url = "http://127.0.0.1:4175"
-[loader_network]
-enabled = ${process.env.OSTOOL_TEST_DISABLE_DISCOVERY !== "true"}
-bind_addr = "127.0.0.1:2998"
-public_base_url = "http://127.0.0.1:4175"
-`,
-);
 const binary =
   process.env.OSTOOL_TEST_SERVER_BIN ||
   resolve("../../target/debug/ostool-server");
@@ -34,10 +12,22 @@ if (!process.env.OSTOOL_E2E_LOCAL_DATABASE_URL)
   throw new Error(
     "Set OSTOOL_E2E_LOCAL_DATABASE_URL to a disposable PostgreSQL database for browser tests",
   );
-const child = spawn(binary, ["--config", join(root, "config.toml")], {
+const child = spawn(binary, ["--env-file", "/dev/null"], {
   stdio: "inherit",
   env: {
     ...process.env,
+    OSTOOL_LISTEN_ADDR: "127.0.0.1:4175",
+    OSTOOL_DATA_DIR: root + "/data",
+    OSTOOL_NETWORK_INTERFACE: "lo",
+    OSTOOL_TFTP_ENABLED: "false",
+    OSTOOL_NETWORK_TEST_ENABLED: "false",
+    OSTOOL_LOADER_NETWORK_ENABLED: String(
+      process.env.OSTOOL_TEST_DISABLE_DISCOVERY !== "true",
+    ),
+    OSTOOL_LOADER_BIND_ADDR: "127.0.0.1:2998",
+    OSTOOL_HTTP_BOOT_ENABLED: "true",
+    OSTOOL_HTTP_BOOT_BASE_URL: "http://127.0.0.1:4175",
+
     OSTOOL_EDITION: "local",
     OSTOOL_DATABASE_URL: process.env.OSTOOL_E2E_LOCAL_DATABASE_URL,
     OSTOOL_DATABASE_SCHEMA: `ostool_e2e_${randomUUID().replaceAll("-", "")}`,

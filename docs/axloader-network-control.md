@@ -129,9 +129,9 @@ cpus = 2
 bridge、TAP 和 dnsmasq，应以具备 Linux `CAP_NET_ADMIN` 的身份运行：
 
 ```bash
-ostool-server --config /etc/ostool-server/config.toml virtual-lab up
-ostool-server --config /etc/ostool-server/config.toml virtual-lab status
-ostool-server --config /etc/ostool-server/config.toml virtual-lab down
+ostool-server --env-file /etc/ostool-server/.env virtual-lab up
+ostool-server --env-file /etc/ostool-server/.env virtual-lab status
+ostool-server --env-file /etc/ostool-server/.env virtual-lab down
 ```
 
 默认客户机网段为 `10.77.0.0/24`，服务端地址为 `10.77.0.1`，dnsmasq/bridge

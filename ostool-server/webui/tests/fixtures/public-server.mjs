@@ -1,5 +1,5 @@
 // Public browser security fixture; never connects to a deployment schema.
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { spawn } from "node:child_process";
@@ -15,35 +15,26 @@ if (
     "Public browser fixture requires an isolated loopback test database",
   );
 const root = await mkdtemp(join(tmpdir(), "ostool-public-e2e-"));
-await writeFile(
-  join(root, "config.toml"),
-  `
-listen_addr = "127.0.0.1:4191"
-data_dir = "${root}/data"
-[tftp]
-provider = "builtin"
-enabled = false
-root_dir = "${root}/tftp"
-bind_addr = "127.0.0.1:0"
-[network]
-interface = "lo"
-[network_test]
-enabled = false
-[loader_network]
-enabled = false
-bind_addr = "127.0.0.1:2998"
-`,
-);
 const child = spawn(
   process.env.OSTOOL_TEST_SERVER_BIN ||
     resolve("../../target/debug/ostool-server"),
-  ["--config", join(root, "config.toml")],
+  ["--env-file", "/dev/null"],
   {
     stdio: "inherit",
     env: {
       ...process.env,
+      OSTOOL_LISTEN_ADDR: "127.0.0.1:4191",
+      OSTOOL_DATA_DIR: root + "/data",
+      OSTOOL_NETWORK_INTERFACE: "lo",
+      OSTOOL_TFTP_ENABLED: "false",
+      OSTOOL_NETWORK_TEST_ENABLED: "false",
+      OSTOOL_LOADER_NETWORK_ENABLED: "false",
+      OSTOOL_LOADER_BIND_ADDR: "127.0.0.1:2998",
+      OSTOOL_HTTP_BOOT_ENABLED: "true",
+      OSTOOL_HTTP_BOOT_BASE_URL: "http://127.0.0.1:4191",
+
       OSTOOL_EDITION: "public",
-      OSTOOL_REDIS_URL:process.env.OSTOOL_E2E_REDIS_URL,
+      OSTOOL_REDIS_URL: process.env.OSTOOL_E2E_REDIS_URL,
       OSTOOL_DATABASE_URL: database,
       OSTOOL_DATABASE_SCHEMA: schema,
       OSTOOL_PUBLIC_BASE_URL: "http://127.0.0.1:4191",

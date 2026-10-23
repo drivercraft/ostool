@@ -8,7 +8,6 @@ use anyhow::{Context, bail};
 use httpboot_protocol::MacAddress;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::fs;
 
 const DEFAULT_SYSTEM_TFTP_ROOT: &str = "/srv/tftp";
 const SYSTEM_CONFIG_DIR: &str = "/etc/ostool-server";
@@ -44,7 +43,7 @@ pub struct ServerConfig {
 
 impl Default for ServerConfig {
     fn default() -> Self {
-        Self::default_for_path(Path::new(".ostool-server.toml"))
+        Self::default_for_path(Path::new(".env"))
     }
 }
 
@@ -84,82 +83,6 @@ impl ServerConfig {
             virtual_qemu,
             network: TftpNetworkConfig::default(),
             upload_limits: UploadLimitsConfig::default(),
-        }
-    }
-
-    pub async fn load_or_create(path: &Path) -> anyhow::Result<Self> {
-        match fs::read_to_string(path).await {
-            Ok(content) => {
-                let mut config: Self = toml::from_str(&content)
-                    .with_context(|| format!("failed to parse {}", path.display()))?;
-                config.normalize_paths(path)?;
-                config.sync_system_tftpd_hpa_config()?;
-                config.sync_network_defaults();
-                config.validate()?;
-                Ok(config)
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                let mut config = Self::default_for_path(path);
-                config.normalize_paths(path)?;
-                config.sync_system_tftpd_hpa_config()?;
-                config.sync_network_defaults();
-                config.validate()?;
-                config.write_to_path(path).await?;
-                Ok(config)
-            }
-            Err(err) => Err(err.into()),
-        }
-    }
-
-    pub async fn write_to_path(&self, path: &Path) -> anyhow::Result<()> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("failed to create {}", parent.display()))?;
-        }
-        fs::write(path, toml::to_string_pretty(self)?)
-            .await
-            .with_context(|| format!("failed to write {}", path.display()))?;
-        Ok(())
-    }
-
-    fn sync_system_tftpd_hpa_config(&mut self) -> anyhow::Result<()> {
-        let TftpConfig::SystemTftpdHpa(cfg) = &mut self.tftp else {
-            return Ok(());
-        };
-
-        match parse_tftpd_hpa_file(&cfg.config_path) {
-            Ok(Some(existing)) => {
-                let existing_dir = if existing.directory.is_absolute() {
-                    existing.directory
-                } else {
-                    PathBuf::from(DEFAULT_SYSTEM_TFTP_ROOT)
-                };
-                cfg.root_dir = existing_dir;
-                if let Some(username) = existing.username {
-                    cfg.username = Some(username);
-                }
-                if let Some(address) = existing.address {
-                    cfg.address = address;
-                }
-                if let Some(options) = existing.options {
-                    cfg.options = options;
-                }
-            }
-            Ok(None) => {
-                cfg.root_dir = PathBuf::from(DEFAULT_SYSTEM_TFTP_ROOT);
-            }
-            Err(err) => return Err(err),
-        }
-
-        Ok(())
-    }
-
-    fn sync_network_defaults(&mut self) {
-        if self.network.interface.trim().is_empty()
-            && let Some(interface) = crate::serial::network::default_non_loopback_interface_name()
-        {
-            self.network.interface = interface;
         }
     }
 
@@ -623,67 +546,6 @@ impl Default for SystemTftpdHpaConfig {
     }
 }
 
-#[derive(Debug)]
-struct ParsedTftpdHpaConfig {
-    username: Option<String>,
-    directory: PathBuf,
-    address: Option<String>,
-    options: Option<String>,
-}
-
-fn parse_tftpd_hpa_file(path: &Path) -> anyhow::Result<Option<ParsedTftpdHpaConfig>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-    let mut username = None;
-    let mut directory = None;
-    let mut address = None;
-    let mut options = None;
-
-    for line in content.lines() {
-        let Some((key, value)) = parse_key_value(line) else {
-            continue;
-        };
-        match key {
-            "TFTP_USERNAME" => username = Some(value),
-            "TFTP_DIRECTORY" => directory = Some(PathBuf::from(value)),
-            "TFTP_ADDRESS" => address = Some(value),
-            "TFTP_OPTIONS" => options = Some(value),
-            _ => {}
-        }
-    }
-
-    let directory = directory.unwrap_or_else(|| PathBuf::from(DEFAULT_SYSTEM_TFTP_ROOT));
-    Ok(Some(ParsedTftpdHpaConfig {
-        username,
-        directory,
-        address,
-        options,
-    }))
-}
-
-fn parse_key_value(line: &str) -> Option<(&str, String)> {
-    let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.starts_with('#') {
-        return None;
-    }
-    let (key, value) = trimmed.split_once('=')?;
-    Some((key.trim(), unquote(value.trim())))
-}
-
-fn unquote(value: &str) -> String {
-    let mut chars = value.chars();
-    match (chars.next(), value.chars().last()) {
-        (Some('"'), Some('"')) | (Some('\''), Some('\'')) if value.len() >= 2 => {
-            value[1..value.len() - 1].to_string()
-        }
-        _ => value.to_string(),
-    }
-}
-
 fn absolutize_path(base_dir: &Path, path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
@@ -1013,7 +875,6 @@ mod tests {
     };
 
     use serde_json::json;
-    use tempfile::tempdir;
 
     use super::{
         AxloaderSerialFlowControl, AxloaderSerialParameters, AxloaderSerialParity,
@@ -1147,22 +1008,6 @@ interface = "eth0"
             config.http_boot.root_dir,
             PathBuf::from("/var/lib/ostool-server/http-boot")
         );
-    }
-
-    #[tokio::test]
-    async fn write_to_path_persists_default_port_2999() {
-        let temp = tempdir().unwrap();
-        let path = temp.path().join("config.toml");
-        let mut config =
-            ServerConfig::default_for_path(Path::new("/etc/ostool-server/config.toml"));
-        config.network.interface = "eth0".into();
-
-        config.write_to_path(&path).await.unwrap();
-
-        let content = std::fs::read_to_string(path).unwrap();
-        assert!(content.contains("listen_addr = \"0.0.0.0:2999\""));
-        assert!(content.contains("session_file_max_mib = 64"));
-        assert!(content.contains("[http_boot]"));
     }
 
     #[test]

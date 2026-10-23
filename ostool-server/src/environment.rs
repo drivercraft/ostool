@@ -3,6 +3,24 @@ use crate::{DatabaseConfig, ServerConfig};
 use anyhow::{Context, bail};
 use std::{collections::BTreeMap, path::Path, str::FromStr};
 
+/// The sole runtime configuration is .env plus process overrides; no TOML is created.
+pub fn load(file: Option<&Path>) -> anyhow::Result<ServerConfig> {
+    let mut config = ServerConfig::default_for_path(file.unwrap_or_else(|| Path::new(".env")));
+    config.listen_addr = "127.0.0.1:2999".parse()?;
+    config.tftp = crate::TftpConfig::Builtin(crate::BuiltinTftpConfig {
+        enabled: false,
+        ..crate::BuiltinTftpConfig::default_with_root(config.data_dir.join("tftp"))
+    });
+    config.loader_network.enabled = false;
+    config.http_boot.enabled = false;
+    config.network_test.enabled = false;
+    config.network.interface = crate::serial::network::default_non_loopback_interface_name()
+        .unwrap_or_else(|| "lo".into());
+    apply(&mut config, file)?;
+    config.normalize_paths(file.unwrap_or_else(|| Path::new(".env")))?;
+    Ok(config)
+}
+
 pub fn apply(config: &mut ServerConfig, file: Option<&Path>) -> anyhow::Result<()> {
     apply_values(config, &read_values(file)?)
 }
@@ -33,6 +51,78 @@ pub(crate) fn apply_values(
     values: &BTreeMap<String, String>,
 ) -> anyhow::Result<()> {
     apply_database_values(&mut config.database, values)?;
+    if let Some(path) = values.get("OSTOOL_DATA_DIR") {
+        config.data_dir = path.into();
+        config.http_boot.root_dir = config.data_dir.join("http-boot");
+        config.virtual_qemu.runtime_dir = config.data_dir.join("qemu");
+        if let crate::TftpConfig::Builtin(tftp) = &mut config.tftp {
+            tftp.root_dir = config.data_dir.join("tftp");
+        }
+    }
+    if let Some(interface) = values.get("OSTOOL_NETWORK_INTERFACE") {
+        config.network.interface = interface.clone();
+    }
+    parsed(
+        values,
+        "OSTOOL_LOADER_NETWORK_ENABLED",
+        &mut config.loader_network.enabled,
+    )?;
+    parsed(
+        values,
+        "OSTOOL_LOADER_BIND_ADDR",
+        &mut config.loader_network.bind_addr,
+    )?;
+    if let Some(url) = values.get("OSTOOL_LOADER_BASE_URL") {
+        config.loader_network.public_base_url = Some(url.clone());
+    }
+    parsed(
+        values,
+        "OSTOOL_HTTP_BOOT_ENABLED",
+        &mut config.http_boot.enabled,
+    )?;
+    if let Some(url) = values.get("OSTOOL_HTTP_BOOT_BASE_URL") {
+        config.http_boot.public_base_url = Some(url.clone());
+    }
+    if let crate::TftpConfig::Builtin(tftp) = &mut config.tftp {
+        parsed(values, "OSTOOL_TFTP_ENABLED", &mut tftp.enabled)?;
+        parsed(values, "OSTOOL_TFTP_BIND_ADDR", &mut tftp.bind_addr)?;
+    }
+    parsed(
+        values,
+        "OSTOOL_VIRTUAL_QEMU_ENABLED",
+        &mut config.virtual_qemu.enabled,
+    )?;
+    for (key, target) in [
+        ("OSTOOL_QEMU_BINARY", &mut config.virtual_qemu.qemu_binary),
+        ("OSTOOL_OVMF_CODE", &mut config.virtual_qemu.ovmf_code),
+        ("OSTOOL_OVMF_VARS", &mut config.virtual_qemu.ovmf_vars),
+        ("OSTOOL_AXLOADER_EFI", &mut config.virtual_qemu.axloader_efi),
+    ] {
+        if let Some(value) = values.get(key) {
+            *target = value.into();
+        }
+    }
+    for (key, target) in [
+        (
+            "OSTOOL_QEMU_NAMESPACE",
+            &mut config.virtual_qemu.network_namespace,
+        ),
+        ("OSTOOL_QEMU_BRIDGE", &mut config.virtual_qemu.bridge),
+    ] {
+        if let Some(value) = values.get(key) {
+            *target = value.clone();
+        }
+    }
+    if let Some(value) = values.get("OSTOOL_QEMU_TAP_POOL") {
+        config.virtual_qemu.tap_pool = value.split(',').map(|s| s.trim().to_owned()).collect();
+    }
+    parsed(
+        values,
+        "OSTOOL_QEMU_MEMORY_MIB",
+        &mut config.virtual_qemu.memory_mib,
+    )?;
+    parsed(values, "OSTOOL_QEMU_CPUS", &mut config.virtual_qemu.cpus)?;
+
     apply_security_values(&mut config.security, values)?;
     for (key, target) in [
         ("OSTOOL_PUBLIC_BASE_URL", &mut config.auth.public_base_url),
@@ -111,6 +201,22 @@ pub(crate) fn apply_values(
         "OSTOOL_NETWORK_TEST_ENABLED",
         &mut config.network_test.enabled,
     )?;
+    parsed(
+        values,
+        "OSTOOL_NETWORK_TEST_LISTEN_ADDR",
+        &mut config.network_test.listen_addr,
+    )?;
+    parsed(
+        values,
+        "OSTOOL_NETWORK_TEST_MAX_ACTIVE",
+        &mut config.network_test.max_active_tests,
+    )?;
+    parsed(
+        values,
+        "OSTOOL_NETWORK_TEST_MAX_DURATION_SECS",
+        &mut config.network_test.max_duration_secs,
+    )?;
+
     config
         .security
         .validate_deployment(config.edition.is_public())?;
@@ -242,6 +348,34 @@ fn apply_security_values(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn env_boot_settings_cover_hardware_without_enabling_it_implicitly() {
+        let mut config = ServerConfig::default();
+        config.network.interface = "lo".into();
+        apply_values(
+            &mut config,
+            &BTreeMap::from([
+                ("OSTOOL_DATA_DIR".into(), "/tmp/env-only-fixture".into()),
+                ("OSTOOL_LISTEN_ADDR".into(), "127.0.0.1:2999".into()),
+                ("OSTOOL_NETWORK_INTERFACE".into(), "lo".into()),
+                ("OSTOOL_LOADER_NETWORK_ENABLED".into(), "false".into()),
+                ("OSTOOL_HTTP_BOOT_ENABLED".into(), "false".into()),
+                ("OSTOOL_NETWORK_TEST_ENABLED".into(), "false".into()),
+                ("OSTOOL_QEMU_MEMORY_MIB".into(), "1024".into()),
+                ("OSTOOL_QEMU_TAP_POOL".into(), "tap-one,tap-two".into()),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(
+            config.http_boot.root_dir,
+            Path::new("/tmp/env-only-fixture/http-boot")
+        );
+        assert!(!config.loader_network.enabled);
+        assert!(!config.http_boot.enabled);
+        assert_eq!(config.virtual_qemu.memory_mib, 1024);
+        assert_eq!(config.virtual_qemu.tap_pool, vec!["tap-one", "tap-two"]);
+    }
+
     #[test]
     fn offline_database_settings_ignore_hardware_and_auth() {
         let mut config = DatabaseConfig::default();

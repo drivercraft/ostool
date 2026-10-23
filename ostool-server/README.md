@@ -64,91 +64,60 @@ with the open failure before closing the WebSocket when the connection is writab
 The lease then follows the normal power-off and file cleanup flow; client
 heartbeats cannot keep a failed serial session allocated.
 
-## Install
+## Deployment and configuration
 
-Before installing `ostool-server`, make sure `Node.js` and `pnpm` are available in your environment.
-The crate build process compiles the bundled web UI, so `cargo install` will fail if either tool is missing.
+The only runtime configuration source is `.env` (with process variables overriding
+values when launching the binary directly). Copy [.env.example](.env.example) once
+to `.env`, set its values, and keep it private. `.env.example` is a template, never
+loaded by the server. No server TOML is generated or loaded. Both React apps read
+runtime configuration through the API and need no separate environment file.
+Editable inventory, users, rentals and business settings remain in PostgreSQL.
 
-You can download and install Node.js from:
-
-```text
-https://nodejs.org/en/download
-```
-
-After Node.js is installed, install `pnpm` with:
+Use the unified deployment script from a repository checkout:
 
 ```bash
-npm install -g pnpm
+cp ostool-server/.env.example ostool-server/.env
+chmod 600 ostool-server/.env
+# Edit the single .env before deploying.
+ostool-server/scripts/deploy.sh docker check
+ostool-server/scripts/deploy.sh docker up
+ostool-server/scripts/deploy.sh docker status
+ostool-server/scripts/deploy.sh docker down
+# Native installation, with existing PostgreSQL/Redis connection URLs:
+ostool-server/scripts/deploy.sh systemd check
+ostool-server/scripts/deploy.sh systemd up --dry-run
+ostool-server/scripts/deploy.sh systemd up
 ```
 
-### Install directly with curl
+`up` also updates an installation. It builds before replacing the executable,
+preserves data, and backs up an existing installed `.env`. `--env-file /path/.env`
+selects the one source file; deployment ignores stale `OSTOOL_*` variables inherited
+from the caller. `systemd up --output-dir /tmp/deployment-preview` only generates
+installation artifacts and does not build, modify `/etc`, or manage host services.
 
-The install script can be executed directly from GitHub:
+Docker requires Docker/Compose and includes PostgreSQL/Redis. It uses the supplied
+connection URLs without silently rewriting them. For managed databases, configure
+the URLs and ensure the supplied containers' ports do not conflict with your services.
+Native builds require Rust, Node.js 24, pnpm 10.33.0 and the normal crate dependencies.
+The systemd installer uses existing database/cache services; it does not install OS
+packages or change package sources. Public systemd deployment also requires Caddy.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/drivercraft/ostool/main/ostool-server/scripts/install.sh | bash
-```
+`deploy/` contains the Dockerfile, Compose definition, Caddyfile and systemd units.
+The native backend runs as `ostool`, with `/etc/ostool-server/.env` and
+`/var/lib/ostool-server`. Public deployment installs a separate
+`ostool-server-caddy.service`, using its own user/data directory and generated,
+restricted proxy parameters rendered into its unit. Its Caddyfile is installed in
+`/etc/ostool-server-proxy`; there is no second user-managed environment file. It does not overwrite
+an existing `caddy.service` or other sites. The Caddy service gets no database,
+SMTP or MFA credentials. Native power commands must be executable by `ostool`;
+serial access uses `dialout` where available. Additional writable hardware paths
+need an explicit service override.
 
-The script will:
-
-- check that Node.js 18+ and pnpm are available for the embedded web UI build
-- install `ostool-server` with `cargo install`
-- install `ostool-server` and `ostool-server-migrate-boards` to `/usr/local/bin`
-- stop an existing `ostool-server` systemd service if present
-- recreate `/etc/ostool-server`
-- create configuration, runtime data and TFTP/session artifact directories
-- install `/etc/systemd/system/ostool-server.service`
-- start the service if you confirm it
-
-If the script is executed remotely and the local `ostool-server.service` template is unavailable, it will automatically download the matching service template from:
-
-```text
-https://raw.githubusercontent.com/drivercraft/ostool/main/ostool-server/scripts/ostool-server.service
-```
-
-### Install from local source
-
-If you already have the repository locally:
-
-```bash
-bash ostool-server/scripts/install.sh --local ./ostool-server
-```
-
-## Upgrade
-
-To upgrade an existing `ostool-server` installation while preserving the current config and data:
-
-```bash
-bash ostool-server/scripts/update.sh
-```
-
-You can also run the upgrade script directly from GitHub:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/drivercraft/ostool/main/ostool-server/scripts/update.sh | bash
-```
-
-To upgrade from a local checkout instead of crates.io:
-
-```bash
-bash ostool-server/scripts/update.sh --local ./ostool-server
-```
-
-## Configuration
-
-The default config path is:
-
-```text
-/etc/ostool-server/config.toml
-```
-
-If the config file does not exist, `ostool-server` will create it automatically on first start and write the generated defaults back to disk.
-
-The default listen address is:
-
-```text
-0.0.0.0:2999
-```
+Local edition exposes HTTP directly and does not install/start Caddy. Public
+edition requires `OSTOOL_LISTEN_ADDR=127.0.0.1:2999`, HTTPS canonical origin, explicit
+site addresses and a configured administrator. Set the actual public domain and
+`OSTOOL_HTTPS_PORT=443` for Internet deployment. LAN IP HTTPS uses the internal CA;
+trust its root on clients. These are deployment differences, not debug bypasses.
 
 ### Local and public editions
 
@@ -161,14 +130,13 @@ connectivity alone does not enable account features.
 
 The frontend reads the edition at runtime, so the same binary serves either
 edition. Configuration precedence is process environment, then the selected
-`.env` file, then TOML. Without `--env-file`, the server reads `.env` from its
-working directory. See [local defaults](.env.example), the
-[public environment example](deploy/public.env.example) and
+`.env` file, then built-in defaults. Without `--env-file`, the server reads `.env` from its
+working directory. See [single environment template](.env.example) and
 [public deployment](#public-deployment).
 
 Board inventory, DTB content, OTA images/jobs/observations and editable
 network/TFTP/upload settings are stored in PostgreSQL. Deployment addresses,
-credentials and hardware paths stay in TOML/environment variables; live hardware
+credentials and hardware paths stay in the environment configuration; live hardware
 connections and discovery stay in memory, and session files expire with their
 leases. Restarting does not restore hardware connections. Existing board files
 are imported only by the [independent migration tool](#existing-board-migration).
@@ -193,20 +161,12 @@ expired. Normal expiry and explicit revocation still require login.
 
 The current board controller is a single-process service. A restart ends its live
 hardware sessions; it does not automatically reconnect serial handles or restore
-exclusive hardware use. Multi-controller scheduling or durable session history
-would require a separate lease/owner-heartbeat design and recovery checks; sharing
+exclusive hardware use. Durable usage history is stored separately in PostgreSQL; multi-controller
+scheduling would require distributed ownership and recovery checks. Sharing
 PostgreSQL alone does not make active hardware sessions work across replicas.
 
-The network throughput test listener is enabled by default on `0.0.0.0:3000`.
-It has a separate router from the management listener, so board management,
-session file uploads, and `/admin/` stay on port 2999. The test listener has no
-authentication and should only be reachable from a trusted LAN. Its address,
-concurrency limit, and maximum test duration can be changed in the server TOML
-configuration; see [the network test API](../docs/api.md#网络吞吐测试-api).
-
-HTTP Boot is enabled by default. Uploaded UEFI HTTP Boot artifacts reuse the
-existing session file storage and lifecycle, so files are scoped to the active
-board session and are cleaned up with that session.
+The network throughput and HTTP Boot listeners are disabled by deployment defaults.
+Enable them explicitly with the single environment file when needed on the board network.
 
 Every active board session also exposes uploaded files through
 `GET /share/sessions/{session_id}/{relative_path}`. This endpoint supports full
@@ -222,72 +182,11 @@ the active session; serial is used only for target-system interaction.
 
 ## Network throughput tests
 
-The dedicated HTTP listener measures raw upload and download streams without
-installing a client. It does not implement the iperf2 protocol. A test ID holds
-separate upload and download results, and both directions may run concurrently
-under the same ID. Upload bytes are counted and discarded without being stored;
-download data is generated while the connection is writable. Neither direction
-has a fixed byte-count limit. The default limit is 64 test IDs with active
-transfers and one hour per transfer; creating an ID does not use a transfer
-slot. Pending IDs expire after 10 minutes; finished results remain
-queryable for one hour, up to 4096 records.
-
-Existing config files can omit the `[network_test]` section and use these
-defaults. To override them, add the section to `/etc/ostool-server/config.toml`
-and restart the service:
-
-```toml
-[network_test]
-enabled = true
-listen_addr = "0.0.0.0:3000"
-max_active_tests = 64
-max_duration_secs = 3600
-```
-
-Create a test, then use its returned `test_id` in these commands. The examples
-transfer 1 GiB per direction and discard the downloaded data locally:
-
-```bash
-base=http://10.3.10.194:3000
-curl -fsS -X POST "$base/v1/tests"
-test_id='UUID_FROM_POST_RESPONSE'
-dd if=/dev/zero bs=1M count=1024 status=none | curl -fsS -T - "$base/v1/tests/$test_id/upload"
-curl -fsS "$base/v1/tests/$test_id/download?bytes=1073741824" -o /dev/null
-curl -fsS "$base/v1/tests/$test_id"
-```
-
-For a simultaneous two-way test, start upload and download on the same ID and
-wait for both requests before reading the final result. Create a fresh test ID
-and replace the placeholder before running these commands:
-
-```bash
-curl -fsS -X POST "$base/v1/tests"
-test_id='UUID_FROM_NEW_POST_RESPONSE'
-dd if=/dev/zero bs=1M count=1024 status=none | curl -fsS -T - "$base/v1/tests/$test_id/upload" &
-upload_pid=$!
-curl -fsS "$base/v1/tests/$test_id/download?duration_secs=30" -o /dev/null &
-download_pid=$!
-wait "$upload_pid"
-wait "$download_pid"
-curl -fsS "$base/v1/tests/$test_id"
-```
-
-An upload or download can be started only once for each test ID. A canceled
-connection, network error, or time limit leaves a queryable terminal result.
-An upload that reaches the time limit returns HTTP 408 when the connection is
-still open. A byte-count download interrupted by the time limit ends its body;
-query the test ID for `timed_out` and compare bytes received by the client.
-Use `GET /healthz` on port 3000 to check the test listener. These endpoints are
-independent of board session file uploads, which remain on port 2999.
-
-## Useful Commands
-
-```bash
-systemctl status ostool-server
-systemctl restart ostool-server
-journalctl -u ostool-server -f
-vi /etc/ostool-server/config.toml
-```
+`OSTOOL_NETWORK_TEST_ENABLED=false` is the deployment default. To enable the
+hardware-network throughput listener, set it to `true`; its address, active test
+limit and duration limit use the `OSTOOL_NETWORK_TEST_*` keys documented in
+`.env.example`. Keep this listener restricted to the hardware network. See the
+[API guide](../docs/api.md) for transfer semantics and client commands.
 
 ## Local development environment
 
@@ -306,29 +205,31 @@ ostool-server/scripts/dev.sh stop
 ```
 
 The launcher runs the same release binary as deployment, together with PostgreSQL,
-Redis and Caddy. It has no development authentication/origin bypass or simulated
+Redis, with Caddy added only for public edition. It has no development authentication/origin bypass or simulated
 runtime. `start` and `restart` build current source and apply Compose configuration;
 `build` only builds the image. `stop` removes the containers and retains named data
 volumes. It never changes systemd or `/etc/ostool-server`. Containers use the Compose
 project name `ostool-server`; both feature editions share the same data volumes.
 
 The launcher reads `ostool-server/.env` through Compose, independent of the working
-directory. Process variables override Compose interpolation values (such as edition
-and published ports); other server settings come from the environment file.
+directory. Deployment ignores caller `OSTOOL_*` variables, so the selected file
+is the single source for both Compose and the server.
 `OSTOOL_ENV_FILE` can select
 another environment file; the same file supplies the container's runtime settings.
 There is no shell evaluation of dotenv contents and no `OSTOOL_DEV_*` settings.
 The previous host-process data directory is not imported or deleted automatically.
 
-Caddy is the HTTPS entry, defaulting to `https://127.0.0.1:3443` and
-`https://localhost:3443`. PostgreSQL, Redis and the Rust API listen only on host
-loopback (54329, 56380 and 2999 by default). Caddy and Rust use host networking,
+In public edition, Caddy is the HTTPS entry, defaulting to `https://127.0.0.1:3443` and
+`https://localhost:3443`. PostgreSQL/Redis remain on loopback (54329/56380); the public Rust API must
+also bind loopback (2999). Local edition uses direct HTTP on 2999, including LAN. Caddy and Rust use host networking,
 matching the normal installation topology and preserving destination IPs for TLS
 certificate selection when clients connect without SNI. No fixed Docker subnet or
 proxy IP is required.
 For simultaneous loopback and LAN access, configure the actual IP:
 
 ```dotenv
+OSTOOL_EDITION=public
+OSTOOL_LISTEN_ADDR=127.0.0.1:2999
 OSTOOL_PUBLIC_BASE_URL=https://192.168.20.10:3443
 OSTOOL_ALLOWED_ORIGINS=https://127.0.0.1:3443,https://localhost:3443
 OSTOOL_SITE_ADDRESSES="https://192.168.20.10 https://127.0.0.1 https://localhost"
@@ -364,7 +265,7 @@ afterward. It never fabricates live sessions, discovered hardware or task status
 Demo accounts `demo01@example.test` and `demo02@example.test` use
 `demo-user-password-123`; import fixtures only into disposable data.
 
-For formal installation use `scripts/install.sh` and Caddy as described below. The
+For formal installation use `scripts/deploy.sh docker up` or `scripts/deploy.sh systemd up`. The
 binary and security checks are identical. Domain/port/certificate settings change
 with the deployment. The container defaults disable hardware listeners; physical
 board access requires explicit serial/USB device mapping and suitable network/TFTP
@@ -437,52 +338,24 @@ maintenance access. Frontend workflows and calendar behavior are documented in
 
 ## Public deployment
 
-Use `scripts/install.sh` for an installed service and Caddy for certificates and
-HTTPS. Installed services and containers run the same release binary without
-development exceptions or automatic demo fixtures. Public edition requires HTTPS
-and a configured canonical origin.
+Use `scripts/deploy.sh docker up` or `scripts/deploy.sh systemd up` with the same
+`.env`, selecting `OSTOOL_EDITION=public`. The script installs/starts Caddy only
+for this edition. The bundled Caddyfile filters hardware boot/update routes from
+the public website. Do not expose the loopback backend to the Internet.
 
-Build with `cargo build --release -p ostool-server`. The build embeds both React
-entries; domain names, database URLs and passwords must not be `VITE_*` variables.
-The same executable supports different deployment domains. A custom
-`OSTOOL_SERVER_WEB_DIST_DIR` must contain `index.html`, `admin/index.html` and
-`assets/`. HTML uses `Cache-Control: no-store`; hashed assets are immutable.
-
-Copy [deploy/public.env.example](deploy/public.env.example) to a private file and
-replace its database, Redis, public URL and initial administrator values:
+For a direct binary launch:
 
 ```bash
-chmod 600 /path/to/ostool.env
-./target/release/ostool-server --config /path/to/config.toml --env-file /path/to/ostool.env
+cargo build --release -p ostool-server
+./target/release/ostool-server --env-file /path/to/.env --check-config
+./target/release/ostool-server --env-file /path/to/.env
 ```
 
-Use literal `KEY=value` assignments, without shell `export` or command
-substitution. Invalid deployment settings fail startup. Initialization creates a
-new administrator only; it does not promote an existing registered account or
-reset its password. Remove the bootstrap password after initialization.
-
-An existing systemd service can load that same file through a drop-in:
-
-```ini
-[Service]
-EnvironmentFile=/path/to/ostool.env
-```
-
-Use [deploy/Caddyfile.example](deploy/Caddyfile.example) for HTTPS on ports 80/443
-and keep Rust on `127.0.0.1:2999`. Set DNS and `OSTOOL_PUBLIC_BASE_URL` to the actual
-HTTPS origin. Forward website, `/admin/*`, `/assets/*`, API, OAuth, WebSocket and
-SSE paths. Caddy supports connection upgrades and streaming without a separate
-frontend service. Same-host Caddy uses `OSTOOL_TRUSTED_PROXY_IPS=127.0.0.1,::1`;
-only trusted peers can supply `X-Forwarded-For`. Missing/invalid forwarding chains
-from trusted proxies are treated as unknown sources, not private clients.
-
-Keep PostgreSQL, Redis, TFTP, UDP discovery, hardware downloads and the network
-test listener private. `OSTOOL_HARDWARE_ALLOWED_NETWORKS` should contain actual
-board subnets; the public Caddy example blocks hardware routes. A loopback Rust
-listener requires a separate device-network ingress for board HTTP Boot, shared
-files and OTA downloads. `OSTOOL_ADMIN_ALLOWED_NETWORKS` can restrict console
-sources using comma-separated CIDRs. Do not expose a local anonymous edition as
-a public service.
+Secrets are runtime settings and must never be `VITE_*` build variables. The same
+embedded website/admin assets work for either edition and deployment domain.
+HTML is not cached; hashed assets remain immutable. The server never creates a
+second configuration file. Data such as editable TFTP/network/upload settings
+are initialized once and subsequently managed by the UI/API in PostgreSQL.
 
 ### Editable account and mail policies
 
@@ -606,7 +479,7 @@ ostool-server/scripts/migrate-boards.sh \
 
 An installed `ostool-server-migrate-boards` accepts the same arguments. Install
 and update scripts install the tool but never run it. It reads only target database
-settings from `--config`, `--env-file` and process variables, without starting
+settings from `--env-file` and process variables, without starting
 authentication, network, serial or power services. Process values take precedence.
 Normal import initializes an empty target through SQLx migrations. `--dry-run`
 requires an already initialized schema and changes neither schema nor records.

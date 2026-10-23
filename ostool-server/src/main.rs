@@ -4,7 +4,7 @@ use anyhow::{Context, anyhow};
 use clap::{Parser, Subcommand};
 use log::info;
 use ostool_server::{
-    ServerConfig, build_app_state, build_router,
+    build_app_state, build_router,
     loader::start_udp_discovery,
     tftp::service::{BuiltinTftpManager, SystemTftpdHpaManager, TftpManager},
     virtual_lab::{VirtualLabAction, run_virtual_lab},
@@ -14,11 +14,12 @@ use tokio::{sync::watch, task::JoinSet};
 #[derive(Parser, Debug)]
 #[command(version, about = "ostool board server")]
 struct Cli {
-    #[arg(short, long, default_value = ".ostool-server.toml")]
-    config: PathBuf,
     /// Load deployment variables from this file (defaults to .env if present).
     #[arg(long)]
     env_file: Option<PathBuf>,
+    /// Validate the sole environment configuration without starting listeners or storage.
+    #[arg(long)]
+    check_config: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -44,8 +45,24 @@ async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     let cli = Cli::parse();
-    let mut config = ServerConfig::load_or_create(&cli.config).await?;
-    ostool_server::environment::apply(&mut config, cli.env_file.as_deref())?;
+    let config = ostool_server::environment::load(cli.env_file.as_deref())?;
+    if cli.check_config {
+        anyhow::ensure!(
+            config
+                .database
+                .url
+                .as_ref()
+                .is_some_and(|url| !url.trim().is_empty()),
+            "missing OSTOOL_DATABASE_URL"
+        );
+        anyhow::ensure!(
+            !config.edition.is_public() || config.auth.public_base_url.is_some(),
+            "public edition requires OSTOOL_PUBLIC_BASE_URL"
+        );
+        config.validate()?;
+        println!("配置检查通过");
+        return Ok(());
+    }
     if let Some(Command::VirtualLab { action }) = cli.command {
         let action = match action {
             VirtualLabCommand::Up => VirtualLabAction::Up,
@@ -84,7 +101,14 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let state = build_app_state(cli.config.clone(), config, tftp_manager.clone()).await?;
+    let state = build_app_state(
+        cli.env_file
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(".env")),
+        config,
+        tftp_manager.clone(),
+    )
+    .await?;
     let tftp_manager = state.tftp_manager.read().await.clone();
     state.ensure_data_dirs().await?;
     state.monitor.start(state.clone());

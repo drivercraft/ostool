@@ -24,8 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && useradd --system --uid 10001 --home-dir /var/lib/ostool-server ostool \
     && mkdir -p /var/lib/ostool-server && chown ostool:ostool /var/lib/ostool-server
 COPY --from=builder /output/ /usr/local/bin/
-COPY ostool-server/deploy/container.toml /etc/ostool-server/config.toml
 USER ostool
 WORKDIR /var/lib/ostool-server
 ENTRYPOINT ["ostool-server"]
-CMD ["--config", "/etc/ostool-server/config.toml", "--env-file", "/dev/null"]
+CMD ["--env-file", "/dev/null"]

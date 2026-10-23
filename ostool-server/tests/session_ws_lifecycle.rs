@@ -136,9 +136,6 @@ fn spawn_test_server_with_power_on(
         },
         upload_limits: UploadLimitsConfig::default(),
     };
-    std::fs::write(&config_path, toml::to_string_pretty(&config)?)
-        .with_context(|| format!("failed to write {}", config_path.display()))?;
-
     let board = sample_board_with_power_on(serial_port, power_on_cmd);
     let (addr_tx, addr_rx) = mpsc::channel::<
         std::result::Result<(SocketAddr, Router, ostool_server::AppState), String>,
@@ -154,7 +151,7 @@ fn spawn_test_server_with_power_on(
             .context("failed to build server runtime")?;
 
         let result: Result<()> = runtime.block_on(async move {
-            let mut config = ServerConfig::load_or_create(&config_path_for_thread).await?;
+            let mut config = config;
             let database = test_database::prepare(&config_path_for_thread, &mut config).await?;
             ostool_server::persistence::BoardStore::new(database)
                 .write_board(&board)

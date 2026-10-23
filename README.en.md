@@ -456,6 +456,8 @@ server = "https://203.0.113.10:8443"
 auth_mode = "required"
 ```
 
+The server uses one `.env`; frontend runtime settings come from the API. Deploy through `ostool-server/scripts/deploy.sh docker up` or `systemd up`. Local edition uses direct HTTP; public edition enables Caddy HTTPS.
+
 The administrator session page includes persistent hardware usage history with filtering and pagination, including local edition. Completed usage from before the upgrade is not reconstructed.
 
 Website accounts require a globally unique username. Both website and administrator sign-in accept a username or email; upgrades generate usernames for existing accounts.

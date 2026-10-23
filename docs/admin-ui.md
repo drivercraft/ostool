@@ -260,7 +260,7 @@ OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_br
 `OSTOOL_PUBLIC_BASE_URL`、附加来源 `OSTOOL_ALLOWED_ORIGINS` 与 Caddy 站点
 `OSTOOL_SITE_ADDRESSES`。运行 `scripts/dev.sh cert` 导出根证书，在访问设备上信任。
 local 版仍然免登录；public 版完整启用登录、验证码、用户和租赁功能。两版共享数据库，
-仅功能配置不同。公网正式安装继续使用 `install.sh` 和 Caddy。
+仅功能配置不同。公网正式安装继续使用 `deploy.sh docker|systemd up`，public 版自动部署 Caddy。
 
 演示数据不再随服务启动自动生成，单独执行：
 

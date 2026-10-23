@@ -34,7 +34,7 @@ CLI 凭据的 `board:operate` scope 仅允许 Board REST、会话文件及串口
 
 `POST /v1/tests` 创建一个随机 `test_id`，上传和下载各有独立结果，可以使用同一 ID 同时传输。每个方向只能启动一次；开始后不能用同一 ID 重试该方向。`GET /v1/tests/{id}` 返回两个方向的状态和计数。状态依次从 `not_started` 进入 `running`，随后成为 `completed`、`canceled`、`timed_out` 或 `failed` 之一；连接中断、传输错误和超时仍保留可查询的终态。
 
-创建 ID 不占传输并发名额；首次启动上传或下载时才申请，默认最多允许 64 个 ID 同时传输，同一 ID 的双向流只占一个名额。第 65 个并发传输请求立即返回 `429`，该方向仍保持 `not_started`，可以稍后重试。默认传输时限为 3600 秒；未开始的记录 10 分钟过期，最后一个运行方向结束后记录保留 1 小时。内存中最多保留 4096 条记录，满额时优先清除最旧的结束记录。记录不写入磁盘，服务器重启后不再可查询。配置使用 `config.toml` 中的 `[network_test]`；旧配置省略此节时沿用默认值：
+创建 ID 不占传输并发名额；首次启动上传或下载时才申请，默认最多允许 64 个 ID 同时传输，同一 ID 的双向流只占一个名额。第 65 个并发传输请求立即返回 `429`，该方向仍保持 `not_started`，可以稍后重试。默认传输时限为 3600 秒；未开始的记录 10 分钟过期，最后一个运行方向结束后记录保留 1 小时。内存中最多保留 4096 条记录，满额时优先清除最旧的结束记录。记录不写入磁盘，服务器重启后不再可查询。该独立监听器的内置参数如下；部署默认关闭，使用 `.env` 的 `OSTOOL_NETWORK_TEST_ENABLED`、`OSTOOL_NETWORK_TEST_LISTEN_ADDR`、`OSTOOL_NETWORK_TEST_MAX_ACTIVE` 和 `OSTOOL_NETWORK_TEST_MAX_DURATION_SECS` 显式启用与调整：
 
 ```toml
 [network_test]
@@ -515,9 +515,9 @@ GET 返回 `{ "enabled": false, "devices": [] }` 或当前设备列表。POST �
 虚拟环境由服务端子命令幂等管理：
 
 ```bash
-ostool-server --config .ostool-server.toml virtual-lab up
-ostool-server --config .ostool-server.toml virtual-lab status
-ostool-server --config .ostool-server.toml virtual-lab down
+ostool-server --env-file ostool-server/.env virtual-lab up
+ostool-server --env-file ostool-server/.env virtual-lab status
+ostool-server --env-file ostool-server/.env virtual-lab down
 ```
 
 默认创建独立 network namespace、bridge、veth、dnsmasq 和当前用户拥有的 TAP 池，客户机网段为 `10.77.0.0/24`，服务端地址为 `10.77.0.1`。该操作需要 Linux `CAP_NET_ADMIN`。

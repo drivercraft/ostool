@@ -9,13 +9,7 @@ services:
       - path: ${OSTOOL_ENV_FILE:-../.env}
         required: false
     environment:
-      OSTOOL_EDITION: ${OSTOOL_EDITION:-local}
-      OSTOOL_LISTEN_ADDR: ${OSTOOL_LISTEN_ADDR:-127.0.0.1:2999}
-      OSTOOL_DATABASE_URL: postgres://ostool:${OSTOOL_POSTGRES_PASSWORD:?请在 .env 中设置数据库密码}@127.0.0.1:${OSTOOL_POSTGRES_PORT:-54329}/ostool
-      OSTOOL_REDIS_URL: redis://127.0.0.1:${OSTOOL_REDIS_PORT:-56380}/0
-      OSTOOL_PUBLIC_BASE_URL: ${OSTOOL_PUBLIC_BASE_URL:-https://127.0.0.1:3443}
-      OSTOOL_ALLOWED_ORIGINS: ${OSTOOL_ALLOWED_ORIGINS:-}
-      OSTOOL_TRUSTED_PROXY_IPS: 127.0.0.1,::1
+      OSTOOL_DATA_DIR: /var/lib/ostool-server
     volumes:
       - server-data:/var/lib/ostool-server
     # 与 systemd 部署使用相同的回环 API 和主机网络，不需要代理 IP 推断。
@@ -72,6 +66,7 @@ services:
 
   caddy:
     image: caddy:2-alpine
+    profiles: [public]
     environment:
       OSTOOL_SITE_ADDRESSES: ${OSTOOL_SITE_ADDRESSES:-https://127.0.0.1 https://localhost}
       OSTOOL_HTTPS_PORT: ${OSTOOL_HTTPS_PORT:-3443}

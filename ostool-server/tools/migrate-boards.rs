@@ -5,7 +5,6 @@ use ostool_server::{
     BoardConfig, BootConfig, DatabaseConfig, environment,
     persistence::{Database, dtbs::normalize_dtb_name},
 };
-use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::Row;
@@ -20,9 +19,6 @@ use std::{
     about = "Import existing board TOML files and their referenced DTBs into PostgreSQL"
 )]
 struct Args {
-    /// Target server configuration (optional; database settings can come from .env).
-    #[arg(long)]
-    config: Option<PathBuf>,
     #[arg(long)]
     env_file: Option<PathBuf>,
     /// Directory containing the existing <board-id>.toml files.
@@ -34,11 +30,6 @@ struct Args {
     /// Validate source and database conflicts without writing business records.
     #[arg(long)]
     dry_run: bool,
-}
-#[derive(Default, Deserialize)]
-struct TargetConfig {
-    #[serde(default)]
-    database: ostool_server::DatabaseConfig,
 }
 struct Input {
     boards: BTreeMap<String, BoardConfig>,
@@ -128,12 +119,6 @@ async fn run(args: Args) -> anyhow::Result<()> {
     // Complete source validation precedes database schema/business writes.
     let input = read_input(&args).await?;
     let mut database_config = DatabaseConfig::default();
-    if let Some(path) = &args.config {
-        let source = tokio::fs::read_to_string(path)
-            .await
-            .with_context(|| format!("cannot read target config {}", path.display()))?;
-        database_config = toml::from_str::<TargetConfig>(&source)?.database;
-    }
     environment::apply_database(&mut database_config, args.env_file.as_deref())?;
     if args.dry_run {
         database_config.migrate = false;

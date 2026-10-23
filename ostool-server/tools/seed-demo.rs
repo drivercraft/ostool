@@ -4,7 +4,7 @@ use chrono::Utc;
 use clap::Parser;
 use ostool_server::{
     BoardConfig, BoardNetworkIdentity, BoardStore, BootConfig, CustomPowerManagement, DtbStore,
-    PowerManagementConfig, PxeProfile, ServerConfig, UbootProfile, UefiBootArch, UefiHttpProfile,
+    PowerManagementConfig, PxeProfile, UbootProfile, UefiBootArch, UefiHttpProfile,
     persistence::postgres::Database,
 };
 use rand::RngCore;
@@ -18,16 +18,13 @@ const USER_COUNT: usize = 36;
 #[derive(Parser)]
 struct Cli {
     #[arg(long)]
-    config: PathBuf,
-    #[arg(long)]
     env_file: Option<PathBuf>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let mut config = ServerConfig::load_or_create(&cli.config).await?;
-    ostool_server::environment::apply(&mut config, cli.env_file.as_deref())?;
+    let config = ostool_server::environment::load(cli.env_file.as_deref())?;
     let db = Database::connect(&config.database).await?;
     let boards = BoardStore::new(db.clone());
     let dtbs = DtbStore::new(db.clone());

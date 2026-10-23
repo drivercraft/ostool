@@ -1,0 +1,26 @@
+# 由 scripts/deploy.sh 安装；唯一配置位于 /etc/ostool-server/.env。
+[Unit]
+Description=OSTool Board Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ostool
+Group=ostool
+ExecStart=/usr/local/bin/ostool-server --env-file /etc/ostool-server/.env
+WorkingDirectory=/var/lib/ostool-server
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ostool-server
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
