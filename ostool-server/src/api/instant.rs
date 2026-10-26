@@ -104,20 +104,29 @@ pub async fn assign(
         })
     })?;
     let rental = Uuid::new_v4();
+    let mut tx = state.database.pool().begin().await?;
     sqlx::query("INSERT INTO board_rentals(id,board_id,user_id,starts_at,ends_at,notes,source) VALUES($1,$2,$3,now(),$4,'即时使用自动分配','instant')")
-  .bind(rental).bind(&id).bind(user.id).bind(end).execute(state.database.pool()).await?;
-    state.admin_events.invalidate(&["rentals"]);
+  .bind(rental).bind(&id).bind(user.id).bind(end).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO rental_requests(user_id,board_id,starts_at,ends_at,notes,status,decision_note,reviewed_at,rental_id) SELECT user_id,board_id,starts_at,ends_at,notes,'auto_approved','自动放行',now(),id FROM board_rentals WHERE id=$1")
+        .bind(rental).execute(&mut *tx).await?;
+    tx.commit().await?;
+    state
+        .admin_events
+        .invalidate(&["rentals", "rental_requests"]);
     state.rental_changed.notify_one();
     Ok((id, rental, end))
 }
 pub async fn cancel_failed(state: &AppState, id: Uuid) {
-    if let Err(error) =
-        sqlx::query("UPDATE board_rentals SET cancelled_at=now() WHERE id=$1 AND source='instant'")
+    if let Err(error) = sqlx::query(
+        "WITH cancelled AS (UPDATE board_rentals SET cancelled_at=now() WHERE id=$1 AND source='instant' RETURNING id) UPDATE rental_requests SET status='cancelled',decision_note='自动放行后分配失败，已取消' WHERE rental_id IN (SELECT id FROM cancelled)",
+    )
             .bind(id)
             .execute(state.database.pool())
             .await
     {
         log::error!("failed to cancel unclaimed instant allocation {id}: {error}");
     }
-    state.admin_events.invalidate(&["rentals"]);
+    state
+        .admin_events
+        .invalidate(&["rentals", "rental_requests"]);
 }

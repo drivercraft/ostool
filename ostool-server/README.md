@@ -585,7 +585,9 @@ have priority; the server bounds each allocation by the next booking minus a
 60-second release buffer and rejects windows below the role's minimum.
 
 Existing CLI session creation requests continue unchanged. The server atomically
-selects a candidate and records an `instant` rental under the admission gate;
+selects a candidate and records an `instant` rental and an `auto_approved` application
+in the same database transaction under the admission gate. Both application lists
+show “自动放行” (automatically approved) as its status and decision note;
 normal rental ownership, upload, HTTP download and WebSocket checks then apply.
 A fixed deadline cannot be extended by heartbeats. Failed allocations are cancelled,
 early session release shortens the rental after hardware cleanup, and server restart

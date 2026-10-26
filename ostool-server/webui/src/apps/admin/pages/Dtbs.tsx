@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogHeader,
+  DialogBody,
   DialogTitle,
   DialogDescription,
   DialogFooter,
@@ -55,22 +57,26 @@ export function DtbUpload({
         }}
       >
         <DialogContent>
-          <DialogTitle>上传 DTB</DialogTitle>
-          <DialogDescription>单个文件最大 10 MiB。</DialogDescription>
-          <FieldGroup>
-            <TextField
-              label="文件"
-              type="file"
-              accept=".dtb,application/octet-stream"
-              onChange={(e) => {
-                const f = e.target.files?.[0] ?? null;
-                setFile(f);
-                if (f) setName(f.name);
-              }}
-            />
-            <TextField label="文件名" value={name} onValue={setName} />
-          </FieldGroup>
-          {task.error && <Notice>{task.error}</Notice>}
+          <DialogHeader>
+            <DialogTitle>上传 DTB</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <DialogDescription>单个文件最大 10 MiB。</DialogDescription>
+            <FieldGroup>
+              <TextField
+                label="文件"
+                type="file"
+                accept=".dtb,application/octet-stream"
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  setFile(f);
+                  if (f) setName(f.name);
+                }}
+              />
+              <TextField label="文件名" value={name} onValue={setName} />
+            </FieldGroup>
+            {task.error && <Notice>{task.error}</Notice>}
+          </DialogBody>
           <DialogFooter>
             <Button
               type="button"
@@ -186,23 +192,27 @@ function EditDtb({ dtb, close }: { dtb: DtbFileResponse; close: () => void }) {
       }}
     >
       <DialogContent>
-        <DialogTitle>修改 DTB</DialogTitle>
-        <DialogDescription>
-          可重命名或替换文件，单个文件最大 10 MiB。
-        </DialogDescription>
-        <FieldGroup>
-          <TextField label="文件名" value={name} onValue={setName} />
-          <TextField
-            label="替换文件"
-            type="file"
-            accept=".dtb,application/octet-stream"
-            onChange={(e) => {
-              file.current = e.target.files?.[0] ?? null;
-              if (file.current) setName(file.current.name);
-            }}
-          />
-        </FieldGroup>
-        {task.error && <Notice>{task.error}</Notice>}
+        <DialogHeader>
+          <DialogTitle>修改 DTB</DialogTitle>
+        </DialogHeader>
+        <DialogBody>
+          <DialogDescription>
+            可重命名或替换文件，单个文件最大 10 MiB。
+          </DialogDescription>
+          <FieldGroup>
+            <TextField label="文件名" value={name} onValue={setName} />
+            <TextField
+              label="替换文件"
+              type="file"
+              accept=".dtb,application/octet-stream"
+              onChange={(e) => {
+                file.current = e.target.files?.[0] ?? null;
+                if (file.current) setName(file.current.name);
+              }}
+            />
+          </FieldGroup>
+          {task.error && <Notice>{task.error}</Notice>}
+        </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={close} disabled={task.pending}>
             取消

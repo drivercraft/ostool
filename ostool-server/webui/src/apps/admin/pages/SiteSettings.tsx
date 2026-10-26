@@ -22,6 +22,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
+  DialogHeader,
+  DialogBody,
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
@@ -465,53 +467,59 @@ function Editor({ source, group }: { source: SiteView; group: string }) {
       {legal && (
         <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
           <DialogContent className="legal-history-dialog">
-            <DialogTitle>{label}发布历史</DialogTitle>
-            <DialogDescription>
-              仅显示当前文档的版本。载入旧版本仅修改草稿，需发布后才生效，原版本和同意记录保持不变。
-            </DialogDescription>
-            <div className="legal-history-scroll">
-              <DataTable
-                layout="table"
-                headers={["版本", "标题", "发布时间", "操作"]}
-                empty={!history.some((item) => item.kind === group)}
-              >
-                {history
-                  .filter((item) => item.kind === group)
-                  .map((item) => (
-                    <Row key={item.version}>
-                      <Cell>v{item.version}</Cell>
-                      <Cell>{item.title}</Cell>
-                      <Cell>
-                        {new Date(item.published_at).toLocaleString()}
-                      </Cell>
-                      <Cell>
-                        <div className="actions">
-                          <RowAction
-                            label={`查看版本 v${item.version}`}
-                            icon={Eye}
-                            disabled={reading}
-                            onClick={() => void readVersion(item.version)}
-                          />
-                          <RowAction
-                            label={`载入版本 v${item.version}`}
-                            icon={RotateCcw}
-                            disabled={reading}
-                            onClick={() => void readVersion(item.version, true)}
-                          />
-                        </div>
-                      </Cell>
-                    </Row>
-                  ))}
-              </DataTable>
-              {version && (
-                <article className="legal-preview" aria-label="历史版本正文">
-                  <h2>
-                    {version.title} · v{version.version}
-                  </h2>
-                  <div>{version.body}</div>
-                </article>
-              )}
-            </div>
+            <DialogHeader>
+              <DialogTitle>{label}发布历史</DialogTitle>
+            </DialogHeader>
+            <DialogBody>
+              <DialogDescription>
+                仅显示当前文档的版本。载入旧版本仅修改草稿，需发布后才生效，原版本和同意记录保持不变。
+              </DialogDescription>
+              <div className="legal-history-scroll">
+                <DataTable
+                  layout="table"
+                  headers={["版本", "标题", "发布时间", "操作"]}
+                  empty={!history.some((item) => item.kind === group)}
+                >
+                  {history
+                    .filter((item) => item.kind === group)
+                    .map((item) => (
+                      <Row key={item.version}>
+                        <Cell>v{item.version}</Cell>
+                        <Cell>{item.title}</Cell>
+                        <Cell>
+                          {new Date(item.published_at).toLocaleString()}
+                        </Cell>
+                        <Cell>
+                          <div className="actions">
+                            <RowAction
+                              label={`查看版本 v${item.version}`}
+                              icon={Eye}
+                              disabled={reading}
+                              onClick={() => void readVersion(item.version)}
+                            />
+                            <RowAction
+                              label={`载入版本 v${item.version}`}
+                              icon={RotateCcw}
+                              disabled={reading}
+                              onClick={() =>
+                                void readVersion(item.version, true)
+                              }
+                            />
+                          </div>
+                        </Cell>
+                      </Row>
+                    ))}
+                </DataTable>
+                {version && (
+                  <article className="legal-preview" aria-label="历史版本正文">
+                    <h2>
+                      {version.title} · v{version.version}
+                    </h2>
+                    <div>{version.body}</div>
+                  </article>
+                )}
+              </div>
+            </DialogBody>
           </DialogContent>
         </Dialog>
       )}

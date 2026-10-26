@@ -5,6 +5,8 @@ import { Button } from "./ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogHeader,
+  DialogBody,
   DialogTitle,
   DialogDescription,
   DialogFooter,
@@ -259,17 +261,21 @@ export function SecuritySettings({
       )}
       <Dialog open={!!codes} onOpenChange={() => {}}>
         <DialogContent showCloseButton={false}>
-          <DialogTitle>保存恢复码</DialogTitle>
-          <DialogDescription>
-            恢复码只展示一次。每个码仅可用一次，请离线妥善保存。
-          </DialogDescription>
-          <ul className="recovery-codes">
-            {codes?.map((code) => (
-              <li key={code}>
-                <code>{code}</code>
-              </li>
-            ))}
-          </ul>
+          <DialogHeader>
+            <DialogTitle>保存恢复码</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <DialogDescription>
+              恢复码只展示一次。每个码仅可用一次，请离线妥善保存。
+            </DialogDescription>
+            <ul className="recovery-codes">
+              {codes?.map((code) => (
+                <li key={code}>
+                  <code>{code}</code>
+                </li>
+              ))}
+            </ul>
+          </DialogBody>
           <DialogFooter>
             <Button onClick={saved}>已安全保存</Button>
           </DialogFooter>

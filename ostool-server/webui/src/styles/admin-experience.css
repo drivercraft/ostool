@@ -604,9 +604,6 @@ a.dashboard-metric:hover {
 }
 .audit-detail-dialog {
   max-width: min(760px, calc(100vw - 32px));
-  max-height: calc(100dvh - 48px);
-  overflow-y: auto;
-  font-size: 0.875rem;
 }
 .audit-detail-dialog .facts {
   gap: 0;

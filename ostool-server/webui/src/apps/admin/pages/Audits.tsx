@@ -18,6 +18,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
+  DialogHeader,
+  DialogBody,
   DialogTitle,
   DialogDescription,
   DialogFooter,
@@ -438,44 +440,48 @@ export default function Audits() {
       </PagePanel>
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         <DialogContent className="audit-detail-dialog">
-          <DialogTitle>审计日志详情</DialogTitle>
-          <DialogDescription>
-            操作身份、请求关联和安全摘要；不包含凭据及原始请求内容。
-          </DialogDescription>
-          {task.error && <Notice>{task.error}</Notice>}
-          {details ? (
-            <>
-              <ReadonlyInfo
-                entries={{
-                  时间: date(details.created_at),
-                  完成时间: date(details.finished_at),
-                  操作者: details.actor_name,
-                  操作者ID: details.actor_id,
-                  身份: actors[details.actor_kind] ?? details.actor_kind,
-                  操作: details.summary,
-                  资源: resources[details.resource] ?? details.resource,
-                  对象: details.target_id,
-                  结果: results[details.result],
-                  状态码: details.status_code,
-                  耗时:
-                    details.duration_ms == null
-                      ? "—"
-                      : `${details.duration_ms} ms`,
-                  IP: details.ip,
-                  请求ID: details.request_id,
-                  请求方法: details.method,
-                  路由: details.route,
-                  "User Agent": details.user_agent,
-                }}
-              />
-              <h3>变更摘要</h3>
-              <pre className="audit-details-json">
-                {JSON.stringify(details.details, null, 2)}
-              </pre>
-            </>
-          ) : (
-            <Skeleton className="h-32 w-full" />
-          )}
+          <DialogHeader>
+            <DialogTitle>审计日志详情</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <DialogDescription>
+              操作身份、请求关联和安全摘要；不包含凭据及原始请求内容。
+            </DialogDescription>
+            {task.error && <Notice>{task.error}</Notice>}
+            {details ? (
+              <>
+                <ReadonlyInfo
+                  entries={{
+                    时间: date(details.created_at),
+                    完成时间: date(details.finished_at),
+                    操作者: details.actor_name,
+                    操作者ID: details.actor_id,
+                    身份: actors[details.actor_kind] ?? details.actor_kind,
+                    操作: details.summary,
+                    资源: resources[details.resource] ?? details.resource,
+                    对象: details.target_id,
+                    结果: results[details.result],
+                    状态码: details.status_code,
+                    耗时:
+                      details.duration_ms == null
+                        ? "—"
+                        : `${details.duration_ms} ms`,
+                    IP: details.ip,
+                    请求ID: details.request_id,
+                    请求方法: details.method,
+                    路由: details.route,
+                    "User Agent": details.user_agent,
+                  }}
+                />
+                <h3>变更摘要</h3>
+                <pre className="audit-details-json">
+                  {JSON.stringify(details.details, null, 2)}
+                </pre>
+              </>
+            ) : (
+              <Skeleton className="h-32 w-full" />
+            )}
+          </DialogBody>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDetailOpen(false)}>
               关闭
@@ -490,23 +496,27 @@ export default function Audits() {
         }}
       >
         <DialogContent>
-          <DialogTitle>清理旧审计日志</DialogTitle>
-          <DialogDescription>
-            永久删除保留天数之前的已完成记录，结果未确认的记录会保留。仅执行本次清理，不改变自动保留策略。
-          </DialogDescription>
-          <p>
-            自动保留策略：
-            {data?.retention_days ? `${data.retention_days} 天` : "保留全部"}
-          </p>
-          <TextField
-            label="保留天数"
-            type="number"
-            min={1}
-            max={3650}
-            value={days}
-            onValue={setDays}
-          />
-          {task.error && <Notice>{task.error}</Notice>}
+          <DialogHeader>
+            <DialogTitle>清理旧审计日志</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <DialogDescription>
+              永久删除保留天数之前的已完成记录，结果未确认的记录会保留。仅执行本次清理，不改变自动保留策略。
+            </DialogDescription>
+            <p>
+              自动保留策略：
+              {data?.retention_days ? `${data.retention_days} 天` : "保留全部"}
+            </p>
+            <TextField
+              label="保留天数"
+              type="number"
+              min={1}
+              max={3650}
+              value={days}
+              onValue={setDays}
+            />
+            {task.error && <Notice>{task.error}</Notice>}
+          </DialogBody>
           <DialogFooter>
             <Button
               variant="outline"

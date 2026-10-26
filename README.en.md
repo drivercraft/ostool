@@ -459,6 +459,8 @@ allocation can use existing board commands to acquire an enabled shared device
 without per-use approval. The server enforces duration, concurrency, board-type
 scope and prior bookings while retaining durable usage records. This capability
 does not grant console access. Local edition remains anonymous.
+Each immediate allocation also creates a rental application with an “Automatically
+approved” status and decision note, visible in both application lists.
 
 ### Public board authentication
 

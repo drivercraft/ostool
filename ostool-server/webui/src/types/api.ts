@@ -522,7 +522,7 @@ export interface RentalRequest {
   starts_at: string;
   ends_at: string;
   notes: string;
-  status: "pending" | "approved" | "rejected" | "cancelled";
+  status: "pending" | "approved" | "auto_approved" | "rejected" | "cancelled";
   decision_note: string;
   reviewed_at: string | null;
   rental_id: string | null;
@@ -758,6 +758,7 @@ export interface MailDelivery {
 export const requestStatusLabels: Record<RentalRequest["status"], string> = {
   pending: "待审核",
   approved: "已通过",
+  auto_approved: "自动放行",
   rejected: "已拒绝",
   cancelled: "已撤回",
 };

@@ -443,6 +443,7 @@
   white-space: nowrap;
 }
 .member-status.active,
+.member-status.auto_approved,
 .member-status.approved {
   background: #e6f7ee;
   color: #158052;

@@ -1,8 +1,10 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 import { api, type SecurityStatus } from "@/api/client";
 import {
   Dialog,
   DialogContent,
+  DialogHeader,
+  DialogBody,
   DialogTitle,
   DialogDescription,
   DialogFooter,
@@ -11,6 +13,7 @@ import { Button } from "./ui/button";
 import { TextField, Notice } from "./forms";
 type Pending = { resolve: () => void; reject: (error: Error) => void };
 export function SecurityVerification() {
+  const formId = useId();
   const [pending, setPending] = useState<Pending>(),
     [status, setStatus] = useState<SecurityStatus>(),
     [password, setPassword] = useState(""),
@@ -63,45 +66,49 @@ export function SecurityVerification() {
       }}
     >
       <DialogContent>
-        <DialogTitle>验证当前身份</DialogTitle>
-        <DialogDescription>
-          验证通过后，当前登录会话可在三分钟内执行敏感操作。
-        </DialogDescription>
-        <form onSubmit={submit} className="security-form">
-          <TextField
-            label="当前密码"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onValue={setPassword}
-            maxLength={1024}
-            required
-          />
-          {status?.enabled && (
+        <DialogHeader>
+          <DialogTitle>验证当前身份</DialogTitle>
+        </DialogHeader>
+        <DialogBody>
+          <DialogDescription>
+            验证通过后，当前登录会话可在三分钟内执行敏感操作。
+          </DialogDescription>
+          <form id={formId} onSubmit={submit} className="security-form">
             <TextField
-              label="验证码或恢复码"
-              autoComplete="one-time-code"
-              value={code}
-              onValue={setCode}
-              maxLength={128}
+              label="当前密码"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onValue={setPassword}
+              maxLength={1024}
               required
             />
-          )}
-          {error && <Notice>{error}</Notice>}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={busy}
-              onClick={cancel}
-            >
-              取消
-            </Button>
-            <Button type="submit" disabled={busy || !status}>
-              {busy ? "验证中…" : "验证身份"}
-            </Button>
-          </DialogFooter>
-        </form>
+            {status?.enabled && (
+              <TextField
+                label="验证码或恢复码"
+                autoComplete="one-time-code"
+                value={code}
+                onValue={setCode}
+                maxLength={128}
+                required
+              />
+            )}
+            {error && <Notice>{error}</Notice>}
+          </form>
+        </DialogBody>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy}
+            onClick={cancel}
+          >
+            取消
+          </Button>
+          <Button type="submit" form={formId} disabled={busy || !status}>
+            {busy ? "验证中…" : "验证身份"}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

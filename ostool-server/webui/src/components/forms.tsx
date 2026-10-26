@@ -33,6 +33,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Dialog,
   DialogContent,
+  DialogHeader,
+  DialogBody,
   DialogTitle,
   DialogDescription,
   DialogFooter,
@@ -315,9 +317,13 @@ export function ConfirmAction({
         }}
       >
         <DialogContent>
-          <DialogTitle>{label}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
-          {task.error && <Notice>{task.error}</Notice>}
+          <DialogHeader>
+            <DialogTitle>{label}</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <DialogDescription>{description}</DialogDescription>
+            {task.error && <Notice>{task.error}</Notice>}
+          </DialogBody>
           <DialogFooter>
             <Button
               variant="outline"

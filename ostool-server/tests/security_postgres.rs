@@ -2557,6 +2557,33 @@ async fn instant_device_use_respects_pool_bookings_concurrency_ownership_and_ear
     use sqlx::Row;
     let rental: Uuid = row.try_get("id")?;
     assert_eq!(row.try_get::<String, _>("source")?, "instant");
+    let applications = f
+        .request(
+            "GET",
+            "/api/v1/admin/rental-requests?status=auto_approved",
+            Some(&cookie),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(applications.status, StatusCode::OK, "{}", applications.body);
+    assert_eq!(applications.body["total"], 1);
+    let application = &applications.body["items"][0];
+    assert_eq!(application["user_id"], user.id.to_string());
+    assert_eq!(application["board_id"], board);
+    assert_eq!(application["rental_id"], rental.to_string());
+    assert_eq!(application["status"], "auto_approved");
+    assert_eq!(application["decision_note"], "自动放行");
+    assert!(application["reviewed_at"].is_string());
+    let application_id = application["id"].as_str().unwrap();
+    let review = f
+        .request(
+            "POST",
+            &format!("/api/v1/admin/rental-requests/{application_id}/review"),
+            Some(&cookie),
+            json!({"decision":"approve","note":"重复批准"}),
+        )
+        .await;
+    assert_eq!(review.status, StatusCode::CONFLICT);
     if board == "shared-1" {
         assert!(
             row.try_get::<chrono::DateTime<Utc>, _>("ends_at")?
@@ -2632,6 +2659,33 @@ async fn instant_device_use_respects_pool_bookings_concurrency_ownership_and_ear
     .fetch_one(f.state.database.pool())
     .await?;
     assert!(ended);
+    // A failed application insert must not leave an orphan rental allocation.
+    sqlx::query("CREATE FUNCTION reject_auto_request() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'application persistence failed'; END $$")
+        .execute(f.state.database.pool()).await?;
+    sqlx::query("CREATE TRIGGER reject_auto_request BEFORE INSERT ON rental_requests FOR EACH ROW EXECUTE FUNCTION reject_auto_request()")
+        .execute(f.state.database.pool()).await?;
+    let failed = f
+        .custom(
+            "POST",
+            "/api/v1/sessions",
+            None,
+            create(board),
+            Some(&f.origin),
+            Some(&grant.access_token),
+        )
+        .await;
+    assert_eq!(failed.status, StatusCode::SERVICE_UNAVAILABLE);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM board_rentals WHERE user_id=$1")
+        .bind(user.id)
+        .fetch_one(f.state.database.pool())
+        .await?;
+    assert_eq!(count, 1);
+    sqlx::query("DROP TRIGGER reject_auto_request ON rental_requests")
+        .execute(f.state.database.pool())
+        .await?;
+    sqlx::query("DROP FUNCTION reject_auto_request()")
+        .execute(f.state.database.pool())
+        .await?;
     let again = f
         .custom(
             "POST",
@@ -2644,6 +2698,11 @@ async fn instant_device_use_respects_pool_bookings_concurrency_ownership_and_ear
         .await;
     assert_eq!(again.status, StatusCode::CREATED, "{}", again.body);
     let next_sid = again.body["session_id"].as_str().unwrap();
+    let next_rental: Uuid =
+        sqlx::query_scalar("SELECT rental_id FROM session_owners WHERE session_id=$1")
+            .bind(next_sid)
+            .fetch_one(f.state.database.pool())
+            .await?;
     let update=f.request("PUT",&format!("/api/v1/admin/roles/{role}"),Some(&cookie),json!({"name":"即时研发成员","revision":1,"description":"取消即时使用","permissions":["board.use"],"allocation_policy":{"max_duration_minutes":120,"max_concurrent_sessions":1,"min_available_minutes":10,"board_types":["shared-arm"]}})).await;
     assert_eq!(update.status, StatusCode::NO_CONTENT, "{}", update.body);
     assert_eq!(
@@ -2672,6 +2731,37 @@ async fn instant_device_use_respects_pool_bookings_concurrency_ownership_and_ear
             .await?
             .unwrap()
             .is_admin
+    );
+    ostool_server::api::instant::cancel_failed(&f.state, next_rental).await;
+    let cancelled: String =
+        sqlx::query_scalar("SELECT status FROM rental_requests WHERE rental_id=$1")
+            .bind(next_rental)
+            .fetch_one(f.state.database.pool())
+            .await?;
+    assert_eq!(cancelled, "cancelled");
+    sqlx::query("DELETE FROM rental_requests WHERE rental_id=$1")
+        .bind(rental)
+        .execute(f.state.database.pool())
+        .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/20261026010000_auto_rental_requests.sql"
+    ))
+    .execute(f.state.database.pool())
+    .await?;
+    let restored: String =
+        sqlx::query_scalar("SELECT status FROM rental_requests WHERE rental_id=$1")
+            .bind(rental)
+            .fetch_one(f.state.database.pool())
+            .await?;
+    assert_eq!(restored, "auto_approved");
+    let application_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM rental_requests WHERE user_id=$1")
+            .bind(user.id)
+            .fetch_one(f.state.database.pool())
+            .await?;
+    assert_eq!(
+        application_count, 2,
+        "history backfill must not duplicate existing applications"
     );
     Ok(())
 }

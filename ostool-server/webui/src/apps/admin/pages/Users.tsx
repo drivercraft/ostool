@@ -4,7 +4,7 @@ import { RowAction } from "@/components/row-action";
 import { PagePanel } from "@/components/page-panel";
 import { useServerList } from "@/components/server-list";
 import { ListToolbar } from "@/components/list-toolbar";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { api } from "@/api/client";
 import { useList, useResource } from "@/api/events";
 import type { ManagedUser, UserInput } from "@/types/api";
@@ -12,6 +12,8 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogHeader,
+  DialogBody,
   DialogTitle,
   DialogDescription,
   DialogFooter,
@@ -29,6 +31,7 @@ import {
 } from "@/components/forms";
 
 export default function Users() {
+  const formId = useId();
   const roles = useList("roles"),
     deployment = useResource("deployment");
   const [search, setSearch] = useState("");
@@ -180,91 +183,96 @@ export default function Users() {
         }}
       >
         <DialogContent>
-          <DialogTitle>{editor?.id ? "编辑用户" : "创建用户"}</DialogTitle>
-          <DialogDescription>
-            修改用户名、角色、密码或状态会撤销该用户已有的登录令牌。不能禁用、删除自己或移除自己的管理权限。
-          </DialogDescription>
-          {editor && (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void task
-                  .run(
-                    () =>
-                      editor.id
-                        ? api.updateUser(editor.id, editor.draft)
-                        : api.createUser(editor.draft),
-                    "用户已保存",
-                  )
-                  .then((ok) => {
-                    if (ok) setEditor(null);
-                  });
-              }}
-              className="management-form"
+          <DialogHeader>
+            <DialogTitle>{editor?.id ? "编辑用户" : "创建用户"}</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <DialogDescription>
+              修改用户名、角色、密码或状态会撤销该用户已有的登录令牌。不能禁用、删除自己或移除自己的管理权限。
+            </DialogDescription>
+            {editor && (
+              <form
+                id={formId}
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void task
+                    .run(
+                      () =>
+                        editor.id
+                          ? api.updateUser(editor.id, editor.draft)
+                          : api.createUser(editor.draft),
+                      "用户已保存",
+                    )
+                    .then((ok) => {
+                      if (ok) setEditor(null);
+                    });
+                }}
+                className="management-form"
+              >
+                <TextField
+                  label="用户名"
+                  required
+                  minLength={3}
+                  maxLength={40}
+                  pattern="[A-Za-z0-9][A-Za-z0-9_-]{2,39}"
+                  placeholder="3–40 位字母、数字、下划线或短横线"
+                  autoComplete="off"
+                  value={editor.draft.username}
+                  onValue={(username) => patch({ username })}
+                />
+                <TextField
+                  label="邮箱"
+                  type="email"
+                  required
+                  value={editor.draft.email}
+                  onValue={(email) => patch({ email })}
+                />
+                <TextField
+                  label="显示名称"
+                  maxLength={120}
+                  value={editor.draft.display_name ?? ""}
+                  onValue={(display_name) => patch({ display_name })}
+                />
+                <SelectField
+                  label="角色"
+                  value={editor.draft.role_id}
+                  onValue={(role_id) => patch({ role_id })}
+                  options={roles.map((r) => ({ value: r.id, label: r.name }))}
+                />
+                <TextField
+                  label={editor.id ? "新密码（留空保留）" : "初始密码"}
+                  type="password"
+                  required={!editor.id}
+                  minLength={15}
+                  maxLength={1024}
+                  autoComplete="new-password"
+                  value={editor.draft.password ?? ""}
+                  onValue={(password) =>
+                    patch({ password: password || undefined })
+                  }
+                />
+                <CheckField
+                  label="禁用账号"
+                  checked={editor.draft.disabled}
+                  onChange={(disabled) => patch({ disabled })}
+                />
+                {task.error && <Notice>{task.error}</Notice>}
+              </form>
+            )}
+          </DialogBody>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={task.pending}
+              onClick={() => setEditor(null)}
             >
-              <TextField
-                label="用户名"
-                required
-                minLength={3}
-                maxLength={40}
-                pattern="[A-Za-z0-9][A-Za-z0-9_-]{2,39}"
-                placeholder="3–40 位字母、数字、下划线或短横线"
-                autoComplete="off"
-                value={editor.draft.username}
-                onValue={(username) => patch({ username })}
-              />
-              <TextField
-                label="邮箱"
-                type="email"
-                required
-                value={editor.draft.email}
-                onValue={(email) => patch({ email })}
-              />
-              <TextField
-                label="显示名称"
-                maxLength={120}
-                value={editor.draft.display_name ?? ""}
-                onValue={(display_name) => patch({ display_name })}
-              />
-              <SelectField
-                label="角色"
-                value={editor.draft.role_id}
-                onValue={(role_id) => patch({ role_id })}
-                options={roles.map((r) => ({ value: r.id, label: r.name }))}
-              />
-              <TextField
-                label={editor.id ? "新密码（留空保留）" : "初始密码"}
-                type="password"
-                required={!editor.id}
-                minLength={15}
-                maxLength={1024}
-                autoComplete="new-password"
-                value={editor.draft.password ?? ""}
-                onValue={(password) =>
-                  patch({ password: password || undefined })
-                }
-              />
-              <CheckField
-                label="禁用账号"
-                checked={editor.draft.disabled}
-                onChange={(disabled) => patch({ disabled })}
-              />
-              {task.error && <Notice>{task.error}</Notice>}
-              <DialogFooter>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={task.pending}
-                  onClick={() => setEditor(null)}
-                >
-                  取消
-                </Button>
-                <Button type="submit" disabled={task.pending}>
-                  {task.pending ? "保存中…" : "保存用户"}
-                </Button>
-              </DialogFooter>
-            </form>
-          )}
+              取消
+            </Button>
+            <Button type="submit" form={formId} disabled={task.pending}>
+              {task.pending ? "保存中…" : "保存用户"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>

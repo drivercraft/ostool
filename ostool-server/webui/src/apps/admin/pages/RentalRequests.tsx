@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogHeader,
+  DialogBody,
   DialogTitle,
   DialogDescription,
   DialogFooter,
@@ -95,7 +97,7 @@ export default function RentalRequests() {
               <Cell>
                 <Badge
                   variant={
-                    r.status === "approved"
+                    r.status === "approved" || r.status === "auto_approved"
                       ? "success"
                       : r.status === "pending"
                         ? "warning"
@@ -137,15 +139,19 @@ export default function RentalRequests() {
         }}
       >
         <DialogContent>
-          <DialogTitle>
-            {editor?.decision === "approve" ? "批准租赁申请" : "拒绝租赁申请"}
-          </DialogTitle>
-          <DialogDescription>
-            {editor?.request.user_email} · {editor?.request.board_id}
-            。批准时重新检查时间冲突并创建正式租赁。
-          </DialogDescription>
-          {task.error && <Notice>{task.error}</Notice>}
-          <TextareaField label="审核意见" value={note} onValue={setNote} />
+          <DialogHeader>
+            <DialogTitle>
+              {editor?.decision === "approve" ? "批准租赁申请" : "拒绝租赁申请"}
+            </DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <DialogDescription>
+              {editor?.request.user_email} · {editor?.request.board_id}
+              。批准时重新检查时间冲突并创建正式租赁。
+            </DialogDescription>
+            {task.error && <Notice>{task.error}</Notice>}
+            <TextareaField label="审核意见" value={note} onValue={setNote} />
+          </DialogBody>
           <DialogFooter>
             <Button
               variant="outline"

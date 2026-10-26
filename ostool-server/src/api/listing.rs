@@ -61,7 +61,14 @@ impl Filters {
         let statuses: &[&str] = match self.view.as_str() {
             "users" => &["", "true", "false"],
             "rentals" => &["", "active", "scheduled", "expired", "cancelled"],
-            _ => &["", "pending", "approved", "rejected", "cancelled"],
+            _ => &[
+                "",
+                "pending",
+                "approved",
+                "auto_approved",
+                "rejected",
+                "cancelled",
+            ],
         };
         if !statuses.contains(&self.status.as_str()) {
             return Err(ApiError::bad_request("未知列表状态"));

@@ -12,6 +12,8 @@ import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
+  DialogHeader,
+  DialogBody,
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
@@ -304,38 +306,42 @@ export default function LeaseHistory() {
           if (!open) setDetails(null);
         }}
       >
-        <DialogContent className="max-h-[85dvh] overflow-y-auto">
-          <DialogTitle>租约详情</DialogTitle>
-          <DialogDescription>
-            记录保留分配时的设备与用户名。中断记录的结束时间表示重启时发现连接已失效的时间。
-          </DialogDescription>
-          {details && (
-            <ReadonlyInfo
-              entries={{
-                会话: details.session_id,
-                设备: details.board_id,
-                板型: details.board_type,
-                用户名: details.username ?? unknownOwner,
-                用户ID: details.user_id ?? "—",
-                租赁ID: details.rental_id ?? "—",
-                客户端: details.client_name ?? "—",
-                创建时间: date(details.created_at),
-                最后心跳: date(details.last_heartbeat_at),
-                最后租约到期: date(details.expires_at),
-                请求释放时间: date(details.stop_requested_at),
-                结束时间: date(details.ended_at),
-                使用时长: duration(details),
-                释放原因: details.stop_reason
-                  ? (reasons[details.stop_reason] ?? details.stop_reason)
-                  : "—",
-                结束原因: details.end_reason
-                  ? (reasons[details.end_reason] ?? details.end_reason)
-                  : "—",
-                释放失败次数: details.release_failures,
-                最后释放错误: details.last_release_error ?? "—",
-              }}
-            />
-          )}
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>租约详情</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <DialogDescription>
+              记录保留分配时的设备与用户名。中断记录的结束时间表示重启时发现连接已失效的时间。
+            </DialogDescription>
+            {details && (
+              <ReadonlyInfo
+                entries={{
+                  会话: details.session_id,
+                  设备: details.board_id,
+                  板型: details.board_type,
+                  用户名: details.username ?? unknownOwner,
+                  用户ID: details.user_id ?? "—",
+                  租赁ID: details.rental_id ?? "—",
+                  客户端: details.client_name ?? "—",
+                  创建时间: date(details.created_at),
+                  最后心跳: date(details.last_heartbeat_at),
+                  最后租约到期: date(details.expires_at),
+                  请求释放时间: date(details.stop_requested_at),
+                  结束时间: date(details.ended_at),
+                  使用时长: duration(details),
+                  释放原因: details.stop_reason
+                    ? (reasons[details.stop_reason] ?? details.stop_reason)
+                    : "—",
+                  结束原因: details.end_reason
+                    ? (reasons[details.end_reason] ?? details.end_reason)
+                    : "—",
+                  释放失败次数: details.release_failures,
+                  最后释放错误: details.last_release_error ?? "—",
+                }}
+              />
+            )}
+          </DialogBody>
         </DialogContent>
       </Dialog>
     </>

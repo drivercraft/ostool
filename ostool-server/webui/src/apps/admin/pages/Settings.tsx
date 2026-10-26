@@ -5,6 +5,8 @@ import { RowAction } from "@/components/row-action";
 import {
   Dialog,
   DialogContent,
+  DialogHeader,
+  DialogBody,
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
@@ -1005,44 +1007,48 @@ function AccountForm({
       )}
       <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
         <DialogContent className="legal-history-dialog">
-          <DialogTitle>邮件投递记录</DialogTitle>
-          <DialogDescription>
-            最近 100 次投递，仅保留用途、收件人、结果与时间。
-          </DialogDescription>
-          <div className="legal-history-scroll">
-            <DataTable
-              layout="table"
-              headers={["用途", "收件邮箱", "状态", "时间"]}
-              empty={!deliveries.length}
-            >
-              {deliveries.map((mail) => (
-                <Row key={mail.id}>
-                  <Cell>{mail.purpose}</Cell>
-                  <Cell>{mail.recipient_email}</Cell>
-                  <Cell>
-                    <Badge
-                      variant={
-                        mail.status === "sent"
-                          ? "success"
-                          : mail.status === "failed"
-                            ? "destructive"
-                            : "warning"
-                      }
-                    >
-                      {
+          <DialogHeader>
+            <DialogTitle>邮件投递记录</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <DialogDescription>
+              最近 100 次投递，仅保留用途、收件人、结果与时间。
+            </DialogDescription>
+            <div className="legal-history-scroll">
+              <DataTable
+                layout="table"
+                headers={["用途", "收件邮箱", "状态", "时间"]}
+                empty={!deliveries.length}
+              >
+                {deliveries.map((mail) => (
+                  <Row key={mail.id}>
+                    <Cell>{mail.purpose}</Cell>
+                    <Cell>{mail.recipient_email}</Cell>
+                    <Cell>
+                      <Badge
+                        variant={
+                          mail.status === "sent"
+                            ? "success"
+                            : mail.status === "failed"
+                              ? "destructive"
+                              : "warning"
+                        }
+                      >
                         {
-                          sending: "发送中",
-                          sent: "已发送",
-                          failed: "发送失败",
-                        }[mail.status]
-                      }
-                    </Badge>
-                  </Cell>
-                  <Cell>{new Date(mail.created_at).toLocaleString()}</Cell>
-                </Row>
-              ))}
-            </DataTable>
-          </div>
+                          {
+                            sending: "发送中",
+                            sent: "已发送",
+                            failed: "发送失败",
+                          }[mail.status]
+                        }
+                      </Badge>
+                    </Cell>
+                    <Cell>{new Date(mail.created_at).toLocaleString()}</Cell>
+                  </Row>
+                ))}
+              </DataTable>
+            </div>
+          </DialogBody>
         </DialogContent>
       </Dialog>
     </PagePanel>
