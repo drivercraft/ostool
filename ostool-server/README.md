@@ -313,6 +313,9 @@ The console groups devices/DTBs/short sessions, rentals, users/roles, audit logs
 and bottom system settings. Toolbars, independently scrolling content and footer
 status/actions fill the viewport. Lists support table/card layouts with shared
 filters, actions and pagination; dashboard task tables have a fixed layout.
+The site-information tab contains branding, contact/support, operator/registration
+details and the maintenance notice; these groups share one save action. Terms and
+privacy policies retain their independent tabs and publication histories.
 All updates use SSE, preserving drafts, focus and scroll position. Configuration
 conflicts require explicit resolution. See the
 [management interface and event protocol](../docs/admin-ui.md).

@@ -26,6 +26,12 @@ test("site settings publish through SSE, legal pages and explicit versioned sign
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await expect(page).toHaveURL(base + "/admin/settings");
   await page.getByRole("tab", { name: "站点信息", exact: true }).click();
+  await expect(
+    page.getByRole("tab", { name: "联系与备案", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("tab", { name: "维护提示", exact: true }),
+  ).toHaveCount(0);
   await page.getByLabel("站点名称", { exact: true }).fill("开发板协作测试");
   await page.getByLabel("站点简称", { exact: true }).fill("协作测试");
   await page.getByRole("button", { name: "保存配置", exact: true }).click();
@@ -94,15 +100,30 @@ test("site settings publish through SSE, legal pages and explicit versioned sign
     page.getByRole("button", { name: "发布协议", exact: true }),
   ).toBeEnabled();
   await page.getByRole("button", { name: "取消", exact: true }).click();
-  await page.getByRole("tab", { name: "联系与备案", exact: true }).click();
+  await page.getByRole("tab", { name: "站点信息", exact: true }).click();
   await page.getByLabel("服务时间", { exact: true }).fill("工作日 10:00–19:00");
   await page
     .getByLabel("隐私事务邮箱", { exact: true })
     .fill("privacy@test.local");
+  await page
+    .getByLabel("维护提示内容", { exact: true })
+    .fill("设备平台将在今晚进行维护。");
+  await page
+    .getByRole("checkbox", { name: "显示维护提示", exact: true })
+    .check();
   await page.getByRole("button", { name: "保存配置", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "保存配置", exact: true }),
   ).toBeDisabled();
+  const savedSite = await (
+    await page.request.get(base + "/api/v1/site")
+  ).json();
+  expect(savedSite.settings.support_work_hours).toBe("工作日 10:00–19:00");
+  expect(savedSite.settings.privacy_contact_email).toBe("privacy@test.local");
+  expect(savedSite.settings.maintenance).toBe(true);
+  expect(savedSite.settings.maintenance_message).toBe(
+    "设备平台将在今晚进行维护。",
+  );
   await page.getByRole("tab", { name: "登录与安全", exact: true }).click();
   const registration = page.getByRole("checkbox", {
     name: "允许站点用户注册",

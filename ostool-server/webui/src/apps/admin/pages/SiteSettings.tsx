@@ -110,8 +110,6 @@ const groups: Record<string, { title: string; fields: Field[] }[]> = {
         },
       ],
     },
-  ],
-  contact: [
     {
       title: "联系与支持",
       fields: [
@@ -196,8 +194,6 @@ const groups: Record<string, { title: string; fields: Field[] }[]> = {
         },
       ],
     },
-  ],
-  maintenance: [
     {
       title: "维护提示",
       fields: [
@@ -423,7 +419,9 @@ function Editor({ source, group }: { source: SiteView; group: string }) {
         ) : (
           groups[group]?.map((section) => (
             <Section key={section.title} title={section.title}>
-              {group === "maintenance" && (
+              {section.fields.some(
+                (field) => field.key === "maintenance_message",
+              ) && (
                 <CheckField
                   label="显示维护提示"
                   checked={current.maintenance}
