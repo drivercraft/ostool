@@ -4,6 +4,54 @@ import { apiLogin, solveCaptcha } from "../fixtures/security";
 const embeddedBase = () =>
   process.env.OSTOOL_E2E_AUTH_BASE_URL ?? "http://127.0.0.1:4175";
 
+test("route navigation resets scroll while history and document anchors retain their positions", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  const menu = page.getByRole("navigation", { name: "网站导航" });
+  await expect(page.locator(".home-feature-section").first()).toBeVisible();
+  await page.evaluate(() =>
+    window.scrollTo({ top: 1200, behavior: "instant" }),
+  );
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(1200);
+  await menu.getByRole("link", { name: "设备", exact: true }).click();
+  await expect(page).toHaveURL(/\/devices$/);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await page.evaluate(() => window.scrollTo({ top: 300, behavior: "instant" }));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(300);
+  await page.goBack();
+  await expect(page).toHaveURL(/\/$/);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(1200);
+  await page.goForward();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(300);
+  await menu.getByRole("link", { name: "文档", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await page.evaluate(() => window.scrollTo({ top: 500, behavior: "instant" }));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(500);
+  await page.getByRole("button", { name: "命令行工具", exact: true }).click();
+  await expect(page).toHaveURL(/page=cli/);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await page.goBack();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(500);
+  const anchor = page.locator(".docs-toc a").last();
+  const hash = await anchor.getAttribute("href");
+  await anchor.click();
+  await expect.poll(() => page.evaluate(() => location.hash)).toBe(hash);
+  await expect
+    .poll(() =>
+      page
+        .locator(hash!)
+        .evaluate((el) => Math.round(el.getBoundingClientRect().top)),
+    )
+    .toBe(100);
+  await menu.getByRole("link", { name: "首页", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await page.evaluate(() => window.scrollTo({ top: 900, behavior: "instant" }));
+  await menu.getByRole("link", { name: "首页", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+});
+
 test("public shell renders before slow configuration, with a full hero and a footer at the bottom", async ({
   page,
 }) => {

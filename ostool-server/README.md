@@ -305,6 +305,9 @@ overview, profile, security, password changes (`/account/password`), rentals,
 applications and CLI tokens on distinct routes. Desktop content uses 80% of the
 viewport width with responsive mobile gutters. Website and console controls, status
 badges, dialogs and theme colors share the same design tokens.
+Website navigation starts new pages at the top, preserves document anchor links,
+and leaves back/forward scroll restoration to the browser. Live data updates do
+not reset the current page's position.
 
 The console groups devices/DTBs/short sessions, rentals, users/roles, audit logs
 and bottom system settings. Toolbars, independently scrolling content and footer

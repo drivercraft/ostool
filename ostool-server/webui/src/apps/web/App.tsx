@@ -25,7 +25,11 @@ import {
 import { EditionProvider, useEdition } from "@/edition";
 import MemberWorkspace from "@/apps/web/pages/MemberWorkspace";
 import Home from "@/apps/web/pages/Home";
-import { Logo, PublicLayout } from "@/apps/web/components/site-layout";
+import {
+  Logo,
+  PublicLayout,
+  SiteScrollRestoration,
+} from "@/apps/web/components/site-layout";
 import { BoardVisual } from "@/apps/web/components/board-visual";
 import { Documentation } from "@/apps/web/pages/Documentation";
 import { DeviceCatalog } from "@/apps/web/pages/DeviceCatalog";
@@ -652,6 +656,7 @@ function PublicRoutes() {
   const publicEdition = useEdition().edition === "public";
   return (
     <BrowserRouter>
+      <SiteScrollRestoration />
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/devices" element={<Devices />} />

@@ -467,7 +467,6 @@ export function Documentation() {
   const sections = content[current.id];
   useEffect(() => {
     setActive(sections[0].id);
-    window.scrollTo({ top: 0 });
   }, [current.id]);
   useEffect(() => {
     const observer = new IntersectionObserver(

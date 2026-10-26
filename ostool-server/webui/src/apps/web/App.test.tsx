@@ -57,6 +57,7 @@ vi.mock("@/api/client", () => ({
   },
 }));
 beforeEach(() => {
+  vi.stubGlobal("scrollTo", vi.fn());
   vi.stubGlobal(
     "ResizeObserver",
     class {

@@ -1,5 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { Link, NavLink, useLocation } from "react-router-dom";
+import { useEffect, useLayoutEffect, useState, type ReactNode } from "react";
+import {
+  Link,
+  NavLink,
+  useLocation,
+  useNavigationType,
+} from "react-router-dom";
 import {
   ArrowRight,
   CircuitBoard,
@@ -32,6 +37,25 @@ const publicNavigation = [
   ["/docs", "文档"],
   ["/about", "关于 ostool"],
 ] as const;
+
+/** New pages start at the top; browser history keeps its native restoration. */
+export function SiteScrollRestoration() {
+  const location = useLocation();
+  const navigation = useNavigationType();
+  useLayoutEffect(() => {
+    if (navigation === "POP") return;
+    let anchor = location.hash.slice(1);
+    try {
+      anchor = decodeURIComponent(anchor);
+    } catch {
+      // Invalid fragments have no matching anchor; the page still opens normally.
+    }
+    const target = anchor ? document.getElementById(anchor) : null;
+    if (target) target.scrollIntoView({ block: "start", behavior: "instant" });
+    else window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, [location, navigation]);
+  return null;
+}
 export function Logo({ light = false }: { light?: boolean }) {
   const { settings } = useSiteSettings();
   return (
