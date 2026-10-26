@@ -21,6 +21,10 @@ test("role matrix grants instant device access without administrator rights and 
   await page.getByRole("button", { name: "创建角色", exact: true }).click();
   await expect(page).toHaveURL(base + "/admin/users/roles/new");
   await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByLabel("角色编码", { exact: true }).fill(`engineer_${stamp}`);
+  await expect(
+    page.getByRole("checkbox", { name: "启用角色", exact: true }),
+  ).toBeChecked();
   await page.getByLabel("角色名称", { exact: true }).fill(name);
   await page
     .getByRole("checkbox", { name: "即时分配设备", exact: true })
@@ -46,6 +50,15 @@ test("role matrix grants instant device access without administrator rights and 
     expect.arrayContaining(["board.use", "board.instant"]),
   );
   expect(role.administrator).toBe(false);
+  expect(role.code).toBe(`engineer_${stamp}`);
+  expect(role.enabled).toBe(true);
+  await page
+    .getByText(name, { exact: true })
+    .locator("xpath=ancestor::tr")
+    .getByRole("link", { name: "编辑", exact: true })
+    .click();
+  await expect(page.getByLabel("角色编码", { exact: true })).toBeDisabled();
+  await page.getByRole("link", { name: "取消", exact: true }).click();
   const username = `engineer_${stamp}`,
     email = username + "@test.local",
     password = "permission-browser-password-123";
@@ -169,6 +182,8 @@ test("role matrix grants instant device access without administrator rights and 
       await context.request.post(base + "/api/v1/admin/roles", {
         headers,
         data: {
+          code: `viewer_${stamp}`,
+          enabled: true,
           name: viewerName,
           description: "只读设备",
           permissions: ["devices.read"],

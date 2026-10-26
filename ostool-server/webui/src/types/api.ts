@@ -437,6 +437,8 @@ export interface AllocationPolicy {
 }
 export interface RoleInput {
   revision?: number;
+  code: string;
+  enabled: boolean;
   name: string;
   description: string;
   permissions: string[];

@@ -7,6 +7,7 @@ import { PagePanel } from "@/components/page-panel";
 import {
   TextField,
   TextareaField,
+  CheckField,
   Section,
   Notice,
   useAction,
@@ -42,6 +43,8 @@ function Editor({
     task = useAction();
   const initial = (): RoleInput => ({
     revision: role?.revision,
+    code: role?.code ?? "",
+    enabled: role?.enabled ?? true,
     name: role?.name ?? "",
     description: role?.description ?? "",
     permissions:
@@ -195,6 +198,18 @@ function Editor({
         <fieldset disabled={readonly || task.pending}>
           <Section title="角色信息">
             <TextField
+              label="角色编码"
+              required
+              minLength={3}
+              maxLength={64}
+              pattern="[a-z][a-z0-9_-]{2,63}"
+              disabled={!!role}
+              value={draft.code}
+              onValue={(code) => patch({ code })}
+              placeholder="3–64 位小写字母、数字、_ 或 -，以字母开头；创建后不可修改"
+              autoComplete="off"
+            />
+            <TextField
               label="角色名称"
               maxLength={80}
               required
@@ -206,6 +221,12 @@ function Editor({
               maxLength={500}
               value={draft.description}
               onValue={(description) => patch({ description })}
+            />
+            <CheckField
+              label="启用角色"
+              disabled={fixed}
+              checked={draft.enabled}
+              onChange={(enabled) => patch({ enabled })}
             />
           </Section>
         </fieldset>
@@ -290,59 +311,64 @@ function Editor({
               );
             })}
           </fieldset>
+          {draft.permissions.includes("board.instant") &&
+            !draft.permissions.includes("system.admin") && (
+              <fieldset
+                className="role-permission-limits"
+                disabled={fixed || task.pending}
+              >
+                <Section title="即时分配权限参数">
+                  <TextField
+                    label="单次最长使用（分钟）"
+                    type="number"
+                    min={1}
+                    max={1440}
+                    required
+                    value={draft.allocation_policy.max_duration_minutes}
+                    onValue={(v) => policy("max_duration_minutes", Number(v))}
+                    placeholder="1–1440 分钟"
+                  />
+                  <TextField
+                    label="每用户并发设备数"
+                    type="number"
+                    min={1}
+                    max={16}
+                    required
+                    value={draft.allocation_policy.max_concurrent_sessions}
+                    onValue={(v) =>
+                      policy("max_concurrent_sessions", Number(v))
+                    }
+                    placeholder="1–16 台"
+                  />
+                  <TextField
+                    label="最短可用时长（分钟）"
+                    type="number"
+                    min={1}
+                    max={draft.allocation_policy.max_duration_minutes}
+                    required
+                    value={draft.allocation_policy.min_available_minutes}
+                    onValue={(v) => policy("min_available_minutes", Number(v))}
+                    placeholder="预约临近时，剩余时间不足此值则不分配"
+                  />
+                  <TextareaField
+                    label="可用板型范围"
+                    value={types}
+                    onValue={(value) => {
+                      setTypes(value);
+                      policy(
+                        "board_types",
+                        value
+                          .split(/[,，\n]/)
+                          .map((v) => v.trim())
+                          .filter(Boolean),
+                      );
+                    }}
+                    placeholder="用逗号或换行分隔；留空允许所有已开放即时使用的设备。"
+                  />
+                </Section>
+              </fieldset>
+            )}
         </Section>
-        {draft.permissions.includes("board.instant") &&
-          !draft.permissions.includes("system.admin") && (
-            <fieldset disabled={fixed || task.pending}>
-              <Section title="即时使用限制">
-                <TextField
-                  label="单次最长使用（分钟）"
-                  type="number"
-                  min={1}
-                  max={1440}
-                  required
-                  value={draft.allocation_policy.max_duration_minutes}
-                  onValue={(v) => policy("max_duration_minutes", Number(v))}
-                  placeholder="1–1440 分钟"
-                />
-                <TextField
-                  label="每用户并发设备数"
-                  type="number"
-                  min={1}
-                  max={16}
-                  required
-                  value={draft.allocation_policy.max_concurrent_sessions}
-                  onValue={(v) => policy("max_concurrent_sessions", Number(v))}
-                  placeholder="1–16 台"
-                />
-                <TextField
-                  label="最短可用时长（分钟）"
-                  type="number"
-                  min={1}
-                  max={draft.allocation_policy.max_duration_minutes}
-                  required
-                  value={draft.allocation_policy.min_available_minutes}
-                  onValue={(v) => policy("min_available_minutes", Number(v))}
-                  placeholder="预约临近时，剩余时间不足此值则不分配"
-                />
-                <TextareaField
-                  label="可用板型范围"
-                  value={types}
-                  onValue={(value) => {
-                    setTypes(value);
-                    policy(
-                      "board_types",
-                      value
-                        .split(/[,，\n]/)
-                        .map((v) => v.trim())
-                        .filter(Boolean),
-                    );
-                  }}
-                  placeholder="用逗号或换行分隔；留空允许所有已开放即时使用的设备。"
-                />
-              </Section>
-            </fieldset>
-          )}
       </form>
     </PagePanel>
   );

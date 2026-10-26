@@ -319,7 +319,7 @@ async fn admin_actions_skip_step_up_but_keep_session_isolation_and_csrf() {
             "POST",
             "/api/v1/admin/roles",
             Some(&cookies),
-            json!({"name":"test role","description":"","permissions":["board.use","rental.request"]}),
+            json!({"code":"test_role","enabled":true,"name":"test role","description":"","permissions":["board.use","rental.request"]}),
         )
         .await;
     assert_eq!(allowed.status, StatusCode::CREATED, "{}", allowed.body);
@@ -2276,7 +2276,7 @@ async fn capability_roles_gate_admin_login_http_and_scoped_events_and_prevent_es
             .iter()
             .any(|p| p["code"] == "board.instant")
     );
-    let created=f.request("POST","/api/v1/admin/roles",Some(&cookie),json!({"name":"设备观察员","description":"只读设备权限","permissions":["devices.read"]})).await;
+    let created=f.request("POST","/api/v1/admin/roles",Some(&cookie),json!({"code":"device_observer","enabled":true,"name":"设备观察员","description":"只读设备权限","permissions":["devices.read"]})).await;
     assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
     let role: String = sqlx::query_scalar("SELECT id FROM roles WHERE name='设备观察员'")
         .fetch_one(f.state.database.pool())
@@ -2349,7 +2349,7 @@ async fn capability_roles_gate_admin_login_http_and_scoped_events_and_prevent_es
     assert!(text.contains("snapshot"));
     assert!(!text.contains("\"listing\""));
     assert!(!text.contains("\"account_settings\""));
-    let updated=f.request("PUT",&format!("/api/v1/admin/roles/{role}"),Some(&cookie),json!({"revision":1,"name":"授权维护员","description":"允许维护自己已有权限的角色","permissions":["roles.manage","users.manage","devices.read"]})).await;
+    let updated=f.request("PUT",&format!("/api/v1/admin/roles/{role}"),Some(&cookie),json!({"revision":1,"code":"device_observer","enabled":true,"name":"授权维护员","description":"允许维护自己已有权限的角色","permissions":["roles.manage","users.manage","devices.read"]})).await;
     assert_eq!(updated.status, StatusCode::NO_CONTENT, "{}", updated.body);
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         while let Some(bytes) = stream.next().await {
@@ -2361,7 +2361,7 @@ async fn capability_roles_gate_admin_login_http_and_scoped_events_and_prevent_es
     })
     .await?;
 
-    let stale=f.request("PUT",&format!("/api/v1/admin/roles/{role}"),Some(&cookie),json!({"revision":1,"name":"覆盖旧权限","description":"","permissions":["system.admin"]})).await;
+    let stale=f.request("PUT",&format!("/api/v1/admin/roles/{role}"),Some(&cookie),json!({"revision":1,"code":"device_observer","enabled":true,"name":"覆盖旧权限","description":"","permissions":["system.admin"]})).await;
     assert_eq!(stale.status, StatusCode::CONFLICT);
     assert_eq!(
         f.request("GET", "/api/v1/auth/me", Some(&observer), Value::Null)
@@ -2377,7 +2377,7 @@ async fn capability_roles_gate_admin_login_http_and_scoped_events_and_prevent_es
             "POST",
             "/api/v1/admin/roles",
             Some(&observer),
-            json!({"name":"非法提权","description":"","permissions":["system.admin"]}),
+            json!({"code":"illegal_escalation","enabled":true,"name":"非法提权","description":"","permissions":["system.admin"]}),
         )
         .await;
     assert_eq!(elevated.status, StatusCode::FORBIDDEN);
@@ -2394,7 +2394,7 @@ async fn capability_roles_gate_admin_login_http_and_scoped_events_and_prevent_es
             "PUT",
             &format!("/api/v1/admin/roles/{role}"),
             Some(&observer),
-            json!({"revision":2,"name":"自改权限","description":"","permissions":["devices.read"]}),
+            json!({"revision":2,"code":"device_observer","enabled":true,"name":"自改权限","description":"","permissions":["devices.read"]}),
         )
         .await;
     assert_eq!(own.status, StatusCode::CONFLICT);
@@ -2403,7 +2403,7 @@ async fn capability_roles_gate_admin_login_http_and_scoped_events_and_prevent_es
             "POST",
             "/api/v1/admin/roles",
             Some(&cookie),
-            json!({"name":"无效权限","description":"","permissions":["not.a.permission"]}),
+            json!({"code":"unknown_permissions","enabled":true,"name":"无效权限","description":"","permissions":["not.a.permission"]}),
         )
         .await;
     assert_eq!(unknown.status, StatusCode::BAD_REQUEST);
@@ -2418,7 +2418,7 @@ async fn instant_device_use_respects_pool_bookings_concurrency_ownership_and_ear
     let f = Fixture::new(true).await;
     let root = f.login(true).await;
     let cookie = test_security::cookie_header(&root.headers);
-    let role_reply=f.request("POST","/api/v1/admin/roles",Some(&cookie),json!({"name":"即时研发成员","description":"可即时使用指定板型","permissions":["board.instant","rental.request"],"allocation_policy":{"max_duration_minutes":120,"max_concurrent_sessions":1,"min_available_minutes":10,"board_types":["shared-arm"]}})).await;
+    let role_reply=f.request("POST","/api/v1/admin/roles",Some(&cookie),json!({"code":"instant_engineer","enabled":true,"name":"即时研发成员","description":"可即时使用指定板型","permissions":["board.instant","rental.request"],"allocation_policy":{"max_duration_minutes":120,"max_concurrent_sessions":1,"min_available_minutes":10,"board_types":["shared-arm"]}})).await;
     assert_eq!(
         role_reply.status,
         StatusCode::CREATED,
@@ -2703,7 +2703,7 @@ async fn instant_device_use_respects_pool_bookings_concurrency_ownership_and_ear
             .bind(next_sid)
             .fetch_one(f.state.database.pool())
             .await?;
-    let update=f.request("PUT",&format!("/api/v1/admin/roles/{role}"),Some(&cookie),json!({"name":"即时研发成员","revision":1,"description":"取消即时使用","permissions":["board.use"],"allocation_policy":{"max_duration_minutes":120,"max_concurrent_sessions":1,"min_available_minutes":10,"board_types":["shared-arm"]}})).await;
+    let update=f.request("PUT",&format!("/api/v1/admin/roles/{role}"),Some(&cookie),json!({"code":"instant_engineer","enabled":true,"name":"即时研发成员","revision":1,"description":"取消即时使用","permissions":["board.use"],"allocation_policy":{"max_duration_minutes":120,"max_concurrent_sessions":1,"min_available_minutes":10,"board_types":["shared-arm"]}})).await;
     assert_eq!(update.status, StatusCode::NO_CONTENT, "{}", update.body);
     assert_eq!(
         f.custom(
@@ -2763,5 +2763,299 @@ async fn instant_device_use_respects_pool_bookings_concurrency_ownership_and_ear
         application_count, 2,
         "history backfill must not duplicate existing applications"
     );
+    let status_input = |revision, enabled| json!({"code":"instant_engineer","enabled":enabled,"revision":revision,"name":"即时研发成员","description":"角色状态测试","permissions":["board.instant"],"allocation_policy":{"max_duration_minutes":120,"max_concurrent_sessions":1,"min_available_minutes":10,"board_types":["shared-arm"]}});
+    assert_eq!(
+        f.request(
+            "PUT",
+            &format!("/api/v1/admin/roles/{role}"),
+            Some(&cookie),
+            status_input(2, true)
+        )
+        .await
+        .status,
+        StatusCode::NO_CONTENT
+    );
+    let current_user = f.state.database.user_by_id(user.id).await?.unwrap();
+    let current_grant = f
+        .state
+        .database
+        .issue_grant(
+            current_user,
+            "ostool-cli",
+            "board:operate offline_access",
+            &auth,
+        )
+        .await?;
+    let active = f
+        .custom(
+            "POST",
+            "/api/v1/sessions",
+            None,
+            create(board),
+            Some(&f.origin),
+            Some(&current_grant.access_token),
+        )
+        .await;
+    assert_eq!(active.status, StatusCode::CREATED, "{}", active.body);
+    let active_sid = active.body["session_id"].as_str().unwrap();
+    assert_eq!(
+        f.request(
+            "PUT",
+            &format!("/api/v1/admin/roles/{role}"),
+            Some(&cookie),
+            status_input(3, false)
+        )
+        .await
+        .status,
+        StatusCode::NO_CONTENT
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while f.state.get_session(active_sid).await.is_some() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    assert_eq!(
+        f.custom(
+            "POST",
+            "/api/v1/sessions",
+            None,
+            create(board),
+            Some(&f.origin),
+            Some(&current_grant.access_token)
+        )
+        .await
+        .status,
+        StatusCode::UNAUTHORIZED
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn role_codes_are_unique_immutable_and_disabling_revokes_all_credentials()
+-> anyhow::Result<()> {
+    let f = Fixture::new(true).await;
+    let root = f.login(true).await;
+    let cookie = test_security::cookie_header(&root.headers);
+    let mut input = json!({"code":"device_reader","enabled":true,"name":"设备只读成员","description":"设备观察","permissions":["devices.read"]});
+    let mut invalid = input.clone();
+    invalid["code"] = json!("Invalid Code");
+    assert_eq!(
+        f.request("POST", "/api/v1/admin/roles", Some(&cookie), invalid)
+            .await
+            .status,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        f.request("POST", "/api/v1/admin/roles", Some(&cookie), input.clone())
+            .await
+            .status,
+        StatusCode::CREATED
+    );
+    let mut duplicate = input.clone();
+    duplicate["name"] = json!("重复编码的另一个角色");
+    assert_eq!(
+        f.request("POST", "/api/v1/admin/roles", Some(&cookie), duplicate)
+            .await
+            .status,
+        StatusCode::CONFLICT
+    );
+    let role: String = sqlx::query_scalar("SELECT id FROM roles WHERE code='device_reader'")
+        .fetch_one(f.state.database.pool())
+        .await?;
+    let user = f
+        .state
+        .database
+        .create_user(
+            "role_reader",
+            "reader@roles.test",
+            "roles-reader-password-123",
+            None,
+            false,
+        )
+        .await?;
+    sqlx::query("UPDATE users SET role_id=$1 WHERE id=$2")
+        .bind(&role)
+        .bind(user.id)
+        .execute(f.state.database.pool())
+        .await?;
+    let user = f.state.database.user_by_id(user.id).await?.unwrap();
+    let auth = f.state.config.read().await.auth.clone();
+    let grant = f
+        .state
+        .database
+        .issue_grant(
+            user.clone(),
+            "ostool-cli",
+            "board:operate offline_access",
+            &auth,
+        )
+        .await?;
+    let credential = f
+        .state
+        .database
+        .authenticate_credential(&grant.access_token)
+        .await?
+        .unwrap();
+    let pat = f
+        .state
+        .database
+        .create_personal_access_token(user.id, "角色测试", None)
+        .await?;
+    input["revision"] = json!(1);
+    input["name"] = json!("设备观察人员");
+    assert_eq!(
+        f.request(
+            "PUT",
+            &format!("/api/v1/admin/roles/{role}"),
+            Some(&cookie),
+            input.clone()
+        )
+        .await
+        .status,
+        StatusCode::NO_CONTENT
+    );
+    assert!(
+        f.state.database.credential_active(&credential).await?,
+        "metadata changes preserve credentials"
+    );
+    input["revision"] = json!(2);
+    input["code"] = json!("renamed_role");
+    assert_eq!(
+        f.request(
+            "PUT",
+            &format!("/api/v1/admin/roles/{role}"),
+            Some(&cookie),
+            input.clone()
+        )
+        .await
+        .status,
+        StatusCode::CONFLICT
+    );
+    assert!(
+        sqlx::query("UPDATE roles SET code='renamed_role' WHERE id=$1")
+            .bind(&role)
+            .execute(f.state.database.pool())
+            .await
+            .is_err()
+    );
+    input["code"] = json!("device_reader");
+    input["enabled"] = json!(false);
+    assert_eq!(
+        f.request(
+            "PUT",
+            &format!("/api/v1/admin/roles/{role}"),
+            Some(&cookie),
+            input.clone()
+        )
+        .await
+        .status,
+        StatusCode::NO_CONTENT
+    );
+    assert!(!f.state.database.credential_active(&credential).await?);
+    assert!(
+        f.state
+            .database
+            .authenticate_token(&grant.access_token)
+            .await?
+            .is_none()
+    );
+    assert!(
+        f.state
+            .database
+            .authenticate_token(&pat.token)
+            .await?
+            .is_none()
+    );
+    assert!(
+        f.state
+            .database
+            .refresh(&grant.refresh_token, &auth)
+            .await?
+            .is_none()
+    );
+    assert!(
+        f.state
+            .database
+            .authenticate_password("role_reader", "roles-reader-password-123")
+            .await?
+            .is_none()
+    );
+    assert!(
+        f.state
+            .database
+            .issue_grant(user, "ostool-cli", "board:operate", &auth)
+            .await
+            .is_err()
+    );
+    let assign = json!({"username":"blocked_reader","email":"blocked@roles.test","password":"blocked-reader-password-123","display_name":null,"role_id":role,"disabled":false});
+    assert_eq!(
+        f.request("POST", "/api/v1/admin/users", Some(&cookie), assign)
+            .await
+            .status,
+        StatusCode::CONFLICT
+    );
+    input["revision"] = json!(3);
+    input["enabled"] = json!(true);
+    assert_eq!(
+        f.request(
+            "PUT",
+            &format!("/api/v1/admin/roles/{role}"),
+            Some(&cookie),
+            input.clone()
+        )
+        .await
+        .status,
+        StatusCode::NO_CONTENT
+    );
+    assert!(
+        f.state
+            .database
+            .authenticate_password("role_reader", "roles-reader-password-123")
+            .await?
+            .is_some()
+    );
+    assert!(
+        f.state
+            .database
+            .authenticate_token(&grant.access_token)
+            .await?
+            .is_none()
+    );
+    assert!(
+        f.state
+            .database
+            .authenticate_token(&pat.token)
+            .await?
+            .is_none()
+    );
+    assert!(
+        f.state
+            .database
+            .refresh(&grant.refresh_token, &auth)
+            .await?
+            .is_none()
+    );
+    let builtin = json!({"code":"admin","enabled":false,"revision":1,"name":"管理员","description":"","permissions":["system.admin"]});
+    assert_eq!(
+        f.request("PUT", "/api/v1/admin/roles/admin", Some(&cookie), builtin)
+            .await
+            .status,
+        StatusCode::CONFLICT
+    );
+    let rows = f
+        .request("GET", "/api/v1/admin/roles", Some(&cookie), Value::Null)
+        .await;
+    let current = rows
+        .body
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == role)
+        .unwrap();
+    assert_eq!(current["code"], "device_reader");
+    assert_eq!(current["enabled"], true);
+    assert_eq!(current["revision"], 4);
     Ok(())
 }

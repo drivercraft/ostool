@@ -567,6 +567,14 @@ conditions. Authentication rules and routes are in [the API reference](../docs/a
 a grouped capability matrix, group/master selection and automatically included
 read dependencies. The server owns the catalog (`GET /api/v1/admin/permissions`);
 the same codes authorize management HTTP routes and filter every SSE resource.
+Role writes require `code` (3–64 lowercase ASCII letters, digits, `_` or `-`, starting
+with a letter) and `enabled`. The code is globally unique and immutable; the internal
+`id` keeps existing user associations stable. Existing roles receive codes during
+migration and stay enabled. Lists support code searches and status filters.
+Disabling an assigned role revokes browser/CLI credentials, refresh tokens and PATs,
+blocks new login and role assignment, and terminates its device sessions. Re-enabling
+requires fresh credentials. Built-in roles stay enabled, and users cannot change the
+status or permissions of their own role.
 Role edits include the current revision to reject stale concurrent writes. Custom roles can enter a limited console through `console.access` without receiving
 all-administrator privileges. `system.admin` remains the full trusted administrator
 capability. Administrators cannot grant capabilities they do not own or edit higher
@@ -578,7 +586,9 @@ log in again. Role metadata changes alone preserve sessions.
 Grant `board.instant` to a custom role to allow immediate use without approval.
 This also grants `board.use`, not console access. The role editor configures a
 maximum duration (1–1440 minutes), concurrent device count (1–16), minimum usable
-window and optional board-type allowlist. Separately enable **Allow immediate use**
+window and optional board-type allowlist within the permission section. `board.instant`
+is the sole allocation grant; `allocation_policy` stores its numeric/scope parameters,
+not a second permission switch. Separately enable **Allow immediate use**
 on each device; existing inventory defaults to closed. Only enabled, idle devices
 in both the role's scope and the open pool can be allocated. Existing bookings
 have priority; the server bounds each allocation by the next booking minus a

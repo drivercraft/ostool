@@ -216,7 +216,14 @@ pub async fn active(
 /// Hardware release uses the existing coordinator, including power-off and
 /// serial cleanup. Failure to validate a public member's grant fails closed.
 pub async fn enforce(state: &AppState) -> Result<(), ApiError> {
-    let rows=sqlx::query("SELECT s.session_id,r.ends_at FROM session_owners s JOIN users u ON u.id=s.user_id JOIN roles role ON role.id=u.role_id JOIN board_rentals r ON r.id=s.rental_id WHERE (u.is_admin OR 'board.use'=ANY(role.permissions)) AND (r.source<>'instant' OR u.is_admin OR 'board.instant'=ANY(role.permissions)) AND NOT u.disabled AND r.cancelled_at IS NULL AND r.starts_at<=now() AND r.ends_at>now()")
+    let blocked: Vec<String> = sqlx::query_scalar("SELECT s.session_id FROM session_owners s JOIN users u ON u.id=s.user_id JOIN roles r ON r.id=u.role_id WHERE u.disabled OR NOT r.enabled")
+        .fetch_all(state.database.pool()).await.map_err(db_error)?;
+    for id in blocked {
+        state
+            .request_session_stop(&id, SessionStopReason::RentalRevoked)
+            .await;
+    }
+    let rows=sqlx::query("SELECT s.session_id,r.ends_at FROM session_owners s JOIN users u ON u.id=s.user_id JOIN roles role ON role.id=u.role_id JOIN board_rentals r ON r.id=s.rental_id WHERE (u.is_admin OR 'board.use'=ANY(role.permissions)) AND (r.source<>'instant' OR u.is_admin OR 'board.instant'=ANY(role.permissions)) AND NOT u.disabled AND role.enabled AND r.cancelled_at IS NULL AND r.starts_at<=now() AND r.ends_at>now()")
         .fetch_all(state.database.pool()).await.map_err(db_error)?;
     let valid = rows
         .iter()

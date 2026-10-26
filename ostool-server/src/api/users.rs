@@ -16,6 +16,8 @@ use uuid::Uuid;
 pub struct Role {
     pub revision: i64,
     pub id: String,
+    pub code: String,
+    pub enabled: bool,
     pub name: String,
     pub description: String,
     pub administrator: bool,
@@ -39,6 +41,8 @@ pub struct UserInput {
 pub struct RoleInput {
     #[serde(default)]
     pub revision: Option<i64>,
+    pub code: String,
+    pub enabled: bool,
     pub name: String,
     pub description: String,
     pub permissions: Vec<String>,
@@ -70,7 +74,7 @@ fn sql_error(error: sqlx::Error) -> ApiError {
         .as_database_error()
         .is_some_and(|e| e.is_unique_violation() || e.is_foreign_key_violation())
     {
-        ApiError::conflict("用户名、邮箱或角色名称已存在，或该角色仍在使用")
+        ApiError::conflict("用户名、邮箱、角色编码或名称已存在，或该角色仍在使用")
     } else {
         log::error!("user management database error: {error}");
         ApiError::service_unavailable("用户数据库操作失败")
@@ -95,6 +99,8 @@ pub async fn list_roles(State(state): State<AppState>) -> Result<Json<Vec<Role>>
             Ok(Role {
                 revision: r.try_get("revision")?,
                 id: r.try_get("id")?,
+                code: r.try_get("code")?,
+                enabled: r.try_get("enabled")?,
                 name: r.try_get("name")?,
                 description: r.try_get("description")?,
                 administrator: r.try_get("administrator")?,
@@ -145,7 +151,7 @@ async fn create_user(
     let hash = crate::persistence::postgres::hash_password_async(password.to_owned()).await?;
     let pool = state.database.pool();
     ensure_assignable(&state, &actor, &input.role_id, None).await?;
-    let result = sqlx::query_scalar::<_,Uuid>("INSERT INTO users(email,display_name,password_hash,role_id,is_admin,disabled,username) SELECT $1,$2,$3,id,administrator,$5,$6 FROM roles WHERE id=$4 RETURNING users.id")
+    let result = sqlx::query_scalar::<_,Uuid>("INSERT INTO users(email,display_name,password_hash,role_id,is_admin,disabled,username) SELECT $1,$2,$3,id,administrator,$5,$6 FROM roles WHERE id=$4 AND enabled RETURNING users.id")
         .bind(input.email.trim().to_lowercase()).bind(display_name).bind(hash).bind(input.role_id).bind(input.disabled).bind(input.username.trim().to_ascii_lowercase()).fetch_optional(pool).await.map_err(sql_error)?;
     let id = result.ok_or_else(|| ApiError::bad_request("角色不存在"))?;
     state.admin_events.invalidate(&["users"]);
@@ -193,7 +199,7 @@ async fn update_user(
         )?;
     let display_name =
         crate::security::names::normalize_display_name(input.display_name.as_deref())?;
-    let role = sqlx::query("SELECT administrator FROM roles WHERE id=$1")
+    let role = sqlx::query("SELECT administrator FROM roles WHERE id=$1 AND enabled")
         .bind(&input.role_id)
         .fetch_optional(&mut *tx)
         .await
@@ -248,6 +254,15 @@ async fn ensure_assignable(
     role: &str,
     target: Option<Uuid>,
 ) -> Result<(), ApiError> {
+    let enabled: Option<bool> = sqlx::query_scalar("SELECT enabled FROM roles WHERE id=$1")
+        .bind(role)
+        .fetch_optional(state.database.pool())
+        .await?;
+    match enabled {
+        Some(true) => {}
+        Some(false) => return Err(ApiError::conflict("不能分配已停用的角色")),
+        None => return Err(ApiError::bad_request("角色不存在")),
+    }
     let access = crate::security::permissions::access(&state.database, actor).await?;
     if access.allows("system.admin") {
         return Ok(());
@@ -276,7 +291,7 @@ async fn ensure_assignable(
 }
 async fn ensure_admin(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<(), ApiError> {
     let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM users WHERE is_admin AND NOT disabled")
+        sqlx::query_scalar("SELECT count(*) FROM users u JOIN roles r ON r.id=u.role_id WHERE u.is_admin AND NOT u.disabled AND r.enabled")
             .fetch_one(&mut **tx)
             .await
             .map_err(sql_error)?;
@@ -286,6 +301,17 @@ async fn ensure_admin(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<
     Ok(())
 }
 fn validate_role(input: &RoleInput) -> Result<(), ApiError> {
+    let code = input.code.as_bytes();
+    if !(3..=64).contains(&code.len())
+        || !code[0].is_ascii_lowercase()
+        || !code
+            .iter()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'_' | b'-'))
+    {
+        return Err(ApiError::bad_request(
+            "角色编码为 3–64 位小写字母、数字、下划线或连字符，以字母开头",
+        ));
+    }
     if input.name.trim().is_empty() || input.name.len() > 80 || input.description.len() > 500 {
         return Err(ApiError::bad_request(
             "角色名称需要 1 至 80 个字符，描述不超过 500 个字符",
@@ -308,9 +334,10 @@ async fn create_role(
         &input.allocation_policy,
     )?;
     let id = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO roles(id,name,description,administrator,permissions,allocation_policy) VALUES($1,$2,$3,$4,$5,$6)")
+    sqlx::query("INSERT INTO roles(id,name,description,administrator,permissions,allocation_policy,code,enabled) VALUES($1,$2,$3,$4,$5,$6,$7,$8)")
         .bind(&id).bind(input.name.trim()).bind(input.description).bind(permissions.iter().any(|p|p=="system.admin"))
         .bind(permissions).bind(serde_json::to_value(input.allocation_policy).map_err(anyhow::Error::from)?)
+        .bind(input.code).bind(input.enabled)
         .execute(state.database.pool()).await.map_err(sql_error)?;
     state.admin_events.invalidate(&["roles"]);
     Ok((StatusCode::CREATED, Extension(crate::audit::Target(id))))
@@ -336,7 +363,7 @@ async fn update_role(
         .execute(&mut *tx)
         .await?;
     let row = sqlx::query(
-        "SELECT builtin,permissions,allocation_policy,revision FROM roles WHERE id=$1 FOR UPDATE",
+        "SELECT code,enabled,builtin,permissions,allocation_policy,revision FROM roles WHERE id=$1 FOR UPDATE",
     )
     .bind(&id)
     .fetch_optional(&mut *tx)
@@ -347,15 +374,20 @@ async fn update_role(
             "角色已被其他管理员修改，请保留草稿并载入最新版本",
         ));
     }
+    if input.code != row.try_get::<String, _>("code")? {
+        return Err(ApiError::conflict("角色编码创建后不可修改"));
+    }
     let old: Vec<String> = row.try_get("permissions")?;
     let policy: serde_json::Value = row.try_get("allocation_policy")?;
     let previous_policy = serde_json::from_value(policy.clone()).map_err(anyhow::Error::from)?;
     crate::security::permissions::ensure_delegable(&access, &old, &previous_policy)?;
     let new_policy = serde_json::to_value(&input.allocation_policy).map_err(anyhow::Error::from)?;
-    let changed = old != permissions || policy != new_policy;
+    let changed = old != permissions
+        || policy != new_policy
+        || input.enabled != row.try_get::<bool, _>("enabled")?;
     if changed && row.try_get::<bool, _>("builtin")? {
         return Err(ApiError::conflict(
-            "内置角色的权限和使用限制不可修改，请创建自定义角色",
+            "内置角色的状态、权限和使用限制不可修改，请创建自定义角色",
         ));
     }
     if !access.allows("system.admin") && old.iter().any(|p| !access.allows(p)) {
@@ -369,17 +401,18 @@ async fn update_role(
             .await?;
     if changed && own_role {
         return Err(ApiError::conflict(
-            "不能修改自己正在使用的角色权限，请使用其他管理员操作",
+            "不能修改自己正在使用的角色状态或权限，请使用其他管理员操作",
         ));
     }
     sqlx::query(
-        "UPDATE roles SET name=$1,description=$2,permissions=$3,allocation_policy=$4 WHERE id=$5",
+        "UPDATE roles SET name=$1,description=$2,permissions=$3,allocation_policy=$4,enabled=$6 WHERE id=$5",
     )
     .bind(input.name.trim())
     .bind(input.description)
     .bind(permissions)
     .bind(new_policy)
     .bind(&id)
+    .bind(input.enabled)
     .execute(&mut *tx)
     .await?;
     ensure_admin(&mut tx).await?;

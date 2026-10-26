@@ -209,7 +209,7 @@ impl Database {
     pub async fn find_user(&self, email: &str) -> anyhow::Result<Option<User>> {
         let email = normalize_email(email)?;
         let row = sqlx::query(
-            "SELECT id,username,email,display_name,is_admin,security_version FROM users WHERE email=$1 AND disabled=false",
+            "SELECT id,username,email,display_name,is_admin,security_version FROM users WHERE email=$1 AND disabled=false AND EXISTS(SELECT 1 FROM roles r WHERE r.id=users.role_id AND r.enabled)",
         )
         .bind(email)
         .fetch_optional(&self.pool)
@@ -220,7 +220,7 @@ impl Database {
 
     pub async fn user_by_id(&self, id: Uuid) -> anyhow::Result<Option<User>> {
         let row = sqlx::query(
-            "SELECT id,username,email,display_name,is_admin,security_version FROM users WHERE id=$1 AND disabled=false",
+            "SELECT id,username,email,display_name,is_admin,security_version FROM users WHERE id=$1 AND disabled=false AND EXISTS(SELECT 1 FROM roles r WHERE r.id=users.role_id AND r.enabled)",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -252,7 +252,7 @@ impl Database {
             return Ok(None);
         }
         let identifier = email.trim().to_lowercase();
-        let row=sqlx::query("SELECT id,username,email,display_name,is_admin,security_version,password_hash FROM users WHERE (email=$1 OR lower(username)=$1) AND NOT disabled").bind(identifier).fetch_optional(&self.pool).await?;
+        let row=sqlx::query("SELECT id,username,email,display_name,is_admin,security_version,password_hash FROM users WHERE (email=$1 OR lower(username)=$1) AND NOT disabled AND EXISTS(SELECT 1 FROM roles r WHERE r.id=users.role_id AND r.enabled)").bind(identifier).fetch_optional(&self.pool).await?;
         let hash = row
             .as_ref()
             .map(|row| row.try_get::<String, _>("password_hash"))
@@ -285,7 +285,7 @@ impl Database {
             now + chrono::Duration::seconds(auth.refresh_token_ttl_secs as i64);
         let mut tx = self.pool.begin().await?;
         let exists: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM users WHERE id=$1 AND security_version=$2 AND NOT disabled FOR UPDATE",
+            "SELECT id FROM users WHERE id=$1 AND security_version=$2 AND NOT disabled AND EXISTS(SELECT 1 FROM roles r WHERE r.id=users.role_id AND r.enabled) FOR UPDATE",
         )
         .bind(user.id)
         .bind(user.security_version)
@@ -319,7 +319,7 @@ impl Database {
         if token.len() > 256 {
             return Ok(None);
         }
-        let row=sqlx::query("SELECT u.id,u.username,u.email,u.display_name,u.is_admin,u.security_version,s.id AS session_id,s.client_id,s.scope,s.step_up_until FROM oauth_sessions s JOIN users u ON u.id=s.user_id WHERE s.access_token_hash=$1 AND s.revoked_at IS NULL AND s.access_expires_at>now() AND s.absolute_expires_at>now() AND s.last_seen_at>now()-interval '1 day' AND s.security_version=u.security_version AND NOT u.disabled UNION ALL SELECT u.id,u.username,u.email,u.display_name,u.is_admin,u.security_version,NULL::uuid,'pat','board:operate',NULL::timestamptz FROM personal_access_tokens p JOIN users u ON u.id=p.user_id WHERE p.token_hash=$1 AND (p.expires_at IS NULL OR p.expires_at>now()) AND NOT u.disabled LIMIT 1")
+        let row=sqlx::query("SELECT u.id,u.username,u.email,u.display_name,u.is_admin,u.security_version,s.id AS session_id,s.client_id,s.scope,s.step_up_until FROM oauth_sessions s JOIN users u ON u.id=s.user_id WHERE s.access_token_hash=$1 AND s.revoked_at IS NULL AND s.access_expires_at>now() AND s.absolute_expires_at>now() AND s.last_seen_at>now()-interval '1 day' AND s.security_version=u.security_version AND NOT u.disabled AND EXISTS(SELECT 1 FROM roles r WHERE r.id=u.role_id AND r.enabled) UNION ALL SELECT u.id,u.username,u.email,u.display_name,u.is_admin,u.security_version,NULL::uuid,'pat','board:operate',NULL::timestamptz FROM personal_access_tokens p JOIN users u ON u.id=p.user_id WHERE p.token_hash=$1 AND (p.expires_at IS NULL OR p.expires_at>now()) AND NOT u.disabled AND EXISTS(SELECT 1 FROM roles r WHERE r.id=u.role_id AND r.enabled) LIMIT 1")
             .bind(token_hash(token)).fetch_optional(&self.pool).await?;
         let Some(row) = row else { return Ok(None) };
         let session_id: Option<Uuid> = row.try_get("session_id")?;
@@ -345,9 +345,9 @@ impl Database {
             // A rotated family keeps an established socket alive only while its
             // current access grant is valid. An unrefreshed expired token must not
             // become a day-long credential merely by holding a WebSocket open.
-            Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM oauth_sessions s JOIN users u ON u.id=s.user_id WHERE s.family_id=(SELECT family_id FROM oauth_sessions WHERE id=$1) AND s.revoked_at IS NULL AND s.access_expires_at>now() AND s.absolute_expires_at>now() AND s.last_seen_at>now()-interval '1 day' AND s.security_version=u.security_version AND NOT u.disabled)").bind(session).fetch_one(&self.pool).await?)
+            Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM oauth_sessions s JOIN users u ON u.id=s.user_id WHERE s.family_id=(SELECT family_id FROM oauth_sessions WHERE id=$1) AND s.revoked_at IS NULL AND s.access_expires_at>now() AND s.absolute_expires_at>now() AND s.last_seen_at>now()-interval '1 day' AND s.security_version=u.security_version AND NOT u.disabled AND EXISTS(SELECT 1 FROM roles r WHERE r.id=u.role_id AND r.enabled))").bind(session).fetch_one(&self.pool).await?)
         } else {
-            Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM personal_access_tokens p JOIN users u ON u.id=p.user_id WHERE p.token_hash=$1 AND (p.expires_at IS NULL OR p.expires_at>now()) AND NOT u.disabled)").bind(&credential.token_hash).fetch_one(&self.pool).await?)
+            Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM personal_access_tokens p JOIN users u ON u.id=p.user_id WHERE p.token_hash=$1 AND (p.expires_at IS NULL OR p.expires_at>now()) AND NOT u.disabled AND EXISTS(SELECT 1 FROM roles r WHERE r.id=u.role_id AND r.enabled))").bind(&credential.token_hash).fetch_one(&self.pool).await?)
         }
     }
     pub async fn create_personal_access_token(
@@ -413,14 +413,14 @@ impl Database {
                 .await?;
         let Some(owner) = owner else { return Ok(None) };
         let alive: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM users WHERE id=$1 AND NOT disabled FOR UPDATE")
+            sqlx::query_scalar("SELECT id FROM users WHERE id=$1 AND NOT disabled AND EXISTS(SELECT 1 FROM roles r WHERE r.id=users.role_id AND r.enabled) FOR UPDATE")
                 .bind(owner)
                 .fetch_optional(&mut *tx)
                 .await?;
         if alive.is_none() {
             return Ok(None);
         }
-        let row=sqlx::query("SELECT s.*,u.username,u.email,u.display_name,u.is_admin,u.security_version AS current_version FROM oauth_sessions s JOIN users u ON u.id=s.user_id WHERE s.refresh_token_hash=$1 AND NOT u.disabled FOR UPDATE OF s").bind(token_hash(token)).fetch_optional(&mut *tx).await?;
+        let row=sqlx::query("SELECT s.*,u.username,u.email,u.display_name,u.is_admin,u.security_version AS current_version FROM oauth_sessions s JOIN users u ON u.id=s.user_id WHERE s.refresh_token_hash=$1 AND NOT u.disabled AND EXISTS(SELECT 1 FROM roles r WHERE r.id=u.role_id AND r.enabled) FOR UPDATE OF s").bind(token_hash(token)).fetch_optional(&mut *tx).await?;
         let Some(row) = row else { return Ok(None) };
         if client.is_some_and(|client| {
             row.try_get::<String, _>("client_id")

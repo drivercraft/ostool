@@ -350,7 +350,7 @@ pub fn expand(values: &[String]) -> Result<Vec<String>, ApiError> {
     Ok(result.into_iter().collect())
 }
 pub async fn access(db: &Database, user: &User) -> Result<Access, ApiError> {
-    let row=sqlx::query("SELECT r.id AS role_id,u.is_admin,r.permissions,r.allocation_policy FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=$1 AND NOT u.disabled").bind(user.id).fetch_optional(db.pool()).await?.ok_or_else(||ApiError::unauthorized("账号不可用"))?;
+    let row=sqlx::query("SELECT r.id AS role_id,u.is_admin,r.permissions,r.allocation_policy FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=$1 AND NOT u.disabled AND r.enabled").bind(user.id).fetch_optional(db.pool()).await?.ok_or_else(||ApiError::unauthorized("账号或角色不可用"))?;
     let mut permissions: BTreeSet<String> = row
         .try_get::<Vec<String>, _>("permissions")?
         .into_iter()

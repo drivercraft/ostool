@@ -461,6 +461,10 @@ scope and prior bookings while retaining durable usage records. This capability
 does not grant console access. Local edition remains anonymous.
 Each immediate allocation also creates a rental application with an “Automatically
 approved” status and decision note, visible in both application lists.
+Roles have a globally unique, immutable code and an enabled state. Disabling a role
+revokes its users' credentials and ends device access; enabling it again requires
+a fresh login. `board.instant` grants allocation, while duration, concurrency and
+board-type scope configure the limits of that permission.
 
 ### Public board authentication
 

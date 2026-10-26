@@ -726,6 +726,8 @@ fn safe_details(payload: &Value) -> Value {
             "notes",
             "user_id",
             "role_id",
+            "code",
+            "enabled",
             "administrator",
             "permissions",
             "allocation_policy",

@@ -609,7 +609,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
             "POST",
             roles_path,
             Some(admin),
-            json!({"name":"Test role","description":"test","permissions":["board.use","rental.request"]})
+            json!({"code":"test_role","enabled":true,"name":"Test role","description":"test","permissions":["board.use","rental.request"]})
         )
         .await
         .0,

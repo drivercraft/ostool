@@ -913,6 +913,7 @@ body:has(.legal-fullscreen) [data-slot="dialog-overlay"] {
   gap: 16px;
 }
 .permission-master,
+.role-permission-limits,
 .role-permission-matrix {
   grid-column: 1 / -1;
   min-width: 0;

@@ -24,9 +24,10 @@ export default function Roles() {
   const { can } = usePermissions();
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState("");
+  const [status, setStatus] = useState("");
   const filtered = roles.filter(
     (r) =>
-      (r.name + " " + r.description)
+      (r.code + " " + r.name + " " + r.description)
         .toLowerCase()
         .includes(search.toLowerCase()) &&
       (!kind ||
@@ -34,9 +35,13 @@ export default function Roles() {
           ? r.administrator
           : kind === "instant"
             ? r.permissions.includes("board.instant")
-            : !r.administrator)),
+            : !r.builtin)) &&
+      (!status || r.enabled === (status === "enabled")),
   );
-  const pagination = useListPage(filtered, JSON.stringify([search, kind]));
+  const pagination = useListPage(
+    filtered,
+    JSON.stringify([search, kind, status]),
+  );
   return (
     <PagePanel
       table
@@ -55,7 +60,7 @@ export default function Roles() {
             label="搜索角色"
             value={search}
             onValue={setSearch}
-            placeholder="角色名称或说明"
+            placeholder="角色编码、名称或说明"
           />
           <SelectField
             label="角色权限"
@@ -64,8 +69,18 @@ export default function Roles() {
             options={[
               { value: "", label: "全部角色" },
               { value: "admin", label: "全部后台管理" },
-              { value: "custom", label: "自定义权限" },
+              { value: "custom", label: "自定义角色" },
               { value: "instant", label: "允许即时使用" },
+            ]}
+          />
+          <SelectField
+            label="角色状态"
+            value={status}
+            onValue={setStatus}
+            options={[
+              { value: "", label: "全部状态" },
+              { value: "enabled", label: "已启用" },
+              { value: "disabled", label: "已停用" },
             ]}
           />
         </ListToolbar>
@@ -76,8 +91,9 @@ export default function Roles() {
       <DataTable
         headers={[
           "角色",
+          "唯一编码",
+          "状态",
           "权限",
-          "即时使用",
           "用户数",
           "说明",
           "更新时间",
@@ -91,27 +107,22 @@ export default function Roles() {
               <strong>{role.name}</strong>
               <small>{role.builtin ? "内置角色" : "自定义角色"}</small>
             </Cell>
+            <Cell className="mono">{role.code}</Cell>
+            <Cell>
+              <Badge variant={role.enabled ? "success" : "secondary"}>
+                {role.enabled ? "已启用" : "已停用"}
+              </Badge>
+            </Cell>
             <Cell>
               <Badge variant={role.administrator ? "info" : "secondary"}>
                 {role.administrator
                   ? "全部管理权限"
                   : `${role.permissions.length} 项权限`}
               </Badge>
-            </Cell>
-            <Cell>
-              <Badge
-                variant={
-                  role.permissions.includes("board.instant")
-                    ? "success"
-                    : "secondary"
-                }
-              >
-                {role.permissions.includes("board.instant") ? "允许" : "未授权"}
-              </Badge>
               {role.permissions.includes("board.instant") && (
                 <small>
-                  {role.allocation_policy.max_duration_minutes} 分钟 / 最多{" "}
-                  {role.allocation_policy.max_concurrent_sessions} 台
+                  即时分配：{role.allocation_policy.max_duration_minutes} 分钟 /
+                  最多 {role.allocation_policy.max_concurrent_sessions} 台
                 </small>
               )}
             </Cell>

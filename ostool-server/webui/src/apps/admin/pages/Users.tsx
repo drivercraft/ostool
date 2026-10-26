@@ -237,7 +237,12 @@ export default function Users() {
                   label="角色"
                   value={editor.draft.role_id}
                   onValue={(role_id) => patch({ role_id })}
-                  options={roles.map((r) => ({ value: r.id, label: r.name }))}
+                  options={roles
+                    .filter((r) => r.enabled || r.id === editor.draft.role_id)
+                    .map((r) => ({
+                      value: r.id,
+                      label: r.enabled ? r.name : `${r.name}（已停用）`,
+                    }))}
                 />
                 <TextField
                   label={editor.id ? "新密码（留空保留）" : "初始密码"}

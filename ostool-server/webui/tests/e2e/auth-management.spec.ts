@@ -69,6 +69,9 @@ test("registration, member/admin access, user/role events and settings navigatio
   await page.getByRole("link", { name: "用户角色", exact: true }).click();
   await page.getByRole("button", { name: "创建角色", exact: true }).click();
   const role = `浏览器测试角色 ${Date.now()}`;
+  await page
+    .getByLabel("角色编码", { exact: true })
+    .fill(`browser_role_${Date.now()}`);
   await page.getByLabel("角色名称", { exact: true }).fill(role);
   await page.getByRole("button", { name: "保存角色", exact: true }).click();
   await expect(page.getByText(role, { exact: true })).toBeVisible();
