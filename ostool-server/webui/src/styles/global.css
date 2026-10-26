@@ -684,7 +684,7 @@
   cursor: pointer;
 }
 .auth-message {
-  color: #d64d59 !important;
+  color: var(--destructive) !important;
 }
 
 /* Admin console shell */

@@ -237,9 +237,15 @@ export function Section({
     </section>
   );
 }
-export function Notice({ children }: { children: ReactNode }) {
+export function Notice({
+  children,
+  variant = "default",
+}: {
+  children: ReactNode;
+  variant?: ComponentProps<typeof Alert>["variant"];
+}) {
   return (
-    <Alert>
+    <Alert variant={variant}>
       <AlertDescription>{children}</AlertDescription>
     </Alert>
   );

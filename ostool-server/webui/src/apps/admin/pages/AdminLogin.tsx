@@ -188,7 +188,7 @@ export default function AdminLogin() {
                   required
                 />
               )}
-              {error && <Notice>{error}</Notice>}
+              {error && <Notice variant="destructive">{error}</Notice>}
               {!challenge && <AuthLegal />}
               <Button
                 type="submit"
