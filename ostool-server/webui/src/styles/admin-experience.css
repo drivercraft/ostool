@@ -907,7 +907,6 @@ body:has(.legal-fullscreen) [data-slot="dialog-overlay"] {
 }
 
 /* 角色权限采用固定分类列与能力选项矩阵，沿用统一控件及分组样式。 */
-.role-permission-toolbar,
 .permission-master,
 .role-permission-category,
 .permission-master label {
@@ -916,16 +915,21 @@ body:has(.legal-fullscreen) [data-slot="dialog-overlay"] {
   justify-content: space-between;
   gap: 16px;
 }
-.role-permission-toolbar > [data-slot="field"] {
-  width: 300px;
-  max-width: 50%;
+.permission-master,
+.role-permission-matrix {
+  grid-column: 1 / -1;
+  min-width: 0;
 }
 .permission-master {
-  margin-bottom: 16px;
+  flex-wrap: wrap;
   color: var(--muted-foreground);
   font-size: 0.875rem;
 }
+.permission-master > span {
+  flex: 1 1 360px;
+}
 .permission-master label {
+  margin-left: auto;
   justify-content: flex-start;
   white-space: nowrap;
   color: var(--foreground);
@@ -935,6 +939,7 @@ body:has(.legal-fullscreen) [data-slot="dialog-overlay"] {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
+  margin: 0;
   padding: 0;
 }
 .role-permission-row {

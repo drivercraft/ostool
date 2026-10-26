@@ -110,16 +110,24 @@ function Editor({
   return (
     <PagePanel
       toolbar={
-        <div className="role-permission-toolbar">
-          <span>
-            {role ? role.name : "创建角色"} · 已选 {selected.size} 项权限
-          </span>
-          <TextField
-            label="搜索权限"
-            value={search}
-            onValue={setSearch}
-            placeholder="功能、权限名称或说明"
-          />
+        <div
+          className="listing-toolbar"
+          role="toolbar"
+          aria-label="角色快捷工具栏"
+        >
+          <div className="listing-actions">
+            <span className="listing-meta">
+              {role ? role.name : "创建角色"} · 已选 {selected.size} 项权限
+            </span>
+          </div>
+          <div className="listing-filters">
+            <TextField
+              label="搜索权限"
+              value={search}
+              onValue={setSearch}
+              placeholder="功能、权限名称或说明"
+            />
+          </div>
         </div>
       }
       footer={
