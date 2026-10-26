@@ -181,8 +181,9 @@ pub(crate) async fn projection(state: &AppState, user: Uuid) -> Result<Value, Ap
     let tokens = sqlx::query("SELECT id,name,expires_at,created_at FROM personal_access_tokens WHERE user_id=$1 ORDER BY created_at DESC")
         .bind(user).fetch_all(db.pool()).await.map_err(db_error)?.into_iter().map(|r| Ok(json!({"id":r.try_get::<Uuid,_>("id")?,"name":r.try_get::<String,_>("name")?,"expires_at":r.try_get::<Option<DateTime<Utc>>,_>("expires_at")?,"created_at":r.try_get::<DateTime<Utc>,_>("created_at")?}))).collect::<Result<Vec<_>,sqlx::Error>>().map_err(db_error)?;
     let summary: Value = sqlx::query_scalar("SELECT jsonb_build_object('active',(SELECT count(*) FROM board_rentals WHERE user_id=$1 AND cancelled_at IS NULL AND starts_at<=now() AND ends_at>now()),'scheduled',(SELECT count(*) FROM board_rentals WHERE user_id=$1 AND cancelled_at IS NULL AND starts_at>now()),'pending',(SELECT count(*) FROM rental_requests WHERE user_id=$1 AND status='pending'))").bind(user).fetch_one(db.pool()).await.map_err(db_error)?;
+    let access = crate::security::permissions::access(db, &profile).await?;
     Ok(
-        json!({"profile":{"id":profile.id,"username":profile.username,"email":profile.email,"display_name":profile.display_name,"is_admin":profile.is_admin},"catalog":catalog,"account_summary":summary,"personal_tokens":tokens}),
+        json!({"profile":{"permissions":access.permissions,"can_access_admin":access.allows("console.access"),"allocation_policy":access.allocation_policy,"id":profile.id,"username":profile.username,"email":profile.email,"display_name":profile.display_name,"is_admin":profile.is_admin},"catalog":catalog,"account_summary":summary,"personal_tokens":tokens}),
     )
 }
 

@@ -1,3 +1,4 @@
+import { usePermissions } from "@/components/permissions";
 import {
   Pencil as ActionEdit,
   Trash2 as ActionDelete,
@@ -33,6 +34,7 @@ export const leaseLabels: Record<string, string> = {
   error: "释放失败",
 };
 export default function Boards() {
+  const { can } = usePermissions();
   const boards = useList("boards"),
     loaders = useList("loaders"),
     runtimes = useResource("runtimes") ?? {},
@@ -98,7 +100,7 @@ export default function Boards() {
               <ListToolbar
                 actions={
                   <>
-                    <Button asChild>
+                    <Button asChild permission="devices.manage">
                       <Link to="/boards/new">
                         <PlusIcon data-icon="inline-start" />
                         新建开发板
@@ -190,12 +192,16 @@ export default function Boards() {
               {boardPage.rows.map((b) => (
                 <Row key={b.id}>
                   <Cell>
-                    <Link
-                      className="board-name"
-                      to={`/boards/${encodeURIComponent(b.id)}`}
-                    >
-                      {b.id}
-                    </Link>
+                    {can("devices.manage") ? (
+                      <Link
+                        className="board-name"
+                        to={`/boards/${encodeURIComponent(b.id)}`}
+                      >
+                        {b.id}
+                      </Link>
+                    ) : (
+                      <span className="board-name">{b.id}</span>
+                    )}
                     <small>
                       {b.board_type}
                       {b.tags.length ? ` · ${b.tags.join(" · ")}` : ""}
@@ -246,10 +252,12 @@ export default function Boards() {
                     <div className="actions">
                       <RowAction
                         label="编辑"
+                        permission="devices.manage"
                         icon={ActionEdit}
                         to={`/boards/${encodeURIComponent(b.id)}`}
                       />
                       <ConfirmAction
+                        permission="devices.manage"
                         icon={ActionDelete}
                         label="删除"
                         description={`删除开发板 ${b.id} 的配置？`}
@@ -444,6 +452,7 @@ export default function Boards() {
                     </Cell>
                     <Cell>
                       <ConfirmAction
+                        permission="devices.manage"
                         icon={ActionDelete}
                         label="清理"
                         description="停止并清理这个未绑定的虚拟设备？"

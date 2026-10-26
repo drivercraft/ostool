@@ -600,6 +600,8 @@ fn absolutize_path(base_dir: &Path, path: &Path) -> PathBuf {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BoardConfig {
+    #[serde(default)]
+    pub allow_instant_use: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reset_command: Option<String>,
     pub id: String,
@@ -1198,6 +1200,7 @@ network_mode = "static_ip"
     #[test]
     fn board_config_serialization_omits_removed_fields() {
         let board = BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "demo-1".into(),
             board_type: "demo".into(),
@@ -1258,6 +1261,7 @@ bootm_addr = "0x82200000"
     #[test]
     fn board_config_round_trip_supports_httpboot_boot() {
         let board = BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "uefi-http-01".into(),
             board_type: "x86_64-uefi-http".into(),
@@ -1304,6 +1308,7 @@ bootm_addr = "0x82200000"
             flow_control: AxloaderSerialFlowControl::RtsCts,
         };
         let board = BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "uefi-http-serial".into(),
             board_type: "x86_64-uefi-http".into(),
@@ -1337,6 +1342,7 @@ bootm_addr = "0x82200000"
     #[test]
     fn physical_httpboot_rejects_host_unsupported_serial_modes() {
         let mut board = BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "uefi-http-serial-invalid".into(),
             board_type: "x86_64-uefi-http".into(),
@@ -1377,6 +1383,7 @@ bootm_addr = "0x82200000"
     #[test]
     fn httpboot_board_requires_persistent_network_identity() {
         let mut board = BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "uefi-http-01".into(),
             board_type: "x86_64-uefi-http".into(),
@@ -1411,6 +1418,7 @@ bootm_addr = "0x82200000"
     #[test]
     fn qemu_board_requires_httpboot_and_derives_virtual_serial() {
         let mut board = BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "qemu-01".into(),
             board_type: "qemu-x86_64".into(),
@@ -1481,6 +1489,7 @@ mac = "1c:69:7a:dc:f3:47"
     #[test]
     fn board_config_round_trip_supports_relay_power_management_key() {
         let board = BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "demo-relay".into(),
             board_type: "demo".into(),

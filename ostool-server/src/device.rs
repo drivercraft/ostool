@@ -850,6 +850,7 @@ mod tests {
         let manager = build_tftp_manager(&config.tftp);
         let state = build_app_state(config_path, config, manager).await.unwrap();
         let board = BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "board-1".into(),
             board_type: "x86_64-uefi-http".into(),

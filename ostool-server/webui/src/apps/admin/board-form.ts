@@ -16,6 +16,7 @@ export interface BoardEditorFormState {
   tags_text: string;
   notes: string;
   disabled: boolean;
+  allow_instant_use: boolean;
   serial_enabled: boolean;
   serial_key_kind: SerialPortKeyKind;
   serial_key_value: string;
@@ -58,6 +59,7 @@ export function defaultFormState(): BoardEditorFormState {
     notes: "",
     reset_command: "",
     disabled: false,
+    allow_instant_use: false,
     serial_enabled: false,
     serial_key_kind: "serial_number",
     serial_key_value: "",
@@ -99,6 +101,7 @@ export function boardToFormState(board: BoardConfig): BoardEditorFormState {
   next.notes = board.notes ?? "";
   next.reset_command = board.reset_command ?? "";
   next.disabled = board.disabled;
+  next.allow_instant_use = board.allow_instant_use ?? false;
   next.network_mac = board.network_identity?.mac_address ?? "";
 
   if (board.serial) {
@@ -242,6 +245,7 @@ export function buildRequestPayload(
     tags: splitTags(form.tags_text),
     notes: trimToNull(form.notes),
     disabled: form.disabled,
+    allow_instant_use: form.allow_instant_use,
     serial:
       form.boot_kind !== "httpboot" && form.serial_enabled
         ? {

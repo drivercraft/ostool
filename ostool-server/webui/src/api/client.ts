@@ -654,6 +654,10 @@ export interface EmailChallenge {
 }
 
 export interface AuthUser {
+  role_id?: string;
+  permissions?: string[];
+  can_access_admin?: boolean;
+  allocation_policy?: import("@/types/api").AllocationPolicy;
   id: string;
   username: string;
   email: string;

@@ -153,11 +153,12 @@ function SiteHeader() {
         <DropdownMenuItem asChild>
           <Link to="/account/requests">租赁申请</Link>
         </DropdownMenuItem>
-        {user.is_admin && (
+        {(user.can_access_admin ?? user.is_admin) && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
-              {(!publicEdition || user?.is_admin) && (
+              {(!publicEdition ||
+                (user?.can_access_admin ?? user?.is_admin)) && (
                 <a href="/admin/overview">管理后台</a>
               )}
             </DropdownMenuItem>
@@ -242,7 +243,7 @@ function SiteFooter() {
           <strong>产品</strong>
           <Link to="/devices">设备管理</Link>
           <Link to="/docs">文档中心</Link>
-          {(!publicEdition || user?.is_admin) && (
+          {(!publicEdition || (user?.can_access_admin ?? user?.is_admin)) && (
             <a href="/admin/overview">管理后台</a>
           )}
         </div>

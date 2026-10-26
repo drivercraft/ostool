@@ -228,6 +228,7 @@ export default function Audits() {
               actions={
                 <>
                   <Button
+                    permission="audits.export"
                     variant="outline"
                     disabled={task.pending || !!filterError || !ready}
                     onClick={() => void download()}
@@ -235,7 +236,11 @@ export default function Audits() {
                     <Download size={15} />
                     导出 CSV
                   </Button>
-                  <Button variant="outline" onClick={() => setCleanup(true)}>
+                  <Button
+                    permission="audits.manage"
+                    variant="outline"
+                    onClick={() => setCleanup(true)}
+                  >
                     <Trash2 size={15} />
                     清理旧日志
                   </Button>

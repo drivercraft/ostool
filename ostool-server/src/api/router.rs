@@ -1242,6 +1242,7 @@ fn allocate_board_id(boards: &BTreeMap<String, BoardConfig>, board_type: &str) -
 impl AdminBoardUpsertRequest {
     fn into_board_config(self, board_id: String) -> BoardConfig {
         BoardConfig {
+            allow_instant_use: self.allow_instant_use,
             reset_command: self.reset_command,
             id: board_id,
             board_type: self.board_type,
@@ -1559,7 +1560,11 @@ async fn list_board_types(
         Some(Extension(super::auth::CurrentUser(user)))
             if !user.is_admin && state.config.read().await.edition.is_public() =>
         {
-            Some(super::rentals::active(&state, user.id).await?)
+            let mut allowed = super::rentals::active(&state, user.id).await?;
+            for (id, end) in super::instant::candidates(&state, &user, None, None, &[]).await? {
+                allowed.entry(id).or_insert((uuid::Uuid::nil(), end));
+            }
+            Some(allowed)
         }
         _ => None,
     };
@@ -1575,6 +1580,7 @@ async fn list_board_types(
 
 async fn create_session(
     State(state): State<AppState>,
+    context: Option<Extension<crate::audit::Context>>,
     actor: Option<Extension<super::auth::CurrentUser>>,
     axum::Json(request): axum::Json<CreateSessionRequestWithBoardId>,
 ) -> Result<
@@ -1596,7 +1602,7 @@ async fn create_session(
     }
 
     let _rental_guard = state.rental_gate.lock().await;
-    let rental_access = match actor.as_ref() {
+    let mut rental_access = match actor.as_ref() {
         Some(Extension(super::auth::CurrentUser(user)))
             if !user.is_admin && state.config.read().await.edition.is_public() =>
         {
@@ -1604,69 +1610,70 @@ async fn create_session(
         }
         _ => None,
     };
-    let session = if let Some(access) = &rental_access {
-        let allowed = access.keys().cloned().collect::<BTreeSet<_>>();
-        if allowed.is_empty() || board_id.is_some_and(|id| !allowed.contains(id)) {
-            return Err(ApiError::forbidden(
-                "当前时间没有已分配的开发板，请联系管理员查看租赁",
-            ));
-        }
-        state
-            .create_session_for_rental(
+    let mut instant_rental = None;
+    if let (Some(access), Some(Extension(super::auth::CurrentUser(user)))) =
+        (&mut rental_access, actor.as_ref())
+    {
+        let boards = state.boards.read().await;
+        let runtimes = state.board_runtimes.read().await;
+        let available = access.keys().any(|id| {
+            boards.get(id).is_some_and(|b| {
+                b.board_type == request.board_type
+                    && !b.disabled
+                    && request.required_tags.iter().all(|t| b.tags.contains(t))
+            }) && board_id.is_none_or(|v| id == v)
+                && runtimes
+                    .get(id)
+                    .is_none_or(|r| r.lease_state == crate::BoardLeaseState::Idle)
+        });
+        drop(runtimes);
+        drop(boards);
+        if !available
+            && crate::security::permissions::access(&state.database, user)
+                .await?
+                .allows("board.instant")
+        {
+            let (id, rental, end) = super::instant::assign(
+                &state,
+                user,
                 &request.board_type,
                 board_id,
                 &request.required_tags,
-                request.client_name.clone(),
-                &allowed,
             )
-            .await
-            .map_err(|error| match error {
-                BoardAllocationWithIdStatus::DatabaseUnavailable => {
-                    ApiError::service_unavailable("租约数据库暂时不可用")
-                }
-                BoardAllocationWithIdStatus::NoAvailableBoard => {
-                    // Existing ostool clients classify these exact errors to wait
-                    // for a busy board. Rental authorization must keep that contract.
-                    ApiError::conflict(match board_id {
-                        Some(id) => format!("board `{id}` is not available"),
-                        None => format!("no available board for type `{}`", request.board_type),
-                    })
-                }
-                BoardAllocationWithIdStatus::BoardTypeMismatch {
-                    board_id,
-                    board_type,
-                    actual_board_type,
-                } => ApiError::bad_request(format!(
-                    "board `{board_id}` has type `{actual_board_type}`, not `{board_type}`"
-                )),
-                BoardAllocationWithIdStatus::BoardTypeNotFound => {
-                    ApiError::not_found(format!("board type `{}` not found", request.board_type))
-                }
-                BoardAllocationWithIdStatus::BoardNotFound => ApiError::not_found(match board_id {
-                    Some(id) => format!("board `{id}` not found"),
-                    None => "board not found".into(),
-                }),
-            })?
-    } else {
-        match board_id {
-            Some(board_id) => state
-                .create_session_with_board_id(
+            .await?;
+            access.clear();
+            access.insert(id, (rental, end));
+            instant_rental = Some(rental);
+        }
+    }
+    let allocation = async {
+        let session = if let Some(access) = &rental_access {
+            let allowed = access.keys().cloned().collect::<BTreeSet<_>>();
+            if allowed.is_empty() || board_id.is_some_and(|id| !allowed.contains(id)) {
+                return Err(ApiError::forbidden(
+                    "当前时间没有已分配的开发板，请联系管理员查看租赁",
+                ));
+            }
+            state
+                .create_session_for_rental(
                     &request.board_type,
                     board_id,
                     &request.required_tags,
                     request.client_name.clone(),
+                    &allowed,
                 )
                 .await
-                .map_err(|err| match err {
+                .map_err(|error| match error {
                     BoardAllocationWithIdStatus::DatabaseUnavailable => {
                         ApiError::service_unavailable("租约数据库暂时不可用")
                     }
-                    BoardAllocationWithIdStatus::BoardTypeNotFound => ApiError::not_found(format!(
-                        "board type `{}` not found",
-                        request.board_type
-                    )),
-                    BoardAllocationWithIdStatus::BoardNotFound => {
-                        ApiError::not_found(format!("board `{board_id}` not found"))
+                    BoardAllocationWithIdStatus::NoAvailableBoard => {
+                        // Existing ostool clients classify these exact errors to wait
+                        // for a busy board. Rental authorization must keep that contract.
+                        ApiError::conflict(match board_id {
+                            Some(id) => format!("board `{id}` is not available"),
+                            None => format!("no available board for type `{}`", request.board_type),
+                        })
                     }
                     BoardAllocationWithIdStatus::BoardTypeMismatch {
                         board_id,
@@ -1675,33 +1682,83 @@ async fn create_session(
                     } => ApiError::bad_request(format!(
                         "board `{board_id}` has type `{actual_board_type}`, not `{board_type}`"
                     )),
-                    BoardAllocationWithIdStatus::NoAvailableBoard => {
-                        ApiError::conflict(format!("board `{board_id}` is not available"))
-                    }
-                })?,
-            None => state
-                .create_session(
-                    &request.board_type,
-                    &request.required_tags,
-                    request.client_name.clone(),
-                )
-                .await
-                .map_err(|err| match err {
-                    BoardAllocationStatus::DatabaseUnavailable => {
-                        ApiError::service_unavailable("租约数据库暂时不可用")
-                    }
-                    BoardAllocationStatus::BoardTypeNotFound => ApiError::not_found(format!(
+                    BoardAllocationWithIdStatus::BoardTypeNotFound => ApiError::not_found(format!(
                         "board type `{}` not found",
                         request.board_type
                     )),
-                    BoardAllocationStatus::NoAvailableBoard => ApiError::conflict(format!(
-                        "no available board for type `{}`",
-                        request.board_type
-                    )),
-                })?,
+                    BoardAllocationWithIdStatus::BoardNotFound => {
+                        ApiError::not_found(match board_id {
+                            Some(id) => format!("board `{id}` not found"),
+                            None => "board not found".into(),
+                        })
+                    }
+                })?
+        } else {
+            match board_id {
+                Some(board_id) => state
+                    .create_session_with_board_id(
+                        &request.board_type,
+                        board_id,
+                        &request.required_tags,
+                        request.client_name.clone(),
+                    )
+                    .await
+                    .map_err(|err| match err {
+                        BoardAllocationWithIdStatus::DatabaseUnavailable => {
+                            ApiError::service_unavailable("租约数据库暂时不可用")
+                        }
+                        BoardAllocationWithIdStatus::BoardTypeNotFound => ApiError::not_found(
+                            format!("board type `{}` not found", request.board_type),
+                        ),
+                        BoardAllocationWithIdStatus::BoardNotFound => {
+                            ApiError::not_found(format!("board `{board_id}` not found"))
+                        }
+                        BoardAllocationWithIdStatus::BoardTypeMismatch {
+                            board_id,
+                            board_type,
+                            actual_board_type,
+                        } => ApiError::bad_request(format!(
+                            "board `{board_id}` has type `{actual_board_type}`, not `{board_type}`"
+                        )),
+                        BoardAllocationWithIdStatus::NoAvailableBoard => {
+                            ApiError::conflict(format!("board `{board_id}` is not available"))
+                        }
+                    })?,
+                None => state
+                    .create_session(
+                        &request.board_type,
+                        &request.required_tags,
+                        request.client_name.clone(),
+                    )
+                    .await
+                    .map_err(|err| match err {
+                        BoardAllocationStatus::DatabaseUnavailable => {
+                            ApiError::service_unavailable("租约数据库暂时不可用")
+                        }
+                        BoardAllocationStatus::BoardTypeNotFound => ApiError::not_found(format!(
+                            "board type `{}` not found",
+                            request.board_type
+                        )),
+                        BoardAllocationStatus::NoAvailableBoard => ApiError::conflict(format!(
+                            "no available board for type `{}`",
+                            request.board_type
+                        )),
+                    })?,
+            }
+        };
+
+        Ok::<_, ApiError>(session)
+    }
+    .await;
+    let session = match allocation {
+        Ok(session) => session,
+        Err(error) => {
+            if let Some(id) = instant_rental {
+                super::instant::cancel_failed(&state, id).await;
+            }
+            return Err(error);
         }
     };
-
     let rental = rental_access
         .as_ref()
         .and_then(|access| access.get(&session.board_id))
@@ -1727,6 +1784,9 @@ async fn create_session(
             state
                 .request_session_stop(&session.id, SessionStopReason::AuthorizationUnavailable)
                 .await;
+            if let Some(id) = instant_rental {
+                super::instant::cancel_failed(&state, id).await;
+            }
             log::error!("failed to persist session owner: {error}");
             return Err(ApiError::service_unavailable(
                 "failed to record session owner",
@@ -1735,6 +1795,10 @@ async fn create_session(
         state
             .admin_events
             .invalidate(&["sessions", "session_history"]);
+    }
+    if let (Some(rental), Some(Extension(context))) = (instant_rental, context) {
+        crate::audit::event(&state,&context,"rental.instant.created","即时分配设备","rentals",Some(&rental.to_string()),true,
+            serde_json::json!({"board_id":session.board_id,"session_id":session.id,"ends_at":rental_access.as_ref().and_then(|a|a.get(&session.board_id)).map(|(_,end)|end)})).await;
     }
     let session = state
         .get_session(&session.id)
@@ -3291,6 +3355,7 @@ pub(crate) async fn admin_topic(
             Ok(serde_json::json!({"revision":state.admin_events.revision(topic)}))
         }
         "roles" => serde_json::to_value(super::users::list_roles(extractor).await?.0),
+        "permissions" => Ok(serde_json::json!(crate::security::permissions::CATALOG)),
         "deployment" => Ok(super::users::deployment(extractor).await.0),
         "dashboard" => Ok(crate::dashboard::projection(state).await),
         "audit" => {
@@ -3672,6 +3737,7 @@ mod tests {
 
     fn sample_board(board_id: &str) -> BoardConfig {
         BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: board_id.into(),
             board_type: "rk3568".into(),
@@ -3959,6 +4025,7 @@ mod tests {
     #[test]
     fn board_config_new_uboot_profile_supports_use_tftp() {
         let board = BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "demo".into(),
             board_type: "demo".into(),
@@ -5966,6 +6033,7 @@ mod tests {
     #[test]
     fn normalize_board_upsert_request_trims_uboot_load_addresses() {
         let request = AdminBoardUpsertRequest {
+            allow_instant_use: false,
             reset_command: None,
             id: Some("demo".into()),
             board_type: "demo".into(),

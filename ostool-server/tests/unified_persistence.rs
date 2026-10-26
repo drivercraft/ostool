@@ -37,6 +37,7 @@ async fn production_builders_require_postgres_in_both_editions() {
 }
 fn board() -> BoardConfig {
     BoardConfig {
+        allow_instant_use: false,
         reset_command: None,
         id: "board-one".into(),
         board_type: "fixture".into(),

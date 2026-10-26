@@ -905,3 +905,87 @@ body:has(.legal-fullscreen) [data-slot="dialog-overlay"] {
     min-height: 0;
   }
 }
+
+/* 角色权限采用固定分类列与能力选项矩阵，沿用统一控件及分组样式。 */
+.role-permission-toolbar,
+.permission-master,
+.role-permission-category,
+.permission-master label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.role-permission-toolbar > [data-slot="field"] {
+  width: 300px;
+  max-width: 50%;
+}
+.permission-master {
+  margin-bottom: 16px;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+}
+.permission-master label {
+  justify-content: flex-start;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+.role-permission-matrix {
+  display: grid;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  padding: 0;
+}
+.role-permission-row {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  border-bottom: 1px solid var(--border);
+}
+.role-permission-row:last-child {
+  border-bottom: 0;
+}
+.role-permission-category {
+  padding: 20px;
+  background: var(--muted);
+  border-right: 1px solid var(--border);
+  align-items: flex-start;
+}
+.role-permission-category small,
+.role-permission-option small {
+  display: block;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+  margin-top: 5px;
+}
+.role-permission-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  padding: 20px;
+}
+.role-permission-option {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  cursor: pointer;
+  min-width: 0;
+}
+.role-permission-option strong {
+  font-weight: 400;
+}
+.role-permission-option [data-slot="checkbox"] {
+  margin-top: 4px;
+}
+@media (max-width: 900px) {
+  .role-permission-row {
+    grid-template-columns: 1fr;
+  }
+  .role-permission-category {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .role-permission-options {
+    grid-template-columns: 1fr;
+  }
+}

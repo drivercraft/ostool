@@ -453,6 +453,13 @@ out of the user API. Both editions use the same routes; public uploads, download
 and serial connections carry login credentials over HTTPS/WSS. Servers without
 this capability continue to use the original client boot flow.
 
+
+Public deployments support grouped role capabilities. A role with immediate device
+allocation can use existing board commands to acquire an enabled shared device
+without per-use approval. The server enforces duration, concurrency, board-type
+scope and prior bookings while retaining durable usage records. This capability
+does not grant console access. Local edition remains anonymous.
+
 ### Public board authentication
 
 Direct LAN connections to `ostool-server` keep the anonymous HTTP configuration above. A public authentication gateway uses a complete HTTPS URL:

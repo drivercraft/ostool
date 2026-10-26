@@ -127,6 +127,7 @@ mod tests {
 
     fn board(id: &str, board_type: &str) -> BoardConfig {
         BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: id.to_string(),
             board_type: board_type.to_string(),

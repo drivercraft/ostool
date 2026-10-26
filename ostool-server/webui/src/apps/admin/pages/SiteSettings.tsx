@@ -1,3 +1,4 @@
+import { usePermissions } from "@/components/permissions";
 import { useEffect, useId, useState } from "react";
 import { Eye, History, Maximize, Minimize, RotateCcw } from "lucide-react";
 import { useResource, useList } from "@/api/events";
@@ -220,6 +221,7 @@ export default function SiteSettings({ group }: { group: string }) {
   );
 }
 function Editor({ source, group }: { source: SiteView; group: string }) {
+  const { can } = usePermissions();
   const id = useId(),
     task = useAction(),
     history = useList("legal_history");
@@ -298,7 +300,7 @@ function Editor({ source, group }: { source: SiteView; group: string }) {
           <div className="panel-footer-actions">
             <Button
               variant="outline"
-              disabled={task.pending}
+              disabled={task.pending || !can("site.manage")}
               onClick={() => {
                 setDraft({});
                 setAwaiting(0);
@@ -308,6 +310,7 @@ function Editor({ source, group }: { source: SiteView; group: string }) {
               取消
             </Button>
             <Button
+              permission="site.manage"
               type="submit"
               form={id}
               disabled={!dirty || task.pending || conflict}
@@ -354,7 +357,7 @@ function Editor({ source, group }: { source: SiteView; group: string }) {
               aria-label={`${label}标题`}
               value={current[titleKey]}
               maxLength={80}
-              disabled={task.pending}
+              disabled={task.pending || !can("site.manage")}
               required
               placeholder="文档标题，最多 80 个字符"
               onChange={(event) => changed(titleKey, event.target.value)}
@@ -400,7 +403,7 @@ function Editor({ source, group }: { source: SiteView; group: string }) {
                   aria-label={`${label}正文`}
                   id={`${id}-body`}
                   data-slot="textarea"
-                  disabled={task.pending}
+                  disabled={task.pending || !can("site.manage")}
                   value={current[bodyKey]}
                   required
                   placeholder="请输入正文；支持换行，前台按纯文本安全展示。发布会生成新的不可变版本。"
@@ -430,6 +433,7 @@ function Editor({ source, group }: { source: SiteView; group: string }) {
                 field.area ? (
                   <TextareaField
                     key={field.key}
+                    disabled={!can("site.manage")}
                     label={field.label}
                     hint={field.hint}
                     placeholder={field.placeholder}
@@ -440,6 +444,7 @@ function Editor({ source, group }: { source: SiteView; group: string }) {
                 ) : (
                   <TextField
                     key={field.key}
+                    disabled={!can("site.manage")}
                     label={field.label}
                     hint={field.hint}
                     placeholder={field.placeholder}

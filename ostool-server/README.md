@@ -445,8 +445,9 @@ per user/client. Refresh rotates credentials; replay revokes the whole chain and
 never extends its absolute or sensitive-operation deadline.
 
 Password/role changes and disabled/deleted users revoke sessions, PATs and pending
-device approvals. Built-in role permissions are fixed; assigned custom roles must
-be unassigned before changing permission level or deletion. PATs last 90 days by
+device approvals. Built-in role permissions are fixed; editing assigned custom
+roles revokes affected credentials and instant allocations. Roles with users cannot
+be deleted. PATs last 90 days by
 default (configurable 1–365) and grant CLI board access only. Admin-console operations,
 including audit export and security management, use the authenticated administrator
 session without additional password/MFA confirmation. Login-time MFA and administrator
@@ -559,6 +560,39 @@ storage/firmware isolation still requires a verified board-specific recovery pro
 Real public DNS/Caddy/TLS and physical firmware/TFTP need
 separate deployment validation; isolated application tests do not prove those
 conditions. Authentication rules and routes are in [the API reference](../docs/api.md).
+
+## Role permissions and immediate device use
+
+`/admin/users/roles` provides a unified role list and standalone role editor, with
+a grouped capability matrix, group/master selection and automatically included
+read dependencies. The server owns the catalog (`GET /api/v1/admin/permissions`);
+the same codes authorize management HTTP routes and filter every SSE resource.
+Role edits include the current revision to reject stale concurrent writes. Custom roles can enter a limited console through `console.access` without receiving
+all-administrator privileges. `system.admin` remains the full trusted administrator
+capability. Administrators cannot grant capabilities they do not own or edit higher
+privilege users/roles. Built-in role capabilities are fixed, and changing your own
+active role's permissions is prohibited. Editing an assigned custom role revokes
+its old credentials, ends its instant allocations and requires affected users to
+log in again. Role metadata changes alone preserve sessions.
+
+Grant `board.instant` to a custom role to allow immediate use without approval.
+This also grants `board.use`, not console access. The role editor configures a
+maximum duration (1–1440 minutes), concurrent device count (1–16), minimum usable
+window and optional board-type allowlist. Separately enable **Allow immediate use**
+on each device; existing inventory defaults to closed. Only enabled, idle devices
+in both the role's scope and the open pool can be allocated. Existing bookings
+have priority; the server bounds each allocation by the next booking minus a
+60-second release buffer and rejects windows below the role's minimum.
+
+Existing CLI session creation requests continue unchanged. The server atomically
+selects a candidate and records an `instant` rental under the admission gate;
+normal rental ownership, upload, HTTP download and WebSocket checks then apply.
+A fixed deadline cannot be extended by heartbeats. Failed allocations are cancelled,
+early session release shortens the rental after hardware cleanup, and server restart
+ends interrupted instant grants. Rental lists distinguish scheduled and instant
+allocations; instant periods cannot be manually extended through the rental editor.
+Manual approval remains available through `rental.request`. Local edition retains
+its unauthenticated workflow and does not display identity or rental permissions.
 
 ## Existing board migration
 

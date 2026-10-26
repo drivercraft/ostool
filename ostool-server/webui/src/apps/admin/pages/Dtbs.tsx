@@ -40,7 +40,12 @@ export function DtbUpload({
   const task = useAction();
   return (
     <>
-      <Button type="button" variant="outline" onClick={() => setOpen(true)}>
+      <Button
+        permission="dtbs.manage"
+        type="button"
+        variant="outline"
+        onClick={() => setOpen(true)}
+      >
         上传 DTB
       </Button>
       <Dialog
@@ -147,6 +152,7 @@ export default function Dtbs() {
                     onClick={() => setEditing(d)}
                   />
                   <ConfirmAction
+                    permission="dtbs.manage"
                     icon={ActionDelete}
                     label="删除"
                     description={`删除 DTB ${d.name}？已被板卡引用的文件不能删除。`}

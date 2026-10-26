@@ -73,6 +73,7 @@ struct SessionCreatedResponse {
 
 fn sample_board_with_power_on(serial_port: String, power_on_cmd: String) -> BoardConfig {
     BoardConfig {
+        allow_instant_use: false,
         reset_command: None,
         id: TEST_BOARD_ID.into(),
         board_type: TEST_BOARD_TYPE.into(),

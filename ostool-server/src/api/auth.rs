@@ -192,8 +192,16 @@ pub async fn middleware(
         return ApiError::unauthorized("请登录当前站点").into_response();
     }
     let user = credential.user.clone();
+    let access = match crate::security::permissions::access(&state.database, &user).await {
+        Ok(access) => access,
+        Err(error) => return error.into_response(),
+    };
+
     // A deployment may enable mandatory MFA while older administrator sessions exist.
-    if config.security.require_admin_mfa && user.is_admin && credential.client_id == "admin-web" {
+    if config.security.require_admin_mfa
+        && access.allows("console.access")
+        && credential.client_id == "admin-web"
+    {
         let enrolled: bool = match sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM mfa_credentials WHERE user_id=$1)",
         )
@@ -229,9 +237,27 @@ pub async fn middleware(
         )
         .into_response();
     }
-    if path.starts_with("/api/v1/admin/") && (!user.is_admin || credential.client_id != "admin-web")
+    if path.starts_with("/api/v1/admin/") {
+        let required = crate::security::permissions::required(request.method(), path);
+        if credential.client_id != "admin-web"
+            || !access.allows("console.access")
+            || required.is_none_or(|code| !access.allows(code))
+        {
+            return ApiError::forbidden("当前角色没有此后台操作权限").into_response();
+        }
+    }
+    if (path == "/api/v1/board-types"
+        || path == "/api/v1/sessions"
+        || path.starts_with("/api/v1/sessions/"))
+        && !access.allows("board.use")
     {
-        return ApiError::forbidden("请使用管理员账号登录管理后台").into_response();
+        return ApiError::forbidden("当前角色没有设备使用权限").into_response();
+    }
+    if path.starts_with("/api/v1/account/rental-requests")
+        && request.method() == axum::http::Method::POST
+        && !access.allows("rental.request")
+    {
+        return ApiError::forbidden("当前角色没有租赁申请权限").into_response();
     }
     if credential.client_id == "ostool-cli" && path != "/api/v1/auth/me" {
         let board_operation = path == "/api/v1/board-types"
@@ -629,8 +655,14 @@ async fn password_login(
     let user = database
         .authenticate_password(&request.email, &request.password)
         .await?
-        .filter(|user| !admin || user.is_admin)
         .ok_or_else(|| ApiError::unauthorized("用户名、邮箱或密码不正确"))?;
+    if admin
+        && !crate::security::permissions::access(database, &user)
+            .await?
+            .allows("console.access")
+    {
+        return Err(ApiError::unauthorized("用户名、邮箱或密码不正确"));
+    }
     store::clear_limit(
         &state.security_cache,
         if admin { "admin-login" } else { "web-login" },
@@ -695,14 +727,16 @@ async fn browser_logout(
 }
 
 async fn me(
+    State(state): State<AppState>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Extension(crate::security::web::CurrentCredential(credential)): Extension<
         crate::security::web::CurrentCredential,
     >,
-) -> Json<serde_json::Value> {
-    Json(
-        serde_json::json!({"id":user.id,"username":user.username,"email":user.email,"display_name":user.display_name,"is_admin":user.is_admin,"mfa_enrollment_required":credential.scope=="mfa:enroll"}),
-    )
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let access = crate::security::permissions::access(&state.database, &user).await?;
+    Ok(Json(
+        serde_json::json!({"role_id":access.role_id,"permissions":access.permissions,"can_access_admin":access.allows("console.access"),"allocation_policy":access.allocation_policy,"id":user.id,"username":user.username,"email":user.email,"display_name":user.display_name,"is_admin":user.is_admin,"mfa_enrollment_required":credential.scope=="mfa:enroll"}),
+    ))
 }
 
 async fn create_personal_access_token(

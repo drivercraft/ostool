@@ -10,3 +10,5 @@ pub mod account;
 pub mod rentals;
 
 pub mod site;
+
+pub mod instant;

@@ -1,3 +1,4 @@
+import { usePermissions } from "@/components/permissions";
 import { Badge } from "@/components/ui/badge";
 import { History } from "lucide-react";
 import { RowAction } from "@/components/row-action";
@@ -67,6 +68,7 @@ function TftpForm({
   source: TftpConfig;
   status?: TftpStatus;
 }) {
+  const { can } = usePermissions();
   const formId = useId();
   const [config, setConfig] = useState(source),
     [baseline, setBaseline] = useState(JSON.stringify(source));
@@ -110,6 +112,7 @@ function TftpForm({
         <ListToolbar
           actions={
             <Button
+              permission="server.manage"
               type="button"
               variant="outline"
               disabled={reconcile.pending}
@@ -148,6 +151,7 @@ function TftpForm({
               取消
             </Button>
             <Button
+              permission="server.manage"
               type="submit"
               form={formId}
               disabled={task.pending || conflict}
@@ -186,68 +190,70 @@ function TftpForm({
             </Button>
           </Notice>
         )}
-        <Section title="服务配置">
-          <SelectField
-            label="Provider"
-            value={config.provider}
-            onValue={(v) => provider(v as TftpConfig["provider"])}
-            options={[
-              { value: "builtin", label: "内建 TFTP" },
-              { value: "system_tftpd_hpa", label: "system_tftpd_hpa" },
-            ]}
-          />
-          <CheckField
-            label="启用 TFTP"
-            checked={config.enabled}
-            onChange={(v) => patch("enabled", v)}
-          />
-          <TextField
-            label="根目录"
-            value={config.root_dir}
-            onValue={(v) => patch("root_dir", v)}
-            required
-          />
-          {config.provider === "builtin" ? (
+        <fieldset disabled={!can("server.manage")}>
+          <Section title="服务配置">
+            <SelectField
+              label="Provider"
+              value={config.provider}
+              onValue={(v) => provider(v as TftpConfig["provider"])}
+              options={[
+                { value: "builtin", label: "内建 TFTP" },
+                { value: "system_tftpd_hpa", label: "system_tftpd_hpa" },
+              ]}
+            />
+            <CheckField
+              label="启用 TFTP"
+              checked={config.enabled}
+              onChange={(v) => patch("enabled", v)}
+            />
             <TextField
-              label="绑定地址"
-              value={config.bind_addr}
-              onValue={(v) => patch("bind_addr", v)}
+              label="根目录"
+              value={config.root_dir}
+              onValue={(v) => patch("root_dir", v)}
               required
             />
-          ) : (
-            <>
-              {(
-                [
-                  ["config_path", "配置文件"],
-                  ["service_name", "服务名"],
-                  ["username", "运行用户"],
-                  ["address", "监听地址"],
-                  ["options", "启动选项"],
-                ] as const
-              ).map(([key, label]) => (
-                <TextField
-                  key={key}
-                  label={label}
-                  value={(config as SystemTftpdHpaConfig)[key] ?? ""}
-                  onValue={(v) => patch(key, v)}
+            {config.provider === "builtin" ? (
+              <TextField
+                label="绑定地址"
+                value={config.bind_addr}
+                onValue={(v) => patch("bind_addr", v)}
+                required
+              />
+            ) : (
+              <>
+                {(
+                  [
+                    ["config_path", "配置文件"],
+                    ["service_name", "服务名"],
+                    ["username", "运行用户"],
+                    ["address", "监听地址"],
+                    ["options", "启动选项"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <TextField
+                    key={key}
+                    label={label}
+                    value={(config as SystemTftpdHpaConfig)[key] ?? ""}
+                    onValue={(v) => patch(key, v)}
+                  />
+                ))}
+                <CheckField
+                  label="允许服务端管理配置文件与重启 service"
+                  checked={config.manage_config}
+                  onChange={(v) => patch("manage_config", v)}
                 />
-              ))}
-              <CheckField
-                label="允许服务端管理配置文件与重启 service"
-                checked={config.manage_config}
-                onChange={(v) => patch("manage_config", v)}
-              />
-              <CheckField
-                label="启动时自动 reconcile"
-                checked={config.reconcile_on_start}
-                onChange={(v) => patch("reconcile_on_start", v)}
-              />
-            </>
-          )}
-        </Section>
-        {task.error && <Notice>{task.error}</Notice>}
+                <CheckField
+                  label="启动时自动 reconcile"
+                  checked={config.reconcile_on_start}
+                  onChange={(v) => patch("reconcile_on_start", v)}
+                />
+              </>
+            )}
+          </Section>
+          {task.error && <Notice>{task.error}</Notice>}
 
-        {reconcile.error && <Notice>{reconcile.error}</Notice>}
+          {reconcile.error && <Notice>{reconcile.error}</Notice>}
+        </fieldset>
       </form>
       {status && (
         <section className="page-section">
@@ -271,6 +277,7 @@ export function Server() {
   );
 }
 function ServerForm({ source }: { source: AdminServerConfigResponse }) {
+  const { can } = usePermissions();
   const formId = useId();
   const [config, setConfig] = useState(source.editable),
     [baseline, setBaseline] = useState(JSON.stringify(source.editable));
@@ -307,6 +314,7 @@ function ServerForm({ source }: { source: AdminServerConfigResponse }) {
               取消
             </Button>
             <Button
+              permission="server.manage"
               type="submit"
               form={formId}
               disabled={task.pending || conflict}
@@ -351,88 +359,94 @@ function ServerForm({ source }: { source: AdminServerConfigResponse }) {
             </Button>
           </Notice>
         )}
-        <Section title="网络与上传">
-          <SelectField
-            label="网络接口"
-            value={config.network.interface}
-            onValue={(v) =>
-              setConfig((c) => ({ ...c, network: { interface: v } }))
-            }
-            options={[
-              { value: "", label: "请选择网络接口" },
-              ...networks.map((n) => ({ value: n.name, label: n.label })),
-            ]}
-          />
-          <TextField
-            label="Session 文件上传上限（MiB）"
-            type="number"
-            min={1}
-            step={1}
-            value={config.upload_limits.session_file_max_mib}
-            onValue={(v) =>
-              setConfig((c) => ({
-                ...c,
-                upload_limits: {
-                  ...c.upload_limits,
-                  session_file_max_mib: Number(v),
-                },
-              }))
-            }
-          />
-          {(
-            [
-              [
-                "session_total_max_mib",
-                "会话文件总容量（MiB）",
-                "全部文件合计容量，不小于单文件上限",
-              ],
-              ["session_max_files", "会话最多文件数", "同名覆盖不增加文件数量"],
-              [
-                "storage_max_mib",
-                "全部会话存储上限（MiB）",
-                "限制所有会话文件的总容量",
-              ],
-              [
-                "user_total_max_mib",
-                "账号文件总容量（MiB）",
-                "限制同一账号全部活动会话的文件总量",
-              ],
-              [
-                "user_max_concurrent_uploads",
-                "单账号上传并发数",
-                "1–32；同一会话同时只允许一个上传",
-              ],
-              [
-                "max_concurrent_uploads",
-                "全局上传并发数",
-                "1–32；每个会话同时仅允许一个上传",
-              ],
-              [
-                "upload_timeout_secs",
-                "上传总时限（秒）",
-                "15–3600；连续 15 秒无数据也会终止",
-              ],
-            ] as const
-          ).map(([key, label, placeholder]) => (
+        <fieldset disabled={!can("server.manage")}>
+          <Section title="网络与上传">
+            <SelectField
+              label="网络接口"
+              value={config.network.interface}
+              onValue={(v) =>
+                setConfig((c) => ({ ...c, network: { interface: v } }))
+              }
+              options={[
+                { value: "", label: "请选择网络接口" },
+                ...networks.map((n) => ({ value: n.name, label: n.label })),
+              ]}
+            />
             <TextField
-              key={key}
-              label={label}
+              label="Session 文件上传上限（MiB）"
               type="number"
               min={1}
               step={1}
-              hint=""
-              placeholder={placeholder}
-              value={config.upload_limits[key]}
+              value={config.upload_limits.session_file_max_mib}
               onValue={(v) =>
                 setConfig((c) => ({
                   ...c,
-                  upload_limits: { ...c.upload_limits, [key]: Number(v) },
+                  upload_limits: {
+                    ...c.upload_limits,
+                    session_file_max_mib: Number(v),
+                  },
                 }))
               }
             />
-          ))}
-        </Section>
-        {task.error && <Notice>{task.error}</Notice>}
+            {(
+              [
+                [
+                  "session_total_max_mib",
+                  "会话文件总容量（MiB）",
+                  "全部文件合计容量，不小于单文件上限",
+                ],
+                [
+                  "session_max_files",
+                  "会话最多文件数",
+                  "同名覆盖不增加文件数量",
+                ],
+                [
+                  "storage_max_mib",
+                  "全部会话存储上限（MiB）",
+                  "限制所有会话文件的总容量",
+                ],
+                [
+                  "user_total_max_mib",
+                  "账号文件总容量（MiB）",
+                  "限制同一账号全部活动会话的文件总量",
+                ],
+                [
+                  "user_max_concurrent_uploads",
+                  "单账号上传并发数",
+                  "1–32；同一会话同时只允许一个上传",
+                ],
+                [
+                  "max_concurrent_uploads",
+                  "全局上传并发数",
+                  "1–32；每个会话同时仅允许一个上传",
+                ],
+                [
+                  "upload_timeout_secs",
+                  "上传总时限（秒）",
+                  "15–3600；连续 15 秒无数据也会终止",
+                ],
+              ] as const
+            ).map(([key, label, placeholder]) => (
+              <TextField
+                key={key}
+                label={label}
+                type="number"
+                min={1}
+                step={1}
+                hint=""
+                placeholder={placeholder}
+                value={config.upload_limits[key]}
+                onValue={(v) =>
+                  setConfig((c) => ({
+                    ...c,
+                    upload_limits: { ...c.upload_limits, [key]: Number(v) },
+                  }))
+                }
+              />
+            ))}
+          </Section>
+          {task.error && <Notice>{task.error}</Notice>}
+        </fieldset>
       </form>
     </PagePanel>
   );
@@ -640,6 +654,7 @@ function AccountForm({
   source: import("@/types/api").AccountSettingsView;
   group: "security" | "email";
 }) {
+  const { can } = usePermissions();
   const id = useId(),
     task = useAction(),
     deliveries = useList("mail_deliveries");
@@ -715,6 +730,7 @@ function AccountForm({
               取消
             </Button>
             <Button
+              permission="security.manage"
               type="submit"
               form={id}
               disabled={!dirty || conflict || task.pending}
@@ -747,7 +763,10 @@ function AccountForm({
             }, "策略已保存");
         }}
       >
-        <fieldset disabled={task.pending} className="settings-fields">
+        <fieldset
+          disabled={task.pending || !can("security.manage")}
+          className="settings-fields"
+        >
           {policySections[group].map((section) => (
             <Section key={section.title} title={section.title}>
               {section.fields.map((field) => {

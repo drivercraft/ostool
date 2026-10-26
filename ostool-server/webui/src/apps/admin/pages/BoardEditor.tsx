@@ -1,3 +1,4 @@
+import { usePermissions } from "@/components/permissions";
 import { PagePanel } from "@/components/page-panel";
 import { useEffect, useId, useRef, useState } from "react";
 import {
@@ -61,6 +62,7 @@ export default function BoardEditor() {
   return <Editor key={boardId ?? "new"} board={board} />;
 }
 function Editor({ board }: { board?: BoardConfig }) {
+  const { local } = usePermissions();
   const formId = useId();
   const [query] = useSearchParams();
   const navigate = useNavigate();
@@ -290,6 +292,14 @@ function Editor({ board }: { board?: BoardConfig }) {
             value={form.notes}
             onValue={(v) => set("notes", v)}
           />
+          {!local && (
+            <CheckField
+              label="允许即时使用"
+              checked={form.allow_instant_use}
+              onChange={(value) => set("allow_instant_use", value)}
+              hint="获授权的角色可自动领取此设备；仍遵守已有预约和使用时限。"
+            />
+          )}
           <CheckField
             label="禁用开发板"
             checked={form.disabled}
@@ -470,10 +480,15 @@ function Editor({ board }: { board?: BoardConfig }) {
               />
             )}
             <div className="actions">
-              <Button type="button" onClick={() => void sendPower("on")}>
+              <Button
+                permission="devices.power"
+                type="button"
+                onClick={() => void sendPower("on")}
+              >
                 上电
               </Button>
               <Button
+                permission="devices.power"
                 type="button"
                 variant="outline"
                 onClick={() => void sendPower("off")}

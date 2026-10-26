@@ -71,6 +71,7 @@ export default function Users() {
           <ListToolbar
             actions={
               <Button
+                permission="users.manage"
                 disabled={!deployment?.database_connected}
                 onClick={() => open()}
               >
@@ -155,10 +156,12 @@ export default function Users() {
                 <div className="actions">
                   <RowAction
                     label="编辑"
+                    permission="users.manage"
                     icon={ActionEdit}
                     onClick={() => open(user)}
                   />
                   <ConfirmAction
+                    permission="users.manage"
                     icon={ActionDelete}
                     label="删除"
                     description={`永久删除 ${user.email} 及其登录令牌？`}

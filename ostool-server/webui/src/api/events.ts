@@ -54,6 +54,7 @@ export interface Resources {
   rentals: { revision: number };
   users: { revision: number };
   roles: import("@/types/api").UserRole[];
+  permissions: import("@/types/api").PermissionCapability[];
   deployment: import("@/types/api").DeploymentInfo;
   account_settings: import("@/types/api").AccountSettingsView;
 
@@ -313,7 +314,7 @@ export class AdminStore {
       if (refresh) await refreshAuth();
       const user = await api.me();
       if (generation !== this.generation) return;
-      if (!this.member && !user.is_admin) {
+      if (!this.member && !(user.can_access_admin ?? user.is_admin)) {
         window.location.assign("/admin/login");
         return;
       }

@@ -170,6 +170,7 @@ async fn add_boards(f: &Fixture) -> anyhow::Result<()> {
     use ostool_server::{BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig};
     for index in 1..=2 {
         let board = BoardConfig {
+            allow_instant_use: false,
             reset_command: Some(format!("true # PRIVATE_RESET_{index}")),
             id: format!("private-board-{index}"),
             board_type: "privacy-type".into(),
@@ -244,7 +245,7 @@ async fn inventory_and_unscoped_events_never_return_commands_but_selected_editor
     assert_eq!(list.status, StatusCode::OK);
     assert_eq!(list.body.as_array().unwrap().len(), 2);
     for board in list.body.as_array().unwrap() {
-        assert_eq!(board.as_object().unwrap().len(), 8);
+        assert_eq!(board.as_object().unwrap().len(), 9);
         for field in ["power_management", "reset_command", "notes"] {
             assert!(board.get(field).is_none());
         }

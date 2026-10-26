@@ -176,6 +176,8 @@ impl Database {
         let mut tx = self.pool().begin().await?;
         sqlx::query("UPDATE session_history SET ended_at=GREATEST(now(),created_at),stop_requested_at=COALESCE(stop_requested_at,now()),stop_reason=COALESCE(stop_reason,$2),end_reason=$2 WHERE session_id=$1 AND ended_at IS NULL")
             .bind(id).bind(reason).execute(&mut *tx).await?;
+        sqlx::query("UPDATE board_rentals SET released_at=now(),ends_at=LEAST(ends_at,GREATEST(now(),starts_at+interval '1 millisecond')) WHERE source='instant' AND id=(SELECT rental_id FROM session_owners WHERE session_id=$1)")
+            .bind(id).execute(&mut *tx).await?;
         sqlx::query("DELETE FROM session_owners WHERE session_id=$1")
             .bind(id)
             .execute(&mut *tx)
@@ -188,6 +190,8 @@ impl Database {
     pub async fn recover_interrupted_leases(&self) -> anyhow::Result<()> {
         let mut tx = self.pool().begin().await?;
         sqlx::query("UPDATE session_history SET ended_at=GREATEST(now(),created_at),end_reason='server_interrupted' WHERE ended_at IS NULL")
+            .execute(&mut *tx).await?;
+        sqlx::query("UPDATE board_rentals SET released_at=now(),ends_at=LEAST(ends_at,GREATEST(now(),starts_at+interval '1 millisecond')) WHERE source='instant' AND released_at IS NULL")
             .execute(&mut *tx).await?;
         sqlx::query("DELETE FROM session_owners")
             .execute(&mut *tx)

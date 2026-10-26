@@ -272,6 +272,7 @@ export function ConfirmAction({
   action,
   disabled,
   triggerVariant = "destructive",
+  permission,
   icon,
 }: {
   label: string;
@@ -279,6 +280,7 @@ export function ConfirmAction({
   action: () => Promise<unknown>;
   disabled?: boolean;
   triggerVariant?: "ghost" | "destructive";
+  permission?: string;
   icon?: LucideIcon;
 }) {
   const [open, setOpen] = useState(false);
@@ -288,6 +290,7 @@ export function ConfirmAction({
       {icon ? (
         <RowAction
           label={label}
+          permission={permission}
           icon={icon}
           variant={triggerVariant}
           disabled={disabled}
@@ -296,6 +299,7 @@ export function ConfirmAction({
       ) : (
         <Button
           type="button"
+          permission={permission}
           variant={triggerVariant}
           size="sm"
           disabled={disabled}

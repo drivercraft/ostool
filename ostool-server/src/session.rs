@@ -424,6 +424,7 @@ mod tests {
 
     fn sample_board() -> BoardConfig {
         BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "demo".into(),
             board_type: "demo".into(),

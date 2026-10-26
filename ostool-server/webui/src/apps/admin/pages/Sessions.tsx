@@ -164,6 +164,7 @@ function ActiveSessions() {
               </Cell>
               <Cell>
                 <ConfirmAction
+                  permission="sessions.manage"
                   icon={ActionRelease}
                   label="强制释放"
                   description={`请求释放 ${s.board_id} 的会话？服务器会停止任务并断电，清理完成后资源才重新可用。`}

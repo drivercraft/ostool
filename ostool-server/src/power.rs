@@ -177,6 +177,7 @@ mod tests {
 
     fn board_with_power_management(power_management: PowerManagementConfig) -> BoardConfig {
         BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "demo".into(),
             board_type: "demo".into(),

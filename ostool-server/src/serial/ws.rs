@@ -787,6 +787,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let output_path = dir.path().join("power.log");
         let board = BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "demo".into(),
             board_type: "demo".into(),
@@ -820,6 +821,7 @@ mod tests {
         let output_path = dir.path().join("power.log");
         let state = test_state(dir.path()).await;
         let board = BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "demo".into(),
             board_type: "demo".into(),

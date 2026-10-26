@@ -974,7 +974,8 @@ impl AppState {
                 match completion {
                     Ok(()) => {
                         self.admin_events
-                            .invalidate(&["sessions", "session_history"]);
+                            .invalidate(&["sessions", "session_history", "rentals"]);
+                        self.rental_changed.notify_one();
                         let state = self.clone();
                         let id = snapshot.id.clone();
                         let board = snapshot.board_id.clone();
@@ -1146,6 +1147,7 @@ mod tests {
 
     fn sample_board(board_id: &str) -> BoardConfig {
         BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: board_id.into(),
             board_type: "demo".into(),
@@ -1436,6 +1438,7 @@ mod tests {
         });
 
         let board = BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "board-1".into(),
             board_type: "demo".into(),
@@ -1524,6 +1527,7 @@ mod tests {
         });
 
         let board = BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "board-1".into(),
             board_type: "demo".into(),
@@ -1597,6 +1601,7 @@ mod tests {
         let state = test_state(&root).await;
 
         let board = BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "board-1".into(),
             board_type: "demo".into(),
@@ -1643,6 +1648,7 @@ mod tests {
         let (relay_port, _relay_handle, server, mut requests, stop_tx) = spawn_relay_test_server();
 
         let board = BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "board-1".into(),
             board_type: "demo".into(),

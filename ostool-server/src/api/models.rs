@@ -39,6 +39,7 @@ impl From<&BoardConfig> for PublicDevice {
 /// belong only in the explicitly selected administrator editor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminBoardSummary {
+    pub allow_instant_use: bool,
     pub id: String,
     pub board_type: String,
     pub tags: Vec<String>,
@@ -59,6 +60,7 @@ impl From<BoardConfig> for AdminBoardSummary {
             _ => None,
         };
         Self {
+            allow_instant_use: board.allow_instant_use,
             virtual_device_id,
             id: board.id,
             board_type: board.board_type,
@@ -155,6 +157,8 @@ pub struct SerialPortSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminBoardUpsertRequest {
+    #[serde(default)]
+    pub allow_instant_use: bool,
     #[serde(default)]
     pub reset_command: Option<String>,
     pub id: Option<String>,

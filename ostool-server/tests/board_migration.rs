@@ -76,6 +76,7 @@ impl Fixture {
 }
 fn board(id: &str) -> BoardConfig {
     BoardConfig {
+        allow_instant_use: false,
         reset_command: None,
         id: id.into(),
         board_type: "migration-test".into(),
@@ -240,6 +241,7 @@ async fn duplicate_macs_and_missing_referenced_dtb_are_rejected() {
     std::fs::remove_file(f.root.path().join("boards/board-b.toml")).unwrap();
     ostool_server::persistence::BoardStore::new(f.database.clone())
         .write_board(&BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "existing".into(),
             ..a.clone()

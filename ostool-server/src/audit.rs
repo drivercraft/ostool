@@ -693,6 +693,21 @@ fn safe_details(payload: &Value) -> Value {
             details.insert(key.into(), value.clone());
         }
     }
+    if let Some(values) = payload["permissions"].as_array() {
+        details.insert(
+            "permissions".into(),
+            json!(
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|code| crate::security::permissions::CATALOG
+                        .iter()
+                        .any(|p| p.code == *code))
+                    .take(64)
+                    .collect::<Vec<_>>()
+            ),
+        );
+    }
     if let Some(fields) = payload.as_object() {
         let known = [
             "username",
@@ -712,6 +727,9 @@ fn safe_details(payload: &Value) -> Value {
             "user_id",
             "role_id",
             "administrator",
+            "permissions",
+            "allocation_policy",
+            "allow_instant_use",
             "disabled",
             "tags",
             "network_identity",

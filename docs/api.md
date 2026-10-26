@@ -1367,3 +1367,29 @@ SMTP 密码、Turnstile 服务端密钥、MFA 加密密钥、数据库及 Redis 
 原始错误留在服务器日志，响应 `X-Request-ID` 与审计记录关联，供排障查询。
 运行状态、TFTP、OTA 和租约历史的错误字段仅保留失败状态及安全提示，不直接输出底层诊断正文。
 接口继续设置 `Cache-Control: no-store`。本地版使用相同的最小响应模型，保持免登录操作。
+
+## 角色能力与自动分配
+
+`GET /api/v1/admin/permissions` 返回固定能力目录：`code/name/description/group/requires`。
+角色新增请求使用 `{name,description,permissions,allocation_policy}`，编辑还必须提交当前 `revision`（冲突返回 409），不再用单个布尔开关编辑全部权限。
+`allocation_policy` 为 `{max_duration_minutes,max_concurrent_sessions,min_available_minutes,board_types}`，
+默认 120 分钟、1 台、最少 10 分钟、板型不限；时长允许 1–1440，并发允许 1–16，最短时长不能超过最大时长。
+能力代码、依赖及使用限制均由后端验证；未知代码拒绝，新增操作能力会自动包含其只读依赖。
+角色响应保留 `administrator` 作为 `system.admin` 的结果标记，并返回能力数组和使用规则。
+`GET /api/v1/auth/me` 与前台 profile 返回 `permissions/can_access_admin/allocation_policy`。
+
+管理入口要求独立的 `admin-web` 会话和 `console.access`，再按接口的只读/管理能力授权；
+`system.admin` 保留完整管理员访问。只有设备只读权限不能读取含控制命令的单设备编辑详情。
+SSE 同样逐主题过滤，伪造 `topics/list_view/editor_view/board_editor_id` 不能取得其他权限数据。
+授权者不能授予自身未拥有的权限，不能维护更高权限用户或角色；内置权限不可修改，不能修改自己的角色权限。
+角色能力或使用规则改变会原子撤销该角色旧凭据并取消其即时租赁；更新名称、说明不撤销凭据。
+
+`board.use` 允许使用有效租赁，`rental.request` 允许提交申请，`board.instant` 允许立即分配。
+设备新增/编辑增加 `allow_instant_use`（默认 false）。原有 `POST /api/v1/sessions` 不变；
+若成员没有可用的已分配设备且具有即时权限，服务器按板型、标签、设备 ID、共享标记和预约日历筛选。
+角色并发上限、当前独占状态及预约冲突在分配门锁内复查。预约开始前保留 60 秒释放缓冲，不足最短可用时间时返回原有空闲不足错误。
+分配成功生成 `board_rentals.source='instant'` 并与 `session_owners/session_history` 关联，
+后续上传、下载、WebSocket 继续按账号和租赁校验。固定到期时间不能通过心跳延长。
+提前清理完成后写 `released_at` 并缩短 `ends_at`；服务器重启结束中断的即时授权；失败分配取消对应记录。
+即时记录不能由租赁修改接口延长。普通预约的 `source='scheduled'`，原有审批流程保留。
+新增结构由增量迁移 `20261026000000_role_permissions.sql` 建立，不重置已有数据或旧迁移校验和。

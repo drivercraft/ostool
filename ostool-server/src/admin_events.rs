@@ -41,6 +41,7 @@ pub const TOPICS: &[&str] = &[
     "power_actions",
     "users",
     "roles",
+    "permissions",
     "deployment",
     "account_settings",
     "rentals",
@@ -395,6 +396,9 @@ async fn subscribe_scoped(
         database,
         credential,
         check_at: tokio::time::Instant::now(),
+        security_revision: state
+            .security_revision
+            .load(std::sync::atomic::Ordering::Relaxed),
         finished: false,
         account,
         security_only,
@@ -406,6 +410,7 @@ async fn subscribe_scoped(
         listing,
         editor,
         board_editor,
+        access: None,
         requested_topics,
         _guard: guard,
     };
@@ -415,6 +420,11 @@ async fn subscribe_scoped(
         }
         loop {
             if tokio::time::Instant::now() >= subscription.check_at
+                || subscription.security_revision
+                    != subscription
+                        .state
+                        .security_revision
+                        .load(std::sync::atomic::Ordering::Relaxed)
                 || (subscription.account.is_none()
                     && subscription.queue.front().is_some_and(|update| {
                         update.data.contains_key("account_settings")
@@ -438,11 +448,23 @@ async fn subscribe_scoped(
                     } else {
                         None
                     };
-                    let mut valid = user.as_ref().is_some_and(|user| {
-                        subscription
-                            .account
-                            .map_or(user.is_admin, |id| user.id == id)
-                    });
+                    let mut valid = user
+                        .as_ref()
+                        .is_some_and(|user| subscription.account.is_none_or(|id| user.id == id));
+                    if valid && subscription.account.is_none() {
+                        match crate::security::permissions::access(
+                            db,
+                            user.as_ref().expect("validated user"),
+                        )
+                        .await
+                        {
+                            Ok(access) => {
+                                valid = access.allows("console.access");
+                                subscription.access = Some(access);
+                            }
+                            Err(_) => return None,
+                        }
+                    }
                     if valid
                         && subscription.account.is_none()
                         && subscription
@@ -479,12 +501,19 @@ async fn subscribe_scoped(
                         ));
                     }
                 }
+                subscription.security_revision = subscription
+                    .state
+                    .security_revision
+                    .load(std::sync::atomic::Ordering::Relaxed);
                 subscription.check_at =
                     tokio::time::Instant::now() + std::time::Duration::from_secs(15);
             }
             if let Some(mut update) = subscription.queue.pop_front() {
+                let permitted =
+                    |code: &str| subscription.access.as_ref().is_none_or(|a| a.allows(code));
                 if !subscription.public_site && subscription.account.is_none() {
                     if let Some(id) = &subscription.board_editor
+                        && permitted("devices.manage")
                         && (update.kind == "snapshot"
                             || update.data.contains_key("boards")
                             || update.data.contains_key("board_revision"))
@@ -504,6 +533,11 @@ async fn subscribe_scoped(
                         update.data.insert("board_editor".into(), value);
                     }
                     if let Some(filters) = &subscription.listing
+                        && permitted(match filters.view.as_str() {
+                            "users" => "users.read",
+                            "rentals" => "rentals.read",
+                            _ => "requests.read",
+                        })
                         && (update.kind == "snapshot" || filters.affected(&update.data))
                     {
                         let value = crate::api::listing::page(&subscription.state, filters)
@@ -512,6 +546,7 @@ async fn subscribe_scoped(
                         update.data.insert("listing".into(), value);
                     }
                     if let Some(filters) = &subscription.editor
+                        && permitted("rentals.manage")
                         && (update.kind == "snapshot"
                             || ["users", "rentals"]
                                 .iter()
@@ -593,6 +628,7 @@ async fn subscribe_scoped(
                         }
                     }
                 } else if update.data.contains_key("audit")
+                    && permitted("audits.read")
                     && let Some(filters) = &subscription.audit_filters
                 {
                     let data = crate::audit::page(&subscription.state, filters)
@@ -602,6 +638,7 @@ async fn subscribe_scoped(
                 }
                 if !subscription.public_site
                     && subscription.account.is_none()
+                    && permitted("sessions.read")
                     && update.data.contains_key("session_history")
                     && let Some(filters) = &subscription.lease_filters
                 {
@@ -616,6 +653,20 @@ async fn subscribe_scoped(
                             serde_json::json!({"error":"租约历史数据库暂时不可用"})
                         });
                     update.data.insert("session_history".into(), data);
+                }
+                if !subscription.public_site && subscription.account.is_none() {
+                    update.data.retain(|topic, _| match topic.as_str() {
+                        "listing" => subscription.listing.as_ref().is_some_and(|f| {
+                            permitted(match f.view.as_str() {
+                                "users" => "users.read",
+                                "rentals" => "rentals.read",
+                                _ => "requests.read",
+                            })
+                        }),
+                        "rental_editor" => permitted("rentals.manage"),
+                        _ => crate::security::permissions::topic_required(topic)
+                            .is_some_and(permitted),
+                    });
                 }
                 if let Some(topics) = &subscription.requested_topics {
                     update.data.retain(|topic, _| topics.contains(topic));
@@ -647,6 +698,7 @@ struct Subscription {
     database: Option<crate::persistence::postgres::Database>,
     credential: Option<String>,
     check_at: tokio::time::Instant,
+    security_revision: u64,
     finished: bool,
     account: Option<uuid::Uuid>,
     security_only: bool,
@@ -658,6 +710,7 @@ struct Subscription {
     listing: Option<crate::api::listing::Filters>,
     editor: Option<crate::api::listing::EditorFilters>,
     board_editor: Option<String>,
+    access: Option<crate::security::permissions::Access>,
     requested_topics: Option<BTreeSet<String>>,
     _guard: crate::dashboard::StreamGuard,
 }

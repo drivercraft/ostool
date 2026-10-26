@@ -145,6 +145,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
     config.tftp = TftpConfig::Builtin(tftp);
     let repository = BoardStore::new(Database::connect(&config.database).await.unwrap());
     let board = ostool_server::BoardConfig {
+        allow_instant_use: false,
         reset_command: None,
         id: "test-board".into(),
         board_type: "test".into(),
@@ -608,7 +609,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
             "POST",
             roles_path,
             Some(admin),
-            json!({"name":"Test role","description":"test","administrator":false})
+            json!({"name":"Test role","description":"test","permissions":["board.use","rental.request"]})
         )
         .await
         .0,

@@ -214,6 +214,13 @@ async fn complete_login(
         .await?
         .filter(|u| u.security_version == version)
         .ok_or_else(invalid)?;
+    if surface == Surface::Admin
+        && !crate::security::permissions::access(&state.database, &user)
+            .await?
+            .allows("console.access")
+    {
+        return Err(ApiError::forbidden("后台访问权限已撤销"));
+    }
     let grant = state
         .database
         .issue_grant(
@@ -453,7 +460,11 @@ async fn disable(
     .fetch_one(&mut *tx)
     .await?;
     let config = state.config.read().await.security.clone();
-    if user.is_admin && config.require_admin_mfa {
+    if crate::security::permissions::access(&state.database, &user)
+        .await?
+        .allows("console.access")
+        && config.require_admin_mfa
+    {
         return Err(ApiError::forbidden("管理员必须保留双重验证"));
     }
     sqlx::query("DELETE FROM mfa_credentials WHERE user_id=$1")

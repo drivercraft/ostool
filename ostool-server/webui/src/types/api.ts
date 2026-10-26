@@ -152,6 +152,7 @@ export interface AxloaderSerialParameters {
 export type BootConfig = UbootProfile | PxeProfile | UefiHttpProfile;
 
 export interface BoardConfig {
+  allow_instant_use?: boolean;
   reset_command?: string | null;
   id: string;
   board_type: string;
@@ -165,6 +166,7 @@ export interface BoardConfig {
 }
 
 export interface AdminBoardSummary {
+  allow_instant_use?: boolean;
   virtual_device_id?: string | null;
   id: string;
   board_type: string;
@@ -175,6 +177,7 @@ export interface AdminBoardSummary {
   boot: { kind: BootConfig["kind"] };
 }
 export interface AdminBoardUpsertRequest {
+  allow_instant_use?: boolean;
   reset_command?: string | null;
   id: string | null;
   board_type: string;
@@ -419,12 +422,29 @@ export interface UserInput {
   disabled: boolean;
   password?: string;
 }
-export interface RoleInput {
+export interface PermissionCapability {
+  code: string;
   name: string;
   description: string;
-  administrator: boolean;
+  group: string;
+  requires: string[];
+}
+export interface AllocationPolicy {
+  max_duration_minutes: number;
+  max_concurrent_sessions: number;
+  min_available_minutes: number;
+  board_types: string[];
+}
+export interface RoleInput {
+  revision?: number;
+  name: string;
+  description: string;
+  permissions: string[];
+  allocation_policy: AllocationPolicy;
 }
 export interface UserRole extends RoleInput {
+  revision: number;
+  administrator: boolean;
   user_count: number;
   created_at?: string;
   updated_at?: string;
@@ -456,6 +476,8 @@ export interface Rental extends RentalInput {
   user_display_name?: string | null;
   id: string;
   status: "scheduled" | "active" | "expired" | "cancelled";
+  source?: "scheduled" | "instant";
+  released_at?: string | null;
   cancelled_at: string | null;
   created_at: string;
 }

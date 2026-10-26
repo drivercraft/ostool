@@ -57,6 +57,7 @@ export function BoardOta({ boardId }: { boardId: string }) {
         />
       </label>
       <Button
+        permission="ota.manage"
         type="button"
         variant="outline"
         disabled={!file || upload.pending}
@@ -97,6 +98,7 @@ export function BoardOta({ boardId }: { boardId: string }) {
         }}
       />
       <Button
+        permission="ota.manage"
         type="button"
         disabled={!selected || !!pending || assign.pending}
         onClick={() =>

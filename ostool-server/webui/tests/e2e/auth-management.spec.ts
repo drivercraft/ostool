@@ -114,7 +114,7 @@ test("registration, member/admin access, user/role events and settings navigatio
   await page.getByRole("button", { name: "保存租赁", exact: true }).click();
   const row = page
     .getByRole("row")
-    .filter({ has: page.getByRole("cell", { name: boardId, exact: true }) });
+    .filter({ has: page.getByText(boardId, { exact: true }) });
   await expect(row).toBeVisible();
   await expect(row.getByText("使用期内", { exact: true })).toBeVisible();
   await page.screenshot({

@@ -113,11 +113,13 @@ export default function RentalRequests() {
                   <div className="row-actions">
                     <RowAction
                       label="批准"
+                      permission="requests.manage"
                       icon={ActionApprove}
                       onClick={() => open(r, "approve")}
                     />
                     <RowAction
                       label="拒绝"
+                      permission="requests.manage"
                       icon={ActionReject}
                       onClick={() => open(r, "reject")}
                     />

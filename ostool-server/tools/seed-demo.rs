@@ -211,6 +211,7 @@ fn board(index: usize) -> BoardConfig {
         })
     };
     BoardConfig {
+        allow_instant_use: false,
         reset_command: None,
         power_management: PowerManagementConfig::Custom(CustomPowerManagement {
             power_on_cmd: "true".into(),
@@ -276,7 +277,7 @@ async fn seed_identity(db: &Database) -> anyhow::Result<()> {
         .and_utc();
     let mut tx = db.pool().begin().await?;
     for (index, (id, name, description)) in ROLES.iter().enumerate() {
-        sqlx::query("INSERT INTO roles(id,name,description,administrator,created_at,updated_at) VALUES($1,$2,$3,$4,now()-interval '200 days',now()-interval '30 days') ON CONFLICT DO NOTHING")
+        sqlx::query("INSERT INTO roles(id,name,description,administrator,permissions,created_at,updated_at) VALUES($1,$2,$3,$4,CASE WHEN $4 THEN ARRAY['system.admin'] ELSE ARRAY['board.use','rental.request'] END,now()-interval '200 days',now()-interval '30 days') ON CONFLICT DO NOTHING")
             .bind(id).bind(name).bind(description).bind(index == 0).execute(&mut *tx).await?;
     }
     for (index, (username, name)) in PEOPLE.iter().enumerate() {

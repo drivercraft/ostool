@@ -1,3 +1,5 @@
+import { usePermissions } from "@/components/permissions";
+import { Notice } from "@/components/forms";
 import {
   useLocation,
   useNavigationType,
@@ -12,22 +14,17 @@ import { Server, Tftp, Accounts } from "./Settings";
 export default function SystemSettings() {
   const publicEdition = useEdition().edition === "public";
   const [params, setParams] = useSearchParams();
-  const routeTab = (publicEdition
-    ? [
-        "site",
-        "contact",
-        "terms",
-        "privacy",
-        "maintenance",
-        "server",
-        "tftp",
-        "security",
-        "email",
-      ]
-    : ["site", "contact", "terms", "privacy", "maintenance", "server", "tftp"]
-  ).includes(params.get("tab") ?? "")
+  const { can } = usePermissions();
+  const tabs = [
+    ...["site", "contact", "terms", "privacy", "maintenance"].filter(() =>
+      can("site.read"),
+    ),
+    ...["server", "tftp"].filter(() => can("server.read")),
+    ...(publicEdition && can("security.read") ? ["security", "email"] : []),
+  ];
+  const routeTab = tabs.includes(params.get("tab") ?? "")
     ? params.get("tab")!
-    : "site";
+    : (tabs[0] ?? "");
   const location = useLocation();
   const navigationType = useNavigationType();
   const [tab, setTab] = useState(routeTab);
@@ -38,6 +35,7 @@ export default function SystemSettings() {
       setTab(routeTab);
     }
   }, [location.key, location.state, navigationType, routeTab]);
+  if (!tabs.length) return <Notice>当前角色没有系统设置权限。</Notice>;
   return (
     <>
       <Tabs
@@ -50,15 +48,31 @@ export default function SystemSettings() {
         }}
       >
         <TabsList className="system-tabs" aria-label="系统设置">
-          <TabsTrigger value="site">站点信息</TabsTrigger>
-          <TabsTrigger value="contact">联系与备案</TabsTrigger>
-          <TabsTrigger value="terms">用户协议</TabsTrigger>
-          <TabsTrigger value="privacy">隐私政策</TabsTrigger>
-          <TabsTrigger value="maintenance">维护提示</TabsTrigger>
-          {publicEdition && <TabsTrigger value="email">邮件服务</TabsTrigger>}
-          <TabsTrigger value="server">网络与上传</TabsTrigger>
-          <TabsTrigger value="tftp">TFTP 服务</TabsTrigger>
-          {publicEdition && (
+          {tabs.includes("site") && (
+            <TabsTrigger value="site">站点信息</TabsTrigger>
+          )}
+          {tabs.includes("contact") && (
+            <TabsTrigger value="contact">联系与备案</TabsTrigger>
+          )}
+          {tabs.includes("terms") && (
+            <TabsTrigger value="terms">用户协议</TabsTrigger>
+          )}
+          {tabs.includes("privacy") && (
+            <TabsTrigger value="privacy">隐私政策</TabsTrigger>
+          )}
+          {tabs.includes("maintenance") && (
+            <TabsTrigger value="maintenance">维护提示</TabsTrigger>
+          )}
+          {tabs.includes("email") && (
+            <TabsTrigger value="email">邮件服务</TabsTrigger>
+          )}
+          {tabs.includes("server") && (
+            <TabsTrigger value="server">网络与上传</TabsTrigger>
+          )}
+          {tabs.includes("tftp") && (
+            <TabsTrigger value="tftp">TFTP 服务</TabsTrigger>
+          )}
+          {tabs.includes("security") && (
             <TabsTrigger value="security">登录与安全</TabsTrigger>
           )}
         </TabsList>

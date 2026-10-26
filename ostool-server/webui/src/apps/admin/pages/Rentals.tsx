@@ -47,7 +47,11 @@ export default function Rentals() {
         toolbar={
           <ListToolbar
             actions={
-              <Button asChild disabled={!boards.some((b) => !b.disabled)}>
+              <Button
+                permission="rentals.manage"
+                asChild
+                disabled={!boards.some((b) => !b.disabled)}
+              >
                 <Link to="/rentals/new">新增租赁</Link>
               </Button>
             }
@@ -120,6 +124,9 @@ export default function Rentals() {
             <Row key={r.id}>
               <Cell>
                 <strong>{r.board_id}</strong>
+                <small>
+                  {r.source === "instant" ? "即时使用" : "预约租赁"}
+                </small>
               </Cell>
               <Cell>
                 {r.user_display_name ||
@@ -147,14 +154,18 @@ export default function Rentals() {
                 <div className="actions">
                   <RowAction
                     label="编辑"
+                    permission="rentals.manage"
                     icon={ActionEdit}
                     disabled={
-                      r.status === "expired" || r.status === "cancelled"
+                      r.source === "instant" ||
+                      r.status === "expired" ||
+                      r.status === "cancelled"
                     }
                     to={`/rentals/${r.id}`}
                   />
                   {r.status !== "cancelled" && r.status !== "expired" && (
                     <ConfirmAction
+                      permission="rentals.manage"
                       icon={ActionCancel}
                       label="取消租赁"
                       description={`取消 ${r.board_id} 的租赁？相关会话会终止，并按正常流程断电、清理文件。`}

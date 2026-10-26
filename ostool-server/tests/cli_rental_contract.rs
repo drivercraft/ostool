@@ -95,6 +95,7 @@ async fn website_rentals_authorize_real_ostool_clients() -> Result<()> {
     config.http_boot.root_dir = root.path().join("http-boot");
     let database = test_database::prepare(&root.path().join("config.toml"), &mut config).await?;
     let board = BoardConfig {
+        allow_instant_use: false,
         reset_command: Some("true # private-restore-credential".into()),
         id: "contract-board".into(),
         board_type: "contract-test".into(),

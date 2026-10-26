@@ -253,7 +253,7 @@ async fn admin_actions_skip_step_up_but_keep_session_isolation_and_csrf() {
             "POST",
             "/api/v1/admin/roles",
             None,
-            json!({"name":"forbidden role","administrator":false}),
+            json!({"name":"forbidden role","permissions":["board.use","rental.request"]}),
             Some(&f.origin),
             Some(test_security::access_cookie(&web.headers)),
         )
@@ -319,7 +319,7 @@ async fn admin_actions_skip_step_up_but_keep_session_isolation_and_csrf() {
             "POST",
             "/api/v1/admin/roles",
             Some(&cookies),
-            json!({"name":"test role","description":"","administrator":false}),
+            json!({"name":"test role","description":"","permissions":["board.use","rental.request"]}),
         )
         .await;
     assert_eq!(allowed.status, StatusCode::CREATED, "{}", allowed.body);
@@ -979,6 +979,7 @@ async fn public_site_stream_cannot_expose_management_or_identity_data() {
     let f = Fixture::new(true).await;
     for disabled in [false, true] {
         let board = ostool_server::BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: if disabled {
                 "disabled-device"
@@ -2248,4 +2249,429 @@ async fn reserved_name_settings_apply_to_admin_writes_and_survive_restart_withou
     assert_eq!(f.login(true).await.status, StatusCode::OK);
     let site = f.request("GET", "/api/v1/site", None, Value::Null).await;
     assert!(!site.body.to_string().contains("username_keywords"));
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn capability_roles_gate_admin_login_http_and_scoped_events_and_prevent_escalation()
+-> anyhow::Result<()> {
+    use futures_util::StreamExt;
+    let f = Fixture::new(true).await;
+    let root = f.login(true).await;
+    let cookie = test_security::cookie_header(&root.headers);
+    let catalog = f
+        .request(
+            "GET",
+            "/api/v1/admin/permissions",
+            Some(&cookie),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(catalog.status, StatusCode::OK);
+    assert!(
+        catalog
+            .body
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["code"] == "board.instant")
+    );
+    let created=f.request("POST","/api/v1/admin/roles",Some(&cookie),json!({"name":"设备观察员","description":"只读设备权限","permissions":["devices.read"]})).await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+    let role: String = sqlx::query_scalar("SELECT id FROM roles WHERE name='设备观察员'")
+        .fetch_one(f.state.database.pool())
+        .await?;
+    let member = f
+        .state
+        .database
+        .create_user(
+            "device_observer",
+            "observer@permissions.test",
+            "permissions-observer-password-123",
+            Some("设备观察员"),
+            false,
+        )
+        .await?;
+    sqlx::query("UPDATE users SET role_id=$1 WHERE id=$2")
+        .bind(&role)
+        .bind(member.id)
+        .execute(f.state.database.pool())
+        .await?;
+    let logged=f.request("POST","/api/v1/admin/auth/login",None,json!({"email":"device_observer","password":"permissions-observer-password-123","verification":f.proof("admin_login").await})).await;
+    assert_eq!(logged.status, StatusCode::OK, "{}", logged.body);
+    let observer = test_security::cookie_header(&logged.headers);
+    let me = f
+        .request("GET", "/api/v1/auth/me", Some(&observer), Value::Null)
+        .await;
+    assert_eq!(me.body["can_access_admin"], true);
+    assert_eq!(me.body["is_admin"], false);
+    assert_eq!(
+        f.request("GET", "/api/v1/admin/boards", Some(&observer), Value::Null)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    for (method, path) in [
+        ("GET", "/api/v1/admin/users"),
+        ("GET", "/api/v1/admin/account-settings"),
+        ("GET", "/api/v1/admin/dashboard"),
+        ("GET", "/api/v1/admin/boards/secret-device"),
+        ("POST", "/api/v1/admin/roles"),
+        ("DELETE", "/api/v1/admin/boards/secret-device"),
+    ] {
+        assert_eq!(
+            f.request(method, path, Some(&observer), json!({}))
+                .await
+                .status,
+            StatusCode::FORBIDDEN,
+            "{method} {path}"
+        );
+    }
+    let response = f
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/admin/events?topics=boards,users,account_settings&list_view=users")
+                .header("cookie", &observer)
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body().into_data_stream();
+    let mut text = String::new();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while let Some(bytes) = stream.next().await {
+            text.push_str(&String::from_utf8_lossy(&bytes.unwrap()));
+        }
+    })
+    .await;
+    assert!(text.contains("snapshot"));
+    assert!(!text.contains("\"listing\""));
+    assert!(!text.contains("\"account_settings\""));
+    let updated=f.request("PUT",&format!("/api/v1/admin/roles/{role}"),Some(&cookie),json!({"revision":1,"name":"授权维护员","description":"允许维护自己已有权限的角色","permissions":["roles.manage","users.manage","devices.read"]})).await;
+    assert_eq!(updated.status, StatusCode::NO_CONTENT, "{}", updated.body);
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while let Some(bytes) = stream.next().await {
+            if String::from_utf8_lossy(&bytes.unwrap()).contains("auth-expired") {
+                return;
+            }
+        }
+        panic!("role revocation did not expire the management event stream");
+    })
+    .await?;
+
+    let stale=f.request("PUT",&format!("/api/v1/admin/roles/{role}"),Some(&cookie),json!({"revision":1,"name":"覆盖旧权限","description":"","permissions":["system.admin"]})).await;
+    assert_eq!(stale.status, StatusCode::CONFLICT);
+    assert_eq!(
+        f.request("GET", "/api/v1/auth/me", Some(&observer), Value::Null)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    let logged=f.request("POST","/api/v1/admin/auth/login",None,json!({"email":"device_observer","password":"permissions-observer-password-123","verification":f.proof("admin_login").await})).await;
+    assert_eq!(logged.status, StatusCode::OK);
+    let observer = test_security::cookie_header(&logged.headers);
+    let elevated = f
+        .request(
+            "POST",
+            "/api/v1/admin/roles",
+            Some(&observer),
+            json!({"name":"非法提权","description":"","permissions":["system.admin"]}),
+        )
+        .await;
+    assert_eq!(elevated.status, StatusCode::FORBIDDEN);
+    let root_user = f
+        .state
+        .database
+        .find_user("admin@security.test")
+        .await?
+        .unwrap();
+    let change=f.request("PUT",&format!("/api/v1/admin/users/{}",root_user.id),Some(&observer),json!({"username":"admin","email":"admin@security.test","display_name":"Administrator","role_id":"admin","disabled":false,"password":"attacker-new-password-123"})).await;
+    assert_eq!(change.status, StatusCode::FORBIDDEN);
+    let own = f
+        .request(
+            "PUT",
+            &format!("/api/v1/admin/roles/{role}"),
+            Some(&observer),
+            json!({"revision":2,"name":"自改权限","description":"","permissions":["devices.read"]}),
+        )
+        .await;
+    assert_eq!(own.status, StatusCode::CONFLICT);
+    let unknown = f
+        .request(
+            "POST",
+            "/api/v1/admin/roles",
+            Some(&cookie),
+            json!({"name":"无效权限","description":"","permissions":["not.a.permission"]}),
+        )
+        .await;
+    assert_eq!(unknown.status, StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn instant_device_use_respects_pool_bookings_concurrency_ownership_and_early_release()
+-> anyhow::Result<()> {
+    use ostool_server::{BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig};
+    let f = Fixture::new(true).await;
+    let root = f.login(true).await;
+    let cookie = test_security::cookie_header(&root.headers);
+    let role_reply=f.request("POST","/api/v1/admin/roles",Some(&cookie),json!({"name":"即时研发成员","description":"可即时使用指定板型","permissions":["board.instant","rental.request"],"allocation_policy":{"max_duration_minutes":120,"max_concurrent_sessions":1,"min_available_minutes":10,"board_types":["shared-arm"]}})).await;
+    assert_eq!(
+        role_reply.status,
+        StatusCode::CREATED,
+        "{}",
+        role_reply.body
+    );
+    let role: String = sqlx::query_scalar("SELECT id FROM roles WHERE name='即时研发成员'")
+        .fetch_one(f.state.database.pool())
+        .await?;
+    for (id, pool, kind) in [
+        ("shared-1", true, "shared-arm"),
+        ("shared-2", true, "shared-arm"),
+        ("private-1", false, "shared-arm"),
+        ("foreign-1", true, "shared-x86"),
+    ] {
+        let board = BoardConfig {
+            allow_instant_use: pool,
+            reset_command: None,
+            id: id.into(),
+            board_type: kind.into(),
+            tags: vec!["kernel".into()],
+            serial: None,
+            boot: BootConfig::Uboot(Default::default()),
+            power_management: PowerManagementConfig::Custom(CustomPowerManagement {
+                power_on_cmd: "true".into(),
+                power_off_cmd: "true".into(),
+            }),
+            notes: None,
+            network_identity: None,
+            disabled: false,
+        };
+        f.state.board_store.write_board(&board).await?;
+        f.state.boards.write().await.insert(id.into(), board);
+    }
+    f.state.sync_board_runtime_states().await;
+    let user = f
+        .state
+        .database
+        .create_user(
+            "instant_engineer",
+            "instant@permissions.test",
+            "instant-engineer-password-123",
+            None,
+            false,
+        )
+        .await?;
+    sqlx::query("UPDATE users SET role_id=$1 WHERE id=$2")
+        .bind(&role)
+        .bind(user.id)
+        .execute(f.state.database.pool())
+        .await?;
+    let user = f.state.database.user_by_id(user.id).await?.unwrap();
+    let auth = f.state.config.read().await.auth.clone();
+    let grant = f
+        .state
+        .database
+        .issue_grant(
+            user.clone(),
+            "ostool-cli",
+            "board:operate offline_access",
+            &auth,
+        )
+        .await?;
+    let normal = f
+        .state
+        .database
+        .create_user(
+            "reserved_engineer",
+            "reserved@permissions.test",
+            "reserved-engineer-password-123",
+            None,
+            false,
+        )
+        .await?;
+    sqlx::query("INSERT INTO board_rentals(board_id,user_id,starts_at,ends_at) VALUES('shared-1',$1,now()+interval '30 minutes',now()+interval '2 hours')").bind(normal.id).execute(f.state.database.pool()).await?;
+    let create =
+        |id: &str| json!({"board_type":"shared-arm","board_id":id,"required_tags":["kernel"]});
+    let access = f
+        .custom(
+            "GET",
+            "/api/v1/board-types",
+            None,
+            Value::Null,
+            Some(&f.origin),
+            Some(&grant.access_token),
+        )
+        .await;
+    assert_eq!(access.status, StatusCode::OK);
+    assert!(access.body.to_string().contains("shared-arm"));
+    assert!(!access.body.to_string().contains("shared-x86"));
+    let denied = f
+        .custom(
+            "POST",
+            "/api/v1/sessions",
+            None,
+            create("private-1"),
+            Some(&f.origin),
+            Some(&grant.access_token),
+        )
+        .await;
+    assert_eq!(denied.status, StatusCode::CONFLICT);
+    // Concurrent requests by one user cannot exceed the configured limit, even on different devices.
+    let (a, b) = tokio::join!(
+        f.custom(
+            "POST",
+            "/api/v1/sessions",
+            None,
+            create("shared-1"),
+            Some(&f.origin),
+            Some(&grant.access_token)
+        ),
+        f.custom(
+            "POST",
+            "/api/v1/sessions",
+            None,
+            create("shared-2"),
+            Some(&f.origin),
+            Some(&grant.access_token)
+        )
+    );
+    assert_eq!(
+        [a.status, b.status]
+            .into_iter()
+            .filter(|s| *s == StatusCode::CREATED)
+            .count(),
+        1
+    );
+    let winner = if a.status == StatusCode::CREATED {
+        a
+    } else {
+        b
+    };
+    let sid = winner.body["session_id"].as_str().unwrap();
+    let board = winner.body["board_id"].as_str().unwrap();
+    let row=sqlx::query("SELECT r.id,r.ends_at,r.source FROM board_rentals r JOIN session_owners s ON s.rental_id=r.id WHERE s.session_id=$1").bind(sid).fetch_one(f.state.database.pool()).await?;
+    use sqlx::Row;
+    let rental: Uuid = row.try_get("id")?;
+    assert_eq!(row.try_get::<String, _>("source")?, "instant");
+    if board == "shared-1" {
+        assert!(
+            row.try_get::<chrono::DateTime<Utc>, _>("ends_at")?
+                < Utc::now() + chrono::Duration::minutes(30)
+        );
+    }
+    let foreign = f
+        .state
+        .database
+        .issue_grant(normal.clone(), "ostool-cli", "board:operate", &auth)
+        .await?;
+    assert_eq!(
+        f.custom(
+            "GET",
+            &format!("/api/v1/sessions/{sid}"),
+            None,
+            Value::Null,
+            Some(&f.origin),
+            Some(&foreign.access_token)
+        )
+        .await
+        .status,
+        StatusCode::NOT_FOUND
+    );
+    let upload = f
+        .custom(
+            "PUT",
+            &format!("/api/v1/sessions/{sid}/files"),
+            None,
+            json!({}),
+            Some(&f.origin),
+            Some(&grant.access_token),
+        )
+        .await;
+    assert_ne!(upload.status, StatusCode::UNAUTHORIZED);
+    assert_ne!(upload.status, StatusCode::FORBIDDEN); // body lacks X-File-Path, proving normal session authorization succeeded.
+    assert_eq!(
+        f.custom(
+            "POST",
+            &format!("/api/v1/sessions/{sid}/heartbeat"),
+            None,
+            Value::Null,
+            Some(&f.origin),
+            Some(&grant.access_token)
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        f.custom(
+            "DELETE",
+            &format!("/api/v1/sessions/{sid}"),
+            None,
+            Value::Null,
+            Some(&f.origin),
+            Some(&grant.access_token)
+        )
+        .await
+        .status,
+        StatusCode::ACCEPTED
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while f.state.get_session(sid).await.is_some() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    let ended: bool = sqlx::query_scalar(
+        "SELECT released_at IS NOT NULL AND ends_at<=now() FROM board_rentals WHERE id=$1",
+    )
+    .bind(rental)
+    .fetch_one(f.state.database.pool())
+    .await?;
+    assert!(ended);
+    let again = f
+        .custom(
+            "POST",
+            "/api/v1/sessions",
+            None,
+            create(board),
+            Some(&f.origin),
+            Some(&grant.access_token),
+        )
+        .await;
+    assert_eq!(again.status, StatusCode::CREATED, "{}", again.body);
+    let next_sid = again.body["session_id"].as_str().unwrap();
+    let update=f.request("PUT",&format!("/api/v1/admin/roles/{role}"),Some(&cookie),json!({"name":"即时研发成员","revision":1,"description":"取消即时使用","permissions":["board.use"],"allocation_policy":{"max_duration_minutes":120,"max_concurrent_sessions":1,"min_available_minutes":10,"board_types":["shared-arm"]}})).await;
+    assert_eq!(update.status, StatusCode::NO_CONTENT, "{}", update.body);
+    assert_eq!(
+        f.custom(
+            "GET",
+            &format!("/api/v1/sessions/{next_sid}"),
+            None,
+            Value::Null,
+            Some(&f.origin),
+            Some(&grant.access_token)
+        )
+        .await
+        .status,
+        StatusCode::UNAUTHORIZED
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while f.state.get_session(next_sid).await.is_some() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    assert!(
+        !f.state
+            .database
+            .authenticate_password("instant_engineer", "instant-engineer-password-123")
+            .await?
+            .unwrap()
+            .is_admin
+    );
+    Ok(())
 }

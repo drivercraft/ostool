@@ -1,3 +1,4 @@
+import { firstPage } from "@/components/permissions";
 import { AuthLegal } from "@/components/auth-legal";
 import { useSiteSettings } from "@/components/site-settings";
 import { useEffect, useState, type FormEvent } from "react";
@@ -45,10 +46,19 @@ export default function AdminLogin() {
         return;
       }
       notifyAuthChanged();
+      const user = await api.me();
+      const redirect = new URLSearchParams(window.location.search).get(
+        "redirect",
+      );
+      const allowed = (code: string) =>
+        user.is_admin ||
+        !!user.permissions?.includes("system.admin") ||
+        !!user.permissions?.includes(code);
+      const target = safeAdminRedirect(redirect);
       window.location.replace(
-        safeAdminRedirect(
-          new URLSearchParams(window.location.search).get("redirect"),
-        ),
+        target === "/admin/overview" && !allowed("dashboard.read")
+          ? "/admin" + firstPage(allowed)
+          : target,
       );
     } catch (error) {
       setError(error instanceof Error ? error.message : "后台登录失败");

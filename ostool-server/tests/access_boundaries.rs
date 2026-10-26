@@ -55,6 +55,7 @@ impl Fixture {
             .await?;
         for id in ["board-one", "board-two"] {
             let board = BoardConfig {
+                allow_instant_use: false,
                 reset_command: None,
                 id: id.into(),
                 board_type: "upload-test".into(),

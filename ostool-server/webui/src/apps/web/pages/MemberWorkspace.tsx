@@ -215,6 +215,19 @@ function Overview({ user }: { user: AuthUser }) {
           </Link>
         ))}
       </div>
+      {user.permissions?.includes("board.instant") && (
+        <section className="member-card">
+          <h2>即时使用设备</h2>
+          <p>当前角色可通过 ostool 直接领取已开放的空闲设备，无需逐次审核。</p>
+          <p>
+            单次最多 {user.allocation_policy?.max_duration_minutes ?? 120}{" "}
+            分钟，同时最多{" "}
+            {user.allocation_policy?.max_concurrent_sessions ?? 1}{" "}
+            台；已有预约优先。
+          </p>
+          <Link to="/docs">查看 CLI 使用说明</Link>
+        </section>
+      )}
       <section className="member-card">
         <h2>当前账号</h2>
         <dl className="member-facts">

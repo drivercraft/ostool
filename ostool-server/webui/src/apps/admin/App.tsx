@@ -1,4 +1,10 @@
 import {
+  PermissionsProvider,
+  usePermissions,
+  pagePermission,
+  firstPage,
+} from "@/components/permissions";
+import {
   SiteSettingsProvider,
   useSiteSettings,
 } from "@/components/site-settings";
@@ -44,6 +50,7 @@ const Rentals = lazy(() => import("@/apps/admin/pages/Rentals"));
 const RentalEditor = lazy(() => import("@/apps/admin/pages/RentalEditor"));
 const Users = lazy(() => import("@/apps/admin/pages/Users"));
 const Roles = lazy(() => import("@/apps/admin/pages/Roles"));
+const RoleEditor = lazy(() => import("@/apps/admin/pages/RoleEditor"));
 const RentalRequests = lazy(() => import("@/apps/admin/pages/RentalRequests"));
 const boardNavigation = [
   ["boards", "设备列表"],
@@ -100,7 +107,9 @@ function AdminEntry() {
       const user = await api.me();
       if (active) {
         setCurrentUser(user);
-        setGate(user.is_admin ? "allowed" : "denied");
+        setGate(
+          (user.can_access_admin ?? user.is_admin) ? "allowed" : "denied",
+        );
       }
     })().catch((e) => {
       if (e instanceof Error && "status" in e && e.status === 401) {
@@ -146,7 +155,11 @@ function AdminEntry() {
         </Button>
       </main>
     );
-  return <AdminConsole user={currentUser} />;
+  return (
+    <PermissionsProvider user={currentUser} local={config.edition === "local"}>
+      <AdminConsole user={currentUser} />
+    </PermissionsProvider>
+  );
 }
 function AdminConsole({
   user,
@@ -158,6 +171,7 @@ function AdminConsole({
   const { settings } = useSiteSettings();
   const publicEdition = useEdition().edition === "public";
   const errors = useErrors();
+  const { can } = usePermissions();
   const [menu, setMenu] = useState(false);
   useEffect(() => {
     if (pending) return;
@@ -189,62 +203,42 @@ function AdminConsole({
             </span>
           </NavLink>
           <nav aria-label="主导航">
-            <SidebarGroup
-              label="仪表盘"
-              icon={<LayoutDashboardIcon />}
-              paths={["/overview", "/jobs", "/operations"]}
-            >
-              {[
-                ["/overview", "运行状态"],
-                ["/jobs", "后台任务"],
-                ["/operations", "运营状态"],
-              ].map(([path, label]) => (
-                <NavLink key={path} to={path} onClick={() => setMenu(false)}>
-                  <span className="admin-nav-dot" aria-hidden="true" />
-                  <span>{label}</span>
-                </NavLink>
-              ))}
-            </SidebarGroup>
-            <SidebarGroup
-              label="设备管理"
-              icon={<CircuitBoardIcon />}
-              paths={["/boards", "/dtbs", "/sessions"]}
-            >
-              {boardNavigation.map(([path, label]) => (
-                <NavLink
-                  key={path}
-                  to={`/${path}`}
-                  onClick={() => setMenu(false)}
-                >
-                  <span className="admin-nav-dot" aria-hidden="true" />
-                  <span>{label}</span>
-                </NavLink>
-              ))}
-            </SidebarGroup>
-            {publicEdition && (
-              <>
-                <SidebarGroup
-                  label="租赁管理"
-                  icon={<CalendarClockIcon />}
-                  paths={["/rentals", "/rental-requests"]}
-                >
-                  <NavLink to="/rentals" onClick={() => setMenu(false)}>
-                    <span className="admin-nav-dot" aria-hidden="true" />
-                    <span>租赁列表</span>
-                  </NavLink>
-                  <NavLink to="/rental-requests" onClick={() => setMenu(false)}>
-                    <span className="admin-nav-dot" aria-hidden="true" />
-                    <span>租赁申请</span>
-                  </NavLink>
-                </SidebarGroup>
-                <SidebarGroup
-                  label="用户管理"
-                  icon={<UserCircleIcon />}
-                  paths={["/users"]}
-                >
-                  {userNavigation.map(([path, label]) => (
+            {can("dashboard.read") && (
+              <SidebarGroup
+                label="仪表盘"
+                icon={<LayoutDashboardIcon />}
+                paths={["/overview", "/jobs", "/operations"]}
+              >
+                {[
+                  ["/overview", "运行状态"],
+                  ["/jobs", "后台任务"],
+                  ["/operations", "运营状态"],
+                ]
+                  .filter(([path]) => can(pagePermission(path)))
+                  .map(([path, label]) => (
                     <NavLink
-                      end={path === "users"}
+                      key={path}
+                      to={path}
+                      onClick={() => setMenu(false)}
+                    >
+                      <span className="admin-nav-dot" aria-hidden="true" />
+                      <span>{label}</span>
+                    </NavLink>
+                  ))}
+              </SidebarGroup>
+            )}
+            {boardNavigation.some(([path]) =>
+              can(pagePermission("/" + path)),
+            ) && (
+              <SidebarGroup
+                label="设备管理"
+                icon={<CircuitBoardIcon />}
+                paths={["/boards", "/dtbs", "/sessions"]}
+              >
+                {boardNavigation
+                  .filter(([path]) => can(pagePermission("/" + path)))
+                  .map(([path, label]) => (
+                    <NavLink
                       key={path}
                       to={`/${path}`}
                       onClick={() => setMenu(false)}
@@ -253,19 +247,72 @@ function AdminConsole({
                       <span>{label}</span>
                     </NavLink>
                   ))}
-                </SidebarGroup>
+              </SidebarGroup>
+            )}
+            {publicEdition && (
+              <>
+                {(can("rentals.read") || can("requests.read")) && (
+                  <SidebarGroup
+                    label="租赁管理"
+                    icon={<CalendarClockIcon />}
+                    paths={["/rentals", "/rental-requests"]}
+                  >
+                    {can("rentals.read") && (
+                      <NavLink to="/rentals" onClick={() => setMenu(false)}>
+                        <span className="admin-nav-dot" aria-hidden="true" />
+                        <span>租赁列表</span>
+                      </NavLink>
+                    )}
+                    {can("requests.read") && (
+                      <NavLink
+                        to="/rental-requests"
+                        onClick={() => setMenu(false)}
+                      >
+                        <span className="admin-nav-dot" aria-hidden="true" />
+                        <span>租赁申请</span>
+                      </NavLink>
+                    )}
+                  </SidebarGroup>
+                )}
+                {userNavigation.some(([path]) =>
+                  can(pagePermission("/" + path)),
+                ) && (
+                  <SidebarGroup
+                    label="用户管理"
+                    icon={<UserCircleIcon />}
+                    paths={["/users"]}
+                  >
+                    {userNavigation
+                      .filter(([path]) => can(pagePermission("/" + path)))
+                      .map(([path, label]) => (
+                        <NavLink
+                          end={path === "users"}
+                          key={path}
+                          to={`/${path}`}
+                          onClick={() => setMenu(false)}
+                        >
+                          <span className="admin-nav-dot" aria-hidden="true" />
+                          <span>{label}</span>
+                        </NavLink>
+                      ))}
+                  </SidebarGroup>
+                )}
               </>
             )}
-            <NavLink to="/audits" onClick={() => setMenu(false)}>
-              <ScrollTextIcon />
-              审计日志
-            </NavLink>
+            {can("audits.read") && (
+              <NavLink to="/audits" onClick={() => setMenu(false)}>
+                <ScrollTextIcon />
+                审计日志
+              </NavLink>
+            )}
           </nav>
           <nav className="admin-bottom-nav" aria-label="系统导航">
-            <NavLink to="/settings" onClick={() => setMenu(false)}>
-              <SettingsIcon />
-              系统设置
-            </NavLink>
+            {["site.read", "server.read", "security.read"].some(can) && (
+              <NavLink to="/settings" onClick={() => setMenu(false)}>
+                <SettingsIcon />
+                系统设置
+              </NavLink>
+            )}
           </nav>
         </aside>
         <main>
@@ -290,7 +337,7 @@ function AdminConsole({
                   <Routes>
                     <Route
                       path="/"
-                      element={<Navigate replace to="/overview" />}
+                      element={<Navigate replace to={firstPage(can)} />}
                     />
                     <Route path="/overview" element={<Overview />} />
                     <Route path="/jobs" element={<Overview view="jobs" />} />
@@ -301,7 +348,7 @@ function AdminConsole({
                     <Route path="/audits" element={<Audits />} />
                     <Route
                       path="/dashboard"
-                      element={<Navigate replace to="/overview" />}
+                      element={<Navigate replace to={firstPage(can)} />}
                     />
                     <Route path="/boards" element={<Boards />} />
                     <Route path="/boards/new" element={<BoardEditor />} />
@@ -323,7 +370,7 @@ function AdminConsole({
                         publicEdition ? (
                           <Users />
                         ) : (
-                          <Navigate replace to="/overview" />
+                          <Navigate replace to={firstPage(can)} />
                         )
                       }
                     />
@@ -333,10 +380,16 @@ function AdminConsole({
                         publicEdition ? (
                           <Roles />
                         ) : (
-                          <Navigate replace to="/overview" />
+                          <Navigate replace to={firstPage(can)} />
                         )
                       }
                     />
+                    <Route path="/users/roles/new" element={<RoleEditor />} />
+                    <Route
+                      path="/users/roles/:roleId"
+                      element={<RoleEditor />}
+                    />
+
                     <Route
                       path="/account"
                       element={
@@ -345,7 +398,7 @@ function AdminConsole({
                             <SecuritySettings />
                           </PagePanel>
                         ) : (
-                          <Navigate replace to="/overview" />
+                          <Navigate replace to={firstPage(can)} />
                         )
                       }
                     />
@@ -355,7 +408,7 @@ function AdminConsole({
                         publicEdition ? (
                           <RentalRequests />
                         ) : (
-                          <Navigate replace to="/overview" />
+                          <Navigate replace to={firstPage(can)} />
                         )
                       }
                     />
@@ -365,7 +418,7 @@ function AdminConsole({
                         publicEdition ? (
                           <RentalEditor />
                         ) : (
-                          <Navigate replace to="/overview" />
+                          <Navigate replace to={firstPage(can)} />
                         )
                       }
                     />
@@ -375,7 +428,7 @@ function AdminConsole({
                         publicEdition ? (
                           <RentalEditor />
                         ) : (
-                          <Navigate replace to="/overview" />
+                          <Navigate replace to={firstPage(can)} />
                         )
                       }
                     />
@@ -385,7 +438,7 @@ function AdminConsole({
                         publicEdition ? (
                           <Rentals />
                         ) : (
-                          <Navigate replace to="/overview" />
+                          <Navigate replace to={firstPage(can)} />
                         )
                       }
                     />
@@ -417,6 +470,7 @@ function ResourceLoading({ children }: { children: ReactNode }) {
         : pathname.startsWith("/sessions")
           ? "sessions"
           : "server";
+  const { can } = usePermissions();
   const data = useResource(topic),
     errors = useErrors();
   useEffect(() => {
@@ -475,9 +529,14 @@ function ResourceLoading({ children }: { children: ReactNode }) {
     admin.setTopics([
       ...common,
       ...topics,
+      ...(pathname.startsWith("/users/roles") ? ["permissions"] : []),
       ...(editing ? ["board_editor"] : []),
     ]);
   }, [pathname]);
+  if (!can(pagePermission(pathname)))
+    return (
+      <Notice variant="destructive">当前角色没有此页面的访问权限。</Notice>
+    );
   return (
     <ListDataLoadingContext.Provider
       value={data === undefined && !errors[topic]}

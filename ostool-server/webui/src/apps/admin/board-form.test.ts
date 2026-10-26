@@ -64,6 +64,7 @@ describe("board configuration contracts", () => {
     expect(buildRequestPayload(boardToFormState(b))).toEqual({
       ...b,
       reset_command: b.reset_command,
+      allow_instant_use: false,
       network_identity: null,
     });
   });

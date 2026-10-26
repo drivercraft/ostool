@@ -102,7 +102,12 @@ pub(crate) async fn save_internal(
         .await
         .map_err(db_error)?;
     if let Some(id) = id {
-        let existing=sqlx::query("SELECT board_id,user_id,cancelled_at,ends_at FROM board_rentals WHERE id=$1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await.map_err(db_error)?.ok_or_else(||ApiError::not_found("租赁不存在"))?;
+        let existing=sqlx::query("SELECT board_id,user_id,cancelled_at,ends_at,source FROM board_rentals WHERE id=$1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await.map_err(db_error)?.ok_or_else(||ApiError::not_found("租赁不存在"))?;
+        if existing.try_get::<String, _>("source").map_err(db_error)? == "instant" {
+            return Err(ApiError::conflict(
+                "即时使用记录不支持调整时段，请另行安排预约租赁",
+            ));
+        }
         if existing
             .try_get::<String, _>("board_id")
             .map_err(db_error)?
@@ -211,7 +216,7 @@ pub async fn active(
 /// Hardware release uses the existing coordinator, including power-off and
 /// serial cleanup. Failure to validate a public member's grant fails closed.
 pub async fn enforce(state: &AppState) -> Result<(), ApiError> {
-    let rows=sqlx::query("SELECT s.session_id,r.ends_at FROM session_owners s JOIN users u ON u.id=s.user_id JOIN board_rentals r ON r.id=s.rental_id WHERE NOT u.disabled AND r.cancelled_at IS NULL AND r.starts_at<=now() AND r.ends_at>now()")
+    let rows=sqlx::query("SELECT s.session_id,r.ends_at FROM session_owners s JOIN users u ON u.id=s.user_id JOIN roles role ON role.id=u.role_id JOIN board_rentals r ON r.id=s.rental_id WHERE (u.is_admin OR 'board.use'=ANY(role.permissions)) AND (r.source<>'instant' OR u.is_admin OR 'board.instant'=ANY(role.permissions)) AND NOT u.disabled AND r.cancelled_at IS NULL AND r.starts_at<=now() AND r.ends_at>now()")
         .fetch_all(state.database.pool()).await.map_err(db_error)?;
     let valid = rows
         .iter()

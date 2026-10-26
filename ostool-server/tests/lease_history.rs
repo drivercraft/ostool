@@ -101,6 +101,7 @@ impl Fixture {
 }
 fn board() -> BoardConfig {
     BoardConfig {
+        allow_instant_use: false,
         reset_command: None,
         id: "history-board".into(),
         board_type: "history-fixture".into(),

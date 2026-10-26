@@ -139,6 +139,7 @@ async fn member_workspace_isolation_approvals_and_security() {
     let store = BoardStore::new(Database::connect(&config.database).await.unwrap());
     store
         .write_board(&BoardConfig {
+            allow_instant_use: false,
             reset_command: None,
             id: "portal-board".into(),
             board_type: "test".into(),

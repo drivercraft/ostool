@@ -1,3 +1,4 @@
+import { usePermissions } from "@/components/permissions";
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "cn";
@@ -45,11 +46,15 @@ function Button({
   variant = "default",
   size = "default",
   asChild = false,
+  permission,
   ...props
 }: React.ComponentProps<"button"> &
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean;
+    permission?: string;
   }) {
+  const { can } = usePermissions();
+  if (permission && !can(permission)) return null;
   const Comp = asChild ? Slot.Root : "button";
 
   return (

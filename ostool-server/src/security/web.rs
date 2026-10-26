@@ -167,10 +167,7 @@ pub async fn clear_cookies(state: &AppState, surface: Surface) -> Response {
 pub fn require_step_up(credential: &Credential) -> Result<(), ApiError> {
     // The admin console relies on its authenticated administrator session.
     // Use the stored client identity, never the request's surface header.
-    if credential.user.is_admin
-        && credential.client_id == Surface::Admin.client()
-        && credential.session_id.is_some()
-    {
+    if credential.client_id == Surface::Admin.client() && credential.session_id.is_some() {
         return Ok(());
     }
     if credential.session_id.is_some()
