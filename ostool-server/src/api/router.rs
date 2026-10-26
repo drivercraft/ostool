@@ -26,7 +26,7 @@ use crate::{
     api::{
         error::ApiError,
         models::{
-            ActionResponse, AdminBoardUpsertRequest, AdminOverviewResponse,
+            ActionResponse, AdminBoardSummary, AdminBoardUpsertRequest, AdminOverviewResponse,
             AdminServerConfigEditable, AdminServerConfigReadonly, AdminServerConfigResponse,
             AdminSessionsResponse, AdminTftpConfigResponse, AdminTftpStatusResponse,
             BoardPowerAction, BoardPowerStatusResponse, BoardRuntimeStatusResponse,
@@ -323,7 +323,7 @@ async fn build_admin_overview(
 
 async fn list_boards(
     State(state): State<AppState>,
-) -> Result<axum::Json<Vec<BoardConfig>>, ApiError> {
+) -> Result<axum::Json<Vec<AdminBoardSummary>>, ApiError> {
     let boards = state
         .boards
         .read()
@@ -331,6 +331,7 @@ async fn list_boards(
         .values()
         .cloned()
         .map(with_resolved_serial_config)
+        .map(AdminBoardSummary::from)
         .collect::<Vec<_>>();
     Ok(axum::Json(boards))
 }
@@ -360,7 +361,7 @@ async fn list_serial_ports() -> Result<axum::Json<Vec<SerialPortSummary>>, ApiEr
     })?))
 }
 
-async fn get_board(
+pub(crate) async fn get_board(
     Path(board_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<BoardConfig>, ApiError> {
@@ -401,7 +402,9 @@ async fn get_board_runtime_status(
     Ok(axum::Json(BoardRuntimeStatusResponse {
         lease_state: status.lease_state,
         active_session_id: status.active_session_id,
-        last_release_error: status.last_release_error,
+        last_release_error: status
+            .last_release_error
+            .map(|_| "设备释放失败，请检查服务器日志".into()),
         updated_at: status.updated_at,
     }))
 }
@@ -709,7 +712,6 @@ async fn list_loader_devices(
                 last_seen_at: device.last_seen_at,
                 online: device.online,
                 conflict: device.conflict,
-                current_registration_id: device.current_registration_id,
             })
             .collect(),
     ))
@@ -1383,7 +1385,8 @@ async fn list_admin_sessions(
         .bind(ids).fetch_all(state.database.pool()).await?;
     let sessions = sessions
         .into_iter()
-        .map(|session| {
+        .map(|mut session| {
+            session.serial_runtime = session.serial_runtime.management_view();
             let owner = owners
                 .iter()
                 .find(|row| row.get::<String, _>("session_id") == session.id);
@@ -2021,6 +2024,7 @@ async fn get_serial_status(
         response.runtime = response.runtime.public_view();
         response.manager = Default::default();
     }
+    response.runtime = response.runtime.management_view();
     Ok(axum::Json(response))
 }
 
@@ -3264,13 +3268,14 @@ pub(crate) async fn admin_topic(
                 .load(std::sync::atomic::Ordering::Relaxed)
         )),
         "boards" => serde_json::to_value(list_boards(extractor).await?.0),
+        "board_revision" => Ok(serde_json::json!(state.admin_events.revision("boards"))),
         "sessions" => serde_json::to_value(list_admin_sessions(extractor).await?.0.sessions),
         "session_history" => {
             Ok(serde_json::json!({"active":false,"revision":state.admin_events.lease_revision()}))
         }
         "loaders" => serde_json::to_value(list_loader_devices(extractor).await?.0),
         "ota" => Ok(
-            serde_json::json!({ "jobs": state.ota.jobs().await, "images": state.ota.images().await? }),
+            serde_json::json!({ "jobs": state.ota.jobs().await.into_iter().map(crate::ota::Job::management_view).collect::<Vec<_>>(), "images": state.ota.images().await? }),
         ),
         "virtual" => serde_json::to_value(list_virtual_devices(extractor).await.0),
         "dtbs" => serde_json::to_value(list_dtbs(extractor).await?.0),
@@ -3303,7 +3308,7 @@ pub(crate) async fn admin_topic(
         "runtimes" => {
             let mut values = BTreeMap::new();
             for (id, r) in state.board_runtimes.read().await.iter() {
-                values.insert(id.clone(), serde_json::json!({"lease_state":r.lease_state,"active_session_id":r.active_session_id,"last_release_error":r.last_release_error,"updated_at":r.updated_at}));
+                values.insert(id.clone(), serde_json::json!({"lease_state":r.lease_state,"active_session_id":r.active_session_id,"last_release_error":r.last_release_error.as_ref().map(|_|"设备释放失败，请检查服务器日志"),"updated_at":r.updated_at}));
             }
             serde_json::to_value(values)
         }
@@ -4411,7 +4416,8 @@ mod tests {
         let boards_body = to_bytes(boards_response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let boards: Vec<BoardConfig> = serde_json::from_slice(&boards_body).unwrap();
+        let boards: Vec<crate::api::models::AdminBoardSummary> =
+            serde_json::from_slice(&boards_body).unwrap();
         assert_eq!(boards[0].id, "demo-board-renamed");
     }
 
@@ -4466,7 +4472,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["message"], "executed `printf power-on >/dev/null`");
+        assert_eq!(value["message"], "power-on completed");
     }
 
     #[tokio::test]

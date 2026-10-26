@@ -838,7 +838,11 @@ async fn audited_request(state: &AppState, request: Request, next: Next) -> Resp
         "cli"
     };
     let context = Context {
-        request_id: Uuid::new_v4(),
+        request_id: parts
+            .extensions
+            .get::<crate::security::web::RequestId>()
+            .map(|id| id.0)
+            .unwrap_or_else(Uuid::new_v4),
         actor,
         source: source.into(),
         ip,

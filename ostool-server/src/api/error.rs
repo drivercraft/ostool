@@ -16,12 +16,29 @@ pub struct ApiError {
 
 impl ApiError {
     pub fn new(status: StatusCode, code: &'static str, message: impl Into<String>) -> Self {
+        let message = message.into();
+        let message = if status.is_server_error() {
+            log::error!("API {code}: {message}");
+            "服务暂时不可用，请稍后重试；如持续失败，请联系管理员并提供请求 ID".into()
+        } else {
+            message
+        };
         Self {
             status,
             code,
-            message: message.into(),
+            message,
             retry_after: None,
         }
+    }
+
+    /// Preserve expected validation/conflict statuses, but never send underlying
+    /// storage or process diagnostics to a client (including SSE projections).
+    pub fn operation(error: anyhow::Error, status: StatusCode, message: &'static str) -> Self {
+        log::warn!("API operation failed: {error:#}");
+        if error.is::<sqlx::Error>() || error.is::<std::io::Error>() {
+            return Self::internal("底层存储或系统调用失败");
+        }
+        Self::new(status, "operation_failed", message)
     }
 
     pub fn with_retry_after(mut self, seconds: u32) -> Self {

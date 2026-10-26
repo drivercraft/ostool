@@ -195,8 +195,11 @@ pub async fn create(
                 "failed"
             };
             result.message = Some(match outcome {
-                Ok(message) => message,
-                Err(error) => format!("{error:#}"),
+                Ok(_) => "电源操作完成".into(),
+                Err(error) => {
+                    log::warn!("power action {} failed: {error:#}", request.request_id);
+                    "电源操作失败，请检查服务器日志".into()
+                }
             });
             for key in resource_keys {
                 actions.busy.remove(&key);

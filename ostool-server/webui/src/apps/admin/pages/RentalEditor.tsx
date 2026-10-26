@@ -10,7 +10,7 @@ import { admin, useErrors, useResource } from "@/api/events";
 import { queryKey } from "@/components/server-list";
 import { localDateTime, rentalConflicts } from "@/utils/rental-calendar";
 import type {
-  BoardConfig,
+  AdminBoardSummary,
   RentalEditorData,
   Rental,
   RentalInput,
@@ -66,7 +66,7 @@ function RentalForm({
   context,
 }: {
   initial?: Rental;
-  boards: BoardConfig[];
+  boards: AdminBoardSummary[];
   context: RentalEditorData;
 }) {
   const users = context.users;

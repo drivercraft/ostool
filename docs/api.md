@@ -355,7 +355,15 @@ GET /api/v1/admin/boards
 GET /api/v1/admin/boards/{board_id}
 ```
 
-列表接口返回 `BoardConfig` 数组，单板接口返回一个 `BoardConfig`。axloader 写入时将 `serial` 规范化为 `null`。读取手动串口配置时服务端会尝试解析串口稳定标识；解析成功后，`serial` 中会额外出现 `resolved_device_path` 和可选的 `resolved_usb_path`。
+列表接口返回 `AdminBoardSummary` 数组，只包含 `id`、`board_type`、`tags`、`disabled`、
+`serial`、`network_identity`、`boot.kind`、`virtual_device_id`，不包含电源/恢复命令、备注和完整启动网络配置。
+单板接口返回一个 `BoardConfig`，仅供已授权管理员维护当前设备。axloader 写入时将 `serial` 规范化为 `null`。读取手动串口配置时服务端会尝试解析串口稳定标识；解析成功后，`serial` 中会额外出现 `resolved_device_path` 和可选的 `resolved_usb_path`。
+
+后台 SSE 的 `boards` 也只推送摘要。编辑页以
+`GET /api/v1/admin/events?topics=board_editor&board_editor_id={board_id}` 订阅当前设备，
+`board_editor` 数据为 `{id, board}`；设备不存在或被删除时 `board` 为 `null`。
+完整配置按连接生成，不进入全局推送缓存、历史重放或其他编辑页；普通用户及公开站点事件流忽略该选择器。
+创建和更新响应仍提供当前设备配置，以便保留编辑和保存行为。
 
 创建和更新使用相同请求结构：
 
@@ -933,7 +941,7 @@ GET /api/v1/sessions/{session_id}/serial
 }
 ```
 
-非 axloader 模式没有串口时，`available` 和 `connected` 为 `false`，`port`、`baud_rate`、`ws_url` 均为 `null`。axloader 连接后 `connected` 只表示 WebSocket；新增 `runtime` 包含 phase、port、parameters、boot_epoch、binding_id、warning、error，`manager` 包含 pending、candidates、leased。`warning` 用于固件参数回退等非致命诊断，`error` 表示当前失败。首次绑定且尚未持有租约时，实际绑定前 `port`/`baud_rate` 为空；若 `Recovering` 仅表示仍在验证一个保留的实时租约，`runtime.port` 和同一启动代次的 `binding_id` 会继续反映该租约。配置了串口但服务端无法把稳定标识解析为当前设备路径时返回 `503 Service Unavailable`。
+非 axloader 模式没有串口时，`available` 和 `connected` 为 `false`，`port`、`baud_rate`、`ws_url` 均为 `null`。axloader 连接后 `connected` 只表示 WebSocket；新增 `runtime` 包含 phase、port、parameters、warning、error；内部 boot_epoch、binding_id 不序列化，`manager` 包含 pending、candidates、leased。`warning` 用于固件参数回退等非致命诊断，`error` 表示当前失败。首次绑定且尚未持有租约时，实际绑定前 `port`/`baud_rate` 为空；若 `Recovering` 仅表示仍在验证一个保留的实时租约，后台 `runtime.port` 继续反映该租约，但绑定标识不返回浏览器。配置了串口但服务端无法把稳定标识解析为当前设备路径时返回 `503 Service Unavailable`。
 
 ### 获取 TFTP 状态
 
@@ -1350,3 +1358,12 @@ SMTP 密码、Turnstile 服务端密钥、MFA 加密密钥、数据库及 Redis 
 `smtp_password`、`turnstile_secret`、`clear_smtp_password`、`clear_turnstile_secret`。
 密钥字段省略或空字符串表示保留；清除需显式传对应布尔值 true，不能与替换同时操作。
 此接口检查管理员身份、后台会话、CSRF 来源和配置 revision；GET/SSE 只返回配置状态。
+
+## 管理响应与内部诊断
+
+公网管理接口仍要求独立的 `admin-web` 管理员会话；未增加密码或 MFA 二次验证。
+设备列表、会话列表和 SSE 不返回控制命令或设备注册/绑定凭据；设备编辑详情保留授权维护所需配置。
+电源操作各平台均返回通用结果，不回显执行命令。数据库及系统调用的 5xx 响应使用通用消息；
+原始错误留在服务器日志，响应 `X-Request-ID` 与审计记录关联，供排障查询。
+运行状态、TFTP、OTA 和租约历史的错误字段仅保留失败状态及安全提示，不直接输出底层诊断正文。
+接口继续设置 `Cache-Control: no-store`。本地版使用相同的最小响应模型，保持免登录操作。

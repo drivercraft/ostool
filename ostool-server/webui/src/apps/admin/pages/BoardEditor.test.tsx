@@ -27,6 +27,7 @@ function mount(board?: BoardConfig) {
     kind: "snapshot",
     data: {
       boards: board ? [board] : [],
+      board_editor: { id: board?.id ?? "", board: board ?? null },
       serial: [],
       loaders: [],
       dtbs: [],
@@ -142,7 +143,9 @@ it("does not overwrite a local draft when another client edits the board", async
       epoch: "peer",
       revision: 1,
       kind: "snapshot",
-      data: { boards: [{ ...board, notes: "remote" }] },
+      data: {
+        board_editor: { id: board.id, board: { ...board, notes: "remote" } },
+      },
     }),
   );
   expect(screen.getByLabelText("备注")).toHaveValue("draft");

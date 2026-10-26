@@ -374,7 +374,7 @@ pub async fn projection(state: &AppState) -> Value {
             operations["database_available"] = json!(false);
         }
     }
-    json!({"runtime":state.monitor.snapshot(),"operations":operations,"audit":state.audit.snapshot(),"power_actions":state.admin_power.snapshots(),"ota_jobs":state.ota.jobs().await,"audit_retention_days":state.config.read().await.audit.retention_days})
+    json!({"runtime":state.monitor.snapshot(),"operations":operations,"audit":state.audit.snapshot(),"power_actions":state.admin_power.snapshots(),"ota_jobs":state.ota.jobs().await.into_iter().map(crate::ota::Job::management_view).collect::<Vec<_>>(),"audit_retention_days":state.config.read().await.audit.retention_days})
 }
 pub async fn get(axum::extract::State(state): axum::extract::State<AppState>) -> axum::Json<Value> {
     axum::Json(projection(&state).await)

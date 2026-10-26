@@ -72,7 +72,7 @@ pub async fn execute_power_action(
                 )));
             }
             run_admin_shell_command(command).await?;
-            Ok(format!("executed `{command}`"))
+            Ok(format!("{} completed", action.label()))
         }
         PowerManagementConfig::ZhongshengRelay(relay) => {
             if relay.key.value.trim().is_empty() {
@@ -201,7 +201,7 @@ mod tests {
         let message = execute_power_action_for_board(&board, PowerAction::On)
             .await
             .unwrap();
-        assert_eq!(message, "executed `printf power-on >/dev/null`");
+        assert_eq!(message, "power-on completed");
     }
 
     #[cfg(unix)]

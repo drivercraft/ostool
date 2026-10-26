@@ -23,6 +23,7 @@ vi.mock("@/api/events", () => ({
   useSiteResource: () => undefined,
   admin: {
     setTopics: vi.fn(),
+    setBoardEditor: vi.fn(),
     connect: mocks.connect,
     disconnect: mocks.disconnect,
   },

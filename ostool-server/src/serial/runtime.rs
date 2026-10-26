@@ -27,12 +27,25 @@ pub struct SerialRuntimeStatus {
     pub phase: SerialRuntimePhase,
     pub port: Option<String>,
     pub parameters: Option<SerialParameters>,
+    #[serde(skip_serializing)]
     pub boot_epoch: Option<String>,
+    #[serde(skip_serializing)]
     pub binding_id: Option<String>,
     pub error: Option<String>,
     pub warning: Option<String>,
 }
 impl SerialRuntimeStatus {
+    /// Administrators need UART diagnostics, not device binding credentials or
+    /// arbitrary errors originating from device responses and external commands.
+    pub fn management_view(mut self) -> Self {
+        self.boot_epoch = None;
+        self.binding_id = None;
+        self.error = self.error.map(|_| "串口连接失败，请检查服务器日志".into());
+        self.warning = self
+            .warning
+            .map(|_| "串口连接异常，请检查服务器日志".into());
+        self
+    }
     /// Only connection state belongs in the user API; UART identity stays on the host.
     pub fn public_view(self) -> Self {
         Self {

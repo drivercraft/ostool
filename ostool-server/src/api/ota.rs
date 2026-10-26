@@ -80,11 +80,13 @@ async fn upload_image(
     if body.len() != length {
         return Err(ApiError::bad_request("incorrect Content-Length"));
     }
-    let image = state
-        .ota
-        .put_image(&body, version)
-        .await
-        .map_err(|error| ApiError::bad_request(format!("{error:#}")))?;
+    let image = state.ota.put_image(&body, version).await.map_err(|error| {
+        ApiError::operation(
+            error,
+            StatusCode::BAD_REQUEST,
+            "镜像校验失败，请检查文件格式",
+        )
+    })?;
     state.admin_events.invalidate(&["ota"]);
     Ok((
         StatusCode::CREATED,
@@ -153,10 +155,16 @@ async fn queue_job(
         .ota
         .queue(board_id, mac, &request.image_sha256)
         .await
-        .map_err(|error| ApiError::conflict(format!("{error:#}")))?;
+        .map_err(|error| {
+            ApiError::operation(
+                error,
+                StatusCode::CONFLICT,
+                "当前设备或任务状态不允许此操作",
+            )
+        })?;
     drop(boards);
     state.admin_events.invalidate(&["ota"]);
-    Ok((StatusCode::CREATED, Json(job)))
+    Ok((StatusCode::CREATED, Json(job.management_view())))
 }
 
 async fn get_job(
@@ -166,7 +174,9 @@ async fn get_job(
     if !state.boards.read().await.contains_key(&board_id) {
         return Err(ApiError::not_found("board not found"));
     }
-    Ok(Json(state.ota.job(&board_id).await))
+    Ok(Json(
+        state.ota.job(&board_id).await.map(Job::management_view),
+    ))
 }
 
 async fn cancel_job(
@@ -177,9 +187,15 @@ async fn cancel_job(
         .ota
         .cancel(&board_id, &update_id)
         .await
-        .map_err(|error| ApiError::conflict(format!("{error:#}")))?;
+        .map_err(|error| {
+            ApiError::operation(
+                error,
+                StatusCode::CONFLICT,
+                "当前设备或任务状态不允许此操作",
+            )
+        })?;
     state.admin_events.invalidate(&["ota"]);
-    Ok(Json(job))
+    Ok(Json(job.management_view()))
 }
 
 async fn download_image(
@@ -252,7 +268,13 @@ async fn report_status(
             report.active_sha256.as_deref(),
         )
         .await
-        .map_err(|error| ApiError::conflict(format!("{error:#}")))?;
+        .map_err(|error| {
+            ApiError::operation(
+                error,
+                StatusCode::CONFLICT,
+                "当前设备或任务状态不允许此操作",
+            )
+        })?;
     drop(boards);
     state.admin_events.invalidate(&["ota"]);
     Ok(StatusCode::NO_CONTENT)

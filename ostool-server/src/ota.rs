@@ -52,6 +52,13 @@ pub struct Job {
     pub delivery_attempts: u8,
 }
 
+impl Job {
+    pub fn management_view(mut self) -> Self {
+        self.error = self.error.map(|_| "设备升级失败，请检查服务器日志".into());
+        self
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Decision {
     Idle,

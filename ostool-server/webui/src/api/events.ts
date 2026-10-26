@@ -5,6 +5,7 @@ import type {
   AdminOverviewResponse,
   AdminServerConfigResponse,
   BoardConfig,
+  AdminBoardSummary,
   AdminSession,
   LoaderDeviceSummary,
   LoaderOtaResources,
@@ -56,7 +57,8 @@ export interface Resources {
   deployment: import("@/types/api").DeploymentInfo;
   account_settings: import("@/types/api").AccountSettingsView;
 
-  boards: BoardConfig[];
+  boards: AdminBoardSummary[];
+  board_editor: { id: string; board: BoardConfig | null };
   sessions: AdminSession[];
   runtimes: Record<string, Runtime>;
   loaders: LoaderDeviceSummary[];
@@ -119,6 +121,18 @@ export class AdminStore {
     const next = [...new Set(topics)].sort();
     if (JSON.stringify(next) === JSON.stringify(this.topics)) return;
     this.topics = next;
+    if (this.source) {
+      this.disconnect();
+      this.connect();
+    }
+  };
+  private boardEditorId: string | null = null;
+  setBoardEditor = (id: string | null) => {
+    if (id === this.boardEditorId) return;
+    this.boardEditorId = id;
+    delete this.data.board_editor;
+    delete this.errors.board_editor;
+    this.emit();
     if (this.source) {
       this.disconnect();
       this.connect();
@@ -241,6 +255,8 @@ export class AdminStore {
         if (value !== undefined && value !== "")
           parameters.set(`list_${key}`, String(value));
     }
+    if (this.boardEditorId)
+      parameters.set("board_editor_id", this.boardEditorId);
     if (this.editorFilters) {
       parameters.set("editor_view", "1");
       for (const [key, value] of Object.entries(this.editorFilters))

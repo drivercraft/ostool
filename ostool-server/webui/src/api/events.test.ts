@@ -249,3 +249,33 @@ it("subscribes to bounded lease history filters and preserves projections when c
   expect(urls.at(-1)).toBe("/api/v1/admin/events");
   store.disconnect();
 });
+
+it("discards selected editor details when changing boards or leaving the editor", () => {
+  const store = new AdminStore();
+  store.setBoardEditor("one");
+  store.apply({
+    epoch: "private",
+    revision: 1,
+    kind: "snapshot",
+    data: {
+      board_editor: {
+        id: "one",
+        board: { id: "one", reset_command: "private command" } as BoardConfig,
+      },
+    },
+  });
+  expect(store.get("board_editor")?.board?.reset_command).toBe(
+    "private command",
+  );
+  store.setBoardEditor("two");
+  expect(store.get("board_editor")).toBeUndefined();
+  store.apply({
+    epoch: "private",
+    revision: 2,
+    kind: "update",
+    data: { board_editor: { id: "two", board: { id: "two" } as BoardConfig } },
+  });
+  expect(store.get("board_editor")?.id).toBe("two");
+  store.setBoardEditor(null);
+  expect(store.get("board_editor")).toBeUndefined();
+});

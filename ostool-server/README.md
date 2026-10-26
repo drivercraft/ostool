@@ -490,6 +490,18 @@ serial sockets require an unexpired access grant in the login family or PAT.
 Normal refresh preserves the socket, while revocation or expiry closes it.
 The CLI returns 401 unchanged, without automatically replaying mutations.
 
+Management inventory and global SSE use explicit device summaries without power/reset
+commands or private boot configuration. An authenticated administrator can still read
+full configuration for one selected device through its detail endpoint or the scoped
+`board_editor_id`/`board_editor` event subscription. These details are computed per
+connection, never put into shared replay history, and discarded by the UI when leaving
+the editor. Saves and conflicts continue to synchronize through SSE.
+Device registration/binding credentials are excluded from management responses.
+Power results never echo commands on any platform. Server failures expose a generic
+message and `X-Request-ID`; raw diagnostics remain in server logs, while runtime,
+TFTP, OTA and lease-history projections show safe failure summaries. Account secret
+handling and public administrator/session authorization remain unchanged.
+
 Device-side loader/TFTP/boot traffic has a separate network trust boundary.
 Use VLAN/firewall isolation between tenants, boards and server infrastructure.
 Local and public editions share the same user API paths. Local edition does not

@@ -467,7 +467,16 @@ function ResourceLoading({ children }: { children: ReactNode }) {
                             "mail_deliveries",
                           ]
                         : [];
-    admin.setTopics([...common, ...topics]);
+    const editing =
+      pathname.startsWith("/boards/") && pathname !== "/boards/new";
+    admin.setBoardEditor(
+      editing ? decodeURIComponent(pathname.slice("/boards/".length)) : null,
+    );
+    admin.setTopics([
+      ...common,
+      ...topics,
+      ...(editing ? ["board_editor"] : []),
+    ]);
   }, [pathname]);
   return (
     <ListDataLoadingContext.Provider

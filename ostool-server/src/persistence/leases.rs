@@ -24,7 +24,17 @@ pub struct LeaseRecord {
     pub stop_reason: Option<String>,
     pub end_reason: Option<String>,
     pub release_failures: i32,
+    #[serde(serialize_with = "serialize_release_error")]
     pub last_release_error: Option<String>,
+}
+fn serialize_release_error<S: serde::Serializer>(
+    value: &Option<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    value
+        .as_ref()
+        .map(|_| "设备释放失败，请检查服务器日志")
+        .serialize(serializer)
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]

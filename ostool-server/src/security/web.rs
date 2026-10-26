@@ -60,6 +60,8 @@ impl Surface {
 pub struct CurrentCredential(pub Credential);
 #[derive(Clone)]
 pub struct CspNonce(pub String);
+#[derive(Clone, Copy)]
+pub struct RequestId(pub uuid::Uuid);
 pub fn secure(config: &ServerConfig) -> bool {
     config
         .auth
@@ -201,6 +203,8 @@ pub async fn transport(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
+    let request_id = uuid::Uuid::new_v4();
+    request.extensions_mut().insert(RequestId(request_id));
     let trusted = state.config.read().await.audit.trusted_proxies.clone();
     let peer = request
         .extensions()
@@ -228,6 +232,13 @@ pub async fn transport(
     request.extensions_mut().insert(CspNonce(nonce.clone()));
     let path = request.uri().path().to_owned();
     let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        "x-request-id",
+        request_id.to_string().parse().expect("UUID header"),
+    );
+    if response.status().is_server_error() {
+        log::error!("request {request_id} {path} failed: {}", response.status());
+    }
     let config = state.config.read().await;
     let cloudflare = config.security.captcha_provider == super::config::CaptchaProvider::Turnstile;
     let third = if cloudflare {

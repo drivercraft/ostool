@@ -7,7 +7,12 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import { api } from "@/api/client";
-import { useList, useResource, type PowerResult } from "@/api/events";
+import {
+  useList,
+  useResource,
+  useErrors,
+  type PowerResult,
+} from "@/api/events";
 import {
   defaultFormState,
   boardToFormState,
@@ -41,9 +46,12 @@ import { BoardOta } from "./BoardOta";
 
 export default function BoardEditor() {
   const { boardId } = useParams();
-  const boards = useResource("boards");
-  if (boardId && !boards) return <Skeleton className="h-40 w-full" />;
-  const board = boards?.find((b) => b.id === boardId);
+  const data = useResource("board_editor");
+  const error = useErrors().board_editor;
+  if (boardId && error) return <Notice variant="destructive">{error}</Notice>;
+  if (boardId && (!data || data.id !== boardId))
+    return <Skeleton className="h-40 w-full" />;
+  const board = boardId ? (data?.board ?? undefined) : undefined;
   if (boardId && !board)
     return (
       <Notice>

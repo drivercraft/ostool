@@ -16,7 +16,18 @@ pub struct TftpStatus {
     pub root_dir: PathBuf,
     pub bind_addr_or_address: Option<String>,
     pub service_state: Option<String>,
+    #[serde(serialize_with = "serialize_error")]
     pub last_error: Option<String>,
+}
+
+fn serialize_error<S: serde::Serializer>(
+    value: &Option<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    value
+        .as_ref()
+        .map(|_| "TFTP 操作失败，请检查服务器日志")
+        .serialize(serializer)
 }
 
 pub fn set_last_error(store: &Mutex<Option<String>>, error: impl Into<String>) {

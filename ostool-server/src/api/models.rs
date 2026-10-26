@@ -35,6 +35,44 @@ impl From<&BoardConfig> for PublicDevice {
     }
 }
 
+/// Inventory projection. Operational commands and boot-network configuration
+/// belong only in the explicitly selected administrator editor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminBoardSummary {
+    pub id: String,
+    pub board_type: String,
+    pub tags: Vec<String>,
+    pub disabled: bool,
+    pub serial: Option<SerialConfig>,
+    pub network_identity: Option<BoardNetworkIdentity>,
+    pub boot: AdminBootSummary,
+    pub virtual_device_id: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminBootSummary {
+    pub kind: String,
+}
+impl From<BoardConfig> for AdminBoardSummary {
+    fn from(board: BoardConfig) -> Self {
+        let virtual_device_id = match &board.power_management {
+            PowerManagementConfig::Qemu { virtual_device_id } => Some(virtual_device_id.clone()),
+            _ => None,
+        };
+        Self {
+            virtual_device_id,
+            id: board.id,
+            board_type: board.board_type,
+            tags: board.tags,
+            disabled: board.disabled,
+            serial: board.serial,
+            network_identity: board.network_identity,
+            boot: AdminBootSummary {
+                kind: board.boot.kind_name().into(),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub code: String,
@@ -145,7 +183,6 @@ pub struct LoaderDeviceSummary {
     pub online: bool,
     pub conflict: bool,
     pub bound_board_id: Option<String>,
-    pub current_registration_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

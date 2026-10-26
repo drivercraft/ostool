@@ -449,9 +449,7 @@ export default function Boards() {
                         description="停止并清理这个未绑定的虚拟设备？"
                         action={() => api.deleteVirtualDevice(d.id)}
                         disabled={boards.some(
-                          (b) =>
-                            b.power_management.kind === "qemu" &&
-                            b.power_management.virtual_device_id === d.id,
+                          (b) => b.virtual_device_id === d.id,
                         )}
                       />
                     </Cell>

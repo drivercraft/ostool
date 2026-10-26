@@ -23,6 +23,7 @@ pub const TOPICS: &[&str] = &[
     "mail_deliveries",
     "security_revision",
     "boards",
+    "board_revision",
     "runtimes",
     "sessions",
     "session_history",
@@ -113,7 +114,13 @@ impl AdminEvents {
                     dirty.insert("roles");
                 }
                 "boards" => {
-                    dirty.extend(["runtimes", "loaders", "overview", "device_catalog"]);
+                    dirty.extend([
+                        "board_revision",
+                        "runtimes",
+                        "loaders",
+                        "overview",
+                        "device_catalog",
+                    ]);
                 }
                 "sessions" | "runtimes" => {
                     dirty.extend(["sessions", "runtimes", "overview"]);
@@ -342,7 +349,7 @@ async fn subscribe_scoped(
     if requested_topics.as_ref().is_some_and(|topics| {
         topics.iter().any(|topic| {
             !TOPICS.contains(&topic.as_str())
-                && !matches!(topic.as_str(), "listing" | "rental_editor")
+                && !matches!(topic.as_str(), "listing" | "rental_editor" | "board_editor")
         })
     }) {
         return Err(crate::api::error::ApiError::bad_request("未知订阅资源"));
@@ -357,6 +364,19 @@ async fn subscribe_scoped(
     } else {
         None
     };
+    // Editor details are computed for this subscription only, never stored in
+    // the shared projection/replay buffer or accepted by member/public streams.
+    let board_editor = if !public_site && account.is_none() {
+        query.get("board_editor_id").cloned()
+    } else {
+        None
+    };
+    if board_editor
+        .as_ref()
+        .is_some_and(|id| id.is_empty() || id.len() > 256)
+    {
+        return Err(crate::api::error::ApiError::bad_request("设备标识无效"));
+    }
     let current_session = if let Some(token) = credential.as_ref() {
         state
             .database
@@ -385,6 +405,7 @@ async fn subscribe_scoped(
         lease_filters,
         listing,
         editor,
+        board_editor,
         requested_topics,
         _guard: guard,
     };
@@ -395,10 +416,13 @@ async fn subscribe_scoped(
         loop {
             if tokio::time::Instant::now() >= subscription.check_at
                 || (subscription.account.is_none()
-                    && subscription
-                        .queue
-                        .front()
-                        .is_some_and(|update| update.data.contains_key("account_settings")))
+                    && subscription.queue.front().is_some_and(|update| {
+                        update.data.contains_key("account_settings")
+                            || update.data.contains_key("security_revision")
+                            || (subscription.board_editor.is_some()
+                                && (update.data.contains_key("boards")
+                                    || update.data.contains_key("board_revision")))
+                    }))
             {
                 if let Some(db) = &subscription.database {
                     let user = if let Some(token) = &subscription.credential {
@@ -460,6 +484,25 @@ async fn subscribe_scoped(
             }
             if let Some(mut update) = subscription.queue.pop_front() {
                 if !subscription.public_site && subscription.account.is_none() {
+                    if let Some(id) = &subscription.board_editor
+                        && (update.kind == "snapshot"
+                            || update.data.contains_key("boards")
+                            || update.data.contains_key("board_revision"))
+                    {
+                        let value = match crate::api::router::get_board(
+                            axum::extract::Path(id.clone()),
+                            State(subscription.state.clone()),
+                        )
+                        .await
+                        {
+                            Ok(board) => serde_json::json!({"id":id,"board":board.0}),
+                            Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => {
+                                serde_json::json!({"id":id,"board":null})
+                            }
+                            Err(error) => serde_json::json!({"error":error.message}),
+                        };
+                        update.data.insert("board_editor".into(), value);
+                    }
                     if let Some(filters) = &subscription.listing
                         && (update.kind == "snapshot" || filters.affected(&update.data))
                     {
@@ -614,6 +657,7 @@ struct Subscription {
     lease_filters: Option<crate::persistence::leases::LeaseFilters>,
     listing: Option<crate::api::listing::Filters>,
     editor: Option<crate::api::listing::EditorFilters>,
+    board_editor: Option<String>,
     requested_topics: Option<BTreeSet<String>>,
     _guard: crate::dashboard::StreamGuard,
 }

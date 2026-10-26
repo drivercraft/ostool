@@ -164,6 +164,16 @@ export interface BoardConfig {
   disabled: boolean;
 }
 
+export interface AdminBoardSummary {
+  virtual_device_id?: string | null;
+  id: string;
+  board_type: string;
+  tags: string[];
+  disabled: boolean;
+  serial: SerialConfig | null;
+  network_identity: BoardNetworkIdentity | null;
+  boot: { kind: BootConfig["kind"] };
+}
 export interface AdminBoardUpsertRequest {
   reset_command?: string | null;
   id: string | null;
@@ -199,7 +209,6 @@ export interface LoaderDeviceSummary {
   online: boolean;
   conflict: boolean;
   bound_board_id: string | null;
-  current_registration_id: string | null;
 }
 
 export interface LoaderImage {
@@ -385,8 +394,6 @@ export interface SerialRuntimeStatus {
   } | null;
   error: string | null;
   warning: string | null;
-  binding_id: string | null;
-  boot_epoch: string | null;
 }
 
 export interface ManagedUser {
