@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge";
 import { Pencil as ActionEdit, Trash2 as ActionDelete } from "lucide-react";
 import { RowAction } from "@/components/row-action";
 import { PagePanel } from "@/components/page-panel";
@@ -131,11 +132,9 @@ export default function Users() {
                 {roles.find((r) => r.id === user.role_id)?.name ?? user.role_id}
               </Cell>
               <Cell>
-                <span
-                  className={`user-status ${user.disabled ? "disabled" : "enabled"}`}
-                >
+                <Badge variant={user.disabled ? "destructive" : "success"}>
                   {user.disabled ? "已禁用" : "正常"}
-                </span>
+                </Badge>
               </Cell>
               <Cell>
                 <span>

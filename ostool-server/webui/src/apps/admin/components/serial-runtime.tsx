@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge";
 import type { SerialRuntimeStatus } from "@/types/api";
 const phases: Record<SerialRuntimeStatus["phase"], string> = {
   waiting_device: "等待设备",
@@ -16,7 +17,19 @@ export function SerialRuntimeDetails({
   const p = status?.parameters;
   return (
     <div aria-label="串口运行态" className="space-y-1 text-sm">
-      <p>{status ? phases[status.phase] : "等待会话自动绑定"}</p>
+      <Badge
+        variant={
+          status?.phase === "bound"
+            ? "success"
+            : status?.phase === "failed"
+              ? "destructive"
+              : status?.phase === "closed"
+                ? "secondary"
+                : "warning"
+        }
+      >
+        {status ? phases[status.phase] : "等待会话自动绑定"}
+      </Badge>
       {status?.port && <p className="mono">{status.port}</p>}
       {p && (
         <p>

@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge";
 import { RowAction } from "@/components/row-action";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -396,9 +397,19 @@ export default function Audits() {
                 </small>
               </Cell>
               <Cell>
-                <span className={`audit-result ${row.result}`}>
+                <Badge
+                  variant={
+                    row.result === "success"
+                      ? "success"
+                      : row.result === "accepted"
+                        ? "info"
+                        : row.result === "pending"
+                          ? "warning"
+                          : "destructive"
+                  }
+                >
                   {results[row.result] ?? row.result}
-                </span>
+                </Badge>
                 <small className="block">
                   {row.status_code ? `HTTP ${row.status_code}` : "系统事件"}
                 </small>

@@ -205,7 +205,7 @@ export default function Boards() {
                     <Badge
                       variant={
                         b.disabled
-                          ? "secondary"
+                          ? "destructive"
                           : runtimes[b.id]?.lease_state === "error"
                             ? "destructive"
                             : runtimes[b.id]?.lease_state === "using"
@@ -338,7 +338,7 @@ export default function Boards() {
                           ? "destructive"
                           : d.online
                             ? "success"
-                            : "secondary"
+                            : "destructive"
                       }
                     >
                       {d.conflict ? "MAC 冲突" : d.online ? "在线" : "离线"}

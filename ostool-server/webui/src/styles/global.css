@@ -1501,22 +1501,6 @@
   display: grid;
   gap: 18px;
 }
-.user-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border-radius: 20px;
-  padding: 3px 9px;
-  font-size: 11px;
-}
-.user-status.enabled {
-  color: var(--success);
-  background: color-mix(in oklch, var(--success), transparent 92%);
-}
-.user-status.disabled {
-  color: var(--muted-foreground);
-  background: var(--muted);
-}
 .admin-gate {
   min-height: 100vh;
   display: flex;

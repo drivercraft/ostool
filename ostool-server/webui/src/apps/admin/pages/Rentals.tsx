@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge";
 import { Pencil as ActionEdit, CircleX as ActionCancel } from "lucide-react";
 import { RowAction } from "@/components/row-action";
 import { PagePanel } from "@/components/page-panel";
@@ -128,7 +129,19 @@ export default function Rentals() {
               </Cell>
               <Cell>{new Date(r.starts_at).toLocaleString("zh-CN")}</Cell>
               <Cell>{new Date(r.ends_at).toLocaleString("zh-CN")}</Cell>
-              <Cell>{rentalStatusLabels[r.status]}</Cell>
+              <Cell>
+                <Badge
+                  variant={
+                    r.status === "active"
+                      ? "success"
+                      : r.status === "scheduled"
+                        ? "warning"
+                        : "secondary"
+                  }
+                >
+                  {rentalStatusLabels[r.status]}
+                </Badge>
+              </Cell>
               <Cell>{r.notes || "—"}</Cell>
               <Cell>
                 <div className="actions">

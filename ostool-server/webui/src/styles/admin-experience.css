@@ -596,31 +596,6 @@ a.dashboard-metric:hover {
 .audit-advanced > [data-slot="field"] label {
   font-size: 0.875rem;
 }
-.audit-result {
-  display: inline-flex;
-  align-items: center;
-  white-space: nowrap;
-  padding: 3px 8px;
-  border-radius: 5px;
-  font-size: 0.875rem;
-}
-.audit-result.success {
-  background: #eaf7ef;
-  color: #278353;
-}
-.audit-result.accepted {
-  background: #edf3ff;
-  color: #386fcb;
-}
-.audit-result.denied,
-.audit-result.failed {
-  background: #fbedef;
-  color: #bf4354;
-}
-.audit-result.pending {
-  background: #fff5df;
-  color: #a57321;
-}
 .audit-code,
 .audit-target {
   font-family: var(--font-mono, monospace);
@@ -650,24 +625,13 @@ a.dashboard-metric:hover {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.dark .dashboard-health.healthy,
-.dark .audit-result.success {
+.dark .dashboard-health.healthy {
   background: #19362b;
   color: #7bc6a0;
 }
-.dark .dashboard-health.warning,
-.dark .audit-result.pending {
+.dark .dashboard-health.warning {
   background: #3e321f;
   color: #e1bb70;
-}
-.dark .audit-result.failed,
-.dark .audit-result.denied {
-  background: #3d242b;
-  color: #e89ba8;
-}
-.dark .audit-result.accepted {
-  background: #23344e;
-  color: #95b6ef;
 }
 @media (max-width: 1200px) {
   .dashboard-metrics {

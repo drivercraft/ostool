@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge";
 import { Check as ActionApprove, X as ActionReject } from "lucide-react";
 import { RowAction } from "@/components/row-action";
 import { useState } from "react";
@@ -92,7 +93,19 @@ export default function RentalRequests() {
                 {new Date(r.ends_at).toLocaleString()}
               </Cell>
               <Cell>
-                {requestStatusLabels[r.status]}
+                <Badge
+                  variant={
+                    r.status === "approved"
+                      ? "success"
+                      : r.status === "pending"
+                        ? "warning"
+                        : r.status === "rejected"
+                          ? "destructive"
+                          : "secondary"
+                  }
+                >
+                  {requestStatusLabels[r.status]}
+                </Badge>
                 <small className="block">{r.decision_note || "—"}</small>
               </Cell>
               <Cell>

@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge";
 import { History } from "lucide-react";
 import { RowAction } from "@/components/row-action";
 import {
@@ -965,7 +966,25 @@ function AccountForm({
                 <Row key={mail.id}>
                   <Cell>{mail.purpose}</Cell>
                   <Cell>{mail.recipient_email}</Cell>
-                  <Cell>{mail.status}</Cell>
+                  <Cell>
+                    <Badge
+                      variant={
+                        mail.status === "sent"
+                          ? "success"
+                          : mail.status === "failed"
+                            ? "destructive"
+                            : "warning"
+                      }
+                    >
+                      {
+                        {
+                          sending: "发送中",
+                          sent: "已发送",
+                          failed: "发送失败",
+                        }[mail.status]
+                      }
+                    </Badge>
+                  </Cell>
                   <Cell>{new Date(mail.created_at).toLocaleString()}</Cell>
                 </Row>
               ))}

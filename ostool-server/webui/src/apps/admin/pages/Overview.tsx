@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge";
 import {
   Activity,
   ArrowRight,
@@ -739,7 +740,9 @@ function Jobs({ data }: { data: DashboardInfo }) {
           value={
             runtime.tasks.filter((task) => task.last_ok === false).length +
             power.filter((task) => task.state === "failed").length +
-            ota.filter((job) => job.phase === "failed").length
+            ota.filter(
+              (job) => job.phase === "failed" || job.phase === "rolled_back",
+            ).length
           }
           detail="请结合操作记录排查"
           icon={<ShieldCheck />}
@@ -770,11 +773,21 @@ function Jobs({ data }: { data: DashboardInfo }) {
                 <small className="block">每 {task.interval_secs} 秒</small>
               </Cell>
               <Cell>
-                {task.state === "running"
-                  ? "执行中"
-                  : task.last_ok === false
-                    ? "最近执行失败"
-                    : "等待下次运行"}
+                <Badge
+                  variant={
+                    task.state === "running"
+                      ? "info"
+                      : task.last_ok === false
+                        ? "destructive"
+                        : "secondary"
+                  }
+                >
+                  {task.state === "running"
+                    ? "执行中"
+                    : task.last_ok === false
+                      ? "最近执行失败"
+                      : "等待下次运行"}
+                </Badge>
               </Cell>
               <Cell>{task.runs}</Cell>
               <Cell>{date(task.last_run)}</Cell>
@@ -803,9 +816,19 @@ function Jobs({ data }: { data: DashboardInfo }) {
               <Cell>{task.id}</Cell>
               <Cell>{task.action === "on" ? "上电" : "下电"}</Cell>
               <Cell>
-                {{ running: "执行中", succeeded: "已完成", failed: "失败" }[
-                  task.state
-                ] ?? task.state}
+                <Badge
+                  variant={
+                    task.state === "succeeded"
+                      ? "success"
+                      : task.state === "failed"
+                        ? "destructive"
+                        : "info"
+                  }
+                >
+                  {{ running: "执行中", succeeded: "已完成", failed: "失败" }[
+                    task.state
+                  ] ?? task.state}
+                </Badge>
               </Cell>
               <Cell>{task.message ?? "—"}</Cell>
             </Row>
@@ -829,7 +852,30 @@ function Jobs({ data }: { data: DashboardInfo }) {
                   {job.board_id}
                 </Link>
               </Cell>
-              <Cell>{job.phase}</Cell>
+              <Cell>
+                <Badge
+                  variant={
+                    job.phase === "succeeded"
+                      ? "success"
+                      : job.phase === "failed" || job.phase === "rolled_back"
+                        ? "destructive"
+                        : job.phase === "cancelled"
+                          ? "secondary"
+                          : "warning"
+                  }
+                >
+                  {{
+                    queued: "待投递",
+                    downloading: "下载中",
+                    staged: "待应用",
+                    confirming: "确认中",
+                    succeeded: "已完成",
+                    rolled_back: "已回滚",
+                    failed: "失败",
+                    cancelled: "已取消",
+                  }[job.phase] ?? job.phase}
+                </Badge>
+              </Cell>
               <Cell>{job.image.version || job.image.sha256.slice(0, 12)}</Cell>
               <Cell>{job.delivery_attempts}</Cell>
             </Row>

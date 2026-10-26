@@ -141,7 +141,9 @@ function ActiveSessions() {
                   variant={
                     runtimes[s.board_id]?.last_release_error
                       ? "destructive"
-                      : "secondary"
+                      : s.state === "releasing"
+                        ? "warning"
+                        : "info"
                   }
                 >
                   {runtimes[s.board_id]?.last_release_error
@@ -150,9 +152,11 @@ function ActiveSessions() {
                       ? "释放中"
                       : "占用中"}
                 </Badge>
-                <small>
-                  WebSocket {s.serial_connected ? "已连接" : "未连接"}
-                </small>
+                <div className="mt-1">
+                  <Badge variant={s.serial_connected ? "success" : "secondary"}>
+                    WebSocket {s.serial_connected ? "已连接" : "未连接"}
+                  </Badge>
+                </div>
                 <SerialRuntimeDetails status={s.serial_runtime} />
                 <small className="text-destructive">
                   {runtimes[s.board_id]?.last_release_error}

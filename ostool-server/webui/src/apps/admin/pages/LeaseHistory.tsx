@@ -260,7 +260,17 @@ export default function LeaseHistory() {
                   )}
                 </Cell>
                 <Cell>
-                  <Badge variant={record.ended_at ? "outline" : "secondary"}>
+                  <Badge
+                    variant={
+                      record.last_release_error && !record.ended_at
+                        ? "destructive"
+                        : record.ended_at
+                          ? "secondary"
+                          : record.stop_requested_at
+                            ? "warning"
+                            : "info"
+                    }
+                  >
                     {record.ended_at
                       ? "已结束"
                       : record.stop_requested_at
