@@ -167,6 +167,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     if config.edition.is_public() {
+        db.bootstrap_admin(&config.auth).await?;
         seed_identity(&db).await?;
     }
     println!("设备、人员、租赁及使用记录已导入；已有记录保持不变。");

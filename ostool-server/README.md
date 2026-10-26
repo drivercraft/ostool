@@ -251,7 +251,9 @@ explicit offline import; it does not change the running release program. Invento
 people, roles, bookings, applications, lease history and audits use ordinary business
 names and consistent relationships, without UI fixture labels. Imported members
 have independent random passwords; set a member password in user management when
-login is needed. Existing administrator credentials and records are preserved. `cert`
+login is needed. The public import also creates the administrator configured by
+`OSTOOL_ADMIN_USERNAME`, `OSTOOL_ADMIN_EMAIL` and `OSTOOL_ADMIN_PASSWORD` if absent;
+existing administrator passwords and records are preserved. `cert`
 exports the Docker gateway CA for the client to trust. The Docker project and data
 volumes are shared with `deploy.sh docker`; do not manage the same environment
 concurrently through both commands.
