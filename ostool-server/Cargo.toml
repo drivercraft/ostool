@@ -32,6 +32,7 @@ name = "ostool-server-seed-demo"
 path = "tools/seed-demo.rs"
 
 [dependencies]
+unicode-normalization = "0.1"
 uboot-shell = { version = "0.2.9", path = "../uboot-shell" }
 tokio-util = { version = "0.7", features = ["compat"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

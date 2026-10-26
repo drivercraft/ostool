@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Section,
+  TextareaField,
   TextField,
   SelectField,
   CheckField,
@@ -645,6 +646,9 @@ function AccountForm({
   const [draft, setDraft] = useState<
     Partial<import("@/types/api").AccountSettings>
   >({});
+  const [keywordDraft, setKeywordDraft] = useState<
+    Partial<Record<keyof import("@/types/api").NamePolicy, string>>
+  >({});
   const [secretDraft, setSecretDraft] = useState<
     import("@/types/api").SecretUpdates
   >({});
@@ -672,6 +676,7 @@ function AccountForm({
     if (awaiting && source.revision >= awaiting) {
       setBaselineRevision(source.revision);
       setDraft({});
+      setKeywordDraft({});
       setSecretDraft({});
       setAwaiting(0);
     }
@@ -700,6 +705,7 @@ function AccountForm({
               disabled={task.pending}
               onClick={() => {
                 setDraft({});
+                setKeywordDraft({});
                 setSecretDraft({});
                 setAwaiting(0);
                 setBaseline(source.settings);
@@ -799,6 +805,34 @@ function AccountForm({
                   />
                 );
               })}
+              {section.title === "账号与注册" &&
+                (
+                  [
+                    ["username_keywords", "用户名禁用关键词"],
+                    ["display_name_keywords", "昵称禁用关键词"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <TextareaField
+                    key={key}
+                    label={label}
+                    rows={5}
+                    maxLength={16384}
+                    placeholder="每行一个或用逗号分隔，最多 128 个，每个不超过 64 字。忽略大小写、全角和分隔符，包含即禁止；留空表示不限制。只检查新名称，已有账号不改名不受影响。"
+                    value={
+                      keywordDraft[key] ?? current.name_policy[key].join("\n")
+                    }
+                    onValue={(value) => {
+                      setKeywordDraft((old) => ({ ...old, [key]: value }));
+                      change("name_policy", {
+                        ...current.name_policy,
+                        [key]: value
+                          .split(/[\n,，]/)
+                          .map((word) => word.trim())
+                          .filter(Boolean),
+                      });
+                    }}
+                  />
+                ))}
             </Section>
           ))}
           <Section

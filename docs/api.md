@@ -1321,12 +1321,23 @@ Cookie 写请求拒绝不匹配/缺失的 Origin。配置、部署与升级说�
 ## 账号与邮件策略配置
 
 仅公网版管理员可使用 `GET /api/v1/admin/account-settings` 和
-`PUT /api/v1/admin/account-settings`。写请求需近期身份复核，提交
+`PUT /api/v1/admin/account-settings`。写请求检查后台管理员会话及请求来源，提交
 `{revision, settings}`；版本冲突返回 409，非法范围或缺少 SMTP/Turnstile/MFA 所需部署凭据
 返回 400。本地版接口返回 404，CLI 凭据不能访问。
 
 配置涵盖注册、找回密码、登录限流、会话上限、令牌时效、SMTP 非密钥参数、人机验证与
 双重验证策略，以及注册和账号邮件验证码的有效期、重发冷却、统计窗口、发送额度、尝试上限。
+新增 `settings.name_policy`，包含 `username_keywords`（用户名禁用关键词数组）与
+`display_name_keywords`（昵称禁用关键词数组）。每组最多 128 个关键词，每个最多 64 个字符；
+拒绝空白、无有效文字、控制字符和规范化后重复的关键词；空数组表示取消对应限制。
+校验采用不区分大小写的包含匹配，Unicode NFKC 规范化后去除空格、标点和零宽等分隔符。
+用户原始显示文字保持不变，不执行正则表达式，也不宣称覆盖所有 Unicode 同形异义字符。
+注册、前台个人资料修改、后台用户创建及改名均由服务端执行校验，分别返回
+`400 reserved_username` 或 `400 reserved_display_name`，错误消息可直接显示。
+已有名称未变时不重新判为违规；现有管理员可以继续登录和编辑非名称资料。
+登录不检查禁用词，部署初始化管理员、离线导入不属于用户改名接口。
+设置保存后立即生效，适用于后续新名称；本地版不开放账号策略接口。
+
 保存至 `server_records` 的 `account-settings` 记录，后台 SSE 通过 `account_settings` 推送；
 公开 `site.auth` 只包含注册、邮箱验证和密码恢复可用性。配置内容和部署密钥不进入公开投影，
 管理员响应中的 `secrets` 也仅为是否已配置的布尔值。

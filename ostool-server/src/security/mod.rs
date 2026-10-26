@@ -5,6 +5,7 @@ pub mod config;
 pub mod crypto;
 pub mod mail;
 pub mod mfa;
+pub mod names;
 pub mod sessions;
 pub mod store;
 pub mod web;

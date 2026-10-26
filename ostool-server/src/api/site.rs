@@ -297,6 +297,15 @@ pub async fn register(
     if !consent.accepted {
         return Err(ApiError::bad_request("请阅读并同意用户协议和隐私政策"));
     }
+    state
+        .config
+        .read()
+        .await
+        .security
+        .name_policy
+        .check_change(&request.username, request.display_name.as_deref(), None)?;
+    let display_name =
+        crate::security::names::normalize_display_name(request.display_name.as_deref())?;
     let username = crate::persistence::postgres::normalize_username(&request.username)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let hash = crate::persistence::postgres::hash_password_async(request.password.clone()).await?;
@@ -322,7 +331,7 @@ pub async fn register(
         }
     }
     let user:Uuid=sqlx::query_scalar("INSERT INTO users(email,password_hash,display_name,email_verified_at,username) VALUES($1,$2,$3,CASE WHEN $4 THEN now() ELSE NULL END,$5) RETURNING id")
-        .bind(email).bind(hash).bind(request.display_name.as_deref()).bind(verified).bind(username).fetch_one(&mut *tx).await.map_err(|error| {
+        .bind(email).bind(hash).bind(display_name).bind(verified).bind(username).fetch_one(&mut *tx).await.map_err(|error| {
             if error.as_database_error().is_some_and(|error| error.is_unique_violation()) {
                 ApiError::conflict("用户名或邮箱已被使用")
             } else {

@@ -741,7 +741,12 @@ export interface EmailPolicy {
   ip_limit: number;
   max_attempts: number;
 }
+export interface NamePolicy {
+  username_keywords: string[];
+  display_name_keywords: string[];
+}
 export interface AccountSettings {
+  name_policy: NamePolicy;
   allow_registration: boolean;
   access_token_ttl_secs: number;
   refresh_token_ttl_secs: number;

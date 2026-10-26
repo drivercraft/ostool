@@ -196,26 +196,34 @@ async fn update_profile(
 ) -> Result<StatusCode, ApiError> {
     let email = crate::persistence::postgres::normalize_email(&input.email)
         .map_err(|_| ApiError::bad_request("邮箱格式无效"))?;
-    if input
-        .display_name
-        .as_ref()
-        .is_some_and(|name| name.chars().count() > 120)
-    {
-        return Err(ApiError::bad_request("显示名称不超过 120 个字符"));
-    }
+    let display_name =
+        crate::security::names::normalize_display_name(input.display_name.as_deref())?;
     if input.email.trim().to_lowercase() != user.email {
         crate::security::web::require_step_up(&credential)?;
     }
     let db = &state.database;
     let mut tx = db.pool().begin().await.map_err(db_error)?;
     let current = sqlx::query(
-        "SELECT email,password_hash FROM users WHERE id=$1 AND NOT disabled FOR UPDATE",
+        "SELECT email,password_hash,username,display_name FROM users WHERE id=$1 AND NOT disabled FOR UPDATE",
     )
     .bind(user.id)
     .fetch_optional(&mut *tx)
     .await
     .map_err(db_error)?
     .ok_or_else(|| ApiError::unauthorized("账号不可用"))?;
+    let current_username: String = current.try_get("username").map_err(db_error)?;
+    let current_name: Option<String> = current.try_get("display_name").map_err(db_error)?;
+    state
+        .config
+        .read()
+        .await
+        .security
+        .name_policy
+        .check_change(
+            &current_username,
+            display_name.as_deref(),
+            Some((&current_username, current_name.as_deref())),
+        )?;
     if email != current.try_get::<String, _>("email").map_err(db_error)? {
         let hash = current
             .try_get::<String, _>("password_hash")
@@ -232,12 +240,7 @@ async fn update_profile(
     sqlx::query("UPDATE users SET email=$2,display_name=$3 WHERE id=$1")
         .bind(user.id)
         .bind(email)
-        .bind(
-            input
-                .display_name
-                .map(|name| name.trim().to_string())
-                .filter(|name| !name.is_empty()),
-        )
+        .bind(display_name)
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;

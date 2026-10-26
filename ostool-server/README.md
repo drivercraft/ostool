@@ -388,6 +388,21 @@ and public registration/recovery availability. New token/code lifetimes apply to
 new issuance; existing absolute expiries are preserved. Session limits apply at
 new login; reduced email attempt limits invalidate exhausted challenges.
 
+Reserved usernames and display names are configured in **System settings → Login and security →
+Account and registration** (`name_policy.username_keywords` and
+`name_policy.display_name_keywords`). Keywords use case-insensitive substring matching;
+comparison uses Unicode NFKC and removes separators, whitespace and invisible marks.
+Defaults reserve admin/administrator/root/system and official-support identities,
+including 管理员、官方、客服 in display names. Lists contain at most 128 plain-text
+keywords of 64 characters each; empty lists disable that field's restriction.
+Registration, member profile edits and administrator user writes enforce the same
+server policy. Existing names remain valid until changed, so policy updates do not
+lock out administrators or block unrelated profile edits. Trusted deployment admin
+provisioning and offline data imports remain separate from user-facing naming rules.
+Policies persist in PostgreSQL, apply on save and survive restarts; local edition
+continues to have no identity or account-policy UI. This filtering limits obvious
+impersonation; it is not a full Unicode confusable-identifier implementation.
+
 Connection addresses and the root MFA/settings encryption key stay in `.env`. SMTP passwords and Turnstile secrets are editable, encrypted database settings; responses expose only credential-presence flags.
 The server rejects incomplete SMTP/Turnstile/MFA combinations. Local edition has
 no account-policy API or authentication/rental UI.

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct SecurityConfig {
+    pub name_policy: super::names::NamePolicy,
     #[serde(skip_serializing)]
     pub redis_url: Option<String>,
     pub redis_prefix: String,
@@ -58,6 +59,7 @@ pub enum SmtpTls {
 impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
+            name_policy: Default::default(),
             redis_url: None,
             redis_prefix: "ostool".into(),
             captcha_provider: CaptchaProvider::Image,
@@ -97,6 +99,7 @@ impl SecurityConfig {
         if !public {
             return Ok(());
         }
+        self.name_policy.validate()?;
         ensure!(
             !self.redis_prefix.is_empty()
                 && self.redis_prefix.len() <= 80
@@ -286,6 +289,8 @@ impl SecurityConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AccountSettings {
+    #[serde(default)]
+    pub name_policy: super::names::NamePolicy,
     pub allow_registration: bool,
     pub access_token_ttl_secs: u64,
     pub refresh_token_ttl_secs: u64,
@@ -312,6 +317,7 @@ pub struct AccountSettings {
 impl AccountSettings {
     pub fn from_config(config: &crate::ServerConfig) -> Self {
         Self {
+            name_policy: config.security.name_policy.clone(),
             allow_registration: config.auth.allow_registration,
             access_token_ttl_secs: config.auth.access_token_ttl_secs,
             refresh_token_ttl_secs: config.auth.refresh_token_ttl_secs,
@@ -337,6 +343,8 @@ impl AccountSettings {
         }
     }
     pub fn apply(&self, config: &mut crate::ServerConfig) -> anyhow::Result<()> {
+        self.name_policy.validate()?;
+        config.security.name_policy = self.name_policy.clone();
         config.auth.allow_registration = self.allow_registration;
         config.auth.access_token_ttl_secs = self.access_token_ttl_secs;
         config.auth.refresh_token_ttl_secs = self.refresh_token_ttl_secs;

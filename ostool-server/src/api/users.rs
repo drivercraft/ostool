@@ -101,9 +101,7 @@ fn validate(input: &UserInput) -> Result<(), ApiError> {
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     crate::persistence::postgres::normalize_email(&input.email)
         .map_err(|_| ApiError::bad_request("邮箱格式无效"))?;
-    if input.display_name.as_ref().is_some_and(|s| s.len() > 120) {
-        return Err(ApiError::bad_request("显示名称过长"));
-    }
+    crate::security::names::normalize_display_name(input.display_name.as_deref())?;
     if let Some(password) = input.password.as_deref() {
         crate::security::crypto::validate_password(password)
             .map_err(|error| ApiError::bad_request(error.to_string()))?;
@@ -115,6 +113,15 @@ async fn create_user(
     Json(input): Json<UserInput>,
 ) -> Result<(StatusCode, axum::extract::Extension<crate::audit::Target>), ApiError> {
     validate(&input)?;
+    state
+        .config
+        .read()
+        .await
+        .security
+        .name_policy
+        .check_change(&input.username, input.display_name.as_deref(), None)?;
+    let display_name =
+        crate::security::names::normalize_display_name(input.display_name.as_deref())?;
     let password = input
         .password
         .as_deref()
@@ -122,7 +129,7 @@ async fn create_user(
     let hash = crate::persistence::postgres::hash_password_async(password.to_owned()).await?;
     let pool = state.database.pool();
     let result = sqlx::query_scalar::<_,Uuid>("INSERT INTO users(email,display_name,password_hash,role_id,is_admin,disabled,username) SELECT $1,$2,$3,id,administrator,$5,$6 FROM roles WHERE id=$4 RETURNING users.id")
-        .bind(input.email.trim().to_lowercase()).bind(input.display_name).bind(hash).bind(input.role_id).bind(input.disabled).bind(input.username.trim().to_ascii_lowercase()).fetch_optional(pool).await.map_err(sql_error)?;
+        .bind(input.email.trim().to_lowercase()).bind(display_name).bind(hash).bind(input.role_id).bind(input.disabled).bind(input.username.trim().to_ascii_lowercase()).fetch_optional(pool).await.map_err(sql_error)?;
     let id = result.ok_or_else(|| ApiError::bad_request("角色不存在"))?;
     state.admin_events.invalidate(&["users"]);
     Ok((
@@ -147,6 +154,27 @@ async fn update_user(
         .execute(&mut *tx)
         .await
         .map_err(sql_error)?;
+    let previous = sqlx::query("SELECT username,display_name FROM users WHERE id=$1")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(sql_error)?
+        .ok_or_else(|| ApiError::not_found("用户不存在"))?;
+    let previous_username: String = previous.try_get("username").map_err(sql_error)?;
+    let previous_name: Option<String> = previous.try_get("display_name").map_err(sql_error)?;
+    state
+        .config
+        .read()
+        .await
+        .security
+        .name_policy
+        .check_change(
+            &input.username,
+            input.display_name.as_deref(),
+            Some((&previous_username, previous_name.as_deref())),
+        )?;
+    let display_name =
+        crate::security::names::normalize_display_name(input.display_name.as_deref())?;
     let role = sqlx::query("SELECT administrator FROM roles WHERE id=$1")
         .bind(&input.role_id)
         .fetch_optional(&mut *tx)
@@ -158,7 +186,7 @@ async fn update_user(
         return Err(ApiError::conflict("不能禁用自己或移除自己的管理权限"));
     }
     let result=sqlx::query("UPDATE users SET email=$1,display_name=$2,role_id=$3,is_admin=$4,disabled=$5,password_hash=COALESCE($6,password_hash),username=$8 WHERE id=$7")
-        .bind(input.email.trim().to_lowercase()).bind(input.display_name).bind(input.role_id).bind(administrator).bind(input.disabled).bind(hash.as_deref()).bind(id).bind(input.username.trim().to_ascii_lowercase()).execute(&mut *tx).await.map_err(sql_error)?;
+        .bind(input.email.trim().to_lowercase()).bind(display_name).bind(input.role_id).bind(administrator).bind(input.disabled).bind(hash.as_deref()).bind(id).bind(input.username.trim().to_ascii_lowercase()).execute(&mut *tx).await.map_err(sql_error)?;
     if result.rows_affected() != 1 {
         return Err(ApiError::not_found("用户不存在"));
     }

@@ -1699,7 +1699,7 @@ async fn username_edits_revoke_credentials_but_display_name_edits_do_not() {
             .status,
         StatusCode::OK
     );
-    input["username"] = json!("renamed-admin");
+    input["username"] = json!("renamed-engineer");
     assert_eq!(
         f.request("PUT", &endpoint, Some(&cookie), input)
             .await
@@ -1712,7 +1712,7 @@ async fn username_edits_revoke_credentials_but_display_name_edits_do_not() {
             .status,
         StatusCode::UNAUTHORIZED
     );
-    let login = f.request("POST", "/api/v1/admin/auth/login", None, json!({"email":"RENAMED-ADMIN","password":"security-admin-password-123","verification":f.proof("admin_login").await})).await;
+    let login = f.request("POST", "/api/v1/admin/auth/login", None, json!({"email":"RENAMED-ENGINEER","password":"security-admin-password-123","verification":f.proof("admin_login").await})).await;
     assert_eq!(login.status, StatusCode::OK);
 }
 
@@ -2013,4 +2013,239 @@ async fn management_pages_are_bounded_filtered_and_member_scoped() {
         assert!(marker.get("revision").is_some());
     }
     assert!(frame.len() < 30000);
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn reserved_names_are_enforced_at_registration_without_creating_partial_accounts() {
+    let f = Fixture::new(true).await;
+    let mut safe = None;
+    for (index, (username, name, code)) in [
+        ("my_ADMIN", "研发成员", Some("reserved_username")),
+        ("administrator01", "研发成员", Some("reserved_username")),
+        ("a_d_m_i_n", "研发成员", Some("reserved_username")),
+        (
+            "engineer_one",
+            "管\u{200b}理 员",
+            Some("reserved_display_name"),
+        ),
+        ("engineer_two", "ＡＤＭＩＮ", Some("reserved_display_name")),
+        ("kernel_engineer", "操作系统研发工程师", None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let reply=f.request("POST","/api/v1/auth/register",None,json!({"username":username,"email":format!("person{index}@names.test"),"display_name":name,"password":"reserved-names-password-123","verification":f.proof("register").await})).await;
+        if let Some(code) = code {
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{}", reply.body);
+            assert_eq!(reply.body["code"], code);
+        } else {
+            assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
+            safe = Some(reply);
+        }
+    }
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM users WHERE email LIKE '%@names.test'")
+            .fetch_one(f.state.database.pool())
+            .await
+            .unwrap();
+    assert_eq!(count, 1);
+    let accepted: i64 = sqlx::query_scalar("SELECT count(*) FROM user_legal_acceptances")
+        .fetch_one(f.state.database.pool())
+        .await
+        .unwrap();
+    assert_eq!(accepted, 2);
+    let cookie = test_security::cookie_header(&safe.unwrap().headers);
+    let changed = f
+        .request(
+            "PUT",
+            "/api/v1/account/profile",
+            Some(&cookie),
+            json!({"email":"person5@names.test","display_name":"官方管理员"}),
+        )
+        .await;
+    assert_eq!(changed.status, StatusCode::BAD_REQUEST);
+    assert_eq!(changed.body["code"], "reserved_display_name");
+    let name: Option<String> =
+        sqlx::query_scalar("SELECT display_name FROM users WHERE username='kernel_engineer'")
+            .fetch_one(f.state.database.pool())
+            .await
+            .unwrap();
+    assert_eq!(name.as_deref(), Some("操作系统研发工程师"));
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn reserved_name_settings_apply_to_admin_writes_and_survive_restart_without_locking_existing_accounts()
+ {
+    let f = Fixture::new(true).await;
+    let login = f.login(true).await;
+    assert_eq!(login.status, StatusCode::OK);
+    let cookie = test_security::cookie_header(&login.headers);
+    let body = |username: &str, name: &str| json!({"username":username,"email":"engineer@names.test","display_name":name,"role_id":"member","disabled":false,"password":"reserved-names-password-123"});
+    for (username, name, expected) in [
+        ("new_admin", "工程师", "reserved_username"),
+        ("new_engineer", "平台管理员", "reserved_display_name"),
+    ] {
+        let r = f
+            .request(
+                "POST",
+                "/api/v1/admin/users",
+                Some(&cookie),
+                body(username, name),
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.body);
+        assert_eq!(r.body["code"], expected);
+    }
+    let user = f
+        .state
+        .database
+        .create_user(
+            "existing_admin_name",
+            "existing@names.test",
+            "reserved-names-password-123",
+            Some("平台管理员"),
+            false,
+        )
+        .await
+        .unwrap();
+    let path = format!("/api/v1/admin/users/{}", user.id);
+    let mut input = body("existing_admin_name", "平台管理员");
+    input["email"] = json!("existing@names.test");
+    input["password"] = Value::Null;
+    assert_eq!(
+        f.request("PUT", &path, Some(&cookie), input.clone())
+            .await
+            .status,
+        StatusCode::NO_CONTENT
+    );
+    input["username"] = json!("another_admin");
+    assert_eq!(
+        f.request("PUT", &path, Some(&cookie), input.clone())
+            .await
+            .body["code"],
+        "reserved_username"
+    );
+    input["username"] = json!("existing_admin_name");
+    input["display_name"] = json!("新的管理员");
+    assert_eq!(
+        f.request("PUT", &path, Some(&cookie), input.clone())
+            .await
+            .body["code"],
+        "reserved_display_name"
+    );
+    let auth = f.state.config.read().await.auth.clone();
+    let grant = f
+        .state
+        .database
+        .issue_grant(user.clone(), "web", "profile", &auth)
+        .await
+        .unwrap();
+    let unchanged = f
+        .custom(
+            "PUT",
+            "/api/v1/account/profile",
+            None,
+            json!({"email":"existing@names.test","display_name":"平台管理员"}),
+            Some(&f.origin),
+            Some(&grant.access_token),
+        )
+        .await;
+    assert_eq!(
+        unchanged.status,
+        StatusCode::NO_CONTENT,
+        "{}",
+        unchanged.body
+    );
+    let changed = f
+        .custom(
+            "PUT",
+            "/api/v1/account/profile",
+            None,
+            json!({"email":"existing@names.test","display_name":"超级管理员"}),
+            Some(&f.origin),
+            Some(&grant.access_token),
+        )
+        .await;
+    assert_eq!(changed.body["code"], "reserved_display_name");
+    let endpoint = "/api/v1/admin/account-settings";
+    let initial = f.request("GET", endpoint, Some(&cookie), Value::Null).await;
+    let mut settings = initial.body["settings"].clone();
+    settings["name_policy"] =
+        json!({"username_keywords":["operator"],"display_name_keywords":["平台代表"]});
+    let save = f
+        .request(
+            "PUT",
+            endpoint,
+            Some(&cookie),
+            json!({"revision":initial.body["revision"],"settings":settings}),
+        )
+        .await;
+    assert_eq!(save.status, StatusCode::OK, "{}", save.body);
+    let rejected = f
+        .request(
+            "POST",
+            "/api/v1/admin/users",
+            Some(&cookie),
+            body("operator_01", "普通工程师"),
+        )
+        .await;
+    assert_eq!(rejected.body["code"], "reserved_username");
+    let rejected = f
+        .request(
+            "POST",
+            "/api/v1/admin/users",
+            Some(&cookie),
+            body("new_engineer", "平 台 代 表"),
+        )
+        .await;
+    assert_eq!(rejected.body["code"], "reserved_display_name");
+    // Replacing the lists is deliberate; former default words are no longer prohibited.
+    let accepted = f
+        .request(
+            "POST",
+            "/api/v1/admin/users",
+            Some(&cookie),
+            body("new_admin", "平台管理员"),
+        )
+        .await;
+    assert_eq!(accepted.status, StatusCode::CREATED, "{}", accepted.body);
+    let mut config = f.state.config.read().await.clone();
+    config.security.name_policy = Default::default();
+    ostool_server::api::site::load_account_settings(&f.state.database, &mut config)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&config.security.name_policy).unwrap(),
+        settings["name_policy"]
+    );
+    let current = f.request("GET", endpoint, Some(&cookie), Value::Null).await;
+    for bad in [
+        json!({"username_keywords":[""],"display_name_keywords":[]}),
+        json!({"username_keywords":["admin","ＡＤＭＩＮ"],"display_name_keywords":[]}),
+    ] {
+        let mut invalid = current.body["settings"].clone();
+        invalid["name_policy"] = bad;
+        assert_eq!(
+            f.request(
+                "PUT",
+                endpoint,
+                Some(&cookie),
+                json!({"revision":current.body["revision"],"settings":invalid})
+            )
+            .await
+            .status,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let unchanged = f.request("GET", endpoint, Some(&cookie), Value::Null).await;
+    assert_eq!(unchanged.body["revision"], current.body["revision"]);
+    assert_eq!(
+        unchanged.body["settings"]["name_policy"],
+        settings["name_policy"]
+    );
+    assert_eq!(f.login(true).await.status, StatusCode::OK);
+    let site = f.request("GET", "/api/v1/site", None, Value::Null).await;
+    assert!(!site.body.to_string().contains("username_keywords"));
 }
