@@ -1707,7 +1707,7 @@ body:has(.app-shell) {
 .panel-scroll > form > .form-section:first-child {
   margin-top: 0;
 }
-.app-shell .page-panel .form-section,
+.form-section,
 .app-shell .panel-scroll > .page-section {
   display: block;
   padding: 0;
@@ -1717,7 +1717,7 @@ body:has(.app-shell) {
   background: transparent;
   box-shadow: none;
 }
-.app-shell .form-section > div > h2,
+.form-section > div > h2,
 .app-shell .page-section > h2 {
   display: flex;
   align-items: center;
@@ -1728,14 +1728,14 @@ body:has(.app-shell) {
   font-weight: 600;
   line-height: 20px;
 }
-.app-shell .form-section > div > h2::after,
+.form-section > div > h2::after,
 .app-shell .page-section > h2::after {
   content: "";
   flex: 1;
   min-width: 24px;
   border-top: 1px solid var(--border);
 }
-.app-shell .form-section > div > .hint {
+.form-section > div > .hint {
   margin: -8px 0 16px;
 }
 .app-shell .data-card-grid {

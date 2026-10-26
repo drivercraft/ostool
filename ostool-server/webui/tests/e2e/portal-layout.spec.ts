@@ -28,6 +28,13 @@ test("public shell renders before slow configuration, with a full hero and a foo
     const hero = await page.locator(".public-hero-section").boundingBox();
     expect(Math.abs(hero!.height + header!.height - 960)).toBeLessThan(3);
     await expect(page.locator(".startup-shell")).toHaveCount(0);
+    const sections = page.locator(".home-feature-section");
+    expect(await sections.count()).toBeGreaterThanOrEqual(3);
+    for (const section of await sections.all()) {
+      await expect(section.getByRole("heading", { level: 2 })).toHaveCount(1);
+    }
+    const heroWidth = hero!.width / 1440;
+    expect(heroWidth).toBeCloseTo(0.8, 2);
     await page.screenshot({ path: "/tmp/ostool-home-desktop.png" });
   } finally {
     release();
@@ -101,9 +108,7 @@ test("username signup and login are independent of email", async ({ page }) => {
   await page.getByRole("menuitem", { name: "退出登录", exact: true }).click();
   await expect(page).toHaveURL(base + "/");
   await page.goto(base + "/login");
-  await page
-    .getByLabel("账号", { exact: true })
-    .fill(username.toUpperCase());
+  await page.getByLabel("账号", { exact: true }).fill(username.toUpperCase());
   await page
     .getByLabel("密码", { exact: true })
     .fill("username-browser-password-123");

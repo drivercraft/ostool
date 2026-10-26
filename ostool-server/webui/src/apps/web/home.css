@@ -1,0 +1,277 @@
+/* 首页只定义内容布局，控件与主题沿用前后台的共用设计。 */
+.site-root .public-hero-section {
+  padding-bottom: 88px;
+}
+.site-root .hero-copy h1 em {
+  color: var(--primary);
+}
+.site-root .hero-kicker {
+  background: var(--card);
+  border-color: var(--border);
+  color: var(--muted-foreground);
+}
+.site-root .hero-trust {
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+}
+.site-root .hero-trust svg {
+  width: 16px;
+  height: 16px;
+  color: var(--primary);
+}
+.home-scroll-link {
+  position: absolute;
+  bottom: 24px;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+}
+.home-scroll-link:hover {
+  color: var(--primary);
+}
+.home-feature-section {
+  width: var(--site-content-width);
+  margin-inline: auto;
+  padding-block: clamp(64px, 8vw, 128px);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  gap: clamp(40px, 7vw, 112px);
+  border-top: 1px solid var(--border);
+  scroll-margin-top: 88px;
+}
+.home-feature-reverse .home-feature-copy {
+  order: 1;
+}
+.home-feature-copy h2 {
+  font-size: clamp(28px, 3vw, 44px);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.035em;
+  margin: 20px 0;
+}
+.home-feature-copy > p {
+  color: var(--muted-foreground);
+  font-size: 1rem;
+  line-height: 1.9;
+}
+.home-feature-copy ul {
+  display: grid;
+  gap: 16px;
+  margin-block: 28px 32px;
+}
+.home-feature-copy li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 1rem;
+  line-height: 1.6;
+}
+.home-feature-copy li svg {
+  width: 18px;
+  height: 18px;
+  margin-top: 4px;
+  color: var(--primary);
+  flex-shrink: 0;
+}
+.home-resource-visual,
+.home-terminal,
+.home-booking-visual,
+.home-access-visual {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  overflow: hidden;
+  box-shadow: 0 16px 56px color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.home-visual-heading {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 20px 24px;
+  background: var(--muted);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+}
+.home-visual-heading > svg {
+  width: 18px;
+  height: 18px;
+}
+.home-resource-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-inline: 24px;
+  padding-block: 24px;
+  border-bottom: 1px solid var(--border);
+}
+.home-feature-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--muted);
+  color: var(--primary);
+}
+.home-feature-icon svg {
+  width: 24px;
+  height: 24px;
+}
+.home-resource-row h3,
+.home-booking-visual h3 {
+  font-size: 1rem;
+  font-weight: 600;
+}
+.home-resource-row p,
+.home-booking-visual p,
+.home-access-visual > p {
+  margin-top: 8px;
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+  line-height: 1.8;
+}
+.home-protocols {
+  padding: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.home-protocols span {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+}
+.home-terminal pre {
+  padding: 36px 28px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 0.875rem/2 var(--font-mono, monospace);
+  color: var(--foreground);
+}
+.home-terminal-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 24px;
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font: 0.75rem/1.6 var(--font-mono, monospace);
+  letter-spacing: 0.08em;
+}
+.home-terminal-footer > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+.home-booking-visual ol {
+  list-style: none;
+  padding: 8px 24px;
+}
+.home-booking-visual li {
+  display: flex;
+  gap: 20px;
+  padding-block: 22px;
+}
+.home-booking-visual li + li {
+  border-top: 1px solid var(--border);
+}
+.home-booking-visual li > span {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--primary);
+  font-size: 0.875rem;
+}
+.home-access-flow {
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+  padding: 32px 24px 20px;
+}
+.home-access-flow > span,
+.home-access-flow > strong {
+  padding: 16px;
+  width: 100%;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  font-size: 1rem;
+  font-weight: 400;
+}
+.home-access-flow > strong {
+  background: var(--accent);
+  border-color: var(--ring);
+  color: var(--primary);
+}
+.home-access-flow > svg {
+  width: 18px;
+  height: 18px;
+  color: var(--muted-foreground);
+}
+.home-access-visual > p {
+  margin: 0;
+  padding: 0 24px 24px;
+  text-align: center;
+}
+.home-closing {
+  width: var(--site-content-width);
+  margin-inline: auto;
+  border-top: 1px solid var(--border);
+  padding-block: 80px 96px;
+  text-align: center;
+}
+.home-closing h2 {
+  font-size: clamp(28px, 3vw, 44px);
+  font-weight: 600;
+  margin-block: 20px;
+}
+.home-closing p {
+  font-size: 1rem;
+  color: var(--muted-foreground);
+  line-height: 1.8;
+}
+.home-closing .hero-actions {
+  justify-content: center;
+  margin-top: 28px;
+}
+@media (max-width: 900px) {
+  .home-feature-section {
+    gap: 32px;
+  }
+}
+@media (max-width: 760px) {
+  .home-feature-section {
+    grid-template-columns: 1fr;
+    gap: 32px;
+    padding-block: 56px;
+  }
+  .home-feature-reverse .home-feature-copy {
+    order: 0;
+  }
+  .home-feature-copy h2 {
+    font-size: 30px;
+  }
+  .home-closing {
+    padding-block: 56px;
+  }
+  .site-root .public-hero-section {
+    padding-bottom: 96px;
+  }
+}

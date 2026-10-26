@@ -143,7 +143,7 @@ test("website content uses eighty percent width on desktops and keeps mobile gut
     for (const selector of [
       ".site-header-inner",
       ".public-hero-section",
-      ".public-section",
+      ".home-feature-section",
       ".site-footer-main",
     ]) {
       const element = page.locator(selector).first();

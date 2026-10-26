@@ -14,6 +14,7 @@ import {
   CalendarClock,
   ClipboardList,
   KeyRound,
+  ArrowRight,
   LayoutDashboard,
   ShieldCheck,
   UserRound,
@@ -28,6 +29,7 @@ import {
 } from "@/api/events";
 import { useSiteSession } from "@/apps/web/session";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   TextField,
@@ -38,6 +40,7 @@ import {
   Cell,
   ConfirmAction,
   useAction,
+  Section,
   ListDataLoadingContext,
 } from "@/components/forms";
 import { useServerList, queryKey } from "@/components/server-list";
@@ -66,12 +69,23 @@ const localDate = (offset: number) => {
     .slice(0, 16);
 };
 const navigation = [
-  ["/account", "工作台总览", LayoutDashboard],
-  ["/account/profile", "基本信息", UserRound],
-  ["/account/security", "账号安全", ShieldCheck],
-  ["/account/rentals", "我的租赁", CalendarClock],
-  ["/account/requests", "租赁申请", ClipboardList],
-  ["/account/tokens", "访问令牌", KeyRound],
+  {
+    title: "工作空间",
+    items: [
+      ["/account", "工作台总览", LayoutDashboard],
+      ["/account/rentals", "我的租赁", CalendarClock],
+      ["/account/requests", "租赁申请", ClipboardList],
+    ],
+  },
+  {
+    title: "账号设置",
+    items: [
+      ["/account/profile", "基本信息", UserRound],
+      ["/account/security", "账号安全", ShieldCheck],
+      ["/account/password", "修改密码", KeyRound],
+      ["/account/tokens", "访问令牌", KeyRound],
+    ],
+  },
 ] as const;
 
 export default function MemberWorkspace() {
@@ -126,6 +140,7 @@ export default function MemberWorkspace() {
           <Route index element={<Overview user={user} />} />
           <Route path="profile" element={<Profile user={user} />} />
           <Route path="security" element={<Security />} />
+          <Route path="password" element={<Password />} />
           <Route path="rentals" element={<MyRentals />} />
           <Route path="requests" element={<MyRequests />} />
           <Route
@@ -158,14 +173,18 @@ function MemberSidebar({ user }: { user?: AuthUser }) {
         </div>
       </div>
       <nav aria-label="个人中心导航">
-        {navigation.map(([path, label, Icon]) => (
-          <NavLink key={path} to={path} end={path === "/account"}>
-            <Icon size={17} />
-            {label}
-          </NavLink>
+        {navigation.map((group) => (
+          <div className="member-nav-group" key={group.title}>
+            <span>{group.title}</span>
+            {group.items.map(([path, label, Icon]) => (
+              <NavLink key={path} to={path} end={path === "/account"}>
+                <Icon size={18} />
+                {label}
+              </NavLink>
+            ))}
+          </div>
         ))}
       </nav>
-      <p className="member-sidebar-note">你的开发板使用计划与账号设置</p>
     </aside>
   );
 }
@@ -181,7 +200,6 @@ function Heading({
   return (
     <div className="member-heading">
       <div>
-        <span className="section-label">MY WORKSPACE</span>
         <h1>{title}</h1>
         <p>{text}</p>
       </div>
@@ -191,11 +209,12 @@ function Heading({
 }
 function Overview({ user }: { user: AuthUser }) {
   const summary = useAccountResource("account_summary");
+  const instant = user.permissions?.includes("board.instant");
   return (
     <>
       <Heading
-        title={`你好，${user.display_name || "开发者"}`}
-        text="在这里安排开发板使用时间，管理你的账号。"
+        title={`你好，${user.display_name || user.username || "开发者"}`}
+        text="查看设备使用安排，继续你的开发工作。"
         action={
           <Button asChild>
             <Link to="/account/requests/new">申请租赁</Link>
@@ -215,50 +234,79 @@ function Overview({ user }: { user: AuthUser }) {
           </Link>
         ))}
       </div>
-      {user.permissions?.includes("board.instant") && (
-        <section className="member-card">
-          <h2>即时使用设备</h2>
-          <p>当前角色可通过 ostool 直接领取已开放的空闲设备，无需逐次审核。</p>
+      <div className="member-overview-grid">
+        <section className="member-card member-access-card">
+          <div className="member-card-heading">
+            <h2>{instant ? "即时使用设备" : "连接开发板"}</h2>
+            <Badge variant={instant ? "success" : "info"}>
+              {instant ? "自动放行" : "按预约使用"}
+            </Badge>
+          </div>
           <p>
-            单次最多 {user.allocation_policy?.max_duration_minutes ?? 120}{" "}
-            分钟，同时最多{" "}
-            {user.allocation_policy?.max_concurrent_sessions ?? 1}{" "}
-            台；已有预约优先。
+            {instant
+              ? "通过 ostool 领取已开放的空闲设备，无需逐次审核；已有预约优先。"
+              : "租赁审核通过后，在分配的使用时段内登录 ostool 并连接开发板。"}
           </p>
-          <Link to="/docs">查看 CLI 使用说明</Link>
+          {instant && (
+            <dl className="member-access-limits">
+              <div>
+                <dt>单次最长</dt>
+                <dd>
+                  {user.allocation_policy?.max_duration_minutes ?? 120} 分钟
+                </dd>
+              </div>
+              <div>
+                <dt>同时使用</dt>
+                <dd>
+                  {user.allocation_policy?.max_concurrent_sessions ?? 1} 台
+                </dd>
+              </div>
+            </dl>
+          )}
+          <code className="member-command">ostool login</code>
+          <div className="member-access-actions">
+            <Button asChild variant="outline">
+              <Link to="/docs?page=cli">
+                CLI 使用说明 <ArrowRight />
+              </Link>
+            </Button>
+            <Link className="member-text-link" to="/account/tokens">
+              管理访问令牌
+            </Link>
+          </div>
         </section>
-      )}
-      <section className="member-card">
-        <h2>当前账号</h2>
-        <dl className="member-facts">
-          <div>
-            <dt>显示名称</dt>
-            <dd>{user.display_name || "未设置"}</dd>
+        <section className="member-card member-account-summary">
+          <h2>当前账号</h2>
+          <dl className="member-facts">
+            <div>
+              <dt>登录账号</dt>
+              <dd>{user.username || user.email}</dd>
+            </div>
+            <div>
+              <dt>账号类型</dt>
+              <dd>{user.is_admin ? "管理员" : "成员"}</dd>
+            </div>
+            <div>
+              <dt>管理后台</dt>
+              <dd>
+                {(user.can_access_admin ?? user.is_admin) ? "已授权" : "未授权"}
+              </dd>
+            </div>
+          </dl>
+          <div className="member-access-actions">
+            <Button asChild variant="outline">
+              <Link to="/account/profile">编辑资料</Link>
+            </Button>
+            <Link className="member-text-link" to="/account/security">
+              管理账号安全 <ArrowRight size={16} />
+            </Link>
           </div>
-          <div>
-            <dt>邮箱</dt>
-            <dd>{user.email}</dd>
-          </div>
-          <div>
-            <dt>账号类型</dt>
-            <dd>{user.is_admin ? "管理员" : "成员"}</dd>
-          </div>
-        </dl>
-        <Button asChild variant="outline">
-          <Link to="/account/profile">编辑个人资料</Link>
-        </Button>
-      </section>
-      <section className="member-card member-cli">
-        <div>
-          <h2>从 CLI 连接开发板</h2>
-          <p>租赁审核通过后，在对应使用时段内登录 ostool 并创建板卡会话。</p>
-        </div>
-        <code>ostool login</code>
-        <Link to="/account/tokens">管理个人访问令牌 →</Link>
-      </section>
+        </section>
+      </div>
     </>
   );
 }
+
 function Profile({ user }: { user: AuthUser }) {
   const [email, setEmail] = useState(user.email),
     [name, setName] = useState(user.display_name ?? ""),
@@ -284,32 +332,34 @@ function Profile({ user }: { user: AuthUser }) {
       <Heading title="基本信息" text="管理对外显示的名称和登录邮箱。" />
       <form className="member-card member-form" onSubmit={save}>
         {task.error && <Notice>{task.error}</Notice>}
-        <TextField label="用户名" value={user.username} readOnly hint="" />
-        <TextField
-          label="显示名称"
-          value={name}
-          onValue={setName}
-          maxLength={120}
-        />
-        <TextField
-          label="邮箱"
-          type="email"
-          required
-          value={email}
-          onValue={setEmail}
-          autoComplete="email"
-        />
-        {email !== user.email && (
+        <Section title="个人资料">
+          <TextField label="用户名" value={user.username} readOnly hint="" />
           <TextField
-            label="当前密码（修改邮箱时必填）"
-            type="password"
-            required
-            maxLength={1024}
-            value={password}
-            onValue={setPassword}
-            autoComplete="current-password"
+            label="显示名称"
+            value={name}
+            onValue={setName}
+            maxLength={120}
           />
-        )}
+          <TextField
+            label="邮箱"
+            type="email"
+            required
+            value={email}
+            onValue={setEmail}
+            autoComplete="email"
+          />
+          {email !== user.email && (
+            <TextField
+              label="当前密码（修改邮箱时必填）"
+              type="password"
+              required
+              maxLength={1024}
+              value={password}
+              onValue={setPassword}
+              autoComplete="current-password"
+            />
+          )}
+        </Section>
         <div className="member-form-actions">
           <Button disabled={task.pending}>保存资料</Button>
           <Button
@@ -329,6 +379,14 @@ function Profile({ user }: { user: AuthUser }) {
   );
 }
 function Security() {
+  return (
+    <>
+      <Heading title="账号安全" text="管理身份验证、邮箱验证和已登录的设备。" />
+      <SecuritySettings />
+    </>
+  );
+}
+function Password() {
   const [current, setCurrent] = useState(""),
     [password, setPassword] = useState(""),
     [confirmation, setConfirmation] = useState("");
@@ -345,40 +403,45 @@ function Security() {
   return (
     <>
       <Heading
-        title="账号安全"
-        text="修改登录密码，保护你的账号和开发板访问权限。"
+        title="修改密码"
+        text="设置独立且不重复使用的密码，保护账号与设备访问。"
       />
       <form className="member-card member-form" onSubmit={save}>
         {task.error && <Notice>{task.error}</Notice>}
-        <TextField
-          label="当前密码"
-          type="password"
-          required
-          maxLength={1024}
-          value={current}
-          onValue={setCurrent}
-          autoComplete="current-password"
-        />
-        <TextField
-          label="新密码"
-          type="password"
-          required
-          minLength={15}
-          maxLength={1024}
-          value={password}
-          onValue={setPassword}
-          autoComplete="new-password"
-        />
-        <TextField
-          label="确认新密码"
-          type="password"
-          required
-          minLength={15}
-          maxLength={1024}
-          value={confirmation}
-          onValue={setConfirmation}
-          autoComplete="new-password"
-        />
+        <Section title="登录密码">
+          <TextField
+            label="当前密码"
+            type="password"
+            required
+            maxLength={1024}
+            value={current}
+            onValue={setCurrent}
+            autoComplete="current-password"
+            placeholder="输入当前登录密码"
+          />
+          <TextField
+            label="新密码"
+            type="password"
+            required
+            minLength={15}
+            maxLength={1024}
+            value={password}
+            onValue={setPassword}
+            autoComplete="new-password"
+            placeholder="至少 15 个字符，建议使用长密码或密码短语"
+          />
+          <TextField
+            label="确认新密码"
+            type="password"
+            required
+            minLength={15}
+            maxLength={1024}
+            value={confirmation}
+            onValue={setConfirmation}
+            autoComplete="new-password"
+            placeholder="再次输入新密码"
+          />
+        </Section>
         <p className="muted">
           密码至少 15 个字符。修改后所有登录与个人访问令牌失效，需要重新登录。
         </p>
@@ -386,7 +449,6 @@ function Security() {
           <Button disabled={task.pending}>更新密码</Button>
         </div>
       </form>
-      <SecuritySettings />
     </>
   );
 }
@@ -444,9 +506,17 @@ function MyRentals() {
                   {date(r.ends_at)}
                 </Cell>
                 <Cell>
-                  <span className={`member-status ${r.status}`}>
+                  <Badge
+                    variant={
+                      r.status === "active"
+                        ? "success"
+                        : r.status === "scheduled"
+                          ? "info"
+                          : "secondary"
+                    }
+                  >
                     {rentalLabels[r.status]}
-                  </span>
+                  </Badge>
                 </Cell>
                 <Cell>{r.notes || "—"}</Cell>
               </Row>
@@ -702,9 +772,19 @@ function MyRequests() {
                   {date(r.ends_at)}
                 </Cell>
                 <Cell>
-                  <span className={`member-status ${r.status}`}>
+                  <Badge
+                    variant={
+                      r.status === "approved" || r.status === "auto_approved"
+                        ? "success"
+                        : r.status === "pending"
+                          ? "warning"
+                          : r.status === "rejected"
+                            ? "destructive"
+                            : "secondary"
+                    }
+                  >
                     {requestStatusLabels[r.status]}
-                  </span>
+                  </Badge>
                   <small className="block">{r.decision_note || "—"}</small>
                 </Cell>
                 <Cell>

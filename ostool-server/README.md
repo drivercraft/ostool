@@ -299,6 +299,13 @@ sharing PostgreSQL accounts and role checks. `/login` opens `/account/*`, while
 the other. Local edition opens the console without login and hides account and
 rental features.
 
+The public website uses a shared header, avatar/theme menus and footer, an initial
+viewport-sized hero, and separate feature sections. The personal workspace keeps
+overview, profile, security, password changes (`/account/password`), rentals,
+applications and CLI tokens on distinct routes. Desktop content uses 80% of the
+viewport width with responsive mobile gutters. Website and console controls, status
+badges, dialogs and theme colors share the same design tokens.
+
 The console groups devices/DTBs/short sessions, rentals, users/roles, audit logs
 and bottom system settings. Toolbars, independently scrolling content and footer
 status/actions fill the viewport. Lists support table/card layouts with shared

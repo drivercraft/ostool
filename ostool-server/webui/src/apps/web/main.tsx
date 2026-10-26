@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "@/styles/global.css";
 import "@/apps/web/portal.css";
+import "@/apps/web/home.css";
 import PublicApp from "@/apps/web/App";
 import { configureAuthSurface } from "@/auth-session";
 configureAuthSurface("website");

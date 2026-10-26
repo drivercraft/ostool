@@ -99,8 +99,8 @@ test("public member profile, rental request approval, theme and password lifecyc
     await page.getByLabel("显示名称", { exact: true }).fill("已更新的租赁成员");
     await page.getByRole("button", { name: "保存资料" }).click();
     await expect(
-      page.locator(".site-actions .site-user-copy strong"),
-    ).toHaveText("已更新的租赁成员");
+      page.locator('.site-actions [aria-label="用户菜单"]'),
+    ).toHaveAttribute("title", "已更新的租赁成员");
     await page.reload();
     await expect(page.getByLabel("显示名称", { exact: true })).toHaveValue(
       "已更新的租赁成员",
@@ -147,9 +147,7 @@ test("public member profile, rental request approval, theme and password lifecyc
       fullPage: true,
     });
     await admin.goto(`${base}/admin/rental-requests`);
-    await admin
-      .getByLabel(/^(邮箱|账号)$/, { exact: true })
-      .fill(adminEmail);
+    await admin.getByLabel(/^(邮箱|账号)$/, { exact: true }).fill(adminEmail);
     await admin.getByLabel("密码", { exact: true }).fill(adminPassword);
     await solveCaptcha(admin);
     await admin.getByRole("button", { name: "登录", exact: true }).click();
@@ -191,6 +189,17 @@ test("public member profile, rental request approval, theme and password lifecyc
       ),
     ).toBe(true);
     await page.goto(`${base}/account/security`);
+    await expect(
+      page.getByRole("heading", { name: "账号安全", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "双重验证", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByLabel("当前密码", { exact: true })).toHaveCount(0);
+    await page.goto(`${base}/account/password`);
+    await expect(
+      page.getByRole("heading", { name: "修改密码", exact: true }),
+    ).toBeVisible();
     await page
       .getByLabel("当前密码", { exact: true })
       .fill("member-password-123");
