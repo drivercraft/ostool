@@ -1,7 +1,7 @@
 import { useId, useState } from "react";
 import { ChevronDownIcon } from "lucide-react";
 import type { LoaderDeviceSummary } from "@/types/api";
-import { Field, FieldLabel, FieldDescription } from "@/components/ui/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -33,7 +33,9 @@ export function MacPicker({
           id={id}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="选择或手动输入 MAC 地址"
+          placeholder="选择或输入 MAC，例如 02:00:00:00:00:01"
+          title="发现列表实时更新；选择后需保存配置才能完成绑定。"
+          aria-description="发现列表实时更新；选择后需保存配置才能完成绑定。"
         />
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
@@ -84,9 +86,6 @@ export function MacPicker({
           </PopoverContent>
         </Popover>
       </div>
-      <FieldDescription>
-        发现列表实时更新；只有保存配置后才完成绑定。
-      </FieldDescription>
     </Field>
   );
 }

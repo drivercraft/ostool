@@ -1,11 +1,5 @@
-import {
-  useContext,
-  Children,
-  cloneElement,
-  isValidElement,
-  type ReactNode,
-} from "react";
-import { SelectField, TextField, ListDataLoadingContext } from "./forms";
+import { useContext, type ReactNode } from "react";
+import { ListDataLoadingContext } from "./forms";
 import { ListLayoutToggle } from "./list-layout";
 export function ListToolbar({
   actions,
@@ -26,15 +20,7 @@ export function ListToolbar({
         )}
       </div>
       <div className="listing-filters">
-        {Children.map(children, (child) =>
-          isValidElement<{ inlineHint?: boolean; hint?: string }>(child)
-            ? child.type === TextField
-              ? cloneElement(child, { inlineHint: true })
-              : child.type === SelectField
-                ? cloneElement(child, { hint: "" })
-                : child
-            : child,
-        )}
+        {children}
         <ListLayoutToggle />
       </div>
     </div>

@@ -54,7 +54,7 @@
 [data-slot="textarea"] {
   min-height: 80px;
   padding: 10px 14px;
-  resize: vertical;
+  resize: none;
 }
 [data-slot="input"][type="file"] {
   padding-block: 7px;

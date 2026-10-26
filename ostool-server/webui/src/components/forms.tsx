@@ -84,12 +84,10 @@ export function TextField({
   label,
   hint,
   onValue,
-  inlineHint = false,
   ...props
 }: ComponentProps<typeof Input> & {
   label: string;
   hint?: string;
-  inlineHint?: boolean;
   onValue?: (value: string) => void;
 }) {
   const id = useId();
@@ -100,17 +98,13 @@ export function TextField({
       <Input
         id={id}
         {...props}
-        placeholder={
-          props.placeholder ?? (inlineHint ? description : undefined)
-        }
-        aria-describedby={
-          description && !inlineHint ? `${id}-hint` : props["aria-describedby"]
+        placeholder={props.placeholder ?? (description || `请输入${label}`)}
+        title={props.title ?? (description || undefined)}
+        aria-description={
+          props["aria-description"] ?? (description || undefined)
         }
         onChange={onValue ? (e) => onValue(e.target.value) : props.onChange}
       />
-      {description && !inlineHint && (
-        <FieldDescription id={`${id}-hint`}>{description}</FieldDescription>
-      )}
     </Field>
   );
 }
@@ -133,14 +127,13 @@ export function TextareaField({
         id={id}
         rows={2}
         {...props}
-        aria-describedby={
-          description ? `${id}-hint` : props["aria-describedby"]
+        placeholder={props.placeholder ?? (description || `请输入${label}`)}
+        title={props.title ?? (description || undefined)}
+        aria-description={
+          props["aria-description"] ?? (description || undefined)
         }
         onChange={(e) => onValue(e.target.value)}
       />
-      {description && (
-        <FieldDescription id={`${id}-hint`}>{description}</FieldDescription>
-      )}
     </Field>
   );
 }
@@ -171,8 +164,9 @@ export function SelectField({
         id={id}
         className="w-full"
         {...props}
-        aria-describedby={
-          description ? `${id}-hint` : props["aria-describedby"]
+        title={props.title ?? (description || undefined)}
+        aria-description={
+          props["aria-description"] ?? (description || undefined)
         }
         onChange={(e) => onValue(e.target.value)}
       >
@@ -182,9 +176,6 @@ export function SelectField({
           </option>
         ))}
       </NativeSelect>
-      {description && (
-        <FieldDescription id={`${id}-hint`}>{description}</FieldDescription>
-      )}
     </Field>
   );
 }

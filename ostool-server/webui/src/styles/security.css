@@ -168,7 +168,7 @@ p.auth-legal {
 }
 .legal-settings textarea {
   min-height: 240px;
-  resize: vertical;
+  resize: none;
 }
 .site-maintenance {
   padding: 12px 24px;
