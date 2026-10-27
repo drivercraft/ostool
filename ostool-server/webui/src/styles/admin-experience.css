@@ -701,7 +701,7 @@ a.dashboard-metric:hover {
   }
 }
 
-/* 系统设置沿用 itexp 的标签页和标题分组，内容直接展示在工作区背景上。 */
+/* 系统设置使用标签页和标题分组，内容直接展示在工作区背景上。 */
 .system-settings.workspace-tabs > .system-tabs {
   align-self: stretch;
   justify-content: flex-start;

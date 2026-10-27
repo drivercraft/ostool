@@ -1,5 +1,4 @@
 .git
-itexp
 **/target
 **/node_modules
 **/dist
