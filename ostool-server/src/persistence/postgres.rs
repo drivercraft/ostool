@@ -95,7 +95,6 @@ impl Database {
         Ok(())
     }
     pub async fn connect(config: &DatabaseConfig) -> anyhow::Result<Self> {
-        crate::security::crypto::initialize_tls();
         let Some(url) = config.url.as_deref().filter(|url| !url.trim().is_empty()) else {
             bail!("PostgreSQL is required (OSTOOL_DATABASE_URL)");
         };

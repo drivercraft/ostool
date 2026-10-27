@@ -9,7 +9,6 @@ pub struct SecurityCache {
 }
 impl SecurityCache {
     pub async fn connect(config: &ServerConfig) -> anyhow::Result<Self> {
-        super::crypto::initialize_tls();
         let url = config
             .security
             .redis_url

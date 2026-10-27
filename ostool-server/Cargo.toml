@@ -35,7 +35,6 @@ path = "tools/seed-demo.rs"
 unicode-normalization = "0.1"
 uboot-shell = { version = "0.2.9", path = "../uboot-shell" }
 tokio-util = { version = "0.7", features = ["compat"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 redis = { version = "1.7", default-features = false, features = ["tokio-rustls-comp", "connection-manager", "script", "tls-rustls-webpki-roots"] }
 captcha = { version = "1.0", default-features = false }
 ring = "0.17"
@@ -43,7 +42,8 @@ subtle = "2.6"
 data-encoding = "2.9"
 ipnet = { version = "2", features = ["serde"] }
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
-lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "tokio1-rustls-tls", "ring", "webpki-roots"] }
+# Match reqwest's provider; tokio1-rustls-tls would implicitly enable ring.
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "tokio1-rustls", "aws-lc-rs", "webpki-roots"] }
 anyhow = {workspace = true}
 async-trait = "0.1"
 axum = {version = "0.8", features = ["ws"]}
@@ -70,7 +70,8 @@ serde = {workspace = true, features = ["derive"]}
 serde_json = {workspace = true}
 serialport = "4.6"
 sha2 = "0.10"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
+# The legacy runtime-tokio-rustls feature implicitly enables the ring provider.
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
 tftpd = "0.5"
 thiserror = {workspace = true}
 tokio = {workspace = true, features = ["full"]}

@@ -8,12 +8,6 @@ use ring::{aead, hmac};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-/// Redis/SQL TLS builders need one explicit provider when both TLS backends are linked.
-pub fn initialize_tls() {
-    if rustls::crypto::CryptoProvider::get_default().is_none() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    }
-}
 pub fn random_token() -> String {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
