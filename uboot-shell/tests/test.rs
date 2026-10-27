@@ -1,20 +1,27 @@
 //! QEMU-backed smoke tests for the asynchronous U-Boot shell.
 
 use std::{
-    process::{Child, Command},
-    sync::atomic::AtomicU32,
+    future::Future,
+    path::PathBuf,
+    process::{Child, Command, Stdio},
 };
 
-use log::{debug, info};
-use ntest::timeout;
+use log::info;
 use tokio::{
-    net::TcpStream,
-    time::{Duration, sleep},
+    io::AsyncReadExt,
+    net::TcpListener,
+    time::{Duration, sleep, timeout},
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use uboot_shell::UbootShell;
 
-static PORT: AtomicU32 = AtomicU32::new(10000);
+const STAGE_TIMEOUT: Duration = Duration::from_secs(15);
+
+async fn stage<T>(name: &str, future: impl Future<Output = T>) -> T {
+    timeout(STAGE_TIMEOUT, future)
+        .await
+        .unwrap_or_else(|_| panic!("timed out after {STAGE_TIMEOUT:?}: {name}"))
+}
 
 struct QemuProcess(Child);
 
@@ -28,83 +35,118 @@ impl Drop for QemuProcess {
 /// Starts QEMU with the bundled U-Boot image and returns an attached shell.
 async fn new_uboot() -> (QemuProcess, UbootShell) {
     let _ = env_logger::try_init();
-    let port = PORT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    // Keep the listener bound while QEMU starts. Connecting the chardev before
+    // the guest boots also prevents early console output from being discarded.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let bios = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/u-boot.bin");
 
-    // qemu-system-aarch64 -machine virt -cpu cortex-a57 -nographic -bios assets/u-boot.bin
-    let out = QemuProcess(
+    let mut out = QemuProcess(
         Command::new("qemu-system-aarch64")
+            .arg("-chardev")
+            .arg(format!(
+                "socket,id=serial,host={},port={},server=off,nodelay=on",
+                address.ip(),
+                address.port()
+            ))
             .arg("-serial")
-            .arg(format!("tcp::{port},server,nowait"))
+            .arg("chardev:serial")
             .args([
                 "-machine",
                 "virt",
                 "-cpu",
                 "cortex-a57",
-                "-nographic",
+                "-display",
+                "none",
+                "-monitor",
+                "none",
                 "-net",
                 "none",
                 "-bios",
-                "../assets/u-boot.bin",
             ])
+            .arg(bios)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
             .spawn()
             .unwrap(),
     );
 
-    loop {
-        sleep(Duration::from_millis(100)).await;
-        match TcpStream::connect(format!("127.0.0.1:{port}")).await {
-            Ok(s) => {
-                let (rx, tx) = s.into_split();
-                info!("connect ok");
-                return (
-                    out,
-                    UbootShell::new(tx.compat_write(), rx.compat())
-                        .await
-                        .unwrap(),
-                );
-            }
-            Err(e) => {
-                debug!("wait for qemu serial port ready: {e}");
+    let mut socket = stage("QEMU serial connection", async {
+        loop {
+            tokio::select! {
+                connection = listener.accept() => break connection.unwrap().0,
+                _ = sleep(Duration::from_millis(20)) => {
+                    if let Some(status) = out.0.try_wait().unwrap() {
+                        panic!("QEMU exited before connecting its serial port: {status}");
+                    }
+                }
             }
         }
-    }
+    })
+    .await;
+    socket.set_nodelay(true).unwrap();
+    // The socket can connect before the firmware accepts console interrupts.
+    // Synchronize on the guest's boot prompt before starting Ctrl-C negotiation.
+    stage("U-Boot autoboot countdown", async {
+        let marker = b"Hit any key to stop autoboot:";
+        let mut boot = Vec::new();
+        while !boot.ends_with(marker) {
+            boot.push(socket.read_u8().await.unwrap());
+        }
+    })
+    .await;
+    let (rx, tx) = socket.into_split();
+    let shell = stage(
+        "U-Boot shell initialization",
+        UbootShell::new(tx.compat_write(), rx.compat()),
+    )
+    .await
+    .unwrap();
+    (out, shell)
 }
 
 #[tokio::test]
-#[timeout(15000)]
 async fn test_shell() {
     let (_qemu, _uboot) = new_uboot().await;
     info!("test_shell ok");
 }
 
 #[tokio::test]
-#[timeout(15000)]
 async fn test_cmd() {
     let (_qemu, mut uboot) = new_uboot().await;
-    let res = uboot.cmd("help").await.unwrap();
+    let res = stage("help command", uboot.cmd("help")).await.unwrap();
     println!("{}", res);
 }
 
 #[tokio::test]
-#[timeout(15000)]
 async fn test_setenv() {
     let (_qemu, mut uboot) = new_uboot().await;
     let cmdline = "earlycon init=/bin/sh HOME=/root USER=root HOSTNAME=starry -- -c \"cd /root; export PS1=$USER@$HOSTNAME:~#; exec /bin/sh -i\"";
-    uboot
-        .set_env("bootargs", format!("'{cmdline}'"))
-        .await
-        .unwrap();
+    stage(
+        "set bootargs",
+        uboot.set_env("bootargs", format!("'{cmdline}'")),
+    )
+    .await
+    .unwrap();
     assert_eq!(
-        uboot.cmd("printenv bootargs").await.unwrap(),
+        stage("read bootargs", uboot.cmd("printenv bootargs"))
+            .await
+            .unwrap(),
         format!("bootargs={cmdline}")
     );
 }
 
 #[tokio::test]
-#[timeout(15000)]
 async fn test_env() {
     let (_qemu, mut uboot) = new_uboot().await;
-    uboot.set_env("fdt_addr", "0x40000000").await.unwrap();
+    stage("set fdt_addr", uboot.set_env("fdt_addr", "0x40000000"))
+        .await
+        .unwrap();
     info!("set fdt_addr ok");
-    assert_eq!(uboot.env_int("fdt_addr").await.unwrap(), 0x40000000);
+    assert_eq!(
+        stage("read fdt_addr", uboot.env_int("fdt_addr"))
+            .await
+            .unwrap(),
+        0x40000000
+    );
 }
