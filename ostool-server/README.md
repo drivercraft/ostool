@@ -12,6 +12,15 @@ It provides:
 
 ## Serial transport
 
+Serial port selection uses stable device identities. USB ports are exposed through
+`/dev/serial/by-id/` when available, so multi-interface adapters such as FT4232H
+remain bound to the selected interface even when the kernel renumbers `ttyUSB*`
+after reconnecting. Existing serial-number and by-path configurations remain
+supported when they identify a unique port, even if USB ID is the preferred
+identity. If multiple interfaces share a serial number, serial-number selection
+returns an ambiguity error; select the interface-specific `usb_id` or `usb_path`
+instead.
+
 On Unix, a dedicated thread drains physical serial input independently of the
 HTTP/WebSocket executor. A 256 KiB byte buffer transfers ownership to the async
 session; its short mutex protects only memory copies, never serial or network I/O.

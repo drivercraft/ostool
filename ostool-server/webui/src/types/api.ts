@@ -47,7 +47,7 @@ export interface TftpStatus {
   last_error: string | null;
 }
 
-export type SerialPortKeyKind = "serial_number" | "usb_path" | "qemu";
+export type SerialPortKeyKind = "serial_number" | "usb_id" | "usb_path" | "qemu";
 
 export interface SerialPortKey {
   kind: SerialPortKeyKind;
@@ -68,6 +68,7 @@ export interface SerialPortSummary {
   primary_key_kind: SerialPortKeyKind | null;
   primary_key_value: string | null;
   usb_path: string | null;
+  usb_id: string | null;
   stable_identity: boolean;
   usb_vendor_id: number | null;
   usb_product_id: number | null;
