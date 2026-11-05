@@ -697,6 +697,7 @@ pub struct SerialPortKey {
 #[serde(rename_all = "snake_case")]
 pub enum SerialPortKeyKind {
     SerialNumber,
+    UsbId,
     UsbPath,
     Qemu,
 }
