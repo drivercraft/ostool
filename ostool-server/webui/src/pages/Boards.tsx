@@ -34,7 +34,12 @@ export default function Boards() {
     [status, setStatus] = useState("");
   const [virtualMac, setVirtualMac] = useState("");
   const task = useAction();
-  const quarantined = useList("quarantined_boards");
+  const quarantined = useList("quarantined_boards").filter(
+    (q) =>
+      !boards.some(
+        (board) => q.original_path.split(/[\\/]/).pop() === `${board.id}.toml`,
+      ),
+  );
   const filtered = boards.filter(
     (b) =>
       (!search ||

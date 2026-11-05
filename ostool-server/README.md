@@ -19,7 +19,8 @@ after reconnecting. Existing serial-number and by-path configurations remain
 supported when they identify a unique port, even if USB ID is the preferred
 identity. If multiple interfaces share a serial number, serial-number selection
 returns an ambiguity error; select the interface-specific `usb_id` or `usb_path`
-instead.
+instead. The board editor preserves saved identities, recognizes by-id and
+by-path aliases, and marks shared serial numbers as ambiguous.
 
 On Unix, a dedicated thread drains physical serial input independently of the
 HTTP/WebSocket executor. A 256 KiB byte buffer transfers ownership to the async
@@ -151,11 +152,39 @@ and single-range downloads for every boot mode and remains available when TFTP
 is disabled. Upload responses include a board-reachable `http_url`; both the
 file and URL expire when the session is released or times out.
 
-For boards using the UEFI HTTP Boot loader, configure the board boot profile
-with `kind = "httpboot"`, `network_identity.mac_address`, and, when needed,
-`boot_arch`. The server binds each UDP/HTTP loader registration to the board by
-its persisted permanent MAC address. Boot manifests and status reports stay in
-the active session; serial is used only for target-system interaction.
+For UEFI HTTP Boot boards, configure `boot.kind = "httpboot"` and
+`network_identity.mac_address`. Architecture is not persisted in the profile.
+Legacy `boot_arch` values are read and discarded; other unknown fields remain
+errors. After validating a legacy board TOML, `FileBoardStore` atomically removes
+the field. A migration write failure preserves the source and reports an error.
+
+The CLI derives `X-HttpBoot-Arch` from its existing ELF detection. The server uses
+`object` to parse little-endian ELF64 and checks `e_machine` against that header.
+Before serial handoff it rechecks the stored file, declaration and axloader's
+`observed.arch`; a mismatch sets serial state to `Failed` and stops the session.
+x86_64 uses `__x86_64_efi_pe_entry`; RISC-V64 and LoongArch64 use `efi_pe_entry`.
+The board editor shows reported architecture read-only while online and unknown
+while offline or undiscovered. Sessions and kernels can be prepared offline, then matched on discovery.
+The permanent MAC remains the persisted binding key, and manifests and status
+remain scoped to the session. v6 verifies UART identity before kernel handoff.
+
+Loader OTA treats images as opaque bytes. `OtaStore` accepts nonempty images up
+to 32 MiB, preserves labels, size and SHA-256, and verifies storage integrity
+before delivery. axloader owns PE/COFF, `Machine` and platform compatibility
+checks. Neither the server nor the Web UI gates OTA by CPU architecture. Offline
+jobs may queue; missing `ota` state leaves a visible waiting reason. Legacy v4
+downloads require the current registration and actual OTA capability, with the
+same MAC/update assignment and an eligible job.
+
+A device's `202` means staged, not completed: success requires the matching new
+slot to run and be confirmed with the expected digest. Device `400`, `413` and
+`422` responses fail the job once and preserve the HTTP status and response body,
+including legacy `422 {}`. `409` refreshes state/epoch and delays retry; `503`
+waits for state, capability or epoch to change without repeated PUTs. Network
+errors and other `5xx` responses use finite retries with backoff; uncertain
+results, including the final attempt, require a fresh device-status check before
+failure. See [loader upgrades](../docs/axloader-network-control.md#22-装载器升级)
+for the device protocol and confirmation rules.
 
 ## Network throughput tests
 

@@ -191,7 +191,6 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
             power_off_cmd: "true".into(),
         }),
         boot: BootConfig::UefiHttp(UefiHttpProfile {
-            boot_arch: Some(UefiBootArch::X86_64),
             serial_parameters: Some(AxloaderSerialParameters {
                 baud_rate: 38_400,
                 data_bits: 8,
@@ -264,19 +263,27 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
         .await
         .unwrap();
     let session = state.session_state(&created.id).await.unwrap();
+    let mut kernel = vec![0; 64];
+    kernel[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+    kernel[16..18].copy_from_slice(&2u16.to_le_bytes());
+    kernel[18..20].copy_from_slice(&object::elf::EM_X86_64.to_le_bytes());
+    kernel[20..24].copy_from_slice(&1u32.to_le_bytes());
+    kernel[52..54].copy_from_slice(&64u16.to_le_bytes());
+    kernel[54..56].copy_from_slice(&56u16.to_le_bytes());
+    kernel[58..60].copy_from_slice(&64u16.to_le_bytes());
     state
         .tftp_manager
         .read()
         .await
-        .put_session_file(&created.id, "kernel.elf", b"kernel")
+        .put_session_file(&created.id, "kernel.elf", &kernel)
         .await
         .unwrap();
     session
         .publish_boot_command(SessionBootCommand {
             boot_id: "kernel".into(),
             kernel_path: format!("/boot/sessions/{}/kernel.elf", created.id),
-            kernel_size: 6,
-            kernel_sha256: format!("{:x}", Sha256::digest(b"kernel")),
+            kernel_size: kernel.len() as u64,
+            kernel_sha256: format!("{:x}", Sha256::digest(&kernel)),
             arch: BootArch::X86_64,
             image_format: ImageFormat::Elf64,
             entry_symbol: None,

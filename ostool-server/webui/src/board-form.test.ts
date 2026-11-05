@@ -8,6 +8,30 @@ import {
 } from "./board-form";
 import type { BoardConfig } from "./types/api";
 describe("board configuration contracts", () => {
+  it("loads legacy HTTPboot architecture fields without preserving them in the form or payload", () => {
+    const legacy = {
+      id: "legacy",
+      board_type: "firmware-board",
+      tags: [],
+      notes: null,
+      disabled: false,
+      serial: null,
+      power_management: {
+        kind: "custom" as const,
+        power_on_cmd: "true",
+        power_off_cmd: "true",
+      },
+      network_identity: { mac_address: "02:00:00:00:00:21" },
+      boot: { kind: "httpboot" as const, boot_arch: "unrecognized" },
+    };
+    const form = boardToFormState(legacy);
+    expect(form).not.toHaveProperty("boot_arch");
+    expect(validateForm(form)).toBe("");
+    expect(buildRequestPayload(form).boot).toEqual({
+      kind: "httpboot",
+      serial_parameters: null,
+    });
+  });
   it("hides manual serial in axloader payload and restores the U-Boot draft", () => {
     const f = defaultFormState();
     f.serial_enabled = true;
@@ -108,7 +132,6 @@ describe("board configuration contracts", () => {
 
     expect(buildRequestPayload(f).boot).toEqual({
       kind: "httpboot",
-      boot_arch: null,
       serial_parameters: {
         baud_rate: 921600,
         data_bits: 7,
@@ -120,7 +143,6 @@ describe("board configuration contracts", () => {
     f.axloader_serial_parameters_enabled = false;
     expect(buildRequestPayload(f).boot).toEqual({
       kind: "httpboot",
-      boot_arch: null,
       serial_parameters: null,
     });
     f.boot_kind = "uboot";
