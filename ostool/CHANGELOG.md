@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.0](https://github.com/drivercraft/ostool/compare/ostool-v0.31.1...ostool-v0.32.0) - 2026-11-05
+
+### Fixed
+
+- *(httpboot)* verify kernel targets and delegate OTA validation ([#217](https://github.com/drivercraft/ostool/pull/217))
+
 ## [0.31.1](https://github.com/drivercraft/ostool/compare/ostool-v0.31.0...ostool-v0.31.1) - 2026-10-16
 
 ### Added
