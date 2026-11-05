@@ -110,6 +110,10 @@ impl SessionSerialRuntime {
         rx.await.context("serial confirmation cancelled")?
     }
     pub fn fail(&self, error: String) {
+        self.update_status(|status| {
+            status.phase = SerialRuntimePhase::Failed;
+            status.error = Some(error.clone());
+        });
         let _ = self.commands.send(Command::Fail(error));
     }
     pub async fn attach(
@@ -127,16 +131,16 @@ impl SessionSerialRuntime {
         let runtime = self.clone();
         tokio::spawn(async move {
             let result = runtime.run(&state, &session, commands, io).await;
-            let mut status = runtime.snapshot();
-            status.phase = if result.is_err() {
-                SerialRuntimePhase::Failed
-            } else {
-                SerialRuntimePhase::Closed
-            };
-            if let Err(error) = &result {
-                status.error = Some(format!("{error:#}"));
-            }
-            runtime.status.send_replace(status);
+            runtime.update_status(|status| {
+                status.phase = if result.is_err() {
+                    SerialRuntimePhase::Failed
+                } else {
+                    SerialRuntimePhase::Closed
+                };
+                if let Err(error) = &result {
+                    status.error = Some(format!("{error:#}"));
+                }
+            });
             state.admin_events.invalidate(&["sessions"]);
             if result.is_err() {
                 session.request_stop(SessionStopReason::SerialClosed);
@@ -594,8 +598,20 @@ impl SessionSerialRuntime {
             let _ = reply.send(Err(error));
         }
     }
+    fn update_status(&self, update: impl FnOnce(&mut SerialRuntimeStatus)) {
+        self.status.send_if_modified(|status| {
+            // A failure is terminal for this session. Keep the original reason
+            // even if shutdown or a previously prepared progress update wins.
+            if status.phase == SerialRuntimePhase::Failed {
+                return false;
+            }
+            update(status);
+            true
+        });
+    }
+
     fn publish(&self, state: &AppState, status: SerialRuntimeStatus) {
-        self.status.send_replace(status);
+        self.update_status(|current| *current = status);
         state.admin_events.invalidate(&["sessions"]);
     }
 }
@@ -694,12 +710,18 @@ fn bind_future(
 
 #[cfg(test)]
 mod tests {
-    use super::effective_parameters;
+    use super::{SerialRuntimePhase, SerialRuntimeStatus, effective_parameters};
     use crate::config::{
         AxloaderSerialFlowControl, AxloaderSerialParameters, AxloaderSerialParity,
         AxloaderSerialStopBits,
     };
+    use crate::{
+        BoardConfig, BoardNetworkIdentity, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
+        PowerManagementConfig, ServerConfig, TftpConfig, UefiHttpProfile, build_app_state,
+        session::SessionState, tftp::service::build_tftp_manager,
+    };
     use httpboot_protocol::{SerialFlowControl, SerialParameters, SerialParity, SerialStopBits};
+    use tokio::io::AsyncReadExt;
 
     fn reported(baud_rate: u64) -> SerialParameters {
         SerialParameters {
@@ -732,5 +754,77 @@ mod tests {
             effective_parameters(Some(configured), Some(reported(115_200))),
             configured.into_protocol()
         );
+    }
+
+    #[tokio::test]
+    async fn serial_runtime_preserves_terminal_outcome_on_shutdown() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("server.toml");
+        let mut config = ServerConfig::default_for_path(&path);
+        config.data_dir = root.path().join("data");
+        config.board_dir = root.path().join("boards");
+        config.dtb_dir = root.path().join("dtbs");
+        config.tftp = TftpConfig::Builtin(BuiltinTftpConfig::default_with_root(
+            root.path().join("tftp"),
+        ));
+        let manager = build_tftp_manager(&config.tftp);
+        let state = build_app_state(path, config, manager).await.unwrap();
+        for failure in [
+            None,
+            Some("kernel ELF architecture does not match declaration"),
+        ] {
+            let session = SessionState::new(
+                BoardConfig {
+                    id: "runtime-board".into(),
+                    board_type: "uefi".into(),
+                    tags: vec![],
+                    serial: None,
+                    power_management: PowerManagementConfig::Custom(CustomPowerManagement {
+                        power_on_cmd: "true".into(),
+                        power_off_cmd: "true".into(),
+                    }),
+                    boot: BootConfig::UefiHttp(UefiHttpProfile {
+                        serial_parameters: None,
+                    }),
+                    network_identity: Some(BoardNetworkIdentity {
+                        mac_address: "02:00:00:00:00:42".parse().unwrap(),
+                    }),
+                    notes: None,
+                    disabled: false,
+                },
+                None,
+            );
+            let runtime = session.serial_runtime.clone();
+            // A closed command stream makes the runtime return Ok before handling failure.
+            runtime.receiver.lock().await.as_mut().unwrap().close();
+            if let Some(reason) = failure {
+                runtime.fail(reason.into());
+                // Late progress and cleanup cannot replace the first failure.
+                runtime.publish(&state, SerialRuntimeStatus::default());
+                runtime.fail("serial cleanup failed".into());
+            }
+            let mut client = runtime
+                .attach(state.clone(), session.clone())
+                .await
+                .unwrap();
+            let mut byte = [0];
+            assert_eq!(
+                tokio::time::timeout(std::time::Duration::from_secs(3), client.read(&mut byte))
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                0
+            );
+            let outcome = session.snapshot().await.serial_runtime;
+            assert_eq!(
+                outcome.phase,
+                if failure.is_some() {
+                    SerialRuntimePhase::Failed
+                } else {
+                    SerialRuntimePhase::Closed
+                }
+            );
+            assert_eq!(outcome.error.as_deref(), failure);
+        }
     }
 }

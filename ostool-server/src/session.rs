@@ -6,7 +6,7 @@ use std::sync::{
 use chrono::{DateTime, Duration, Utc};
 use httpboot_protocol::{BootArch, ImageFormat, LoaderStatusPhase, LoaderStatusResponse};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{RwLock, mpsc, watch};
+use tokio::sync::{Mutex, RwLock, mpsc, watch};
 
 use crate::{config::BoardConfig, state::AppState};
 
@@ -46,6 +46,7 @@ impl SessionLifecycleState {
 pub enum SessionStopReason {
     ApiDelete,
     SerialClosed,
+    BootFailed,
     Expired,
     Dropped,
 }
@@ -108,6 +109,8 @@ pub struct SessionState {
     lifecycle_state: AtomicU8,
     stop_requested: AtomicBool,
     serial_connected: AtomicBool,
+    // Kernel storage and publication must not overlap another upload or handoff.
+    pub(crate) boot_operation: Mutex<()>,
     loader: RwLock<SessionLoaderState>,
     command_tx: Option<mpsc::UnboundedSender<SessionCommand>>,
 }
@@ -174,6 +177,7 @@ impl SessionState {
             lifecycle_state: AtomicU8::new(SessionLifecycleState::Active.as_u8()),
             stop_requested: AtomicBool::new(false),
             serial_connected: AtomicBool::new(false),
+            boot_operation: Mutex::new(()),
             loader: RwLock::new(SessionLoaderState::default()),
             command_tx,
         })

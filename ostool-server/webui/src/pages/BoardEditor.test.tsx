@@ -1,12 +1,19 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, expect, it, vi } from "vitest";
 import BoardEditor from "./BoardEditor";
+import Boards from "./Boards";
 import { admin } from "@/api/events";
 import { api } from "@/api/client";
-import type { BoardConfig, LoaderDeviceSummary } from "@/types/api";
+import type {
+  BoardConfig,
+  LoaderDeviceSummary,
+  LoaderUpdateJob,
+  SerialPortKey,
+  SerialPortSummary,
+} from "@/types/api";
 vi.stubGlobal(
   "ResizeObserver",
   class {
@@ -20,34 +27,130 @@ afterEach(() => {
   vi.restoreAllMocks();
   sessionStorage.clear();
 });
-function mount(board?: BoardConfig) {
+function mount(
+  board?: BoardConfig,
+  path?: string,
+  loaders: LoaderDeviceSummary[] = [],
+  serial: SerialPortSummary[] = [],
+) {
   admin.apply({
     epoch: crypto.randomUUID(),
     revision: 1,
     kind: "snapshot",
     data: {
       boards: board ? [board] : [],
-      serial: [],
-      loaders: [],
+      quarantined_boards: [],
+      serial,
+      loaders,
       dtbs: [],
       power_actions: [],
+      ota: { images: [], jobs: [] },
       virtual: { enabled: false, devices: [] },
     },
   });
   render(
     <MemoryRouter
       initialEntries={[
-        board ? `/boards/${board.id}` : "/boards/new?mac=02:00:00:00:00:21",
+        path ??
+          (board ? `/boards/${board.id}` : "/boards/new?mac=02:00:00:00:00:21"),
       ]}
     >
       <Routes>
+        <Route path="/boards" element={<Boards />} />
         <Route path="/boards/new" element={<BoardEditor />} />
         <Route path="/boards/:boardId" element={<BoardEditor />} />
       </Routes>
     </MemoryRouter>,
   );
 }
-function httpBootBoard(bootArch?: string): BoardConfig {
+it("creates and rebinds discovered devices while showing their live architectures read-only", async () => {
+  const first = {
+    mac_address: "02:00:00:00:00:21",
+    current_mac_address: "02:00:00:00:00:21",
+    ip_address: "10.0.0.21",
+    arch: "riscv64",
+    loader_version: "test",
+    hardware: {},
+    online: true,
+    conflict: false,
+    bound_board_id: null,
+    last_seen_at: "2026-10-01T00:00:00Z",
+    current_registration_id: "first-epoch",
+  } as LoaderDeviceSummary;
+  const second = {
+    ...first,
+    mac_address: "02:00:00:00:00:22",
+    arch: "loongarch64",
+  } as LoaderDeviceSummary;
+  const create = vi
+    .spyOn(api, "createBoard")
+    .mockImplementation(async (payload) => {
+      const saved = { ...payload, id: "discovered" } as BoardConfig;
+      act(() =>
+        admin.apply({
+          epoch: "saved",
+          revision: 1,
+          kind: "snapshot",
+          data: { boards: [saved], loaders: [first, second] },
+        }),
+      );
+      return saved;
+    });
+  const update = vi
+    .spyOn(api, "updateBoard")
+    .mockImplementation(
+      async (id, payload) => ({ ...payload, id }) as BoardConfig,
+    );
+  mount(undefined, "/boards", [first, second]);
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("tab", { name: /发现设备/ }));
+  expect(screen.getByText("riscv64")).toBeVisible();
+  expect(screen.getByText("loongarch64")).toBeVisible();
+  const createLink = screen.getAllByRole("link", { name: "创建配置" })[0];
+  expect(createLink.getAttribute("href")).not.toContain("arch=");
+  await user.click(createLink);
+  expect(screen.getByLabelText("MAC 地址")).toHaveValue(first.mac_address);
+  expect(screen.queryByLabelText("启动架构")).not.toBeInTheDocument();
+  expect(screen.queryByText("高级启动设置")).not.toBeInTheDocument();
+  expect(screen.getByText(/设备架构 riscv64/)).toBeVisible();
+  await user.type(screen.getByLabelText("板型"), "discovered");
+  await user.type(screen.getByLabelText("上电命令"), "true");
+  await user.type(screen.getByLabelText("下电命令"), "true");
+  await user.click(screen.getByRole("button", { name: "保存开发板" }));
+  expect(create).toHaveBeenCalledOnce();
+  expect(create.mock.calls[0][0]).toMatchObject({
+    boot: { kind: "httpboot" },
+  });
+  expect(create.mock.calls[0][0].boot).not.toHaveProperty("boot_arch");
+  await screen.findByRole("heading", { name: "编辑开发板" });
+  const notes = screen.getByLabelText("备注");
+  await user.type(notes, "local draft");
+  act(() =>
+    admin.apply({
+      epoch: "architecture-updated",
+      revision: 1,
+      kind: "snapshot",
+      data: { loaders: [{ ...first, arch: "aarch64" }, second] },
+    }),
+  );
+  expect(screen.getByText(/设备架构 aarch64/)).toBeVisible();
+  expect(notes).toHaveValue("local draft");
+  expect(notes).toHaveFocus();
+  await user.click(screen.getByRole("button", { name: "发现 2 台设备" }));
+  await user.click(
+    await screen.findByRole("button", { name: new RegExp(second.mac_address) }),
+  );
+  expect(screen.getByText(/设备架构 loongarch64/)).toBeVisible();
+  expect(screen.queryByLabelText("启动架构")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "保存开发板" }));
+  expect(update).toHaveBeenCalledOnce();
+  expect(update.mock.calls[0][1]).toMatchObject({
+    network_identity: { mac_address: second.mac_address },
+    boot: { kind: "httpboot" },
+  });
+  expect(update.mock.calls[0][1].boot).not.toHaveProperty("boot_arch");
+});
+function httpBootBoard(): BoardConfig {
   return {
     id: "http-board",
     board_type: "uefi-http",
@@ -61,9 +164,138 @@ function httpBootBoard(bootArch?: string): BoardConfig {
       power_on_cmd: "true",
       power_off_cmd: "true",
     },
-    boot: { kind: "httpboot", boot_arch: bootArch },
+    boot: { kind: "httpboot" },
   };
 }
+function usbSerialPort(port: number, serialNumber: string): SerialPortSummary {
+  const usbId = `/dev/serial/by-id/ftdi-if0${port}`;
+  return {
+    current_device_path: `/dev/ttyUSB${port}`,
+    port_type: "usb",
+    label: "FTDI",
+    primary_key_kind: "usb_id",
+    primary_key_value: usbId,
+    usb_id: usbId,
+    usb_path: `/dev/serial/by-path/ftdi-if0${port}`,
+    serial_number: serialNumber,
+    stable_identity: true,
+    usb_vendor_id: 0x0403,
+    usb_product_id: 0x6011,
+    manufacturer: "FTDI",
+    product: "FT4232H",
+  };
+}
+function serialBoard(
+  serialKey: SerialPortKey,
+  relayKey: SerialPortKey,
+): BoardConfig {
+  return {
+    ...httpBootBoard(),
+    boot: { kind: "pxe", notes: null },
+    serial: { key: serialKey, baud_rate: 115200 },
+    power_management: { kind: "zhongsheng_relay", key: relayKey },
+  };
+}
+it.each([
+  { kind: "serial_number", field: "serial_number" },
+  { kind: "usb_path", field: "usb_path" },
+  { kind: "usb_path", field: "usb_id" },
+  { kind: "usb_id", field: "usb_path" },
+] as const)(
+  "keeps saved $kind identities from $field available when USB ID is preferred",
+  async ({ kind, field }) => {
+    const consolePort = usbSerialPort(0, "console-123");
+    const relayPort = usbSerialPort(1, "relay-123");
+    const serialKey = { kind, value: consolePort[field]! };
+    const relayKey = { kind, value: relayPort[field]! };
+    const board = serialBoard(serialKey, relayKey);
+    const update = vi
+      .spyOn(api, "updateBoard")
+      .mockImplementation(
+        async (id, payload) => ({ ...payload, id }) as BoardConfig,
+      );
+    mount(board);
+    const serialSelect = screen.getByLabelText("稳定串口");
+    const relaySelect = screen.getByLabelText("继电器");
+    for (const select of [serialSelect, relaySelect]) {
+      expect(
+        within(select).getByRole("option", { selected: true }),
+      ).toHaveTextContent("当前未检测到");
+    }
+    const user = userEvent.setup();
+    const notes = screen.getByLabelText("备注");
+    await user.type(notes, "local serial draft");
+    act(() =>
+      admin.apply({
+        epoch: "serial-arrived",
+        revision: 1,
+        kind: "snapshot",
+        data: { serial: [consolePort, relayPort] },
+      }),
+    );
+    expect(serialSelect).toHaveValue(`${kind}:${serialKey.value}`);
+    expect(relaySelect).toHaveValue(`${kind}:${relayKey.value}`);
+    for (const select of [serialSelect, relaySelect]) {
+      expect(
+        within(select).getByRole("option", { selected: true }),
+      ).not.toHaveTextContent("当前未检测到");
+    }
+    expect(screen.getAllByText(/VID:PID 403:6011/)).toHaveLength(2);
+    expect(notes).toHaveValue("local serial draft");
+    expect(notes).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "保存开发板" }));
+    expect(update).toHaveBeenCalledOnce();
+    expect(update.mock.calls[0][1]).toMatchObject({
+      serial: { key: serialKey },
+      power_management: { kind: "zhongsheng_relay", key: relayKey },
+    });
+  },
+);
+it("marks shared serial numbers ambiguous until an interface is selected", async () => {
+  const consolePort = usbSerialPort(0, "shared-123");
+  const relayPort = usbSerialPort(1, "shared-123");
+  const sharedKey: SerialPortKey = {
+    kind: "serial_number",
+    value: "shared-123",
+  };
+  const board = serialBoard(sharedKey, sharedKey);
+  const update = vi
+    .spyOn(api, "updateBoard")
+    .mockImplementation(
+      async (id, payload) => ({ ...payload, id }) as BoardConfig,
+    );
+  mount(board, undefined, [], [consolePort, relayPort]);
+  const serialSelect = screen.getByLabelText("稳定串口");
+  const relaySelect = screen.getByLabelText("继电器");
+  for (const select of [serialSelect, relaySelect]) {
+    const selected = within(select).getByRole("option", { selected: true });
+    expect(selected).toHaveTextContent("匹配多个接口");
+    expect(selected).toBeDisabled();
+  }
+  expect(screen.getAllByText(/匹配多个串口接口/)).toHaveLength(2);
+  expect(screen.queryByText(/VID:PID/)).not.toBeInTheDocument();
+  act(() =>
+    admin.apply({
+      epoch: "serial-reordered",
+      revision: 1,
+      kind: "snapshot",
+      data: { serial: [relayPort, consolePort] },
+    }),
+  );
+  expect(screen.getAllByText(/匹配多个串口接口/)).toHaveLength(2);
+  expect(screen.queryByText(/VID:PID/)).not.toBeInTheDocument();
+  const user = userEvent.setup();
+  await user.selectOptions(serialSelect, `usb_id:${consolePort.usb_id}`);
+  await user.selectOptions(relaySelect, `usb_id:${relayPort.usb_id}`);
+  expect(screen.queryByText(/匹配多个串口接口/)).not.toBeInTheDocument();
+  expect(screen.getAllByText(/VID:PID 403:6011/)).toHaveLength(2);
+  await user.click(screen.getByRole("button", { name: "保存开发板" }));
+  expect(update).toHaveBeenCalledOnce();
+  expect(update.mock.calls[0][1]).toMatchObject({
+    serial: { key: { kind: "usb_id", value: consolePort.usb_id } },
+    power_management: { key: { kind: "usb_id", value: relayPort.usb_id } },
+  });
+});
 it("only prefills the MAC and does not require board identity for a power command", async () => {
   const power = vi.spyOn(api, "powerAction").mockResolvedValue({
     id: "one",
@@ -179,23 +411,125 @@ it("switches to U-Boot without requiring or submitting a stale MAC", async () =>
   );
 });
 
-it("hides loader OTA for an unsupported HTTP Boot architecture", () => {
-  mount(httpBootBoard("aarch64"));
+it.each([
+  { arch: "aarch64", online: true, legacyArch: "x86_64" },
+  { arch: "x86_64", online: true, legacyArch: "aarch64" },
+  { arch: "riscv64", online: false, legacyArch: "aarch64" },
+  { arch: null, online: false, legacyArch: "aarch64" },
+])(
+  "shows reported $arch/$online read-only without limiting OTA actions",
+  async ({ arch, online, legacyArch }) => {
+    const board = {
+      ...httpBootBoard(),
+      boot: { kind: "httpboot" as const, boot_arch: legacyArch },
+    };
+    const loaders = arch
+      ? [
+          {
+            mac_address: board.network_identity!.mac_address,
+            ip_address: "10.0.0.31",
+            arch,
+            hardware: {},
+            online,
+            bound_board_id: board.id,
+          } as LoaderDeviceSummary,
+        ]
+      : [];
+    mount(board, undefined, loaders);
 
-  expect(screen.queryByText("axloader OTA")).not.toBeInTheDocument();
-});
+    expect(screen.queryByLabelText("启动架构")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        online ? new RegExp(`设备架构 ${arch}`) : /设备架构 未知/,
+      ),
+    ).toBeVisible();
+    expect(screen.getByText("axloader OTA")).toBeVisible();
+    expect(screen.getByLabelText("EFI 镜像（最多 32 MiB）")).toBeVisible();
+    expect(screen.getByRole("button", { name: "上传镜像" })).toBeVisible();
 
-it("shows loader OTA when the HTTP Boot architecture is omitted", () => {
-  mount(httpBootBoard());
+    const previous: LoaderUpdateJob = {
+      board_id: board.id,
+      mac_address: board.network_identity!.mac_address,
+      update_id: "previous-update",
+      image: {
+        sha256: "11".repeat(32),
+        size: 512,
+        version: "previous-loader",
+      },
+      phase: "failed",
+      error: "422 Unprocessable Entity: device rejected image Machine",
+      delivery_attempts: 1,
+    };
+    act(() =>
+      admin.apply({
+        epoch: "ota-history",
+        revision: 1,
+        kind: "snapshot",
+        data: { ota: { images: [previous.image], jobs: [previous] } },
+      }),
+    );
+    expect(screen.getByText(/previous-update.*failed/)).toBeVisible();
+    expect(screen.getByText(previous.error!)).toBeVisible();
 
-  expect(screen.getByText("axloader OTA")).toBeInTheDocument();
-});
+    const queued: LoaderUpdateJob = {
+      ...previous,
+      update_id: "new-update",
+      phase: "queued",
+      error: "503 Service Unavailable: device has no writable inactive slot",
+      next_delivery_at: null,
+      waiting_for_device_change: true,
+    };
+    const queue = vi.spyOn(api, "queueLoaderUpdate").mockResolvedValue(queued);
+    const cancel = vi.spyOn(api, "cancelLoaderUpdate").mockResolvedValue({
+      ...queued,
+      phase: "cancelled",
+    });
+    const user = userEvent.setup();
+    await user.selectOptions(
+      screen.getByLabelText("待下发镜像"),
+      previous.image.sha256,
+    );
+    await user.click(screen.getByRole("button", { name: "下发升级" }));
+    expect(queue).toHaveBeenCalledWith(board.id, previous.image.sha256);
+
+    // Device discovery must preserve the offline assignment and its controls.
+    if (!online && arch) {
+      act(() =>
+        admin.apply({
+          epoch: "loader-online",
+          revision: 1,
+          kind: "snapshot",
+          data: {
+            loaders: loaders.map((loader) => ({ ...loader, online: true })),
+          },
+        }),
+      );
+      expect(screen.getByText(/previous-update.*failed/)).toBeVisible();
+      expect(screen.getByText(previous.error!)).toBeVisible();
+      expect(screen.getByRole("button", { name: "下发升级" })).toBeEnabled();
+      expect(screen.getByLabelText("EFI 镜像（最多 32 MiB）")).toBeVisible();
+    }
+    act(() =>
+      admin.apply({
+        epoch: "ota-waiting",
+        revision: 1,
+        kind: "snapshot",
+        data: { ota: { images: [previous.image], jobs: [queued] } },
+      }),
+    );
+    expect(screen.getByText(/new-update.*queued/)).toBeVisible();
+    expect(screen.getByText(queued.error!)).toBeVisible();
+    expect(screen.getByRole("button", { name: "下发升级" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "取消升级" }));
+    await user.click(screen.getByRole("button", { name: "确认" }));
+    expect(cancel).toHaveBeenCalledWith(board.id, queued.update_id);
+  },
+);
 
 it("loads and edits the optional axloader serial override", async () => {
   const board = httpBootBoard();
   board.boot = {
     kind: "httpboot",
-    boot_arch: "x86_64",
     serial_parameters: {
       baud_rate: 921600,
       data_bits: 7,
@@ -256,4 +590,52 @@ it("switches manual UART draft to axloader and preserves focus on serial SSE upd
   expect(input).toHaveValue("local draft");
   await user.selectOptions(screen.getByLabelText("启动方式"), "uboot");
   expect(screen.getByLabelText("波特率")).toHaveValue(57600);
+});
+
+it("shows only quarantine entries whose board has not been restored", async () => {
+  mount(undefined, "/boards");
+  const reports = ["recovered", "pending"].map((id) => ({
+    original_path: `/boards/${id}.toml`,
+    backup_path: `/boards/quarantine/previous/${id}.toml`,
+    reason: `previous rejection of ${id}`,
+    quarantined_at: "2026-01-01T00:00:00Z",
+  }));
+  act(() =>
+    admin.apply({
+      epoch: "quarantine",
+      revision: 1,
+      kind: "snapshot",
+      data: { quarantined_boards: reports },
+    }),
+  );
+  await userEvent.setup().click(screen.getByText(/份不兼容配置已备份隔离/));
+  expect(screen.getByText("previous rejection of recovered")).toBeVisible();
+  expect(screen.getByText("previous rejection of pending")).toBeVisible();
+
+  const recovered = { ...httpBootBoard(), id: "recovered", disabled: true };
+  act(() =>
+    admin.apply({
+      epoch: "recovered",
+      revision: 1,
+      kind: "snapshot",
+      data: { boards: [recovered] },
+    }),
+  );
+  expect(
+    screen.queryByText("previous rejection of recovered"),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText("previous rejection of pending")).toBeVisible();
+
+  act(() =>
+    admin.apply({
+      epoch: "all-recovered",
+      revision: 1,
+      kind: "snapshot",
+      data: { boards: [recovered, { ...httpBootBoard(), id: "pending" }] },
+    }),
+  );
+  expect(
+    screen.queryByText("previous rejection of pending"),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText(/修正备份文件后放回/)).not.toBeInTheDocument();
 });

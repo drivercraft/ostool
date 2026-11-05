@@ -376,7 +376,8 @@ Content-Type: application/json
 
   启用内建虚拟板时也可使用 `{"kind":"qemu","virtual_device_id":"..."}`。此时 axloader 配置使用 `serial: null`，串口 provider 从电源取得，并配置相同虚拟设备的 MAC。
 
-- `boot.kind` 可为上例的 `uboot`、`{"kind":"pxe","notes":null}`，或 `{"kind":"httpboot","boot_arch":"aarch64","serial_parameters":null}`。`boot_arch` 可为 `x86_64`、`aarch64`、`loongarch64`、`riscv64` 或 `other`。`httpboot.serial_parameters` 是可选的宿主串口覆盖，包含 `baud_rate`、`data_bits`（7/8）、`parity`（`none`/`odd`/`even`/`mark`/`space`）、`stop_bits`（`one`/`one_point_five`/`two`）和 `flow_control`（`none`/`rts_cts`）；配置后优先于 axloader 本次上报，省略或为 `null` 时采用上报值，固件无法提供时采用 115200/8N1/无流控。物理宿主后端保存配置时只接受 `none`/`odd`/`even` 和 1/2 stop bits，`mark`/`space` 或 1.5 stop bits 会明确拒绝；覆盖必须与实际串口输出一致，否则身份帧无法绑定。
+- `boot.kind` 可为上例的 `uboot`、`{"kind":"pxe","notes":null}`，或 `{"kind":"httpboot","serial_parameters":null}`。不再配置或返回 `boot_arch`；旧字段兼容读取后丢弃，其他未知字段仍拒绝。`httpboot.serial_parameters` 是可选的宿主串口覆盖，包含 `baud_rate`、`data_bits`（7/8）、`parity`（`none`/`odd`/`even`/`mark`/`space`）、`stop_bits`（`one`/`one_point_five`/`two`）和 `flow_control`（`none`/`rts_cts`）；配置后优先于 axloader 本次上报，省略或为 `null` 时采用上报值，固件无法提供时采用 115200/8N1/无流控。物理宿主后端保存配置时只接受 `none`/`odd`/`even` 和 1/2 stop bits，`mark`/`space` 或 1.5 stop bits 会明确拒绝；覆盖必须与实际串口输出一致，否则身份帧无法绑定。
+- `FileBoardStore` 验证旧 TOML 的配置、身份及唯一性后，原子迁移删除 HTTP Boot 的 `boot_arch`；迁移写入失败会保留源文件并报错。
 - `httpboot` 板卡必须提供 `network_identity: {"mac_address":"02:00:00:00:00:01"}`。MAC 会规范化为小写六字节冒号格式并在全部板卡配置中保持唯一；重复绑定返回 `409` 和错误码 `mac_already_bound`。`board_type` 始终由管理员填写，不根据 SMBIOS 或架构推断。
 - U-Boot `network_mode` 可为 `dhcp` 或 `static_ip`。未启用 TFTP 或使用 DHCP 时服务端清除静态网络字段；使用 `static_ip` 时 `board_ip` 必填，所有已提供的网络字段必须是 IPv4 地址。`dtb_name` 必须符合单层 DTB 文件名格式，但创建或更新开发板时不会检查对应文件是否已经上传。
 
@@ -467,7 +468,7 @@ GET /api/v1/admin/network-interfaces
 GET /api/v1/admin/loader-devices
 ```
 
-返回当前内存探测表，包括永久/当前 MAC、IP、架构、loader 版本、SMBIOS Type 1 摘要、最近出现时间、在线状态、冲突状态、当前注册代次和实时解析出的 `bound_board_id`。10 秒未上报视为离线，记录保留 24 小时；绑定关系始终从板卡 TOML 按 MAC 计算，不单独持久化。Web UI 只为 `bound_board_id = null` 的设备提供“创建配置”。
+返回当前内存探测表，包括永久/当前 MAC、IP、架构、loader 版本、SMBIOS Type 1 摘要、最近出现时间、在线状态、冲突状态、当前注册代次和实时解析出的 `bound_board_id`。10 秒未上报视为离线，记录保留 24 小时；绑定关系始终从板卡 TOML 按 MAC 计算，不单独持久化。Web UI 只为 `bound_board_id = null` 的设备提供“创建配置”；编辑页只读显示 axloader 上报架构，离线或未发现时显示未知，不默认 x86_64。离线仍可准备 Session 和内核，待设备上线后核对实际架构。
 
 内建 QEMU 默认关闭。启用时在服务端配置中提供实际 QEMU、OVMF 和 axloader
 产物路径，并声明隔离网络及 TAP 池：
@@ -691,22 +692,47 @@ Content-Type: application/json
 
 axloader 协议 v2/v3/v4 的 `POST /api/v1/loaders/poll`、`POST /api/v1/loaders/status` 和 `GET /api/v1/sessions/{session_id}/loader-status` 保留识别及升级用途。poll/status 由 UDP 发现返回的一次性 `registration_id` 关联本次固件启动；状态以 `session_id + boot_id + registration_id` 定位，旧代次迟到上报不能覆盖新代次。v4 携带 `ota` 状态时仍可收到 `update` / `confirm_update`，普通启动统一返回 `serial_protocol_upgrade_required`。Session 释放时删除启动清单和 loader 状态，不删除独立持久的 OTA 任务。
 
-v5/v6 axloader 通过 UDP 广播自身地址，ostool-server 随后调用设备的 HTTP 接口；v5 保留识别与 OTA，自动启动要求 v6。服务器先从当前 UART 身份帧确认物理连线，以本次参数接管租约，再通过网络 continue 和 `X-Serial-Binding` 放行启动。设备 `POST /api/v1/boot/jobs` 创建事务返回 `201`，相同清单重试返回 `200`，冲突清单返回 `409`；服务端观察到同代次的其他启动 ID 时会先删除旧事务并只重试创建一次，删除返回 `404` 也视为旧事务已经消失。清单完整保留相互独立的可选 `cmdline` 与 `initramfs` 元数据，并把 Session 的兼容入口转换为 `__x86_64_efi_pe_entry`。`POST /api/v1/boot/jobs/{id}/start` 和 `PUT /api/v1/ota/image` 接受交接或升级后返回 `202`；`POST /api/v1/ota/confirm` 成功返回 `200`，代次、来源或升级 ID 不匹配返回 `409`。完整设备接口及状态机见 [axloader 网络控制与本地验证](axloader-network-control.md#21-启动事务)和[装载器升级](axloader-network-control.md#22-装载器升级)。设备没有可用 OTA 持久区时，`ota` 状态可以为空；服务端跳过升级，v6 仍可向已有 Session 推送普通启动事务。
+v5/v6 axloader 通过 UDP 广播自身地址，ostool-server 随后调用设备的 HTTP 接口；v5 保留识别与 OTA，自动启动要求 v6。服务器先从当前 UART 身份帧确认物理连线，以本次参数接管租约，再通过网络 continue 和 `X-Serial-Binding` 放行启动。设备 `POST /api/v1/boot/jobs` 创建事务返回 `201`，相同清单重试返回 `200`，冲突清单返回 `409`；服务端观察到同代次的其他启动 ID 时会先删除旧事务并只重试创建一次，删除返回 `404` 也视为旧事务已经消失。清单完整保留相互独立的可选 `cmdline` 与 `initramfs` 元数据，并按已核验的内核架构选择 EFI 入口：x86_64 为 `__x86_64_efi_pe_entry`，RISC-V64 和 LoongArch64 为 `efi_pe_entry`。串口交接前重新核对文件、架构声明和 `observed.arch`，不匹配时发布错误码为 `boot_preflight_failed` 的 loader `failed` 状态，串口状态进入 `Failed`，并在关闭 WebSocket 前通过 `error.message` 发送具体原因，随后停止会话。`POST /api/v1/boot/jobs/{id}/start` 和 `PUT /api/v1/ota/image` 接受交接或升级后返回 `202`；`POST /api/v1/ota/confirm` 成功返回 `200`，代次、来源或升级 ID 不匹配返回 `409`。完整设备接口及状态机见 [axloader 网络控制与本地验证](axloader-network-control.md#21-启动事务)和[装载器升级](axloader-network-control.md#22-装载器升级)。设备没有可用 OTA 持久区时，`ota` 状态可以为空；服务端不发送升级镜像，任务保留可见的等待原因，不按架构判为失败。v6 仍可向已有 Session 推送普通启动事务。
 
 装载器镜像库和指派任务使用下列 ostool-server 接口：
 
 | 方法与路径 | 成功结果 | 主要冲突或校验错误 |
 | --- | --- | --- |
 | `GET /api/v1/admin/loader-images` | `200`，返回持久镜像元数据列表 | 镜像库读取失败返回 `500` |
-| `POST /api/v1/admin/loader-images` | `201`，按请求体保存 EFI 并返回摘要、长度和可选 `X-Image-Version` | 空请求体、缺少或错误的 `Content-Length`、无效 PE/COFF 或版本返回 `400`，超过 32 MiB 返回 `413` |
+| `POST /api/v1/admin/loader-images` | `201`，按请求体保存不透明镜像字节并返回 SHA-256、长度和可选 `X-Image-Version` | 空请求体、缺少/错误/不匹配的 `Content-Length` 或无效版本返回 `400`，超过 32 MiB 返回 `413`；不解析 PE/COFF 或 `Machine` |
 | `DELETE /api/v1/admin/loader-images/{sha256}` | `204`，删除未被活动任务引用的 EFI 文件和元数据 | 摘要无效返回 `400`，镜像不存在返回 `404`，仍被非终态任务引用返回 `409` |
 | `GET /api/v1/admin/boards/{board_id}/loader-updates` | `200`，返回该板卡当前任务或 `null` | 未知板卡返回 `404` |
-| `POST /api/v1/admin/boards/{board_id}/loader-updates` | `201`，为 x86_64 UEFI HTTP 板卡创建绑定当前 MAC 的独立升级 ID；省略 `boot_arch` 时按 `x86_64` 处理 | 架构或启动类型不支持、板卡有 Session、已有非终态任务、设备处于待试槽或镜像已激活时返回 `409` |
+| `POST /api/v1/admin/boards/{board_id}/loader-updates` | `201`，为 HTTP Boot 板卡创建绑定当前 MAC 的独立升级 ID；离线可先排队，不限制 CPU 架构 | 启动类型不支持、缺少 MAC 或身份冲突、板卡租约非空闲/已有 Session、已有非终态任务、设备有未确认升级或镜像已激活时返回 `409` |
 | `DELETE /api/v1/admin/boards/{board_id}/loader-updates/{update_id}` | `200`，取消任意非终态任务并返回 `cancelled` 任务 | ID 已被替代或任务已经终结返回 `409` |
-| `GET /api/v1/loader-updates/{update_id}/image` | `200`，向旧 v4 loader 返回任务对应 EFI | 任务不存在或不可下载返回 `404`，板卡 MAC 已改变返回 `409` |
+| `GET /api/v1/loader-updates/{update_id}/image` | `200`，向旧 v4 loader 返回任务镜像；要求当前在线注册、实际 OTA 状态、相同 MAC/升级 ID、处于 `downloading` 的任务及空闲且无 Session 的板卡，读取后核对长度与 SHA-256 | 任务不存在或已终结返回 `404`；板卡 MAC 改变、设备离线、租约忙碌或注册/能力/任务许可不匹配返回 `409`；存储长度或摘要改变返回 `500` |
 | `POST /api/v1/loaders/ota-status` | `204`，接受旧 v4 loader 的阶段上报 | 协议版本错误返回 `400`，注册、MAC、任务或阶段不匹配返回 `409` |
 
-OTA 镜像和任务是独立于 Session 的持久状态。服务端重启后继续使用原升级 ID；同一阶段的回报可安全重试。空闲检查只限制新镜像下发；若设备已运行与服务端任务匹配的待试槽，即使板卡已经进入活动 Session，服务端也会先确认该槽，使设备随后可以接受该 Session 的启动事务。v5 设备镜像投递失败会持久记录错误和次数，连续三次失败后任务进入 `failed` 并停止重发。取消已激活的任务不会远程改写设备状态，已进入待试槽的设备会在未获确认时按自身 A/B 规则回滚。非终态任务引用的镜像不能删除；删除终态任务曾引用的镜像只回收 EFI 文件和镜像元数据，任务中保存的摘要、版本和长度仍可用于审计。
+OTA 镜像对服务端是不透明的字节对象。`OtaStore` 接受非空且不超过 `MAX_IMAGE_BYTES`（32 MiB）的内容，保存标签、长度和 SHA-256，并在下发前验证文件完整性。axloader 独占 PE/COFF 格式、`Machine`、EFI Subsystem、平台加载限制及 A/B 试运行判断；server 和 Web UI 不用 CPU 架构判定 OTA 资格，也不需要设备新增专用架构检查接口。普通 HTTP Boot 的 ELF 架构声明、`boot_image::elf_arch()` 和交接前设备架构核对保持不变。
+
+v5/v6 的 `device::push_ota_image()` 复用设备 `PUT /api/v1/ota/image`，保留 `X-Boot-Epoch`、`X-Image-Sha256`、`X-Update-Id`、`X-Update-Source: server` 和准确的 `Content-Length`。服务端完整读取响应体，依据 HTTP 状态决定任务行为，错误通过 `Job.error` 和现有 API/SSE 展示，不根据设备错误码推断架构。设备响应的处理规则为：
+
+| 设备结果 | 服务端行为 |
+| --- | --- |
+| `202 Accepted` | 镜像已校验并暂存，任务进入 `staged`；不表示最终升级成功 |
+| `400 Bad Request` | 请求头或参数等请求错误，本次任务直接 `failed`，不重传相同镜像 |
+| `413 Payload Too Large` | 超出设备限额，本次任务直接 `failed`，不重传相同镜像 |
+| `422 Unprocessable Content` | 摘要、格式、`Machine` 或平台兼容性等确定性拒绝，本次任务直接 `failed`，不重传相同镜像 |
+| `409 Conflict` | 刷新实际设备状态/启动代次，至少等待重试间隔后按状态决定是否再发；不消耗传输失败重试次数 |
+| `503 Service Unavailable` | 保留等待/不可用原因，直到 OTA 状态、能力或启动代次变化才重新尝试，不持续重复 PUT |
+| 网络中断、超时及其他 `5xx` | 持久记录错误并有限退避，最多三次投递失败；结果不确定时先核对设备状态和升级 ID，最后一次也先核对再判定失败 |
+
+确定性拒绝至少保留 HTTP 状态及设备响应体，包括旧固件的 `422 {}`；读取拒绝响应体失败时保留 HTTP 状态和读取错误，仍不重传。升级 ID 匹配本任务的已暂存镜像不会再次下发，兼容暂存阶段 `source` 为空的固件；进入试运行后，仍要求来源为 `server` 且运行摘要匹配才能确认。缺失实际 `ota` 状态时任务等待并显示原因，不盲目发送，也不永久判为格式或架构错误。旧 v4 poll 只有在当前注册代次携带实际 OTA 状态时才能获得升级；旧下载路径核对同一注册代次的能力、MAC、升级 ID 和任务许可，重新注册或能力消失使旧资格失效。镜像格式和兼容性由实际下载它的 axloader 校验，并经既有 `ota-status` 上报。
+
+OTA 镜像和任务独立于 Session 持久保存，服务端重启后继续使用原升级 ID。空闲检查只限制新镜像下发；若设备已运行本任务对应、来源为 `server` 且运行摘要匹配的新槽，即使板卡已经进入活动 Session，服务端也会先确认该槽。只有设备实际运行新槽、持久确认且激活摘要匹配后，任务才进入 `succeeded`。重复或旧代次上报不能改写终态，也不能覆盖最初的终态失败原因。取消非终态任务不会远程改写设备状态，已进入待试槽的设备在未获确认时按自身 A/B 规则回滚。非终态任务引用的镜像不能删除；删除终态任务曾引用的镜像只回收镜像文件和元数据，任务中保存的摘要、版本和长度仍可用于审计。
+
+`Job` 在原有 `phase`、`error` 和 `delivery_attempts` 之外提供以下调度字段，随任务查询及 `ota` SSE 资源返回。客户端兼容旧服务器时应允许字段缺失；旧持久任务缺失字段时也按下列默认值恢复。
+
+| JSON 字段 | 类型与默认值 | 含义 |
+| --- | --- | --- |
+| `next_delivery_at` | UTC 时间戳字符串或 `null`，默认 `null` | 下次允许投递的最早时间；到期后仍须核对设备状态和任务资格 |
+| `waiting_for_device_change` | 布尔值，默认 `false` | 当前因设备不可用而等待 OTA 状态、能力或启动代次变化；不能靠时间到期持续重发 |
+
+等待原因通过已有 `error` 展示。这些字段控制重试调度，不改变终态、取消或试运行确认条件。
 
 ### 查询开发板类型
 
@@ -877,7 +903,7 @@ GET /api/v1/sessions/{session_id}/boot-profile
 }
 ```
 
-`boot.kind` 可为 `uboot`、`pxe` 或 `httpboot`（客户端也接受别名 `uefi_http`）。`pxe` 的对象仅含可选 `notes`；`httpboot` 的对象含可选 `boot_arch`（`x86_64`、`aarch64`、`loongarch64`、`riscv64` 或 `other`）。HTTP Boot 的 MAC 位于顶层 `network_identity.mac_address`，不属于 boot profile。顶层 `server_ip`、`netmask`、`interface`、`http_base_url` 均可为 `null`。`server_ip` 和 `http_base_url` 使用板端可访问的网络地址，不一定等于管理网地址。
+`boot.kind` 可为 `uboot`、`pxe` 或 `httpboot`（客户端也接受别名 `uefi_http`）。`pxe` 的对象仅含可选 `notes`；`httpboot` 的对象可含 `serial_parameters`，不含持久架构字段。旧 `boot_arch` 兼容读取后丢弃，不用于选择内核架构。HTTP Boot 的 MAC 位于顶层 `network_identity.mac_address`，不属于 boot profile。顶层 `server_ip`、`netmask`、`interface`、`http_base_url` 均可为 `null`。`server_ip` 和 `http_base_url` 使用板端可访问的网络地址，不一定等于管理网地址。
 
 ### 获取串口状态
 
@@ -1049,7 +1075,7 @@ Range: bytes=<start>-<end>  # 可选
 ```http
 PUT /api/v1/sessions/{session_id}/http-boot/kernel
 X-HttpBoot-Remote-Name: <remote_name>        # 可选，默认 kernel.elf
-X-HttpBoot-Arch: <arch>                      # 必填：x86_64、aarch64、loongarch64、riscv64 或 other
+X-HttpBoot-Arch: <arch>                      # 必填，与 ELF 一致：x86_64、riscv64 或 loongarch64
 X-HttpBoot-Image-Format: <image_format>      # 可选，当前仅支持 elf64
 X-HttpBoot-Entry-Symbol: <entry_symbol>      # 可选
 X-HttpBoot-Initramfs-Path: <relative_path>   # 可选，当前 Session 已上传的宿主归档路径
@@ -1058,7 +1084,7 @@ X-HttpBoot-Cmdline: <cmdline>                 # 可选，宿主内核命令行
 <raw kernel bytes>
 ```
 
-该接口与普通 HTTP Boot 文件上传具有相同的会话类型和服务开关限制。`X-HttpBoot-Remote-Name` 和 `X-HttpBoot-Initramfs-Path` 都必须是合法的会话内相对路径。若配置归档，先通过 `PUT /http-boot/files` 上传到**同一 Session**，再发布内核；服务端拒绝不存在、为空或超过 256 MiB 的归档，读取后记录其大小和 SHA-256。`X-HttpBoot-Cmdline` 最长 4095 字节，只允许可打印 ASCII 和空格，超限或含控制字符返回 `400`。请求体是内核原始字节，大小受服务器配置 `upload_limits.session_file_max_mib` 限制，超限返回 `413 Payload Too Large`。成功返回 `201 Created`：
+该接口与普通 HTTP Boot 文件上传具有相同的会话类型和服务开关限制。`X-HttpBoot-Remote-Name` 和 `X-HttpBoot-Initramfs-Path` 都必须是合法的会话内相对路径。若配置归档，先通过 `PUT /http-boot/files` 上传到**同一 Session**，再发布内核；服务端拒绝不存在、为空或超过 256 MiB 的归档，读取后记录其大小和 SHA-256。`X-HttpBoot-Cmdline` 最长 4095 字节，只允许可打印 ASCII 和空格，超限或含控制字符返回 `400`。请求体必须是 `object` 可解析的小端 ELF64，服务端通过 `boot_image::elf_arch()` 核对 `e_machine` 与 `X-HttpBoot-Arch`，不支持的格式、架构或不匹配声明返回 `400`，同时串口状态进入 `Failed` 并停止会话。内核大小受服务器配置 `upload_limits.session_file_max_mib` 限制，超限返回 `413 Payload Too Large`。成功返回 `201 Created`：
 
 ```json
 {
@@ -1069,7 +1095,9 @@ X-HttpBoot-Cmdline: <cmdline>                 # 可选，宿主内核命令行
 }
 ```
 
-响应模型允许 `kernel_sha256` 为 `null`，但当前 `ostool-server` 会计算并返回 64 位小写十六进制 SHA-256。当前 `ostool board run` 的 HTTP Boot 流程固定发送 `remote_name=kernel.elf`、`image_format=elf64` 和 `entry_symbol=httpboot_entry`；配置 `initramfs` 时先上传为 `initramfs.cpio` 并设置对应路径 Header。服务器向 v6 设备推送时将兼容入口转换为 `__x86_64_efi_pe_entry`，完整保留独立的可选命令行和归档，核对文件摘要并携带当前串口绑定令牌。旧 poll 装载器需要升级后才能启动。
+上传先校验本次请求体，再写入内核文件；非法 ELF 不进入存储。同一 Session 的内核写入、启动命令发布与设备交接互斥，后续上传等待当前操作完成，避免读取并发覆盖的文件。等待结束后若 Session 已停止或进入释放流程，请求返回 `409`；会话已移除时返回 `404`。设备交接在等待互斥锁和执行期间均可因电源代次变化或会话停止而取消。
+
+响应模型允许 `kernel_sha256` 为 `null`，但当前 `ostool-server` 会计算并返回 64 位小写十六进制 SHA-256。当前 `ostool board run` 复用已有 ELF 架构检测结果生成 `X-HttpBoot-Arch`，固定发送 `remote_name=kernel.elf`、`image_format=elf64` 和 `entry_symbol=httpboot_entry`；配置 `initramfs` 时先上传为 `initramfs.cpio` 并设置对应路径 Header。设备尚未上线时可以先完成上传。服务器在串口交接前再次读取文件，核对长度、摘要、ELF 架构、声明及 `observed.arch`；不匹配时串口状态进入 `Failed` 并停止会话。向 v6 设备推送时，x86_64 使用 `__x86_64_efi_pe_entry`，RISC-V64 和 LoongArch64 使用 `efi_pe_entry`，完整保留独立的可选命令行和归档，并携带当前串口绑定令牌。旧 poll 装载器需要升级后才能启动。
 
 ## 串口 WebSocket API
 
@@ -1123,7 +1151,7 @@ WebSocket 连接成功后发送 `opened` 控制消息并自动执行开发板上
 {"type":"close"}
 ```
 
-收到客户端 `close`、WebSocket Close 帧、会话释放信号或串口连接结束后，服务端关闭串口并请求释放会话；会话释放流程负责关闭开发板电源。客户端发送 Ping 时服务端回复相同 payload 的 Pong。无法解析的文本消息、缺少 `tx.data` 或不支持的 `encoding` 会终止串口处理。
+收到客户端 `close`、WebSocket Close 帧、会话释放信号或串口连接结束后，服务端关闭串口并请求释放会话；会话释放流程负责关闭开发板电源。若串口状态已为 `Failed`，关闭和后续状态更新会保留该状态及最初的错误原因，服务端在关闭 WebSocket 前通过 `error.message` 发送该原因。客户端发送 Ping 时服务端回复相同 payload 的 Pong。无法解析的文本消息、缺少 `tx.data` 或不支持的 `encoding` 会终止串口处理。
 
 ## REST API 错误响应
 

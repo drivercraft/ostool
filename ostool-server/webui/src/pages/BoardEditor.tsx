@@ -19,6 +19,7 @@ import type {
   BoardConfig,
   SerialPortSummary,
   SerialPortKeyKind,
+  SerialPortKey,
 } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -31,7 +32,6 @@ import {
   Notice,
   ConfirmAction,
   useAction,
-  options,
 } from "@/components/forms";
 import { MacPicker } from "@/components/mac-picker";
 import { DtbUpload } from "./Dtbs";
@@ -128,22 +128,42 @@ function Editor({ board }: { board?: BoardConfig }) {
         : { ...f, serial_key_kind: kind, serial_key_value: key },
     );
   }
-  const serialOptions = (relay = false) => [
-    { value: "", label: "请选择稳定设备" },
-    ...serial
-      .filter((p) => !relay || p.stable_identity)
-      .map((p) => ({
-        value: `${p.primary_key_kind}:${p.primary_key_value}`,
-        label: serialLabel(p),
-        disabled: !p.stable_identity,
-      })),
-    ...(!relay
-      ? (virtual?.devices ?? []).map((d) => ({
-          value: `qemu:${d.id}`,
-          label: `QEMU · ${d.id} · ${d.mac_address}`,
-        }))
-      : []),
-  ];
+  const serialOptions = (relay = false) => {
+    const choices = [
+      { value: "", label: "请选择稳定设备" },
+      ...serial
+        .filter((p) => !relay || p.stable_identity)
+        .map((p) => ({
+          value: `${p.primary_key_kind}:${p.primary_key_value}`,
+          label: serialLabel(p),
+          disabled: !p.stable_identity,
+        })),
+      ...(!relay
+        ? (virtual?.devices ?? []).map((d) => ({
+            value: `qemu:${d.id}`,
+            label: `QEMU · ${d.id} · ${d.mac_address}`,
+          }))
+        : []),
+    ];
+    const key: SerialPortKey = relay
+      ? { kind: form.relay_serial_key_kind, value: form.relay_serial_key_value }
+      : { kind: form.serial_key_kind, value: form.serial_key_value };
+    const value = `${key.kind}:${key.value}`;
+    if (!key.value || choices.some((choice) => choice.value === value))
+      return choices;
+    const matches = matchingSerialPorts(serial, key);
+    if (matches.length > 0) {
+      choices.push({
+        value,
+        label:
+          matches.length === 1
+            ? serialLabel(matches[0], key)
+            : `${value}（匹配多个接口）`,
+        disabled: matches.length > 1,
+      });
+    }
+    return choices;
+  };
   const text = (
     key: keyof BoardEditorFormState,
     label: string,
@@ -191,6 +211,9 @@ function Editor({ board }: { board?: BoardConfig }) {
   }
   const selectedLoader = loaders.find(
     (d) => d.mac_address === form.network_mac.trim().toLowerCase(),
+  );
+  const boundLoader = loaders.find(
+    (d) => d.mac_address === board?.network_identity?.mac_address.toLowerCase(),
   );
   return (
     <>
@@ -377,7 +400,13 @@ function Editor({ board }: { board?: BoardConfig }) {
                   value={form.serial_baud_rate}
                   onValue={(v) => set("serial_baud_rate", Number(v))}
                 />
-                <SerialDetails ports={serial} value={form.serial_key_value} />
+                <SerialDetails
+                  ports={serial}
+                  portKey={{
+                    kind: form.serial_key_kind,
+                    value: form.serial_key_value,
+                  }}
+                />
               </>
             )}
           </Section>
@@ -422,7 +451,10 @@ function Editor({ board }: { board?: BoardConfig }) {
                 />
                 <SerialDetails
                   ports={serial}
-                  value={form.relay_serial_key_value}
+                  portKey={{
+                    kind: form.relay_serial_key_kind,
+                    value: form.relay_serial_key_value,
+                  }}
                 />
               </>
             )}
@@ -514,47 +546,34 @@ function Editor({ board }: { board?: BoardConfig }) {
           {form.boot_kind !== "uboot" && (
             <MacPicker
               value={form.network_mac}
-              onChange={(v) => set("network_mac", v)}
+              onChange={(value) => set("network_mac", value)}
               devices={loaders}
               boardId={board?.id}
             />
           )}
-          {form.boot_kind !== "uboot" && selectedLoader && (
+          {form.boot_kind !== "uboot" && (
             <p className="hint">
-              {selectedLoader.ip_address} · 设备架构 {selectedLoader.arch} ·{" "}
-              {selectedLoader.hardware.product} ·{" "}
-              {selectedLoader.conflict
-                ? "MAC 冲突"
-                : selectedLoader.bound_board_id
-                  ? `已绑定 ${selectedLoader.bound_board_id}`
-                  : selectedLoader.online
-                    ? "在线，未绑定"
-                    : "离线，未绑定"}
+              设备架构{" "}
+              {selectedLoader?.online
+                ? selectedLoader.arch
+                : selectedLoader
+                  ? "未知（设备离线）"
+                  : "未知（未发现设备）"}
+              {selectedLoader && (
+                <>
+                  {" "}
+                  · {selectedLoader.ip_address} ·{" "}
+                  {selectedLoader.hardware.product} ·{" "}
+                  {selectedLoader.conflict
+                    ? "MAC 冲突"
+                    : selectedLoader.bound_board_id
+                      ? `已绑定 ${selectedLoader.bound_board_id}`
+                      : selectedLoader.online
+                        ? "在线，未绑定"
+                        : "离线，未绑定"}
+                </>
+              )}
             </p>
-          )}
-          {form.boot_kind === "httpboot" && (
-            <details className="advanced-options full-width">
-              <summary>
-                高级启动设置 <span>默认使用 x86_64，通常无需修改</span>
-              </summary>
-              <div className="advanced-fields">
-                <SelectField
-                  label="启动架构"
-                  value={form.boot_arch}
-                  onValue={(v) => set("boot_arch", v)}
-                  options={[
-                    { value: "", label: "默认（x86_64）" },
-                    ...options([
-                      "x86_64",
-                      "aarch64",
-                      "loongarch64",
-                      "riscv64",
-                      "other",
-                    ]),
-                  ]}
-                />
-              </div>
-            </details>
           )}
           {form.boot_kind === "pxe" && (
             <TextareaField
@@ -645,32 +664,47 @@ function Editor({ board }: { board?: BoardConfig }) {
           </Button>
         </footer>
       </form>
-      {board?.network_identity &&
-        board.boot.kind === "httpboot" &&
-        (!board.boot.boot_arch || board.boot.boot_arch === "x86_64") && (
-          <BoardOta boardId={board.id} />
-        )}
+      {board?.network_identity && board.boot.kind === "httpboot" && (
+        <BoardOta boardId={board.id} />
+      )}
     </>
   );
 }
-function serialLabel(p: SerialPortSummary) {
+function matchingSerialPorts(ports: SerialPortSummary[], key: SerialPortKey) {
+  const { kind, value } = key;
+  if (!value || kind === "qemu") return [];
+  return ports.filter((port) =>
+    kind === "serial_number"
+      ? port.serial_number === value
+      : port.usb_id === value || port.usb_path === value,
+  );
+}
+function serialLabel(p: SerialPortSummary, key?: SerialPortKey) {
+  const keyKind = key?.kind ?? p.primary_key_kind;
   const kind =
-    p.primary_key_kind === "serial_number"
+    keyKind === "serial_number"
       ? "SN"
-      : p.primary_key_kind === "usb_id"
+      : keyKind === "usb_id"
         ? "USB ID"
         : "USB PATH";
-  return `${kind} ${p.primary_key_value ?? "无稳定标识"} · ${p.current_device_path} · ${p.manufacturer ?? ""} ${p.product ?? ""}`;
+  return `${kind} ${key?.value ?? p.primary_key_value ?? "无稳定标识"} · ${p.current_device_path} · ${p.manufacturer ?? ""} ${p.product ?? ""}`;
 }
 function SerialDetails({
   ports,
-  value,
+  portKey,
 }: {
   ports: SerialPortSummary[];
-  value: string;
+  portKey: SerialPortKey;
 }) {
-  const p = ports.find((p) => p.primary_key_value === value);
-  if (!value) return null;
+  if (!portKey.value) return null;
+  const matches = matchingSerialPorts(ports, portKey);
+  if (matches.length > 1)
+    return (
+      <p className="hint full-width">
+        匹配多个串口接口，请选择 USB ID 或 USB PATH。
+      </p>
+    );
+  const p = matches[0];
   return (
     <p className="hint full-width">
       {p

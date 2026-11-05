@@ -742,23 +742,33 @@ async fn poll_loader(
             retry_after_ms: Some(2_000),
         }));
     };
+    let idle = runtime.active_session_id.is_none() && runtime.lease_state == BoardLeaseState::Idle;
+    let ota = if request.protocol_version == httpboot_protocol::PROTOCOL_VERSION {
+        request.ota.as_ref()
+    } else {
+        None
+    };
+    let decision = state
+        .ota
+        .decide(
+            &board_id,
+            request.mac_address,
+            ota,
+            idle,
+            &request.registration_id,
+        )
+        .await?;
+    state.admin_events.invalidate(&["ota"]);
     if request.protocol_version == httpboot_protocol::PROTOCOL_VERSION {
-        let Some(ota) = &request.ota else {
+        if ota.is_none() {
             return Ok(axum::Json(LoaderPollResponse::Reject {
                 code: "ota_state_missing".into(),
                 message: "protocol v4 requires OTA state".into(),
                 retry_after_ms: None,
             }));
-        };
-        let idle =
-            runtime.active_session_id.is_none() && runtime.lease_state == BoardLeaseState::Idle;
-        let decision = state
-            .ota
-            .decide(&board_id, request.mac_address, ota, idle)
-            .await?;
+        }
         match decision {
             crate::ota::Decision::Update(job) => {
-                state.admin_events.invalidate(&["ota"]);
                 return Ok(axum::Json(LoaderPollResponse::Update {
                     board_id,
                     update_id: job.update_id.clone(),
@@ -768,7 +778,6 @@ async fn poll_loader(
                 }));
             }
             crate::ota::Decision::Confirm(update_id) => {
-                state.admin_events.invalidate(&["ota"]);
                 return Ok(axum::Json(LoaderPollResponse::ConfirmUpdate {
                     board_id,
                     update_id,
@@ -1976,6 +1985,27 @@ async fn put_http_boot_kernel(
         return Err(ApiError::conflict("HTTP Boot is disabled"));
     }
 
+    let max_mib = state.config.read().await.upload_limits.session_file_max_mib;
+    let body = read_limited_body(request, max_mib, "HTTP Boot kernel").await?;
+    let validation = (|| {
+        let actual = crate::boot_image::elf_arch(&body)?;
+        anyhow::ensure!(
+            actual == arch,
+            "kernel ELF architecture {actual:?} does not match declared {arch:?}"
+        );
+        Ok::<_, anyhow::Error>(())
+    })();
+    if let Err(error) = validation {
+        let message = format!("{error:#}");
+        session.serial_runtime.fail(message.clone());
+        session.request_stop(SessionStopReason::BootFailed);
+        state.admin_events.invalidate(&["sessions"]);
+        return Err(ApiError::bad_request(message));
+    }
+    let _boot_operation = session.boot_operation.lock().await;
+    // The lease can stop while this request waits for another publication.
+    active_session_state_or_404(&state, &session_id).await?;
+
     let initramfs = if let Some(path) = initramfs_path.as_deref() {
         let manager = state.tftp_manager.read().await.clone();
         let file = manager
@@ -2014,14 +2044,8 @@ async fn put_http_boot_kernel(
         None
     };
 
-    let (kernel_file, kernel_size, kernel_sha256) = put_session_file_bytes_from_request(
-        &state,
-        &session_id,
-        &remote_name,
-        request,
-        "HTTP Boot kernel",
-    )
-    .await?;
+    let (kernel_file, kernel_size, kernel_sha256) =
+        put_session_file_bytes(&state, &session_id, &remote_name, &body).await?;
     let config = state.config.read().await.clone();
     let kernel_response = http_boot_file_response(&config, &session_id, &remote_name, kernel_file)?;
     let response = publish_kernel(KernelPublishInput {
@@ -2235,11 +2259,20 @@ async fn put_session_file_bytes_from_request(
 ) -> Result<(TftpFileRef, u64, String), ApiError> {
     let max_mib = state.config.read().await.upload_limits.session_file_max_mib;
     let body = read_limited_body(request, max_mib, body_label).await?;
+    put_session_file_bytes(state, session_id, relative_path, &body).await
+}
+
+async fn put_session_file_bytes(
+    state: &AppState,
+    session_id: &str,
+    relative_path: &str,
+    body: &[u8],
+) -> Result<(TftpFileRef, u64, String), ApiError> {
     let size = body.len() as u64;
-    let sha256 = hex_sha256(&body);
+    let sha256 = hex_sha256(body);
     let manager = state.tftp_manager.read().await.clone();
     let file = manager
-        .put_session_file(session_id, relative_path, &body)
+        .put_session_file(session_id, relative_path, body)
         .await
         .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
     Ok((file, size, sha256))
@@ -2910,7 +2943,7 @@ mod tests {
         config::{
             BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
             PowerManagementConfig, SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig,
-            TftpConfig, UbootNetworkMode, UefiBootArch, UefiHttpProfile, UploadLimitsConfig,
+            TftpConfig, UbootNetworkMode, UefiHttpProfile, UploadLimitsConfig,
             ZhongshengRelayPowerManagement,
         },
         session::SessionLifecycleState,
@@ -2951,17 +2984,6 @@ mod tests {
             },
             upload_limits: UploadLimitsConfig::default(),
         }
-    }
-
-    fn efi_image() -> Vec<u8> {
-        let mut bytes = vec![0; 512];
-        bytes[..2].copy_from_slice(b"MZ");
-        bytes[0x3c..0x40].copy_from_slice(&(0x80_u32).to_le_bytes());
-        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
-        bytes[0x84..0x86].copy_from_slice(&[0x64, 0x86]);
-        bytes[0x98..0x9a].copy_from_slice(&[0x0b, 0x02]);
-        bytes[0xdc..0xde].copy_from_slice(&[10, 0]);
-        bytes
     }
 
     #[tokio::test]
@@ -3251,7 +3273,6 @@ mod tests {
         board.board_type = "x86_64-uefi-http".into();
         board.tags = vec!["uefi-http".into()];
         board.boot = BootConfig::UefiHttp(UefiHttpProfile {
-            boot_arch: Some(UefiBootArch::X86_64),
             serial_parameters: None,
         });
         board.network_identity = Some(crate::config::BoardNetworkIdentity {
@@ -3586,7 +3607,7 @@ mod tests {
         let BootConfig::UefiHttp(profile) = board.boot else {
             panic!("expected httpboot");
         };
-        assert_eq!(profile.boot_arch, Some(UefiBootArch::X86_64));
+        assert_eq!(profile.serial_parameters, None);
         assert_eq!(
             board.network_identity.unwrap().mac_address.to_string(),
             "1c:69:7a:dc:f3:47"
@@ -4791,44 +4812,179 @@ mod tests {
         assert_eq!(download_after_release.status(), StatusCode::CONFLICT);
     }
 
+    struct ControlledUploads {
+        inner: Arc<dyn TftpManager>,
+        calls: std::sync::atomic::AtomicUsize,
+        first: std::sync::Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TftpManager for ControlledUploads {
+        async fn start_if_needed(&self) -> anyhow::Result<()> {
+            self.inner.start_if_needed().await
+        }
+        async fn reconcile(&self) -> anyhow::Result<()> {
+            self.inner.reconcile().await
+        }
+        async fn status(&self) -> anyhow::Result<crate::tftp::status::TftpStatus> {
+            self.inner.status().await
+        }
+        async fn put_session_file(
+            &self,
+            session_id: &str,
+            path: &str,
+            bytes: &[u8],
+        ) -> anyhow::Result<crate::tftp::files::TftpFileRef> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let first = self.first.lock().unwrap().take();
+            if let Some((entered, resume)) = first {
+                let _ = entered.send(());
+                resume.await?;
+            }
+            self.inner.put_session_file(session_id, path, bytes).await
+        }
+        async fn get_session_file(
+            &self,
+            session_id: &str,
+            path: &str,
+        ) -> anyhow::Result<Option<crate::tftp::files::TftpFileRef>> {
+            self.inner.get_session_file(session_id, path).await
+        }
+        async fn list_session_files(
+            &self,
+            session_id: &str,
+        ) -> anyhow::Result<Vec<crate::tftp::files::TftpFileRef>> {
+            self.inner.list_session_files(session_id).await
+        }
+        async fn remove_session_file(&self, session_id: &str, path: &str) -> anyhow::Result<()> {
+            self.inner.remove_session_file(session_id, path).await
+        }
+        async fn remove_session_dir(&self, session_id: &str) -> anyhow::Result<()> {
+            self.inner.remove_session_dir(session_id).await
+        }
+        fn root_dir(&self) -> &std::path::Path {
+            self.inner.root_dir()
+        }
+    }
+
     #[tokio::test]
     async fn httpboot_kernel_upload_returns_download_offer_payload() {
-        let app = test_router().await;
+        for (declared, machine, expected) in [
+            ("x86_64", 62, BootArch::X86_64),
+            ("riscv64", 243, BootArch::Riscv64),
+            ("loongarch64", 258, BootArch::Loongarch64),
+        ] {
+            let (app, state) = test_router_and_state_with_config(|_| {}).await;
+            let board = sample_httpboot_board("uefi-http-kernel");
+            assert_eq!(
+                create_board(&app, serde_json::to_value(&board).unwrap()).await,
+                StatusCode::CREATED
+            );
+            let session_id = create_session(&app, &board.board_type).await;
+            let bytes = crate::boot_image::test_elf(machine);
+            let published = app
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri(format!("/api/v1/sessions/{session_id}/http-boot/kernel"))
+                        .header("X-HttpBoot-Remote-Name", "kernel.elf")
+                        .header("X-HttpBoot-Arch", declared)
+                        .header("X-HttpBoot-Image-Format", "elf64")
+                        .header("X-HttpBoot-Entry-Symbol", "httpboot_entry")
+                        .body(Body::from(bytes.clone()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(published.status(), StatusCode::CREATED);
+            let body = to_bytes(published.into_body(), usize::MAX).await.unwrap();
+            let ready_value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert!(ready_value["boot_id"].as_str().is_some());
+            assert_eq!(
+                ready_value["kernel_url"],
+                format!("http://127.0.0.1:0/boot/sessions/{session_id}/kernel.elf")
+            );
+            assert_eq!(ready_value["kernel_size"], bytes.len());
+            assert_eq!(ready_value["kernel_sha256"], super::hex_sha256(&bytes));
+            let command = state
+                .session_state(&session_id)
+                .await
+                .unwrap()
+                .boot_command()
+                .await
+                .unwrap();
+            assert_eq!(command.arch, expected);
+        }
+        let (app, state) = test_router_and_state_with_config(|_| {}).await;
+        let board = sample_httpboot_board("concurrent-upload");
         assert_eq!(
-            create_board(
-                &app,
-                serde_json::to_value(sample_httpboot_board("uefi-http-kernel")).unwrap()
-            )
-            .await,
+            create_board(&app, serde_json::to_value(&board).unwrap()).await,
             StatusCode::CREATED
         );
-        let session_id = create_session(&app, "x86_64-uefi-http").await;
-
-        let published = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/kernel"))
-                    .header("X-HttpBoot-Remote-Name", "kernel.elf")
-                    .header("X-HttpBoot-Arch", "x86_64")
-                    .header("X-HttpBoot-Image-Format", "elf64")
-                    .header("X-HttpBoot-Entry-Symbol", "httpboot_entry")
-                    .body(Body::from("kernel-elf"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(published.status(), StatusCode::CREATED);
-        let body = to_bytes(published.into_body(), usize::MAX).await.unwrap();
-        let ready_value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(ready_value["boot_id"].as_str().is_some());
-        assert_eq!(
-            ready_value["kernel_url"],
-            format!("http://127.0.0.1:0/boot/sessions/{session_id}/kernel.elf")
+        let id = create_session(&app, &board.board_type).await;
+        let session = state.session_state(&id).await.unwrap();
+        let (entered, waiting) = oneshot::channel();
+        let (resume, proceed) = oneshot::channel();
+        let manager = Arc::new(ControlledUploads {
+            inner: state.tftp_manager.read().await.clone(),
+            calls: Default::default(),
+            first: std::sync::Mutex::new(Some((entered, proceed))),
+        });
+        *state.tftp_manager.write().await = manager.clone();
+        let upload = |arch: &str, bytes: Vec<u8>| {
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/v1/sessions/{id}/http-boot/kernel"))
+                .header("X-HttpBoot-Arch", arch)
+                .header("X-HttpBoot-Image-Format", "elf64")
+                .body(Body::from(bytes))
+                .unwrap()
+        };
+        let first = tokio::spawn(
+            app.clone()
+                .oneshot(upload("x86_64", crate::boot_image::test_elf(62))),
         );
-        assert_eq!(ready_value["kernel_size"], 10);
-        assert!(ready_value["kernel_sha256"].as_str().unwrap().len() == 64);
+        tokio::time::timeout(std::time::Duration::from_secs(3), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        let bytes = crate::boot_image::test_elf(243);
+        let second = app.oneshot(upload("riscv64", bytes.clone()));
+        tokio::pin!(second);
+        assert!(futures_util::poll!(second.as_mut()).is_pending());
+        assert_eq!(
+            manager.calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "another upload reached storage before the first publication completed"
+        );
+        resume.send(()).unwrap();
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(3), first)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+                .status(),
+            StatusCode::CREATED
+        );
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(3), second)
+                .await
+                .unwrap()
+                .unwrap()
+                .status(),
+            StatusCode::CREATED
+        );
+        let command = session.boot_command().await.unwrap();
+        let file = manager
+            .get_session_file(&id, "kernel.elf")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(tokio::fs::read(file.disk_path).await.unwrap(), bytes);
+        assert_eq!(command.arch, BootArch::Riscv64);
+        assert_eq!(command.kernel_sha256, super::hex_sha256(&bytes));
+        assert!(!session.is_stop_requested());
     }
 
     #[tokio::test]
@@ -4867,7 +5023,7 @@ mod tests {
                     .header("X-HttpBoot-Image-Format", "elf64")
                     .header("X-HttpBoot-Initramfs-Path", "initramfs.cpio")
                     .header("X-HttpBoot-Cmdline", "x".repeat(4096))
-                    .body(Body::from("kernel-elf"))
+                    .body(Body::from(crate::boot_image::test_elf(62)))
                     .unwrap(),
             )
             .await
@@ -4885,7 +5041,7 @@ mod tests {
                     .header("X-HttpBoot-Entry-Symbol", "httpboot_entry")
                     .header("X-HttpBoot-Initramfs-Path", "initramfs.cpio")
                     .header("X-HttpBoot-Cmdline", "console=ttyS0 -- test")
-                    .body(Body::from("kernel-elf"))
+                    .body(Body::from(crate::boot_image::test_elf(62)))
                     .unwrap(),
             )
             .await
@@ -4970,7 +5126,7 @@ mod tests {
                     .header("X-HttpBoot-Arch", "x86_64")
                     .header("X-HttpBoot-Image-Format", "elf64")
                     .header("X-HttpBoot-Entry-Symbol", "httpboot_entry")
-                    .body(Body::from(vec![0x5a; 4096]))
+                    .body(Body::from(crate::boot_image::test_elf(62)))
                     .unwrap(),
             )
             .await
@@ -5091,34 +5247,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn httpboot_kernel_upload_accepts_other_arch() {
-        let app = test_router().await;
-        assert_eq!(
-            create_board(
-                &app,
-                serde_json::to_value(sample_httpboot_board("uefi-http-other")).unwrap()
-            )
-            .await,
-            StatusCode::CREATED
-        );
-        let session_id = create_session(&app, "x86_64-uefi-http").await;
-
-        let published = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/kernel"))
-                    .header("X-HttpBoot-Remote-Name", "kernel.elf")
-                    .header("X-HttpBoot-Arch", "other")
-                    .header("X-HttpBoot-Image-Format", "elf64")
-                    .body(Body::from("kernel-elf"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(published.status(), StatusCode::CREATED);
+    async fn httpboot_kernel_upload_rejects_invalid_architectures() {
+        for (declared, bytes) in [
+            ("x86_64", crate::boot_image::test_elf(243)),
+            ("riscv64", crate::boot_image::test_elf(62)),
+            ("aarch64", crate::boot_image::test_elf(183)),
+            ("other", crate::boot_image::test_elf(0xffff)),
+            ("x86_64", b"not an ELF".to_vec()),
+        ] {
+            let (app, state) = test_router_and_state_with_config(|_| {}).await;
+            let board = sample_httpboot_board("invalid-kernel");
+            assert_eq!(
+                create_board(&app, serde_json::to_value(&board).unwrap()).await,
+                StatusCode::CREATED
+            );
+            let id = create_session(&app, &board.board_type).await;
+            let session = state.session_state(&id).await.unwrap();
+            let manager = Arc::new(ControlledUploads {
+                inner: state.tftp_manager.read().await.clone(),
+                calls: Default::default(),
+                first: std::sync::Mutex::new(None),
+            });
+            *state.tftp_manager.write().await = manager.clone();
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri(format!("/api/v1/sessions/{id}/http-boot/kernel"))
+                        .header("X-HttpBoot-Arch", declared)
+                        .header("X-HttpBoot-Image-Format", "elf64")
+                        .body(Body::from(bytes))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{declared}");
+            assert_eq!(
+                manager.calls.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "invalid kernel bytes must be rejected before storage"
+            );
+            assert!(session.boot_command().await.is_none());
+            assert!(session.is_stop_requested());
+            assert_eq!(
+                session.serial_runtime.snapshot().phase,
+                crate::serial::runtime::SerialRuntimePhase::Failed
+            );
+            assert!(session.serial_runtime.snapshot().error.is_some());
+        }
     }
 
     #[tokio::test]
@@ -5895,7 +6071,7 @@ mod tests {
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
         assert_eq!(error["code"], "bad_request");
-        assert_eq!(error["message"], "empty EFI image");
+        assert_eq!(error["message"], "empty OTA image");
 
         let response = app
             .clone()
@@ -5924,7 +6100,24 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-        let image = efi_image();
+        for (declared_length, version) in [(1, "v1".to_owned()), (4, "x".repeat(97))] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/admin/loader-images")
+                        .header(header::CONTENT_LENGTH, declared_length)
+                        .header("X-Image-Version", version)
+                        .body(Body::from("data"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+
+        let image = b"opaque loader image".to_vec();
         let response = app
             .clone()
             .oneshot(
@@ -5961,17 +6154,13 @@ mod tests {
     #[tokio::test]
     async fn v4_upgrade_routes_require_a_board_assignment_and_matching_trial() {
         let (app, state) = test_router_and_state_with_config(|_| {}).await;
-        let mut board = sample_httpboot_board("ota-board");
-        board.boot = BootConfig::UefiHttp(UefiHttpProfile {
-            boot_arch: None,
-            serial_parameters: None,
-        });
+        let board = sample_httpboot_board("ota-board");
         let mac = board.network_identity.as_ref().unwrap().mac_address;
         assert_eq!(
             create_board(&app, serde_json::to_value(&board).unwrap()).await,
             StatusCode::CREATED
         );
-        let image = efi_image();
+        let image = b"opaque axloader image".to_vec();
         let response = app
             .clone()
             .oneshot(
@@ -5988,45 +6177,6 @@ mod tests {
         let uploaded: crate::ota::Image =
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
-        let mut arm_board = sample_httpboot_board("ota-arm-board");
-        arm_board.board_type = "aarch64-uefi-http".into();
-        arm_board.serial = None;
-        arm_board.boot = BootConfig::UefiHttp(UefiHttpProfile {
-            boot_arch: Some(UefiBootArch::Aarch64),
-            serial_parameters: None,
-        });
-        arm_board.network_identity = Some(crate::config::BoardNetworkIdentity {
-            mac_address: "02:00:00:00:00:02".parse().unwrap(),
-        });
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&arm_board).unwrap()).await,
-            StatusCode::CREATED
-        );
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!(
-                        "/api/v1/admin/boards/{}/loader-updates",
-                        arm_board.id
-                    ))
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({"image_sha256": uploaded.sha256}).to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::CONFLICT);
-        let error: crate::api::models::ErrorResponse =
-            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
-        assert_eq!(
-            error.message,
-            "loader OTA requires an x86_64 UEFI HTTP board"
-        );
         let queue = || {
             Request::builder()
                 .method("POST")
@@ -6039,30 +6189,45 @@ mod tests {
         };
         let response = app.clone().oneshot(queue()).await.unwrap();
         assert_eq!(response.status(), StatusCode::CREATED);
-        let job: crate::ota::Job =
+        let mut job: crate::ota::Job =
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/api/v1/admin/loader-images/{}", uploaded.sha256))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let download = |update_id: &str| {
+            Request::builder()
+                .uri(format!("/api/v1/loader-updates/{update_id}/image"))
+                .body(Body::empty())
+                .unwrap()
+        };
+        let report = |registration_id: &str, update_id: &str, phase: &str| {
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/loaders/ota-status")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "protocol_version": 4,
+                        "registration_id": registration_id,
+                        "mac_address": mac,
+                        "update_id": update_id,
+                        "phase": phase,
+                    })
+                    .to_string(),
+                ))
+                .unwrap()
+        };
         assert_eq!(
-            app.clone().oneshot(queue()).await.unwrap().status(),
+            app.clone()
+                .oneshot(download(&job.update_id))
+                .await
+                .unwrap()
+                .status(),
             StatusCode::CONFLICT
         );
         let probe = LoaderDiscoveryProbe {
             protocol_version: PROTOCOL_VERSION,
             mac_address: mac,
             current_mac_address: mac,
-            arch: BootArch::X86_64,
+            arch: BootArch::Loongarch64,
             loader_version: "ota-test".into(),
         };
         let registration = state
@@ -6076,46 +6241,86 @@ mod tests {
             mac_address: mac,
             current_mac_address: mac,
             ip_address: "10.0.2.15".into(),
-            arch: BootArch::X86_64,
+            arch: BootArch::Loongarch64,
             loader_version: "ota-test".into(),
             hardware: LoaderHardwareInfo::default(),
-            ota: Some(LoaderOtaState {
-                active_sha256: "11".repeat(32),
-                running_sha256: "11".repeat(32),
-                pending_update_id: None,
-                trial: false,
-                source: None,
-                last_update_id: None,
-                last_outcome: None,
-            }),
+            ota: None,
         };
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/loaders/poll")
-                    .body(Body::from(serde_json::to_vec(&poll).unwrap()))
-                    .unwrap(),
-            )
-            .await
+        let poll_request = |poll: &LoaderPollRequest| {
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/loaders/poll")
+                .body(Body::from(serde_json::to_vec(poll).unwrap()))
+                .unwrap()
+        };
+        let response = app.clone().oneshot(poll_request(&poll)).await.unwrap();
+        let reply: LoaderPollResponse =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert!(
+            matches!(reply, LoaderPollResponse::Reject { ref code, .. } if code == "ota_state_missing")
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(report(&poll.registration_id, &job.update_id, "failed"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            state.ota.job(&board.id).await.unwrap().phase,
+            crate::ota::Phase::Queued
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(download(&job.update_id))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT
+        );
+
+        // Requeue while the non-x86 loader is online, without treating its CPU as a capability.
+        state.ota.cancel(&board.id, &job.update_id).await.unwrap();
+        let response = app.clone().oneshot(queue()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        job = serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
             .unwrap();
+        assert_eq!(
+            app.clone().oneshot(queue()).await.unwrap().status(),
+            StatusCode::CONFLICT
+        );
+        let delete = || {
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v1/admin/loader-images/{}", uploaded.sha256))
+                .body(Body::empty())
+                .unwrap()
+        };
+        assert_eq!(
+            app.clone().oneshot(delete()).await.unwrap().status(),
+            StatusCode::CONFLICT
+        );
+        let idle = LoaderOtaState {
+            active_sha256: "11".repeat(32),
+            running_sha256: "11".repeat(32),
+            pending_update_id: None,
+            trial: false,
+            source: None,
+            last_update_id: None,
+            last_outcome: None,
+        };
+        poll.ota = Some(idle.clone());
+        let response = app.clone().oneshot(poll_request(&poll)).await.unwrap();
         let reply: LoaderPollResponse =
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
         assert!(
             matches!(reply, LoaderPollResponse::Update { ref update_id, .. } if update_id == &job.update_id)
         );
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/api/v1/loader-updates/{}/image", job.update_id))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = app.clone().oneshot(download(&job.update_id)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             to_bytes(response.into_body(), usize::MAX)
                 .await
@@ -6123,55 +6328,236 @@ mod tests {
                 .as_ref(),
             image
         );
+
+        assert_eq!(
+            app.clone()
+                .oneshot(report(&poll.registration_id, &job.update_id, "downloading"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+
+        let idle_runtime = state.board_runtimes.read().await[&board.id].clone();
+        assert!(state.claim_board_for_session(&board.id, "occupied").await);
+        assert_eq!(
+            app.clone()
+                .oneshot(download(&job.update_id))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT
+        );
+        state
+            .board_runtimes
+            .write()
+            .await
+            .insert(board.id.clone(), idle_runtime);
+
+        state
+            .boards
+            .write()
+            .await
+            .get_mut(&board.id)
+            .unwrap()
+            .network_identity = None;
+        assert_eq!(
+            app.clone()
+                .oneshot(download(&job.update_id))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT
+        );
+        state
+            .boards
+            .write()
+            .await
+            .get_mut(&board.id)
+            .unwrap()
+            .network_identity = board.network_identity.clone();
+
+        let image_path = state.ota.image_path(&uploaded.sha256).unwrap();
+        let mut corrupt = image.clone();
+        *corrupt.last_mut().unwrap() ^= 1;
+        tokio::fs::write(&image_path, &corrupt).await.unwrap();
+        assert_eq!(
+            app.clone()
+                .oneshot(download(&job.update_id))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        tokio::fs::write(&image_path, &image[..image.len() - 1])
+            .await
+            .unwrap();
+        assert_eq!(
+            app.clone()
+                .oneshot(download(&job.update_id))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        tokio::fs::write(&image_path, &image).await.unwrap();
+
+        // Losing capability in the same registration must revoke a previous assignment.
+        poll.ota = None;
+        let response = app.clone().oneshot(poll_request(&poll)).await.unwrap();
+        let reply: LoaderPollResponse =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert!(
+            matches!(reply, LoaderPollResponse::Reject { ref code, .. } if code == "ota_state_missing")
+        );
+        assert_eq!(
+            state.ota.job(&board.id).await.unwrap().phase,
+            crate::ota::Phase::Downloading
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(download(&job.update_id))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT
+        );
+        poll.ota = Some(idle.clone());
+        app.clone().oneshot(poll_request(&poll)).await.unwrap();
+        assert_eq!(
+            app.clone()
+                .oneshot(download(&job.update_id))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+
+        // A registration replacement cannot inherit the previous registration's OTA capability.
+        let replacement = state
+            .loader_registry
+            .offer(&probe, "http://127.0.0.1:2999".into())
+            .await
+            .unwrap();
+        poll.registration_id = replacement.registration_id;
+        state.loader_registry.accept_poll(&poll).await.unwrap();
+        assert_eq!(
+            app.clone()
+                .oneshot(report(&poll.registration_id, &job.update_id, "failed"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            state.ota.job(&board.id).await.unwrap().phase,
+            crate::ota::Phase::Downloading
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(download(&job.update_id))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT
+        );
+        app.clone().oneshot(poll_request(&poll)).await.unwrap();
+        assert_eq!(
+            app.clone()
+                .oneshot(download(&job.update_id))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+
+        // Earlier poll protocols cannot obtain OTA even if they include a state object.
+        for protocol_version in [PREVIOUS_PROTOCOL_VERSION, LEGACY_PROTOCOL_VERSION] {
+            let mut old_probe = probe.clone();
+            old_probe.protocol_version = protocol_version;
+            let old_registration = state
+                .loader_registry
+                .offer(&old_probe, "http://127.0.0.1:2999".into())
+                .await
+                .unwrap();
+            poll.protocol_version = protocol_version;
+            poll.registration_id = old_registration.registration_id;
+            let response = app.clone().oneshot(poll_request(&poll)).await.unwrap();
+            let reply: LoaderPollResponse =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert!(matches!(reply, LoaderPollResponse::BoundIdle { .. }));
+            assert_eq!(
+                state.ota.job(&board.id).await.unwrap().phase,
+                crate::ota::Phase::Downloading
+            );
+            assert_eq!(
+                app.clone()
+                    .oneshot(download(&job.update_id))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::CONFLICT
+            );
+        }
+        poll.protocol_version = PROTOCOL_VERSION;
+
+        poll.registration_id = state
+            .loader_registry
+            .offer(&probe, "http://127.0.0.1:2999".into())
+            .await
+            .unwrap()
+            .registration_id;
+        app.clone().oneshot(poll_request(&poll)).await.unwrap();
+
         let trial = poll.ota.as_mut().unwrap();
         trial.pending_update_id = Some(job.update_id.clone());
         trial.running_sha256 = uploaded.sha256.clone();
         trial.trial = true;
         trial.source = Some(OtaSource::Direct);
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/loaders/poll")
-                    .body(Body::from(serde_json::to_vec(&poll).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = app.clone().oneshot(poll_request(&poll)).await.unwrap();
         let reply: LoaderPollResponse =
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
         assert!(matches!(reply, LoaderPollResponse::BoundIdle { .. }));
+        assert_eq!(
+            app.clone()
+                .oneshot(download(&job.update_id))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT
+        );
         poll.ota.as_mut().unwrap().source = Some(OtaSource::Server);
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/loaders/poll")
-                    .body(Body::from(serde_json::to_vec(&poll).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = app.clone().oneshot(poll_request(&poll)).await.unwrap();
         let reply: LoaderPollResponse =
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
         assert!(
             matches!(reply, LoaderPollResponse::ConfirmUpdate { ref update_id, .. } if update_id == &job.update_id)
         );
-        let response = app.clone().oneshot(Request::builder().method("POST").uri("/api/v1/loaders/ota-status")
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(json!({"protocol_version": 4, "registration_id": registration.registration_id,
-                "mac_address": mac, "update_id": job.update_id, "phase": "succeeded"}).to_string())).unwrap()).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CONFLICT);
-
+        assert_eq!(
+            app.clone()
+                .oneshot(download(&job.update_id))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(report(&poll.registration_id, &job.update_id, "succeeded"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT
+        );
         state
             .ota
             .report(
                 &board.id,
-                mac,
+                &poll.registration_id,
                 &job.update_id,
                 crate::ota::Phase::Succeeded,
                 None,
@@ -6179,28 +6565,37 @@ mod tests {
             )
             .await
             .unwrap();
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/api/v1/admin/loader-images/{}", uploaded.sha256))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/api/v1/loader-updates/{}/image", job.update_id))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            app.clone()
+                .oneshot(report(&poll.registration_id, &job.update_id, "failed"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(report(
+                    &registration.registration_id,
+                    &job.update_id,
+                    "failed"
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            app.clone().oneshot(delete()).await.unwrap().status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            app.oneshot(download(&job.update_id))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
         let retained = state.ota.job(&board.id).await.unwrap();
         assert_eq!(retained.phase, crate::ota::Phase::Succeeded);
         assert_eq!(retained.image.sha256, uploaded.sha256);

@@ -197,6 +197,21 @@ async fn run_serial_ws_inner(
         }
     };
 
+    // The runtime can close its byte stream or stop the session before the
+    // status poll reaches the client. Send its failure before the close frame.
+    let result = if automatic {
+        let runtime = session.serial_runtime.snapshot();
+        match runtime
+            .error
+            .filter(|_| runtime.phase == super::runtime::SerialRuntimePhase::Failed)
+        {
+            Some(error) => Err(anyhow::anyhow!(error)),
+            None => result,
+        }
+    } else {
+        result
+    };
+
     // A stalled WebSocket must not prevent session/serial cleanup. The peer
     // sees an explicit error when writable, otherwise it sees the connection close.
     let _ = tokio::time::timeout(SERIAL_CLOSE_TIMEOUT, async {

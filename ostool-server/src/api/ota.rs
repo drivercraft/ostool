@@ -9,10 +9,11 @@ use axum::{
 };
 use httpboot_protocol::{LoaderStatusPhase, LoaderStatusReport, MacAddress, PROTOCOL_VERSION};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::{
     api::{error::ApiError, router::board_id_for_mac},
-    config::{BootConfig, UefiBootArch},
+    config::BootConfig,
     ota::{DeleteImageError, Image, Job, MAX_IMAGE_BYTES, Phase},
     state::{AppState, BoardLeaseState},
 };
@@ -57,10 +58,10 @@ async fn upload_image(
         .and_then(|value| value.parse::<usize>().ok())
         .ok_or_else(|| ApiError::bad_request("Content-Length required"))?;
     if length == 0 {
-        return Err(ApiError::bad_request("empty EFI image"));
+        return Err(ApiError::bad_request("empty OTA image"));
     }
     if length > MAX_IMAGE_BYTES {
-        return Err(ApiError::payload_too_large("EFI image exceeds 32 MiB"));
+        return Err(ApiError::payload_too_large("OTA image exceeds 32 MiB"));
     }
     let version = request
         .headers()
@@ -70,7 +71,7 @@ async fn upload_image(
         .map_err(|_| ApiError::bad_request("invalid image version"))?;
     let body = to_bytes(request.into_body(), MAX_IMAGE_BYTES + 1)
         .await
-        .map_err(|_| ApiError::payload_too_large("EFI image exceeds 32 MiB"))?;
+        .map_err(|_| ApiError::payload_too_large("OTA image exceeds 32 MiB"))?;
     if body.len() != length {
         return Err(ApiError::bad_request("incorrect Content-Length"));
     }
@@ -117,23 +118,25 @@ async fn queue_job(
     let board = boards
         .get(&board_id)
         .ok_or_else(|| ApiError::not_found("board not found"))?;
-    if !matches!(
-        &board.boot,
-        BootConfig::UefiHttp(profile)
-            if profile
-                .boot_arch
-                .as_ref()
-                .is_none_or(|arch| arch == &UefiBootArch::X86_64)
-    ) {
-        return Err(ApiError::conflict(
-            "loader OTA requires an x86_64 UEFI HTTP board",
-        ));
+    if !matches!(&board.boot, BootConfig::UefiHttp(_)) {
+        return Err(ApiError::conflict("loader OTA requires a UEFI HTTP board"));
     }
     let mac = board
         .network_identity
         .as_ref()
         .ok_or_else(|| ApiError::conflict("board lacks a configured MAC"))?
         .mac_address;
+    if state
+        .loader_registry
+        .snapshots()
+        .await
+        .into_iter()
+        .any(|device| device.mac_address == mac && device.online && device.conflict)
+    {
+        return Err(ApiError::conflict(
+            "loader OTA requires a device without identity conflicts",
+        ));
+    }
     let runtime = state
         .board_runtime_status(&board_id)
         .await
@@ -189,6 +192,27 @@ async fn download_image(
     if board_id_for_mac(&boards, job.mac_address).as_deref() != Some(job.board_id.as_str()) {
         return Err(ApiError::conflict("board MAC assignment has changed"));
     }
+    let runtimes = state.board_runtimes.read().await;
+    let runtime = runtimes
+        .get(&job.board_id)
+        .ok_or_else(|| ApiError::conflict("board runtime is unavailable"))?;
+    if runtime.active_session_id.is_some() || runtime.lease_state != BoardLeaseState::Idle {
+        return Err(ApiError::conflict("board has an active session"));
+    }
+    let registration_id = state
+        .loader_registry
+        .legacy_ota_registration(job.mac_address)
+        .await
+        .ok_or_else(|| ApiError::conflict("OTA image requires a registered online v4 device"))?;
+    if !state
+        .ota
+        .can_download(&job.board_id, job.mac_address, &update_id, &registration_id)
+        .await
+    {
+        return Err(ApiError::conflict(
+            "OTA assignment is not available for this registration",
+        ));
+    }
     let bytes = tokio::fs::read(state.ota.image_path(&job.image.sha256)?)
         .await
         .map_err(|error| {
@@ -200,6 +224,9 @@ async fn download_image(
         })?;
     if bytes.len() as u64 != job.image.size {
         return Err(ApiError::internal("stored image length changed"));
+    }
+    if format!("{:x}", Sha256::digest(&bytes)) != job.image.sha256 {
+        return Err(ApiError::internal("stored image digest changed"));
     }
     Ok(Body::from(bytes))
 }
@@ -222,11 +249,14 @@ async fn report_status(
     if report.protocol_version != PROTOCOL_VERSION {
         return Err(ApiError::bad_request("OTA requires v4"));
     }
-    state
+    let boards = state.boards.read().await;
+    let board_id = board_id_for_mac(&boards, report.mac_address)
+        .ok_or_else(|| ApiError::conflict("loader MAC is not bound"))?;
+    let registration = state
         .loader_registry
-        .accept_status(&LoaderStatusReport {
+        .accept_ota_status(&LoaderStatusReport {
             protocol_version: report.protocol_version,
-            registration_id: report.registration_id,
+            registration_id: report.registration_id.clone(),
             mac_address: report.mac_address,
             session_id: String::new(),
             boot_id: String::new(),
@@ -234,14 +264,11 @@ async fn report_status(
         })
         .await
         .map_err(|error| ApiError::conflict(format!("invalid loader registration: {error:?}")))?;
-    let boards = state.boards.read().await;
-    let board_id = board_id_for_mac(&boards, report.mac_address)
-        .ok_or_else(|| ApiError::conflict("loader MAC is not bound"))?;
     state
         .ota
         .report(
             &board_id,
-            report.mac_address,
+            &report.registration_id,
             &report.update_id,
             report.phase,
             report.error,
@@ -249,6 +276,7 @@ async fn report_status(
         )
         .await
         .map_err(|error| ApiError::conflict(format!("{error:#}")))?;
+    drop(registration);
     drop(boards);
     state.admin_events.invalidate(&["ota"]);
     Ok(StatusCode::NO_CONTENT)

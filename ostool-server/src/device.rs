@@ -13,12 +13,10 @@ use sha2::{Digest, Sha256};
 use crate::{
     api::router::board_id_for_mac,
     config::BootConfig,
-    ota::{Decision, Job, Phase},
+    ota::{Decision, DeliveryFailure, Job, Phase},
     session::SessionBootCommand,
     state::{AppState, BoardLeaseState},
 };
-
-const V5_EFI_ENTRY_SYMBOL: &str = "__x86_64_efi_pe_entry";
 
 pub async fn reconcile(
     state: AppState,
@@ -73,94 +71,126 @@ pub async fn reconcile(
     let idle = runtime.active_session_id.is_none()
         && runtime.lease_state == BoardLeaseState::Idle
         && observed.boot.is_none();
-    if let Some(ota) = observed.ota.as_ref() {
-        match state
-            .ota
-            .decide(&board_id, announcement.mac_address, ota, idle)
-            .await?
-        {
-            Decision::Update(job) => {
-                state.admin_events.invalidate(&["ota"]);
-                if let Err(error) =
-                    push_ota_image(&state, &client, &endpoint, &observed, &job).await
-                {
-                    state
-                        .ota
-                        .record_delivery_failure(
-                            &board_id,
-                            announcement.mac_address,
-                            &job.update_id,
-                            format!("{error:#}"),
-                        )
-                        .await?;
-                    state.admin_events.invalidate(&["ota"]);
-                    return Err(error);
-                }
-                state
-                    .ota
-                    .report(
-                        &board_id,
-                        announcement.mac_address,
-                        &job.update_id,
-                        Phase::Staged,
-                        None,
-                        None,
+    let decision = state
+        .ota
+        .decide(
+            &board_id,
+            observed.mac_address,
+            observed.ota.as_ref(),
+            idle,
+            &observed.boot_epoch,
+        )
+        .await?;
+    state.admin_events.invalidate(&["ota"]);
+    match decision {
+        Decision::Update(job) => {
+            if let Err(failure) = push_ota_image(&state, &client, &endpoint, &observed, &job).await
+            {
+                let message = failure.to_string();
+                let failure = if matches!(
+                    failure,
+                    DeliveryFailure::Retryable(_) | DeliveryFailure::Conflict(_)
+                ) {
+                    match recover_ota_delivery(
+                        &state,
+                        &client,
+                        &endpoint,
+                        &announcement,
+                        peer,
+                        &job,
                     )
-                    .await?;
-                state.admin_events.invalidate(&["ota"]);
-                return Ok(());
-            }
-            Decision::Confirm(update_id) => {
-                state.admin_events.invalidate(&["ota"]);
-                let response = client
-                    .post(format!("{endpoint}/api/v1/ota/confirm"))
-                    .header("X-Boot-Epoch", &observed.boot_epoch)
-                    .header("X-Update-Source", "server")
-                    .json(&serde_json::json!({"update_id": update_id}))
-                    .send()
-                    .await?;
-                require_status(response, 200).await?;
-                let confirmed: LoaderDeviceStatus = client
-                    .get(format!("{endpoint}/api/v1/status"))
-                    .send()
                     .await?
-                    .error_for_status()?
-                    .json()
-                    .await?;
-                let active = confirmed
-                    .ota
-                    .as_ref()
-                    .context("missing confirmed OTA state")?;
-                ensure!(
-                    active.active_sha256 == job_digest(&state, &board_id).await?,
-                    "confirmed digest mismatch"
-                );
+                    {
+                        DeliveryRecovery::Observed => {
+                            state.admin_events.invalidate(&["ota"]);
+                            return Ok(());
+                        }
+                        DeliveryRecovery::AwaitingEpoch => DeliveryFailure::Conflict(format!(
+                            "{message}; device rebooted after accepting OTA; waiting for its current announcement"
+                        )),
+                        DeliveryRecovery::Unknown => failure,
+                    }
+                } else {
+                    failure
+                };
                 state
                     .ota
-                    .report(
+                    .record_delivery_failure(
                         &board_id,
-                        announcement.mac_address,
-                        &update_id,
-                        Phase::Succeeded,
-                        None,
-                        Some(&active.active_sha256),
+                        observed.mac_address,
+                        &job.update_id,
+                        &observed.boot_epoch,
+                        failure,
                     )
                     .await?;
                 state.admin_events.invalidate(&["ota"]);
-                return Ok(());
+                return Err(anyhow::anyhow!(message));
             }
-            Decision::Wait => return Ok(()),
-            Decision::Idle => {}
-        }
-        if ota.trial {
+            state
+                .ota
+                .report(
+                    &board_id,
+                    &observed.boot_epoch,
+                    &job.update_id,
+                    Phase::Staged,
+                    None,
+                    None,
+                )
+                .await?;
+            state.admin_events.invalidate(&["ota"]);
             return Ok(());
         }
-    } else {
-        log::warn!(
-            "loader {} at {} did not report OTA state; skipping upgrades",
-            announcement.mac_address,
-            peer.ip()
-        );
+        Decision::Confirm(update_id) => {
+            let response = client
+                .post(format!("{endpoint}/api/v1/ota/confirm"))
+                .header("X-Boot-Epoch", &observed.boot_epoch)
+                .header("X-Update-Source", "server")
+                .json(&serde_json::json!({"update_id": update_id}))
+                .send()
+                .await?;
+            require_status(response, 200).await?;
+            let confirmed: LoaderDeviceStatus = client
+                .get(format!("{endpoint}/api/v1/status"))
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            let active = confirmed
+                .ota
+                .as_ref()
+                .context("missing confirmed OTA state")?;
+            ensure!(
+                confirmed.protocol_version == observed.protocol_version
+                    && confirmed.mac_address == observed.mac_address
+                    && confirmed.boot_epoch == observed.boot_epoch,
+                "confirmed OTA device identity changed"
+            );
+            ensure!(
+                !active.trial
+                    && active.pending_update_id.is_none()
+                    && active.last_update_id.as_deref() == Some(update_id.as_str())
+                    && active.last_outcome == Some(httpboot_protocol::OtaOutcome::Confirmed)
+                    && active.active_sha256 == active.running_sha256
+                    && active.active_sha256 == job_digest(&state, &board_id).await?,
+                "OTA trial is not confirmed"
+            );
+            state
+                .ota
+                .report(
+                    &board_id,
+                    &observed.boot_epoch,
+                    &update_id,
+                    Phase::Succeeded,
+                    None,
+                    Some(&active.active_sha256),
+                )
+                .await?;
+            state.admin_events.invalidate(&["ota"]);
+            return Ok(());
+        }
+        Decision::Wait => return Ok(()),
+        Decision::Idle => {}
     }
     if runtime.lease_state != BoardLeaseState::Using {
         return Ok(());
@@ -171,12 +201,18 @@ pub async fn reconcile(
     let Some(session) = state.session_state(&session_id).await else {
         return Ok(());
     };
+    let mut generation = session.subscribe_boot_generation();
+    let mut shutdown = session.subscribe_shutdown();
+    // Power changes and shutdown must also cancel a queued handoff.
+    let _boot_operation = tokio::select! {
+        biased;
+        _ = shutdown.wait_for(|s| *s) => return Ok(()),
+        _ = generation.changed() => return Ok(()),
+        guard = session.boot_operation.lock() => guard,
+    };
     let Some(command) = session.boot_command().await else {
         return Ok(());
     };
-    if command.arch != observed.arch {
-        return Ok(());
-    }
     if observed.protocol_version != DEVICE_PROTOCOL_VERSION {
         session.serial_runtime.fail(
             "automatic serial binding requires axloader protocol v6; upgrade the loader".into(),
@@ -190,9 +226,38 @@ pub async fn reconcile(
         return Ok(());
     }
     let session_id = session.snapshot().await.id;
-    let mut generation = session.subscribe_boot_generation();
-    let mut shutdown = session.subscribe_shutdown();
     let operation = async {
+        let preflight = async {
+            ensure!(
+                command.arch == observed.arch,
+                "kernel architecture {:?} does not match device {:?}",
+                command.arch,
+                observed.arch
+            );
+            let request = BootRequest::new(&command)?;
+            request.validate_kernel(&state, &session).await?;
+            Ok::<_, anyhow::Error>(request)
+        }
+        .await;
+        let request = match preflight {
+            Ok(request) => request,
+            Err(error) => {
+                let message = format!("{error:#}");
+                session
+                    .update_loader_status(
+                        observed.boot_epoch.clone(),
+                        &command.boot_id,
+                        LoaderStatusPhase::Failed {
+                            code: "boot_preflight_failed".into(),
+                            message: message.clone(),
+                        },
+                    )
+                    .await
+                    .map_err(|error| anyhow::anyhow!("stale boot preflight: {error:?}"))?;
+                session.serial_runtime.fail(message);
+                return Err(error);
+            }
+        };
         let serial = observed
             .serial
             .as_ref()
@@ -236,7 +301,7 @@ pub async fn reconcile(
             &client,
             &endpoint,
             &observed,
-            &command,
+            &request,
             &session,
             &binding.binding_id,
         )
@@ -245,8 +310,12 @@ pub async fn reconcile(
         Ok(())
     };
     tokio::select! {
+        biased;
+        _ = shutdown.wait_for(|s| *s) => Ok(()),
+        _ = generation.changed() => Ok(()),
         result = operation => {
-            if let Err(error) = &result {
+            if let Err(error) = &result
+                && session.serial_runtime.snapshot().phase != crate::serial::runtime::SerialRuntimePhase::Failed {
                 log::warn!(
                     "axloader serial handoff for session `{}` did not complete: {error:#}; waiting for the next device broadcast",
                     session_id,
@@ -254,8 +323,6 @@ pub async fn reconcile(
             }
             result
         },
-        _ = shutdown.wait_for(|s|*s) => Ok(()),
-        _ = generation.changed() => Ok(()),
     }
 }
 
@@ -291,14 +358,112 @@ impl Drop for SerialGrant {
         );
         let epoch = self.epoch.clone();
         tokio::spawn(async move {
-            let _ = client
+            if let Ok(response) = client
                 .delete(url)
                 .header("X-Boot-Epoch", epoch)
                 .timeout(std::time::Duration::from_secs(2))
                 .send()
-                .await;
+                .await
+            {
+                let _ = response.bytes().await;
+            }
         });
     }
+}
+
+enum DeliveryRecovery {
+    Observed,
+    AwaitingEpoch,
+    Unknown,
+}
+
+async fn recover_ota_delivery(
+    state: &AppState,
+    client: &Client,
+    endpoint: &str,
+    announcement: &LoaderAnnouncement,
+    peer: SocketAddr,
+    job: &Job,
+) -> anyhow::Result<DeliveryRecovery> {
+    // A reply can be lost after durable staging, including on the last attempt.
+    let actual = async {
+        client
+            .get(format!("{endpoint}/api/v1/status"))
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<LoaderDeviceStatus>()
+            .await
+    }
+    .await;
+    let Ok(actual) = actual else {
+        return Ok(DeliveryRecovery::Unknown);
+    };
+    if actual.mac_address != job.mac_address {
+        return Ok(DeliveryRecovery::Unknown);
+    }
+    let accepted = actual.ota.as_ref().is_some_and(|ota| {
+        // Firmware may omit source before the pending slot actually starts.
+        ota.pending_update_id.as_deref() == Some(&job.update_id)
+            && (!ota.trial
+                || (ota.source == Some(httpboot_protocol::OtaSource::Server)
+                    && ota.running_sha256 == job.image.sha256))
+    });
+    if actual.boot_epoch != announcement.boot_epoch {
+        // Do not authenticate a new epoch using a stale announcement, or make
+        // an already accepted trial terminal before its next broadcast arrives.
+        return Ok(
+            if accepted
+                && matches!(
+                    actual.protocol_version,
+                    DEVICE_PROTOCOL_VERSION | httpboot_protocol::PREVIOUS_DEVICE_PROTOCOL_VERSION
+                )
+            {
+                DeliveryRecovery::AwaitingEpoch
+            } else {
+                DeliveryRecovery::Unknown
+            },
+        );
+    }
+    if !matches!(
+        state
+            .loader_registry
+            .accept_announcement(announcement, &actual, peer.ip().to_string(),)
+            .await,
+        Ok(false)
+    ) {
+        return Ok(DeliveryRecovery::Unknown);
+    }
+    let Some(current) = state.ota.job(&job.board_id).await else {
+        return Ok(DeliveryRecovery::Observed);
+    };
+    if current.update_id != job.update_id || current.phase.is_terminal() {
+        return Ok(DeliveryRecovery::Observed);
+    }
+    let idle = state
+        .board_runtime_status(&job.board_id)
+        .await
+        .is_some_and(|runtime| {
+            runtime.active_session_id.is_none()
+                && runtime.lease_state == BoardLeaseState::Idle
+                && actual.boot.is_none()
+        });
+    let _ = state
+        .ota
+        .decide(
+            &job.board_id,
+            actual.mac_address,
+            actual.ota.as_ref(),
+            idle,
+            &actual.boot_epoch,
+        )
+        .await?;
+    Ok(if accepted {
+        DeliveryRecovery::Observed
+    } else {
+        DeliveryRecovery::Unknown
+    })
 }
 
 async fn push_ota_image(
@@ -307,12 +472,17 @@ async fn push_ota_image(
     endpoint: &str,
     observed: &LoaderDeviceStatus,
     job: &Job,
-) -> anyhow::Result<()> {
-    let bytes = tokio::fs::read(state.ota.image_path(&job.image.sha256)?).await?;
-    ensure!(
-        bytes.len() as u64 == job.image.size && hex_sha256(&bytes) == job.image.sha256,
-        "OTA image changed in storage"
-    );
+) -> Result<(), DeliveryFailure> {
+    let bytes = async {
+        let bytes = tokio::fs::read(state.ota.image_path(&job.image.sha256)?).await?;
+        ensure!(
+            bytes.len() as u64 == job.image.size && hex_sha256(&bytes) == job.image.sha256,
+            "OTA image changed in storage"
+        );
+        Ok::<_, anyhow::Error>(bytes)
+    }
+    .await
+    .map_err(|error| DeliveryFailure::Rejected(format!("{error:#}")))?;
     let response = client
         .put(format!("{endpoint}/api/v1/ota/image"))
         .header("X-Boot-Epoch", &observed.boot_epoch)
@@ -322,8 +492,96 @@ async fn push_ota_image(
         .header("Content-Length", bytes.len())
         .body(bytes)
         .send()
-        .await?;
-    require_status(response, 202).await
+        .await
+        .map_err(|error| {
+            DeliveryFailure::Retryable(format!("OTA image transport failed: {error:#}"))
+        })?;
+    let status = response.status();
+    let body = response.text().await;
+    if status.as_u16() == 202 {
+        body.map_err(|error| {
+            DeliveryFailure::Retryable(format!(
+                "device HTTP {status}: response body failed: {error}"
+            ))
+        })?;
+        return Ok(());
+    }
+    let body = body.unwrap_or_else(|error| format!("response body failed: {error}"));
+    let message = format!("device HTTP {status}: {body}");
+    Err(match status.as_u16() {
+        409 => DeliveryFailure::Conflict(message),
+        503 => DeliveryFailure::Unavailable(message),
+        429 | 500..=599 => DeliveryFailure::Retryable(message),
+        _ => DeliveryFailure::Rejected(message),
+    })
+}
+
+// Keep the validated manifest paired with its session-owned payload paths.
+struct BootRequest<'a> {
+    command: &'a SessionBootCommand,
+    manifest: DeviceBootJob,
+}
+
+impl<'a> BootRequest<'a> {
+    async fn validate_kernel(
+        &self,
+        state: &AppState,
+        session: &crate::session::SessionState,
+    ) -> anyhow::Result<()> {
+        let session_id = session.snapshot().await.id;
+        let prefix = format!("/boot/sessions/{session_id}/");
+        let path = self
+            .command
+            .kernel_path
+            .strip_prefix(&prefix)
+            .context("kernel path does not belong to session")?;
+        let manager = state.tftp_manager.read().await.clone();
+        let file = manager
+            .get_session_file(&session_id, path)
+            .await?
+            .context("session kernel file missing")?;
+        let bytes = tokio::fs::read(file.disk_path).await?;
+        ensure!(
+            bytes.len() as u64 == self.manifest.kernel.size
+                && hex_sha256(&bytes) == self.manifest.kernel.sha256,
+            "published boot file changed on disk"
+        );
+        let actual = crate::boot_image::elf_arch(&bytes)?;
+        ensure!(
+            actual == self.command.arch,
+            "kernel ELF architecture {actual:?} does not match declared {:?}",
+            self.command.arch
+        );
+        Ok(())
+    }
+
+    fn new(command: &'a SessionBootCommand) -> anyhow::Result<Self> {
+        let entry_symbol = match command.arch {
+            httpboot_protocol::BootArch::X86_64 => "__x86_64_efi_pe_entry",
+            httpboot_protocol::BootArch::Loongarch64 | httpboot_protocol::BootArch::Riscv64 => {
+                "efi_pe_entry"
+            }
+            arch => anyhow::bail!("axloader EFI boot is unsupported for architecture {arch:?}"),
+        };
+        Ok(Self {
+            command,
+            manifest: DeviceBootJob {
+                boot_id: command.boot_id.clone(),
+                arch: command.arch,
+                image_format: command.image_format,
+                kernel: DeviceBootImage {
+                    size: command.kernel_size,
+                    sha256: command.kernel_sha256.clone(),
+                },
+                initramfs: command.initramfs.as_ref().map(|file| DeviceBootImage {
+                    size: file.size,
+                    sha256: file.sha256.clone(),
+                }),
+                cmdline: command.cmdline.clone(),
+                entry_symbol: Some(entry_symbol.into()),
+            },
+        })
+    }
 }
 
 async fn push_boot(
@@ -331,20 +589,20 @@ async fn push_boot(
     client: &Client,
     endpoint: &str,
     observed: &LoaderDeviceStatus,
-    command: &SessionBootCommand,
+    request: &BootRequest<'_>,
     session: &crate::session::SessionState,
     binding_id: &str,
 ) -> anyhow::Result<()> {
+    let BootRequest { command, manifest } = request;
     let epoch = observed.boot_epoch.as_str();
     let observed_boot_id = observed.boot.as_ref().map(|boot| boot.boot_id.as_str());
-    let manifest = v5_boot_manifest(command);
 
     let base = format!("{endpoint}/api/v1/boot/jobs");
     let create = || {
         client
             .post(&base)
             .header("X-Boot-Epoch", epoch)
-            .json(&manifest)
+            .json(manifest)
             .send()
     };
     let response = create().await?;
@@ -352,7 +610,7 @@ async fn push_boot(
         && let Some(stale_boot_id) = observed_boot_id
         && stale_boot_id != command.boot_id
     {
-        drop(response);
+        require_status(response, 409).await?;
         let delete_response = client
             .delete(format!("{base}/{stale_boot_id}"))
             .header("X-Boot-Epoch", epoch)
@@ -363,10 +621,11 @@ async fn push_boot(
     } else {
         response
     };
+    let status = response.status();
+    let body = response.text().await?;
     ensure!(
-        response.status().as_u16() == 201 || response.status().as_u16() == 200,
-        "device refused boot job: {}",
-        response.text().await?
+        status.as_u16() == 201 || status.as_u16() == 200,
+        "device refused boot job: {body}"
     );
     session
         .update_loader_status(epoch.into(), &command.boot_id, LoaderStatusPhase::Accepted)
@@ -425,24 +684,6 @@ async fn push_boot(
     Ok(())
 }
 
-fn v5_boot_manifest(command: &SessionBootCommand) -> DeviceBootJob {
-    DeviceBootJob {
-        boot_id: command.boot_id.clone(),
-        arch: command.arch,
-        image_format: command.image_format,
-        kernel: DeviceBootImage {
-            size: command.kernel_size,
-            sha256: command.kernel_sha256.clone(),
-        },
-        initramfs: command.initramfs.as_ref().map(|file| DeviceBootImage {
-            size: file.size,
-            sha256: file.sha256.clone(),
-        }),
-        cmdline: command.cmdline.clone(),
-        entry_symbol: Some(V5_EFI_ENTRY_SYMBOL.into()),
-    }
-}
-
 struct PushContext<'a> {
     state: &'a AppState,
     client: &'a Client,
@@ -486,10 +727,12 @@ async fn require_status(response: Response, expected: u16) -> anyhow::Result<()>
 
 async fn require_status_in(response: Response, expected: &[u16]) -> anyhow::Result<()> {
     let status = response.status();
+    // The device may wait for the complete response to be acknowledged before
+    // handoff. Dropping a body after its headers can instead reset that TCP flow.
+    let body = response.text().await?;
     ensure!(
         expected.contains(&status.as_u16()),
-        "device HTTP {status}: {}",
-        response.text().await?
+        "device HTTP {status}: {body}"
     );
     Ok(())
 }
@@ -532,12 +775,13 @@ mod tests {
     };
     use serde::Deserialize;
     use tokio::{net::TcpListener, sync::Mutex};
+    use tower::ServiceExt;
 
-    use super::{V5_EFI_ENTRY_SYMBOL, hex_sha256, reconcile, v5_boot_manifest};
+    use super::{BootRequest, hex_sha256, reconcile};
     use crate::{
         BoardConfig, BoardNetworkIdentity, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
-        PowerManagementConfig, ServerConfig, TftpConfig, UefiBootArch, UefiHttpProfile,
-        build_app_state, ota::Phase, session::SessionBootCommand, state::BoardRuntimeState,
+        PowerManagementConfig, ServerConfig, TftpConfig, UefiHttpProfile, build_app_state,
+        ota::Phase, session::SessionBootCommand, state::BoardRuntimeState,
         tftp::service::build_tftp_manager,
     };
 
@@ -550,6 +794,10 @@ mod tests {
         put_attempts: usize,
         confirm_attempts: usize,
         allow_confirm: bool,
+        upload_response: Option<(StatusCode, &'static str)>,
+        stage_before_response: bool,
+        pending_only: bool,
+        reboot_on_upload: bool,
     }
 
     type FakeState = Arc<Mutex<FakeDevice>>;
@@ -566,55 +814,32 @@ mod tests {
         reject_create_without_manifest: bool,
         reject_upload: bool,
         kernel: Vec<u8>,
+        initramfs: Vec<u8>,
     }
 
     type FakeBootState = Arc<Mutex<FakeBootDevice>>;
 
     #[test]
-    fn v5_manifest_preserves_optional_boot_payloads_and_uses_efi_entry() {
-        for (cmdline, initramfs) in [
-            (None, None),
-            (Some("console=ttyS0".to_string()), None),
-            (
-                None,
-                Some(BootFile {
-                    path: "/boot/sessions/session/initramfs.cpio".into(),
-                    size: 123,
-                    sha256: "22".repeat(32),
-                }),
-            ),
-            (
-                Some("console=ttyS0".to_string()),
-                Some(BootFile {
-                    path: "/boot/sessions/session/initramfs.cpio".into(),
-                    size: 123,
-                    sha256: "22".repeat(32),
-                }),
-            ),
+    fn boot_manifest_selects_efi_entry_for_supported_architectures() {
+        for (arch, entry_symbol) in [
+            (BootArch::X86_64, "__x86_64_efi_pe_entry"),
+            (BootArch::Loongarch64, "efi_pe_entry"),
+            (BootArch::Riscv64, "efi_pe_entry"),
         ] {
             let command = SessionBootCommand {
                 boot_id: "boot-1".into(),
                 kernel_path: "/boot/sessions/session/kernel.elf".into(),
                 kernel_size: 456,
                 kernel_sha256: "11".repeat(32),
-                arch: BootArch::X86_64,
+                arch,
                 image_format: ImageFormat::Elf64,
                 entry_symbol: Some("httpboot_entry".into()),
-                initramfs: initramfs.clone(),
-                cmdline: cmdline.clone(),
+                initramfs: None,
+                cmdline: None,
             };
-
-            let manifest = v5_boot_manifest(&command);
-
-            assert_eq!(manifest.cmdline, cmdline);
-            assert_eq!(manifest.entry_symbol.as_deref(), Some(V5_EFI_ENTRY_SYMBOL));
-            assert_eq!(
-                manifest.initramfs,
-                initramfs.map(|file| httpboot_protocol::DeviceBootImage {
-                    size: file.size,
-                    sha256: file.sha256,
-                })
-            );
+            let manifest = BootRequest::new(&command).unwrap().manifest;
+            assert_eq!(manifest.arch, arch);
+            assert_eq!(manifest.entry_symbol.as_deref(), Some(entry_symbol));
         }
     }
 
@@ -644,13 +869,28 @@ mod tests {
         let Some(update_id) = header("X-Update-Id") else {
             return (StatusCode::BAD_REQUEST, "missing update id").into_response();
         };
+        if let Some((status, body)) = device.upload_response
+            && !device.stage_before_response
+        {
+            return (status, body).into_response();
+        }
         device.update_id = Some(update_id.clone());
+        let pending_only = device.pending_only;
         let ota = device.status.ota.as_mut().unwrap();
         ota.pending_update_id = Some(update_id);
-        ota.running_sha256 = digest;
-        ota.trial = true;
-        ota.source = Some(OtaSource::Server);
-        StatusCode::ACCEPTED.into_response()
+        if !pending_only {
+            ota.running_sha256 = digest;
+        }
+        ota.trial = !pending_only;
+        ota.source = (!pending_only).then_some(OtaSource::Server);
+        if device.reboot_on_upload {
+            device.status.boot_epoch = "epoch-2".into();
+            device.accepted_epoch = "epoch-2".into();
+        }
+        device.upload_response.map_or_else(
+            || StatusCode::ACCEPTED.into_response(),
+            |(status, body)| (status, body).into_response(),
+        )
     }
 
     #[derive(Deserialize)]
@@ -684,6 +924,9 @@ mod tests {
             ota.trial = false;
             ota.last_update_id = Some(request.update_id);
             ota.last_outcome = Some(OtaOutcome::Confirmed);
+        } else {
+            let ota = device.status.ota.as_mut().unwrap();
+            ota.active_sha256.clone_from(&ota.running_sha256);
         }
         StatusCode::OK.into_response()
     }
@@ -786,6 +1029,11 @@ mod tests {
         StatusCode::OK.into_response()
     }
 
+    async fn put_initramfs(State(device): State<FakeBootState>, body: Bytes) -> StatusCode {
+        device.lock().await.initramfs = body.to_vec();
+        StatusCode::OK
+    }
+
     async fn start_boot(State(device): State<FakeBootState>, headers: HeaderMap) -> Response {
         let mut device = device.lock().await;
         device.start_attempts += 1;
@@ -834,7 +1082,6 @@ mod tests {
                 power_off_cmd: "true".into(),
             }),
             boot: BootConfig::UefiHttp(UefiHttpProfile {
-                boot_arch: Some(UefiBootArch::X86_64),
                 serial_parameters: None,
             }),
             network_identity: Some(BoardNetworkIdentity { mac_address: mac }),
@@ -868,8 +1115,67 @@ mod tests {
         }
     }
 
+    async fn spawn_ota_device(
+        mac: httpboot_protocol::MacAddress,
+        arch: BootArch,
+        has_ota: bool,
+        image_bytes: &[u8],
+    ) -> (FakeState, u16, tokio::task::JoinHandle<()>) {
+        let fake = Arc::new(Mutex::new(FakeDevice {
+            status: LoaderDeviceStatus {
+                serial: None,
+                protocol_version: DEVICE_PROTOCOL_VERSION,
+                boot_epoch: "epoch-1".into(),
+                mac_address: mac,
+                current_mac_address: mac,
+                arch,
+                loader_version: "fake-v5".into(),
+                hardware: LoaderHardwareInfo::default(),
+                boot: None,
+                ota: has_ota.then(|| LoaderOtaState {
+                    active_sha256: "11".repeat(32),
+                    running_sha256: "11".repeat(32),
+                    pending_update_id: None,
+                    trial: false,
+                    source: None,
+                    last_update_id: None,
+                    last_outcome: None,
+                }),
+            },
+            accepted_epoch: "epoch-1".into(),
+            expected_image: image_bytes.to_vec(),
+            update_id: None,
+            put_attempts: 0,
+            confirm_attempts: 0,
+            allow_confirm: false,
+            upload_response: None,
+            stage_before_response: false,
+            pending_only: false,
+            reboot_on_upload: false,
+        }));
+        let app = Router::new()
+            .route("/api/v1/status", get(get_status))
+            .route("/api/v1/ota/image", put(put_ota))
+            .route("/api/v1/ota/confirm", post(confirm_ota))
+            .with_state(fake.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (fake, port, server)
+    }
+
     #[tokio::test]
     async fn reverse_ota_repushes_after_epoch_change_and_retries_confirmation() {
+        for (arch, has_ota) in [
+            (BootArch::X86_64, true),
+            (BootArch::Loongarch64, true),
+            (BootArch::Riscv64, false),
+        ] {
+            check_reverse_ota(arch, has_ota).await;
+        }
+    }
+
+    async fn check_reverse_ota(arch: BootArch, has_ota: bool) {
         let dir = tempfile::tempdir().unwrap();
         let mac = "02:00:00:00:00:01".parse().unwrap();
         let state = test_state(dir.path(), mac).await;
@@ -884,49 +1190,31 @@ mod tests {
             .queue("board-1".into(), mac, &image.sha256)
             .await
             .unwrap();
-        let fake = Arc::new(Mutex::new(FakeDevice {
-            status: LoaderDeviceStatus {
-                serial: None,
-                protocol_version: httpboot_protocol::PREVIOUS_DEVICE_PROTOCOL_VERSION,
-                boot_epoch: "epoch-1".into(),
-                mac_address: mac,
-                current_mac_address: mac,
-                arch: BootArch::X86_64,
-                loader_version: "fake-v5".into(),
-                hardware: LoaderHardwareInfo::default(),
-                boot: None,
-                ota: Some(LoaderOtaState {
-                    active_sha256: "11".repeat(32),
-                    running_sha256: "11".repeat(32),
-                    pending_update_id: None,
-                    trial: false,
-                    source: None,
-                    last_update_id: None,
-                    last_outcome: None,
-                }),
-            },
-            accepted_epoch: "epoch-2".into(),
-            expected_image: image_bytes,
-            update_id: None,
-            put_attempts: 0,
-            confirm_attempts: 0,
-            allow_confirm: false,
-        }));
-        let app = Router::new()
-            .route("/api/v1/status", get(get_status))
-            .route("/api/v1/ota/image", put(put_ota))
-            .route("/api/v1/ota/confirm", post(confirm_ota))
-            .with_state(fake.clone());
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let (fake, port, server) = spawn_ota_device(mac, arch, has_ota, &image_bytes).await;
+        {
+            let mut device = fake.lock().await;
+            device.accepted_epoch = "epoch-2".into();
+            device.status.protocol_version = httpboot_protocol::PREVIOUS_DEVICE_PROTOCOL_VERSION;
+        }
         let peer = "127.0.0.1:40000".parse().unwrap();
 
         let old_announcement = |epoch| {
             let mut a = announcement(mac, epoch, port);
             a.protocol_version = httpboot_protocol::PREVIOUS_DEVICE_PROTOCOL_VERSION;
+            a.arch = arch;
             a
         };
+        if !has_ota {
+            reconcile(state.clone(), old_announcement("epoch-1"), peer)
+                .await
+                .unwrap();
+            let waiting = state.ota.job("board-1").await.unwrap();
+            assert_eq!(waiting.phase, Phase::Queued);
+            assert!(waiting.error.unwrap().contains("OTA"));
+            assert_eq!(fake.lock().await.put_attempts, 0);
+            server.abort();
+            return;
+        }
         let error = reconcile(state.clone(), old_announcement("epoch-1"), peer)
             .await
             .unwrap_err();
@@ -940,12 +1228,18 @@ mod tests {
             Phase::Downloading
         );
         let failed = state.ota.job("board-1").await.unwrap();
-        assert_eq!(failed.delivery_attempts, 1);
+        assert_eq!(failed.delivery_attempts, 0);
         assert_eq!(
             failed.error.as_deref(),
             Some("device HTTP 409 Conflict: stale boot epoch")
         );
 
+        reconcile(state.clone(), old_announcement("epoch-1"), peer)
+            .await
+            .unwrap();
+        assert_eq!(fake.lock().await.put_attempts, 1);
+        let deadline = failed.next_delivery_at.unwrap();
+        tokio::time::sleep((deadline - chrono::Utc::now()).to_std().unwrap_or_default()).await;
         {
             let mut fake = fake.lock().await;
             fake.status.boot_epoch = "epoch-2".into();
@@ -960,18 +1254,20 @@ mod tests {
         );
 
         fake.lock().await.status.protocol_version = DEVICE_PROTOCOL_VERSION;
-        let error = reconcile(state.clone(), announcement(mac, "epoch-2", port), peer)
+        let mut current_announcement = announcement(mac, "epoch-2", port);
+        current_announcement.arch = arch;
+        let error = reconcile(state.clone(), current_announcement.clone(), peer)
             .await
             .unwrap_err();
         let error = format!("{error:#}");
-        assert!(error.contains("confirmed digest mismatch"), "{error}");
+        assert!(error.contains("OTA trial is not confirmed"), "{error}");
         assert_eq!(
             state.ota.job("board-1").await.unwrap().phase,
             Phase::Confirming
         );
         fake.lock().await.allow_confirm = true;
 
-        reconcile(state.clone(), announcement(mac, "epoch-2", port), peer)
+        reconcile(state.clone(), current_announcement, peer)
             .await
             .unwrap();
         assert_eq!(
@@ -989,171 +1285,747 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn boot_push_replaces_stale_job_and_only_retries_create_once() {
+    async fn ota_delivery_results_preserve_device_errors_and_control_retransmission() {
+        for (status, body, terminal) in [
+            (
+                StatusCode::BAD_REQUEST,
+                r#"{"error":"invalid_request"}"#,
+                true,
+            ),
+            (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                r#"{"error":"image_too_large"}"#,
+                true,
+            ),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                r#"{"error":"unsupported_image_arch","message":"device refused image"}"#,
+                true,
+            ),
+            (StatusCode::UNPROCESSABLE_ENTITY, "{}", true),
+            (
+                StatusCode::CONFLICT,
+                r#"{"error":"ota_state_conflict"}"#,
+                false,
+            ),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                r#"{"error":"ota_storage_unavailable"}"#,
+                false,
+            ),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                r#"{"error":"ota_storage_failed"}"#,
+                false,
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mac = "02:00:00:00:00:01".parse().unwrap();
+            let mut state = test_state(dir.path(), mac).await;
+            let bytes = efi_image();
+            let image = state.ota.put_image(&bytes, None).await.unwrap();
+            let assignment = state
+                .ota
+                .queue("board-1".into(), mac, &image.sha256)
+                .await
+                .unwrap();
+            let (fake, port, server) = spawn_ota_device(mac, BootArch::X86_64, true, &bytes).await;
+            fake.lock().await.upload_response = Some((status, body));
+            let event = announcement(mac, "epoch-1", port);
+            let peer = "127.0.0.1:40000".parse().unwrap();
+            let error = reconcile(state.clone(), event.clone(), peer)
+                .await
+                .unwrap_err();
+            assert!(format!("{error:#}").contains(&format!("HTTP {}", status.as_u16())));
+            let job = state.ota.job("board-1").await.unwrap();
+            assert_eq!(
+                job.phase,
+                if terminal {
+                    Phase::Failed
+                } else {
+                    Phase::Downloading
+                },
+                "{status}"
+            );
+            assert!(job.error.as_deref().unwrap().contains(body), "{status}");
+            assert_eq!(
+                job.delivery_attempts,
+                u8::from(status == StatusCode::INTERNAL_SERVER_ERROR)
+            );
+
+            // Reconciliation must not send rejected, unavailable or rate-limited bytes again.
+            reconcile(state.clone(), event.clone(), peer).await.unwrap();
+            assert_eq!(fake.lock().await.put_attempts, 1, "{status}");
+            let response = crate::api::router::build_router(state.clone())
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri("/api/v1/admin/boards/board-1/loader-updates")
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let response = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let visible: crate::ota::Job = serde_json::from_slice(&response).unwrap();
+            assert_eq!(visible.update_id, assignment.update_id);
+            assert!(visible.error.unwrap().contains(body));
+            if status == StatusCode::SERVICE_UNAVAILABLE {
+                state.ota = crate::ota::OtaStore::open(&dir.path().join("data")).unwrap();
+                reconcile(state.clone(), event.clone(), peer).await.unwrap();
+                assert_eq!(fake.lock().await.put_attempts, 1);
+                {
+                    let mut device = fake.lock().await;
+                    device.status.boot_epoch = "epoch-2".into();
+                    device.accepted_epoch = "epoch-2".into();
+                    device.upload_response = None;
+                }
+                let mut next = event;
+                next.boot_epoch = "epoch-2".into();
+                reconcile(state.clone(), next, peer).await.unwrap();
+                assert_eq!(fake.lock().await.put_attempts, 2);
+                assert_eq!(state.ota.job("board-1").await.unwrap().phase, Phase::Staged);
+            }
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn ota_reconciles_an_accepted_pending_image_before_retransmission() {
+        check_uncertain_ota_delivery(false).await;
+    }
+
+    #[tokio::test]
+    async fn ota_recovers_a_rebooted_trial_before_retry_exhaustion() {
+        check_uncertain_ota_delivery(true).await;
+    }
+
+    async fn check_uncertain_ota_delivery(rebooted: bool) {
         let dir = tempfile::tempdir().unwrap();
-        let mac = "02:00:00:00:00:02".parse().unwrap();
-        let state = test_state(dir.path(), mac).await;
-        let created = state
-            .create_session_with_board_id(
-                "x86_64-uefi-http",
-                "board-1",
-                &[],
-                Some("device-test".into()),
-            )
+        let mac = "02:00:00:00:00:01".parse().unwrap();
+        let mut state = test_state(dir.path(), mac).await;
+        let bytes = efi_image();
+        let image = state.ota.put_image(&bytes, None).await.unwrap();
+        state
+            .ota
+            .queue("board-1".into(), mac, &image.sha256)
             .await
             .unwrap();
-        let kernel = b"fake ELF64 kernel".to_vec();
-        let manager = state.tftp_manager.read().await.clone();
-        manager
-            .put_session_file(&created.id, "kernel.elf", &kernel)
+        let (fake, port, server) = spawn_ota_device(mac, BootArch::X86_64, true, &bytes).await;
+        {
+            let mut device = fake.lock().await;
+            device.upload_response = Some((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "response uncertain after staging",
+            ));
+            device.stage_before_response = true;
+            device.pending_only = !rebooted;
+            device.reboot_on_upload = rebooted;
+        }
+        let status = fake.lock().await.status.clone();
+        state
+            .ota
+            .decide("board-1", mac, status.ota.as_ref(), true, "epoch-1")
+            .await
+            .unwrap();
+        let job = state.ota.job("board-1").await.unwrap();
+        for _ in 0..crate::ota::MAX_DELIVERY_ATTEMPTS - 1 {
+            state
+                .ota
+                .record_delivery_failure(
+                    "board-1",
+                    mac,
+                    &job.update_id,
+                    "epoch-1",
+                    crate::ota::DeliveryFailure::Retryable("earlier uncertain transport".into()),
+                )
+                .await
+                .unwrap();
+        }
+        let mut jobs = std::collections::BTreeMap::from([(
+            "board-1",
+            state.ota.job("board-1").await.unwrap(),
+        )]);
+        jobs.get_mut("board-1").unwrap().next_delivery_at =
+            Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+        std::fs::write(
+            dir.path().join("data/loader-ota/jobs.json"),
+            serde_json::to_vec(&jobs).unwrap(),
+        )
+        .unwrap();
+        state.ota = crate::ota::OtaStore::open(&dir.path().join("data")).unwrap();
+        let event = announcement(mac, "epoch-1", port);
+        let peer = "127.0.0.1:40000".parse().unwrap();
+        let _ = reconcile(state.clone(), event.clone(), peer).await;
+        assert_ne!(state.ota.job("board-1").await.unwrap().phase, Phase::Failed);
+        if !rebooted {
+            reconcile(state.clone(), event.clone(), peer).await.unwrap();
+            assert_eq!(state.ota.job("board-1").await.unwrap().phase, Phase::Staged);
+        }
+        assert_eq!(fake.lock().await.put_attempts, 1);
+        assert_eq!(
+            state.ota.job("board-1").await.unwrap().delivery_attempts,
+            crate::ota::MAX_DELIVERY_ATTEMPTS - 1
+        );
+        {
+            let mut device = fake.lock().await;
+            device.status.ota.as_mut().unwrap().trial = true;
+            device.status.ota.as_mut().unwrap().source = Some(OtaSource::Server);
+            device.status.ota.as_mut().unwrap().running_sha256 = image.sha256;
+            device.allow_confirm = true;
+        }
+        let mut event = event;
+        if rebooted {
+            event.boot_epoch = "epoch-2".into();
+        }
+        reconcile(state.clone(), event, peer).await.unwrap();
+        assert_eq!(fake.lock().await.put_attempts, 1);
+        assert_eq!(
+            state.ota.job("board-1").await.unwrap().phase,
+            Phase::Succeeded
+        );
+        server.abort();
+    }
+
+    struct NoSerialPorts;
+
+    impl ostool_serial::SerialBackend for NoSerialPorts {
+        fn ports(&self) -> ostool_serial::BackendFuture<'_, Vec<ostool_serial::PortLocator>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+
+        fn open(
+            &self,
+            _port: ostool_serial::PortLocator,
+            _parameters: httpboot_protocol::SerialParameters,
+        ) -> ostool_serial::BackendFuture<'_, Box<dyn ostool_serial::SerialIo>> {
+            Box::pin(async { Err(std::io::Error::other("unexpected serial open")) })
+        }
+    }
+
+    #[tokio::test]
+    async fn boot_preflight_fails_before_serial_handoff() {
+        use futures_util::StreamExt;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio_tungstenite::tungstenite::Message;
+
+        for arch in [
+            BootArch::Aarch64,
+            BootArch::Other,
+            BootArch::Riscv64,
+            BootArch::X86_64,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mac = "02:00:00:00:00:02".parse().unwrap();
+            let mut state = test_state(dir.path(), mac).await;
+            state.serial_manager = ostool_serial::SerialManager::new(Arc::new(NoSerialPorts));
+            let created = state
+                .create_session_with_board_id("x86_64-uefi-http", "board-1", &[], None)
+                .await
+                .unwrap();
+            let session = state.session_state(&created.id).await.unwrap();
+            let bytes = crate::boot_image::test_elf(243);
+            state
+                .tftp_manager
+                .read()
+                .await
+                .clone()
+                .put_session_file(&created.id, "kernel.elf", &bytes)
+                .await
+                .unwrap();
+            let expected = match arch {
+                BootArch::Riscv64 => "does not match device",
+                BootArch::X86_64 => "does not match declared",
+                _ => "unsupported for architecture",
+            };
+            session
+                .publish_boot_command(SessionBootCommand {
+                    boot_id: "unsupported-boot".into(),
+                    kernel_path: format!("/boot/sessions/{}/kernel.elf", created.id),
+                    kernel_size: bytes.len() as u64,
+                    kernel_sha256: hex_sha256(&bytes),
+                    arch,
+                    image_format: ImageFormat::Elf64,
+                    entry_symbol: None,
+                    initramfs: None,
+                    cmdline: None,
+                })
+                .await;
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let server_address = listener.local_addr().unwrap();
+            let app = crate::api::router::build_router(state.clone());
+            let server_task =
+                tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let (mut websocket, _) = tokio_tungstenite::connect_async(format!(
+                "ws://{server_address}/api/v1/sessions/{}/serial/ws",
+                created.id
+            ))
+            .await
+            .unwrap();
+            let opened = tokio::time::timeout(std::time::Duration::from_secs(3), websocket.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(opened, Message::Text(r#"{"type":"opened"}"#.into()));
+            let mut event = announcement(mac, "unsupported-epoch", 0);
+            event.arch = if arch == BootArch::Riscv64 {
+                BootArch::X86_64
+            } else {
+                arch
+            };
+            event.serial_id = Some(format!("{:032x}", 1));
+            event.serial_ready = true;
+            let serial = httpboot_protocol::LoaderSerialStatus {
+                serial_id: event.serial_id.clone().unwrap(),
+                ready: true,
+                parameters: Some(Default::default()),
+                binding: None,
+                error: None,
+            };
+            let observed = LoaderDeviceStatus {
+                protocol_version: DEVICE_PROTOCOL_VERSION,
+                boot_epoch: "unsupported-epoch".into(),
+                mac_address: mac,
+                current_mac_address: mac,
+                arch: event.arch,
+                loader_version: event.loader_version.clone(),
+                hardware: LoaderHardwareInfo::default(),
+                boot: None,
+                ota: None,
+                serial: Some(serial),
+            };
+            let mutations = Arc::new(AtomicUsize::new(0));
+            let writes = mutations.clone();
+            let app = Router::new()
+                .route(
+                    "/api/v1/status",
+                    get(move || {
+                        let observed = observed.clone();
+                        async move { Json(observed) }
+                    }),
+                )
+                .fallback(move || {
+                    writes.fetch_add(1, Ordering::SeqCst);
+                    async { StatusCode::OK }
+                });
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            event.http_port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let mut discovery = state.serial_manager.subscribe();
+            let operation = reconcile(state.clone(), event, "127.0.0.1:12345".parse().unwrap());
+            let error = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                tokio::select! {
+                    result = operation => result.unwrap_err(),
+                    _ = discovery.wait_for(|snapshot| snapshot.pending > 0 || snapshot.candidates > 0 || snapshot.leased > 0) => {
+                        panic!("unsupported architecture started serial discovery before rejection")
+                    }
+                }
+            }).await.unwrap();
+            assert!(error.to_string().contains(expected), "{error:#}");
+            let control = tokio::time::timeout(std::time::Duration::from_secs(3), websocket.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let Message::Text(control) = control else {
+                panic!("expected error control message");
+            };
+            let control: serde_json::Value = serde_json::from_str(&control).unwrap();
+            assert_eq!(control["type"], "error");
+            assert!(
+                control["message"].as_str().unwrap().contains(expected),
+                "{control}"
+            );
+            let status = session.loader_status().await.unwrap().status.unwrap();
+            assert!(
+                matches!(status, httpboot_protocol::LoaderStatusPhase::Failed { ref code, ref message }
+                if code == "boot_preflight_failed" && message.contains(expected))
+            );
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                while !session.is_stop_requested() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            let runtime = session.serial_runtime.snapshot();
+            assert_eq!(
+                runtime.phase,
+                crate::serial::runtime::SerialRuntimePhase::Failed
+            );
+            assert!(runtime.error.unwrap().contains(expected));
+            assert!(runtime.port.is_none() && runtime.binding_id.is_none());
+            assert_eq!(mutations.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                *discovery.borrow(),
+                ostool_serial::ManagerSnapshot::default()
+            );
+            server.abort();
+            server_task.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn boot_handoff_cancels_lock_wait_on_power_change() {
+        use crate::serial::runtime::SerialRuntimePhase;
+        use std::task::Poll;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mac = "02:00:00:00:00:03".parse().unwrap();
+        let mut state = test_state(dir.path(), mac).await;
+        state.serial_manager = ostool_serial::SerialManager::new(Arc::new(NoSerialPorts));
+        let created = state
+            .create_session_with_board_id("x86_64-uefi-http", "board-1", &[], None)
             .await
             .unwrap();
         let session = state.session_state(&created.id).await.unwrap();
-        let boot_id = "boot-1";
+        session.set_serial_connected(true);
+        let _serial = session
+            .serial_runtime
+            .attach(state.clone(), session.clone())
+            .await
+            .unwrap();
+        let publishing = session.boot_operation.lock().await;
+        let bytes = crate::boot_image::test_elf(62);
+        state
+            .tftp_manager
+            .read()
+            .await
+            .clone()
+            .put_session_file(&created.id, "kernel.elf", &bytes)
+            .await
+            .unwrap();
+        let mut event = announcement(mac, "before-power-change", 0);
+        event.serial_id = Some(format!("{:032x}", 2));
+        event.serial_ready = true;
+        let observed = LoaderDeviceStatus {
+            protocol_version: DEVICE_PROTOCOL_VERSION,
+            boot_epoch: event.boot_epoch.clone(),
+            mac_address: mac,
+            current_mac_address: mac,
+            arch: event.arch,
+            loader_version: event.loader_version.clone(),
+            hardware: LoaderHardwareInfo::default(),
+            boot: None,
+            ota: None,
+            serial: Some(httpboot_protocol::LoaderSerialStatus {
+                serial_id: event.serial_id.clone().unwrap(),
+                ready: true,
+                parameters: Some(Default::default()),
+                binding: None,
+                error: None,
+            }),
+        };
+        let app = Router::new().route(
+            "/api/v1/status",
+            get(move || {
+                let observed = observed.clone();
+                async move { Json(observed) }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        event.http_port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut operation = Box::pin(reconcile(
+            state.clone(),
+            event,
+            "127.0.0.1:12345".parse().unwrap(),
+        ));
+        // Drive the real HTTP response through discovery before testing the lock wait.
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            tokio::select! {
+                result = operation.as_mut() => panic!("handoff finished before publication: {result:?}"),
+                _ = async {
+                    while state.loader_registry.snapshots().await.is_empty() {
+                        tokio::task::yield_now().await;
+                    }
+                } => {}
+            }
+        }).await.unwrap();
+        assert!(futures_util::poll!(operation.as_mut()).is_pending());
+        session.change_power(false).await;
         session
             .publish_boot_command(SessionBootCommand {
-                boot_id: boot_id.into(),
+                boot_id: "after-power-change".into(),
                 kernel_path: format!("/boot/sessions/{}/kernel.elf", created.id),
-                kernel_size: kernel.len() as u64,
-                kernel_sha256: hex_sha256(&kernel),
+                kernel_size: bytes.len() as u64,
+                kernel_sha256: hex_sha256(&bytes),
                 arch: BootArch::X86_64,
                 image_format: ImageFormat::Elf64,
                 entry_symbol: None,
                 initramfs: None,
-                cmdline: Some("console=ttyS0".into()),
+                cmdline: None,
             })
             .await;
-        let stale_manifest = DeviceBootJob {
-            boot_id: "stale-boot".into(),
-            arch: BootArch::X86_64,
-            image_format: ImageFormat::Elf64,
-            kernel: httpboot_protocol::DeviceBootImage {
-                size: 1,
-                sha256: "00".repeat(32),
-            },
-            initramfs: None,
-            cmdline: None,
-            entry_symbol: None,
-        };
-        let fake = Arc::new(Mutex::new(FakeBootDevice {
-            status: LoaderDeviceStatus {
-                serial: None,
-                protocol_version: DEVICE_PROTOCOL_VERSION,
-                boot_epoch: "boot-epoch".into(),
-                mac_address: mac,
-                current_mac_address: mac,
-                arch: BootArch::X86_64,
-                loader_version: "fake-v5".into(),
-                hardware: LoaderHardwareInfo::default(),
-                boot: Some(DeviceBootStatus {
-                    boot_id: stale_manifest.boot_id.clone(),
-                    phase: "accepted".into(),
-                    kernel_received: false,
-                    initramfs_received: true,
-                    last_error: None,
-                }),
-                ota: None,
-            },
-            manifest: Some(stale_manifest),
-            create_attempts: 0,
-            delete_attempts: 0,
-            upload_attempts: 0,
-            start_attempts: 0,
-            delete_returns_not_found: false,
-            reject_create_without_manifest: false,
-            reject_upload: true,
-            kernel,
-        }));
-        let app = Router::new()
-            .route("/api/v1/status", get(get_boot_status))
-            .route("/api/v1/boot/jobs", post(create_boot_job))
-            .route("/api/v1/boot/jobs/{id}", delete(delete_boot_job))
-            .route("/api/v1/boot/jobs/{id}/kernel", put(put_kernel))
-            .route("/api/v1/boot/jobs/{id}/start", post(start_boot))
-            .with_state(fake.clone());
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let observed = fake.lock().await.status.clone();
-        let command = session.boot_command().await.unwrap();
-        let client = reqwest::Client::new();
-        let endpoint = format!("http://127.0.0.1:{port}");
-
-        let error = super::push_boot(
-            &state,
-            &client,
-            &endpoint,
-            &observed,
-            &command,
-            &session,
-            "test-binding",
-        )
-        .await
-        .unwrap_err();
-        let error = format!("{error:#}");
         assert!(
-            error.contains("device HTTP 400 Bad Request: digest mismatch"),
-            "{error}"
+            matches!(futures_util::poll!(operation.as_mut()), Poll::Ready(Ok(()))),
+            "power change must cancel the stale handoff while publication still holds the lock"
         );
-        fake.lock().await.reject_upload = false;
+        drop(publishing);
+        let runtime = session.serial_runtime.snapshot();
+        assert_eq!(runtime.phase, SerialRuntimePhase::WaitingDevice);
+        assert!(runtime.boot_epoch.is_none() && runtime.error.is_none());
+        assert!(!session.is_stop_requested());
+        assert_eq!(
+            *state.serial_manager.subscribe().borrow(),
+            ostool_serial::ManagerSnapshot::default()
+        );
+        server.abort();
+    }
 
-        super::push_boot(
-            &state,
-            &client,
-            &endpoint,
-            &observed,
-            &command,
-            &session,
-            "test-binding",
-        )
-        .await
-        .unwrap();
-        {
+    #[tokio::test]
+    async fn successful_status_waits_for_complete_response_body() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // A device can send its headers before the rest of the response. The
+        // start acknowledgement is complete only after every body byte arrives.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (finish_body, body_ready) = tokio::sync::oneshot::channel();
+        let delayed_response = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                stream.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+                assert!(request.len() <= 4096, "unexpectedly large request head");
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 202 Accepted\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{",
+                )
+                .await
+                .unwrap();
+            body_ready.await.unwrap();
+            stream.write_all(b"\"ok\":true}").await.unwrap();
+        });
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("http://{address}/start"))
+            .send()
+            .await
+            .unwrap();
+        let mut completed_response = Box::pin(super::require_status(response, 202));
+        assert!(
+            futures_util::poll!(completed_response.as_mut()).is_pending(),
+            "a successful status must not return before the full response body"
+        );
+        finish_body.send(()).unwrap();
+        completed_response.await.unwrap();
+        delayed_response.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn boot_push_transfers_payloads_and_retries_stale_job_once() {
+        let initramfs_bytes = b"test initramfs payload";
+        for (cmdline, has_initramfs) in [
+            (None, false),
+            (Some("console=ttyS0"), false),
+            (None, true),
+            (Some("console=ttyS0"), true),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mac = "02:00:00:00:00:02".parse().unwrap();
+            let state = test_state(dir.path(), mac).await;
+            let created = state
+                .create_session_with_board_id(
+                    "x86_64-uefi-http",
+                    "board-1",
+                    &[],
+                    Some("device-test".into()),
+                )
+                .await
+                .unwrap();
+            let kernel = b"fake ELF64 kernel".to_vec();
+            let manager = state.tftp_manager.read().await.clone();
+            manager
+                .put_session_file(&created.id, "kernel.elf", &kernel)
+                .await
+                .unwrap();
+            let initramfs_file = has_initramfs.then(|| BootFile {
+                path: format!("/boot/sessions/{}/initramfs.cpio", created.id),
+                size: initramfs_bytes.len() as u64,
+                sha256: hex_sha256(initramfs_bytes),
+            });
+            if has_initramfs {
+                manager
+                    .put_session_file(&created.id, "initramfs.cpio", initramfs_bytes)
+                    .await
+                    .unwrap();
+            }
+            let session = state.session_state(&created.id).await.unwrap();
+            let boot_id = "boot-1";
+            session
+                .publish_boot_command(SessionBootCommand {
+                    boot_id: boot_id.into(),
+                    kernel_path: format!("/boot/sessions/{}/kernel.elf", created.id),
+                    kernel_size: kernel.len() as u64,
+                    kernel_sha256: hex_sha256(&kernel),
+                    arch: BootArch::X86_64,
+                    image_format: ImageFormat::Elf64,
+                    entry_symbol: None,
+                    initramfs: initramfs_file.clone(),
+                    cmdline: cmdline.map(str::to_owned),
+                })
+                .await;
+            let stale_manifest = DeviceBootJob {
+                boot_id: "stale-boot".into(),
+                arch: BootArch::X86_64,
+                image_format: ImageFormat::Elf64,
+                kernel: httpboot_protocol::DeviceBootImage {
+                    size: 1,
+                    sha256: "00".repeat(32),
+                },
+                initramfs: None,
+                cmdline: None,
+                entry_symbol: None,
+            };
+            let fake = Arc::new(Mutex::new(FakeBootDevice {
+                status: LoaderDeviceStatus {
+                    serial: None,
+                    protocol_version: DEVICE_PROTOCOL_VERSION,
+                    boot_epoch: "boot-epoch".into(),
+                    mac_address: mac,
+                    current_mac_address: mac,
+                    arch: BootArch::X86_64,
+                    loader_version: "fake-v5".into(),
+                    hardware: LoaderHardwareInfo::default(),
+                    boot: Some(DeviceBootStatus {
+                        boot_id: stale_manifest.boot_id.clone(),
+                        phase: "accepted".into(),
+                        kernel_received: false,
+                        initramfs_received: true,
+                        last_error: None,
+                    }),
+                    ota: None,
+                },
+                manifest: Some(stale_manifest),
+                create_attempts: 0,
+                delete_attempts: 0,
+                upload_attempts: 0,
+                start_attempts: 0,
+                delete_returns_not_found: false,
+                reject_create_without_manifest: false,
+                reject_upload: true,
+                kernel,
+                initramfs: Vec::new(),
+            }));
+            let app = Router::new()
+                .route("/api/v1/status", get(get_boot_status))
+                .route("/api/v1/boot/jobs", post(create_boot_job))
+                .route("/api/v1/boot/jobs/{id}", delete(delete_boot_job))
+                .route("/api/v1/boot/jobs/{id}/kernel", put(put_kernel))
+                .route("/api/v1/boot/jobs/{id}/initramfs", put(put_initramfs))
+                .route("/api/v1/boot/jobs/{id}/start", post(start_boot))
+                .with_state(fake.clone());
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let observed = fake.lock().await.status.clone();
+            let command = session.boot_command().await.unwrap();
+            let client = reqwest::Client::new();
+            let endpoint = format!("http://127.0.0.1:{port}");
+
+            let error = super::push_boot(
+                &state,
+                &client,
+                &endpoint,
+                &observed,
+                &BootRequest::new(&command).unwrap(),
+                &session,
+                "test-binding",
+            )
+            .await
+            .unwrap_err();
+            let error = format!("{error:#}");
+            assert!(
+                error.contains("device HTTP 400 Bad Request: digest mismatch"),
+                "{error}"
+            );
+            fake.lock().await.reject_upload = false;
+
+            super::push_boot(
+                &state,
+                &client,
+                &endpoint,
+                &observed,
+                &BootRequest::new(&command).unwrap(),
+                &session,
+                "test-binding",
+            )
+            .await
+            .unwrap();
+            {
+                let fake = fake.lock().await;
+                assert_eq!(fake.create_attempts, 3);
+                assert_eq!(fake.delete_attempts, 1);
+                assert_eq!(fake.upload_attempts, 2);
+                assert_eq!(fake.start_attempts, 1);
+                let manifest = fake.manifest.as_ref().unwrap();
+                assert_eq!(manifest.boot_id, boot_id);
+                assert_eq!(manifest.cmdline.as_deref(), cmdline);
+                assert_eq!(
+                    manifest.initramfs,
+                    initramfs_file
+                        .as_ref()
+                        .map(|file| httpboot_protocol::DeviceBootImage {
+                            size: file.size,
+                            sha256: file.sha256.clone(),
+                        })
+                );
+                assert_eq!(
+                    fake.initramfs.as_slice(),
+                    if has_initramfs {
+                        initramfs_bytes.as_slice()
+                    } else {
+                        &[]
+                    }
+                );
+            }
+
+            session
+                .publish_boot_command(SessionBootCommand {
+                    boot_id: "boot-2".into(),
+                    kernel_path: format!("/boot/sessions/{}/kernel.elf", created.id),
+                    kernel_size: b"fake ELF64 kernel".len() as u64,
+                    kernel_sha256: hex_sha256(b"fake ELF64 kernel"),
+                    arch: BootArch::X86_64,
+                    image_format: ImageFormat::Elf64,
+                    entry_symbol: None,
+                    initramfs: initramfs_file.clone(),
+                    cmdline: cmdline.map(str::to_owned),
+                })
+                .await;
+            {
+                let mut fake = fake.lock().await;
+                fake.delete_returns_not_found = true;
+                fake.reject_create_without_manifest = true;
+            }
+            let error = super::push_boot(
+                &state,
+                &client,
+                &endpoint,
+                &observed,
+                &BootRequest::new(&session.boot_command().await.unwrap()).unwrap(),
+                &session,
+                "test-binding",
+            )
+            .await
+            .unwrap_err();
+            let error = format!("{error:#}");
+            assert!(error.contains("device refused boot job: create still conflicts"));
             let fake = fake.lock().await;
-            assert_eq!(fake.create_attempts, 3);
-            assert_eq!(fake.delete_attempts, 1);
+            assert_eq!(fake.create_attempts, 5);
+            assert_eq!(fake.delete_attempts, 2);
             assert_eq!(fake.upload_attempts, 2);
             assert_eq!(fake.start_attempts, 1);
-            assert_eq!(fake.manifest.as_ref().unwrap().boot_id, boot_id);
+            assert!(fake.manifest.is_none());
+            server.abort();
         }
-
-        session
-            .publish_boot_command(SessionBootCommand {
-                boot_id: "boot-2".into(),
-                kernel_path: format!("/boot/sessions/{}/kernel.elf", created.id),
-                kernel_size: b"fake ELF64 kernel".len() as u64,
-                kernel_sha256: hex_sha256(b"fake ELF64 kernel"),
-                arch: BootArch::X86_64,
-                image_format: ImageFormat::Elf64,
-                entry_symbol: None,
-                initramfs: None,
-                cmdline: Some("console=ttyS0".into()),
-            })
-            .await;
-        {
-            let mut fake = fake.lock().await;
-            fake.delete_returns_not_found = true;
-            fake.reject_create_without_manifest = true;
-        }
-        let error = super::push_boot(
-            &state,
-            &client,
-            &endpoint,
-            &observed,
-            &session.boot_command().await.unwrap(),
-            &session,
-            "test-binding",
-        )
-        .await
-        .unwrap_err();
-        let error = format!("{error:#}");
-        assert!(error.contains("device refused boot job: create still conflicts"));
-        let fake = fake.lock().await;
-        assert_eq!(fake.create_attempts, 5);
-        assert_eq!(fake.delete_attempts, 2);
-        assert_eq!(fake.upload_attempts, 2);
-        assert_eq!(fake.start_attempts, 1);
-        assert!(fake.manifest.is_none());
-        server.abort();
     }
 }

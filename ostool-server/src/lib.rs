@@ -29,8 +29,10 @@ pub use config::{
     AxloaderSerialStopBits, BoardConfig, BoardNetworkIdentity, BootConfig, BuiltinTftpConfig,
     CustomPowerManagement, LoaderNetworkConfig, PowerManagementConfig, PxeProfile, SerialConfig,
     SerialPortKey, SerialPortKeyKind, ServerConfig, SystemTftpdHpaConfig, TftpConfig,
-    TftpNetworkConfig, UbootNetworkMode, UbootProfile, UefiBootArch, UefiHttpProfile,
-    UploadLimitsConfig, VirtualQemuConfig, ZhongshengRelayPowerManagement,
+    TftpNetworkConfig, UbootNetworkMode, UbootProfile, UefiHttpProfile, UploadLimitsConfig,
+    VirtualQemuConfig, ZhongshengRelayPowerManagement,
 };
 pub use dtb_store::{DtbFile, DtbStore};
 pub use state::{AppState, BoardLeaseState, build_app_state};
+
+mod boot_image;
