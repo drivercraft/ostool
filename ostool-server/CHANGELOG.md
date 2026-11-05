@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/drivercraft/ostool/compare/ostool-server-v0.9.1...ostool-server-v0.10.0) - 2026-11-05
+
+### Fixed
+
+- *(httpboot)* verify kernel targets and delegate OTA validation ([#217](https://github.com/drivercraft/ostool/pull/217))
+- *(ostool-server)* support stable multi-port USB serial identities ([#215](https://github.com/drivercraft/ostool/pull/215))
+
 ## [0.9.1](https://github.com/drivercraft/ostool/compare/ostool-server-v0.9.0...ostool-server-v0.9.1) - 2026-10-16
 
 ### Other
