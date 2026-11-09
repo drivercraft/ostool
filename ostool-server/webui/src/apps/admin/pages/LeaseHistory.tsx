@@ -32,6 +32,7 @@ const reasons: Record<string, string> = {
   client_released: "客户端释放",
   admin_released: "管理员释放",
   serial_closed: "串口连接关闭",
+  boot_failed: "启动失败",
   lease_expired: "租约到期 / 心跳超时",
   rental_revoked: "租赁取消或权限失效",
   authorization_unavailable: "鉴权或租约存储不可用",

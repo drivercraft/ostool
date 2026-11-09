@@ -16,8 +16,7 @@ use tokio_util::compat::{FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt};
 use crate::{
     board::{
         client::{
-            BoardServerClient, BootConfig as RemoteBootConfig, HttpBootKernelUpload,
-            SerialStatusResponse, SessionCreatedResponse, UefiBootArch,
+            BoardServerClient, HttpBootKernelUpload, SerialStatusResponse, SessionCreatedResponse,
         },
         config::BoardRunConfig,
     },
@@ -60,21 +59,12 @@ struct HttpBootBoardRunner {
 
 impl HttpBootBoardRunner {
     async fn run(self) -> anyhow::Result<()> {
-        let boot_profile = self
-            .client
-            .get_boot_profile(&self.session.session_id)
-            .await
-            .context("failed to get HTTP Boot profile")?;
-        let RemoteBootConfig::UefiHttp(profile) = boot_profile.boot else {
-            bail!(
-                "unsupported board boot mode `{}`; expected `httpboot`",
-                self.session.boot_mode
-            );
-        };
-        let arch = profile
-            .boot_arch
-            .map(boot_arch_from_profile)
-            .unwrap_or(BootArch::X86_64);
+        anyhow::ensure!(
+            matches!(self.session.boot_mode.as_str(), "httpboot" | "uefi_http"),
+            "unsupported board boot mode `{}`; expected `httpboot`",
+            self.session.boot_mode
+        );
+        let arch = boot_arch_from_elf(self.input.arch())?;
         let elf_path = self
             .input
             .artifacts()
@@ -82,6 +72,10 @@ impl HttpBootBoardRunner {
             .ok_or_else(|| anyhow!("HTTP Boot requires a prepared runtime ELF"))?;
         let kernel_bytes =
             fs::read(elf_path).with_context(|| format!("failed to read {}", elf_path.display()))?;
+        anyhow::ensure!(
+            kernel_bytes.starts_with(b"\x7fELF\x02"),
+            "HTTP Boot requires an ELF64 kernel"
+        );
         let kernel_sha256 = hex_sha256(&kernel_bytes);
         let initramfs = match self.board_config.boot.initramfs_path() {
             Some(path) => {
@@ -156,29 +150,32 @@ impl HttpBootBoardRunner {
         println!("Serial is connected for target-system interaction only.");
         let status_client = self.client.clone();
         let status_session_id = self.session.session_id.clone();
-        let terminal = run_terminal(
-            serial_rx,
-            serial_tx,
-            TerminalRunOptions {
-                fail_regex: self.board_config.fail_regex,
-                shell_check_steps: self.board_config.shell_check_steps,
-                timeout: self.board_config.timeout,
-            },
-        );
-        let status = monitor_loader_status(status_client, status_session_id);
-        tokio::pin!(terminal);
-        tokio::pin!(status);
-        let result = tokio::select! {
-            result = &mut terminal => result,
-            result = &mut status => result,
+        let result = {
+            let terminal = run_terminal(
+                serial_rx,
+                serial_tx,
+                TerminalRunOptions {
+                    fail_regex: self.board_config.fail_regex,
+                    shell_check_steps: self.board_config.shell_check_steps,
+                    timeout: self.board_config.timeout,
+                },
+            );
+            let status = monitor_loader_status(status_client, status_session_id);
+            tokio::pin!(terminal);
+            tokio::pin!(status);
+            tokio::select! {
+                result = &mut terminal => result,
+                result = &mut status => result,
+            }
         };
         let shutdown_result = tasks.shutdown_with_timeout(Duration::from_secs(2)).await;
-        if result.is_ok() {
-            shutdown_result?;
-        } else if let Err(err) = shutdown_result {
-            log::warn!("serial websocket cleanup failed: {err:#}");
+        match (result, shutdown_result) {
+            (Err(error), Err(shutdown_error)) => Err(error.context(format!(
+                "serial websocket cleanup failed: {shutdown_error:#}"
+            ))),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(()), shutdown_result) => shutdown_result,
         }
-        result
     }
 }
 
@@ -385,13 +382,13 @@ fn serial_ws_url(
     client.resolve_ws_url(ws_path)
 }
 
-fn boot_arch_from_profile(arch: UefiBootArch) -> BootArch {
+fn boot_arch_from_elf(arch: Option<object::Architecture>) -> anyhow::Result<BootArch> {
     match arch {
-        UefiBootArch::X86_64 => BootArch::X86_64,
-        UefiBootArch::Aarch64 => BootArch::Aarch64,
-        UefiBootArch::Loongarch64 => BootArch::Loongarch64,
-        UefiBootArch::Riscv64 => BootArch::Riscv64,
-        UefiBootArch::Other => BootArch::Other,
+        Some(object::Architecture::X86_64) => Ok(BootArch::X86_64),
+        Some(object::Architecture::Riscv64) => Ok(BootArch::Riscv64),
+        Some(object::Architecture::LoongArch64) => Ok(BootArch::Loongarch64),
+        Some(arch) => bail!("unsupported HTTP Boot kernel architecture: {arch:?}"),
+        None => bail!("HTTP Boot requires a detected kernel ELF architecture"),
     }
 }
 
@@ -429,7 +426,346 @@ mod tests {
 
     use tokio::io::AsyncWrite;
 
-    use super::write_board_input;
+    use super::{HttpBootBoardRunner, write_board_input};
+    use crate::{
+        artifact::{
+            runtime::{RuntimeArtifactOptions, prepare_runtime_artifacts},
+            state::OutputArtifacts,
+        },
+        board::{
+            client::{
+                BoardServerClient, SessionCreatedResponse,
+                tests::{read_http_request_bytes, write_http_response},
+            },
+            config::BoardRunConfig,
+        },
+        process::ProcessContext,
+        project::variables::VariableScope,
+        run::uboot::UbootRunInput,
+    };
+
+    fn minimal_elf(machine: u16, class: u8) -> Vec<u8> {
+        let mut bytes = vec![0_u8; 0x104];
+        bytes[..4].copy_from_slice(b"\x7fELF");
+        bytes[4] = class;
+        bytes[5] = object::elf::ELFDATA2LSB;
+        bytes[6] = object::elf::EV_CURRENT;
+        bytes[16..18].copy_from_slice(&object::elf::ET_EXEC.to_le_bytes());
+        bytes[18..20].copy_from_slice(&machine.to_le_bytes());
+        bytes[20..24].copy_from_slice(&u32::from(object::elf::EV_CURRENT).to_le_bytes());
+        if class == object::elf::ELFCLASS64 {
+            bytes[24..32].copy_from_slice(&0x8000_0000_u64.to_le_bytes());
+            bytes[32..40].copy_from_slice(&64_u64.to_le_bytes());
+            bytes[52..54].copy_from_slice(&64_u16.to_le_bytes());
+            bytes[54..56].copy_from_slice(&56_u16.to_le_bytes());
+            bytes[56..58].copy_from_slice(&1_u16.to_le_bytes());
+            bytes[64..68].copy_from_slice(&object::elf::PT_LOAD.to_le_bytes());
+            bytes[68..72].copy_from_slice(&(object::elf::PF_R | object::elf::PF_X).to_le_bytes());
+            bytes[72..80].copy_from_slice(&0x100_u64.to_le_bytes());
+            bytes[80..88].copy_from_slice(&0x8000_0000_u64.to_le_bytes());
+            bytes[88..96].copy_from_slice(&0x8000_0000_u64.to_le_bytes());
+            bytes[96..104].copy_from_slice(&4_u64.to_le_bytes());
+            bytes[104..112].copy_from_slice(&4_u64.to_le_bytes());
+            bytes[112..120].copy_from_slice(&4_u64.to_le_bytes());
+        } else {
+            bytes[40..42].copy_from_slice(&52_u16.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn test_input(root: &std::path::Path, bytes: &[u8]) -> UbootRunInput {
+        let elf = root.join("kernel.elf");
+        std::fs::write(&elf, bytes).unwrap();
+        let context = ProcessContext::new(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            VariableScope::new(root.to_path_buf(), root.to_path_buf(), root.to_path_buf()),
+            Some(elf.clone()),
+        );
+        let prepared = prepare_runtime_artifacts(
+            &context,
+            RuntimeArtifactOptions {
+                elf_path: elf,
+                to_bin: false,
+                bin_dir: None,
+                debug: false,
+                cargo_artifact_dir: None,
+                strip_elf: false,
+            },
+        )
+        .unwrap();
+        let mut artifacts = OutputArtifacts::default();
+        artifacts.apply_prepared_runtime_artifacts(&prepared);
+        UbootRunInput::new(context, artifacts, prepared.arch())
+    }
+
+    fn test_runner(input: UbootRunInput, port: u16, boot_mode: &str) -> HttpBootBoardRunner {
+        HttpBootBoardRunner {
+            input,
+            board_config: BoardRunConfig::default(),
+            client: BoardServerClient::new("127.0.0.1", port).unwrap(),
+            session: SessionCreatedResponse {
+                session_id: "demo".into(),
+                board_id: "board-1".into(),
+                lease_expires_at: chrono::Utc::now(),
+                serial_available: true,
+                boot_mode: boot_mode.into(),
+                ws_url: None,
+            },
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum PreflightFailureDelivery {
+        Websocket,
+        DuringShutdown,
+        LoaderStatus,
+    }
+
+    async fn run_preflight_failure(
+        delivery: PreflightFailureDelivery,
+        reason: &'static str,
+    ) -> String {
+        use futures::{SinkExt, StreamExt};
+        use tokio::sync::oneshot;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let temp = tempfile::tempdir().unwrap();
+        let input = test_input(
+            temp.path(),
+            &minimal_elf(object::elf::EM_RISCV, object::elf::ELFCLASS64),
+        );
+        let http = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let http_address = http.local_addr().unwrap();
+        let websocket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let websocket_address = websocket.local_addr().unwrap();
+        let (poll_started, poll_received) = oneshot::channel();
+        let (failure_sent, failure_received) = oneshot::channel();
+        let websocket_server = tokio::spawn(async move {
+            let (socket, _) = websocket.accept().await.unwrap();
+            let mut websocket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            if matches!(delivery, PreflightFailureDelivery::Websocket) {
+                poll_received.await.unwrap();
+            } else {
+                // A status response wins first. Deliver the server error during
+                // cleanup, after the runner releases its terminal writer.
+                assert_eq!(
+                    websocket.next().await.unwrap().unwrap(),
+                    Message::Text(r#"{"type":"close"}"#.into())
+                );
+            }
+            if !matches!(delivery, PreflightFailureDelivery::LoaderStatus) {
+                websocket
+                    .send(Message::Text(
+                        serde_json::json!({"type": "error", "message": reason})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+            websocket.close(None).await.unwrap();
+            let _ = failure_sent.send(());
+        });
+        let http_server = tokio::spawn(async move {
+            let (mut upload, _) = http.accept().await.unwrap();
+            let request = read_http_request_bytes(&mut upload).await;
+            assert!(request.starts_with(b"PUT /api/v1/sessions/demo/http-boot/kernel "));
+            let response = serde_json::json!({
+                "boot_id": "boot-1",
+                "kernel_url": format!("http://{http_address}/boot/sessions/demo/kernel.elf"),
+                "kernel_size": 260,
+                "kernel_sha256": null
+            });
+            write_http_response(&mut upload, "201 Created", &response.to_string()).await;
+            let (mut serial, _) = http.accept().await.unwrap();
+            let request = read_http_request_bytes(&mut serial).await;
+            assert!(request.starts_with(b"GET /api/v1/sessions/demo/serial "));
+            let response = serde_json::json!({
+                "available": true,
+                "connected": false,
+                "ws_url": format!("ws://{websocket_address}/serial")
+            });
+            write_http_response(&mut serial, "200 OK", &response.to_string()).await;
+            let (mut status, _) = http.accept().await.unwrap();
+            let request = read_http_request_bytes(&mut status).await;
+            assert!(request.starts_with(b"GET /api/v1/sessions/demo/loader-status "));
+            if matches!(delivery, PreflightFailureDelivery::LoaderStatus) {
+                let response = serde_json::json!({
+                    "session_id": "demo",
+                    "boot_id": "boot-1",
+                    "registration_id": "epoch-1",
+                    "status": {"phase": "failed", "code": "boot_preflight_failed", "message": reason}
+                });
+                write_http_response(&mut status, "200 OK", &response.to_string()).await;
+            } else {
+                if matches!(delivery, PreflightFailureDelivery::Websocket) {
+                    poll_started.send(()).unwrap();
+                    failure_received.await.unwrap();
+                }
+                write_http_response(
+                    &mut status,
+                    "404 Not Found",
+                    r#"{"code":"not_found","message":"session not found"}"#,
+                )
+                .await;
+            }
+        });
+        let mut runner = test_runner(input, http_address.port(), "httpboot");
+        runner.board_config.shell_check_steps = vec![super::ShellCheckStep {
+            success_regex: Some(vec!["KERNEL_READY".into()]),
+            ..Default::default()
+        }];
+        let result = tokio::time::timeout(Duration::from_secs(6), runner.run()).await;
+        http_server.abort();
+        websocket_server.abort();
+        let _ = http_server.await;
+        let _ = websocket_server.await;
+        let error = result
+            .expect("HTTP Boot runner did not finish after a preflight failure")
+            .expect_err("preflight failure must fail the HTTP Boot run");
+        format!("{error:#}")
+    }
+
+    #[tokio::test]
+    async fn httpboot_preserves_websocket_preflight_error_after_session_release() {
+        let reason = "kernel architecture Riscv64 does not match device X86_64";
+        let error = run_preflight_failure(PreflightFailureDelivery::Websocket, reason).await;
+        assert!(error.contains(reason), "{error}");
+    }
+
+    #[tokio::test]
+    async fn httpboot_preserves_preflight_error_received_during_shutdown() {
+        let reason = "kernel ELF architecture Riscv64 does not match declared X86_64";
+        let error = run_preflight_failure(PreflightFailureDelivery::DuringShutdown, reason).await;
+        assert!(error.contains(reason), "{error}");
+    }
+
+    #[tokio::test]
+    async fn httpboot_preserves_polled_preflight_failure() {
+        let reason = "kernel architecture Riscv64 does not match device Loongarch64";
+        let error = run_preflight_failure(PreflightFailureDelivery::LoaderStatus, reason).await;
+        assert!(error.contains("boot_preflight_failed"), "{error}");
+        assert!(error.contains(reason), "{error}");
+    }
+
+    #[tokio::test]
+    async fn httpboot_upload_uses_elf_architecture_without_boot_profile() {
+        for (machine, arch, mode) in [
+            (object::elf::EM_X86_64, "x86_64", "httpboot"),
+            (object::elf::EM_RISCV, "riscv64", "httpboot"),
+            (object::elf::EM_LOONGARCH, "loongarch64", "uefi_http"),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let bytes = minimal_elf(machine, object::elf::ELFCLASS64);
+            let input = test_input(temp.path(), &bytes);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let request = read_http_request_bytes(&mut socket).await;
+                write_http_response(&mut socket, "409 Conflict", "upload intercepted").await;
+                request
+            });
+
+            let error = test_runner(input, port, mode).run().await.unwrap_err();
+            let request = server.await.unwrap();
+            let header_end = request
+                .windows(4)
+                .position(|part| part == b"\r\n\r\n")
+                .unwrap();
+            let headers = String::from_utf8_lossy(&request[..header_end]).to_ascii_lowercase();
+
+            assert!(
+                headers.starts_with("put /api/v1/sessions/demo/http-boot/kernel "),
+                "{headers}"
+            );
+            assert!(
+                headers.contains(&format!("x-httpboot-arch: {arch}\r\n")),
+                "{headers}"
+            );
+            assert!(
+                headers.contains("x-httpboot-image-format: elf64\r\n"),
+                "{headers}"
+            );
+            assert_eq!(&request[header_end + 4..], bytes);
+            assert_eq!(error.to_string(), "failed to upload HTTP Boot kernel");
+        }
+    }
+
+    #[tokio::test]
+    async fn httpboot_rejects_unsupported_kernel_architectures_before_upload() {
+        for (machine, class) in [
+            (object::elf::EM_AARCH64, object::elf::ELFCLASS64),
+            (object::elf::EM_NONE, object::elf::ELFCLASS64),
+            (object::elf::EM_X86_64, object::elf::ELFCLASS32),
+            (object::elf::EM_RISCV, object::elf::ELFCLASS32),
+            (object::elf::EM_LOONGARCH, object::elf::ELFCLASS32),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let input = test_input(temp.path(), &minimal_elf(machine, class));
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            drop(listener);
+
+            let error = test_runner(input, port, "httpboot")
+                .run()
+                .await
+                .unwrap_err();
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("unsupported HTTP Boot kernel architecture"),
+                "{error:#}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn httpboot_rejects_non_elf_kernel_before_upload() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut bytes = vec![0_u8; 32];
+        bytes[..4].copy_from_slice(&object::macho::MH_MAGIC_64.to_le_bytes());
+        bytes[4..8].copy_from_slice(&object::macho::CPU_TYPE_X86_64.to_le_bytes());
+        bytes[12..16].copy_from_slice(&object::macho::MH_EXECUTE.to_le_bytes());
+        let input = test_input(temp.path(), &bytes);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let error = test_runner(input, port, "httpboot")
+            .run()
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "HTTP Boot requires an ELF64 kernel");
+    }
+
+    #[tokio::test]
+    async fn httpboot_rejects_missing_kernel_architecture_before_upload() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = ProcessContext::new(
+            temp.path().into(),
+            temp.path().into(),
+            VariableScope::new(temp.path().into(), temp.path().into(), temp.path().into()),
+            None,
+        );
+        let input = UbootRunInput::new(context, OutputArtifacts::default(), None);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let error = test_runner(input, port, "httpboot")
+            .run()
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "HTTP Boot requires a detected kernel ELF architecture"
+        );
+    }
 
     #[derive(Clone, Copy)]
     enum WriterFailure {

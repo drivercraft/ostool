@@ -54,7 +54,8 @@ export interface TftpStatus {
   last_error: string | null;
 }
 
-export type SerialPortKeyKind = "serial_number" | "usb_id" | "usb_path" | "qemu";
+export type SerialPortKeyKind =
+  "serial_number" | "usb_id" | "usb_path" | "qemu";
 
 export interface SerialPortKey {
   kind: SerialPortKeyKind;
@@ -134,7 +135,6 @@ export interface PxeProfile {
 
 export interface UefiHttpProfile {
   kind: "httpboot";
-  boot_arch?: string | null;
   serial_parameters?: AxloaderSerialParameters | null;
 }
 
@@ -237,6 +237,8 @@ export interface LoaderUpdateJob {
     | "cancelled";
   error: string | null;
   delivery_attempts: number;
+  next_delivery_at?: string | null;
+  waiting_for_device_change?: boolean;
 }
 
 export interface LoaderOtaResources {

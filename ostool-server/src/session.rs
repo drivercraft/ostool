@@ -50,6 +50,7 @@ pub enum SessionStopReason {
     AuthorizationUnavailable,
     ServerShutdown,
     SerialClosed,
+    BootFailed,
     Expired,
     Dropped,
 }
@@ -60,6 +61,7 @@ impl SessionStopReason {
             Self::ApiDelete => "client_released",
             Self::AdminRelease => "admin_released",
             Self::SerialClosed => "serial_closed",
+            Self::BootFailed => "boot_failed",
             Self::Expired => "lease_expired",
             Self::Dropped => "session_dropped",
             Self::RentalRevoked => "rental_revoked",
@@ -133,6 +135,8 @@ pub struct SessionState {
     lifecycle_state: AtomicU8,
     stop_requested: AtomicBool,
     serial_connected: AtomicBool,
+    // Kernel storage and publication must not overlap another upload or handoff.
+    pub(crate) boot_operation: Mutex<()>,
     loader: RwLock<SessionLoaderState>,
     command_tx: Option<mpsc::UnboundedSender<SessionCommand>>,
 }
@@ -205,6 +209,7 @@ impl SessionState {
             lifecycle_state: AtomicU8::new(SessionLifecycleState::Active.as_u8()),
             stop_requested: AtomicBool::new(false),
             serial_connected: AtomicBool::new(false),
+            boot_operation: Mutex::new(()),
             loader: RwLock::new(SessionLoaderState::default()),
             command_tx,
         })

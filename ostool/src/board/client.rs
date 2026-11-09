@@ -135,20 +135,8 @@ pub struct HttpBootKernelUpload {
     pub cmdline: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum UefiBootArch {
-    X86_64,
-    Aarch64,
-    Loongarch64,
-    Riscv64,
-    Other,
-}
-
 #[derive(Debug, Clone, Deserialize)]
-pub struct UefiHttpProfile {
-    pub boot_arch: Option<UefiBootArch>,
-}
+pub struct UefiHttpProfile {}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BootProfileResponse {
@@ -798,7 +786,7 @@ impl fmt::Display for BoardTypeSummary {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -1017,6 +1005,10 @@ mod tests {
     }
 
     async fn read_http_request(socket: &mut TcpStream) -> String {
+        String::from_utf8(read_http_request_bytes(socket).await).unwrap()
+    }
+
+    pub(crate) async fn read_http_request_bytes(socket: &mut TcpStream) -> Vec<u8> {
         let mut bytes = Vec::new();
         let mut buffer = [0_u8; 1024];
         loop {
@@ -1027,7 +1019,7 @@ mod tests {
                 break;
             }
         }
-        String::from_utf8(bytes).unwrap()
+        bytes
     }
 
     fn request_complete(bytes: &[u8]) -> bool {
@@ -1047,7 +1039,7 @@ mod tests {
         bytes.len() >= header_end + 4 + content_length
     }
 
-    async fn write_http_response(socket: &mut TcpStream, status: &str, body: &str) {
+    pub(crate) async fn write_http_response(socket: &mut TcpStream, status: &str, body: &str) {
         let response = format!(
             "HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
             body.len()
@@ -1124,25 +1116,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_httpboot_boot_profile() {
-        let response: super::BootProfileResponse = serde_json::from_str(
-            r#"{
-                "boot": {
-                    "kind": "httpboot",
-                    "boot_arch": "x86_64"
-                },
-                "server_ip": null,
-                "netmask": null,
-                "interface": null
-            }"#,
-        )
-        .unwrap();
+    fn parse_httpboot_boot_profile_ignores_legacy_architecture() {
+        for kind in ["httpboot", "uefi_http"] {
+            for arch in [None, Some("x86_64"), Some("riscv64"), Some("future_arch")] {
+                let mut value = serde_json::json!({"boot": {"kind": kind}});
+                if let Some(arch) = arch {
+                    value["boot"]["boot_arch"] = serde_json::json!(arch);
+                }
+                let response: super::BootProfileResponse = serde_json::from_value(value).unwrap();
 
-        match response.boot {
-            BootConfig::UefiHttp(profile) => {
-                assert_eq!(profile.boot_arch, Some(super::UefiBootArch::X86_64));
+                assert!(matches!(response.boot, BootConfig::UefiHttp(_)));
             }
-            _ => panic!("expected httpboot profile"),
         }
     }
 

@@ -4,8 +4,7 @@ use chrono::{Duration, Utc};
 use clap::Parser;
 use ostool_server::{
     BoardConfig, BoardNetworkIdentity, BoardStore, BootConfig, CustomPowerManagement, DtbStore,
-    PowerManagementConfig, UbootProfile, UefiBootArch, UefiHttpProfile,
-    persistence::postgres::Database,
+    PowerManagementConfig, UbootProfile, UefiHttpProfile, persistence::postgres::Database,
 };
 use rand::RngCore;
 use std::path::PathBuf;
@@ -202,11 +201,6 @@ fn board(index: usize) -> BoardConfig {
         })
     } else {
         BootConfig::UefiHttp(UefiHttpProfile {
-            boot_arch: Some(if model_index == 4 {
-                UefiBootArch::X86_64
-            } else {
-                UefiBootArch::Aarch64
-            }),
             serial_parameters: None,
         })
     };

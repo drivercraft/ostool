@@ -125,7 +125,6 @@ async fn imports_boards_and_referenced_dtbs_once_without_changing_sources() {
         mac_address: "02:00:00:00:00:02".parse().unwrap(),
     });
     second.boot = BootConfig::UefiHttp(ostool_server::UefiHttpProfile {
-        boot_arch: Some(ostool_server::config::UefiBootArch::X86_64),
         serial_parameters: None,
     });
     f.source(&second);

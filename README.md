@@ -340,7 +340,13 @@ interface = "eth0"
 board_ip = "192.168.1.100"
 ```
 
-`BootPayloadConfig` 的 `cmdline` 与 `initramfs` 相互独立且都可省略；它们是 QEMU、board 与 U-Boot 的顶层运行配置，不属于构建配置。`initramfs` 是宿主归档，与 Linux guest 的 initrd 分开配置。QEMU 直启仅在 AArch64/RISC-V 路径使用 `-initrd` 和 `-append`；x86 使用 UEFI ESP 中的 `EFI/BOOT/initramfs.cpio`、`cmdline.txt`，不向裸 ELF 传 Linux x86 启动协议参数。U-Boot 的 `generate_fit_image()` 将归档作为 FIT ramdisk，并在启动前设置 `bootargs`；生成 FIT 前会清除输入 DTB 中遗留的 `linux,initrd-start/end` 及与其完全对应的内存预留；若 FIT 包含 ramdisk，U-Boot 会写入本次启动的实际范围。串口命令路径暂不接受含单引号的 `cmdline`。board HTTP Boot 将归档和内核上传到同一 session，服务端记录归档大小与 SHA-256。v5 设备保留识别与 OTA；v6 设备由服务端先按本次上报的 UART 参数确认串口身份，再以绑定令牌放行启动，兼容入口转换为 `__x86_64_efi_pe_entry`，cmdline 通过 EFI LoadOptions、initramfs 通过 TGOS `BootPayload` 交接。v2/v3/v4 poll 保留识别与升级用途，普通启动统一返回 `serial_protocol_upgrade_required`。归档上限为 256 MiB，cmdline 上限为 4095 字节且仅允许可打印 ASCII 和空格。实体板卡的固件和内核须实现对应交接协议。
+`BootPayloadConfig` 的 `cmdline` 与 `initramfs` 相互独立且都可省略；它们是 QEMU、board 与 U-Boot 的顶层运行配置，不属于构建配置。`initramfs` 是宿主归档，与 Linux guest 的 initrd 分开配置。QEMU 直启仅在 AArch64/RISC-V 路径使用 `-initrd` 和 `-append`；x86 使用 UEFI ESP 中的 `EFI/BOOT/initramfs.cpio`、`cmdline.txt`，不向裸 ELF 传 Linux x86 启动协议参数。U-Boot 的 `generate_fit_image()` 将归档作为 FIT ramdisk，并在启动前设置 `bootargs`；生成 FIT 前会清除输入 DTB 中遗留的 `linux,initrd-start/end` 及与其完全对应的内存预留；若 FIT 包含 ramdisk，U-Boot 会写入本次启动的实际范围。串口命令路径暂不接受含单引号的 `cmdline`。board HTTP Boot 将归档和内核上传到同一 session，服务端记录归档大小与 SHA-256。v5 设备保留识别与 OTA；v6 设备由服务端先按本次上报的 UART 参数确认串口身份，再以绑定令牌放行启动，按内核架构选择 EFI 入口（x86_64 为 `__x86_64_efi_pe_entry`，RISC-V64 和 LoongArch64 为 `efi_pe_entry`），cmdline 通过 EFI LoadOptions、initramfs 通过 TGOS `BootPayload` 交接。v2/v3/v4 poll 保留识别与升级用途，普通启动统一返回 `serial_protocol_upgrade_required`。归档上限为 256 MiB，cmdline 上限为 4095 字节且仅允许可打印 ASCII 和空格。实体板卡的固件和内核须实现对应交接协议。
+
+HTTP Boot 不持久保存 `boot_arch`；旧字段兼容读取后丢弃，重新保存到 PostgreSQL 时移除；旧 TOML 通过独立迁移工具导入，源文件保持不变，其他未知字段仍拒绝。CLI 复用已有 ELF 检测结果生成架构 Header；服务端用 `object` 解析小端 ELF64，上传时校验 `e_machine` 与声明，串口交接前再核对文件、声明及 axloader 的 `observed.arch`。不匹配时串口状态进入 `Failed` 并停止会话。编辑页只读展示在线设备上报架构，离线或未发现时显示未知，仍可准备 Session 和内核，待上线后匹配。
+
+OTA 镜像对服务端是不透明的字节：`OtaStore` 接受非空且不超过 32 MiB 的内容，保存标签、长度与 SHA-256，下发前校验存储完整性；PE/COFF 格式、`Machine` 和平台可加载性由 axloader 判定。服务端和 Web UI 不按 CPU 架构限制 OTA，离线可排队，缺失实际 `ota` 状态时保留可见的等待原因。旧 v4 poll 升级同样由设备校验镜像，下载仍要求当前注册代次、OTA 能力及 MAC/任务绑定匹配。
+
+设备返回 `202` 仅表示暂存通过，任务须在新槽实际运行、确认且摘要匹配后才成功。`400`/`413`/`422` 拒绝会使本次任务一次失败，服务端保留 HTTP 状态和设备响应体（包括旧 `422 {}`），管理 API/SSE 返回安全错误提示；`409` 刷新状态/代次并延迟重试，`503` 等待状态、能力或代次变化而不重复推送。网络错误和其他 `5xx` 有限退避重试，结果不确定时先核对设备是否已接受，最后一次尝试也在判定失败前核对。完整契约见[装载器升级](docs/axloader-network-control.md#22-装载器升级)。
 
 ### 有序 Shell 初始化步骤
 

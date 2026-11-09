@@ -34,7 +34,6 @@ export interface BoardEditorFormState {
   relay_serial_key_value: string;
   virtual_device_id: string;
   boot_kind: BootKind;
-  boot_arch: string;
   network_mac: string;
   use_tftp: boolean;
   dtb_name: string;
@@ -77,7 +76,6 @@ export function defaultFormState(): BoardEditorFormState {
     relay_serial_key_value: "",
     virtual_device_id: "",
     boot_kind: "uboot",
-    boot_arch: "",
     network_mac: "",
     use_tftp: false,
     dtb_name: "",
@@ -150,7 +148,6 @@ export function boardToFormState(board: BoardConfig): BoardEditorFormState {
     next.pxe_notes = board.boot.notes ?? "";
   } else {
     next.boot_kind = "httpboot";
-    next.boot_arch = board.boot.boot_arch ?? "";
   }
 
   return next;
@@ -189,7 +186,6 @@ function buildBootConfig(form: BoardEditorFormState): BootConfig {
   if (form.boot_kind === "httpboot") {
     return {
       kind: "httpboot",
-      boot_arch: trimToNull(form.boot_arch),
       serial_parameters: form.axloader_serial_parameters_enabled
         ? {
             baud_rate: form.axloader_baud_rate,

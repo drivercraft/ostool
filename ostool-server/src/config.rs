@@ -805,21 +805,9 @@ pub struct PxeProfile {
     pub notes: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum UefiBootArch {
-    X86_64,
-    Aarch64,
-    Loongarch64,
-    Riscv64,
-    Other,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UefiHttpProfile {
-    #[serde(default)]
-    pub boot_arch: Option<UefiBootArch>,
     /// Optional host-side UART settings for axloader serial discovery.
     ///
     /// When omitted, the server uses the parameters reported by axloader (or
@@ -827,6 +815,29 @@ pub struct UefiHttpProfile {
     /// [`BoardConfig::serial`], which is retained for U-Boot/PXE consoles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serial_parameters: Option<AxloaderSerialParameters>,
+}
+
+impl<'de> Deserialize<'de> for UefiHttpProfile {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            // Read legacy architecture metadata without retaining a second source
+            // of truth alongside the uploaded ELF and axloader announcements.
+            #[serde(default, rename = "boot_arch")]
+            _boot_arch: Option<serde::de::IgnoredAny>,
+            #[serde(default)]
+            serial_parameters: Option<AxloaderSerialParameters>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            serial_parameters: wire.serial_parameters,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -935,7 +946,7 @@ mod tests {
         AxloaderSerialFlowControl, AxloaderSerialParameters, AxloaderSerialParity,
         AxloaderSerialStopBits, BoardConfig, BoardNetworkIdentity, BootConfig,
         CustomPowerManagement, PowerManagementConfig, SerialPortKey, SerialPortKeyKind,
-        ServerConfig, UbootNetworkMode, UbootProfile, UefiBootArch, UefiHttpProfile,
+        ServerConfig, UbootNetworkMode, UbootProfile, UefiHttpProfile,
         ZhongshengRelayPowerManagement,
     };
 
@@ -1273,7 +1284,6 @@ bootm_addr = "0x82200000"
                 power_off_cmd: "true".into(),
             }),
             boot: BootConfig::UefiHttp(UefiHttpProfile {
-                boot_arch: Some(UefiBootArch::X86_64),
                 serial_parameters: None,
             }),
             network_identity: Some(BoardNetworkIdentity {
@@ -1285,17 +1295,54 @@ bootm_addr = "0x82200000"
 
         let encoded = toml::to_string_pretty(&board).unwrap();
         assert!(encoded.contains("kind = \"httpboot\""));
+        assert!(!encoded.contains("boot_arch"));
         assert!(encoded.contains("mac_address = \"02:00:00:00:00:01\""));
 
         let decoded: BoardConfig = toml::from_str(&encoded).unwrap();
         let BootConfig::UefiHttp(profile) = decoded.boot else {
             panic!("expected httpboot");
         };
-        assert_eq!(profile.boot_arch, Some(UefiBootArch::X86_64));
         assert_eq!(profile.serial_parameters, None);
         assert_eq!(
             decoded.network_identity.unwrap().mac_address.to_string(),
             "02:00:00:00:00:01"
+        );
+    }
+
+    #[test]
+    fn legacy_httpboot_arch_is_read_but_not_serialized() {
+        for arch in ["x86_64", "aarch64", "loongarch64", "riscv64", "other"] {
+            let legacy_toml = format!("boot_arch = {arch:?}\n");
+            let profile: UefiHttpProfile = toml::from_str(&legacy_toml).unwrap();
+            assert_eq!(profile.serial_parameters, None);
+            assert!(!toml::to_string(&profile).unwrap().contains("boot_arch"));
+
+            let profile: UefiHttpProfile =
+                serde_json::from_value(json!({ "boot_arch": arch })).unwrap();
+            assert_eq!(serde_json::to_value(profile).unwrap(), json!({}));
+        }
+    }
+
+    #[test]
+    fn httpboot_schema_only_exposes_current_settings() {
+        let schema = serde_json::to_value(schemars::schema_for!(UefiHttpProfile)).unwrap();
+        let properties = schema["properties"].as_object().unwrap();
+        assert!(properties.contains_key("serial_parameters"));
+        assert!(!properties.contains_key("boot_arch"));
+        assert_eq!(schema["additionalProperties"], false);
+    }
+
+    #[test]
+    fn legacy_httpboot_arch_does_not_hide_unknown_settings() {
+        let error = serde_json::from_value::<UefiHttpProfile>(json!({
+            "boot_arch": "riscv64",
+            "serial_paramters": {}
+        }))
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `serial_paramters`")
         );
     }
 
@@ -1320,7 +1367,6 @@ bootm_addr = "0x82200000"
                 power_off_cmd: "true".into(),
             }),
             boot: BootConfig::UefiHttp(UefiHttpProfile {
-                boot_arch: Some(UefiBootArch::X86_64),
                 serial_parameters: Some(parameters),
             }),
             network_identity: Some(BoardNetworkIdentity {
@@ -1354,7 +1400,6 @@ bootm_addr = "0x82200000"
                 power_off_cmd: "true".into(),
             }),
             boot: BootConfig::UefiHttp(UefiHttpProfile {
-                boot_arch: Some(UefiBootArch::X86_64),
                 serial_parameters: Some(AxloaderSerialParameters {
                     baud_rate: 115_200,
                     data_bits: 8,
@@ -1395,7 +1440,6 @@ bootm_addr = "0x82200000"
                 power_off_cmd: "true".into(),
             }),
             boot: BootConfig::UefiHttp(UefiHttpProfile {
-                boot_arch: Some(UefiBootArch::X86_64),
                 serial_parameters: None,
             }),
             network_identity: None,
@@ -1449,7 +1493,6 @@ bootm_addr = "0x82200000"
             "QEMU boards must use httpboot"
         );
         board.boot = BootConfig::UefiHttp(UefiHttpProfile {
-            boot_arch: Some(UefiBootArch::X86_64),
             serial_parameters: None,
         });
         board.validate().unwrap();

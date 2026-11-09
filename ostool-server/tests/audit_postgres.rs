@@ -453,11 +453,17 @@ async fn complete_audit_contract_with_real_postgres() {
         .unwrap();
     state
         .ota
+        .decide("audit-board", mac, None, false, "audit-epoch")
+        .await
+        .unwrap();
+    state
+        .ota
         .record_delivery_failure(
             "audit-board",
             mac,
             &job.update_id,
-            "NEVER_COPY_OTA_ERROR".into(),
+            "audit-epoch",
+            ostool_server::ota::DeliveryFailure::Retryable("NEVER_COPY_OTA_ERROR".into()),
         )
         .await
         .unwrap();

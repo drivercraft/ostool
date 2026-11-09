@@ -34,8 +34,8 @@ pub use config::{
     AxloaderSerialStopBits, BoardConfig, BoardNetworkIdentity, BootConfig, BuiltinTftpConfig,
     CustomPowerManagement, DatabaseConfig, LoaderNetworkConfig, PowerManagementConfig, PxeProfile,
     SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig, SystemTftpdHpaConfig, TftpConfig,
-    TftpNetworkConfig, UbootNetworkMode, UbootProfile, UefiBootArch, UefiHttpProfile,
-    UploadLimitsConfig, VirtualQemuConfig, ZhongshengRelayPowerManagement,
+    TftpNetworkConfig, UbootNetworkMode, UbootProfile, UefiHttpProfile, UploadLimitsConfig,
+    VirtualQemuConfig, ZhongshengRelayPowerManagement,
 };
 pub use persistence::{BoardStore, DtbFile, DtbStore};
 pub use state::{AppState, BoardLeaseState, build_app_state};
@@ -45,3 +45,5 @@ extern crate self as ostool_server;
 #[cfg(test)]
 #[path = "../tests/support/database.rs"]
 pub(crate) mod test_support;
+
+mod boot_image;

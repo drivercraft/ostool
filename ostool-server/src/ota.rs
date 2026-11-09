@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 
 pub const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const MAX_DELIVERY_ATTEMPTS: u8 = 3;
+const DELIVERY_RETRY_SECONDS: i64 = 5;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Image {
@@ -50,6 +51,10 @@ pub struct Job {
     pub error: Option<String>,
     #[serde(default)]
     pub delivery_attempts: u8,
+    #[serde(default)]
+    pub next_delivery_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub waiting_for_device_change: bool,
 }
 
 impl Job {
@@ -65,6 +70,19 @@ pub enum Decision {
     Update(Job),
     Confirm(String),
     Wait,
+}
+
+/// Delivery policy follows device HTTP results, never image architecture.
+#[derive(Debug, thiserror::Error)]
+pub enum DeliveryFailure {
+    #[error("{0}")]
+    Rejected(String),
+    #[error("{0}")]
+    Conflict(String),
+    #[error("{0}")]
+    Unavailable(String),
+    #[error("{0}")]
+    Retryable(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -90,7 +108,9 @@ pub struct OtaStore {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Observation {
     mac_address: httpboot_protocol::MacAddress,
-    state: LoaderOtaState,
+    state: Option<LoaderOtaState>,
+    #[serde(default)]
+    epoch: String,
 }
 
 impl OtaStore {
@@ -211,11 +231,17 @@ impl OtaStore {
             .filter(|device| device.mac_address == mac_address)
         {
             ensure!(
-                !device.state.trial && device.state.pending_update_id.is_none(),
+                device
+                    .state
+                    .as_ref()
+                    .is_none_or(|state| !state.trial && state.pending_update_id.is_none()),
                 "device has an unconfirmed OTA trial"
             );
             ensure!(
-                device.state.active_sha256 != image.sha256,
+                device
+                    .state
+                    .as_ref()
+                    .is_none_or(|state| state.active_sha256 != image.sha256),
                 "this image is already the active loader"
             );
         }
@@ -227,6 +253,8 @@ impl OtaStore {
             phase: Phase::Queued,
             error: None,
             delivery_attempts: 0,
+            next_delivery_at: None,
+            waiting_for_device_change: false,
         };
         let mut updated = jobs.clone();
         updated.insert(board_id, job.clone());
@@ -249,6 +277,8 @@ impl OtaStore {
         );
         job.phase = Phase::Cancelled;
         job.error = None;
+        job.next_delivery_at = None;
+        job.waiting_for_device_change = false;
         let result = job.clone();
 
         let mut updated_observations = observations.clone();
@@ -277,80 +307,187 @@ impl OtaStore {
         Ok(result)
     }
 
+    pub async fn can_download(
+        &self,
+        board_id: &str,
+        mac: httpboot_protocol::MacAddress,
+        update_id: &str,
+        epoch: &str,
+    ) -> bool {
+        let observations = self.observations.lock().await;
+        let eligible = observations.get(board_id).is_some_and(|observation| {
+            observation.mac_address == mac
+                && observation.epoch == epoch
+                && observation
+                    .state
+                    .as_ref()
+                    .is_some_and(|ota| !ota.trial && ota.pending_update_id.is_none())
+        });
+        eligible
+            && self.jobs.lock().await.get(board_id).is_some_and(|job| {
+                job.mac_address == mac
+                    && job.update_id == update_id
+                    && job.phase == Phase::Downloading
+            })
+    }
+
     pub async fn decide(
         &self,
         board_id: &str,
         mac_address: httpboot_protocol::MacAddress,
-        ota: &LoaderOtaState,
+        ota: Option<&LoaderOtaState>,
         board_idle: bool,
+        epoch: &str,
+    ) -> anyhow::Result<Decision> {
+        self.decide_at(
+            board_id,
+            mac_address,
+            ota,
+            board_idle,
+            epoch,
+            chrono::Utc::now(),
+        )
+        .await
+    }
+
+    async fn decide_at(
+        &self,
+        board_id: &str,
+        mac_address: httpboot_protocol::MacAddress,
+        ota: Option<&LoaderOtaState>,
+        board_idle: bool,
+        epoch: &str,
+        now: chrono::DateTime<chrono::Utc>,
     ) -> anyhow::Result<Decision> {
         let mut observations = self.observations.lock().await;
-        let changed_observation = observations
-            .get(board_id)
-            .is_none_or(|old| old.mac_address != mac_address || old.state != *ota);
+        let changed_observation = observations.get(board_id).is_none_or(|old| {
+            old.mac_address != mac_address || old.epoch != epoch || old.state.as_ref() != ota
+        });
         if changed_observation {
             let mut updated = observations.clone();
             updated.insert(
                 board_id.into(),
                 Observation {
                     mac_address,
-                    state: ota.clone(),
+                    state: ota.cloned(),
+                    epoch: epoch.into(),
                 },
             );
             self.save_observations(&updated).await?;
             *observations = updated;
         }
         let mut jobs = self.jobs.lock().await;
-        let Some(job) = jobs.get(board_id) else {
-            return Ok(if ota.trial {
-                Decision::Wait
-            } else {
-                Decision::Idle
-            });
+        let Some(previous) = jobs.get(board_id) else {
+            return Ok(
+                if ota.is_some_and(|ota| ota.trial || ota.pending_update_id.is_some()) {
+                    Decision::Wait
+                } else {
+                    Decision::Idle
+                },
+            );
         };
-        if job.mac_address != mac_address {
+        if previous.mac_address != mac_address {
             return Ok(Decision::Wait);
         }
-        let mut changed = jobs.clone();
-        let job = changed.get_mut(board_id).unwrap();
-        if ota.last_update_id.as_deref() == Some(&job.update_id) {
-            match ota.last_outcome {
-                Some(OtaOutcome::Confirmed)
-                    if job.phase == Phase::Confirming && ota.active_sha256 == job.image.sha256 =>
-                {
-                    job.phase = Phase::Succeeded
-                }
-                Some(OtaOutcome::RolledBack) => job.phase = Phase::RolledBack,
-                Some(OtaOutcome::Failed) => job.phase = Phase::Failed,
-                _ => {}
-            }
+        // Device reports from another boot must never revive a terminal assignment.
+        if previous.phase.is_terminal() {
+            return Ok(
+                if ota.is_some_and(|ota| ota.trial || ota.pending_update_id.is_some()) {
+                    Decision::Wait
+                } else {
+                    Decision::Idle
+                },
+            );
         }
-        let decision = if ota.trial {
-            if ota.source == Some(OtaSource::Server)
-                && ota.pending_update_id.as_deref() == Some(&job.update_id)
-                && ota.running_sha256 == job.image.sha256
-                && !job.phase.is_terminal()
+        let mut updated = jobs.clone();
+        let job = updated.get_mut(board_id).unwrap();
+        let decision = if let Some(ota) = ota {
+            if changed_observation {
+                job.waiting_for_device_change = false;
+            }
+            if ota.last_update_id.as_deref() == Some(&job.update_id) {
+                match ota.last_outcome {
+                    Some(OtaOutcome::Confirmed)
+                        if job.phase == Phase::Confirming
+                            && ota.active_sha256 == job.image.sha256 =>
+                    {
+                        job.phase = Phase::Succeeded;
+                    }
+                    Some(OtaOutcome::RolledBack) => job.phase = Phase::RolledBack,
+                    Some(OtaOutcome::Failed) => job.phase = Phase::Failed,
+                    _ => {}
+                }
+            }
+            if job.phase.is_terminal() {
+                job.next_delivery_at = None;
+                job.waiting_for_device_change = false;
+                if ota.trial || ota.pending_update_id.is_some() {
+                    Decision::Wait
+                } else {
+                    Decision::Idle
+                }
+            } else if ota.trial {
+                if ota.source == Some(OtaSource::Server)
+                    && ota.pending_update_id.as_deref() == Some(&job.update_id)
+                    && ota.running_sha256 == job.image.sha256
+                {
+                    job.phase = Phase::Confirming;
+                    job.error = None;
+                    job.next_delivery_at = None;
+                    job.waiting_for_device_change = false;
+                    Decision::Confirm(job.update_id.clone())
+                } else {
+                    Decision::Wait
+                }
+            } else if ota.pending_update_id.is_some() {
+                // Source is optional until firmware starts the pending slot.
+                if ota.pending_update_id.as_deref() == Some(&job.update_id) {
+                    job.phase = Phase::Staged;
+                    job.error = None;
+                    job.next_delivery_at = None;
+                    job.waiting_for_device_change = false;
+                }
+                Decision::Wait
+            } else if !board_idle {
+                Decision::Idle
+            } else if ota.active_sha256 == job.image.sha256 {
+                job.phase = Phase::Failed;
+                job.error =
+                    Some("image already active without this assignment's confirmation".into());
+                job.next_delivery_at = None;
+                job.waiting_for_device_change = false;
+                Decision::Idle
+            } else if (job.waiting_for_device_change && !changed_observation)
+                || job.next_delivery_at.is_some_and(|deadline| now < deadline)
             {
-                job.phase = Phase::Confirming;
-                Decision::Confirm(job.update_id.clone())
+                Decision::Wait
+            } else if matches!(job.phase, Phase::Queued | Phase::Downloading) {
+                job.phase = Phase::Downloading;
+                job.error = None;
+                job.next_delivery_at = None;
+                job.waiting_for_device_change = false;
+                Decision::Update(job.clone())
             } else {
                 Decision::Wait
             }
-        } else if job.phase.is_terminal() || !board_idle {
-            Decision::Idle
-        } else if ota.active_sha256 == job.image.sha256 {
-            job.phase = Phase::Failed;
-            job.error = Some("image already active without this assignment's confirmation".into());
-            Decision::Idle
-        } else if matches!(job.phase, Phase::Queued | Phase::Downloading) {
-            job.phase = Phase::Downloading;
-            Decision::Update(job.clone())
         } else {
-            Decision::Wait
+            // Missing upgrade support must not block ordinary kernel HTTP Boot.
+            if job.error.is_none() {
+                job.error =
+                    Some("loader did not report OTA state; waiting for OTA availability".into());
+            }
+            job.waiting_for_device_change = true;
+            job.next_delivery_at = None;
+            Decision::Idle
         };
-        if changed.get(board_id).unwrap().phase != jobs.get(board_id).unwrap().phase {
-            self.save(&changed).await?;
-            *jobs = changed;
+        let current = jobs.get(board_id).unwrap();
+        if job.phase != current.phase
+            || job.error != current.error
+            || job.next_delivery_at != current.next_delivery_at
+            || job.waiting_for_device_change != current.waiting_for_device_change
+        {
+            self.save(&updated).await?;
+            *jobs = updated;
         }
         Ok(decision)
     }
@@ -358,7 +495,7 @@ impl OtaStore {
     pub async fn report(
         &self,
         board_id: &str,
-        mac_address: httpboot_protocol::MacAddress,
+        epoch: &str,
         update_id: &str,
         phase: Phase,
         error: Option<String>,
@@ -368,9 +505,15 @@ impl OtaStore {
         let mut jobs = self.jobs.lock().await;
         let mut updated = jobs.clone();
         let job = updated.get_mut(board_id).context("unknown OTA job")?;
+        ensure!(job.update_id == update_id, "stale OTA report");
+        let observed = observations
+            .get(board_id)
+            .context("OTA status not observed")?;
         ensure!(
-            job.mac_address == mac_address && job.update_id == update_id,
-            "stale OTA report"
+            observed.mac_address == job.mac_address
+                && observed.epoch == epoch
+                && observed.state.is_some(),
+            "stale OTA report epoch or capability"
         );
         ensure!(
             matches!(
@@ -379,6 +522,10 @@ impl OtaStore {
             ),
             "invalid loader OTA phase"
         );
+        if job.phase.is_terminal() {
+            ensure!(job.phase == phase, "OTA job already finished");
+            return Ok(());
+        }
         if job.phase == phase {
             if job.error != error {
                 job.error = error;
@@ -401,22 +548,23 @@ impl OtaStore {
             "invalid OTA phase transition"
         );
         if phase == Phase::Succeeded {
-            let observed = observations
-                .get(board_id)
-                .context("OTA trial not observed")?;
             ensure!(
-                observed.mac_address == mac_address
-                    && observed.state.source == Some(OtaSource::Server)
-                    && observed.state.trial
-                    && observed.state.pending_update_id.as_deref() == Some(update_id)
-                    && observed.state.running_sha256 == job.image.sha256
-                    && active_sha256 == Some(job.image.sha256.as_str()),
+                observed.state.as_ref().is_some_and(|state| {
+                    state.source == Some(OtaSource::Server)
+                        && state.trial
+                        && state.pending_update_id.as_deref() == Some(update_id)
+                        && state.running_sha256 == job.image.sha256
+                }) && active_sha256 == Some(job.image.sha256.as_str()),
                 "confirmed OTA result does not match registered trial"
             );
         }
         if job.phase != phase || job.error != error {
             job.phase = phase;
             job.error = error;
+            if phase != Phase::Downloading {
+                job.next_delivery_at = None;
+                job.waiting_for_device_change = false;
+            }
             self.save(&updated).await?;
             *jobs = updated;
         }
@@ -428,8 +576,16 @@ impl OtaStore {
         board_id: &str,
         mac_address: httpboot_protocol::MacAddress,
         update_id: &str,
-        error: String,
+        epoch: &str,
+        failure: DeliveryFailure,
     ) -> anyhow::Result<Job> {
+        let observations = self.observations.lock().await;
+        ensure!(
+            observations.get(board_id).is_some_and(|observed| {
+                observed.mac_address == mac_address && observed.epoch == epoch
+            }),
+            "stale OTA delivery epoch"
+        );
         let mut jobs = self.jobs.lock().await;
         let mut updated = jobs.clone();
         let job = updated.get_mut(board_id).context("unknown OTA job")?;
@@ -437,16 +593,46 @@ impl OtaStore {
             job.mac_address == mac_address && job.update_id == update_id,
             "stale OTA delivery failure"
         );
+        if job.phase.is_terminal() {
+            return Ok(job.clone());
+        }
         ensure!(
             matches!(job.phase, Phase::Queued | Phase::Downloading),
             "OTA job is not accepting an image"
         );
-        job.delivery_attempts = job.delivery_attempts.saturating_add(1);
-        job.error = Some(error);
-        if job.delivery_attempts >= MAX_DELIVERY_ATTEMPTS {
-            job.phase = Phase::Failed;
-        } else {
-            job.phase = Phase::Downloading;
+        job.next_delivery_at = None;
+        job.waiting_for_device_change = false;
+        match failure {
+            DeliveryFailure::Rejected(error) => {
+                job.phase = Phase::Failed;
+                job.error = Some(error);
+            }
+            DeliveryFailure::Conflict(error) => {
+                job.phase = Phase::Downloading;
+                job.error = Some(error);
+                job.next_delivery_at =
+                    Some(chrono::Utc::now() + chrono::Duration::seconds(DELIVERY_RETRY_SECONDS));
+            }
+            DeliveryFailure::Unavailable(error) => {
+                job.phase = Phase::Downloading;
+                job.error = Some(error);
+                job.waiting_for_device_change = true;
+            }
+            DeliveryFailure::Retryable(error) => {
+                job.delivery_attempts = job.delivery_attempts.saturating_add(1);
+                job.error = Some(error);
+                if job.delivery_attempts >= MAX_DELIVERY_ATTEMPTS {
+                    job.phase = Phase::Failed;
+                } else {
+                    job.phase = Phase::Downloading;
+                    job.next_delivery_at = Some(
+                        chrono::Utc::now()
+                            + chrono::Duration::seconds(
+                                DELIVERY_RETRY_SECONDS * i64::from(job.delivery_attempts),
+                            ),
+                    );
+                }
+            }
         }
         let result = job.clone();
         self.save(&updated).await?;
@@ -514,35 +700,6 @@ async fn write_job_audit(
 }
 
 fn validate_image(bytes: &[u8], version: Option<String>) -> anyhow::Result<Image> {
-    // DOS header, PE signature, AMD64 machine and EFI application subsystem.
-    ensure!(
-        bytes.len() >= 0x40 && &bytes[..2] == b"MZ",
-        "invalid DOS header"
-    );
-    let pe_offset = u32::from_le_bytes(bytes[0x3c..0x40].try_into()?) as usize;
-    ensure!(
-        pe_offset
-            .checked_add(94)
-            .is_some_and(|end| end <= bytes.len()),
-        "invalid PE offset"
-    );
-    ensure!(
-        &bytes[pe_offset..pe_offset + 4] == b"PE\0\0",
-        "invalid PE header"
-    );
-    ensure!(
-        bytes[pe_offset + 4..pe_offset + 6] == [0x64, 0x86],
-        "unsupported EFI architecture"
-    );
-    let optional = pe_offset + 24;
-    ensure!(
-        bytes[optional..optional + 2] == [0x0b, 0x02],
-        "EFI image must be PE32+"
-    );
-    ensure!(
-        bytes[optional + 68..optional + 70] == [10, 0],
-        "EFI image must be an application"
-    );
     if let Some(label) = &version {
         ensure!(
             label.len() <= 96 && label.bytes().all(|byte| byte.is_ascii_graphic()),
@@ -597,6 +754,20 @@ mod tests {
             .await
             .unwrap();
 
+        let initial = LoaderOtaState {
+            active_sha256: "11".repeat(32),
+            running_sha256: "11".repeat(32),
+            pending_update_id: None,
+            trial: false,
+            source: None,
+            last_update_id: None,
+            last_outcome: None,
+        };
+        store
+            .decide("board-1", mac, Some(&initial), false, "epoch-1")
+            .await
+            .unwrap();
+
         for phase in [
             Phase::Downloading,
             Phase::Downloading,
@@ -608,7 +779,7 @@ mod tests {
             store
                 .report(
                     "board-1",
-                    mac,
+                    "epoch-1",
                     &job.update_id,
                     phase,
                     (phase == Phase::Failed).then(|| "device rejected image".into()),
@@ -617,6 +788,22 @@ mod tests {
                 .await
                 .unwrap();
         }
+
+        store
+            .report(
+                "board-1",
+                "epoch-1",
+                &job.update_id,
+                Phase::Failed,
+                Some("late duplicate must not overwrite the refusal".into()),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store.job("board-1").await.unwrap().error.as_deref(),
+            Some("device rejected image")
+        );
 
         let mut replacement = efi_image();
         replacement.push(1);
@@ -638,14 +825,14 @@ mod tests {
             last_outcome: None,
         };
         assert!(matches!(
-            store.decide("board-1", mac, &trial, true).await.unwrap(),
+            store.decide("board-1", mac, Some(&trial), true, "epoch-1").await.unwrap(),
             Decision::Confirm(id) if id == job.update_id
         ));
         for _ in 0..2 {
             store
                 .report(
                     "board-1",
-                    mac,
+                    "epoch-1",
                     &job.update_id,
                     Phase::Succeeded,
                     None,
@@ -668,12 +855,108 @@ mod tests {
             .await
             .unwrap();
 
+        let idle = LoaderOtaState {
+            active_sha256: "11".repeat(32),
+            running_sha256: "11".repeat(32),
+            pending_update_id: None,
+            trial: false,
+            source: None,
+            last_update_id: None,
+            last_outcome: None,
+        };
+        store
+            .decide("board-1", mac, Some(&idle), true, "epoch-1")
+            .await
+            .unwrap();
+        store
+            .record_delivery_failure(
+                "board-1",
+                mac,
+                &job.update_id,
+                "epoch-1",
+                DeliveryFailure::Unavailable("device HTTP 503: no OTA storage".into()),
+            )
+            .await
+            .unwrap();
+        drop(store);
+        let store = test_store(dir.path()).await;
+        assert!(matches!(
+            store
+                .decide("board-1", mac, Some(&idle), true, "epoch-1")
+                .await
+                .unwrap(),
+            Decision::Wait
+        ));
+        assert!(matches!(
+            store
+                .decide_at(
+                    "board-1",
+                    mac,
+                    Some(&idle),
+                    true,
+                    "epoch-1",
+                    chrono::Utc::now() + chrono::Duration::hours(1)
+                )
+                .await
+                .unwrap(),
+            Decision::Wait
+        ));
+        // Observe recovery while a normal kernel session owns the board, then upgrade when idle.
+        assert!(matches!(
+            store
+                .decide("board-1", mac, Some(&idle), false, "epoch-2")
+                .await
+                .unwrap(),
+            Decision::Idle
+        ));
+        assert!(matches!(
+            store
+                .decide("board-1", mac, Some(&idle), true, "epoch-2")
+                .await
+                .unwrap(),
+            Decision::Update(_)
+        ));
+        store
+            .record_delivery_failure(
+                "board-1",
+                mac,
+                &job.update_id,
+                "epoch-2",
+                DeliveryFailure::Conflict("device HTTP 409: temporarily busy".into()),
+            )
+            .await
+            .unwrap();
+        let conflict = store.job("board-1").await.unwrap();
+        assert_eq!(conflict.delivery_attempts, 0);
+        let deadline = conflict.next_delivery_at.unwrap();
+        assert!(matches!(
+            store
+                .decide_at(
+                    "board-1",
+                    mac,
+                    Some(&idle),
+                    true,
+                    "epoch-2",
+                    deadline - chrono::Duration::microseconds(1)
+                )
+                .await
+                .unwrap(),
+            Decision::Wait
+        ));
+        assert!(matches!(
+            store
+                .decide_at("board-1", mac, Some(&idle), true, "epoch-2", deadline)
+                .await
+                .unwrap(),
+            Decision::Update(_)
+        ));
         let first = store
             .record_delivery_failure(
                 "board-1",
                 mac,
                 &job.update_id,
-                "device HTTP 409 Conflict".into(),
+                "epoch-2",
+                DeliveryFailure::Retryable("device HTTP 500 Internal Server Error".into()),
             )
             .await
             .unwrap();
@@ -688,7 +971,8 @@ mod tests {
                     "board-1",
                     mac,
                     &job.update_id,
-                    format!("delivery attempt {attempt} failed"),
+                    "epoch-2",
+                    DeliveryFailure::Retryable(format!("delivery attempt {attempt} failed")),
                 )
                 .await
                 .unwrap();
@@ -697,6 +981,21 @@ mod tests {
         let failed = store.job("board-1").await.unwrap();
         assert_eq!(failed.phase, Phase::Failed);
         assert_eq!(failed.error.as_deref(), Some("delivery attempt 3 failed"));
+        let late = LoaderOtaState {
+            active_sha256: "11".repeat(32),
+            running_sha256: "11".repeat(32),
+            pending_update_id: None,
+            trial: false,
+            source: None,
+            last_update_id: Some(job.update_id.clone()),
+            last_outcome: Some(OtaOutcome::RolledBack),
+        };
+        store
+            .decide("board-1", mac, Some(&late), true, "epoch-3")
+            .await
+            .unwrap();
+        assert_eq!(store.job("board-1").await.unwrap().phase, Phase::Failed);
+        assert_eq!(store.job("board-1").await.unwrap().error, failed.error);
         let idle = LoaderOtaState {
             active_sha256: "11".repeat(32),
             running_sha256: "11".repeat(32),
@@ -707,7 +1006,10 @@ mod tests {
             last_outcome: None,
         };
         assert!(matches!(
-            store.decide("board-1", mac, &idle, true).await.unwrap(),
+            store
+                .decide("board-1", mac, Some(&idle), true, "epoch-2")
+                .await
+                .unwrap(),
             Decision::Idle
         ));
     }
@@ -731,6 +1033,35 @@ mod tests {
                 .await
                 .is_err()
         );
+        let mut legacy: serde_json::Value =
+            store.database.record("ota-jobs").await.unwrap().unwrap();
+        let old_job = legacy["board-1"].as_object_mut().unwrap();
+        old_job.remove("next_delivery_at");
+        old_job.remove("waiting_for_device_change");
+        store
+            .database
+            .save_record("ota-jobs", &legacy)
+            .await
+            .unwrap();
+        let legacy_ota = LoaderOtaState {
+            active_sha256: "11".repeat(32),
+            running_sha256: "11".repeat(32),
+            pending_update_id: None,
+            trial: false,
+            source: None,
+            last_update_id: None,
+            last_outcome: None,
+        };
+        store
+            .database
+            .save_record(
+                "ota-observations",
+                &serde_json::json!({
+                    "board-1": { "mac_address": mac, "state": legacy_ota }
+                }),
+            )
+            .await
+            .unwrap();
         drop(store);
         let store = test_store(dir.path()).await;
         let mut state = LoaderOtaState {
@@ -743,11 +1074,17 @@ mod tests {
             last_outcome: None,
         };
         assert!(matches!(
-            store.decide("board-1", mac, &state, false).await.unwrap(),
+            store
+                .decide("board-1", mac, Some(&state), false, "epoch-1")
+                .await
+                .unwrap(),
             Decision::Idle
         ));
         assert!(matches!(
-            store.decide("board-1", mac, &state, true).await.unwrap(),
+            store
+                .decide("board-1", mac, Some(&state), true, "epoch-1")
+                .await
+                .unwrap(),
             Decision::Update(_)
         ));
         state.pending_update_id = Some(job.update_id.clone());
@@ -755,24 +1092,33 @@ mod tests {
         state.running_sha256 = image.sha256.clone();
         state.source = Some(OtaSource::Direct);
         assert!(matches!(
-            store.decide("board-1", mac, &state, true).await.unwrap(),
+            store
+                .decide("board-1", mac, Some(&state), true, "epoch-1")
+                .await
+                .unwrap(),
             Decision::Wait
         ));
         state.source = Some(OtaSource::Server);
         assert!(
-            matches!(store.decide("board-1", mac, &state, false).await.unwrap(), Decision::Confirm(id) if id == job.update_id)
+            matches!(store.decide("board-1", mac, Some(&state), false, "epoch-1").await.unwrap(), Decision::Confirm(id) if id == job.update_id)
         );
         drop(store);
         let store = test_store(dir.path()).await;
         assert_eq!(store.job("board-1").await.unwrap().phase, Phase::Confirming);
-        state.trial = false;
-        state.pending_update_id = None;
+        // The prior assignment can finish while a newer direct trial is already running.
+        state.trial = true;
+        state.pending_update_id = Some("01234567-89ab-cdef-0123-456789abcdef".into());
+        state.source = Some(OtaSource::Direct);
         state.active_sha256 = image.sha256;
+        state.running_sha256 = "22".repeat(32);
         state.last_update_id = Some(job.update_id);
         state.last_outcome = Some(OtaOutcome::Confirmed);
         assert!(matches!(
-            store.decide("board-1", mac, &state, true).await.unwrap(),
-            Decision::Idle
+            store
+                .decide("board-1", mac, Some(&state), true, "epoch-1")
+                .await
+                .unwrap(),
+            Decision::Wait
         ));
         assert_eq!(store.job("board-1").await.unwrap().phase, Phase::Succeeded);
         let mut newer = efi_image();
@@ -782,7 +1128,10 @@ mod tests {
         state.pending_update_id = Some("01234567-89ab-cdef-0123-456789abcdef".into());
         state.source = Some(OtaSource::Direct);
         assert!(matches!(
-            store.decide("board-1", mac, &state, true).await.unwrap(),
+            store
+                .decide("board-1", mac, Some(&state), true, "epoch-1")
+                .await
+                .unwrap(),
             Decision::Wait
         ));
         drop(store);
@@ -818,7 +1167,10 @@ mod tests {
             last_outcome: None,
         };
         assert!(matches!(
-            store.decide("board-1", mac, &state, true).await.unwrap(),
+            store
+                .decide("board-1", mac, Some(&state), true, "epoch-1")
+                .await
+                .unwrap(),
             Decision::Update(_)
         ));
         assert_eq!(

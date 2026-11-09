@@ -9,7 +9,11 @@ use httpboot_protocol::{
     PROTOCOL_VERSION,
 };
 use serde::Serialize;
-use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
+use tokio::{
+    net::UdpSocket,
+    sync::{Mutex, MutexGuard},
+    task::JoinHandle,
+};
 
 use crate::state::AppState;
 
@@ -42,6 +46,7 @@ struct Registration {
 
 #[derive(Debug, Clone)]
 struct DeviceRecord {
+    protocol_version: u16,
     current_mac_address: MacAddress,
     ip_address: String,
     arch: httpboot_protocol::BootArch,
@@ -64,6 +69,11 @@ pub struct LoaderRegistry {
     deadline_changed: Arc<tokio::sync::Notify>,
     server_id: Arc<str>,
     state: Arc<Mutex<LoaderRegistryState>>,
+}
+
+/// Keeps an accepted registration stable while its OTA report is applied.
+pub(crate) struct RegistrationGuard<'a> {
+    _state: MutexGuard<'a, LoaderRegistryState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +125,7 @@ impl LoaderRegistry {
             state.devices.insert(
                 device.mac_address,
                 DeviceRecord {
+                    protocol_version: device.protocol_version,
                     current_mac_address: device.current_mac_address,
                     ip_address,
                     arch: device.arch,
@@ -211,7 +222,20 @@ impl LoaderRegistry {
         &self,
         report: &LoaderStatusReport,
     ) -> Result<(), RegistrationError> {
-        let result = self.accept_status_inner(report).await;
+        let result = self.accept_status_inner(report).await.map(drop);
+        self.events.invalidate(&["loaders"]);
+        self.deadline_changed.notify_one();
+        result
+    }
+    pub(crate) async fn accept_ota_status(
+        &self,
+        report: &LoaderStatusReport,
+    ) -> Result<RegistrationGuard<'_>, RegistrationError> {
+        let result = if report.protocol_version == PROTOCOL_VERSION {
+            self.accept_status_inner(report).await
+        } else {
+            Err(RegistrationError::ProtocolVersion)
+        };
         self.events.invalidate(&["loaders"]);
         self.deadline_changed.notify_one();
         result
@@ -328,6 +352,7 @@ impl LoaderRegistry {
         state.devices.insert(
             request.mac_address,
             DeviceRecord {
+                protocol_version: request.protocol_version,
                 current_mac_address: request.current_mac_address,
                 ip_address: request.ip_address.clone(),
                 arch: request.arch,
@@ -344,7 +369,7 @@ impl LoaderRegistry {
     async fn accept_status_inner(
         &self,
         report: &LoaderStatusReport,
-    ) -> Result<(), RegistrationError> {
+    ) -> Result<RegistrationGuard<'_>, RegistrationError> {
         if !matches!(
             report.protocol_version,
             LEGACY_PROTOCOL_VERSION | PREVIOUS_PROTOCOL_VERSION | PROTOCOL_VERSION
@@ -375,15 +400,17 @@ impl LoaderRegistry {
             }
             return Err(RegistrationError::Replaced);
         }
-        let (conflict, current_registration_id) = state
+        let device = state
             .devices
             .get(&report.mac_address)
-            .map(|device| (device.conflict, device.current_registration_id.clone()))
             .ok_or(RegistrationError::Unknown)?;
-        if conflict {
+        if device.protocol_version != report.protocol_version {
+            return Err(RegistrationError::ProtocolVersion);
+        }
+        if device.conflict {
             return Err(RegistrationError::Conflict);
         }
-        if current_registration_id != report.registration_id {
+        if device.current_registration_id != report.registration_id {
             return Err(RegistrationError::Replaced);
         }
         state
@@ -396,7 +423,28 @@ impl LoaderRegistry {
             .get_mut(&report.mac_address)
             .expect("device was validated above")
             .last_seen_at = now;
-        Ok(())
+        Ok(RegistrationGuard { _state: state })
+    }
+
+    pub(crate) async fn legacy_ota_registration(&self, mac: MacAddress) -> Option<String> {
+        let now = Utc::now();
+        let mut state = self.state.lock().await;
+        prune(&mut state, now);
+        let device = state.devices.get(&mac)?;
+        if device.protocol_version != PROTOCOL_VERSION
+            || device.conflict
+            || now - device.last_seen_at > ONLINE_TTL
+        {
+            return None;
+        }
+        let registration = state.registrations.get(&device.current_registration_id)?;
+        if registration.protocol_version != PROTOCOL_VERSION
+            || registration.mac_address != mac
+            || registration.superseded_at.is_some()
+        {
+            return None;
+        }
+        Some(device.current_registration_id.clone())
     }
 
     pub async fn snapshots(&self) -> Vec<LoaderDeviceSnapshot> {
@@ -680,12 +728,22 @@ mod tests {
             .offer(&probe(mac), "http://host".into())
             .await
             .unwrap();
-        assert!(
-            !registry
-                .accept_poll(&poll(mac, second.registration_id.clone()))
-                .await
-                .unwrap()
-        );
+        let registration = registry
+            .accept_ota_status(&LoaderStatusReport {
+                protocol_version: PROTOCOL_VERSION,
+                registration_id: first.registration_id.clone(),
+                mac_address: mac,
+                session_id: String::new(),
+                boot_id: String::new(),
+                status: LoaderStatusPhase::Accepted,
+            })
+            .await
+            .unwrap();
+        let next_poll = poll(mac, second.registration_id.clone());
+        let mut replacement = std::pin::pin!(registry.accept_poll(&next_poll));
+        assert!(futures_util::poll!(replacement.as_mut()).is_pending());
+        drop(registration);
+        assert!(!replacement.await.unwrap());
         assert!(!registry.snapshots().await[0].conflict);
         assert!(
             registry

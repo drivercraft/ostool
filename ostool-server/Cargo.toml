@@ -62,6 +62,7 @@ log = {workspace = true}
 mime_guess = "2"
 network-interface = "2"
 nusb = "0.2.3"
+object = "0.39"
 rust-embed = {version = "8", features = ["interpolate-folder-path", "debug-embed"]}
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rand = "0.9"

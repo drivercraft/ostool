@@ -531,6 +531,8 @@ fn runtime_and_history_serialization_omit_binding_credentials_and_raw_diagnostic
         phase: ostool_server::ota::Phase::Failed,
         error: Some("PRIVATE_OTA_ERROR".into()),
         delivery_attempts: 1,
+        next_delivery_at: None,
+        waiting_for_device_change: false,
     };
     assert!(!serde_json::to_string(&job.management_view())?.contains("PRIVATE_OTA_ERROR"));
     for error in [
