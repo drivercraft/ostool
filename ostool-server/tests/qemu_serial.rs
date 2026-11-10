@@ -3,7 +3,7 @@
 #[path = "common/serial.rs"]
 mod serial_fixture;
 use futures_util::{SinkExt, StreamExt};
-use httpboot_protocol::{BootArch, BootFile, ImageFormat, LoaderAnnouncement, LoaderDeviceStatus};
+use httpboot_protocol::{BootFile, LoaderAnnouncement, LoaderDeviceStatus};
 use ostool_serial::{PortLocator, SerialManager};
 #[path = "support/database.rs"]
 mod test_database;
@@ -183,9 +183,6 @@ async fn ovmf_identity_binds_serial_null_session_and_boots_kernel() -> anyhow::R
             kernel_path: format!("/boot/sessions/{}/kernel.elf", created.id),
             kernel_size: kernel.len() as u64,
             kernel_sha256: format!("{:x}", Sha256::digest(&kernel)),
-            arch: BootArch::X86_64,
-            image_format: ImageFormat::Elf64,
-            entry_symbol: None,
             initramfs,
             cmdline: Some("axloader.cmdline=ostool-local".into()),
         })
@@ -219,7 +216,7 @@ async fn ovmf_identity_binds_serial_null_session_and_boots_kernel() -> anyhow::R
         boot_epoch: observed.boot_epoch.clone(),
         mac_address: observed.mac_address,
         current_mac_address: observed.current_mac_address,
-        arch: observed.arch,
+        arch: observed.arch.clone(),
         loader_version: observed.loader_version.clone(),
         http_port: port,
         serial_id: Some(uart.serial_id.clone()),

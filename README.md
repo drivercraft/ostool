@@ -15,7 +15,7 @@
 
 ## 📖 项目简介
 
-axloader 网络控制（v6 串口自动绑定、v5 设备识别与 OTA、旧无认证设备入口的拒绝策略）、持久 MAC 绑定、Web 管理、内建 QEMU 虚拟板和本地真实 FAT 磁盘验证设计见 [docs/axloader-network-control.md](docs/axloader-network-control.md)，完整接口契约见 [docs/api.md](docs/api.md)。
+axloader 网络控制（唯一 v7 协议、串口自动绑定、反向 OTA）、持久 MAC 绑定、Web 管理、内建 QEMU 虚拟板和本地真实 FAT 磁盘验证设计见 [docs/axloader-network-control.md](docs/axloader-network-control.md)，完整接口契约见 [docs/api.md](docs/api.md)。
 
 `ostool-server` 提供独立的前台网站和 `/admin/` 管理后台，使用 PostgreSQL 持久化。
 本地版使用 HTTP 免登录，直接独占使用空闲开发板，不启用账号或租赁分配，也不依赖 Redis；公网版通过 HTTPS 登录，使用 Redis 风控与开发板租赁，有权限的成员可即时领取设备。会话文件以 PostgreSQL 分块存储，磁盘仅为可重建缓存。
@@ -340,13 +340,15 @@ interface = "eth0"
 board_ip = "192.168.1.100"
 ```
 
-`BootPayloadConfig` 的 `cmdline` 与 `initramfs` 相互独立且都可省略；它们是 QEMU、board 与 U-Boot 的顶层运行配置，不属于构建配置。`initramfs` 是宿主归档，与 Linux guest 的 initrd 分开配置。QEMU 直启仅在 AArch64/RISC-V 路径使用 `-initrd` 和 `-append`；x86 使用 UEFI ESP 中的 `EFI/BOOT/initramfs.cpio`、`cmdline.txt`，不向裸 ELF 传 Linux x86 启动协议参数。U-Boot 的 `generate_fit_image()` 将归档作为 FIT ramdisk，并在启动前设置 `bootargs`；生成 FIT 前会清除输入 DTB 中遗留的 `linux,initrd-start/end` 及与其完全对应的内存预留；若 FIT 包含 ramdisk，U-Boot 会写入本次启动的实际范围。串口命令路径暂不接受含单引号的 `cmdline`。board HTTP Boot 将归档和内核上传到同一 session，服务端记录归档大小与 SHA-256。v5 设备保留识别与 OTA；v6 设备由服务端先按本次上报的 UART 参数确认串口身份，再以绑定令牌放行启动，按内核架构选择 EFI 入口（x86_64 为 `__x86_64_efi_pe_entry`，RISC-V64 和 LoongArch64 为 `efi_pe_entry`），cmdline 通过 EFI LoadOptions、initramfs 通过 TGOS `BootPayload` 交接。无认证 UDP 发现与旧 v2/v3/v4 poll 入口已关闭；网络设备必须配置 HTTPS 地址、独立凭据和受信任证书。归档上限为 256 MiB，cmdline 上限为 4095 字节且仅允许可打印 ASCII 和空格。实体板卡的固件和内核须实现对应交接协议。
+`BootPayloadConfig` 的 `cmdline` 与 `initramfs` 相互独立且都可省略；它们是 QEMU、board 与 U-Boot 的顶层运行配置，不属于构建配置。`initramfs` 是宿主归档，与 Linux guest 的 initrd 分开配置。QEMU 直启仅在 AArch64/RISC-V 路径使用 `-initrd` 和 `-append`；x86 使用 UEFI ESP 中的 `EFI/BOOT/initramfs.cpio`、`cmdline.txt`，不向裸 ELF 传 Linux x86 启动协议参数。U-Boot 的 `generate_fit_image()` 将归档作为 FIT ramdisk，并在启动前设置 `bootargs`；生成 FIT 前会清除输入 DTB 中遗留的 `linux,initrd-start/end` 及与其完全对应的内存预留；若 FIT 包含 ramdisk，U-Boot 会写入本次启动的实际范围。串口命令路径暂不接受含单引号的 `cmdline`。board HTTP Boot 将归档和内核上传到同一 session，服务端记录归档大小与 SHA-256。设备控制协议只支持 v7：设备先由 `/api/v1/status` 上报 `protocol_version: 7`，所有 boot、serial、OTA mutation 以及 CLI 向 server 的 files/kernel 上传都携带 `X-Axloader-Protocol-Version: 7`；缺失或错误版本在任何写入、串口接管或 body 解析前返回固定 `unsupported_protocol`。服务端只负责传输、长度/摘要、会话、代次和绑定；ELF 的 machine、格式、装载范围及本地 EFI 入口由 axloader 根据目标机自身规则检查。cmdline 通过 EFI LoadOptions、initramfs 通过 TGOS `BootPayload` 交接。归档上限为 256 MiB，cmdline 上限为 4095 字节且仅允许可打印 ASCII 和空格。实体板卡的固件和内核须实现对应交接协议。
 
-HTTP Boot 不持久保存 `boot_arch`；旧字段兼容读取后丢弃，重新保存到 PostgreSQL 时移除；旧 TOML 通过独立迁移工具导入，源文件保持不变，其他未知字段仍拒绝。CLI 复用已有 ELF 检测结果生成架构 Header；服务端用 `object` 解析小端 ELF64，上传时校验 `e_machine` 与声明，串口交接前再核对文件、声明及 axloader 的 `observed.arch`。不匹配时串口状态进入 `Failed` 并停止会话。编辑页只读展示在线设备上报架构，离线或未发现时显示未知，仍可准备 Session 和内核，待上线后匹配。
+设备连接仍要求预先配置的 HTTPS 来源、独立凭据和受信任证书；未认证 UDP 不注册设备，管理 API/SSE 不回传设备原始内部错误。
 
-OTA 镜像对服务端是不透明的字节：`OtaStore` 接受非空且不超过 32 MiB 的内容，保存标签、长度与 SHA-256，下发前校验存储完整性；PE/COFF 格式、`Machine` 和平台可加载性由 axloader 判定。服务端和 Web UI 不按 CPU 架构限制 OTA，离线可排队，缺失实际 `ota` 状态时保留可见的等待原因。旧 v2/v3/v4 poll、下载及状态回报实现已移除，升级仅走已配置凭据的设备 HTTPS 接口。
+HTTP Boot 不持久保存 `boot_arch`，也不会自动迁移旧配置；`httpboot` 是唯一现行 wire/config kind。CLI 直接上传实际文件字节，不发送架构、镜像格式或入口 Header，也不会因 `Architecture::Unknown`、未列举的 `e_machine` 或 ELF32 在主机侧提前拒绝。axloader 上报的 `arch` 是开放的非空显示字符串并原样展示；设备身份与关联仍由 MAC、`boot_epoch`、串口 serial ID 和 binding 核对。真实镜像不兼容时由设备以开放 `{code,message}` 错误明确拒绝，主机保留并展示首个终态错误。
 
-设备返回 `202` 仅表示暂存通过，任务须在新槽实际运行、确认且摘要匹配后才成功。`400`/`413`/`422` 拒绝会使本次任务一次失败，服务端保留 HTTP 状态和设备响应体（包括旧 `422 {}`），管理 API/SSE 返回安全错误提示；`409` 刷新状态/代次并延迟重试，`503` 等待状态、能力或代次变化而不重复推送。网络错误和其他 `5xx` 有限退避重试，结果不确定时先核对设备是否已接受，最后一次尝试也在判定失败前核对。完整契约见[装载器升级](docs/axloader-network-control.md#22-装载器升级)。
+OTA 镜像对服务端是不透明的字节：`OtaStore` 接受非空且不超过 32 MiB 的内容，保存标签、长度与 SHA-256，下发前校验存储完整性；PE/COFF 格式、`Machine` 和平台可加载性由 axloader 判定。服务端和 Web UI 不按 CPU 架构限制 OTA，离线可排队，缺失实际 `ota` 状态时保留可见的等待原因。当前反向 OTA 仍使用 `PUT /api/v1/ota/image`、`POST /api/v1/ota/confirm` 和 `boot_epoch`；旧 discovery/poll/OTA 下载路由不保留。
+
+设备返回 `202` 仅表示请求已接受或启动载荷已准备、即将交接，不代表内核已经成功运行；成功仍需串口输出或 OTA 新槽实际运行确认。boot job 的 `422` 是事务终态：首个 `code/message` 保留在 failed job 并可查询，后续 PUT/start 不会重新解析或重发大缓冲；`400`/`413` 也作为明确拒绝稳定展示。普通 OTA 已接受镜像后的重启失联继续走既有 trial/confirm 流程，不能误判为 boot failed。`POST start` 响应不确定时只查询同一 `boot_epoch + boot_id`，仅在状态仍为 `ready` 时同 ID 重试一次；failed 按终态处理，其他结果报告“交接结果未确认”，不自动 DELETE、重建事务、更换 ID 或跨代重启。完整契约见[启动事务](docs/axloader-network-control.md#21-启动事务)和[装载器升级](docs/axloader-network-control.md#22-装载器升级)。
 
 ### 有序 Shell 初始化步骤
 

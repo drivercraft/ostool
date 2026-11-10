@@ -38,6 +38,8 @@ mod artifact;
 mod boot;
 pub use boot::payload::BootPayloadConfig;
 
+mod http_io;
+
 /// Authentication gateway client, secure credential storage, and token lifecycle management.
 pub mod auth;
 

@@ -2,15 +2,18 @@ use std::fmt;
 
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
-use httpboot_protocol::{KernelPublishResponse, LoaderStatusResponse};
+use httpboot_protocol::{
+    DEVICE_PROTOCOL_VERSION_HEADER, KernelPublishResponse, LoaderStatusResponse,
+    decode_device_operation_error, device_protocol_version_header_value,
+};
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use thiserror::Error;
 use url::Url;
 
 use crate::{
     auth::token_manager::TokenManager,
     board::global_config::{AuthMode, BoardEndpoint},
+    http_io::{MAX_ERROR_BODY_BYTES, read_limited_body},
 };
 
 #[derive(Clone)]
@@ -84,7 +87,7 @@ pub struct HeartbeatResponse {
 pub enum BootConfig {
     Uboot(UbootProfile),
     Pxe(PxeProfile),
-    #[serde(rename = "httpboot", alias = "uefi_http")]
+    #[serde(rename = "httpboot")]
     UefiHttp(UefiHttpProfile),
 }
 
@@ -127,16 +130,16 @@ pub struct PxeProfile {
 #[derive(Debug, Clone)]
 pub struct HttpBootKernelUpload {
     pub remote_name: String,
-    pub arch: String,
-    pub image_format: String,
-    pub entry_symbol: Option<String>,
     pub bytes: Vec<u8>,
     pub initramfs: Option<Vec<u8>>,
     pub cmdline: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct UefiHttpProfile {}
+#[serde(deny_unknown_fields)]
+pub struct UefiHttpProfile {
+    pub serial_parameters: Option<httpboot_protocol::SerialParameters>,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BootProfileResponse {
@@ -225,19 +228,27 @@ pub struct SessionDtbResponse {
     pub tftp_url: Option<Url>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct ErrorResponse {
-    code: String,
-    message: String,
-}
-
-#[derive(Debug, Clone, Error)]
-#[error("{message}")]
+#[derive(Debug, Clone)]
 pub struct BoardServerClientError {
     pub status: StatusCode,
     pub code: Option<String>,
     pub message: String,
 }
+
+impl fmt::Display for BoardServerClientError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.code {
+            Some(code) => write!(
+                formatter,
+                "{} (HTTP {}, code {code})",
+                self.message, self.status
+            ),
+            None => write!(formatter, "{} (HTTP {})", self.message, self.status),
+        }
+    }
+}
+
+impl std::error::Error for BoardServerClientError {}
 
 impl BoardServerClientError {
     pub fn is_no_available_board_for(&self, board_type: &str) -> bool {
@@ -576,6 +587,10 @@ impl BoardServerClient {
                 self.endpoint(&format!("/api/v1/sessions/{session_id}/http-boot/files")),
             )
             .await?
+            .header(
+                DEVICE_PROTOCOL_VERSION_HEADER,
+                device_protocol_version_header_value(),
+            )
             .header("X-File-Path", relative_path)
             .body(bytes);
         let response = self.send(request).await?;
@@ -598,12 +613,11 @@ impl BoardServerClient {
                 self.endpoint(&format!("/api/v1/sessions/{session_id}/http-boot/kernel")),
             )
             .await?
-            .header("X-HttpBoot-Remote-Name", upload.remote_name)
-            .header("X-HttpBoot-Arch", upload.arch)
-            .header("X-HttpBoot-Image-Format", upload.image_format);
-        if let Some(entry_symbol) = upload.entry_symbol {
-            request = request.header("X-HttpBoot-Entry-Symbol", entry_symbol);
-        }
+            .header(
+                DEVICE_PROTOCOL_VERSION_HEADER,
+                device_protocol_version_header_value(),
+            )
+            .header("X-HttpBoot-Remote-Name", upload.remote_name);
         if has_initramfs {
             request = request.header("X-HttpBoot-Initramfs-Path", "initramfs.cpio");
         }
@@ -746,8 +760,17 @@ impl BoardServerClient {
 
     async fn api_error(response: reqwest::Response) -> BoardServerClientError {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        parse_error_body(status, &body)
+        let body = match read_limited_body(response, MAX_ERROR_BODY_BYTES).await {
+            Ok(body) => body,
+            Err(error) => {
+                return BoardServerClientError {
+                    status,
+                    code: Some("invalid_device_response".to_string()),
+                    message: format!("invalid_device_response (HTTP {status}): {error}"),
+                };
+            }
+        };
+        parse_error_body(status, &String::from_utf8_lossy(&body))
     }
 
     fn request_error(err: reqwest::Error) -> BoardServerClientError {
@@ -760,7 +783,7 @@ impl BoardServerClient {
 }
 
 fn parse_error_body(status: StatusCode, body: &str) -> BoardServerClientError {
-    match serde_json::from_str::<ErrorResponse>(body) {
+    match decode_device_operation_error(body.as_bytes()) {
         Ok(error) => BoardServerClientError {
             status,
             code: Some(error.code),
@@ -768,8 +791,8 @@ fn parse_error_body(status: StatusCode, body: &str) -> BoardServerClientError {
         },
         Err(_) if !body.trim().is_empty() => BoardServerClientError {
             status,
-            code: None,
-            message: body.trim().to_string(),
+            code: Some("invalid_device_response".to_string()),
+            message: format!("invalid_device_response (HTTP {status}): {}", body.trim()),
         },
         Err(_) => BoardServerClientError {
             status,
@@ -801,7 +824,9 @@ pub(crate) mod tests {
     };
     use url::Url;
 
-    use super::{BoardServerClient, BoardTypeSummary, BootConfig, parse_error_body};
+    use super::{
+        BoardServerClient, BoardTypeSummary, BootConfig, HttpBootKernelUpload, parse_error_body,
+    };
     use crate::board::global_config::{AuthMode, BoardEndpoint};
 
     #[derive(Serialize)]
@@ -950,12 +975,118 @@ pub(crate) mod tests {
     #[test]
     fn parse_error_body_prefers_structured_api_errors() {
         let error = parse_error_body(
-            StatusCode::CONFLICT,
-            r#"{"code":"conflict","message":"no available board for type `rk3568`"}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            r#"{"code":"future_device_error","message":"future device detail"}"#,
         );
-        assert_eq!(error.status, StatusCode::CONFLICT);
-        assert_eq!(error.code.as_deref(), Some("conflict"));
-        assert_eq!(error.message, "no available board for type `rk3568`");
+        assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(error.code.as_deref(), Some("future_device_error"));
+        assert_eq!(error.message, "future device detail");
+    }
+
+    #[tokio::test]
+    async fn chunked_error_body_is_rejected_at_the_shared_limit() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _ = read_http_request_bytes(&mut socket).await;
+            let chunk = "x".repeat(33 * 1024);
+            let response = format!(
+                "HTTP/1.1 500 Internal Server Error\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n{:x}\r\n{chunk}\r\n{:x}\r\n{chunk}\r\n0\r\n\r\n",
+                chunk.len(),
+                chunk.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let endpoint =
+            BoardEndpoint::new(&format!("http://{address}"), None, AuthMode::Disabled).unwrap();
+        let client = BoardServerClient::new_with_endpoint(endpoint).unwrap();
+        let error = client.list_board_types().await.unwrap_err();
+        assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.code.as_deref(), Some("invalid_device_response"));
+        assert!(
+            error.message.contains("body exceeds 65536 bytes"),
+            "{error}"
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn httpboot_uploads_send_v7_on_files_and_kernel_without_arch_headers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let kernel = b"future-isa-kernel".to_vec();
+        let expected_kernel = kernel.clone();
+        let server = tokio::spawn(async move {
+            let (mut files, _) = listener.accept().await.unwrap();
+            let request = read_http_request_bytes(&mut files).await;
+            let header_end = request
+                .windows(4)
+                .position(|part| part == b"\r\n\r\n")
+                .unwrap();
+            let headers = String::from_utf8_lossy(&request[..header_end]).to_ascii_lowercase();
+            assert!(headers.starts_with("put /api/v1/sessions/demo/http-boot/files "));
+            assert!(headers.contains("x-axloader-protocol-version: 7\r\n"));
+            assert_eq!(&request[header_end + 4..], b"initramfs");
+            write_http_response(
+                &mut files,
+                "201 Created",
+                &serde_json::json!({
+                    "filename": "initramfs.cpio",
+                    "relative_path": "ostool/sessions/demo/initramfs.cpio",
+                    "http_url": format!("http://{address}/boot/initramfs.cpio"),
+                    "size": 9,
+                    "uploaded_at": "2026-11-10T00:00:00Z"
+                })
+                .to_string(),
+            )
+            .await;
+
+            let (mut kernel_socket, _) = listener.accept().await.unwrap();
+            let request = read_http_request_bytes(&mut kernel_socket).await;
+            let header_end = request
+                .windows(4)
+                .position(|part| part == b"\r\n\r\n")
+                .unwrap();
+            let headers = String::from_utf8_lossy(&request[..header_end]).to_ascii_lowercase();
+            assert!(headers.starts_with("put /api/v1/sessions/demo/http-boot/kernel "));
+            assert!(headers.contains("x-axloader-protocol-version: 7\r\n"));
+            assert!(!headers.contains("x-httpboot-arch:"));
+            assert!(!headers.contains("x-httpboot-image-format:"));
+            assert!(!headers.contains("x-httpboot-entry-symbol:"));
+            assert_eq!(&request[header_end + 4..], b"future-isa-kernel");
+            write_http_response(
+                &mut kernel_socket,
+                "201 Created",
+                &serde_json::json!({
+                    "boot_id": "boot-1",
+                    "kernel_url": format!("http://{address}/boot/kernel.elf"),
+                    "kernel_size": 17,
+                    "kernel_sha256": null
+                })
+                .to_string(),
+            )
+            .await;
+        });
+
+        let endpoint =
+            BoardEndpoint::new(&format!("http://{address}"), None, AuthMode::Disabled).unwrap();
+        let client = BoardServerClient::new_with_endpoint(endpoint).unwrap();
+        client
+            .upload_http_boot_kernel(
+                "demo",
+                HttpBootKernelUpload {
+                    remote_name: "kernel.elf".into(),
+                    bytes: kernel,
+                    initramfs: Some(b"initramfs".to_vec()),
+                    cmdline: Some("console=ttyS0".into()),
+                },
+            )
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(expected_kernel, b"future-isa-kernel".to_vec());
     }
 
     #[test]
@@ -1124,17 +1255,38 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn parse_httpboot_boot_profile_ignores_legacy_architecture() {
-        for kind in ["httpboot", "uefi_http"] {
-            for arch in [None, Some("x86_64"), Some("riscv64"), Some("future_arch")] {
-                let mut value = serde_json::json!({"boot": {"kind": kind}});
-                if let Some(arch) = arch {
-                    value["boot"]["boot_arch"] = serde_json::json!(arch);
-                }
-                let response: super::BootProfileResponse = serde_json::from_value(value).unwrap();
+    fn parse_httpboot_boot_profile_only_accepts_the_current_kind() {
+        let empty: super::BootProfileResponse =
+            serde_json::from_value(serde_json::json!({"boot": {"kind": "httpboot"}})).unwrap();
+        match empty.boot {
+            BootConfig::UefiHttp(profile) => assert!(profile.serial_parameters.is_none()),
+            BootConfig::Uboot(_) | BootConfig::Pxe(_) => panic!("expected httpboot profile"),
+        }
 
-                assert!(matches!(response.boot, BootConfig::UefiHttp(_)));
+        let configured: super::BootProfileResponse = serde_json::from_value(serde_json::json!({
+            "boot": {
+                "kind": "httpboot",
+                "serial_parameters": {
+                    "baud_rate": 115200,
+                    "data_bits": 8,
+                    "parity": "none",
+                    "stop_bits": "one",
+                    "flow_control": "none"
+                }
             }
+        }))
+        .unwrap();
+        match configured.boot {
+            BootConfig::UefiHttp(profile) => assert_eq!(
+                profile.serial_parameters,
+                Some(httpboot_protocol::SerialParameters::default())
+            ),
+            BootConfig::Uboot(_) | BootConfig::Pxe(_) => panic!("expected httpboot profile"),
+        }
+
+        for kind in ["uefi_http", "httpboot"] {
+            let value = serde_json::json!({"boot": {"kind": kind, "boot_arch": "future_arch"}});
+            assert!(serde_json::from_value::<super::BootProfileResponse>(value).is_err());
         }
     }
 

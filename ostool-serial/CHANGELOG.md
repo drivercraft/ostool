@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/drivercraft/ostool/compare/ostool-serial-v0.1.1...ostool-serial-v0.2.0) - 2026-11-10
+
+### Added
+
+- *(httpboot)* adopt architecture-agnostic device protocol v7 ([#218](https://github.com/drivercraft/ostool/pull/218))
+
 ## [0.1.1](https://github.com/drivercraft/ostool/compare/ostool-serial-v0.1.0...ostool-serial-v0.1.1) - 2026-10-16
 
 ### Other

@@ -3,7 +3,7 @@ import https from 'node:https';
 import { readFileSync } from 'node:fs';
 const [cert, key, token, mode] = process.argv.slice(2);
 const status = {
-  protocol_version: 6, boot_epoch: 'secure-epoch', mac_address: '02:00:00:00:11:09',
+  protocol_version: 7, boot_epoch: 'secure-epoch', mac_address: '02:00:00:00:11:09',
   current_mac_address: '02:00:00:00:11:09', arch: 'x86_64', loader_version: 'secure-test',
   hardware: {manufacturer:null,product:null,version:null,serial:null}, boot:null, ota:null, serial:null
 };

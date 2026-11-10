@@ -153,18 +153,16 @@ QEMU 使用已有虚拟设备，保留原来的真实网络发现与匹配校验
 由会话的 SSE 展示；`serial_manager` 展示发现请求数与候选监听数。没有黑名单界面。
 继电器配置继续保留，server 在发现前排除其所有路径别名和 SN。
 
-HTTP Boot 不再配置或保存 `boot_arch`，旧配置中的该字段在载入后忽略，重新保存时移除。
-内核架构从 ELF 读取，设备架构取自 axloader 的 `observed.arch`；发现列表和
-`BoardEditor` 只读展示设备上报架构，编辑页在设备离线或未发现时显示未知。
-`boardToFormState()` 和 `buildRequestPayload()` 不保留人工架构状态，选择 MAC 只改变绑定。
+`httpboot` 是唯一 HTTP Boot kind；`uefi_http` 和 `boot_arch` 不再兼容读取，旧配置必须由部署人员修正。内核按不透明字节上传，server 不读取 ELF 架构。设备架构取自 axloader `/status` 的开放字符串 `arch`，发现列表和 `BoardEditor` 原样只读展示，包括 `future-isa` 等未枚举名称；离线或未发现时显示未知。`boardToFormState()` 和 `buildRequestPayload()` 不保留人工架构状态，选择 MAC 只改变绑定。
 
 `BoardOta` 的上传、排队、任务历史和取消操作不按 CPU 架构隐藏；设备离线或未发现时
 仍可先排队。服务端保存非空且不超过 32 MiB 的镜像字节、标签、长度及 SHA-256，
 由 axloader 校验格式、`Machine` 和平台兼容性。实际 `ota` 状态缺失时不下发镜像，
 任务保留可见的等待原因；设备返回 `503` 后，等待状态、能力或代次变化再尝试。
 
-面板通过现有 `ota` SSE 资源展示 `Job.phase` 和经过安全处理的 `Job.error`；
-设备 HTTP 状态与原始错误体保留在服务端，旧设备的 `422 {}` 同样只失败一次。`202` 仅表示暂存，
+面板通过现有 `ota` SSE 资源展示 `Job.phase` 和安全处理后的 `Job.error`，原始设备错误不直接展示。
+服务端日志保留 HTTP 状态、受限响应体及顶层 `{code,message}`；不可解码或截断的响应记为
+`invalid_device_response`。`202` 仅表示暂存，
 待新槽实际运行、确认且摘要匹配后任务才成功。`409` 延迟重试和网络错误的有限退避
 由服务器处理；用户仍可查看错误或取消非终态任务。完整状态规则见
 [装载器升级](axloader-network-control.md#22-装载器升级)。

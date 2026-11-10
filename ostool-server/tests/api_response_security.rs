@@ -500,13 +500,14 @@ fn runtime_and_history_serialization_omit_binding_credentials_and_raw_diagnostic
         mac_address: "02:00:00:00:00:01".parse()?,
         current_mac_address: "02:00:00:00:00:01".parse()?,
         ip_address: "192.168.1.2".into(),
-        arch: httpboot_protocol::BootArch::X86_64,
+        arch: "x86_64".into(),
         loader_version: "1".into(),
         hardware: Default::default(),
         last_seen_at: Utc::now(),
         online: true,
         conflict: false,
         bound_board_id: None,
+        boot_epoch: "epoch-1".into(),
     };
     assert!(
         serde_json::to_value(loader)?

@@ -2,7 +2,7 @@
 
 ## 1. 启动身份
 
-`httpboot-protocol::LoaderSerialStatus`、`SerialParameters` 和 `SerialBinding` 定义 v6 的设备契约。设备每次上电产生新的 `boot_epoch` 和 32 位小写十六进制 `serial_id`。MAC 用于选择板卡，UART 身份帧用于证明物理连线；SMBIOS 序列号和 USB SN 均不是启动身份。
+`httpboot-protocol::LoaderSerialStatus`、`SerialParameters` 和 `SerialBinding` 定义 v7 设备协议中的串口子契约。设备每次上电产生新的 `boot_epoch` 和 32 位小写十六进制 `serial_id`。MAC 用于选择板卡，UART 身份帧用于证明物理连线；SMBIOS 序列号和 USB SN 均不是启动身份。独立的 UART 身份帧继续使用 `AXLOADER-SERIAL/1 `，不随设备 HTTP 协议升级改为 `/7`。
 
 ### 1.1 设备参数
 
@@ -20,7 +20,7 @@
 
 ### 1.2 网络门禁
 
-HTTP 和 UART 就绪后，固件每 250 ms 尝试发送 `\r\nAXLOADER-SERIAL/1 <serial_id>\r\n`。`POST /api/v1/serial/continue` 使用当前 `X-Boot-Epoch` 和 `SerialBinding`，相同请求幂等，冲突请求拒绝。启动还需 `X-Serial-Binding`。上传、查询和 OTA 不受串口门禁限制。
+HTTP 和 UART 就绪后，固件每 250 ms 尝试发送 `\r\nAXLOADER-SERIAL/1 <serial_id>\r\n`。`POST /api/v1/serial/continue` 使用当前 `X-Boot-Epoch`、`SerialBinding` 和 `X-Axloader-Protocol-Version: 7`，相同请求幂等，冲突请求拒绝。启动还需 `X-Serial-Binding`。上传、查询和 OTA 不受串口绑定门禁限制，但 OTA mutation 仍须通过 v7 版本门禁；版本头不替代 epoch 或 binding。
 
 `bound` 表示已经由宿主身份匹配并接管串口；`direct` 是直连客户端显式放行，没有串口隧道。`DELETE /api/v1/serial/bindings/{binding_id}` 只能撤销当前代次的匹配令牌；设备还在 axloader 时恢复发送身份。服务器取消请求或启动失败时，以代次和令牌进行有期限的尽力撤销。
 
@@ -54,7 +54,7 @@ sequenceDiagram
     M->>S: IO、读取者、缓冲和不可克隆租约
     S->>L: continue(epoch, serial_id, binding_id, bound)
     S->>M: 确认 RAM 定位
-    S->>L: 上传并 start(X-Serial-Binding)
+    S->>L: 上传并 start(v7, X-Serial-Binding)
     L-->>W: 原读取者转发内核输出
     W->>S: Close 或会话结束
     S->>M: 句柄关闭且接收线程退出后归还
@@ -88,7 +88,9 @@ ostool axloader run --device http://DEVICE:2999 --kernel kernel.elf \
 ostool axloader continue --device http://DEVICE:2999
 ```
 
-`run` 自动配置本地口并输出串口，在交互终端转发键盘输入；Unix 非交互模式只输出，沿用现有终端行为。CLI 使用本次设备上报的 UART 参数；参数缺失时使用协议默认值 `115200 8N1`、无流控。Web UI 的持久化覆盖只属于 server session，CLI 暂不读取该板卡配置。CLI 对设备状态和管理器绑定请求使用 60 秒总等待期限；每次请求的串口扫描仍按 `max(5 秒, 组合数 × 2 秒)` 结束，遇到 `ready=false`、扫描超时或发现失败会重新读取状态并发起下一次请求。交互输入复用 `sterm::Input` 的可取消非阻塞读取，不留下等待换行的工作线程。Ctrl-C 归还租约，尚在装载器时尽力撤销绑定。`continue` 只执行 direct 放行，调用方随后上传和启动时仍须带设备状态中的匹配令牌。
+`run` 自动配置本地口并输出串口，在交互终端转发键盘输入；Unix 非交互模式只输出，沿用现有终端行为。CLI 使用本次设备上报的 UART 参数；参数缺失时使用协议默认值 `115200 8N1`、无流控。Web UI 的持久化覆盖只属于 server session，CLI 暂不读取该板卡配置。CLI 对设备状态和管理器绑定请求使用 60 秒总等待期限；每次请求的串口扫描仍按 `max(5 秒, 组合数 × 2 秒)` 结束，遇到 `ready=false`、扫描超时或发现失败会重新读取状态并发起下一次请求。交互输入复用 `sterm::Input` 的可取消非阻塞读取，不留下等待换行的工作线程。
+
+`POST start` 的连接中断、超时或可重试 `5xx` 不直接结束串口租约。CLI 只查询同一 `boot_epoch + boot_id`：明确 `failed` 时显示首个设备 `code/message` 并终态退出；仅当仍是 `ready` 时才用同 ID 重试一次；端点不可达、已换代、job 缺失或再次不确定时打印“交接结果未确认”，继续持有租约观察串口，直到现有串口关闭、Ctrl-C 或调用方取消。它不会 DELETE 或重建 boot job、更换 ID 或跨代启动。普通 OTA 已接受镜像后的重启失联继续走 OTA trial/confirm 流程，不按这个 boot start 规则判为内核失败。Ctrl-C 归还租约，尚在装载器时尽力撤销绑定。`continue` 只执行 direct 放行，调用方随后上传和启动时仍须带设备状态中的匹配令牌。
 
 ## 4. 验证与迁移
 
@@ -111,9 +113,9 @@ TGOS 使用 `cargo fmt --package axloader --package axbuild`、`cargo xtask clip
 
 ### 4.2 发布顺序
 
-设备协议依赖版本为 `httpboot-protocol 0.5.0`，共享组件为 `ostool-serial 0.1.0`。先审查并发布协议，再发布组件及 ostool，更新 TGOS 的 registry 锁文件后再协调升级。开发验证可用 Cargo 本地 patch，但不得把开发机器的路径依赖作为正式交付。
+设备协议依赖为不兼容的 `httpboot-protocol 0.6.0`，共享组件为 `ostool-serial 0.2.0`，配套 host 为 `ostool 0.32.0`。锁文件由 Cargo 重新生成，不手工拼接。先审查并发布协议，再发布组件及 ostool，更新 TGOS 的 registry 锁文件后再协调升级；不维护 v2-v6 dual series 或旧入口过渡层。
 
-维护窗口先排空 session。server 保留 v5 识别与 OTA，旧 poll 设备仍可识别和升级，但自动启动明确要求 v6；不提供手动串口回退。启动身份和定位不持久化，重启后再次进入 axloader 才能绑定。当前验证范围是 x86_64 UEFI、Linux 宿主和可信实验网络；部署、实体板卡刷写和新架构支持独立授权。
+维护窗口先排空 session 和 OTA，停止旧 server，人工备份并整理旧配置与 OTA 观测缓存，再安装 v7 axloader 和配套 CLI/server。新 server 不通过旧协议桥接升级旧 loader，旧写请求因缺版本头直接得到 `400 unsupported_protocol`。启动身份和定位不持久化，重启后再次进入 axloader 才能绑定。当前验证范围是 x86_64 UEFI、Linux 宿主和可信实验网络；部署、实体板卡刷写和新架构支持独立授权。
 
 ### 4.3 本次本地验收记录
 

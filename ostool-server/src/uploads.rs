@@ -138,11 +138,6 @@ impl PendingUpload {
             result=tokio::time::timeout_at(self.deadline,future)=>result.map_err(|_|upload_timeout()),
         }
     }
-    pub async fn bytes(&self) -> Result<Vec<u8>, ApiError> {
-        self.within_deadline(tokio::fs::read(self.temp.path()))
-            .await?
-            .map_err(|e| ApiError::from(anyhow::Error::from(e)))
-    }
     pub async fn commit(
         self,
         state: &AppState,

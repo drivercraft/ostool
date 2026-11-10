@@ -10,8 +10,9 @@ use axum::{
 };
 use futures_util::future::join_all;
 use httpboot_protocol::{
-    BootArch, BootFile, ImageFormat, LoaderStatusResponse, MAX_HTTP_BOOT_INITRAMFS_BYTES,
-    MacAddress, valid_host_cmdline,
+    BootFile, DEVICE_PROTOCOL_VERSION_HEADER, LoaderStatusResponse, MAX_HTTP_BOOT_INITRAMFS_BYTES,
+    MacAddress, UNSUPPORTED_PROTOCOL_CODE, UNSUPPORTED_PROTOCOL_MESSAGE, valid_host_cmdline,
+    validate_device_protocol_version_header,
 };
 use mime_guess::from_path;
 use sha2::{Digest, Sha256};
@@ -686,6 +687,7 @@ async fn list_loader_devices(
                 last_seen_at: device.last_seen_at,
                 online: device.online,
                 conflict: device.conflict,
+                boot_epoch: device.boot_epoch,
             })
             .collect(),
     ))
@@ -776,7 +778,6 @@ async fn get_loader_status(
         .loader_status()
         .await
         .ok_or_else(|| ApiError::not_found("session has no published boot command"))?;
-    status.registration_id = None;
     if let Some(httpboot_protocol::LoaderStatusPhase::Failed { message, .. }) = &mut status.status {
         *message = "设备启动失败，请联系管理员".into();
     }
@@ -2093,6 +2094,7 @@ async fn put_http_boot_file(
     State(state): State<AppState>,
     request: Request,
 ) -> Result<(StatusCode, axum::Json<HttpBootFileResponse>), ApiError> {
+    require_device_protocol_version_header(request.headers())?;
     let session = active_session_state_or_404(&state, &session_id).await?;
     ensure_httpboot_board(session.board())?;
     if !state.config.read().await.http_boot.enabled {
@@ -2111,6 +2113,7 @@ async fn put_http_boot_kernel(
     State(state): State<AppState>,
     request: Request,
 ) -> Result<(StatusCode, axum::Json<KernelPublishResponse>), ApiError> {
+    require_device_protocol_version_header(request.headers())?;
     let session = active_session_state_or_404(&state, &session_id).await?;
     let board = session.board().clone();
     ensure_httpboot_board(&board)?;
@@ -2118,11 +2121,6 @@ async fn put_http_boot_kernel(
     let remote_name = optional_header(headers, "X-HttpBoot-Remote-Name")?
         .unwrap_or_else(|| "kernel.elf".to_string());
     let remote_name = parse_relative_path(&remote_name)?;
-    let arch = parse_httpboot_arch_header(headers)?;
-    let image_format = parse_httpboot_image_format_header(headers)?;
-    let entry_symbol = optional_header(headers, "X-HttpBoot-Entry-Symbol")?
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
     let initramfs_path = optional_header(headers, "X-HttpBoot-Initramfs-Path")?
         .map(|path| parse_relative_path(&path))
         .transpose()?;
@@ -2138,23 +2136,6 @@ async fn put_http_boot_kernel(
     }
 
     let upload = crate::uploads::receive(&state, &session_id, request, "HTTP Boot kernel").await?;
-    let body = upload.bytes().await?;
-    let validation = (|| {
-        let actual = crate::boot_image::elf_arch(&body)?;
-        anyhow::ensure!(
-            actual == arch,
-            "kernel ELF architecture {actual:?} does not match declared {arch:?}"
-        );
-        Ok::<_, anyhow::Error>(())
-    })();
-    if let Err(error) = validation {
-        let message = format!("{error:#}");
-        session.serial_runtime.fail(message.clone());
-        session.request_stop(SessionStopReason::BootFailed);
-        state.admin_events.invalidate(&["sessions"]);
-        return Err(ApiError::bad_request(message));
-    }
-    drop(body);
     let _boot_operation = upload
         .within_deadline(session.boot_operation.lock())
         .await?;
@@ -2224,45 +2205,12 @@ async fn put_http_boot_kernel(
                 .kernel_sha256
                 .clone()
                 .expect("kernel upload always computes SHA-256"),
-            arch,
-            image_format,
-            entry_symbol,
             initramfs,
             cmdline,
         })
         .await;
 
     Ok((StatusCode::CREATED, axum::Json(response)))
-}
-
-fn parse_httpboot_arch_header(headers: &HeaderMap) -> Result<BootArch, ApiError> {
-    match required_header(headers, "X-HttpBoot-Arch")?.trim() {
-        "x86_64" => Ok(BootArch::X86_64),
-        "aarch64" => Ok(BootArch::Aarch64),
-        "loongarch64" => Ok(BootArch::Loongarch64),
-        "riscv64" => Ok(BootArch::Riscv64),
-        "other" => Ok(BootArch::Other),
-        other => Err(ApiError::bad_request(format!(
-            "unsupported X-HttpBoot-Arch `{other}`"
-        ))),
-    }
-}
-
-fn parse_httpboot_image_format_header(headers: &HeaderMap) -> Result<ImageFormat, ApiError> {
-    match optional_header(headers, "X-HttpBoot-Image-Format")?
-        .unwrap_or_else(|| "elf64".to_string())
-        .trim()
-    {
-        "elf64" => Ok(ImageFormat::Elf64),
-        other => Err(ApiError::bad_request(format!(
-            "unsupported X-HttpBoot-Image-Format `{other}`"
-        ))),
-    }
-}
-
-fn required_header(headers: &HeaderMap, name: &'static str) -> Result<String, ApiError> {
-    optional_header(headers, name)?
-        .ok_or_else(|| ApiError::bad_request(format!("missing {name} header")))
 }
 
 fn optional_header(headers: &HeaderMap, name: &'static str) -> Result<Option<String>, ApiError> {
@@ -2275,6 +2223,27 @@ fn optional_header(headers: &HeaderMap, name: &'static str) -> Result<Option<Str
                 .map_err(|_| ApiError::bad_request(format!("invalid {name} header")))
         })
         .transpose()
+}
+
+fn require_device_protocol_version_header(headers: &HeaderMap) -> Result<(), ApiError> {
+    let value = headers
+        .get(DEVICE_PROTOCOL_VERSION_HEADER)
+        .map(HeaderValue::to_str)
+        .transpose()
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                UNSUPPORTED_PROTOCOL_CODE,
+                UNSUPPORTED_PROTOCOL_MESSAGE,
+            )
+        })?;
+    validate_device_protocol_version_header(value).map_err(|error| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            UNSUPPORTED_PROTOCOL_CODE,
+            error.message,
+        )
+    })
 }
 
 async fn list_session_files(
@@ -3017,7 +2986,9 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode, header},
     };
-    use httpboot_protocol::{BootArch, LoaderHardwareInfo};
+    use httpboot_protocol::{
+        DEVICE_PROTOCOL_VERSION, DEVICE_PROTOCOL_VERSION_HEADER, LoaderHardwareInfo,
+    };
     use serde::Serialize;
     use serde_json::json;
     #[cfg(unix)]
@@ -3764,7 +3735,7 @@ mod tests {
                             },
                             "boot": {
                                 "kind": "httpboot",
-                                "boot_arch": "x86_64"
+                                "serial_parameters": null
                             },
                             "network_identity": {
                                 "mac_address": "1C:69:7A:DC:F3:47"
@@ -3865,7 +3836,7 @@ mod tests {
                 "baud_rate": 115200
             },
             "power_management": { "kind": "qemu", "virtual_device_id": virtual_id },
-            "boot": { "kind": "httpboot", "boot_arch": "x86_64" },
+            "boot": { "kind": "httpboot" },
             "network_identity": { "mac_address": mac },
             "notes": null,
             "disabled": false
@@ -3892,7 +3863,7 @@ mod tests {
             protocol_version: httpboot_protocol::DEVICE_PROTOCOL_VERSION,
             mac_address: mac,
             current_mac_address: mac,
-            arch: BootArch::X86_64,
+            arch: "x86_64".into(),
             loader_version: "test-loader".into(),
             boot_epoch: "test-epoch".into(),
             http_port: 443,
@@ -3903,7 +3874,7 @@ mod tests {
             protocol_version: announcement.protocol_version,
             mac_address: mac,
             current_mac_address: mac,
-            arch: announcement.arch,
+            arch: announcement.arch.clone(),
             loader_version: announcement.loader_version.clone(),
             boot_epoch: announcement.boot_epoch.clone(),
             hardware: LoaderHardwareInfo::default(),
@@ -3927,13 +3898,13 @@ mod tests {
             mac_address: mac,
             current_mac_address: mac,
             ip_address: "10.77.0.2".into(),
-            arch: BootArch::X86_64,
+            arch: "x86_64".into(),
             loader_version: "test-loader".into(),
             hardware: LoaderHardwareInfo::default(),
             last_seen_at: chrono::Utc::now(),
             online: true,
             conflict: false,
-            current_registration_id: Some("registration-1".into()),
+            boot_epoch: "epoch-1".into(),
         };
 
         assert!(virtual_loader_is_bindable(&loader, mac));
@@ -4905,6 +4876,10 @@ mod tests {
                 Request::builder()
                     .method("PUT")
                     .uri(format!("/api/v1/sessions/{session_id}/http-boot/files"))
+                    .header(
+                        DEVICE_PROTOCOL_VERSION_HEADER,
+                        DEVICE_PROTOCOL_VERSION.to_string(),
+                    )
                     .header("X-File-Path", "kernel.bin")
                     .body(Body::from("kernel-image"))
                     .unwrap(),
@@ -4992,205 +4967,158 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn httpboot_kernel_upload_returns_download_offer_payload() {
-        for (declared, machine, expected) in [
-            ("x86_64", 62, BootArch::X86_64),
-            ("riscv64", 243, BootArch::Riscv64),
-            ("loongarch64", 258, BootArch::Loongarch64),
-        ] {
+    async fn httpboot_payload_matrix_accepts_opaque_future_arch_bytes() {
+        for (with_initramfs, with_cmdline) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
             let (app, state) = test_router_and_state_with_config(|_| {}).await;
-            let board = sample_httpboot_board("uefi-http-kernel");
+            let board_id = format!("payload-{with_initramfs}-{with_cmdline}");
             assert_eq!(
-                create_board(&app, serde_json::to_value(&board).unwrap()).await,
+                create_board(
+                    &app,
+                    serde_json::to_value(sample_httpboot_board(&board_id)).unwrap()
+                )
+                .await,
                 StatusCode::CREATED
             );
-            let session_id = create_session(&app, &board.board_type).await;
-            let bytes = crate::boot_image::test_elf(machine);
-            let published = app
-                .oneshot(
-                    Request::builder()
-                        .method("PUT")
-                        .uri(format!("/api/v1/sessions/{session_id}/http-boot/kernel"))
-                        .header("X-HttpBoot-Remote-Name", "kernel.elf")
-                        .header("X-HttpBoot-Arch", declared)
-                        .header("X-HttpBoot-Image-Format", "elf64")
-                        .header("X-HttpBoot-Entry-Symbol", "httpboot_entry")
-                        .body(Body::from(bytes.clone()))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(published.status(), StatusCode::CREATED);
-            let body = to_bytes(published.into_body(), usize::MAX).await.unwrap();
-            let ready_value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            assert!(ready_value["boot_id"].as_str().is_some());
-            assert_eq!(
-                ready_value["kernel_url"],
-                format!("http://127.0.0.1:2999/boot/sessions/{session_id}/kernel.elf")
-            );
-            assert_eq!(ready_value["kernel_size"], bytes.len());
-            assert_eq!(ready_value["kernel_sha256"], super::hex_sha256(&bytes));
-            let command = state
-                .session_state(&session_id)
-                .await
-                .unwrap()
-                .boot_command()
-                .await
-                .unwrap();
-            assert_eq!(command.arch, expected);
-        }
-        let (app, state) = test_router_and_state_with_config(|_| {}).await;
-        let board = sample_httpboot_board("concurrent-upload");
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&board).unwrap()).await,
-            StatusCode::CREATED
-        );
-        let id = create_session(&app, &board.board_type).await;
-        let session = state.session_state(&id).await.unwrap();
-        // Pause the first upload before its atomic commit. The next kernel
-        // publication must wait instead of colliding with its upload gate.
-        let files = session.file_gate.lock().await;
-        let manager = state.tftp_manager.read().await.clone();
-        let upload = |arch: &str, bytes: Vec<u8>| {
-            Request::builder()
-                .method("PUT")
-                .uri(format!("/api/v1/sessions/{id}/http-boot/kernel"))
-                .header("X-HttpBoot-Arch", arch)
-                .header("X-HttpBoot-Image-Format", "elf64")
-                .body(Body::from(bytes))
-                .unwrap()
-        };
-        let first = tokio::spawn(
-            app.clone()
-                .oneshot(upload("x86_64", crate::boot_image::test_elf(62))),
-        );
-        tokio::time::timeout(std::time::Duration::from_secs(3), async {
-            loop {
-                if session.upload_gate.try_lock().is_err() {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        let bytes = crate::boot_image::test_elf(243);
-        let second = app.oneshot(upload("riscv64", bytes.clone()));
-        tokio::pin!(second);
-        assert_eq!(
-            second.as_mut().await.unwrap().status(),
-            StatusCode::CONFLICT
-        );
-        assert!(
-            manager
-                .get_session_file(&id, "kernel.elf")
-                .await
-                .unwrap()
-                .is_none()
-        );
-        drop(files);
-        assert_eq!(
-            tokio::time::timeout(std::time::Duration::from_secs(3), first)
-                .await
-                .unwrap()
-                .unwrap()
-                .unwrap()
-                .status(),
-            StatusCode::CREATED
-        );
-        let command = session.boot_command().await.unwrap();
-        let file = manager
-            .get_session_file(&id, "kernel.elf")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            tokio::fs::read(file.disk_path).await.unwrap(),
-            crate::boot_image::test_elf(62)
-        );
-        assert_eq!(command.arch, BootArch::X86_64);
-        assert_eq!(
-            command.kernel_sha256,
-            super::hex_sha256(&crate::boot_image::test_elf(62))
-        );
-        assert!(!session.is_stop_requested());
-    }
-
-    #[tokio::test]
-    async fn legacy_loader_poll_rejects_unsigned_boot_requests() {
-        let (app, state) = test_router_and_state_with_config(|_| {}).await;
-        for edition in [
-            crate::config::Edition::Local,
-            crate::config::Edition::Public,
-        ] {
-            state.config.write().await.edition = edition;
-            for path in [
-                "/api/v1/loaders/poll",
-                "/api/v1/loaders/status",
-                "/api/v1/loaders/ota-status",
-            ] {
+            let session_id = create_session(&app, "x86_64-uefi-http").await;
+            if with_initramfs {
                 let response = app
                     .clone()
                     .oneshot(
                         Request::builder()
-                            .method("POST")
-                            .uri(path)
-                            .body(Body::from("{}"))
+                            .method("PUT")
+                            .uri(format!("/api/v1/sessions/{session_id}/http-boot/files"))
+                            .header(
+                                DEVICE_PROTOCOL_VERSION_HEADER,
+                                DEVICE_PROTOCOL_VERSION.to_string(),
+                            )
+                            .header("X-File-Path", "initramfs.cpio")
+                            .body(Body::from("future initramfs"))
                             .unwrap(),
                     )
                     .await
                     .unwrap();
-                assert_eq!(response.status(), StatusCode::FORBIDDEN);
+                assert_eq!(response.status(), StatusCode::CREATED);
             }
+            let mut request = Request::builder()
+                .method("PUT")
+                .uri(format!("/api/v1/sessions/{session_id}/http-boot/kernel"))
+                .header(
+                    DEVICE_PROTOCOL_VERSION_HEADER,
+                    DEVICE_PROTOCOL_VERSION.to_string(),
+                )
+                .header("X-HttpBoot-Remote-Name", "future.image");
+            if with_initramfs {
+                request = request.header("X-HttpBoot-Initramfs-Path", "initramfs.cpio");
+            }
+            if with_cmdline {
+                request = request.header("X-HttpBoot-Cmdline", "console=ttyS0");
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::from("not an ELF; future ISA")).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CREATED);
+            let session = state.session_state(&session_id).await.unwrap();
+            let command = session.boot_command().await.unwrap();
+            assert_eq!(command.initramfs.is_some(), with_initramfs);
+            assert_eq!(
+                command.cmdline.as_deref(),
+                with_cmdline.then_some("console=ttyS0")
+            );
+            assert_eq!(
+                command.kernel_path,
+                format!("/boot/sessions/{session_id}/future.image")
+            );
+            let stored = state
+                .tftp_manager
+                .read()
+                .await
+                .get_session_file(&session_id, "future.image")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                tokio::fs::read(stored.disk_path).await.unwrap(),
+                b"not an ELF; future ISA"
+            );
         }
     }
 
     #[tokio::test]
-    async fn httpboot_kernel_upload_rejects_invalid_architectures() {
-        for (declared, bytes) in [
-            ("x86_64", crate::boot_image::test_elf(243)),
-            ("riscv64", crate::boot_image::test_elf(62)),
-            ("aarch64", crate::boot_image::test_elf(183)),
-            ("other", crate::boot_image::test_elf(0xffff)),
-            ("x86_64", b"not an ELF".to_vec()),
+    async fn httpboot_version_gate_precedes_body_and_file_side_effects() {
+        let (app, state) = test_router_and_state_with_config(|_| {}).await;
+        assert_eq!(
+            create_board(
+                &app,
+                serde_json::to_value(sample_httpboot_board("version-gate")).unwrap()
+            )
+            .await,
+            StatusCode::CREATED
+        );
+        let session_id = create_session(&app, "x86_64-uefi-http").await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/kernel"))
+                    .header("X-HttpBoot-Remote-Name", "kernel.elf")
+                    .body(Body::from("must not be read"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            json!({
+                "code": "unsupported_protocol",
+                "message": "axloader protocol 7 is required"
+            })
+        );
+        let session = state.session_state(&session_id).await.unwrap();
+        assert!(session.boot_command().await.is_none());
+        assert!(!session.is_stop_requested());
+        assert!(
+            state
+                .tftp_manager
+                .read()
+                .await
+                .list_session_files(&session_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn obsolete_loader_routes_remain_forbidden() {
+        let app = test_router().await;
+        for (method, uri) in [
+            ("POST", "/api/v1/loaders/poll"),
+            ("POST", "/api/v1/loaders/status"),
+            ("POST", "/api/v1/loaders/ota-status"),
+            (
+                "GET",
+                "/api/v1/loader-updates/01234567-89ab-cdef-0123-456789abcdef/image",
+            ),
         ] {
-            let (app, state) = test_router_and_state_with_config(|_| {}).await;
-            let board = sample_httpboot_board("invalid-kernel");
-            assert_eq!(
-                create_board(&app, serde_json::to_value(&board).unwrap()).await,
-                StatusCode::CREATED
-            );
-            let id = create_session(&app, &board.board_type).await;
-            let session = state.session_state(&id).await.unwrap();
-            let manager = state.tftp_manager.read().await.clone();
             let response = app
+                .clone()
                 .oneshot(
                     Request::builder()
-                        .method("PUT")
-                        .uri(format!("/api/v1/sessions/{id}/http-boot/kernel"))
-                        .header("X-HttpBoot-Arch", declared)
-                        .header("X-HttpBoot-Image-Format", "elf64")
-                        .body(Body::from(bytes))
+                        .method(method)
+                        .uri(uri)
+                        .body(Body::empty())
                         .unwrap(),
                 )
                 .await
                 .unwrap();
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{declared}");
-            assert!(
-                manager
-                    .get_session_file(&id, "kernel.elf")
-                    .await
-                    .unwrap()
-                    .is_none(),
-                "invalid kernel bytes must be rejected before storage"
-            );
-            assert!(session.boot_command().await.is_none());
-            assert!(session.is_stop_requested());
-            assert_eq!(
-                session.serial_runtime.snapshot().phase,
-                crate::serial::runtime::SerialRuntimePhase::Failed
-            );
-            assert!(session.serial_runtime.snapshot().error.is_some());
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method} {uri}");
         }
     }
 
@@ -5209,6 +5137,10 @@ mod tests {
                 Request::builder()
                     .method("PUT")
                     .uri(format!("/api/v1/sessions/{session_id}/http-boot/files"))
+                    .header(
+                        DEVICE_PROTOCOL_VERSION_HEADER,
+                        DEVICE_PROTOCOL_VERSION.to_string(),
+                    )
                     .header("X-File-Path", "kernel.bin")
                     .body(Body::from("kernel-image"))
                     .unwrap(),
@@ -6021,34 +5953,5 @@ mod tests {
             app.oneshot(delete()).await.unwrap().status(),
             StatusCode::NOT_FOUND
         );
-    }
-
-    #[tokio::test]
-    async fn legacy_v4_ota_routes_require_an_authenticated_transport() {
-        let (app, state) = test_router_and_state_with_config(|_| {}).await;
-        for edition in [
-            crate::config::Edition::Local,
-            crate::config::Edition::Public,
-        ] {
-            state.config.write().await.edition = edition;
-            for path in [
-                "/api/v1/loaders/poll",
-                "/api/v1/loaders/status",
-                "/api/v1/loaders/ota-status",
-            ] {
-                let response = app
-                    .clone()
-                    .oneshot(
-                        Request::builder()
-                            .method("POST")
-                            .uri(path)
-                            .body(Body::from("{}"))
-                            .unwrap(),
-                    )
-                    .await
-                    .unwrap();
-                assert_eq!(response.status(), StatusCode::FORBIDDEN);
-            }
-        }
     }
 }

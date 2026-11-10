@@ -109,8 +109,7 @@ pub struct OtaStore {
 struct Observation {
     mac_address: httpboot_protocol::MacAddress,
     state: Option<LoaderOtaState>,
-    #[serde(default)]
-    epoch: String,
+    boot_epoch: String,
 }
 
 impl OtaStore {
@@ -313,14 +312,14 @@ impl OtaStore {
         mac_address: httpboot_protocol::MacAddress,
         ota: Option<&LoaderOtaState>,
         board_idle: bool,
-        epoch: &str,
+        boot_epoch: &str,
     ) -> anyhow::Result<Decision> {
         self.decide_at(
             board_id,
             mac_address,
             ota,
             board_idle,
-            epoch,
+            boot_epoch,
             chrono::Utc::now(),
         )
         .await
@@ -332,12 +331,14 @@ impl OtaStore {
         mac_address: httpboot_protocol::MacAddress,
         ota: Option<&LoaderOtaState>,
         board_idle: bool,
-        epoch: &str,
+        boot_epoch: &str,
         now: chrono::DateTime<chrono::Utc>,
     ) -> anyhow::Result<Decision> {
         let mut observations = self.observations.lock().await;
         let changed_observation = observations.get(board_id).is_none_or(|old| {
-            old.mac_address != mac_address || old.epoch != epoch || old.state.as_ref() != ota
+            old.mac_address != mac_address
+                || old.boot_epoch != boot_epoch
+                || old.state.as_ref() != ota
         });
         if changed_observation {
             let mut updated = observations.clone();
@@ -346,7 +347,7 @@ impl OtaStore {
                 Observation {
                     mac_address,
                     state: ota.cloned(),
-                    epoch: epoch.into(),
+                    boot_epoch: boot_epoch.into(),
                 },
             );
             self.save_observations(&updated).await?;
@@ -471,7 +472,7 @@ impl OtaStore {
     pub async fn report(
         &self,
         board_id: &str,
-        epoch: &str,
+        boot_epoch: &str,
         update_id: &str,
         phase: Phase,
         error: Option<String>,
@@ -487,9 +488,9 @@ impl OtaStore {
             .context("OTA status not observed")?;
         ensure!(
             observed.mac_address == job.mac_address
-                && observed.epoch == epoch
+                && observed.boot_epoch == boot_epoch
                 && observed.state.is_some(),
-            "stale OTA report epoch or capability"
+            "stale OTA report boot epoch or capability"
         );
         ensure!(
             matches!(
@@ -552,15 +553,15 @@ impl OtaStore {
         board_id: &str,
         mac_address: httpboot_protocol::MacAddress,
         update_id: &str,
-        epoch: &str,
+        boot_epoch: &str,
         failure: DeliveryFailure,
     ) -> anyhow::Result<Job> {
         let observations = self.observations.lock().await;
         ensure!(
             observations.get(board_id).is_some_and(|observed| {
-                observed.mac_address == mac_address && observed.epoch == epoch
+                observed.mac_address == mac_address && observed.boot_epoch == boot_epoch
             }),
-            "stale OTA delivery epoch"
+            "stale OTA delivery boot epoch"
         );
         let mut jobs = self.jobs.lock().await;
         let mut updated = jobs.clone();
@@ -1033,7 +1034,7 @@ mod tests {
             .save_record(
                 "ota-observations",
                 &serde_json::json!({
-                    "board-1": { "mac_address": mac, "state": legacy_ota }
+                    "board-1": { "mac_address": mac, "state": legacy_ota, "boot_epoch": "epoch-1" }
                 }),
             )
             .await

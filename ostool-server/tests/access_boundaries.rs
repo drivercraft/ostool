@@ -443,10 +443,10 @@ async fn unsigned_devices_cannot_initiate_plaintext_callbacks() -> anyhow::Resul
     let address = listener.local_addr()?;
     let mac = "02:00:00:00:00:01".parse()?;
     let announcement = httpboot_protocol::LoaderAnnouncement {
-        protocol_version: 6,
+        protocol_version: httpboot_protocol::DEVICE_PROTOCOL_VERSION,
         mac_address: mac,
         current_mac_address: mac,
-        arch: httpboot_protocol::BootArch::X86_64,
+        arch: "x86_64".into(),
         loader_version: "unsigned".into(),
         boot_epoch: "unsigned".into(),
         http_port: address.port(),
@@ -663,7 +663,7 @@ async fn public_httpboot_responses_keep_device_network_and_uart_configuration_on
     {
         let mut boards = f.state.boards.write().await;
         let board = boards.get_mut("board-one").unwrap();
-        board.boot = serde_json::from_value(json!({"kind":"httpboot","boot_arch":"x86_64",
+        board.boot = serde_json::from_value(json!({"kind":"httpboot",
             "serial_parameters":{"baud_rate":115200,"data_bits":8,"parity":"none","stop_bits":"one","flow_control":"none"}}))?;
         f.state.board_store.write_board(board).await?;
     }
@@ -712,6 +712,10 @@ async fn public_httpboot_responses_keep_device_network_and_uart_configuration_on
                 .uri(format!("/api/v1/sessions/{sid}/http-boot/files"))
                 .header("authorization", format!("Bearer {}", f.grant.access_token))
                 .header("x-file-path", "kernel.bin")
+                .header(
+                    httpboot_protocol::DEVICE_PROTOCOL_VERSION_HEADER,
+                    httpboot_protocol::DEVICE_PROTOCOL_VERSION.to_string(),
+                )
                 .body(Body::from("kernel"))?,
         )
         .await?;
@@ -1007,6 +1011,10 @@ async fn exercise_managed_boot(tftp: bool, disconnect: bool) -> anyhow::Result<(
                     master.write_all(b"\nshared-command-ok\n# ").await?;
                 }
             } else {
+                anyhow::ensure!(
+                    command.ends_with("&& echo cmd-ok; echo cmd-end"),
+                    "missing command completion marker"
+                );
                 let value = if command.starts_with("echo $kernel_addr_r") {
                     "80200000"
                 } else if command.starts_with("echo $kernel_comp_addr_r") {
@@ -1017,7 +1025,7 @@ async fn exercise_managed_boot(tftp: bool, disconnect: bool) -> anyhow::Result<(
                     ""
                 };
                 master
-                    .write_all(format!("\n{value}\ncmd-ok\n=> ").as_bytes())
+                    .write_all(format!("\n{value}\ncmd-ok\ncmd-end\n=> ").as_bytes())
                     .await?;
             }
         }

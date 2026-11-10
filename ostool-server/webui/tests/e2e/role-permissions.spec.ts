@@ -88,7 +88,7 @@ test("role matrix grants instant device access without administrator rights and 
           serial: null,
           notes: null,
           network_identity: { mac_address: "02:19:28:37:46:55" },
-          boot: { kind: "httpboot", boot_arch: "aarch64" },
+          boot: { kind: "httpboot" },
           power_management: {
             kind: "custom",
             power_on_cmd: "true",

@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{Context as _, anyhow, bail};
-use httpboot_protocol::{BootArch, LoaderStatusPhase};
+use httpboot_protocol::LoaderStatusPhase;
 use sha2::{Digest, Sha256};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -60,11 +60,10 @@ struct HttpBootBoardRunner {
 impl HttpBootBoardRunner {
     async fn run(self) -> anyhow::Result<()> {
         anyhow::ensure!(
-            matches!(self.session.boot_mode.as_str(), "httpboot" | "uefi_http"),
+            self.session.boot_mode == "httpboot",
             "unsupported board boot mode `{}`; expected `httpboot`",
             self.session.boot_mode
         );
-        let arch = boot_arch_from_elf(self.input.arch())?;
         let elf_path = self
             .input
             .artifacts()
@@ -72,10 +71,6 @@ impl HttpBootBoardRunner {
             .ok_or_else(|| anyhow!("HTTP Boot requires a prepared runtime ELF"))?;
         let kernel_bytes =
             fs::read(elf_path).with_context(|| format!("failed to read {}", elf_path.display()))?;
-        anyhow::ensure!(
-            kernel_bytes.starts_with(b"\x7fELF\x02"),
-            "HTTP Boot requires an ELF64 kernel"
-        );
         let kernel_sha256 = hex_sha256(&kernel_bytes);
         let initramfs = match self.board_config.boot.initramfs_path() {
             Some(path) => {
@@ -101,9 +96,6 @@ impl HttpBootBoardRunner {
                 &self.session.session_id,
                 HttpBootKernelUpload {
                     remote_name: "kernel.elf".into(),
-                    arch: boot_arch_name(arch).into(),
-                    image_format: "elf64".into(),
-                    entry_symbol: Some("httpboot_entry".into()),
                     bytes: kernel_bytes,
                     initramfs,
                     cmdline: self.board_config.boot.cmdline.clone(),
@@ -382,26 +374,6 @@ fn serial_ws_url(
     client.resolve_ws_url(ws_path)
 }
 
-fn boot_arch_from_elf(arch: Option<object::Architecture>) -> anyhow::Result<BootArch> {
-    match arch {
-        Some(object::Architecture::X86_64) => Ok(BootArch::X86_64),
-        Some(object::Architecture::Riscv64) => Ok(BootArch::Riscv64),
-        Some(object::Architecture::LoongArch64) => Ok(BootArch::Loongarch64),
-        Some(arch) => bail!("unsupported HTTP Boot kernel architecture: {arch:?}"),
-        None => bail!("HTTP Boot requires a detected kernel ELF architecture"),
-    }
-}
-
-fn boot_arch_name(arch: BootArch) -> &'static str {
-    match arch {
-        BootArch::X86_64 => "x86_64",
-        BootArch::Aarch64 => "aarch64",
-        BootArch::Loongarch64 => "loongarch64",
-        BootArch::Riscv64 => "riscv64",
-        BootArch::Other => "other",
-    }
-}
-
 fn hex_sha256(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut output = String::with_capacity(digest.len() * 2);
@@ -494,6 +466,7 @@ mod tests {
             },
         )
         .unwrap();
+        assert!(prepared.bin().is_none());
         let mut artifacts = OutputArtifacts::default();
         artifacts.apply_prepared_runtime_artifacts(&prepared);
         UbootRunInput::new(context, artifacts, prepared.arch())
@@ -600,8 +573,8 @@ mod tests {
                 let response = serde_json::json!({
                     "session_id": "demo",
                     "boot_id": "boot-1",
-                    "registration_id": "epoch-1",
-                    "status": {"phase": "failed", "code": "boot_preflight_failed", "message": reason}
+                    "boot_epoch": "epoch-1",
+                    "status": {"phase": "failed", "code": "elf_machine_mismatch", "message": reason}
                 });
                 write_http_response(&mut status, "200 OK", &response.to_string()).await;
             } else {
@@ -635,141 +608,78 @@ mod tests {
 
     #[tokio::test]
     async fn httpboot_preserves_websocket_preflight_error_after_session_release() {
-        let reason = "kernel architecture Riscv64 does not match device X86_64";
+        let reason = "ELF e_machine=243 does not match loader x86_64 (expected 62)";
         let error = run_preflight_failure(PreflightFailureDelivery::Websocket, reason).await;
         assert!(error.contains(reason), "{error}");
     }
 
     #[tokio::test]
     async fn httpboot_preserves_preflight_error_received_during_shutdown() {
-        let reason = "kernel ELF architecture Riscv64 does not match declared X86_64";
+        let reason = "ELF e_machine=243 does not match loader x86_64 (expected 62)";
         let error = run_preflight_failure(PreflightFailureDelivery::DuringShutdown, reason).await;
         assert!(error.contains(reason), "{error}");
     }
 
     #[tokio::test]
     async fn httpboot_preserves_polled_preflight_failure() {
-        let reason = "kernel architecture Riscv64 does not match device Loongarch64";
+        let reason = "ELF e_machine=243 does not match loader loongarch64 (expected 258)";
         let error = run_preflight_failure(PreflightFailureDelivery::LoaderStatus, reason).await;
-        assert!(error.contains("boot_preflight_failed"), "{error}");
+        assert!(error.contains("elf_machine_mismatch"), "{error}");
         assert!(error.contains(reason), "{error}");
     }
 
     #[tokio::test]
-    async fn httpboot_upload_uses_elf_architecture_without_boot_profile() {
-        for (machine, arch, mode) in [
-            (object::elf::EM_X86_64, "x86_64", "httpboot"),
-            (object::elf::EM_RISCV, "riscv64", "httpboot"),
-            (object::elf::EM_LOONGARCH, "loongarch64", "uefi_http"),
-        ] {
-            let temp = tempfile::tempdir().unwrap();
-            let bytes = minimal_elf(machine, object::elf::ELFCLASS64);
-            let input = test_input(temp.path(), &bytes);
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let port = listener.local_addr().unwrap().port();
-            let server = tokio::spawn(async move {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let request = read_http_request_bytes(&mut socket).await;
-                write_http_response(&mut socket, "409 Conflict", "upload intercepted").await;
-                request
-            });
-
-            let error = test_runner(input, port, mode).run().await.unwrap_err();
-            let request = server.await.unwrap();
-            let header_end = request
-                .windows(4)
-                .position(|part| part == b"\r\n\r\n")
-                .unwrap();
-            let headers = String::from_utf8_lossy(&request[..header_end]).to_ascii_lowercase();
-
-            assert!(
-                headers.starts_with("put /api/v1/sessions/demo/http-boot/kernel "),
-                "{headers}"
-            );
-            assert!(
-                headers.contains(&format!("x-httpboot-arch: {arch}\r\n")),
-                "{headers}"
-            );
-            assert!(
-                headers.contains("x-httpboot-image-format: elf64\r\n"),
-                "{headers}"
-            );
-            assert_eq!(&request[header_end + 4..], bytes);
-            assert_eq!(error.to_string(), "failed to upload HTTP Boot kernel");
-        }
-    }
-
-    #[tokio::test]
-    async fn httpboot_rejects_unsupported_kernel_architectures_before_upload() {
-        for (machine, class) in [
-            (object::elf::EM_AARCH64, object::elf::ELFCLASS64),
-            (object::elf::EM_NONE, object::elf::ELFCLASS64),
-            (object::elf::EM_X86_64, object::elf::ELFCLASS32),
-            (object::elf::EM_RISCV, object::elf::ELFCLASS32),
-            (object::elf::EM_LOONGARCH, object::elf::ELFCLASS32),
-        ] {
-            let temp = tempfile::tempdir().unwrap();
-            let input = test_input(temp.path(), &minimal_elf(machine, class));
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            let port = listener.local_addr().unwrap().port();
-            drop(listener);
-
-            let error = test_runner(input, port, "httpboot")
-                .run()
-                .await
-                .unwrap_err();
-
-            assert!(
-                error
-                    .to_string()
-                    .contains("unsupported HTTP Boot kernel architecture"),
-                "{error:#}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn httpboot_rejects_non_elf_kernel_before_upload() {
+    async fn httpboot_uploads_future_machine_bytes_without_host_arch_gate() {
         let temp = tempfile::tempdir().unwrap();
-        let mut bytes = vec![0_u8; 32];
-        bytes[..4].copy_from_slice(&object::macho::MH_MAGIC_64.to_le_bytes());
-        bytes[4..8].copy_from_slice(&object::macho::CPU_TYPE_X86_64.to_le_bytes());
-        bytes[12..16].copy_from_slice(&object::macho::MH_EXECUTE.to_le_bytes());
+        let bytes = minimal_elf(0xcafe, object::elf::ELFCLASS64);
         let input = test_input(temp.path(), &bytes);
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        drop(listener);
+        let expected = bytes.clone();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_http_request_bytes(&mut socket).await;
+            write_http_response(&mut socket, "409 Conflict", "upload intercepted").await;
+            request
+        });
 
         let error = test_runner(input, port, "httpboot")
             .run()
             .await
             .unwrap_err();
+        let request = server.await.unwrap();
+        let header_end = request
+            .windows(4)
+            .position(|part| part == b"\r\n\r\n")
+            .unwrap();
+        let headers = String::from_utf8_lossy(&request[..header_end]).to_ascii_lowercase();
 
-        assert_eq!(error.to_string(), "HTTP Boot requires an ELF64 kernel");
+        assert!(
+            headers.starts_with("put /api/v1/sessions/demo/http-boot/kernel "),
+            "{headers}"
+        );
+        assert!(
+            headers.contains("x-axloader-protocol-version: 7\r\n"),
+            "{headers}"
+        );
+        assert!(!headers.contains("x-httpboot-arch:"), "{headers}");
+        assert!(!headers.contains("x-httpboot-image-format:"), "{headers}");
+        assert!(!headers.contains("x-httpboot-entry-symbol:"), "{headers}");
+        assert_eq!(&request[header_end + 4..], expected);
+        assert_eq!(error.to_string(), "failed to upload HTTP Boot kernel");
     }
 
     #[tokio::test]
-    async fn httpboot_rejects_missing_kernel_architecture_before_upload() {
+    async fn httpboot_rejects_legacy_boot_kind_before_upload() {
         let temp = tempfile::tempdir().unwrap();
-        let context = ProcessContext::new(
-            temp.path().into(),
-            temp.path().into(),
-            VariableScope::new(temp.path().into(), temp.path().into(), temp.path().into()),
-            None,
+        let input = test_input(
+            temp.path(),
+            &minimal_elf(object::elf::EM_X86_64, object::elf::ELFCLASS64),
         );
-        let input = UbootRunInput::new(context, OutputArtifacts::default(), None);
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-
-        let error = test_runner(input, port, "httpboot")
-            .run()
-            .await
-            .unwrap_err();
-
+        let error = test_runner(input, 1, "uefi_http").run().await.unwrap_err();
         assert_eq!(
             error.to_string(),
-            "HTTP Boot requires a detected kernel ELF architecture"
+            "unsupported board boot mode `uefi_http`; expected `httpboot`"
         );
     }
 

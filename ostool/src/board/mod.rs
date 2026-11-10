@@ -18,7 +18,7 @@ use crate::board::{
     client::{BoardServerClient, BoardTypeSummary},
     config::BoardRunConfig,
     config_tui::run_board_config_tui,
-    global_config::{BoardEndpoint, LoadedBoardGlobalConfig},
+    global_config::{BoardEndpoint, BoardGlobalConfig, LoadedBoardGlobalConfig},
     session::BoardSession,
     shared_files::expand_board_session_variables,
 };
@@ -454,7 +454,6 @@ pub async fn run_prepared_board_with_request(
     request: BoardRunRequest,
 ) -> anyhow::Result<()> {
     let scope = invocation.variable_scope()?;
-    let global_config = load_board_global_config_with_notice()?;
     let (mut board_config, options, session_files) = request.into_parts();
     board_config.apply_overrides(
         &scope,
@@ -463,7 +462,18 @@ pub async fn run_prepared_board_with_request(
         options.port,
     )?;
 
-    let endpoint = board_config.resolve_endpoint(None, None, &global_config.board)?;
+    let loaded_global_config = if board_config.server.is_some() && board_config.auth_mode.is_some()
+    {
+        None
+    } else {
+        Some(load_board_global_config_with_notice()?)
+    };
+    let default_global_config = BoardGlobalConfig::default();
+    let global_config = loaded_global_config
+        .as_ref()
+        .map(|loaded| &loaded.board)
+        .unwrap_or(&default_global_config);
+    let endpoint = board_config.resolve_endpoint(None, None, global_config)?;
     let (client, session) =
         acquire_board_session_endpoint(endpoint, &board_config.board_type).await?;
     print_allocated_board_session(&session, &board_config.board_type);
@@ -549,7 +559,7 @@ async fn run_allocated_board(
             crate::run::uboot::run_uboot_remote(input, board_config, client, session.info().clone())
                 .await
         }
-        "httpboot" | "uefi_http" => {
+        "httpboot" => {
             let input = crate::run::uboot::uboot_run_input(invocation)?;
             crate::run::httpboot_board::run_httpboot_remote(
                 input,

@@ -210,33 +210,41 @@ is disabled. Upload responses include a board-reachable `http_url`; both the
 file and URL expire when the session is released or times out.
 
 For UEFI HTTP Boot boards, configure `boot.kind = "httpboot"` and
-`network_identity.mac_address`. Architecture is not persisted in the profile.
-Legacy `boot_arch` values are read and discarded; other unknown fields remain
-errors. Saving to PostgreSQL omits the field. Import legacy board TOML through
-the standalone migration tool; its source files remain unchanged.
+`network_identity.mac_address`. `httpboot` is the only current wire kind;
+`uefi_http`, `boot_arch`, and the removed loader announcement
+`public_base_url` are rejected or require manual deployment cleanup. The server
+does not migrate board files.
 
-The CLI derives `X-HttpBoot-Arch` from its existing ELF detection. The server uses
-`object` to parse little-endian ELF64 and checks `e_machine` against that header.
-Before serial handoff it rechecks the stored file, declaration and axloader's
-`observed.arch`; a mismatch sets serial state to `Failed` and stops the session.
-x86_64 uses `__x86_64_efi_pe_entry`; RISC-V64 and LoongArch64 use `efi_pe_entry`.
-The board editor shows reported architecture read-only while online and unknown
-while offline or undiscovered. Sessions and kernels can be prepared offline, then matched on discovery.
-The permanent MAC remains the persisted binding key, and manifests and status
-remain scoped to the session. v6 verifies UART identity before kernel handoff.
+Both HTTP Boot upload endpoints require
+`X-Axloader-Protocol-Version: 7` before reading the body or touching session
+files. The kernel is transferred as opaque bytes with length and SHA-256;
+ostool-server does not parse ELF, inspect ISA, or select an EFI entry symbol.
+axloader validates the real image against its local target when `start`
+prepares the handoff. The board editor displays the device-reported `arch`
+string as diagnostics only, including names unknown to ostool.
+
+The permanent MAC, UART `serial_id`/binding, and current `boot_epoch` remain the
+device identity and association keys. Device rejects with 400/413/422 are read
+as top-level `{code,message}`, published to the session loader status and
+WebSocket path, and retained as the first failure for that boot ID. An uncertain
+start is queried only in the same boot epoch and boot ID. If the result remains
+unconfirmed, the serial lease stays under console/timeout/cancel observation and
+later announcements in that boot generation do not recreate or re-upload it.
 
 Loader OTA treats images as opaque bytes. `OtaStore` accepts nonempty images up
 to 32 MiB, preserves labels, size and SHA-256, and verifies storage integrity
 before delivery. axloader owns PE/COFF, `Machine` and platform compatibility
 checks. Neither the server nor the Web UI gates OTA by CPU architecture. Offline
-jobs may queue; missing `ota` state leaves a visible waiting reason. Legacy v2/v3/v4
-polling, image download and status handlers are removed. Updates use the provisioned
-device HTTPS endpoint; there is no separate device download listener or source-subnet bypass.
+jobs may queue; missing `ota` state leaves a visible waiting reason. The current
+reverse OTA flow calls device `PUT /api/v1/ota/image` and
+`POST /api/v1/ota/confirm` with the v7 header through provisioned HTTPS endpoints;
+old poll, download, and `ota-status` routes are removed. Device credentials and
+trusted certificates remain required; there is no plaintext fallback.
 
-A device's `202` means staged, not completed: success requires the matching new
+A device's `202` means staged or ready for handoff, not completed: success requires the matching new
 slot to run and be confirmed with the expected digest. Device `400`, `413` and
-`422` responses fail the job once. The server retains their HTTP status and response
-body, including legacy `422 {}`; management API/SSE responses use safe error messages. `409` refreshes state/epoch and delays retry; `503`
+`422` responses fail the operation once and preserve the HTTP status and bounded
+response body internally; management API/SSE projections use safe messages. `409` refreshes state/boot epoch and delays retry; `503`
 waits for state, capability or epoch to change without repeated PUTs. Network
 errors and other `5xx` responses use finite retries with backoff; uncertain
 results, including the final attempt, require a fresh device-status check before

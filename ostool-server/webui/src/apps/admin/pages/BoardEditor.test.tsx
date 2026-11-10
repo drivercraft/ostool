@@ -75,7 +75,7 @@ it("creates and rebinds discovered devices while showing their live architecture
     conflict: false,
     bound_board_id: null,
     last_seen_at: "2026-10-01T00:00:00Z",
-    current_registration_id: "first-epoch",
+    boot_epoch: "first-epoch",
   } as LoaderDeviceSummary;
   const second = {
     ...first,
@@ -340,6 +340,9 @@ it("preserves typed MAC and input identity while devices arrive", async () => {
             hardware: { manufacturer: null, product: null, version: null, serial: null },
             ip_address: "10.0.0.2",
             arch: "x86_64",
+            loader_version: "test",
+            last_seen_at: "2026-10-01T00:00:00Z",
+            boot_epoch: "device-arrived",
           } as LoaderDeviceSummary,
         ],
       },
@@ -414,17 +417,14 @@ it("switches to U-Boot without requiring or submitting a stale MAC", async () =>
 });
 
 it.each([
-  { arch: "aarch64", online: true, legacyArch: "x86_64" },
-  { arch: "x86_64", online: true, legacyArch: "aarch64" },
-  { arch: "riscv64", online: false, legacyArch: "aarch64" },
-  { arch: null, online: false, legacyArch: "aarch64" },
+  { arch: "aarch64", online: true },
+  { arch: "x86_64", online: true },
+  { arch: "future-isa", online: false },
+  { arch: null, online: false },
 ])(
   "shows reported $arch/$online read-only without limiting OTA actions",
-  async ({ arch, online, legacyArch }) => {
-    const board = {
-      ...httpBootBoard(),
-      boot: { kind: "httpboot" as const, boot_arch: legacyArch },
-    };
+  async ({ arch, online }) => {
+    const board = httpBootBoard();
     const loaders = arch
       ? [
           {
@@ -434,6 +434,7 @@ it.each([
             hardware: { manufacturer: null, product: null, version: null, serial: null },
             online,
             bound_board_id: board.id,
+            boot_epoch: "epoch-1",
           } as LoaderDeviceSummary,
         ]
       : [];

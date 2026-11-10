@@ -1077,15 +1077,22 @@ async fn public_site_stream_cannot_expose_management_or_identity_data() {
                     data.extend(values.clone());
                 }
             }
-            if data.contains_key("site") && data.contains_key("device_catalog") {
+            if ["site", "device_catalog", "device_documents"]
+                .iter()
+                .all(|key| data.contains_key(*key))
+            {
                 return;
             }
         }
-        panic!("public stream ended before publishing both resources");
+        panic!("public stream ended before publishing all public resources");
     })
     .await
     .unwrap();
-    assert_eq!(data.len(), 2);
+    assert_eq!(
+        data.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["device_catalog", "device_documents", "site"]
+    );
+    assert_eq!(data["device_documents"], json!({}));
     assert_eq!(data["device_catalog"], catalog.body);
     assert!(!text.contains("private-power"));
     assert!(!text.contains("private-operator"));

@@ -72,9 +72,6 @@ pub(crate) fn apply_values(
         "OSTOOL_LOADER_BIND_ADDR",
         &mut config.loader_network.bind_addr,
     )?;
-    if let Some(url) = values.get("OSTOOL_LOADER_BASE_URL") {
-        config.loader_network.public_base_url = Some(url.clone());
-    }
     parsed(
         values,
         "OSTOOL_HTTP_BOOT_ENABLED",

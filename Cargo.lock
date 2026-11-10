@@ -1902,7 +1902,7 @@ checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
 name = "httpboot-protocol"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3047,7 +3047,7 @@ dependencies = [
 
 [[package]]
 name = "ostool"
-version = "0.31.1"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3096,7 +3096,7 @@ dependencies = [
 
 [[package]]
 name = "ostool-serial"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "futures-util",
  "httpboot-protocol",
@@ -3113,7 +3113,7 @@ dependencies = [
 
 [[package]]
 name = "ostool-server"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -3138,7 +3138,6 @@ dependencies = [
  "nix 0.30.1",
  "notify",
  "nusb",
- "object",
  "ostool",
  "ostool-serial",
  "qrcode",
@@ -5452,7 +5451,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "uboot-shell"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "colored",
  "env_logger",

@@ -10,7 +10,7 @@ name = "ostool-server"
 default-run = "ostool-server"
 readme = "README.md"
 repository = "https://github.com/drivercraft/ostool"
-version = "0.9.1"
+version = "0.10.0"
 
 exclude = ["webui/node_modules/*", "webui/dist/*", "webui/test-results/*", "webui/playwright-report/*"]
 
@@ -62,7 +62,6 @@ log = {workspace = true}
 mime_guess = "2"
 network-interface = "2"
 nusb = "0.2.3"
-object = "0.39"
 rust-embed = {version = "8", features = ["interpolate-folder-path", "debug-embed"]}
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rand = "0.9"
@@ -90,7 +89,7 @@ zbus = { version = "5", default-features = false, features = ["tokio"] }
 nix = { version = "0.30", features = ["signal", "process"] }
 
 [dev-dependencies]
-ostool = { version = "0.31.1", path = "../ostool" }
+ostool = { version = "0.32.0", path = "../ostool" }
 nix = {version="0.30", features=["term"]}
 tokio-modbus = {version = "0.17.0", default-features = false, features = ["rtu", "rtu-server"]}
 tokio-tungstenite = "0.28"

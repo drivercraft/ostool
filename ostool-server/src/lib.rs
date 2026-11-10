@@ -45,5 +45,3 @@ extern crate self as ostool_server;
 #[cfg(test)]
 #[path = "../tests/support/database.rs"]
 pub(crate) mod test_support;
-
-mod boot_image;

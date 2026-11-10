@@ -93,6 +93,16 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        if self.code == httpboot_protocol::UNSUPPORTED_PROTOCOL_CODE {
+            return (
+                self.status,
+                Json(httpboot_protocol::DeviceOperationError {
+                    code: self.code.to_string(),
+                    message: self.message,
+                }),
+            )
+                .into_response();
+        }
         let retry = self.retry_after;
         let mut response = (
             self.status,

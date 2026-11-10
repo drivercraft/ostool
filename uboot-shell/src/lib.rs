@@ -22,6 +22,8 @@ use futures::{
 use futures_timer::Delay;
 use regex::Regex;
 
+mod command;
+
 /// CRC16-CCITT checksum implementation.
 pub mod crc;
 
@@ -39,8 +41,6 @@ const INT_STR: &str = "<INTERRUPT>";
 const INT: &[u8] = INT_STR.as_bytes();
 const LOADY_MAX_ATTEMPTS: usize = 3;
 const LOADY_RETRY_DELAY: Duration = Duration::from_millis(300);
-const COMMAND_ECHO_TIMEOUT: Duration = Duration::from_secs(5);
-const COMMAND_SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 type Tx = Box<dyn AsyncWrite + Send + Unpin>;
 type Rx = Box<dyn AsyncRead + Send + Unpin>;
@@ -66,6 +66,7 @@ pub struct UbootShell {
     pub rx: Option<Rx>,
     /// Shell prompt prefix detected during initialization.
     perfix: String,
+    command_phase: command::CommandPhase,
 }
 
 impl UbootShell {
@@ -77,6 +78,7 @@ impl UbootShell {
             tx: Some(Box::new(tx)),
             rx: Some(Box::new(rx)),
             perfix: String::new(),
+            command_phase: command::CommandPhase::Ready,
         };
         shell.wait_for_shell().await?;
         debug!("shell ready, perfix: `{}`", shell.perfix);
@@ -223,148 +225,6 @@ impl UbootShell {
             .to_string())
     }
 
-    /// Writes a command and newline without consuming its response.
-    pub async fn cmd_without_reply(&mut self, cmd: &str) -> Result<()> {
-        self.tx().write_all(cmd.as_bytes()).await?;
-        self.tx().write_all(b"\n").await?;
-        self.tx().flush().await?;
-        Ok(())
-    }
-
-    async fn send_echoed_command(&mut self, command: &str) -> Result<()> {
-        // A successful host write/flush does not acknowledge the target UART.
-        // Its line editor echoes each accepted byte before executing the line,
-        // so keep only one unacknowledged byte in flight. Do not apply this to
-        // raw commands or YMODEM, which have different response protocols.
-        let sending = async {
-            for expected in command.bytes() {
-                self.tx().write_all(&[expected]).await?;
-                self.tx().flush().await?;
-                let started = std::time::Instant::now();
-                let mut escape = false;
-                let mut csi = false;
-                loop {
-                    let remaining = COMMAND_ECHO_TIMEOUT.saturating_sub(started.elapsed());
-                    if remaining.is_zero() {
-                        return Err(Error::new(
-                            ErrorKind::TimedOut,
-                            "U-Boot command echo timed out",
-                        ));
-                    }
-                    let byte = self.read_byte_with_timeout(remaining).await?;
-                    // Cursor/color CSI sequences are formatting, not input echoes.
-                    if csi {
-                        csi = !(0x40..=0x7e).contains(&byte);
-                        continue;
-                    }
-                    if escape {
-                        escape = false;
-                        csi = byte == b'[';
-                        continue;
-                    }
-                    if byte == 0x1b {
-                        escape = true;
-                        continue;
-                    }
-                    if byte == expected {
-                        break;
-                    }
-                }
-            }
-            self.tx().write_all(b"\n").await?;
-            self.tx().flush().await
-        }
-        .fuse();
-        let deadline = Delay::new(COMMAND_SEND_TIMEOUT).fuse();
-        pin_mut!(sending, deadline);
-        match select(sending, deadline).await {
-            Either::Left((result, _)) => result,
-            Either::Right(_) => Err(Error::new(
-                ErrorKind::TimedOut,
-                "U-Boot command send timed out",
-            )),
-        }
-    }
-
-    async fn resynchronize_command_prompt(&mut self) -> Result<()> {
-        // A failed send may leave an unterminated line in the target editor.
-        // Abort it and observe a fresh prompt before publishing another line.
-        self.tx().write_all(&[CTRL_C]).await?;
-        self.tx().flush().await?;
-        let prompt = self.perfix.clone();
-        let reply = self.wait_for_reply(&prompt).fuse();
-        let deadline = Delay::new(COMMAND_ECHO_TIMEOUT).fuse();
-        pin_mut!(reply, deadline);
-        match select(reply, deadline).await {
-            Either::Left((result, _)) => result.map(|_| ()),
-            Either::Right(_) => Err(Error::new(
-                ErrorKind::TimedOut,
-                "U-Boot prompt resynchronization timed out",
-            )),
-        }
-    }
-
-    async fn _cmd(&mut self, cmd: &str) -> Result<String> {
-        self.clear_shell().await?;
-        let ok_str = "cmd-ok";
-        let cmd_with_id = format!("{cmd}&& echo {ok_str}");
-        self.send_echoed_command(&cmd_with_id).await?;
-        let perfix = self.perfix.clone();
-        let res = self
-            .wait_for_reply(&perfix)
-            .await?
-            .trim_end()
-            .trim_end_matches(self.perfix.as_str().trim())
-            .trim_end()
-            .to_string();
-
-        if res.ends_with(ok_str) {
-            Ok(res
-                .trim()
-                .trim_end_matches(ok_str)
-                .trim_end()
-                .trim_start_matches(&cmd_with_id)
-                .trim()
-                .to_string())
-        } else {
-            Err(Error::other(format!(
-                "command `{cmd}` failed, response: {res}",
-            )))
-        }
-    }
-
-    /// Runs a command on a console with input echo enabled and returns its output.
-    ///
-    /// Each input byte waits for its echo before the next byte is sent. A failed
-    /// attempt is interrupted and synchronized to a fresh prompt before retrying.
-    pub async fn cmd(&mut self, cmd: &str) -> Result<String> {
-        if cmd.bytes().any(|byte| byte.is_ascii_control()) {
-            return Err(Error::new(
-                ErrorKind::InvalidInput,
-                "U-Boot command must be a single line without control bytes",
-            ));
-        }
-        info!("cmd: {cmd}");
-        let mut retry = 3;
-        while retry > 0 {
-            match self._cmd(cmd).await {
-                Ok(res) => return Ok(res),
-                Err(err) => {
-                    warn!("cmd `{cmd}` failed: {err}, retrying...");
-                    retry -= 1;
-                    if retry > 0 {
-                        self.resynchronize_command_prompt().await.map_err(|resync| {
-                            Error::new(resync.kind(), format!("U-Boot resynchronization failed: {resync}; command error: {err}"))
-                        })?;
-                    }
-                }
-            }
-        }
-        Err(Error::other(format!(
-            "command `{cmd}` failed after retries",
-        )))
-    }
-
     pub async fn set_env(
         &mut self,
         name: impl Into<String>,
@@ -409,18 +269,23 @@ impl UbootShell {
         file: impl Into<PathBuf>,
         on_progress: impl Fn(usize, usize),
     ) -> Result<String> {
+        self.admit_command().await?;
         let file = file.into();
 
         for attempt in 1..=LOADY_MAX_ATTEMPTS {
             match self.loady_once(addr, &file, &on_progress).await {
-                Ok(reply) => return Ok(reply),
+                Ok(reply) => {
+                    self.command_phase = command::CommandPhase::Ready;
+                    return Ok(reply);
+                }
                 Err(err) if attempt < LOADY_MAX_ATTEMPTS => {
                     warn!(
                         "loady attempt {attempt}/{LOADY_MAX_ATTEMPTS} failed: {err}; retrying..."
                     );
                     self.wait_for_shell().await.map_err(|recover_err| {
                         Error::other(format!(
-                            "loady attempt {attempt} failed and shell recovery failed: {recover_err}",
+                            "loady attempt {attempt} failed and shell recovery failed: \
+                             {recover_err}",
                         ))
                     })?;
                     Delay::new(LOADY_RETRY_DELAY).await;
@@ -443,7 +308,7 @@ impl UbootShell {
         on_progress: &impl Fn(usize, usize),
     ) -> Result<String> {
         self.clear_shell().await?;
-        self.cmd_without_reply(&format!("loady {addr:#x}")).await?;
+        self.write_raw_command(&format!("loady {addr:#x}")).await?;
         let crc = self.wait_for_load_crc().await?;
         let mut protocol = ymodem::Ymodem::new(crc);
 
@@ -458,8 +323,7 @@ impl UbootShell {
         protocol
             .send(self, &mut file, name, size, |sent| on_progress(sent, size))
             .await?;
-        let perfix = self.perfix.clone();
-        self.wait_for_reply(&perfix).await
+        self.read_prompt_reply().await
     }
 
     async fn wait_for_load_crc(&mut self) -> Result<bool> {
@@ -553,148 +417,13 @@ fn print_raw_win(buff: &[u8]) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{
         collections::VecDeque,
         fs,
         sync::{Arc, Mutex},
     };
 
-    #[derive(Default)]
-    struct EchoConsole {
-        reply: VecDeque<(u8, bool)>,
-        pending_echo: usize,
-        dropped: usize,
-        line: Vec<u8>,
-        executed: Vec<Vec<u8>>,
-        reader: Option<std::task::Waker>,
-        fail_next_echo: bool,
-        aborted_lines: usize,
-    }
-
-    impl EchoConsole {
-        fn receive(&mut self, bytes: &[u8]) {
-            for &byte in bytes {
-                if byte == CTRL_C {
-                    self.line.clear();
-                    self.reply.clear();
-                    self.pending_echo = 0;
-                    self.aborted_lines += 1;
-                    self.reply
-                        .extend(b"\r\n=> ".iter().map(|&byte| (byte, false)));
-                    continue;
-                }
-                if self.pending_echo == 1 {
-                    self.dropped += 1;
-                    continue;
-                }
-                if byte == b'\n' {
-                    let line = std::mem::take(&mut self.line);
-                    let acknowledged = line.ends_with(b"&& echo cmd-ok");
-                    self.executed.push(line);
-                    let reply: &[u8] = if acknowledged {
-                        b"\r\ndevice-result\r\ncmd-ok\r\n=> "
-                    } else {
-                        b"\r\ninvalid command\r\n=> "
-                    };
-                    self.reply.extend(reply.iter().map(|&byte| (byte, false)));
-                } else {
-                    self.line.push(byte);
-                    self.pending_echo += 1;
-                    self.reply
-                        .extend(b"\x1b[0m".iter().map(|&byte| (byte, false)));
-                    self.reply.push_back((byte, true));
-                }
-            }
-            if let Some(reader) = self.reader.take() {
-                reader.wake();
-            }
-        }
-    }
-
-    struct EchoTx(Arc<Mutex<EchoConsole>>);
-    struct EchoRx(Arc<Mutex<EchoConsole>>);
-
-    impl AsyncWrite for EchoTx {
-        fn poll_write(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            bytes: &[u8],
-        ) -> Poll<Result<usize>> {
-            // Like a host TTY, accepting a write does not prove the remote
-            // console's finite receive capacity could retain every byte.
-            self.0.lock().unwrap().receive(bytes);
-            Poll::Ready(Ok(bytes.len()))
-        }
-
-        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
-            Poll::Ready(Ok(()))
-        }
-
-        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
-            Poll::Ready(Ok(()))
-        }
-    }
-
-    impl AsyncRead for EchoRx {
-        fn poll_read(
-            self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-            bytes: &mut [u8],
-        ) -> Poll<Result<usize>> {
-            if bytes.is_empty() {
-                return Poll::Ready(Ok(0));
-            }
-            let mut console = self.0.lock().unwrap();
-            if console.fail_next_echo && console.pending_echo > 0 {
-                console.fail_next_echo = false;
-                return Poll::Ready(Err(Error::new(ErrorKind::TimedOut, "injected echo loss")));
-            }
-            if console.reply.is_empty() {
-                console.reader = Some(cx.waker().clone());
-                return Poll::Pending;
-            }
-            let size = bytes.len().min(console.reply.len());
-            for output in &mut bytes[..size] {
-                let (byte, echo) = console.reply.pop_front().unwrap();
-                *output = byte;
-                if echo {
-                    console.pending_echo -= 1;
-                }
-            }
-            Poll::Ready(Ok(size))
-        }
-    }
-
-    #[tokio::test]
-    async fn long_command_waits_for_remote_echo_before_advancing() {
-        for fail_next_echo in [false, true] {
-            let console = Arc::new(Mutex::new(EchoConsole {
-                fail_next_echo,
-                ..Default::default()
-            }));
-            let mut shell = UbootShell {
-                tx: Some(Box::new(EchoTx(console.clone()))),
-                rx: Some(Box::new(EchoRx(console.clone()))),
-                perfix: "=> ".to_string(),
-            };
-            let command = format!("setenv bootargs '{}'", "console=ttyS0 ".repeat(24));
-            let result = tokio::time::timeout(Duration::from_secs(2), shell.cmd(&command)).await;
-            assert_eq!(
-                result
-                    .expect("command lost bytes before reaching the device")
-                    .unwrap(),
-                "device-result"
-            );
-            let console = console.lock().unwrap();
-            assert_eq!(console.dropped, 0, "command overflowed the remote console");
-            assert_eq!(console.aborted_lines, usize::from(fail_next_echo));
-            assert_eq!(
-                console.executed,
-                [format!("{command}&& echo cmd-ok").into_bytes()]
-            );
-        }
-    }
+    use super::*;
 
     #[derive(Clone)]
     struct InterruptTx {
@@ -865,7 +594,11 @@ mod tests {
                         self.loady_count += 1;
                         self.accepting_commands = false;
                         self.queue_loady_response();
+                    } else if command.ends_with(b"&& echo cmd-ok; echo cmd-end\n") {
+                        self.queue_read(b"\r\nafter-transfer\r\ncmd-ok\r\ncmd-end\r\n=> ");
                     }
+                } else if self.loady_count == 2 {
+                    self.queue_read([byte]);
                 } else if self.command.len() > 256 {
                     self.command.clear();
                 }
@@ -932,6 +665,9 @@ mod tests {
             for slot in &mut buf[..n] {
                 *slot = script.reads.pop_front().unwrap();
             }
+            if script.reads.is_empty() && script.loady_count == 2 {
+                script.accepting_commands = true;
+            }
             Poll::Ready(Ok(n))
         }
     }
@@ -948,6 +684,7 @@ mod tests {
                 script: script.clone(),
             })),
             perfix: "=> ".to_string(),
+            command_phase: command::CommandPhase::Ready,
         };
 
         let file =
@@ -964,6 +701,7 @@ mod tests {
         let _ = fs::remove_file(&file);
 
         assert!(reply?.contains("done"));
+        assert_eq!(shell.cmd("echo after-transfer").await?, "after-transfer");
         let script = script.lock().unwrap();
         let writes = String::from_utf8_lossy(&script.writes);
         assert_eq!(writes.matches("loady 0x80200000").count(), 2);

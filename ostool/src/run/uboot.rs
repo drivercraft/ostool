@@ -400,10 +400,6 @@ impl UbootRunInput {
     pub(crate) fn artifacts(&self) -> &OutputArtifacts {
         &self.artifacts
     }
-
-    pub(crate) fn arch(&self) -> Option<object::Architecture> {
-        self.arch
-    }
 }
 
 pub(crate) fn default_uboot_config() -> UbootConfig {

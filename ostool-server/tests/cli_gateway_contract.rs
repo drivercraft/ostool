@@ -96,8 +96,13 @@ async fn gateway_contract_probe() -> Result<()> {
     client.delete_session(&session.session_id).await?;
     let error = client.create_session("baseline").await.unwrap_err();
     assert_eq!(error.status, StatusCode::UNAUTHORIZED);
-    assert_eq!(error.code, None);
-    assert_eq!(error.message, "baseline gateway rejected credentials");
+    assert_eq!(error.code.as_deref(), Some("invalid_device_response"));
+    assert!(
+        error
+            .message
+            .contains("baseline gateway rejected credentials")
+    );
+    assert!(error.message.contains("HTTP 401"));
     assert_eq!(
         seen.load(Ordering::SeqCst),
         10,

@@ -374,8 +374,10 @@ async fn kernel_upload_admission_and_timeout_cover_receiving_the_request_body() 
             .method("PUT")
             .uri(format!("/api/v1/sessions/{sid}/http-boot/kernel"))
             .header("authorization", format!("Bearer {}", f.member.access_token))
-            .header("x-httpboot-arch", "x86_64")
-            .header("x-httpboot-image-format", "elf64")
+            .header(
+                httpboot_protocol::DEVICE_PROTOCOL_VERSION_HEADER,
+                httpboot_protocol::DEVICE_PROTOCOL_VERSION.to_string(),
+            )
             .body(body)
             .unwrap()
     };
@@ -528,10 +530,10 @@ async fn device_callbacks_require_provisioned_tls_and_never_follow_udp_callback_
     .await??;
     let port: u16 = line.trim().parse()?;
     let announcement = httpboot_protocol::LoaderAnnouncement {
-        protocol_version: 6,
+        protocol_version: httpboot_protocol::DEVICE_PROTOCOL_VERSION,
         mac_address: "02:00:00:00:11:09".parse()?,
         current_mac_address: "02:00:00:00:11:09".parse()?,
-        arch: httpboot_protocol::BootArch::X86_64,
+        arch: "x86_64".into(),
         loader_version: "secure-test".into(),
         boot_epoch: "secure-epoch".into(),
         http_port: 1,

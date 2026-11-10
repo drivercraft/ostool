@@ -213,6 +213,7 @@ export interface LoaderDeviceSummary {
   online: boolean;
   conflict: boolean;
   bound_board_id: string | null;
+  boot_epoch: string;
 }
 
 export interface LoaderImage {

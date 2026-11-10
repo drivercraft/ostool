@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use chrono::{DateTime, Duration, Utc};
-use httpboot_protocol::{BootArch, ImageFormat, LoaderStatusPhase, LoaderStatusResponse};
+use httpboot_protocol::{LoaderStatusPhase, LoaderStatusResponse};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock, mpsc, watch};
 
@@ -138,6 +138,7 @@ pub struct SessionState {
     // Kernel storage and publication must not overlap another upload or handoff.
     pub(crate) boot_operation: Mutex<()>,
     loader: RwLock<SessionLoaderState>,
+    handoff_observation: Mutex<Option<HandoffObservation>>,
     command_tx: Option<mpsc::UnboundedSender<SessionCommand>>,
 }
 
@@ -148,14 +149,18 @@ struct SessionLoaderState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HandoffObservation {
+    generation: u64,
+    boot_epoch: String,
+    boot_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionBootCommand {
     pub boot_id: String,
     pub kernel_path: String,
     pub kernel_size: u64,
     pub kernel_sha256: String,
-    pub arch: BootArch,
-    pub image_format: ImageFormat,
-    pub entry_symbol: Option<String>,
     pub initramfs: Option<httpboot_protocol::BootFile>,
     pub cmdline: Option<String>,
 }
@@ -211,6 +216,7 @@ impl SessionState {
             serial_connected: AtomicBool::new(false),
             boot_operation: Mutex::new(()),
             loader: RwLock::new(SessionLoaderState::default()),
+            handoff_observation: Mutex::new(None),
             command_tx,
         })
     }
@@ -219,6 +225,7 @@ impl SessionState {
         self.boot_generation.subscribe()
     }
     pub async fn change_power(&self, powered: bool) {
+        self.clear_handoff_observation().await;
         self.boot_generation
             .send_modify(|g| *g = g.checked_add(1).expect("boot generation exhausted"));
         self.serial_runtime.restart(powered).await;
@@ -321,6 +328,7 @@ impl SessionState {
     }
 
     pub async fn publish_boot_command(&self, command: SessionBootCommand) {
+        self.clear_handoff_observation().await;
         let mut loader = self.loader.write().await;
         loader.boot_command = Some(command);
         loader.status = None;
@@ -332,7 +340,7 @@ impl SessionState {
 
     pub async fn update_loader_status(
         &self,
-        registration_id: String,
+        boot_epoch: String,
         boot_id: &str,
         status: LoaderStatusPhase,
     ) -> Result<(), LoaderStatusUpdateError> {
@@ -344,10 +352,19 @@ impl SessionState {
         if command.boot_id != boot_id {
             return Err(LoaderStatusUpdateError::StaleBoot);
         }
+        if loader.status.as_ref().is_some_and(|status| {
+            status.boot_id == boot_id
+                && matches!(
+                    status.status.as_ref(),
+                    Some(LoaderStatusPhase::Failed { .. })
+                )
+        }) {
+            return Ok(());
+        }
         loader.status = Some(LoaderStatusResponse {
             session_id,
             boot_id: boot_id.to_string(),
-            registration_id: Some(registration_id),
+            boot_epoch: Some(boot_epoch),
             status: Some(status),
         });
         Ok(())
@@ -365,9 +382,57 @@ impl SessionState {
         Some(LoaderStatusResponse {
             session_id: self.info.read().await.id.clone(),
             boot_id: command.boot_id,
-            registration_id: None,
+            boot_epoch: None,
             status: None,
         })
+    }
+
+    pub(crate) async fn handoff_was_submitted(&self, boot_id: &str) -> bool {
+        self.loader
+            .read()
+            .await
+            .status
+            .as_ref()
+            .is_some_and(|status| {
+                status.boot_id == boot_id
+                    && matches!(
+                        status.status.as_ref(),
+                        Some(LoaderStatusPhase::ReadyToHandoff)
+                    )
+            })
+    }
+
+    pub(crate) async fn observed_handoff_for_generation(
+        &self,
+        generation: u64,
+    ) -> Option<(String, String)> {
+        let mut observation = self.handoff_observation.lock().await;
+        if observation
+            .as_ref()
+            .is_some_and(|current| current.generation != generation)
+        {
+            *observation = None;
+        }
+        observation
+            .as_ref()
+            .map(|current| (current.boot_epoch.clone(), current.boot_id.clone()))
+    }
+
+    pub(crate) async fn mark_handoff_unconfirmed(
+        &self,
+        generation: u64,
+        boot_epoch: String,
+        boot_id: String,
+    ) {
+        *self.handoff_observation.lock().await = Some(HandoffObservation {
+            generation,
+            boot_epoch,
+            boot_id,
+        });
+    }
+
+    async fn clear_handoff_observation(&self) {
+        *self.handoff_observation.lock().await = None;
     }
 }
 
@@ -420,7 +485,7 @@ async fn run_session_actor(
 mod tests {
     use std::thread;
 
-    use httpboot_protocol::{BootArch, ImageFormat, LoaderStatusPhase};
+    use httpboot_protocol::LoaderStatusPhase;
 
     use super::{SESSION_TTL, Session, SessionBootCommand, SessionLifecycleState, SessionState};
     use crate::config::{
@@ -481,26 +546,53 @@ mod tests {
             kernel_path: "/kernel.elf".into(),
             kernel_size: 4096,
             kernel_sha256: "00".repeat(32),
-            arch: BootArch::X86_64,
-            image_format: ImageFormat::Elf64,
-            entry_symbol: None,
             initramfs: None,
             cmdline: None,
         };
         state.publish_boot_command(command("boot-1")).await;
         state
-            .update_loader_status(
-                "registration-1".into(),
-                "boot-1",
-                LoaderStatusPhase::Verified,
-            )
+            .update_loader_status("epoch-1".into(), "boot-1", LoaderStatusPhase::Verified)
             .await
             .unwrap();
 
         state.publish_boot_command(command("boot-2")).await;
         let status = state.loader_status().await.unwrap();
         assert_eq!(status.boot_id, "boot-2");
-        assert_eq!(status.registration_id, None);
+        assert_eq!(status.boot_epoch, None);
         assert_eq!(status.status, None);
+    }
+
+    #[tokio::test]
+    async fn failed_status_is_not_cleared_by_a_later_update_for_the_same_boot() {
+        let state = SessionState::new(sample_board(), None);
+        let command = SessionBootCommand {
+            boot_id: "boot-1".into(),
+            kernel_path: "/kernel.elf".into(),
+            kernel_size: 4096,
+            kernel_sha256: "00".repeat(32),
+            initramfs: None,
+            cmdline: None,
+        };
+        state.publish_boot_command(command).await;
+        state
+            .update_loader_status(
+                "epoch-1".into(),
+                "boot-1",
+                LoaderStatusPhase::Failed {
+                    code: "invalid_elf".into(),
+                    message: "bad entry".into(),
+                },
+            )
+            .await
+            .unwrap();
+        state
+            .update_loader_status("epoch-1".into(), "boot-1", LoaderStatusPhase::Verified)
+            .await
+            .unwrap();
+        assert!(matches!(
+            state.loader_status().await.unwrap().status,
+            Some(LoaderStatusPhase::Failed { code, message })
+                if code == "invalid_elf" && message == "bad entry"
+        ));
     }
 }

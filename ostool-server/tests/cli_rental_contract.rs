@@ -810,9 +810,6 @@ async fn cli_transport_probe() -> Result<()> {
                 sid,
                 HttpBootKernelUpload {
                     remote_name: "kernel.bin".into(),
-                    arch: "aarch64".into(),
-                    image_format: "raw".into(),
-                    entry_symbol: None,
                     bytes: vec![1],
                     initramfs: None,
                     cmdline: None
