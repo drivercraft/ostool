@@ -113,8 +113,14 @@ impl SessionSerialRuntime {
         self.update_status(|status| {
             status.phase = SerialRuntimePhase::Failed;
             status.error = Some(error.clone());
+            status.warning = None;
         });
         let _ = self.commands.send(Command::Fail(error));
+    }
+    pub fn set_warning(&self, warning: Option<String>) {
+        self.update_status(|status| {
+            status.warning = warning.clone();
+        });
     }
     pub async fn attach(
         self: &Arc<Self>,

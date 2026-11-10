@@ -5,16 +5,14 @@ use axum::{
     body::{Body, to_bytes},
     extract::{Path, State},
     http::{Request, StatusCode, header},
-    routing::{get, post},
+    routing::get,
 };
-use httpboot_protocol::{LoaderStatusPhase, LoaderStatusReport, MacAddress, PROTOCOL_VERSION};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 
 use crate::{
-    api::{error::ApiError, router::board_id_for_mac},
+    api::error::ApiError,
     config::BootConfig,
-    ota::{DeleteImageError, Image, Job, MAX_IMAGE_BYTES, Phase},
+    ota::{DeleteImageError, Image, Job, MAX_IMAGE_BYTES},
     state::{AppState, BoardLeaseState},
 };
 
@@ -36,11 +34,6 @@ pub fn routes() -> Router<AppState> {
             "/api/v1/admin/boards/{board_id}/loader-updates/{update_id}",
             axum::routing::delete(cancel_job),
         )
-        .route(
-            "/api/v1/loader-updates/{update_id}/image",
-            get(download_image),
-        )
-        .route("/api/v1/loaders/ota-status", post(report_status))
 }
 
 async fn list_images(State(state): State<AppState>) -> Result<Json<Vec<Image>>, ApiError> {
@@ -175,109 +168,4 @@ async fn cancel_job(
         .map_err(|error| ApiError::conflict(format!("{error:#}")))?;
     state.admin_events.invalidate(&["ota"]);
     Ok(Json(job))
-}
-
-async fn download_image(
-    Path(update_id): Path<String>,
-    State(state): State<AppState>,
-) -> Result<Body, ApiError> {
-    let job = state
-        .ota
-        .jobs()
-        .await
-        .into_iter()
-        .find(|job| job.update_id == update_id && !job.phase.is_terminal())
-        .ok_or_else(|| ApiError::not_found("OTA assignment not found"))?;
-    let boards = state.boards.read().await;
-    if board_id_for_mac(&boards, job.mac_address).as_deref() != Some(job.board_id.as_str()) {
-        return Err(ApiError::conflict("board MAC assignment has changed"));
-    }
-    let runtimes = state.board_runtimes.read().await;
-    let runtime = runtimes
-        .get(&job.board_id)
-        .ok_or_else(|| ApiError::conflict("board runtime is unavailable"))?;
-    if runtime.active_session_id.is_some() || runtime.lease_state != BoardLeaseState::Idle {
-        return Err(ApiError::conflict("board has an active session"));
-    }
-    let registration_id = state
-        .loader_registry
-        .legacy_ota_registration(job.mac_address)
-        .await
-        .ok_or_else(|| ApiError::conflict("OTA image requires a registered online v4 device"))?;
-    if !state
-        .ota
-        .can_download(&job.board_id, job.mac_address, &update_id, &registration_id)
-        .await
-    {
-        return Err(ApiError::conflict(
-            "OTA assignment is not available for this registration",
-        ));
-    }
-    let bytes = tokio::fs::read(state.ota.image_path(&job.image.sha256)?)
-        .await
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                ApiError::not_found("OTA image not found")
-            } else {
-                ApiError::internal(format!("failed to read OTA image: {error}"))
-            }
-        })?;
-    if bytes.len() as u64 != job.image.size {
-        return Err(ApiError::internal("stored image length changed"));
-    }
-    if format!("{:x}", Sha256::digest(&bytes)) != job.image.sha256 {
-        return Err(ApiError::internal("stored image digest changed"));
-    }
-    Ok(Body::from(bytes))
-}
-
-#[derive(Deserialize)]
-struct Report {
-    protocol_version: u16,
-    registration_id: String,
-    mac_address: MacAddress,
-    update_id: String,
-    phase: Phase,
-    error: Option<String>,
-    active_sha256: Option<String>,
-}
-
-async fn report_status(
-    State(state): State<AppState>,
-    Json(report): Json<Report>,
-) -> Result<StatusCode, ApiError> {
-    if report.protocol_version != PROTOCOL_VERSION {
-        return Err(ApiError::bad_request("OTA requires v4"));
-    }
-    let boards = state.boards.read().await;
-    let board_id = board_id_for_mac(&boards, report.mac_address)
-        .ok_or_else(|| ApiError::conflict("loader MAC is not bound"))?;
-    let registration = state
-        .loader_registry
-        .accept_ota_status(&LoaderStatusReport {
-            protocol_version: report.protocol_version,
-            registration_id: report.registration_id.clone(),
-            mac_address: report.mac_address,
-            session_id: String::new(),
-            boot_id: String::new(),
-            status: LoaderStatusPhase::Accepted,
-        })
-        .await
-        .map_err(|error| ApiError::conflict(format!("invalid loader registration: {error:?}")))?;
-    state
-        .ota
-        .report(
-            &board_id,
-            &report.registration_id,
-            &report.update_id,
-            report.phase,
-            report.error,
-            report.active_sha256.as_deref(),
-        )
-        .await
-        .map_err(|error| ApiError::conflict(format!("{error:#}")))?;
-    drop(registration);
-    drop(boards);
-    state.admin_events.invalidate(&["ota"]);
-    Ok(StatusCode::NO_CONTENT)
 }

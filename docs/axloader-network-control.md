@@ -4,15 +4,15 @@
 
 ### 1.1 入口与发现
 
-协议 v6 将 HTTP 控制入口放在 axloader。`network::Announcer` 在同一 UEFI 网卡
-向 UDP `2998` 单向广播 MAC、架构、启动代次和设备 TCP4 端口 `2999`；
+设备控制唯一使用协议 v7。`network::Announcer` 在同一 UEFI 网卡向 UDP `2998`
+单向广播 v7、MAC、开放架构名称、启动代次和设备 TCP4 端口 `2999`；
 `direct::Listener` 在该端口处理启动与 OTA。ostool-server 的
-`loader::serve_udp_discovery()` 对 v5/v6 广播调用 `device::reconcile()`，先反向
-GET 设备状态，核对 MAC、代次和架构，才从板卡 TOML 中查找当前绑定。
+`loader::serve_udp_discovery()` 只接入 v7 广播，并调用 `device::reconcile()` 反向
+GET 设备状态，核对 MAC、代次和身份后才从板卡 TOML 中查找当前绑定。架构名称不再是
+接入条件或准入白名单。
 发现不要求服务端响应：直连客户端知道设备 IP 时可独立控制装载器。
 设备没有可写 ESP 或 OTA 状态区时，状态响应中的 `ota` 可以为空；服务端不下发
-升级镜像，并为任务保存可见的等待原因，不按架构判为失败。v6 设备已有 Session 的
-普通启动推送仍然可用。
+升级镜像，并为任务保存可见的等待原因，不按架构判为失败。
 
 广播和 HTTP 没有身份认证。MAC 仅作板卡配置绑定键；报文和镜像的 SHA-256
 仅检验一致性，本阶段限定可信隔离实验网。服务器对重复 MAC 且不同来源 IP
@@ -20,30 +20,31 @@ GET 设备状态，核对 MAC、代次和架构，才从板卡 TOML 中查找当
 修改请求。
 
 发现页的“创建配置”链接只携带 MAC，`BoardEditor` 不维护或保存启动架构。
-发现列表只读显示 axloader 上报的架构；编辑页架构取自 `observed.arch`，在线时只读展示，
-离线或未发现时显示未知，不会推定为 x86_64。设备离线时仍可创建 Session 并上传内核，待上线后核对架构再启动。
+发现列表只读显示 axloader 上报的架构；编辑页架构取自当前 `/status` 的 `arch`，在线时只读展示，
+离线或未发现时显示未知，不会推定为 x86_64。`arch` 是开放的原始非空字符串，设备新增名称时
+server/UI 不要求升级枚举；该值只用于显示和诊断，不参与 MAC、代次或串口绑定身份核对。
+设备离线时仍可创建 Session 并上传内核，待上线后由设备判断镜像是否可启动。
 
-HTTP Boot profile 不再持久化 `boot_arch`。旧字段兼容读取后丢弃，其他未知字段仍拒绝。
-`FileBoardStore` 完成旧 TOML 的配置、身份和唯一性验证后，原子写回不含该字段的配置；
-迁移写入失败时保留源文件并报错。
+HTTP Boot profile 不持久化 `boot_arch`，也不自动迁移旧字段；旧配置由部署时人工修正，
+现行解析按未知字段报告错误。`httpboot` 是唯一现行 wire/config kind，`uefi_http` 别名不保留。
 
 ### 1.2 启动交接
 
 `BootServer` 在内存维护一个 `DeviceBootJob`。内核和可选 initramfs 由调用方
 PUT 上传，各自按清单长度及 SHA-256 检验，每个文件不超过 256 MiB。cmdline
-和 initramfs 相互独立且都可省略。内核须为 `object` 可解析的小端 ELF64，
-当前支持 x86_64、RISC-V64 和 LoongArch64。CLI 复用已有 ELF 检测结果生成
-`X-HttpBoot-Arch`，服务端上传时通过 `boot_image::elf_arch()` 核对 `e_machine` 与声明。
+和 initramfs 相互独立且都可省略。CLI/server 上传实际文件字节，不检查 ELF machine、
+位宽或本地入口，也不发送架构、镜像格式或入口 Header。共享 artifact 准备仍保留真实容器
+坏格式诊断；解析得到 `Architecture::Unknown` 或无架构信息不能作为 HTTP Boot 拒绝理由。
 上传校验直接使用本次请求体，在写入内核文件前完成；同一会话的内核写入、命令发布与设备交接串行执行。
 交接在等待互斥锁前订阅电源代次及会话停止信号；等待和执行期间优先处理取消，避免旧交接越过开关机操作。
-串口交接前再次校验文件长度、摘要和 ELF 架构，并要求文件、声明与 `observed.arch`
-一致；任一阶段的架构校验失败都会使串口状态进入 `Failed` 并停止会话。
+串口交接前继续校验文件长度、摘要、epoch 与绑定；主机不加载或复刻设备 ELF 白名单。
+设备在 `start` 中一次性解析真实镜像并应用其本地 machine、ELF 结构、装载范围和 EFI
+入口符号规则；拒绝以开放 `{code,message}` 返回并使 boot job 进入 `failed`。
 `Failed` 是该会话串口运行时的终态；关闭和迟到的状态更新均保留最初的错误原因。
-交接前预检失败还会发布 `boot_preflight_failed` loader 状态，并在关闭串口 WebSocket 前发送具体原因；
-CLI 保留轮询及 WebSocket 清理期间收到的错误，避免会话释放后的 `404` 掩盖架构不匹配原因。
-服务端按核验后的架构选择入口：
-x86_64 使用 `__x86_64_efi_pe_entry`，RISC-V64 和 LoongArch64 使用 `efi_pe_entry`。
-设备须运行对应架构的 axloader。
+交接前失败会发布设备原始 `code/message` loader 状态，并在关闭串口 WebSocket 前发送具体原因；
+CLI 保留轮询、WebSocket 关闭及清理期间收到的首个实际错误，避免会话释放后的 `404` 掩盖它。
+设备本地 `TargetSpec` 保存实际 machine 和 EFI 符号名；符号表必须保留，设备只在
+`start` 时从目标自身规则解析，不使用 ELF `e_entry` 或 `_start` 代替 EFI ABI 交接。
 `POST /api/v1/boot/jobs/{id}/start` 按设备自身的目标契约校验入口，把 cmdline 安装为 EFI LoadOptions，
 并仅在归档存在时发布 TGOS `BootPayload` 配置表；回复 `ready_to_handoff` 后释放
 TCP4、UDP4 对象和 UART 身份计时器，进入 UEFI 内核交接。
@@ -56,7 +57,7 @@ sequenceDiagram
     L-->>S: UDP :2998 广播（可选）
     S->>L: GET /api/v1/status
     S->>L: continue（bound 身份匹配或显式 direct）
-    S->>L: POST /api/v1/boot/jobs（X-Boot-Epoch）
+    S->>L: POST /api/v1/boot/jobs（v7、X-Boot-Epoch）
     S->>L: PUT kernel；可选 PUT initramfs
     S->>L: POST /api/v1/boot/jobs/{id}/start（X-Serial-Binding）
     L-->>S: 202 ready_to_handoff
@@ -74,14 +75,25 @@ ostool-server 保留原有 Session、串口 WebSocket、启动清单和板卡租
 
 ### 2.1 启动事务
 
-所有修改调用携带当前 `/api/v1/status` 返回的 `X-Boot-Epoch`。
-`BootServer::create()` 只接受匹配设备架构的 ELF64、非空合法启动 ID、预期长度与
-摘要、固定 EFI 入口，以及合法的可选命令行；相同 ID 和清单的重试保留已接收文件，
-冲突清单返回 `409`。设备只保留一个启动事务，可在启动前取消。
+`GET /api/v1/status` 可无版本 Header，用于任何修改前的 v7 检查。所有 boot、serial 和
+OTA mutation 携带 `X-Axloader-Protocol-Version: 7`，并继续携带当前 `/api/v1/status`
+返回的 `X-Boot-Epoch`；版本头不替代 epoch、串口 binding、OTA update ID/source 等约束。
+Header 缺失、非法或不等于 7 时，设备必须在 body 解析、串口接管、文件写入和事务修改前
+返回 HTTP `400`，顶层固定为
+`{"code":"unsupported_protocol","message":"axloader protocol 7 is required"}`。
+
+`DeviceBootJob` 只有 `boot_id`、`kernel`、可选 `initramfs` 和可选 `cmdline`；内核及
+initramfs 各自只有 `size` 与 `sha256`。请求启用未知字段拒绝，携带旧 `arch`、
+`image_format` 或 `entry_symbol` 的伪 v7 请求返回 `400 invalid_boot_manifest`。
+`BootServer::create()` 只校验非空合法启动 ID、预期长度/摘要、容量和命令行，不接收
+`TargetSpec`，因为此时没有镜像字节。相同 ID 和 manifest 的重试返回当前状态且不重置
+失败；主机必须先解析这个成功响应中的 `DeviceBootStatus`，若匹配 job 已为 `failed`
+则立即重放首个错误，不能因 `kernel_received=false` 再次 PUT。冲突清单返回 `409`。
+设备只保留一个启动事务，可在启动前取消。
 
 | 方法与路径 | 结果 |
 | --- | --- |
-| `GET /api/v1/status` | 返回 v6、MAC、启动代次、串口参数/绑定、硬件、启动事务及 OTA 状态 |
+| `GET /api/v1/status` | 返回 v7、MAC、启动代次、开放架构名称、串口参数/绑定、硬件、启动事务及 OTA 状态 |
 | `POST /api/v1/serial/continue` | 当前 epoch 的 `serial_id`、`binding_id` 和 `bound/direct`；相同请求幂等 |
 | `DELETE /api/v1/serial/bindings/{binding_id}` | 撤销当前匹配绑定，尚在装载器时恢复身份帧 |
 | `POST /api/v1/boot/jobs` | 提交 `DeviceBootJob`；创建返回 `201`，幂等重试返回 `200` |
@@ -92,8 +104,24 @@ ostool-server 保留原有 Session、串口 WebSocket、启动清单和板卡租
 | `DELETE /api/v1/boot/jobs/{id}` | 未交接时释放事务和文件 |
 
 请求头限制 4 KiB；仅接受 `Content-Length`，连接空闲 30 秒后取消，短读和
-错误摘要或上传中断释放启动事务。长时间接收过程中等待路径继续驱动 UDP 广播；单个设备
+错误摘要按终态保存到 failed job，上传中断按既有非终态规则处理。`ready` 只表示所需文件
+已收齐，不表示 ELF 可执行；`failed` 保留 manifest、boot_id、首个 `code/message` 并释放
+kernel/initramfs 大缓冲，两个 received 字段均为 false。GET 和同 manifest 重试必须可查询
+failed 状态，PUT/start 先重放首个错误，不能借补传清除失败。长时间接收过程中等待路径继续驱动 UDP 广播；单个设备
 一次只处理一个 TCP 连接。需要同时上传或查询的客户端应等当前请求完成。
+
+HTTP 错误统一为顶层 `{code,message}`。版本不符为 `400 unsupported_protocol`；manifest
+非法为 `400 invalid_boot_manifest`；容量超限为 `413 image_too_large`；长度和摘要不符为
+`422 image_size_mismatch`/`image_digest_mismatch`；ELF、machine、EFI 符号和装载失败使用
+设备内部固定 code，并在 message 中保留实际 machine、期望 machine、要求符号和底层原因。
+主机以 HTTP 类别和事务状态处理，同时原样展示开放 code/message；新增设备错误码不会导致
+反序列化失败。明确 `400`/`413`/`422` 是终态，不等待下一次广播后重复上传。
+
+`POST start` 返回 `202` 只表示准备完成、即将交接，不代表内核已运行。202 写失败时不得
+交接，保留 ready 事务允许重新 start。start 已发出但连接中断/超时时，主机只 GET 同一
+`boot_epoch + boot_id`：只有查询明确为 `ready` 才可用同 ID 重试一次；failed 按终态处理；
+其他情况显示“交接结果未确认”并沿用串口观察和会话超时。不得自动 DELETE/重建事务、更换
+boot_id 或跨代重新启动。
 
 ### 2.2 装载器升级
 
@@ -111,8 +139,8 @@ axloader 的设备端 OTA 实现（如 `ota::OtaContext`）和 A/B 启动器负�
 服务端把 OTA 镜像视为不透明的字节对象。`OtaStore` 接受非空且不超过
 `MAX_IMAGE_BYTES`（32 MiB）的内容，保存标签、长度及 SHA-256，下发前验证存储文件
 长度和摘要；不解析 PE/COFF，也不维护 `Machine` 或 CPU 架构白名单。服务端和
-`BoardOta` 均不按设备架构阻断升级，离线可以先排队。此规则只用于装载器 OTA；
-普通 HTTP Boot 的 ELF 架构检查、`observed.arch` 核对及各架构 EFI 入口保持不变。
+`BoardOta` 均不按设备架构阻断升级，离线可以先排队。普通 HTTP Boot 同样不做主机架构
+准入；真实镜像检查和本地 EFI 入口选择由 axloader 完成。
 
 直连上传默认生成 ID，且来源为 `direct`。服务端指派携带持久任务 ID，并保留
 `X-Boot-Epoch`、`X-Image-Sha256`、`X-Update-Id`、`X-Update-Source: server`
@@ -132,16 +160,10 @@ axloader 的设备端 OTA 实现（如 `ota::OtaContext`）和 A/B 启动器负�
 | `503` | 显示设备当前缺少 OTA 存储/能力的原因；等待 OTA 状态、能力或启动代次变化，不持续重复 PUT |
 | 网络中断、超时、其他 `5xx` | 持久记录错误并有限退避，最多三次投递失败；结果不确定时先核对设备是否已接受，最后一次也在核对后才判定失败 |
 
-`Job.error` 至少保留 HTTP 状态及设备原始响应体；兼容旧 `422 {}`，不要求设备升级
-错误格式后才启用多架构 OTA。确定性拒绝的响应体读取失败时仍保留 HTTP 状态和读取
+`Job.error` 至少保留 HTTP 状态及设备 `{code,message}` 响应；不启用旧错误形状解析。
+确定性拒绝的响应体读取失败时仍保留 HTTP 状态和读取
 错误，不重传。已暂存镜像的升级 ID 与本任务匹配时不再次下发，兼容暂存阶段
 `source` 为空的固件；进入试运行后，仍核对来源为 `server` 且运行摘要匹配才确认。重复或旧代次上报不能改写终态或最初的终态失败原因。
-
-旧 v4 poll 只有当前注册代次上报实际 `ota` 状态时才可获得升级指派。下载要求
-同一当前在线注册、MAC、升级 ID、OTA 能力、处于 `downloading` 的任务及空闲且无
-Session 的板卡；租约忙碌返回 `409`。重新注册或
-能力消失会撤销旧下载资格。下载仍核对文件长度与 SHA-256，设备决定镜像格式及
-兼容性，再经既有 `ota-status` 上报；不增加 CPU 架构限制。
 
 服务重启读取独立于 Session 的镜像库和任务。`Job.next_delivery_at` 是最早允许再次
 投递的 UTC 时间或 `null`，`Job.waiting_for_device_change` 表示等待 OTA 状态、能力或
@@ -161,7 +183,6 @@ Session 的板卡；租约忙碌返回 `409`。重新注册或
 [loader_network]
 enabled = true
 bind_addr = "0.0.0.0:2998"
-public_base_url = "http://10.77.0.1:2999"
 
 [virtual_qemu]
 enabled = true
@@ -220,12 +241,17 @@ hub 保留最近 64 KiB 输出并跨 QEMU 重启，新实例广播新的启动�
 
 ### 4.1 兼容边界
 
-ostool-server 保留 v5 的设备识别与 OTA，以及 v2/v3/v4 的旧识别和升级入口。
-自动启动要求 v6，旧装载器在启动前收到明确升级错误，不回退手工串口。
-`PROTOCOL_VERSION` 继续标识旧 poll 路径，`DEVICE_PROTOCOL_VERSION` 为 6。
-TGOS 与 ostool 共用正式版本 `httpboot-protocol 0.5.0`；发布前本地联合验证通过
-忽略的 Cargo patch 指向协议工作树，正式交付先发布协议和 `ostool-serial 0.1.0`，
-再更新 registry 锁文件。升级前排空 session，串口定位只在 RAM 保留。
+协议唯一为 v7，不保留 v2–v6 discovery、poll、status、入口或配置分支。`/api/v1`
+是资源 API 路径；设备协议由同一 `DEVICE_PROTOCOL_VERSION` 和请求头控制。旧写请求因
+缺版本头直接返回 `400 unsupported_protocol`，旧 URL 自然不存在，不提供升级代理。
+UART 身份帧 `AXLOADER-SERIAL/1 ` 是独立帧格式，继续保持 `/1`。
+
+TGOS 与 ostool 共用不兼容的 `httpboot-protocol 0.6.0`、`ostool 0.32.0` 和
+`ostool-serial 0.2.0` 系列；锁文件由 Cargo 重新生成，不手工拼接。部署切换应先暂停
+新 Session/OTA，完成或取消活动旧任务并确认设备退出 pending/trial，停止旧 server，
+人工备份并整理旧配置和 OTA 观测缓存，再安装 v7 axloader、配套 CLI/server，最后重新
+发现和验证。新 server 不承担通过旧协议升级旧 loader 的桥接功能。升级前排空 session，
+串口定位只在 RAM 保留。
 
 串口 channel、独占租约、原始参数恢复、继电器排除和错误恢复的代码边界见
 [串口所有权](axloader-serial-ownership.md)。U-Boot 继续使用手动串口配置与原步骤。

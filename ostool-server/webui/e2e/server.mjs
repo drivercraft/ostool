@@ -11,6 +11,9 @@ listen_addr = "127.0.0.1:4175"
 data_dir = "${root}/data"
 board_dir = "${root}/boards"
 dtb_dir = "${root}/dtbs"
+[network_test]
+enabled = false
+listen_addr = "127.0.0.1:0"
 [tftp]
 provider = "builtin"
 enabled = false
@@ -25,7 +28,6 @@ public_base_url = "http://127.0.0.1:4175"
 [loader_network]
 enabled = true
 bind_addr = "127.0.0.1:2998"
-public_base_url = "http://127.0.0.1:4175"
 `,
 );
 await mkdir(join(root, "boards"), { recursive: true });

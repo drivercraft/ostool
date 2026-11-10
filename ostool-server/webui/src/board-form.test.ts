@@ -8,9 +8,9 @@ import {
 } from "./board-form";
 import type { BoardConfig } from "./types/api";
 describe("board configuration contracts", () => {
-  it("loads legacy HTTPboot architecture fields without preserving them in the form or payload", () => {
-    const legacy = {
-      id: "legacy",
+  it("serializes only the current HTTPboot profile shape", () => {
+    const current = {
+      id: "current",
       board_type: "firmware-board",
       tags: [],
       notes: null,
@@ -22,10 +22,9 @@ describe("board configuration contracts", () => {
         power_off_cmd: "true",
       },
       network_identity: { mac_address: "02:00:00:00:00:21" },
-      boot: { kind: "httpboot" as const, boot_arch: "unrecognized" },
+      boot: { kind: "httpboot" as const, serial_parameters: null },
     };
-    const form = boardToFormState(legacy);
-    expect(form).not.toHaveProperty("boot_arch");
+    const form = boardToFormState(current);
     expect(validateForm(form)).toBe("");
     expect(buildRequestPayload(form).boot).toEqual({
       kind: "httpboot",

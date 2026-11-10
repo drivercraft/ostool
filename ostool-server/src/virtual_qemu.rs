@@ -133,41 +133,6 @@ impl VirtualBoardManager {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(crate) async fn insert_test_device(
-        &self,
-        id: &str,
-        mac_address: MacAddress,
-    ) -> anyhow::Result<()> {
-        if self.devices.read().await.contains_key(id) {
-            bail!("virtual device `{id}` already exists");
-        }
-        let hub = SerialHub::new_at(Ipv4Addr::LOCALHOST).await?;
-        let run_dir = self.config.runtime_dir.join(id);
-        self.devices.write().await.insert(
-            id.to_string(),
-            Arc::new(VirtualDevice {
-                id: id.to_string(),
-                mac_address,
-                tap: self
-                    .config
-                    .tap_pool
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "test-tap".into()),
-                hub,
-                runtime: Mutex::new(VirtualRuntime {
-                    child: None,
-                    deleting: false,
-                    generation: 0,
-                    qmp_path: run_dir.join("qmp.sock"),
-                    run_dir,
-                }),
-            }),
-        );
-        Ok(())
-    }
-
     async fn get_or_create_device(
         &self,
         id: &str,
