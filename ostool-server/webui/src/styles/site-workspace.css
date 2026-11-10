@@ -884,13 +884,3 @@
     flex-wrap: wrap;
   }
 }
-
-/* Only the active history subscribes; its wide table scrolls inside the page. */
-.member-rental-tabs,
-.member-rental-tabs > [data-slot="tabs-content"] {
-  min-width: 0;
-  width: 100%;
-}
-.member-rental-tabs > [data-slot="tabs-list"] {
-  height: 44px;
-}

@@ -9,10 +9,10 @@ import {
   Routes,
   useLocation,
   useNavigate,
-  useSearchParams,
 } from "react-router-dom";
 import {
   CalendarClock,
+  ClipboardList,
   KeyRound,
   ArrowRight,
   LayoutDashboard,
@@ -29,7 +29,6 @@ import {
 } from "@/api/events";
 import { useSiteSession } from "@/apps/web/session";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -62,6 +61,7 @@ const navigation = [
     items: [
       ["/account", "工作台总览", LayoutDashboard],
       ["/account/rentals", "我的租赁", CalendarClock],
+      ["/account/requests", "租赁申请", ClipboardList],
     ],
   },
   {
@@ -124,10 +124,7 @@ export default function MemberWorkspace() {
           <Route path="password" element={<Password />} />
           <Route path="rentals" element={<MyRentals />} />
           <Route path="allocations/new" element={<ClaimBoard user={user} />} />
-          <Route
-            path="requests"
-            element={<Navigate replace to="/account/rentals?tab=requests" />}
-          />
+          <Route path="requests" element={<MyRequests />} />
           <Route path="tokens" element={<Tokens />} />
           <Route path="*" element={<Navigate replace to="/account" />} />
         </Routes>
@@ -216,11 +213,7 @@ function Overview({ user }: { user: AuthUser }) {
         {[
           ["使用中的租赁", summary?.active ?? "—", "/account/rentals"],
           ["即将开始", summary?.scheduled ?? "—", "/account/rentals"],
-          [
-            "待审核申请",
-            summary?.pending ?? "—",
-            "/account/rentals?tab=requests",
-          ],
+          ["待审核申请", summary?.pending ?? "—", "/account/requests"],
         ].map(([label, count, path]) => (
           <Link key={label} to={String(path)}>
             <span>{label}</span>
@@ -451,33 +444,26 @@ function MyRentals() {
   const { user } = useSiteSession();
   const instant =
     user?.is_admin || user?.permissions?.includes("board.instant");
-  const [query, setQuery] = useSearchParams();
-  const tab = query.get("tab") === "requests" ? "requests" : "rentals";
   return (
     <>
       <Heading
         title="我的租赁"
-        text="查看设备使用安排、申请进度和审核结果。"
+        text="查看分配给你的开发板及使用时段。"
         action={<RentalActions instant={!!instant} />}
       />
-      <Tabs
-        className="member-rental-tabs"
-        value={tab}
-        onValueChange={(value) =>
-          setQuery(value === "requests" ? { tab: "requests" } : {})
-        }
-      >
-        <TabsList variant="line" aria-label="我的租赁视图">
-          <TabsTrigger value="rentals">租赁记录</TabsTrigger>
-          <TabsTrigger value="requests">申请记录</TabsTrigger>
-        </TabsList>
-        <TabsContent value="rentals">
-          {tab === "rentals" && <RentalHistory />}
-        </TabsContent>
-        <TabsContent value="requests">
-          {tab === "requests" && <ApplicationHistory />}
-        </TabsContent>
-      </Tabs>
+      <RentalHistory />
+    </>
+  );
+}
+function MyRequests() {
+  return (
+    <>
+      <Heading
+        title="租赁申请"
+        text="查看你的设备租赁申请及审核结果。"
+        action={<RentalActions instant={false} />}
+      />
+      <ApplicationHistory />
     </>
   );
 }

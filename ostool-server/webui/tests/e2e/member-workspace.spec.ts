@@ -96,7 +96,7 @@ test("public member profile, rental request approval, theme and password lifecyc
       page
         .getByRole("navigation", { name: "个人中心导航" })
         .getByRole("link", { name: "租赁申请", exact: true }),
-    ).toHaveCount(0);
+    ).toBeVisible();
 
     await expect(page.locator(".sidebar")).toHaveCount(0);
     await page.getByRole("button", { name: "用户菜单" }).click();
@@ -122,6 +122,11 @@ test("public member profile, rental request approval, theme and password lifecyc
     await expect(page.locator(".member-sidebar")).toHaveCount(0);
     await expect(
       page.getByRole("button", { name: "提交申请", exact: true }),
+    ).toBeVisible();
+    await page.getByRole("link", { name: "取消", exact: true }).click();
+    await expect(page).toHaveURL(`${base}/account/requests`);
+    await expect(
+      page.getByRole("heading", { name: "租赁申请", exact: true }),
     ).toBeVisible();
     await page.goto(`${base}/devices`);
     await page.getByLabel("搜索设备").fill(board);
@@ -161,13 +166,16 @@ test("public member profile, rental request approval, theme and password lifecyc
       fullPage: true,
     });
     await page.getByRole("button", { name: "提交申请" }).click();
-    await expect(page).toHaveURL(`${base}/account/rentals?tab=requests`);
+    await expect(page).toHaveURL(`${base}/account/requests`);
     await expect(
-      page.getByRole("heading", { name: "我的租赁", exact: true }),
+      page.getByRole("heading", { name: "租赁申请", exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByRole("tab", { name: "申请记录", exact: true }),
-    ).toHaveAttribute("aria-selected", "true");
+      page
+        .getByRole("navigation", { name: "个人中心导航" })
+        .getByRole("link", { name: "租赁申请", exact: true }),
+    ).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("tab")).toHaveCount(0);
 
     const memberRow = page
       .getByRole("row")
@@ -202,8 +210,15 @@ test("public member profile, rental request approval, theme and password lifecyc
       page.getByRole("cell", { name: board, exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByRole("tab", { name: "租赁记录", exact: true }),
-    ).toHaveAttribute("aria-selected", "true");
+      page.getByRole("heading", { name: "我的租赁", exact: true }),
+    ).toBeVisible();
+    await expect(page).toHaveURL(`${base}/account/rentals`);
+    await expect(
+      page
+        .getByRole("navigation", { name: "个人中心导航" })
+        .getByRole("link", { name: "我的租赁", exact: true }),
+    ).toHaveAttribute("aria-current", "page");
+    await expect(page.getByLabel("申请状态", { exact: true })).toHaveCount(0);
     await page.screenshot({
       path: "/tmp/ostool-member-rentals.png",
       fullPage: true,
@@ -225,6 +240,25 @@ test("public member profile, rental request approval, theme and password lifecyc
         () => document.documentElement.scrollWidth <= window.innerWidth,
       ),
     ).toBe(true);
+    await page
+      .getByRole("navigation", { name: "个人中心导航" })
+      .getByRole("link", { name: "租赁申请", exact: true })
+      .click();
+    await expect(page).toHaveURL(`${base}/account/requests`);
+    await expect(
+      page.getByRole("heading", { name: "租赁申请", exact: true }),
+    ).toBeVisible();
+    await expect(memberRow.getByText("已通过", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("搜索我的租赁")).toHaveCount(0);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: "/tmp/ostool-member-requests-mobile-dark.png",
+      fullPage: true,
+    });
     await page.goto(`${base}/account/security`);
     await expect(
       page.getByRole("heading", { name: "账号安全", exact: true }),

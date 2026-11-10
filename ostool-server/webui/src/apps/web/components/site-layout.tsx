@@ -8,6 +8,7 @@ import {
 import {
   ArrowRight,
   CircuitBoard,
+  FileText,
   Github,
   LogOut,
   Menu,
@@ -147,6 +148,12 @@ function SiteHeader() {
           <Link to="/account/rentals">
             <CircuitBoard />
             我的租赁
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link to="/account/requests">
+            <FileText />
+            租赁申请
           </Link>
         </DropdownMenuItem>
         {(user.can_access_admin ?? user.is_admin) && (

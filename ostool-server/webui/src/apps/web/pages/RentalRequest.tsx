@@ -47,7 +47,7 @@ export default function RentalRequest() {
           <p>选择开发板及使用时段，提交后等待管理员审核。</p>
         </div>
         <Button asChild variant="outline">
-          <Link to="/account/rentals?tab=requests">我的租赁</Link>
+          <Link to="/account/requests">申请记录</Link>
         </Button>
       </div>
       {checking ? (
@@ -83,7 +83,7 @@ function RentalRequestEditor({ user }: { user: AuthUser }) {
         className="rental-request-panel"
         footer={
           <Button asChild variant="outline">
-            <Link to="/account/rentals?tab=requests">取消</Link>
+            <Link to="/account/requests">取消</Link>
           </Button>
         }
       >
@@ -232,7 +232,7 @@ function RentalRequestForm({
                   });
                 }, "申请已提交，等待管理员审核")
                 .then((ok) => {
-                  if (ok) navigate("/account/rentals?tab=requests");
+                  if (ok) navigate("/account/requests");
                 });
             }}
           >
@@ -288,7 +288,7 @@ function RentalRequestForm({
             </span>
             <div className="row-actions">
               <Button asChild variant="outline">
-                <Link to="/account/rentals?tab=requests">取消</Link>
+                <Link to="/account/requests">取消</Link>
               </Button>
               <Button
                 type="submit"

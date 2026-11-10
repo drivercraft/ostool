@@ -170,10 +170,8 @@ it("uses the rental editor layout and preserves the application draft on availab
     ends_at: new Date(to).toISOString(),
     notes: "Keep this application draft",
   });
-  await screen.findByRole("heading", { name: "我的租赁" });
-  expect(window.location.pathname + window.location.search).toBe(
-    "/account/rentals?tab=requests",
-  );
+  await screen.findByRole("heading", { name: "租赁申请" });
+  expect(window.location.pathname).toBe("/account/requests");
 });
 
 it("claims an eligible board for the current user and reacts to availability changes", async () => {
@@ -227,25 +225,36 @@ it.each([false, true])(
   },
 );
 
-it("consolidates applications under My rentals and redirects the removed list URL", async () => {
+it("keeps rentals and applications on separate pages with their own active navigation", async () => {
   window.history.replaceState({}, "", "/account/requests");
   render(<App />);
-  await screen.findByRole("heading", { name: "我的租赁" });
-  expect(window.location.pathname + window.location.search).toBe(
-    "/account/rentals?tab=requests",
+  await screen.findByRole("heading", { name: "租赁申请" });
+  const navigation = within(
+    screen.getByRole("navigation", { name: "个人中心导航" }),
   );
-  const navigation = screen.getByRole("navigation", { name: "个人中心导航" });
-  expect(navigation.querySelector('a[href="/account/requests"]')).toBeNull();
-  expect(screen.queryByRole("heading", { name: "租赁申请" })).toBeNull();
+  const requests = navigation.getByRole("link", { name: "租赁申请" });
+  const rentals = navigation.getByRole("link", { name: "我的租赁" });
+  expect(requests.getAttribute("aria-current")).toBe("page");
+  expect(rentals.getAttribute("aria-current")).toBeNull();
+  expect(screen.getByLabelText("申请状态")).toBeTruthy();
+  expect(screen.queryByLabelText("搜索我的租赁")).toBeNull();
+  expect(screen.queryByRole("tab")).toBeNull();
   expect(
-    screen.getByRole("tab", { name: "申请记录" }).getAttribute("aria-selected"),
-  ).toBe("true");
-  await userEvent.setup().click(screen.getByRole("tab", { name: "租赁记录" }));
+    screen.getByRole("link", { name: "申请租赁" }).getAttribute("href"),
+  ).toBe("/rental-request");
+  const user = userEvent.setup();
+  await user.click(rentals);
   expect(window.location.pathname).toBe("/account/rentals");
-  expect(window.location.search).toBe("");
+  expect(rentals.getAttribute("aria-current")).toBe("page");
+  expect(requests.getAttribute("aria-current")).toBeNull();
+  expect(screen.getByRole("heading", { name: "我的租赁" })).toBeTruthy();
   expect(screen.getByLabelText("搜索我的租赁")).toBeTruthy();
+  expect(screen.queryByLabelText("申请状态")).toBeNull();
+  await user.click(requests);
+  expect(window.location.pathname).toBe("/account/requests");
+  expect(screen.getByRole("heading", { name: "租赁申请" })).toBeTruthy();
 });
-it("keeps pending application withdrawal inside My rentals", async () => {
+it("keeps pending application withdrawal on the applications page", async () => {
   mocks.resources.listing = {
     query: { view: "rental_requests", page: 1, page_size: 20 },
     page: 1,
@@ -264,7 +273,7 @@ it("keeps pending application withdrawal inside My rentals", async () => {
     ],
   };
   mocks.withdrawRentalRequest.mockResolvedValue(undefined);
-  window.history.replaceState({}, "", "/account/rentals?tab=requests");
+  window.history.replaceState({}, "", "/account/requests");
   render(<App />);
   expect(within(screen.getByRole("table")).getByText("待审核")).toBeTruthy();
   const user = userEvent.setup();
