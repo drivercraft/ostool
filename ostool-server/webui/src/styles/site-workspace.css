@@ -729,17 +729,15 @@
 .site-root .legal-reader {
   padding-inline: 0;
 }
-.member-editor-main {
+.rental-request-page {
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  gap: 20px;
 }
 .site-root .rental-request-panel {
-  height: max(700px, calc(100dvh - 132px));
-  flex: none;
-  border: 1px solid var(--site-border);
-  border-radius: var(--admin-panel-radius, 12px);
-  background: var(--site-card);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 .site-root .rental-request-panel .rental-calendar {
   min-height: 0;
@@ -747,14 +745,6 @@
 }
 .rental-request-panel .panel-scroll {
   min-height: 0;
-}
-.member-create-request {
-  margin-right: auto;
-}
-@media (max-width: 760px) {
-  .site-root .rental-request-panel {
-    height: max(860px, calc(100dvh - 180px));
-  }
 }
 /* Decorative hero glows may bleed into the gutter, never create page scrolling. */
 .site-root .public-home {
@@ -893,4 +883,14 @@
   .site-footer-bottom {
     flex-wrap: wrap;
   }
+}
+
+/* Only the active history subscribes; its wide table scrolls inside the page. */
+.member-rental-tabs,
+.member-rental-tabs > [data-slot="tabs-content"] {
+  min-width: 0;
+  width: 100%;
+}
+.member-rental-tabs > [data-slot="tabs-list"] {
+  height: 44px;
 }

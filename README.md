@@ -786,3 +786,5 @@ auth_mode = "disabled"
 ```
 
 服务器设为 `OSTOOL_EDITION=local`，无需 Redis、管理员账号或用户分配；`public` 不能关闭鉴权。
+
+设备目录提供独立的 `/devices/:boardId` 详情页。管理员在“设备文档”中维护公开介绍、图片和参数；租赁申请页采用单屏左右布局，展示设备信息并填写使用时段。

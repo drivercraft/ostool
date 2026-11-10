@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, clearBrowserSession, notifyAuthChanged } from "./api/client";
-import { sessionSignalKey, safeAdminRedirect } from "./auth-session";
+import {
+  sessionSignalKey,
+  safeAdminRedirect,
+  safeWebsiteRedirect,
+} from "./auth-session";
 
 afterEach(() => {
   localStorage.clear();
@@ -52,4 +56,25 @@ describe("independent browser sessions", () => {
       "/admin/boards/demo?view=details",
     );
   });
+});
+
+it("website login preserves application selection and rejects external or escaped paths", () => {
+  expect(safeWebsiteRedirect("/rental-request?board=rk%20board%2F1")).toBe(
+    "/rental-request?board=rk%20board%2F1",
+  );
+  expect(safeWebsiteRedirect("/account/requests/new?board=board-1")).toBe(
+    "/account/requests/new?board=board-1",
+  );
+  for (const value of [
+    null,
+    "https://example.com",
+    "//example.com",
+    "/rental-request/../admin",
+    "/account/../admin",
+    "/accounting",
+    "/rental-request-elsewhere",
+    "/account/\\example.com",
+  ]) {
+    expect(safeWebsiteRedirect(value)).toBe("/account");
+  }
 });

@@ -39,6 +39,9 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { Notice, ListDataLoadingContext } from "@/components/forms";
+const DeviceDocuments = lazy(
+  () => import("@/apps/admin/pages/DeviceDocuments"),
+);
 const Boards = lazy(() => import("@/apps/admin/pages/Boards"));
 const BoardEditor = lazy(() => import("@/apps/admin/pages/BoardEditor"));
 const Overview = lazy(() => import("@/apps/admin/pages/Overview"));
@@ -54,6 +57,7 @@ const RoleEditor = lazy(() => import("@/apps/admin/pages/RoleEditor"));
 const RentalRequests = lazy(() => import("@/apps/admin/pages/RentalRequests"));
 const boardNavigation = [
   ["boards", "设备列表"],
+  ["device-documents", "设备文档"],
   ["dtbs", "DTB 管理"],
   ["sessions", "会话租约"],
 ] as const;
@@ -95,7 +99,10 @@ function AdminEntry() {
   useEffect(() => {
     let active = true;
     (async () => {
-      if (!config.enabled) { setGate("allowed"); return; }
+      if (!config.enabled) {
+        setGate("allowed");
+        return;
+      }
       if (loginPage) return;
       const user = await api.me();
       if (active) {
@@ -346,6 +353,14 @@ function AdminConsole({
                     <Route path="/boards" element={<Boards />} />
                     <Route path="/boards/new" element={<BoardEditor />} />
                     <Route path="/boards/:boardId" element={<BoardEditor />} />
+                    <Route
+                      path="/device-documents"
+                      element={<DeviceDocuments />}
+                    />
+                    <Route
+                      path="/device-documents/:boardId"
+                      element={<DeviceDocuments />}
+                    />
                     <Route path="/dtbs" element={<Dtbs />} />
                     <Route path="/sessions" element={<Sessions />} />
                     <Route
@@ -458,11 +473,13 @@ function ResourceLoading({ children }: { children: ReactNode }) {
     ? "roles"
     : pathname.startsWith("/boards")
       ? "boards"
-      : pathname.startsWith("/dtbs")
-        ? "dtbs"
-        : pathname.startsWith("/sessions")
-          ? "sessions"
-          : "server";
+      : pathname.startsWith("/device-documents")
+        ? "device_documents"
+        : pathname.startsWith("/dtbs")
+          ? "dtbs"
+          : pathname.startsWith("/sessions")
+            ? "sessions"
+            : "server";
   const { can } = usePermissions();
   const data = useResource(topic),
     errors = useErrors();
@@ -491,29 +508,31 @@ function ResourceLoading({ children }: { children: ReactNode }) {
             "serial_manager",
             "ota",
           ]
-        : pathname === "/boards"
-          ? ["boards", "loaders", "virtual"]
-          : pathname.startsWith("/dtbs")
-            ? ["dtbs"]
-            : pathname.startsWith("/sessions")
-              ? ["sessions", "session_history"]
-              : pathname.startsWith("/users")
-                ? ["roles", "listing"]
-                : pathname.startsWith("/rentals")
-                  ? ["boards", "listing", "rental_editor"]
-                  : pathname.startsWith("/rental-requests")
-                    ? ["listing"]
-                    : pathname.startsWith("/audits")
-                      ? ["audit"]
-                      : pathname.startsWith("/settings")
-                        ? [
-                            "legal_history",
-                            "network",
-                            "tftp",
-                            "tftp_status",
-                            "mail_deliveries",
-                          ]
-                        : [];
+        : pathname.startsWith("/device-documents")
+          ? ["boards", "device_documents", "device_document"]
+          : pathname === "/boards"
+            ? ["boards", "loaders", "virtual"]
+            : pathname.startsWith("/dtbs")
+              ? ["dtbs"]
+              : pathname.startsWith("/sessions")
+                ? ["sessions", "session_history"]
+                : pathname.startsWith("/users")
+                  ? ["roles", "listing"]
+                  : pathname.startsWith("/rentals")
+                    ? ["boards", "listing", "rental_editor"]
+                    : pathname.startsWith("/rental-requests")
+                      ? ["listing"]
+                      : pathname.startsWith("/audits")
+                        ? ["audit"]
+                        : pathname.startsWith("/settings")
+                          ? [
+                              "legal_history",
+                              "network",
+                              "tftp",
+                              "tftp_status",
+                              "mail_deliveries",
+                            ]
+                          : [];
     const editing =
       pathname.startsWith("/boards/") && pathname !== "/boards/new";
     admin.setBoardEditor(

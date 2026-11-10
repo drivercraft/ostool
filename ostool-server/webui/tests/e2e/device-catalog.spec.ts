@@ -94,12 +94,19 @@ test("anonymous device cards receive updates and keep the selected board after l
     await solveCaptcha(page);
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await expect(page).toHaveURL(
-      `${base}/account/requests/new?board=${devices[0].id}`,
+      `${base}/rental-request?board=${devices[0].id}`,
     );
     await expect(
       page.getByRole("button", { name: "提交申请", exact: true }),
     ).toBeVisible();
-    await expect(page.locator(".sidebar")).toHaveCount(0);
+    await expect(page.locator(".sidebar, .member-sidebar")).toHaveCount(0);
+    await expect(page.getByLabel("申请开发板", { exact: true })).toHaveValue(
+      devices[0].id,
+    );
+    await page.reload();
+    await expect(page.getByLabel("申请开发板", { exact: true })).toHaveValue(
+      devices[0].id,
+    );
     await page.screenshot({ path: "/tmp/ostool-public-device-rental.png" });
     await page.goto(`${base}/devices`);
     await page.getByLabel("搜索设备").fill(`catalog-${suffix}`);

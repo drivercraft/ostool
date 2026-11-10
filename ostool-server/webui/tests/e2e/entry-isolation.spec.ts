@@ -12,6 +12,11 @@ test("server and dev host serve independent website and admin entry documents", 
     const admin = await request.get(`${base}/admin/login`, {
       headers: { accept: "text/html" },
     });
+    const application = await request.get(`${base}/rental-request?board=selected-board`, {
+      headers: { accept: "text/html" },
+    });
+    expect(application.ok()).toBeTruthy();
+    expect(await application.text()).toContain("开发板协作平台");
     expect(site.ok()).toBeTruthy();
     expect(admin.ok()).toBeTruthy();
     expect(await site.text()).toContain("开发板协作平台");

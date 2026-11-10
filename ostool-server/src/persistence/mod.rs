@@ -1,5 +1,6 @@
 //! PostgreSQL persistence.
 pub mod boards;
+pub mod documents;
 pub mod dtbs;
 pub mod files;
 pub mod leases;

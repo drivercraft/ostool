@@ -12,3 +12,5 @@ pub mod rentals;
 pub mod site;
 
 pub mod instant;
+
+pub mod documents;

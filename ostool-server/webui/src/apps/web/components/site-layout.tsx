@@ -8,7 +8,6 @@ import {
 import {
   ArrowRight,
   CircuitBoard,
-  FileText,
   Github,
   LogOut,
   Menu,
@@ -85,13 +84,17 @@ function SiteHeader() {
     setOpen(false);
     const title = location.pathname.startsWith("/account")
       ? "个人工作台"
-      : location.pathname === "/login"
-        ? "登录"
-        : location.pathname === "/register"
-          ? "注册"
-          : (publicNavigation.find(
-              ([path]) => path === location.pathname,
-            )?.[1] ?? "开发板协作平台");
+      : location.pathname === "/rental-request"
+        ? "租赁申请"
+        : location.pathname.startsWith("/devices/")
+          ? "设备详情"
+          : location.pathname === "/login"
+            ? "登录"
+            : location.pathname === "/register"
+              ? "注册"
+              : (publicNavigation.find(
+                  ([path]) => path === location.pathname,
+                )?.[1] ?? "开发板协作平台");
     document.title = title + " · " + settings.name;
   }, [location.pathname, settings.name]);
   const { user, checking } = useSiteSession();
@@ -144,12 +147,6 @@ function SiteHeader() {
           <Link to="/account/rentals">
             <CircuitBoard />
             我的租赁
-          </Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <Link to="/account/requests">
-            <FileText />
-            租赁申请
           </Link>
         </DropdownMenuItem>
         {(user.can_access_admin ?? user.is_admin) && (

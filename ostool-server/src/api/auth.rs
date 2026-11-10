@@ -323,6 +323,7 @@ fn is_public_path(path: &str) -> bool {
     path.starts_with("/device-files/")
         || path == "/"
         || path == "/register"
+        || path == "/rental-request"
         || path == "/password-reset"
         || path == "/account"
         || path.starts_with("/account/")

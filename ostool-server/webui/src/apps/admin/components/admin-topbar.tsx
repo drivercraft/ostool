@@ -40,6 +40,7 @@ const pageTitles: Record<string, string> = {
   "/audits": "审计日志",
   "/boards": "设备列表",
   "/boards/new": "新建开发板",
+  "/device-documents": "设备文档",
   "/dtbs": "DTB 管理",
   "/sessions": "会话租约",
   "/rentals": "租赁列表",
@@ -373,11 +374,13 @@ export function AdminTopbar({
   const { pathname } = useLocation();
   const title =
     pageTitles[pathname] ??
-    (pathname.startsWith("/boards/")
-      ? "编辑开发板"
-      : pathname.startsWith("/rentals/")
-        ? "编辑租赁"
-        : "设备管理控制台");
+    (pathname.startsWith("/device-documents/")
+      ? "编辑设备文档"
+      : pathname.startsWith("/boards/")
+        ? "编辑开发板"
+        : pathname.startsWith("/rentals/")
+          ? "编辑租赁"
+          : "设备管理控制台");
   return (
     <header className="admin-topbar">
       <div className="topbar-title-area">

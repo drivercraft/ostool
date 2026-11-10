@@ -22,10 +22,13 @@ vi.mock("@/api/events", () => ({
   site: {
     connect: vi.fn(),
     disconnect: vi.fn(),
+    setDeviceDocument: vi.fn(),
     subscribe: () => () => {},
     getErrors: () => emptyErrors,
     getConnection: () => "connected",
   },
+  useDeviceDocument: () => undefined,
+  useDeviceDocuments: () => ({}),
   usePublicDevices: () => mocks.devices,
   useSiteResource: () => undefined,
   account: {
@@ -122,10 +125,7 @@ describe("registration", () => {
     );
     render(<PublicApp />);
     const user = userEvent.setup();
-    await user.type(
-      await screen.findByLabelText("账号"),
-      "member@test.local",
-    );
+    await user.type(await screen.findByLabelText("账号"), "member@test.local");
     await user.type(screen.getByLabelText("密码"), "member-password-123");
     await user.type(await screen.findByLabelText("图形验证码"), "AB29Q");
     await user.click(screen.getByRole("button", { name: "登录" }));
@@ -149,10 +149,7 @@ describe("registration", () => {
     });
     const user = userEvent.setup();
     render(<PublicApp />);
-    await user.type(
-      await screen.findByLabelText("账号"),
-      "admin@test.local",
-    );
+    await user.type(await screen.findByLabelText("账号"), "admin@test.local");
     await user.type(screen.getByLabelText("密码"), "admin-password-123");
     await user.type(await screen.findByLabelText("图形验证码"), "AB29Q");
     await user.click(screen.getByRole("button", { name: "登录" }));
@@ -270,12 +267,9 @@ describe("public device directory", () => {
         .disabled,
     ).toBe(true);
     const link = screen.getByRole("link", { name: "登录后申请" });
-    expect(
-      new URL(
-        link.getAttribute("href")!,
-        window.location.origin,
-      ).searchParams.get("redirect"),
-    ).toBe("/account/requests/new?board=rk%20board%2F1");
+    expect(link.getAttribute("href")).toBe(
+      "/rental-request?board=rk%20board%2F1",
+    );
     const user = userEvent.setup();
     await user.type(screen.getByLabelText("搜索设备"), "arm64");
     expect(screen.queryByRole("heading", { name: "offline-board" })).toBeNull();
@@ -310,10 +304,7 @@ describe("CLI device authorization", () => {
     window.history.replaceState({}, "", "/login?user_code=ABCD-EFGH");
     const user = userEvent.setup();
     render(<PublicApp />);
-    await user.type(
-      await screen.findByLabelText("账号"),
-      "member@test.local",
-    );
+    await user.type(await screen.findByLabelText("账号"), "member@test.local");
     await user.type(screen.getByLabelText("密码"), "member-password-123");
     await user.type(await screen.findByLabelText("图形验证码"), "AB29Q");
     const submit = screen.getByRole("button", { name: "登录并批准" });
@@ -328,4 +319,83 @@ describe("CLI device authorization", () => {
     await screen.findByText("设备登录已批准，可以返回 ostool CLI。");
     expect(mocks.authorizeDevice).toHaveBeenCalledWith("ABCD-EFGH");
   });
+});
+
+describe("standalone rental application routing", () => {
+  it("redirects a direct anonymous visit to login with the selected board intact", async () => {
+    window.history.replaceState({}, "", "/rental-request?board=board%2F1");
+    render(<PublicApp />);
+    await screen.findByRole("heading", { name: "欢迎回来" });
+    expect(window.location.pathname).toBe("/login");
+    expect(new URLSearchParams(window.location.search).get("redirect")).toBe(
+      "/rental-request?board=board%2F1",
+    );
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("账号"), "member@test.local");
+    await user.type(screen.getByLabelText("密码"), "member-password-123");
+    await user.type(await screen.findByLabelText("图形验证码"), "AB29Q");
+    await user.click(screen.getByRole("button", { name: "登录" }));
+    await screen.findByRole("heading", { name: "租赁申请" });
+    expect(window.location.pathname + window.location.search).toBe(
+      "/rental-request?board=board%2F1",
+    );
+  });
+  it("redirects the old application URL to the single page while retaining parameters", async () => {
+    localStorage.setItem("ostool.website.session-state", "signed-in");
+    window.history.replaceState(
+      {},
+      "",
+      "/account/requests/new?board=selected-board",
+    );
+    render(<PublicApp />);
+    await screen.findByRole("heading", { name: "租赁申请" });
+    expect(window.location.pathname + window.location.search).toBe(
+      "/rental-request?board=selected-board",
+    );
+    expect(document.querySelector(".member-sidebar")).toBeNull();
+  });
+  it("does not expose the application in anonymous local edition", async () => {
+    mocks.config.mockResolvedValue({
+      edition: "local",
+      enabled: false,
+      allow_registration: false,
+      database_available: true,
+    });
+    window.history.replaceState({}, "", "/rental-request?board=local-board");
+    render(<PublicApp />);
+    await screen.findByRole("heading", { name: /连接每一块开发板/ });
+    expect(window.location.pathname).toBe("/");
+    expect(screen.queryByRole("heading", { name: "租赁申请" })).toBeNull();
+    expect(mocks.me).not.toHaveBeenCalled();
+  });
+});
+
+describe("common website frame", () => {
+  it.each(["/login", "/register", "/rental-request"])(
+    "keeps the public header and footer on %s",
+    async (path) => {
+      if (path === "/rental-request")
+        mocks.me.mockResolvedValue({
+          id: "member",
+          username: "member",
+          email: "member@test.local",
+          is_admin: false,
+        });
+      window.history.replaceState({}, "", path);
+      render(<PublicApp />);
+      await waitFor(() =>
+        expect(
+          document.querySelector(".public-site > .site-header"),
+        ).not.toBeNull(),
+      );
+      expect(
+        document.querySelectorAll(".public-site > .site-footer"),
+      ).toHaveLength(1);
+      expect(document.querySelector(".public-site-viewport")).toBeNull();
+      if (path !== "/rental-request")
+        expect(
+          document.querySelector(".site-root .auth-page-fullscreen"),
+        ).toBeNull();
+    },
+  );
 });

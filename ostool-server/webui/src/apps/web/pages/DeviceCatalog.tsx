@@ -1,7 +1,7 @@
 import { useState, useSyncExternalStore } from "react";
 import { CircuitBoard, Search } from "lucide-react";
 import { Link } from "react-router-dom";
-import { site, usePublicDevices } from "@/api/events";
+import { site, usePublicDevices, useDeviceDocuments } from "@/api/events";
 import { useEdition } from "@/edition";
 import { useSiteSession } from "@/apps/web/session";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import { useListPage } from "@/components/list-pagination";
 /** Public projection is shared by visitors and members, with cards in both editions. */
 export function DeviceCatalog() {
   const devices = usePublicDevices();
+  const documents = useDeviceDocuments() ?? {};
   const errors = useSyncExternalStore(site.subscribe, site.getErrors);
   const connection = useSyncExternalStore(site.subscribe, site.getConnection);
   const { user } = useSiteSession();
@@ -91,10 +92,20 @@ export function DeviceCatalog() {
       ) : filtered.length ? (
         <div className="device-directory-grid">
           {page.rows.map((board) => {
-            const application = `/account/requests/new?board=${encodeURIComponent(board.id)}`;
+            const application = `/rental-request?board=${encodeURIComponent(board.id)}`;
             return (
               <article className="device-directory-card" key={board.id}>
-                <BoardVisual label={board.board_type} compact />
+                {documents[board.id]?.image_url ? (
+                  <img
+                    className="device-card-image"
+                    src={documents[board.id].image_url}
+                    alt={`${documents[board.id].title || board.id} 开发板`}
+                    loading="lazy"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <BoardVisual label={board.board_type} compact />
+                )}
                 <div className="device-directory-card-top">
                   <CircuitBoard aria-hidden="true" />
                   <span
@@ -105,34 +116,35 @@ export function DeviceCatalog() {
                     {board.disabled ? "暂不可用" : "已启用"}
                   </span>
                 </div>
-                <h3>{board.id}</h3>
-                <p>{board.board_type}</p>
+                <h3>{documents[board.id]?.title || board.id}</h3>
+                <p>{documents[board.id]?.summary || board.board_type}</p>
                 <div className="device-directory-tags">
                   {board.tags.map((tag) => (
                     <span key={tag}>{tag}</span>
                   ))}
                 </div>
-                {publicEdition ? (
-                  board.disabled ? (
-                    <Button disabled>暂不可申请</Button>
-                  ) : (
-                    <Button asChild>
-                      <Link
-                        to={
-                          user
-                            ? application
-                            : `/login?redirect=${encodeURIComponent(application)}`
-                        }
-                      >
-                        {user ? "申请租赁" : "登录后申请"}
-                      </Link>
-                    </Button>
-                  )
-                ) : (
+                <div className="device-card-actions">
                   <Button asChild variant="outline">
-                    <a href="/admin/boards">查看设备</a>
+                    <Link to={`/devices/${encodeURIComponent(board.id)}`}>
+                      查看详情
+                    </Link>
                   </Button>
-                )}
+                  {publicEdition ? (
+                    board.disabled ? (
+                      <Button disabled>暂不可申请</Button>
+                    ) : (
+                      <Button asChild>
+                        <Link to={application}>
+                          {user ? "申请租赁" : "登录后申请"}
+                        </Link>
+                      </Button>
+                    )
+                  ) : (
+                    <Button asChild variant="outline">
+                      <a href="/admin/boards">查看设备</a>
+                    </Button>
+                  )}
+                </div>
               </article>
             );
           })}

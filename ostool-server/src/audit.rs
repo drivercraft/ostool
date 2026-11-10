@@ -624,6 +624,7 @@ fn intent(method: &Method, path: &str, payload: &Value) -> Option<Intent> {
             ("ota.cancel", "取消 OTA 任务")
         }
         ("boards", _, _) if parts.len() > 2 => ("board.operation", "执行开发板操作"),
+        ("device-documents", _, _) => ("device.document.publish", "发布设备文档"),
         ("boards", _, "POST") => ("board.create", "新增开发板"),
         ("boards", _, "DELETE") => ("board.delete", "删除开发板"),
         ("boards", _, _) => ("board.update", "修改开发板"),

@@ -758,3 +758,12 @@ and an independent token of 32–512 printable characters. The first write requi
 leaving it empty preserves the existing encrypted token. Changing device credentials requires
 an idle board. Configure `OSTOOL_MFA_ENCRYPTION_KEY` before provisioning and back it up
 with deployment secrets. This repository does not supply TLS support for existing axloader firmware.
+
+
+### Public device documentation
+
+`/admin/device-documents` is a dedicated editor for public descriptions, images, highlights and specifications.
+Documents are revisioned PostgreSQL records, preserved on board rename and removed on board deletion.
+Readers need `devices.read`; publishing needs `devices.manage` in public edition. Local edition retains anonymous administration.
+`/devices/:boardId` presents only this authored content and the public device projection.
+Device cards have parallel detail/application actions. The application owns one viewport with device information on the left and the form/calendar on the right, stacking on mobile with internal scrolling.

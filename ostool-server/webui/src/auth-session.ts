@@ -62,3 +62,21 @@ export function safeAdminRedirect(value: string | null) {
     ? path.pathname + path.search + path.hash
     : "/admin/overview";
 }
+
+/** Website login returns only to member pages or the shared application page. */
+export function safeWebsiteRedirect(value: string | null) {
+  if (
+    !value ||
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    /[\\\u0000-\u0020]/.test(value)
+  )
+    return "/account";
+  const path = new URL(value, window.location.origin);
+  return path.origin === window.location.origin &&
+    (path.pathname === "/account" ||
+      path.pathname.startsWith("/account/") ||
+      path.pathname === "/rental-request")
+    ? path.pathname + path.search + path.hash
+    : "/account";
+}

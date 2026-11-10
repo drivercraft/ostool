@@ -70,6 +70,7 @@ const DTB_UPLOAD_MAX_MIB: u32 = 10;
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(super::site::routes())
+        .merge(super::documents::routes())
         .merge(crate::serial::uboot::routes())
         .merge(crate::serial::commands::routes())
         .merge(super::auth::routes())
@@ -98,6 +99,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/assets/{*path}", get(serve_admin_asset))
         .route("/admin/{*path}", get(serve_admin_history))
         .route("/register", get(serve_site_index))
+        .route("/rental-request", get(serve_site_index))
         .route("/password-reset", get(serve_site_index))
         .route("/account", get(serve_site_index))
         .route("/account/{*path}", get(serve_site_history))
@@ -556,21 +558,8 @@ async fn update_board(
         .prepare_board_serial_exclusions(&board, Some(&board_id))
         .await
         .map_err(serial_exclusion_error)?;
-    if let Err(error) = state.board_store.write_board(&board).await {
+    if let Err(error) = state.board_store.replace_board(&board_id, &board).await {
         state.refresh_serial_exclusions().await?;
-        return Err(error.into());
-    }
-    if board.id != board_id
-        && let Err(error) = state.board_store.delete_board(&board_id).await
-    {
-        state.refresh_serial_exclusions().await?;
-        if let Err(rollback_error) = state.board_store.delete_board(&board.id).await {
-            return Err(ApiError::internal(format!(
-                "failed to remove old board config `{board_id}`: {error:#}; \
-                 failed to roll back new board config `{}`: {rollback_error:#}",
-                board.id
-            )));
-        }
         return Err(error.into());
     }
 
@@ -2956,6 +2945,9 @@ pub(crate) async fn admin_topic(
     let value = match topic {
         "account_settings" => Ok(super::site::account_settings(extractor).await?.0),
         "site" => serde_json::to_value(super::site::view(state).await?),
+        "device_documents" => Ok(serde_json::json!(
+            state.database.device_document_summaries().await?
+        )),
         "device_catalog" => Ok(serde_json::json!(super::site::device_catalog(state).await)),
         "legal_history" => Ok(super::site::history(extractor).await?.0),
         "mail_deliveries" => Ok(super::site::mail_deliveries(extractor).await?.0),

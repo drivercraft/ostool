@@ -68,7 +68,7 @@ export default function AdminLogin() {
     }
   }
   return (
-    <div className="auth-page auth-page-fullscreen admin-login-page">
+    <div className="auth-page auth-page-split auth-page-fullscreen admin-login-page">
       <main className="auth-shell">
         <aside className="auth-aside" aria-label="后台介绍">
           <a href="/admin/login" className="auth-brand">

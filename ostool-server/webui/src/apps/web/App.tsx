@@ -2,6 +2,7 @@ import {
   SiteSettingsProvider,
   useSiteSettings,
 } from "@/components/site-settings";
+import { safeWebsiteRedirect } from "@/auth-session";
 import { AuthLegal } from "@/components/auth-legal";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FormEvent, useEffect, useState } from "react";
@@ -24,6 +25,8 @@ import {
 } from "react-router-dom";
 import { EditionProvider, useEdition } from "@/edition";
 import MemberWorkspace from "@/apps/web/pages/MemberWorkspace";
+import DeviceDetail from "@/apps/web/pages/DeviceDetail";
+import RentalRequest from "@/apps/web/pages/RentalRequest";
 import Home from "@/apps/web/pages/Home";
 import {
   Logo,
@@ -34,7 +37,6 @@ import { BoardVisual } from "@/apps/web/components/board-visual";
 import { Documentation } from "@/apps/web/pages/Documentation";
 import { DeviceCatalog } from "@/apps/web/pages/DeviceCatalog";
 import { SiteSessionProvider } from "@/apps/web/session";
-import { ThemeMenu } from "@/components/theme-menu";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "@/components/ui/sonner";
 import { TextField } from "@/components/forms";
@@ -254,12 +256,7 @@ function Login() {
         await api.authorizeDevice(userCode);
         setMessage("设备登录已批准，可以返回 ostool CLI。");
       } else {
-        const redirect = query.get("redirect");
-        navigate(
-          redirect?.startsWith("/account") && !redirect.startsWith("//")
-            ? redirect
-            : "/account",
-        );
+        navigate(safeWebsiteRedirect(query.get("redirect")));
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "登录失败");
@@ -269,7 +266,7 @@ function Login() {
     }
   }
   return (
-    <div className="auth-page auth-page-fullscreen">
+    <div className="auth-page auth-page-split site-auth-page">
       <main className="auth-shell">
         <aside className="auth-aside" aria-label="平台介绍">
           <Logo light />
@@ -318,13 +315,6 @@ function Login() {
           className="auth-form-pane"
           aria-label={registering ? "注册账号" : "用户登录"}
         >
-          <div className="auth-page-tools">
-            <span className="auth-mobile-brand">
-              <Logo />
-            </span>
-            <Link to="/">返回首页</Link>
-            <ThemeMenu />
-          </div>
           <div className="auth-form-scroll">
             <form className="auth-card" onSubmit={submit}>
               <div>
@@ -660,13 +650,29 @@ function PublicRoutes() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/devices" element={<Devices />} />
+        <Route
+          path="/devices/:boardId"
+          element={
+            <PublicLayout>
+              <DeviceDetail />
+            </PublicLayout>
+          }
+        />
         <Route path="/docs" element={<Docs />} />
         <Route path="/legal/terms" element={<LegalPage />} />
         <Route path="/legal/privacy" element={<LegalPage />} />
         <Route path="/about" element={<About />} />
         <Route
           path="/login"
-          element={publicEdition ? <Login /> : <Navigate replace to="/" />}
+          element={
+            publicEdition ? (
+              <PublicLayout>
+                <Login />
+              </PublicLayout>
+            ) : (
+              <Navigate replace to="/" />
+            )
+          }
         />
         <Route
           path="/password-reset"
@@ -688,7 +694,31 @@ function PublicRoutes() {
         />
         <Route
           path="/register"
-          element={publicEdition ? <Login /> : <Navigate replace to="/" />}
+          element={
+            publicEdition ? (
+              <PublicLayout>
+                <Login />
+              </PublicLayout>
+            ) : (
+              <Navigate replace to="/" />
+            )
+          }
+        />
+        <Route
+          path="/rental-request"
+          element={
+            publicEdition ? (
+              <PublicLayout>
+                <RentalRequest />
+              </PublicLayout>
+            ) : (
+              <Navigate replace to="/" />
+            )
+          }
+        />
+        <Route
+          path="/account/requests/new"
+          element={<LegacyRentalRequestRedirect />}
         />
         <Route
           path="/account/*"
@@ -706,4 +736,9 @@ function PublicRoutes() {
       </Routes>
     </BrowserRouter>
   );
+}
+
+function LegacyRentalRequestRedirect() {
+  const location = useLocation();
+  return <Navigate replace to={`/rental-request${location.search}`} />;
 }

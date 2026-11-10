@@ -19,6 +19,7 @@ use tokio::sync::{Notify, watch};
 pub const TOPICS: &[&str] = &[
     "site",
     "device_catalog",
+    "device_documents",
     "legal_history",
     "mail_deliveries",
     "security_revision",
@@ -121,6 +122,7 @@ impl AdminEvents {
                         "loaders",
                         "overview",
                         "device_catalog",
+                        "device_documents",
                     ]);
                 }
                 "sessions" | "runtimes" => {
@@ -350,7 +352,10 @@ async fn subscribe_scoped(
     if requested_topics.as_ref().is_some_and(|topics| {
         topics.iter().any(|topic| {
             !TOPICS.contains(&topic.as_str())
-                && !matches!(topic.as_str(), "listing" | "rental_editor" | "board_editor")
+                && !matches!(
+                    topic.as_str(),
+                    "listing" | "rental_editor" | "board_editor" | "device_document"
+                )
         })
     }) {
         return Err(crate::api::error::ApiError::bad_request("未知订阅资源"));
@@ -373,6 +378,17 @@ async fn subscribe_scoped(
         None
     };
     if board_editor
+        .as_ref()
+        .is_some_and(|id| id.is_empty() || id.len() > 256)
+    {
+        return Err(crate::api::error::ApiError::bad_request("设备标识无效"));
+    }
+    let document_id = if account.is_none() {
+        query.get("device_document_id").cloned()
+    } else {
+        None
+    };
+    if document_id
         .as_ref()
         .is_some_and(|id| id.is_empty() || id.len() > 256)
     {
@@ -410,6 +426,7 @@ async fn subscribe_scoped(
         listing,
         editor,
         board_editor,
+        document_id,
         access: None,
         requested_topics,
         _guard: guard,
@@ -572,10 +589,30 @@ async fn subscribe_scoped(
                         update.data.insert("rental_editor".into(), value);
                     }
                 }
+                if let Some(id) = &subscription.document_id
+                    && (subscription.public_site
+                        || (subscription.account.is_none() && permitted("devices.read")))
+                    && (update.kind == "snapshot"
+                        || update.data.contains_key("device_documents")
+                        || update.data.contains_key("device_catalog"))
+                {
+                    let value =
+                        match crate::api::documents::projection(&subscription.state, id).await {
+                            Ok(view) => serde_json::to_value(view).expect("document projection"),
+                            Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => {
+                                serde_json::json!({"id":id,"revision":0,"document":null})
+                            }
+                            Err(error) => serde_json::json!({"error":error.message}),
+                        };
+                    update.data.insert("device_document".into(), value);
+                }
                 if subscription.public_site {
-                    update
-                        .data
-                        .retain(|key, _| matches!(key.as_str(), "site" | "device_catalog"));
+                    update.data.retain(|key, _| {
+                        matches!(
+                            key.as_str(),
+                            "site" | "device_catalog" | "device_documents" | "device_document"
+                        )
+                    });
                 } else if let Some(user) = subscription.account {
                     let relevant = update.kind == "snapshot"
                         || [
@@ -726,6 +763,7 @@ struct Subscription {
     listing: Option<crate::api::listing::Filters>,
     editor: Option<crate::api::listing::EditorFilters>,
     board_editor: Option<String>,
+    document_id: Option<String>,
     access: Option<crate::security::permissions::Access>,
     requested_topics: Option<BTreeSet<String>>,
     _guard: crate::dashboard::StreamGuard,

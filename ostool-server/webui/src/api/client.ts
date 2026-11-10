@@ -186,6 +186,15 @@ export type AuthConfig = {
 };
 let authConfigRequest: Promise<AuthConfig> | undefined;
 export const api = {
+  saveDeviceDocument: (
+    id: string,
+    revision: number,
+    document: import("@/types/api").DeviceDocument,
+  ) =>
+    request<import("@/types/api").DeviceDocumentView>(
+      `/api/v1/admin/device-documents/${encodeURIComponent(id)}`,
+      { method: "PUT", bodyJson: { revision, document } },
+    ),
   legalVersion(kind: "terms" | "privacy", version: number) {
     return request<import("@/types/api").LegalDocument>(
       `/api/v1/site/legal/${kind}/${version}`,

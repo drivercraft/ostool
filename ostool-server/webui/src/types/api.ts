@@ -869,3 +869,24 @@ export interface DeviceConnection {
   ca_pem: string | null;
   configured: boolean;
 }
+
+/** Authored public information; never includes operational board configuration. */
+export interface DeviceDocument {
+  title: string;
+  summary: string;
+  description: string;
+  image_url: string;
+  highlights: string[];
+  specifications: { name: string; value: string }[];
+}
+export interface DeviceDocumentView {
+  id: string;
+  revision: number;
+  document: DeviceDocument | null;
+}
+export interface DeviceDocumentSummary {
+  title: string;
+  summary: string;
+  image_url: string;
+  revision: number;
+}

@@ -828,3 +828,5 @@ auth_mode = "disabled"
 ```
 
 Run the server with `OSTOOL_EDITION=local`. Redis, administrator accounts and user assignments are unnecessary; public edition cannot disable authentication.
+
+The device catalog links to independent `/devices/:boardId` product pages. Administrators maintain public descriptions, images and specifications under Device documents. Rental applications use a single-viewport layout with device information beside the application form.

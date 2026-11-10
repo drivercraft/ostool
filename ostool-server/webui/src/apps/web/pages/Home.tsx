@@ -242,13 +242,7 @@ export default function Home() {
                 </li>
               </ul>
               <Button asChild variant="outline">
-                <Link
-                  to={
-                    user
-                      ? "/account/requests/new"
-                      : "/login?redirect=/account/requests/new"
-                  }
-                >
+                <Link to="/rental-request">
                   安排设备使用 <ArrowRight />
                 </Link>
               </Button>

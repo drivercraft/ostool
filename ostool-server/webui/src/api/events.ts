@@ -34,6 +34,8 @@ export interface Resources {
     | import("@/types/api").RentalRequest
   >;
   rental_editor: import("@/types/api").RentalEditorData;
+  device_documents: Record<string, import("@/types/api").DeviceDocumentSummary>;
+  device_document: import("@/types/api").DeviceDocumentView;
   device_catalog: import("@/types/api").PublicDevice[];
   site: import("@/types/api").SiteView;
   legal_history: import("@/types/api").LegalVersion[];
@@ -126,6 +128,15 @@ export class AdminStore {
     const next = [...new Set(topics)].sort();
     if (JSON.stringify(next) === JSON.stringify(this.topics)) return;
     this.topics = next;
+    if (this.source) {
+      this.disconnect();
+      this.connect();
+    }
+  };
+  private deviceDocumentId: string | null = null;
+  setDeviceDocument = (id: string | null) => {
+    if (id === this.deviceDocumentId) return;
+    this.deviceDocumentId = id;
     if (this.source) {
       this.disconnect();
       this.connect();
@@ -260,6 +271,8 @@ export class AdminStore {
         if (value !== undefined && value !== "")
           parameters.set(`list_${key}`, String(value));
     }
+    if (this.deviceDocumentId)
+      parameters.set("device_document_id", this.deviceDocumentId);
     if (this.boardEditorId)
       parameters.set("board_editor_id", this.boardEditorId);
     if (this.editorFilters) {
@@ -396,4 +409,15 @@ export function useSiteResource() {
 }
 export function usePublicDevices() {
   return useSyncExternalStore(site.subscribe, () => site.get("device_catalog"));
+}
+
+export function useDeviceDocuments() {
+  return useSyncExternalStore(site.subscribe, () =>
+    site.get("device_documents"),
+  );
+}
+export function useDeviceDocument() {
+  return useSyncExternalStore(site.subscribe, () =>
+    site.get("device_document"),
+  );
 }

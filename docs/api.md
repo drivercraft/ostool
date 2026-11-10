@@ -1441,3 +1441,17 @@ PUT 字段为 `endpoint`（HTTPS 来源）、`token`（首次必填，后续空�
 结束或释放的会话不能下载，错误/过期凭据返回 401。该接口支持 Range 和有界流式读取，并返回 `Cache-Control: no-store`。
 会话文件元数据和 256 KiB 内容块事务性保存在 PostgreSQL；磁盘暂存不是持久存储，串口缓存可从数据库重建。
 内核上传从接收第一个数据块之前开始检查并发、超时和会话取消，校验失败不发布文件。
+
+
+## 公开设备文档
+
+- `GET /api/v1/site/device-documents/{id}`：匿名读取已登记设备的公开文档；未知设备返回 404。
+- `GET /api/v1/admin/device-documents/{id}`：需要后台 `devices.read`。
+- `PUT /api/v1/admin/device-documents/{id}`：需要后台 `devices.manage`，请求为
+  `{revision, document}`。首次保存 revision=0，后续提交已读取的版本；冲突返回 409。
+- `document` 含 `title`、`summary`、`description`、`image_url`、`highlights: string[]`、
+  `specifications: {name,value}[]`。只接受这些公开字段，不序列化 BoardConfig 或内部运维备注。
+- 图片仅允许站内路径或 HTTPS；介绍为纯文本。最多 8 个亮点和 32 个参数，详情最多 16000 字节。
+- `device_documents` SSE topic 只包含文档摘要。站点或后台订阅可加
+  `device_document_id={id}` 获取当前文档的 `device_document: {id,revision,document}`。
+  全部正文不进入共享事件历史；未选中的设备正文不推送。

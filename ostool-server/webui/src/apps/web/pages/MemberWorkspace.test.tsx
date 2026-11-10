@@ -1,8 +1,9 @@
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import MemberWorkspace from "./MemberWorkspace";
+import RentalRequest from "./RentalRequest";
 const mocks = vi.hoisted(() => ({
   user: {
     id: "member",
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   updateProfile: vi.fn(),
   applyRental: vi.fn(),
   claimBoard: vi.fn(),
+  withdrawRentalRequest: vi.fn(),
   resources: {} as Record<string, unknown>,
   errors: {},
   listeners: new Set<() => void>(),
@@ -26,6 +28,7 @@ vi.mock("@/api/client", () => ({
     updateProfile: mocks.updateProfile,
     applyRental: mocks.applyRental,
     claimBoard: mocks.claimBoard,
+    withdrawRentalRequest: mocks.withdrawRentalRequest,
   },
   clearAuthToken: vi.fn(),
 }));
@@ -40,6 +43,8 @@ vi.mock("@/api/events", async () => {
   return {
     useAccountResource: (key: string) =>
       useSyncExternalStore(subscribe, () => mocks.resources[key]),
+    useDeviceDocument: () => undefined,
+    site: { setDeviceDocument: vi.fn() },
     useAccountConnection: () => "connected",
     useAccountErrors: () => mocks.errors,
     account: {
@@ -90,6 +95,7 @@ afterEach(() => {
 const App = () => (
   <BrowserRouter>
     <Routes>
+      <Route path="/rental-request" element={<RentalRequest />} />
       <Route path="/account/*" element={<MemberWorkspace />} />
     </Routes>
   </BrowserRouter>
@@ -125,9 +131,12 @@ it("uses the rental editor layout and preserves the application draft on availab
   mocks.resources.catalog = [{ id: "board-1", board_type: "test", tags: [] }];
   mocks.resources.availability = [];
   mocks.resources.my_requests = [];
-  window.history.replaceState({}, "", "/account/requests/new?board=board-1");
+  window.history.replaceState({}, "", "/rental-request?board=board-1");
   const app = render(<App />),
     user = userEvent.setup();
+  expect(screen.getByRole("heading", { name: "租赁申请" })).toBeTruthy();
+  expect(screen.queryByRole("navigation", { name: "个人中心导航" })).toBeNull();
+  expect(document.querySelector(".member-workspace")).toBeNull();
   const notes = screen.getByLabelText("申请说明");
   await user.type(notes, "Keep this application draft");
   const from = (screen.getByLabelText("开始时间") as HTMLInputElement).value;
@@ -161,8 +170,10 @@ it("uses the rental editor layout and preserves the application draft on availab
     ends_at: new Date(to).toISOString(),
     notes: "Keep this application draft",
   });
-  await screen.findByRole("link", { name: "新增申请" });
-  expect(window.location.pathname).toBe("/account/requests");
+  await screen.findByRole("heading", { name: "我的租赁" });
+  expect(window.location.pathname + window.location.search).toBe(
+    "/account/rentals?tab=requests",
+  );
 });
 
 it("claims an eligible board for the current user and reacts to availability changes", async () => {
@@ -186,4 +197,80 @@ it("rejects the direct claim page when the role lacks instant allocation", () =>
     screen.getByText("当前角色没有即时分配权限，请通过租赁申请获取设备。"),
   ).toBeTruthy();
   expect(screen.queryByRole("button", { name: "确认领取" })).toBeNull();
+});
+
+it.each([false, true])(
+  "the workspace links to the shared application page with instant access=%s",
+  async (instant) => {
+    mocks.user.permissions = instant ? ["board.instant"] : [];
+    mocks.resources.catalog = [{ id: "board-1", board_type: "test", tags: [] }];
+    mocks.resources.availability = [];
+    window.history.replaceState({}, "", "/account");
+    render(<App />);
+    const user = userEvent.setup();
+    const application = screen.getByRole("link", {
+      name: "申请租赁",
+    });
+    expect(application.getAttribute("href")).toBe("/rental-request");
+    if (instant)
+      expect(
+        screen
+          .getByRole("link", { name: "即时领取开发板" })
+          .getAttribute("href"),
+      ).toBe("/account/allocations/new");
+    await user.click(application);
+    await screen.findByRole("button", { name: "提交申请" });
+    expect(window.location.pathname).toBe("/rental-request");
+    expect(
+      screen.queryByRole("navigation", { name: "个人中心导航" }),
+    ).toBeNull();
+  },
+);
+
+it("consolidates applications under My rentals and redirects the removed list URL", async () => {
+  window.history.replaceState({}, "", "/account/requests");
+  render(<App />);
+  await screen.findByRole("heading", { name: "我的租赁" });
+  expect(window.location.pathname + window.location.search).toBe(
+    "/account/rentals?tab=requests",
+  );
+  const navigation = screen.getByRole("navigation", { name: "个人中心导航" });
+  expect(navigation.querySelector('a[href="/account/requests"]')).toBeNull();
+  expect(screen.queryByRole("heading", { name: "租赁申请" })).toBeNull();
+  expect(
+    screen.getByRole("tab", { name: "申请记录" }).getAttribute("aria-selected"),
+  ).toBe("true");
+  await userEvent.setup().click(screen.getByRole("tab", { name: "租赁记录" }));
+  expect(window.location.pathname).toBe("/account/rentals");
+  expect(window.location.search).toBe("");
+  expect(screen.getByLabelText("搜索我的租赁")).toBeTruthy();
+});
+it("keeps pending application withdrawal inside My rentals", async () => {
+  mocks.resources.listing = {
+    query: { view: "rental_requests", page: 1, page_size: 20 },
+    page: 1,
+    page_size: 20,
+    total: 1,
+    items: [
+      {
+        id: "pending-request",
+        board_id: "board-1",
+        starts_at: "2026-11-10T10:00:00Z",
+        ends_at: "2026-11-10T12:00:00Z",
+        status: "pending",
+        notes: "Need a board",
+        decision_note: null,
+      },
+    ],
+  };
+  mocks.withdrawRentalRequest.mockResolvedValue(undefined);
+  window.history.replaceState({}, "", "/account/rentals?tab=requests");
+  render(<App />);
+  expect(within(screen.getByRole("table")).getByText("待审核")).toBeTruthy();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "撤回申请" }));
+  await user.click(
+    within(screen.getByRole("dialog")).getByRole("button", { name: "确认" }),
+  );
+  expect(mocks.withdrawRentalRequest).toHaveBeenCalledWith("pending-request");
 });

@@ -373,6 +373,13 @@ pub fn required(method: &Method, path: &str) -> Option<&'static str> {
     Some(match section {
         "events" | "permissions" | "deployment" => "console.access",
         "dashboard" | "overview" => "dashboard.read",
+        "device-documents" => {
+            if read {
+                "devices.read"
+            } else {
+                "devices.manage"
+            }
+        }
         "boards" if tail.contains("/device-connection") => "devices.manage",
         "boards" if tail.contains("/loader-updates") => {
             if read {
@@ -476,6 +483,7 @@ pub fn topic_required(topic: &str) -> Option<&'static str> {
         }
         "boards" | "board_revision" | "runtimes" | "loaders" | "virtual" | "serial"
         | "serial_manager" | "network" => "devices.read",
+        "device_documents" | "device_document" => "devices.read",
         "board_editor" => "devices.manage",
         "dtbs" => "dtbs.read",
         "sessions" | "session_history" => "sessions.read",

@@ -262,7 +262,7 @@ pub async fn transport(
         "sandbox; default-src 'none'".to_owned()
     } else {
         format!(
-            "default-src 'self'; script-src 'self' 'nonce-{nonce}'{third}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' {websocket}{third}; frame-src{frames}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'",
+            "default-src 'self'; script-src 'self' 'nonce-{nonce}'{third}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' {websocket}{third}; frame-src{frames}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'",
             frames = if cloudflare {
                 " https://challenges.cloudflare.com"
             } else {

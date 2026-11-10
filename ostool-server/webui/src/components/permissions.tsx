@@ -31,6 +31,8 @@ export function pagePermission(path: string, manage = false): string {
   if (path === "/" || path === "/dashboard") return "console.access";
   if (path.startsWith("/server") || path.startsWith("/tftp"))
     return manage ? "server.manage" : "server.read";
+  if (path.startsWith("/device-documents/")) return "devices.manage";
+  if (path.startsWith("/device-documents")) return "devices.read";
   if (path.startsWith("/boards/")) return "devices.manage";
   if (path.startsWith("/boards"))
     return manage ? "devices.manage" : "devices.read";
@@ -55,6 +57,7 @@ export function firstPage(can: (code: string) => boolean): string {
     [
       "/overview",
       "/boards",
+      "/device-documents",
       "/dtbs",
       "/sessions",
       "/rentals",
