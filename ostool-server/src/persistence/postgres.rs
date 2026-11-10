@@ -54,7 +54,25 @@ pub struct PersonalAccessToken {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+/// Finish BEGIN even if its caller is cancelled. SQLx 0.8 increments its transaction
+/// depth only after PostgreSQL acknowledges BEGIN; cancelling that exchange can
+/// otherwise return a connection with an untracked open transaction to the pool.
+/// Only connection acquisition and BEGIN run in the worker. If the receiver is
+/// gone, the returned transaction is dropped and SQLx queues its normal rollback.
+pub async fn begin_transaction(
+    pool: &PgPool,
+) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, sqlx::Error> {
+    let pool = pool.clone();
+    tokio::spawn(async move { pool.begin().await })
+        .await
+        .map_err(|_| sqlx::Error::Io(std::io::Error::other("transaction worker failed")))?
+}
+
 impl Database {
+    pub async fn begin(&self) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, sqlx::Error> {
+        begin_transaction(&self.pool).await
+    }
+
     pub async fn record<T: serde::de::DeserializeOwned>(
         &self,
         name: &str,
@@ -282,7 +300,7 @@ impl Database {
         let access_expires_at = now + chrono::Duration::seconds(auth.access_token_ttl_secs as i64);
         let refresh_expires_at =
             now + chrono::Duration::seconds(auth.refresh_token_ttl_secs as i64);
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin().await?;
         let exists: Option<Uuid> = sqlx::query_scalar(
             "SELECT id FROM users WHERE id=$1 AND security_version=$2 AND NOT disabled AND EXISTS(SELECT 1 FROM roles r WHERE r.id=users.role_id AND r.enabled) FOR UPDATE",
         )
@@ -404,7 +422,7 @@ impl Database {
         auth: &AuthConfig,
         client: Option<&str>,
     ) -> anyhow::Result<Option<AccessGrant>> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin().await?;
         let owner: Option<Uuid> =
             sqlx::query_scalar("SELECT user_id FROM oauth_sessions WHERE refresh_token_hash=$1")
                 .bind(token_hash(token))

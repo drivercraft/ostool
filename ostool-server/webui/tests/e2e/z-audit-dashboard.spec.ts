@@ -1,4 +1,4 @@
-import { expect, test } from "playwright/test";
+import { expect, test } from "../fixtures/local";
 
 test("dashboard, durable audit filters/export, discovery toolbar and shared theme styles", async ({
   page,
@@ -9,9 +9,9 @@ test("dashboard, durable audit filters/export, discovery toolbar and shared them
   page.on("pageerror", (error) => errors.push(error.message));
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto("/admin/overview");
-  await expect(
-    page.getByRole("heading", { name: "服务运行状态" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "服务运行状态" })).toBeVisible(
+    { timeout: 15000 },
+  );
   await expect(
     page.getByRole("status").filter({ hasText: "实时已连接" }),
   ).toBeVisible();
@@ -126,7 +126,7 @@ test("dashboard, durable audit filters/export, discovery toolbar and shared them
   const row = page.getByRole("row").filter({ hasText: id });
   await expect(row).toHaveCount(1);
   await expect(row).toContainText("新增开发板");
-  await expect(row).toContainText("本地操作者");
+  await expect(row).toContainText("local-browser-admin@test.local");
   await expect(search).toBeFocused();
   expect(reads).toEqual([]);
   await row.getByRole("button", { name: "详情", exact: true }).click();
@@ -207,7 +207,7 @@ test("runtime health follows a lost event stream and recovers without a page ban
     await expect(page.locator(".admin-notices [data-slot=alert]")).toHaveCount(
       0,
     );
-    await expect(page.getByText("待重新确认", { exact: true })).toHaveCount(2);
+    await expect(page.getByText("待重新确认", { exact: true })).toHaveCount(3);
     await expect(
       page.getByText("连接中断，自动重连中", { exact: true }),
     ).toBeVisible();

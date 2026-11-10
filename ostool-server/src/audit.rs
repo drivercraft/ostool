@@ -268,7 +268,9 @@ fn db_error(error: sqlx::Error) -> ApiError {
 pub async fn page(state: &AppState, filters: &Filters) -> Result<Value, ApiError> {
     filters.validate()?;
     let pool = state.database.pool();
-    let mut tx = pool.begin().await.map_err(db_error)?;
+    let mut tx = crate::persistence::postgres::begin_transaction(pool)
+        .await
+        .map_err(db_error)?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         .execute(&mut *tx)
         .await
@@ -631,6 +633,8 @@ fn intent(method: &Method, path: &str, payload: &Value) -> Option<Intent> {
         ("roles", _, "POST") => ("role.create", "新增角色"),
         ("roles", _, "DELETE") => ("role.delete", "删除角色"),
         ("roles", _, _) => ("role.update", "修改角色"),
+        ("allocations", _, "POST") => ("rental.instant.claim", "领取即时使用设备"),
+        ("allocations", _, "DELETE") => ("rental.instant.return", "归还即时使用设备"),
         ("rentals", _, "POST") => ("rental.create", "新增租赁"),
         ("rentals", _, "DELETE") => ("rental.cancel", "取消租赁"),
         ("rentals", _, _) => ("rental.update", "修改租赁"),
@@ -821,7 +825,7 @@ async fn audited_request(state: &AppState, request: Request, next: Next) -> Resp
         &config.audit.trusted_proxies,
     )
     .map(|ip| ip.to_string());
-    let public = config.edition.is_public();
+    let authenticated = config.edition.is_public();
     drop(config);
     let token = parts
         .headers
@@ -844,7 +848,7 @@ async fn audited_request(state: &AppState, request: Request, next: Next) -> Resp
                 None
             }
         });
-    if public
+    if authenticated
         && let Some(token) = token
         && let Ok(Some(user)) = state.database.authenticate_token(&token).await
     {

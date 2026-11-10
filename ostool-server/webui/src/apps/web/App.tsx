@@ -51,7 +51,7 @@ import {
 import { Button } from "@/components/ui/button";
 
 function Devices() {
-  const publicEdition = useEdition().edition === "public";
+  const publicEdition = useEdition().enabled;
   return (
     <PublicLayout>
       <main className="public-inner-page devices-page">
@@ -653,7 +653,7 @@ function LegalPage() {
   );
 }
 function PublicRoutes() {
-  const publicEdition = useEdition().edition === "public";
+  const publicEdition = useEdition().enabled;
   return (
     <BrowserRouter>
       <SiteScrollRestoration />

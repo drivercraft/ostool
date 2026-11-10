@@ -544,13 +544,13 @@ mod tests {
         let temp = tempdir().unwrap();
         let path = temp.path().join(".ostool/config.toml");
         let mut app = BoardConfigApp::new(path.clone(), BoardGlobalConfig::default());
-        app.server = InputField::new("http://10.0.0.2");
+        app.server = InputField::new("https://10.0.0.2");
         app.port = InputField::new("9000");
 
         app.save().unwrap();
 
         let content = std::fs::read_to_string(path).unwrap();
-        assert!(content.contains("server = \"http://10.0.0.2\""));
+        assert!(content.contains("server = \"https://10.0.0.2\""));
         assert!(content.contains("port = 9000"));
     }
 

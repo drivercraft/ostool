@@ -359,3 +359,63 @@ impl TftpManager for SystemTftpdHpaManager {
         &self.config.root_dir
     }
 }
+
+/// The database is authoritative. Files are regenerated only for serial transfer.
+pub struct DatabaseTftpManager {
+    inner: Arc<dyn TftpManager>,
+    files: crate::persistence::files::SessionFileStore,
+}
+impl DatabaseTftpManager {
+    pub fn new(
+        inner: Arc<dyn TftpManager>,
+        files: crate::persistence::files::SessionFileStore,
+    ) -> Self {
+        Self { inner, files }
+    }
+}
+#[async_trait]
+impl TftpManager for DatabaseTftpManager {
+    async fn start_if_needed(&self) -> anyhow::Result<()> {
+        self.inner.start_if_needed().await
+    }
+    async fn reconcile(&self) -> anyhow::Result<()> {
+        self.inner.reconcile().await
+    }
+    async fn status(&self) -> anyhow::Result<TftpStatus> {
+        self.inner.status().await
+    }
+    fn root_dir(&self) -> &Path {
+        self.inner.root_dir()
+    }
+    async fn put_session_file(
+        &self,
+        sid: &str,
+        path: &str,
+        bytes: &[u8],
+    ) -> anyhow::Result<TftpFileRef> {
+        let file = self.files.write_bytes(sid, path, bytes).await?;
+        self.files.materialize(&file, self.root_dir()).await
+    }
+    async fn get_session_file(&self, sid: &str, path: &str) -> anyhow::Result<Option<TftpFileRef>> {
+        match self.files.get(sid, path).await? {
+            Some(file) => Ok(Some(self.files.materialize(&file, self.root_dir()).await?)),
+            None => Ok(None),
+        }
+    }
+    async fn list_session_files(&self, sid: &str) -> anyhow::Result<Vec<TftpFileRef>> {
+        self.files
+            .list(sid)
+            .await?
+            .iter()
+            .map(|file| file.reference(self.root_dir()))
+            .collect()
+    }
+    async fn remove_session_file(&self, sid: &str, path: &str) -> anyhow::Result<()> {
+        self.files.delete(sid, path).await?;
+        self.inner.remove_session_file(sid, path).await
+    }
+    async fn remove_session_dir(&self, sid: &str) -> anyhow::Result<()> {
+        self.files.delete_session(sid).await?;
+        self.inner.remove_session_dir(sid).await
+    }
+}

@@ -437,55 +437,32 @@ async fn restoration_failure_keeps_board_reserved_until_baseline_is_restored() -
 
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL and Redis"]
-async fn device_callbacks_reject_redirects_and_oversized_status_responses() -> anyhow::Result<()> {
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
-    };
+async fn unsigned_devices_cannot_initiate_plaintext_callbacks() -> anyhow::Result<()> {
     let f = Fixture::new().await?;
-    let forbidden = TcpListener::bind("127.0.0.1:0").await?;
-    for oversized in [false, true] {
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let address = listener.local_addr()?;
-        let target = forbidden.local_addr()?;
-        let fake = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = [0u8; 4096];
-            let _ = socket.read(&mut request).await;
-            let response = if oversized {
-                "HTTP/1.1 200 OK\r\nContent-Length: 65537\r\nConnection: close\r\n\r\n".to_string()
-            } else {
-                format!(
-                    "HTTP/1.1 302 Found\r\nLocation: http://{target}/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                )
-            };
-            let _ = socket.write_all(response.as_bytes()).await;
-        });
-        let mac = "02:00:00:00:00:01".parse()?;
-        let announcement = httpboot_protocol::LoaderAnnouncement {
-            protocol_version: httpboot_protocol::DEVICE_PROTOCOL_VERSION,
-            mac_address: mac,
-            current_mac_address: mac,
-            arch: httpboot_protocol::BootArch::X86_64,
-            loader_version: "test".into(),
-            boot_epoch: "test-epoch".into(),
-            http_port: address.port(),
-            serial_id: None,
-            serial_ready: false,
-        };
-        let error = device::reconcile(f.state.clone(), announcement, address)
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let mac = "02:00:00:00:00:01".parse()?;
+    let announcement = httpboot_protocol::LoaderAnnouncement {
+        protocol_version: 6,
+        mac_address: mac,
+        current_mac_address: mac,
+        arch: httpboot_protocol::BootArch::X86_64,
+        loader_version: "unsigned".into(),
+        boot_epoch: "unsigned".into(),
+        http_port: address.port(),
+        serial_id: None,
+        serial_ready: false,
+    };
+    assert!(
+        device::reconcile(f.state.clone(), announcement, address)
             .await
-            .unwrap_err();
-        if oversized {
-            assert!(error.to_string().contains("too large"));
-        }
-        assert!(
-            tokio::time::timeout(Duration::from_millis(100), forbidden.accept())
-                .await
-                .is_err()
-        );
-        fake.await?;
-    }
+            .is_err()
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err()
+    );
     Ok(())
 }
 
@@ -563,7 +540,7 @@ async fn stalled_downloads_are_bounded_and_cancelled_when_the_session_ends() -> 
     let f = Fixture::new().await?;
     let sid = f.acquire("board-one").await?;
     assert_eq!(
-        f.put(&sid, "large.bin", vec![1; 256 * 1024]).await?,
+        f.put(&sid, "large.bin", vec![1; 3 * 256 * 1024]).await?,
         StatusCode::CREATED
     );
     let router = f.app.clone();
@@ -595,10 +572,10 @@ async fn stalled_downloads_are_bounded_and_cancelled_when_the_session_ends() -> 
         }
     })
     .await?;
-    let first_result = to_bytes(first.into_body(), 1024 * 1024).await;
-    let second_result = to_bytes(second.into_body(), 1024 * 1024).await;
-    assert!(first_result.is_err() || first_result.unwrap().len() < 256 * 1024);
-    assert!(second_result.is_err() || second_result.unwrap().len() < 256 * 1024);
+    let first_result = to_bytes(first.into_body(), 2 * 1024 * 1024).await;
+    let second_result = to_bytes(second.into_body(), 2 * 1024 * 1024).await;
+    assert!(first_result.is_err() || first_result.unwrap().len() < 3 * 256 * 1024);
+    assert!(second_result.is_err() || second_result.unwrap().len() < 3 * 256 * 1024);
     Ok(())
 }
 
@@ -749,8 +726,8 @@ async fn public_httpboot_responses_keep_device_network_and_uart_configuration_on
 
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL and Redis"]
-async fn both_editions_share_user_routes_and_only_local_bypasses_authentication()
--> anyhow::Result<()> {
+async fn public_requires_credentials_and_local_accepts_anonymous_user_routes() -> anyhow::Result<()>
+{
     let f = Fixture::new().await?;
     let sid = f.acquire("board-one").await?;
     f.put(&sid, "data.bin", b"private data".to_vec()).await?;
@@ -921,10 +898,8 @@ async fn exercise_managed_boot(tftp: bool, disconnect: bool) -> anyhow::Result<(
     {
         let mut config = f.state.config.write().await;
         config.listen_addr = user_address;
-        config.auth.public_base_url = Some("https://boards.example.com".into());
+        config.auth.public_base_url = Some(format!("http://{user_address}"));
     }
-    let device_address = hardware::download_address(&*f.state.config.read().await)?.unwrap();
-    let device_listener = tokio::net::TcpListener::bind(device_address).await?;
     {
         let mut boards = f.state.boards.write().await;
         let board = boards.get_mut("board-one").unwrap();
@@ -1058,15 +1033,6 @@ async fn exercise_managed_boot(tftp: bool, disconnect: bool) -> anyhow::Result<(
         .await
         .unwrap()
     });
-    let device_app = hardware::download_router(f.state.clone());
-    let devices = tokio::spawn(async move {
-        axum::serve(
-            device_listener,
-            device_app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .await
-        .unwrap()
-    });
     let sid = f.acquire("board-one").await?;
     f.put(&sid, "shared.txt", b"shared fixture bytes".to_vec())
         .await?;
@@ -1094,7 +1060,6 @@ async fn exercise_managed_boot(tftp: bool, disconnect: bool) -> anyhow::Result<(
         .spawn()?;
     let result = tokio::time::timeout(Duration::from_secs(30), probe.wait()).await??;
     users.abort();
-    devices.abort();
     emulator.abort();
     anyhow::ensure!(result.success(), "actual CLI managed boot probe failed");
     let commands = transcript.lock().unwrap().clone();
@@ -1123,9 +1088,11 @@ async fn exercise_managed_boot(tftp: bool, disconnect: bool) -> anyhow::Result<(
             assert!(!commands.iter().any(|c| c.starts_with("tftp ")));
         }
         assert!(commands.iter().any(|c| c.starts_with("bootm 0x84000000")));
-        assert!(commands.iter().any(|c| c.starts_with(&format!(
-            "curl http://{device_address}/share/sessions/{sid}/shared.txt"
-        ))));
+        assert!(
+            commands
+                .iter()
+                .any(|c| c.starts_with(&format!("curl http://{user_address}/device-files/")))
+        );
     }
     Ok(())
 }

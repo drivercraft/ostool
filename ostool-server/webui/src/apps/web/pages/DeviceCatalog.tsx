@@ -16,7 +16,7 @@ export function DeviceCatalog() {
   const errors = useSyncExternalStore(site.subscribe, site.getErrors);
   const connection = useSyncExternalStore(site.subscribe, site.getConnection);
   const { user } = useSiteSession();
-  const publicEdition = useEdition().edition === "public";
+  const publicEdition = useEdition().enabled;
   const [search, setSearch] = useState("");
   const [type, setType] = useState("");
   const types = Array.from(

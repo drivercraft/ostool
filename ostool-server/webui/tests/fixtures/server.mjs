@@ -21,16 +21,21 @@ const child = spawn(binary, ["--env-file", "/dev/null"], {
     OSTOOL_NETWORK_INTERFACE: "lo",
     OSTOOL_TFTP_ENABLED: "false",
     OSTOOL_NETWORK_TEST_ENABLED: "false",
-    OSTOOL_LOADER_NETWORK_ENABLED: String(
-      process.env.OSTOOL_TEST_DISABLE_DISCOVERY !== "true",
-    ),
+    OSTOOL_LOADER_NETWORK_ENABLED: "false",
     OSTOOL_LOADER_BIND_ADDR: "127.0.0.1:2998",
     OSTOOL_HTTP_BOOT_ENABLED: "true",
     OSTOOL_HTTP_BOOT_BASE_URL: "http://127.0.0.1:4175",
 
-    OSTOOL_EDITION: "local",
+    OSTOOL_EDITION: "public",
+    OSTOOL_PUBLIC_BASE_URL: "http://127.0.0.1:4175",
+    OSTOOL_REDIS_URL: process.env.OSTOOL_E2E_REDIS_URL,
+    OSTOOL_ALLOWED_ORIGINS: "http://127.0.0.1:4174",
+    OSTOOL_ADMIN_EMAIL: "local-browser-admin@test.local",
+    OSTOOL_ADMIN_PASSWORD: "local-browser-password-123",
     OSTOOL_DATABASE_URL: process.env.OSTOOL_E2E_LOCAL_DATABASE_URL,
-    OSTOOL_DATABASE_SCHEMA: `ostool_e2e_${randomUUID().replaceAll("-", "")}`,
+    OSTOOL_DATABASE_SCHEMA:
+      process.env.OSTOOL_E2E_LOCAL_DATABASE_SCHEMA ??
+      `ostool_e2e_${randomUUID().replaceAll("-", "")}`,
   },
 });
 let stopping = false;

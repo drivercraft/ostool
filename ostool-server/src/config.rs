@@ -72,7 +72,7 @@ impl ServerConfig {
             security: crate::security::config::SecurityConfig::default(),
             audit: AuditConfig::default(),
             edition: Edition::Local,
-            listen_addr: SocketAddr::from(([0, 0, 0, 0], 2999)),
+            listen_addr: SocketAddr::from(([127, 0, 0, 1], 2999)),
             database: DatabaseConfig::default(),
             auth: AuthConfig::default(),
             network_test: NetworkTestConfig::default(),
@@ -118,6 +118,19 @@ impl ServerConfig {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.edition.is_public() || self.auth.enabled,
+            "public authentication cannot be disabled"
+        );
+        anyhow::ensure!(
+            !self.edition.is_public() || self.listen_addr.ip().is_loopback(),
+            "public user API must use a loopback listener behind the HTTPS gateway"
+        );
+        anyhow::ensure!(
+            !self.loader_network.enabled,
+            "unsigned UDP device discovery is disabled; provision device HTTPS authentication in the administrator console"
+        );
+        self.tftp.validate_disabled()?;
         if self
             .audit
             .retention_days
@@ -207,7 +220,7 @@ pub struct AuditConfig {
     pub trusted_proxies: Vec<std::net::IpAddr>,
 }
 
-/// Runtime edition is authoritative for both browser features and API security.
+/// Local deployments use anonymous HTTP; public deployments require authenticated HTTPS.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Edition {
@@ -293,10 +306,31 @@ impl std::fmt::Debug for AuthConfig {
     }
 }
 
+impl AuthConfig {
+    /// One canonical user/device origin; direct HTTP is restricted to loopback.
+    pub fn public_url(&self) -> anyhow::Result<url::Url> {
+        let url = url::Url::parse(
+            self.public_base_url
+                .as_deref()
+                .context("service origin is unavailable")?,
+        )?;
+        let loopback = url.host().is_some_and(|host| match host {
+            url::Host::Domain(host) => host == "localhost",
+            url::Host::Ipv4(ip) => ip.is_loopback(),
+            url::Host::Ipv6(ip) => ip.is_loopback(),
+        });
+        anyhow::ensure!(
+            url.scheme() == "https" || (url.scheme() == "http" && loopback),
+            "service origin requires HTTPS, except on loopback"
+        );
+        Ok(url)
+    }
+}
+
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             access_token_ttl_secs: 900,
             refresh_token_ttl_secs: 30 * 24 * 60 * 60,
             device_code_ttl_secs: 600,
@@ -324,7 +358,7 @@ impl Default for NetworkTestConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            listen_addr: SocketAddr::from(([0, 0, 0, 0], 3000)),
+            listen_addr: SocketAddr::from(([127, 0, 0, 1], 3000)),
             max_active_tests: 64,
             max_duration_secs: 3600,
         }
@@ -333,6 +367,10 @@ impl Default for NetworkTestConfig {
 
 impl NetworkTestConfig {
     fn validate(&self, management_addr: SocketAddr) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.enabled || self.listen_addr.ip().is_loopback(),
+            "network test API must use a loopback listener behind the HTTPS gateway"
+        );
         if self.listen_addr.port() == management_addr.port() {
             bail!("network_test.listen_addr must use a different port from listen_addr");
         }
@@ -363,7 +401,7 @@ pub struct LoaderNetworkConfig {
 impl Default for LoaderNetworkConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             bind_addr: SocketAddr::from(([0, 0, 0, 0], httpboot_protocol::DISCOVERY_PORT)),
             public_base_url: None,
         }
@@ -517,6 +555,14 @@ pub enum TftpConfig {
 }
 
 impl TftpConfig {
+    pub fn validate_disabled(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.enabled(),
+            "TFTP does not authenticate devices; use authenticated HTTP downloads or server-side serial transfer"
+        );
+        Ok(())
+    }
+
     pub fn enabled(&self) -> bool {
         match self {
             Self::Builtin(cfg) => cfg.enabled,
@@ -554,7 +600,7 @@ pub struct BuiltinTftpConfig {
 impl BuiltinTftpConfig {
     pub fn default_with_root(root_dir: PathBuf) -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             root_dir,
             bind_addr: SocketAddr::from((Ipv4Addr::UNSPECIFIED, 69)),
         }
@@ -577,7 +623,7 @@ pub struct SystemTftpdHpaConfig {
 impl Default for SystemTftpdHpaConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             root_dir: PathBuf::from(DEFAULT_SYSTEM_TFTP_ROOT),
             config_path: PathBuf::from("/etc/default/tftpd-hpa"),
             service_name: "tftpd-hpa".to_string(),
@@ -955,10 +1001,13 @@ mod tests {
         let config = ServerConfig::default();
         let encoded = toml::to_string_pretty(&config).unwrap();
         let decoded: ServerConfig = toml::from_str(&encoded).unwrap();
-        assert_eq!(decoded.listen_addr, SocketAddr::from(([0, 0, 0, 0], 2999)));
+        assert_eq!(
+            decoded.listen_addr,
+            SocketAddr::from(([127, 0, 0, 1], 2999))
+        );
         assert_eq!(
             decoded.network_test.listen_addr,
-            SocketAddr::from(([0, 0, 0, 0], 3000))
+            SocketAddr::from(([127, 0, 0, 1], 3000))
         );
         assert!(decoded.network_test.enabled);
         assert_eq!(decoded.network_test.max_active_tests, 64);

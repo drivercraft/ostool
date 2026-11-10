@@ -9,9 +9,11 @@ const mocks = vi.hoisted(() => ({
     email: "member@test.local",
     display_name: "Original",
     is_admin: false,
+    permissions: [] as string[],
   },
   updateProfile: vi.fn(),
   applyRental: vi.fn(),
+  claimBoard: vi.fn(),
   resources: {} as Record<string, unknown>,
   errors: {},
   listeners: new Set<() => void>(),
@@ -20,7 +22,11 @@ vi.mock("@/apps/web/session", () => ({
   useSiteSession: () => ({ user: mocks.user, checking: false, error: "" }),
 }));
 vi.mock("@/api/client", () => ({
-  api: { updateProfile: mocks.updateProfile, applyRental: mocks.applyRental },
+  api: {
+    updateProfile: mocks.updateProfile,
+    applyRental: mocks.applyRental,
+    claimBoard: mocks.claimBoard,
+  },
   clearAuthToken: vi.fn(),
 }));
 vi.mock("@/api/events", async () => {
@@ -69,6 +75,12 @@ beforeEach(() => {
   mocks.updateProfile.mockResolvedValue(undefined);
   mocks.applyRental.mockResolvedValue(undefined);
   mocks.user.display_name = "Original";
+  mocks.user.permissions = [];
+  mocks.claimBoard.mockResolvedValue({
+    id: "claim",
+    board_id: "shared",
+    ends_at: "2026-11-09T23:00:00Z",
+  });
   window.history.replaceState({}, "", "/account/profile");
 });
 afterEach(() => {
@@ -151,4 +163,27 @@ it("uses the rental editor layout and preserves the application draft on availab
   });
   await screen.findByRole("link", { name: "新增申请" });
   expect(window.location.pathname).toBe("/account/requests");
+});
+
+it("claims an eligible board for the current user and reacts to availability changes", async () => {
+  mocks.user.permissions = ["board.use", "board.instant"];
+  mocks.resources.catalog = [
+    { id: "shared", board_type: "arm", tags: [], instant_available: true },
+    { id: "reserved", board_type: "arm", tags: [], instant_available: false },
+  ];
+  window.history.replaceState({}, "", "/account/allocations/new");
+  render(<App />);
+  const user = userEvent.setup();
+  expect(screen.queryByRole("option", { name: /reserved/ })).toBeNull();
+  await user.selectOptions(screen.getByLabelText("开发板"), "shared");
+  await user.click(screen.getByRole("button", { name: "确认领取" }));
+  expect(mocks.claimBoard).toHaveBeenCalledWith("shared");
+});
+it("rejects the direct claim page when the role lacks instant allocation", () => {
+  window.history.replaceState({}, "", "/account/allocations/new");
+  render(<App />);
+  expect(
+    screen.getByText("当前角色没有即时分配权限，请通过租赁申请获取设备。"),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "确认领取" })).toBeNull();
 });

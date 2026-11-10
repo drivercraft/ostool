@@ -1,52 +1,11 @@
-import { expect, test } from "playwright/test";
-import dgram from "node:dgram";
+import { expect, test } from "../fixtures/local";
 import { mkdir } from "node:fs/promises";
 const mac = "02:00:00:00:00:42";
-async function discover() {
-  const socket = dgram.createSocket("udp4");
-  try {
-    return await new Promise<{ registration_id: string }>((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error("discovery timed out")),
-        3000,
-      );
-      socket.once("message", (message) => {
-        clearTimeout(timer);
-        resolve(JSON.parse(message.toString()));
-      });
-      socket.send(
-        Buffer.from(
-          JSON.stringify({
-            protocol_version: 2,
-            mac_address: mac,
-            current_mac_address: mac,
-            arch: "x86_64",
-            loader_version: "e2e",
-          }),
-        ),
-        2998,
-        "127.0.0.1",
-        (e) => {
-          if (e) {
-            clearTimeout(timer);
-            reject(e);
-          }
-        },
-      );
-    });
-  } finally {
-    socket.close();
-  }
-}
-test("unbound power -> real discovery -> manual MAC binding; push preserves focus and no GET polling", async ({
+test("authenticated unbound power and manual MAC binding preserve drafts while unsigned discovery is rejected", async ({
   page,
   context,
   request,
 }) => {
-  test.skip(
-    process.env.OSTOOL_TEST_DISABLE_DISCOVERY === "true",
-    "UDP discovery is disabled for this isolated layout run",
-  );
   const consoleErrors: string[] = [];
   page.on("pageerror", (e) => consoleErrors.push(e.message));
   const reads: string[] = [];
@@ -86,28 +45,26 @@ test("unbound power -> real discovery -> manual MAC binding; push preserves focu
     element: e.tagName,
     scroll: window.scrollY,
   }));
-  const offer = await discover();
-  const poll = await request.post("http://127.0.0.1:4175/api/v1/loaders/poll", {
-    data: {
-      protocol_version: 2,
-      registration_id: offer.registration_id,
-      mac_address: mac,
-      current_mac_address: mac,
-      ip_address: "10.77.0.142",
-      arch: "x86_64",
-      loader_version: "e2e",
-      hardware: {
-        manufacturer: "QEMU",
-        product: "Standard PC (Q35)",
-        version: "q35",
-        serial: "virtual-42",
+  const rejected = await request.post(
+    "http://127.0.0.1:4175/api/v1/loaders/poll",
+    { data: { protocol_version: 2, mac_address: mac } },
+  );
+  expect(rejected.status()).toBe(403);
+  const unrelated = await request.post(
+    "http://127.0.0.1:4175/api/v1/admin/power-actions",
+    {
+      data: {
+        request_id: crypto.randomUUID(),
+        action: "off",
+        power_management: {
+          kind: "custom",
+          power_on_cmd: "true",
+          power_off_cmd: "true",
+        },
       },
     },
-  });
-  expect(poll.ok()).toBeTruthy();
-  await expect(
-    page.getByRole("button", { name: "发现 1 台设备" }),
-  ).toBeVisible();
+  );
+  expect(unrelated.status()).toBe(202);
   await expect(macInput).toHaveValue("02:00:00:00:00:");
   await expect(macInput).toBeFocused();
   expect(await page.evaluate(() => window.scrollY)).toBe(before.scroll);
@@ -140,19 +97,21 @@ test("unbound power -> real discovery -> manual MAC binding; push preserves focu
     "changed by peer",
   );
   await peer.getByRole("button", { name: /发现设备/ }).click();
-  // No new loader requests: the server deadline itself must publish offline.
-  await expect(
-    peer.getByRole("table").getByText("离线", { exact: true }),
-  ).toBeVisible({
-    timeout: 15_000,
-  });
   expect(
-    reads.every(
-      (url) =>
-        url.endsWith("/api/v1/site/events") ||
-        new URL(url).pathname === "/api/v1/admin/events" ||
-        url.endsWith("/api/v1/auth/config"),
+    await (
+      await request.get("http://127.0.0.1:4175/api/v1/admin/loader-devices")
+    ).json(),
+  ).toEqual([]);
+  expect(
+    reads.every((url) =>
+      [
+        "/api/v1/site/events",
+        "/api/v1/admin/events",
+        "/api/v1/auth/config",
+        "/api/v1/auth/me",
+      ].includes(new URL(url).pathname),
     ),
+    JSON.stringify(reads),
   ).toBeTruthy();
   expect(
     reads.filter((url) => url.endsWith("/api/v1/auth/config")),
@@ -290,37 +249,45 @@ test("all management modules, DTB CRUD, session release and narrow viewport", as
   expect(consoleErrors).toEqual([]);
 });
 
-test("local edition exposes the existing workflow without any account routes", async ({
+test("public fixture exposes authenticated account and allocation routes", async ({
   page,
   request,
+  playwright,
 }) => {
   await page.goto("/admin/overview");
-  await page.getByRole("button", { name: "账号菜单", exact: true }).click();
-  await expect(page.getByText("本地版 · 免登录")).toBeVisible();
-  await page.keyboard.press("Escape");
   await expect(
     page.getByRole("link", { name: "用户列表", exact: true }),
-  ).toHaveCount(0);
+  ).toBeVisible();
   await expect(
     page.getByRole("link", { name: "租赁列表", exact: true }),
-  ).toHaveCount(0);
+  ).toBeVisible();
   for (const path of [
     "/api/v1/auth/me",
     "/api/v1/admin/users",
     "/api/v1/admin/rentals",
   ]) {
-    expect((await request.get(`http://127.0.0.1:4175${path}`)).status()).toBe(
-      404,
+    expect((await request.get("http://127.0.0.1:4175" + path)).status()).toBe(
+      200,
     );
   }
-  await page.goto("http://127.0.0.1:4175/login");
-  await expect(page).toHaveURL("http://127.0.0.1:4175/");
-  await expect(
-    page.getByRole("link", { name: "登录", exact: true }),
-  ).toHaveCount(0);
-  await expect(
-    page.getByRole("link", { name: "免费注册", exact: true }),
-  ).toHaveCount(0);
+  const anonymous = await playwright.request.newContext({
+    storageState: { cookies: [], origins: [] },
+    extraHTTPHeaders: {},
+  });
+  try {
+    expect(
+      (
+        await anonymous.get("http://127.0.0.1:4175/api/v1/admin/boards")
+      ).status(),
+    ).toBe(401);
+    const config = await (
+      await anonymous.get("http://127.0.0.1:4175/api/v1/auth/config")
+    ).json();
+    expect(config.enabled).toBe(true);
+    expect(config.captcha_required).toBe(true);
+  } finally {
+    await anonymous.dispose();
+  }
 });
 
 test("viewport panels keep toolbar and footer fixed while tables/forms scroll", async ({
@@ -661,14 +628,14 @@ test("titlebar shares the logo theme and provides notifications, theme and works
   await expect(page.locator("html")).not.toHaveClass(/dark/);
   await page.getByRole("button", { name: "账号菜单", exact: true }).click();
   await expect(
-    page.getByText("本地版 · 免登录", { exact: true }),
+    page.getByText("local-browser-admin@test.local", { exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("menuitem", { name: "我的账号", exact: true }),
-  ).toHaveCount(0);
+  ).toBeVisible();
   await expect(
     page.getByRole("menuitem", { name: "退出登录", exact: true }),
-  ).toHaveCount(0);
+  ).toBeVisible();
   await page.getByRole("menuitem", { name: "系统设置", exact: true }).click();
   await expect(page).toHaveURL(/\/admin\/settings$/);
   await page.setViewportSize({ width: 390, height: 844 });

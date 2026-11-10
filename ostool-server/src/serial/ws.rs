@@ -117,14 +117,7 @@ async fn run_serial_ws_inner(
     let session_id = session.snapshot().await.id;
     let board = session.board().clone();
     let automatic = matches!(board.boot, BootConfig::UefiHttp(_));
-    let public = state.config.read().await.edition.is_public();
-    let error_message = |err: &anyhow::Error| {
-        if public {
-            "设备连接失败，请联系管理员".to_owned()
-        } else {
-            format!("{err:#}")
-        }
-    };
+    let error_message = |_: &anyhow::Error| "设备连接失败，请联系管理员".to_owned();
     let opened = async {
         let reservation = if automatic {
             None

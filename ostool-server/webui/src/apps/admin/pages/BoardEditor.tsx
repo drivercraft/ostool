@@ -44,6 +44,7 @@ import { MacPicker } from "@/apps/admin/components/mac-picker";
 import { DtbUpload } from "./Dtbs";
 import { SerialRuntimeDetails } from "@/apps/admin/components/serial-runtime";
 import { BoardOta } from "./BoardOta";
+import { DeviceConnection } from "./DeviceConnection";
 
 export default function BoardEditor() {
   const { boardId } = useParams();
@@ -707,7 +708,7 @@ function Editor({ board }: { board?: BoardConfig }) {
         </Section>
       </form>
       {board?.network_identity && board.boot.kind === "httpboot" && (
-        <BoardOta boardId={board.id} />
+        <><DeviceConnection boardId={board.id} /><BoardOta boardId={board.id} /></>
       )}
     </PagePanel>
   );

@@ -167,15 +167,15 @@ pub(crate) fn apply_values(
             .context("invalid OSTOOL_TRUSTED_PROXY_IPS")?;
     }
     parsed(values, "OSTOOL_LISTEN_ADDR", &mut config.listen_addr)?;
-    parsed(values, "OSTOOL_AUTH_ENABLED", &mut config.auth.enabled)?;
-    if config.edition.is_public()
-        && values
-            .get("OSTOOL_AUTH_ENABLED")
-            .is_some_and(|value| value == "false")
-    {
-        bail!("public edition cannot disable authentication");
+    let expected_auth = config.edition.is_public();
+    if let Some(value) = values.get("OSTOOL_AUTH_ENABLED") {
+        let enabled: bool = value.parse().context("invalid OSTOOL_AUTH_ENABLED")?;
+        anyhow::ensure!(
+            enabled == expected_auth,
+            "OSTOOL_AUTH_ENABLED must match OSTOOL_EDITION (local=false, public=true)"
+        );
     }
-    config.auth.enabled = config.edition.is_public();
+    config.auth.enabled = expected_auth;
     parsed(
         values,
         "OSTOOL_ALLOW_REGISTRATION",
@@ -217,9 +217,7 @@ pub(crate) fn apply_values(
         &mut config.network_test.max_duration_secs,
     )?;
 
-    config
-        .security
-        .validate_deployment(config.edition.is_public())?;
+    config.security.validate_deployment(config.auth.enabled)?;
     config.validate()?;
     Ok(())
 }
@@ -302,10 +300,6 @@ fn apply_security_values(
         (
             "OSTOOL_ADMIN_ALLOWED_NETWORKS",
             &mut config.admin_allowed_networks,
-        ),
-        (
-            "OSTOOL_HARDWARE_ALLOWED_NETWORKS",
-            &mut config.hardware_allowed_networks,
         ),
         (
             "OSTOOL_TURNSTILE_HOSTNAMES",

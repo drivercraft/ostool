@@ -577,12 +577,23 @@ async fn complete_audit_contract_with_real_postgres() {
     .await
     .unwrap();
     let local_app = build_router(local.clone());
-    assert_eq!(call(&local_app,"POST","/api/v1/admin/auth/login",None,json!({"email":"admin@audit.test","password":"audit-admin-password-NEVER_COPY_PASSWORD"})).await.0,StatusCode::NOT_FOUND);
     assert_eq!(
         call(&local_app, "GET", "/api/v1/admin/audits", None, Value::Null)
             .await
             .0,
         StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &local_app,
+            "POST",
+            "/api/v1/admin/audits/view",
+            None,
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
     );
     assert!(sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM audit_events WHERE actor_kind='local' AND action='audit.view')").fetch_one(pool).await.unwrap());
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))

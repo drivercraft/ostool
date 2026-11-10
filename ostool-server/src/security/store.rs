@@ -62,7 +62,7 @@ pub async fn challenge(
     ttl: i64,
 ) -> Result<Uuid, ApiError> {
     let id = Uuid::new_v4();
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::persistence::postgres::begin_transaction(pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(29992026)")
         .execute(&mut *tx)
         .await?;

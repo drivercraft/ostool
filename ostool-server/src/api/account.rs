@@ -65,6 +65,11 @@ struct PasswordInput {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/account", get(snapshot))
+        .route("/api/v1/account/allocations", post(super::instant::claim))
+        .route(
+            "/api/v1/account/allocations/{id}",
+            axum::routing::delete(super::instant::release),
+        )
         .route("/api/v1/account/rentals", get(member_rentals))
         .route("/api/v1/account/availability", get(member_availability))
         .route(
@@ -170,14 +175,17 @@ pub(crate) async fn projection(state: &AppState, user: Uuid) -> Result<Value, Ap
         .await
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::unauthorized("账号不可用，请重新登录"))?;
+    let candidates = super::instant::candidates(state, &profile, None, None, &[]).await?;
+    let runtimes = state.board_runtimes.read().await;
     let catalog: Vec<_> = state
         .boards
         .read()
         .await
         .values()
         .filter(|b| !b.disabled)
-        .map(|b| json!({"id":b.id,"board_type":b.board_type,"tags":b.tags}))
+        .map(|b| json!({"id":b.id,"board_type":b.board_type,"tags":b.tags,"instant_available":candidates.contains_key(&b.id) && runtimes.get(&b.id).is_some_and(|r|r.lease_state==crate::BoardLeaseState::Idle),"instant_ends_at":candidates.get(&b.id)}))
         .collect();
+    drop(runtimes);
     let tokens = sqlx::query("SELECT id,name,expires_at,created_at FROM personal_access_tokens WHERE user_id=$1 ORDER BY created_at DESC")
         .bind(user).fetch_all(db.pool()).await.map_err(db_error)?.into_iter().map(|r| Ok(json!({"id":r.try_get::<Uuid,_>("id")?,"name":r.try_get::<String,_>("name")?,"expires_at":r.try_get::<Option<DateTime<Utc>>,_>("expires_at")?,"created_at":r.try_get::<DateTime<Utc>,_>("created_at")?}))).collect::<Result<Vec<_>,sqlx::Error>>().map_err(db_error)?;
     let summary: Value = sqlx::query_scalar("SELECT jsonb_build_object('active',(SELECT count(*) FROM board_rentals WHERE user_id=$1 AND cancelled_at IS NULL AND starts_at<=now() AND ends_at>now()),'scheduled',(SELECT count(*) FROM board_rentals WHERE user_id=$1 AND cancelled_at IS NULL AND starts_at>now()),'pending',(SELECT count(*) FROM rental_requests WHERE user_id=$1 AND status='pending'))").bind(user).fetch_one(db.pool()).await.map_err(db_error)?;
@@ -203,7 +211,7 @@ async fn update_profile(
         crate::security::web::require_step_up(&credential)?;
     }
     let db = &state.database;
-    let mut tx = db.pool().begin().await.map_err(db_error)?;
+    let mut tx = db.begin().await.map_err(db_error)?;
     let current = sqlx::query(
         "SELECT email,password_hash,username,display_name FROM users WHERE id=$1 AND NOT disabled FOR UPDATE",
     )
@@ -260,7 +268,7 @@ async fn change_password(
         return Err(ApiError::bad_request("当前密码过长"));
     }
     let db = &state.database;
-    let mut tx = db.pool().begin().await.map_err(db_error)?;
+    let mut tx = db.begin().await.map_err(db_error)?;
     let hash: String = sqlx::query_scalar(
         "SELECT password_hash FROM users WHERE id=$1 AND NOT disabled FOR UPDATE",
     )

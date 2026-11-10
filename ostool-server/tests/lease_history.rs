@@ -46,7 +46,11 @@ impl Fixture {
         state.boards.write().await.insert(board.id.clone(), board);
         state.sync_board_runtime_states().await;
         Self {
-            app: build_router(state.clone()),
+            app: if public {
+                build_router(state.clone())
+            } else {
+                test_database::authenticated_router(&state).await.unwrap()
+            },
             state,
             _root: root,
         }

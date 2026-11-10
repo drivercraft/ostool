@@ -373,6 +373,7 @@ pub fn required(method: &Method, path: &str) -> Option<&'static str> {
     Some(match section {
         "events" | "permissions" | "deployment" => "console.access",
         "dashboard" | "overview" => "dashboard.read",
+        "boards" if tail.contains("/device-connection") => "devices.manage",
         "boards" if tail.contains("/loader-updates") => {
             if read {
                 "ota.read"

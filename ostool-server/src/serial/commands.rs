@@ -86,7 +86,8 @@ pub(super) async fn expand(
             || name.starts_with("sessionFile:")
         {
             let config = state.config.read().await.clone();
-            let base = crate::hardware::download_base_url(&config)?;
+            let base = crate::api::router::http_boot_public_base_url(&config)
+                .map_err(|error| anyhow::anyhow!("{}", error.message))?;
             if name == "boardServerIp" {
                 result.push_str(
                     base.host_str()
@@ -99,22 +100,7 @@ pub(super) async fn expand(
                     name.trim_start_matches("sessionFile:"),
                 )?;
                 let id = session.snapshot().await.id;
-                anyhow::ensure!(
-                    state
-                        .tftp_manager
-                        .read()
-                        .await
-                        .get_session_file(&id, &path)
-                        .await?
-                        .is_some(),
-                    "session file missing"
-                );
-                let mut url = base;
-                url.path_segments_mut()
-                    .map_err(|_| anyhow::anyhow!("invalid device URL"))?
-                    .pop_if_empty()
-                    .extend(["share", "sessions", id.as_str()])
-                    .extend(path.split('/'));
+                let url = crate::device_security::file_url(state, &id, &path).await?;
                 result.push_str(url.as_str());
             }
         } else {

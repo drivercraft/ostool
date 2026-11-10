@@ -78,7 +78,7 @@ export function Logo({ light = false }: { light?: boolean }) {
 function SiteHeader() {
   const { settings } = useSiteSettings();
   const edition = useEdition();
-  const publicEdition = edition.edition === "public";
+  const publicEdition = edition.enabled;
   const [open, setOpen] = useState(false);
   const location = useLocation();
   useEffect(() => {
@@ -233,7 +233,7 @@ function SiteHeader() {
 
 function SiteFooter() {
   const { settings } = useSiteSettings();
-  const publicEdition = useEdition().edition === "public";
+  const publicEdition = useEdition().enabled;
   return (
     <footer className="site-footer">
       <div className="site-footer-main">

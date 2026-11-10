@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   logout: vi.fn(),
 }));
 vi.mock("@/edition", () => ({
-  useEdition: () => ({ edition: mocks.edition }),
+  useEdition: () => ({ edition: mocks.edition, enabled: mocks.edition === "public" }),
 }));
 vi.mock("@/api/client", () => ({ api: { logout: mocks.logout } }));
 vi.mock("@/api/events", () => ({

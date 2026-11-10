@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 
 export default function Home() {
   const edition = useEdition();
-  const publicEdition = edition.edition === "public";
+  const publicEdition = edition.enabled;
   const { user } = useSiteSession();
   const startPath = publicEdition
     ? user

@@ -10,16 +10,13 @@ use axum::{
 };
 use futures_util::future::join_all;
 use httpboot_protocol::{
-    BootArch, BootFile, ImageFormat, LoaderPollRequest, LoaderPollResponse, LoaderStatusReport,
-    LoaderStatusResponse, MAX_HTTP_BOOT_INITRAMFS_BYTES, MacAddress, valid_host_cmdline,
+    BootArch, BootFile, ImageFormat, LoaderStatusResponse, MAX_HTTP_BOOT_INITRAMFS_BYTES,
+    MacAddress, valid_host_cmdline,
 };
 use mime_guess::from_path;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tokio::{
-    fs::{self, File},
-    io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
-};
+use tokio::fs;
 use url::Url;
 
 use crate::{
@@ -43,7 +40,6 @@ use crate::{
         BoardConfig, BootConfig, PowerManagementConfig, ServerConfig, TftpConfig, UbootNetworkMode,
     },
     http_boot::publish::{KernelPublishInput, publish_kernel},
-    loader::RegistrationError,
     persistence::dtbs::normalize_dtb_name,
     power::{PowerAction, PowerActionError},
     serial::{
@@ -56,7 +52,7 @@ use crate::{
         ws::run_serial_ws,
     },
     session::SessionStopReason,
-    session::{LoaderStatusUpdateError, SessionBootCommand, SessionState},
+    session::{SessionBootCommand, SessionState},
     state::{AppState, BoardLeaseState, TouchSessionError},
     static_assets::{
         serve_admin_asset, serve_admin_history, serve_admin_index, serve_site_history,
@@ -71,17 +67,6 @@ use crate::{
 
 const DTB_UPLOAD_MAX_MIB: u32 = 10;
 
-pub(crate) fn device_download_routes() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/share/sessions/{session_id}/{*path}",
-            get(get_shared_session_file),
-        )
-        .route(
-            "/boot/sessions/{session_id}/{*path}",
-            get(get_http_boot_file),
-        )
-}
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(super::site::routes())
@@ -95,6 +80,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/admin/dashboard", get(crate::dashboard::get))
         .route("/api/v1/admin/session-history", get(list_session_history))
         .merge(super::ota::routes())
+        .merge(crate::device_security::routes())
+        .route("/device-files/{id}", get(crate::device_security::download))
         .route("/api/v1/admin/events", get(crate::admin_events::subscribe))
         .route(
             "/api/v1/admin/power-actions",
@@ -147,8 +134,6 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/admin/virtual-devices/{device_id}",
             delete(delete_virtual_device),
         )
-        .route("/api/v1/loaders/poll", post(poll_loader))
-        .route("/api/v1/loaders/status", post(report_loader_status))
         .route("/api/v1/admin/dtbs", get(list_dtbs).post(create_dtb))
         .route("/api/v1/admin/serial-ports", get(list_serial_ports))
         .route(
@@ -790,175 +775,6 @@ fn virtual_device_summary(
     }
 }
 
-async fn poll_loader(
-    State(state): State<AppState>,
-    request: Request,
-) -> Result<axum::Json<LoaderPollResponse>, ApiError> {
-    let request: LoaderPollRequest = parse_loader_json(request).await?;
-    let conflict = match state.loader_registry.accept_poll(&request).await {
-        Ok(conflict) => conflict,
-        Err(error) => return Ok(axum::Json(loader_reject(error))),
-    };
-    if conflict {
-        return Ok(axum::Json(LoaderPollResponse::Reject {
-            code: "duplicate_mac".into(),
-            message: "another active loader is reporting the same permanent MAC".into(),
-            retry_after_ms: Some(2_000),
-        }));
-    }
-
-    let boards = state.boards.read().await;
-    let Some(board_id) = board_id_for_mac(&boards, request.mac_address) else {
-        return Ok(axum::Json(LoaderPollResponse::Unbound));
-    };
-    drop(boards);
-
-    let Some(runtime) = state.board_runtime_status(&board_id).await else {
-        return Ok(axum::Json(LoaderPollResponse::Reject {
-            code: "board_unavailable".into(),
-            message: "the bound board has no runtime state".into(),
-            retry_after_ms: Some(2_000),
-        }));
-    };
-    let idle = runtime.active_session_id.is_none() && runtime.lease_state == BoardLeaseState::Idle;
-    let ota = if request.protocol_version == httpboot_protocol::PROTOCOL_VERSION {
-        request.ota.as_ref()
-    } else {
-        None
-    };
-    let decision = state
-        .ota
-        .decide(
-            &board_id,
-            request.mac_address,
-            ota,
-            idle,
-            &request.registration_id,
-        )
-        .await?;
-    state.admin_events.invalidate(&["ota"]);
-    if request.protocol_version == httpboot_protocol::PROTOCOL_VERSION {
-        if ota.is_none() {
-            return Ok(axum::Json(LoaderPollResponse::Reject {
-                code: "ota_state_missing".into(),
-                message: "protocol v4 requires OTA state".into(),
-                retry_after_ms: None,
-            }));
-        }
-        match decision {
-            crate::ota::Decision::Update(job) => {
-                return Ok(axum::Json(LoaderPollResponse::Update {
-                    board_id,
-                    update_id: job.update_id.clone(),
-                    image_path: format!("/api/v1/loader-updates/{}/image", job.update_id),
-                    image_size: job.image.size,
-                    image_sha256: job.image.sha256,
-                }));
-            }
-            crate::ota::Decision::Confirm(update_id) => {
-                return Ok(axum::Json(LoaderPollResponse::ConfirmUpdate {
-                    board_id,
-                    update_id,
-                }));
-            }
-            crate::ota::Decision::Wait => {
-                return Ok(axum::Json(LoaderPollResponse::BoundIdle { board_id }));
-            }
-            crate::ota::Decision::Idle => {}
-        }
-    }
-    let Some(session_id) = runtime.active_session_id else {
-        return Ok(axum::Json(LoaderPollResponse::BoundIdle { board_id }));
-    };
-    if runtime.lease_state != BoardLeaseState::Using {
-        return Ok(axum::Json(LoaderPollResponse::Reject {
-            code: "board_releasing".into(),
-            message: "the bound board is being released".into(),
-            retry_after_ms: Some(2_000),
-        }));
-    }
-    let Some(session) = state.session_state(&session_id).await else {
-        return Ok(axum::Json(LoaderPollResponse::Reject {
-            code: "session_unavailable".into(),
-            message: "the active session is unavailable".into(),
-            retry_after_ms: Some(2_000),
-        }));
-    };
-    let Some(command) = session.boot_command().await else {
-        return Ok(axum::Json(LoaderPollResponse::BoundIdle { board_id }));
-    };
-    if command.arch != request.arch {
-        return Ok(axum::Json(LoaderPollResponse::Reject {
-            code: "architecture_mismatch".into(),
-            message: "the published kernel architecture does not match this loader".into(),
-            retry_after_ms: None,
-        }));
-    }
-    session
-        .serial_runtime
-        .fail("automatic serial binding requires axloader protocol v6; upgrade the loader".into());
-    Ok(axum::Json(LoaderPollResponse::Reject {
-        code: "serial_protocol_upgrade_required".into(),
-        message:
-            "automatic boot requires axloader protocol v6; identification and OTA remain available"
-                .into(),
-        retry_after_ms: None,
-    }))
-}
-
-async fn report_loader_status(
-    State(state): State<AppState>,
-    request: Request,
-) -> Result<StatusCode, ApiError> {
-    let report: LoaderStatusReport = parse_loader_json(request).await?;
-    state
-        .loader_registry
-        .accept_status(&report)
-        .await
-        .map_err(registration_api_error)?;
-    let session = active_session_state_or_404(&state, &report.session_id).await?;
-    if session
-        .board()
-        .network_identity
-        .as_ref()
-        .is_none_or(|identity| identity.mac_address != report.mac_address)
-    {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "loader_board_mismatch",
-            "loader MAC does not own this session",
-        ));
-    }
-    session
-        .update_loader_status(report.registration_id, &report.boot_id, report.status)
-        .await
-        .map_err(|error| match error {
-            LoaderStatusUpdateError::NoBootCommand => {
-                ApiError::conflict("session has no published boot command")
-            }
-            LoaderStatusUpdateError::StaleBoot => ApiError::new(
-                StatusCode::CONFLICT,
-                "stale_boot_id",
-                "status belongs to a superseded boot command",
-            ),
-        })?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn parse_loader_json<T: serde::de::DeserializeOwned>(
-    request: Request,
-) -> Result<T, ApiError> {
-    let body = tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        to_bytes(request.into_body(), 64 * 1024),
-    )
-    .await
-    .map_err(|_| ApiError::bad_request("loader JSON body timed out"))?
-    .map_err(|_| ApiError::bad_request("failed to read loader JSON body"))?;
-    serde_json::from_slice(&body)
-        .map_err(|error| ApiError::bad_request(format!("invalid loader JSON: {error}")))
-}
-
 async fn get_loader_status(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
@@ -971,13 +787,9 @@ async fn get_loader_status(
         .loader_status()
         .await
         .ok_or_else(|| ApiError::not_found("session has no published boot command"))?;
-    if state.config.read().await.edition.is_public() {
-        status.registration_id = None;
-        if let Some(httpboot_protocol::LoaderStatusPhase::Failed { message, .. }) =
-            &mut status.status
-        {
-            *message = "设备启动失败，请联系管理员".into();
-        }
+    status.registration_id = None;
+    if let Some(httpboot_protocol::LoaderStatusPhase::Failed { message, .. }) = &mut status.status {
+        *message = "设备启动失败，请联系管理员".into();
     }
     Ok(axum::Json(status))
 }
@@ -993,64 +805,6 @@ pub(crate) fn board_id_for_mac(
             .filter(|identity| identity.mac_address == mac)
             .map(|_| board_id.clone())
     })
-}
-
-fn loader_reject(error: RegistrationError) -> LoaderPollResponse {
-    let (code, message) = match error {
-        RegistrationError::Capacity => (
-            "discovery_busy",
-            "device discovery capacity reached; retry later",
-        ),
-        RegistrationError::ProtocolVersion => {
-            ("unsupported_protocol", "unsupported protocol version")
-        }
-        RegistrationError::Unknown => ("unknown_registration", "registration is unknown"),
-        RegistrationError::Expired => ("expired_registration", "registration has expired"),
-        RegistrationError::MacMismatch => (
-            "registration_mac_mismatch",
-            "registration belongs to another MAC",
-        ),
-        RegistrationError::Replaced => (
-            "replaced_registration",
-            "registration was replaced by a newer loader",
-        ),
-        RegistrationError::Conflict => (
-            "duplicate_mac",
-            "multiple active loaders report the same MAC",
-        ),
-    };
-    LoaderPollResponse::Reject {
-        code: code.into(),
-        message: message.into(),
-        retry_after_ms: Some(2_000),
-    }
-}
-
-fn registration_api_error(error: RegistrationError) -> ApiError {
-    let (code, message) = match error {
-        RegistrationError::Capacity => (
-            "discovery_busy",
-            "device discovery capacity reached; retry later",
-        ),
-        RegistrationError::ProtocolVersion => {
-            ("unsupported_protocol", "unsupported protocol version")
-        }
-        RegistrationError::Unknown => ("unknown_registration", "registration is unknown"),
-        RegistrationError::Expired => ("expired_registration", "registration has expired"),
-        RegistrationError::MacMismatch => (
-            "registration_mac_mismatch",
-            "registration belongs to another MAC",
-        ),
-        RegistrationError::Replaced => (
-            "replaced_registration",
-            "registration was replaced by a newer loader",
-        ),
-        RegistrationError::Conflict => (
-            "duplicate_mac",
-            "multiple active loaders report the same MAC",
-        ),
-    };
-    ApiError::new(StatusCode::CONFLICT, code, message)
 }
 
 async fn build_board_config_for_create(
@@ -1464,7 +1218,7 @@ async fn get_tftp_config(
 
 async fn update_tftp_config(
     State(state): State<AppState>,
-    axum::Json(mut tftp): axum::Json<TftpConfig>,
+    axum::Json(tftp): axum::Json<TftpConfig>,
 ) -> Result<axum::Json<AdminTftpConfigResponse>, ApiError> {
     let _admission = state.rental_gate.lock().await;
     if tftp.root_dir() != state.tftp_manager.read().await.root_dir()
@@ -1473,8 +1227,8 @@ async fn update_tftp_config(
         return Err(ApiError::conflict("请先释放所有会话，再修改文件存储目录"));
     }
 
-    crate::hardware::restrict_tftp(&*state.config.read().await, &mut tftp)
-        .map_err(ApiError::from)?;
+    tftp.validate_disabled()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
     tokio::fs::create_dir_all(tftp.root_dir())
         .await
         .map_err(|err| ApiError::internal(err.to_string()))?;
@@ -1495,7 +1249,9 @@ async fn update_tftp_config(
         config.tftp = tftp.clone();
     }
     state.save_config().await?;
-    *state.tftp_manager.write().await = new_manager;
+    *state.tftp_manager.write().await = std::sync::Arc::new(
+        crate::tftp::service::DatabaseTftpManager::new(new_manager, state.session_files.clone()),
+    );
 
     Ok(axum::Json(AdminTftpConfigResponse { tftp }))
 }
@@ -1566,9 +1322,7 @@ async fn list_board_types(
     actor: Option<Extension<super::auth::CurrentUser>>,
 ) -> Result<axum::Json<Vec<BoardTypeSummary>>, ApiError> {
     let allowed = match actor {
-        Some(Extension(super::auth::CurrentUser(user)))
-            if !user.is_admin && state.config.read().await.edition.is_public() =>
-        {
+        Some(Extension(super::auth::CurrentUser(user))) if !user.is_admin => {
             let mut allowed = super::rentals::active(&state, user.id).await?;
             for (id, end) in super::instant::candidates(&state, &user, None, None, &[]).await? {
                 allowed.entry(id).or_insert((uuid::Uuid::nil(), end));
@@ -1612,9 +1366,7 @@ async fn create_session(
 
     let _rental_guard = state.rental_gate.lock().await;
     let mut rental_access = match actor.as_ref() {
-        Some(Extension(super::auth::CurrentUser(user)))
-            if !user.is_admin && state.config.read().await.edition.is_public() =>
-        {
+        Some(Extension(super::auth::CurrentUser(user))) if !user.is_admin => {
             Some(super::rentals::active(&state, user.id).await?)
         }
         _ => None,
@@ -1779,7 +1531,7 @@ async fn create_session(
     }
     if let Some(Extension(super::auth::CurrentUser(user))) = actor {
         let ownership = async {
-            let mut tx = state.database.pool().begin().await?;
+            let mut tx = state.database.begin().await?;
             let updated=sqlx::query("UPDATE session_history SET user_id=$2,username=$3,rental_id=$4,expires_at=LEAST(expires_at,COALESCE($5,expires_at)) WHERE session_id=$1 AND ended_at IS NULL")
                 .bind(&session.id).bind(user.id).bind(&user.username).bind(rental.map(|(id,_)|id)).bind(rental.map(|(_,deadline)|deadline))
                 .execute(&mut *tx).await?;
@@ -1840,14 +1592,14 @@ async fn get_session(
     State(state): State<AppState>,
 ) -> Result<axum::Json<SessionDetailResponse>, ApiError> {
     let mut session = get_session_or_404(&state, &session_id).await?;
-    if state.config.read().await.edition.is_public() {
-        session.serial_runtime = session.serial_runtime.public_view();
-    }
+
+    session.serial_runtime = session.serial_runtime.public_view();
+
     let board = state
         .session_board(&session_id)
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
-    let files = session_file_responses(&state, &session_id, &board).await?;
+    let files = session_file_responses(&state, &session_id).await?;
     let connected = session.serial_connected;
 
     Ok(axum::Json(SessionDetailResponse {
@@ -1903,44 +1655,26 @@ async fn get_boot_profile(
         .session_board(&session_id)
         .await
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
-    if state.config.read().await.edition.is_public() {
-        let mut boot = board.boot;
-        match &mut boot {
-            BootConfig::UefiHttp(profile) => profile.serial_parameters = None,
-            BootConfig::Uboot(profile) => {
-                profile.use_tftp = false;
-                profile.server_ip = None;
-                profile.board_ip = None;
-                profile.netmask = None;
-                profile.gatewayip = None;
-                profile.network_mode = UbootNetworkMode::Dhcp;
-            }
-            BootConfig::Pxe(profile) => profile.notes = None,
+    let mut boot = board.boot;
+    match &mut boot {
+        BootConfig::UefiHttp(profile) => profile.serial_parameters = None,
+        BootConfig::Uboot(profile) => {
+            profile.use_tftp = false;
+            profile.server_ip = None;
+            profile.board_ip = None;
+            profile.netmask = None;
+            profile.gatewayip = None;
+            profile.network_mode = UbootNetworkMode::Dhcp;
         }
-        let config = state.config.read().await;
-        return Ok(axum::Json(BootProfileResponse {
-            boot,
-            server_ip: None,
-            netmask: None,
-            interface: None,
-            http_base_url: Some(http_boot_public_base_url(&config)?),
-            server_side_operations: true,
-        }));
+        BootConfig::Pxe(profile) => profile.notes = None,
     }
-    let network = resolved_shared_network(&state, &board).await?;
-    let http_base_url = match network
-        .as_ref()
-        .and_then(|network| network.server_ip.as_deref())
-    {
-        Some(server_ip) => Some(shared_http_base_url(&state, server_ip).await?),
-        None => None,
-    };
+    let config = state.config.read().await;
     Ok(axum::Json(BootProfileResponse {
-        boot: boot_profile_with_resolved_network(board.boot, network.as_ref()),
-        server_ip: network.as_ref().and_then(|item| item.server_ip.clone()),
-        netmask: network.as_ref().and_then(|item| item.netmask.clone()),
-        interface: network.as_ref().and_then(|item| item.interface.clone()),
-        http_base_url,
+        boot,
+        server_ip: None,
+        netmask: None,
+        interface: None,
+        http_base_url: Some(http_boot_public_base_url(&config)?),
         server_side_operations: true,
     }))
 }
@@ -1965,9 +1699,7 @@ async fn get_session_dtb(
 
     let file = ensure_session_preset_dtb_file(&state, &session_id, &board).await?;
     let tftp_url = if let Some(file) = file {
-        file_response_for_board(&state, &board, file)
-            .await?
-            .tftp_url
+        file_response(&state, file).await?.tftp_url
     } else {
         None
     };
@@ -2091,13 +1823,10 @@ async fn get_serial_status(
             ws_url: None,
         }
     };
-    if state.config.read().await.edition.is_public() {
-        response.port = None;
-        response.baud_rate = None;
-        response.runtime = response.runtime.public_view();
-        response.manager = Default::default();
-    }
-    response.runtime = response.runtime.management_view();
+    response.port = None;
+    response.baud_rate = None;
+    response.runtime = response.runtime.public_view().management_view();
+    response.manager = Default::default();
     Ok(axum::Json(response))
 }
 
@@ -2218,33 +1947,28 @@ async fn read_http_boot_session_file(
     read_session_file_response(state, session_id, relative_path, headers).await
 }
 
-async fn read_session_file_response(
+pub(crate) async fn read_session_file_response(
     state: &AppState,
     session_id: &str,
     relative_path: &str,
     headers: &HeaderMap,
 ) -> Result<Response, ApiError> {
-    let manager = state.tftp_manager.read().await.clone();
-    let file = manager
-        .get_session_file(session_id, relative_path)
-        .await
-        .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?
-        .ok_or_else(|| {
-            ApiError::not_found(format!("HTTP Boot file `{relative_path}` not found"))
-        })?;
-    let disk_path = file.disk_path;
-    let metadata = fs::metadata(&disk_path)
-        .await
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => {
-                ApiError::not_found(format!("HTTP Boot file `{relative_path}` not found"))
-            }
-            _ => ApiError::from(anyhow::Error::from(err)),
-        })?;
-    let file_len = usize::try_from(metadata.len()).map_err(|_| {
-        ApiError::service_unavailable(format!("HTTP Boot file `{relative_path}` is too large"))
-    })?;
-    let content_type = from_path(&disk_path).first_or_octet_stream().to_string();
+    let stored = state
+        .session_files
+        .get(session_id, relative_path)
+        .await?
+        .ok_or_else(|| ApiError::not_found("session file not found"))?;
+    read_stored_file_response(state, stored, headers).await
+}
+
+pub(crate) async fn read_stored_file_response(
+    state: &AppState,
+    stored: crate::persistence::files::StoredFile,
+    headers: &HeaderMap,
+) -> Result<Response, ApiError> {
+    let file_len =
+        usize::try_from(stored.size).map_err(|_| ApiError::internal("session file too large"))?;
+    let content_type = from_path(&stored.path).first_or_octet_stream().to_string();
     let content_type = HeaderValue::from_str(&content_type).map_err(|err| {
         ApiError::service_unavailable(format!("invalid content type `{content_type}`: {err}"))
     })?;
@@ -2255,12 +1979,9 @@ async fn read_session_file_response(
     let (start, length) = range
         .map(|(start, end)| (start, end - start + 1))
         .unwrap_or((0, file_len));
-    let mut file = File::open(&disk_path).await.map_err(anyhow::Error::from)?;
-    file.seek(SeekFrom::Start(start as u64))
-        .await
-        .map_err(anyhow::Error::from)?;
+    let files = state.session_files.clone();
     let session = state
-        .session_state(session_id)
+        .session_state(&stored.session_id)
         .await
         .ok_or_else(|| ApiError::not_found("session not found"))?;
     let global = state
@@ -2293,18 +2014,27 @@ async fn read_session_file_response(
         let _slots = (global, own);
         let transfer = async {
             let mut remaining = length;
+            let mut position = start;
             while remaining > 0 {
-                let mut chunk = vec![0u8; remaining.min(64 * 1024)];
-                let n = file.read(&mut chunk).await?;
+                let chunk = files
+                    .chunk(
+                        stored.id,
+                        (position / crate::persistence::files::CHUNK_SIZE) as u64,
+                    )
+                    .await
+                    .map_err(std::io::Error::other)?;
+                let offset = position % crate::persistence::files::CHUNK_SIZE;
+                let n = remaining.min(chunk.len().saturating_sub(offset));
                 if n == 0 {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
                         "file changed during download",
                     ));
                 }
-                chunk.truncate(n);
+                let bytes = Bytes::copy_from_slice(&chunk[offset..offset + n]);
+                position += n;
                 remaining -= n;
-                sender.send(Ok(Bytes::from(chunk))).await.map_err(|_| {
+                sender.send(Ok(bytes)).await.map_err(|_| {
                     std::io::Error::new(std::io::ErrorKind::BrokenPipe, "download closed")
                 })?;
             }
@@ -2418,14 +2148,8 @@ async fn put_http_boot_kernel(
         return Err(ApiError::conflict("HTTP Boot is disabled"));
     }
 
-    let max_mib = state.config.read().await.upload_limits.session_file_max_mib;
-    let (request_parts, body) = request.into_parts();
-    let body = read_limited_body(
-        Request::from_parts(request_parts.clone(), body),
-        max_mib,
-        "HTTP Boot kernel",
-    )
-    .await?;
+    let upload = crate::uploads::receive(&state, &session_id, request, "HTTP Boot kernel").await?;
+    let body = upload.bytes().await?;
     let validation = (|| {
         let actual = crate::boot_image::elf_arch(&body)?;
         anyhow::ensure!(
@@ -2441,56 +2165,59 @@ async fn put_http_boot_kernel(
         state.admin_events.invalidate(&["sessions"]);
         return Err(ApiError::bad_request(message));
     }
-    let _boot_operation = session.boot_operation.lock().await;
+    drop(body);
+    let _boot_operation = upload
+        .within_deadline(session.boot_operation.lock())
+        .await?;
     // The lease can stop while this request waits for another publication.
     active_session_state_or_404(&state, &session_id).await?;
 
-    let initramfs = if let Some(path) = initramfs_path.as_deref() {
-        let manager = state.tftp_manager.read().await.clone();
-        let file = manager
-            .get_session_file(&session_id, path)
-            .await
-            .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?
-            .ok_or_else(|| ApiError::bad_request("host initramfs not uploaded to this session"))?;
-        let size = fs::metadata(&file.disk_path)
-            .await
-            .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?
-            .len();
-        if size == 0 {
-            return Err(ApiError::bad_request("host initramfs is empty"));
-        }
-        if size > MAX_HTTP_BOOT_INITRAMFS_BYTES as u64 {
-            return Err(ApiError::bad_request(
-                "host initramfs exceeds HTTP Boot loader limit",
-            ));
-        }
-        let bytes = fs::read(&file.disk_path)
-            .await
-            .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
-        if bytes.len() as u64 != size {
-            return Err(ApiError::conflict(
-                "host initramfs changed during publication",
-            ));
-        }
-        let config = state.config.read().await.clone();
-        let url = http_boot_url(&config, &session_id, path)?;
-        Some(BootFile {
-            path: url.path().into(),
-            size: bytes.len() as u64,
-            sha256: hex_sha256(&bytes),
+    let initramfs = upload
+        .within_deadline(async {
+            Ok::<_, ApiError>(if let Some(path) = initramfs_path.as_deref() {
+                let manager = state.tftp_manager.read().await.clone();
+                let file = manager
+                    .get_session_file(&session_id, path)
+                    .await
+                    .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?
+                    .ok_or_else(|| {
+                        ApiError::bad_request("host initramfs not uploaded to this session")
+                    })?;
+                let size = fs::metadata(&file.disk_path)
+                    .await
+                    .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?
+                    .len();
+                if size == 0 {
+                    return Err(ApiError::bad_request("host initramfs is empty"));
+                }
+                if size > MAX_HTTP_BOOT_INITRAMFS_BYTES as u64 {
+                    return Err(ApiError::bad_request(
+                        "host initramfs exceeds HTTP Boot loader limit",
+                    ));
+                }
+                let bytes = fs::read(&file.disk_path)
+                    .await
+                    .map_err(|err| ApiError::service_unavailable(format!("{err:#}")))?;
+                if bytes.len() as u64 != size {
+                    return Err(ApiError::conflict(
+                        "host initramfs changed during publication",
+                    ));
+                }
+                let config = state.config.read().await.clone();
+                let url = http_boot_url(&config, &session_id, path)?;
+                Some(BootFile {
+                    path: url.path().into(),
+                    size: bytes.len() as u64,
+                    sha256: hex_sha256(&bytes),
+                })
+            } else {
+                None
+            })
         })
-    } else {
-        None
-    };
+        .await??;
 
-    let (kernel_file, kernel_size, kernel_sha256) = crate::uploads::store(
-        &state,
-        &session_id,
-        &remote_name,
-        Request::from_parts(request_parts, Body::from(body)),
-        "HTTP Boot kernel",
-    )
-    .await?;
+    let (kernel_file, kernel_size, kernel_sha256) =
+        upload.commit(&state, &session_id, &remote_name).await?;
     let config = state.config.read().await.clone();
     let kernel_response = http_boot_file_response(&config, &session_id, &remote_name, kernel_file)?;
     let response = publish_kernel(KernelPublishInput {
@@ -2565,12 +2292,9 @@ async fn list_session_files(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<Vec<SharedSessionFileResponse>>, ApiError> {
-    let board = state
-        .session_board(&session_id)
-        .await
-        .ok_or_else(|| ApiError::not_found("session board not found"))?;
+    get_session_or_404(&state, &session_id).await?;
     Ok(axum::Json(
-        session_file_responses(&state, &session_id, &board).await?,
+        session_file_responses(&state, &session_id).await?,
     ))
 }
 
@@ -2588,13 +2312,10 @@ async fn put_session_file(
             "session `{session_id}` is releasing"
         )));
     }
-    let board = state
-        .session_board(&session_id)
-        .await
-        .ok_or_else(|| ApiError::not_found("session board not found"))?;
+    get_session_or_404(&state, &session_id).await?;
     let (_relative_path, file) =
         put_session_file_from_request(&state, &session_id, request, "session file").await?;
-    let response = file_response_for_board(&state, &board, file).await?;
+    let response = file_response(&state, file).await?;
     Ok((StatusCode::CREATED, axum::Json(response)))
 }
 
@@ -2603,18 +2324,15 @@ async fn get_session_file(
     State(state): State<AppState>,
 ) -> Result<axum::Json<SharedSessionFileResponse>, ApiError> {
     let relative_path = parse_relative_path(&path)?;
-    let board = state
-        .session_board(&session_id)
-        .await
-        .ok_or_else(|| ApiError::not_found("session board not found"))?;
+    get_session_or_404(&state, &session_id).await?;
     let manager = state.tftp_manager.read().await.clone();
-    let file = manager
-        .get_session_file(&session_id, &relative_path)
+    let stored = state
+        .session_files
+        .get(&session_id, &relative_path)
         .await?
-        .ok_or_else(|| ApiError::not_found(format!("file `{relative_path}` not found")))?;
-    Ok(axum::Json(
-        file_response_for_board(&state, &board, file).await?,
-    ))
+        .ok_or_else(|| ApiError::not_found("session file not found"))?;
+    let file = stored.reference(manager.root_dir())?;
+    Ok(axum::Json(file_response(&state, file).await?))
 }
 
 async fn delete_session_file(
@@ -2646,27 +2364,15 @@ async fn get_session_tftp_status(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<axum::Json<TftpSessionResponse>, ApiError> {
-    let board = state
-        .session_board(&session_id)
-        .await
-        .ok_or_else(|| ApiError::not_found("session board not found"))?;
+    get_session_or_404(&state, &session_id).await?;
     let status = state.tftp_manager.read().await.status().await?;
-    let hide_network = state.config.read().await.edition.is_public();
-    let network = if hide_network {
-        None
-    } else {
-        resolved_board_network(&state, &board).await?
-    };
-    let server_ip = network
-        .as_ref()
-        .and_then(|network| network.server_ip.clone());
-    let files = session_file_responses(&state, &session_id, &board).await?;
+    let files = session_file_responses(&state, &session_id).await?;
 
     Ok(axum::Json(TftpSessionResponse {
-        available: status.enabled && status.healthy && status.writable && server_ip.is_some(),
+        available: false,
         provider: status.provider,
-        server_ip,
-        netmask: network.and_then(|network| network.netmask),
+        server_ip: None,
+        netmask: None,
         writable: status.writable,
         files,
     }))
@@ -2690,19 +2396,8 @@ async fn put_session_file_from_request(
 ) -> Result<(String, TftpFileRef), ApiError> {
     let relative_path = required_relative_path_header(request.headers(), "X-File-Path")?;
     let (file, _, _) =
-        put_session_file_bytes_from_request(state, session_id, &relative_path, request, body_label)
-            .await?;
+        crate::uploads::store(state, session_id, &relative_path, request, body_label).await?;
     Ok((relative_path, file))
-}
-
-async fn put_session_file_bytes_from_request(
-    state: &AppState,
-    session_id: &str,
-    relative_path: &str,
-    request: Request,
-    body_label: &'static str,
-) -> Result<(TftpFileRef, u64, String), ApiError> {
-    crate::uploads::store(state, session_id, relative_path, request, body_label).await
 }
 
 fn required_relative_path_header(
@@ -2719,42 +2414,25 @@ fn required_relative_path_header(
 async fn session_file_responses(
     state: &AppState,
     session_id: &str,
-    board: &BoardConfig,
 ) -> Result<Vec<SharedSessionFileResponse>, ApiError> {
     let manager = state.tftp_manager.read().await.clone();
     let files = manager.list_session_files(session_id).await?;
     let mut responses = Vec::with_capacity(files.len());
     for file in files {
-        responses.push(file_response_for_board(state, board, file).await?);
+        responses.push(file_response(state, file).await?);
     }
     Ok(responses)
 }
 
-async fn file_response_for_board(
+async fn file_response(
     state: &AppState,
-    board: &BoardConfig,
     file: TftpFileRef,
 ) -> Result<SharedSessionFileResponse, ApiError> {
-    if state.config.read().await.edition.is_public() {
-        let http_url = shared_http_url(state, "", &file.relative_path).await?;
-        return Ok(SharedSessionFileResponse::from_file(
-            file,
-            None,
-            Some(http_url),
-        ));
-    }
-    let tftp_url = resolved_board_network(state, board)
-        .await?
-        .and_then(|network| network.server_ip)
-        .map(|server_ip| session_tftp_url(&server_ip, &file.relative_path))
-        .transpose()?;
-    let shared_network = resolved_shared_network(state, board).await?;
-    let http_url = match shared_network.and_then(|network| network.server_ip) {
-        Some(server_ip) => Some(shared_http_url(state, &server_ip, &file.relative_path).await?),
-        None => None,
-    };
+    let http_url = shared_http_url(state, &file.relative_path).await?;
     Ok(SharedSessionFileResponse::from_file(
-        file, tftp_url, http_url,
+        file,
+        None,
+        Some(http_url),
     ))
 }
 
@@ -2782,7 +2460,7 @@ async fn run_board_power_action(
     } else {
         PowerAction::Off
     };
-    let message = state
+    state
         .execute_board_power_action(&board, action)
         .await
         .map_err(|err| match err {
@@ -2792,11 +2470,7 @@ async fn run_board_power_action(
             PowerActionError::Execution(err) => ApiError::from(err),
         })?;
 
-    let message = if state.config.read().await.edition.is_public() {
-        format!("{} completed", action.label())
-    } else {
-        message
-    };
+    let message = format!("{} completed", action.label());
     Ok(axum::Json(ActionResponse { ok: true, message }))
 }
 
@@ -2883,33 +2557,20 @@ fn http_boot_url(
 }
 
 pub(crate) fn http_boot_public_base_url(config: &ServerConfig) -> Result<Url, ApiError> {
-    if config.edition.is_public() {
-        return config
-            .auth
-            .public_base_url
-            .as_deref()
-            .ok_or_else(|| ApiError::service_unavailable("公网访问地址尚未配置"))
-            .and_then(|url| {
-                Url::parse(url).map_err(|_| ApiError::service_unavailable("公网访问地址无效"))
-            });
+    if !config.edition.is_public() {
+        return Url::parse(
+            config
+                .auth
+                .public_base_url
+                .as_deref()
+                .unwrap_or("http://127.0.0.1:2999"),
+        )
+        .map_err(|_| ApiError::service_unavailable("服务访问地址无效"));
     }
-    if let Some(public_base_url) = config.http_boot.public_base_url.as_deref()
-        && !public_base_url.trim().is_empty()
-    {
-        return Url::parse(public_base_url.trim())
-            .map_err(|err| ApiError::bad_request(format!("invalid HTTP Boot public URL: {err}")));
-    }
-
-    if let Some(network) = resolve_server_network(config)?
-        && let Some(server_ip) = network.server_ip
-    {
-        return server_http_base_url(&server_ip, config.listen_addr.port());
-    }
-
-    server_http_base_url(
-        &config.listen_addr.ip().to_string(),
-        config.listen_addr.port(),
-    )
+    config
+        .auth
+        .public_url()
+        .map_err(|_| ApiError::service_unavailable("服务访问地址未配置或无效"))
 }
 
 fn hex_sha256(bytes: &[u8]) -> String {
@@ -3034,7 +2695,6 @@ async fn read_limited_body(request: Request, max_mib: u32, label: &str) -> Resul
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedNetwork {
-    pub(crate) interface: Option<String>,
     pub(crate) server_ip: Option<String>,
     pub(crate) netmask: Option<String>,
 }
@@ -3047,7 +2707,6 @@ fn resolve_server_network(config: &ServerConfig) -> Result<Option<ResolvedNetwor
     };
     if interface.as_deref() == Some("lo") {
         return Ok(Some(ResolvedNetwork {
-            interface,
             server_ip: Some("127.0.0.1".into()),
             netmask: Some("255.0.0.0".into()),
         }));
@@ -3067,11 +2726,7 @@ fn resolve_server_network(config: &ServerConfig) -> Result<Option<ResolvedNetwor
     };
     let netmask = matched.and_then(|item| item.netmask);
 
-    Ok(Some(ResolvedNetwork {
-        interface,
-        server_ip,
-        netmask,
-    }))
+    Ok(Some(ResolvedNetwork { server_ip, netmask }))
 }
 
 pub(crate) async fn resolved_board_network(
@@ -3090,7 +2745,6 @@ pub(crate) async fn resolved_board_network(
         && profile.netmask.is_some()
     {
         return Ok(Some(ResolvedNetwork {
-            interface: None,
             server_ip: profile.server_ip.clone(),
             netmask: profile.netmask.clone(),
         }));
@@ -3111,54 +2765,12 @@ pub(crate) async fn resolved_board_network(
     Ok(network)
 }
 
-async fn resolved_shared_network(
-    state: &AppState,
-    board: &BoardConfig,
-) -> Result<Option<ResolvedNetwork>, ApiError> {
-    if let Some(network) = resolved_board_network(state, board).await? {
-        return Ok(Some(network));
-    }
-    let config = state.config.read().await.clone();
-    resolve_server_network(&config)
-}
-
-async fn shared_http_base_url(state: &AppState, server_ip: &str) -> Result<Url, ApiError> {
-    let config = state.config.read().await.clone();
-    if config.edition.is_public() {
-        return http_boot_public_base_url(&config);
-    }
-    server_http_base_url(server_ip, config.listen_addr.port())
-}
-
-fn server_http_base_url(server_ip: &str, port: u16) -> Result<Url, ApiError> {
-    let mut url = Url::parse("http://localhost/")
-        .map_err(|error| ApiError::service_unavailable(error.to_string()))?;
-    url.set_host(Some(server_ip))
-        .map_err(|_| ApiError::service_unavailable("invalid shared HTTP server address"))?;
-    url.set_port(Some(port))
-        .map_err(|_| ApiError::service_unavailable("invalid shared HTTP server port"))?;
-    Ok(url)
-}
-
-fn session_tftp_url(server_ip: &str, relative_path: &str) -> Result<Url, ApiError> {
-    let mut url = Url::parse("tftp://localhost/")
-        .map_err(|error| ApiError::service_unavailable(error.to_string()))?;
-    url.set_host(Some(server_ip))
-        .map_err(|_| ApiError::service_unavailable("invalid TFTP server address"))?;
-    append_url_path(&mut url, &[], relative_path)?;
-    Ok(url)
-}
-
-async fn shared_http_url(
-    state: &AppState,
-    server_ip: &str,
-    stored_relative_path: &str,
-) -> Result<Url, ApiError> {
+async fn shared_http_url(state: &AppState, stored_relative_path: &str) -> Result<Url, ApiError> {
     let relative_path = stored_relative_path
         .split_once("/sessions/")
         .map(|(_, relative)| relative)
         .ok_or_else(|| ApiError::service_unavailable("invalid stored session file path"))?;
-    let mut url = shared_http_base_url(state, server_ip).await?;
+    let mut url = http_boot_public_base_url(&*state.config.read().await)?;
     append_url_path(&mut url, &["share", "sessions"], relative_path)?;
     Ok(url)
 }
@@ -3179,24 +2791,6 @@ fn append_url_path(
         segments.push(segment);
     }
     Ok(())
-}
-
-fn boot_profile_with_resolved_network(
-    boot: BootConfig,
-    network: Option<&ResolvedNetwork>,
-) -> BootConfig {
-    let BootConfig::Uboot(mut profile) = boot else {
-        return boot;
-    };
-    if profile.network_mode == UbootNetworkMode::StaticIp {
-        if profile.server_ip.is_none() {
-            profile.server_ip = network.and_then(|item| item.server_ip.clone());
-        }
-        if profile.netmask.is_none() {
-            profile.netmask = network.and_then(|item| item.netmask.clone());
-        }
-    }
-    BootConfig::Uboot(profile)
 }
 
 fn dtb_name_header(headers: &HeaderMap, name: &str) -> Result<String, ApiError> {
@@ -3344,20 +2938,23 @@ pub(crate) async fn admin_topic(
     if !state.config.read().await.edition.is_public()
         && matches!(
             topic,
-            "users" | "roles" | "rentals" | "rental_requests" | "mail_deliveries"
+            "account_settings"
+                | "users"
+                | "roles"
+                | "rentals"
+                | "rental_requests"
+                | "mail_deliveries"
         )
     {
-        return Ok(serde_json::json!([]));
+        return Ok(if topic == "account_settings" {
+            serde_json::Value::Null
+        } else {
+            serde_json::json!([])
+        });
     }
     let extractor = State(state.clone());
     let value = match topic {
-        "account_settings" => {
-            if state.config.read().await.edition.is_public() {
-                Ok(super::site::account_settings(extractor).await?.0)
-            } else {
-                Ok(serde_json::Value::Null)
-            }
-        }
+        "account_settings" => Ok(super::site::account_settings(extractor).await?.0),
         "site" => serde_json::to_value(super::site::view(state).await?),
         "device_catalog" => Ok(serde_json::json!(super::site::device_catalog(state).await)),
         "legal_history" => Ok(super::site::history(extractor).await?.0),
@@ -3428,11 +3025,7 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode, header},
     };
-    use httpboot_protocol::{
-        BootArch, LEGACY_PROTOCOL_VERSION, LoaderDiscoveryProbe, LoaderHardwareInfo,
-        LoaderOtaState, LoaderPollRequest, LoaderPollResponse, LoaderStatusPhase,
-        LoaderStatusReport, OtaSource, PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION,
-    };
+    use httpboot_protocol::{BootArch, LoaderHardwareInfo};
     use serde::Serialize;
     use serde_json::json;
     #[cfg(unix)]
@@ -3447,8 +3040,8 @@ mod tests {
     use tower::util::ServiceExt;
 
     use super::{
-        DTB_UPLOAD_MAX_MIB, ResolvedNetwork, boot_profile_with_resolved_network, build_router,
-        http_boot_url, mib_to_bytes, resolve_server_network, virtual_loader_is_bindable,
+        DTB_UPLOAD_MAX_MIB, http_boot_url, mib_to_bytes, resolve_server_network,
+        virtual_loader_is_bindable,
     };
     use crate::{
         api::models::{
@@ -3459,8 +3052,7 @@ mod tests {
         config::{
             BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
             PowerManagementConfig, SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig,
-            TftpConfig, UbootNetworkMode, UefiHttpProfile, UploadLimitsConfig,
-            ZhongshengRelayPowerManagement,
+            TftpConfig, UefiHttpProfile, UploadLimitsConfig, ZhongshengRelayPowerManagement,
         },
         session::SessionLifecycleState,
         state::BoardLeaseState,
@@ -3703,7 +3295,12 @@ mod tests {
         let manager: Arc<dyn TftpManager> = build_tftp_manager(&config.tftp);
         let state = build_app_state(config_path, config, manager).await.unwrap();
         state.ensure_data_dirs().await.unwrap();
-        (build_router(state.clone()), state)
+        (
+            crate::test_support::authenticated_router(&state)
+                .await
+                .unwrap(),
+            state,
+        )
     }
 
     async fn create_board(app: &Router, request: impl Serialize) -> StatusCode {
@@ -4011,7 +3608,8 @@ mod tests {
         config.network.interface = "lo".into();
 
         let resolved = resolve_server_network(&config).unwrap().unwrap();
-        assert_eq!(resolved.interface.as_deref(), Some("lo"));
+        assert_eq!(resolved.server_ip.as_deref(), Some("127.0.0.1"));
+        assert_eq!(resolved.netmask.as_deref(), Some("255.0.0.0"));
     }
 
     #[test]
@@ -4021,12 +3619,12 @@ mod tests {
             ..ServerConfig::default()
         };
         config.network.interface = "lo".into();
-        config.http_boot.public_base_url = Some("http://10.3.10.192:2999/".into());
+        config.auth.public_base_url = Some("https://boards.example.com/".into());
 
         let url = http_boot_url(&config, "asus-1", "kernel.bin").unwrap();
         assert_eq!(
             url.as_str(),
-            "http://10.3.10.192:2999/boot/sessions/asus-1/kernel.bin"
+            "https://boards.example.com/boot/sessions/asus-1/kernel.bin"
         );
     }
 
@@ -4038,6 +3636,7 @@ mod tests {
         };
         config.network.interface = "lo".into();
         config.http_boot.public_base_url = None;
+        config.auth.public_base_url = Some("http://127.0.0.1:2999".into());
 
         let url = http_boot_url(&config, "asus-1", "kernel.elf").unwrap();
         assert_eq!(
@@ -4297,33 +3896,32 @@ mod tests {
         let error: crate::api::models::ErrorResponse = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(error.code, "virtual_device_not_discovered");
 
-        let offer = state
-            .loader_registry
-            .offer(
-                &LoaderDiscoveryProbe {
-                    protocol_version: PROTOCOL_VERSION,
-                    mac_address: mac,
-                    current_mac_address: mac,
-                    arch: BootArch::X86_64,
-                    loader_version: "test-loader".into(),
-                },
-                "http://10.77.0.1:2999".into(),
-            )
-            .await
-            .unwrap();
+        let announcement = httpboot_protocol::LoaderAnnouncement {
+            protocol_version: httpboot_protocol::DEVICE_PROTOCOL_VERSION,
+            mac_address: mac,
+            current_mac_address: mac,
+            arch: BootArch::X86_64,
+            loader_version: "test-loader".into(),
+            boot_epoch: "test-epoch".into(),
+            http_port: 443,
+            serial_id: None,
+            serial_ready: false,
+        };
+        let observed = httpboot_protocol::LoaderDeviceStatus {
+            protocol_version: announcement.protocol_version,
+            mac_address: mac,
+            current_mac_address: mac,
+            arch: announcement.arch,
+            loader_version: announcement.loader_version.clone(),
+            boot_epoch: announcement.boot_epoch.clone(),
+            hardware: LoaderHardwareInfo::default(),
+            boot: None,
+            ota: None,
+            serial: None,
+        };
         state
             .loader_registry
-            .accept_poll(&LoaderPollRequest {
-                protocol_version: PROTOCOL_VERSION,
-                registration_id: offer.registration_id,
-                mac_address: mac,
-                current_mac_address: mac,
-                ip_address: "10.77.0.100".into(),
-                arch: BootArch::X86_64,
-                loader_version: "test-loader".into(),
-                hardware: LoaderHardwareInfo::default(),
-                ota: None,
-            })
+            .accept_announcement(&announcement, &observed, "10.77.0.100".into())
             .await
             .unwrap();
         assert_eq!(create_board(&app, &board).await, StatusCode::CREATED);
@@ -4707,10 +4305,7 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
-            value["message"],
-            format!("executed Zhongsheng relay power-off via {relay_port}")
-        );
+        assert_eq!(value["message"], "power-off completed");
 
         let request = tokio::time::timeout(std::time::Duration::from_secs(1), requests.recv())
             .await
@@ -5334,7 +4929,7 @@ mod tests {
         );
         assert_eq!(
             uploaded["http_url"],
-            format!("http://127.0.0.1:0/boot/sessions/{session_id}/kernel.bin")
+            format!("http://127.0.0.1:2999/boot/sessions/{session_id}/kernel.bin")
         );
 
         let download_kernel = app
@@ -5439,7 +5034,7 @@ mod tests {
             assert!(ready_value["boot_id"].as_str().is_some());
             assert_eq!(
                 ready_value["kernel_url"],
-                format!("http://127.0.0.1:0/boot/sessions/{session_id}/kernel.elf")
+                format!("http://127.0.0.1:2999/boot/sessions/{session_id}/kernel.elf")
             );
             assert_eq!(ready_value["kernel_size"], bytes.len());
             assert_eq!(ready_value["kernel_sha256"], super::hex_sha256(&bytes));
@@ -5490,11 +5085,9 @@ mod tests {
         let bytes = crate::boot_image::test_elf(243);
         let second = app.oneshot(upload("riscv64", bytes.clone()));
         tokio::pin!(second);
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(100), second.as_mut())
-                .await
-                .is_err(),
-            "another upload bypassed the first kernel publication"
+        assert_eq!(
+            second.as_mut().await.unwrap().status(),
+            StatusCode::CONFLICT
         );
         assert!(
             manager
@@ -5513,283 +5106,51 @@ mod tests {
                 .status(),
             StatusCode::CREATED
         );
-        assert_eq!(
-            tokio::time::timeout(std::time::Duration::from_secs(3), second)
-                .await
-                .unwrap()
-                .unwrap()
-                .status(),
-            StatusCode::CREATED
-        );
         let command = session.boot_command().await.unwrap();
         let file = manager
             .get_session_file(&id, "kernel.elf")
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(tokio::fs::read(file.disk_path).await.unwrap(), bytes);
-        assert_eq!(command.arch, BootArch::Riscv64);
-        assert_eq!(command.kernel_sha256, super::hex_sha256(&bytes));
+        assert_eq!(
+            tokio::fs::read(file.disk_path).await.unwrap(),
+            crate::boot_image::test_elf(62)
+        );
+        assert_eq!(command.arch, BootArch::X86_64);
+        assert_eq!(
+            command.kernel_sha256,
+            super::hex_sha256(&crate::boot_image::test_elf(62))
+        );
         assert!(!session.is_stop_requested());
     }
 
     #[tokio::test]
-    async fn network_loader_publishes_verified_host_payload_only_to_supported_version() {
+    async fn legacy_loader_poll_rejects_unsigned_boot_requests() {
         let (app, state) = test_router_and_state_with_config(|_| {}).await;
-        let board = sample_httpboot_board("httpboot-initramfs");
-        let mac = board.network_identity.as_ref().unwrap().mac_address;
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&board).unwrap()).await,
-            StatusCode::CREATED
-        );
-        let session_id = create_session(&app, &board.board_type).await;
-        let archive = b"initramfs-bytes";
-
-        let uploaded = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/files"))
-                    .header("X-File-Path", "initramfs.cpio")
-                    .body(Body::from(archive.to_vec()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(uploaded.status(), StatusCode::CREATED);
-
-        let too_long = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/kernel"))
-                    .header("X-HttpBoot-Arch", "x86_64")
-                    .header("X-HttpBoot-Image-Format", "elf64")
-                    .header("X-HttpBoot-Initramfs-Path", "initramfs.cpio")
-                    .header("X-HttpBoot-Cmdline", "x".repeat(4096))
-                    .body(Body::from(crate::boot_image::test_elf(62)))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(too_long.status(), StatusCode::BAD_REQUEST);
-
-        let published = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/kernel"))
-                    .header("X-HttpBoot-Arch", "x86_64")
-                    .header("X-HttpBoot-Image-Format", "elf64")
-                    .header("X-HttpBoot-Entry-Symbol", "httpboot_entry")
-                    .header("X-HttpBoot-Initramfs-Path", "initramfs.cpio")
-                    .header("X-HttpBoot-Cmdline", "console=ttyS0 -- test")
-                    .body(Body::from(crate::boot_image::test_elf(62)))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(published.status(), StatusCode::CREATED);
-
-        for version in [
-            PROTOCOL_VERSION,
-            PREVIOUS_PROTOCOL_VERSION,
-            LEGACY_PROTOCOL_VERSION,
+        for edition in [
+            crate::config::Edition::Local,
+            crate::config::Edition::Public,
         ] {
-            let probe = LoaderDiscoveryProbe {
-                protocol_version: version,
-                mac_address: mac,
-                current_mac_address: mac,
-                arch: BootArch::X86_64,
-                loader_version: "test-loader".into(),
-            };
-            let offer = state
-                .loader_registry
-                .offer(&probe, "http://127.0.0.1:2999".into())
-                .await
-                .unwrap();
-            assert_eq!(offer.protocol_version, version);
-            let request = LoaderPollRequest {
-                protocol_version: version,
-                registration_id: offer.registration_id,
-                mac_address: mac,
-                current_mac_address: mac,
-                ip_address: "10.77.0.2".into(),
-                arch: BootArch::X86_64,
-                loader_version: "test-loader".into(),
-                hardware: LoaderHardwareInfo::default(),
-                ota: (version == PROTOCOL_VERSION).then(|| LoaderOtaState {
-                    active_sha256: "11".repeat(32),
-                    running_sha256: "11".repeat(32),
-                    pending_update_id: None,
-                    trial: false,
-                    source: None,
-                    last_update_id: None,
-                    last_outcome: None,
-                }),
-            };
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri("/api/v1/loaders/poll")
-                        .body(Body::from(serde_json::to_vec(&request).unwrap()))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            let response: LoaderPollResponse = serde_json::from_slice(&body).unwrap();
-            assert!(
-                matches!(response, LoaderPollResponse::Reject { ref code, .. }
-                if code == "serial_protocol_upgrade_required")
-            );
+            state.config.write().await.edition = edition;
+            for path in [
+                "/api/v1/loaders/poll",
+                "/api/v1/loaders/status",
+                "/api/v1/loaders/ota-status",
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri(path)
+                            .body(Body::from("{}"))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            }
         }
-    }
-
-    #[tokio::test]
-    async fn network_loader_reuses_session_boot_after_a_new_registration() {
-        let (app, state) = test_router_and_state_with_config(|_| {}).await;
-        let board = sample_httpboot_board("httpboot-network-1");
-        let mac = board.network_identity.as_ref().unwrap().mac_address;
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&board).unwrap()).await,
-            StatusCode::CREATED
-        );
-        let session_id = create_session(&app, &board.board_type).await;
-
-        let upload_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/v1/sessions/{session_id}/http-boot/kernel"))
-                    .header("X-HttpBoot-Remote-Name", "kernel.elf")
-                    .header("X-HttpBoot-Arch", "x86_64")
-                    .header("X-HttpBoot-Image-Format", "elf64")
-                    .header("X-HttpBoot-Entry-Symbol", "httpboot_entry")
-                    .body(Body::from(crate::boot_image::test_elf(62)))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(upload_response.status(), StatusCode::CREATED);
-        let body = to_bytes(upload_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let published: httpboot_protocol::KernelPublishResponse =
-            serde_json::from_slice(&body).unwrap();
-
-        let probe = LoaderDiscoveryProbe {
-            protocol_version: PREVIOUS_PROTOCOL_VERSION,
-            mac_address: mac,
-            current_mac_address: mac,
-            arch: BootArch::X86_64,
-            loader_version: "test-loader".into(),
-        };
-        let first = state
-            .loader_registry
-            .offer(&probe, "http://127.0.0.1:2999".into())
-            .await
-            .unwrap();
-        let make_poll = |registration_id: String| LoaderPollRequest {
-            protocol_version: PREVIOUS_PROTOCOL_VERSION,
-            registration_id,
-            mac_address: mac,
-            current_mac_address: mac,
-            ip_address: "10.77.0.2".into(),
-            arch: BootArch::X86_64,
-            loader_version: "test-loader".into(),
-            hardware: LoaderHardwareInfo {
-                manufacturer: Some("QEMU".into()),
-                product: Some("Standard PC".into()),
-                version: None,
-                serial: None,
-            },
-            ota: None,
-        };
-
-        let first_poll = make_poll(first.registration_id.clone());
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/loaders/poll")
-                    .body(Body::from(serde_json::to_vec(&first_poll).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let first_boot: LoaderPollResponse = serde_json::from_slice(&body).unwrap();
-        assert!(
-            matches!(first_boot, LoaderPollResponse::Reject { ref code, .. } if code == "serial_protocol_upgrade_required")
-        );
-
-        let status = LoaderStatusReport {
-            protocol_version: PREVIOUS_PROTOCOL_VERSION,
-            registration_id: first.registration_id.clone(),
-            mac_address: mac,
-            session_id: session_id.clone(),
-            boot_id: published.boot_id.clone(),
-            status: LoaderStatusPhase::ReadyToHandoff,
-        };
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/loaders/status")
-                    .body(Body::from(serde_json::to_vec(&status).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
-
-        let second = state
-            .loader_registry
-            .offer(&probe, "http://127.0.0.1:2999".into())
-            .await
-            .unwrap();
-        let second_poll = make_poll(second.registration_id);
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/loaders/poll")
-                    .body(Body::from(serde_json::to_vec(&second_poll).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let second_boot: LoaderPollResponse = serde_json::from_slice(&body).unwrap();
-        assert!(
-            matches!(second_boot, LoaderPollResponse::Reject { ref code, .. } if code == "serial_protocol_upgrade_required")
-        );
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/loaders/poll")
-                    .body(Body::from(serde_json::to_vec(&first_poll).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let stale: LoaderPollResponse = serde_json::from_slice(&body).unwrap();
-        assert!(
-            matches!(stale, LoaderPollResponse::Reject { ref code, .. } if code == "duplicate_mac")
-        );
     }
 
     #[tokio::test]
@@ -5898,10 +5259,7 @@ mod tests {
             uploaded["relative_path"],
             format!("ostool/sessions/{session_id}/boot/Image")
         );
-        assert_eq!(
-            uploaded["tftp_url"],
-            format!("tftp://127.0.0.1/ostool/sessions/{session_id}/boot/Image")
-        );
+        assert!(uploaded["tftp_url"].is_null());
 
         let get_response = app
             .clone()
@@ -5973,10 +5331,10 @@ mod tests {
             .await
             .unwrap();
         let profile: BootProfileResponse = serde_json::from_slice(&profile_body).unwrap();
-        assert_eq!(profile.server_ip.as_deref(), Some("127.0.0.1"));
+        assert_eq!(profile.server_ip, None);
         assert_eq!(
             profile.http_base_url.unwrap().as_str(),
-            "http://127.0.0.1:0/"
+            "http://127.0.0.1:2999/"
         );
 
         let relative_path = "tools/network/probe script.sh";
@@ -6005,7 +5363,7 @@ mod tests {
         assert_eq!(
             http_url.as_str(),
             format!(
-                "http://127.0.0.1:0/share/sessions/{session_id}/tools/network/probe%20script.sh"
+                "http://127.0.0.1:2999/share/sessions/{session_id}/tools/network/probe%20script.sh"
             )
         );
 
@@ -6129,36 +5487,12 @@ mod tests {
         );
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-        assert_eq!(value["boot"]["network_mode"], "static_ip");
-        assert_eq!(value["boot"]["board_ip"], "192.168.10.20");
-        assert_eq!(value["boot"]["server_ip"], "192.168.10.2");
-        assert_eq!(value["boot"]["netmask"], "255.255.255.0");
-        assert_eq!(value["boot"]["gatewayip"], "192.168.10.1");
-        assert_eq!(value["server_ip"], "192.168.10.2");
-        assert_eq!(value["netmask"], "255.255.255.0");
-    }
-
-    #[test]
-    fn boot_profile_fills_static_uboot_network_from_resolved_server_network() {
-        let boot = BootConfig::Uboot(crate::config::UbootProfile {
-            use_tftp: true,
-            network_mode: UbootNetworkMode::StaticIp,
-            board_ip: Some("192.168.10.20".into()),
-            ..Default::default()
-        });
-        let resolved = ResolvedNetwork {
-            interface: Some("eth0".into()),
-            server_ip: Some("192.168.10.2".into()),
-            netmask: Some("255.255.255.0".into()),
-        };
-
-        let BootConfig::Uboot(profile) = boot_profile_with_resolved_network(boot, Some(&resolved))
-        else {
-            panic!("expected uboot profile");
-        };
-
-        assert_eq!(profile.server_ip.as_deref(), Some("192.168.10.2"));
-        assert_eq!(profile.netmask.as_deref(), Some("255.255.255.0"));
+        assert_eq!(value["boot"]["network_mode"], "dhcp");
+        for field in ["board_ip", "server_ip", "netmask", "gatewayip"] {
+            assert!(value["boot"][field].is_null());
+        }
+        assert!(value["server_ip"].is_null());
+        assert!(value["netmask"].is_null());
     }
 
     #[test]
@@ -6698,466 +6032,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v4_upgrade_routes_require_a_board_assignment_and_matching_trial() {
+    async fn legacy_v4_ota_routes_require_an_authenticated_transport() {
         let (app, state) = test_router_and_state_with_config(|_| {}).await;
-        let board = sample_httpboot_board("ota-board");
-        let mac = board.network_identity.as_ref().unwrap().mac_address;
-        assert_eq!(
-            create_board(&app, serde_json::to_value(&board).unwrap()).await,
-            StatusCode::CREATED
-        );
-        let image = b"opaque axloader image".to_vec();
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/admin/loader-images")
-                    .header(header::CONTENT_LENGTH, image.len())
-                    .body(Body::from(image.clone()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let uploaded: crate::ota::Image =
-            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
-        let queue = || {
-            Request::builder()
-                .method("POST")
-                .uri(format!("/api/v1/admin/boards/{}/loader-updates", board.id))
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({"image_sha256": uploaded.sha256}).to_string(),
-                ))
-                .unwrap()
-        };
-        let response = app.clone().oneshot(queue()).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let mut job: crate::ota::Job =
-            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
-        let download = |update_id: &str| {
-            Request::builder()
-                .uri(format!("/api/v1/loader-updates/{update_id}/image"))
-                .body(Body::empty())
-                .unwrap()
-        };
-        let report = |registration_id: &str, update_id: &str, phase: &str| {
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/loaders/ota-status")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({
-                        "protocol_version": 4,
-                        "registration_id": registration_id,
-                        "mac_address": mac,
-                        "update_id": update_id,
-                        "phase": phase,
-                    })
-                    .to_string(),
-                ))
-                .unwrap()
-        };
-        assert_eq!(
-            app.clone()
-                .oneshot(download(&job.update_id))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::CONFLICT
-        );
-        let probe = LoaderDiscoveryProbe {
-            protocol_version: PROTOCOL_VERSION,
-            mac_address: mac,
-            current_mac_address: mac,
-            arch: BootArch::Loongarch64,
-            loader_version: "ota-test".into(),
-        };
-        let registration = state
-            .loader_registry
-            .offer(&probe, "http://127.0.0.1:2999".into())
-            .await
-            .unwrap();
-        let mut poll = LoaderPollRequest {
-            protocol_version: PROTOCOL_VERSION,
-            registration_id: registration.registration_id.clone(),
-            mac_address: mac,
-            current_mac_address: mac,
-            ip_address: "10.0.2.15".into(),
-            arch: BootArch::Loongarch64,
-            loader_version: "ota-test".into(),
-            hardware: LoaderHardwareInfo::default(),
-            ota: None,
-        };
-        let poll_request = |poll: &LoaderPollRequest| {
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/loaders/poll")
-                .body(Body::from(serde_json::to_vec(poll).unwrap()))
-                .unwrap()
-        };
-        let response = app.clone().oneshot(poll_request(&poll)).await.unwrap();
-        let reply: LoaderPollResponse =
-            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
-        assert!(
-            matches!(reply, LoaderPollResponse::Reject { ref code, .. } if code == "ota_state_missing")
-        );
-        assert_eq!(
-            app.clone()
-                .oneshot(report(&poll.registration_id, &job.update_id, "failed"))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::CONFLICT
-        );
-        assert_eq!(
-            state.ota.job(&board.id).await.unwrap().phase,
-            crate::ota::Phase::Queued
-        );
-        assert_eq!(
-            app.clone()
-                .oneshot(download(&job.update_id))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::CONFLICT
-        );
-
-        // Requeue while the non-x86 loader is online, without treating its CPU as a capability.
-        state.ota.cancel(&board.id, &job.update_id).await.unwrap();
-        let response = app.clone().oneshot(queue()).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-        job = serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-            .unwrap();
-        assert_eq!(
-            app.clone().oneshot(queue()).await.unwrap().status(),
-            StatusCode::CONFLICT
-        );
-        let delete = || {
-            Request::builder()
-                .method("DELETE")
-                .uri(format!("/api/v1/admin/loader-images/{}", uploaded.sha256))
-                .body(Body::empty())
-                .unwrap()
-        };
-        assert_eq!(
-            app.clone().oneshot(delete()).await.unwrap().status(),
-            StatusCode::CONFLICT
-        );
-        let idle = LoaderOtaState {
-            active_sha256: "11".repeat(32),
-            running_sha256: "11".repeat(32),
-            pending_update_id: None,
-            trial: false,
-            source: None,
-            last_update_id: None,
-            last_outcome: None,
-        };
-        poll.ota = Some(idle.clone());
-        let response = app.clone().oneshot(poll_request(&poll)).await.unwrap();
-        let reply: LoaderPollResponse =
-            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
-        assert!(
-            matches!(reply, LoaderPollResponse::Update { ref update_id, .. } if update_id == &job.update_id)
-        );
-        let response = app.clone().oneshot(download(&job.update_id)).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap()
-                .as_ref(),
-            image
-        );
-
-        assert_eq!(
-            app.clone()
-                .oneshot(report(&poll.registration_id, &job.update_id, "downloading"))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::NO_CONTENT
-        );
-
-        let idle_runtime = state.board_runtimes.read().await[&board.id].clone();
-        assert!(state.claim_board_for_session(&board.id, "occupied").await);
-        assert_eq!(
-            app.clone()
-                .oneshot(download(&job.update_id))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::CONFLICT
-        );
-        state
-            .board_runtimes
-            .write()
-            .await
-            .insert(board.id.clone(), idle_runtime);
-
-        state
-            .boards
-            .write()
-            .await
-            .get_mut(&board.id)
-            .unwrap()
-            .network_identity = None;
-        assert_eq!(
-            app.clone()
-                .oneshot(download(&job.update_id))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::CONFLICT
-        );
-        state
-            .boards
-            .write()
-            .await
-            .get_mut(&board.id)
-            .unwrap()
-            .network_identity = board.network_identity.clone();
-
-        let mut corrupt = image.clone();
-        *corrupt.last_mut().unwrap() ^= 1;
-        sqlx::query("UPDATE ota_images SET content=$2 WHERE sha256=$1")
-            .bind(&uploaded.sha256)
-            .bind(&corrupt)
-            .execute(state.database.pool())
-            .await
-            .unwrap();
-        assert_eq!(
-            app.clone()
-                .oneshot(download(&job.update_id))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-        sqlx::query("UPDATE ota_images SET content=$2 WHERE sha256=$1")
-            .bind(&uploaded.sha256)
-            .bind(&image[..image.len() - 1])
-            .execute(state.database.pool())
-            .await
-            .unwrap();
-        assert_eq!(
-            app.clone()
-                .oneshot(download(&job.update_id))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-        sqlx::query("UPDATE ota_images SET content=$2 WHERE sha256=$1")
-            .bind(&uploaded.sha256)
-            .bind(&image)
-            .execute(state.database.pool())
-            .await
-            .unwrap();
-
-        // Losing capability in the same registration must revoke a previous assignment.
-        poll.ota = None;
-        let response = app.clone().oneshot(poll_request(&poll)).await.unwrap();
-        let reply: LoaderPollResponse =
-            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
-        assert!(
-            matches!(reply, LoaderPollResponse::Reject { ref code, .. } if code == "ota_state_missing")
-        );
-        assert_eq!(
-            state.ota.job(&board.id).await.unwrap().phase,
-            crate::ota::Phase::Downloading
-        );
-        assert_eq!(
-            app.clone()
-                .oneshot(download(&job.update_id))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::CONFLICT
-        );
-        poll.ota = Some(idle.clone());
-        app.clone().oneshot(poll_request(&poll)).await.unwrap();
-        assert_eq!(
-            app.clone()
-                .oneshot(download(&job.update_id))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::OK
-        );
-
-        // A registration replacement cannot inherit the previous registration's OTA capability.
-        let replacement = state
-            .loader_registry
-            .offer(&probe, "http://127.0.0.1:2999".into())
-            .await
-            .unwrap();
-        poll.registration_id = replacement.registration_id;
-        state.loader_registry.accept_poll(&poll).await.unwrap();
-        assert_eq!(
-            app.clone()
-                .oneshot(report(&poll.registration_id, &job.update_id, "failed"))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::CONFLICT
-        );
-        assert_eq!(
-            state.ota.job(&board.id).await.unwrap().phase,
-            crate::ota::Phase::Downloading
-        );
-        assert_eq!(
-            app.clone()
-                .oneshot(download(&job.update_id))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::CONFLICT
-        );
-        app.clone().oneshot(poll_request(&poll)).await.unwrap();
-        assert_eq!(
-            app.clone()
-                .oneshot(download(&job.update_id))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::OK
-        );
-
-        // Earlier poll protocols cannot obtain OTA even if they include a state object.
-        for protocol_version in [PREVIOUS_PROTOCOL_VERSION, LEGACY_PROTOCOL_VERSION] {
-            let mut old_probe = probe.clone();
-            old_probe.protocol_version = protocol_version;
-            let old_registration = state
-                .loader_registry
-                .offer(&old_probe, "http://127.0.0.1:2999".into())
-                .await
-                .unwrap();
-            poll.protocol_version = protocol_version;
-            poll.registration_id = old_registration.registration_id;
-            let response = app.clone().oneshot(poll_request(&poll)).await.unwrap();
-            let reply: LoaderPollResponse =
-                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                    .unwrap();
-            assert!(matches!(reply, LoaderPollResponse::BoundIdle { .. }));
-            assert_eq!(
-                state.ota.job(&board.id).await.unwrap().phase,
-                crate::ota::Phase::Downloading
-            );
-            assert_eq!(
-                app.clone()
-                    .oneshot(download(&job.update_id))
+        for edition in [
+            crate::config::Edition::Local,
+            crate::config::Edition::Public,
+        ] {
+            state.config.write().await.edition = edition;
+            for path in [
+                "/api/v1/loaders/poll",
+                "/api/v1/loaders/status",
+                "/api/v1/loaders/ota-status",
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri(path)
+                            .body(Body::from("{}"))
+                            .unwrap(),
+                    )
                     .await
-                    .unwrap()
-                    .status(),
-                StatusCode::CONFLICT
-            );
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            }
         }
-        poll.protocol_version = PROTOCOL_VERSION;
-
-        poll.registration_id = state
-            .loader_registry
-            .offer(&probe, "http://127.0.0.1:2999".into())
-            .await
-            .unwrap()
-            .registration_id;
-        app.clone().oneshot(poll_request(&poll)).await.unwrap();
-
-        let trial = poll.ota.as_mut().unwrap();
-        trial.pending_update_id = Some(job.update_id.clone());
-        trial.running_sha256 = uploaded.sha256.clone();
-        trial.trial = true;
-        trial.source = Some(OtaSource::Direct);
-        let response = app.clone().oneshot(poll_request(&poll)).await.unwrap();
-        let reply: LoaderPollResponse =
-            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
-        assert!(matches!(reply, LoaderPollResponse::BoundIdle { .. }));
-        assert_eq!(
-            app.clone()
-                .oneshot(download(&job.update_id))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::CONFLICT
-        );
-        poll.ota.as_mut().unwrap().source = Some(OtaSource::Server);
-        let response = app.clone().oneshot(poll_request(&poll)).await.unwrap();
-        let reply: LoaderPollResponse =
-            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
-        assert!(
-            matches!(reply, LoaderPollResponse::ConfirmUpdate { ref update_id, .. } if update_id == &job.update_id)
-        );
-        assert_eq!(
-            app.clone()
-                .oneshot(download(&job.update_id))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::CONFLICT
-        );
-        assert_eq!(
-            app.clone()
-                .oneshot(report(&poll.registration_id, &job.update_id, "succeeded"))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::CONFLICT
-        );
-        state
-            .ota
-            .report(
-                &board.id,
-                &poll.registration_id,
-                &job.update_id,
-                crate::ota::Phase::Succeeded,
-                None,
-                Some(&uploaded.sha256),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            app.clone()
-                .oneshot(report(&poll.registration_id, &job.update_id, "failed"))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::CONFLICT
-        );
-        assert_eq!(
-            app.clone()
-                .oneshot(report(
-                    &registration.registration_id,
-                    &job.update_id,
-                    "failed"
-                ))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::CONFLICT
-        );
-        assert_eq!(
-            app.clone().oneshot(delete()).await.unwrap().status(),
-            StatusCode::NO_CONTENT
-        );
-        assert_eq!(
-            app.oneshot(download(&job.update_id))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::NOT_FOUND
-        );
-        let retained = state.ota.job(&board.id).await.unwrap();
-        assert_eq!(retained.phase, crate::ota::Phase::Succeeded);
-        assert_eq!(retained.image.sha256, uploaded.sha256);
-        assert_eq!(retained.image.size, uploaded.size);
-        assert_eq!(retained.image.version, uploaded.version);
     }
 }

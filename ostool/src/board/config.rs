@@ -327,7 +327,7 @@ shell_check_steps = [
   { shell_prefix = " login: ", shell_cmd = " root ", success_regex = ["ok"] },
 ]
 timeout = 15
-server = "http://10.0.0.2"
+server = "https://10.0.0.2"
 port = 9000
 "#,
         )
@@ -353,14 +353,14 @@ port = 9000
         assert_eq!(
             config
                 .resolve_endpoint(
-                    Some("http://127.0.0.1"),
+                    Some("https://127.0.0.1"),
                     None,
                     &BoardGlobalConfig::default(),
                 )
                 .unwrap()
                 .base_url
                 .as_str(),
-            "http://127.0.0.1:9000/"
+            "https://127.0.0.1:9000/"
         );
     }
 

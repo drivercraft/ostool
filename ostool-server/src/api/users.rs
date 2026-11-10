@@ -172,7 +172,7 @@ async fn update_user(
         Some(ref p) => Some(crate::persistence::postgres::hash_password_async(p.clone()).await?),
         None => None,
     };
-    let mut tx = state.database.pool().begin().await.map_err(sql_error)?;
+    let mut tx = state.database.begin().await.map_err(sql_error)?;
     // Serializes changes to administrators, including concurrent demotions.
     sqlx::query("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE")
         .execute(&mut *tx)
@@ -230,7 +230,7 @@ async fn delete_user(
         return Err(ApiError::conflict("不能删除当前账号"));
     }
     ensure_assignable(&state, &actor, "member", Some(id)).await?;
-    let mut tx = state.database.pool().begin().await.map_err(sql_error)?;
+    let mut tx = state.database.begin().await.map_err(sql_error)?;
     sqlx::query("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE")
         .execute(&mut *tx)
         .await
@@ -358,7 +358,7 @@ async fn update_role(
         &input.allocation_policy,
     )?;
     let _gate = state.rental_gate.lock().await;
-    let mut tx = state.database.pool().begin().await?;
+    let mut tx = state.database.begin().await?;
     sqlx::query("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE")
         .execute(&mut *tx)
         .await?;
@@ -452,12 +452,11 @@ async fn delete_role(
 }
 pub async fn deployment(State(state): State<AppState>) -> Json<serde_json::Value> {
     let config = state.config.read().await;
-    let public = config.edition.is_public();
     let redis_connected = match &state.security_cache {
         Some(cache) => cache.ping().await.is_ok(),
         None => false,
     };
-    let security = if public {
+    let security = {
         serde_json::json!({
             "图形验证方式":config.security.captcha_provider,
             "注册要求邮箱验证":config.security.registration_email_verification,
@@ -467,17 +466,13 @@ pub async fn deployment(State(state): State<AppState>) -> Json<serde_json::Value
             "SMTP 密码已配置":config.security.smtp_password.is_some(),
             "双重验证加密密钥已配置":config.security.mfa_encryption_key.is_some()
         })
-    } else {
-        serde_json::json!({})
     };
     let persistent = "PostgreSQL";
-    let mut storage = serde_json::json!({"boards":persistent,"dtbs":persistent,"ota":persistent,"configuration":"PostgreSQL（部署启动参数仍来自 TOML / .env）","active_sessions":"进程状态（重启释放，不恢复硬件连接）","artifacts":"临时文件（随租约清理）"});
-    if public {
-        for key in ["users", "roles", "rentals"] {
-            storage[key] = serde_json::json!("PostgreSQL");
-        }
+    let mut storage = serde_json::json!({"boards":persistent,"dtbs":persistent,"ota":persistent,"configuration":"PostgreSQL（部署启动参数仍来自 TOML / .env）","active_sessions":"进程状态（重启释放，不恢复硬件连接）","artifacts":"PostgreSQL 分块存储（磁盘仅为可重建缓存）"});
+    for key in ["users", "roles", "rentals"] {
+        storage[key] = serde_json::json!("PostgreSQL");
     }
     Json(
-        serde_json::json!({"edition":config.edition,"database_connected":true,"redis_connected":redis_connected,"security":security,"auth_enabled":public,"allow_registration":public&&config.auth.allow_registration,"public_base_url":config.auth.public_base_url,"access_token_ttl_secs":config.auth.access_token_ttl_secs,"storage":storage}),
+        serde_json::json!({"edition":config.edition,"database_connected":true,"redis_connected":redis_connected,"security":security,"auth_enabled":config.edition.is_public(),"allow_registration":config.edition.is_public() && config.auth.allow_registration,"public_base_url":config.auth.public_base_url,"access_token_ttl_secs":config.auth.access_token_ttl_secs,"storage":storage}),
     )
 }

@@ -176,7 +176,7 @@ async fn complete_login(
     store::limit(&state.security_cache, "mfa-user", &user.to_string(), 6, 900).await?;
     let config = state.config.read().await.clone();
     let encryption = key(&config.security)?;
-    let mut tx = state.database.pool().begin().await?;
+    let mut tx = state.database.begin().await?;
     let version: Option<i64> = sqlx::query_scalar(
         "SELECT security_version FROM users WHERE id=$1 AND NOT disabled FOR UPDATE",
     )
@@ -259,7 +259,7 @@ async fn step_up(
         return Err(ApiError::unauthorized("身份验证失败"));
     }
     let config = state.config.read().await.security.clone();
-    let mut tx = state.database.pool().begin().await?;
+    let mut tx = state.database.begin().await?;
     sqlx::query(
         "SELECT id FROM users WHERE id=$1 AND security_version=$2 AND NOT disabled FOR UPDATE",
     )
@@ -394,7 +394,7 @@ async fn confirm(
     .await?;
     let config = state.config.read().await.security.clone();
     let encryption = key(&config)?;
-    let mut tx = state.database.pool().begin().await?;
+    let mut tx = state.database.begin().await?;
     let version: i64 = sqlx::query_scalar(
         "SELECT security_version FROM users WHERE id=$1 AND NOT disabled FOR UPDATE",
     )
@@ -451,7 +451,7 @@ async fn disable(
     Extension(CurrentCredential(credential)): Extension<CurrentCredential>,
 ) -> Result<Response, ApiError> {
     web::require_step_up(&credential)?;
-    let mut tx = state.database.pool().begin().await?;
+    let mut tx = state.database.begin().await?;
     sqlx::query(
         "SELECT id FROM users WHERE id=$1 AND security_version=$2 AND NOT disabled FOR UPDATE",
     )
@@ -497,7 +497,7 @@ async fn recovery(
     Extension(CurrentCredential(credential)): Extension<CurrentCredential>,
 ) -> Result<Json<Value>, ApiError> {
     web::require_step_up(&credential)?;
-    let mut tx = state.database.pool().begin().await?;
+    let mut tx = state.database.begin().await?;
     sqlx::query(
         "SELECT id FROM users WHERE id=$1 AND security_version=$2 AND NOT disabled FOR UPDATE",
     )

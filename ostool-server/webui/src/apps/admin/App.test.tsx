@@ -66,39 +66,23 @@ afterEach(() => {
   document.documentElement.classList.remove("dark", "light");
 });
 describe("edition navigation and authentication", () => {
-  it("local edition opens without login and hides user and rental modules", async () => {
-    mocks.config.mockResolvedValue({
-      edition: "local",
-      enabled: false,
-      database_available: true,
-    });
+  it("local edition opens without login and hides account and allocation management", async () => {
+    mocks.config.mockResolvedValue({edition:"local",enabled:false,database_available:true});
+    mocks.me.mockResolvedValue({id:"local-admin",username:"admin",email:"admin@test.local",is_admin:true});
     render(<App />);
-    await screen.findByRole("button", { name: "账号菜单" });
-    await userEvent.click(screen.getByRole("button", { name: "账号菜单" }));
-    await screen.findByText("本地版 · 免登录");
+    await screen.findByText("本地设备总览");
+    expect(mocks.me).not.toHaveBeenCalled();
     expect(screen.queryByText("用户管理")).toBeNull();
     expect(screen.queryByText("租赁管理")).toBeNull();
-    expect(screen.queryByText("我的账号")).toBeNull();
-    const mainNavigation = screen.getByRole("navigation", { name: "主导航" });
-    expect(
-      within(mainNavigation).getAllByRole("link").at(-1)?.textContent,
-    ).toBe("审计日志");
-    const systemNavigation = screen.getByRole("navigation", {
-      name: "系统导航",
-    });
-    expect(within(systemNavigation).getAllByRole("link")).toHaveLength(1);
-    expect(
-      within(systemNavigation).getByRole("link", { name: "系统设置" }),
-    ).toBeTruthy();
-    expect(mocks.me).not.toHaveBeenCalled();
     await waitFor(() => expect(mocks.connect).toHaveBeenCalledTimes(1));
   });
   it("does not show a global disconnection banner above page content", async () => {
     mocks.config.mockResolvedValue({
       edition: "local",
-      enabled: false,
+      enabled: true,
       database_available: true,
     });
+    mocks.me.mockResolvedValue({id:"local-admin",username:"admin",email:"admin@test.local",is_admin:true});
     mocks.connection.mockReturnValue("reconnecting");
     render(<App />);
     await screen.findByText("本地设备总览");

@@ -232,7 +232,7 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
     state.refresh_serial_exclusions().await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let server_addr = listener.local_addr().unwrap();
-    let app = build_router(state.clone());
+    let app = test_database::authenticated_router(&state).await.unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let device = Arc::new(Mutex::new(Device {
         status: LoaderDeviceStatus {
@@ -262,8 +262,12 @@ async fn serial_null_session_binds_reuses_uart_and_releases_real_reader() {
         .route("/api/v1/boot/jobs/{id}/start", post(start))
         .with_state(device.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let device_port = listener.local_addr().unwrap().port();
+    let device_address = listener.local_addr().unwrap();
+    let device_port = device_address.port();
     let http = tokio::spawn(async move { axum::serve(listener, fake).await.unwrap() });
+    let _tls = test_database::provision_tls_proxy(&state, "auto", device_address)
+        .await
+        .unwrap();
     let created = state
         .create_session_with_board_id("uefi", "auto", &[], None)
         .await

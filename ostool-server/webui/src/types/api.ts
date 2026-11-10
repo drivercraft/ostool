@@ -540,6 +540,8 @@ export interface RentalApplication {
   notes: string;
 }
 export interface CatalogBoard {
+  instant_available?: boolean;
+  instant_ends_at?: string | null;
   id: string;
   board_type: string;
   tags: string[];
@@ -860,4 +862,10 @@ export interface SecretUpdates {
   turnstile_secret?: string;
   clear_smtp_password?: boolean;
   clear_turnstile_secret?: boolean;
+}
+
+export interface DeviceConnection {
+  endpoint: string;
+  ca_pem: string | null;
+  configured: boolean;
 }

@@ -230,7 +230,7 @@ export default function Overview({
   const data = useResource("dashboard"),
     connection = useConnection(),
     error = useErrors().dashboard,
-    publicEdition = useEdition().edition === "public";
+    publicEdition = useEdition().enabled;
   return (
     <PagePanel
       className="dashboard-panel"

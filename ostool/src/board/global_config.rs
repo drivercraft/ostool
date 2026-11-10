@@ -9,15 +9,15 @@ use reqwest::Url;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
-// Keep the URL-based configuration aligned with ostool-server's established
-// default listen port so a newly generated config works without user edits.
-pub const DEFAULT_BOARD_SERVER: &str = "http://localhost:2999";
+// New configurations use the authenticated HTTPS gateway. The native server
+// listener remains on loopback behind that gateway.
+pub const DEFAULT_BOARD_SERVER: &str = "https://localhost";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthMode {
-    #[default]
     Disabled,
+    #[default]
     Required,
 }
 
@@ -154,7 +154,7 @@ impl Default for BoardGlobalConfig {
         Self {
             server: default_server(),
             port: None,
-            auth_mode: AuthMode::Disabled,
+            auth_mode: AuthMode::Required,
         }
     }
 }
@@ -269,10 +269,10 @@ mod tests {
         let loaded = LoadedBoardGlobalConfig::load_or_create_at(&path).unwrap();
 
         assert!(loaded.created);
-        assert_eq!(loaded.board.server, "http://localhost:2999");
+        assert_eq!(loaded.board.server, "https://localhost");
         assert_eq!(loaded.board.port, None);
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("server = \"http://localhost:2999\""));
+        assert!(content.contains("server = \"https://localhost\""));
         assert!(!content.contains("server_ip"));
     }
 
@@ -284,7 +284,7 @@ mod tests {
                 .unwrap()
                 .base_url
                 .as_str(),
-            "http://localhost:2999/"
+            "https://localhost/"
         );
     }
 
@@ -383,6 +383,7 @@ mod tests {
                 [board]
                 server_ip = "localhost"
                 port = 2999
+                auth_mode = "disabled"
             "#,
         )
         .unwrap();

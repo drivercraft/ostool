@@ -4,22 +4,16 @@
 
 ### 1.1 入口与发现
 
-协议 v6 将 HTTP 控制入口放在 axloader。`network::Announcer` 在同一 UEFI 网卡
-向 UDP `2998` 单向广播 MAC、架构、启动代次和设备 TCP4 端口 `2999`；
-`direct::Listener` 在该端口处理启动与 OTA。ostool-server 的
-`loader::serve_udp_discovery()` 对 v5/v6 广播调用 `device::reconcile()`，先反向
-GET 设备状态，核对 MAC、代次和架构，才从 PostgreSQL 板卡库存的运行投影中查找当前绑定。
-发现不要求服务端响应：直连客户端知道设备 IP 时可独立控制装载器。
-设备没有可写 ESP 或 OTA 状态区时，状态响应中的 `ota` 可以为空；服务端不下发
-升级镜像，并为任务保存可见的等待原因，不按架构判为失败。v6 设备已有 Session 的
-普通启动推送仍然可用。
+当前 ostool-server 不再接受无认证 UDP 发现、TFTP 或旧 poll/status 回调。
+管理员先创建开发板并绑定 MAC，再在“设备认证”中配置固定 HTTPS 来源、独立 Bearer 凭据和可选私有 CA。
+凭据加密存储在 PostgreSQL，接口不返回 token。控制器只探测已配置的 HTTPS 来源，
+核验证书和设备凭据后核对 MAC、架构及启动代次；未认证报文不能决定回调地址。
 
-广播和 HTTP 没有身份认证。MAC 仅作板卡配置绑定键；报文和镜像的 SHA-256
-仅检验一致性，本阶段限定可信隔离实验网。服务器对重复 MAC 且不同来源 IP
-的在线设备停止下发任务，新的启动代次替代同地址的旧实例；设备拒绝旧代次的
-修改请求。
+现有 axloader 固件的原生 UDP/HTTP 机制尚未提供这些认证能力，因而不能直接接入这一安全部署。
+设备端必须先实现 HTTPS 和 Bearer 校验；服务端没有明文回退或忽略证书的选项。
+本文后续设备状态机及手工 QEMU/固件验证描述协议行为，不代表已验证实体设备的 TLS 支持。
+U-Boot 则通过已认证用户会话下的服务端 UART/YMODEM 编排使用。
 
-发现页的“创建配置”链接只携带 MAC，`BoardEditor` 不维护或保存启动架构。
 发现列表只读显示 axloader 上报的架构；编辑页架构取自 `observed.arch`，在线时只读展示，
 离线或未发现时显示未知，不会推定为 x86_64。设备离线时仍可创建 Session 并上传内核，待上线后核对架构再启动。
 
@@ -53,8 +47,7 @@ TCP4、UDP4 对象和 UART 身份计时器，进入 UEFI 内核交接。
 sequenceDiagram
     participant L as axloader
     participant S as ostool-server 或直连工具
-    L-->>S: UDP :2998 广播（可选）
-    S->>L: GET /api/v1/status
+    S->>L: HTTPS GET /api/v1/status（证书校验与独立 Bearer）
     S->>L: continue（bound 身份匹配或显式 direct）
     S->>L: POST /api/v1/boot/jobs（X-Boot-Epoch）
     S->>L: PUT kernel；可选 PUT initramfs
@@ -68,7 +61,7 @@ ostool-server 保留原有 Session、串口 WebSocket、启动清单和板卡租
 再调用设备接口；它不把文件 URL 交给装载器。设备在同一 Session 内复位时，
 服务器观察新启动代次并按原 `boot_id` 重新推送。串口在启动前承载本次身份帧，绑定后承载目标系统输出；每次上电都重新验证身份和参数。
 若同一启动代次仍保留其他 `boot_id`，服务器在创建返回 `409` 后按状态中的旧 ID
-删除该事务，再尝试创建一次；第二次仍冲突则停止本次推送，等待后续设备广播。
+删除该事务，再尝试创建一次；第二次仍冲突则停止本次推送，等待后续已认证的设备探测。
 
 ## 2. 设备协议
 
@@ -137,11 +130,7 @@ axloader 的设备端 OTA 实现（如 `ota::OtaContext`）和 A/B 启动器负�
 错误，不重传。已暂存镜像的升级 ID 与本任务匹配时不再次下发，兼容暂存阶段
 `source` 为空的固件；进入试运行后，仍核对来源为 `server` 且运行摘要匹配才确认。重复或旧代次上报不能改写终态或最初的终态失败原因。
 
-旧 v4 poll 只有当前注册代次上报实际 `ota` 状态时才可获得升级指派。下载要求
-同一当前在线注册、MAC、升级 ID、OTA 能力、处于 `downloading` 的任务及空闲且无
-Session 的板卡；租约忙碌返回 `409`。重新注册或
-能力消失会撤销旧下载资格。下载仍核对文件长度与 SHA-256，设备决定镜像格式及
-兼容性，再经既有 `ota-status` 上报；不增加 CPU 架构限制。
+旧 v2/v3/v4 的注册、poll、镜像下载和状态回报实现已移除。HTTPS 控制器直接核对设备状态和任务，不再维护第二套注册凭据。旧接口路径继续由安全边界拒绝。
 
 服务重启读取独立于 Session 的镜像库和任务。`Job.next_delivery_at` 是最早允许再次
 投递的 UTC 时间或 `null`，`Job.waiting_for_device_change` 表示等待 OTA 状态、能力或
@@ -158,11 +147,6 @@ Session 的板卡；租约忙碌返回 `409`。重新注册或
 虚拟板默认关闭，当前固定使用 `x86_64 + OVMF + q35 + TCG`。示例服务端配置：
 
 ```toml
-[loader_network]
-enabled = true
-bind_addr = "0.0.0.0:2998"
-public_base_url = "http://10.77.0.1:2999"
-
 [virtual_qemu]
 enabled = true
 qemu_binary = "/usr/bin/qemu-system-x86_64"
@@ -188,8 +172,10 @@ ostool-server --env-file /etc/ostool-server/.env virtual-lab down
 
 默认客户机网段为 `10.77.0.0/24`，服务端地址为 `10.77.0.1`，dnsmasq/bridge
 地址为 `10.77.0.254`，DHCP 池为 `10.77.0.100-200`。三个子命令均可重复调用。
-管理页面启动虚拟设备后，QEMU 必须通过真实 UDP 广播和设备 HTTP 接口出现在
-未绑定列表。绑定时 MAC 和电源配置必须引用同一个虚拟设备；串口 provider 从电源取得，板卡不保存串口配置：
+当前自带 axloader 固件尚未实现 HTTPS 与凭据校验，QEMU 网络启动联调需先补齐固件能力。
+具备认证能力后，先保存板卡 MAC 与 QEMU 电源配置，再在设备认证中配置 HTTPS 来源及凭据；
+控制器探测成功后才显示在线。UDP 广播不会注册设备。MAC 和电源配置必须引用同一个虚拟设备；
+串口 provider 从电源取得，板卡不保存串口配置：
 
 ```toml
 [network_identity]
@@ -209,8 +195,8 @@ hub 保留最近 64 KiB 输出并跨 QEMU 重启，新实例广播新的启动�
 
 验收顺序如下：
 
-1. 启动未绑定 QEMU，确认它通过真实发现出现在管理页面。
-2. 填写板卡 ID、类型和 QEMU 电源，并选择探测到的 MAC。
+1. 先为 QEMU 固件实现 HTTPS 与独立凭据校验，核实其证书。
+2. 保存板卡 ID、类型、QEMU 电源和 MAC，配置设备认证后启动 QEMU，确认已认证探测显示在线。
 3. 使用 `ostool` 创建 Session、上传内核及可选 initramfs/cmdline，确认设备 HTTP 交接和内核串口标志。
 4. 保持 WebSocket 和 Session，执行虚拟板 `Off -> On`，确认新启动代次重新取得相同启动事务并再次交接。
 5. 关闭 WebSocket，确认 Session 经 `releasing` 回到 `idle` 且 QEMU 退出。
@@ -220,9 +206,9 @@ hub 保留最近 64 KiB 输出并跨 QEMU 重启，新实例广播新的启动�
 
 ### 4.1 兼容边界
 
-ostool-server 保留 v5 的设备识别与 OTA，以及 v2/v3/v4 的旧识别和升级入口。
+ostool-server 保留具有 HTTPS 与凭据校验能力的 v5/v6 设备识别与 OTA；v2/v3/v4 的旧识别和升级实现已移除。
 自动启动要求 v6，旧装载器在启动前收到明确升级错误，不回退手工串口。
-`PROTOCOL_VERSION` 继续标识旧 poll 路径，`DEVICE_PROTOCOL_VERSION` 为 6。
+`httpboot-protocol` 中的旧 poll 类型不再用于服务端；`DEVICE_PROTOCOL_VERSION` 为 6。
 TGOS 与 ostool 共用正式版本 `httpboot-protocol 0.5.0`；发布前本地联合验证通过
 忽略的 Cargo patch 指向协议工作树，正式交付先发布协议和 `ostool-serial 0.1.0`，
 再更新 registry 锁文件。升级前排空 session，串口定位只在 RAM 保留。

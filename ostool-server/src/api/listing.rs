@@ -137,11 +137,16 @@ pub async fn scoped_page(
     filters: &Filters,
     owner: Option<Uuid>,
 ) -> Result<Value, ApiError> {
+    if !state.config.read().await.edition.is_public() {
+        return Err(ApiError::not_found(
+            "this feature is unavailable in local edition",
+        ));
+    }
     filters.validate()?;
     if owner.is_some() && filters.view == "users" {
         return Err(ApiError::forbidden("不能查询其他用户"));
     }
-    let mut tx = state.database.pool().begin().await?;
+    let mut tx = state.database.begin().await?;
     // Count and rows must describe the same snapshot when other users mutate data.
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         .execute(&mut *tx)
@@ -236,6 +241,11 @@ impl EditorFilters {
     }
 }
 pub async fn editor(state: &AppState, filters: &EditorFilters) -> Result<Value, ApiError> {
+    if !state.config.read().await.edition.is_public() {
+        return Err(ApiError::not_found(
+            "this feature is unavailable in local edition",
+        ));
+    }
     let user_rows: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',id,'username',username,'email',email,'display_name',display_name,'disabled',disabled) FROM users WHERE (NOT disabled AND strpos(lower(concat_ws(' ',username,email,display_name)),lower($1))>0) OR id=$2 ORDER BY (id=$2) DESC NULLS LAST,username LIMIT 51")
         .bind(&filters.q).bind(filters.user).fetch_all(state.database.pool()).await?;
     let rental: Option<Value> = sqlx::query_scalar("SELECT to_jsonb(item) FROM (SELECT r.*,CASE WHEN cancelled_at IS NOT NULL THEN 'cancelled' WHEN ends_at<=now() THEN 'expired' WHEN starts_at>now() THEN 'scheduled' ELSE 'active' END AS status FROM board_rentals r WHERE id=$1) item")

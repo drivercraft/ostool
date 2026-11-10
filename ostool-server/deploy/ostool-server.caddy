@@ -5,5 +5,7 @@ boards.example.com {
 	encode @assets zstd gzip
 	@hardware path /api/v1/loaders/* /api/v1/loader-updates/*
 	respond @hardware 404
+	@network_tests path /v1/tests /v1/tests/*
+	reverse_proxy @network_tests 127.0.0.1:3000
 	reverse_proxy 127.0.0.1:2999
 }

@@ -5,7 +5,6 @@ use clap::{Parser, Subcommand};
 use log::info;
 use ostool_server::{
     build_app_state, build_router,
-    loader::start_udp_discovery,
     tftp::service::{BuiltinTftpManager, SystemTftpdHpaManager, TftpManager},
     virtual_lab::{VirtualLabAction, run_virtual_lab},
 };
@@ -47,10 +46,6 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let config = ostool_server::environment::load(cli.env_file.as_deref())?;
     anyhow::ensure!(
-        !config.edition.is_public() || config.listen_addr.ip().is_loopback(),
-        "public 用户 API 必须使用回环监听，由 HTTPS 网关转发"
-    );
-    anyhow::ensure!(
         !config.edition.is_public() || config.auth.public_base_url.is_some(),
         "public edition requires OSTOOL_PUBLIC_BASE_URL"
     );
@@ -90,6 +85,10 @@ async fn main() -> anyhow::Result<()> {
     let network_test_config = config.network_test.clone();
     let network_test_listener = if network_test_config.enabled {
         let addr = network_test_config.listen_addr;
+        anyhow::ensure!(
+            addr.ip().is_loopback(),
+            "network test API must use a loopback listener behind the HTTPS gateway"
+        );
         Some(
             tokio::net::TcpListener::bind(addr)
                 .await
@@ -113,21 +112,6 @@ async fn main() -> anyhow::Result<()> {
         tftp_manager.clone(),
     )
     .await?;
-    let device_listener = {
-        let config = state.config.read().await;
-        if config.edition.is_public() {
-            match ostool_server::hardware::download_address(&config)? {
-                Some(address) => Some(
-                    tokio::net::TcpListener::bind(address)
-                        .await
-                        .context("设备下载监听失败")?,
-                ),
-                None => None,
-            }
-        } else {
-            None
-        }
-    };
     let tftp_manager = state.tftp_manager.read().await.clone();
     state.ensure_data_dirs().await?;
     ostool_server::uploads::cleanup_interrupted(&state).await?;
@@ -137,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
             "failed to power off board `{board_id}` during server startup; marking it disabled for this process: {err}"
         );
     }
-    let discovery_task = start_udp_discovery(state.clone()).await?;
+    let device_task = ostool_server::device::start_authenticated_devices(state.clone());
     tftp_manager.start_if_needed().await?;
     if let ostool_server::TftpConfig::SystemTftpdHpa(cfg) = &state.config.read().await.tftp
         && cfg.reconcile_on_start
@@ -178,26 +162,23 @@ async fn main() -> anyhow::Result<()> {
         .context("management listener failed")
     });
     info!("ostoold management API listening on {listen_addr}");
-    if let Some(listener) = device_listener {
-        let shutdown = shutdown_tx.subscribe();
-        let app = ostool_server::hardware::download_router(state.clone());
-        servers.spawn(async move {
-            axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-            )
-            .with_graceful_shutdown(wait_for_shutdown(shutdown))
-            .await
-            .context("设备下载监听失败")
-        });
-    }
     if let Some(test_listener) = network_test_listener {
         let test_shutdown = shutdown_tx.subscribe();
         let test_addr = network_test_config.listen_addr;
         let mut test_app = ostool_server::network_test::build_router(network_test_config);
-        if state.config.read().await.edition.is_public() {
-            test_app = ostool_server::hardware::protect(test_app, state.clone());
-        }
+        test_app = test_app
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                ostool_server::api::auth::middleware,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                ostool_server::security::web::gate,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                ostool_server::security::web::transport,
+            ));
         servers.spawn(async move {
             axum::serve(
                 test_listener,
@@ -235,10 +216,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
-    if let Some(task) = discovery_task {
-        task.abort();
-        let _ = task.await;
-    }
+    device_task.abort();
+    let _ = device_task.await;
     state.virtual_boards.shutdown().await;
     serve_result
 }

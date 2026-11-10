@@ -59,7 +59,11 @@ export interface Resources {
   account_settings: import("@/types/api").AccountSettingsView;
 
   boards: AdminBoardSummary[];
-  board_editor: { id: string; board: BoardConfig | null };
+  board_editor: {
+    id: string;
+    board: BoardConfig | null;
+    device_connection?: import("@/types/api").DeviceConnection | null;
+  };
   sessions: AdminSession[];
   runtimes: Record<string, Runtime>;
   loaders: LoaderDeviceSummary[];

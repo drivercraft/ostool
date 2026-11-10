@@ -23,6 +23,60 @@ pub async fn reconcile(
     announcement: LoaderAnnouncement,
     peer: SocketAddr,
 ) -> anyhow::Result<()> {
+    let board_id = {
+        let boards = state.boards.read().await;
+        board_id_for_mac(&boards, announcement.mac_address)
+            .context("device is not bound to a board")?
+    };
+    let connection = crate::device_security::connection(&state, &board_id).await?;
+    reconcile_connected(state, announcement, peer, connection).await
+}
+/// Poll a provisioned TLS endpoint; unsigned UDP announcements are not needed.
+pub async fn reconcile_provisioned(state: AppState, board_id: &str) -> anyhow::Result<()> {
+    let connection = crate::device_security::connection(&state, board_id).await?;
+    let observed = read_status(
+        connection
+            .client
+            .get(format!("{}/api/v1/status", connection.endpoint))
+            .send()
+            .await?,
+    )
+    .await?;
+    let board = state
+        .boards
+        .read()
+        .await
+        .get(board_id)
+        .cloned()
+        .context("board not found")?;
+    let mac = board
+        .network_identity
+        .context("device has no configured identity")?
+        .mac_address;
+    ensure!(
+        observed.mac_address == mac,
+        "authenticated device reported another board MAC"
+    );
+    let announcement = LoaderAnnouncement {
+        protocol_version: observed.protocol_version,
+        mac_address: mac,
+        current_mac_address: observed.current_mac_address,
+        arch: observed.arch,
+        loader_version: observed.loader_version.clone(),
+        boot_epoch: observed.boot_epoch.clone(),
+        http_port: 443,
+        serial_id: observed.serial.as_ref().map(|s| s.serial_id.clone()),
+        serial_ready: observed.serial.as_ref().is_some_and(|s| s.ready),
+    };
+    reconcile_connected(state, announcement, "127.0.0.1:0".parse()?, connection).await
+}
+
+async fn reconcile_connected(
+    state: AppState,
+    announcement: LoaderAnnouncement,
+    peer: SocketAddr,
+    connection: crate::device_security::DeviceConnection,
+) -> anyhow::Result<()> {
     ensure!(
         matches!(
             announcement.protocol_version,
@@ -31,23 +85,15 @@ pub async fn reconcile(
         "unsupported device protocol"
     );
     ensure!(announcement.http_port > 0, "missing device HTTP port");
-    let device_addr = SocketAddr::new(peer.ip(), announcement.http_port);
-    let endpoint = format!("http://{device_addr}");
-    let client = Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(3))
-        .read_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(300))
-        .build()?;
-    let observed = read_status(
-        client
-            .get(format!("{endpoint}/api/v1/status"))
-            .timeout(Duration::from_secs(5))
-            .send()
-            .await?,
-    )
-    .await?;
+    let endpoint = connection.endpoint;
+    let client = connection.client;
+    let response = client
+        .get(format!("{endpoint}/api/v1/status"))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await?;
+    let peer = response.remote_addr().unwrap_or(peer);
+    let observed = read_status(response).await?;
     if state
         .loader_registry
         .accept_announcement(&announcement, &observed, peer.ip().to_string())
@@ -507,7 +553,9 @@ async fn push_ota_image(
             DeliveryFailure::Retryable(format!("OTA image transport failed: {error:#}"))
         })?;
     let status = response.status();
-    let body = response.text().await;
+    let body = read_body(response)
+        .await
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
     if status.as_u16() == 202 {
         body.map_err(|error| {
             DeliveryFailure::Retryable(format!(
@@ -810,7 +858,27 @@ mod tests {
     use tokio::{net::TcpListener, sync::Mutex};
     use tower::ServiceExt;
 
-    use super::{BootRequest, hex_sha256, reconcile};
+    use super::{BootRequest, hex_sha256};
+    async fn reconcile(
+        state: crate::AppState,
+        announcement: httpboot_protocol::LoaderAnnouncement,
+        peer: std::net::SocketAddr,
+    ) -> anyhow::Result<()> {
+        let connection = crate::device_security::DeviceConnection {
+            endpoint: format!(
+                "http://{}",
+                std::net::SocketAddr::new(peer.ip(), announcement.http_port)
+            ),
+            client: reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(std::time::Duration::from_secs(3))
+                .read_timeout(std::time::Duration::from_secs(5))
+                .timeout(std::time::Duration::from_secs(300))
+                .build()?,
+        };
+        super::reconcile_connected(state, announcement, peer, connection).await
+    }
     use crate::{
         BoardConfig, BoardNetworkIdentity, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
         PowerManagementConfig, ServerConfig, TftpConfig, UefiHttpProfile, ota::Phase,
@@ -1390,7 +1458,9 @@ mod tests {
             // Reconciliation must not send rejected, unavailable or rate-limited bytes again.
             reconcile(state.clone(), event.clone(), peer).await.unwrap();
             assert_eq!(fake.lock().await.put_attempts, 1, "{status}");
-            let response = crate::api::router::build_router(state.clone())
+            let response = crate::test_support::authenticated_router(&state)
+                .await
+                .unwrap()
                 .oneshot(
                     axum::http::Request::builder()
                         .uri("/api/v1/admin/boards/board-1/loader-updates")
@@ -1591,7 +1661,9 @@ mod tests {
                 .await;
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let server_address = listener.local_addr().unwrap();
-            let app = crate::api::router::build_router(state.clone());
+            let app = crate::test_support::authenticated_router(&state)
+                .await
+                .unwrap();
             let server_task =
                 tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
             let (mut websocket, _) = tokio_tungstenite::connect_async(format!(
@@ -1671,10 +1743,7 @@ mod tests {
             };
             let control: serde_json::Value = serde_json::from_str(&control).unwrap();
             assert_eq!(control["type"], "error");
-            assert!(
-                control["message"].as_str().unwrap().contains(expected),
-                "{control}"
-            );
+            assert_eq!(control["message"], "设备连接失败，请联系管理员");
             let status = session.loader_status().await.unwrap().status.unwrap();
             assert!(
                 matches!(status, httpboot_protocol::LoaderStatusPhase::Failed { ref code, ref message }
@@ -2066,4 +2135,70 @@ mod tests {
             server.abort();
         }
     }
+}
+
+/// A single bounded owner reconciles each provisioned device. No unauthenticated
+/// discovery listener or caller-supplied callback URL is involved.
+pub fn start_authenticated_devices(state: AppState) -> tokio::task::JoinHandle<()> {
+    use sqlx::Row;
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(2));
+        let mut tasks = tokio::task::JoinSet::new();
+        let mut active = std::collections::BTreeMap::<
+            String,
+            (chrono::DateTime<chrono::Utc>, tokio::task::AbortHandle),
+        >::new();
+        let mut owners = std::collections::HashMap::new();
+        let mut cursor = 0usize;
+        let mut retry = std::collections::BTreeMap::<
+            String,
+            (
+                chrono::DateTime<chrono::Utc>,
+                tokio::time::Instant,
+                Duration,
+            ),
+        >::new();
+        loop {
+            tokio::select! {
+                _=tick.tick()=>{
+                    let rows=sqlx::query("SELECT d.board_id,d.updated_at FROM device_connections d JOIN board_records b ON b.id=d.board_id WHERE COALESCE((b.payload->>'disabled')::boolean,false)=false ORDER BY d.board_id LIMIT 4096").fetch_all(state.database.pool()).await;
+                    let rows=match rows {Ok(rows)=>rows,Err(error)=>{
+                        log::warn!("device identity lookup failed: {error:#}");
+                        for (_,(_,handle)) in std::mem::take(&mut active){handle.abort();}
+                        continue;
+                    }};
+                    let provisioned=rows.into_iter().filter_map(|row| match (row.try_get::<String,_>("board_id"),row.try_get::<chrono::DateTime<chrono::Utc>,_>("updated_at")) {
+                        (Ok(id),Ok(revision))=>Some((id,revision)),
+                        _=>{log::warn!("invalid stored device authentication metadata");None}
+                    }).collect::<std::collections::BTreeMap<_,_>>();
+                    let revoked=active.iter().filter(|(id,(revision,_))|provisioned.get(*id)!=Some(revision)).map(|(id,_)|id.clone()).collect::<Vec<_>>();
+                    for id in revoked {if let Some((_,handle))=active.remove(&id){handle.abort();}}
+                    retry.retain(|id,_|provisioned.contains_key(id));
+                    let using=state.board_runtimes.read().await.iter().filter(|(_,runtime)|runtime.active_session_id.is_some()).map(|(id,_)|id.clone()).collect::<std::collections::BTreeSet<_>>();
+                    let entries=provisioned.into_iter().collect::<Vec<_>>();
+                    let start=cursor;
+                    for offset in 0..entries.len() {
+                        if active.len()>=16 {break;}
+                        let index=(start+offset)%entries.len();
+                        let (id,revision)=&entries[index];
+                        if active.contains_key(id){continue;}
+                        if !using.contains(id) && retry.get(id).is_some_and(|(version,deadline,_)|version==revision && tokio::time::Instant::now()<*deadline){continue;}
+                        let board=id.clone();let state=state.clone();
+                        let handle=tasks.spawn(async move {match reconcile_provisioned(state,&board).await {Ok(())=>true,Err(error)=>{log::warn!("authenticated device {board}: {error:#}");false}}});
+                        owners.insert(handle.id(),id.clone());active.insert(id.clone(),(*revision,handle));
+                        cursor=(index+1)%entries.len();
+                    }
+                },
+                result=tasks.join_next_with_id(),if !tasks.is_empty()=>{
+                    let (id,success)=match result{Some(Ok((id,success)))=>(Some(id),success),Some(Err(error))=>(Some(error.id()),false),None=>(None,false)};
+                    if let Some(id)=id && let Some(board)=owners.remove(&id) && active.get(&board).is_some_and(|(_,handle)|handle.id()==id) && let Some((revision,_))=active.remove(&board){
+                        if success {retry.remove(&board);}else{
+                            let delay=retry.get(&board).filter(|(version,_,_)|*version==revision).map(|(_,_,delay)|(*delay*2).min(Duration::from_secs(60))).unwrap_or(Duration::from_secs(4));
+                            retry.insert(board,(revision,tokio::time::Instant::now()+delay,delay));
+                        }
+                    }
+                },
+            }
+        }
+    })
 }

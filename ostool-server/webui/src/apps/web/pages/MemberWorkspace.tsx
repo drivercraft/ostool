@@ -142,6 +142,7 @@ export default function MemberWorkspace() {
           <Route path="security" element={<Security />} />
           <Route path="password" element={<Password />} />
           <Route path="rentals" element={<MyRentals />} />
+          <Route path="allocations/new" element={<ClaimBoard user={user} />} />
           <Route path="requests" element={<MyRequests />} />
           <Route
             path="requests/new"
@@ -209,7 +210,7 @@ function Heading({
 }
 function Overview({ user }: { user: AuthUser }) {
   const summary = useAccountResource("account_summary");
-  const instant = user.permissions?.includes("board.instant");
+  const instant = user.is_admin || user.permissions?.includes("board.instant");
   return (
     <>
       <Heading
@@ -217,7 +218,13 @@ function Overview({ user }: { user: AuthUser }) {
         text="查看设备使用安排，继续你的开发工作。"
         action={
           <Button asChild>
-            <Link to="/account/requests/new">申请租赁</Link>
+            <Link
+              to={
+                instant ? "/account/allocations/new" : "/account/requests/new"
+              }
+            >
+              {instant ? "即时领取开发板" : "申请租赁"}
+            </Link>
           </Button>
         }
       />
@@ -453,6 +460,9 @@ function Password() {
   );
 }
 function MyRentals() {
+  const { user } = useSiteSession();
+  const instant =
+    user?.is_admin || user?.permissions?.includes("board.instant");
   const [search, setSearch] = useState(""),
     [status, setStatus] = useState("");
   const page = useServerList("rentals", { q: search, status }, "account");
@@ -463,7 +473,13 @@ function MyRentals() {
         text="查看分配给你的开发板及使用时段。"
         action={
           <Button asChild>
-            <Link to="/account/requests/new">申请租赁</Link>
+            <Link
+              to={
+                instant ? "/account/allocations/new" : "/account/requests/new"
+              }
+            >
+              {instant ? "即时领取开发板" : "申请租赁"}
+            </Link>
           </Button>
         }
       />
@@ -492,7 +508,7 @@ function MyRentals() {
         {page.error && <Notice>{page.error}</Notice>}
         <ListDataLoadingContext.Provider value={page.loading}>
           <DataTable
-            headers={["开发板", "使用时间", "状态", "备注"]}
+            headers={["开发板", "使用时间", "状态", "备注", "操作"]}
             empty={!page.rows.length}
           >
             {page.rows.map((r) => (
@@ -519,6 +535,15 @@ function MyRentals() {
                   </Badge>
                 </Cell>
                 <Cell>{r.notes || "—"}</Cell>
+                <Cell>
+                  {r.source === "instant" && r.status === "active" && (
+                    <ConfirmAction
+                      label="归还设备"
+                      description="归还后将释放设备并结束当前使用会话。"
+                      action={() => api.returnBoard(r.id)}
+                    />
+                  )}
+                </Cell>
               </Row>
             ))}
           </DataTable>
@@ -898,5 +923,62 @@ function MemberList({
     <ListLayoutProvider storageKey={`member:${storageKey}`}>
       <section className="member-card member-list">{children}</section>
     </ListLayoutProvider>
+  );
+}
+
+function ClaimBoard({ user }: { user: AuthUser }) {
+  const catalog = useAccountResource("catalog") ?? [];
+  const available = catalog.filter((board) => board.instant_available);
+  const [selected, setSelected] = useState("");
+  const task = useAction();
+  const navigate = useNavigate();
+  const allowed = user.permissions?.includes("board.instant") || user.is_admin;
+  if (!allowed)
+    return <Notice>当前角色没有即时分配权限，请通过租赁申请获取设备。</Notice>;
+  return (
+    <PagePanel
+      footer={
+        <>
+          <span>设备将分配给当前账号，使用时段按角色限制确定。</span>
+          <Button
+            disabled={
+              !selected ||
+              !available.some((b) => b.id === selected) ||
+              task.pending
+            }
+            onClick={() =>
+              void task.run(async () => {
+                await api.claimBoard(selected);
+                navigate("/account/rentals");
+              }, "开发板已分配")
+            }
+          >
+            确认领取
+          </Button>
+        </>
+      }
+    >
+      <Heading
+        title="即时领取开发板"
+        text="选择可即时使用的空闲设备，领取后通过 ostool 登录使用。"
+      />
+      {!available.length && <Notice>暂无符合当前角色条件的空闲开发板。</Notice>}
+      <SelectField
+        label="开发板"
+        value={selected}
+        onValue={setSelected}
+        options={[
+          { value: "", label: "请选择开发板" },
+          ...available.map((board) => ({
+            value: board.id,
+            label: `${board.id} · ${board.board_type}`,
+          })),
+        ]}
+      />
+      {selected && !available.some((b) => b.id === selected) && (
+        <Notice>所选开发板已不可领取，请重新选择。</Notice>
+      )}
+      <Link to="/account/rentals">返回我的租赁</Link>
+    </PagePanel>
   );
 }

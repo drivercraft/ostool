@@ -91,7 +91,6 @@ async fn website_rentals_authorize_real_ostool_clients() -> Result<()> {
     config.auth.access_token_ttl_secs = 60;
     // The loopback client represents an Internet user in this fixture. Hardware-only
     // anonymous traffic is tested separately; it must not mask missing CLI credentials.
-    config.security.hardware_allowed_networks = vec!["192.168.250.0/24".into()];
     config.http_boot.root_dir = root.path().join("http-boot");
     let database = test_database::prepare(&root.path().join("config.toml"), &mut config).await?;
     let board = BoardConfig {

@@ -1,9 +1,6 @@
 //! Bounded streaming uploads. A session's file lock orders commits and release cleanup.
 use crate::{
-    AppState,
-    api::error::ApiError,
-    security::web::CurrentCredential,
-    tftp::files::{self, TftpFileRef},
+    AppState, api::error::ApiError, security::web::CurrentCredential, tftp::files::TftpFileRef,
 };
 use axum::{
     body::Body,
@@ -13,7 +10,6 @@ use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    path::Path,
     sync::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicUsize, Ordering},
@@ -61,6 +57,7 @@ impl Drop for Slot {
 
 /// Called before serving requests; interrupted uploads are never published session files.
 pub async fn cleanup_interrupted(state: &AppState) -> anyhow::Result<()> {
+    state.session_files.cleanup_ended().await?;
     let root = state
         .tftp_manager
         .read()
@@ -104,7 +101,186 @@ pub async fn store(
     request: Request<Body>,
     label: &str,
 ) -> Result<(TftpFileRef, u64, String), ApiError> {
+    receive(state, sid, request, label)
+        .await?
+        .commit(state, sid, path)
+        .await
+}
+
+/// Holds admission slots and the session upload gate until publication or drop.
+/// A rejected or cancelled upload never becomes a published session file.
+pub(crate) struct PendingUpload {
+    temp: tempfile::NamedTempFile,
+    deadline: tokio::time::Instant,
+    size: u64,
+    sha256: String,
+    credential: Option<CurrentCredential>,
+    limits: crate::config::UploadLimitsConfig,
+    session: Arc<crate::session::SessionState>,
+    manager: Arc<dyn crate::tftp::service::TftpManager>,
+    _slot: Slot,
+    _upload: tokio::sync::OwnedMutexGuard<()>,
+}
+impl PendingUpload {
+    pub async fn within_deadline<F: std::future::Future>(
+        &self,
+        future: F,
+    ) -> Result<F::Output, ApiError> {
+        if self.session.is_stop_requested() || self.session.is_releasing() {
+            return Err(ApiError::conflict("会话已结束，上传已取消"));
+        }
+        if tokio::time::Instant::now() >= self.deadline {
+            return Err(upload_timeout());
+        }
+        let mut shutdown = self.session.subscribe_shutdown();
+        tokio::select! {biased;
+            _=shutdown.wait_for(|value|*value)=>Err(ApiError::conflict("会话已结束，上传已取消")),
+            result=tokio::time::timeout_at(self.deadline,future)=>result.map_err(|_|upload_timeout()),
+        }
+    }
+    pub async fn bytes(&self) -> Result<Vec<u8>, ApiError> {
+        self.within_deadline(tokio::fs::read(self.temp.path()))
+            .await?
+            .map_err(|e| ApiError::from(anyhow::Error::from(e)))
+    }
+    pub async fn commit(
+        self,
+        state: &AppState,
+        sid: &str,
+        path: &str,
+    ) -> Result<(TftpFileRef, u64, String), ApiError> {
+        let deadline = self.deadline;
+        if self.session.is_stop_requested() || self.session.is_releasing() {
+            return Err(ApiError::conflict("会话已结束，上传已取消"));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(upload_timeout());
+        }
+        let mut shutdown = self.session.subscribe_shutdown();
+        tokio::select! {biased;
+            _=shutdown.wait_for(|value|*value)=>Err(ApiError::conflict("会话已结束，上传已取消")),
+            result=tokio::time::timeout_at(deadline,self.publish(state,sid,path))=>result.map_err(|_|upload_timeout())?,
+        }
+    }
+    async fn publish(
+        self,
+        state: &AppState,
+        sid: &str,
+        path: &str,
+    ) -> Result<(TftpFileRef, u64, String), ApiError> {
+        let Self {
+            temp,
+            deadline: _,
+            size,
+            sha256,
+            credential,
+            limits,
+            session,
+            manager,
+            _slot,
+            _upload,
+        } = self;
+        let _commit = state.uploads.commits.lock().await;
+        let _rental = state.rental_gate.lock().await;
+        let _files = session.file_gate.lock().await;
+        let snapshot = session.snapshot().await;
+        if session.is_stop_requested()
+            || session.is_releasing()
+            || snapshot.expires_at <= chrono::Utc::now()
+        {
+            return Err(ApiError::conflict("会话已结束，上传已取消"));
+        }
+        if let Some(CurrentCredential(credential)) = &credential {
+            if !state.database.credential_active(credential).await? {
+                return Err(ApiError::unauthorized("登录已失效，上传已取消"));
+            }
+            if !credential.user.is_admin {
+                let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM session_owners s JOIN board_rentals r ON r.id=s.rental_id JOIN users u ON u.id=s.user_id WHERE s.session_id=$1 AND s.user_id=$2 AND NOT u.disabled AND r.cancelled_at IS NULL AND r.starts_at<=now() AND r.ends_at>now())")
+                .bind(sid).bind(credential.user.id).fetch_one(state.database.pool()).await?;
+                if !valid {
+                    return Err(ApiError::forbidden("租赁已结束，上传已取消"));
+                }
+            }
+        }
+        let owner = credential
+            .as_ref()
+            .map(|CurrentCredential(value)| value.user.id);
+        let exists = state.session_files.get(sid, path).await?.is_some();
+        let (total, own, count, old, user_total) =
+            state.session_files.usage(sid, path, owner).await?;
+        if own.saturating_sub(old) + size > limits.session_total_max_mib as u64 * 1024 * 1024
+            || count + u64::from(!exists) > limits.session_max_files as u64
+        {
+            return Err(ApiError::payload_too_large("会话文件数量或总容量超出限制"));
+        }
+        if credential.is_some()
+            && user_total.saturating_sub(old) + size
+                > limits.user_total_max_mib as u64 * 1024 * 1024
+        {
+            return Err(ApiError::payload_too_large("账号文件总容量超出限制"));
+        }
+        if total.saturating_sub(old) + size > limits.storage_max_mib as u64 * 1024 * 1024 {
+            return Err(ApiError::payload_too_large("会话文件存储总容量超出限制"));
+        }
+        if fs4::available_space(manager.root_dir()).map_err(anyhow::Error::from)? < 64 * 1024 * 1024
+        {
+            return Err(ApiError::service_unavailable("文件存储可用空间不足"));
+        }
+        if session.is_stop_requested() || session.snapshot().await.expires_at <= chrono::Utc::now()
+        {
+            return Err(ApiError::conflict("会话已结束，上传已取消"));
+        }
+        let mut staged = state
+            .session_files
+            .stage_path(sid, path, temp.path())
+            .await?;
+        if staged.file.size != size || staged.file.sha256 != sha256 {
+            return Err(ApiError::internal("上传内容在提交期间发生变化"));
+        }
+        // Recheck against the same transaction after writing content, using the
+        // database's real clock rather than the transaction start timestamp.
+        if let Some(CurrentCredential(credential)) = &credential {
+            if !staged.credential_active(credential).await? {
+                return Err(ApiError::unauthorized("登录已失效，上传已取消"));
+            }
+            if !credential.user.is_admin {
+                let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM session_owners s JOIN board_rentals r ON r.id=s.rental_id JOIN users u ON u.id=s.user_id WHERE s.session_id=$1 AND s.user_id=$2 AND NOT u.disabled AND r.cancelled_at IS NULL AND r.starts_at<=clock_timestamp() AND r.ends_at>clock_timestamp())")
+                    .bind(sid).bind(credential.user.id).fetch_one(&mut *staged.tx).await?;
+                if !valid {
+                    return Err(ApiError::forbidden("租赁已结束，上传已取消"));
+                }
+            }
+        }
+        let (total, own, count, user_total) = staged.usage(owner).await?;
+        if own > limits.session_total_max_mib as u64 * 1024 * 1024
+            || count > limits.session_max_files as u64
+            || total > limits.storage_max_mib as u64 * 1024 * 1024
+            || (owner.is_some() && user_total > limits.user_total_max_mib as u64 * 1024 * 1024)
+        {
+            return Err(ApiError::payload_too_large("文件存储数量或容量超出限制"));
+        }
+        if session.is_stop_requested()
+            || session.is_releasing()
+            || session.snapshot().await.expires_at <= chrono::Utc::now()
+        {
+            return Err(ApiError::conflict("会话已结束，上传已取消"));
+        }
+        let stored = staged.commit().await?;
+        // UART caches are materialized from PostgreSQL only when a transport
+        // needs a path. A cache failure cannot change the committed upload.
+        Ok((stored.reference(manager.root_dir())?, size, sha256))
+    }
+}
+
+pub(crate) async fn receive(
+    state: &AppState,
+    sid: &str,
+    request: Request<Body>,
+    label: &str,
+) -> Result<PendingUpload, ApiError> {
     let limits = state.config.read().await.upload_limits.clone();
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_secs(limits.upload_timeout_secs as u64);
     if request
         .headers()
         .get(axum::http::header::CONTENT_LENGTH)
@@ -161,7 +337,6 @@ pub async fn store(
         *count += 1;
         slot.owner = Some(credential.user.id);
     }
-    let _slot = slot;
     let session = state
         .session_state(sid)
         .await
@@ -229,126 +404,29 @@ pub async fn store(
     tokio::select! {
         biased;
         _=shutdown.wait_for(|stopped|*stopped)=>return Err(ApiError::conflict("会话已结束，上传已取消")),
-        result=tokio::time::timeout(Duration::from_secs(limits.upload_timeout_secs as u64),receive)=>{
+        result=tokio::time::timeout_at(deadline,receive)=>{
             result.map_err(|_|ApiError::new(StatusCode::REQUEST_TIMEOUT,"upload_timeout","上传总时间超出限制"))??;
         }
     }
     drop(file);
-    let _commit = state.uploads.commits.lock().await;
-    let _rental = state.rental_gate.lock().await;
-    let _files = session.file_gate.lock().await;
-    let snapshot = session.snapshot().await;
-    if session.is_stop_requested()
-        || session.is_releasing()
-        || snapshot.expires_at <= chrono::Utc::now()
-    {
-        return Err(ApiError::conflict("会话已结束，上传已取消"));
-    }
-    if let Some(CurrentCredential(credential)) = &credential {
-        if !state.database.credential_active(credential).await? {
-            return Err(ApiError::unauthorized("登录已失效，上传已取消"));
-        }
-        if !credential.user.is_admin {
-            let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM session_owners s JOIN board_rentals r ON r.id=s.rental_id JOIN users u ON u.id=s.user_id WHERE s.session_id=$1 AND s.user_id=$2 AND NOT u.disabled AND r.cancelled_at IS NULL AND r.starts_at<=now() AND r.ends_at>now())")
-                .bind(sid).bind(credential.user.id).fetch_one(state.database.pool()).await?;
-            if !valid {
-                return Err(ApiError::forbidden("租赁已结束，上传已取消"));
-            }
-        }
-    }
-    let destination = files::disk_path(manager.root_dir(), sid, path)?;
-    let root = manager.root_dir().to_path_buf();
-    let session_root = root.join("ostool/sessions").join(sid);
-    let target = destination.clone();
-    let owned: Vec<String> = if let Some(CurrentCredential(credential)) = &credential {
-        sqlx::query_scalar("SELECT session_id FROM session_owners WHERE user_id=$1")
-            .bind(credential.user.id)
-            .fetch_all(state.database.pool())
-            .await?
-    } else {
-        Vec::new()
-    };
-    let owner_root = root.clone();
-    let (total, own, count, old, user_total) =
-        tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            let total = usage(&root.join("ostool/sessions"))?.0;
-            let (own, count) = usage(&session_root)?;
-            let old = std::fs::symlink_metadata(target)
-                .ok()
-                .filter(|m| m.is_file())
-                .map(|m| m.len());
-            let mut user_total = 0u64;
-            for id in owned {
-                user_total = user_total
-                    .saturating_add(usage(&owner_root.join("ostool/sessions").join(id))?.0);
-            }
-            Ok((total, own, count, old, user_total))
-        })
-        .await
-        .map_err(anyhow::Error::from)??;
-    if own.saturating_sub(old.unwrap_or(0)) + size
-        > limits.session_total_max_mib as u64 * 1024 * 1024
-        || count + u64::from(old.is_none()) > limits.session_max_files as u64
-    {
-        return Err(ApiError::payload_too_large("会话文件数量或总容量超出限制"));
-    }
-    if credential.is_some()
-        && user_total.saturating_sub(old.unwrap_or(0)) + size
-            > limits.user_total_max_mib as u64 * 1024 * 1024
-    {
-        return Err(ApiError::payload_too_large("账号文件总容量超出限制"));
-    }
-    if total.saturating_sub(old.unwrap_or(0)) + size > limits.storage_max_mib as u64 * 1024 * 1024 {
-        return Err(ApiError::payload_too_large("会话文件存储总容量超出限制"));
-    }
-    if fs4::available_space(manager.root_dir()).map_err(anyhow::Error::from)? < 64 * 1024 * 1024 {
-        return Err(ApiError::service_unavailable("文件存储可用空间不足"));
-    }
-    files::prepare_session_parent(manager.root_dir(), sid, path)?;
-    if session.is_stop_requested() || session.snapshot().await.expires_at <= chrono::Utc::now() {
-        return Err(ApiError::conflict("会话已结束，上传已取消"));
-    }
-    // The synchronous rename is atomic and stays inside both commit/cleanup locks.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        temp.as_file()
-            .set_permissions(std::fs::Permissions::from_mode(0o644))
-            .map_err(anyhow::Error::from)?;
-    }
-    temp.persist(&destination)
-        .map_err(|error| ApiError::from(anyhow::Error::from(error.error)))?;
-    let stored = files::get_session_file(manager.root_dir(), sid, path)?
-        .ok_or_else(|| ApiError::internal("上传文件提交失败"))?;
-    Ok((stored, size, format!("{:x}", digest.finalize())))
+    Ok(PendingUpload {
+        temp,
+        deadline,
+        size,
+        sha256: format!("{:x}", digest.finalize()),
+        credential,
+        limits,
+        session,
+        manager,
+        _slot: slot,
+        _upload,
+    })
 }
 
-fn usage(root: &Path) -> anyhow::Result<(u64, u64)> {
-    let mut pending = vec![root.to_path_buf()];
-    let (mut bytes, mut count) = (0u64, 0u64);
-    while let Some(dir) = pending.pop() {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e.into()),
-        };
-        for entry in entries {
-            let entry = entry?;
-            let meta = match entry.path().symlink_metadata() {
-                Ok(meta) => meta,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error.into()),
-            };
-            if meta.is_symlink() {
-                anyhow::bail!("session storage must not contain symbolic links");
-            }
-            if meta.is_dir() {
-                pending.push(entry.path());
-            } else if meta.is_file() {
-                bytes = bytes.saturating_add(meta.len());
-                count += 1;
-            }
-        }
-    }
-    Ok((bytes, count))
+fn upload_timeout() -> ApiError {
+    ApiError::new(
+        StatusCode::REQUEST_TIMEOUT,
+        "upload_timeout",
+        "上传总时间超出限制",
+    )
 }

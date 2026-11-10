@@ -319,7 +319,7 @@ async fn subscribe_scoped(
             crate::security::web::cookie(&headers, &name).map(str::to_owned)
         });
     let public_site = query.get("public_site").is_some_and(|v| v == "1");
-    let database = if !public_site && state.config.read().await.edition.is_public() {
+    let database = if !public_site && cookie_config.edition.is_public() {
         Some(state.database.clone())
     } else {
         None
@@ -524,7 +524,21 @@ async fn subscribe_scoped(
                         )
                         .await
                         {
-                            Ok(board) => serde_json::json!({"id":id,"board":board.0}),
+                            Ok(board) => {
+                                match crate::device_security::projection(&subscription.state, id)
+                                    .await
+                                {
+                                    Ok(connection) => {
+                                        serde_json::json!({"id":id,"board":board.0,"device_connection":connection})
+                                    }
+                                    Err(error) => {
+                                        log::warn!(
+                                            "device connection projection failed: {error:#}"
+                                        );
+                                        serde_json::json!({"error":"设备认证配置暂时不可用"})
+                                    }
+                                }
+                            }
                             Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => {
                                 serde_json::json!({"id":id,"board":null})
                             }
@@ -569,6 +583,8 @@ async fn subscribe_scoped(
                             "rentals",
                             "rental_requests",
                             "boards",
+                            "sessions",
+                            "runtimes",
                             "security_revision",
                         ]
                         .iter()

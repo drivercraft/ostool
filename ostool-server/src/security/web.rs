@@ -255,7 +255,10 @@ pub async fn transport(
         })
         .collect::<Vec<_>>()
         .join(" ");
-    let policy = if path.starts_with("/share/") || path.starts_with("/boot/") {
+    let policy = if path.starts_with("/device-files/")
+        || path.starts_with("/share/")
+        || path.starts_with("/boot/")
+    {
         "sandbox; default-src 'none'".to_owned()
     } else {
         format!(
@@ -289,7 +292,8 @@ pub async fn transport(
             HeaderValue::from_static("max-age=31536000"),
         );
     }
-    if path.starts_with("/api/")
+    if path.starts_with("/device-files/")
+        || path.starts_with("/api/")
         || path.starts_with("/oauth/")
         || path.starts_with("/share/")
         || path.starts_with("/boot/")
@@ -310,12 +314,12 @@ pub async fn gate(
     next: Next,
 ) -> Response {
     let config = state.config.read().await.clone();
-    if !config.edition.is_public() {
-        return next.run(request).await;
-    }
     let path = request.uri().path();
     if path.starts_with("/api/v1/loaders/") || path.starts_with("/api/v1/loader-updates/") {
         return ApiError::forbidden("设备内部接口不对公网用户开放").into_response();
+    }
+    if !config.edition.is_public() {
+        return next.run(request).await;
     }
     if (path.starts_with("/admin") || path.starts_with("/api/v1/admin/"))
         && !config.security.admin_allowed_networks.is_empty()

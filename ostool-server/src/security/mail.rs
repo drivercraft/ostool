@@ -152,7 +152,7 @@ async fn issue(
     let subject = crypto::hash(email);
     let table = proof_table(purpose);
     let id = Uuid::new_v4();
-    let mut tx = state.database.pool().begin().await?;
+    let mut tx = state.database.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(29992027)")
         .execute(&mut *tx)
         .await?;
@@ -254,7 +254,7 @@ async fn consume(
         config.email_policy.max_attempts
     } as i32;
     let table = proof_table(purpose);
-    let mut tx = state.database.pool().begin().await?;
+    let mut tx = state.database.begin().await?;
     let row = sqlx::query(&format!("SELECT * FROM {table} WHERE id=$1 FOR UPDATE"))
         .bind(id)
         .fetch_optional(&mut *tx)

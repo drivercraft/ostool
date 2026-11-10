@@ -2464,7 +2464,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let fit_path = write_fit_image(temp.path());
         let mut backend = RemoteBackend {
-            client: BoardServerClient::new("127.0.0.1", 8080).unwrap(),
+            client: BoardServerClient::new_with_endpoint(
+                crate::board::global_config::BoardEndpoint {
+                    base_url: format!("http://127.0.0.1:{}/", 8080).parse().unwrap(),
+                    auth_mode: crate::board::global_config::AuthMode::Disabled,
+                },
+            )
+            .unwrap(),
             session: SessionCreatedResponse {
                 session_id: "demo".into(),
                 board_id: "board-1".into(),

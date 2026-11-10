@@ -87,7 +87,7 @@ pub(crate) async fn save_internal(
     if board.disabled {
         return Err(ApiError::conflict("已禁用的开发板不能分配租赁"));
     }
-    let mut tx = state.database.pool().begin().await.map_err(db_error)?;
+    let mut tx = state.database.begin().await.map_err(db_error)?;
     if let Some((request_id, _, _)) = &approval {
         let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM (SELECT * FROM rental_requests WHERE id=$1 FOR UPDATE) r WHERE status='pending' AND user_id=$2 AND board_id=$3 AND starts_at=$4 AND ends_at=$5)")
             .bind(request_id).bind(input.user_id).bind(&input.board_id).bind(input.starts_at).bind(input.ends_at)

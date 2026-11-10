@@ -105,7 +105,7 @@ pub fn routes() -> Router<AppState> {
 }
 pub async fn initialize(database: &crate::persistence::Database) -> anyhow::Result<()> {
     let settings = SiteSettings::default();
-    let mut tx = database.pool().begin().await?;
+    let mut tx = database.begin().await?;
     sqlx::query("INSERT INTO site_settings(id,content) VALUES(1,$1) ON CONFLICT DO NOTHING")
         .bind(serde_json::to_value(&settings)?)
         .execute(&mut *tx)
@@ -226,7 +226,7 @@ async fn update(
 ) -> Result<Json<Value>, ApiError> {
     validate(&input.settings)?;
     let actor = actor.map(|Extension(CurrentUser(user))| user.id);
-    let mut tx = state.database.pool().begin().await?;
+    let mut tx = state.database.begin().await?;
     let row = sqlx::query("SELECT revision,content FROM site_settings WHERE id=1 FOR UPDATE")
         .fetch_one(&mut *tx)
         .await?;
@@ -309,7 +309,7 @@ pub async fn register(
     let username = crate::persistence::postgres::normalize_username(&request.username)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let hash = crate::persistence::postgres::hash_password_async(request.password.clone()).await?;
-    let mut tx = state.database.pool().begin().await?;
+    let mut tx = state.database.begin().await?;
     sqlx::query("SELECT id FROM site_settings WHERE id=1 FOR SHARE")
         .fetch_one(&mut *tx)
         .await?;
@@ -495,10 +495,9 @@ pub async fn load_account_settings(
     stored.settings.apply(config)
 }
 pub fn public_auth(config: &crate::ServerConfig) -> Value {
-    let public = config.edition.is_public();
-    let email = public && config.security.smtp_available();
-    json!({"allow_registration":public && config.auth.allow_registration,
-        "registration_email_verification":public && config.security.registration_email_verification,
+    let email = config.edition.is_public() && config.security.smtp_available();
+    json!({"allow_registration":config.edition.is_public() && config.auth.allow_registration,
+        "registration_email_verification":config.edition.is_public() && config.security.registration_email_verification,
         "email_security_available":email,
         "password_reset_available":email && config.security.password_reset_enabled})
 }
@@ -507,11 +506,8 @@ pub async fn account_settings(State(state): State<AppState>) -> Result<Json<Valu
         .database
         .record("account-settings")
         .await?
-        .ok_or_else(|| ApiError::not_found("本地版不提供账号策略配置"))?;
+        .ok_or_else(|| ApiError::not_found("账号策略尚未初始化"))?;
     let config = state.config.read().await;
-    if !config.edition.is_public() {
-        return Err(ApiError::not_found("本地版不提供账号策略配置"));
-    }
     Ok(Json(
         json!({"revision":record.revision,"settings":crate::security::config::AccountSettings::from_config(&config),
         "secrets":{"smtp_password":config.security.smtp_password.is_some(),"turnstile_secret":config.security.turnstile_secret.is_some(),"mfa_key":config.security.mfa_encryption_key.is_some()}}),
@@ -522,9 +518,6 @@ async fn update_account_settings(
     Json(input): Json<AccountSettingsInput>,
 ) -> Result<Json<Value>, ApiError> {
     let mut config = state.config.write().await;
-    if !config.edition.is_public() {
-        return Err(ApiError::not_found("本地版不提供账号策略配置"));
-    }
     let mut next = config.clone();
     input
         .secret_updates
@@ -534,7 +527,7 @@ async fn update_account_settings(
         .settings
         .apply(&mut next)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let mut tx = state.database.pool().begin().await?;
+    let mut tx = state.database.begin().await?;
     let payload: Value = sqlx::query_scalar(
         "SELECT payload FROM server_records WHERE name='account-settings' FOR UPDATE",
     )

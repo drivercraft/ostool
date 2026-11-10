@@ -17,7 +17,7 @@ const SessionContext = createContext<{
   error: string;
 }>({ checking: true, error: "" });
 export function SiteSessionProvider({ children }: { children: ReactNode }) {
-  const publicEdition = useEdition().edition === "public";
+  const publicEdition = useEdition().enabled;
   const [session, setSession] = useState<{
     user?: AuthUser;
     checking: boolean;

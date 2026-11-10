@@ -13,7 +13,7 @@ impl SecurityCache {
             .security
             .redis_url
             .as_deref()
-            .context("public edition requires OSTOOL_REDIS_URL")?;
+            .context("server requires OSTOOL_REDIS_URL")?;
         let client = redis::Client::open(url)
             .map_err(|_| anyhow::anyhow!("invalid Redis connection settings"))?;
         let settings = ConnectionManagerConfig::new()

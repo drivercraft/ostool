@@ -234,6 +234,7 @@ describe("registration", () => {
   it("shows registration closed without sending a request", async () => {
     mocks.config.mockResolvedValue({
       edition: "public",
+      enabled: true,
       allow_registration: false,
     });
     window.history.replaceState({}, "", "/register");

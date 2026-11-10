@@ -81,7 +81,7 @@ fn public_plan_rejects_exposed_native_api_before_any_installation() {
 fn executable_checks_one_env_without_creating_a_toml_or_starting_hardware() {
     let root = tempfile::tempdir().unwrap();
     let file = root.path().join(".env");
-    fs::write(&file,"OSTOOL_EDITION=local\nOSTOOL_LISTEN_ADDR=127.0.0.1:2999\nOSTOOL_NETWORK_INTERFACE=lo\nOSTOOL_DATABASE_URL=postgres://unreachable.invalid/unused\n").unwrap();
+    fs::write(&file,"OSTOOL_EDITION=local\nOSTOOL_LISTEN_ADDR=127.0.0.1:2999\nOSTOOL_NETWORK_INTERFACE=lo\nOSTOOL_PUBLIC_BASE_URL=https://boards.example.com\nOSTOOL_DATABASE_URL=postgres://unreachable.invalid/unused\n").unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_ostool-server"))
         .current_dir(root.path())
         .args(["--env-file"])
@@ -135,11 +135,7 @@ if [[ " $* " == *' config --environment '* ]]; then cat "$OSTOOL_ENV_FILE"; fi
     for edition in ["local", "public"] {
         let env_file = root.path().join(format!("{edition} config.env"));
         let trace = root.path().join(format!("{edition}.trace"));
-        let listener = if edition == "public" {
-            "127.0.0.1:2999"
-        } else {
-            "0.0.0.0:2999"
-        };
+        let listener = "127.0.0.1:2999";
         fs::write(&env_file,format!("OSTOOL_EDITION={edition}\nOSTOOL_LISTEN_ADDR={listener}\nOSTOOL_PUBLIC_BASE_URL=https://127.0.0.1:3443\nOSTOOL_ALLOWED_ORIGINS=https://localhost:3443,https://192.0.2.10:3443\nOSTOOL_ADMIN_PASSWORD=private-test-value\n")).unwrap();
         for action in ["start", "restart", "check", "logs", "seed", "stop"] {
             let mut command = Command::new(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/dev.sh"));
@@ -177,7 +173,8 @@ if [[ " $* " == *' config --environment '* ]]; then cat "$OSTOOL_ENV_FILE"; fi
             assert!(trace.contains(
                 "sites=<https://127.0.0.1:3443 https://localhost:3443 https://192.0.2.10:3443>"
             ));
-        } else {
+        }
+        if edition == "local" {
             assert!(trace.contains("<--profile> <gateway> <stop> <caddy>"));
         }
     }

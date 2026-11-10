@@ -285,7 +285,7 @@ impl OtaStore {
         updated_observations.remove(board_id);
         {
             let db = &self.database;
-            let mut tx = db.pool().begin().await?;
+            let mut tx = db.begin().await?;
             for (name, payload) in [
                 (
                     "ota-observations",
@@ -305,30 +305,6 @@ impl OtaStore {
         *observations = updated_observations;
         *jobs = updated_jobs;
         Ok(result)
-    }
-
-    pub async fn can_download(
-        &self,
-        board_id: &str,
-        mac: httpboot_protocol::MacAddress,
-        update_id: &str,
-        epoch: &str,
-    ) -> bool {
-        let observations = self.observations.lock().await;
-        let eligible = observations.get(board_id).is_some_and(|observation| {
-            observation.mac_address == mac
-                && observation.epoch == epoch
-                && observation
-                    .state
-                    .as_ref()
-                    .is_some_and(|ota| !ota.trial && ota.pending_update_id.is_none())
-        });
-        eligible
-            && self.jobs.lock().await.get(board_id).is_some_and(|job| {
-                job.mac_address == mac
-                    && job.update_id == update_id
-                    && job.phase == Phase::Downloading
-            })
     }
 
     pub async fn decide(
@@ -643,7 +619,7 @@ impl OtaStore {
     async fn save(&self, jobs: &BTreeMap<String, Job>) -> anyhow::Result<()> {
         let db = &self.database;
 
-        let mut tx = db.pool().begin().await?;
+        let mut tx = db.begin().await?;
         let old: Option<serde_json::Value> = sqlx::query_scalar(
             "SELECT payload FROM server_records WHERE name='ota-jobs' FOR UPDATE",
         )

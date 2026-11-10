@@ -12,7 +12,7 @@ import SiteSettings from "./SiteSettings";
 import { Server, Tftp, Accounts } from "./Settings";
 
 export default function SystemSettings() {
-  const publicEdition = useEdition().edition === "public";
+  const publicEdition = useEdition().enabled;
   const [params, setParams] = useSearchParams();
   const { can } = usePermissions();
   const tabs = [

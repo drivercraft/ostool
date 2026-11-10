@@ -1,4 +1,4 @@
-import { expect, test } from "playwright/test";
+import { expect, test } from "../fixtures/local";
 
 test("lease history follows real allocation and release through the paginated event stream", async ({
   page,

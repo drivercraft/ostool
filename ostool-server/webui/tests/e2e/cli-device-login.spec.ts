@@ -20,7 +20,9 @@ test("website approves CLI device login only after terminal confirmation", async
       )
     ).ok(),
   ).toBeTruthy();
-  const cli = await playwright.request.newContext();
+  const cli = await playwright.request.newContext({
+    storageState: { cookies: [], origins: [] },
+  });
   const deviceResponse = await cli.post(`${base}/oauth/device/code`, {
     form: { client_id: "ostool-cli", scope: "board:operate offline_access" },
   });

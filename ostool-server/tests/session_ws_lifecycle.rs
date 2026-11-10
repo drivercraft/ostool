@@ -23,7 +23,7 @@ use futures_util::{SinkExt, StreamExt};
 use ostool_server::{
     BoardConfig, BootConfig, BuiltinTftpConfig, CustomPowerManagement, PowerManagementConfig,
     SerialConfig, SerialPortKey, SerialPortKeyKind, ServerConfig, TftpConfig, UbootProfile,
-    UploadLimitsConfig, build_router,
+    UploadLimitsConfig,
     tftp::service::{TftpManager, build_tftp_manager},
 };
 use serialport::{SerialPort, TTYPort};
@@ -181,7 +181,7 @@ fn spawn_test_server_with_power_on(
                 }
             });
 
-            let app = build_router(state.clone());
+            let app = test_database::authenticated_router(&state).await?;
             let listen_addr = state.config.read().await.listen_addr;
             let listener = tokio::net::TcpListener::bind(listen_addr).await?;
             let local_addr = listener.local_addr()?;
@@ -635,7 +635,7 @@ fn serial_open_failure_reports_error_and_releases_session() -> Result<()> {
             error["message"]
                 .as_str()
                 .unwrap_or_default()
-                .contains("failed to open board serial"),
+                .contains("设备连接失败，请联系管理员"),
             "{text}"
         );
         wait_for_closed(&mut ws).await?;
@@ -749,7 +749,6 @@ fn public_credential_ending_closes_serial(expire_access: bool) -> Result<()> {
         })
         .await
         .context("invalid credential did not close serial within 8 seconds")??;
-        server.state.config.write().await.edition = ostool_server::config::Edition::Local;
         wait_for_session_release(&server.app, &created.session_id).await
     });
     let shutdown = server.shutdown();

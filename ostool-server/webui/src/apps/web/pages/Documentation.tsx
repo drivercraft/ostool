@@ -107,7 +107,7 @@ function Steps({ items }: { items: { title: string; text: string }[] }) {
 }
 export function Documentation() {
   const [params, setParams] = useSearchParams();
-  const publicEdition = useEdition().edition === "public";
+  const publicEdition = useEdition().enabled;
   const requested = params.get("page") ?? "start";
   const current =
     documents.find((item) => item.id === requested) ?? documents[0];

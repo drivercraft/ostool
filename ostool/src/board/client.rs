@@ -263,9 +263,9 @@ impl BoardServerClientError {
 impl BoardServerClient {
     pub fn new(server: &str, port: u16) -> anyhow::Result<Self> {
         Self::new_with_endpoint(BoardEndpoint::new(
-            &format!("http://{server}"),
+            &format!("https://{server}"),
             Some(port),
-            AuthMode::Disabled,
+            AuthMode::Required,
         )?)
     }
 
@@ -862,7 +862,11 @@ pub(crate) mod tests {
 
     #[test]
     fn resolve_relative_ws_url_uses_server_defaults() {
-        let client = BoardServerClient::new("127.0.0.1", 8080).unwrap();
+        let client = BoardServerClient::new_with_endpoint(BoardEndpoint {
+            base_url: "http://127.0.0.1:8080/".parse().unwrap(),
+            auth_mode: AuthMode::Disabled,
+        })
+        .unwrap();
         let url = client
             .resolve_ws_url("/api/v1/sessions/demo/serial/ws")
             .unwrap();
@@ -898,7 +902,11 @@ pub(crate) mod tests {
 
     #[test]
     fn resolve_absolute_ws_url_keeps_original_value() {
-        let client = BoardServerClient::new("127.0.0.1", 8080).unwrap();
+        let client = BoardServerClient::new_with_endpoint(BoardEndpoint {
+            base_url: "http://127.0.0.1:8080/".parse().unwrap(),
+            auth_mode: AuthMode::Disabled,
+        })
+        .unwrap();
         let url = client
             .resolve_ws_url("ws://10.0.0.2:9000/api/v1/sessions/demo/serial/ws")
             .unwrap();

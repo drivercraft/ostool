@@ -73,7 +73,7 @@ pub async fn assign(
         return Err(ApiError::forbidden("当前角色没有即时分配权限"));
     }
     let count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM session_history WHERE user_id=$1 AND ended_at IS NULL",
+        "SELECT count(DISTINCT board_id) FROM (SELECT board_id FROM session_history WHERE user_id=$1 AND ended_at IS NULL UNION SELECT board_id FROM board_rentals WHERE user_id=$1 AND source='instant' AND cancelled_at IS NULL AND starts_at<=now() AND ends_at>now()) allocations",
     )
     .bind(user.id)
     .fetch_one(state.database.pool())
@@ -104,7 +104,7 @@ pub async fn assign(
         })
     })?;
     let rental = Uuid::new_v4();
-    let mut tx = state.database.pool().begin().await?;
+    let mut tx = state.database.begin().await?;
     sqlx::query("INSERT INTO board_rentals(id,board_id,user_id,starts_at,ends_at,notes,source) VALUES($1,$2,$3,now(),$4,'即时使用自动分配','instant')")
   .bind(rental).bind(&id).bind(user.id).bind(end).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO rental_requests(user_id,board_id,starts_at,ends_at,notes,status,decision_note,reviewed_at,rental_id) SELECT user_id,board_id,starts_at,ends_at,notes,'auto_approved','自动放行',now(),id FROM board_rentals WHERE id=$1")
@@ -129,4 +129,65 @@ pub async fn cancel_failed(state: &AppState, id: Uuid) {
     state
         .admin_events
         .invalidate(&["rentals", "rental_requests"]);
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AllocationInput {
+    pub board_id: String,
+}
+
+pub async fn claim(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    axum::extract::Extension(crate::api::auth::CurrentUser(user)): axum::extract::Extension<
+        crate::api::auth::CurrentUser,
+    >,
+    axum::Json(input): axum::Json<AllocationInput>,
+) -> Result<
+    (
+        axum::http::StatusCode,
+        axum::extract::Extension<crate::audit::Target>,
+        axum::Json<serde_json::Value>,
+    ),
+    ApiError,
+> {
+    if input.board_id.is_empty() || input.board_id.len() > 256 {
+        return Err(ApiError::bad_request("请选择开发板"));
+    }
+    let _gate = state.rental_gate.lock().await;
+    let _inventory = state.board_inventory_gate.lock().await;
+    let kind = state
+        .boards
+        .read()
+        .await
+        .get(&input.board_id)
+        .map(|b| b.board_type.clone())
+        .ok_or_else(|| ApiError::not_found("开发板不存在"))?;
+    let (board, id, end) = assign(&state, &user, &kind, Some(&input.board_id), &[]).await?;
+    Ok((
+        axum::http::StatusCode::CREATED,
+        axum::extract::Extension(crate::audit::Target(id.to_string())),
+        axum::Json(serde_json::json!({"id":id,"board_id":board,"ends_at":end})),
+    ))
+}
+pub async fn release(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    axum::extract::Extension(crate::api::auth::CurrentUser(user)): axum::extract::Extension<
+        crate::api::auth::CurrentUser,
+    >,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    let _gate = state.rental_gate.lock().await;
+    let changed=sqlx::query("UPDATE board_rentals SET cancelled_at=now() WHERE id=$1 AND user_id=$2 AND source='instant' AND cancelled_at IS NULL AND ends_at>now()")
+        .bind(id).bind(user.id).execute(state.database.pool()).await?;
+    if changed.rows_affected() == 0 {
+        return Err(ApiError::not_found("即时分配记录不存在或已结束"));
+    }
+    sqlx::query("UPDATE rental_requests SET status='cancelled',decision_note='用户主动归还' WHERE rental_id=$1 AND status='auto_approved'").bind(id).execute(state.database.pool()).await?;
+    crate::api::rentals::enforce(&state).await?;
+    state
+        .admin_events
+        .invalidate(&["rentals", "rental_requests"]);
+    state.rental_changed.notify_one();
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }

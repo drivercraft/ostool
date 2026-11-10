@@ -309,18 +309,23 @@ async fn try_main() -> Result<()> {
                 )?;
                 let board_config =
                     load_board_config(&mut invocation, args.board_config.as_deref()).await?;
-                board::run_board(
-                    &mut invocation,
-                    &loaded_build_config.config,
-                    Some(loaded_build_config.path.as_path()),
-                    &board_config,
+                let request = board::BoardRunRequest::new(
+                    board_config,
                     board::RunBoardOptions {
                         board_type: args.board_type,
                         server: args.server.server,
                         port: args.server.port,
                     },
                 )
+                .with_configured_session_files(&invocation, args.board_config.as_deref())?;
+                build::prepare_with_config(
+                    &mut invocation,
+                    &loaded_build_config.config,
+                    Some(loaded_build_config.path.as_path()),
+                    false,
+                )
                 .await?;
+                board::run_prepared_board_with_request(&mut invocation, request).await?;
             }
             BoardSubCommands::Config => {
                 board::config()?;

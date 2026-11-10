@@ -146,8 +146,7 @@ pub async fn middleware(
     next: Next,
 ) -> Response {
     let path = request.uri().path();
-    let public = state.config.read().await.edition.is_public();
-    if !public {
+    if !state.config.read().await.edition.is_public() {
         if path.starts_with("/oauth/")
             || (path.starts_with("/api/v1/auth/") && path != "/api/v1/auth/config")
             || [
@@ -157,6 +156,7 @@ pub async fn middleware(
                 "/api/v1/admin/rentals",
                 "/api/v1/admin/rental-requests",
                 "/api/v1/admin/mail-deliveries",
+                "/api/v1/admin/account-settings",
                 "/api/v1/account",
             ]
             .iter()
@@ -246,7 +246,8 @@ pub async fn middleware(
             return ApiError::forbidden("当前角色没有此后台操作权限").into_response();
         }
     }
-    if (path == "/api/v1/board-types"
+    if (path.starts_with("/v1/tests")
+        || path == "/api/v1/board-types"
         || path == "/api/v1/sessions"
         || path.starts_with("/api/v1/sessions/"))
         && !access.allows("board.use")
@@ -260,7 +261,8 @@ pub async fn middleware(
         return ApiError::forbidden("当前角色没有租赁申请权限").into_response();
     }
     if credential.client_id == "ostool-cli" && path != "/api/v1/auth/me" {
-        let board_operation = path == "/api/v1/board-types"
+        let board_operation = path.starts_with("/v1/tests")
+            || path == "/api/v1/board-types"
             || path == "/api/v1/sessions"
             || path.starts_with("/api/v1/sessions/")
             || path.starts_with("/share/sessions/")
@@ -318,7 +320,8 @@ pub async fn middleware(
 }
 
 fn is_public_path(path: &str) -> bool {
-    path == "/"
+    path.starts_with("/device-files/")
+        || path == "/"
         || path == "/register"
         || path == "/password-reset"
         || path == "/account"

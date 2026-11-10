@@ -2,8 +2,9 @@
 
 `ostool-server` 提供本地版和公网版，二者共用 PostgreSQL 和 Board REST / 串口 WebSocket 契约：
 
-- 本地版使用 `auth_mode = "disabled"`，CLI 无需登录，网站隐藏账号和租赁功能。
-- 公网版使用 `auth_mode = "required"`，CLI 通过同一服务器的 OAuth Device Authorization 登录，或使用个人访问令牌（PAT）；管理后台与前台有独立登录界面和浏览器 Cookie。
+- `local` 使用 HTTP 免登录，不启用用户、租赁分配或审批，也不需要 Redis；`public` 使用 HTTPS，强制登录、角色权限和租赁授权。`OSTOOL_AUTH_ENABLED` 如显式填写必须与部署版本一致。
+- CLI 默认使用 `auth_mode = "required"` 和 HTTPS，通过 OAuth Device Authorization 或 PAT 登录。
+- 管理后台与前台有独立登录界面和浏览器 Cookie。
 
 CLI 只调用 OAuth、Board REST 和串口 WebSocket；管理 API `/api/v1/admin/...` 要求后台管理员身份，CLI 凭据不能调用这些接口。
 
@@ -17,18 +18,20 @@ CLI 凭据的 `board:operate` scope 仅允许 Board REST、会话文件及串口
 
 取消、缩短租赁或到期会停止相关运行会话；撤销 OAuth 登录或 PAT 会关闭现有串口连接并释放设备（凭据复核最多间隔 5 秒）。OAuth 刷新属于同一登录族，不应中断正常串口连接；如果该登录族没有新的有效 access token，现有串口也会在 5 秒内关闭。
 
-设备侧 TFTP 不支持用户 Bearer 鉴权；loader 与启动/共享文件允许配置的设备网段匿名访问，以兼容固件和板上下载命令。`http_url` 是设备可访问的文件地址，CLI 不会把用户 token 注入板上命令。公网 HTTP 下载则需要当前有效凭据和会话归属。独立吞吐测试监听器同样没有用户认证；部署时只向公网暴露 Caddy 的 HTTPS 入口，限制设备端口和设备网段，见 [安全配置](../ostool-server/README.md#security-configuration)。
+设备通信使用后台配置的固定 HTTPS 来源、独立凭据和证书验证。设备凭据加密入库，不返回 CLI。
+无认证 UDP 发现、TFTP 和旧 loader 回调已关闭。设备下载使用 60 秒、绑定单个文件的 HTTPS 凭据；
+用户 token 不注入板上命令。可选吞吐测试入口也要求认证，并只允许回环监听，由 HTTPS 网关转发。
 
-服务地址来自全局或项目配置中的 `board.server`（完整 URL，可包含路径前缀），可被命令行 `--server` 覆盖；可选的 `board.port` 或 `--port` 用于覆盖 URL 中的端口。`auth_mode = "disabled"` 时该地址指向局域网 `ostool-server`；`auth_mode = "required"` 时该地址指向认证后端，OAuth 和受认证的 Board API 共用这个 Base URL。为兼容旧的局域网配置，`board.server` 为裸 IPv4 或 IPv6 地址时客户端自动补为 `http://`。基线版本写出的 `board.server_ip` / `board.port` 也会在读取时迁移为 `board.server` / `board.port`，下一次保存配置时只写新格式；无 scheme 的主机名不支持。
+服务地址来自全局或项目配置中的 `board.server`（完整 URL，可包含路径前缀），可被命令行 `--server` 覆盖；可选的 `board.port` 或 `--port` 用于覆盖 URL 中的端口。`auth_mode = "required"` 时该地址指向认证后端，OAuth 和受认证的 Board API 共用这个 Base URL。为兼容旧的局域网配置，`board.server` 为裸 IPv4 或 IPv6 地址时客户端自动补为 `http://`。基线版本写出的 `board.server_ip` / `board.port` 也会在读取时迁移为 `board.server` / `board.port`，下一次保存配置时只写新格式；无 scheme 的主机名不支持。
 
 客户端会先把 Base URL 规范化为以 `/` 结尾，再将 HTTP 和 OAuth 接口路径追加到该路径。本文为简洁起见把接口写成 `/api/...` 或 `/oauth/...`；这些是相对于 Base URL 的接口标识，不表示实际请求必须位于域名根目录。例如 Base URL 为 `https://board.example.com/webapp/ostoolmanagephp/` 时，创建会话的实际 URL 是 `https://board.example.com/webapp/ostoolmanagephp/api/v1/sessions`。
 
 - `auth_mode = "required"` 时，`board.server` 必须使用 HTTPS，Board REST 请求和串口 WebSocket 握手携带下文描述的 Bearer Token；OAuth Device Authorization、Token 和撤销请求不携带该 Header；
-- `auth_mode = "disabled"`（默认）时通常使用 HTTP，不会发送认证 Header，适合局域网直连 `ostool-server`。
+- `auth_mode = "disabled"` 仅保留给外部旧网关兼容；当前 ostool-server 会拒绝无凭据的板卡操作。
 
 ## 网络吞吐测试 API
 
-`ostool-server` 另开专用 HTTP 监听地址，默认 `0.0.0.0:3000`，与默认使用 2999 端口的管理、开发板和会话文件接口分离。该监听器只安装本节路由，没有登录认证，部署时应限制在可信局域网内。它使用 HTTP 原始流测量上传和下载，不兼容 iperf2 协议；`ostool` CLI 的 `board.server` 不指向此端口。
+`ostool-server` 另开专用 HTTP 监听地址，配置为 `127.0.0.1:3000`，与默认使用 2999 端口的管理、开发板和会话文件接口分离。该监听器只安装本节路由，要求用户凭据和设备使用权限；只能绑定回环地址并由 HTTPS 网关转发。它使用 HTTP 原始流测量上传和下载，不兼容 iperf2 协议；`ostool` CLI 的 `board.server` 不指向此端口。
 
 ### 测试生命周期
 
@@ -132,7 +135,7 @@ HTTP 客户端不跟随重定向。认证模式下，绝对 WebSocket URL 必须
 
 ## OAuth Device Authorization API
 
-本节接口由公网版 `ostool-server` 提供，本地版返回 404。所有 OAuth 请求使用 `application/x-www-form-urlencoded`；CLI 的请求格式与既有设备授权协议一致。
+本节身份接口仅由公网版提供，本地版返回 404。所有 OAuth 请求使用 `application/x-www-form-urlencoded`；CLI 的请求格式与既有设备授权协议一致。
 
 ### 基本原理
 
@@ -253,34 +256,31 @@ token=<refresh_token>
 
 `ostool-server` 的管理页面位于 `/admin`，页面使用同源的 `/api/v1/admin/...` 接口维护开发板、DTB、活动会话、TFTP 和服务器可编辑配置。除 DTB 上传使用原始字节外，请求和响应均使用 JSON。
 
-公网版管理 API 检查管理员身份、后台登录来源和 CSRF 来源；后台操作不要求再次验证密码或 MFA，登录时的 MFA 策略仍生效。管理页面使用独立的 `/admin/login`。网站 Cookie、普通成员、CLI OAuth 和 PAT 不能代替后台管理员登录。本地版保持免登录，仅适合可信内网。部署时由 Caddy 提供 HTTPS，并限制 Rust 原始监听端口和设备端口的访问范围。
+公网版管理 API 检查管理员身份、后台登录来源和 CSRF 来源；后台操作不要求再次验证密码或 MFA，登录时的 MFA 策略仍生效。管理页面使用独立的 `/admin/login`。网站 Cookie、普通成员、CLI OAuth 和 PAT 不能代替后台管理员登录。本地版管理页面和硬件 API 免登录，不提供用户、角色与租赁管理。部署时由 Caddy 提供 HTTPS，并限制 Rust 原始监听端口和设备端口的访问范围。
 
-本地版和公网版共用用户 API 路径：本地免登录，公网请求必须携带有效账号凭据并符合租赁及会话归属。
+两种模式共用开发板 API 路径：公网版校验有效凭据、租赁和会话归属；本地版匿名使用空闲板卡，并保持互斥和释放。
 公网用户入口保持回环地址，经 Caddy 提供 HTTPS，包含上传、文件下载和 WebSocket；私网来源不能跳过鉴权。
 用户接口的下载 URL 使用公网 HTTPS 来源，不返回设备下载地址；启动配置、串口和 TFTP 响应不返回设备网地址、
 宿主机串口路径或绑定标识。管理接口仍向已登录管理员提供维护设备所需的配置。
-设备下载只绑定所选设备网的私有地址及后端端口，且只提供 `/share/sessions/...`、`/boot/sessions/...` 文件读取，
-不提供用户、管理、装载器或会话控制接口。来源限制为所选网卡子网及回环地址，按 TCP 实际来源判断，忽略转发头。
-设备网设置沿用已有配置，不另设设备监听环境变量；`OSTOOL_HARDWARE_ALLOWED_NETWORKS` 可收紧来源网段。
-该通道用于服务端展开的板端命令，不得向互联网转发。UDP 发现和 TFTP 也应仅用于设备内部网络。
-公网设备使用服务端主动控制协议；旧装载器轮询不对公网开放。本地版沿用免登录入口。
+设备下载复用 HTTPS 网关，使用短时、单文件的设备凭据，不另起匿名设备监听。
+旧无认证 UDP/TFTP/poll 接口不再启用。网络装载器仅通过后台配置的固定 HTTPS 来源和独立凭据接入。
 
 `GET /api/v1/sessions/{id}/boot-profile` 返回 `server_side_operations: true` 表示支持服务端编排。
 `POST /api/v1/sessions/{id}/uboot/prepare` 接收可选命令数组、加载地址和 1–600 秒的超时，先于串口连接提交。
 连接原有串口 WebSocket 后，`GET .../uboot/prepare` 等待准备完成，仅返回 `kernel_load_addr`、`fit_load_addr`、
 `fdt_load_addr` 等 RAM 地址。客户端生成并上传 FIT 后，以 `POST .../uboot/boot` 提交会话内 `path` 和可选 `cmdline`。
-服务端读取设备配置、设置网络并执行 TFTP 或串口加载；启动后同一 WebSocket 继续用于终端交互。
+服务端读取设备配置并执行串口加载；启动后同一 WebSocket 继续用于终端交互。
 所有新增路径同样检查公网账号、会话归属和有效租赁，取消或断开连接会结束编排并释放设备。
 `POST .../commands` 接收共享文件命令模板数组，只返回对应 UUID 数组。
 串口控制消息 `{"type":"command","id":"UUID"}` 执行当前会话中注册的模板；变量仅在服务端展开。
 命令内容通过设备串口发送，不会在宿主机 shell 执行。命令上限每会话 64 条、总计 64 KiB。
 新客户端按能力字段选择此流程，连接未提供该字段的原有服务端时继续使用原有协议。
 
-会话文件上传为流式临时文件加原子提交，释放会话会取消上传；提交重新检查当前凭据与租赁。
+会话文件先限流接收到私有暂存，再以数据库事务提交元数据和内容块；释放会话会取消上传，提交前重新检查当前凭据与租赁。
 单文件、会话、账号及全局容量，以及文件数、并发和超时在系统设置的网络与上传组中配置。
 超出容量返回 413；并发限制返回 429 及 `Retry-After`；上传超时返回 408；会话结束返回 409。
 同名覆盖按替换后的容量计费，失败不会覆盖已有文件。文件存储根目录不能在仍有会话时切换。
-上传总时限默认 300 秒，连续 15 秒无数据终止；下载同样采用流式传输和有界并发，并随会话终止。
+上传总时限默认 300 秒，覆盖接收、校验、发布等待及数据库提交；连续 15 秒无数据终止；下载同样采用流式传输和有界并发，并随会话终止。
 设备配置可选 `reset_command`，用于断电后的基线恢复；失败会保留设备占用，避免分配给下一个用户。
 
 ### 接口索引
@@ -338,7 +338,7 @@ GET /api/v1/admin/overview
     "last_error": null
   },
   "server": {
-    "listen_addr": "0.0.0.0:2999",
+    "listen_addr": "127.0.0.1:2999",
     "data_dir": "/var/lib/ostool-server",
     "http_boot_public_base_url": null,
     "dtb_upload_max_mib": 10
@@ -644,7 +644,7 @@ DELETE /api/v1/admin/sessions/{session_id}
 ### 硬件租约历史
 
 硬件使用历史接口：`GET /api/v1/admin/session-history`。公网版仅管理员可访问；
-本地版沿用免登录管理。参数为 `q`（会话、设备、板型、用户名或客户端的字面子串）、
+本地版使用相同的认证管理入口。参数为 `q`（会话、设备、板型、用户名或客户端的字面子串）、
 `board`（精确设备 ID）、`state`（active/releasing/ended）、`reason`（结束原因）、
 `from` / `to`（创建时间，RFC3339，含起点不含终点）、`page`（从 1 开始）和
 `page_size`（1–100，默认 20）。响应包含 `items,total,page,page_size,query,active`。
@@ -662,6 +662,8 @@ DELETE /api/v1/admin/sessions/{session_id}
 
 ### TFTP 管理
 
+
+当前服务器禁止启用无认证 TFTP；保留状态/配置接口用于兼容旧客户端、查询缓存设置。`enabled=true` 返回 400。
 ```http
 GET /api/v1/admin/tftp
 PUT /api/v1/admin/tftp
@@ -673,9 +675,9 @@ Content-Type: application/json
 ```json
 {
   "provider": "builtin",
-  "enabled": true,
+  "enabled": false,
   "root_dir": "/var/lib/ostool-server/tftp-root",
-  "bind_addr": "0.0.0.0:69"
+  "bind_addr": "127.0.0.1:69"
 }
 ```
 
@@ -684,7 +686,7 @@ systemd `tftpd-hpa` provider 示例：
 ```json
 {
   "provider": "system_tftpd_hpa",
-  "enabled": true,
+  "enabled": false,
   "root_dir": "/srv/tftp",
   "config_path": "/etc/default/tftpd-hpa",
   "service_name": "tftpd-hpa",
@@ -704,7 +706,6 @@ POST /api/v1/admin/tftp/reconcile
 ```
 
 状态响应使用 `{"status": <TftpStatus>}` 包装，`TftpStatus` 字段格式与管理概览中的 `tftp_status` 相同。`reconcile` 没有请求体，用于立即应用当前 provider 配置并在成功后返回最新状态；失败返回 `503 Service Unavailable`。
-
 ### 服务器配置管理
 
 ```http
@@ -716,7 +717,7 @@ GET /api/v1/admin/server-config
 ```json
 {
   "readonly": {
-    "listen_addr": "0.0.0.0:2999",
+    "listen_addr": "127.0.0.1:2999",
     "data_dir": "/var/lib/ostool-server",
     "http_boot_public_base_url": null,
     "dtb_upload_max_mib": 10
@@ -752,11 +753,13 @@ Content-Type: application/json
 
 ## Board REST API
 
-本节定义同一 Rust `ostool-server` 在本地版和公网版共用的开发板服务契约。两版使用统一 PostgreSQL 数据层；本地版无需登录，公网版校验身份和租赁使用权。这里覆盖 `ostool-server` 的全部公开、非管理 REST 接口。`ostool` 当前命令会使用会话文件上传；配置宿主 initramfs 时还会调用普通 HTTP Boot 文件上传。它不直接调用会话详情、会话文件列表/查询/删除和显式电源控制；这些仍属于公开 board 服务契约，其中显式电源控制也已有 `BoardServerClient` 方法。
+本节定义同一 Rust `ostool-server` 在本地版和公网版共用的开发板服务契约。两版使用统一 PostgreSQL 数据层；公网版校验身份和租赁使用权；本地版无需账号或租赁。这里覆盖 `ostool-server` 的全部公开、非管理 REST 接口。`ostool` 当前命令会使用会话文件上传；配置宿主 initramfs 时还会调用普通 HTTP Boot 文件上传。它不直接调用会话详情、会话文件列表/查询/删除和显式电源控制；这些仍属于公开 board 服务契约，其中显式电源控制也已有 `BoardServerClient` 方法。
 
-axloader 协议 v2/v3/v4 的 `POST /api/v1/loaders/poll`、`POST /api/v1/loaders/status` 和 `GET /api/v1/sessions/{session_id}/loader-status` 保留识别及升级用途。poll/status 由 UDP 发现返回的一次性 `registration_id` 关联本次固件启动；状态以 `session_id + boot_id + registration_id` 定位，旧代次迟到上报不能覆盖新代次。v4 携带 `ota` 状态时仍可收到 `update` / `confirm_update`，普通启动统一返回 `serial_protocol_upgrade_required`。Session 释放时删除启动清单和 loader 状态，不删除独立持久的 OTA 任务。
+旧 v2/v3/v4 的注册、poll/status/OTA 回调实现已移除，旧路径仍由安全中间件返回 403；UDP 发现实现已移除。设备和用户文件下载共用主 HTTPS 入口，不再保留独立的设备下载监听或来源网段放行配置。
+`GET /api/v1/sessions/{session_id}/loader-status` 仍可由当前会话用户读取经过安全处理的状态。
+网络装载器须先具备 HTTPS 与独立 Bearer 验证能力，服务器才会探测和控制已配置的设备。
 
-v5/v6 axloader 通过 UDP 广播自身地址，ostool-server 随后调用设备的 HTTP 接口；v5 保留识别与 OTA，自动启动要求 v6。服务器先从当前 UART 身份帧确认物理连线，以本次参数接管租约，再通过网络 continue 和 `X-Serial-Binding` 放行启动。设备 `POST /api/v1/boot/jobs` 创建事务返回 `201`，相同清单重试返回 `200`，冲突清单返回 `409`；服务端观察到同代次的其他启动 ID 时会先删除旧事务并只重试创建一次，删除返回 `404` 也视为旧事务已经消失。清单完整保留相互独立的可选 `cmdline` 与 `initramfs` 元数据，并按已核验的内核架构选择 EFI 入口：x86_64 为 `__x86_64_efi_pe_entry`，RISC-V64 和 LoongArch64 为 `efi_pe_entry`。串口交接前重新核对文件、架构声明和 `observed.arch`，不匹配时发布错误码为 `boot_preflight_failed` 的 loader `failed` 状态，串口状态进入 `Failed`，并在关闭 WebSocket 前通过 `error.message` 发送具体原因，随后停止会话。`POST /api/v1/boot/jobs/{id}/start` 和 `PUT /api/v1/ota/image` 接受交接或升级后返回 `202`；`POST /api/v1/ota/confirm` 成功返回 `200`，代次、来源或升级 ID 不匹配返回 `409`。完整设备接口及状态机见 [axloader 网络控制与本地验证](axloader-network-control.md#21-启动事务)和[装载器升级](axloader-network-control.md#22-装载器升级)。设备没有可用 OTA 持久区时，`ota` 状态可以为空；服务端不发送升级镜像，任务保留可见的等待原因，不按架构判为失败。v6 仍可向已有 Session 推送普通启动事务。
+服务器主动探测已配置的 v5/v6 装载器 HTTPS 接口，回调地址不从 UDP 获得；v5 保留识别与 OTA，自动启动要求 v6。服务器先从当前 UART 身份帧确认物理连线，以本次参数接管租约，再通过网络 continue 和 `X-Serial-Binding` 放行启动。设备 `POST /api/v1/boot/jobs` 创建事务返回 `201`，相同清单重试返回 `200`，冲突清单返回 `409`；服务端观察到同代次的其他启动 ID 时会先删除旧事务并只重试创建一次，删除返回 `404` 也视为旧事务已经消失。清单完整保留相互独立的可选 `cmdline` 与 `initramfs` 元数据，并按已核验的内核架构选择 EFI 入口：x86_64 为 `__x86_64_efi_pe_entry`，RISC-V64 和 LoongArch64 为 `efi_pe_entry`。串口交接前重新核对文件、架构声明和 `observed.arch`，不匹配时发布错误码为 `boot_preflight_failed` 的 loader `failed` 状态，串口状态进入 `Failed`，并在关闭 WebSocket 前通过 `error.message` 发送具体原因，随后停止会话。`POST /api/v1/boot/jobs/{id}/start` 和 `PUT /api/v1/ota/image` 接受交接或升级后返回 `202`；`POST /api/v1/ota/confirm` 成功返回 `200`，代次、来源或升级 ID 不匹配返回 `409`。完整设备接口及状态机见 [axloader 网络控制与本地验证](axloader-network-control.md#21-启动事务)和[装载器升级](axloader-network-control.md#22-装载器升级)。设备没有可用 OTA 持久区时，`ota` 状态可以为空；服务端不发送升级镜像，任务保留可见的等待原因，不按架构判为失败。v6 仍可向已有 Session 推送普通启动事务。
 
 装载器镜像库和指派任务使用下列 ostool-server 接口：
 
@@ -768,8 +771,8 @@ v5/v6 axloader 通过 UDP 广播自身地址，ostool-server 随后调用设备�
 | `GET /api/v1/admin/boards/{board_id}/loader-updates` | `200`，返回该板卡当前任务或 `null` | 未知板卡返回 `404` |
 | `POST /api/v1/admin/boards/{board_id}/loader-updates` | `201`，为 HTTP Boot 板卡创建绑定当前 MAC 的独立升级 ID；离线可先排队，不限制 CPU 架构 | 启动类型不支持、缺少 MAC 或身份冲突、板卡租约非空闲/已有 Session、已有非终态任务、设备有未确认升级或镜像已激活时返回 `409` |
 | `DELETE /api/v1/admin/boards/{board_id}/loader-updates/{update_id}` | `200`，取消任意非终态任务并返回 `cancelled` 任务 | ID 已被替代或任务已经终结返回 `409` |
-| `GET /api/v1/loader-updates/{update_id}/image` | `200`，向旧 v4 loader 返回任务镜像；要求当前在线注册、实际 OTA 状态、相同 MAC/升级 ID、处于 `downloading` 的任务及空闲且无 Session 的板卡，读取后核对长度与 SHA-256 | 任务不存在或已终结返回 `404`；板卡 MAC 改变、设备离线、租约忙碌或注册/能力/任务许可不匹配返回 `409`；存储长度或摘要改变返回 `500` |
-| `POST /api/v1/loaders/ota-status` | `204`，接受旧 v4 loader 的阶段上报 | 协议版本错误返回 `400`，注册、MAC、任务或阶段不匹配返回 `409` |
+| `GET /api/v1/loader-updates/{update_id}/image` | 旧无认证设备入口已关闭 | 两种模式均返回 `403`；使用已配置的 HTTPS 设备控制协议 |
+| `POST /api/v1/loaders/ota-status` | 旧无认证设备入口已关闭 | 两种模式均返回 `403` |
 
 OTA 镜像对服务端是不透明的字节对象。`OtaStore` 接受非空且不超过 `MAX_IMAGE_BYTES`（32 MiB）的内容，保存标签、长度和 SHA-256，并在下发前验证文件完整性。axloader 独占 PE/COFF 格式、`Machine`、EFI Subsystem、平台加载限制及 A/B 试运行判断；server 和 Web UI 不用 CPU 架构判定 OTA 资格，也不需要设备新增专用架构检查接口。普通 HTTP Boot 的 ELF 架构声明、`boot_image::elf_arch()` 和交接前设备架构核对保持不变。
 
@@ -785,7 +788,7 @@ v5/v6 的 `device::push_ota_image()` 复用设备 `PUT /api/v1/ota/image`，保�
 | `503 Service Unavailable` | 保留等待/不可用原因，直到 OTA 状态、能力或启动代次变化才重新尝试，不持续重复 PUT |
 | 网络中断、超时及其他 `5xx` | 持久记录错误并有限退避，最多三次投递失败；结果不确定时先核对设备状态和升级 ID，最后一次也先核对再判定失败 |
 
-确定性拒绝至少保留 HTTP 状态及设备响应体，包括旧固件的 `422 {}`；读取拒绝响应体失败时保留 HTTP 状态和读取错误，仍不重传。升级 ID 匹配本任务的已暂存镜像不会再次下发，兼容暂存阶段 `source` 为空的固件；进入试运行后，仍要求来源为 `server` 且运行摘要匹配才能确认。缺失实际 `ota` 状态时任务等待并显示原因，不盲目发送，也不永久判为格式或架构错误。旧 v4 poll 只有在当前注册代次携带实际 OTA 状态时才能获得升级；旧下载路径核对同一注册代次的能力、MAC、升级 ID 和任务许可，重新注册或能力消失使旧资格失效。镜像格式和兼容性由实际下载它的 axloader 校验，并经既有 `ota-status` 上报。
+确定性拒绝至少保留 HTTP 状态及设备响应体，包括旧固件的 `422 {}`；读取拒绝响应体失败时保留 HTTP 状态和读取错误，仍不重传。升级 ID 匹配本任务的已暂存镜像不会再次下发，兼容暂存阶段 `source` 为空的固件；进入试运行后，仍要求来源为 `server` 且运行摘要匹配才能确认。缺失实际 `ota` 状态时任务等待并显示原因，不盲目发送，也不永久判为格式或架构错误。旧注册、poll、下载和 `ota-status` 回报实现已移除；当前升级通过已配置设备的 HTTPS 状态、投递和确认接口完成。
 
 OTA 镜像和任务独立于 Session 持久保存，服务端重启后继续使用原升级 ID。空闲检查只限制新镜像下发；若设备已运行本任务对应、来源为 `server` 且运行摘要匹配的新槽，即使板卡已经进入活动 Session，服务端也会先确认该槽。只有设备实际运行新槽、持久确认且激活摘要匹配后，任务才进入 `succeeded`。重复或旧代次上报不能改写终态，也不能覆盖最初的终态失败原因。取消非终态任务不会远程改写设备状态，已进入待试槽的设备在未获确认时按自身 A/B 规则回滚。非终态任务引用的镜像不能删除；删除终态任务曾引用的镜像只回收数据库中的镜像字节和元数据，任务中保存的摘要、版本和长度仍可用于审计。
 
@@ -947,7 +950,7 @@ GET /api/v1/sessions/{session_id}/boot-profile
 }
 ```
 
-`boot.kind` 可为 `uboot`、`pxe` 或 `httpboot`（客户端也接受别名 `uefi_http`）。`pxe` 的对象仅含可选 `notes`；`httpboot` 的对象可含 `serial_parameters`，不含持久架构字段。旧 `boot_arch` 兼容读取后丢弃，不用于选择内核架构。HTTP Boot 的 MAC 位于顶层 `network_identity.mac_address`，不属于 boot profile。顶层 `server_ip`、`netmask`、`interface`、`http_base_url` 均可为 `null`。本地版的 `server_ip` 和 `http_base_url` 可使用板端网络地址；公网版的设备网参数为 `null`，HTTP URL 使用公网 HTTPS 来源，实际设备编排由服务端完成。
+`boot.kind` 可为 `uboot`、`pxe` 或 `httpboot`（客户端也接受别名 `uefi_http`）。`pxe` 的对象仅含可选 `notes`；`httpboot` 的对象可含 `serial_parameters`，不含持久架构字段。旧 `boot_arch` 兼容读取后丢弃，不用于选择内核架构。HTTP Boot 的 MAC 位于顶层 `network_identity.mac_address`，不属于 boot profile。顶层 `server_ip`、`netmask`、`interface`、`http_base_url` 均可为 `null`。两种模式的设备网参数均为 `null`，公网 HTTP URL 使用配置的 HTTPS 来源，本地 URL 使用配置的 HTTP 服务地址，实际设备编排由服务端完成。
 
 ### 获取串口状态
 
@@ -1248,9 +1251,9 @@ GET `/api/v1/account/availability?board=...&from=...&to=...` 返回 `{query,item
 
 ## ostool-server 浏览器认证与账号安全
 
-本节仅适用于 `OSTOOL_EDITION=public` 的网页端。上述 CLI Device Authorization、
-`/oauth/token`、`/oauth/revoke`、Bearer/PAT 协议保持不变。本地版隐藏身份/租赁 API，
-使用 `auth_mode=disabled`；两种版本的业务数据均由 PostgreSQL 存储。
+本节适用于公网版网页端，本地版不启用身份接口。上述 CLI Device Authorization、
+`/oauth/token`、`/oauth/revoke`、Bearer/PAT 协议保持不变。公网版启用身份和租赁 API，
+CLI 使用 `auth_mode=required`；业务数据和会话文件均由 PostgreSQL 存储。
 
 浏览器认证使用 HttpOnly、SameSite=Strict 的独立前台/后台 Cookie，不返回访问/刷新令牌。
 HTTPS Cookie 带 Secure 和 `__Host-` 前缀。网页请求同源并携带 Cookie，
@@ -1327,7 +1330,7 @@ Cookie 写请求拒绝不匹配/缺失的 Origin。配置、部署与升级说�
 ## 站点配置与注册协议版本
 
 公网版新增 Redis 连接配置 OSTOOL_REDIS_URL，用于认证入口限流和冷却计数；
-用户/会话/验证证明仍以 PostgreSQL 为准，本地版不连接 Redis。
+公网用户/会话/验证证明仍以 PostgreSQL 为准；公网版需要 Redis，本地版不需要。
 
 公开站点配置和协议版本通过 GET /api/v1/site/events 推送，仅含 site 主题。
 管理页保存使用 PUT /api/v1/admin/site-settings，提交 revision 和完整 settings；
@@ -1359,7 +1362,7 @@ Cookie 写请求拒绝不匹配/缺失的 Origin。配置、部署与升级说�
 仅公网版管理员可使用 `GET /api/v1/admin/account-settings` 和
 `PUT /api/v1/admin/account-settings`。写请求检查后台管理员会话及请求来源，提交
 `{revision, settings}`；版本冲突返回 409，非法范围或缺少 SMTP/Turnstile/MFA 所需部署凭据
-返回 400。本地版接口返回 404，CLI 凭据不能访问。
+返回 400。此账号策略接口仅在公网版开放，CLI 凭据不能访问。
 
 配置涵盖注册、找回密码、登录限流、会话上限、令牌时效、SMTP 非密钥参数、人机验证与
 双重验证策略，以及注册和账号邮件验证码的有效期、重发冷却、统计窗口、发送额度、尝试上限。
@@ -1372,7 +1375,7 @@ Cookie 写请求拒绝不匹配/缺失的 Origin。配置、部署与升级说�
 `400 reserved_username` 或 `400 reserved_display_name`，错误消息可直接显示。
 已有名称未变时不重新判为违规；现有管理员可以继续登录和编辑非名称资料。
 登录不检查禁用词，部署初始化管理员、离线导入不属于用户改名接口。
-设置保存后立即生效，适用于后续新名称；本地版不开放账号策略接口。
+设置保存后立即生效，适用于后续新名称；本地版使用相同的账号策略接口与权限校验。
 
 保存至 `server_records` 的 `account-settings` 记录，后台 SSE 通过 `account_settings` 推送；
 公开 `site.auth` 只包含注册、邮箱验证和密码恢复可用性。配置内容和部署密钥不进入公开投影，
@@ -1394,7 +1397,7 @@ SMTP 密码、Turnstile 服务端密钥、MFA 加密密钥、数据库及 Redis 
 电源操作各平台均返回通用结果，不回显执行命令。数据库及系统调用的 5xx 响应使用通用消息；
 原始错误留在服务器日志，响应 `X-Request-ID` 与审计记录关联，供排障查询。
 运行状态、TFTP、OTA 和租约历史的错误字段仅保留失败状态及安全提示，不直接输出底层诊断正文。
-接口继续设置 `Cache-Control: no-store`。本地版使用相同的最小响应模型，保持免登录操作。
+接口继续设置 `Cache-Control: no-store`。本地版保留最小响应模型，允许匿名 HTTP 使用。
 
 ## 角色能力与自动分配
 
@@ -1421,3 +1424,20 @@ SSE 同样逐主题过滤，伪造 `topics/list_view/editor_view/board_editor_id
 提前清理完成后写 `released_at` 并缩短 `ends_at`；服务器重启结束中断的即时授权；失败分配取消对应记录。
 即时记录不能由租赁修改接口延长。普通预约的 `source='scheduled'`，原有审批流程保留。
 新增结构由增量迁移 `20261026000000_role_permissions.sql` 建立，不重置已有数据或旧迁移校验和。
+
+## 统一认证与设备凭据接口
+
+以下身份、租赁及账号接口仅适用于公网版，未认证请求返回 401，权限不足返回 403；本地版不启用这些接口，返回 404。
+`POST /api/v1/account/allocations` 接收 `{"board_id":"..."}`，仅允许 `board.instant` 成员给自己领取设备，
+返回 201 和 `id,board_id,ends_at`；预约冲突、池范围或并发上限返回 409。
+`DELETE /api/v1/account/allocations/{id}` 只归还当前用户的未结束即时分配，并释放关联硬件会话。
+
+`GET/PUT/DELETE /api/v1/admin/boards/{id}/device-connection` 要求 `devices.manage`。
+PUT 字段为 `endpoint`（HTTPS 来源）、`token`（首次必填，后续空值保留）和 `ca_pem`（可选 PEM）。
+接口返回 `endpoint,ca_pem,configured`，从不返回 token 或密文。凭据用部署主密钥加密入 PostgreSQL。
+未配置、证书不受信任或凭据错误的设备不能接入；不降级 HTTP，也不接受 UDP 指定回调地址。
+
+`GET /device-files/{file_id}?token=...` 使用独立随机文件凭据，数据库仅存摘要；凭据绑定文件 ID 并在 60 秒后过期。
+结束或释放的会话不能下载，错误/过期凭据返回 401。该接口支持 Range 和有界流式读取，并返回 `Cache-Control: no-store`。
+会话文件元数据和 256 KiB 内容块事务性保存在 PostgreSQL；磁盘暂存不是持久存储，串口缓存可从数据库重建。
+内核上传从接收第一个数据块之前开始检查并发、超时和会话取消，校验失败不发布文件。

@@ -95,14 +95,7 @@ function AdminEntry() {
   useEffect(() => {
     let active = true;
     (async () => {
-      if (config.edition === "local") {
-        if (loginPage) {
-          window.location.replace("/admin/overview");
-          return;
-        }
-        if (active) setGate("allowed");
-        return;
-      }
+      if (!config.enabled) { setGate("allowed"); return; }
       if (loginPage) return;
       const user = await api.me();
       if (active) {
@@ -125,7 +118,7 @@ function AdminEntry() {
       active = false;
     };
   }, [config, loginPage, requireAdminMfa]);
-  if (loginPage && config.edition === "public") return <AdminLogin />;
+  if (loginPage && config.enabled) return <AdminLogin />;
   if (gate === "checking") return <AdminConsole pending />;
   if (gate !== "allowed")
     return (
@@ -156,7 +149,7 @@ function AdminEntry() {
       </main>
     );
   return (
-    <PermissionsProvider user={currentUser} local={config.edition === "local"}>
+    <PermissionsProvider user={currentUser} local={!config.enabled}>
       <AdminConsole user={currentUser} />
     </PermissionsProvider>
   );
@@ -169,7 +162,7 @@ function AdminConsole({
   pending?: boolean;
 }) {
   const { settings } = useSiteSettings();
-  const publicEdition = useEdition().edition === "public";
+  const publicEdition = useEdition().enabled;
   const errors = useErrors();
   const { can } = usePermissions();
   const [menu, setMenu] = useState(false);

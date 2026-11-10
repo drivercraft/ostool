@@ -165,7 +165,7 @@ async fn main() -> anyhow::Result<()> {
                 .await?;
         }
     }
-    if config.edition.is_public() {
+    if config.auth.enabled {
         db.bootstrap_admin(&config.auth).await?;
         seed_identity(&db).await?;
     }

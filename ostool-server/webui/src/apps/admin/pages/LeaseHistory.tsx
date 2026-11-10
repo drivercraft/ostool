@@ -64,7 +64,7 @@ function duration(record: LeaseRecord) {
 }
 export default function LeaseHistory() {
   const unknownOwner =
-    useEdition().edition === "local" ? "本地操作者" : "未完成身份绑定";
+    !useEdition().enabled ? "本地操作者" : "未完成身份绑定";
   const [filters, setFilters] = useState<LeaseFilters>({
     page: 1,
     page_size: 20,

@@ -260,7 +260,7 @@ function ThemeMenu({ menus }: { menus: TopbarMenus }) {
 }
 
 function AccountMenu({ user, menus }: { user?: AuthUser; menus: TopbarMenus }) {
-  const publicEdition = useEdition().edition === "public";
+  const publicEdition = useEdition().enabled;
   const name = publicEdition
     ? user?.display_name || user?.email || "管理员"
     : "本地工作区";

@@ -563,16 +563,9 @@ async fn totp_enrollment_login_recovery_codes_and_administrator_requirement() {
 }
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
-async fn local_edition_keeps_anonymous_board_access_and_hides_identity_features() {
+async fn local_edition_is_anonymous_and_omits_identity_features() {
     let f = Fixture::new(false).await;
-    assert_eq!(
-        f.request("GET", "/api/v1/board-types", None, Value::Null)
-            .await
-            .status,
-        StatusCode::OK
-    );
     for path in [
-        "/api/v1/auth/captcha?action=login",
         "/api/v1/auth/security",
         "/api/v1/account",
         "/api/v1/admin/users",
@@ -590,6 +583,18 @@ async fn local_edition_keeps_anonymous_board_access_and_hides_identity_features(
         .await;
     assert_eq!(config.body["captcha_required"], false);
     assert_eq!(config.body["enabled"], false);
+    assert_eq!(
+        f.request("POST", "/api/v1/auth/login", None, json!({}))
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        f.request("GET", "/api/v1/board-types", None, Value::Null)
+            .await
+            .status,
+        StatusCode::OK
+    );
 }
 
 /// A loopback SMTP sink exercises the real mail transport, without external delivery.

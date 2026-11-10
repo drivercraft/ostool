@@ -173,7 +173,7 @@ impl Database {
         Ok(())
     }
     pub async fn finish_lease(&self, id: &str, reason: &str) -> anyhow::Result<()> {
-        let mut tx = self.pool().begin().await?;
+        let mut tx = self.begin().await?;
         sqlx::query("UPDATE session_history SET ended_at=GREATEST(now(),created_at),stop_requested_at=COALESCE(stop_requested_at,now()),stop_reason=COALESCE(stop_reason,$2),end_reason=$2 WHERE session_id=$1 AND ended_at IS NULL")
             .bind(id).bind(reason).execute(&mut *tx).await?;
         sqlx::query("UPDATE board_rentals SET released_at=now(),ends_at=LEAST(ends_at,GREATEST(now(),starts_at+interval '1 millisecond')) WHERE source='instant' AND id=(SELECT rental_id FROM session_owners WHERE session_id=$1)")
@@ -188,7 +188,7 @@ impl Database {
     /// One controller owns each inventory. On restart, former connections cannot be restored.
     /// ended_at is detection time; last_heartbeat_at is the last confirmed activity.
     pub async fn recover_interrupted_leases(&self) -> anyhow::Result<()> {
-        let mut tx = self.pool().begin().await?;
+        let mut tx = self.begin().await?;
         sqlx::query("UPDATE session_history SET ended_at=GREATEST(now(),created_at),end_reason='server_interrupted' WHERE ended_at IS NULL")
             .execute(&mut *tx).await?;
         sqlx::query("UPDATE board_rentals SET released_at=now(),ends_at=LEAST(ends_at,GREATEST(now(),starts_at+interval '1 millisecond')) WHERE source='instant' AND released_at IS NULL")
@@ -201,7 +201,7 @@ impl Database {
     }
     pub async fn lease_page(&self, filters: &LeaseFilters) -> anyhow::Result<LeasePage> {
         filters.validate()?;
-        let mut tx = self.pool().begin().await?;
+        let mut tx = self.begin().await?;
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             .execute(&mut *tx)
             .await?;

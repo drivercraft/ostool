@@ -35,9 +35,8 @@ async function readJsonBody<T>(response: Response): Promise<T | undefined> {
   return JSON.parse(text) as T;
 }
 
-let runtimeEdition: "local" | "public" =
-  readAuthBootstrap()?.edition ?? "local";
-export const isPublicEdition = () => runtimeEdition === "public";
+let runtimeAuthentication = readAuthBootstrap()?.enabled ?? true;
+export const isPublicEdition = () => runtimeAuthentication;
 export class ApiRequestError extends Error {
   constructor(
     message: string,
@@ -247,6 +246,33 @@ export const api = {
       bodyJson: { current_password, new_password },
     });
   },
+  removeDeviceConnection(id: string) {
+    return request<void>(
+      `/api/v1/admin/boards/${encodeURIComponent(id)}/device-connection`,
+      { method: "DELETE" },
+    );
+  },
+  saveDeviceConnection(
+    id: string,
+    input: { endpoint: string; token?: string; ca_pem?: string | null },
+  ) {
+    return request<import("@/types/api").DeviceConnection>(
+      `/api/v1/admin/boards/${encodeURIComponent(id)}/device-connection`,
+      { method: "PUT", bodyJson: input },
+    );
+  },
+  claimBoard(board_id: string) {
+    return request<{ id: string; board_id: string; ends_at: string }>(
+      "/api/v1/account/allocations",
+      { method: "POST", bodyJson: { board_id } },
+    );
+  },
+  returnBoard(id: string) {
+    return request<void>(
+      `/api/v1/account/allocations/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
+  },
   applyRental(payload: import("@/types/api").RentalApplication) {
     return request<void>("/api/v1/account/rental-requests", {
       method: "POST",
@@ -288,7 +314,7 @@ export const api = {
     // StrictMode mounts effects twice; share the in-flight bootstrap request.
     return (authConfigRequest ??= request<AuthConfig>("/api/v1/auth/config")
       .then((config) => {
-        runtimeEdition = config.edition;
+        runtimeAuthentication = config.enabled;
         return config;
       })
       .finally(() => {

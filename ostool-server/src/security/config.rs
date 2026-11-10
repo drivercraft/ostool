@@ -22,7 +22,6 @@ pub struct SecurityConfig {
     pub login_max_failures: u32,
     pub login_lock_secs: u32,
     pub admin_allowed_networks: Vec<String>,
-    pub hardware_allowed_networks: Vec<String>,
     pub smtp_enabled: bool,
     pub password_reset_enabled: bool,
     pub password_reset_ttl_secs: u32,
@@ -72,7 +71,6 @@ impl Default for SecurityConfig {
             login_max_failures: 6,
             login_lock_secs: 900,
             admin_allowed_networks: vec![],
-            hardware_allowed_networks: Vec::new(),
             smtp_enabled: true,
             password_reset_enabled: true,
             password_reset_ttl_secs: 600,
@@ -134,22 +132,10 @@ impl SecurityConfig {
             !complete || !self.require_admin_mfa || self.mfa_encryption_key.is_some(),
             "administrator MFA requires OSTOOL_MFA_ENCRYPTION_KEY"
         );
-        for network in self
-            .admin_allowed_networks
-            .iter()
-            .chain(&self.hardware_allowed_networks)
-        {
+        for network in &self.admin_allowed_networks {
             network
                 .parse::<ipnet::IpNet>()
                 .map_err(|_| anyhow::anyhow!("invalid admin network: {network}"))?;
-        }
-        for network in &self.hardware_allowed_networks {
-            let network: ipnet::IpNet = network.parse()?;
-            ensure!(
-                crate::hardware::private_address(network.network())
-                    && crate::hardware::private_address(network.broadcast()),
-                "设备来源网段必须限制在私有网络或回环范围"
-            );
         }
         if complete && self.captcha_provider == CaptchaProvider::Turnstile {
             ensure!(
@@ -367,7 +353,7 @@ impl AccountSettings {
         config.security.password_reset_ttl_secs = self.password_reset_ttl_secs;
         config.security.email_policy = self.email_policy.clone();
         config.security.registration_email_policy = self.registration_email_policy.clone();
-        config.security.validate(config.edition.is_public())?;
+        config.security.validate(config.auth.enabled)?;
         config.validate()
     }
 }

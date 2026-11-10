@@ -115,6 +115,7 @@ fn release_settle_delay(board: &BoardConfig) -> Option<Duration> {
 
 #[derive(Clone)]
 pub struct AppState {
+    pub session_files: crate::persistence::files::SessionFileStore,
     pub(crate) uploads: crate::uploads::Uploads,
     pub security_cache: Option<crate::security::cache::SecurityCache>,
     pub security_revision: Arc<std::sync::atomic::AtomicU64>,
@@ -155,15 +156,17 @@ pub async fn build_app_state(
         "both local and public editions require PostgreSQL (OSTOOL_DATABASE_URL)"
     );
     config.auth.enabled = config.edition.is_public();
-    config
-        .security
-        .validate_deployment(config.edition.is_public())?;
+    config.security.validate_deployment(config.auth.enabled)?;
+
     if config.edition.is_public() {
         anyhow::ensure!(
             config.auth.public_base_url.is_some(),
             "public edition requires OSTOOL_PUBLIC_BASE_URL"
         );
+    } else if config.auth.public_base_url.is_none() {
+        config.auth.public_base_url = Some(format!("http://{}", config.listen_addr));
     }
+
     config.validate()?;
     let security_cache = if config.edition.is_public() {
         Some(crate::security::cache::SecurityCache::connect(&config).await?)
@@ -192,13 +195,6 @@ pub async fn build_app_state(
         }
     }
     let board_store = Arc::new(BoardStore::new(database.clone()));
-    crate::hardware::resolve_networks(&mut config)?;
-    let mut restricted = config.tftp.clone();
-    crate::hardware::restrict_tftp(&config, &mut restricted)?;
-    if serde_json::to_value(&restricted)? != serde_json::to_value(&config.tftp)? {
-        config.tftp = restricted;
-        tftp_manager = crate::tftp::service::build_tftp_manager(&config.tftp);
-    }
     let dtb_store = Arc::new(DtbStore::new(database.clone()));
     let boards = board_store.load_all().await?;
     let board_runtimes = initial_board_runtimes(&boards);
@@ -229,7 +225,13 @@ pub async fn build_app_state(
         ostool_serial::SerialManager::new(Arc::new(crate::serial::backend::ServerSerialBackend {
             virtual_boards: virtual_boards.clone(),
         }));
+    let session_files = crate::persistence::files::SessionFileStore::new(database.clone());
+    tftp_manager = Arc::new(crate::tftp::service::DatabaseTftpManager::new(
+        tftp_manager,
+        session_files.clone(),
+    ));
     let state = AppState {
+        session_files,
         uploads: crate::uploads::Uploads::default(),
         security_cache,
         security_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -269,9 +271,11 @@ pub async fn build_app_state(
 
     state.admin_events.start(state.clone());
     state.loader_registry.start_deadlines();
+
     if state.config.read().await.edition.is_public() {
         crate::api::rentals::start_deadlines(state.clone());
     }
+
     Ok(state)
 }
 

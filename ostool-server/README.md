@@ -139,9 +139,7 @@ Public native deployment uses the installed, standard `caddy.service` and
 `import ostool-server.caddy` if needed, validates the complete candidate configuration,
 and reloads Caddy. Existing sites and global options remain intact. Failed validation
 restores the site fragment without replacing the main file or stopping the running
-service. Failed reload restores the previous files. Local deployment does not install
-or start Caddy. Switching an installed public site to local requires removing its
-public site block and reloading Caddy before exposing an anonymous backend.
+service. Failed reload restores the previous files. Public deployments use the existing Caddy service. Local deployments use direct HTTP without login.
 
 Docker deployment manages only the backend, PostgreSQL and Redis. Connect its
 loopback API to your existing Caddy, whether that Caddy uses the official systemd
@@ -162,12 +160,8 @@ re-encryption of existing settings and MFA seeds, not an ordinary settings edit.
 
 ### Local and public editions
 
-Both editions require PostgreSQL and use the same database schema. The default
-`OSTOOL_EDITION=local` has no authentication, account or rental management;
-`ostool` continues to connect with `auth_mode=disabled`. Public deployment must
-explicitly select `OSTOOL_EDITION=public` and configure PostgreSQL, Redis and an
-initial administrator. Public edition always enforces authentication; database
-connectivity alone does not enable account features.
+Both editions require PostgreSQL. `local` uses anonymous HTTP with exclusive hardware sessions; it has no account, rental or approval workflow and does not require Redis. Set CLI `auth_mode="disabled"`.
+`public` requires login, permissions, rentals and Redis, with a loopback backend behind Caddy HTTPS. Bootstrap its first administrator through `.env`. Authentication follows the edition: local=false, public=true; a conflicting `OSTOOL_AUTH_ENABLED` is rejected.
 
 The frontend reads the edition at runtime, so the same binary serves either
 edition. Configuration precedence is process environment, then the selected
@@ -176,7 +170,7 @@ working directory. See [single environment template](.env.example) and
 [public deployment](#public-deployment).
 
 Board inventory, DTB content, OTA images/jobs/observations and editable
-network/TFTP/upload settings are stored in PostgreSQL. Deployment addresses,
+network/TFTP/upload settings and chunked session artifacts are stored in PostgreSQL. Deployment addresses,
 credentials and hardware paths stay in the environment configuration; live hardware
 connections and discovery stay in memory, and session files expire with their
 leases. Restarting does not restore hardware connections. Existing board files
@@ -235,9 +229,9 @@ Loader OTA treats images as opaque bytes. `OtaStore` accepts nonempty images up
 to 32 MiB, preserves labels, size and SHA-256, and verifies storage integrity
 before delivery. axloader owns PE/COFF, `Machine` and platform compatibility
 checks. Neither the server nor the Web UI gates OTA by CPU architecture. Offline
-jobs may queue; missing `ota` state leaves a visible waiting reason. Legacy v4
-downloads require the current registration and actual OTA capability, with the
-same MAC/update assignment and an eligible job.
+jobs may queue; missing `ota` state leaves a visible waiting reason. Legacy v2/v3/v4
+polling, image download and status handlers are removed. Updates use the provisioned
+device HTTPS endpoint; there is no separate device download listener or source-subnet bypass.
 
 A device's `202` means staged, not completed: success requires the matching new
 slot to run and be confirmed with the expected digest. Device `400`, `413` and
@@ -251,10 +245,10 @@ for the device protocol and confirmation rules.
 
 ## Network throughput tests
 
-`OSTOOL_NETWORK_TEST_ENABLED=false` is the deployment default. To enable the
+`OSTOOL_NETWORK_TEST_ENABLED=false` is the deployment default. The authenticated listener defaults to `127.0.0.1:3000`; `/v1/tests` is forwarded through HTTPS by the supplied Caddy templates. If its port is changed, update the existing gateway route to match. To enable the
 hardware-network throughput listener, set it to `true`; its address, active test
 limit and duration limit use the `OSTOOL_NETWORK_TEST_*` keys documented in
-`.env.example`. Keep this listener restricted to the hardware network. See the
+`.env.example`. Keep this listener on loopback behind the authenticated HTTPS gateway. See the
 [API guide](../docs/api.md) for transfer semantics and client commands.
 
 ## Local development environment
@@ -274,7 +268,7 @@ ostool-server/scripts/dev.sh stop
 ```
 
 The independent Docker-only launcher runs the same release binary as deployment,
-together with PostgreSQL/Redis and, for public edition, a standard Caddy container. It has no development authentication/origin bypass or simulated
+together with PostgreSQL/Redis and a standard Caddy container. It has no development authentication/origin bypass or simulated
 runtime. `start` and `restart` build current source, apply Compose configuration and
 reload the development gateway configuration;
 `build` only builds the image. `stop` removes backend/database/cache containers and retains named data
@@ -304,8 +298,7 @@ another environment file; the same file supplies the container's runtime setting
 There is no shell evaluation of dotenv contents and no `OSTOOL_DEV_*` settings.
 The previous host-process data directory is not imported or deleted automatically.
 
-Local edition uses direct HTTP on port 2999, including LAN addresses when listening
-on `0.0.0.0`. For public edition, set a canonical HTTPS origin and bind the backend to
+For either edition, set a canonical HTTPS origin and bind the backend to
 `127.0.0.1:2999`; add its site to your existing Caddy configuration. Certificate ports,
 redirects, trust and other global proxy options remain under Caddy's own configuration.
 There are no server-specific proxy global options. For the Docker debug environment,
@@ -334,8 +327,7 @@ live in `tests/e2e/` and `tests/fixtures/`. Neither app imports the other's priv
 pages. Website and console use independent browser sessions and theme settings,
 sharing PostgreSQL accounts and role checks. `/login` opens `/account/*`, while
 `/admin/login` rejects non-administrators. Logging out of one does not log out of
-the other. Local edition opens the console without login and hides account and
-rental features.
+the other. Local edition has no browser login or account/rental features.
 
 The public website uses a shared header, avatar/theme menus and footer, an initial
 viewport-sized hero, and separate feature sections. The personal workspace keeps
@@ -455,8 +447,7 @@ continues to have no identity or account-policy UI. This filtering limits obviou
 impersonation; it is not a full Unicode confusable-identifier implementation.
 
 Connection addresses and the root MFA/settings encryption key stay in `.env`. SMTP passwords and Turnstile secrets are editable, encrypted database settings; responses expose only credential-presence flags.
-The server rejects incomplete SMTP/Turnstile/MFA combinations. Local edition has
-no account-policy API or authentication/rental UI.
+The server rejects incomplete SMTP/Turnstile/MFA combinations. Account-policy, authentication and rental features are public-only.
 
 User agreements and privacy policies have separate tabs with a workspace-filling
 plain-text editor, split preview, fullscreen mode and an icon to open version
@@ -482,7 +473,7 @@ also have a per-IP limit; 429 includes `Retry-After`. Redis stores TTL-bound
 counters using atomic operations; PostgreSQL remains authoritative for users,
 sessions, challenges, email verification/reset proofs and audit. Redis connection
 failure prevents public startup; runtime limiter failure rejects verification
-with 503. Local edition does not connect to Redis. Keep Redis private with
+with 503. Only public edition connects to Redis. Keep Redis private with
 credentials/ACL, use TLS (`rediss://`) remotely, configure `noeviction`, and enable
 AOF if lockout windows must survive restart. Clearing Redis resets counters.
 
@@ -554,29 +545,27 @@ message and `X-Request-ID`; raw diagnostics remain in server logs, while runtime
 TFTP, OTA and lease-history projections show safe failure summaries. Account secret
 handling and public administrator/session authorization remain unchanged.
 
-Device-side loader/TFTP/boot traffic has a separate network trust boundary.
-Use VLAN/firewall isolation between tenants, boards and server infrastructure.
-Local and public editions share the same user API paths. Local edition does not
-require credentials. Public user APIs remain on loopback behind HTTPS Caddy;
-uploads, downloads and serial WebSockets all check the user and active rental.
-Returned file URLs use the public HTTPS origin, never the device-network origin.
-The device-only download listener binds the selected private interface and the
-backend port, and exposes only boot/shared file reads, without management, user,
-loader or session-control routes. It is used by server-expanded guest commands;
-its address is not returned by the user API. No separate device-listener setting
-is required. Source ranges default to that interface subnet and loopback;
-`OSTOOL_HARDWARE_ALLOWED_NETWORKS` can restrict them explicitly. Actual TCP peers
-are checked, ignoring forwarding headers. Keep this listener and device ports
-behind the device-network firewall, with no Internet port forwarding.
-Interface changes require a backend restart.
-UDP discovery and the separate public-edition throughput listener enforce the same
-source networks. Device callbacks reject redirects, bypass proxies, bound status bodies
-and concurrency, and unverified announcements cannot cancel an in-progress operation.
+Both editions share board API paths. Public uploads, downloads and serial
+WebSockets check identity, role and rental ownership. Local edition permits anonymous HTTP/WS and shared-file downloads during active sessions. No private-interface anonymous
+download listener is opened. User file URLs use the configured HTTPS origin.
+A device receives a short-lived capability for one immutable file, with only its hash
+stored in PostgreSQL. Capabilities expire after 60 seconds and cannot cross files or outlive a session.
+
+Network loaders require a board-specific HTTPS origin and Bearer credential configured
+in the administrator board editor. A private CA certificate may be supplied. Credentials
+use the deployment root encryption key and never appear in API/SSE responses or CLI data.
+The controller polls only these provisioned HTTPS origins; UDP advertisements never choose
+callback addresses. Certificate validation, proxy bypass, redirect rejection, body limits
+and bounded device concurrency apply. Firmware without HTTPS and credential validation
+is rejected; it must be upgraded before HTTP Boot or OTA can work.
+Unsigned UDP discovery and legacy poll/status/OTA callbacks are disabled.
+The optional throughput listener also requires user authentication and must bind loopback
+behind an HTTPS gateway; its measurement payload remains raw HTTP bytes after TLS termination.
 
 New clients use `server_side_operations` in the boot profile to select server-side
 U-Boot orchestration. They request preparation, open the authenticated serial
 WebSocket, receive RAM load addresses, generate/upload a FIT image and request boot.
-The server configures the device network and performs TFTP or serial transfer.
+The server performs serial transfer; unauthenticated TFTP cannot be enabled.
 Shared-file shell templates are registered as opaque command IDs and expanded on
 the server when sent over the existing serial connection. Public boot/serial/TFTP
 responses omit device-network addresses, UART paths and binding IDs; public power
@@ -586,20 +575,18 @@ still use the existing client orchestration when connected to a server that does
 not advertise this capability. The protocol extension is required to move the
 original U-Boot orchestration off the client, rather than to implement login.
 
-The built-in TFTP server rejects WRQ and binds the private device interface in public
-edition. For an existing tftpd-hpa service, enable the installed
-`--map-file /etc/ostool-server-tftp.rules` in its actual service configuration;
-the bundled `Pa .*` rule rejects all PUTs ([tftpd-hpa remapping](https://manpages.debian.org/bookworm/tftpd-hpa/in.tftpd.8.en.html#FILENAME_REMAPPING)).
-Installing the rule does not change another service's running configuration.
-Keep UDP TFTP ports confined to the device network with the host/network firewall.
+Server deployments reject enabled TFTP configuration. The migration disables previously
+stored TFTP settings; old processes/services must be stopped through the normal deployment workflow.
+Device files are served by authenticated HTTPS capabilities, and U-Boot uses YMODEM over
+the server-owned UART. The standalone TFTP utility is separate from ostool-server deployment.
 
 Uploads stream into private temporary files and commit atomically after checking
-the current credential, rental and session. Release cancels in-flight uploads and
+the current credential, rental and session. The authoritative commit writes PostgreSQL metadata and 256 KiB content chunks in one transaction; disk copies are disposable UART caches. Release cancels in-flight uploads and
 serializes file cleanup with commits. Startup removes interrupted temporary uploads
 and directories whose durable session history confirms an ended lease, preserving
 unmanaged paths. System settings provide single-file (64 MiB), session (512 MiB/128 files),
 account (1024 MiB), global storage (4096 MiB), upload concurrency (4 globally/2 per
-account/1 per session), and total timeout (300 s) defaults. A 15-second idle timeout
+account/1 per session), and total timeout (300 s, including validation and database publication) defaults. A 15-second idle timeout
 also applies. Downloads stream with bounded buffering, 16 global/2 per-session slots,
 and stop on session termination or the configured transfer timeout.
 
@@ -608,7 +595,7 @@ reuse, including startup. It must be idempotent, completes within 60 seconds, an
 failure keeps the device reserved until recovery succeeds. It runs only when an
 administrator configures it; RAM-only boot devices may leave it unset. Persistent
 storage/firmware isolation still requires a verified board-specific recovery procedure.
-Real public DNS/Caddy/TLS and physical firmware/TFTP need
+Real DNS/Caddy/TLS and physical firmware need
 separate deployment validation; isolated application tests do not prove those
 conditions. Authentication rules and routes are in [the API reference](../docs/api.md).
 
@@ -654,8 +641,7 @@ A fixed deadline cannot be extended by heartbeats. Failed allocations are cancel
 early session release shortens the rental after hardware cleanup, and server restart
 ends interrupted instant grants. Rental lists distinguish scheduled and instant
 allocations; instant periods cannot be manually extended through the rental editor.
-Manual approval remains available through `rental.request`. Local edition retains
-its unauthenticated workflow and does not display identity or rental permissions.
+Manual approval remains available through `rental.request`. Public edition enforces authenticated identity and rental permissions; local edition uses direct exclusive board sessions.
 
 ## Existing board migration
 
@@ -738,7 +724,7 @@ export RUST_TEST_THREADS=4
 cargo test -p ostool-server
 cargo test -p ostool-server --test auth_postgres --test account_postgres \
   --test audit_postgres --test security_postgres --test unified_persistence \
-  --test board_migration --test username_migration --test lease_history --test cli_rental_contract -- --ignored
+  --test board_migration --test username_migration --test lease_history --test cli_rental_contract --test security_completion -- --ignored
 cargo test -p ostool-server --test cli_gateway_contract
 pnpm --dir ostool-server/webui test
 pnpm --dir ostool-server/webui build
@@ -749,7 +735,7 @@ OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:5432/ostool_tes
   pnpm --dir ostool-server/webui test:e2e
 ```
 
-Browser tests start separate local/public servers, create fresh `ostool_e2e_...`
+Authentication browser tests start two isolated public-edition servers; the local HTTP integration and actual CLI simulation separately validate anonymous local mode. Fixtures, create fresh `ostool_e2e_...`
 schemas and stop the fixtures automatically; ports 4174, 4175, 4191 and UDP 2998
 must be available. Public tests set known CAPTCHA digests only in that isolated
 database; the application has no test bypass. Without `OSTOOL_E2E_PUBLIC=true`
@@ -758,3 +744,17 @@ fixture must provide matching `OSTOOL_E2E_AUTH_BASE_URL`,
 `OSTOOL_E2E_AUTH_DATABASE_URL`, `OSTOOL_E2E_AUTH_DATABASE_SCHEMA`,
 `OSTOOL_E2E_ADMIN_EMAIL` and `OSTOOL_E2E_ADMIN_PASSWORD`, with loopback hosts and an
 `ostool_e2e_` schema. See [browser test details](../docs/admin-ui.md#开发与验证).
+
+### Website instant allocation and device provisioning
+
+Members with `board.instant` can use **即时领取开发板** in their workspace and return
+active instant allocations from **我的租赁**. The server infers the current user; clients
+cannot assign to another user. Pool membership, board types, duration, existing bookings
+and concurrent allocations are checked atomically under the existing rental admission gate.
+Administrators retain direct scheduled assignment and application approval.
+
+`PUT /api/v1/admin/boards/{id}/device-connection` accepts an HTTPS origin, optional CA PEM
+and an independent token of 32–512 printable characters. The first write requires a token;
+leaving it empty preserves the existing encrypted token. Changing device credentials requires
+an idle board. Configure `OSTOOL_MFA_ENCRYPTION_KEY` before provisioning and back it up
+with deployment secrets. This repository does not supply TLS support for existing axloader firmware.

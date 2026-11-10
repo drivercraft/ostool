@@ -4,5 +4,7 @@
 	respond @hardware 404
 	@assets path /assets/*
 	encode @assets zstd gzip
+	@network_tests path /v1/tests /v1/tests/*
+	reverse_proxy @network_tests 127.0.0.1:3000
 	reverse_proxy {$OSTOOL_GATEWAY_UPSTREAM}
 }
