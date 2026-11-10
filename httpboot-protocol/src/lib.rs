@@ -9,18 +9,15 @@ mod serial;
 pub use serial::*;
 
 #[cfg(feature = "alloc")]
-use alloc::{string::String, vec::Vec};
+use alloc::string::{String, ToString as _};
 
-pub const PROTOCOL_VERSION: u16 = 4;
-/// Loader-hosted HTTP with per-boot serial binding. v5 supports OTA migration only.
-pub const DEVICE_PROTOCOL_VERSION: u16 = 6;
-pub const PREVIOUS_DEVICE_PROTOCOL_VERSION: u16 = 5;
-pub const PREVIOUS_PROTOCOL_VERSION: u16 = 3;
-pub const LEGACY_PROTOCOL_VERSION: u16 = 2;
+/// The only device control protocol understood by this release.
+pub const DEVICE_PROTOCOL_VERSION: u16 = 7;
+pub const DEVICE_PROTOCOL_VERSION_HEADER: &str = "X-Axloader-Protocol-Version";
+pub const UNSUPPORTED_PROTOCOL_CODE: &str = "unsupported_protocol";
+pub const UNSUPPORTED_PROTOCOL_MESSAGE: &str = "axloader protocol 7 is required";
 pub const MAX_HOST_CMDLINE_BYTES: usize = 4095;
 pub const MAX_HTTP_BOOT_INITRAMFS_BYTES: usize = 256 * 1024 * 1024;
-pub const DISCOVERY_PORT: u16 = 2998;
-pub const MAX_DISCOVERY_DATAGRAM_BYTES: usize = 1400;
 
 pub fn valid_host_cmdline(value: &str) -> bool {
     value.len() <= MAX_HOST_CMDLINE_BYTES
@@ -134,24 +131,6 @@ impl<'de> serde::Deserialize<'de> for MacAddress {
     }
 }
 
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "json", serde(rename_all = "snake_case"))]
-pub enum BootArch {
-    X86_64,
-    Aarch64,
-    Loongarch64,
-    Riscv64,
-    Other,
-}
-
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "json", serde(rename_all = "snake_case"))]
-pub enum ImageFormat {
-    Elf64,
-}
-
 #[cfg(feature = "alloc")]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -162,18 +141,7 @@ pub struct LoaderHardwareInfo {
     pub serial: Option<String>,
 }
 
-#[cfg(feature = "alloc")]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoaderDiscoveryProbe {
-    pub protocol_version: u16,
-    pub mac_address: MacAddress,
-    pub current_mac_address: MacAddress,
-    pub arch: BootArch,
-    pub loader_version: String,
-}
-
-/// A v5/v6 loader advertises its own HTTP endpoint without registering with a server.
+/// A v7 loader advertises its own HTTP endpoint without registering with a server.
 #[cfg(feature = "alloc")]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,7 +149,8 @@ pub struct LoaderAnnouncement {
     pub protocol_version: u16,
     pub mac_address: MacAddress,
     pub current_mac_address: MacAddress,
-    pub arch: BootArch,
+    #[cfg_attr(feature = "json", serde(deserialize_with = "deserialize_arch_name"))]
+    pub arch: String,
     pub loader_version: String,
     pub boot_epoch: String,
     pub http_port: u16,
@@ -194,19 +163,18 @@ pub struct LoaderAnnouncement {
 /// The caller owns the boot ID; the loader owns the current boot epoch.
 #[cfg(feature = "alloc")]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "json", serde(deny_unknown_fields))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceBootJob {
     pub boot_id: String,
-    pub arch: BootArch,
-    pub image_format: ImageFormat,
     pub kernel: DeviceBootImage,
     pub initramfs: Option<DeviceBootImage>,
     pub cmdline: Option<String>,
-    pub entry_symbol: Option<String>,
 }
 
 #[cfg(feature = "alloc")]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "json", serde(deny_unknown_fields))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceBootImage {
     pub size: u64,
@@ -221,7 +189,15 @@ pub struct DeviceBootStatus {
     pub phase: String,
     pub kernel_received: bool,
     pub initramfs_received: bool,
-    pub last_error: Option<String>,
+    pub last_error: Option<DeviceOperationError>,
+}
+
+#[cfg(feature = "alloc")]
+#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceOperationError {
+    pub code: String,
+    pub message: String,
 }
 
 #[cfg(feature = "alloc")]
@@ -232,44 +208,14 @@ pub struct LoaderDeviceStatus {
     pub boot_epoch: String,
     pub mac_address: MacAddress,
     pub current_mac_address: MacAddress,
-    pub arch: BootArch,
+    #[cfg_attr(feature = "json", serde(deserialize_with = "deserialize_arch_name"))]
+    pub arch: String,
     pub loader_version: String,
     pub hardware: LoaderHardwareInfo,
     pub boot: Option<DeviceBootStatus>,
     pub ota: Option<LoaderOtaState>,
     #[cfg_attr(feature = "json", serde(default))]
     pub serial: Option<LoaderSerialStatus>,
-}
-
-#[cfg(feature = "alloc")]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoaderDiscoveryOffer {
-    pub protocol_version: u16,
-    pub server_id: String,
-    pub control_base_url: String,
-    pub registration_id: String,
-    pub expires_in_ms: u64,
-}
-
-#[cfg(feature = "alloc")]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoaderPollRequest {
-    pub protocol_version: u16,
-    pub registration_id: String,
-    pub mac_address: MacAddress,
-    pub current_mac_address: MacAddress,
-    pub ip_address: String,
-    pub arch: BootArch,
-    pub loader_version: String,
-    pub hardware: LoaderHardwareInfo,
-    /// Present only for OTA-aware loaders (protocol v4).
-    #[cfg_attr(
-        feature = "json",
-        serde(default, skip_serializing_if = "Option::is_none")
-    )]
-    pub ota: Option<LoaderOtaState>,
 }
 
 #[cfg(feature = "alloc")]
@@ -303,46 +249,6 @@ pub enum OtaOutcome {
     Failed,
 }
 
-#[cfg(feature = "alloc")]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "json", serde(tag = "state", rename_all = "snake_case"))]
-pub enum LoaderPollResponse {
-    Unbound,
-    BoundIdle {
-        board_id: String,
-    },
-    Update {
-        board_id: String,
-        update_id: String,
-        image_path: String,
-        image_size: u64,
-        image_sha256: String,
-    },
-    ConfirmUpdate {
-        board_id: String,
-        update_id: String,
-    },
-    Boot {
-        board_id: String,
-        session_id: String,
-        boot_id: String,
-        kernel_path: String,
-        kernel_size: u64,
-        kernel_sha256: String,
-        arch: BootArch,
-        image_format: ImageFormat,
-        entry_symbol: Option<String>,
-        initramfs: Option<BootFile>,
-        cmdline: Option<String>,
-    },
-    Reject {
-        code: String,
-        message: String,
-        retry_after_ms: Option<u64>,
-    },
-}
-
 /// A session-scoped boot file authenticated before kernel handoff.
 #[cfg(feature = "alloc")]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
@@ -367,23 +273,12 @@ pub enum LoaderStatusPhase {
 
 #[cfg(feature = "alloc")]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoaderStatusReport {
-    pub protocol_version: u16,
-    pub registration_id: String,
-    pub mac_address: MacAddress,
-    pub session_id: String,
-    pub boot_id: String,
-    pub status: LoaderStatusPhase,
-}
-
-#[cfg(feature = "alloc")]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "json", serde(deny_unknown_fields))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoaderStatusResponse {
     pub session_id: String,
     pub boot_id: String,
-    pub registration_id: Option<String>,
+    pub boot_epoch: Option<String>,
     pub status: Option<LoaderStatusPhase>,
 }
 
@@ -397,39 +292,77 @@ pub struct KernelPublishResponse {
     pub kernel_sha256: Option<String>,
 }
 
-#[cfg(all(feature = "alloc", feature = "json"))]
-pub fn encode_discovery_probe(
-    probe: &LoaderDiscoveryProbe,
-) -> Result<Vec<u8>, DiscoveryMessageError> {
-    let bytes = serde_json::to_vec(probe).map_err(DiscoveryMessageError::Json)?;
-    if bytes.len() > MAX_DISCOVERY_DATAGRAM_BYTES {
-        return Err(DiscoveryMessageError::TooLarge(bytes.len()));
-    }
-    Ok(bytes)
-}
-
-#[cfg(all(feature = "alloc", feature = "json"))]
-#[derive(Debug)]
-pub enum DiscoveryMessageError {
-    TooLarge(usize),
-    Json(serde_json::Error),
-}
-
-#[cfg(all(feature = "alloc", feature = "json"))]
-impl fmt::Display for DiscoveryMessageError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::TooLarge(size) => write!(
-                f,
-                "discovery datagram is {size} bytes, limit is {MAX_DISCOVERY_DATAGRAM_BYTES}"
-            ),
-            Self::Json(err) => write!(f, "failed to encode discovery datagram: {err}"),
+#[cfg(feature = "alloc")]
+impl DeviceOperationError {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
         }
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for DiscoveryMessageError {}
+#[cfg(feature = "alloc")]
+impl fmt::Display for DeviceOperationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}: {}", self.code, self.message)
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl core::error::Error for DeviceOperationError {}
+
+#[cfg(feature = "alloc")]
+pub fn unsupported_protocol_error() -> DeviceOperationError {
+    DeviceOperationError::new(UNSUPPORTED_PROTOCOL_CODE, UNSUPPORTED_PROTOCOL_MESSAGE)
+}
+
+#[cfg(feature = "alloc")]
+pub fn validate_device_protocol_version(version: u16) -> Result<(), DeviceOperationError> {
+    if version == DEVICE_PROTOCOL_VERSION {
+        Ok(())
+    } else {
+        Err(unsupported_protocol_error())
+    }
+}
+
+#[cfg(feature = "alloc")]
+pub fn device_protocol_version_header_value() -> String {
+    DEVICE_PROTOCOL_VERSION.to_string()
+}
+
+/// Validates the wire header without depending on an HTTP framework.
+#[cfg(feature = "alloc")]
+pub fn validate_device_protocol_version_header(
+    value: Option<&str>,
+) -> Result<(), DeviceOperationError> {
+    let version = value
+        .and_then(|value| value.parse::<u16>().ok())
+        .ok_or_else(unsupported_protocol_error)?;
+    validate_device_protocol_version(version)
+}
+
+/// Decodes the shared device error shape for either control frontend or host.
+#[cfg(all(feature = "alloc", feature = "json"))]
+pub fn decode_device_operation_error(
+    body: &[u8],
+) -> Result<DeviceOperationError, serde_json::Error> {
+    serde_json::from_slice(body)
+}
+
+#[cfg(feature = "json")]
+fn deserialize_arch_name<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let arch = <String as serde::Deserialize>::deserialize(deserializer)?;
+    if arch.trim().is_empty() {
+        return Err(serde::de::Error::custom(
+            "loader architecture name must not be empty",
+        ));
+    }
+    Ok(arch)
+}
 
 #[cfg(test)]
 mod tests {
@@ -469,64 +402,103 @@ mod tests {
     }
 
     #[test]
-    fn discovery_packet_stays_below_the_mtu_budget() {
-        let probe = LoaderDiscoveryProbe {
-            protocol_version: PROTOCOL_VERSION,
-            mac_address: "02:00:00:00:00:01".parse().unwrap(),
-            current_mac_address: "02:00:00:00:00:01".parse().unwrap(),
-            arch: BootArch::X86_64,
-            loader_version: "axloader-0.2".into(),
+    fn validates_only_the_v7_protocol_header() {
+        assert_eq!(validate_device_protocol_version_header(Some("7")), Ok(()));
+        for value in [None, Some(""), Some("6"), Some("8"), Some("seven")] {
+            assert_eq!(
+                validate_device_protocol_version_header(value),
+                Err(unsupported_protocol_error())
+            );
+        }
+    }
+
+    #[test]
+    fn boot_job_rejects_legacy_fields_and_accepts_payload_combinations() {
+        let kernel = DeviceBootImage {
+            size: 4096,
+            sha256: "00".repeat(32),
         };
-        assert!(encode_discovery_probe(&probe).unwrap().len() <= MAX_DISCOVERY_DATAGRAM_BYTES);
-    }
-
-    #[test]
-    fn rejects_discovery_packet_above_the_mtu_budget() {
-        let probe = LoaderDiscoveryProbe {
-            protocol_version: PROTOCOL_VERSION,
-            mac_address: "02:00:00:00:00:01".parse().unwrap(),
-            current_mac_address: "02:00:00:00:00:01".parse().unwrap(),
-            arch: BootArch::X86_64,
-            loader_version: "x".repeat(MAX_DISCOVERY_DATAGRAM_BYTES),
-        };
-
-        assert!(matches!(
-            encode_discovery_probe(&probe),
-            Err(DiscoveryMessageError::TooLarge(_))
-        ));
-    }
-
-    #[test]
-    fn rejects_malformed_discovery_json() {
-        assert!(serde_json::from_slice::<LoaderDiscoveryProbe>(b"{not-json}").is_err());
-        assert!(
-            serde_json::from_slice::<LoaderDiscoveryProbe>(br#"{"protocol_version":2}"#).is_err()
-        );
-    }
-
-    #[test]
-    fn loader_poll_state_round_trips() {
-        let response = LoaderPollResponse::Boot {
-            board_id: "qemu-x86-1".into(),
-            session_id: "session-1".into(),
+        let base = DeviceBootJob {
             boot_id: "boot-1".into(),
-            kernel_path: "/boot/sessions/session-1/kernel.elf".into(),
-            kernel_size: 4096,
-            kernel_sha256: "00".repeat(32),
-            arch: BootArch::X86_64,
-            image_format: ImageFormat::Elf64,
-            entry_symbol: Some("httpboot_entry".into()),
-            initramfs: Some(BootFile {
-                path: "/boot/sessions/session-1/initramfs.cpio".into(),
-                size: 1024,
-                sha256: "11".repeat(32),
-            }),
-            cmdline: Some("root=/dev/vda".into()),
+            kernel: kernel.clone(),
+            initramfs: None,
+            cmdline: None,
         };
-        let bytes = serde_json::to_vec(&response).unwrap();
-        assert_eq!(
-            serde_json::from_slice::<LoaderPollResponse>(&bytes).unwrap(),
-            response
-        );
+        for value in [
+            serde_json::json!({
+                "boot_id": "boot-1",
+                "kernel": {"size": 4096, "sha256": "00".repeat(32)},
+                "initramfs": null,
+                "cmdline": null
+            }),
+            serde_json::json!({
+                "boot_id": "boot-1",
+                "kernel": {"size": 4096, "sha256": "00".repeat(32)},
+                "cmdline": "console=ttyS0"
+            }),
+            serde_json::json!({
+                "boot_id": "boot-1",
+                "kernel": {"size": 4096, "sha256": "00".repeat(32)},
+                "initramfs": {"size": 1024, "sha256": "11".repeat(32)}
+            }),
+            serde_json::json!({
+                "boot_id": "boot-1",
+                "kernel": {"size": 4096, "sha256": "00".repeat(32)},
+                "initramfs": {"size": 1024, "sha256": "11".repeat(32)},
+                "cmdline": "console=ttyS0"
+            }),
+        ] {
+            let decoded: DeviceBootJob = serde_json::from_value(value).unwrap();
+            assert_eq!(decoded.kernel, base.kernel);
+        }
+
+        for field in ["arch", "image_format", "entry_symbol"] {
+            let mut value = serde_json::to_value(&base).unwrap();
+            value[field] = serde_json::json!("legacy");
+            assert!(serde_json::from_value::<DeviceBootJob>(value).is_err());
+        }
+        let mut value = serde_json::to_value(&base).unwrap();
+        value["kernel"]["entry_symbol"] = serde_json::json!("legacy");
+        assert!(serde_json::from_value::<DeviceBootJob>(value).is_err());
+    }
+
+    #[test]
+    fn loader_arch_is_an_open_nonempty_string() {
+        let mac: MacAddress = "02:00:00:00:00:01".parse().unwrap();
+        let status: LoaderDeviceStatus = serde_json::from_value(serde_json::json!({
+            "protocol_version": DEVICE_PROTOCOL_VERSION,
+            "boot_epoch": "epoch",
+            "mac_address": mac,
+            "current_mac_address": mac,
+            "arch": "future-isa",
+            "loader_version": "axloader",
+            "hardware": {},
+            "boot": null,
+            "ota": null
+        }))
+        .unwrap();
+        assert_eq!(status.arch, "future-isa");
+
+        let mut value = serde_json::to_value(&status).unwrap();
+        value["arch"] = serde_json::json!("");
+        assert!(serde_json::from_value::<LoaderDeviceStatus>(value).is_err());
+    }
+
+    #[test]
+    fn device_errors_keep_open_codes_and_decode_from_body() {
+        let error = DeviceOperationError::new("future_device_error", "useful detail");
+        let bytes = serde_json::to_vec(&error).unwrap();
+        assert_eq!(decode_device_operation_error(&bytes).unwrap(), error);
+    }
+
+    #[test]
+    fn loader_status_rejects_the_old_registration_field() {
+        let value = serde_json::json!({
+            "session_id": "session-1",
+            "boot_id": "boot-1",
+            "registration_id": "epoch-1",
+            "status": null
+        });
+        assert!(serde_json::from_value::<LoaderStatusResponse>(value).is_err());
     }
 }

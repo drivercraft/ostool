@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
-use httpboot_protocol::{BootArch, LoaderHardwareInfo, MacAddress};
 pub use httpboot_protocol::{KernelPublishResponse, LoaderStatusResponse};
+use httpboot_protocol::{LoaderHardwareInfo, MacAddress};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -116,14 +116,14 @@ pub struct LoaderDeviceSummary {
     pub mac_address: MacAddress,
     pub current_mac_address: MacAddress,
     pub ip_address: String,
-    pub arch: BootArch,
+    pub arch: String,
     pub loader_version: String,
     pub hardware: LoaderHardwareInfo,
     pub last_seen_at: DateTime<Utc>,
     pub online: bool,
     pub conflict: bool,
     pub bound_board_id: Option<String>,
-    pub current_registration_id: Option<String>,
+    pub boot_epoch: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

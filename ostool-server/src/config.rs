@@ -13,6 +13,7 @@ use tokio::fs;
 const DEFAULT_SYSTEM_TFTP_ROOT: &str = "/srv/tftp";
 const SYSTEM_CONFIG_DIR: &str = "/etc/ostool-server";
 const SYSTEM_DATA_DIR: &str = "/var/lib/ostool-server";
+const LOADER_DISCOVERY_PORT: u16 = 2998;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ServerConfig {
@@ -196,18 +197,11 @@ impl ServerConfig {
         if self.upload_limits.session_file_max_mib == 0 {
             bail!("upload_limits.session_file_max_mib must be greater than 0");
         }
-        if self.loader_network.bind_addr.port() != httpboot_protocol::DISCOVERY_PORT {
+        if self.loader_network.bind_addr.port() != LOADER_DISCOVERY_PORT {
             bail!(
                 "loader_network.bind_addr must use UDP port {}",
-                httpboot_protocol::DISCOVERY_PORT
+                LOADER_DISCOVERY_PORT
             );
-        }
-        if let Some(public_base_url) = self.loader_network.public_base_url.as_deref() {
-            let url = url::Url::parse(public_base_url)
-                .context("loader_network.public_base_url must be an absolute URL")?;
-            if url.scheme() != "http" || url.cannot_be_a_base() {
-                bail!("loader_network.public_base_url must be an HTTP base URL");
-            }
         }
         self.virtual_qemu.validate()?;
         Ok(())
@@ -257,18 +251,17 @@ pub struct HttpBootConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LoaderNetworkConfig {
     pub enabled: bool,
     pub bind_addr: SocketAddr,
-    pub public_base_url: Option<String>,
 }
 
 impl Default for LoaderNetworkConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            bind_addr: SocketAddr::from(([0, 0, 0, 0], httpboot_protocol::DISCOVERY_PORT)),
-            public_base_url: None,
+            bind_addr: SocketAddr::from(([0, 0, 0, 0], LOADER_DISCOVERY_PORT)),
         }
     }
 }
@@ -635,7 +628,7 @@ pub struct ZhongshengRelayPowerManagement {
 pub enum BootConfig {
     Uboot(UbootProfile),
     Pxe(PxeProfile),
-    #[serde(rename = "httpboot", alias = "uefi_http")]
+    #[serde(rename = "httpboot")]
     UefiHttp(UefiHttpProfile),
 }
 
@@ -713,7 +706,7 @@ pub struct PxeProfile {
     pub notes: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UefiHttpProfile {
     /// Optional host-side UART settings for axloader serial discovery.
@@ -723,29 +716,6 @@ pub struct UefiHttpProfile {
     /// [`BoardConfig::serial`], which is retained for U-Boot/PXE consoles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serial_parameters: Option<AxloaderSerialParameters>,
-}
-
-impl<'de> Deserialize<'de> for UefiHttpProfile {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Wire {
-            // Read legacy architecture metadata without retaining a second source
-            // of truth alongside the uploaded ELF and axloader announcements.
-            #[serde(default, rename = "boot_arch")]
-            _boot_arch: Option<serde::de::IgnoredAny>,
-            #[serde(default)]
-            serial_parameters: Option<AxloaderSerialParameters>,
-        }
-
-        let wire = Wire::deserialize(deserializer)?;
-        Ok(Self {
-            serial_parameters: wire.serial_parameters,
-        })
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -854,8 +824,8 @@ mod tests {
     use super::{
         AxloaderSerialFlowControl, AxloaderSerialParameters, AxloaderSerialParity,
         AxloaderSerialStopBits, BoardConfig, BoardNetworkIdentity, BootConfig,
-        CustomPowerManagement, PowerManagementConfig, SerialPortKey, SerialPortKeyKind,
-        ServerConfig, UbootNetworkMode, UbootProfile, UefiHttpProfile,
+        CustomPowerManagement, LoaderNetworkConfig, PowerManagementConfig, SerialPortKey,
+        SerialPortKeyKind, ServerConfig, UbootNetworkMode, UbootProfile, UefiHttpProfile,
         ZhongshengRelayPowerManagement,
     };
 
@@ -1241,17 +1211,32 @@ bootm_addr = "0x82200000"
     }
 
     #[test]
-    fn legacy_httpboot_arch_is_read_but_not_serialized() {
-        for arch in ["x86_64", "aarch64", "loongarch64", "riscv64", "other"] {
-            let legacy_toml = format!("boot_arch = {arch:?}\n");
-            let profile: UefiHttpProfile = toml::from_str(&legacy_toml).unwrap();
-            assert_eq!(profile.serial_parameters, None);
-            assert!(!toml::to_string(&profile).unwrap().contains("boot_arch"));
+    fn legacy_httpboot_arch_is_rejected_without_migration() {
+        let error = toml::from_str::<UefiHttpProfile>("boot_arch = \"riscv64\"\n").unwrap_err();
+        assert!(error.to_string().contains("unknown field `boot_arch`"));
 
-            let profile: UefiHttpProfile =
-                serde_json::from_value(json!({ "boot_arch": arch })).unwrap();
-            assert_eq!(serde_json::to_value(profile).unwrap(), json!({}));
-        }
+        let error = serde_json::from_value::<UefiHttpProfile>(json!({ "boot_arch": "riscv64" }))
+            .unwrap_err();
+        assert!(error.to_string().contains("unknown field `boot_arch`"));
+    }
+
+    #[test]
+    fn legacy_httpboot_alias_is_rejected() {
+        let error = toml::from_str::<BootConfig>("kind = \"uefi_http\"\n").unwrap_err();
+        assert!(error.to_string().contains("unknown variant `uefi_http`"));
+    }
+
+    #[test]
+    fn removed_loader_network_public_base_url_is_rejected() {
+        let error = toml::from_str::<LoaderNetworkConfig>(
+            "enabled = true\nbind_addr = \"0.0.0.0:2998\"\npublic_base_url = \"http://host\"\n",
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `public_base_url`")
+        );
     }
 
     #[test]
@@ -1264,9 +1249,8 @@ bootm_addr = "0x82200000"
     }
 
     #[test]
-    fn legacy_httpboot_arch_does_not_hide_unknown_settings() {
+    fn httpboot_profile_rejects_unknown_settings() {
         let error = serde_json::from_value::<UefiHttpProfile>(json!({
-            "boot_arch": "riscv64",
             "serial_paramters": {}
         }))
         .unwrap_err();
@@ -1447,10 +1431,7 @@ mac = "1c:69:7a:dc:f3:47"
         )
         .unwrap_err();
 
-        assert!(
-            error.to_string().contains("unknown field `strategy`")
-                || error.to_string().contains("unknown field `mac`")
-        );
+        assert!(error.to_string().contains("unknown field"));
     }
 
     #[test]

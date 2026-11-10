@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Isolated v6 integration: real OVMF UART, managed PTY, HTTP and WebSocket."""
+"""Isolated v7 integration: real OVMF UART, managed PTY, HTTP and WebSocket."""
 import argparse
 import json
 import os
@@ -16,8 +16,8 @@ def main():
     args = parser.parse_args()
     tgos = args.tgos.resolve()
     workspace = Path(__file__).resolve().parents[2]
-    artifacts = Path(tempfile.mkdtemp(prefix="axloader-v6-local-"))
-    print("local v6 artifacts:", artifacts, flush=True)
+    artifacts = Path(tempfile.mkdtemp(prefix="axloader-v7-local-"))
+    print("local v7 artifacts:", artifacts, flush=True)
     kernel = (args.kernel or tgos / "target/x86_64-unknown-linux-musl/release/arceos-helloworld").resolve()
     loader = tgos / "target/x86_64-unknown-uefi/release/axloader.efi"
     if not kernel.is_file() or not loader.is_file():
@@ -33,7 +33,7 @@ def main():
     (artifacts / "result.json").write_text(json.dumps({"result": "passed", "serial_config": None,
         "kernel": str(kernel), "loader": str(loader), "initramfs": str(initramfs),
         "kernel_output": str(artifacts / "kernel-serial.log")}, indent=2) + "\n")
-    print("local v6: UART identity, automatic parameters, network continue and real kernel output passed")
+    print("local v7: UART identity, automatic parameters, network continue and real kernel output passed")
 
 
 if __name__ == "__main__":

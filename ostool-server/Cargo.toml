@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 name = "ostool-server"
 readme = "README.md"
 repository = "https://github.com/drivercraft/ostool"
-version = "0.9.1"
+version = "0.10.0"
 
 exclude = ["webui/node_modules/*", "webui/dist/*", "webui/test-results/*", "webui/playwright-report/*"]
 
@@ -38,7 +38,6 @@ log = {workspace = true}
 mime_guess = "2"
 network-interface = "2"
 nusb = "0.2.3"
-object = "0.39"
 rust-embed = {version = "8", features = ["interpolate-folder-path", "debug-embed"]}
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 schemars = {workspace = true, features = ["derive"]}

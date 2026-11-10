@@ -1,35 +1,70 @@
 import { expect, test } from "playwright/test";
 import dgram from "node:dgram";
+import http from "node:http";
 import { mkdir } from "node:fs/promises";
 const mac = "02:00:00:00:00:42";
-async function discover() {
+async function announce() {
+  const device = http.createServer((request, response) => {
+    if (request.url !== "/api/v1/status") {
+      response.writeHead(404).end();
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(
+      JSON.stringify({
+        protocol_version: 7,
+        boot_epoch: "e2e-epoch",
+        mac_address: mac,
+        current_mac_address: mac,
+        arch: "future-isa",
+        loader_version: "e2e",
+        hardware: {
+          manufacturer: "QEMU",
+          product: "Standard PC (Q35)",
+          version: "q35",
+          serial: "virtual-42",
+        },
+        boot: null,
+        ota: null,
+        serial: null,
+      }),
+    );
+  });
+  await new Promise<void>((resolve) => device.listen(0, "127.0.0.1", resolve));
+  const address = device.address();
+  if (!address || typeof address === "string") {
+    device.close();
+    throw new Error("device HTTP listener has no TCP address");
+  }
   const socket = dgram.createSocket("udp4");
   try {
-    return await new Promise<{ registration_id: string }>((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
         () => reject(new Error("discovery timed out")),
         3000,
       );
-      socket.once("message", (message) => {
-        clearTimeout(timer);
-        resolve(JSON.parse(message.toString()));
-      });
       socket.send(
         Buffer.from(
           JSON.stringify({
-            protocol_version: 2,
+            protocol_version: 7,
             mac_address: mac,
             current_mac_address: mac,
-            arch: "x86_64",
+            arch: "future-isa",
             loader_version: "e2e",
+            boot_epoch: "e2e-epoch",
+            http_port: address.port,
+            serial_id: null,
+            serial_ready: false,
           }),
         ),
         2998,
         "127.0.0.1",
         (e) => {
+          clearTimeout(timer);
           if (e) {
-            clearTimeout(timer);
             reject(e);
+          } else {
+            resolve();
           }
         },
       );
@@ -37,6 +72,7 @@ async function discover() {
   } finally {
     socket.close();
   }
+  return device;
 }
 test("unbound power -> real discovery -> manual MAC binding; push preserves focus and no GET polling", async ({
   page,
@@ -84,25 +120,7 @@ test("unbound power -> real discovery -> manual MAC binding; push preserves focu
     element: e.tagName,
     scroll: window.scrollY,
   }));
-  const offer = await discover();
-  const poll = await request.post("http://127.0.0.1:4175/api/v1/loaders/poll", {
-    data: {
-      protocol_version: 2,
-      registration_id: offer.registration_id,
-      mac_address: mac,
-      current_mac_address: mac,
-      ip_address: "10.77.0.142",
-      arch: "x86_64",
-      loader_version: "e2e",
-      hardware: {
-        manufacturer: "QEMU",
-        product: "Standard PC (Q35)",
-        version: "q35",
-        serial: "virtual-42",
-      },
-    },
-  });
-  expect(poll.ok()).toBeTruthy();
+  const device = await announce();
   await expect(
     page.getByRole("button", { name: "发现 1 台设备" }),
   ).toBeVisible();
@@ -162,6 +180,7 @@ test("unbound power -> real discovery -> manual MAC binding; push preserves focu
     animations: "disabled",
   });
   await peer.close();
+  device.close();
 });
 test("all management modules, DTB CRUD, session release and narrow viewport", async ({
   page,

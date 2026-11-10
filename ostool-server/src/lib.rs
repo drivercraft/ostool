@@ -34,5 +34,3 @@ pub use config::{
 };
 pub use dtb_store::{DtbFile, DtbStore};
 pub use state::{AppState, BoardLeaseState, build_app_state};
-
-mod boot_image;

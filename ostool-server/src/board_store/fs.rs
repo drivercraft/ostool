@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, bail};
 use tokio::fs;
 
-use crate::config::{BoardConfig, BootConfig};
+use crate::config::BoardConfig;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct QuarantinedBoard {
@@ -53,13 +53,10 @@ impl FileBoardStore {
             let bytes = fs::read(&path)
                 .await
                 .with_context(|| format!("failed to read {}", path.display()))?;
-            let parsed = (|| -> anyhow::Result<(BoardConfig, bool)> {
+            let parsed = (|| -> anyhow::Result<BoardConfig> {
                 let content = std::str::from_utf8(&bytes).context("board config is not UTF-8")?;
                 let document: toml::Value =
                     toml::from_str(content).context("incompatible board TOML")?;
-                let has_legacy_arch = document
-                    .get("boot")
-                    .is_some_and(|boot| boot.get("boot_arch").is_some());
                 let board: BoardConfig = document.try_into().context("incompatible board TOML")?;
                 board.validate().context("invalid board config")?;
                 let stem = path
@@ -80,21 +77,10 @@ impl FileBoardStore {
                 {
                     bail!("duplicate network identity MAC `{}`", identity.mac_address);
                 }
-                let migrate_arch = has_legacy_arch && matches!(board.boot, BootConfig::UefiHttp(_));
-                Ok((board, migrate_arch))
+                Ok(board)
             })();
             match parsed {
-                Ok((board, migrate_arch)) => {
-                    if migrate_arch {
-                        // Validate identity and uniqueness before replacing a legacy
-                        // config. A failed atomic write must leave the source intact.
-                        self.write_board(&board).await.with_context(|| {
-                            format!(
-                                "failed to migrate obsolete boot.boot_arch in {}; original config retained",
-                                path.display()
-                            )
-                        })?;
-                    }
+                Ok(board) => {
                     if let Some(identity) = &board.network_identity {
                         network_identities.insert(identity.mac_address);
                     }
@@ -293,7 +279,7 @@ mod tests {
         assert_eq!(store.load_all().await.unwrap().len(), 2);
     }
 
-    fn legacy_httpboot_config(id: &str, kind: &str) -> String {
+    fn obsolete_httpboot_config(id: &str, kind: &str) -> String {
         format!(
             r#"id = "{id}"
 board_type = "uefi"
@@ -321,71 +307,15 @@ mac_address = "02:00:00:00:00:42"
     }
 
     #[tokio::test]
-    async fn legacy_httpboot_arch_is_migrated_on_load() {
+    async fn obsolete_httpboot_config_is_quarantined_without_rewrite() {
         for kind in ["httpboot", "uefi_http"] {
             let dir = tempdir().unwrap();
             let store = FileBoardStore::new(dir.path().to_path_buf());
             let path = dir.path().join("legacy.toml");
-            tokio::fs::write(&path, legacy_httpboot_config("legacy", kind))
-                .await
-                .unwrap();
-            let loaded = store.load_all().await.unwrap();
-            let board = loaded.get("legacy").unwrap();
-            let BootConfig::UefiHttp(profile) = &board.boot else {
-                panic!("expected httpboot profile");
-            };
-            assert_eq!(profile.serial_parameters.unwrap().baud_rate, 115200);
-            let saved = tokio::fs::read_to_string(&path).await.unwrap();
-            assert!(!saved.contains("boot_arch"));
-            assert!(store.quarantined().await.unwrap().is_empty());
-            // Subsequent loads must not attempt another migration write.
-            tokio::fs::create_dir(path.with_extension("toml.tmp"))
-                .await
-                .unwrap();
-            assert_eq!(
-                serde_json::to_value(&store.load_all().await.unwrap()["legacy"]).unwrap(),
-                serde_json::to_value(board).unwrap()
-            );
-            assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), saved);
-        }
-    }
-
-    #[tokio::test]
-    async fn failed_legacy_arch_migration_retains_original_config() {
-        let dir = tempdir().unwrap();
-        let store = FileBoardStore::new(dir.path().to_path_buf());
-        let path = dir.path().join("legacy.toml");
-        let original = legacy_httpboot_config("legacy", "httpboot");
-        tokio::fs::write(&path, &original).await.unwrap();
-        tokio::fs::create_dir(path.with_extension("toml.tmp"))
-            .await
-            .unwrap();
-        let error = store.load_all().await.unwrap_err();
-        assert!(error.to_string().contains("failed to migrate"));
-        assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), original);
-        assert!(store.quarantined().await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn legacy_arch_migration_preserves_validation_and_quarantine() {
-        let config = legacy_httpboot_config("legacy", "httpboot");
-        for original in [
-            config.replace("id = \"legacy\"", "id = \"different\""),
-            config.replace(
-                "boot_arch = \"riscv64\"",
-                "boot_arch = \"riscv64\"\nunknown = true",
-            ),
-            config.replace("02:00:00:00:00:42", "invalid-mac"),
-            config.replace(
-                "[network_identity]\nmac_address = \"02:00:00:00:00:42\"",
-                "",
-            ),
-        ] {
-            let dir = tempdir().unwrap();
-            let store = FileBoardStore::new(dir.path().to_path_buf());
-            let path = dir.path().join("legacy.toml");
+            let original = obsolete_httpboot_config("legacy", kind);
             tokio::fs::write(&path, &original).await.unwrap();
             assert!(store.load_all().await.unwrap().is_empty());
+            assert!(!path.exists());
             let quarantine = store.quarantined().await.unwrap();
             assert_eq!(quarantine.len(), 1);
             assert_eq!(
