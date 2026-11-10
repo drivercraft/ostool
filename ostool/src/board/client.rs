@@ -137,7 +137,9 @@ pub struct HttpBootKernelUpload {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct UefiHttpProfile {}
+pub struct UefiHttpProfile {
+    pub serial_parameters: Option<httpboot_protocol::SerialParameters>,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BootProfileResponse {
@@ -1167,9 +1169,33 @@ pub(crate) mod tests {
 
     #[test]
     fn parse_httpboot_boot_profile_only_accepts_the_current_kind() {
-        let response: super::BootProfileResponse =
+        let empty: super::BootProfileResponse =
             serde_json::from_value(serde_json::json!({"boot": {"kind": "httpboot"}})).unwrap();
-        assert!(matches!(response.boot, BootConfig::UefiHttp(_)));
+        match empty.boot {
+            BootConfig::UefiHttp(profile) => assert!(profile.serial_parameters.is_none()),
+            BootConfig::Uboot(_) | BootConfig::Pxe(_) => panic!("expected httpboot profile"),
+        }
+
+        let configured: super::BootProfileResponse = serde_json::from_value(serde_json::json!({
+            "boot": {
+                "kind": "httpboot",
+                "serial_parameters": {
+                    "baud_rate": 115200,
+                    "data_bits": 8,
+                    "parity": "none",
+                    "stop_bits": "one",
+                    "flow_control": "none"
+                }
+            }
+        }))
+        .unwrap();
+        match configured.boot {
+            BootConfig::UefiHttp(profile) => assert_eq!(
+                profile.serial_parameters,
+                Some(httpboot_protocol::SerialParameters::default())
+            ),
+            BootConfig::Uboot(_) | BootConfig::Pxe(_) => panic!("expected httpboot profile"),
+        }
 
         for kind in ["uefi_http", "httpboot"] {
             let value = serde_json::json!({"boot": {"kind": kind, "boot_arch": "future_arch"}});

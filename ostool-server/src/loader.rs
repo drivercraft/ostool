@@ -106,13 +106,13 @@ impl LoaderRegistry {
         let now = Utc::now();
         let mut state = self.state.lock().await;
         prune(&mut state, now);
-        let conflict = state
+        let source_conflict = state
             .devices
             .get(&device.mac_address)
             .is_some_and(|previous| {
                 previous.ip_address != ip_address && now - previous.last_seen_at < ONLINE_TTL
             });
-        if conflict {
+        if source_conflict {
             if let Some(previous) = state.devices.get_mut(&device.mac_address) {
                 previous.conflict = true;
                 previous.conflict_until = Some(now + ONLINE_TTL);
@@ -138,6 +138,10 @@ impl LoaderRegistry {
                 },
             );
         }
+        let conflict = state
+            .devices
+            .get(&device.mac_address)
+            .is_some_and(|record| record.conflict);
         drop(state);
         self.events.invalidate(&["loaders"]);
         self.deadline_changed.notify_one();
@@ -402,14 +406,16 @@ mod tests {
                 .unwrap()
         );
         assert!(registry.snapshots().await[0].conflict);
-        registry
-            .accept_announcement(
-                &announcement(mac, "epoch-3", "future-isa"),
-                &status(mac, "epoch-3", "future-isa"),
-                "127.0.0.1".into(),
-            )
-            .await
-            .unwrap();
+        assert!(
+            registry
+                .accept_announcement(
+                    &announcement(mac, "epoch-3", "future-isa"),
+                    &status(mac, "epoch-3", "future-isa"),
+                    "127.0.0.1".into(),
+                )
+                .await
+                .unwrap()
+        );
         assert!(registry.snapshots().await[0].conflict);
     }
 

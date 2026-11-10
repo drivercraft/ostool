@@ -461,23 +461,29 @@ mod tests {
         socket.write_all(response.as_bytes()).await.unwrap();
     }
 
+    async fn respond_truncated(socket: &mut tokio::net::TcpStream, status: &str) {
+        let response =
+            format!("HTTP/1.1 {status}\r\ncontent-length: 2\r\nconnection: close\r\n\r\nx");
+        socket.write_all(response.as_bytes()).await.unwrap();
+        socket.shutdown().await.unwrap();
+    }
+
     #[tokio::test]
     async fn uncertain_start_queries_same_job_and_retries_ready_job_once() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let (abort_tx, abort_rx) = oneshot::channel();
         let server = tokio::spawn(async move {
             let (mut first_start, _) = listener.accept().await.unwrap();
             let request = read_headers(&mut first_start).await;
             assert!(request.starts_with("post /api/v1/boot/jobs/boot-1/start "));
             assert!(request.contains("x-axloader-protocol-version: 7\r\n"));
-            respond(
-                &mut first_start,
-                "500 Internal Server Error",
-                r#"{"code":"temporary","message":"response lost"}"#,
-            )
-            .await;
+            respond_truncated(&mut first_start, "202 Accepted").await;
 
-            let (mut status_socket, _) = listener.accept().await.unwrap();
+            let (mut status_socket, _) = tokio::select! {
+                accepted = listener.accept() => accepted.unwrap(),
+                _ = abort_rx => panic!("truncated start body must enter recovery"),
+            };
             let request = read_headers(&mut status_socket).await;
             assert!(request.starts_with("get /api/v1/status "));
             respond(
@@ -504,6 +510,7 @@ mod tests {
         )
         .await
         .unwrap();
+        let _ = abort_tx.send(());
         assert_eq!(outcome, StartOutcome::Accepted);
         server.await.unwrap();
     }
@@ -561,12 +568,7 @@ mod tests {
             for attempt in 0..2 {
                 let (mut start, _) = listener.accept().await.unwrap();
                 read_headers(&mut start).await;
-                respond(
-                    &mut start,
-                    "500 Internal Server Error",
-                    r#"{"code":"temporary","message":"response lost"}"#,
-                )
-                .await;
+                respond_truncated(&mut start, "202 Accepted").await;
                 if attempt == 0 {
                     let (mut status_socket, _) = listener.accept().await.unwrap();
                     read_headers(&mut status_socket).await;
@@ -801,7 +803,10 @@ async fn perform_start(
         Err(error) => return StartAttempt::Uncertain(error.to_string()),
     };
     if response.status().is_success() {
-        return StartAttempt::Accepted;
+        return match response.bytes().await {
+            Ok(_) => StartAttempt::Accepted,
+            Err(error) => StartAttempt::Uncertain(error.to_string()),
+        };
     }
     let status = response.status();
     let error = device_response_error(response).await;

@@ -1088,8 +1088,22 @@ async fn finish_start(
     };
     match response.status() {
         StatusCode::ACCEPTED => {
-            let _ = read_bounded_body(response).await;
-            start.handed_off().await
+            match read_bounded_body(response).await {
+                Ok(body) if !body.truncated => start.handed_off().await,
+                Ok(body) => {
+                    start
+                        .query_uncertain(format!(
+                            "start response body truncated after {MAX_DEVICE_ERROR_BODY_BYTES} bytes; raw: {}",
+                            String::from_utf8_lossy(&body.bytes)
+                        ))
+                        .await
+                }
+                Err(error) => {
+                    start
+                        .query_uncertain(format!("start response body read failed: {error:#}"))
+                        .await
+                }
+            }
         }
         StatusCode::BAD_REQUEST
         | StatusCode::PAYLOAD_TOO_LARGE
@@ -1167,8 +1181,22 @@ impl StartContext<'_> {
         };
         match retry.status() {
             StatusCode::ACCEPTED => {
-                let _ = read_bounded_body(retry).await;
-                self.handed_off().await
+                match read_bounded_body(retry).await {
+                    Ok(body) if !body.truncated => self.handed_off().await,
+                    Ok(body) => {
+                        self.unconfirmed(format!(
+                            "{diagnostic}; same-ID start retry body truncated after {MAX_DEVICE_ERROR_BODY_BYTES} bytes; raw: {}",
+                            String::from_utf8_lossy(&body.bytes)
+                        ))
+                        .await
+                    }
+                    Err(error) => {
+                        self.unconfirmed(format!(
+                            "{diagnostic}; same-ID start retry body read failed: {error:#}"
+                        ))
+                        .await
+                    }
+                }
             }
             StatusCode::BAD_REQUEST
             | StatusCode::PAYLOAD_TOO_LARGE
@@ -1208,26 +1236,27 @@ fn hex_sha256(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::VecDeque, sync::Arc};
 
     use axum::{
         Json, Router,
-        body::Bytes,
+        body::{Body, Bytes},
         extract::{Path, State},
         http::{HeaderMap, StatusCode},
         response::{IntoResponse, Response},
         routing::{delete, get, post, put},
     };
+    use futures_util::StreamExt;
     use httpboot_protocol::{
         BootFile, DEVICE_PROTOCOL_VERSION, DeviceBootJob, DeviceBootStatus, DeviceOperationError,
         LoaderAnnouncement, LoaderDeviceStatus, LoaderHardwareInfo, LoaderStatusPhase,
     };
     use tokio::net::TcpListener;
-    use tokio::sync::Mutex;
+    use tokio::sync::{Mutex, oneshot};
 
     use super::{
-        BootPushContext, BootPushOutcome, BootRequest, decode_device_error_body, hex_sha256,
-        push_boot, reconcile, require_device_protocol,
+        BootPushContext, BootPushOutcome, BootRequest, StartContext, decode_device_error_body,
+        finish_start, hex_sha256, push_boot, reconcile, require_device_protocol,
     };
     use crate::{
         BoardConfig, BoardNetworkIdentity, BootConfig, BuiltinTftpConfig, CustomPowerManagement,
@@ -1255,6 +1284,13 @@ mod tests {
         Accepted,
         FailOnceThenReady,
         FailOnceReceiving,
+        RetryBodyError,
+        RetryBodyTruncated,
+    }
+
+    struct StartBodyErrorChannels {
+        entered: oneshot::Sender<()>,
+        release: oneshot::Receiver<()>,
     }
 
     struct FakeBootDevice {
@@ -1270,6 +1306,7 @@ mod tests {
         create_boot_id_override: Option<String>,
         upload_rejection: Option<(StatusCode, DeviceOperationError)>,
         start_mode: StartMode,
+        start_body_errors: VecDeque<StartBodyErrorChannels>,
     }
 
     type FakeBootState = Arc<Mutex<FakeBootDevice>>;
@@ -1397,19 +1434,53 @@ mod tests {
         StatusCode::NO_CONTENT.into_response()
     }
 
+    fn interrupted_start_response(channels: StartBodyErrorChannels) -> Response {
+        let body = futures_util::stream::once(async {
+            Ok::<_, std::io::Error>(Bytes::from_static(b"partial"))
+        })
+        .chain(futures_util::stream::once(async move {
+            let _ = channels.entered.send(());
+            let _ = channels.release.await;
+            Err(std::io::Error::other("start body interrupted"))
+        }));
+        Response::builder()
+            .status(StatusCode::ACCEPTED)
+            .body(Body::from_stream(body))
+            .unwrap()
+    }
+
     async fn fake_start(State(device): State<FakeBootState>, headers: HeaderMap) -> Response {
         assert_v7(&headers);
         let mut device = device.lock().await;
         device.start_attempts += 1;
-        if device.start_attempts == 1 && device.start_mode != StartMode::Accepted {
-            if device.start_mode == StartMode::FailOnceReceiving {
-                device.status.boot.as_mut().unwrap().phase = "receiving".into();
+        match device.start_mode {
+            StartMode::FailOnceThenReady | StartMode::FailOnceReceiving
+                if device.start_attempts == 1 =>
+            {
+                if device.start_mode == StartMode::FailOnceReceiving {
+                    device.status.boot.as_mut().unwrap().phase = "receiving".into();
+                }
+                return device_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "handoff_busy",
+                    "start response uncertain",
+                );
             }
-            return device_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "handoff_busy",
-                "start response uncertain",
-            );
+            StartMode::RetryBodyError => {
+                if let Some(channels) = device.start_body_errors.pop_front() {
+                    return interrupted_start_response(channels);
+                }
+            }
+            StartMode::RetryBodyTruncated => {
+                return Response::builder()
+                    .status(StatusCode::ACCEPTED)
+                    .body(Body::from(vec![
+                        b'x';
+                        super::MAX_DEVICE_ERROR_BODY_BYTES + 1
+                    ]))
+                    .unwrap();
+            }
+            StartMode::Accepted | StartMode::FailOnceThenReady | StartMode::FailOnceReceiving => {}
         }
         device.status.boot.as_mut().unwrap().phase = "handoff".into();
         StatusCode::ACCEPTED.into_response()
@@ -1509,6 +1580,7 @@ mod tests {
             create_boot_id_override: None,
             upload_rejection: None,
             start_mode,
+            start_body_errors: VecDeque::new(),
         }));
         let app = Router::new()
             .route("/api/v1/status", get(fake_status))
@@ -1888,6 +1960,162 @@ mod tests {
         assert_eq!(fake.upload_attempts, 1);
         assert_eq!(fake.start_attempts, 2);
         assert_eq!(fake.manifest.as_ref().unwrap().boot_id, "boot-1");
+    }
+
+    #[tokio::test]
+    async fn first_start_body_read_error_retries_the_same_boot_id_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mac = "02:00:00:00:00:48".parse().unwrap();
+        let (state, session, fake, port) =
+            boot_test_context(dir.path(), mac, StartMode::RetryBodyError).await;
+        {
+            let mut fake = fake.lock().await;
+            fake.status.boot = Some(DeviceBootStatus {
+                boot_id: "boot-1".into(),
+                phase: "ready".into(),
+                kernel_received: true,
+                initramfs_received: true,
+                last_error: None,
+            });
+        }
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        fake.lock()
+            .await
+            .start_body_errors
+            .push_back(StartBodyErrorChannels {
+                entered: entered_tx,
+                release: release_rx,
+            });
+        let client = reqwest::Client::new();
+        let endpoint = format!("http://127.0.0.1:{port}");
+        let response = client
+            .post(format!("{endpoint}/api/v1/boot/jobs/boot-1/start"))
+            .header(
+                httpboot_protocol::DEVICE_PROTOCOL_VERSION_HEADER,
+                httpboot_protocol::device_protocol_version_header_value(),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        tokio::time::timeout(std::time::Duration::from_secs(3), entered_rx)
+            .await
+            .expect("202 response body was not polled")
+            .unwrap();
+        release_tx.send(()).unwrap();
+        let observed = fake.lock().await.status.clone();
+        let start = StartContext {
+            state: &state,
+            client: &client,
+            endpoint: &endpoint,
+            observed: &observed,
+            session: &session,
+            binding_id: "binding-1",
+            boot_id: "boot-1",
+        };
+        assert_eq!(
+            finish_start(start, Ok(response)).await.unwrap(),
+            BootPushOutcome::HandedOff
+        );
+        let fake = fake.lock().await;
+        assert_eq!(fake.create_attempts, 0);
+        assert_eq!(fake.upload_attempts, 0);
+        assert_eq!(fake.start_attempts, 2);
+        assert_eq!(fake.delete_attempts, 0);
+    }
+
+    #[tokio::test]
+    async fn retry_start_body_read_error_stays_unconfirmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mac = "02:00:00:00:00:49".parse().unwrap();
+        let (state, session, fake, port) =
+            boot_test_context(dir.path(), mac, StartMode::RetryBodyError).await;
+        {
+            let mut fake = fake.lock().await;
+            fake.status.boot = Some(DeviceBootStatus {
+                boot_id: "boot-1".into(),
+                phase: "ready".into(),
+                kernel_received: true,
+                initramfs_received: true,
+                last_error: None,
+            });
+        }
+        let (first_entered_tx, first_entered_rx) = oneshot::channel();
+        let (first_release_tx, first_release_rx) = oneshot::channel();
+        let (retry_entered_tx, retry_entered_rx) = oneshot::channel();
+        let (retry_release_tx, retry_release_rx) = oneshot::channel();
+        fake.lock().await.start_body_errors = VecDeque::from([
+            StartBodyErrorChannels {
+                entered: first_entered_tx,
+                release: first_release_rx,
+            },
+            StartBodyErrorChannels {
+                entered: retry_entered_tx,
+                release: retry_release_rx,
+            },
+        ]);
+        let client = reqwest::Client::new();
+        let endpoint = format!("http://127.0.0.1:{port}");
+        let response = client
+            .post(format!("{endpoint}/api/v1/boot/jobs/boot-1/start"))
+            .header(
+                httpboot_protocol::DEVICE_PROTOCOL_VERSION_HEADER,
+                httpboot_protocol::device_protocol_version_header_value(),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        tokio::time::timeout(std::time::Duration::from_secs(3), first_entered_rx)
+            .await
+            .expect("first 202 response body was not polled")
+            .unwrap();
+        first_release_tx.send(()).unwrap();
+        let observed = fake.lock().await.status.clone();
+        let start = StartContext {
+            state: &state,
+            client: &client,
+            endpoint: &endpoint,
+            observed: &observed,
+            session: &session,
+            binding_id: "binding-1",
+            boot_id: "boot-1",
+        };
+        let mut workflow = Box::pin(finish_start(start, Ok(response)));
+        tokio::select! {
+            result = &mut workflow => panic!("retry body error was not gated: {result:?}"),
+            entered = retry_entered_rx => entered.unwrap(),
+        }
+        retry_release_tx.send(()).unwrap();
+        assert_eq!(workflow.await.unwrap(), BootPushOutcome::Unconfirmed);
+        let fake = fake.lock().await;
+        assert_eq!(fake.create_attempts, 0);
+        assert_eq!(fake.upload_attempts, 0);
+        assert_eq!(fake.start_attempts, 2);
+        assert_eq!(fake.delete_attempts, 0);
+        drop(fake);
+        assert!(session.serial_runtime.snapshot().warning.is_some());
+        assert!(!session.handoff_was_submitted("boot-1").await);
+        assert!(!session.is_stop_requested());
+    }
+
+    #[tokio::test]
+    async fn retry_start_body_truncation_stays_unconfirmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mac = "02:00:00:00:00:4a".parse().unwrap();
+        let (state, session, fake, port) =
+            boot_test_context(dir.path(), mac, StartMode::RetryBodyTruncated).await;
+
+        assert_eq!(
+            run_fake_push(&state, &session, port).await.unwrap(),
+            BootPushOutcome::Unconfirmed
+        );
+        let fake = fake.lock().await;
+        assert_eq!(fake.start_attempts, 2);
+        assert_eq!(fake.delete_attempts, 0);
+        drop(fake);
+        assert!(!session.handoff_was_submitted("boot-1").await);
     }
 
     #[tokio::test]
