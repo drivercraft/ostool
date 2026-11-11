@@ -85,33 +85,8 @@
   flex-shrink: 0;
 }
 
-.editor-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-}
 .rental-editor-panel > .panel-toolbar {
   padding: 12px 16px 0;
-}
-.rental-editor-form {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 16px;
-}
-.rental-editor-form > [data-slot="field"] {
-  min-width: 0;
-  gap: 8px;
-  display: grid;
-  grid-template-columns: 80px minmax(0, 1fr);
-  align-items: center;
-}
-.rental-editor-form > [data-slot="field"] > [data-slot="field-description"] {
-  grid-column: 1 / -1;
-}
-.rental-editor-form > [data-slot="field"]:last-child {
-  grid-column: 1 / -1;
 }
 .rental-editor-panel .panel-scroll {
   display: flex;
@@ -426,13 +401,6 @@
   .rental-editor-panel > .panel-toolbar {
     padding: 10px 12px 0;
   }
-  .rental-editor-form {
-    gap: 8px;
-  }
-  .rental-editor-form > [data-slot="field"] {
-    display: flex;
-    gap: 4px;
-  }
   .calendar-status-line {
     flex-basis: 63px;
     min-height: 63px;
@@ -470,12 +438,6 @@
   }
   .calendar-year-grid {
     grid-template-columns: 1fr;
-  }
-  .editor-footer {
-    flex-wrap: wrap;
-  }
-  .editor-footer > .row-actions {
-    margin-left: auto;
   }
 }
 
@@ -517,8 +479,4 @@
 }
 .calendar-busy {
   background: var(--muted-foreground);
-}
-
-.rental-editor-form .rental-user-search {
-  grid-column: 1 / -1;
 }

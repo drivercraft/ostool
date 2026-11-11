@@ -3,7 +3,7 @@ import { useEffect, useId, useState } from "react";
 import { Eye, History, Maximize, Minimize, RotateCcw } from "lucide-react";
 import { useResource, useList } from "@/api/events";
 import { api } from "@/api/client";
-import { PagePanel } from "@/components/page-panel";
+import { PagePanel, EditorFooter } from "@/components/page-panel";
 import { RowAction } from "@/components/row-action";
 import {
   TextField,
@@ -39,6 +39,7 @@ type Field = {
   hint: string;
   placeholder?: string;
   area?: boolean;
+  fullWidth?: boolean;
   type?: "email" | "url";
   maxLength?: number;
 };
@@ -77,6 +78,7 @@ const groups: Record<string, { title: string; fields: Field[] }[]> = {
         },
         {
           key: "logo_url",
+          fullWidth: true,
           label: "LOGO 路径",
           hint: "同源绝对路径，支持 SVG、PNG；留空使用默认标志。",
           placeholder: "/branding/logo.svg",
@@ -84,6 +86,7 @@ const groups: Record<string, { title: string; fields: Field[] }[]> = {
         },
         {
           key: "favicon_url",
+          fullWidth: true,
           label: "站点图标路径",
           hint: "浏览器标签页图标的同源路径，支持 ICO、SVG、PNG。",
           placeholder: "/branding/favicon.ico",
@@ -96,6 +99,7 @@ const groups: Record<string, { title: string; fields: Field[] }[]> = {
       fields: [
         {
           key: "copyright",
+          fullWidth: true,
           label: "版权文字",
           hint: "页脚自动添加当前年份，无需重复填写 © 和年份。",
           placeholder: "例如：某某实验室",
@@ -155,12 +159,14 @@ const groups: Record<string, { title: string; fields: Field[] }[]> = {
       fields: [
         {
           key: "operator",
+          fullWidth: true,
           label: "运营主体",
           hint: "组织或公司名称，用于页脚与运营信息展示。",
           maxLength: 120,
         },
         {
           key: "address",
+          fullWidth: true,
           label: "联系地址",
           hint: "公开联系地址，最多 300 个字符。",
           maxLength: 300,
@@ -289,34 +295,35 @@ function Editor({ source, group }: { source: SiteView; group: string }) {
     <PagePanel
       className={`${legal ? "legal-settings" : ""}${fullscreen ? " legal-fullscreen" : ""}`}
       footer={
-        <>
-          <span className="panel-status">
-            配置版本 {source.revision}
-            {dirty ? " · 尚未保存" : ""}
-            {legal ? " · 纯文本，最多 100 KB" : ""}
-          </span>
-          <div className="panel-footer-actions">
-            <Button
-              variant="outline"
-              disabled={task.pending || !can("site.manage")}
-              onClick={() => {
-                setDraft({});
-                setAwaiting(0);
-                setBaseline(source.settings);
-              }}
-            >
-              取消
-            </Button>
-            <Button
-              permission="site.manage"
-              type="submit"
-              form={id}
-              disabled={!dirty || task.pending || conflict}
-            >
-              {task.pending ? "保存中…" : legal ? "发布协议" : "保存配置"}
-            </Button>
-          </div>
-        </>
+        <EditorFooter
+          status={
+            <>
+              配置版本 {source.revision}
+              {dirty ? " · 尚未保存" : ""}
+              {legal ? " · 纯文本，最多 100 KB" : ""}
+            </>
+          }
+        >
+          <Button
+            variant="outline"
+            disabled={task.pending || !can("site.manage")}
+            onClick={() => {
+              setDraft({});
+              setAwaiting(0);
+              setBaseline(source.settings);
+            }}
+          >
+            取消
+          </Button>
+          <Button
+            permission="site.manage"
+            type="submit"
+            form={id}
+            disabled={!dirty || task.pending || conflict}
+          >
+            {task.pending ? "保存中…" : legal ? "发布协议" : "保存配置"}
+          </Button>
+        </EditorFooter>
       }
     >
       {conflict && (
@@ -449,16 +456,7 @@ function Editor({ source, group }: { source: SiteView; group: string }) {
                     hint={field.hint}
                     placeholder={field.placeholder}
                     type={field.type}
-                    fullWidth={
-                      field.type === "url" ||
-                      [
-                        "address",
-                        "operator",
-                        "copyright",
-                        "logo_url",
-                        "favicon_url",
-                      ].includes(field.key)
-                    }
+                    fullWidth={field.fullWidth}
                     maxLength={field.maxLength}
                     value={String(current[field.key] ?? "")}
                     onValue={(value) => changed(field.key, value)}

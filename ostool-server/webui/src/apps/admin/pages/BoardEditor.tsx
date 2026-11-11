@@ -1,5 +1,5 @@
 import { usePermissions } from "@/components/permissions";
-import { PagePanel } from "@/components/page-panel";
+import { PagePanel, EditorFooter } from "@/components/page-panel";
 import { useEffect, useId, useRef, useState } from "react";
 import {
   Link,
@@ -33,6 +33,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Section,
   TextField,
+  ReloadNotice,
+  FormGrid,
   TextareaField,
   SelectField,
   CheckField,
@@ -180,15 +182,14 @@ function Editor({ board }: { board?: BoardConfig }) {
   const text = (
     key: keyof BoardEditorFormState,
     label: string,
-    hint?: string,
+    props: { hint?: string; fullWidth?: boolean } = {},
   ) => (
     <TextField
       key={key}
       label={label}
-      fullWidth={key === "power_on_cmd" || key === "power_off_cmd"}
       value={String(form[key])}
       onValue={(v) => setForm((f) => ({ ...f, [key]: v }))}
-      hint={hint}
+      {...props}
     />
   );
   async function submit() {
@@ -232,55 +233,50 @@ function Editor({ board }: { board?: BoardConfig }) {
   return (
     <PagePanel
       footer={
-        <>
-          <span className="panel-status">
-            {save.pending
+        <EditorFooter
+          status={
+            save.pending
               ? "正在保存…"
               : conflict
                 ? "服务器配置已更新，草稿已保留"
                 : JSON.stringify(form) !== baseline
                   ? "存在未保存的修改"
-                  : "配置已保存"}
-          </span>
-          <div className="panel-footer-actions">
-            {board && (
-              <ConfirmAction
-                label="删除开发板"
-                description={`删除 ${board.id} 的配置？`}
-                disabled={powerBusy}
-                action={async () => {
-                  await api.deleteBoard(board.id);
-                  navigate("/boards");
-                }}
-              />
-            )}
-            <Button variant="outline" type="button" asChild>
-              <Link to="/boards">取消</Link>
-            </Button>
-            <Button
-              type="submit"
-              form={formId}
-              disabled={save.pending || powerBusy || conflict}
-            >
-              {save.pending ? "保存中…" : "保存开发板"}
-            </Button>
-          </div>
-        </>
+                  : "配置已保存"
+          }
+        >
+          {board && (
+            <ConfirmAction
+              label="删除开发板"
+              description={`删除 ${board.id} 的配置？`}
+              disabled={powerBusy}
+              action={async () => {
+                await api.deleteBoard(board.id);
+                navigate("/boards");
+              }}
+            />
+          )}
+          <Button variant="outline" type="button" asChild>
+            <Link to="/boards">取消</Link>
+          </Button>
+          <Button
+            type="submit"
+            form={formId}
+            disabled={save.pending || powerBusy || conflict}
+          >
+            {save.pending ? "保存中…" : "保存开发板"}
+          </Button>
+        </EditorFooter>
       }
     >
       {conflict && (
-        <Notice>
+        <ReloadNotice
+          onReload={() => {
+            setForm(boardToFormState(board!));
+            setBaseline(live);
+          }}
+        >
           服务器配置已被其他操作修改。你的草稿已保留，请载入最新配置后重新编辑。
-          <Button
-            variant="outline"
-            onClick={() => {
-              setForm(boardToFormState(board!));
-              setBaseline(live);
-            }}
-          >
-            载入服务器版本
-          </Button>
-        </Notice>
+        </ReloadNotice>
       )}
       {(validation || save.error) && (
         <Notice>{validation || save.error}</Notice>
@@ -475,8 +471,8 @@ function Editor({ board }: { board?: BoardConfig }) {
             />
             {form.power_management_kind === "custom" && (
               <>
-                {text("power_on_cmd", "上电命令")}
-                {text("power_off_cmd", "下电命令")}
+                {text("power_on_cmd", "上电命令", { fullWidth: true })}
+                {text("power_off_cmd", "下电命令", { fullWidth: true })}
               </>
             )}
             {form.power_management_kind === "zhongsheng_relay" && (
@@ -669,11 +665,11 @@ function Editor({ board }: { board?: BoardConfig }) {
                 <summary>
                   高级启动地址 <span>按需配置，留空使用默认值</span>
                 </summary>
-                <div className="advanced-fields">
+                <FormGrid className="pt-4">
                   {text("kernel_load_addr", "Kernel 加载地址")}
                   {text("fit_load_addr", "FIT 加载地址")}
                   {text("bootm_addr", "bootm 地址")}
-                </div>
+                </FormGrid>
               </details>
               {form.use_tftp && (
                 <>
@@ -691,16 +687,12 @@ function Editor({ board }: { board?: BoardConfig }) {
                   {form.network_mode === "static_ip" && (
                     <>
                       {text("board_ip", "开发板 IP")}
-                      {text(
-                        "server_ip",
-                        "服务器 IP",
-                        `默认 ${tftp?.resolved_server_ip ?? "未解析"}`,
-                      )}
-                      {text(
-                        "netmask",
-                        "子网掩码",
-                        `默认 ${tftp?.resolved_netmask ?? "未解析"}`,
-                      )}
+                      {text("server_ip", "服务器 IP", {
+                        hint: `默认 ${tftp?.resolved_server_ip ?? "未解析"}`,
+                      })}
+                      {text("netmask", "子网掩码", {
+                        hint: `默认 ${tftp?.resolved_netmask ?? "未解析"}`,
+                      })}
                       {text("gatewayip", "网关")}
                     </>
                   )}

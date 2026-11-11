@@ -181,9 +181,3 @@ p.auth-legal {
   height: 100%;
   object-fit: contain;
 }
-.legal-settings .form-section {
-  grid-template-columns: minmax(0, 1fr);
-}
-.legal-settings .form-fields {
-  grid-template-columns: minmax(0, 1fr);
-}

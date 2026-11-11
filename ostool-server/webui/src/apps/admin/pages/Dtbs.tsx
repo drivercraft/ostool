@@ -16,13 +16,13 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { FieldGroup } from "@/components/ui/field";
 import {
   DataTable,
   Row,
   Cell,
   ConfirmAction,
   TextField,
+  FormGrid,
   Notice,
   useAction,
 } from "@/components/forms";
@@ -62,7 +62,7 @@ export function DtbUpload({
           </DialogHeader>
           <DialogBody>
             <DialogDescription>单个文件最大 10 MiB。</DialogDescription>
-            <FieldGroup className="form-fields">
+            <FormGrid>
               <TextField
                 label="文件"
                 type="file"
@@ -74,7 +74,7 @@ export function DtbUpload({
                 }}
               />
               <TextField label="文件名" value={name} onValue={setName} />
-            </FieldGroup>
+            </FormGrid>
             {task.error && <Notice>{task.error}</Notice>}
           </DialogBody>
           <DialogFooter>
@@ -199,7 +199,7 @@ function EditDtb({ dtb, close }: { dtb: DtbFileResponse; close: () => void }) {
           <DialogDescription>
             可重命名或替换文件，单个文件最大 10 MiB。
           </DialogDescription>
-          <FieldGroup className="form-fields">
+          <FormGrid>
             <TextField label="文件名" value={name} onValue={setName} />
             <TextField
               label="替换文件"
@@ -210,7 +210,7 @@ function EditDtb({ dtb, close }: { dtb: DtbFileResponse; close: () => void }) {
                 if (file.current) setName(file.current.name);
               }}
             />
-          </FieldGroup>
+          </FormGrid>
           {task.error && <Notice>{task.error}</Notice>}
         </DialogBody>
         <DialogFooter>

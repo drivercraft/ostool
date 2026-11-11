@@ -2,6 +2,21 @@ import { useContext, useLayoutEffect, useRef, type ReactNode } from "react";
 import { ListLayoutProvider } from "./list-layout";
 import { ListDataLoadingContext } from "./forms";
 
+export function EditorFooter({
+  status,
+  children,
+}: {
+  status: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <>
+      <span className="panel-status">{status}</span>
+      <div className="panel-footer-actions">{children}</div>
+    </>
+  );
+}
+
 /** Fixed header/footer with a single independently scrolling content region. */
 export function PagePanel({
   toolbar,

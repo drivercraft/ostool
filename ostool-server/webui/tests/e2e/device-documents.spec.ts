@@ -68,14 +68,12 @@ test("device documents publish to product details and the rental workspace with 
     await page.getByRole("button", { name: "添加参数", exact: true }).click();
     await page.getByLabel("参数名称 1", { exact: true }).fill("Memory");
     await page.getByLabel("参数值 1", { exact: true }).fill("8 GiB");
-    const editorLayout = await page.evaluate(() => {
-      const box = (selector: string) =>
-        document.querySelector(selector)!.getBoundingClientRect().toJSON();
-      return {
-        form: box(".device-document-form"),
-        description: box(".device-document-description"),
-      };
-    });
+    const editorLayout = await page
+      .getByLabel("详细介绍", { exact: true })
+      .evaluate((element) => ({
+        form: element.closest("form")!.getBoundingClientRect().toJSON(),
+        description: element.getBoundingClientRect().toJSON(),
+      }));
     expect(editorLayout.description.height).toBeGreaterThanOrEqual(240);
     expect(editorLayout.description.width).toBeGreaterThan(
       editorLayout.form.width * 0.85,
@@ -93,7 +91,7 @@ test("device documents publish to product details and the rental workspace with 
     expect(Math.abs(nameBox!.y - valueBox!.y)).toBeLessThan(2);
     expect(nameBox!.x + nameBox!.width).toBeLessThan(valueBox!.x);
     await page
-      .locator(".device-document-editor .panel-scroll")
+      .getByRole("region", { name: "页面内容", exact: true })
       .evaluate((el) => {
         el.scrollTop = 0;
       });

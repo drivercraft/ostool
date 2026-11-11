@@ -768,44 +768,6 @@ a.dashboard-metric:hover {
   }
 }
 
-/* Admin fields share three columns; long values and supporting content use a row. */
-body:has(.app-shell)
-  :is(.form-fields, .management-form, .rental-editor-form, .advanced-fields) {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-body:has(.app-shell)
-  :is(.form-fields, .management-form, .rental-editor-form, .advanced-fields)
-  > * {
-  min-width: 0;
-}
-body:has(.app-shell)
-  :is(.form-fields, .management-form, .rental-editor-form)
-  > [data-slot="field"]:has(input[type="file"]),
-.app-shell .form-fields > :not([data-slot="field"], [data-slot="button"]),
-.management-form > [data-slot="alert"] {
-  grid-column: 1 / -1;
-}
-.app-shell .form-fields > [data-slot="button"] {
-  justify-self: start;
-}
-.app-shell .rental-editor-form > [data-slot="field"] {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-}
-@media (max-width: 1100px) {
-  body:has(.app-shell)
-    :is(.form-fields, .management-form, .rental-editor-form, .advanced-fields) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-@media (max-width: 640px) {
-  body:has(.app-shell)
-    :is(.form-fields, .management-form, .rental-editor-form, .advanced-fields) {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
 /* 协议编辑器与普通配置页共用底栏，正文占满剩余工作区。 */
 .settings-fields {
   border: 0;
@@ -1023,59 +985,6 @@ body:has(.legal-fullscreen) [data-slot="dialog-overlay"] {
   }
   .role-permission-options {
     grid-template-columns: 1fr;
-  }
-}
-
-/* Device documents share the admin toolbar, fields, and fixed action footer. */
-.app-shell .device-documents-panel [data-slot="table-cell"] small {
-  display: block;
-  margin-top: 4px;
-  color: var(--muted-foreground);
-}
-.device-document-form {
-  width: 100%;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-}
-.device-document-form .form-section > .form-fields {
-  gap: 20px;
-}
-.device-document-form [data-slot="field"] {
-  min-width: 0;
-  align-items: stretch;
-  flex-direction: column;
-}
-.device-document-form .device-document-summary {
-  min-height: 100px;
-}
-.device-document-form .device-document-description {
-  min-height: 240px;
-  line-height: 1.8;
-  resize: vertical;
-}
-.device-document-form .document-edit-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 16px;
-  align-items: end;
-}
-.device-document-form
-  .document-edit-row:has(> [data-slot="field"] + [data-slot="field"]) {
-  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr) auto;
-}
-.device-document-form .form-fields > [data-slot="button"] {
-  justify-self: start;
-}
-@media (max-width: 760px) {
-  .device-document-form
-    .document-edit-row:has(> [data-slot="field"] + [data-slot="field"]) {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  .device-document-form
-    .document-edit-row
-    > [data-slot="field"]:first-child:not(:last-of-type) {
-    grid-column: 1 / -1;
   }
 }
 

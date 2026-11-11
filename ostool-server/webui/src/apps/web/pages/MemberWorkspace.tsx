@@ -320,7 +320,7 @@ function Profile({ user }: { user: AuthUser }) {
       <Heading title="基本信息" text="管理对外显示的名称和登录邮箱。" />
       <form className="member-card member-form" onSubmit={save}>
         {task.error && <Notice>{task.error}</Notice>}
-        <Section title="个人资料">
+        <Section title="个人资料" columns={2}>
           <TextField label="用户名" value={user.username} readOnly hint="" />
           <TextField
             label="显示名称"
@@ -396,7 +396,7 @@ function Password() {
       />
       <form className="member-card member-form" onSubmit={save}>
         {task.error && <Notice>{task.error}</Notice>}
-        <Section title="登录密码">
+        <Section title="登录密码" columns={2}>
           <TextField
             label="当前密码"
             type="password"

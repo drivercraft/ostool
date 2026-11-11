@@ -1290,19 +1290,6 @@
   overflow: auto;
   padding: 0;
 }
-.rental-request-layout .rental-editor-form {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 16px;
-}
-.rental-request-layout .rental-editor-form [data-slot="field"] {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 6px;
-}
-.rental-request-layout .rental-editor-form [data-slot="field"]:last-child {
-  grid-column: 1 / -1;
-}
 @media (max-width: 1050px) {
   .rental-request-layout {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1402,10 +1389,6 @@
   .rental-request-layout .rental-request-panel .panel-toolbar {
     padding: 0 0 12px;
     max-height: 48%;
-  }
-  .rental-request-layout .editor-footer {
-    flex-wrap: wrap;
-    gap: 8px;
   }
 }
 @media (max-width: 760px) {

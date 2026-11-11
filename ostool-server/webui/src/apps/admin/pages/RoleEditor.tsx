@@ -3,9 +3,11 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useList } from "@/api/events";
 import { api } from "@/api/client";
 import type { RoleInput, UserRole, PermissionCapability } from "@/types/api";
-import { PagePanel } from "@/components/page-panel";
+import { PagePanel, EditorFooter } from "@/components/page-panel";
+import { ListToolbar } from "@/components/list-toolbar";
 import {
   TextField,
+  ReloadNotice,
   TextareaField,
   CheckField,
   Section,
@@ -113,30 +115,22 @@ function Editor({
   return (
     <PagePanel
       toolbar={
-        <div
-          className="listing-toolbar"
-          role="toolbar"
+        <ListToolbar
           aria-label="角色快捷工具栏"
+          count={`${role?.name ?? "创建角色"} · 已选 ${selected.size} 项权限`}
         >
-          <div className="listing-actions">
-            <span className="listing-meta">
-              {role ? role.name : "创建角色"} · 已选 {selected.size} 项权限
-            </span>
-          </div>
-          <div className="listing-filters">
-            <TextField
-              label="搜索权限"
-              value={search}
-              onValue={setSearch}
-              placeholder="功能、权限名称或说明"
-            />
-          </div>
-        </div>
+          <TextField
+            label="搜索权限"
+            value={search}
+            onValue={setSearch}
+            placeholder="功能、权限名称或说明"
+          />
+        </ListToolbar>
       }
       footer={
-        <>
-          <span className="panel-status">
-            {role?.builtin
+        <EditorFooter
+          status={
+            role?.builtin
               ? "内置角色权限只读"
               : conflict
                 ? "角色已被其他人更新，草稿已保留"
@@ -144,39 +138,30 @@ function Editor({
                   ? "只读权限"
                   : JSON.stringify(draft) !== baseline
                     ? "尚未保存"
-                    : "配置已保存"}
-          </span>
-          <div className="panel-footer-actions">
-            <Button variant="outline" asChild>
-              <Link to="/users/roles">取消</Link>
+                    : "配置已保存"
+          }
+        >
+          <Button variant="outline" asChild>
+            <Link to="/users/roles">取消</Link>
+          </Button>
+          {!readonly && (
+            <Button form={id} type="submit" disabled={task.pending || conflict}>
+              {task.pending ? "保存中…" : "保存角色"}
             </Button>
-            {!readonly && (
-              <Button
-                form={id}
-                type="submit"
-                disabled={task.pending || conflict}
-              >
-                {task.pending ? "保存中…" : "保存角色"}
-              </Button>
-            )}
-          </div>
-        </>
+          )}
+        </EditorFooter>
       }
     >
       {conflict && (
-        <Notice>
+        <ReloadNotice
+          onReload={() => {
+            setDraft(initial());
+            setTypes(initial().allocation_policy.board_types.join(", "));
+            setBaseline(current);
+          }}
+        >
           角色配置已更新，草稿已保留。
-          <Button
-            variant="outline"
-            onClick={() => {
-              setDraft(initial());
-              setTypes(initial().allocation_policy.board_types.join(", "));
-              setBaseline(current);
-            }}
-          >
-            载入服务器版本
-          </Button>
-        </Notice>
+        </ReloadNotice>
       )}
       {task.error && <Notice variant="destructive">{task.error}</Notice>}
       <form

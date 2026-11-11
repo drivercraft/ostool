@@ -52,7 +52,7 @@
   padding-right: 38px;
 }
 [data-slot="textarea"] {
-  min-height: 80px;
+  min-height: max(80px, calc(var(--textarea-rows, 2) * 1lh + 20px));
   padding: 10px 14px;
   resize: none;
 }

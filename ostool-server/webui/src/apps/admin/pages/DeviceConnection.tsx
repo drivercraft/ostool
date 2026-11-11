@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { usePermissions } from "@/components/permissions";
 import {
   TextField,
+  ReloadNotice,
   TextareaField,
   Section,
   Notice,
@@ -48,20 +49,17 @@ function Editor({ id, source }: { id: string; source: Connection | null }) {
             : "设备需支持 HTTPS 和独立凭据；未配置时无法执行网络启动或升级。"}
       </Notice>
       {conflict && (
-        <Notice>
+        <ReloadNotice
+          onReload={() => {
+            setEndpoint(source?.endpoint ?? "");
+            setCa(source?.ca_pem ?? "");
+            setToken("");
+            setBaseline(sourceKey(source));
+          }}
+          label="载入最新配置"
+        >
           服务器认证配置已更新，输入已保留。
-          <Button
-            variant="outline"
-            onClick={() => {
-              setEndpoint(source?.endpoint ?? "");
-              setCa(source?.ca_pem ?? "");
-              setToken("");
-              setBaseline(sourceKey(source));
-            }}
-          >
-            载入最新配置
-          </Button>
-        </Notice>
+        </ReloadNotice>
       )}
       <TextField
         label="设备 HTTPS 地址"

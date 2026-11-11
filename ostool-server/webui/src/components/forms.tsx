@@ -85,7 +85,8 @@ const inputHints: Record<string, string> = {
 export function TextField({
   label,
   hint,
-  fullWidth,
+  type,
+  fullWidth = type === "url" || type === "file",
   onValue,
   ...props
 }: ComponentProps<typeof Input> & {
@@ -101,6 +102,7 @@ export function TextField({
       <FieldLabel htmlFor={id}>{label}</FieldLabel>
       <Input
         id={id}
+        type={type}
         {...props}
         placeholder={props.placeholder ?? (description || `请输入${label}`)}
         title={props.title ?? (description || undefined)}
@@ -219,10 +221,12 @@ export function Section({
   title,
   hint,
   children,
+  columns,
 }: {
   title: string;
   hint?: string;
   children: ReactNode;
+  columns?: 2 | 3;
 }) {
   return (
     <section className="form-section">
@@ -230,8 +234,45 @@ export function Section({
         <h2>{title}</h2>
         {hint && <p className="hint">{hint}</p>}
       </div>
-      <FieldGroup className="form-fields">{children}</FieldGroup>
+      <FormGrid columns={columns}>{children}</FormGrid>
     </section>
+  );
+}
+
+export function FormGrid({
+  columns = 3,
+  className = "",
+  ...props
+}: ComponentProps<typeof FieldGroup> & { columns?: 2 | 3 }) {
+  return (
+    <FieldGroup
+      {...props}
+      data-columns={columns}
+      className={`form-fields ${className}`}
+    />
+  );
+}
+
+export function FormRow({ className = "", ...props }: ComponentProps<"div">) {
+  return <div {...props} className={`form-row full-width ${className}`} />;
+}
+
+export function ReloadNotice({
+  children,
+  onReload,
+  label = "载入服务器版本",
+}: {
+  children: ReactNode;
+  onReload: () => void;
+  label?: string;
+}) {
+  return (
+    <Notice>
+      {children}
+      <Button type="button" variant="outline" onClick={onReload}>
+        {label}
+      </Button>
+    </Notice>
   );
 }
 export function Notice({

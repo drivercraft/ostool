@@ -11,7 +11,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { DataTable, Row, Cell } from "@/components/forms";
-import { PagePanel } from "@/components/page-panel";
+import { PagePanel, EditorFooter } from "@/components/page-panel";
 import { ListToolbar } from "@/components/list-toolbar";
 import { useEffect, useId, useState } from "react";
 import { api } from "@/api/client";
@@ -28,6 +28,7 @@ import {
   Section,
   TextareaField,
   TextField,
+  ReloadNotice,
   SelectField,
   CheckField,
   Notice,
@@ -131,37 +132,36 @@ function TftpForm({
         />
       }
       footer={
-        <>
-          <span className="panel-status">
-            {conflict
+        <EditorFooter
+          status={
+            conflict
               ? "服务器配置已更新，草稿已保留"
               : JSON.stringify(config) !== baseline
                 ? "存在未保存的修改"
-                : "配置已保存"}
-          </span>
-          <div className="panel-footer-actions">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={task.pending}
-              onClick={() => {
-                setConfig(source);
-                setBaseline(live);
-                setPreviousSource(null);
-              }}
-            >
-              取消
-            </Button>
-            <Button
-              permission="server.manage"
-              type="submit"
-              form={formId}
-              disabled={task.pending || conflict}
-            >
-              {task.pending ? "保存中…" : "保存配置"}
-            </Button>
-          </div>
-        </>
+                : "配置已保存"
+          }
+        >
+          <Button
+            type="button"
+            variant="outline"
+            disabled={task.pending}
+            onClick={() => {
+              setConfig(source);
+              setBaseline(live);
+              setPreviousSource(null);
+            }}
+          >
+            取消
+          </Button>
+          <Button
+            permission="server.manage"
+            type="submit"
+            form={formId}
+            disabled={task.pending || conflict}
+          >
+            {task.pending ? "保存中…" : "保存配置"}
+          </Button>
+        </EditorFooter>
       }
     >
       <form
@@ -178,19 +178,14 @@ function TftpForm({
         }}
       >
         {conflict && (
-          <Notice>
+          <ReloadNotice
+            onReload={() => {
+              setConfig(source);
+              setBaseline(JSON.stringify(source));
+            }}
+          >
             服务器配置发生变化，草稿已保留。
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setConfig(source);
-                setBaseline(JSON.stringify(source));
-              }}
-            >
-              载入服务器版本
-            </Button>
-          </Notice>
+          </ReloadNotice>
         )}
         <fieldset disabled={!can("server.manage")}>
           <Section title="服务配置">
@@ -300,37 +295,36 @@ function ServerForm({ source }: { source: AdminServerConfigResponse }) {
   return (
     <PagePanel
       footer={
-        <>
-          <span className="panel-status">
-            {conflict
+        <EditorFooter
+          status={
+            conflict
               ? "服务器配置已更新，草稿已保留"
               : JSON.stringify(config) !== baseline
                 ? "存在未保存的修改"
-                : "配置已保存"}
-          </span>
-          <div className="panel-footer-actions">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={task.pending}
-              onClick={() => {
-                setConfig(source.editable);
-                setBaseline(live);
-                setPreviousSource(null);
-              }}
-            >
-              取消
-            </Button>
-            <Button
-              permission="server.manage"
-              type="submit"
-              form={formId}
-              disabled={task.pending || conflict}
-            >
-              {task.pending ? "保存中…" : "保存配置"}
-            </Button>
-          </div>
-        </>
+                : "配置已保存"
+          }
+        >
+          <Button
+            type="button"
+            variant="outline"
+            disabled={task.pending}
+            onClick={() => {
+              setConfig(source.editable);
+              setBaseline(live);
+              setPreviousSource(null);
+            }}
+          >
+            取消
+          </Button>
+          <Button
+            permission="server.manage"
+            type="submit"
+            form={formId}
+            disabled={task.pending || conflict}
+          >
+            {task.pending ? "保存中…" : "保存配置"}
+          </Button>
+        </EditorFooter>
       }
     >
       <form
@@ -353,19 +347,14 @@ function ServerForm({ source }: { source: AdminServerConfigResponse }) {
         }}
       >
         {conflict && (
-          <Notice>
+          <ReloadNotice
+            onReload={() => {
+              setConfig(source.editable);
+              setBaseline(JSON.stringify(source.editable));
+            }}
+          >
             服务器配置发生变化，草稿已保留。
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setConfig(source.editable);
-                setBaseline(JSON.stringify(source.editable));
-              }}
-            >
-              载入服务器版本
-            </Button>
-          </Notice>
+          </ReloadNotice>
         )}
         <fieldset disabled={!can("server.manage")}>
           <Section title="网络与上传">
@@ -465,11 +454,12 @@ type PolicyField = {
   key: keyof import("@/types/api").AccountSettings;
   label: string;
   hint: string;
-  type?: "check" | "number" | "select";
+  type?: "check" | "number" | "select" | "list";
   min?: number;
   max?: number;
   placeholder?: string;
   options?: { value: string; label: string }[];
+  fullWidth?: boolean;
 };
 const policySections: Record<
   string,
@@ -573,6 +563,8 @@ const policySections: Record<
         },
         {
           key: "turnstile_hostnames",
+          type: "list",
+          fullWidth: true,
           label: "允许的验证域名",
           hint: "多个域名以英文逗号分隔，不填写协议、端口或通配符，须与 Cloudflare 配置一致。",
           placeholder: "boards.example.com, admin.example.com",
@@ -717,36 +709,37 @@ function AccountForm({
   return (
     <PagePanel
       footer={
-        <>
-          <span className="panel-status">
-            策略版本 {source.revision}
-            {dirty ? " · 尚未保存" : ""} · 保存后生效
-          </span>
-          <div className="panel-footer-actions">
-            <Button
-              variant="outline"
-              disabled={task.pending}
-              onClick={() => {
-                setDraft({});
-                setKeywordDraft({});
-                setSecretDraft({});
-                setAwaiting(0);
-                setBaseline(source.settings);
-                setBaselineRevision(source.revision);
-              }}
-            >
-              取消
-            </Button>
-            <Button
-              permission="security.manage"
-              type="submit"
-              form={id}
-              disabled={!dirty || conflict || task.pending}
-            >
-              {task.pending ? "保存中…" : "保存配置"}
-            </Button>
-          </div>
-        </>
+        <EditorFooter
+          status={
+            <>
+              策略版本 {source.revision}
+              {dirty ? " · 尚未保存" : ""} · 保存后生效
+            </>
+          }
+        >
+          <Button
+            variant="outline"
+            disabled={task.pending}
+            onClick={() => {
+              setDraft({});
+              setKeywordDraft({});
+              setSecretDraft({});
+              setAwaiting(0);
+              setBaseline(source.settings);
+              setBaselineRevision(source.revision);
+            }}
+          >
+            取消
+          </Button>
+          <Button
+            permission="security.manage"
+            type="submit"
+            form={id}
+            disabled={!dirty || conflict || task.pending}
+          >
+            {task.pending ? "保存中…" : "保存配置"}
+          </Button>
+        </EditorFooter>
       }
     >
       {conflict && (
@@ -806,7 +799,7 @@ function AccountForm({
                     label={field.label}
                     hint={field.hint}
                     placeholder={field.placeholder}
-                    fullWidth={field.key === "turnstile_hostnames"}
+                    fullWidth={field.fullWidth}
                     type={field.type === "number" ? "number" : "text"}
                     min={field.min}
                     max={field.max}
@@ -821,7 +814,7 @@ function AccountForm({
                         field.key,
                         field.type === "number"
                           ? Number(v)
-                          : field.key === "turnstile_hostnames"
+                          : field.type === "list"
                             ? v
                                 .split(",")
                                 .map((s) => s.trim())

@@ -1064,26 +1064,6 @@
     margin: 6px 0 16px;
     overflow-wrap: anywhere;
   }
-  .form-section {
-    display: grid;
-    grid-template-columns: 160px minmax(0, 1fr);
-    gap: 24px;
-    padding: 26px 0;
-    border-bottom: 1px solid var(--border);
-  }
-  .form-section:first-child {
-    border-top: 1px solid var(--border);
-  }
-  .form-fields {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-items: start;
-    gap: 22px 28px;
-  }
-  .form-fields > [data-slot="field"][data-orientation="horizontal"] {
-    min-height: 34px;
-    align-self: center;
-  }
   .full-width {
     grid-column: 1/-1;
   }
@@ -1116,9 +1096,46 @@
     overflow-wrap: anywhere;
   }
 }
-/* Layout wrappers override the primitive's default vertical stack. */
-.form-fields[data-slot="field-group"] {
+/* Shared form layout, used by sections, dialogs, and standalone editors. */
+.form-fields {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+  gap: 22px 28px;
+}
+.form-fields[data-columns="2"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.form-fields > * {
+  min-width: 0;
+}
+.form-fields > [data-slot="field"][data-orientation="horizontal"] {
+  min-height: 34px;
+  align-self: center;
+}
+.form-fields > :not([data-slot="field"], [data-slot="button"]) {
+  grid-column: 1 / -1;
+}
+.form-fields > [data-slot="button"] {
+  justify-self: start;
+}
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 16px;
+}
+.form-row > [data-slot="field"] {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.form-row > [data-slot="button"] {
+  flex-shrink: 0;
+}
+@media (max-width: 1100px) {
+  .form-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 .filters[data-slot="field-group"] {
   flex-direction: row;
@@ -1127,10 +1144,6 @@
   width: 200px;
 }
 @media (max-width: 900px) {
-  .form-section {
-    grid-template-columns: 1fr;
-    gap: 16px;
-  }
   .facts {
     grid-template-columns: 1fr;
   }
@@ -1153,7 +1166,8 @@
     margin-left: 0;
     padding: 24px 18px 40px;
   }
-  .form-fields {
+  .form-fields,
+  .form-fields[data-columns="2"] {
     grid-template-columns: 1fr;
   }
   .filters > [data-slot="field"] {
@@ -1352,16 +1366,7 @@
   font-size: 12px;
   font-weight: 400;
 }
-.advanced-fields {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-  padding-top: 16px;
-}
 @media (max-width: 640px) {
-  .advanced-fields {
-    grid-template-columns: 1fr;
-  }
   .advanced-options summary span {
     display: block;
     margin: 6px 0 0;
@@ -1496,10 +1501,6 @@
 .sidebar .admin-bottom-nav a {
   width: 100%;
   padding-block: 8px;
-}
-.management-form {
-  display: grid;
-  gap: 18px;
 }
 .admin-gate {
   min-height: 100vh;
@@ -1744,6 +1745,7 @@ body:has(.app-shell) {
 .panel-footer {
   flex: 0 0 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;

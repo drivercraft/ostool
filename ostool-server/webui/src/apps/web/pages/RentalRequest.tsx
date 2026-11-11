@@ -13,8 +13,14 @@ import { useSiteSession } from "@/apps/web/session";
 import { BoardVisual } from "@/apps/web/components/board-visual";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { TextField, SelectField, Notice, useAction } from "@/components/forms";
-import { PagePanel } from "@/components/page-panel";
+import {
+  TextField,
+  SelectField,
+  Notice,
+  FormGrid,
+  useAction,
+} from "@/components/forms";
+import { PagePanel, EditorFooter } from "@/components/page-panel";
 import { queryKey } from "@/components/server-list";
 import type { CatalogBoard } from "@/types/api";
 import { RentalCalendar } from "@/components/rental-calendar";
@@ -212,99 +218,101 @@ function RentalRequestForm({
       <PagePanel
         className="rental-editor-panel rental-request-panel"
         toolbar={
-          <form
-            id={formId}
-            className="rental-editor-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void task
-                .run(async () => {
-                  if (!boardExists) throw new Error("请选择可申请的设备");
-                  if (!valid) throw new Error("开始时间必须早于结束时间");
-                  if (conflicts.length)
-                    throw new Error("所选时段已有租赁，请选择空闲时段");
-                  if (!ready) throw new Error("请等待日历同步完成");
-                  await api.applyRental({
-                    board_id: board,
-                    starts_at: new Date(start).toISOString(),
-                    ends_at: new Date(end).toISOString(),
-                    notes,
+          <FormGrid asChild columns={2}>
+            <form
+              id={formId}
+              className="rental-editor-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void task
+                  .run(async () => {
+                    if (!boardExists) throw new Error("请选择可申请的设备");
+                    if (!valid) throw new Error("开始时间必须早于结束时间");
+                    if (conflicts.length)
+                      throw new Error("所选时段已有租赁，请选择空闲时段");
+                    if (!ready) throw new Error("请等待日历同步完成");
+                    await api.applyRental({
+                      board_id: board,
+                      starts_at: new Date(start).toISOString(),
+                      ends_at: new Date(end).toISOString(),
+                      notes,
+                    });
+                  }, "申请已提交，等待管理员审核")
+                  .then((ok) => {
+                    if (ok) navigate("/account/requests");
                   });
-                }, "申请已提交，等待管理员审核")
-                .then((ok) => {
-                  if (ok) navigate("/account/requests");
-                });
-            }}
-          >
-            <TextField
-              label="申请用户"
-              value={
-                user.display_name
-                  ? user.display_name + " · " + user.email
-                  : user.email
-              }
-              readOnly
-            />
-            <SelectField
-              label="申请开发板"
-              value={board}
-              onValue={setBoard}
-              disabled={task.pending}
-              options={catalog.map((item) => ({
-                value: item.id,
-                label: item.id + " · " + item.board_type,
-              }))}
-            />
-            <TextField
-              label="开始时间"
-              type="datetime-local"
-              step="0.001"
-              required
-              value={start}
-              onValue={setStart}
-            />
-            <TextField
-              label="结束时间"
-              type="datetime-local"
-              step="0.001"
-              required
-              value={end}
-              onValue={setEnd}
-            />
-            <TextField
-              label="申请说明"
-              maxLength={2000}
-              value={notes}
-              onValue={setNotes}
-            />
-          </form>
+              }}
+            >
+              <TextField
+                label="申请用户"
+                value={
+                  user.display_name
+                    ? user.display_name + " · " + user.email
+                    : user.email
+                }
+                readOnly
+              />
+              <SelectField
+                label="申请开发板"
+                value={board}
+                onValue={setBoard}
+                disabled={task.pending}
+                options={catalog.map((item) => ({
+                  value: item.id,
+                  label: item.id + " · " + item.board_type,
+                }))}
+              />
+              <TextField
+                label="开始时间"
+                type="datetime-local"
+                step="0.001"
+                required
+                value={start}
+                onValue={setStart}
+              />
+              <TextField
+                label="结束时间"
+                type="datetime-local"
+                step="0.001"
+                required
+                value={end}
+                onValue={setEnd}
+              />
+              <TextField
+                label="申请说明"
+                fullWidth
+                maxLength={2000}
+                value={notes}
+                onValue={setNotes}
+              />
+            </form>
+          </FormGrid>
         }
         footer={
-          <div className="editor-footer">
-            <span className="panel-status">
-              {conflicts.length
+          <EditorFooter
+            status={
+              conflicts.length
                 ? "所选时段已有租赁"
-                : "申请不预占设备，通过审核后生效"}
-            </span>
-            <div className="row-actions">
-              <Button asChild variant="outline">
-                <Link to="/account/requests">取消</Link>
-              </Button>
-              <Button
-                type="submit"
-                form={formId}
-                disabled={
-                  task.pending ||
-                  !ready ||
-                  !boardExists ||
-                  !valid ||
-                  conflicts.length > 0
-                }
-              >
-                {task.pending ? "提交中…" : "提交申请"}
-              </Button>
-            </div>
-          </div>
+                : "申请不预占设备，通过审核后生效"
+            }
+          >
+            <Button asChild variant="outline">
+              <Link to="/account/requests">取消</Link>
+            </Button>
+            <Button
+              type="submit"
+              form={formId}
+              disabled={
+                task.pending ||
+                !ready ||
+                !boardExists ||
+                !valid ||
+                conflicts.length > 0
+              }
+            >
+              {task.pending ? "提交中…" : "提交申请"}
+            </Button>
+          </EditorFooter>
         }
       >
         {error && <Notice>{error}</Notice>}

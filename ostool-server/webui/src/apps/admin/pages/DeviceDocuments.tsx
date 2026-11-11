@@ -5,10 +5,12 @@ import { api } from "@/api/client";
 import { admin, useList, useResource, useErrors } from "@/api/events";
 import type { DeviceDocument, DeviceDocumentView } from "@/types/api";
 import { ListToolbar } from "@/components/list-toolbar";
-import { PagePanel } from "@/components/page-panel";
+import { PagePanel, EditorFooter } from "@/components/page-panel";
 import { Button } from "@/components/ui/button";
 import {
   TextField,
+  ReloadNotice,
+  FormRow,
   TextareaField,
   Section,
   Notice,
@@ -50,7 +52,6 @@ export default function DeviceDocuments() {
   return (
     <PagePanel
       table
-      className="device-documents-panel"
       toolbar={
         <ListToolbar count={`共 ${filtered.length} 台设备`}>
           <TextField label="搜索设备文档" value={search} onValue={setSearch} />
@@ -96,54 +97,46 @@ function DocumentEditor({ source }: { source: DeviceDocumentView }) {
   ) => setDraft((old) => ({ ...old, [key]: value }));
   return (
     <PagePanel
-      className="device-document-editor"
       footer={
-        <>
-          <span className="panel-status">
-            {conflict ? "已有更新，草稿已保留" : "保存后发布到设备详情页"}
-          </span>
-          <div className="panel-footer-actions">
-            <Button asChild variant="outline">
-              <a
-                href={`/devices/${encodeURIComponent(source.id)}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                查看详情页
-              </a>
-            </Button>
-            <Button asChild variant="outline">
-              <Link to="/device-documents">返回文档列表</Link>
-            </Button>
-            <Button
-              form={formId}
-              type="submit"
-              permission="devices.manage"
-              disabled={task.pending || conflict}
+        <EditorFooter
+          status={conflict ? "已有更新，草稿已保留" : "保存后发布到设备详情页"}
+        >
+          <Button asChild variant="outline">
+            <a
+              href={`/devices/${encodeURIComponent(source.id)}`}
+              target="_blank"
+              rel="noreferrer"
             >
-              保存并发布
-            </Button>
-          </div>
-        </>
+              查看详情页
+            </a>
+          </Button>
+          <Button asChild variant="outline">
+            <Link to="/device-documents">返回文档列表</Link>
+          </Button>
+          <Button
+            form={formId}
+            type="submit"
+            permission="devices.manage"
+            disabled={task.pending || conflict}
+          >
+            保存并发布
+          </Button>
+        </EditorFooter>
       }
     >
       {conflict && (
-        <Notice>
+        <ReloadNotice
+          onReload={() => {
+            setDraft(source.document!);
+            setRevision(source.revision);
+          }}
+          label="载入最新文档"
+        >
           文档已被其他管理员更新，当前输入已保留。
-          <Button
-            variant="outline"
-            onClick={() => {
-              setDraft(source.document!);
-              setRevision(source.revision);
-            }}
-          >
-            载入最新文档
-          </Button>
-        </Notice>
+        </ReloadNotice>
       )}
       {task.error && <Notice>{task.error}</Notice>}
       <form
-        className="device-document-form"
         id={formId}
         onSubmit={(event) => {
           event.preventDefault();
@@ -170,14 +163,14 @@ function DocumentEditor({ source }: { source: DeviceDocumentView }) {
           />
           <TextareaField
             label="设备简介"
-            className="device-document-summary"
+            rows={3}
             value={draft.summary}
             onValue={(v) => set("summary", v)}
             maxLength={600}
           />
           <TextareaField
             label="详细介绍"
-            className="device-document-description"
+            rows={10}
             value={draft.description}
             onValue={(v) => set("description", v)}
             maxLength={16000}
@@ -193,7 +186,7 @@ function DocumentEditor({ source }: { source: DeviceDocumentView }) {
         </Section>
         <Section title="设备亮点" hint="用简短的文字说明设备特点，最多 8 项。">
           {draft.highlights.map((value, index) => (
-            <div className="document-edit-row" key={index}>
+            <FormRow key={index}>
               <TextField
                 label={`亮点 ${index + 1}`}
                 value={value}
@@ -219,7 +212,7 @@ function DocumentEditor({ source }: { source: DeviceDocumentView }) {
               >
                 <Trash2 />
               </Button>
-            </div>
+            </FormRow>
           ))}
           <Button
             type="button"
@@ -236,7 +229,7 @@ function DocumentEditor({ source }: { source: DeviceDocumentView }) {
           hint="填写已确认的硬件规格，参数名称和值成对展示。"
         >
           {draft.specifications.map((item, index) => (
-            <div className="document-edit-row" key={index}>
+            <FormRow key={index}>
               <TextField
                 label={`参数名称 ${index + 1}`}
                 value={item.name}
@@ -277,7 +270,7 @@ function DocumentEditor({ source }: { source: DeviceDocumentView }) {
               >
                 <Trash2 />
               </Button>
-            </div>
+            </FormRow>
           ))}
           <Button
             type="button"

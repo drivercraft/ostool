@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { PagePanel } from "@/components/page-panel";
+import { PagePanel, EditorFooter } from "@/components/page-panel";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Notice, TextField, SelectField, useAction } from "@/components/forms";
+import {
+  Notice,
+  TextField,
+  SelectField,
+  FormGrid,
+  useAction,
+} from "@/components/forms";
 import { RentalCalendar } from "@/components/rental-calendar";
 import { api } from "@/api/client";
 import { admin, useErrors, useResource } from "@/api/events";
@@ -137,87 +143,88 @@ function RentalForm({
     <PagePanel
       className="rental-editor-panel"
       toolbar={
-        <form
-          id={formId}
-          className="rental-editor-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void task
-              .run(async () => {
-                const start = new Date(draft.starts_at),
-                  end = new Date(draft.ends_at);
-                if (
-                  !Number.isFinite(start.getTime()) ||
-                  !Number.isFinite(end.getTime()) ||
-                  start >= end
-                )
-                  throw new Error("开始时间必须早于结束时间");
-                if (
-                  rentalConflicts(
-                    bookings,
-                    start.getTime(),
-                    end.getTime(),
-                    initial?.id,
-                  ).length
-                )
-                  throw new Error("该时段已被租用，请调整时间");
-                if (!ready || error) throw new Error("请等待日历同步完成");
-                const payload = {
-                  ...draft,
-                  starts_at: start.toISOString(),
-                  ends_at: end.toISOString(),
-                };
-                if (initial) await api.updateRental(initial.id, payload);
-                else await api.createRental(payload);
-              }, "租赁已保存")
-              .then((ok) => {
-                if (ok) navigate("/rentals");
-              });
-          }}
-        >
-          <SelectField
-            label="使用用户"
-            disabled={!!initial || task.pending}
-            value={draft.user_id}
-            onValue={(user_id) => patch({ user_id })}
-            options={users
-              .filter((u) => !u.disabled || u.id === draft.user_id)
-              .map((u) => ({
-                value: u.id,
-                label: `${u.username} · ${u.email}${u.display_name ? ` · ${u.display_name}` : ""}`,
-              }))}
-          />
-          <SelectField
-            label="指定开发板"
-            disabled={!!initial || task.pending}
-            value={draft.board_id}
-            onValue={(board_id) => patch({ board_id })}
-            options={boards
-              .filter((b) => !b.disabled || b.id === draft.board_id)
-              .map((b) => ({
-                value: b.id,
-                label: `${b.id} · ${b.board_type}`,
-              }))}
-          />
-          <TextField
-            label="开始时间"
-            type="datetime-local"
-            step="0.001"
-            required
-            value={draft.starts_at}
-            onValue={(starts_at) => patch({ starts_at })}
-          />
-          <TextField
-            label="结束时间"
-            type="datetime-local"
-            step="0.001"
-            required
-            value={draft.ends_at}
-            onValue={(ends_at) => patch({ ends_at })}
-          />
-          {(context.more_users || userSearch) && (
-            <div className="rental-user-search">
+        <FormGrid asChild>
+          <form
+            id={formId}
+            className="rental-editor-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void task
+                .run(async () => {
+                  const start = new Date(draft.starts_at),
+                    end = new Date(draft.ends_at);
+                  if (
+                    !Number.isFinite(start.getTime()) ||
+                    !Number.isFinite(end.getTime()) ||
+                    start >= end
+                  )
+                    throw new Error("开始时间必须早于结束时间");
+                  if (
+                    rentalConflicts(
+                      bookings,
+                      start.getTime(),
+                      end.getTime(),
+                      initial?.id,
+                    ).length
+                  )
+                    throw new Error("该时段已被租用，请调整时间");
+                  if (!ready || error) throw new Error("请等待日历同步完成");
+                  const payload = {
+                    ...draft,
+                    starts_at: start.toISOString(),
+                    ends_at: end.toISOString(),
+                  };
+                  if (initial) await api.updateRental(initial.id, payload);
+                  else await api.createRental(payload);
+                }, "租赁已保存")
+                .then((ok) => {
+                  if (ok) navigate("/rentals");
+                });
+            }}
+          >
+            <SelectField
+              label="使用用户"
+              disabled={!!initial || task.pending}
+              value={draft.user_id}
+              onValue={(user_id) => patch({ user_id })}
+              options={users
+                .filter((u) => !u.disabled || u.id === draft.user_id)
+                .map((u) => ({
+                  value: u.id,
+                  label: `${u.username} · ${u.email}${u.display_name ? ` · ${u.display_name}` : ""}`,
+                }))}
+            />
+            <SelectField
+              label="指定开发板"
+              disabled={!!initial || task.pending}
+              value={draft.board_id}
+              onValue={(board_id) => patch({ board_id })}
+              options={boards
+                .filter((b) => !b.disabled || b.id === draft.board_id)
+                .map((b) => ({
+                  value: b.id,
+                  label: `${b.id} · ${b.board_type}`,
+                }))}
+            />
+            <TextField
+              label="开始时间"
+              type="datetime-local"
+              step="0.001"
+              required
+              value={draft.starts_at}
+              onValue={(starts_at) => patch({ starts_at })}
+            />
+            <TextField
+              label="结束时间"
+              type="datetime-local"
+              step="0.001"
+              required
+              value={draft.ends_at}
+              onValue={(ends_at) => patch({ ends_at })}
+            />
+            {(context.more_users || userSearch) && (
               <TextField
+                fullWidth
                 label="搜索使用用户"
                 value={userSearch}
                 onValue={setUserSearch}
@@ -227,44 +234,43 @@ function RentalForm({
                     : "按用户名、邮箱或显示名称搜索"
                 }
               />
-            </div>
-          )}
-          <TextField
-            label="备注"
-            fullWidth
-            value={draft.notes}
-            onValue={(notes) => patch({ notes })}
-          />
-        </form>
+            )}
+            <TextField
+              label="备注"
+              fullWidth
+              value={draft.notes}
+              onValue={(notes) => patch({ notes })}
+            />
+          </form>
+        </FormGrid>
       }
       footer={
-        <div className="editor-footer">
-          <span className="panel-status">
-            {!ready
+        <EditorFooter
+          status={
+            !ready
               ? "正在同步日历…"
               : conflicts.length
                 ? `所选时段有 ${conflicts.length} 条租赁冲突`
-                : "日历与已有租赁实时同步"}
-          </span>
-          <div className="row-actions">
-            {back}
-            <Button
-              type="submit"
-              form={formId}
-              disabled={
-                task.pending ||
-                !ready ||
-                !!error ||
-                finished ||
-                !draft.board_id ||
-                !draft.user_id ||
-                conflicts.length > 0
-              }
-            >
-              {task.pending ? "保存中…" : "保存租赁"}
-            </Button>
-          </div>
-        </div>
+                : "日历与已有租赁实时同步"
+          }
+        >
+          {back}
+          <Button
+            type="submit"
+            form={formId}
+            disabled={
+              task.pending ||
+              !ready ||
+              !!error ||
+              finished ||
+              !draft.board_id ||
+              !draft.user_id ||
+              conflicts.length > 0
+            }
+          >
+            {task.pending ? "保存中…" : "保存租赁"}
+          </Button>
+        </EditorFooter>
       }
     >
       {error && <Notice>{error}</Notice>}
