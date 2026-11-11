@@ -299,34 +299,52 @@ impl UbootShell {
             deadline.saturating_duration_since(Instant::now()),
             "command recovery",
             async {
-                // Drain before Ctrl-C, never accept a queued old marker/prompt as
-                // evidence for the new interrupt. The outer budget covers all steps.
+                let mut repeated_interrupt = false;
                 loop {
-                    let remaining = deadline.saturating_duration_since(Instant::now());
-                    if remaining.is_zero() {
-                        return Err(Error::new(
-                            ErrorKind::TimedOut,
-                            "U-Boot command recovery timed out while draining",
-                        ));
-                    }
-                    match self.read_command_byte(IDLE_TIMEOUT.min(remaining)).await {
-                        Ok(_) => {}
-                        Err(err)
-                            if err.kind() == ErrorKind::TimedOut && remaining >= IDLE_TIMEOUT =>
-                        {
-                            break;
+                    // Never accept a queued old marker/prompt as evidence for
+                    // the new interrupt. All rounds share the outer budget.
+                    self.drain_recovery_input(deadline).await?;
+                    self.tx().write_all(&[CTRL_C]).await?;
+                    self.tx().flush().await?;
+                    match self.read_interrupt_handshake(deadline).await {
+                        Ok(()) => {
+                            if repeated_interrupt {
+                                // Repeated interrupts may leave extra responses
+                                // queued behind the handshake.
+                                self.drain_recovery_input(deadline).await?;
+                            }
+                            return Ok(());
+                        }
+                        Err(err) if err.kind() == ErrorKind::TimedOut => {
+                            repeated_interrupt = true;
                         }
                         Err(err) => return Err(err),
                     }
                 }
-                self.tx().write_all(&[CTRL_C]).await?;
-                self.tx().flush().await?;
-                self.read_interrupt_handshake(deadline).await
             },
         )
         .await?;
         self.command_phase = CommandPhase::Ready;
         Ok(())
+    }
+
+    async fn drain_recovery_input(&mut self, deadline: Instant) -> Result<()> {
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(Error::new(
+                    ErrorKind::TimedOut,
+                    "U-Boot command recovery timed out while draining",
+                ));
+            }
+            match self.read_command_byte(IDLE_TIMEOUT.min(remaining)).await {
+                Ok(_) => {}
+                Err(err) if err.kind() == ErrorKind::TimedOut && remaining >= IDLE_TIMEOUT => {
+                    return Ok(());
+                }
+                Err(err) => return Err(err),
+            }
+        }
     }
 
     async fn read_interrupt_handshake(&mut self, deadline: Instant) -> Result<()> {
@@ -335,7 +353,9 @@ impl UbootShell {
         let mut overlong = false;
         loop {
             let byte = self
-                .read_command_byte(deadline.saturating_duration_since(Instant::now()))
+                .read_command_byte(
+                    IDLE_TIMEOUT.min(deadline.saturating_duration_since(Instant::now())),
+                )
                 .await?;
             if byte == b'\n' {
                 if line.last() == Some(&b'\r') {
@@ -354,7 +374,9 @@ impl UbootShell {
         }
         for expected in self.perfix.clone().bytes() {
             if self
-                .read_command_byte(deadline.saturating_duration_since(Instant::now()))
+                .read_command_byte(
+                    IDLE_TIMEOUT.min(deadline.saturating_duration_since(Instant::now())),
+                )
                 .await?
                 != expected
             {
