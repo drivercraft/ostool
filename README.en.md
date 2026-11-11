@@ -443,6 +443,13 @@ ostool board config
 
 `ostool board connect -b <BOARD_TYPE>` allocates any available board of that type; pass `--board-id <BOARD_ID>` as well when you need to connect a specific board.
 
+Local and public deployments use the same Board REST, file and serial WebSocket
+APIs. Set `auth_mode` manually to `"disabled"` for local CLI access and device
+management without login. Public deployments use `"required"`; after
+`ostool login`, HTTP and WebSocket requests carry credentials. The client setting
+cannot disable authentication on a public server. `ostool board ls` displays board
+type, available count, total count and tags, without the removed rental fields.
+
 A `.board.toml` file can declare shared files relative to its own directory with
 `session_files`. `ostool board run` resolves them from the file selected by
 `--board-config`, or the workspace `.board.toml` by default. Library callers can

@@ -28,7 +28,7 @@ use crate::{
             AdminServerConfigEditable, AdminServerConfigReadonly, AdminServerConfigResponse,
             AdminSessionsResponse, AdminTftpConfigResponse, AdminTftpStatusResponse,
             BoardPowerAction, BoardPowerStatusResponse, BoardRuntimeStatusResponse,
-            BoardTypeSummary, BootProfileResponse, CreateSessionRequestWithBoardId,
+            BoardTypeSummary, BootProfileResponse, CreateSessionRequest,
             CreateVirtualDeviceRequest, DtbFileResponse, HeartbeatResponse, HttpBootFileResponse,
             KernelPublishResponse, LoaderDeviceSummary, NetworkInterfaceSummary, SerialPortSummary,
             SerialStatusResponse, SessionCreatedResponse, SessionDetailResponse,
@@ -1335,7 +1335,7 @@ async fn create_session(
     State(state): State<AppState>,
     context: Option<Extension<crate::audit::Context>>,
     actor: Option<Extension<super::auth::CurrentUser>>,
-    axum::Json(request): axum::Json<CreateSessionRequestWithBoardId>,
+    axum::Json(request): axum::Json<CreateSessionRequest>,
 ) -> Result<
     (
         StatusCode,
@@ -3283,6 +3283,7 @@ mod tests {
 
     async fn create_session(app: &Router, board_type: &str) -> String {
         let request = CreateSessionRequest {
+            board_id: None,
             board_type: board_type.to_string(),
             required_tags: Vec::new(),
             client_name: Some("test".to_string()),

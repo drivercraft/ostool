@@ -40,25 +40,10 @@ pub struct BoardTypeSummary {
     pub tags: Vec<String>,
     pub total: usize,
     pub available: usize,
-    pub leases: Option<Vec<BoardLease>>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct BoardLease {
-    pub board_id: String,
-    pub date_begin: String,
-    pub date_end: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateSessionRequest {
-    pub board_type: String,
-    pub required_tags: Vec<String>,
-    pub client_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct CreateSessionRequestWithBoardId {
     pub board_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub board_id: Option<String>,
@@ -198,9 +183,6 @@ pub struct SharedSessionFileResponse {
     pub uploaded_at: DateTime<Utc>,
 }
 
-#[deprecated(note = "use SharedSessionFileResponse")]
-pub type FileResponse = SharedSessionFileResponse;
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct HttpBootFileResponse {
     pub filename: String,
@@ -333,7 +315,7 @@ impl BoardServerClient {
         let request = self
             .request(Method::POST, self.endpoint("/api/v1/sessions"))
             .await?
-            .json(&CreateSessionRequestWithBoardId {
+            .json(&CreateSessionRequest {
                 board_type: board_type.to_string(),
                 board_id: board_id.map(ToOwned::to_owned),
                 required_tags: vec![],
@@ -841,48 +823,15 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn board_type_summary_accepts_response_without_leases() {
+    fn board_type_summary_matches_server_response() {
         let summaries: Vec<BoardTypeSummary> = serde_json::from_str(
-            r#"[
-                {
-                    "board_type": "rk3568",
-                    "tags": [],
-                    "total": 2,
-                    "available": 1
-                }
-            ]"#,
+            r#"[{"board_type":"rk3568","tags":["arm64"],"total":2,"available":1}]"#,
         )
         .unwrap();
-
-        assert!(summaries[0].leases.is_none());
-    }
-
-    #[test]
-    fn board_type_summary_parses_optional_leases() {
-        let summaries: Vec<BoardTypeSummary> = serde_json::from_str(
-            r#"[
-                {
-                    "board_type": "Rock-4D",
-                    "tags": [],
-                    "total": 1,
-                    "available": 1,
-                    "leases": [
-                        {
-                            "board_id": "Rock-4D-1",
-                            "date_begin": "2026-07-31 15:40:00",
-                            "date_end": "2026-08-03 15:40:00"
-                        }
-                    ]
-                }
-            ]"#,
-        )
-        .unwrap();
-
-        let leases = summaries[0].leases.as_ref().unwrap();
-        assert_eq!(leases.len(), 1);
-        assert_eq!(leases[0].board_id, "Rock-4D-1");
-        assert_eq!(leases[0].date_begin, "2026-07-31 15:40:00");
-        assert_eq!(leases[0].date_end, "2026-08-03 15:40:00");
+        assert_eq!(summaries[0].board_type, "rk3568");
+        assert_eq!(summaries[0].tags, ["arm64"]);
+        assert_eq!(summaries[0].total, 2);
+        assert_eq!(summaries[0].available, 1);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! PostgreSQL development-board repository.
 use super::postgres::Database;
 use crate::config::BoardConfig;
-use anyhow::bail;
+use anyhow::{Context, bail};
 use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug)]
 pub struct BoardStore {
@@ -21,8 +21,11 @@ impl BoardStore {
             .await?
         {
             let id: String = row.try_get("id")?;
-            let board: BoardConfig = serde_json::from_value(row.try_get("payload")?)?;
-            board.validate()?;
+            let board: BoardConfig = serde_json::from_value(row.try_get("payload")?)
+                .with_context(|| format!("invalid PostgreSQL board record `{id}`"))?;
+            board
+                .validate()
+                .with_context(|| format!("invalid PostgreSQL board record `{id}`"))?;
             if board.id != id {
                 bail!("board database id mismatch: {id}");
             }

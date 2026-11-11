@@ -3,10 +3,21 @@
 `ostool-server` 提供本地版和公网版，二者共用 PostgreSQL 和 Board REST / 串口 WebSocket 契约：
 
 - `local` 使用 HTTP 免登录，不启用用户、租赁分配或审批，也不需要 Redis；`public` 使用 HTTPS，强制登录、角色权限和租赁授权。`OSTOOL_AUTH_ENABLED` 如显式填写必须与部署版本一致。
-- CLI 默认使用 `auth_mode = "required"` 和 HTTPS，通过 OAuth Device Authorization 或 PAT 登录。
-- 管理后台与前台有独立登录界面和浏览器 Cookie。
+- CLI 保留手动 `auth_mode`：本地版配置 `"disabled"` 后直接使用；公网版配置 `"required"` 和 HTTPS，通过 OAuth Device Authorization 或 PAT 登录。
+- 本地管理后台免登录；公网管理后台与前台有独立登录界面和浏览器 Cookie。
 
-CLI 只调用 OAuth、Board REST 和串口 WebSocket；管理 API `/api/v1/admin/...` 要求后台管理员身份，CLI 凭据不能调用这些接口。
+CLI 只调用 OAuth、Board REST 和串口 WebSocket。公网管理 API `/api/v1/admin/...` 要求后台管理员身份，CLI 凭据不能调用这些接口；本地设备管理 API 免登录，账号、角色、租赁及审批接口不启用。
+
+### 两种部署共用的契约
+
+两版使用同一组 Board API 路径、HTTP 方法、请求字段、成功状态码和响应结构，包括板型发现、会话创建/心跳/释放、启动配置、文件操作、电源控制及串口 WebSocket。公网只返回当前用户有权使用的设备，并校验会话归属和租赁期限；这不会改变 API 结构。
+
+| 部署 | CLI 配置 | Board HTTP / WebSocket | 管理后台 |
+| --- | --- | --- | --- |
+| `local` | `auth_mode = "disabled"`，HTTP | 不发送 Token，直接使用 | 免登录 |
+| `public` | `auth_mode = "required"`，HTTPS | 登录后携带 Bearer Token，WebSocket 使用 WSS | 独立管理员登录 |
+
+`auth_mode` 只控制客户端是否发送凭据，不改变服务器的部署版本或鉴权规则。公网版即使收到 `disabled` 客户端的请求，也会返回 `401`，不会开放匿名板卡访问。`GET /api/v1/auth/config` 在两版均可匿名读取，`enabled` 分别为 `false` 和 `true`；客户端不据此自动切换 `auth_mode`。
 
 CLI 凭据的 `board:operate` scope 仅允许 Board REST、会话文件及串口操作；不允许读取或修改个人账号、创建令牌或管理登录设备。仅有 `offline_access` 的凭据不授予板卡操作权。登录页需要用户明确确认自己发起了设备登录并核对终端验证码。
 
@@ -27,7 +38,7 @@ CLI 凭据的 `board:operate` scope 仅允许 Board REST、会话文件及串口
 客户端会先把 Base URL 规范化为以 `/` 结尾，再将 HTTP 和 OAuth 接口路径追加到该路径。本文为简洁起见把接口写成 `/api/...` 或 `/oauth/...`；这些是相对于 Base URL 的接口标识，不表示实际请求必须位于域名根目录。例如 Base URL 为 `https://board.example.com/webapp/ostoolmanagephp/` 时，创建会话的实际 URL 是 `https://board.example.com/webapp/ostoolmanagephp/api/v1/sessions`。
 
 - `auth_mode = "required"` 时，`board.server` 必须使用 HTTPS，Board REST 请求和串口 WebSocket 握手携带下文描述的 Bearer Token；OAuth Device Authorization、Token 和撤销请求不携带该 Header；
-- `auth_mode = "disabled"` 仅保留给外部旧网关兼容；当前 ostool-server 会拒绝无凭据的板卡操作。
+- `auth_mode = "disabled"` 用于本地版，HTTP 请求和 WebSocket 握手均不携带凭据；无需执行 `ostool login`。
 
 ## 网络吞吐测试 API
 
@@ -105,7 +116,7 @@ curl -fsS "$base/v1/tests/$test_id"
 
 ## 通用认证规则
 
-当 `auth_mode = "required"` 时，所有下列 board HTTP 请求和串口 WebSocket 握手均携带：
+公网版使用 `auth_mode = "required"` 时，所有下列 board HTTP 请求和串口 WebSocket 握手均携带：
 
 ```http
 Authorization: Bearer <access_token>

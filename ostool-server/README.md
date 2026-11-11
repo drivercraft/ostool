@@ -163,6 +163,14 @@ re-encryption of existing settings and MFA seeds, not an ordinary settings edit.
 Both editions require PostgreSQL. `local` uses anonymous HTTP with exclusive hardware sessions; it has no account, rental or approval workflow and does not require Redis. Set CLI `auth_mode="disabled"`.
 `public` requires login, permissions, rentals and Redis, with a loopback backend behind Caddy HTTPS. Bootstrap its first administrator through `.env`. Authentication follows the edition: local=false, public=true; a conflicting `OSTOOL_AUTH_ENABLED` is rejected.
 
+Both editions serve the same Board REST and serial WebSocket routes, request
+fields, response structures and success status codes. Local board operations and
+device management need no login. Public board requests require Bearer credentials
+and retain role, rental and session ownership checks; the management console
+requires its separate administrator login. The CLI's manual `auth_mode` selects
+whether it sends credentials; it cannot disable authentication on a public server.
+See the [deployment/API comparison](../docs/api.md#两种部署共用的契约).
+
 The frontend reads the edition at runtime, so the same binary serves either
 edition. Configuration precedence is process environment, then the selected
 `.env` file, then built-in defaults. Without `--env-file`, the server reads `.env` from its
