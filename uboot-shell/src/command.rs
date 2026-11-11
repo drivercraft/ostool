@@ -3,12 +3,13 @@
 use std::{
     future::Future,
     io::{Error, ErrorKind, Result},
+    task::Poll,
     time::{Duration, Instant},
 };
 
 use futures::{
     AsyncReadExt, AsyncWriteExt,
-    future::{Either, select},
+    future::{Either, poll_fn, select},
     pin_mut,
 };
 use futures_timer::Delay;
@@ -19,6 +20,7 @@ const ECHO_TIMEOUT: Duration = Duration::from_secs(5);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 const RECOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const IDLE_TIMEOUT: Duration = Duration::from_millis(300);
+const RECOVERY_READ_BATCH: usize = 256;
 const MAX_ATTEMPTS: usize = 3;
 const OK: &str = "cmd-ok";
 const END: &str = "cmd-end";
@@ -329,6 +331,7 @@ impl UbootShell {
     }
 
     async fn drain_recovery_input(&mut self, deadline: Instant) -> Result<()> {
+        let mut bytes_read = 0;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -338,7 +341,7 @@ impl UbootShell {
                 ));
             }
             match self.read_command_byte(IDLE_TIMEOUT.min(remaining)).await {
-                Ok(_) => {}
+                Ok(_) => yield_recovery_batch(&mut bytes_read).await,
                 Err(err) if err.kind() == ErrorKind::TimedOut && remaining >= IDLE_TIMEOUT => {
                     return Ok(());
                 }
@@ -351,12 +354,14 @@ impl UbootShell {
         let prefixed = [self.perfix.as_bytes(), INT].concat();
         let mut line = Vec::new();
         let mut overlong = false;
+        let mut bytes_read = 0;
         loop {
             let byte = self
                 .read_command_byte(
                     IDLE_TIMEOUT.min(deadline.saturating_duration_since(Instant::now())),
                 )
                 .await?;
+            yield_recovery_batch(&mut bytes_read).await;
             if byte == b'\n' {
                 if line.last() == Some(&b'\r') {
                     line.pop();
@@ -388,6 +393,27 @@ impl UbootShell {
         }
         Ok(())
     }
+}
+
+async fn yield_recovery_batch(bytes_read: &mut usize) {
+    *bytes_read += 1;
+    if *bytes_read < RECOVERY_READ_BATCH {
+        return;
+    }
+    *bytes_read = 0;
+    // Ready reads need not suspend. Return to the executor periodically without
+    // sleeping or changing either the shared deadline or the receive window.
+    let mut yielded = false;
+    poll_fn(|cx| {
+        if yielded {
+            Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    })
+    .await;
 }
 
 fn echo_mismatch(offset: usize, expected: u8, actual: u8) -> Error {
