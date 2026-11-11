@@ -443,7 +443,8 @@ ostool board config
 
 `ostool board connect -b <BOARD_TYPE>` allocates any available board of that type; pass `--board-id <BOARD_ID>` as well when you need to connect a specific board.
 
-Local and public deployments use the same Board REST, file and serial WebSocket
+The same ostool executable connects to local and public deployments; no separate
+client build or installation is needed. Both deployments use the same Board REST, file and serial WebSocket
 APIs. Set `auth_mode` manually to `"disabled"` for local CLI access and device
 management without login. Public deployments use `"required"`; after
 `ostool login`, HTTP and WebSocket requests carry credentials. The client setting

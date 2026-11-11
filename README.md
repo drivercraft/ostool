@@ -416,7 +416,8 @@ ostool board config
 
 `ostool board connect -b <BOARD_TYPE>` 会按类型分配任意空闲开发板；需要连接某一块具体开发板时，可以额外传入 `--board-id <BOARD_ID>`。
 
-本地版和公网版使用相同的板卡 REST、文件和串口 WebSocket API。手动将 `auth_mode` 设为
+ostool 使用同一份客户端程序连接本地版和公网版，无需分别编译或安装。
+两版服务器使用相同的板卡 REST、文件和串口 WebSocket API。手动将 `auth_mode` 设为
 `"disabled"` 时，本地版 ostool 和设备管理后台都免登录；公网版使用 `"required"`，执行
 `ostool login` 后，HTTP 和 WebSocket 请求携带凭据。客户端设置不会改变公网服务器的
 鉴权要求。`ostool board ls` 统一显示板型、可用数、总数和标签，不显示已移除的租期字段。
