@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useResource } from "@/api/events";
 import { api } from "@/api/client";
 import { Button } from "@/components/ui/button";
+import { usePermissions } from "@/components/permissions";
 import {
   TextField,
   TextareaField,
@@ -30,6 +31,7 @@ function sourceKey(value: Connection | null) {
   );
 }
 function Editor({ id, source }: { id: string; source: Connection | null }) {
+  const { local } = usePermissions();
   const [endpoint, setEndpoint] = useState(source?.endpoint ?? "");
   const [ca, setCa] = useState(source?.ca_pem ?? "");
   const [token, setToken] = useState("");
@@ -41,7 +43,9 @@ function Editor({ id, source }: { id: string; source: Connection | null }) {
       <Notice>
         {source?.configured
           ? "已配置独立设备凭据。留空保留现有凭据。"
-          : "设备需支持 HTTPS 和独立凭据；未配置时无法执行网络启动或升级。"}
+          : local
+            ? "本地版可通过 UDP 发现设备；也可配置 HTTPS 和独立凭据连接设备。"
+            : "设备需支持 HTTPS 和独立凭据；未配置时无法执行网络启动或升级。"}
       </Notice>
       {conflict && (
         <Notice>

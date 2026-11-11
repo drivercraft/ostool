@@ -128,10 +128,10 @@ impl ServerConfig {
             "public user API must use a loopback listener behind the HTTPS gateway"
         );
         anyhow::ensure!(
-            !self.loader_network.enabled,
-            "unsigned UDP device discovery is disabled; provision device HTTPS authentication in the administrator console"
+            !self.edition.is_public() || !self.loader_network.enabled,
+            "public edition requires provisioned HTTPS devices; UDP discovery is local-only"
         );
-        self.tftp.validate_disabled()?;
+        self.tftp.validate_for_edition(self.edition)?;
         if self
             .audit
             .retention_days
@@ -548,10 +548,10 @@ pub enum TftpConfig {
 }
 
 impl TftpConfig {
-    pub fn validate_disabled(&self) -> anyhow::Result<()> {
+    pub fn validate_for_edition(&self, edition: Edition) -> anyhow::Result<()> {
         anyhow::ensure!(
-            !self.enabled(),
-            "TFTP does not authenticate devices; use authenticated HTTP downloads or server-side serial transfer"
+            !edition.is_public() || !self.enabled(),
+            "public edition does not allow TFTP; use authenticated HTTP downloads or server-side serial transfer"
         );
         Ok(())
     }
@@ -965,6 +965,27 @@ mod tests {
         SerialPortKeyKind, ServerConfig, UbootNetworkMode, UbootProfile, UefiHttpProfile,
         ZhongshengRelayPowerManagement,
     };
+
+    #[test]
+    fn local_network_services_are_allowed_but_public_services_require_authentication() {
+        let mut config = ServerConfig::default();
+        config.network.interface = "lo".into();
+        config.tftp = super::TftpConfig::Builtin(super::BuiltinTftpConfig {
+            enabled: true,
+            ..super::BuiltinTftpConfig::default_with_root("/tmp/local-tftp".into())
+        });
+        config.loader_network.enabled = true;
+        config.validate().unwrap();
+        config.edition = super::Edition::Public;
+        config.auth.enabled = true;
+        assert!(config.validate().unwrap_err().to_string().contains("UDP"));
+        config.loader_network.enabled = false;
+        assert!(config.validate().unwrap_err().to_string().contains("TFTP"));
+        if let super::TftpConfig::Builtin(tftp) = &mut config.tftp {
+            tftp.enabled = false;
+        }
+        config.validate().unwrap();
+    }
 
     #[test]
     fn server_config_round_trip_includes_network() {

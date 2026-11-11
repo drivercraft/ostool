@@ -254,11 +254,13 @@ impl BoardServerClientError {
 }
 
 impl BoardServerClient {
+    /// Connect to a local server over anonymous HTTP. For authenticated HTTPS,
+    /// construct a BoardEndpoint and use new_with_endpoint.
     pub fn new(server: &str, port: u16) -> anyhow::Result<Self> {
         Self::new_with_endpoint(BoardEndpoint::new(
-            &format!("https://{server}"),
+            &format!("http://{server}"),
             Some(port),
-            AuthMode::Required,
+            AuthMode::Disabled,
         )?)
     }
 
@@ -832,6 +834,32 @@ pub(crate) mod tests {
         assert_eq!(summaries[0].tags, ["arm64"]);
         assert_eq!(summaries[0].total, 2);
         assert_eq!(summaries[0].available, 1);
+    }
+
+    #[tokio::test]
+    async fn host_and_port_constructor_keeps_local_http_anonymous() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_http_request_bytes(&mut socket).await;
+            let headers = String::from_utf8_lossy(&request).to_ascii_lowercase();
+            assert!(headers.starts_with("get /api/v1/board-types "));
+            assert!(!headers.contains("authorization:"));
+            write_http_response(
+                &mut socket,
+                "200 OK",
+                r#"[{"board_type":"local","tags":[],"total":1,"available":1}]"#,
+            )
+            .await;
+        });
+        let client = BoardServerClient::new("127.0.0.1", port).unwrap();
+        assert_eq!(
+            client.list_board_types().await.unwrap()[0].board_type,
+            "local"
+        );
+        assert!(client.websocket_authorization().await.unwrap().is_none());
+        server.await.unwrap();
     }
 
     #[test]

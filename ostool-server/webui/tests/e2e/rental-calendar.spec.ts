@@ -110,7 +110,8 @@ test("standalone rental calendar, live conflicts and persistent card layouts", a
     );
   expect(fields.every((field) => field.height === 42)).toBe(true);
   expect(fields[0].top).toBe(fields[1].top);
-  expect(fields[2].top).toBe(fields[3].top);
+  expect(fields[1].top).toBe(fields[2].top);
+  expect(fields[3].top).toBeGreaterThan(fields[2].top);
   await expect(page.getByRole("link", { name: "返回租赁列表" })).toHaveCount(0);
   await calendar.getByRole("button", { name: "年视图", exact: true }).click();
   await expect(

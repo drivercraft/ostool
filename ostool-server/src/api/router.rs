@@ -470,7 +470,7 @@ async fn create_board(
     if state.admin_power.is_busy(&board.power_management) {
         return Err(ApiError::conflict("power resource has a running action"));
     }
-    validate_virtual_binding(&state, &board, true).await?;
+    validate_virtual_binding(&state, &board).await?;
 
     {
         let boards = state.boards.read().await;
@@ -526,10 +526,7 @@ async fn update_board(
     {
         return Err(ApiError::conflict("power resource has a running action"));
     }
-    let changes_virtual_binding = existing_board
-        .as_ref()
-        .is_none_or(|existing| virtual_binding(existing) != virtual_binding(&board));
-    validate_virtual_binding(&state, &board, changes_virtual_binding).await?;
+    validate_virtual_binding(&state, &board).await?;
 
     {
         let boards = state.boards.read().await;
@@ -604,11 +601,7 @@ fn validate_board_config(board: &BoardConfig) -> Result<(), ApiError> {
         .map_err(|error| ApiError::bad_request(format!("{error:#}")))
 }
 
-async fn validate_virtual_binding(
-    state: &AppState,
-    board: &BoardConfig,
-    require_discovery: bool,
-) -> Result<(), ApiError> {
+async fn validate_virtual_binding(state: &AppState, board: &BoardConfig) -> Result<(), ApiError> {
     let PowerManagementConfig::Qemu { virtual_device_id } = &board.power_management else {
         return Ok(());
     };
@@ -632,40 +625,7 @@ async fn validate_virtual_binding(
             device.mac_address
         )));
     }
-    if require_discovery
-        && !state
-            .loader_registry
-            .snapshots()
-            .await
-            .iter()
-            .any(|loader| virtual_loader_is_bindable(loader, board_mac))
-    {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "virtual_device_not_discovered",
-            format!(
-                "virtual device `{virtual_device_id}` has not completed real UDP/HTTP discovery"
-            ),
-        ));
-    }
     Ok(())
-}
-
-fn virtual_loader_is_bindable(
-    loader: &crate::loader::LoaderDeviceSnapshot,
-    board_mac: MacAddress,
-) -> bool {
-    loader.mac_address == board_mac && loader.online && !loader.conflict
-}
-
-fn virtual_binding(board: &BoardConfig) -> Option<(&str, MacAddress)> {
-    let PowerManagementConfig::Qemu { virtual_device_id } = &board.power_management else {
-        return None;
-    };
-    Some((
-        virtual_device_id,
-        board.network_identity.as_ref()?.mac_address,
-    ))
 }
 
 async fn list_loader_devices(
@@ -1217,7 +1177,7 @@ async fn update_tftp_config(
         return Err(ApiError::conflict("请先释放所有会话，再修改文件存储目录"));
     }
 
-    tftp.validate_disabled()
+    tftp.validate_for_edition(state.config.read().await.edition)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     tokio::fs::create_dir_all(tftp.root_dir())
         .await
@@ -2325,12 +2285,29 @@ async fn get_session_tftp_status(
     get_session_or_404(&state, &session_id).await?;
     let status = state.tftp_manager.read().await.status().await?;
     let files = session_file_responses(&state, &session_id).await?;
+    let public = state.config.read().await.edition.is_public();
+    let network = if !public && status.enabled {
+        let board = state
+            .session_board(&session_id)
+            .await
+            .ok_or_else(|| ApiError::not_found("session board not found"))?;
+        resolved_board_network(&state, &board).await?
+    } else {
+        None
+    };
+    let server_ip = network
+        .as_ref()
+        .and_then(|network| network.server_ip.clone());
 
     Ok(axum::Json(TftpSessionResponse {
-        available: false,
+        available: !public
+            && status.enabled
+            && status.healthy
+            && status.writable
+            && server_ip.is_some(),
         provider: status.provider,
-        server_ip: None,
-        netmask: None,
+        server_ip,
+        netmask: network.and_then(|network| network.netmask),
         writable: status.writable,
         files,
     }))
@@ -2387,9 +2364,40 @@ async fn file_response(
     file: TftpFileRef,
 ) -> Result<SharedSessionFileResponse, ApiError> {
     let http_url = shared_http_url(state, &file.relative_path).await?;
+    let config = state.config.read().await.clone();
+    let tftp_url = if !config.edition.is_public() && config.tftp.enabled() {
+        let sid = file
+            .relative_path
+            .strip_prefix("ostool/sessions/")
+            .and_then(|path| path.split('/').next())
+            .ok_or_else(|| ApiError::service_unavailable("invalid stored session file path"))?;
+        let board = state
+            .session_board(sid)
+            .await
+            .ok_or_else(|| ApiError::not_found("session board not found"))?;
+        if let Some(ip) = resolved_board_network(state, &board)
+            .await?
+            .and_then(|network| network.server_ip)
+        {
+            let mut url = Url::parse(&format!("tftp://{ip}/"))
+                .map_err(|error| ApiError::internal(error.to_string()))?;
+            if let TftpConfig::Builtin(tftp) = &config.tftp
+                && tftp.bind_addr.port() != 69
+            {
+                url.set_port(Some(tftp.bind_addr.port()))
+                    .map_err(|_| ApiError::internal("invalid TFTP port"))?;
+            }
+            append_url_path(&mut url, &[], &file.relative_path)?;
+            Some(url)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     Ok(SharedSessionFileResponse::from_file(
         file,
-        None,
+        tftp_url,
         Some(http_url),
     ))
 }
@@ -2986,9 +2994,7 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode, header},
     };
-    use httpboot_protocol::{
-        DEVICE_PROTOCOL_VERSION, DEVICE_PROTOCOL_VERSION_HEADER, LoaderHardwareInfo,
-    };
+    use httpboot_protocol::{DEVICE_PROTOCOL_VERSION, DEVICE_PROTOCOL_VERSION_HEADER};
     use serde::Serialize;
     use serde_json::json;
     #[cfg(unix)]
@@ -3002,10 +3008,7 @@ mod tests {
     };
     use tower::util::ServiceExt;
 
-    use super::{
-        DTB_UPLOAD_MAX_MIB, http_boot_url, mib_to_bytes, resolve_server_network,
-        virtual_loader_is_bindable,
-    };
+    use super::{DTB_UPLOAD_MAX_MIB, http_boot_url, mib_to_bytes, resolve_server_network};
     use crate::{
         api::models::{
             AdminBoardUpsertRequest, BoardRuntimeStatusResponse, BootProfileResponse,
@@ -3815,7 +3818,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn qemu_board_binding_requires_real_loader_discovery() {
+    async fn qemu_board_binding_can_be_configured_before_device_authentication() {
         let (app, state) = test_router_and_state_with_config(|config| {
             config.virtual_qemu.enabled = true;
             config.virtual_qemu.tap_pool = vec!["test-tap".into()];
@@ -3843,77 +3846,43 @@ mod tests {
             "disabled": false
         });
 
-        let rejected = app
-            .clone()
+        assert!(state.loader_registry.snapshots().await.is_empty());
+        assert_eq!(create_board(&app, &board).await, StatusCode::CREATED);
+        assert!(
+            state
+                .board_store
+                .load_all()
+                .await
+                .unwrap()
+                .contains_key("qemu-discovery-test")
+        );
+
+        let mut mismatched = board.clone();
+        mismatched["id"] = json!("wrong-mac");
+        mismatched["network_identity"]["mac_address"] = json!("02:00:00:00:00:43");
+        assert_eq!(
+            create_board(&app, &mismatched).await,
+            StatusCode::BAD_REQUEST
+        );
+        mismatched["power_management"]["virtual_device_id"] = json!("missing");
+        assert_eq!(
+            create_board(&app, &mismatched).await,
+            StatusCode::BAD_REQUEST
+        );
+
+        let response = app
             .oneshot(
                 Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/admin/boards")
+                    .method("PUT")
+                    .uri("/api/v1/admin/boards/qemu-discovery-test")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(serde_json::to_vec(&board).unwrap()))
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(rejected.status(), StatusCode::CONFLICT);
-        let body_bytes = to_bytes(rejected.into_body(), usize::MAX).await.unwrap();
-        let error: crate::api::models::ErrorResponse = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(error.code, "virtual_device_not_discovered");
-
-        let announcement = httpboot_protocol::LoaderAnnouncement {
-            protocol_version: httpboot_protocol::DEVICE_PROTOCOL_VERSION,
-            mac_address: mac,
-            current_mac_address: mac,
-            arch: "x86_64".into(),
-            loader_version: "test-loader".into(),
-            boot_epoch: "test-epoch".into(),
-            http_port: 443,
-            serial_id: None,
-            serial_ready: false,
-        };
-        let observed = httpboot_protocol::LoaderDeviceStatus {
-            protocol_version: announcement.protocol_version,
-            mac_address: mac,
-            current_mac_address: mac,
-            arch: announcement.arch.clone(),
-            loader_version: announcement.loader_version.clone(),
-            boot_epoch: announcement.boot_epoch.clone(),
-            hardware: LoaderHardwareInfo::default(),
-            boot: None,
-            ota: None,
-            serial: None,
-        };
-        state
-            .loader_registry
-            .accept_announcement(&announcement, &observed, "10.77.0.100".into())
-            .await
-            .unwrap();
-        assert_eq!(create_board(&app, &board).await, StatusCode::CREATED);
+        assert_eq!(response.status(), StatusCode::OK);
         state.virtual_boards.shutdown().await;
-    }
-
-    #[test]
-    fn qemu_binding_accepts_only_online_non_conflicting_loader() {
-        let mac = "02:00:00:00:00:42".parse().unwrap();
-        let mut loader = crate::loader::LoaderDeviceSnapshot {
-            mac_address: mac,
-            current_mac_address: mac,
-            ip_address: "10.77.0.2".into(),
-            arch: "x86_64".into(),
-            loader_version: "test-loader".into(),
-            hardware: LoaderHardwareInfo::default(),
-            last_seen_at: chrono::Utc::now(),
-            online: true,
-            conflict: false,
-            boot_epoch: "epoch-1".into(),
-        };
-
-        assert!(virtual_loader_is_bindable(&loader, mac));
-        loader.online = false;
-        assert!(!virtual_loader_is_bindable(&loader, mac));
-        loader.online = true;
-        loader.conflict = true;
-        assert!(!virtual_loader_is_bindable(&loader, mac));
     }
 
     #[tokio::test]
@@ -5149,6 +5118,77 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn local_tftp_uploads_return_download_urls_without_exposing_them_publicly() {
+        let (app, state) = test_router_and_state_with_config(|config| {
+            if let TftpConfig::Builtin(tftp) = &mut config.tftp {
+                tftp.enabled = true;
+                tftp.bind_addr = "127.0.0.1:1069".parse().unwrap();
+            }
+        })
+        .await;
+        assert_eq!(
+            create_board(&app, sample_board("local-tftp")).await,
+            StatusCode::CREATED
+        );
+        let sid = create_session(&app, "rk3568").await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{sid}/files"))
+                    .header("x-file-path", "kernel.fit")
+                    .body(Body::from("fixture FIT"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(
+            payload["tftp_url"],
+            format!("tftp://127.0.0.1:1069/ostool/sessions/{sid}/kernel.fit")
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/sessions/{sid}/tftp"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(payload["server_ip"], "127.0.0.1");
+        let manager = state.tftp_manager.read().await.clone();
+        let file = manager
+            .get_session_file(&sid, "kernel.fit")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            tokio::fs::read(&file.disk_path).await.unwrap(),
+            b"fixture FIT"
+        );
+        // Even a changed in-memory edition must never disclose TFTP URLs publicly.
+        state.config.write().await.edition = crate::config::Edition::Public;
+        assert!(
+            super::file_response(&state, file)
+                .await
+                .unwrap()
+                .tftp_url
+                .is_none()
+        );
+        state.shutdown_sessions().await.unwrap();
     }
 
     #[tokio::test]

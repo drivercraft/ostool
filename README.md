@@ -342,7 +342,7 @@ board_ip = "192.168.1.100"
 
 `BootPayloadConfig` 的 `cmdline` 与 `initramfs` 相互独立且都可省略；它们是 QEMU、board 与 U-Boot 的顶层运行配置，不属于构建配置。`initramfs` 是宿主归档，与 Linux guest 的 initrd 分开配置。QEMU 直启仅在 AArch64/RISC-V 路径使用 `-initrd` 和 `-append`；x86 使用 UEFI ESP 中的 `EFI/BOOT/initramfs.cpio`、`cmdline.txt`，不向裸 ELF 传 Linux x86 启动协议参数。U-Boot 的 `generate_fit_image()` 将归档作为 FIT ramdisk，并在启动前设置 `bootargs`；生成 FIT 前会清除输入 DTB 中遗留的 `linux,initrd-start/end` 及与其完全对应的内存预留；若 FIT 包含 ramdisk，U-Boot 会写入本次启动的实际范围。串口命令路径暂不接受含单引号的 `cmdline`。board HTTP Boot 将归档和内核上传到同一 session，服务端记录归档大小与 SHA-256。设备控制协议只支持 v7：设备先由 `/api/v1/status` 上报 `protocol_version: 7`，所有 boot、serial、OTA mutation 以及 CLI 向 server 的 files/kernel 上传都携带 `X-Axloader-Protocol-Version: 7`；缺失或错误版本在任何写入、串口接管或 body 解析前返回固定 `unsupported_protocol`。服务端只负责传输、长度/摘要、会话、代次和绑定；ELF 的 machine、格式、装载范围及本地 EFI 入口由 axloader 根据目标机自身规则检查。cmdline 通过 EFI LoadOptions、initramfs 通过 TGOS `BootPayload` 交接。归档上限为 256 MiB，cmdline 上限为 4095 字节且仅允许可打印 ASCII 和空格。实体板卡的固件和内核须实现对应交接协议。
 
-设备连接仍要求预先配置的 HTTPS 来源、独立凭据和受信任证书；未认证 UDP 不注册设备，管理 API/SSE 不回传设备原始内部错误。
+公网设备连接要求预先配置的 HTTPS 来源、独立凭据和受信任证书；本地版可显式启用 v7 UDP 发现。管理 API/SSE 不回传设备原始内部错误。
 
 HTTP Boot 不持久保存 `boot_arch`，也不会自动迁移旧配置；`httpboot` 是唯一现行 wire/config kind。CLI 直接上传实际文件字节，不发送架构、镜像格式或入口 Header，也不会因 `Architecture::Unknown`、未列举的 `e_machine` 或 ELF32 在主机侧提前拒绝。axloader 上报的 `arch` 是开放的非空显示字符串并原样展示；设备身份与关联仍由 MAC、`boot_epoch`、串口 serial ID 和 binding 核对。真实镜像不兼容时由设备以开放 `{code,message}` 错误明确拒绝，主机保留并展示首个终态错误。
 
@@ -470,7 +470,7 @@ ostool logout --server https://203.0.113.10:8443
 
 OAuth 登录会自动刷新短期 access token；PAT 直接用于 Bearer 认证，不会刷新。凭据优先保存到系统 credential store；不可用时会警告并退回用户级凭据文件。自动化场景可设置 `OSTOOL_BOARD_ACCESS_TOKEN`，该 token 不保存也不刷新。
 
-网站 `/devices` 无需登录即可用卡片浏览全部设备，禁用设备显示不可用。公网版普通用户只有在正式租赁的有效时段内才能通过 `ostool` 使用对应开发板；申请需经管理员审批，租赁取消或到期会释放会话。HTTP 和串口 WebSocket 使用同一 Bearer 身份与租赁归属校验。设备回调要求 HTTPS 和独立凭据，无认证 TFTP/UDP 入口已关闭；见 [API 与鉴权边界](docs/api.md)。
+网站 `/devices` 无需登录即可用卡片浏览全部设备，禁用设备显示不可用。公网版普通用户只有在正式租赁的有效时段内才能通过 `ostool` 使用对应开发板；申请需经管理员审批，租赁取消或到期会释放会话。HTTP 和串口 WebSocket 使用同一 Bearer 身份与租赁归属校验。公网设备回调要求 HTTPS 和独立凭据，公网 TFTP/UDP 入口保持关闭；见 [API 与鉴权边界](docs/api.md)。
 
 CLI 的系统密钥环操作在阻塞线程中执行，避免与异步运行时冲突；环境变量令牌被拒绝不会删除独立保存的登录。
 
@@ -780,7 +780,7 @@ cargo test
 本地版使用 HTTP、免登录且无需用户租赁授权，CLI 配置 `auth_mode = "disabled"`；公网版要求登录并使用 HTTPS。新 CLI 配置默认采用公网安全设置。
 管理员在开发板编辑页的“设备认证”中设置固定 HTTPS 来源、独立 Bearer 凭据和可选私有 CA。
 凭据加密保存在 PostgreSQL，接口只返回已配置状态。设备端尚未支持 HTTPS/凭据校验时，
-网络启动和 OTA 保持拒绝；没有 HTTP 回退。无认证 TFTP 和 UDP 发现不再启用，U-Boot 使用服务端串口传输。
+公网网络启动和 OTA 保持拒绝，不降级 HTTP。本地版可通过 `OSTOOL_LOADER_NETWORK_ENABLED=true` 启用 v7 UDP/HTTP 发现，并通过 `OSTOOL_TFTP_ENABLED=true` 启用只读 TFTP；U-Boot 支持本地网络加载和服务端串口传输。
 公网前台成员可在角色授权范围内即时领取和归还设备，或提交待审批的预约申请。
 内核和共享文件同样受上传并发、超时、容量、凭据撤销与租赁检查；设备下载使用短时、单文件的 HTTPS 凭据，
 不接收用户登录 token。数据库备份包含会话文件；上传暂存和串口缓存可重建，实时硬件连接不在重启后恢复。

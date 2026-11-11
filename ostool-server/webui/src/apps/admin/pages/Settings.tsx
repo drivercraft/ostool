@@ -70,7 +70,7 @@ function TftpForm({
   source: TftpConfig;
   status?: TftpStatus;
 }) {
-  const { can } = usePermissions();
+  const { can, local } = usePermissions();
   const formId = useId();
   const [config, setConfig] = useState(source),
     [baseline, setBaseline] = useState(JSON.stringify(source));
@@ -205,6 +205,12 @@ function TftpForm({
             />
             <CheckField
               label="启用 TFTP"
+              disabled={!local}
+              hint={
+                local
+                  ? "允许设备下载会话文件；网络写入仍被拒绝。"
+                  : "公网版使用认证 HTTPS 或服务端串口传输，不开放 TFTP。"
+              }
               checked={config.enabled}
               onChange={(v) => patch("enabled", v)}
             />

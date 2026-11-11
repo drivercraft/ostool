@@ -570,18 +570,18 @@ stored in PostgreSQL. Capabilities expire after 60 seconds and cannot cross file
 Network loaders require a board-specific HTTPS origin and Bearer credential configured
 in the administrator board editor. A private CA certificate may be supplied. Credentials
 use the deployment root encryption key and never appear in API/SSE responses or CLI data.
-The controller polls only these provisioned HTTPS origins; UDP advertisements never choose
+In public deployments the controller polls only these provisioned HTTPS origins; UDP advertisements never choose
 callback addresses. Certificate validation, proxy bypass, redirect rejection, body limits
 and bounded device concurrency apply. Firmware without HTTPS and credential validation
 is rejected; it must be upgraded before HTTP Boot or OTA can work.
-Unsigned UDP discovery and legacy poll/status/OTA callbacks are disabled.
+Public deployments disable unsigned UDP discovery; legacy poll/status/OTA callbacks stay disabled in both editions. Local deployments can explicitly enable v7 UDP/HTTP discovery with `OSTOOL_LOADER_NETWORK_ENABLED=true` (UDP port 2998).
 The optional throughput listener also requires user authentication and must bind loopback
 behind an HTTPS gateway; its measurement payload remains raw HTTP bytes after TLS termination.
 
 New clients use `server_side_operations` in the boot profile to select server-side
 U-Boot orchestration. They request preparation, open the authenticated serial
 WebSocket, receive RAM load addresses, generate/upload a FIT image and request boot.
-The server performs serial transfer; unauthenticated TFTP cannot be enabled.
+Public deployments perform serial transfer and cannot enable TFTP. Local deployments also support read-only TFTP for network loading.
 Shared-file shell templates are registered as opaque command IDs and expanded on
 the server when sent over the existing serial connection. Public boot/serial/TFTP
 responses omit device-network addresses, UART paths and binding IDs; public power
@@ -591,10 +591,12 @@ still use the existing client orchestration when connected to a server that does
 not advertise this capability. The protocol extension is required to move the
 original U-Boot orchestration off the client, rather than to implement login.
 
-Server deployments reject enabled TFTP configuration. The migration disables previously
-stored TFTP settings; old processes/services must be stopped through the normal deployment workflow.
-Device files are served by authenticated HTTPS capabilities, and U-Boot uses YMODEM over
-the server-owned UART. The standalone TFTP utility is separate from ostool-server deployment.
+Public deployments reject enabled TFTP configuration. Local deployments may set
+`OSTOOL_TFTP_ENABLED=true` or enable TFTP in system settings; UDP write requests remain
+rejected. The earlier device-authentication migration disabled stored TFTP settings,
+so an existing local deployment must explicitly re-enable them through system settings.
+Public device files use authenticated HTTPS capabilities and U-Boot uses YMODEM over
+the server-owned UART. Local U-Boot retains network and serial loading.
 
 Uploads stream into private temporary files and commit atomically after checking
 the current credential, rental and session. The authoritative commit writes PostgreSQL metadata and 256 KiB content chunks in one transaction; disk copies are disposable UART caches. Release cancels in-flight uploads and

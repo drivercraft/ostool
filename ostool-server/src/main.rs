@@ -121,6 +121,7 @@ async fn main() -> anyhow::Result<()> {
             "failed to power off board `{board_id}` during server startup; marking it disabled for this process: {err}"
         );
     }
+    let discovery_task = ostool_server::loader::start_udp_discovery(state.clone()).await?;
     let device_task = ostool_server::device::start_authenticated_devices(state.clone());
     tftp_manager.start_if_needed().await?;
     if let ostool_server::TftpConfig::SystemTftpdHpa(cfg) = &state.config.read().await.tftp
@@ -218,6 +219,10 @@ async fn main() -> anyhow::Result<()> {
     }
     device_task.abort();
     let _ = device_task.await;
+    if let Some(task) = discovery_task {
+        task.abort();
+        let _ = task.await;
+    }
     state.virtual_boards.shutdown().await;
     serve_result
 }

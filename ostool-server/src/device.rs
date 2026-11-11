@@ -25,12 +25,28 @@ pub async fn reconcile(
     announcement: LoaderAnnouncement,
     peer: SocketAddr,
 ) -> anyhow::Result<()> {
-    let board_id = {
-        let boards = state.boards.read().await;
-        board_id_for_mac(&boards, announcement.mac_address)
-            .context("device is not bound to a board")?
+    let public = state.config.read().await.edition.is_public();
+    let connection = if public {
+        let board_id = {
+            let boards = state.boards.read().await;
+            board_id_for_mac(&boards, announcement.mac_address)
+                .context("device is not bound to a board")?
+        };
+        crate::device_security::connection(&state, &board_id).await?
+    } else {
+        crate::device_security::DeviceConnection {
+            endpoint: format!(
+                "http://{}",
+                SocketAddr::new(peer.ip(), announcement.http_port)
+            ),
+            client: Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(Duration::from_secs(3))
+                .timeout(Duration::from_secs(300))
+                .build()?,
+        }
     };
-    let connection = crate::device_security::connection(&state, &board_id).await?;
     reconcile_connected(state, announcement, peer, connection).await
 }
 /// Poll a provisioned TLS endpoint; unsigned UDP announcements are not needed.

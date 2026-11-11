@@ -1,15 +1,86 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
 use httpboot_protocol::{
     DeviceOperationError, LoaderAnnouncement, LoaderDeviceStatus, LoaderHardwareInfo, MacAddress,
     validate_device_protocol_version,
 };
 use serde::Serialize;
-use tokio::sync::{Mutex, Notify};
+use tokio::{
+    net::UdpSocket,
+    sync::{Mutex, Notify},
+    task::{JoinHandle, JoinSet},
+};
 
 const ONLINE_TTL: Duration = Duration::seconds(10);
 const RECORD_RETENTION: Duration = Duration::hours(24);
+const MAX_ANNOUNCEMENT_BYTES: usize = 1400;
+
+pub async fn start_udp_discovery(state: crate::AppState) -> anyhow::Result<Option<JoinHandle<()>>> {
+    let config = state.config.read().await.clone();
+    if !config.loader_network.enabled {
+        return Ok(None);
+    }
+    anyhow::ensure!(!config.edition.is_public(), "UDP discovery is local-only");
+    let socket = UdpSocket::bind(config.loader_network.bind_addr)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to bind loader discovery UDP {}",
+                config.loader_network.bind_addr
+            )
+        })?;
+    Ok(Some(tokio::spawn(async move {
+        if let Err(error) = serve_udp_announcements(state, socket).await {
+            log::error!("loader discovery stopped: {error:#}");
+        }
+    })))
+}
+
+async fn serve_udp_announcements(state: crate::AppState, socket: UdpSocket) -> anyhow::Result<()> {
+    let mut buffer = [0; MAX_ANNOUNCEMENT_BYTES + 1];
+    let mut tasks = JoinSet::new();
+    let mut running = BTreeMap::<MacAddress, (String, tokio::task::AbortHandle)>::new();
+    loop {
+        let (length, peer) = socket.recv_from(&mut buffer).await?;
+        while tasks.try_join_next().is_some() {}
+        running.retain(|_, (_, task)| !task.is_finished());
+        if length > MAX_ANNOUNCEMENT_BYTES {
+            continue;
+        }
+        let Ok(announcement) = serde_json::from_slice::<LoaderAnnouncement>(&buffer[..length])
+        else {
+            continue;
+        };
+        if validate_device_protocol_version(announcement.protocol_version).is_err()
+            || announcement.http_port == 0
+        {
+            continue;
+        }
+        state
+            .loader_registry
+            .touch_announcement(&announcement, &peer.ip().to_string())
+            .await;
+        let mac = announcement.mac_address;
+        if let Some((epoch, task)) = running.get(&mac) {
+            if *epoch == announcement.boot_epoch {
+                continue;
+            }
+            task.abort();
+        } else if running.len() >= 16 {
+            continue;
+        }
+        let epoch = announcement.boot_epoch.clone();
+        let device_state = state.clone();
+        let task = tasks.spawn(async move {
+            if let Err(error) = crate::device::reconcile(device_state, announcement, peer).await {
+                log::warn!("device {mac} at {peer}: {error:#}");
+            }
+        });
+        running.insert(mac, (epoch, task));
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LoaderDeviceSnapshot {
@@ -270,6 +341,72 @@ mod tests {
             ota: None,
             serial: None,
         }
+    }
+
+    #[tokio::test]
+    async fn local_udp_discovers_unbound_v7_devices_and_public_refuses_the_listener() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = crate::ServerConfig {
+            data_dir: root.path().join("data"),
+            ..Default::default()
+        };
+        config.tftp = crate::TftpConfig::Builtin(crate::BuiltinTftpConfig::default_with_root(
+            root.path().join("tftp"),
+        ));
+        let manager = crate::tftp::service::build_tftp_manager(&config.tftp);
+        let state = crate::test_support::build_test_app_state(
+            root.path().join("test.env"),
+            config,
+            manager,
+        )
+        .await
+        .unwrap();
+        let mac = "02:00:00:00:00:42".parse().unwrap();
+        let observed = status(mac, "udp-epoch", "future-isa");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let app = axum::Router::new().route(
+            "/api/v1/status",
+            axum::routing::get(move || {
+                let observed = observed.clone();
+                async move { axum::Json(observed) }
+            }),
+        );
+        let device = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let address = socket.local_addr().unwrap();
+        let discovery = tokio::spawn(serve_udp_announcements(state.clone(), socket));
+        let sender = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let mut announcement = announcement(mac, "udp-epoch", "future-isa");
+        announcement.http_port = port;
+        sender
+            .send_to(&serde_json::to_vec(&announcement).unwrap(), address)
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Some(device) = state.loader_registry.snapshots().await.first() {
+                    assert_eq!(device.mac_address, mac);
+                    assert_eq!(device.arch, "future-isa");
+                    assert!(device.online);
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(state.boards.read().await.is_empty());
+        {
+            let mut config = state.config.write().await;
+            config.edition = crate::config::Edition::Public;
+            config.loader_network.enabled = true;
+        }
+        assert!(start_udp_discovery(state).await.is_err());
+        discovery.abort();
+        device.abort();
     }
 
     #[tokio::test]
