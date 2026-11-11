@@ -3,12 +3,13 @@
 use std::{
     future::Future,
     io::{Error, ErrorKind, Result},
+    task::Poll,
     time::{Duration, Instant},
 };
 
 use futures::{
     AsyncReadExt, AsyncWriteExt,
-    future::{Either, select},
+    future::{Either, poll_fn, select},
     pin_mut,
 };
 use futures_timer::Delay;
@@ -19,6 +20,7 @@ const ECHO_TIMEOUT: Duration = Duration::from_secs(5);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 const RECOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const IDLE_TIMEOUT: Duration = Duration::from_millis(300);
+const RECOVERY_READ_BATCH: usize = 256;
 const MAX_ATTEMPTS: usize = 3;
 const OK: &str = "cmd-ok";
 const END: &str = "cmd-end";
@@ -299,29 +301,28 @@ impl UbootShell {
             deadline.saturating_duration_since(Instant::now()),
             "command recovery",
             async {
-                // Drain before Ctrl-C, never accept a queued old marker/prompt as
-                // evidence for the new interrupt. The outer budget covers all steps.
+                let mut repeated_interrupt = false;
                 loop {
-                    let remaining = deadline.saturating_duration_since(Instant::now());
-                    if remaining.is_zero() {
-                        return Err(Error::new(
-                            ErrorKind::TimedOut,
-                            "U-Boot command recovery timed out while draining",
-                        ));
-                    }
-                    match self.read_command_byte(IDLE_TIMEOUT.min(remaining)).await {
-                        Ok(_) => {}
-                        Err(err)
-                            if err.kind() == ErrorKind::TimedOut && remaining >= IDLE_TIMEOUT =>
-                        {
-                            break;
+                    // Never accept a queued old marker/prompt as evidence for
+                    // the new interrupt. All rounds share the outer budget.
+                    self.drain_recovery_input(deadline).await?;
+                    self.tx().write_all(&[CTRL_C]).await?;
+                    self.tx().flush().await?;
+                    match self.read_interrupt_handshake(deadline).await {
+                        Ok(()) => {
+                            if repeated_interrupt {
+                                // Repeated interrupts may leave extra responses
+                                // queued behind the handshake.
+                                self.drain_recovery_input(deadline).await?;
+                            }
+                            return Ok(());
+                        }
+                        Err(err) if err.kind() == ErrorKind::TimedOut => {
+                            repeated_interrupt = true;
                         }
                         Err(err) => return Err(err),
                     }
                 }
-                self.tx().write_all(&[CTRL_C]).await?;
-                self.tx().flush().await?;
-                self.read_interrupt_handshake(deadline).await
             },
         )
         .await?;
@@ -329,14 +330,38 @@ impl UbootShell {
         Ok(())
     }
 
+    async fn drain_recovery_input(&mut self, deadline: Instant) -> Result<()> {
+        let mut bytes_read = 0;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(Error::new(
+                    ErrorKind::TimedOut,
+                    "U-Boot command recovery timed out while draining",
+                ));
+            }
+            match self.read_command_byte(IDLE_TIMEOUT.min(remaining)).await {
+                Ok(_) => yield_recovery_batch(&mut bytes_read).await,
+                Err(err) if err.kind() == ErrorKind::TimedOut && remaining >= IDLE_TIMEOUT => {
+                    return Ok(());
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
     async fn read_interrupt_handshake(&mut self, deadline: Instant) -> Result<()> {
         let prefixed = [self.perfix.as_bytes(), INT].concat();
         let mut line = Vec::new();
         let mut overlong = false;
+        let mut bytes_read = 0;
         loop {
             let byte = self
-                .read_command_byte(deadline.saturating_duration_since(Instant::now()))
+                .read_command_byte(
+                    IDLE_TIMEOUT.min(deadline.saturating_duration_since(Instant::now())),
+                )
                 .await?;
+            yield_recovery_batch(&mut bytes_read).await;
             if byte == b'\n' {
                 if line.last() == Some(&b'\r') {
                     line.pop();
@@ -354,7 +379,9 @@ impl UbootShell {
         }
         for expected in self.perfix.clone().bytes() {
             if self
-                .read_command_byte(deadline.saturating_duration_since(Instant::now()))
+                .read_command_byte(
+                    IDLE_TIMEOUT.min(deadline.saturating_duration_since(Instant::now())),
+                )
                 .await?
                 != expected
             {
@@ -366,6 +393,27 @@ impl UbootShell {
         }
         Ok(())
     }
+}
+
+async fn yield_recovery_batch(bytes_read: &mut usize) {
+    *bytes_read += 1;
+    if *bytes_read < RECOVERY_READ_BATCH {
+        return;
+    }
+    *bytes_read = 0;
+    // Ready reads need not suspend. Return to the executor periodically without
+    // sleeping or changing either the shared deadline or the receive window.
+    let mut yielded = false;
+    poll_fn(|cx| {
+        if yielded {
+            Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    })
+    .await;
 }
 
 fn echo_mismatch(offset: usize, expected: u8, actual: u8) -> Error {

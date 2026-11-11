@@ -32,15 +32,13 @@ unaccounted partial line for a later command. A disconnect, unexpected line
 ending or other evidence that execution may already have started is not a
 recoverable echo failure.
 
-Recovery has one five-second deadline covering input draining, Ctrl-C write,
-flush and receive. It first drains queued input until idle, then sends Ctrl-C.
-It must observe a complete `<INTERRUPT>` line, optionally prefixed by the
-detected prompt, followed by that prompt at the start of the next console line.
-A bare prompt, a prompt embedded in output, or an interrupt marker consumed
-before the new Ctrl-C cannot complete recovery. Consoles without this supported
-interrupt response fail recovery rather than falling back to a weaker test.
-This establishes the supported handshake, not immunity to arbitrary delayed or
-corrupted control traffic.
+Recovery shares one five-second deadline across draining, Ctrl-C writes and
+strict interrupt/prompt verification. An idle, incomplete interrupt response
+allows another Ctrl-C within that same budget, not another command submission.
+Repeated interrupts also require a final idle drain before commands resume.
+The [recovery contract](../design/uboot-command-recovery.md) defines these
+boundaries. Unsupported consoles and persistent corruption still fail; this
+does not repair the physical link or guarantee immunity to arbitrary delays.
 
 ### 1.2 Execution boundary and cancellation
 
