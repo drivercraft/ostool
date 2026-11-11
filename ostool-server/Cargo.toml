@@ -10,7 +10,7 @@ name = "ostool-server"
 default-run = "ostool-server"
 readme = "README.md"
 repository = "https://github.com/drivercraft/ostool"
-version = "0.10.0"
+version = "0.10.1"
 
 exclude = ["webui/node_modules/*", "webui/dist/*", "webui/test-results/*", "webui/playwright-report/*"]
 

@@ -29,6 +29,12 @@ enum Gate {
     Reply,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecoveryNoise {
+    Drain,
+    Interrupt,
+}
+
 #[derive(Default)]
 struct EchoConsole {
     reply: VecDeque<(u8, bool)>,
@@ -46,6 +52,11 @@ struct EchoConsole {
     echo_prefix: Option<&'static [u8]>,
     repeat_prefix: bool,
     interrupt_reply: Option<&'static [u8]>,
+    interrupt_replies: VecDeque<&'static [u8]>,
+    interrupt_byte_interval: Option<Duration>,
+    interrupt_byte_delay: Option<futures_timer::Delay>,
+    continuous_noise: Option<RecoveryNoise>,
+    noise_started: Option<tokio::sync::oneshot::Sender<()>>,
     eof_after_interrupt: bool,
     block: Option<Gate>,
     blocked: bool,
@@ -74,7 +85,9 @@ impl EchoConsole {
                 self.line.clear();
                 self.aborted_lines += 1;
                 self.reply.extend(
-                    self.interrupt_reply
+                    self.interrupt_replies
+                        .pop_front()
+                        .or(self.interrupt_reply)
                         .unwrap_or(b"<INTERRUPT>\r\n=> ")
                         .iter()
                         .map(|&byte| (byte, false)),
@@ -245,11 +258,35 @@ impl AsyncRead for EchoRx {
             return Poll::Ready(Err(Error::new(ErrorKind::TimedOut, "injected echo loss")));
         }
         if console.reply.is_empty() {
+            if console.continuous_noise.is_some_and(|noise| match noise {
+                // Start only after a body byte was written: cmd also drains
+                // before sending, which is outside command recovery.
+                RecoveryNoise::Drain => !console.line.is_empty(),
+                RecoveryNoise::Interrupt => console.aborted_lines > 0,
+            }) {
+                if let Some(started) = console.noise_started.take() {
+                    started.send(()).unwrap();
+                }
+                bytes[0] = 0x83;
+                return Poll::Ready(Ok(1));
+            }
             if console.eof_after_interrupt && console.aborted_lines > 0 {
                 return Poll::Ready(Ok(0));
             }
             console.reader = Some(cx.waker().clone());
             return Poll::Pending;
+        }
+        if console.last_write == Some(CTRL_C)
+            && console.aborted_lines > 0
+            && let Some(interval) = console.interrupt_byte_interval
+        {
+            let delay = console
+                .interrupt_byte_delay
+                .get_or_insert_with(|| futures_timer::Delay::new(interval));
+            if Pin::new(delay).poll(cx).is_pending() {
+                return Poll::Pending;
+            }
+            console.interrupt_byte_delay = None;
         }
         let size = bytes.len().min(console.reply.len());
         for output in &mut bytes[..size] {
@@ -378,6 +415,55 @@ async fn recovery_requires_a_fresh_complete_interrupt_handshake() {
         );
         assert_eq!(console.lock().unwrap().aborted_lines, 1);
     }
+
+    for first_response in [&b"\x83"[..], &b""[..]] {
+        let console = Arc::new(Mutex::new(EchoConsole::default()));
+        let mut shell = echo_shell(&console).await;
+        {
+            let mut fixture = console.lock().unwrap();
+            fixture.wrong_echo = true;
+            // Leave stale input in the SAME RX queue after the fresh handshake.
+            // Without the final drain it will corrupt the next body's echo.
+            fixture.interrupt_replies = [
+                first_response,
+                b"<INTERRUPT>\r\n=> \x83\r\n=> <INTERRUPT>\r\n=> ",
+            ]
+            .into();
+        }
+        let result = shell.cmd("echo fresh").await;
+        assert_eq!(
+            result.unwrap_or_else(|err| panic!("{first_response:?}: {err}")),
+            "device-result"
+        );
+        let fixture = console.lock().unwrap();
+        assert_eq!(
+            fixture.aborted_lines, 2,
+            "did not synchronize exactly twice"
+        );
+        assert_eq!(
+            fixture.executed,
+            [b"echo fresh&& echo cmd-ok; echo cmd-end".to_vec()],
+            "command was replayed or corrupted"
+        );
+        assert_eq!(fixture.dropped, 0);
+    }
+
+    // The complete response takes longer than one idle window, but each byte
+    // arrives before idle. A whole-handshake 300ms limit would reject it.
+    let console = Arc::new(Mutex::new(EchoConsole::default()));
+    let mut shell = echo_shell(&console).await;
+    {
+        let mut fixture = console.lock().unwrap();
+        fixture.wrong_echo = true;
+        fixture.interrupt_byte_interval = Some(Duration::from_millis(40));
+    }
+    assert_eq!(shell.cmd("echo slow").await.unwrap(), "device-result");
+    let fixture = console.lock().unwrap();
+    assert_eq!(fixture.aborted_lines, 1);
+    assert_eq!(
+        fixture.executed,
+        [b"echo slow&& echo cmd-ok; echo cmd-end".to_vec()]
+    );
 }
 
 #[tokio::test]
@@ -525,7 +611,7 @@ async fn cancellation_owns_body_recovery_and_submission_across_calls() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn echo_and_recovery_deadlines_cover_pending_io() {
     // A genuinely missing echo spends the real five-second character budget,
     // recovers and resends the entire line once. No test clock or short limit.
@@ -573,6 +659,73 @@ async fn echo_and_recovery_deadlines_cover_pending_io() {
     console.lock().unwrap().block = None;
     assert_eq!(shell.cmd("echo recovered").await.unwrap(), "device-result");
     assert_eq!(console.lock().unwrap().aborted_lines, 2);
+
+    // Repeated idle timeouts cannot restart the total budget; an always-ready
+    // noisy stream must not starve it OR other tasks on this single thread.
+    let mut scheduling = Vec::new();
+    for noise in [
+        None,
+        Some(RecoveryNoise::Interrupt),
+        Some(RecoveryNoise::Drain),
+    ] {
+        let console = Arc::new(Mutex::new(EchoConsole::default()));
+        let mut shell = echo_shell(&console).await;
+        let sibling = noise.map(|_| {
+            let (started, observed) = tokio::sync::oneshot::channel();
+            console.lock().unwrap().noise_started = Some(started);
+            tokio::spawn(async move {
+                // Progress before the first continuously-ready read is not
+                // evidence that the receive loop cooperates.
+                observed.await.expect("continuous noise was never read");
+            })
+        });
+        {
+            let mut fixture = console.lock().unwrap();
+            fixture.wrong_echo = true;
+            fixture.interrupt_reply = Some(b"\x83");
+            fixture.continuous_noise = noise;
+        }
+        let started = Instant::now();
+        let error = tokio::time::timeout(Duration::from_secs(7), shell.cmd("echo noise"))
+            .await
+            .expect("interrupt receive exceeded the shared recovery budget")
+            .unwrap_err();
+        if let Some(sibling) = sibling {
+            // No await between recovery returning and this snapshot: a sibling
+            // first scheduled AFTER the deadline cannot make the test pass.
+            scheduling.push((noise.unwrap(), sibling.is_finished()));
+            console.lock().unwrap().noise_started.take();
+            sibling.await.unwrap();
+        }
+        assert_eq!(error.kind(), ErrorKind::TimedOut);
+        assert!(started.elapsed() >= Duration::from_secs(5));
+        assert!(started.elapsed() < Duration::from_secs(7));
+        {
+            let mut fixture = console.lock().unwrap();
+            assert!(fixture.executed.is_empty());
+            if noise.is_none() {
+                assert!(fixture.aborted_lines > 1);
+            } else {
+                assert_eq!(
+                    fixture.aborted_lines,
+                    usize::from(noise == Some(RecoveryNoise::Interrupt)),
+                    "noise must exercise the intended recovery loop"
+                );
+            }
+            fixture.interrupt_reply = None;
+            fixture.continuous_noise = None;
+        }
+        assert_eq!(shell.cmd("echo recovered").await.unwrap(), "device-result");
+        assert_eq!(
+            console.lock().unwrap().executed,
+            [b"echo recovered&& echo cmd-ok; echo cmd-end".to_vec()],
+            "the timed-out command must not be submitted or replayed"
+        );
+    }
+    assert!(
+        scheduling.iter().all(|(_, progressed)| *progressed),
+        "continuous RX noise starved sibling progress during recovery: {scheduling:?}"
+    );
 }
 
 #[tokio::test]
