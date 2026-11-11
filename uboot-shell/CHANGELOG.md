@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.11](https://github.com/drivercraft/ostool/compare/uboot-shell-v0.2.10...uboot-shell-v0.2.11) - 2026-11-11
+
+### Fixed
+
+- *(uboot-shell)* retry lost interrupt recovery handshakes ([#221](https://github.com/drivercraft/ostool/pull/221))
+
 ## [0.2.10](https://github.com/drivercraft/ostool/compare/uboot-shell-v0.2.9...uboot-shell-v0.2.10) - 2026-11-10
 
 ### Fixed
