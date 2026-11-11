@@ -449,6 +449,16 @@ function Editor({ source, group }: { source: SiteView; group: string }) {
                     hint={field.hint}
                     placeholder={field.placeholder}
                     type={field.type}
+                    fullWidth={
+                      field.type === "url" ||
+                      [
+                        "address",
+                        "operator",
+                        "copyright",
+                        "logo_url",
+                        "favicon_url",
+                      ].includes(field.key)
+                    }
                     maxLength={field.maxLength}
                     value={String(current[field.key] ?? "")}
                     onValue={(value) => changed(field.key, value)}

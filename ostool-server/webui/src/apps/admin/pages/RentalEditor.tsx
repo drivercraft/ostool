@@ -231,6 +231,7 @@ function RentalForm({
           )}
           <TextField
             label="备注"
+            fullWidth
             value={draft.notes}
             onValue={(notes) => patch({ notes })}
           />

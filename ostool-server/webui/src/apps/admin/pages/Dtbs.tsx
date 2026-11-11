@@ -62,7 +62,7 @@ export function DtbUpload({
           </DialogHeader>
           <DialogBody>
             <DialogDescription>单个文件最大 10 MiB。</DialogDescription>
-            <FieldGroup>
+            <FieldGroup className="form-fields">
               <TextField
                 label="文件"
                 type="file"
@@ -199,7 +199,7 @@ function EditDtb({ dtb, close }: { dtb: DtbFileResponse; close: () => void }) {
           <DialogDescription>
             可重命名或替换文件，单个文件最大 10 MiB。
           </DialogDescription>
-          <FieldGroup>
+          <FieldGroup className="form-fields">
             <TextField label="文件名" value={name} onValue={setName} />
             <TextField
               label="替换文件"

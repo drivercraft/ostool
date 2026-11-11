@@ -61,12 +61,14 @@ function Editor({ id, source }: { id: string; source: Connection | null }) {
       )}
       <TextField
         label="设备 HTTPS 地址"
+        fullWidth
         value={endpoint}
         onValue={setEndpoint}
         hint="例如 https://loader.example.com:9443，只填写来源地址。"
       />
       <TextField
         label="设备独立凭据"
+        fullWidth
         value={token}
         type="password"
         onValue={setToken}

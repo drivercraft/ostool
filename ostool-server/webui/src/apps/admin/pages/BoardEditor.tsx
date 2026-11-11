@@ -185,6 +185,7 @@ function Editor({ board }: { board?: BoardConfig }) {
     <TextField
       key={key}
       label={label}
+      fullWidth={key === "power_on_cmd" || key === "power_off_cmd"}
       value={String(form[key])}
       onValue={(v) => setForm((f) => ({ ...f, [key]: v }))}
       hint={hint}
@@ -307,6 +308,7 @@ function Editor({ board }: { board?: BoardConfig }) {
           />
           <TextareaField
             label="标签"
+            fullWidth={false}
             value={form.tags_text}
             onValue={(v) => set("tags_text", v)}
             hint="用逗号或换行分隔"
@@ -578,6 +580,7 @@ function Editor({ board }: { board?: BoardConfig }) {
         <Section title="设备恢复">
           <TextField
             label="释放后恢复命令"
+            fullWidth
             value={form.reset_command}
             onValue={(v) => setForm((f) => ({ ...f, reset_command: v }))}
             hint=""
@@ -708,7 +711,10 @@ function Editor({ board }: { board?: BoardConfig }) {
         </Section>
       </form>
       {board?.network_identity && board.boot.kind === "httpboot" && (
-        <><DeviceConnection boardId={board.id} /><BoardOta boardId={board.id} /></>
+        <>
+          <DeviceConnection boardId={board.id} />
+          <BoardOta boardId={board.id} />
+        </>
       )}
     </PagePanel>
   );

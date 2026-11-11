@@ -800,6 +800,7 @@ function AccountForm({
                     label={field.label}
                     hint={field.hint}
                     placeholder={field.placeholder}
+                    fullWidth={field.key === "turnstile_hostnames"}
                     type={field.type === "number" ? "number" : "text"}
                     min={field.min}
                     max={field.max}

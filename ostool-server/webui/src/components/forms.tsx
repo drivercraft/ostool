@@ -85,17 +85,19 @@ const inputHints: Record<string, string> = {
 export function TextField({
   label,
   hint,
+  fullWidth,
   onValue,
   ...props
 }: ComponentProps<typeof Input> & {
   label: string;
   hint?: string;
+  fullWidth?: boolean;
   onValue?: (value: string) => void;
 }) {
   const id = useId();
   const description = hint ?? inputHints[label];
   return (
-    <Field>
+    <Field className={fullWidth ? "full-width" : undefined}>
       <FieldLabel htmlFor={id}>{label}</FieldLabel>
       <Input
         id={id}
@@ -113,17 +115,19 @@ export function TextField({
 export function TextareaField({
   label,
   hint,
+  fullWidth = true,
   onValue,
   ...props
 }: Omit<ComponentProps<typeof Textarea>, "onChange"> & {
   label: string;
   hint?: string;
+  fullWidth?: boolean;
   onValue: (value: string) => void;
 }) {
   const id = useId();
   const description = hint ?? inputHints[label];
   return (
-    <Field>
+    <Field className={fullWidth ? "full-width" : undefined}>
       <FieldLabel htmlFor={id}>{label}</FieldLabel>
       <Textarea
         id={id}

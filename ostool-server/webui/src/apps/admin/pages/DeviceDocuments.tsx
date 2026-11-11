@@ -163,6 +163,7 @@ function DocumentEditor({ source }: { source: DeviceDocumentView }) {
         >
           <TextField
             label="公开标题"
+            fullWidth
             value={draft.title}
             onValue={(v) => set("title", v)}
             maxLength={160}
@@ -183,6 +184,7 @@ function DocumentEditor({ source }: { source: DeviceDocumentView }) {
           />
           <TextField
             label="设备图片地址"
+            fullWidth
             value={draft.image_url}
             onValue={(v) => set("image_url", v)}
             hint="站内图片路径或 HTTPS 图片地址；不填时展示开发板示意图。"
