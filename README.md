@@ -22,6 +22,8 @@ axloader 网络控制（唯一 v7 协议、串口自动绑定、反向 OTA）、
 部署、安全配置和已有板卡迁移见 [服务器说明](ostool-server/README.md)，界面与 SSE 协议见
 [管理界面文档](docs/admin-ui.md)。
 
+新增板卡时，`new`（不区分大小写）、`.`、`..` 为保留 ID；一个继电器只能绑定一块板卡（包括可解析到同一设备的别名）。启用 U-Boot 板卡前必须配置串口，未完成配置可禁用保存。公网 HTTPboot 板卡新增后先处于禁用状态，配置设备认证后再手动启用；移除认证前须先禁用。
+
 开发环境使用 `ostool-server/scripts/dev.sh start|stop|status` 运行统一的 Docker Compose
 release 环境；`build` 仅构建镜像，修改源码后使用 `restart`。配置来自
 `ostool-server/.env`，本机和局域网通过 Caddy HTTPS 访问，`seed` 独立导入演示数据。

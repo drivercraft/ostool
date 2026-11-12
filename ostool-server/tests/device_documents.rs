@@ -66,7 +66,7 @@ async fn authored_documents_are_public_revisioned_and_follow_board_lifecycle() -
         app.clone()
             .oneshot(request.body(Body::from(body.to_string())).unwrap())
     };
-    let mut board = json!({"id":"doc-board","board_type":"arm64","tags":["lab"],"notes":"PRIVATE OPERATIONS","boot":{"kind":"uboot","use_tftp":false},"power_management":{"kind":"custom","power_on_cmd":"true # PRIVATE POWER","power_off_cmd":"true"}});
+    let mut board = json!({"id":"doc-board","board_type":"arm64","tags":["lab"],"notes":"PRIVATE OPERATIONS","serial":{"key":{"kind":"serial_number","value":"document-console"},"baud_rate":115200},"boot":{"kind":"uboot","use_tftp":false},"power_management":{"kind":"custom","power_on_cmd":"true # PRIVATE POWER","power_off_cmd":"true"}});
     assert_eq!(
         call(
             "POST",

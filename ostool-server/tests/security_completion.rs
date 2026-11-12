@@ -100,7 +100,7 @@ impl Fixture {
         ))
     }
     async fn board(&self, id: &str, http: bool, instant: bool) -> Result<()> {
-        let value = json!({"id":id,"allow_instant_use":instant,"board_type":"completion","tags":[],"serial":null,"notes":null,"disabled":false,
+        let value = json!({"id":id,"allow_instant_use":instant,"board_type":"completion","tags":[],"serial":if http{Value::Null}else{json!({"key":{"kind":"serial_number","value":format!("console-{id}")},"baud_rate":115200})},"notes":null,"disabled":false,
    "boot":if http{json!({"kind":"httpboot"})}else{json!({"kind":"uboot","use_tftp":false})},
    "network_identity":if http{json!({"mac_address":"02:00:00:00:11:09"})}else{Value::Null},
    "power_management":{"kind":"custom","power_on_cmd":"true","power_off_cmd":"true"}});
@@ -355,6 +355,30 @@ async fn database_artifacts_survive_cache_loss_and_download_grants_are_file_scop
 async fn kernel_upload_admission_and_timeout_cover_receiving_the_request_body() -> Result<()> {
     let f = Fixture::new().await?;
     f.board("kernel", true, false).await?;
+    assert_eq!(
+        f.call(
+            "PUT",
+            "/api/v1/admin/boards/kernel/device-connection",
+            Some(&f.admin.access_token),
+            json!({"endpoint":"https://board.test", "token":"0123456789abcdef0123456789abcdef"})
+        )
+        .await?
+        .0,
+        StatusCode::OK
+    );
+    let mut board = f.state.boards.read().await.get("kernel").cloned().unwrap();
+    board.disabled = false;
+    assert_eq!(
+        f.call(
+            "PUT",
+            "/api/v1/admin/boards/kernel",
+            Some(&f.admin.access_token),
+            serde_json::to_value(board)?
+        )
+        .await?
+        .0,
+        StatusCode::OK
+    );
     let sid = f.session("kernel").await?;
     {
         let mut config = f.state.config.write().await;
@@ -749,10 +773,48 @@ async fn removing_device_credentials_cancels_a_pending_authenticated_callback() 
     let ca = tokio::fs::read_to_string(fixture.join("ca.pem")).await?;
     let path = "/api/v1/admin/boards/revoked-device/device-connection";
     assert_eq!(f.call("PUT",path,Some(&f.admin.access_token),json!({"endpoint":format!("https://127.0.0.1:{}",port.trim()),"token":token,"ca_pem":ca})).await?.0,StatusCode::OK);
+    let mut board = f
+        .state
+        .boards
+        .read()
+        .await
+        .get("revoked-device")
+        .cloned()
+        .unwrap();
+    board.disabled = false;
+    assert_eq!(
+        f.call(
+            "PUT",
+            "/api/v1/admin/boards/revoked-device",
+            Some(&f.admin.access_token),
+            serde_json::to_value(&board)?
+        )
+        .await?
+        .0,
+        StatusCode::OK
+    );
     let controller = device::start_authenticated_devices(f.state.clone());
     let mut authenticated = String::new();
     tokio::time::timeout(Duration::from_secs(5), output.read_line(&mut authenticated)).await??;
     assert_eq!(authenticated.trim(), "authenticated");
+    assert_eq!(
+        f.call("DELETE", path, Some(&f.admin.access_token), Value::Null)
+            .await?
+            .0,
+        StatusCode::CONFLICT
+    );
+    board.disabled = true;
+    assert_eq!(
+        f.call(
+            "PUT",
+            "/api/v1/admin/boards/revoked-device",
+            Some(&f.admin.access_token),
+            serde_json::to_value(&board)?
+        )
+        .await?
+        .0,
+        StatusCode::OK
+    );
     assert_eq!(
         f.call("DELETE", path, Some(&f.admin.access_token), Value::Null)
             .await?

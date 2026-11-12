@@ -25,6 +25,10 @@ test("device documents publish to product details and the rental workspace with 
         id,
         board_type: "arm64-lab",
         tags: ["kernel", "serial"],
+        serial: {
+          key: { kind: "serial_number", value: "document-console" },
+          baud_rate: 115200,
+        },
         boot: { kind: "uboot", use_tftp: false },
         power_management: {
           kind: "custom",

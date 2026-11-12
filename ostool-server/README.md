@@ -763,6 +763,29 @@ fixture must provide matching `OSTOOL_E2E_AUTH_BASE_URL`,
 `OSTOOL_E2E_ADMIN_EMAIL` and `OSTOOL_E2E_ADMIN_PASSWORD`, with loopback hosts and an
 `ostool_e2e_` schema. See [browser test details](../docs/admin-ui.md#开发与验证).
 
+### Board creation and activation
+
+`POST /api/v1/admin/boards` and `PUT /api/v1/admin/boards/{id}` reject reserved
+IDs `new` (case insensitive), `.` and `..` and relay identities already assigned to another board.
+Relay checks compare saved selectors even while offline and, when resolvable,
+compare device paths to catch different aliases for the same port. Offline aliases
+with different selectors cannot be proven equivalent until the device is present;
+use the same stable selector consistently. Each relay currently controls one output.
+
+Enabled U-Boot boards require a configured serial console. Incomplete U-Boot
+configurations may be saved with `disabled: true`, but cannot be enabled until
+the serial configuration is supplied.
+
+New public HTTPboot boards are always persisted and returned with `disabled: true`,
+including when the request asks to enable them. Save the board, provision its
+HTTPS device authentication, then explicitly save `disabled: false`. The server
+checks that the credentials can be loaded before enabling. This does not require
+powering on the device or prove live connectivity; check discovery and a boot
+operation before offering it to users. Public boards must be disabled before
+removing device authentication. Local HTTPboot discovery retains its existing flow.
+Renaming a public HTTPboot board requires disabling it and provisioning credentials
+for the new ID before enabling it again.
+
 ### Website instant allocation and device provisioning
 
 Members with `board.instant` can use **即时领取开发板** in their workspace and return

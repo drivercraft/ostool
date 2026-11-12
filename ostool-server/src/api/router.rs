@@ -465,7 +465,14 @@ async fn create_board(
     ApiError,
 > {
     let _inventory_guard = state.board_inventory_gate.lock().await;
-    let board = build_board_config_for_create(&state, request).await?;
+    let mut board = build_board_config_for_create(&state, request).await?;
+    // Credentials are provisioned separately after creation. Keep public HTTPboot
+    // inventory unavailable until an administrator explicitly enables it.
+    if state.config.read().await.edition.is_public()
+        && matches!(board.boot, BootConfig::UefiHttp(_))
+    {
+        board.disabled = true;
+    }
     validate_board_config(&board)?;
     if state.admin_power.is_busy(&board.power_management) {
         return Err(ApiError::conflict("power resource has a running action"));
@@ -481,6 +488,7 @@ async fn create_board(
             )));
         }
         ensure_unique_network_identity(&boards, &board, None)?;
+        ensure_unique_relay(&boards, &board, None)?;
     }
 
     state
@@ -540,6 +548,24 @@ async fn update_board(
             )));
         }
         ensure_unique_network_identity(&boards, &board, Some(&board_id))?;
+        ensure_unique_relay(&boards, &board, Some(&board_id))?;
+    }
+
+    if !board.disabled
+        && matches!(board.boot, BootConfig::UefiHttp(_))
+        && state.config.read().await.edition.is_public()
+    {
+        // A rename changes the encryption context; credentials must be provisioned
+        // for the new ID before enabling it.
+        if board.id != board_id
+            || crate::device_security::connection(&state, &board.id)
+                .await
+                .is_err()
+        {
+            return Err(ApiError::bad_request(
+                "请先禁用开发板并配置设备认证，再启用 HTTPboot",
+            ));
+        }
     }
 
     let runtime = state
@@ -595,7 +621,43 @@ fn ensure_unique_network_identity(
     Ok(())
 }
 
+fn ensure_unique_relay(
+    boards: &BTreeMap<String, BoardConfig>,
+    candidate: &BoardConfig,
+    replaced_board_id: Option<&str>,
+) -> Result<(), ApiError> {
+    let PowerManagementConfig::ZhongshengRelay(relay) = &candidate.power_management else {
+        return Ok(());
+    };
+    let resolved = crate::serial::discovery::resolve_serial_key(&relay.key).ok();
+    for (id, board) in boards {
+        if Some(id.as_str()) == replaced_board_id {
+            continue;
+        }
+        let PowerManagementConfig::ZhongshengRelay(existing) = &board.power_management else {
+            continue;
+        };
+        let same_port = relay.key == existing.key
+            || resolved.as_ref().is_some_and(|port| {
+                crate::serial::discovery::resolve_serial_key(&existing.key)
+                    .is_ok_and(|other| other.current_device_path == port.current_device_path)
+            });
+        if same_port {
+            return Err(ApiError::conflict(format!("继电器已绑定开发板 `{id}`")));
+        }
+    }
+    Ok(())
+}
+
 fn validate_board_config(board: &BoardConfig) -> Result<(), ApiError> {
+    if board.id.eq_ignore_ascii_case("new") || matches!(board.id.as_str(), "." | "..") {
+        return Err(ApiError::bad_request("板子 ID 不能使用保留值 new、. 或 .."));
+    }
+    if !board.disabled && matches!(board.boot, BootConfig::Uboot(_)) && board.serial.is_none() {
+        return Err(ApiError::bad_request(
+            "启用 U-Boot 开发板前必须配置串口；未完成配置可先禁用保存",
+        ));
+    }
     board
         .validate()
         .map_err(|error| ApiError::bad_request(format!("{error:#}")))
@@ -2986,6 +3048,12 @@ pub(crate) async fn admin_topic(
 
 #[cfg(test)]
 mod tests {
+    use super::ensure_unique_relay;
+    use axum::{
+        Json,
+        extract::{Path, State},
+    };
+    use std::collections::BTreeMap;
     use std::future;
     use std::sync::Arc;
 
@@ -3687,6 +3755,167 @@ mod tests {
         assert_eq!(returned.board_type, "rk3568");
     }
 
+    async fn put_board(app: &Router, id: &str, board: &BoardConfig) -> StatusCode {
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/admin/boards/{id}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(board).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test]
+    async fn onboarding_rejects_reserved_ids_on_create_and_update() {
+        let app = test_router().await;
+        assert_eq!(
+            create_board(&app, sample_board("valid")).await,
+            StatusCode::CREATED
+        );
+        for id in ["new", "New", "NEW", ".", "..", " new "] {
+            let board = sample_board(id);
+            assert_eq!(create_board(&app, &board).await, StatusCode::BAD_REQUEST);
+            assert_eq!(
+                put_board(&app, "valid", &board).await,
+                StatusCode::BAD_REQUEST
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn onboarding_uboot_draft_requires_serial_before_enable() {
+        let app = test_router().await;
+        let mut board = sample_board("uart-draft");
+        let serial = board.serial.take();
+        assert_eq!(create_board(&app, &board).await, StatusCode::BAD_REQUEST);
+        board.disabled = true;
+        assert_eq!(create_board(&app, &board).await, StatusCode::CREATED);
+        board.disabled = false;
+        assert_eq!(
+            put_board(&app, &board.id, &board).await,
+            StatusCode::BAD_REQUEST
+        );
+        board.serial = serial;
+        assert_eq!(put_board(&app, &board.id, &board).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn onboarding_relay_ownership_is_unique_on_create_and_update() {
+        let app = test_router().await;
+        let mut first = sample_board("relay-owner");
+        first.power_management =
+            PowerManagementConfig::ZhongshengRelay(crate::config::ZhongshengRelayPowerManagement {
+                key: SerialPortKey {
+                    kind: SerialPortKeyKind::SerialNumber,
+                    value: "offline-relay".into(),
+                },
+            });
+        assert_eq!(create_board(&app, &first).await, StatusCode::CREATED);
+        let mut second = first.clone();
+        second.id = "relay-other".into();
+        assert_eq!(create_board(&app, &second).await, StatusCode::CONFLICT);
+        assert_eq!(
+            create_board(&app, sample_board(&second.id)).await,
+            StatusCode::CREATED
+        );
+        assert_eq!(
+            put_board(&app, &second.id, &second).await,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(put_board(&app, &first.id, &first).await, StatusCode::OK);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn onboarding_relay_aliases_cannot_bypass_ownership() {
+        let root = tempdir().unwrap();
+        let port = root.path().join("port");
+        let alias = root.path().join("alias");
+        std::fs::write(&port, "").unwrap();
+        std::os::unix::fs::symlink(&port, &alias).unwrap();
+        let mut first = sample_board("owner");
+        first.power_management =
+            PowerManagementConfig::ZhongshengRelay(crate::config::ZhongshengRelayPowerManagement {
+                key: SerialPortKey {
+                    kind: SerialPortKeyKind::UsbId,
+                    value: port.to_string_lossy().into(),
+                },
+            });
+        let mut other = first.clone();
+        other.id = "other".into();
+        other.power_management =
+            PowerManagementConfig::ZhongshengRelay(crate::config::ZhongshengRelayPowerManagement {
+                key: SerialPortKey {
+                    kind: SerialPortKeyKind::UsbPath,
+                    value: alias.to_string_lossy().into(),
+                },
+            });
+        let boards = BTreeMap::from([(first.id.clone(), first)]);
+        assert!(ensure_unique_relay(&boards, &other, None).is_err());
+        assert!(ensure_unique_relay(&boards, &other, Some("owner")).is_ok());
+    }
+
+    #[tokio::test]
+    async fn onboarding_public_httpboot_stays_disabled_until_credentials_are_provisioned() {
+        let (_, state) = test_router_and_state_with_config(|_| {}).await;
+        state.config.write().await.edition = crate::config::Edition::Public;
+        let board = sample_httpboot_board("public-draft");
+        let (_, _, Json(mut saved)) = super::create_board(
+            State(state.clone()),
+            Json(serde_json::from_value(serde_json::to_value(board).unwrap()).unwrap()),
+        )
+        .await
+        .unwrap();
+        assert!(saved.disabled);
+        assert!(
+            state
+                .create_session(&saved.board_type, &[], None)
+                .await
+                .is_err()
+        );
+        saved.disabled = false;
+        let request = || serde_json::from_value(serde_json::to_value(&saved).unwrap()).unwrap();
+        assert!(
+            super::update_board(
+                Path(saved.id.clone()),
+                State(state.clone()),
+                Json(request())
+            )
+            .await
+            .is_err()
+        );
+        let key = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+        state.config.write().await.security.mfa_encryption_key = Some(key.into());
+        let ciphertext = crate::security::crypto::seal(
+            key,
+            &format!("device:{}", saved.id),
+            b"0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO device_connections(board_id,endpoint,token_ciphertext) VALUES($1,$2,$3)",
+        )
+        .bind(&saved.id)
+        .bind("https://board.test")
+        .bind(ciphertext)
+        .execute(state.database.pool())
+        .await
+        .unwrap();
+        let Json(enabled) = super::update_board(
+            Path(saved.id.clone()),
+            State(state.clone()),
+            Json(request()),
+        )
+        .await
+        .unwrap();
+        assert!(!enabled.disabled);
+    }
+
     #[tokio::test]
     async fn create_board_persists_request_payload_and_returns_board_config() {
         let app = test_router().await;
@@ -4130,6 +4359,7 @@ mod tests {
         let app = test_router().await;
         let mut board = sample_board("release-board");
         board.serial = None;
+        board.boot = BootConfig::Pxe(Default::default());
         board.power_management = PowerManagementConfig::Custom(CustomPowerManagement {
             power_on_cmd: "printf power-on >/dev/null".into(),
             power_off_cmd: "sh -c 'sleep 1'".into(),
@@ -4259,6 +4489,7 @@ mod tests {
 
         let mut board = sample_board("relay-release-board");
         board.serial = None;
+        board.boot = BootConfig::Pxe(Default::default());
         board.power_management =
             PowerManagementConfig::ZhongshengRelay(ZhongshengRelayPowerManagement {
                 key: SerialPortKey {
@@ -4618,7 +4849,7 @@ mod tests {
                     "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
                     "boot": { "kind": "uboot", "use_tftp": true, "dtb_name": "board.dtb" },
                     "notes": null,
-                    "disabled": false
+                    "disabled": true
                 }),
             )
             .await,
@@ -5412,7 +5643,7 @@ mod tests {
                     "id": "static-profile",
                     "board_type": "rk3568",
                     "tags": [],
-                    "serial": null,
+                    "serial": {"key":{"kind":"serial_number","value":"profile-console"},"baud_rate":115200},
                     "power_management": { "kind": "custom", "power_on_cmd": "echo on", "power_off_cmd": "echo off" },
                     "boot": {
                         "kind": "uboot",

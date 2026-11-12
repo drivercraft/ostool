@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, expect, it, vi } from "vitest";
 import BoardEditor from "./BoardEditor";
 import Boards from "./Boards";
+import { PermissionsProvider } from "@/components/permissions";
 import { admin } from "@/api/events";
 import { api } from "@/api/client";
 import type {
@@ -32,6 +33,7 @@ function mount(
   path?: string,
   loaders: LoaderDeviceSummary[] = [],
   serial: SerialPortSummary[] = [],
+  local = true,
 ) {
   admin.apply({
     epoch: crypto.randomUUID(),
@@ -49,18 +51,22 @@ function mount(
     },
   });
   render(
-    <MemoryRouter
-      initialEntries={[
-        path ??
-          (board ? `/boards/${board.id}` : "/boards/new?mac=02:00:00:00:00:21"),
-      ]}
-    >
-      <Routes>
-        <Route path="/boards" element={<Boards />} />
-        <Route path="/boards/new" element={<BoardEditor />} />
-        <Route path="/boards/:boardId" element={<BoardEditor />} />
-      </Routes>
-    </MemoryRouter>,
+    <PermissionsProvider local={local}>
+      <MemoryRouter
+        initialEntries={[
+          path ??
+            (board
+              ? `/boards/${board.id}`
+              : "/boards/new?mac=02:00:00:00:00:21"),
+        ]}
+      >
+        <Routes>
+          <Route path="/boards" element={<Boards />} />
+          <Route path="/boards/new" element={<BoardEditor />} />
+          <Route path="/boards/:boardId" element={<BoardEditor />} />
+        </Routes>
+      </MemoryRouter>
+    </PermissionsProvider>,
   );
 }
 it("creates and rebinds discovered devices while showing their live architectures read-only", async () => {
@@ -70,7 +76,12 @@ it("creates and rebinds discovered devices while showing their live architecture
     ip_address: "10.0.0.21",
     arch: "riscv64",
     loader_version: "test",
-    hardware: { manufacturer: null, product: null, version: null, serial: null },
+    hardware: {
+      manufacturer: null,
+      product: null,
+      version: null,
+      serial: null,
+    },
     online: true,
     conflict: false,
     bound_board_id: null,
@@ -91,7 +102,11 @@ it("creates and rebinds discovered devices while showing their live architecture
           epoch: "saved",
           revision: 1,
           kind: "snapshot",
-          data: { boards: [saved], board_editor: { id: saved.id, board: saved }, loaders: [first, second] },
+          data: {
+            boards: [saved],
+            board_editor: { id: saved.id, board: saved },
+            loaders: [first, second],
+          },
         }),
       );
       return saved;
@@ -337,7 +352,12 @@ it("preserves typed MAC and input identity while devices arrive", async () => {
             online: true,
             conflict: false,
             bound_board_id: null,
-            hardware: { manufacturer: null, product: null, version: null, serial: null },
+            hardware: {
+              manufacturer: null,
+              product: null,
+              version: null,
+              serial: null,
+            },
             ip_address: "10.0.0.2",
             arch: "x86_64",
             loader_version: "test",
@@ -403,6 +423,7 @@ it("switches to U-Boot without requiring or submitting a stale MAC", async () =>
   await user.clear(screen.getByLabelText("MAC 地址"));
   await user.type(screen.getByLabelText("MAC 地址"), "unfinished");
   await user.selectOptions(screen.getByLabelText("启动方式"), "uboot");
+  await user.click(screen.getByRole("checkbox", { name: "禁用开发板" }));
   expect(screen.queryByLabelText("MAC 地址")).not.toBeInTheDocument();
   await user.type(screen.getByLabelText("板型"), "arm");
   await user.type(screen.getByLabelText("上电命令"), "true");
@@ -431,7 +452,12 @@ it.each([
             mac_address: board.network_identity!.mac_address,
             ip_address: "10.0.0.31",
             arch,
-            hardware: { manufacturer: null, product: null, version: null, serial: null },
+            hardware: {
+              manufacturer: null,
+              product: null,
+              version: null,
+              serial: null,
+            },
             online,
             bound_board_id: board.id,
             boot_epoch: "epoch-1",
@@ -593,4 +619,23 @@ it("switches manual UART draft to axloader and preserves focus on serial SSE upd
   expect(input).toHaveValue("local draft");
   await user.selectOptions(screen.getByLabelText("启动方式"), "uboot");
   expect(screen.getByLabelText("波特率")).toHaveValue(57600);
+});
+
+it("keeps new public HTTPboot boards disabled until device authentication can be configured", async () => {
+  mount(undefined, "/boards/new?mac=02:00:00:00:00:21", [], [], false);
+  expect(screen.getByRole("checkbox", { name: "禁用开发板" })).toBeChecked();
+  expect(
+    screen.getByText(/新增公网 HTTPboot 开发板会先禁用保存/),
+  ).toBeVisible();
+  const create = vi
+    .spyOn(api, "createBoard")
+    .mockRejectedValue(new Error("stop after request"));
+  const user = userEvent.setup();
+  await user.type(screen.getByLabelText("板型"), "public-http");
+  await user.type(screen.getByLabelText("上电命令"), "true");
+  await user.type(screen.getByLabelText("下电命令"), "true");
+  await user.click(screen.getByRole("button", { name: "保存开发板" }));
+  expect(create).toHaveBeenCalledWith(
+    expect.objectContaining({ disabled: true }),
+  );
 });

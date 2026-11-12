@@ -67,7 +67,10 @@ test("a member claims and returns an eligible board without gaining console acce
           allow_instant_use: true,
           tags: [],
           disabled: false,
-          serial: null,
+          serial: {
+            key: { kind: "serial_number", value: "claim-console-" + suffix },
+            baud_rate: 115200,
+          },
           notes: null,
           network_identity: null,
           boot: { kind: "uboot", use_tftp: false },
@@ -163,6 +166,9 @@ test("the board editor keeps credentials write-only and preserves a draft across
     await expect(page).toHaveURL(base + "/admin/boards/" + id, {
       timeout: 15000,
     });
+    await expect(
+      page.getByRole("checkbox", { name: "禁用开发板" }),
+    ).toBeChecked();
     const endpoint = page.getByLabel("设备 HTTPS 地址");
     await expect(endpoint).toBeVisible();
     await endpoint.fill("https://127.0.0.1:1");

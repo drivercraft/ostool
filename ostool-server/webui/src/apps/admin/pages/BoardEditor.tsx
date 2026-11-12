@@ -75,6 +75,7 @@ function Editor({ board }: { board?: BoardConfig }) {
       f.boot_kind = "httpboot";
       f.network_mac = query.get("mac")!;
     }
+    if (!board && !local && f.boot_kind === "httpboot") f.disabled = true;
     return f;
   });
   const [baseline, setBaseline] = useState(() =>
@@ -322,6 +323,12 @@ function Editor({ board }: { board?: BoardConfig }) {
               hint="获授权的角色可自动领取此设备；仍遵守已有预约和使用时限。"
             />
           )}
+          {!local && form.boot_kind === "httpboot" && (
+            <Notice>
+              新增公网 HTTPboot
+              开发板会先禁用保存。保存后配置设备认证，再取消禁用并保存以开放分配。
+            </Notice>
+          )}
           <CheckField
             label="禁用开发板"
             checked={form.disabled}
@@ -418,6 +425,7 @@ function Editor({ board }: { board?: BoardConfig }) {
               label="启用串口"
               checked={form.serial_enabled}
               onChange={(v) => set("serial_enabled", v)}
+              hint="启用 U-Boot 开发板必须配置串口；未完成配置可先禁用保存。"
             />
             {form.serial_enabled && (
               <>
@@ -588,7 +596,12 @@ function Editor({ board }: { board?: BoardConfig }) {
             label="启动方式"
             value={form.boot_kind}
             onValue={(v) =>
-              set("boot_kind", v as BoardEditorFormState["boot_kind"])
+              setForm((f) => ({
+                ...f,
+                boot_kind: v as BoardEditorFormState["boot_kind"],
+                disabled:
+                  !board && !local && v === "httpboot" ? true : f.disabled,
+              }))
             }
             options={[
               { value: "uboot", label: "U-Boot" },

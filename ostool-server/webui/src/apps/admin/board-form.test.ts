@@ -8,6 +8,35 @@ import {
 } from "@/apps/admin/board-form";
 import type { BoardConfig } from "@/types/api";
 describe("board configuration contracts", () => {
+  it.each(["new", "New", "NEW", ".", "..", " new "])(
+    "rejects reserved board ID %s",
+    (id) => {
+      const f = {
+        ...defaultFormState(),
+        id,
+        board_type: "arm",
+        disabled: true,
+        power_on_cmd: "on",
+        power_off_cmd: "off",
+      };
+      expect(validateForm(f)).toContain("保留值");
+    },
+  );
+  it("requires a console for enabled U-Boot boards but permits disabled drafts", () => {
+    const f = {
+      ...defaultFormState(),
+      board_type: "arm",
+      power_on_cmd: "on",
+      power_off_cmd: "off",
+    };
+    expect(validateForm(f)).toContain("必须配置串口");
+    f.disabled = true;
+    expect(validateForm(f)).toBe("");
+    f.disabled = false;
+    f.serial_enabled = true;
+    f.serial_key_value = "console";
+    expect(validateForm(f)).toBe("");
+  });
   it("serializes only the current HTTPboot profile shape", () => {
     const current = {
       id: "current",

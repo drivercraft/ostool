@@ -107,7 +107,7 @@ function Editor({ id, source }: { id: string; source: Connection | null }) {
       {source?.configured && (
         <ConfirmAction
           label="移除设备认证"
-          description="移除后该设备不能执行网络启动或升级。请先结束设备上的活动会话。"
+          description="移除后该设备不能执行网络启动或升级。请先结束活动会话；公网版还需先禁用开发板。"
           disabled={task.pending || conflict}
           action={async () => {
             await api.removeDeviceConnection(id);

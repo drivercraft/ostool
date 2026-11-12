@@ -161,6 +161,16 @@ async fn remove(
     {
         return Err(ApiError::conflict("请先释放设备再移除认证配置"));
     }
+    if state.config.read().await.edition.is_public()
+        && state
+            .boards
+            .read()
+            .await
+            .get(&id)
+            .is_some_and(|board| !board.disabled)
+    {
+        return Err(ApiError::conflict("请先禁用开发板再移除设备认证"));
+    }
     sqlx::query("DELETE FROM device_connections WHERE board_id=$1")
         .bind(id)
         .execute(state.database.pool())
@@ -215,6 +225,70 @@ pub async fn connection(state: &AppState, id: &str) -> anyhow::Result<DeviceConn
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn public_device_authentication_can_only_be_removed_after_disabling() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = crate::ServerConfig {
+            data_dir: root.path().join("data"),
+            ..Default::default()
+        };
+        config.security.mfa_encryption_key =
+            Some("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=".into());
+        let state = crate::test_support::build_test_app_state(
+            root.path().join("server.env"),
+            config.clone(),
+            crate::tftp::service::build_tftp_manager(&config.tftp),
+        )
+        .await
+        .unwrap();
+        let mut board: crate::BoardConfig = serde_json::from_value(serde_json::json!({
+            "id": "provisioned", "board_type": "http", "notes": null,
+            "serial": null, "boot": {"kind":"httpboot"},
+            "network_identity": {"mac_address":"02:00:00:00:00:01"},
+            "power_management": {"kind":"custom", "power_on_cmd":"true", "power_off_cmd":"true"}
+        }))
+        .unwrap();
+        state.board_store.write_board(&board).await.unwrap();
+        state
+            .boards
+            .write()
+            .await
+            .insert(board.id.clone(), board.clone());
+        let Json(view) = save(
+            State(state.clone()),
+            Path(board.id.clone()),
+            Json(ConnectionInput {
+                endpoint: "https://board.test".into(),
+                ca_pem: None,
+                token: Some("0123456789abcdef0123456789abcdef".into()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(view.configured);
+        state.config.write().await.edition = crate::config::Edition::Public;
+        assert!(
+            remove(State(state.clone()), Path(board.id.clone()))
+                .await
+                .is_err()
+        );
+        assert!(projection(&state, &board.id).await.unwrap().is_some());
+        board.disabled = true;
+        state.board_store.write_board(&board).await.unwrap();
+        state
+            .boards
+            .write()
+            .await
+            .insert(board.id.clone(), board.clone());
+        assert_eq!(
+            remove(State(state.clone()), Path(board.id.clone()))
+                .await
+                .unwrap(),
+            StatusCode::NO_CONTENT
+        );
+        assert!(projection(&state, &board.id).await.unwrap().is_none());
+    }
+
     #[test]
     fn device_origins_require_tls_and_do_not_accept_inline_credentials_or_paths() {
         for value in [

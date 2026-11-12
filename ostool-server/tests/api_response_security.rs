@@ -175,7 +175,15 @@ async fn add_boards(f: &Fixture) -> anyhow::Result<()> {
             id: format!("private-board-{index}"),
             board_type: "privacy-type".into(),
             tags: vec!["研发".into()],
-            serial: None,
+            serial: Some(ostool_server::SerialConfig {
+                key: ostool_server::SerialPortKey {
+                    kind: ostool_server::SerialPortKeyKind::SerialNumber,
+                    value: format!("privacy-console-{index}"),
+                },
+                baud_rate: 115_200,
+                resolved_device_path: None,
+                resolved_usb_path: None,
+            }),
             boot: BootConfig::Uboot(Default::default()),
             power_management: PowerManagementConfig::Custom(CustomPowerManagement {
                 power_on_cmd: format!("true # PRIVATE_POWER_{index}"),

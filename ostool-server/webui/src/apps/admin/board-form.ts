@@ -267,6 +267,12 @@ export function validateForm(form: BoardEditorFormState): string {
   if (!form.board_type.trim()) {
     errors.push("board_type 不能为空");
   }
+  if (["new", ".", ".."].includes(form.id.trim().toLowerCase())) {
+    errors.push("板子 ID 不能使用保留值 new、. 或 ..");
+  }
+  if (!form.disabled && form.boot_kind === "uboot" && !form.serial_enabled) {
+    errors.push("启用 U-Boot 开发板前必须配置串口；未完成配置可先禁用保存");
+  }
   if (form.id.includes("/") || form.id.includes("\\")) {
     errors.push("板子 ID 不能包含路径分隔符");
   }

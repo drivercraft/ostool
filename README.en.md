@@ -22,6 +22,8 @@ persistence. Local edition uses anonymous HTTP with exclusive board sessions, no
 deployment, security and existing board migration, and the
 [management interface guide](docs/admin-ui.md) for UI and SSE behavior.
 
+Board IDs `new` (case insensitive), `.` and `..` are reserved. Each relay belongs to one board, including aliases that resolve to the same device. U-Boot boards require a configured serial console before enabling; incomplete configurations can be saved disabled. New public HTTPboot boards start disabled: provision device authentication, then explicitly enable the board. Disable it before removing authentication.
+
 Use `ostool-server/scripts/dev.sh start|stop|status` for the unified Docker Compose
 release environment; `build` only builds the image, and `restart` applies source
 changes. Settings come from `ostool-server/.env`; Caddy HTTPS serves loopback and

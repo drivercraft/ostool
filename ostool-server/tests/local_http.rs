@@ -369,7 +369,7 @@ async fn local_anonymous_http_allocates_exclusively_and_persists_files_without_a
             StatusCode::NOT_FOUND
         );
     }
-    assert_eq!(call("POST","/api/v1/admin/boards",json!({"id":"local","board_type":"local-test","tags":[],"disabled":false,"boot":{"kind":"uboot","use_tftp":false},"power_management":{"kind":"custom","power_on_cmd":"true","power_off_cmd":"true"}})).await?.status(),StatusCode::CREATED);
+    assert_eq!(call("POST","/api/v1/admin/boards",json!({"id":"local","board_type":"local-test","tags":[],"disabled":false,"serial":{"key":{"kind":"serial_number","value":"local-console"},"baud_rate":115200},"boot":{"kind":"uboot","use_tftp":false},"power_management":{"kind":"custom","power_on_cmd":"true","power_off_cmd":"true"}})).await?.status(),StatusCode::CREATED);
     let response = call(
         "POST",
         "/api/v1/sessions",

@@ -75,29 +75,45 @@ test("role matrix grants instant device access without administrator rights and 
   });
   expect(user.ok()).toBe(true);
   const id = `permission-board-${stamp}`;
-  expect(
-    (
-      await context.request.post(base + "/api/v1/admin/boards", {
-        headers,
-        data: {
-          id,
-          board_type: "permission-arm",
-          allow_instant_use: true,
-          disabled: false,
-          tags: [],
-          serial: null,
-          notes: null,
-          network_identity: { mac_address: "02:19:28:37:46:55" },
-          boot: { kind: "httpboot" },
-          power_management: {
-            kind: "custom",
-            power_on_cmd: "true",
-            power_off_cmd: "true",
-          },
-        },
-      })
-    ).ok(),
-  ).toBe(true);
+  const created = await context.request.post(base + "/api/v1/admin/boards", {
+    headers,
+    data: {
+      id,
+      board_type: "permission-arm",
+      allow_instant_use: true,
+      disabled: false,
+      tags: [],
+      serial: null,
+      notes: null,
+      network_identity: { mac_address: "02:19:28:37:46:55" },
+      boot: { kind: "httpboot" },
+      power_management: {
+        kind: "custom",
+        power_on_cmd: "true",
+        power_off_cmd: "true",
+      },
+    },
+  });
+  expect(created.status(), await created.text()).toBe(201);
+  const saved = await created.json();
+  expect(saved.disabled).toBe(true);
+  const boardPath = base + "/api/v1/admin/boards/" + id;
+  const provisioned = await context.request.put(
+    boardPath + "/device-connection",
+    {
+      headers,
+      data: {
+        endpoint: "https://127.0.0.1:1",
+        token: "permission-fixture-device-credential-32-characters",
+      },
+    },
+  );
+  expect(provisioned.status(), await provisioned.text()).toBe(200);
+  const enabled = await context.request.put(boardPath, {
+    headers,
+    data: { ...saved, disabled: false },
+  });
+  expect(enabled.status(), await enabled.text()).toBe(200);
   const member = await browser.newContext();
   try {
     await apiLogin(member.request, base!, email, password, false);
