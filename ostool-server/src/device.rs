@@ -1321,6 +1321,72 @@ fn hex_sha256(bytes: &[u8]) -> String {
     result
 }
 
+/// A single bounded owner reconciles each provisioned device. No unauthenticated
+/// discovery listener or caller-supplied callback URL is involved.
+pub fn start_authenticated_devices(state: AppState) -> tokio::task::JoinHandle<()> {
+    use sqlx::Row;
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(2));
+        let mut tasks = tokio::task::JoinSet::new();
+        let mut active = std::collections::BTreeMap::<
+            String,
+            (chrono::DateTime<chrono::Utc>, tokio::task::AbortHandle),
+        >::new();
+        let mut owners = std::collections::HashMap::new();
+        let mut cursor = 0usize;
+        let mut retry = std::collections::BTreeMap::<
+            String,
+            (
+                chrono::DateTime<chrono::Utc>,
+                tokio::time::Instant,
+                Duration,
+            ),
+        >::new();
+        loop {
+            tokio::select! {
+                _=tick.tick()=>{
+                    let rows=sqlx::query("SELECT d.board_id,d.updated_at FROM device_connections d JOIN board_records b ON b.id=d.board_id WHERE COALESCE((b.payload->>'disabled')::boolean,false)=false ORDER BY d.board_id LIMIT 4096").fetch_all(state.database.pool()).await;
+                    let rows=match rows {Ok(rows)=>rows,Err(error)=>{
+                        log::warn!("device identity lookup failed: {error:#}");
+                        for (_,(_,handle)) in std::mem::take(&mut active){handle.abort();}
+                        continue;
+                    }};
+                    let provisioned=rows.into_iter().filter_map(|row| match (row.try_get::<String,_>("board_id"),row.try_get::<chrono::DateTime<chrono::Utc>,_>("updated_at")) {
+                        (Ok(id),Ok(revision))=>Some((id,revision)),
+                        _=>{log::warn!("invalid stored device authentication metadata");None}
+                    }).collect::<std::collections::BTreeMap<_,_>>();
+                    let revoked=active.iter().filter(|(id,(revision,_))|provisioned.get(*id)!=Some(revision)).map(|(id,_)|id.clone()).collect::<Vec<_>>();
+                    for id in revoked {if let Some((_,handle))=active.remove(&id){handle.abort();}}
+                    retry.retain(|id,_|provisioned.contains_key(id));
+                    let using=state.board_runtimes.read().await.iter().filter(|(_,runtime)|runtime.active_session_id.is_some()).map(|(id,_)|id.clone()).collect::<std::collections::BTreeSet<_>>();
+                    let entries=provisioned.into_iter().collect::<Vec<_>>();
+                    let start=cursor;
+                    for offset in 0..entries.len() {
+                        if active.len()>=16 {break;}
+                        let index=(start+offset)%entries.len();
+                        let (id,revision)=&entries[index];
+                        if active.contains_key(id){continue;}
+                        if !using.contains(id) && retry.get(id).is_some_and(|(version,deadline,_)|version==revision && tokio::time::Instant::now()<*deadline){continue;}
+                        let board=id.clone();let state=state.clone();
+                        let handle=tasks.spawn(async move {match reconcile_provisioned(state,&board).await {Ok(())=>true,Err(error)=>{log::warn!("authenticated device {board}: {error:#}");false}}});
+                        owners.insert(handle.id(),id.clone());active.insert(id.clone(),(*revision,handle));
+                        cursor=(index+1)%entries.len();
+                    }
+                },
+                result=tasks.join_next_with_id(),if !tasks.is_empty()=>{
+                    let (id,success)=match result{Some(Ok((id,success)))=>(Some(id),success),Some(Err(error))=>(Some(error.id()),false),None=>(None,false)};
+                    if let Some(id)=id && let Some(board)=owners.remove(&id) && active.get(&board).is_some_and(|(_,handle)|handle.id()==id) && let Some((revision,_))=active.remove(&board){
+                        if success {retry.remove(&board);}else{
+                            let delay=retry.get(&board).filter(|(version,_,_)|*version==revision).map(|(_,_,delay)|(*delay*2).min(Duration::from_secs(60))).unwrap_or(Duration::from_secs(4));
+                            retry.insert(board,(revision,tokio::time::Instant::now()+delay,delay));
+                        }
+                    }
+                },
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::VecDeque, sync::Arc};
@@ -2607,70 +2673,4 @@ mod tests {
         assert!(failure.error.message.contains("truncated"));
         assert!(failure.error.message.contains("invalid_elf"));
     }
-}
-
-/// A single bounded owner reconciles each provisioned device. No unauthenticated
-/// discovery listener or caller-supplied callback URL is involved.
-pub fn start_authenticated_devices(state: AppState) -> tokio::task::JoinHandle<()> {
-    use sqlx::Row;
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(Duration::from_secs(2));
-        let mut tasks = tokio::task::JoinSet::new();
-        let mut active = std::collections::BTreeMap::<
-            String,
-            (chrono::DateTime<chrono::Utc>, tokio::task::AbortHandle),
-        >::new();
-        let mut owners = std::collections::HashMap::new();
-        let mut cursor = 0usize;
-        let mut retry = std::collections::BTreeMap::<
-            String,
-            (
-                chrono::DateTime<chrono::Utc>,
-                tokio::time::Instant,
-                Duration,
-            ),
-        >::new();
-        loop {
-            tokio::select! {
-                _=tick.tick()=>{
-                    let rows=sqlx::query("SELECT d.board_id,d.updated_at FROM device_connections d JOIN board_records b ON b.id=d.board_id WHERE COALESCE((b.payload->>'disabled')::boolean,false)=false ORDER BY d.board_id LIMIT 4096").fetch_all(state.database.pool()).await;
-                    let rows=match rows {Ok(rows)=>rows,Err(error)=>{
-                        log::warn!("device identity lookup failed: {error:#}");
-                        for (_,(_,handle)) in std::mem::take(&mut active){handle.abort();}
-                        continue;
-                    }};
-                    let provisioned=rows.into_iter().filter_map(|row| match (row.try_get::<String,_>("board_id"),row.try_get::<chrono::DateTime<chrono::Utc>,_>("updated_at")) {
-                        (Ok(id),Ok(revision))=>Some((id,revision)),
-                        _=>{log::warn!("invalid stored device authentication metadata");None}
-                    }).collect::<std::collections::BTreeMap<_,_>>();
-                    let revoked=active.iter().filter(|(id,(revision,_))|provisioned.get(*id)!=Some(revision)).map(|(id,_)|id.clone()).collect::<Vec<_>>();
-                    for id in revoked {if let Some((_,handle))=active.remove(&id){handle.abort();}}
-                    retry.retain(|id,_|provisioned.contains_key(id));
-                    let using=state.board_runtimes.read().await.iter().filter(|(_,runtime)|runtime.active_session_id.is_some()).map(|(id,_)|id.clone()).collect::<std::collections::BTreeSet<_>>();
-                    let entries=provisioned.into_iter().collect::<Vec<_>>();
-                    let start=cursor;
-                    for offset in 0..entries.len() {
-                        if active.len()>=16 {break;}
-                        let index=(start+offset)%entries.len();
-                        let (id,revision)=&entries[index];
-                        if active.contains_key(id){continue;}
-                        if !using.contains(id) && retry.get(id).is_some_and(|(version,deadline,_)|version==revision && tokio::time::Instant::now()<*deadline){continue;}
-                        let board=id.clone();let state=state.clone();
-                        let handle=tasks.spawn(async move {match reconcile_provisioned(state,&board).await {Ok(())=>true,Err(error)=>{log::warn!("authenticated device {board}: {error:#}");false}}});
-                        owners.insert(handle.id(),id.clone());active.insert(id.clone(),(*revision,handle));
-                        cursor=(index+1)%entries.len();
-                    }
-                },
-                result=tasks.join_next_with_id(),if !tasks.is_empty()=>{
-                    let (id,success)=match result{Some(Ok((id,success)))=>(Some(id),success),Some(Err(error))=>(Some(error.id()),false),None=>(None,false)};
-                    if let Some(id)=id && let Some(board)=owners.remove(&id) && active.get(&board).is_some_and(|(_,handle)|handle.id()==id) && let Some((revision,_))=active.remove(&board){
-                        if success {retry.remove(&board);}else{
-                            let delay=retry.get(&board).filter(|(version,_,_)|*version==revision).map(|(_,_,delay)|(*delay*2).min(Duration::from_secs(60))).unwrap_or(Duration::from_secs(4));
-                            retry.insert(board,(revision,tokio::time::Instant::now()+delay,delay));
-                        }
-                    }
-                },
-            }
-        }
-    })
 }
