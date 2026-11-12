@@ -36,6 +36,8 @@ const TEST_BOARD_ID: &str = "custom-board-1";
 const TEST_BOARD_TYPE: &str = "custom-demo";
 const TEST_SERIAL_BAUD_RATE: u32 = 115_200;
 const EXPECTED_SERIAL_PAYLOAD: &[u8] = b"hello from board\n";
+// Startup includes PostgreSQL schema migrations and administrator password hashing.
+const SERVER_START_TIMEOUT: Duration = Duration::from_secs(30);
 const FAST_ASSERT_TIMEOUT: Duration = Duration::from_millis(800);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
@@ -203,7 +205,7 @@ fn spawn_test_server_with_power_on(
         result
     });
 
-    let (addr, app, state) = match addr_rx.recv_timeout(Duration::from_secs(5)) {
+    let (addr, app, state) = match addr_rx.recv_timeout(SERVER_START_TIMEOUT) {
         Ok(Ok(server)) => server,
         Ok(Err(err)) => return Err(anyhow!("test server failed to start: {err}")),
         Err(_) => return Err(anyhow!("timed out waiting for test server listen address")),
