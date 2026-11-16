@@ -89,9 +89,7 @@ export default function AdminLogin() {
           <div className="auth-aside-copy">
             <span className="section-label">HARDWARE MANAGEMENT WORKSPACE</span>
             <h1>
-              让每一台设备，
-              <br />
-              <em>有序服务研发。</em>
+              让每一台设备，<em>有序服务研发。</em>
             </h1>
             <p>
               集中管理设备、使用时段与访问权限，让团队协作和运行维护清晰可控。

@@ -62,9 +62,7 @@ function Devices() {
           <div className="inner-hero">
             <span className="section-label">YOUR HARDWARE. ONE WORKSPACE.</span>
             <h1>
-              让硬件资源，
-              <br />
-              <em>成为研发的助力。</em>
+              让硬件资源，<em>成为研发的助力。</em>
             </h1>
             <p>
               从一块开发板到整个实验室，统一管理设备配置、启动方式与调试入口。用清晰的资源目录，连接每一次构建与验证。
@@ -274,9 +272,7 @@ function Login() {
           <div className="auth-aside-copy">
             <span className="section-label">YOUR HARDWARE WORKSPACE</span>
             <h1>
-              连接每一块开发板，
-              <br />
-              <em>专注下一次创造。</em>
+              连接每一块开发板，<em>专注下一次创造。</em>
             </h1>
             <p>
               从设备发现到远程调试，让开发资源与团队协作在同一个工作区有序连接。

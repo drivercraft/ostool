@@ -91,9 +91,7 @@ export default function Home() {
           <div className="home-feature-copy">
             <span className="section-label">01 / DEVICE RESOURCES</span>
             <h2 id="hardware-title">
-              真实硬件与虚拟设备，
-              <br />
-              放在同一个工作区。
+              真实硬件与虚拟设备，放在同一个工作区。
             </h2>
             <p>
               按设备类型与标签组织开发资源，统一维护接入配置。切换目标硬件时，让熟悉的工作方式继续沿用。
@@ -165,9 +163,7 @@ export default function Home() {
           <div className="home-feature-copy">
             <span className="section-label">02 / TERMINAL FIRST</span>
             <h2 id="workflow-title">
-              留在终端，
-              <br />
-              完成从启动到调试。
+              留在终端，完成从启动到调试。
             </h2>
             <p>
               沿用 ostool
@@ -220,9 +216,7 @@ export default function Home() {
             <div className="home-feature-copy">
               <span className="section-label">03 / SHARED HARDWARE</span>
               <h2 id="booking-title">
-                共享设备，
-                <br />
-                各自拥有专注的时间。
+                共享设备，各自拥有专注的时间。
               </h2>
               <p>
                 先查看可用日历，再申请需要的使用时段。获授权的成员也可以直接领取空闲设备，系统自动记录申请与使用过程。
@@ -280,9 +274,7 @@ export default function Home() {
               {publicEdition ? "04" : "03"} / YOUR INFRASTRUCTURE
             </span>
             <h2 id="deployment-title">
-              部署在你掌握的环境，
-              <br />
-              为团队建立清晰边界。
+              部署在你掌握的环境，为团队建立清晰边界。
             </h2>
             <p>
               从实验室局域网到公网协作，按使用场景选择访问方式。设备通信留在服务器侧，用户通过统一入口使用获授权的资源。
