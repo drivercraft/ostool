@@ -152,8 +152,8 @@ test("the board editor keeps credentials write-only and preserves a draft across
     const page = await context.newPage();
     await page.goto(
       base +
-        "/admin/login?redirect=" +
-        encodeURIComponent("/admin/boards/" + id),
+        "/qcl/login?redirect=" +
+        encodeURIComponent("/qcl/boards/" + id),
     );
     await page
       .getByLabel(/^(邮箱|账号)$/, { exact: true })
@@ -163,7 +163,7 @@ test("the board editor keeps credentials write-only and preserves a draft across
       .fill(process.env.OSTOOL_E2E_ADMIN_PASSWORD!);
     await solveCaptcha(page);
     await page.getByRole("button", { name: "登录", exact: true }).click();
-    await expect(page).toHaveURL(base + "/admin/boards/" + id, {
+    await expect(page).toHaveURL(base + "/qcl/boards/" + id, {
       timeout: 15000,
     });
     await expect(

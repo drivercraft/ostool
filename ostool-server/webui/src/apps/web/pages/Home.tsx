@@ -29,7 +29,7 @@ export default function Home() {
       : edition.allow_registration
         ? "/register"
         : "/login"
-    : "/admin/overview";
+    : "/qcl/overview";
   return (
     <PublicLayout>
       <main className="public-home">

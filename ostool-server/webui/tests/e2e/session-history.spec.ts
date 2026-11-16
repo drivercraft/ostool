@@ -43,7 +43,7 @@ test("lease history follows real allocation and release through the paginated ev
     )
       privateReads.push(r.url());
   });
-  await page.goto("/admin/sessions");
+  await page.goto("/qcl/sessions");
   await page.getByRole("link", { name: "租约历史", exact: true }).click();
   await page.getByLabel("设备标识", { exact: true }).fill(board);
   const row = page.getByRole("row").filter({ hasText: session });

@@ -61,7 +61,7 @@ export function SecuritySettings({
   }
   function saved() {
     setCodes(undefined);
-    if (enrollmentOnly) window.location.replace("/admin/overview");
+    if (enrollmentOnly) window.location.replace("/qcl/overview");
   }
   return (
     <div className="security-settings">
@@ -142,7 +142,7 @@ export function SecuritySettings({
               </Button>
               {!(
                 status.require_admin_mfa &&
-                location.pathname.startsWith("/admin")
+                location.pathname.startsWith("/qcl")
               ) && (
                 <ConfirmAction
                   label="关闭双重验证"
@@ -248,8 +248,8 @@ export function SecuritySettings({
                   if (result.current) {
                     await api.logout();
                     window.location.replace(
-                      location.pathname.startsWith("/admin")
-                        ? "/admin/login"
+                      location.pathname.startsWith("/qcl")
+                        ? "/qcl/login"
                         : "/login",
                     );
                   }

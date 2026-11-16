@@ -265,9 +265,9 @@ token=<refresh_token>
 
 ## Management API
 
-`ostool-server` 的管理页面位于 `/admin`，页面使用同源的 `/api/v1/admin/...` 接口维护开发板、DTB、活动会话、TFTP 和服务器可编辑配置。除 DTB 上传使用原始字节外，请求和响应均使用 JSON。
+`ostool-server` 的管理页面位于 `/qcl`，页面使用同源的 `/api/v1/admin/...` 接口维护开发板、DTB、活动会话、TFTP 和服务器可编辑配置。除 DTB 上传使用原始字节外，请求和响应均使用 JSON。
 
-公网版管理 API 检查管理员身份、后台登录来源和 CSRF 来源；后台操作不要求再次验证密码或 MFA，登录时的 MFA 策略仍生效。管理页面使用独立的 `/admin/login`。网站 Cookie、普通成员、CLI OAuth 和 PAT 不能代替后台管理员登录。本地版管理页面和硬件 API 免登录，不提供用户、角色与租赁管理。部署时由 Caddy 提供 HTTPS，并限制 Rust 原始监听端口和设备端口的访问范围。
+公网版管理 API 检查管理员身份、后台登录来源和 CSRF 来源；后台操作不要求再次验证密码或 MFA，登录时的 MFA 策略仍生效。管理页面使用独立的 `/qcl/login`。网站 Cookie、普通成员、CLI OAuth 和 PAT 不能代替后台管理员登录。本地版管理页面和硬件 API 免登录，不提供用户、角色与租赁管理。部署时由 Caddy 提供 HTTPS，并限制 Rust 原始监听端口和设备端口的访问范围。
 
 两种模式共用开发板 API 路径：公网版校验有效凭据、租赁和会话归属；本地版匿名使用空闲板卡，并保持互斥和释放。
 公网用户入口保持回环地址，经 Caddy 提供 HTTPS，包含上传、文件下载和 WebSocket；私网来源不能跳过鉴权。

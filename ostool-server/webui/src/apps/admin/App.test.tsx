@@ -58,7 +58,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.connection.mockReturnValue("connected");
   localStorage.clear();
-  window.history.replaceState({}, "", "/admin/overview");
+  window.history.replaceState({}, "", "/qcl/overview");
 });
 afterEach(() => {
   cleanup();
@@ -66,6 +66,17 @@ afterEach(() => {
   document.documentElement.classList.remove("dark", "light");
 });
 describe("edition navigation and authentication", () => {
+  it("shows the shared 404 inside the console and returns to an allowed page", async () => {
+    mocks.config.mockResolvedValue({ edition: "local", enabled: false, database_available: true });
+    window.history.replaceState({}, "", "/qcl/missing-page");
+    render(<App />);
+    await screen.findByRole("heading", { name: "页面不存在" });
+    expect(document.querySelector("#admin-sidebar")).toBeTruthy();
+    expect(window.location.pathname).toBe("/qcl/missing-page");
+    await userEvent.click(screen.getByRole("link", { name: "返回管理后台" }));
+    await screen.findByText("本地设备总览");
+    expect(window.location.pathname).toBe("/qcl/overview");
+  });
   it("local edition opens without login and hides account and allocation management", async () => {
     mocks.config.mockResolvedValue({edition:"local",enabled:false,database_available:true});
     mocks.me.mockResolvedValue({id:"local-admin",username:"admin",email:"admin@test.local",is_admin:true});

@@ -56,12 +56,12 @@ export default defineConfig({
       : []),
     {
       command: "node tests/fixtures/server.mjs",
-      url: "http://127.0.0.1:4175/admin/",
+      url: "http://127.0.0.1:4175/qcl/",
       reuseExistingServer: false,
     },
     {
       command: "pnpm dev --host 127.0.0.1 --port 4174",
-      url: "http://127.0.0.1:4174/admin/",
+      url: "http://127.0.0.1:4174/qcl/",
       reuseExistingServer: false,
     },
   ],

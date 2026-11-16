@@ -16,7 +16,7 @@ describe("independent browser sessions", () => {
     window.history.replaceState({}, "", "/login");
     notifyAuthChanged();
     const website = localStorage.getItem(sessionSignalKey("website"));
-    window.history.replaceState({}, "", "/admin/login");
+    window.history.replaceState({}, "", "/qcl/login");
     notifyAuthChanged();
     const fetch = vi
       .fn()
@@ -46,14 +46,14 @@ describe("independent browser sessions", () => {
       "https://example.com",
       "//example.com",
       "/account",
-      "/admin/../account",
-      "/admin/login?redirect=/admin/login",
-      "/admin/\\example.com",
+      "/qcl/../account",
+      "/qcl/login?redirect=/qcl/login",
+      "/qcl/\\example.com",
     ]) {
-      expect(safeAdminRedirect(value)).toBe("/admin/overview");
+      expect(safeAdminRedirect(value)).toBe("/qcl/overview");
     }
-    expect(safeAdminRedirect("/admin/boards/demo?view=details")).toBe(
-      "/admin/boards/demo?view=details",
+    expect(safeAdminRedirect("/qcl/boards/demo?view=details")).toBe(
+      "/qcl/boards/demo?view=details",
     );
   });
 });
@@ -69,8 +69,8 @@ it("website login preserves application selection and rejects external or escape
     null,
     "https://example.com",
     "//example.com",
-    "/rental-request/../admin",
-    "/account/../admin",
+    "/rental-request/../qcl",
+    "/account/../qcl",
     "/accounting",
     "/rental-request-elsewhere",
     "/account/\\example.com",

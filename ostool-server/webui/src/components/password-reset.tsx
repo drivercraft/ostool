@@ -22,7 +22,7 @@ export function PasswordReset() {
     remaining = useCountdown(until);
   const login =
     new URLSearchParams(location.search).get("surface") === "admin"
-      ? "/admin/login"
+      ? "/qcl/login"
       : "/login";
   async function submit(event: FormEvent) {
     event.preventDefault();

@@ -49,7 +49,7 @@ export function useEdition() {
 
 export function StartupScreen({
   error = "",
-  admin = window.location.pathname.startsWith("/admin"),
+  admin = window.location.pathname.startsWith("/qcl"),
 }: {
   error?: string;
   admin?: boolean;

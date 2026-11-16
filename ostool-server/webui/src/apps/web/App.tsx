@@ -3,6 +3,7 @@ import {
   useSiteSettings,
 } from "@/components/site-settings";
 import { safeWebsiteRedirect } from "@/auth-session";
+import { NotFound } from "@/components/not-found";
 import { AuthLegal } from "@/components/auth-legal";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FormEvent, useEffect, useState } from "react";
@@ -126,7 +127,7 @@ function Devices() {
             </p>
           </div>
           <Button asChild>
-            <a href={publicEdition ? "/account" : "/admin/overview"}>
+            <a href={publicEdition ? "/account" : "/qcl/overview"}>
               {publicEdition ? "个人工作台" : "进入控制台"}
               <ArrowRight size={16} />
             </a>
@@ -732,7 +733,16 @@ function PublicRoutes() {
             )
           }
         />
-        <Route path="*" element={<Home />} />
+        <Route
+          path="*"
+          element={
+            <PublicLayout>
+              <main className="public-inner-page">
+                <NotFound />
+              </main>
+            </PublicLayout>
+          }
+        />
       </Routes>
     </BrowserRouter>
   );

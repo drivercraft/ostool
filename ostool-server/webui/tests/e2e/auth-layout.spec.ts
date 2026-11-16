@@ -10,17 +10,17 @@ test("website auth uses the common header and footer while admin login stays ful
   });
   try {
     const page = await context.newPage();
-    for (const path of ["/login", "/register", "/admin/login"]) {
+    for (const path of ["/login", "/register", "/qcl/login"]) {
       await page.goto(base + path);
       await expect(
         page.getByLabel("图形验证码", { exact: true }),
       ).toBeEnabled();
-      const admin = path.startsWith("/admin");
+      const admin = path.startsWith("/qcl");
       await expect(page.locator(".site-header")).toHaveCount(admin ? 0 : 1);
       await expect(page.locator(".site-footer")).toHaveCount(admin ? 0 : 1);
       const aside = await page
         .getByRole("complementary", {
-          name: path.startsWith("/admin") ? "后台介绍" : "平台介绍",
+          name: path.startsWith("/qcl") ? "后台介绍" : "平台介绍",
         })
         .boundingBox();
       const form = await page.locator(".auth-card").boundingBox();
@@ -84,7 +84,7 @@ test("website auth uses the common header and footer while admin login stays ful
       });
       await page
         .getByRole("button", {
-          name: path.startsWith("/admin") ? "切换后台主题" : "切换网站主题",
+          name: path.startsWith("/qcl") ? "切换后台主题" : "切换网站主题",
         })
         .click();
       await page
@@ -96,7 +96,7 @@ test("website auth uses the common header and footer while admin login stays ful
       });
       await page
         .getByRole("button", {
-          name: path.startsWith("/admin") ? "切换后台主题" : "切换网站主题",
+          name: path.startsWith("/qcl") ? "切换后台主题" : "切换网站主题",
         })
         .click();
       await page
@@ -109,7 +109,7 @@ test("website auth uses the common header and footer while admin login stays ful
       { width: 320, height: 568 },
     ]) {
       await page.setViewportSize(viewport);
-      for (const path of ["/login", "/register", "/admin/login"]) {
+      for (const path of ["/login", "/register", "/qcl/login"]) {
         await page.goto(base + path);
         await expect(
           page.getByLabel("图形验证码", { exact: true }),
@@ -121,13 +121,13 @@ test("website auth uses the common header and footer while admin login stays ful
           viewportHeight: innerHeight,
         }));
         expect(geometry.width).toBeLessThanOrEqual(geometry.viewportWidth);
-        if (path.startsWith("/admin"))
+        if (path.startsWith("/qcl"))
           expect(geometry.height).toBeLessThanOrEqual(geometry.viewportHeight);
         else {
           await expect(page.locator(".site-header")).toHaveCount(1);
           await expect(page.locator(".site-footer")).toHaveCount(1);
         }
-        if (viewport.width >= 901 && path.startsWith("/admin")) {
+        if (viewport.width >= 901 && path.startsWith("/qcl")) {
           const form = await page.locator(".auth-card").boundingBox();
           expect(form!.y + form!.height).toBeLessThanOrEqual(viewport.height);
         }
@@ -139,7 +139,7 @@ test("website auth uses the common header and footer while admin login stays ful
         await expect(submit).toBeVisible();
         if (viewport.width < 900)
           await expect(page.getByRole("complementary")).toBeHidden();
-        if (!path.startsWith("/admin")) {
+        if (!path.startsWith("/qcl")) {
           await page.locator(".site-footer").scrollIntoViewIfNeeded();
           await expect(page.locator(".site-footer")).toBeVisible();
           await page.evaluate(() => window.scrollTo(0, 0));
@@ -151,11 +151,11 @@ test("website auth uses the common header and footer while admin login stays ful
         ).toBe(true);
         await page.screenshot({
           path: `/tmp/ostool-auth-${path.slice(1).replaceAll("/", "-")}-${viewport.width}.png`,
-          fullPage: !path.startsWith("/admin"),
+          fullPage: !path.startsWith("/qcl"),
         });
       }
     }
-    await page.goto(base + "/admin/login");
+    await page.goto(base + "/qcl/login");
     await expect(page.getByLabel("图形验证码", { exact: true })).toBeEnabled();
     const input = await page
       .getByLabel("图形验证码", { exact: true })

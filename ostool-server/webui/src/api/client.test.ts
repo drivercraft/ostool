@@ -8,7 +8,7 @@ describe("api client", () => {
   });
 
   it("preserves the login on refresh outages and clears it only after confirmed rejection", async () => {
-    window.history.replaceState({}, "", "/admin/overview");
+    window.history.replaceState({}, "", "/qcl/overview");
     const key = "ostool.admin.session-state";
     localStorage.setItem(key, "signed-in");
     const fetch = vi
@@ -42,7 +42,7 @@ describe("api client", () => {
   });
 
   it("reports admin errors directly without opening identity confirmation", async () => {
-    window.history.replaceState({}, "", "/admin/overview");
+    window.history.replaceState({}, "", "/qcl/overview");
     const verify = vi.fn();
     window.addEventListener("ostool:step-up", verify);
     const fetch = vi.fn().mockResolvedValue(

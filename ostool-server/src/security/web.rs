@@ -321,7 +321,7 @@ pub async fn gate(
     if !config.edition.is_public() {
         return next.run(request).await;
     }
-    if (path.starts_with("/admin") || path.starts_with("/api/v1/admin/"))
+    if (path.starts_with("/qcl") || path.starts_with("/api/v1/admin/"))
         && !config.security.admin_allowed_networks.is_empty()
         && !client.ip.parse::<std::net::IpAddr>().is_ok_and(|ip| {
             config

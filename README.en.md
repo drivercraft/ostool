@@ -17,7 +17,7 @@
 
 See [docs/axloader-network-control.md](docs/axloader-network-control.md) for axloader network control (the v7-only protocol, serial auto-binding, and reverse OTA), persistent MAC binding, web administration, built-in QEMU virtual boards, and local validation with a real FAT disk image. The complete API contract is documented in [docs/api.md](docs/api.md).
 
-`ostool-server` provides an independent website and `/admin/` console with PostgreSQL
+`ostool-server` provides an independent website and `/qcl/` console with PostgreSQL
 persistence. Local edition uses anonymous HTTP with exclusive board sessions, no account/rental assignment, and no Redis dependency. Public edition requires HTTPS login, Redis risk controls and scheduled board rentals. Authorized members can also claim boards immediately from the website. Session artifacts are stored in PostgreSQL chunks; disk copies are rebuildable caches. See the [server guide](ostool-server/README.md) for
 deployment, security and existing board migration, and the
 [management interface guide](docs/admin-ui.md) for UI and SSE behavior.

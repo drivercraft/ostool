@@ -54,14 +54,14 @@ test("standalone rental calendar, live conflicts and persistent card layouts", a
       })
     ).ok(),
   ).toBeTruthy();
-  await page.goto(`${base}/admin/login?redirect=/admin/rentals`);
+  await page.goto(`${base}/qcl/login?redirect=/qcl/rentals`);
   await page.getByLabel(/^(邮箱|账号)$/, { exact: true }).fill(email);
   await page.getByLabel("密码", { exact: true }).fill(password);
   await solveCaptcha(page);
   await page.getByRole("button", { name: "登录", exact: true }).click();
-  await expect(page).toHaveURL(`${base}/admin/rentals`);
+  await expect(page).toHaveURL(`${base}/qcl/rentals`);
   await page.getByRole("link", { name: "新增租赁", exact: true }).click();
-  await expect(page).toHaveURL(`${base}/admin/rentals/new`);
+  await expect(page).toHaveURL(`${base}/qcl/rentals/new`);
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("region", { name: "租赁日历" })).toBeVisible();
   await page.getByLabel("指定开发板", { exact: true }).selectOption(boardId);
@@ -257,12 +257,12 @@ test("standalone rental calendar, live conflicts and persistent card layouts", a
     "rentals",
     "rental-requests",
   ]) {
-    await page.goto(`${base}/admin/${route}`);
+    await page.goto(`${base}/qcl/${route}`);
     await expect(
       page.getByRole("button", { name: "切换列表布局", exact: true }).first(),
     ).toBeVisible();
   }
-  await page.goto(`${base}/admin/boards`);
+  await page.goto(`${base}/qcl/boards`);
   await page.getByLabel("搜索开发板", { exact: true }).fill(boardId);
   const head = page.getByRole("columnheader", { name: "开发板", exact: true });
   await expect(head).toBeVisible();

@@ -8,7 +8,7 @@ test("dashboard, durable audit filters/export, discovery toolbar and shared them
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.setViewportSize({ width: 1440, height: 960 });
-  await page.goto("/admin/overview");
+  await page.goto("/qcl/overview");
   await expect(page.getByRole("heading", { name: "服务运行状态" })).toBeVisible(
     { timeout: 15000 },
   );
@@ -59,7 +59,7 @@ test("dashboard, durable audit filters/export, discovery toolbar and shared them
   expect(response.status()).toBe(201);
   await expect(page.getByRole("link", { name: id, exact: true })).toBeVisible();
   const fonts = await page.evaluate(() => {
-    const nav = document.querySelector('.sidebar a[href="/admin/boards"]')!;
+    const nav = document.querySelector('.sidebar a[href="/qcl/boards"]')!;
     const cell = document.querySelector('[data-slot="table-cell"]')!;
     return [nav, cell].map((element) => {
       const style = getComputedStyle(element);
@@ -186,7 +186,7 @@ test("dashboard, durable audit filters/export, discovery toolbar and shared them
 test("runtime health follows a lost event stream and recovers without a page banner", async ({
   page,
 }) => {
-  await page.goto("/admin/overview");
+  await page.goto("/qcl/overview");
   const summary = page.getByRole("region", { name: "运行状态汇总" });
   await expect(summary.getByRole("status")).toHaveText("服务运行正常", {
     timeout: 15_000,

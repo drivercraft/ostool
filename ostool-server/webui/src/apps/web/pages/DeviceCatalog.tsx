@@ -141,7 +141,7 @@ export function DeviceCatalog() {
                     )
                   ) : (
                     <Button asChild variant="outline">
-                      <a href="/admin/boards">查看设备</a>
+                      <a href="/qcl/boards">查看设备</a>
                     </Button>
                   )}
                 </div>

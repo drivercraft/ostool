@@ -9,7 +9,7 @@ test("server and dev host serve independent website and admin entry documents", 
     const site = await request.get(`${base}/`, {
       headers: { accept: "text/html" },
     });
-    const admin = await request.get(`${base}/admin/login`, {
+    const admin = await request.get(`${base}/qcl/login`, {
       headers: { accept: "text/html" },
     });
     const application = await request.get(`${base}/rental-request?board=selected-board`, {
@@ -48,7 +48,7 @@ test("website and admin login/logout work independently in the same browser", as
     process.env.OSTOOL_E2E_ADMIN_PASSWORD ?? "admin-password-123";
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(`${base}/login?redirect=/admin/overview`);
+  await page.goto(`${base}/login?redirect=/qcl/overview`);
   await page.getByLabel(/^(邮箱|账号)$/, { exact: true }).fill(email);
   await page.getByLabel("密码", { exact: true }).fill(password);
   await solveCaptcha(page);
@@ -65,8 +65,8 @@ test("website and admin login/logout work independently in the same browser", as
   expect(websiteToken).toBeTruthy();
   const admin = await context.newPage();
   admin.on("pageerror", (error) => errors.push(error.message));
-  await admin.goto(`${base}/admin/overview`);
-  await expect(admin).toHaveURL(/\/admin\/login\?redirect=/);
+  await admin.goto(`${base}/qcl/overview`);
+  await expect(admin).toHaveURL(/\/qcl\/login\?redirect=/);
   await expect(
     admin.getByRole("heading", { name: "管理后台登录" }),
   ).toBeVisible();
@@ -80,7 +80,7 @@ test("website and admin login/logout work independently in the same browser", as
   await admin.getByLabel("密码", { exact: true }).fill(password);
   await solveCaptcha(admin);
   await admin.getByRole("button", { name: "登录", exact: true }).click();
-  await expect(admin).toHaveURL(`${base}/admin/overview`);
+  await expect(admin).toHaveURL(`${base}/qcl/overview`);
   expect(
     (await context.cookies()).find(
       (cookie) => cookie.name === "ostool-admin-access",
@@ -93,7 +93,7 @@ test("website and admin login/logout work independently in the same browser", as
   ).toBe(websiteToken);
   await admin.getByRole("button", { name: "账号菜单", exact: true }).click();
   await admin.getByRole("menuitem", { name: "退出登录", exact: true }).click();
-  await expect(admin).toHaveURL(`${base}/admin/login`);
+  await expect(admin).toHaveURL(`${base}/qcl/login`);
   expect(
     await admin.evaluate(() =>
       localStorage.getItem("ostool.admin.access_token"),
@@ -110,7 +110,7 @@ test("website and admin login/logout work independently in the same browser", as
   await admin.getByLabel("密码", { exact: true }).fill(password);
   await solveCaptcha(admin);
   await admin.getByRole("button", { name: "登录", exact: true }).click();
-  await expect(admin).toHaveURL(`${base}/admin/overview`);
+  await expect(admin).toHaveURL(`${base}/qcl/overview`);
   await page
     .getByRole("button", { name: "用户菜单", exact: true })
     .first()

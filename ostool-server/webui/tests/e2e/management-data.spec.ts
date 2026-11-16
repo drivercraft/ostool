@@ -60,7 +60,7 @@ test("management inventory omits commands while only the selected editor receive
         }
       };
     });
-    await page.goto(base + "/admin/boards");
+    await page.goto(base + "/qcl/boards");
     await expect(
       page.getByRole("link", { name: ids[0], exact: true }),
     ).toBeVisible();

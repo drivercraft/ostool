@@ -17,7 +17,7 @@
 
 axloader 网络控制（唯一 v7 协议、串口自动绑定、反向 OTA）、持久 MAC 绑定、Web 管理、内建 QEMU 虚拟板和本地真实 FAT 磁盘验证设计见 [docs/axloader-network-control.md](docs/axloader-network-control.md)，完整接口契约见 [docs/api.md](docs/api.md)。
 
-`ostool-server` 提供独立的前台网站和 `/admin/` 管理后台，使用 PostgreSQL 持久化。
+`ostool-server` 提供独立的前台网站和 `/qcl/` 管理后台，使用 PostgreSQL 持久化。
 本地版使用 HTTP 免登录，直接独占使用空闲开发板，不启用账号或租赁分配，也不依赖 Redis；公网版通过 HTTPS 登录，使用 Redis 风控与开发板租赁，有权限的成员可即时领取设备。会话文件以 PostgreSQL 分块存储，磁盘仅为可重建缓存。
 部署、安全配置和已有板卡迁移见 [服务器说明](ostool-server/README.md)，界面与 SSE 协议见
 [管理界面文档](docs/admin-ui.md)。

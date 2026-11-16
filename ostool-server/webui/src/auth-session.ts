@@ -29,8 +29,8 @@ export function configureAuthSurface(surface: AuthSurface) {
 }
 export const authSurface = (): AuthSurface =>
   applicationSurface ??
-  (window.location.pathname === "/admin" ||
-  window.location.pathname.startsWith("/admin/")
+  (window.location.pathname === "/qcl" ||
+  window.location.pathname.startsWith("/qcl/")
     ? "admin"
     : "website");
 export const authEvent = (surface: AuthSurface = authSurface()) =>
@@ -49,18 +49,18 @@ export function clearBrowserSession() {
 export function loginUrl(surface: AuthSurface = authSurface()) {
   if (surface === "website") return "/login";
   const redirect = window.location.pathname + window.location.search;
-  return `/admin/login?redirect=${encodeURIComponent(safeAdminRedirect(redirect))}`;
+  return `/qcl/login?redirect=${encodeURIComponent(safeAdminRedirect(redirect))}`;
 }
 export function safeAdminRedirect(value: string | null) {
-  if (!value || !value.startsWith("/admin/") || /[\\\u0000-\u0020]/.test(value))
-    return "/admin/overview";
+  if (!value || !value.startsWith("/qcl/") || /[\\\u0000-\u0020]/.test(value))
+    return "/qcl/overview";
   const path = new URL(value, window.location.origin);
   return path.origin === window.location.origin &&
-    path.pathname.startsWith("/admin/") &&
-    path.pathname !== "/admin/login" &&
-    path.pathname !== "/admin/login/"
+    path.pathname.startsWith("/qcl/") &&
+    path.pathname !== "/qcl/login" &&
+    path.pathname !== "/qcl/login/"
     ? path.pathname + path.search + path.hash
-    : "/admin/overview";
+    : "/qcl/overview";
 }
 
 /** Website login returns only to member pages or the shared application page. */

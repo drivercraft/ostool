@@ -53,7 +53,7 @@ export default function DeviceDetail() {
                 to={
                   publicEdition
                     ? `/rental-request?board=${encodeURIComponent(board.id)}`
-                    : "/admin/boards"
+                    : "/qcl/boards"
                 }
               >
                 {publicEdition ? "申请租赁" : "打开控制台"}
@@ -158,7 +158,7 @@ export default function DeviceDetail() {
               to={
                 publicEdition
                   ? `/rental-request?board=${encodeURIComponent(board.id)}`
-                  : "/admin/boards"
+                  : "/qcl/boards"
               }
             >
               {publicEdition ? "申请租赁" : "打开控制台"}

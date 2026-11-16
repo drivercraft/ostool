@@ -100,6 +100,13 @@ const App = () => (
     </Routes>
   </BrowserRouter>
 );
+it("keeps unknown account pages in the workspace and offers a return link", () => {
+  window.history.replaceState({}, "", "/account/missing-page");
+  render(<App />);
+  expect(screen.getByRole("heading", { name: "页面不存在" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "返回个人工作台" }).getAttribute("href")).toBe("/account");
+  expect(window.location.pathname).toBe("/account/missing-page");
+});
 it("preserves a profile draft across server pushes and submits only editable fields", async () => {
   const user = userEvent.setup();
   const app = render(<App />);

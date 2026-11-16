@@ -185,12 +185,12 @@ test("public member profile, rental request approval, theme and password lifecyc
       path: "/tmp/ostool-member-requests.png",
       fullPage: true,
     });
-    await admin.goto(`${base}/admin/rental-requests`);
+    await admin.goto(`${base}/qcl/rental-requests`);
     await admin.getByLabel(/^(邮箱|账号)$/, { exact: true }).fill(adminEmail);
     await admin.getByLabel("密码", { exact: true }).fill(adminPassword);
     await solveCaptcha(admin);
     await admin.getByRole("button", { name: "登录", exact: true }).click();
-    await expect(admin).toHaveURL(`${base}/admin/rental-requests`);
+    await expect(admin).toHaveURL(`${base}/qcl/rental-requests`);
     await admin.getByLabel("搜索申请").fill(email);
     const adminRow = admin
       .getByRole("row")

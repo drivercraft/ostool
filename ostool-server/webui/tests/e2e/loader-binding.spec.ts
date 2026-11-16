@@ -16,7 +16,7 @@ test("authenticated unbound power and manual MAC binding preserve drafts while u
     )
       reads.push(r.url());
   });
-  await page.goto("/admin/boards/new");
+  await page.goto("/qcl/boards/new");
   await expect(page.getByLabel("板型", { exact: true })).toBeVisible();
   await page.getByLabel("上电命令", { exact: true }).fill("true");
   await page.getByLabel("下电命令", { exact: true }).fill("true");
@@ -76,7 +76,7 @@ test("authenticated unbound power and manual MAC binding preserve drafts while u
   ).json();
   expect(saved.serial).toBeNull();
   const peer = await context.newPage();
-  await peer.goto("/admin/boards");
+  await peer.goto("/qcl/boards");
   await expect(
     peer.getByRole("link", { name: "e2e-board", exact: true }),
   ).toBeVisible();
@@ -139,7 +139,7 @@ test("all management modules, DTB CRUD, session release and narrow viewport", as
 }) => {
   const consoleErrors: string[] = [];
   page.on("pageerror", (e) => consoleErrors.push(e.message));
-  await page.goto("/admin/overview");
+  await page.goto("/qcl/overview");
   await expect(
     page.getByRole("heading", { name: "服务运行状态", exact: true }),
   ).toBeVisible();
@@ -254,7 +254,7 @@ test("public fixture exposes authenticated account and allocation routes", async
   request,
   playwright,
 }) => {
-  await page.goto("/admin/overview");
+  await page.goto("/qcl/overview");
   await expect(
     page.getByRole("link", { name: "用户列表", exact: true }),
   ).toBeVisible();
@@ -319,7 +319,7 @@ test("viewport panels keep toolbar and footer fixed while tables/forms scroll", 
     ).toBeTruthy();
   }
   await page.setViewportSize({ width: 1360, height: 800 });
-  await page.goto("/admin/boards");
+  await page.goto("/qcl/boards");
   await page.getByLabel("搜索开发板", { exact: true }).fill("viewport-");
   const panel = page.locator(".page-panel:visible");
   const scroll = panel.locator(".panel-scroll");
@@ -547,7 +547,7 @@ test("titlebar shares the logo theme and provides notifications, theme and works
   request,
 }) => {
   await page.emulateMedia({ colorScheme: "light" });
-  await page.goto("/admin/boards");
+  await page.goto("/qcl/boards");
   await expect(
     page.getByRole("heading", { name: "设备列表", exact: true }),
   ).toBeVisible();
@@ -637,7 +637,7 @@ test("titlebar shares the logo theme and provides notifications, theme and works
     page.getByRole("menuitem", { name: "退出登录", exact: true }),
   ).toBeVisible();
   await page.getByRole("menuitem", { name: "系统设置", exact: true }).click();
-  await expect(page).toHaveURL(/\/admin\/settings$/);
+  await expect(page).toHaveURL(/\/qcl\/settings$/);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "切换导航", exact: true }).click();
   await expect(

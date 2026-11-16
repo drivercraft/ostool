@@ -332,7 +332,7 @@ export class AdminStore {
       const user = await api.me();
       if (generation !== this.generation) return;
       if (!this.member && !(user.can_access_admin ?? user.is_admin)) {
-        window.location.assign("/admin/login");
+        window.location.assign("/qcl/login");
         return;
       }
       this.connect();

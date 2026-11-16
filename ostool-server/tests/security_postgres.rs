@@ -29,6 +29,45 @@ struct Fixture {
     _root: tempfile::TempDir,
     origin: String,
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn anonymous_missing_pages_return_html_404_without_bypassing_api_authentication() {
+    let fixture = Fixture::new(true).await;
+    for (path, status, content_type) in [
+        ("/missing-page", StatusCode::NOT_FOUND, "text/html"),
+        ("/admin", StatusCode::NOT_FOUND, "text/html"),
+        ("/docs/missing-page", StatusCode::NOT_FOUND, "text/html"),
+        ("/qcl/missing-page", StatusCode::NOT_FOUND, "text/html"),
+        (
+            "/api/v1/missing",
+            StatusCode::UNAUTHORIZED,
+            "application/json",
+        ),
+        (
+            "/api/v1/admin/users",
+            StatusCode::UNAUTHORIZED,
+            "application/json",
+        ),
+    ] {
+        let mut request = Request::builder()
+            .uri(path)
+            .header("accept", "text/html")
+            .body(Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(
+            "203.0.113.5:4190".parse::<std::net::SocketAddr>().unwrap(),
+        ));
+        let response = fixture.app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), status, "{path}");
+        assert_eq!(response.headers()["content-type"], content_type, "{path}");
+        if content_type == "text/html" {
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            assert!(response.headers().contains_key("content-security-policy"));
+        }
+    }
+}
+
 impl Fixture {
     async fn new(public: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
@@ -386,7 +425,7 @@ async fn admin_actions_skip_step_up_but_keep_session_isolation_and_csrf() {
         .await;
     assert_eq!(allowed.status, StatusCode::CREATED, "{}", allowed.body);
     let headers = f
-        .request("GET", "/admin/login", None, Value::Null)
+        .request("GET", "/qcl/login", None, Value::Null)
         .await
         .headers;
     assert_eq!(headers["x-content-type-options"], "nosniff");

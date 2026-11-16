@@ -39,7 +39,7 @@ test("registration, member/admin access, user/role events and settings navigatio
   await page.getByRole("button", { name: "创建账号", exact: true }).click();
   await expect(page).toHaveURL(`${base}/account`);
   await expect(page.getByRole("heading", { name: "当前账号" })).toBeVisible();
-  await page.goto(`${base}/admin/users`);
+  await page.goto(`${base}/qcl/users`);
   await expect(
     page.getByRole("heading", { name: "管理后台登录" }),
   ).toBeVisible();
@@ -50,7 +50,7 @@ test("registration, member/admin access, user/role events and settings navigatio
   await expect(
     page.getByText("用户名、邮箱或密码不正确", { exact: true }),
   ).toBeVisible();
-  await page.goto(`${base}/admin/login?redirect=/admin/overview`);
+  await page.goto(`${base}/qcl/login?redirect=/qcl/overview`);
   await page
     .getByLabel(/^(邮箱|账号)$/, { exact: true })
     .fill(process.env.OSTOOL_E2E_ADMIN_EMAIL ?? "admin@example.com");
@@ -59,7 +59,7 @@ test("registration, member/admin access, user/role events and settings navigatio
     .fill(process.env.OSTOOL_E2E_ADMIN_PASSWORD ?? "admin-password-123");
   await solveCaptcha(page);
   await page.getByRole("button", { name: "登录", exact: true }).click();
-  await expect(page).toHaveURL(`${base}/admin/overview`);
+  await expect(page).toHaveURL(`${base}/qcl/overview`);
   await page.getByRole("link", { name: "用户列表", exact: true }).click();
   await expect(page.getByText(email, { exact: true })).toBeVisible();
   await page.screenshot({
@@ -104,7 +104,7 @@ test("registration, member/admin access, user/role events and settings navigatio
   ).toBeTruthy();
   await page.getByRole("link", { name: "租赁列表", exact: true }).click();
   await page.getByRole("link", { name: "新增租赁", exact: true }).click();
-  await expect(page).toHaveURL(`${base}/admin/rentals/new`);
+  await expect(page).toHaveURL(`${base}/qcl/rentals/new`);
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("region", { name: "租赁日历" })).toBeVisible();
   const userSelect = page.getByLabel("使用用户", { exact: true });
@@ -157,7 +157,7 @@ test("temporary refresh failures preserve the administrator login and unsaved de
   const base = process.env.OSTOOL_E2E_AUTH_BASE_URL;
   test.skip(!base, "requires disposable public PostgreSQL and Redis fixtures");
   test.setTimeout(60000);
-  await page.goto(base + "/admin/login?redirect=/admin/boards/new");
+  await page.goto(base + "/qcl/login?redirect=/qcl/boards/new");
   await page
     .getByLabel(/^(邮箱|账号)$/, { exact: true })
     .fill(process.env.OSTOOL_E2E_ADMIN_EMAIL!);
@@ -166,7 +166,7 @@ test("temporary refresh failures preserve the administrator login and unsaved de
     .fill(process.env.OSTOOL_E2E_ADMIN_PASSWORD!);
   await solveCaptcha(page);
   await page.getByRole("button", { name: "登录", exact: true }).click();
-  await expect(page).toHaveURL(base + "/admin/boards/new");
+  await expect(page).toHaveURL(base + "/qcl/boards/new");
   await page
     .getByLabel("备注", { exact: true })
     .fill("keep this draft across a restart");
@@ -193,7 +193,7 @@ test("temporary refresh failures preserve the administrator login and unsaved de
       ),
     );
     await expect.poll(() => attempts, { timeout: 25000 }).toBeGreaterThan(0);
-    await expect(page).toHaveURL(base + "/admin/boards/new");
+    await expect(page).toHaveURL(base + "/qcl/boards/new");
     await expect(page.getByLabel("备注", { exact: true })).toHaveValue(
       "keep this draft across a restart",
     );
@@ -209,7 +209,7 @@ test("temporary refresh failures preserve the administrator login and unsaved de
       { timeout: 20000 },
     )
     .toBe(true);
-  await expect(page).toHaveURL(base + "/admin/boards/new");
+  await expect(page).toHaveURL(base + "/qcl/boards/new");
   await expect(page.getByLabel("备注", { exact: true })).toHaveValue(
     "keep this draft across a restart",
   );

@@ -46,7 +46,7 @@ vi.mock("@/api/client", () => ({
   api: { createRental: mocks.createRental, updateRental: mocks.updateRental },
 }));
 beforeEach(() => {
-  window.history.replaceState({}, "", "/admin/rentals/new");
+  window.history.replaceState({}, "", "/qcl/rentals/new");
   mocks.resources = {
     rental_editor: {
       query: {},
@@ -67,7 +67,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 const App = () => (
-  <BrowserRouter basename="/admin">
+  <BrowserRouter basename="/qcl">
     <Routes>
       <Route path="/rentals/new" element={<RentalEditor />} />
     </Routes>

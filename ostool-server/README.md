@@ -336,13 +336,19 @@ migrations in `migrations/`. `webui/` builds two independent React/Vite entries:
 | `index.html` | `src/apps/web/` | Website, login and member workspace |
 | `admin/index.html` | `src/apps/admin/` | Console and administrator login |
 
+Unknown website, account and console pages share a themed 404 view with return
+navigation. Direct requests to unknown page paths return HTTP 404 while retaining
+the corresponding website or console layout. API and asset errors keep their
+existing response formats. Keep the document path matcher in `src/static_assets.rs`
+aligned with the React routers when adding pages.
+
 Shared controls are in `src/components/`, API clients/SSE in `src/api/`, contracts
 in `src/types/api.ts`, and styles under `src/styles/` with `global.css` as the
 entry. Unit tests live beside source; Playwright tests and private server fixtures
 live in `tests/e2e/` and `tests/fixtures/`. Neither app imports the other's private
 pages. Website and console use independent browser sessions and theme settings,
 sharing PostgreSQL accounts and role checks. `/login` opens `/account/*`, while
-`/admin/login` rejects non-administrators. Logging out of one does not log out of
+`/qcl/login` rejects non-administrators. Logging out of one does not log out of
 the other. Local edition has no browser login or account/rental features.
 
 The public website uses a shared header, avatar/theme menus and footer, an initial
@@ -366,14 +372,14 @@ All updates use SSE, preserving drafts, focus and scroll position. Configuration
 conflicts require explicit resolution. See the
 [management interface and event protocol](../docs/admin-ui.md).
 
-The dashboard provides runtime health (`/admin/overview`), background tasks
-(`/admin/jobs`) and operational metrics (`/admin/operations`). Resource and service
+The dashboard provides runtime health (`/qcl/overview`), background tasks
+(`/qcl/jobs`) and operational metrics (`/qcl/operations`). Resource and service
 snapshots update every five seconds through SSE; charts retain at most five
 minutes from this process. Unavailable host metrics stay unavailable. Local
 edition hides user/rental metrics. The dashboard footer includes connection
 health; the device toolbar opens discovery information.
 
-`/admin/audits` provides PostgreSQL-backed pagination, filters, details and CSV
+`/qcl/audits` provides PostgreSQL-backed pagination, filters, details and CSV
 export for identity, permissions, settings, board/session/file/power/OTA and
 user/role/rental operations. Mutations record an intent before execution; audit
 storage failure returns 503 without executing the action. If result recording
@@ -619,7 +625,7 @@ conditions. Authentication rules and routes are in [the API reference](../docs/a
 
 ## Role permissions and immediate device use
 
-`/admin/users/roles` provides a unified role list and standalone role editor, with
+`/qcl/users/roles` provides a unified role list and standalone role editor, with
 a grouped capability matrix, group/master selection and automatically included
 read dependencies. The server owns the catalog (`GET /api/v1/admin/permissions`);
 the same codes authorize management HTTP routes and filter every SSE resource.
@@ -803,7 +809,7 @@ with deployment secrets. This repository does not supply TLS support for existin
 
 ### Public device documentation
 
-`/admin/device-documents` is a dedicated editor for public descriptions, images, highlights and specifications.
+`/qcl/device-documents` is a dedicated editor for public descriptions, images, highlights and specifications.
 Documents are revisioned PostgreSQL records, preserved on board rename and removed on board deletion.
 Readers need `devices.read`; publishing needs `devices.manage` in public edition. Local edition retains anonymous administration.
 `/devices/:boardId` presents only this authored content and the public device projection.

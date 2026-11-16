@@ -56,8 +56,8 @@ export default function AdminLogin() {
         !!user.permissions?.includes(code);
       const target = safeAdminRedirect(redirect);
       window.location.replace(
-        target === "/admin/overview" && !allowed("dashboard.read")
-          ? "/admin" + firstPage(allowed)
+        target === "/qcl/overview" && !allowed("dashboard.read")
+          ? "/qcl" + firstPage(allowed)
           : target,
       );
     } catch (error) {
@@ -71,7 +71,7 @@ export default function AdminLogin() {
     <div className="auth-page auth-page-split auth-page-fullscreen admin-login-page">
       <main className="auth-shell">
         <aside className="auth-aside" aria-label="后台介绍">
-          <a href="/admin/login" className="auth-brand">
+          <a href="/qcl/login" className="auth-brand">
             <span className="logo-mark">
               {settings.logo_url ? (
                 <img
@@ -130,7 +130,7 @@ export default function AdminLogin() {
         <section className="auth-form-pane" aria-label="后台登录">
           <div className="auth-page-tools">
             <span className="auth-mobile-brand">
-              <a href="/admin/login" className="auth-brand">
+              <a href="/qcl/login" className="auth-brand">
                 <span className="logo-mark">
                   {settings.logo_url ? (
                     <img

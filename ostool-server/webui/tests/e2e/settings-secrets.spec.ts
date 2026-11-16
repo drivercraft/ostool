@@ -6,7 +6,7 @@ test("system settings write encrypted credentials without echoing them and prote
 }) => {
   const base = process.env.OSTOOL_E2E_AUTH_BASE_URL;
   test.skip(!base, "requires disposable public fixtures");
-  await page.goto(base + "/admin/login?redirect=/admin/settings");
+  await page.goto(base + "/qcl/login?redirect=/qcl/settings");
   await page
     .getByLabel("账号", { exact: true })
     .fill(process.env.OSTOOL_E2E_ADMIN_EMAIL!);
@@ -15,7 +15,7 @@ test("system settings write encrypted credentials without echoing them and prote
     .fill(process.env.OSTOOL_E2E_ADMIN_PASSWORD!);
   await solveCaptcha(page);
   await page.getByRole("button", { name: "登录", exact: true }).click();
-  await expect(page).toHaveURL(base + "/admin/settings");
+  await expect(page).toHaveURL(base + "/qcl/settings");
   const headers = { "x-ostool-surface": "admin", origin: base! };
   const endpoint = base + "/api/v1/admin/account-settings";
   const initial = await (
@@ -91,7 +91,7 @@ test("reserved name lists preserve multiline drafts, save through SSE and persis
     await context.request.get(endpoint, { headers })
   ).json();
   try {
-    await page.goto(base + "/admin/settings?tab=security");
+    await page.goto(base + "/qcl/settings?tab=security");
     const username = page.getByLabel("用户名禁用关键词", { exact: true });
     const nickname = page.getByLabel("昵称禁用关键词", { exact: true });
     await expect(username).toHaveValue(

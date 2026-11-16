@@ -41,10 +41,10 @@ test("administrator tables share restrained headers in light and dark themes", a
     let reference: Record<string, string> | undefined;
     for (const theme of ["light", "dark"]) {
       for (const route of [
-        "/admin/boards",
-        "/admin/users",
-        "/admin/rentals",
-        "/admin/device-documents",
+        "/qcl/boards",
+        "/qcl/users",
+        "/qcl/rentals",
+        "/qcl/device-documents",
       ]) {
         await page.goto(route);
         await expect(page.getByRole("columnheader").first()).toBeVisible();
@@ -82,7 +82,7 @@ test("administrator tables share restrained headers in light and dark themes", a
         reference ??= styles;
         expect(styles).toEqual(reference);
         expect(Number.parseFloat(styles.height)).toBeGreaterThanOrEqual(48);
-        if (route === "/admin/boards")
+        if (route === "/qcl/boards")
           await page.screenshot({
             path: `/tmp/ostool-admin-table-header-${theme}.png`,
             fullPage: true,

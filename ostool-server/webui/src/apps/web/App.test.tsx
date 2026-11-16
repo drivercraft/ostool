@@ -114,6 +114,31 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+describe("unknown website pages", () => {
+  it("returns home when the missing page has no previous in-app entry", async () => {
+    window.history.replaceState({ idx: 0 }, "", "/missing-page");
+    render(<PublicApp />);
+    await userEvent.click(await screen.findByRole("button", { name: "返回上一页" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    expect(screen.queryByRole("heading", { name: "页面不存在" })).toBeNull();
+  });
+  it.each(["/missing-page", "/docs/missing-page", "/admin"])(
+    "shows the shared 404 inside the website layout at %s",
+    async (path) => {
+      window.history.replaceState({}, "", path);
+      render(<PublicApp />);
+      await screen.findByRole("heading", { name: "页面不存在" });
+      expect(screen.getByRole("navigation", { name: "网站导航" })).toBeTruthy();
+      expect(screen.getByRole("link", { name: "返回首页" }).getAttribute("href")).toBe("/");
+      expect(window.location.pathname).toBe(path);
+      await waitFor(() => expect(document.title).toContain("404"));
+      await userEvent.click(screen.getByRole("link", { name: "返回首页" }));
+      await waitFor(() => expect(window.location.pathname).toBe("/"));
+      expect(screen.queryByRole("heading", { name: "页面不存在" })).toBeNull();
+    },
+  );
+});
+
 describe("registration", () => {
   it("keeps the account route pending while a newly saved login identity loads", async () => {
     let finish!: (value: unknown) => void;

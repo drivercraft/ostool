@@ -17,9 +17,9 @@ test("role matrix grants instant device access without administrator rights and 
   const headers = { origin: base!, "x-ostool-surface": "admin" };
   const stamp = Date.now();
   const name = `即时研发角色 ${stamp}`;
-  await page.goto(base + "/admin/users/roles");
+  await page.goto(base + "/qcl/users/roles");
   await page.getByRole("button", { name: "创建角色", exact: true }).click();
-  await expect(page).toHaveURL(base + "/admin/users/roles/new");
+  await expect(page).toHaveURL(base + "/qcl/users/roles/new");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.getByLabel("角色编码", { exact: true }).fill(`engineer_${stamp}`);
   await expect(
@@ -40,7 +40,7 @@ test("role matrix grants instant device access without administrator rights and 
   await page.getByLabel("最短可用时长（分钟）", { exact: true }).fill("5");
   await page.getByLabel("可用板型范围", { exact: true }).fill("permission-arm");
   await page.getByRole("button", { name: "保存角色", exact: true }).click();
-  await expect(page).toHaveURL(base + "/admin/users/roles");
+  await expect(page).toHaveURL(base + "/qcl/users/roles");
   await expect(page.getByText(name, { exact: true })).toBeVisible();
   const roles = await (
     await context.request.get(base + "/api/v1/admin/roles", { headers })
@@ -233,8 +233,8 @@ test("role matrix grants instant device access without administrator rights and 
   try {
     await apiLogin(viewer.request, base!, viewerEmail, password, true);
     const view = await viewer.newPage();
-    await view.goto(base + "/admin");
-    await expect(view).toHaveURL(base + "/admin/boards");
+    await view.goto(base + "/qcl");
+    await expect(view).toHaveURL(base + "/qcl/boards");
     await expect(view.getByText(id, { exact: true })).toBeVisible();
     await expect(
       view.getByRole("link", { name: "用户列表", exact: true }),
@@ -251,7 +251,7 @@ test("role matrix grants instant device access without administrator rights and 
     expect(
       (await viewer.request.get(base + "/api/v1/admin/users")).status(),
     ).toBe(403);
-    await view.goto(base + "/admin/users");
+    await view.goto(base + "/qcl/users");
     await expect(
       view.getByText("当前角色没有此页面的访问权限。", { exact: true }),
     ).toBeVisible();

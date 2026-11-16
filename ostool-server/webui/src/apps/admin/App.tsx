@@ -9,6 +9,7 @@ import {
   useSiteSettings,
 } from "@/components/site-settings";
 import { loginUrl } from "@/auth-session";
+import { NotFound } from "@/components/not-found";
 import { SecuritySettings } from "@/components/security-settings";
 import { PagePanel } from "@/components/page-panel";
 import AdminLogin from "@/apps/admin/pages/AdminLogin";
@@ -90,7 +91,7 @@ function AdminEntry() {
   const config = useEdition();
   const requireAdminMfa =
     useResource("account_settings")?.settings.require_admin_mfa ?? false;
-  const loginPage = /^\/admin\/login\/?$/.test(window.location.pathname);
+  const loginPage = /^\/qcl\/login\/?$/.test(window.location.pathname);
   const [gate, setGate] = useState<"checking" | "allowed" | "denied" | "error">(
     "checking",
   );
@@ -136,7 +137,7 @@ function AdminEntry() {
             : message}
         </Notice>
         <a href="/account">个人中心</a>
-        <a href="/admin/login">重新登录后台</a>
+        <a href="/qcl/login">重新登录后台</a>
       </div>
     );
   if (currentUser?.mfa_enrollment_required)
@@ -148,7 +149,7 @@ function AdminEntry() {
         <Button
           variant="outline"
           onClick={() =>
-            void api.logout().then(() => location.replace("/admin/login"))
+            void api.logout().then(() => location.replace("/qcl/login"))
           }
         >
           退出登录
@@ -179,7 +180,7 @@ function AdminConsole({
     return admin.disconnect;
   }, [pending]);
   return (
-    <BrowserRouter basename="/admin">
+    <BrowserRouter basename="/qcl">
       <div className="app-shell">
         <aside
           id="admin-sidebar"
@@ -453,7 +454,12 @@ function AdminConsole({
                     <Route
                       path="*"
                       element={
-                        <Notice>页面不存在。请选择左侧管理模块。</Notice>
+                        <PagePanel
+                          className="not-found-panel"
+                          footer={<span className="panel-status">404 · 页面不存在</span>}
+                        >
+                          <NotFound homeTo={firstPage(can)} homeLabel="返回管理后台" />
+                        </PagePanel>
                       }
                     />
                   </Routes>

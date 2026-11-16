@@ -15,7 +15,7 @@ test("site settings publish through SSE, legal pages and explicit versioned sign
   await expect(
     website.getByRole("link", { name: "《隐私政策》", exact: true }).first(),
   ).toBeVisible();
-  await page.goto(base + "/admin/login?redirect=/admin/settings");
+  await page.goto(base + "/qcl/login?redirect=/qcl/settings");
   await page
     .getByLabel(/^(邮箱|账号)$/, { exact: true })
     .fill(process.env.OSTOOL_E2E_ADMIN_EMAIL!);
@@ -24,7 +24,7 @@ test("site settings publish through SSE, legal pages and explicit versioned sign
     .fill(process.env.OSTOOL_E2E_ADMIN_PASSWORD!);
   await solveCaptcha(page);
   await page.getByRole("button", { name: "登录", exact: true }).click();
-  await expect(page).toHaveURL(base + "/admin/settings");
+  await expect(page).toHaveURL(base + "/qcl/settings");
   await page.getByRole("tab", { name: "站点信息", exact: true }).click();
   await expect(
     page.getByRole("tab", { name: "联系与备案", exact: true }),

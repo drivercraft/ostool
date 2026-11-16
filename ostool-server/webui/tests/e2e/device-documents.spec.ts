@@ -42,7 +42,7 @@ test("device documents publish to product details and the rental workspace with 
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    await page.goto(`${base}/admin/device-documents`);
+    await page.goto(`${base}/qcl/device-documents`);
     await page.getByLabel("搜索设备文档").fill(id);
     const documentToolbar = page.getByRole("toolbar", {
       name: "列表快捷工具栏",
@@ -102,7 +102,7 @@ test("device documents publish to product details and the rental workspace with 
     // Compare with the existing new-board editor, including wide screens that
     // exposed the old centered max-width and nested card gutters.
     const referencePage = await context.newPage();
-    await referencePage.goto(`${base}/admin/boards/new`);
+    await referencePage.goto(`${base}/qcl/boards/new`);
     await expect(
       referencePage.getByLabel("板型", { exact: true }),
     ).toBeVisible();

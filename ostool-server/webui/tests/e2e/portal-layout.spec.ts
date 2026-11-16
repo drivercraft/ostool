@@ -191,7 +191,7 @@ test("administrator shell stays full sized while identity loads and subscribes o
   });
   await page.setViewportSize({ width: 1440, height: 960 });
   try {
-    await page.goto(base + "/admin/boards", { waitUntil: "domcontentloaded" });
+    await page.goto(base + "/qcl/boards", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".sidebar")).toBeVisible();
     await expect(page.locator(".admin-workspace")).toHaveAttribute(
       "aria-busy",

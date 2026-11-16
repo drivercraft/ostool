@@ -17,7 +17,7 @@ export default defineConfig({
         server.middlewares.use((request, _response, next) => {
           const pathname = request.url?.split("?")[0] ?? "";
           if (
-            (pathname === "/admin" || pathname.startsWith("/admin/")) &&
+            (pathname === "/qcl" || pathname.startsWith("/qcl/")) &&
             request.headers.accept?.includes("text/html")
           ) {
             request.url = "/admin/index.html";

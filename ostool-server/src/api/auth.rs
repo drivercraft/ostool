@@ -167,7 +167,17 @@ pub async fn middleware(
         }
         return next.run(request).await;
     }
-    if is_public_path(path) {
+    if is_public_path(path)
+        || (request
+            .extensions()
+            .get::<axum::extract::MatchedPath>()
+            .is_none()
+            && crate::static_assets::is_browser_page_request(
+                request.method(),
+                request.uri(),
+                request.headers(),
+            ))
+    {
         return next.run(request).await;
     }
     let config = state.config.read().await.clone();
@@ -327,7 +337,7 @@ fn is_public_path(path: &str) -> bool {
         || path == "/password-reset"
         || path == "/account"
         || path.starts_with("/account/")
-        || path.starts_with("/admin")
+        || path.starts_with("/qcl")
         || path == "/login"
         || path.starts_with("/login/")
         || path == "/devices"
@@ -351,7 +361,7 @@ fn is_public_path(path: &str) -> bool {
         || path == "/api/v1/auth/refresh"
         || path == "/api/v1/auth/logout"
         || path == "/healthz"
-        || path.starts_with("/admin/assets/")
+        || path.starts_with("/qcl/assets/")
         || path.starts_with("/assets/")
         || path == "/api/v1/admin/auth/login"
 }

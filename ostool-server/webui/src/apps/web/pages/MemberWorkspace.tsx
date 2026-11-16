@@ -1,6 +1,7 @@
 import { SecuritySettings } from "@/components/security-settings";
 import { useEffect, useState, type FormEvent } from "react";
 import { requestStatusLabels } from "@/types/api";
+import { NotFound } from "@/components/not-found";
 import {
   Link,
   NavLink,
@@ -126,7 +127,7 @@ export default function MemberWorkspace() {
           <Route path="allocations/new" element={<ClaimBoard user={user} />} />
           <Route path="requests" element={<MyRequests />} />
           <Route path="tokens" element={<Tokens />} />
-          <Route path="*" element={<Navigate replace to="/account" />} />
+          <Route path="*" element={<NotFound homeTo="/account" homeLabel="返回个人工作台" />} />
         </Routes>
       </div>
     </main>

@@ -101,7 +101,7 @@ function SiteHeader() {
   const { user, checking } = useSiteSession();
   const accountActions = !publicEdition ? (
     <Button asChild size="sm">
-      <a href="/admin/overview">打开控制台</a>
+      <a href="/qcl/overview">打开控制台</a>
     </Button>
   ) : checking ? (
     <Skeleton className="h-9 w-32" aria-label="正在读取登录状态" />
@@ -162,7 +162,7 @@ function SiteHeader() {
             <DropdownMenuItem asChild>
               {(!publicEdition ||
                 (user?.can_access_admin ?? user?.is_admin)) && (
-                <a href="/admin/overview">管理后台</a>
+                <a href="/qcl/overview">管理后台</a>
               )}
             </DropdownMenuItem>
           </>
@@ -292,7 +292,7 @@ function SiteFooter() {
               <Link to="/legal/privacy">{settings.privacy_title}</Link>
             </>
           )}
-          {!publicEdition && <a href="/admin/overview">本地控制台</a>}
+          {!publicEdition && <a href="/qcl/overview">本地控制台</a>}
         </nav>
       </div>
       <div className="site-footer-bottom">

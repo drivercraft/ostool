@@ -94,11 +94,11 @@ pub fn build_router(state: AppState) -> Router {
             get(crate::admin_power::get),
         )
         .route("/", get(serve_site_index))
-        .route("/admin", get(serve_admin_index))
-        .route("/admin/", get(serve_admin_index))
-        .route("/admin/assets/{*path}", get(serve_admin_asset))
+        .route("/qcl", get(serve_admin_index))
+        .route("/qcl/", get(serve_admin_index))
+        .route("/qcl/assets/{*path}", get(serve_admin_asset))
         .route("/assets/{*path}", get(serve_admin_asset))
-        .route("/admin/{*path}", get(serve_admin_history))
+        .route("/qcl/{*path}", get(serve_admin_history))
         .route("/register", get(serve_site_index))
         .route("/rental-request", get(serve_site_index))
         .route("/password-reset", get(serve_site_index))
@@ -118,6 +118,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/about", get(serve_site_index))
         .route("/about/{*path}", get(serve_site_history))
+        .fallback(crate::static_assets::serve_not_found)
         .route(
             "/boot/sessions/{session_id}/{*path}",
             get(get_http_boot_file),
@@ -3488,12 +3489,7 @@ mod tests {
     async fn admin_route_serves_embedded_index() {
         let app: Router = test_router().await;
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/admin")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri("/qcl").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -3523,8 +3519,8 @@ mod tests {
             "/devices",
             "/account/profile",
             "/login",
-            "/admin/login",
-            "/admin/boards",
+            "/qcl/login",
+            "/qcl/boards",
         ] {
             let response = app
                 .clone()
@@ -3540,7 +3536,7 @@ mod tests {
                     .to_vec(),
             )
             .unwrap();
-            if path.starts_with("/admin/") {
+            if path.starts_with("/qcl/") {
                 assert!(body.contains("ostool · 管理后台"));
                 assert!(body.contains("/assets/admin-"));
                 assert!(!body.contains("/assets/website-"));
@@ -3574,7 +3570,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("/admin/{asset_path}"))
+                    .uri(format!("/qcl/{asset_path}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -3595,7 +3591,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/admin/boards/demo-board")
+                    .uri("/qcl/boards/demo-board")
                     .body(Body::empty())
                     .unwrap(),
             )

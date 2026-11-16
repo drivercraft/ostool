@@ -37,9 +37,9 @@ for (const theme of ["light", "dark"] as const) {
       for (const [path, label] of [
         [base + "/login", "账号"],
         [base + "/register", "用户名"],
-        [base + "/admin/login", "账号"],
+        [base + "/qcl/login", "账号"],
         [base + "/devices", "搜索设备"],
-        ["http://127.0.0.1:4174/admin/boards/new", "板型"],
+        ["http://127.0.0.1:4174/qcl/boards/new", "板型"],
       ]) {
         const page = await context.newPage();
         await page.goto(path);

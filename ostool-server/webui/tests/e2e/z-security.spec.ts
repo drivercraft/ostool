@@ -32,7 +32,7 @@ test("image captcha, encrypted MFA enrollment and recovery login without admin s
   page.on("request", (request) => {
     if (request.url().includes("/events")) events.push(request.url());
   });
-  await page.goto(base + "/admin/login?redirect=/admin/account");
+  await page.goto(base + "/qcl/login?redirect=/qcl/account");
   await expect(
     page.getByRole("button", { name: "登录", exact: true }),
   ).toBeDisabled();
@@ -40,7 +40,7 @@ test("image captcha, encrypted MFA enrollment and recovery login without admin s
   await page.getByLabel("密码", { exact: true }).fill(password);
   await solveCaptcha(page);
   await page.getByRole("button", { name: "登录", exact: true }).click();
-  await expect(page).toHaveURL(base + "/admin/account");
+  await expect(page).toHaveURL(base + "/qcl/account");
   await page
     .getByRole("button", { name: "设置身份验证器", exact: true })
     .click();
@@ -97,8 +97,8 @@ test("image captcha, encrypted MFA enrollment and recovery login without admin s
   ).toBeVisible();
   await page.getByLabel("验证码或恢复码", { exact: true }).fill(replaced[0]);
   await page.getByRole("button", { name: "验证并登录", exact: true }).click();
-  await expect(page).toHaveURL(base + "/admin/overview");
-  await page.goto(base + "/admin/account");
+  await expect(page).toHaveURL(base + "/qcl/overview");
+  await page.goto(base + "/qcl/account");
   await expect(
     page.getByText("已启用身份验证器，剩余 7 个恢复码。"),
   ).toBeVisible();

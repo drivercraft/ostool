@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::{Extension, Path, State},
-    http::{HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
     response::{IntoResponse, Response},
 };
 use mime_guess::from_path;
@@ -19,11 +19,11 @@ pub async fn serve_admin_index(
 }
 
 pub async fn serve_admin_history(
-    Path(_path): Path<String>,
+    uri: Uri,
     state: State<crate::AppState>,
     nonce: Extension<crate::security::web::CspNonce>,
 ) -> Response {
-    serve_admin_index(state, nonce).await
+    document_status(serve_admin_index(state, nonce).await, uri.path())
 }
 
 pub async fn serve_site_index(
@@ -34,11 +34,87 @@ pub async fn serve_site_index(
 }
 
 pub async fn serve_site_history(
-    Path(_path): Path<String>,
+    uri: Uri,
     state: State<crate::AppState>,
     nonce: Extension<crate::security::web::CspNonce>,
 ) -> Response {
-    serve_site_index(state, nonce).await
+    document_status(serve_site_index(state, nonce).await, uri.path())
+}
+
+// Keep these document paths aligned with the two React routers. Resource IDs
+// are resolved by the application; only an unknown page shape is a document 404.
+fn is_document_path(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    if path.is_empty() {
+        return true;
+    }
+    let parts: Vec<_> = path.split('/').collect();
+    match parts.as_slice() {
+        [
+            "",
+            "" | "register" | "rental-request" | "password-reset" | "login" | "devices" | "docs"
+            | "about" | "account" | "qcl",
+        ] => true,
+        ["", "legal", "terms" | "privacy"] => true,
+        ["", "devices", id] if !id.is_empty() => true,
+        [
+            "",
+            "account",
+            "profile" | "security" | "password" | "rentals" | "requests" | "tokens",
+        ] => true,
+        ["", "account", "allocations" | "requests", "new"] => true,
+        [
+            "",
+            "qcl",
+            "login" | "overview" | "jobs" | "operations" | "audits" | "dashboard" | "boards"
+            | "device-documents" | "dtbs" | "sessions" | "tftp" | "server" | "settings" | "users"
+            | "account" | "rental-requests" | "rentals",
+        ] => true,
+        ["", "qcl", "boards" | "device-documents" | "rentals", id] if !id.is_empty() => true,
+        ["", "qcl", "users", "roles"] => true,
+        ["", "qcl", "users", "roles", id] if !id.is_empty() => true,
+        _ => false,
+    }
+}
+
+fn document_status(mut response: Response, path: &str) -> Response {
+    if !is_document_path(path) {
+        *response.status_mut() = StatusCode::NOT_FOUND;
+    }
+    response
+}
+
+pub(crate) fn is_browser_page_request(method: &Method, uri: &Uri, headers: &HeaderMap) -> bool {
+    let path = uri.path();
+    matches!(*method, Method::GET | Method::HEAD)
+        && !matches!(
+            path.split('/').nth(1),
+            Some("api" | "assets" | "device-files" | "boot" | "share" | "oauth")
+        )
+        && headers
+            .get(header::ACCEPT)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|accept| {
+                accept
+                    .split(',')
+                    .any(|part| part.split(';').next().unwrap_or_default().trim() == "text/html")
+            })
+}
+
+pub async fn serve_not_found(
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    state: State<crate::AppState>,
+    nonce: Extension<crate::security::web::CspNonce>,
+) -> Response {
+    if is_browser_page_request(&method, &uri, &headers) {
+        let mut response = serve_site_index(state, nonce).await;
+        *response.status_mut() = StatusCode::NOT_FOUND;
+        response
+    } else {
+        crate::api::error::ApiError::not_found("route not found").into_response()
+    }
 }
 
 pub async fn serve_admin_asset(Path(path): Path<String>) -> Response {
@@ -97,4 +173,116 @@ fn asset_response(
         }),
     );
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn document_routes_distinguish_pages_from_unknown_paths() {
+        for path in [
+            "/",
+            "/devices/demo",
+            "/account/profile",
+            "/account/allocations/new",
+            "/account/requests/new",
+            "/qcl/",
+            "/qcl/login/",
+            "/qcl/overview",
+            "/qcl/boards/new",
+            "/qcl/boards/demo",
+            "/qcl/device-documents/demo",
+            "/qcl/users/roles",
+            "/qcl/users/roles/new",
+            "/qcl/users/roles/demo",
+            "/qcl/rentals/new",
+            "/qcl/rentals/demo",
+            "/qcl/settings/",
+        ] {
+            assert!(is_document_path(path), "{path}");
+        }
+        for path in [
+            "/missing",
+            "/admin",
+            "/docs/missing",
+            "/login/missing",
+            "/about/missing",
+            "/devices/demo/missing",
+            "/account/missing",
+            "/qcl/missing",
+            "/qcl/boards/demo/missing",
+            "/qcl/users/roles/demo/missing",
+        ] {
+            assert!(!is_document_path(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn only_browser_page_requests_can_receive_the_website_fallback() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ACCEPT,
+            HeaderValue::from_static("text/html,application/xhtml+xml"),
+        );
+        for method in [Method::GET, Method::HEAD] {
+            assert!(is_browser_page_request(
+                &method,
+                &"/missing".parse().unwrap(),
+                &headers
+            ));
+        }
+        assert!(!is_browser_page_request(
+            &Method::POST,
+            &"/missing".parse().unwrap(),
+            &headers
+        ));
+        for path in [
+            "/api",
+            "/api/v1/missing",
+            "/assets/missing.js",
+            "/device-files/missing",
+            "/boot/missing",
+            "/share/missing",
+            "/oauth/missing",
+        ] {
+            assert!(
+                !is_browser_page_request(&Method::GET, &path.parse().unwrap(), &headers),
+                "{path}"
+            );
+        }
+        headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+        assert!(!is_browser_page_request(
+            &Method::GET,
+            &"/missing".parse().unwrap(),
+            &headers
+        ));
+    }
+
+    #[tokio::test]
+    async fn missing_documents_preserve_entry_theme_bootstrap_and_security_headers() {
+        for entry in ["index.html", "admin/index.html"] {
+            let response = document_status(
+                asset_response(
+                    entry.into(),
+                    Some("test-nonce"),
+                    Some(serde_json::json!({"edition":"local"})),
+                ),
+                "/missing",
+            );
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_eq!(response.headers()[header::CONTENT_TYPE], "text/html");
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body = String::from_utf8(body.to_vec()).unwrap();
+            assert!(body.contains("test-nonce"));
+            assert!(body.contains("ostool-bootstrap"));
+            assert!(body.contains("/assets/"));
+        }
+        let response = asset_response("assets/does-not-exist.js".into(), None, None);
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_ne!(response.headers()[header::CONTENT_TYPE], "text/html");
+    }
 }
