@@ -542,6 +542,33 @@ test("viewport panels keep toolbar and footer fixed while tables/forms scroll", 
   });
 });
 
+test("theme menu stays open when delayed administrator authentication completes", async ({ page }) => {
+  let finishAuth!: () => void;
+  const pendingAuth = new Promise<void>((resolve) => { finishAuth = resolve; });
+  await page.route("**/api/v1/auth/me", async (route) => {
+    const response = await route.fetch();
+    await pendingAuth;
+    await route.fulfill({ response });
+  });
+  try {
+    await page.goto("/qcl/boards");
+    await expect(page.locator(".admin-workspace")).toHaveAttribute("aria-busy", "true");
+    const trigger = page.getByRole("button", { name: "切换主题", exact: true });
+    const originalButton = await trigger.elementHandle();
+    await trigger.click();
+    await expect(page.getByRole("menuitemradio", { name: "跟随系统", exact: true })).toBeVisible();
+    finishAuth();
+    await expect(page.locator(".admin-workspace")).toHaveAttribute("aria-busy", "false");
+    expect(await originalButton!.evaluate((element) => element.isConnected)).toBe(true);
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await page.getByRole("menuitemradio", { name: "跟随系统", exact: true }).click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(await page.evaluate(() => localStorage.getItem("ostool.admin.theme"))).toBe("system");
+  } finally {
+    finishAuth();
+  }
+});
+
 test("titlebar shares the logo theme and provides notifications, theme and workspace menus", async ({
   page,
   request,

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
+  act,
   render,
   screen,
   waitFor,
@@ -66,6 +67,25 @@ afterEach(() => {
   document.documentElement.classList.remove("dark", "light");
 });
 describe("edition navigation and authentication", () => {
+  it("keeps an open theme menu mounted when delayed authentication completes", async () => {
+    mocks.config.mockResolvedValue({ edition: "public", enabled: true, database_available: true });
+    let finishAuth!: (user: { is_admin: boolean }) => void;
+    mocks.me.mockImplementation(() => new Promise((resolve) => { finishAuth = resolve; }));
+    render(<App />);
+    const user = userEvent.setup();
+    const trigger = await screen.findByRole("button", { name: "切换主题" });
+    expect(document.querySelector(".admin-workspace")?.getAttribute("aria-busy")).toBe("true");
+    expect(mocks.connect).not.toHaveBeenCalled();
+    await user.click(trigger);
+    expect(await screen.findByRole("menuitemradio", { name: "跟随系统" })).toBeTruthy();
+    await act(async () => { finishAuth({ is_admin: true }); });
+    await screen.findByText("本地设备总览");
+    expect(screen.getByRole("button", { name: "切换主题" })).toBe(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    await user.click(screen.getByRole("menuitemradio", { name: "跟随系统" }));
+    expect(localStorage.getItem("ostool.admin.theme")).toBe("system");
+    expect(mocks.connect).toHaveBeenCalledTimes(1);
+  });
   it("shows the shared 404 inside the console and returns to an allowed page", async () => {
     mocks.config.mockResolvedValue({ edition: "local", enabled: false, database_available: true });
     window.history.replaceState({}, "", "/qcl/missing-page");

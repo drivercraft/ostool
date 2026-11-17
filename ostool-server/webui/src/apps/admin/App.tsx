@@ -127,8 +127,7 @@ function AdminEntry() {
     };
   }, [config, loginPage, requireAdminMfa]);
   if (loginPage && config.enabled) return <AdminLogin />;
-  if (gate === "checking") return <AdminConsole pending />;
-  if (gate !== "allowed")
+  if (gate !== "checking" && gate !== "allowed")
     return (
       <div className="admin-gate">
         <Notice>
@@ -140,7 +139,7 @@ function AdminEntry() {
         <a href="/qcl/login">重新登录后台</a>
       </div>
     );
-  if (currentUser?.mfa_enrollment_required)
+  if (gate === "allowed" && currentUser?.mfa_enrollment_required)
     return (
       <main className="security-enrollment-page">
         <h1>启用管理员双重验证</h1>
@@ -157,8 +156,9 @@ function AdminEntry() {
       </main>
     );
   return (
+    // Keep the console mounted across authentication so open menus and focus survive.
     <PermissionsProvider user={currentUser} local={!config.enabled}>
-      <AdminConsole user={currentUser} />
+      <AdminConsole user={currentUser} pending={gate === "checking"} />
     </PermissionsProvider>
   );
 }
