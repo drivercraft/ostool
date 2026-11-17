@@ -25,14 +25,20 @@ pub async fn reconcile(
     announcement: LoaderAnnouncement,
     peer: SocketAddr,
 ) -> anyhow::Result<()> {
-    let public = state.config.read().await.edition.is_public();
-    let connection = if public {
-        let board_id = {
-            let boards = state.boards.read().await;
-            board_id_for_mac(&boards, announcement.mac_address)
-                .context("device is not bound to a board")?
-        };
-        crate::device_security::connection(&state, &board_id).await?
+    ensure!(
+        crate::device_network::is_lan_address(peer.ip()),
+        "device discovery source must be on the device LAN"
+    );
+    let board_id = board_id_for_mac(&*state.boards.read().await, announcement.mac_address);
+    let provisioned = if let Some(id) = &board_id {
+        crate::device_security::projection(&state, id)
+            .await?
+            .is_some()
+    } else {
+        false
+    };
+    let connection = if provisioned {
+        crate::device_security::connection(&state, board_id.as_deref().unwrap()).await?
     } else {
         crate::device_security::DeviceConnection {
             endpoint: format!(
@@ -49,7 +55,7 @@ pub async fn reconcile(
     };
     reconcile_connected(state, announcement, peer, connection).await
 }
-/// Poll a provisioned TLS endpoint; unsigned UDP announcements are not needed.
+/// Poll a configured HTTP or HTTPS device endpoint without requiring discovery.
 pub async fn reconcile_provisioned(state: AppState, board_id: &str) -> anyhow::Result<()> {
     let connection = crate::device_security::connection(&state, board_id).await?;
     let observed = get_device_status(
@@ -1321,8 +1327,7 @@ fn hex_sha256(bytes: &[u8]) -> String {
     result
 }
 
-/// A single bounded owner reconciles each provisioned device. No unauthenticated
-/// discovery listener or caller-supplied callback URL is involved.
+/// A bounded owner polls each fixed device endpoint independently of UDP discovery.
 pub fn start_authenticated_devices(state: AppState) -> tokio::task::JoinHandle<()> {
     use sqlx::Row;
     tokio::spawn(async move {
@@ -1770,6 +1775,38 @@ mod tests {
         (state, session, fake, port)
     }
 
+    #[tokio::test]
+    async fn public_boot_push_uses_native_axloader_http_without_tls_or_bearer() {
+        let root = tempfile::tempdir().unwrap();
+        let (state, session, fake, port) = boot_test_context(
+            root.path(),
+            "02:00:00:00:00:43".parse().unwrap(),
+            StartMode::Accepted,
+        )
+        .await;
+        state
+            .board_store
+            .write_board(session.board())
+            .await
+            .unwrap();
+        state.config.write().await.edition = crate::config::Edition::Public;
+        sqlx::query(
+            "INSERT INTO device_connections(board_id,endpoint,token_ciphertext) VALUES($1,$2,NULL)",
+        )
+        .bind(&session.board().id)
+        .bind(format!("http://127.0.0.1:{port}"))
+        .execute(state.database.pool())
+        .await
+        .unwrap();
+        assert!(matches!(
+            run_fake_push(&state, &session, port).await.unwrap(),
+            BootPushOutcome::HandedOff
+        ));
+        let device = fake.lock().await;
+        assert_eq!(device.upload_attempts, 1);
+        assert_eq!(device.start_attempts, 1);
+    }
+
     async fn run_fake_push(
         state: &crate::AppState,
         session: &Arc<crate::session::SessionState>,
@@ -1806,8 +1843,19 @@ mod tests {
             ota: None,
             serial: None,
         };
-        let client = reqwest::Client::new();
-        let endpoint = format!("http://127.0.0.1:{port}");
+        let connection = if crate::device_security::projection(state, &session.board().id)
+            .await?
+            .is_some()
+        {
+            crate::device_security::connection(state, &session.board().id).await?
+        } else {
+            crate::device_security::DeviceConnection {
+                client: reqwest::Client::builder().no_proxy().build()?,
+                endpoint: format!("http://127.0.0.1:{port}"),
+            }
+        };
+        let client = connection.client;
+        let endpoint = connection.endpoint;
         let push = BootPushContext {
             state,
             client: &client,
@@ -2516,6 +2564,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mac = "02:00:00:00:00:51".parse().unwrap();
         let state = ota_test_state(dir.path(), mac).await;
+        // Public user authentication must not force the device LAN to use TLS.
+        state.config.write().await.edition = crate::config::Edition::Public;
         let image_bytes = b"opaque loader image".to_vec();
         let image = state
             .ota

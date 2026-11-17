@@ -530,8 +530,8 @@ async fn front_end_claims_are_owned_limited_and_cannot_bypass_bookings() -> Resu
 }
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL and Redis, Node.js"]
-async fn device_callbacks_require_provisioned_tls_and_never_follow_udp_callback_addresses()
--> Result<()> {
+async fn configured_devices_validate_optional_tls_and_ignore_udp_callback_addresses() -> Result<()>
+{
     use tokio::io::{AsyncBufReadExt, BufReader};
     let f = Fixture::new().await?;
     f.board("secure-device", true, false).await?;
@@ -579,7 +579,7 @@ async fn device_callbacks_require_provisioned_tls_and_never_follow_udp_callback_
             "PUT",
             path,
             Some(&f.admin.access_token),
-            json!({"endpoint":format!("http://127.0.0.1:{port}"),"token":token})
+            json!({"endpoint":format!("http://8.8.8.8:{port}"),"token":token})
         )
         .await?
         .0,

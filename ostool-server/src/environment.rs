@@ -80,6 +80,12 @@ pub(crate) fn apply_values(
     if let Some(url) = values.get("OSTOOL_HTTP_BOOT_BASE_URL") {
         config.http_boot.public_base_url = Some(url.clone());
     }
+    if let Some(addr) = values.get("OSTOOL_HTTP_BOOT_LISTEN_ADDR") {
+        config.http_boot.listen_addr = Some(
+            addr.parse()
+                .context("invalid OSTOOL_HTTP_BOOT_LISTEN_ADDR")?,
+        );
+    }
     if let crate::TftpConfig::Builtin(tftp) = &mut config.tftp {
         parsed(values, "OSTOOL_TFTP_ENABLED", &mut tftp.enabled)?;
         parsed(values, "OSTOOL_TFTP_BIND_ADDR", &mut tftp.bind_addr)?;

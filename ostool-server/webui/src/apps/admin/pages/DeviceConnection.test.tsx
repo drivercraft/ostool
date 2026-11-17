@@ -22,11 +22,24 @@ function publish(endpoint: string) {
     },
   });
 }
+it("saves a native axloader HTTP endpoint without requiring a device credential", async () => {
+  admin.apply({ epoch: crypto.randomUUID(), revision: 1, kind: "snapshot", data: {
+    board_editor: { id: "tls", board: null, device_connection: null },
+  } });
+  const save = vi.spyOn(api, "saveDeviceConnection").mockResolvedValue({
+    endpoint: "http://192.168.10.20:8080", ca_pem: null, configured: true,
+  });
+  render(<DeviceConnection boardId="tls" />);
+  const user = userEvent.setup();
+  await user.type(screen.getByLabelText("设备 HTTP / HTTPS 地址"), "http://192.168.10.20:8080");
+  await user.click(screen.getByRole("button", { name: "保存设备认证" }));
+  expect(save).toHaveBeenCalledWith("tls", { endpoint: "http://192.168.10.20:8080", token: undefined, ca_pem: null });
+});
 it("never displays the stored credential and keeps unsaved connection settings across SSE changes", async () => {
   publish("https://device.test");
   render(<DeviceConnection boardId="tls" />);
   const user = userEvent.setup();
-  const endpoint = screen.getByLabelText("设备 HTTPS 地址") as HTMLInputElement;
+  const endpoint = screen.getByLabelText("设备 HTTP / HTTPS 地址") as HTMLInputElement;
   const token = screen.getByLabelText("设备独立凭据") as HTMLInputElement;
   expect(token.value).toBe("");
   expect(token.type).toBe("password");

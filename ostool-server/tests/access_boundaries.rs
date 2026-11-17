@@ -437,7 +437,7 @@ async fn restoration_failure_keeps_board_reserved_until_baseline_is_restored() -
 
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL and Redis"]
-async fn unsigned_devices_cannot_initiate_plaintext_callbacks() -> anyhow::Result<()> {
+async fn non_lan_discovery_cannot_initiate_device_callbacks() -> anyhow::Result<()> {
     let f = Fixture::new().await?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
@@ -454,9 +454,13 @@ async fn unsigned_devices_cannot_initiate_plaintext_callbacks() -> anyhow::Resul
         serial_ready: false,
     };
     assert!(
-        device::reconcile(f.state.clone(), announcement, address)
-            .await
-            .is_err()
+        device::reconcile(
+            f.state.clone(),
+            announcement,
+            std::net::SocketAddr::new("8.8.8.8".parse()?, address.port())
+        )
+        .await
+        .is_err()
     );
     assert!(
         tokio::time::timeout(Duration::from_millis(100), listener.accept())
@@ -652,6 +656,88 @@ async fn public_download_url_uses_the_authenticated_user_api_without_internal_ad
         .request_session_stop(sid, session::SessionStopReason::ApiDelete)
         .await;
     users.abort();
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn public_user_auth_is_independent_of_device_lan_http_capabilities() -> anyhow::Result<()> {
+    let f = Fixture::new().await?;
+    {
+        let mut config = f.state.config.write().await;
+        config.auth.public_base_url = Some("https://ostool.muxai.net:14321".into());
+        config.http_boot.listen_addr = Some("127.0.0.1:3001".parse()?);
+        config.http_boot.public_base_url = Some("http://127.0.0.1:3001".into());
+    }
+    let sid = f.acquire("board-one").await?;
+    f.put(&sid, "image.bin", b"device LAN image".to_vec())
+        .await?;
+    let url = ostool_server::device_security::file_url(&f.state, &sid, "image.bin").await?;
+    assert_eq!(url.origin().ascii_serialization(), "http://127.0.0.1:3001");
+    let app = ostool_server::device_network::router(f.state.clone());
+    let request_path = &url[url::Position::BeforePath..];
+    let response = app
+        .clone()
+        .oneshot(Request::builder().uri(request_path).body(Body::empty())?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(response.into_body(), 1024).await?.as_ref(),
+        b"device LAN image"
+    );
+    // A bare URL grants nothing, and this LAN listener contains no management API.
+    assert_eq!(
+        app.clone()
+            .oneshot(Request::builder().uri(url.path()).body(Body::empty())?)
+            .await?
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/admin/boards")
+                    .body(Body::empty())?
+            )
+            .await?
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        f.app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/admin/boards")
+                    .body(Body::empty())?
+            )
+            .await?
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    f.put(&sid, "image.bin", b"new image".to_vec()).await?;
+    assert_ne!(
+        app.clone()
+            .oneshot(Request::builder().uri(request_path).body(Body::empty())?)
+            .await?
+            .status(),
+        StatusCode::OK
+    );
+    let url = ostool_server::device_security::file_url(&f.state, &sid, "image.bin").await?;
+    sqlx::query("UPDATE device_file_grants SET expires_at=now()-interval '1 second'")
+        .execute(f.state.database.pool())
+        .await?;
+    assert_eq!(
+        app.oneshot(
+            Request::builder()
+                .uri(&url[url::Position::BeforePath..])
+                .body(Body::empty())?
+        )
+        .await?
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
     Ok(())
 }
 
@@ -917,7 +1003,7 @@ async fn exercise_managed_boot(tftp: bool, disconnect: bool) -> anyhow::Result<(
             resolved_usb_path: None,
         });
         board.boot = BootConfig::Uboot(UbootProfile {
-            use_tftp: true,
+            use_tftp: tftp,
             server_ip: Some("192.168.44.1".into()),
             board_ip: Some("192.168.44.2".into()),
             network_mode: UbootNetworkMode::StaticIp,

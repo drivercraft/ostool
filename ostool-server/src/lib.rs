@@ -9,6 +9,7 @@ pub mod board_pool;
 pub mod config;
 pub mod dashboard;
 pub mod device;
+pub mod device_network;
 pub mod device_security;
 pub mod environment;
 pub mod http_boot;

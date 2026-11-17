@@ -4,19 +4,20 @@
 
 ### 1.1 入口与发现
 
-设备控制唯一使用协议 v7。当前 ostool-server 不接收无认证 UDP 发现或旧 poll/status 回调。
-管理员先创建开发板并绑定 MAC，再在“设备认证”中配置固定 HTTPS 来源、独立 Bearer 凭据和可选私有 CA。
-凭据加密存储在 PostgreSQL，接口不返回 token。控制器只探测已配置的 HTTPS 来源，
-核验证书和设备凭据后核对 MAC 与启动代次；未认证报文不能决定回调地址。
+设备控制唯一使用协议 v7。公网用户 HTTPS 与服务器到设备的内网通信独立。
+axloader 原生使用内网 HTTP，无需 HTTPS 或 Bearer。管理员先创建板卡并绑定 MAC，
+可在“设备认证”中配置固定 `http://设备内网IP:端口`，也可启用
+`OSTOOL_LOADER_NETWORK_ENABLED=true` 接收 UDP 2998 上的发现报文。
+发现使用报文来源内网 IP 和上报端口，核对实际设备 MAC 与启动代次；旧 poll/status 回调不恢复。
+支持 HTTPS 的设备仍可配置证书与可选加密凭据，接口不返回 token。
 设备 `/status` 必须报告协议 v7；boot、serial 和 OTA 写请求携带
 `X-Axloader-Protocol-Version: 7`。架构名称是开放字符串，只用于显示，不是准入条件。
 设备没有可写 ESP 或 OTA 状态区时，状态响应中的 `ota` 可以为空；服务端不下发
 升级镜像，并为任务保存可见的等待原因，不按架构判为失败。
 
-现有 axloader 固件的原生 UDP/HTTP 机制尚未提供这些认证能力，因而不能直接接入这一安全部署。
-设备端必须先实现 HTTPS 和 Bearer 校验；服务端没有明文回退或忽略证书的选项。
-本文后续设备状态机及手工 QEMU/固件验证描述协议行为，不代表已验证实体设备的 TLS 支持。
-U-Boot 则通过已认证用户会话下的服务端 UART/YMODEM 编排使用。
+现有 axloader 固件可直接通过 UDP/HTTP 接入，无需先增加 TLS 功能。
+U-Boot 保留设备内网 TFTP 高速加载与 YMODEM；串口主要用于启动控制与控制台。
+选择 TFTP 后服务不可用会明确报错，不静默将大镜像改为串口传输。
 
 发现页的“创建配置”链接只携带 MAC，`BoardEditor` 不维护或保存启动架构。
 发现列表只读显示 axloader 上报的架构；编辑页架构取自当前 `/status` 的 `arch`，在线时只读展示，
@@ -53,7 +54,7 @@ TCP4、UDP4 对象和 UART 身份计时器，进入 UEFI 内核交接。
 sequenceDiagram
     participant L as axloader
     participant S as ostool-server 或直连工具
-    S->>L: HTTPS GET /api/v1/status（证书校验与独立 Bearer）
+    S->>L: HTTP GET /api/v1/status（设备内网，HTTPS/凭据可选）
     S->>L: continue（bound 身份匹配或显式 direct）
     S->>L: POST /api/v1/boot/jobs（v7、X-Boot-Epoch）
     S->>L: PUT kernel；可选 PUT initramfs
@@ -204,8 +205,8 @@ ostool-server --env-file /etc/ostool-server/.env virtual-lab down
 
 默认客户机网段为 `10.77.0.0/24`，服务端地址为 `10.77.0.1`，dnsmasq/bridge
 地址为 `10.77.0.254`，DHCP 池为 `10.77.0.100-200`。三个子命令均可重复调用。
-当前自带 axloader 固件尚未实现 HTTPS 与凭据校验，QEMU 网络启动联调需先补齐固件能力。
-具备认证能力后，先保存板卡 MAC 与 QEMU 电源配置，再在设备认证中配置 HTTPS 来源及凭据；
+当前 axloader 可直接使用虚拟设备网内的 HTTP，无需 TLS 固件。启用 v7 UDP 发现，
+或为板卡配置其虚拟网内 HTTP 地址；再按原有 MAC、串口身份和绑定流程启动。
 控制器探测成功后才显示在线。UDP 广播不会注册设备。MAC 和电源配置必须引用同一个虚拟设备；
 串口 provider 从电源取得，板卡不保存串口配置：
 
@@ -227,7 +228,7 @@ hub 保留最近 64 KiB 输出并跨 QEMU 重启，新实例广播新的启动�
 
 验收顺序如下：
 
-1. 先为 QEMU 固件实现 HTTPS 与独立凭据校验，核实其证书。
+1. 准备 v7 axloader 固件，启用设备内网 UDP/HTTP，或配置固定设备内网 HTTP 地址。
 2. 保存板卡 ID、类型、QEMU 电源和 MAC，配置设备认证后启动 QEMU，确认已认证探测显示在线。
 3. 使用 `ostool` 创建 Session、上传内核及可选 initramfs/cmdline，确认设备 HTTP 交接和内核串口标志。
 4. 保持 WebSocket 和 Session，执行虚拟板 `Off -> On`，确认新启动代次重新取得相同启动事务并再次交接。

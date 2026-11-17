@@ -1,4 +1,4 @@
-//! Provisioned HTTPS device identities. Discovery never chooses the callback origin.
+//! Configured device LAN endpoints and optional encrypted credentials. Discovery never chooses the callback origin.
 use crate::{AppState, api::error::ApiError, security::crypto};
 use anyhow::{Context, ensure};
 use axum::{
@@ -59,6 +59,9 @@ async fn view(
 }
 fn validate_endpoint(value: &str) -> anyhow::Result<url::Url> {
     let url = url::Url::parse(value)?;
+    if url.scheme() == "http" {
+        return crate::device_network::http_origin(value);
+    }
     ensure!(
         url.scheme() == "https"
             && url.host_str().is_some()
@@ -67,7 +70,7 @@ fn validate_endpoint(value: &str) -> anyhow::Result<url::Url> {
             && url.query().is_none()
             && url.fragment().is_none()
             && url.path() == "/",
-        "设备地址必须是 HTTPS 来源地址，不能包含路径、凭据或查询参数"
+        "设备地址必须是设备内网 HTTP 或 HTTPS 来源地址，不能包含路径、凭据或查询参数"
     );
     Ok(url)
 }
@@ -130,15 +133,19 @@ async fn save(
             .mfa_encryption_key
             .as_deref()
             .ok_or_else(|| ApiError::bad_request("请先配置部署主密钥 OSTOOL_MFA_ENCRYPTION_KEY"))?;
-        crypto::seal(key, &format!("device:{id}"), token.as_bytes())?
+        Some(crypto::seal(
+            key,
+            &format!("device:{id}"),
+            token.as_bytes(),
+        )?)
     } else {
-        sqlx::query_scalar::<_, String>(
+        sqlx::query_scalar::<_, Option<String>>(
             "SELECT token_ciphertext FROM device_connections WHERE board_id=$1",
         )
         .bind(&id)
         .fetch_optional(state.database.pool())
         .await?
-        .ok_or_else(|| ApiError::bad_request("首次配置必须填写设备凭据"))?
+        .flatten()
     };
     sqlx::query("INSERT INTO device_connections(board_id,endpoint,ca_pem,token_ciphertext) VALUES($1,$2,$3,$4) ON CONFLICT(board_id) DO UPDATE SET endpoint=excluded.endpoint,ca_pem=excluded.ca_pem,token_ciphertext=excluded.token_ciphertext,updated_at=now()")
         .bind(&id).bind(&endpoint).bind(&ca_pem).bind(ciphertext).execute(state.database.pool()).await?;
@@ -185,28 +192,25 @@ pub async fn connection(state: &AppState, id: &str) -> anyhow::Result<DeviceConn
     .bind(id)
     .fetch_optional(state.database.pool())
     .await?
-    .context("device HTTPS authentication is not provisioned")?;
+    .context("device endpoint is not configured")?;
     let endpoint: String = row.try_get("endpoint")?;
-    validate_endpoint(&endpoint)?;
-    let config = state.config.read().await;
-    let key = config
-        .security
-        .mfa_encryption_key
-        .as_deref()
-        .context("device credential encryption key is unavailable")?;
-    let token = crypto::open(
-        key,
-        &format!("device:{id}"),
-        &row.try_get::<String, _>("token_ciphertext")?,
-    )?;
-    drop(config);
-    let token = std::str::from_utf8(&token)?;
-    let mut header = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))?;
-    header.set_sensitive(true);
+    let url = validate_endpoint(&endpoint)?;
     let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(reqwest::header::AUTHORIZATION, header);
+    if let Some(ciphertext) = row.try_get::<Option<String>, _>("token_ciphertext")? {
+        let config = state.config.read().await;
+        let key = config
+            .security
+            .mfa_encryption_key
+            .as_deref()
+            .context("device credential encryption key is unavailable")?;
+        let token = crypto::open(key, &format!("device:{id}"), &ciphertext)?;
+        let token = std::str::from_utf8(&token)?;
+        let mut header = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))?;
+        header.set_sensitive(true);
+        headers.insert(reqwest::header::AUTHORIZATION, header);
+    }
     let mut client = reqwest::Client::builder()
-        .https_only(true)
+        .https_only(url.scheme() == "https")
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(3))
@@ -225,6 +229,72 @@ pub async fn connection(state: &AppState, id: &str) -> anyhow::Result<DeviceConn
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn public_axloader_connection_supports_plain_http_without_credentials() {
+        let root = tempfile::tempdir().unwrap();
+        let config = crate::ServerConfig {
+            data_dir: root.path().join("data"),
+            ..Default::default()
+        };
+        let state = crate::test_support::build_test_app_state(
+            root.path().join("server.env"),
+            config.clone(),
+            crate::tftp::service::build_tftp_manager(&config.tftp),
+        )
+        .await
+        .unwrap();
+        let board: crate::BoardConfig = serde_json::from_value(serde_json::json!({
+            "id":"http-device", "board_type":"http", "serial":null,
+            "boot":{"kind":"httpboot"}, "network_identity":{"mac_address":"02:00:00:00:00:42"},
+            "power_management":{"kind":"custom","power_on_cmd":"true","power_off_cmd":"true"}
+        }))
+        .unwrap();
+        state.board_store.write_board(&board).await.unwrap();
+        state
+            .boards
+            .write()
+            .await
+            .insert(board.id.clone(), board.clone());
+        state.config.write().await.edition = crate::config::Edition::Public;
+        let app = axum::Router::new().route(
+            "/api/v1/status",
+            axum::routing::get(|headers: axum::http::HeaderMap| async move {
+                assert!(!headers.contains_key(axum::http::header::AUTHORIZATION));
+                "plain axloader HTTP"
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let _ = save(
+            State(state.clone()),
+            Path(board.id.clone()),
+            Json(ConnectionInput {
+                endpoint: endpoint.clone(),
+                token: None,
+                ca_pem: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let device = connection(&state, &board.id).await.unwrap();
+        assert_eq!(device.endpoint, endpoint);
+        assert_eq!(
+            device
+                .client
+                .get(format!("{endpoint}/api/v1/status"))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            "plain axloader HTTP"
+        );
+        server.abort();
+    }
     #[tokio::test]
     async fn public_device_authentication_can_only_be_removed_after_disabling() {
         let root = tempfile::tempdir().unwrap();
@@ -290,9 +360,11 @@ mod tests {
     }
 
     #[test]
-    fn device_origins_require_tls_and_do_not_accept_inline_credentials_or_paths() {
+    fn device_origins_allow_lan_http_without_inline_credentials_or_paths() {
         for value in [
-            "http://127.0.0.1:9000",
+            "http://8.8.8.8:9000",
+            "http://0.0.0.0:9000",
+            "http://device.example.com:9000",
             "https://user:secret@board.test",
             "https://board.test/path",
             "https://board.test/?token=secret",
@@ -300,6 +372,8 @@ mod tests {
             assert!(validate_endpoint(value).is_err(), "{value}");
         }
         assert!(validate_endpoint("https://board.test:9443").is_ok());
+        assert!(validate_endpoint("http://192.168.10.20:8080").is_ok());
+        assert!(validate_endpoint("http://127.0.0.1:9000").is_ok());
     }
 }
 
@@ -307,7 +381,7 @@ mod tests {
 /// Only hashes are stored; a capability grants one immutable file, never a directory.
 pub async fn file_url(state: &AppState, sid: &str, path: &str) -> anyhow::Result<url::Url> {
     let config = state.config.read().await;
-    if !config.edition.is_public() {
+    if !config.edition.is_public() && config.http_boot.listen_addr.is_none() {
         let mut url = url::Url::parse(
             config
                 .auth
@@ -348,7 +422,7 @@ pub async fn file_url(state: &AppState, sid: &str, path: &str) -> anyhow::Result
         .await?;
     sqlx::query("INSERT INTO device_file_grants(token_hash,file_id,expires_at) VALUES($1,$2,now()+interval '60 seconds')")
         .bind(crypto::hash(&token)).bind(file.id).execute(state.database.pool()).await?;
-    let mut base = state.config.read().await.auth.public_url()?;
+    let mut base = crate::device_network::file_base_url(&*state.config.read().await)?;
     base.set_path(&format!("/device-files/{}", file.id));
     base.query_pairs_mut().append_pair("token", &token);
     Ok(base)
@@ -367,8 +441,8 @@ pub async fn download(
     if query.token.len() > 128 {
         return Err(ApiError::unauthorized("设备文件凭据无效"));
     }
-    let row=sqlx::query("SELECT f.session_id FROM device_file_grants g JOIN session_files f ON f.id=g.file_id WHERE g.file_id=$1 AND g.token_hash=$2 AND g.expires_at>now() AND EXISTS(SELECT 1 FROM session_owners o JOIN users u ON u.id=o.user_id JOIN roles r ON r.id=u.role_id LEFT JOIN board_rentals b ON b.id=o.rental_id WHERE o.session_id=f.session_id AND NOT u.disabled AND r.enabled AND (u.is_admin OR (b.cancelled_at IS NULL AND b.starts_at<=now() AND b.ends_at>now() AND 'board.use'=ANY(r.permissions))))")
-        .bind(id).bind(crypto::hash(&query.token)).fetch_optional(state.database.pool()).await?
+    let row=sqlx::query("SELECT f.session_id FROM device_file_grants g JOIN session_files f ON f.id=g.file_id WHERE g.file_id=$1 AND g.token_hash=$2 AND g.expires_at>now() AND (NOT $3 OR EXISTS(SELECT 1 FROM session_owners o JOIN users u ON u.id=o.user_id JOIN roles r ON r.id=u.role_id LEFT JOIN board_rentals b ON b.id=o.rental_id WHERE o.session_id=f.session_id AND NOT u.disabled AND r.enabled AND (u.is_admin OR (b.cancelled_at IS NULL AND b.starts_at<=now() AND b.ends_at>now() AND 'board.use'=ANY(r.permissions)))))")
+        .bind(id).bind(crypto::hash(&query.token)).bind(state.config.read().await.edition.is_public()).fetch_optional(state.database.pool()).await?
         .ok_or_else(||ApiError::unauthorized("设备文件凭据无效或已过期"))?;
     let sid: String = row.try_get("session_id")?;
     let session = state

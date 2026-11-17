@@ -22,7 +22,7 @@ persistence. Local edition uses anonymous HTTP with exclusive board sessions, no
 deployment, security and existing board migration, and the
 [management interface guide](docs/admin-ui.md) for UI and SSE behavior.
 
-Board IDs `new` (case insensitive), `.` and `..` are reserved. Each relay belongs to one board, including aliases that resolve to the same device. U-Boot boards require a configured serial console before enabling; incomplete configurations can be saved disabled. New public HTTPboot boards start disabled: provision device authentication, then explicitly enable the board. Disable it before removing authentication.
+Board IDs `new` (case insensitive), `.` and `..` are reserved. Each relay belongs to one board, including aliases that resolve to the same device. U-Boot boards require a configured serial console before enabling; incomplete configurations can be saved disabled. Without device UDP discovery, new public HTTPboot boards start disabled: configure a fixed endpoint, then explicitly enable them. With discovery enabled, boards can connect by MAC over LAN HTTP. Disable a board before removing its fixed endpoint.
 
 Use `ostool-server/scripts/dev.sh start|stop|status` for the unified Docker Compose
 release environment; `build` only builds the image, and `restart` applies source
@@ -370,7 +370,7 @@ board_ip = "192.168.1.100"
 
 `BootPayloadConfig.cmdline` and `initramfs` are independent optional fields. They are top-level runtime settings for QEMU, board, and U-Boot configurations rather than build settings. `initramfs` is the **host** archive, separate from a Linux guest initrd. Direct AArch64/RISC-V QEMU boot passes it with `-initrd` and passes `cmdline` with `-append`; x86 uses `EFI/BOOT/initramfs.cpio` and `cmdline.txt` on the UEFI ESP, not the Linux x86 boot protocol for a bare ELF. U-Boot includes the archive as a FIT ramdisk and sets `bootargs` before booting. FIT generation removes inherited `linux,initrd-start/end` properties and any exactly matching memory reservation from the input DTB. If the FIT contains a ramdisk, U-Boot writes the range for this boot. The serial command path rejects a `cmdline` containing a single quote. For board HTTP Boot, the archive and kernel belong to the same session and the server records the archive size and SHA-256. Device control supports only v7: `/api/v1/status` reports `protocol_version: 7`, and every boot, serial, and OTA mutation plus the CLI-to-server files/kernel uploads carry `X-Axloader-Protocol-Version: 7`. Missing or incorrect versions return the fixed `unsupported_protocol` error before body parsing, serial takeover, or mutation. The server owns transfer, length/digest, session, epoch, and binding checks; axloader checks the ELF machine, format, load ranges, and its local EFI entry using the target's own rules. Cmdline is passed through EFI LoadOptions and initramfs through the TGOS `BootPayload` table. The archive limit is 256 MiB and the command-line limit is 4095 printable ASCII bytes. Firmware and kernels on physical boards must implement the corresponding handoff.
 
-Public device connections require provisioned HTTPS origins, independent credentials, and trusted certificates. Local deployments can explicitly enable v7 UDP discovery. Management API/SSE projections do not expose raw internal device errors.
+Public user APIs retain HTTPS and authentication. In either edition the device LAN supports axloader v7 UDP/HTTP and U-Boot read-only TFTP/YMODEM. Device HTTP needs no TLS certificate or Bearer; fixed HTTP endpoints require LAN IPs. Credentials are optional for capable devices. Management API/SSE projections do not expose raw internal device errors.
 
 HTTP Boot does not persist `boot_arch` and does not migrate old configuration; `httpboot` is the only current wire/config kind. The CLI uploads the actual file bytes and sends no architecture, image-format, or entry headers. It does not reject `Architecture::Unknown`, an unlisted `e_machine`, or ELF32 on the host. Axloader's `arch` is an open nonempty display string and is shown verbatim; identity and association continue to use MAC, `boot_epoch`, and the serial ID/binding. An incompatible real image is rejected by the device with an open `{code,message}` error, and the host preserves the first terminal failure.
 
@@ -511,7 +511,7 @@ ostool logout --server https://203.0.113.10:8443
 
 OAuth sign-in automatically refreshes short-lived access tokens. A PAT is sent directly as a Bearer token and is never refreshed. Credentials are stored in the system credential store when available, with a warned user-level credential-file fallback. Automation can use `OSTOOL_BOARD_ACCESS_TOKEN`; it is neither stored nor refreshed.
 
-The website `/devices` shows all configured devices as searchable cards without login, including unavailable devices. Public members can use an assigned board through `ostool` only during an approved rental window; cancellation or expiry releases its session. HTTP and serial WebSocket requests share Bearer identity and rental ownership checks. Public device callbacks require provisioned HTTPS credentials; public TFTP and UDP discovery remain disabled; see [API authorization boundaries](docs/api.md).
+The website `/devices` shows all configured devices as searchable cards without login, including unavailable devices. Public members can use an assigned board through `ostool` only during an approved rental window; cancellation or expiry releases its session. HTTP and serial WebSocket requests share Bearer identity and rental ownership checks. Device LAN transports support native HTTP and UDP discovery; public-edition TFTP binds an explicit LAN IP; see [API authorization boundaries](docs/api.md).
 
 CLI keyring operations run on blocking threads to avoid nested async runtimes. Rejecting an environment token leaves an independently saved login intact.
 
@@ -823,12 +823,14 @@ Thanks to all developers and users who have contributed to the ostool project!
 ### Server security and device authentication
 
 Local edition uses anonymous HTTP without user rentals; configure the CLI with `auth_mode = "disabled"`. Public edition requires HTTPS login. New CLI configuration defaults to the public security settings.
-In the board editor, an administrator provisions a fixed HTTPS origin, independent Bearer credential and optional private CA.
-Credentials are encrypted in PostgreSQL; responses expose only configured state. Firmware without HTTPS and credential validation
-cannot perform public network boot or OTA; public connections never downgrade to HTTP. Local deployments can set `OSTOOL_LOADER_NETWORK_ENABLED=true` for v7 UDP/HTTP discovery and `OSTOOL_TFTP_ENABLED=true` for read-only TFTP. U-Boot supports local network loading and server-side serial transfer.
+The device LAN is independent of public user HTTPS. Configure a fixed LAN HTTP endpoint
+or enable v7 UDP discovery with `OSTOOL_LOADER_NETWORK_ENABLED=true`; native axloader
+needs no TLS or Bearer. HTTPS and encrypted credentials remain optional for capable devices.
+Enable read-only TFTP with `OSTOOL_TFTP_ENABLED=true`, binding an explicit LAN IP in public
+edition. U-Boot selects TFTP or YMODEM per board, without silently falling back to serial.
 Authorized public-edition members can claim and return boards immediately, or submit reservations for approval.
 Kernel and shared uploads enforce concurrency, timeouts, capacity, credential revocation and rental checks.
-Device downloads use short-lived, single-file HTTPS capabilities instead of user login tokens.
+Device downloads use short-lived, single-file capabilities through an optional separate LAN HTTP listener instead of user login tokens.
 Database backups include session artifacts; upload staging and serial caches are rebuildable. Restarting does not restore live hardware connections.
 
 For anonymous local access, save this CLI profile with `ostool board config`:

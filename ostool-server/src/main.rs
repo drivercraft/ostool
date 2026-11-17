@@ -83,6 +83,17 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to bind management listener at {listen_addr}"))?;
     let network_test_config = config.network_test.clone();
+    // Shared device files are independent of the kernel HTTP Boot publication switch.
+    let device_http_addr = config.http_boot.listen_addr;
+    let device_http_listener = if let Some(addr) = device_http_addr {
+        Some(
+            tokio::net::TcpListener::bind(addr)
+                .await
+                .with_context(|| format!("failed to bind device HTTP listener at {addr}"))?,
+        )
+    } else {
+        None
+    };
     let network_test_listener = if network_test_config.enabled {
         let addr = network_test_config.listen_addr;
         anyhow::ensure!(
@@ -153,6 +164,20 @@ async fn main() -> anyhow::Result<()> {
     let app = build_router(state.clone());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut servers = JoinSet::new();
+    if let Some(device_listener) = device_http_listener {
+        let device_app = ostool_server::device_network::router(state.clone());
+        let device_shutdown = shutdown_tx.subscribe();
+        servers.spawn(async move {
+            axum::serve(device_listener, device_app)
+                .with_graceful_shutdown(wait_for_shutdown(device_shutdown))
+                .await
+                .context("device HTTP listener failed")
+        });
+        info!(
+            "ostoold device file API listening on {}",
+            device_http_addr.unwrap()
+        );
+    }
     servers.spawn(async move {
         axum::serve(
             listener,

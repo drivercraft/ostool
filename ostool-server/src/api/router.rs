@@ -467,11 +467,13 @@ async fn create_board(
 > {
     let _inventory_guard = state.board_inventory_gate.lock().await;
     let mut board = build_board_config_for_create(&state, request).await?;
-    // Credentials are provisioned separately after creation. Keep public HTTPboot
-    // inventory unavailable until an administrator explicitly enables it.
-    if state.config.read().await.edition.is_public()
-        && matches!(board.boot, BootConfig::UefiHttp(_))
-    {
+    // Without LAN discovery, a fixed endpoint is configured after board creation.
+    // Keep that inventory unavailable until the administrator configures it.
+    let requires_fixed_endpoint = {
+        let config = state.config.read().await;
+        config.edition.is_public() && !config.loader_network.enabled
+    };
+    if requires_fixed_endpoint && matches!(board.boot, BootConfig::UefiHttp(_)) {
         board.disabled = true;
     }
     validate_board_config(&board)?;
@@ -552,10 +554,11 @@ async fn update_board(
         ensure_unique_relay(&boards, &board, Some(&board_id))?;
     }
 
-    if !board.disabled
-        && matches!(board.boot, BootConfig::UefiHttp(_))
-        && state.config.read().await.edition.is_public()
-    {
+    let requires_fixed_endpoint = {
+        let config = state.config.read().await;
+        config.edition.is_public() && !config.loader_network.enabled
+    };
+    if !board.disabled && matches!(board.boot, BootConfig::UefiHttp(_)) && requires_fixed_endpoint {
         // A rename changes the encryption context; credentials must be provisioned
         // for the new ID before enabling it.
         if board.id != board_id
@@ -1672,7 +1675,6 @@ async fn get_boot_profile(
     match &mut boot {
         BootConfig::UefiHttp(profile) => profile.serial_parameters = None,
         BootConfig::Uboot(profile) => {
-            profile.use_tftp = false;
             profile.server_ip = None;
             profile.board_ip = None;
             profile.netmask = None;

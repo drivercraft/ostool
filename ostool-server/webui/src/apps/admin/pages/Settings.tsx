@@ -200,11 +200,10 @@ function TftpForm({
             />
             <CheckField
               label="启用 TFTP"
-              disabled={!local}
               hint={
                 local
                   ? "允许设备下载会话文件；网络写入仍被拒绝。"
-                  : "公网版使用认证 HTTPS 或服务端串口传输，不开放 TFTP。"
+                  : "在设备内网提供只读下载；公网版必须绑定明确的设备内网 IP，不能使用 0.0.0.0。"
               }
               checked={config.enabled}
               onChange={(v) => patch("enabled", v)}

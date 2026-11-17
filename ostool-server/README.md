@@ -573,36 +573,38 @@ download listener is opened. User file URLs use the configured HTTPS origin.
 A device receives a short-lived capability for one immutable file, with only its hash
 stored in PostgreSQL. Capabilities expire after 60 seconds and cannot cross files or outlive a session.
 
-Network loaders require a board-specific HTTPS origin and Bearer credential configured
-in the administrator board editor. A private CA certificate may be supplied. Credentials
-use the deployment root encryption key and never appear in API/SSE responses or CLI data.
-In public deployments the controller polls only these provisioned HTTPS origins; UDP advertisements never choose
-callback addresses. Certificate validation, proxy bypass, redirect rejection, body limits
-and bounded device concurrency apply. Firmware without HTTPS and credential validation
-is rejected; it must be upgraded before HTTP Boot or OTA can work.
-Public deployments disable unsigned UDP discovery; legacy poll/status/OTA callbacks stay disabled in both editions. Local deployments can explicitly enable v7 UDP/HTTP discovery with `OSTOOL_LOADER_NETWORK_ENABLED=true` (UDP port 2998).
-The optional throughput listener also requires user authentication and must bind loopback
-behind an HTTPS gateway; its measurement payload remains raw HTTP bytes after TLS termination.
+The public user plane and device LAN are separate. Public website, CLI, uploads and
+serial WebSockets retain HTTPS, user authentication and rental checks. Device LAN
+services are available in either edition; axloader does not need TLS firmware.
 
-New clients use `server_side_operations` in the boot profile to select server-side
-U-Boot orchestration. They request preparation, open the authenticated serial
-WebSocket, receive RAM load addresses, generate/upload a FIT image and request boot.
-Public deployments perform serial transfer and cannot enable TFTP. Local deployments also support read-only TFTP for network loading.
-Shared-file shell templates are registered as opaque command IDs and expanded on
-the server when sent over the existing serial connection. Public boot/serial/TFTP
-responses omit device-network addresses, UART paths and binding IDs; public power
-responses never expose control commands. Device v6 is actively controlled by the server;
-legacy loader polling is unavailable through public user routes. New CLI clients
-still use the existing client orchestration when connected to a server that does
-not advertise this capability. The protocol extension is required to move the
-original U-Boot orchestration off the client, rather than to implement login.
+- Set `OSTOOL_LOADER_NETWORK_ENABLED=true` to receive v7 UDP discovery on port 2998.
+  Only private, link-local or loopback sources are accepted. The server contacts the
+  announcement's source IP and advertised port over HTTP, checks MAC/boot epoch,
+  and performs boot, serial and OTA using the existing v7 protocol. Old poll APIs
+  stay removed. Restrict UDP ingress to the device network interface.
+- Alternatively, configure a fixed `http://<device-LAN-IP>:<port>` endpoint in the
+  board editor. HTTP endpoints require explicit LAN IPs. Bearer credentials are
+  optional; ordinary axloader firmware uses none. HTTPS endpoints and custom CAs
+  remain supported for devices that implement them; stored credentials stay encrypted.
+- U-Boot retains TFTP and YMODEM, selected by the board's `use_tftp` setting.
+  TFTP-selected boards fail clearly if the service is unavailable rather than
+  silently sending large images over the UART. In public edition, enabled TFTP
+  must bind an explicit LAN IP (for example `192.168.10.2:69`), not `0.0.0.0` or
+  a public IP. TFTP is read-only. The server owns network parameters and commands;
+  they need not be exposed to public clients.
+- Optional device-side HTTP file service: set `OSTOOL_HTTP_BOOT_LISTEN_ADDR` and
+  `OSTOOL_HTTP_BOOT_BASE_URL` to matching LAN addresses, such as `192.168.10.2:3001`
+  and `http://192.168.10.2:3001`. This separate listener exposes only
+  `/device-files/{file_id}?token=...`, using a 60-second capability for one immutable
+  session file, with session/rental and streaming checks. It has no user/admin APIs,
+  pages or WebSockets. User-facing URLs keep the public HTTPS origin. v7 kernel,
+  initramfs and OTA transfers are server-to-device HTTP PUTs, not URL downloads.
 
-Public deployments reject enabled TFTP configuration. Local deployments may set
-`OSTOOL_TFTP_ENABLED=true` or enable TFTP in system settings; UDP write requests remain
-rejected. The earlier device-authentication migration disabled stored TFTP settings,
-so an existing local deployment must explicitly re-enable them through system settings.
-Public device files use authenticated HTTPS capabilities and U-Boot uses YMODEM over
-the server-owned UART. Local U-Boot retains network and serial loading.
+Set `OSTOOL_NETWORK_INTERFACE` to the actual device LAN interface if automatic
+selection picks another adapter. Existing installations whose stored TFTP settings
+were disabled by an earlier migration must re-enable TFTP in system settings and
+choose a LAN bind address. The optional throughput listener remains authenticated
+behind Caddy; `OSTOOL_NETWORK_TEST_ENABLED` is independent of device boot protocols.
 
 Uploads stream into private temporary files and commit atomically after checking
 the current credential, rental and session. The authoritative commit writes PostgreSQL metadata and 256 KiB content chunks in one transaction; disk copies are disposable UART caches. Release cancels in-flight uploads and
@@ -782,15 +784,15 @@ Enabled U-Boot boards require a configured serial console. Incomplete U-Boot
 configurations may be saved with `disabled: true`, but cannot be enabled until
 the serial configuration is supplied.
 
-New public HTTPboot boards are always persisted and returned with `disabled: true`,
-including when the request asks to enable them. Save the board, provision its
-HTTPS device authentication, then explicitly save `disabled: false`. The server
-checks that the credentials can be loaded before enabling. This does not require
-powering on the device or prove live connectivity; check discovery and a boot
-operation before offering it to users. Public boards must be disabled before
-removing device authentication. Local HTTPboot discovery retains its existing flow.
-Renaming a public HTTPboot board requires disabling it and provisioning credentials
-for the new ID before enabling it again.
+When UDP discovery is disabled, new public HTTPboot boards start with `disabled: true`.
+Save the board, configure its fixed device LAN HTTP endpoint (or HTTPS for capable
+firmware), then explicitly save `disabled: false`. Credentials are optional; an
+existing encrypted credential must remain readable. With UDP discovery enabled,
+boards can connect through their configured MAC without a fixed endpoint.
+Neither configuration validates live connectivity; check discovery and a boot
+operation before offering the board to users. Disable public boards before removing
+a fixed endpoint, and configure the new ID before re-enabling a renamed board when
+UDP discovery is disabled.
 
 ### Website instant allocation and device provisioning
 
@@ -800,11 +802,12 @@ cannot assign to another user. Pool membership, board types, duration, existing 
 and concurrent allocations are checked atomically under the existing rental admission gate.
 Administrators retain direct scheduled assignment and application approval.
 
-`PUT /api/v1/admin/boards/{id}/device-connection` accepts an HTTPS origin, optional CA PEM
-and an independent token of 32–512 printable characters. The first write requires a token;
-leaving it empty preserves the existing encrypted token. Changing device credentials requires
-an idle board. Configure `OSTOOL_MFA_ENCRYPTION_KEY` before provisioning and back it up
-with deployment secrets. This repository does not supply TLS support for existing axloader firmware.
+`PUT /api/v1/admin/boards/{id}/device-connection` accepts a LAN-IP HTTP origin or an
+HTTPS origin. Native axloader needs no CA or token. Devices that support authentication
+may use an optional token of 32–512 printable characters; leaving it empty preserves
+an existing encrypted token. HTTPS devices may supply a custom CA PEM. Changes require
+an idle board. Set and back up `OSTOOL_MFA_ENCRYPTION_KEY` before storing credentials;
+no key is needed for a credential-free HTTP device connection.
 
 
 ### Public device documentation

@@ -324,14 +324,20 @@ where
                     .await
                     .map_err(|e| anyhow::anyhow!("{}", e.message))?;
                 let status = manager.status().await?;
-                let network_ready = profile.use_tftp
-                    && status.enabled
-                    && status.healthy
-                    && network.as_ref().is_some_and(|n| n.server_ip.is_some());
+                if profile.use_tftp {
+                    anyhow::ensure!(
+                        status.enabled && status.healthy,
+                        "TFTP was selected but the device LAN TFTP service is unavailable"
+                    );
+                    anyhow::ensure!(
+                        network.as_ref().is_some_and(|n| n.server_ip.is_some()),
+                        "TFTP was selected but the device LAN server address is unavailable"
+                    );
+                }
                 shell
                     .set_env("loadaddr", format!("{:#x}", addresses.fit_load_addr))
                     .await?;
-                if network_ready {
+                if profile.use_tftp {
                     let n = network.as_ref().unwrap();
                     for (key, value) in [
                         ("serverip", n.server_ip.as_ref()),

@@ -127,11 +127,29 @@ impl ServerConfig {
             !self.edition.is_public() || self.listen_addr.ip().is_loopback(),
             "public user API must use a loopback listener behind the HTTPS gateway"
         );
-        anyhow::ensure!(
-            !self.edition.is_public() || !self.loader_network.enabled,
-            "public edition requires provisioned HTTPS devices; UDP discovery is local-only"
-        );
         self.tftp.validate_for_edition(self.edition)?;
+        if let Some(addr) = self.http_boot.listen_addr {
+            anyhow::ensure!(
+                crate::device_network::is_lan_address(addr.ip())
+                    && addr.port() != 0
+                    && addr != self.listen_addr,
+                "device HTTP listener must bind a separate explicit LAN address"
+            );
+            let base = crate::device_network::http_origin(
+                self.http_boot.public_base_url.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("device HTTP listener requires OSTOOL_HTTP_BOOT_BASE_URL")
+                })?,
+            )?;
+            anyhow::ensure!(
+                base.host_str()
+                    .unwrap()
+                    .trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()?
+                    == addr.ip()
+                    && base.port_or_known_default() == Some(addr.port()),
+                "device HTTP origin must match the device listener address and port"
+            );
+        }
         if self
             .audit
             .retention_days
@@ -301,7 +319,7 @@ impl std::fmt::Debug for AuthConfig {
 }
 
 impl AuthConfig {
-    /// One canonical user/device origin; direct HTTP is restricted to loopback.
+    /// Canonical user origin; device LAN transports use separate settings.
     pub fn public_url(&self) -> anyhow::Result<url::Url> {
         let url = url::Url::parse(
             self.public_base_url
@@ -381,6 +399,8 @@ impl NetworkTestConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HttpBootConfig {
     pub enabled: bool,
+    #[serde(default)]
+    pub listen_addr: Option<SocketAddr>,
     pub root_dir: PathBuf,
     pub public_base_url: Option<String>,
 }
@@ -469,6 +489,7 @@ impl HttpBootConfig {
     pub fn default_with_root(root_dir: PathBuf) -> Self {
         Self {
             enabled: true,
+            listen_addr: None,
             root_dir,
             public_base_url: None,
         }
@@ -549,10 +570,19 @@ pub enum TftpConfig {
 
 impl TftpConfig {
     pub fn validate_for_edition(&self, edition: Edition) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            !edition.is_public() || !self.enabled(),
-            "public edition does not allow TFTP; use authenticated HTTP downloads or server-side serial transfer"
-        );
+        if edition.is_public() && self.enabled() {
+            let addr = match self {
+                Self::Builtin(config) => config.bind_addr,
+                Self::SystemTftpdHpa(config) => config
+                    .address
+                    .parse::<SocketAddr>()
+                    .context("public TFTP requires an explicit LAN bind address")?,
+            };
+            anyhow::ensure!(
+                crate::device_network::is_lan_address(addr.ip()),
+                "TFTP must bind an explicit device LAN address, not a public or wildcard address"
+            );
+        }
         Ok(())
     }
 
@@ -978,13 +1008,19 @@ mod tests {
         config.validate().unwrap();
         config.edition = super::Edition::Public;
         config.auth.enabled = true;
-        assert!(config.validate().unwrap_err().to_string().contains("UDP"));
-        config.loader_network.enabled = false;
         assert!(config.validate().unwrap_err().to_string().contains("TFTP"));
         if let super::TftpConfig::Builtin(tftp) = &mut config.tftp {
-            tftp.enabled = false;
+            tftp.bind_addr = "192.168.10.2:69".parse().unwrap();
         }
         config.validate().unwrap();
+        config.listen_addr = "0.0.0.0:2999".parse().unwrap();
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("public user API")
+        );
     }
 
     #[test]

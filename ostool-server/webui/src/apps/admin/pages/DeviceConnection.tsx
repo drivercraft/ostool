@@ -43,10 +43,10 @@ function Editor({ id, source }: { id: string; source: Connection | null }) {
     <Section title="设备认证">
       <Notice>
         {source?.configured
-          ? "已配置独立设备凭据。留空保留现有凭据。"
+          ? "已配置设备连接。凭据留空保留现有凭据。"
           : local
-            ? "本地版可通过 UDP 发现设备；也可配置 HTTPS 和独立凭据连接设备。"
-            : "设备需支持 HTTPS 和独立凭据；未配置时无法执行网络启动或升级。"}
+            ? "可通过设备内网 UDP 发现 axloader，也可直接配置 HTTP 地址。"
+            : "设备内网支持 axloader HTTP，无需 HTTPS 证书或设备凭据；也可通过 UDP 发现。"}
       </Notice>
       {conflict && (
         <ReloadNotice
@@ -62,11 +62,11 @@ function Editor({ id, source }: { id: string; source: Connection | null }) {
         </ReloadNotice>
       )}
       <TextField
-        label="设备 HTTPS 地址"
+        label="设备 HTTP / HTTPS 地址"
         fullWidth
         value={endpoint}
         onValue={setEndpoint}
-        hint="例如 https://loader.example.com:9443，只填写来源地址。"
+        hint="例如 http://192.168.10.20:8080，只填写来源地址；HTTP 必须使用内网 IP。"
       />
       <TextField
         label="设备独立凭据"
@@ -74,7 +74,7 @@ function Editor({ id, source }: { id: string; source: Connection | null }) {
         value={token}
         type="password"
         onValue={setToken}
-        hint="首次配置必须填写至少 32 个字符；凭据需同时配置在设备端。"
+        hint="可选，仅设备支持 Bearer 认证时填写，至少 32 个字符；普通 axloader 留空。"
       />
       <TextareaField
         label="设备 CA 证书（可选）"
@@ -87,8 +87,7 @@ function Editor({ id, source }: { id: string; source: Connection | null }) {
         disabled={
           task.pending ||
           conflict ||
-          !endpoint ||
-          (!source?.configured && !token)
+          !endpoint
         }
         onClick={() =>
           void task.run(async () => {

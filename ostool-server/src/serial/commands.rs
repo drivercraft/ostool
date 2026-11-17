@@ -86,11 +86,21 @@ pub(super) async fn expand(
             || name.starts_with("sessionFile:")
         {
             let config = state.config.read().await.clone();
-            let base = crate::api::router::http_boot_public_base_url(&config)
-                .map_err(|error| anyhow::anyhow!("{}", error.message))?;
+            let base = if config.http_boot.listen_addr.is_some() {
+                crate::device_network::file_base_url(&config)?
+            } else {
+                crate::api::router::http_boot_public_base_url(&config)
+                    .map_err(|error| anyhow::anyhow!("{}", error.message))?
+            };
             if name == "boardServerIp" {
+                let network = crate::api::router::resolved_board_network(state, session.board())
+                    .await
+                    .map_err(|error| anyhow::anyhow!("{}", error.message))?;
                 result.push_str(
-                    base.host_str()
+                    network
+                        .as_ref()
+                        .and_then(|network| network.server_ip.as_deref())
+                        .or_else(|| base.host_str())
                         .ok_or_else(|| anyhow::anyhow!("missing device network"))?,
                 );
             } else if name == "boardServerHttpBaseUrl" {

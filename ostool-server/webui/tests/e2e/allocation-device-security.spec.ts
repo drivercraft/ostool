@@ -169,7 +169,7 @@ test("the board editor keeps credentials write-only and preserves a draft across
     await expect(
       page.getByRole("checkbox", { name: "禁用开发板" }),
     ).toBeChecked();
-    const endpoint = page.getByLabel("设备 HTTPS 地址");
+    const endpoint = page.getByLabel("设备 HTTP / HTTPS 地址");
     await expect(endpoint).toBeVisible();
     await endpoint.fill("https://127.0.0.1:1");
     const token = "separate-device-credential-for-browser-fixture";

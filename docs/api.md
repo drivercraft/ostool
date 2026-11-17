@@ -29,8 +29,8 @@ CLI 凭据的 `board:operate` scope 仅允许 Board REST、会话文件及串口
 
 取消、缩短租赁或到期会停止相关运行会话；撤销 OAuth 登录或 PAT 会关闭现有串口连接并释放设备（凭据复核最多间隔 5 秒）。OAuth 刷新属于同一登录族，不应中断正常串口连接；如果该登录族没有新的有效 access token，现有串口也会在 5 秒内关闭。
 
-设备通信使用后台配置的固定 HTTPS 来源、独立凭据和证书验证。设备凭据加密入库，不返回 CLI。
-公网版关闭无认证 UDP 发现、TFTP 和旧 loader 回调；本地版可显式启用当前 v7 UDP 发现和只读 TFTP。设备下载使用 60 秒、绑定单个文件的 HTTPS 凭据；
+用户 HTTPS 与设备内网分离。axloader 支持设备内网 HTTP 和可选 v7 UDP 发现；固定 HTTP 地址须为内网 IP。HTTPS、独立凭据和证书为支持这些能力的设备保留，凭据加密入库，不返回 CLI。
+两种模式均可显式启用当前 v7 UDP 发现和只读 TFTP；公网版 TFTP 必须绑定明确的设备内网 IP，旧 loader 回调不恢复。设备下载使用 60 秒、绑定单个文件的凭据；
 用户 token 不注入板上命令。可选吞吐测试入口也要求认证，并只允许回环监听，由 HTTPS 网关转发。
 
 服务地址来自全局或项目配置中的 `board.server`（完整 URL，可包含路径前缀），可被命令行 `--server` 覆盖；可选的 `board.port` 或 `--port` 用于覆盖 URL 中的端口。`auth_mode = "required"` 时该地址指向认证后端，OAuth 和受认证的 Board API 共用这个 Base URL。为兼容旧的局域网配置，`board.server` 为裸 IPv4 或 IPv6 地址时客户端自动补为 `http://`。基线版本写出的 `board.server_ip` / `board.port` 也会在读取时迁移为 `board.server` / `board.port`，下一次保存配置时只写新格式；无 scheme 的主机名不支持。
@@ -273,8 +273,8 @@ token=<refresh_token>
 公网用户入口保持回环地址，经 Caddy 提供 HTTPS，包含上传、文件下载和 WebSocket；私网来源不能跳过鉴权。
 用户接口的下载 URL 使用公网 HTTPS 来源，不返回设备下载地址；启动配置、串口和 TFTP 响应不返回设备网地址、
 宿主机串口路径或绑定标识。管理接口仍向已登录管理员提供维护设备所需的配置。
-设备下载复用 HTTPS 网关，使用短时、单文件的设备凭据，不另起匿名设备监听。
-公网不启用无认证 UDP/TFTP；网络装载器通过后台配置的固定 HTTPS 来源和独立凭据接入。本地可启用当前 v7 UDP/HTTP 发现和只读 TFTP；旧 poll 接口不恢复。
+设置 `OSTOOL_HTTP_BOOT_LISTEN_ADDR` 与匹配的 `OSTOOL_HTTP_BOOT_BASE_URL` 后，设备下载使用独立内网 HTTP 监听上的 `/device-files/{file_id}?token=...`。该监听不注册用户/管理 API，仅提供短时单文件凭据下载。未配置时仍使用用户访问来源。
+公网用户接口继续鉴权；服务器到设备的内网 HTTP、UDP 和只读 TFTP 不由用户接口的 HTTPS 模式禁用。UDP 来源只接受内网 IP；公网版 TFTP 不能绑定公网或通配地址。旧 poll 接口不恢复。
 
 `GET /api/v1/sessions/{id}/boot-profile` 返回 `server_side_operations: true` 表示支持服务端编排。
 `POST /api/v1/sessions/{id}/uboot/prepare` 接收可选命令数组、加载地址和 1–600 秒的超时，先于串口连接提交。
@@ -674,7 +674,7 @@ DELETE /api/v1/admin/sessions/{session_id}
 ### TFTP 管理
 
 
-本地版支持启用只读 TFTP，状态、配置和会话下载 URL 使用现行 API。公网版禁止启用 TFTP，`enabled=true` 返回 400；公网文件与启动仍使用认证 HTTPS 或服务端串口传输。
+两种模式支持只读 TFTP；公网版启用时须绑定明确的设备内网 IP，绑定公网或通配地址返回 400。U-Boot 按 `use_tftp` 选择网络加载或 YMODEM；选择 TFTP 后服务不可用会明确报错，不静默改用串口。用户文件 URL 与内网 TFTP 地址仍分离。
 ```http
 GET /api/v1/admin/tftp
 PUT /api/v1/admin/tftp
@@ -766,7 +766,7 @@ Content-Type: application/json
 
 本节定义同一 Rust `ostool-server` 在本地版和公网版共用的开发板服务契约。两版使用统一 PostgreSQL 数据层；公网版校验身份和租赁使用权；本地版无需账号或租赁。这里覆盖 `ostool-server` 的全部公开、非管理 REST 接口。`ostool` 当前命令会使用会话文件上传；配置宿主 initramfs 时还会调用普通 HTTP Boot 文件上传。它不直接调用会话详情、会话文件列表/查询/删除和显式电源控制；这些仍属于公开 board 服务契约，其中显式电源控制也已有 `BoardServerClient` 方法。
 
-axloader 只接入 v7。公网设备身份来自预先配置的 HTTPS 来源和独立凭据；本地版可通过启用的 UDP 监听接收当前 v7 广播，并核对设备状态中的 MAC 和 boot_epoch。设备 `GET /api/v1/status` 的 `protocol_version` 必须为 `7`；server→device 的 boot、serial、OTA mutation 统一携带 `X-Axloader-Protocol-Version: 7`。缺失、非数字或不等同于 7 时，设备端在解析请求体、写文件或修改事务前返回 `400`：`{"code":"unsupported_protocol","message":"axloader protocol 7 is required"}`。UART 身份帧仍是独立的 `AXLOADER-SERIAL/1` 格式。旧 poll/status 路由不存在，也不提供用于升级的旧协议桥接。
+axloader 只接入 v7。设备可通过固定 HTTP/HTTPS 地址或启用的内网 UDP 监听接入；原生 axloader HTTP 不需要证书或 Bearer。发现后核对设备状态中的 MAC 和 boot_epoch。设备 `GET /api/v1/status` 的 `protocol_version` 必须为 `7`；server→device 的 boot、serial、OTA mutation 统一携带 `X-Axloader-Protocol-Version: 7`。缺失、非数字或不等同于 7 时，设备端在解析请求体、写文件或修改事务前返回 `400`：`{"code":"unsupported_protocol","message":"axloader protocol 7 is required"}`。UART 身份帧仍是独立的 `AXLOADER-SERIAL/1` 格式。旧 poll/status 路由不存在，也不提供用于升级的旧协议桥接。
 
 部署切换时先暂停新 session 和 OTA 任务，完成或取消活动旧 OTA 并确认设备退出 pending/trial；停止旧 server 后备份并人工整理板卡配置中的 `boot_arch`/`uefi_http`、删除 `loader_network.public_base_url`，同时备份 PostgreSQL 中的 OTA 记录并按当前 `boot_epoch` 形状整理 `ota-observations` 文档。用现有刷写/恢复方式安装 v7 axloader 和配套 CLI/server 后重新发现并验证。不要删除 PostgreSQL 中的 `ota-jobs`、镜像历史、板卡身份、电源配置或设备侧回滚记录。
 
@@ -1445,9 +1445,9 @@ SSE 同样逐主题过滤，伪造 `topics/list_view/editor_view/board_editor_id
 `DELETE /api/v1/account/allocations/{id}` 只归还当前用户的未结束即时分配，并释放关联硬件会话。
 
 `GET/PUT/DELETE /api/v1/admin/boards/{id}/device-connection` 要求 `devices.manage`。
-PUT 字段为 `endpoint`（HTTPS 来源）、`token`（首次必填，后续空值保留）和 `ca_pem`（可选 PEM）。
+PUT 字段为 `endpoint`（内网 IP 的 HTTP 来源，或 HTTPS 来源）、`token`（可选，后续空值保留已有凭据）和 `ca_pem`（可选 HTTPS CA PEM）。
 接口返回 `endpoint,ca_pem,configured`，从不返回 token 或密文。凭据用部署主密钥加密入 PostgreSQL。
-公网未配置、证书不受信任或凭据错误的设备不能接入；公网不降级 HTTP，也不接受 UDP 指定回调地址。本地启用 UDP 发现后使用报文来源 IP 和上报端口核验当前 v7 设备。
+设备 HTTP 地址仅接受内网 IP，不跟随重定向或系统代理；HTTPS 仍校验证书。启用 UDP 发现后使用报文来源内网 IP 和上报端口核验当前 v7 设备。v7 内核、initramfs 和 OTA 使用服务器主动 HTTP PUT，不要求固件从公网 HTTPS 下载。
 
 `GET /device-files/{file_id}?token=...` 使用独立随机文件凭据，数据库仅存摘要；凭据绑定文件 ID 并在 60 秒后过期。
 结束或释放的会话不能下载，错误/过期凭据返回 401。该接口支持 Range 和有界流式读取，并返回 `Cache-Control: no-store`。
