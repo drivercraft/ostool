@@ -49,6 +49,7 @@ const Overview = lazy(() => import("@/apps/admin/pages/Overview"));
 const Audits = lazy(() => import("@/apps/admin/pages/Audits"));
 const Dtbs = lazy(() => import("@/apps/admin/pages/Dtbs"));
 const Sessions = lazy(() => import("@/apps/admin/pages/Sessions"));
+const LeaseHistory = lazy(() => import("@/apps/admin/pages/LeaseHistory"));
 const Settings = lazy(() => import("@/apps/admin/pages/SystemSettings"));
 const Rentals = lazy(() => import("@/apps/admin/pages/Rentals"));
 const RentalEditor = lazy(() => import("@/apps/admin/pages/RentalEditor"));
@@ -60,7 +61,8 @@ const boardNavigation = [
   ["boards", "设备列表"],
   ["device-documents", "设备文档"],
   ["dtbs", "DTB 管理"],
-  ["sessions", "会话租约"],
+  ["sessions", "当前会话"],
+  ["session-history", "租约历史"],
 ] as const;
 const userNavigation = [
   ["users", "用户列表"],
@@ -234,7 +236,7 @@ function AdminConsole({
               <SidebarGroup
                 label="设备管理"
                 icon={<CircuitBoardIcon />}
-                paths={["/boards", "/dtbs", "/sessions"]}
+                paths={boardNavigation.map(([path]) => "/" + path)}
               >
                 {boardNavigation
                   .filter(([path]) => can(pagePermission("/" + path)))
@@ -364,6 +366,7 @@ function AdminConsole({
                     />
                     <Route path="/dtbs" element={<Dtbs />} />
                     <Route path="/sessions" element={<Sessions />} />
+                    <Route path="/session-history" element={<LeaseHistory />} />
                     <Route
                       path="/tftp"
                       element={<Navigate replace to="/settings?tab=tftp" />}
@@ -483,9 +486,11 @@ function ResourceLoading({ children }: { children: ReactNode }) {
         ? "device_documents"
         : pathname.startsWith("/dtbs")
           ? "dtbs"
-          : pathname.startsWith("/sessions")
-            ? "sessions"
-            : "server";
+          : pathname.startsWith("/session-history")
+            ? "session_history"
+            : pathname.startsWith("/sessions")
+              ? "sessions"
+              : "server";
   const { can } = usePermissions();
   const data = useResource(topic),
     errors = useErrors();
@@ -520,25 +525,27 @@ function ResourceLoading({ children }: { children: ReactNode }) {
             ? ["boards", "loaders", "virtual"]
             : pathname.startsWith("/dtbs")
               ? ["dtbs"]
-              : pathname.startsWith("/sessions")
-                ? ["sessions", "session_history"]
-                : pathname.startsWith("/users")
-                  ? ["roles", "listing"]
-                  : pathname.startsWith("/rentals")
-                    ? ["boards", "listing", "rental_editor"]
-                    : pathname.startsWith("/rental-requests")
-                      ? ["listing"]
-                      : pathname.startsWith("/audits")
-                        ? ["audit"]
-                        : pathname.startsWith("/settings")
-                          ? [
-                              "legal_history",
-                              "network",
-                              "tftp",
-                              "tftp_status",
-                              "mail_deliveries",
-                            ]
-                          : [];
+              : pathname.startsWith("/session-history")
+                ? ["session_history"]
+                : pathname.startsWith("/sessions")
+                  ? ["sessions"]
+                  : pathname.startsWith("/users")
+                    ? ["roles", "listing"]
+                    : pathname.startsWith("/rentals")
+                      ? ["boards", "listing", "rental_editor"]
+                      : pathname.startsWith("/rental-requests")
+                        ? ["listing"]
+                        : pathname.startsWith("/audits")
+                          ? ["audit"]
+                          : pathname.startsWith("/settings")
+                            ? [
+                                "legal_history",
+                                "network",
+                                "tftp",
+                                "tftp_status",
+                                "mail_deliveries",
+                              ]
+                            : [];
     const editing =
       pathname.startsWith("/boards/") && pathname !== "/boards/new";
     admin.setBoardEditor(

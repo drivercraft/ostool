@@ -44,7 +44,17 @@ test("lease history follows real allocation and release through the paginated ev
       privateReads.push(r.url());
   });
   await page.goto("/qcl/sessions");
-  await page.getByRole("link", { name: "租约历史", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "当前会话", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("navigation", { name: "主导航" })
+    .getByRole("link", { name: "租约历史", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/qcl\/session-history$/);
+  await expect(
+    page.getByRole("heading", { name: "租约历史", exact: true }),
+  ).toBeVisible();
   await page.getByLabel("设备标识", { exact: true }).fill(board);
   const row = page.getByRole("row").filter({ hasText: session });
   await expect(row).toBeVisible();
@@ -83,4 +93,9 @@ test("lease history follows real allocation and release through the paginated ev
   await expect(
     page.getByRole("listitem").filter({ hasText: session }),
   ).toBeVisible();
+  // Direct document requests must serve the independent history route as well.
+  const document = await request.get(base + "/qcl/session-history", {
+    headers: { accept: "text/html" },
+  });
+  expect(document.status()).toBe(200);
 });

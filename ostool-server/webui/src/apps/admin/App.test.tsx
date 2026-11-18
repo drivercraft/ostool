@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   connect: vi.fn(),
   disconnect: vi.fn(),
   connection: vi.fn(),
+  topics: vi.fn(),
 }));
 vi.mock("@/api/client", () => ({
   api: { authConfig: mocks.config, me: mocks.me },
@@ -23,7 +24,8 @@ vi.mock("@/api/events", () => ({
   site: { connect: vi.fn(), disconnect: vi.fn() },
   useSiteResource: () => undefined,
   admin: {
-    setTopics: vi.fn(),
+    setTopics: mocks.topics,
+    setLeaseFilters: vi.fn(),
     setBoardEditor: vi.fn(),
     connect: mocks.connect,
     disconnect: mocks.disconnect,
@@ -31,6 +33,7 @@ vi.mock("@/api/events", () => ({
   useConnection: () => mocks.connection(),
   useErrors: () => ({}),
   useResource: () => undefined,
+  useList: () => [],
 }));
 vi.mock("@/apps/admin/pages/Overview", () => ({
   default: () => <div>本地设备总览</div>,
@@ -67,6 +70,60 @@ afterEach(() => {
   document.documentElement.classList.remove("dark", "light");
 });
 describe("edition navigation and authentication", () => {
+  it("opens current sessions and lease history as separate navigation pages", async () => {
+    mocks.config.mockResolvedValue({
+      edition: "local",
+      enabled: false,
+      database_available: true,
+    });
+    render(<App />);
+    await screen.findByText("本地设备总览");
+    const nav = within(screen.getByRole("navigation", { name: "主导航" }));
+    await userEvent.click(
+      nav.getByRole("link", { name: "租约历史" }),
+    );
+    await screen.findByLabelText("搜索租约历史");
+    expect(window.location.pathname).toBe("/qcl/session-history");
+    expect(screen.getByRole("heading", { name: "租约历史" })).toBeTruthy();
+    expect(mocks.topics.mock.lastCall?.[0]).toContain("session_history");
+    expect(mocks.topics.mock.lastCall?.[0]).not.toContain("sessions");
+    await userEvent.click(
+      nav.getByRole("link", { name: "当前会话" }),
+    );
+    await screen.findByLabelText("搜索会话");
+    expect(window.location.pathname).toBe("/qcl/sessions");
+    expect(screen.getByRole("heading", { name: "当前会话" })).toBeTruthy();
+    expect(mocks.topics.mock.lastCall?.[0]).toContain("sessions");
+    expect(mocks.topics.mock.lastCall?.[0]).not.toContain("session_history");
+  });
+  it("keeps lease history accessible to a role with session read permission", async () => {
+    mocks.config.mockResolvedValue({
+      edition: "public",
+      enabled: true,
+      database_available: true,
+    });
+    mocks.me.mockResolvedValue({
+      is_admin: false,
+      can_access_admin: true,
+      permissions: ["console.access", "sessions.read"],
+    });
+    window.history.replaceState({}, "", "/qcl/session-history");
+    render(<App />);
+    await screen.findByLabelText("搜索租约历史");
+    expect(screen.queryByText("当前角色没有此页面的访问权限。")).toBeNull();
+  });
+  it("redirects the previous history link to the standalone page", async () => {
+    mocks.config.mockResolvedValue({
+      edition: "local",
+      enabled: false,
+      database_available: true,
+    });
+    window.history.replaceState({}, "", "/qcl/sessions?view=history");
+    render(<App />);
+    await screen.findByLabelText("搜索租约历史");
+    expect(window.location.pathname).toBe("/qcl/session-history");
+    expect(window.location.search).toBe("");
+  });
   it("keeps an open theme menu mounted when delayed authentication completes", async () => {
     mocks.config.mockResolvedValue({ edition: "public", enabled: true, database_available: true });
     let finishAuth!: (user: { is_admin: boolean }) => void;

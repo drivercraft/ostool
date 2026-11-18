@@ -67,8 +67,8 @@ fn is_document_path(path: &str) -> bool {
             "",
             "qcl",
             "login" | "overview" | "jobs" | "operations" | "audits" | "dashboard" | "boards"
-            | "device-documents" | "dtbs" | "sessions" | "tftp" | "server" | "settings" | "users"
-            | "account" | "rental-requests" | "rentals",
+            | "device-documents" | "dtbs" | "sessions" | "session-history" | "tftp" | "server"
+            | "settings" | "users" | "account" | "rental-requests" | "rentals",
         ] => true,
         ["", "qcl", "boards" | "device-documents" | "rentals", id] if !id.is_empty() => true,
         ["", "qcl", "users", "roles"] => true,
@@ -190,6 +190,8 @@ mod tests {
             "/qcl/",
             "/qcl/login/",
             "/qcl/overview",
+            "/qcl/sessions",
+            "/qcl/session-history",
             "/qcl/boards/new",
             "/qcl/boards/demo",
             "/qcl/device-documents/demo",

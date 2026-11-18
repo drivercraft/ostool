@@ -2,7 +2,6 @@ import { Unplug as ActionRelease } from "lucide-react";
 import { PagePanel } from "@/components/page-panel";
 import { useListPage } from "@/components/list-pagination";
 import { ListToolbar } from "@/components/list-toolbar";
-import { Button } from "@/components/ui/button";
 import { useEffect, useState } from "react";
 import { formatLeaseRemaining } from "@/utils/time";
 import { useList, useResource } from "@/api/events";
@@ -17,12 +16,11 @@ import {
 } from "@/components/forms";
 import { SerialRuntimeDetails } from "@/apps/admin/components/serial-runtime";
 import { Badge } from "@/components/ui/badge";
-import { Link, useSearchParams } from "react-router-dom";
-import LeaseHistory from "./LeaseHistory";
+import { Link, Navigate, useSearchParams } from "react-router-dom";
 export default function Sessions() {
   const [params] = useSearchParams();
   return params.get("view") === "history" ? (
-    <LeaseHistory />
+    <Navigate replace to="/session-history" />
   ) : (
     <ActiveSessions />
   );
@@ -50,14 +48,7 @@ function ActiveSessions() {
       <PagePanel
         table
         toolbar={
-          <ListToolbar
-            actions={
-              <Button asChild variant="outline">
-                <Link to="/sessions?view=history">租约历史</Link>
-              </Button>
-            }
-            count={`${filtered.length} 个会话`}
-          >
+          <ListToolbar count={`${filtered.length} 个会话`}>
             <TextField
               label="搜索会话"
               value={search}

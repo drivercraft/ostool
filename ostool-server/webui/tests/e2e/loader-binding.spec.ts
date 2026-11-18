@@ -165,7 +165,7 @@ test("all management modules, DTB CRUD, session release and narrow viewport", as
   await expect(
     page.getByRole("cell", { name: "renamed.dtb", exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("link", { name: "会话租约", exact: true }).click();
+  await page.getByRole("link", { name: "当前会话", exact: true }).click();
   await request.post("http://127.0.0.1:4175/api/v1/admin/boards", {
     data: {
       id: "session-board",

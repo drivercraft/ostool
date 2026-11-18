@@ -37,6 +37,7 @@ export function pagePermission(path: string, manage = false): string {
   if (path.startsWith("/boards"))
     return manage ? "devices.manage" : "devices.read";
   if (path.startsWith("/dtbs")) return manage ? "dtbs.manage" : "dtbs.read";
+  if (path.startsWith("/session-history")) return "sessions.read";
   if (path.startsWith("/sessions"))
     return manage ? "sessions.manage" : "sessions.read";
   if (path.startsWith("/users/roles"))
@@ -60,6 +61,7 @@ export function firstPage(can: (code: string) => boolean): string {
       "/device-documents",
       "/dtbs",
       "/sessions",
+      "/session-history",
       "/rentals",
       "/rental-requests",
       "/users",

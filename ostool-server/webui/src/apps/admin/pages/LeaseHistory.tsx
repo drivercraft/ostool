@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 import { ChevronLeft, ChevronRight, Eye } from "lucide-react";
 import { useEdition } from "@/edition";
 import { admin, useErrors, useResource } from "@/api/events";
@@ -63,8 +62,7 @@ function duration(record: LeaseRecord) {
   return `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds / 60) % 60} 分 ${seconds % 60} 秒`;
 }
 export default function LeaseHistory() {
-  const unknownOwner =
-    !useEdition().enabled ? "本地操作者" : "未完成身份绑定";
+  const unknownOwner = !useEdition().enabled ? "本地操作者" : "未完成身份绑定";
   const [filters, setFilters] = useState<LeaseFilters>({
     page: 1,
     page_size: 20,
@@ -150,14 +148,7 @@ export default function LeaseHistory() {
         scrollKey={identity}
         footer={footer}
         toolbar={
-          <ListToolbar
-            actions={
-              <Button asChild variant="outline">
-                <Link to="/sessions">活动租约</Link>
-              </Button>
-            }
-            count={ready ? `${total} 条历史记录` : "正在同步…"}
-          >
+          <ListToolbar count={ready ? `${total} 条历史记录` : "正在同步…"}>
             <TextField
               label="搜索租约历史"
               placeholder="会话、设备、用户名或客户端"
