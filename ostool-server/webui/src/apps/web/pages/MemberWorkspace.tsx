@@ -412,18 +412,18 @@ function Password() {
             label="新密码"
             type="password"
             required
-            minLength={15}
+            minLength={8}
             maxLength={1024}
             value={password}
             onValue={setPassword}
             autoComplete="new-password"
-            placeholder="至少 15 个字符，建议使用长密码或密码短语"
+            placeholder="至少 8 个字符，建议使用长密码或密码短语"
           />
           <TextField
             label="确认新密码"
             type="password"
             required
-            minLength={15}
+            minLength={8}
             maxLength={1024}
             value={confirmation}
             onValue={setConfirmation}
@@ -432,7 +432,7 @@ function Password() {
           />
         </Section>
         <p className="muted">
-          密码至少 15 个字符。修改后所有登录与个人访问令牌失效，需要重新登录。
+          密码至少 8 个字符。修改后所有登录与个人访问令牌失效，需要重新登录。
         </p>
         <div className="member-form-actions">
           <Button disabled={task.pending}>更新密码</Button>

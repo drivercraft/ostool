@@ -249,7 +249,7 @@ export default function Users() {
                     label={editor.id ? "新密码（留空保留）" : "初始密码"}
                     type="password"
                     required={!editor.id}
-                    minLength={15}
+                    minLength={8}
                     maxLength={1024}
                     autoComplete="new-password"
                     value={editor.draft.password ?? ""}

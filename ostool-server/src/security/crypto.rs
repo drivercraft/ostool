@@ -24,8 +24,8 @@ pub fn equal(a: &str, b: &str) -> bool {
 }
 pub fn validate_password(password: &str) -> anyhow::Result<()> {
     ensure!(
-        password.chars().count() >= 15 && password.len() <= 1024,
-        "密码需要至少 15 个字符，且不超过 1024 字节"
+        password.chars().count() >= 8 && password.len() <= 1024,
+        "密码需要至少 8 个字符，且不超过 1024 字节"
     );
     let lower = password.to_lowercase();
     ensure!(
@@ -141,7 +141,10 @@ mod tests {
     }
     #[test]
     fn password_length_counts_characters_and_allows_long_passphrases() {
-        assert!(validate_password("密码密码").is_err());
+        assert!(validate_password("Abc123!").is_err());
+        assert!(validate_password("Abc123!@").is_ok());
+        assert!(validate_password("一二三四五六七").is_err());
+        assert!(validate_password("一二三四五六七八").is_ok());
         assert!(validate_password("a long and memorable passphrase").is_ok());
         assert!(validate_password(&"x".repeat(20)).is_err());
         assert!(validate_password(&"a ".repeat(600)).is_err());

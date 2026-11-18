@@ -40,8 +40,8 @@ export function PasswordReset() {
     } else {
       await task.run(async () => {
         if (password !== confirmation) throw new Error("两次输入的密码不一致");
-        if (Array.from(password).length < 15)
-          throw new Error("密码至少需要 15 个字符");
+        if (Array.from(password).length < 8)
+          throw new Error("密码至少需要 8 个字符");
         await api.resetPassword(challenge.challenge_id, code, password);
         setPassword("");
         setConfirmation("");
@@ -92,7 +92,7 @@ export function PasswordReset() {
               <TextField
                 label="新密码"
                 type="password"
-                minLength={15}
+                minLength={8}
                 maxLength={1024}
                 required
                 autoComplete="new-password"
@@ -102,7 +102,7 @@ export function PasswordReset() {
               <TextField
                 label="确认新密码"
                 type="password"
-                minLength={15}
+                minLength={8}
                 maxLength={1024}
                 required
                 autoComplete="new-password"

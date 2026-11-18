@@ -213,14 +213,14 @@ describe("registration", () => {
     ).toBeTruthy();
     expect(screen.getByLabelText("确认密码")).toBeTruthy();
   });
-  it("validates confirmation and sends a real registration request then opens member account", async () => {
+  it("validates confirmation and registers with an eight-character password then opens member account", async () => {
     window.history.replaceState({}, "", "/register");
     const user = userEvent.setup();
     render(<PublicApp />);
     await user.type(await screen.findByLabelText("用户名"), "member");
     await user.type(screen.getByLabelText("邮箱"), "member@test.local");
     await user.type(screen.getByLabelText("显示名称"), "Member");
-    await user.type(screen.getByLabelText("密码"), "member-password-123");
+    await user.type(screen.getByLabelText("密码"), "Abc123!@");
     await user.type(screen.getByLabelText("确认密码"), "different-password");
     if (!(screen.getByLabelText("图形验证码") as HTMLInputElement).value)
       await user.type(screen.getByLabelText("图形验证码"), "AB29Q");
@@ -235,7 +235,7 @@ describe("registration", () => {
     );
     expect(mocks.register).not.toHaveBeenCalled();
     await user.clear(screen.getByLabelText("确认密码"));
-    await user.type(screen.getByLabelText("确认密码"), "member-password-123");
+    await user.type(screen.getByLabelText("确认密码"), "Abc123!@");
     if (!(screen.getByLabelText("图形验证码") as HTMLInputElement).value)
       await user.type(screen.getByLabelText("图形验证码"), "AB29Q");
     await user.click(screen.getByRole("button", { name: /创建账号/ }));
@@ -243,7 +243,7 @@ describe("registration", () => {
     expect(mocks.register).toHaveBeenCalledWith(
       "member",
       "member@test.local",
-      "member-password-123",
+      "Abc123!@",
       "Member",
       {
         captcha_id: "00000000-0000-0000-0000-000000000001",

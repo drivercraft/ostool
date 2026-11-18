@@ -221,10 +221,10 @@ function Login() {
     try {
       if (
         registering &&
-        (Array.from(password).length < 15 ||
+        (Array.from(password).length < 8 ||
           new TextEncoder().encode(password).length > 1024)
       )
-        throw new Error("密码需要至少 15 个字符，且不超过 1024 字节");
+        throw new Error("密码需要至少 8 个字符，且不超过 1024 字节");
       const result = challenge
         ? await api.verifyMfa(challenge, otp)
         : registering
@@ -390,14 +390,14 @@ function Login() {
                     type="password"
                     required
                     maxLength={1024}
-                    minLength={registering ? 15 : undefined}
+                    minLength={registering ? 8 : undefined}
                     value={password}
                     onValue={setPassword}
                     autoComplete={
                       registering ? "new-password" : "current-password"
                     }
                     placeholder={
-                      registering ? "至少 15 个字符" : "输入登录密码"
+                      registering ? "至少 8 个字符" : "输入登录密码"
                     }
                   />
                   {registering && (
@@ -405,7 +405,7 @@ function Login() {
                       label="确认密码"
                       type="password"
                       required
-                      minLength={15}
+                      minLength={8}
                       maxLength={1024}
                       value={confirmPassword}
                       onValue={setConfirmPassword}

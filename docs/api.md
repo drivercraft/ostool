@@ -1298,7 +1298,7 @@ SSE 使用同源 Cookie，可用 `surface=admin` 指定后台，禁止将令牌�
    CAPTCHA action 必须为 register。默认不需要邮件验证码。
    开启 `OSTOOL_REGISTRATION_EMAIL_VERIFICATION=true` 后还必须带
    `email_challenge_id` 和 `email_code`。注册成功 201，设置网站 Cookie。
-   新建/修改密码至少 15 个字符、最多 1024 字节；注册失败使用通用 400 提示。
+   新建/修改密码至少 8 个字符、最多 1024 字节；注册失败使用通用 400 提示。
 5. `POST /api/v1/auth/refresh` 使用刷新 Cookie，轮换 Cookie；重复使用已轮换令牌撤销
    整个登录链。`POST /api/v1/auth/logout` 撤销当前客户端登录并清 Cookie。
    网站与后台退出相互独立。`GET /api/v1/auth/me` 返回当前用户与
