@@ -230,17 +230,29 @@ async fn main() -> anyhow::Result<()> {
     if let Err(error) = state.shutdown_sessions().await {
         log::warn!("session cleanup incomplete during shutdown: {error:#}");
     }
-    while let Some(completed) = servers.join_next().await {
-        let result = completed
-            .context("server listener task failed")
-            .and_then(|result| result);
-        if let Err(error) = result {
-            if serve_result.is_ok() {
-                serve_result = Err(error);
-            } else {
-                log::warn!("server listener failed while shutting down: {error:#}");
+    // axum's graceful shutdown waits for in-flight connections, but SSE and
+    // WebSocket streams held by open admin consoles never complete on their
+    // own. Bound the drain window; remaining streams are disconnected when
+    // the process exits right after.
+    let drain = async {
+        while let Some(completed) = servers.join_next().await {
+            let result = completed
+                .context("server listener task failed")
+                .and_then(|result| result);
+            if let Err(error) = result {
+                if serve_result.is_ok() {
+                    serve_result = Err(error);
+                } else {
+                    log::warn!("server listener failed while shutting down: {error:#}");
+                }
             }
         }
+    };
+    if tokio::time::timeout(std::time::Duration::from_secs(10), drain)
+        .await
+        .is_err()
+    {
+        log::warn!("graceful connection drain timed out after 10s; forcing exit");
     }
     device_task.abort();
     let _ = device_task.await;

@@ -49,7 +49,9 @@ struct EchoConsole {
     fail_submit_flush: bool,
     corrupt_result: bool,
     failed_result: bool,
+    result_reply: Option<&'static [u8]>,
     echo_prefix: Option<&'static [u8]>,
+    echo_prefix_offset: usize,
     repeat_prefix: bool,
     interrupt_reply: Option<&'static [u8]>,
     interrupt_replies: VecDeque<&'static [u8]>,
@@ -114,6 +116,7 @@ impl EchoConsole {
                 } else {
                     b"\r\ninvalid command\r\n=> "
                 };
+                let reply = self.result_reply.unwrap_or(reply);
                 self.reply.extend(reply.iter().map(|&byte| (byte, false)));
             } else {
                 self.line.push(byte);
@@ -121,9 +124,13 @@ impl EchoConsole {
                     continue;
                 }
                 self.pending_echo += 1;
-                let prefix = self.echo_prefix.unwrap_or(b"\x1b[0m");
+                let prefix = if self.line.len() - 1 == self.echo_prefix_offset {
+                    self.echo_prefix.unwrap_or(b"\x1b[0m")
+                } else {
+                    b"\x1b[0m"
+                };
                 self.reply.extend(prefix.iter().map(|&byte| (byte, false)));
-                if !self.repeat_prefix {
+                if !self.repeat_prefix && self.line.len() - 1 == self.echo_prefix_offset {
                     self.echo_prefix = None;
                 }
                 if std::mem::take(&mut self.wrong_echo) {
@@ -355,6 +362,23 @@ async fn echo_grammar_and_early_execution_are_enforced() {
     for (prefix, recoveries, uncertain) in [
         (&b"\x1b[0m"[..], 0, false),
         (&b"\x1b[1;2 m"[..], 0, false),
+        (&b"[   2.608] "[..], 0, false),
+        (&b"\x1b[0m[123.456] \x1b[0m"[..], 0, false),
+        (
+            &b"[                                                        2.608] "[..],
+            0,
+            false,
+        ),
+        (
+            &b"[                                                         2.608] "[..],
+            1,
+            false,
+        ),
+        (&b"[ 2.608] [ 3.000] "[..], 1, false),
+        (&b"[ 2.x] "[..], 1, false),
+        (&b"[ 2.608]junk"[..], 1, false),
+        (&b"[ 2.608]\r"[..], 0, true),
+        (&b"[ 2.608\n"[..], 0, true),
         (&b"\x1bX"[..], 1, false),
         (&b"\x1b[ 0m"[..], 1, false),
         (&b"\x1b[0\x00m"[..], 1, false),
@@ -387,6 +411,39 @@ async fn echo_grammar_and_early_execution_are_enforced() {
 }
 
 #[tokio::test]
+async fn timestamp_prefix_does_not_consume_command_brackets_or_body_noise() {
+    for (timestamped, echo_timestamp) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let console = Arc::new(Mutex::new(EchoConsole {
+            interrupt_reply: timestamped.then_some(b"=> [   2.015] <INTERRUPT>\r\n=> "),
+            ..Default::default()
+        }));
+        let mut shell = echo_shell(&console).await;
+        if echo_timestamp {
+            console.lock().unwrap().echo_prefix = Some(b"[   2.608] ");
+        }
+        assert_eq!(shell.cmd("[ 1 = 1 ]").await.unwrap(), "device-result");
+        assert_eq!(console.lock().unwrap().aborted_lines, 0);
+        {
+            let mut fixture = console.lock().unwrap();
+            fixture.echo_prefix = Some(b"[   3.000] ");
+            fixture.echo_prefix_offset = 1;
+        }
+        assert_eq!(shell.cmd("echo safe").await.unwrap(), "device-result");
+        let fixture = console.lock().unwrap();
+        assert_eq!(fixture.aborted_lines, 1, "mid-command output was ignored");
+        assert_eq!(
+            fixture.executed,
+            [
+                b" [ 1 = 1 ]&& echo cmd-ok; echo cmd-end".to_vec(),
+                b"echo safe&& echo cmd-ok; echo cmd-end".to_vec(),
+            ]
+        );
+    }
+}
+
+#[tokio::test]
 async fn recovery_requires_a_fresh_complete_interrupt_handshake() {
     for (response, accepted) in [
         (&b"=> "[..], false),
@@ -396,6 +453,10 @@ async fn recovery_requires_a_fresh_complete_interrupt_handshake() {
         (&b"<INTERRUPT>\r\n\r\n=> "[..], false),
         (&b"<INTERRUPT>\r\n=> "[..], true),
         (&b"=> <INTERRUPT>\r\n=> "[..], true),
+        (&b"=> [   2.015] <INTERRUPT>\r\n=> "[..], true),
+        (&b"[   2.015] <INTERRUPT>\r\n=> "[..], true),
+        (&b"=> [ 2.x] <INTERRUPT>\r\n=> "[..], false),
+        (&b"wrong> [ 2.015] <INTERRUPT>\r\n=> "[..], false),
     ] {
         let console = Arc::new(Mutex::new(EchoConsole::default()));
         let mut shell = echo_shell(&console).await;
@@ -523,6 +584,60 @@ async fn transport_errors_and_missing_results_are_not_retryable() {
     assert!(error.contains("completion marker"), "{error}");
     assert_unresolved_entries_rejected(&mut shell, &console).await;
     assert_eq!(console.lock().unwrap().executed.len(), 1);
+}
+
+#[tokio::test]
+async fn completion_markers_accept_only_bounded_timestamp_prefixes() {
+    for (reply, output, complete) in [
+        (&b"\r\ncmd-ok\r\n[                                                        2.608] cmd-end\r\n=> "[..], Some(""), true),
+        (&b"\r\ncmd-ok\r\n[                                                         2.608] cmd-end\r\n=> "[..], None, false),
+        (&b"\r\n[ 2.2]cmd-ok\r\n[ 2.3] cmd-end\r\n=> "[..], None, true),
+        (
+            &b"\r\ndevice-result\r\ncmd-ok\r\n[   2.497] cmd-end\r\n=> "[..],
+            Some("device-result"),
+            true,
+        ),
+        (
+            &b"\r\n[ 2.1] device-result\r\n[ 2.2] cmd-ok\r\n[ 2.3] cmd-end\r\n=> "[..],
+            Some("[ 2.1] device-result"),
+            true,
+        ),
+        (&b"\r\nfailure\r\n[ 2.3] cmd-end\r\n=> "[..], None, true),
+        (&b"\r\ncmd-ok\r\n[ 2.x] cmd-end\r\n=> "[..], None, false),
+        (&b"\r\ncmd-ok\r\n[ 2.3] junkcmd-end\r\n=> "[..], None, false),
+        (
+            &b"\r\ncmd-ok\r\n[ 2.3] [ 2.4] cmd-end\r\n=> "[..],
+            None,
+            false,
+        ),
+    ] {
+        let console = Arc::new(Mutex::new(EchoConsole::default()));
+        let mut shell = echo_shell(&console).await;
+        console.lock().unwrap().result_reply = Some(reply);
+        let result = shell.cmd("echo once").await;
+        match output {
+            Some(expected) => assert_eq!(result.unwrap(), expected),
+            None => {
+                let error = result.unwrap_err().to_string();
+                assert!(
+                    error.contains(if complete {
+                        "complete failure result"
+                    } else {
+                        "completion marker"
+                    }),
+                    "{error}"
+                );
+            }
+        }
+        assert_eq!(console.lock().unwrap().executed.len(), 1);
+        if complete {
+            console.lock().unwrap().result_reply = None;
+            assert_eq!(shell.cmd("echo next").await.unwrap(), "device-result");
+            assert_eq!(console.lock().unwrap().executed.len(), 2);
+        } else {
+            assert_unresolved_entries_rejected(&mut shell, &console).await;
+        }
+    }
 }
 
 #[tokio::test]
@@ -748,4 +863,13 @@ async fn raw_boot_preserves_unacknowledged_protocol_and_stream_handoff() {
     shell.cmd_without_reply("booti").await.unwrap();
     assert_eq!(console.lock().unwrap().writes, b"\x03booti\n");
     assert_eq!(console.lock().unwrap().aborted_lines, 1);
+}
+
+#[tokio::test]
+async fn environment_address_accepts_timestamped_output() {
+    let console = Arc::new(Mutex::new(EchoConsole::default()));
+    let mut shell = echo_shell(&console).await;
+    console.lock().unwrap().result_reply =
+        Some(b"\r\n[ 2.1] 0x102200000\r\n[ 2.2] cmd-ok\r\n[ 2.3] cmd-end\r\n=> ");
+    assert_eq!(shell.env_int("kernel_addr_r").await.unwrap(), 0x102200000);
 }
