@@ -647,13 +647,24 @@ active role's permissions is prohibited. Editing an assigned custom role revokes
 its old credentials, ends its instant allocations and requires affected users to
 log in again. Role metadata changes alone preserve sessions.
 
+The three built-in roles are Administrator (`admin`, `system.admin`), Ordinary user
+(`member`, `board.use` and `rental.request`) and Advanced user (`advanced`, the same
+permissions as `member` plus `board.instant`). Registration defaults to `member`;
+upgrading adds `advanced` without changing existing users or their role assignments.
+Neither user role grants console access. Built-in roles cannot be disabled, deleted
+or have their permissions and allocation limits changed.
+
 Grant `board.instant` to a custom role to allow immediate use without approval.
 This also grants `board.use`, not console access. The role editor configures a
 maximum duration (1–1440 minutes), concurrent device count (1–16), minimum usable
 window and optional board-type allowlist within the permission section. `board.instant`
 is the sole allocation grant; `allocation_policy` stores its numeric/scope parameters,
-not a second permission switch. Separately enable **Allow immediate use**
-on each device; existing inventory defaults to closed. Only enabled, idle devices
+not a second permission switch. Separately enable **Open for use without application** (开放免申请)
+on each device; existing inventory defaults to closed. This switch grants no user
+permissions. In the role editor, **Use devices without approval** (免审批使用设备)
+controls `board.instant`: ordinary members still submit applications for approval,
+while the built-in Advanced user role or a custom role granted this capability can directly claim devices
+with the switch enabled. Only enabled, idle devices
 in both the role's scope and the open pool can be allocated. Existing bookings
 have priority; the server bounds each allocation by the next booking minus a
 60-second release buffer and rejects windows below the role's minimum.

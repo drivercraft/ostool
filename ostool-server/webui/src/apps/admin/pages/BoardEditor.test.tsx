@@ -624,6 +624,8 @@ it("switches manual UART draft to axloader and preserves focus on serial SSE upd
 it("keeps new public HTTPboot boards disabled until device authentication can be configured", async () => {
   mount(undefined, "/boards/new?mac=02:00:00:00:00:21", [], [], false);
   expect(screen.getByRole("checkbox", { name: "禁用开发板" })).toBeChecked();
+  const pool = screen.getByRole("checkbox", { name: "开放免申请" });
+  expect(pool).not.toBeChecked();
   expect(
     screen.getByText(/新增公网 HTTPboot 开发板会先禁用保存/),
   ).toBeVisible();
@@ -631,11 +633,12 @@ it("keeps new public HTTPboot boards disabled until device authentication can be
     .spyOn(api, "createBoard")
     .mockRejectedValue(new Error("stop after request"));
   const user = userEvent.setup();
+  await user.click(pool);
   await user.type(screen.getByLabelText("板型"), "public-http");
   await user.type(screen.getByLabelText("上电命令"), "true");
   await user.type(screen.getByLabelText("下电命令"), "true");
   await user.click(screen.getByRole("button", { name: "保存开发板" }));
   expect(create).toHaveBeenCalledWith(
-    expect.objectContaining({ disabled: true }),
+    expect.objectContaining({ disabled: true, allow_instant_use: true }),
   );
 });

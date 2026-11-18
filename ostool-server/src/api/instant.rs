@@ -70,7 +70,7 @@ pub async fn assign(
 ) -> Result<(String, Uuid, DateTime<Utc>), ApiError> {
     let access = permissions::access(&state.database, user).await?;
     if !access.allows("board.instant") {
-        return Err(ApiError::forbidden("当前角色没有即时分配权限"));
+        return Err(ApiError::forbidden("当前角色没有免审批使用设备权限"));
     }
     let count: i64 = sqlx::query_scalar(
         "SELECT count(DISTINCT board_id) FROM (SELECT board_id FROM session_history WHERE user_id=$1 AND ended_at IS NULL UNION SELECT board_id FROM board_rentals WHERE user_id=$1 AND source='instant' AND cancelled_at IS NULL AND starts_at<=now() AND ends_at>now()) allocations",

@@ -317,10 +317,10 @@ function Editor({ board }: { board?: BoardConfig }) {
           />
           {!local && (
             <CheckField
-              label="允许即时使用"
+              label="开放免申请"
               checked={form.allow_instant_use}
               onChange={(value) => set("allow_instant_use", value)}
-              hint="获授权的角色可自动领取此设备；仍遵守已有预约和使用时限。"
+              hint="仅拥有“免审批使用设备”权限的用户可直接领取；普通用户仍需申请审批，已有预约和使用限制继续生效。"
             />
           )}
           {!local && form.boot_kind === "httpboot" && (

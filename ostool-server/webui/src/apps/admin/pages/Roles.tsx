@@ -70,7 +70,7 @@ export default function Roles() {
               { value: "", label: "全部角色" },
               { value: "admin", label: "全部后台管理" },
               { value: "custom", label: "自定义角色" },
-              { value: "instant", label: "允许即时使用" },
+              { value: "instant", label: "免审批使用设备" },
             ]}
           />
           <SelectField
@@ -121,7 +121,7 @@ export default function Roles() {
               </Badge>
               {role.permissions.includes("board.instant") && (
                 <small>
-                  即时分配：{role.allocation_policy.max_duration_minutes} 分钟 /
+                  免审批使用：{role.allocation_policy.max_duration_minutes} 分钟 /
                   最多 {role.allocation_policy.max_concurrent_sessions} 台
                 </small>
               )}

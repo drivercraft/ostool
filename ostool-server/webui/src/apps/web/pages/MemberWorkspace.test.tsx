@@ -199,7 +199,7 @@ it("rejects the direct claim page when the role lacks instant allocation", () =>
   window.history.replaceState({}, "", "/account/allocations/new");
   render(<App />);
   expect(
-    screen.getByText("当前角色没有即时分配权限，请通过租赁申请获取设备。"),
+    screen.getByText("当前角色没有免审批使用设备权限，请通过租赁申请获取设备。"),
   ).toBeTruthy();
   expect(screen.queryByRole("button", { name: "确认领取" })).toBeNull();
 });

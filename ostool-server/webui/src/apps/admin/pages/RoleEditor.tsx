@@ -302,7 +302,7 @@ function Editor({
                 className="role-permission-limits"
                 disabled={fixed || task.pending}
               >
-                <Section title="即时分配权限参数">
+                <Section title="免审批使用权限参数">
                   <TextField
                     label="单次最长使用（分钟）"
                     type="number"
@@ -348,7 +348,7 @@ function Editor({
                           .filter(Boolean),
                       );
                     }}
-                    placeholder="用逗号或换行分隔；留空允许所有已开放即时使用的设备。"
+                    placeholder="用逗号或换行分隔；留空允许所有已开放免申请的设备。"
                   />
                 </Section>
               </fieldset>

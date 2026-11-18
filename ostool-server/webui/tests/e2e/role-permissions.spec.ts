@@ -27,7 +27,7 @@ test("role matrix grants instant device access without administrator rights and 
   ).toBeChecked();
   await page.getByLabel("角色名称", { exact: true }).fill(name);
   await page
-    .getByRole("checkbox", { name: "即时分配设备", exact: true })
+    .getByRole("checkbox", { name: "免审批使用设备", exact: true })
     .check();
   await expect(
     page.getByRole("checkbox", { name: "使用已分配设备", exact: true }),

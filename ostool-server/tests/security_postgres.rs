@@ -2304,6 +2304,142 @@ async fn reserved_name_settings_apply_to_admin_writes_and_survive_restart_withou
 
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL and Redis"]
+async fn builtin_role_upgrade_preserves_existing_users_roles_and_credentials() -> anyhow::Result<()>
+{
+    let url = std::env::var("OSTOOL_TEST_DATABASE_URL")?;
+    let mut connection = <sqlx::PgConnection as sqlx::Connection>::connect(&url).await?;
+    let mut tx = sqlx::Connection::begin(&mut connection).await?;
+    let schema = format!("ostool_role_upgrade_{}", Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SELECT set_config('search_path',$1,true)")
+        .bind(format!("{schema},public"))
+        .execute(&mut *tx)
+        .await?;
+    for migration in sqlx::migrate!("./migrations")
+        .iter()
+        .filter(|m| m.version < 20261118000000)
+    {
+        sqlx::raw_sql(&migration.sql).execute(&mut *tx).await?;
+    }
+    sqlx::query("INSERT INTO users(username,email,password_hash,role_id,is_admin) VALUES ('existing_admin','admin@upgrade.test','existing-admin-hash','admin',true),('existing_member','member@upgrade.test','existing-member-hash','member',false)")
+        .execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO oauth_sessions(user_id,client_id,access_token_hash,refresh_token_hash,access_expires_at,refresh_expires_at,absolute_expires_at) SELECT id,'web','existing-access','existing-refresh',now()+interval '1 hour',now()+interval '1 day',now()+interval '1 day' FROM users WHERE username='existing_member'")
+        .execute(&mut *tx).await?;
+    let snapshot = "SELECT jsonb_build_object('users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'roles',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM roles r WHERE id<>'advanced'),'credentials',(SELECT jsonb_agg(to_jsonb(s) ORDER BY id) FROM oauth_sessions s))";
+    let before: Value = sqlx::query_scalar(snapshot).fetch_one(&mut *tx).await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/20261118000000_advanced_builtin_role.sql"
+    ))
+    .execute(&mut *tx)
+    .await?;
+    let after: Value = sqlx::query_scalar(snapshot).fetch_one(&mut *tx).await?;
+    assert_eq!(before, after);
+    let builtin_count: i64 = sqlx::query_scalar("SELECT count(*) FROM roles WHERE builtin")
+        .fetch_one(&mut *tx)
+        .await?;
+    assert_eq!(builtin_count, 3);
+    tx.rollback().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn builtin_roles_include_advanced_members_with_only_approval_free_use_added()
+-> anyhow::Result<()> {
+    let f = Fixture::new(true).await;
+    let root = f.login(true).await;
+    let cookie = test_security::cookie_header(&root.headers);
+    let reply = f
+        .request("GET", "/api/v1/admin/roles", Some(&cookie), Value::Null)
+        .await;
+    assert_eq!(reply.status, StatusCode::OK);
+    let roles = reply.body.as_array().unwrap();
+    assert_eq!(roles.len(), 3);
+    for (id, name, permissions) in [
+        ("admin", "管理员", json!(["system.admin"])),
+        ("member", "普通用户", json!(["board.use", "rental.request"])),
+        (
+            "advanced",
+            "高级用户",
+            json!(["board.instant", "board.use", "rental.request"]),
+        ),
+    ] {
+        let role = roles.iter().find(|r| r["id"] == id).unwrap();
+        assert_eq!(role["name"], name);
+        assert_eq!(role["code"], id);
+        assert_eq!(role["builtin"], true);
+        assert_eq!(role["enabled"], true);
+        assert_eq!(role["administrator"], id == "admin");
+        assert_eq!(role["permissions"], permissions);
+    }
+    let advanced = roles.iter().find(|r| r["id"] == "advanced").unwrap();
+    let member = roles.iter().find(|r| r["id"] == "member").unwrap();
+    assert_eq!(advanced["allocation_policy"], member["allocation_policy"]);
+    let created = f
+        .request(
+            "POST",
+            "/api/v1/admin/users",
+            Some(&cookie),
+            json!({"username":"advanced_member","email":"advanced@roles.test","password":"advanced-password-123","role_id":"advanced","disabled":false}),
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+    let user = f
+        .state
+        .database
+        .find_user("advanced@roles.test")
+        .await?
+        .unwrap();
+    let access = ostool_server::security::permissions::access(&f.state.database, &user)
+        .await
+        .unwrap();
+    assert!(!user.is_admin);
+    assert!(access.allows("board.instant"));
+    assert!(access.allows("rental.request"));
+    assert!(!access.allows("console.access"));
+    let mut changed = advanced.clone();
+    changed["permissions"] = json!(["board.use", "rental.request"]);
+    let update = f
+        .request(
+            "PUT",
+            "/api/v1/admin/roles/advanced",
+            Some(&cookie),
+            changed,
+        )
+        .await;
+    assert_eq!(update.status, StatusCode::CONFLICT);
+    let deleted = f
+        .request(
+            "DELETE",
+            "/api/v1/admin/roles/advanced",
+            Some(&cookie),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(deleted.status, StatusCode::CONFLICT);
+    let normal = f
+        .state
+        .database
+        .create_user(
+            "ordinary_member",
+            "ordinary@roles.test",
+            "ordinary-password-123",
+            None,
+            false,
+        )
+        .await?;
+    let access = ostool_server::security::permissions::access(&f.state.database, &normal)
+        .await
+        .unwrap();
+    assert_eq!(access.role_id, "member");
+    assert!(!access.allows("board.instant"));
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
 async fn capability_roles_gate_admin_login_http_and_scoped_events_and_prevent_escalation()
 -> anyhow::Result<()> {
     use futures_util::StreamExt;
@@ -2544,6 +2680,78 @@ async fn instant_device_use_respects_pool_bookings_concurrency_ownership_and_ear
             false,
         )
         .await?;
+    // Opening a device does not grant ordinary members approval-free access.
+    let normal_grant = f
+        .state
+        .database
+        .issue_grant(normal.clone(), "ostool-cli", "board:operate", &auth)
+        .await?;
+    let normal_web = f
+        .state
+        .database
+        .issue_grant(normal.clone(), "web", "profile", &auth)
+        .await?;
+    let advanced_web = f
+        .state
+        .database
+        .issue_grant(user.clone(), "web", "profile", &auth)
+        .await?;
+    for (path, input, token) in [
+        (
+            "/api/v1/account/allocations",
+            json!({"board_id":"shared-2"}),
+            &normal_web.access_token,
+        ),
+        (
+            "/api/v1/sessions",
+            json!({"board_type":"shared-arm","board_id":"shared-2"}),
+            &normal_grant.access_token,
+        ),
+    ] {
+        let denied = f
+            .custom("POST", path, None, input, Some(&f.origin), Some(token))
+            .await;
+        assert_eq!(
+            denied.status,
+            StatusCode::FORBIDDEN,
+            "{path}: {}",
+            denied.body
+        );
+    }
+    let ordinary = f
+        .custom(
+            "GET",
+            "/api/v1/account",
+            None,
+            Value::Null,
+            Some(&f.origin),
+            Some(&normal_web.access_token),
+        )
+        .await;
+    assert_eq!(ordinary.status, StatusCode::OK);
+    assert!(
+        ordinary.body["catalog"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|b| b["instant_available"] == false)
+    );
+    // The advanced role can claim only devices explicitly opened for this use.
+    let advanced = f
+        .custom(
+            "GET",
+            "/api/v1/account",
+            None,
+            Value::Null,
+            Some(&f.origin),
+            Some(&advanced_web.access_token),
+        )
+        .await;
+    assert_eq!(advanced.status, StatusCode::OK);
+    for board in advanced.body["catalog"].as_array().unwrap() {
+        let eligible = matches!(board["id"].as_str(), Some("shared-1" | "shared-2"));
+        assert_eq!(board["instant_available"], eligible, "{board}");
+    }
     sqlx::query("INSERT INTO board_rentals(board_id,user_id,starts_at,ends_at) VALUES('shared-1',$1,now()+interval '30 minutes',now()+interval '2 hours')").bind(normal.id).execute(f.state.database.pool()).await?;
     let create =
         |id: &str| json!({"board_type":"shared-arm","board_id":id,"required_tags":["kernel"]});

@@ -720,7 +720,7 @@ function ClaimBoard({ user }: { user: AuthUser }) {
   const navigate = useNavigate();
   const allowed = user.permissions?.includes("board.instant") || user.is_admin;
   if (!allowed)
-    return <Notice>当前角色没有即时分配权限，请通过租赁申请获取设备。</Notice>;
+    return <Notice>当前角色没有免审批使用设备权限，请通过租赁申请获取设备。</Notice>;
   return (
     <PagePanel
       footer={

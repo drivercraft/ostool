@@ -238,8 +238,8 @@ pub const CATALOG: &[Capability] = &[
     ),
     cap!(
         "board.instant",
-        "即时分配设备",
-        "自动领取开放的空闲设备，不需要逐次审核",
+        "免审批使用设备",
+        "无需提交申请或逐次审批，仅可领取已开放免申请的空闲设备",
         "前台设备使用",
         ["board.use"]
     ),
@@ -510,6 +510,13 @@ pub async fn catalog(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn approval_free_use_requires_a_separate_role_grant() {
+        let ordinary = expand(&["board.use".into(), "rental.request".into()]).unwrap();
+        assert!(!ordinary.iter().any(|p| p == "board.instant"));
+        let advanced = expand(&["board.instant".into()]).unwrap();
+        assert_eq!(advanced, vec!["board.instant", "board.use"]);
+    }
     #[test]
     fn capability_dependencies_are_expanded_but_unknown_codes_and_routes_fail_closed() {
         let list = expand(&["requests.manage".into()]).unwrap();

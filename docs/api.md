@@ -1427,8 +1427,13 @@ SSE 同样逐主题过滤，伪造 `topics/list_view/editor_view/board_editor_id
 授权者不能授予自身未拥有的权限，不能维护更高权限用户或角色；内置权限不可修改，不能修改自己的角色权限。
 角色能力或使用规则改变会原子撤销该角色旧凭据并取消其即时租赁；更新名称、说明不撤销凭据。
 
-`board.use` 允许使用有效租赁，`rental.request` 允许提交申请，`board.instant` 允许立即分配。
-设备新增/编辑增加 `allow_instant_use`（默认 false）。原有 `POST /api/v1/sessions` 不变；
+预置角色为 `admin`（管理员，`system.admin`）、`member`（普通用户，`board.use`、`rental.request`）、
+`advanced`（高级用户，在普通用户基础上仅增加 `board.instant`）。新注册用户仍默认分配 `member`，
+升级不自动提升现有用户权限。高级用户没有管理后台权限，内置角色的状态、权限和使用限制不可修改，也不可删除。
+
+`board.use` 允许使用有效租赁，`rental.request` 允许提交申请，`board.instant` 是角色的“免审批使用设备”权限，允许立即分配。
+设备新增/编辑的 `allow_instant_use`（“开放免申请”，默认 false）仅控制设备是否参与分配，不授予用户权限；
+必须同时满足用户拥有 `board.instant` 且设备开启此配置，才允许免申请审批直接领取。普通用户仍需通过申请审批获得租赁。原有 `POST /api/v1/sessions` 不变；
 若成员没有可用的已分配设备且具有即时权限，服务器按板型、标签、设备 ID、共享标记和预约日历筛选。
 角色并发上限、当前独占状态及预约冲突在分配门锁内复查。预约开始前保留 60 秒释放缓冲，不足最短可用时间时返回原有空闲不足错误。
 分配成功生成 `board_rentals.source='instant'` 并与 `session_owners/session_history` 关联，

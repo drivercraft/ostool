@@ -481,8 +481,13 @@ Each immediate allocation also creates a rental application with an “Automatic
 approved” status and decision note, visible in both application lists.
 Roles have a globally unique, immutable code and an enabled state. Disabling a role
 revokes its users' credentials and ends device access; enabling it again requires
-a fresh login. `board.instant` grants allocation, while duration, concurrency and
-board-type scope configure the limits of that permission.
+a fresh login. The role capability `board.instant` grants use without approval; a device's
+**Open for use without application** switch only selects eligible devices and grants no user permissions.
+The three built-in roles are Administrator (`admin`), Ordinary user (`member`) and
+Advanced user (`advanced`). Registration defaults to `member`. Advanced users have
+exactly the ordinary user permissions plus `board.instant` and can directly claim
+devices with the switch enabled. Neither user role grants console access.
+Duration, concurrency and board-type scope configure the limits of that permission.
 
 ### Public board authentication
 
