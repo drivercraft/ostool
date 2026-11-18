@@ -49,11 +49,11 @@ test("lease history follows real allocation and release through the paginated ev
   ).toBeVisible();
   await page
     .getByRole("navigation", { name: "主导航" })
-    .getByRole("link", { name: "租约历史", exact: true })
+    .getByRole("link", { name: "会话历史", exact: true })
     .click();
   await expect(page).toHaveURL(/\/qcl\/session-history$/);
   await expect(
-    page.getByRole("heading", { name: "租约历史", exact: true }),
+    page.getByRole("heading", { name: "会话历史", exact: true }),
   ).toBeVisible();
   await page.getByLabel("设备标识", { exact: true }).fill(board);
   const row = page.getByRole("row").filter({ hasText: session });
@@ -64,7 +64,7 @@ test("lease history follows real allocation and release through the paginated ev
   ).toBe(202);
   await expect(row.getByText("管理员释放", { exact: true })).toBeVisible();
   await expect(row.getByText("已结束", { exact: true })).toBeVisible();
-  await row.getByRole("button", { name: "租约详情", exact: true }).click();
+  await row.getByRole("button", { name: "会话详情", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText(session);
   await expect(page.getByRole("dialog")).toContainText("最后心跳");
   await page.keyboard.press("Escape");

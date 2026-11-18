@@ -1098,6 +1098,20 @@
   }
 }
 /* Shared form layout, used by sections, dialogs, and standalone editors. */
+.board-editor-form fieldset {
+  min-width: 0;
+}
+.board-editor-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 36px;
+}
+@media (max-width: 1100px) {
+  .board-editor-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .form-fields {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

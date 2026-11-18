@@ -14,11 +14,13 @@ export function MacPicker({
   onChange,
   devices,
   boardId,
+  disabled = false,
 }: {
   value: string;
   onChange: (value: string) => void;
   devices: LoaderDeviceSummary[];
   boardId?: string;
+  disabled?: boolean;
 }) {
   const id = useId();
   const [open, setOpen] = useState(false);
@@ -31,17 +33,19 @@ export function MacPicker({
       <div className="flex gap-2">
         <Input
           id={id}
+          disabled={disabled}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="选择或输入 MAC，例如 02:00:00:00:00:01"
           title="发现列表实时更新；选择后需保存配置才能完成绑定。"
           aria-description="发现列表实时更新；选择后需保存配置才能完成绑定。"
         />
-        <Popover open={open} onOpenChange={setOpen}>
+        <Popover open={open && !disabled} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
             <Button
               type="button"
               variant="outline"
+              disabled={disabled}
               aria-label={`发现 ${candidates.length} 台设备`}
             >
               发现 {candidates.length} 台

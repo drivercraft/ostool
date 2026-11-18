@@ -79,12 +79,19 @@ describe("edition navigation and authentication", () => {
     render(<App />);
     await screen.findByText("本地设备总览");
     const nav = within(screen.getByRole("navigation", { name: "主导航" }));
+    const sessions = screen.getByText("会话管理").closest("details")!;
+    const devices = screen.getByText("设备管理").closest("details")!;
+    expect(within(sessions).getByRole("link", { name: "当前会话" })).toBeTruthy();
+    expect(within(devices).queryByRole("link", { name: "当前会话" })).toBeNull();
+    expect(within(devices).queryByRole("link", { name: "会话历史" })).toBeNull();
     await userEvent.click(
-      nav.getByRole("link", { name: "租约历史" }),
+      nav.getByRole("link", { name: "会话历史" }),
     );
-    await screen.findByLabelText("搜索租约历史");
+    await screen.findByLabelText("搜索会话历史");
     expect(window.location.pathname).toBe("/qcl/session-history");
-    expect(screen.getByRole("heading", { name: "租约历史" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "会话历史" })).toBeTruthy();
+    expect(sessions.querySelector("summary")?.classList.contains("active")).toBe(true);
+    expect(devices.querySelector("summary")?.classList.contains("active")).toBe(false);
     expect(mocks.topics.mock.lastCall?.[0]).toContain("session_history");
     expect(mocks.topics.mock.lastCall?.[0]).not.toContain("sessions");
     await userEvent.click(
@@ -109,8 +116,10 @@ describe("edition navigation and authentication", () => {
     });
     window.history.replaceState({}, "", "/qcl/session-history");
     render(<App />);
-    await screen.findByLabelText("搜索租约历史");
+    await screen.findByLabelText("搜索会话历史");
     expect(screen.queryByText("当前角色没有此页面的访问权限。")).toBeNull();
+    expect(screen.getByText("会话管理")).toBeTruthy();
+    expect(screen.queryByText("设备管理")).toBeNull();
   });
   it("redirects the previous history link to the standalone page", async () => {
     mocks.config.mockResolvedValue({
@@ -120,7 +129,7 @@ describe("edition navigation and authentication", () => {
     });
     window.history.replaceState({}, "", "/qcl/sessions?view=history");
     render(<App />);
-    await screen.findByLabelText("搜索租约历史");
+    await screen.findByLabelText("搜索会话历史");
     expect(window.location.pathname).toBe("/qcl/session-history");
     expect(window.location.search).toBe("");
   });

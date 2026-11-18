@@ -30,8 +30,8 @@ test("authenticated unbound power and manual MAC binding preserve drafts while u
   await page.getByLabel("板型", { exact: true }).fill("qemu-x86_64");
   await page.getByLabel("ID", { exact: true }).fill("e2e-board");
   await page.getByLabel("启动方式").selectOption("httpboot");
-  await expect(page.getByLabel("波特率", { exact: true })).toHaveCount(0);
-  await expect(page.getByLabel("启用串口")).toHaveCount(0);
+  await expect(page.getByLabel("波特率", { exact: true })).toBeDisabled();
+  await expect(page.getByLabel("启用串口")).toBeDisabled();
   await expect(page.getByText("自动串口", { exact: true })).toBeVisible();
   const macInput = page.getByLabel("MAC 地址", { exact: true });
   await macInput.fill("02:00:00:00:00:");

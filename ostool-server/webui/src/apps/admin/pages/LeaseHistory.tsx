@@ -103,7 +103,7 @@ export default function LeaseHistory() {
   }
   const footer = (
     <div className="audit-pagination">
-      <span>{ready ? `共 ${total} 条租约` : "正在同步租约历史…"}</span>
+      <span>{ready ? `共 ${total} 条会话记录` : "正在同步会话历史…"}</span>
       <div>
         <SelectField
           label="每页条数"
@@ -150,7 +150,7 @@ export default function LeaseHistory() {
         toolbar={
           <ListToolbar count={ready ? `${total} 条历史记录` : "正在同步…"}>
             <TextField
-              label="搜索租约历史"
+              label="搜索会话历史"
               placeholder="会话、设备、用户名或客户端"
               value={filters.q ?? ""}
               onValue={(q) => change({ q })}
@@ -162,7 +162,7 @@ export default function LeaseHistory() {
               onValue={(board) => change({ board })}
             />
             <SelectField
-              label="租约状态"
+              label="会话状态"
               value={filters.state ?? ""}
               onValue={(state) => change({ state })}
               options={[
@@ -282,7 +282,7 @@ export default function LeaseHistory() {
                 </Cell>
                 <Cell>
                   <RowAction
-                    label="租约详情"
+                    label="会话详情"
                     icon={Eye}
                     onClick={() => setDetails(record)}
                   />
@@ -300,7 +300,7 @@ export default function LeaseHistory() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>租约详情</DialogTitle>
+            <DialogTitle>会话详情</DialogTitle>
           </DialogHeader>
           <DialogBody>
             <DialogDescription>

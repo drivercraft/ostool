@@ -25,6 +25,7 @@ import {
 import {
   LayoutDashboardIcon,
   CircuitBoardIcon,
+  MonitorIcon,
   CalendarClockIcon,
   SettingsIcon,
   UserCircleIcon,
@@ -61,8 +62,10 @@ const boardNavigation = [
   ["boards", "设备列表"],
   ["device-documents", "设备文档"],
   ["dtbs", "DTB 管理"],
+] as const;
+const sessionNavigation = [
   ["sessions", "当前会话"],
-  ["session-history", "租约历史"],
+  ["session-history", "会话历史"],
 ] as const;
 const userNavigation = [
   ["users", "用户列表"],
@@ -239,6 +242,28 @@ function AdminConsole({
                 paths={boardNavigation.map(([path]) => "/" + path)}
               >
                 {boardNavigation
+                  .filter(([path]) => can(pagePermission("/" + path)))
+                  .map(([path, label]) => (
+                    <NavLink
+                      key={path}
+                      to={`/${path}`}
+                      onClick={() => setMenu(false)}
+                    >
+                      <span className="admin-nav-dot" aria-hidden="true" />
+                      <span>{label}</span>
+                    </NavLink>
+                  ))}
+              </SidebarGroup>
+            )}
+            {sessionNavigation.some(([path]) =>
+              can(pagePermission("/" + path)),
+            ) && (
+              <SidebarGroup
+                label="会话管理"
+                icon={<MonitorIcon />}
+                paths={sessionNavigation.map(([path]) => "/" + path)}
+              >
+                {sessionNavigation
                   .filter(([path]) => can(pagePermission("/" + path)))
                   .map(([path, label]) => (
                     <NavLink

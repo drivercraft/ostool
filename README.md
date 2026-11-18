@@ -460,8 +460,8 @@ auth_mode = "required"
 
 服务器统一使用一份 `.env`，前端从 API 获取运行配置。部署入口为 `ostool-server/scripts/deploy.sh docker up` 或 `systemd up`；local 直接使用 HTTP；public 使用 Caddy HTTPS，后端仅监听回环地址。
 
-管理后台“设备管理”下分别提供“当前会话”（`/qcl/sessions`）和“租约历史”（`/qcl/session-history`）导航页。
-当前会话用于查看和释放正在使用的设备；租约历史提供持久化的设备使用记录，支持筛选和分页。
+管理后台“会话管理”下分别提供“当前会话”（`/qcl/sessions`）和“会话历史”（`/qcl/session-history`）导航页。
+当前会话用于查看和释放正在使用的设备；会话历史提供持久化的设备使用记录，支持筛选和分页。
 本地版也会记录，升级前已结束的使用不补造历史。
 
 网站账号必须设置全局唯一的用户名，网站和后台均支持用户名或邮箱登录；已有账号在升级时自动生成用户名。

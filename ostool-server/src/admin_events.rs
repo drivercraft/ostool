@@ -703,7 +703,7 @@ async fn subscribe_scoped(
                         .and_then(|page| Ok(serde_json::to_value(page)?))
                         .unwrap_or_else(|error| {
                             log::warn!("lease history query failed: {error:#}");
-                            serde_json::json!({"error":"租约历史数据库暂时不可用"})
+                            serde_json::json!({"error":"会话历史数据库暂时不可用"})
                         });
                     update.data.insert("session_history".into(), data);
                 }

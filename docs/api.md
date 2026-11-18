@@ -308,7 +308,7 @@ token=<refresh_token>
 | QEMU 虚拟设备 | `GET /api/v1/admin/virtual-devices`；`POST /api/v1/admin/virtual-devices`；`DELETE /api/v1/admin/virtual-devices/{device_id}` |
 | DTB 列表与创建 | `GET /api/v1/admin/dtbs`；`POST /api/v1/admin/dtbs` |
 | 单个 DTB | `GET /api/v1/admin/dtbs/{dtb_name}`；`PUT /api/v1/admin/dtbs/{dtb_name}`；`DELETE /api/v1/admin/dtbs/{dtb_name}` |
-| 租约历史 | `GET /api/v1/admin/session-history` |
+| 会话历史 | `GET /api/v1/admin/session-history` |
 | 活动会话 | `GET /api/v1/admin/sessions`；`DELETE /api/v1/admin/sessions/{session_id}` |
 | TFTP 配置 | `GET /api/v1/admin/tftp`；`PUT /api/v1/admin/tftp` |
 | TFTP 状态与协调 | `GET /api/v1/admin/tftp/status`；`POST /api/v1/admin/tftp/reconcile` |
@@ -652,7 +652,7 @@ DELETE /api/v1/admin/sessions/{session_id}
 
 成功返回 `202 Accepted` 且没有响应体。释放是异步过程，期间会话可能继续出现在列表中并处于 `releasing`；不存在时返回 `404 Not Found`。
 
-### 硬件租约历史
+### 硬件会话历史
 
 硬件使用历史接口：`GET /api/v1/admin/session-history`。公网版仅管理员可访问；
 本地版使用相同的认证管理入口。参数为 `q`（会话、设备、板型、用户名或客户端的字面子串）、
@@ -1408,7 +1408,7 @@ SMTP 密码、Turnstile 服务端密钥、MFA 加密密钥、数据库及 Redis 
 设备列表、会话列表和 SSE 不返回控制命令或设备注册/绑定凭据；设备编辑详情保留授权维护所需配置。
 电源操作各平台均返回通用结果，不回显执行命令。数据库及系统调用的 5xx 响应使用通用消息；
 原始错误留在服务器日志，响应 `X-Request-ID` 与审计记录关联，供排障查询。
-运行状态、TFTP、OTA 和租约历史的错误字段仅保留失败状态及安全提示，不直接输出底层诊断正文。
+运行状态、TFTP、OTA 和会话历史的错误字段仅保留失败状态及安全提示，不直接输出底层诊断正文。
 接口继续设置 `Cache-Control: no-store`。本地版保留最小响应模型，允许匿名 HTTP 使用。
 
 ## 角色能力与自动分配

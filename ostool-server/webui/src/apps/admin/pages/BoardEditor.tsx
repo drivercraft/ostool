@@ -284,12 +284,13 @@ function Editor({ board }: { board?: BoardConfig }) {
       )}
       <form
         id={formId}
+        className="board-editor-form"
         onSubmit={(e) => {
           e.preventDefault();
           void submit();
         }}
       >
-        <Section title="基本信息">
+        <Section title="基本信息" columns={2}>
           <TextField
             label="板型"
             required
@@ -312,6 +313,7 @@ function Editor({ board }: { board?: BoardConfig }) {
           />
           <TextareaField
             label="备注"
+            fullWidth={false}
             value={form.notes}
             onValue={(v) => set("notes", v)}
           />
@@ -323,20 +325,125 @@ function Editor({ board }: { board?: BoardConfig }) {
               hint="仅拥有“免审批使用设备”权限的用户可直接领取；普通用户仍需申请审批，已有预约和使用限制继续生效。"
             />
           )}
-          {!local && form.boot_kind === "httpboot" && (
-            <Notice>
-              新增公网 HTTPboot
-              开发板会先禁用保存。保存后配置设备认证，再取消禁用并保存以开放分配。
-            </Notice>
-          )}
           <CheckField
             label="禁用开发板"
             checked={form.disabled}
             onChange={(v) => set("disabled", v)}
           />
         </Section>
-        {form.boot_kind === "httpboot" ? (
-          <Section title="自动串口">
+        <Section
+          title="启动与绑定"
+          columns={2}
+          hint="选择启动方式后，下方对应配置可编辑；其他配置保留草稿。"
+        >
+          <SelectField
+            label="启动方式"
+            value={form.boot_kind}
+            onValue={(v) =>
+              setForm((f) => ({
+                ...f,
+                boot_kind: v as BoardEditorFormState["boot_kind"],
+                disabled:
+                  !board && !local && v === "httpboot" ? true : f.disabled,
+              }))
+            }
+            options={[
+              { value: "uboot", label: "U-Boot" },
+              { value: "pxe", label: "PXE" },
+              { value: "httpboot", label: "axloader (HTTP Boot)" },
+            ]}
+          />
+          <MacPicker
+            value={form.network_mac}
+            onChange={(value) => set("network_mac", value)}
+            devices={loaders}
+            boardId={board?.id}
+            disabled={form.boot_kind === "uboot"}
+          />
+          {!local && (
+            <p className="hint">
+              新增公网 HTTPboot
+              开发板会先禁用保存。保存后配置设备认证，再取消禁用并保存以开放分配。
+            </p>
+          )}
+          <p className="hint">
+            设备架构{" "}
+            {selectedLoader?.online
+              ? selectedLoader.arch
+              : selectedLoader
+                ? "未知（设备离线）"
+                : "未知（未发现设备）"}
+            {selectedLoader && (
+              <>
+                {" "}
+                · {selectedLoader.ip_address} ·{" "}
+                {selectedLoader.hardware.product} ·{" "}
+                {selectedLoader.conflict
+                  ? "MAC 冲突"
+                  : selectedLoader.bound_board_id
+                    ? `已绑定 ${selectedLoader.bound_board_id}`
+                    : selectedLoader.online
+                      ? "在线，未绑定"
+                      : "离线，未绑定"}
+              </>
+            )}
+          </p>
+          <TextareaField
+            label="PXE 备注"
+            value={form.pxe_notes}
+            disabled={form.boot_kind !== "pxe"}
+            onValue={(v) => set("pxe_notes", v)}
+          />
+        </Section>
+        <div className="board-editor-columns">
+          <Section
+            title="手动串口"
+            columns={2}
+            hint="用于 U-Boot 与 PXE；axloader HTTP Boot 使用下方自动串口。"
+          >
+            <CheckField
+              label="启用串口"
+              disabled={form.boot_kind === "httpboot"}
+              checked={form.serial_enabled}
+              onChange={(v) => set("serial_enabled", v)}
+              hint="启用 U-Boot 开发板必须配置串口；未完成配置可先禁用保存。"
+            />
+            <fieldset
+              disabled={form.boot_kind === "httpboot" || !form.serial_enabled}
+            >
+              <FormGrid columns={2}>
+                <SelectField
+                  label="稳定串口"
+                  value={
+                    form.serial_key_value
+                      ? `${form.serial_key_kind}:${form.serial_key_value}`
+                      : ""
+                  }
+                  onValue={(v) => chooseSerial(v)}
+                  options={serialOptions()}
+                />
+                <TextField
+                  label="波特率"
+                  type="number"
+                  min={1}
+                  value={form.serial_baud_rate}
+                  onValue={(v) => set("serial_baud_rate", Number(v))}
+                />
+                <SerialDetails
+                  ports={serial}
+                  portKey={{
+                    kind: form.serial_key_kind,
+                    value: form.serial_key_value,
+                  }}
+                />
+              </FormGrid>
+            </fieldset>
+          </Section>
+          <Section
+            title="自动串口"
+            columns={2}
+            hint="仅用于 axloader HTTP Boot；未指定参数时采用设备上报值。"
+          >
             <p className="text-sm text-muted-foreground">
               axloader 上报实际参数，每次上电自动确认串口身份。
             </p>
@@ -351,13 +458,19 @@ function Editor({ board }: { board?: BoardConfig }) {
             </p>
             <CheckField
               label="指定串口参数"
+              disabled={form.boot_kind !== "httpboot"}
               checked={form.axloader_serial_parameters_enabled}
               onChange={(v) => set("axloader_serial_parameters_enabled", v)}
             />
-            {form.axloader_serial_parameters_enabled && (
-              <>
+            <fieldset
+              disabled={
+                form.boot_kind !== "httpboot" ||
+                !form.axloader_serial_parameters_enabled
+              }
+            >
+              <FormGrid columns={2}>
                 <TextField
-                  label="波特率"
+                  label="axloader 波特率"
                   type="number"
                   min={1}
                   value={form.axloader_baud_rate}
@@ -416,50 +529,71 @@ function Editor({ board }: { board?: BoardConfig }) {
                     { value: "rts_cts", label: "RTS/CTS" },
                   ]}
                 />
-              </>
-            )}
+              </FormGrid>
+            </fieldset>
           </Section>
-        ) : (
-          <Section title="串口">
-            <CheckField
-              label="启用串口"
-              checked={form.serial_enabled}
-              onChange={(v) => set("serial_enabled", v)}
-              hint="启用 U-Boot 开发板必须配置串口；未完成配置可先禁用保存。"
-            />
-            {form.serial_enabled && (
-              <>
-                <SelectField
-                  label="稳定串口"
-                  value={
-                    form.serial_key_value
-                      ? `${form.serial_key_kind}:${form.serial_key_value}`
-                      : ""
-                  }
-                  onValue={(v) => chooseSerial(v)}
-                  options={serialOptions()}
-                />
-                <TextField
-                  label="波特率"
-                  type="number"
-                  min={1}
-                  value={form.serial_baud_rate}
-                  onValue={(v) => set("serial_baud_rate", Number(v))}
-                />
-                <SerialDetails
-                  ports={serial}
-                  portKey={{
-                    kind: form.serial_key_kind,
-                    value: form.serial_key_value,
-                  }}
-                />
-              </>
-            )}
-          </Section>
-        )}
+        </div>
+        <div className="board-editor-columns">
+          <fieldset disabled={form.boot_kind !== "uboot"}>
+            <Section
+              title="U-Boot 启动"
+              columns={2}
+              hint="仅 U-Boot 启动使用这些配置；加载地址留空时使用默认值。"
+            >
+              <SelectField
+                label="预设 DTB"
+                value={form.dtb_name}
+                onValue={(v) => set("dtb_name", v)}
+                options={[
+                  { value: "", label: "无预设" },
+                  ...dtbs.map((d) => ({ value: d.name, label: d.name })),
+                ]}
+              />
+              <DtbUpload onUploaded={(name) => set("dtb_name", name)} />
+              {text("kernel_load_addr", "Kernel 加载地址")}
+              {text("fit_load_addr", "FIT 加载地址")}
+              {text("bootm_addr", "bootm 地址")}
+              <CheckField
+                label="启用 TFTP"
+                checked={form.use_tftp}
+                onChange={(v) => set("use_tftp", v)}
+              />
+            </Section>
+          </fieldset>
+          <fieldset disabled={form.boot_kind !== "uboot" || !form.use_tftp}>
+            <Section
+              title="TFTP 网络"
+              columns={2}
+              hint="启用 U-Boot TFTP 后可编辑；静态网络参数仅在静态 IP 模式下生效。"
+            >
+              <SelectField
+                label="网络模式"
+                value={form.network_mode}
+                onValue={(v) => set("network_mode", v as "dhcp" | "static_ip")}
+                options={[
+                  { value: "dhcp", label: "DHCP" },
+                  { value: "static_ip", label: "静态 IP" },
+                ]}
+              />
+              <fieldset disabled={form.network_mode !== "static_ip"}>
+                <FormGrid columns={2}>
+                  {text("board_ip", "开发板 IP")}
+                  {text("server_ip", "服务器 IP", {
+                    hint: `默认 ${tftp?.resolved_server_ip ?? "未解析"}`,
+                  })}
+                  {text("netmask", "子网掩码", {
+                    hint: `默认 ${tftp?.resolved_netmask ?? "未解析"}`,
+                  })}
+                  {text("gatewayip", "网关")}
+                </FormGrid>
+              </fieldset>
+            </Section>
+          </fieldset>
+        </div>
         <fieldset disabled={powerBusy} className="power-fields">
           <Section
             title="电源管理"
+            columns={2}
             hint="选择模块后可直接上电或下电，无需先保存开发板。"
           >
             <SelectField
@@ -477,14 +611,29 @@ function Editor({ board }: { board?: BoardConfig }) {
                 { value: "qemu", label: "QEMU 虚拟设备" },
               ]}
             />
-            {form.power_management_kind === "custom" && (
-              <>
-                {text("power_on_cmd", "上电命令", { fullWidth: true })}
-                {text("power_off_cmd", "下电命令", { fullWidth: true })}
-              </>
-            )}
-            {form.power_management_kind === "zhongsheng_relay" && (
-              <>
+            <SelectField
+              disabled={form.power_management_kind !== "qemu"}
+              label="虚拟设备"
+              value={form.virtual_device_id}
+              onValue={(v) => set("virtual_device_id", v)}
+              options={[
+                { value: "", label: "选择已有虚拟设备" },
+                ...(virtual?.devices ?? []).map((d) => ({
+                  value: d.id,
+                  label: `${d.id} · ${d.mac_address}`,
+                })),
+              ]}
+            />
+            <fieldset disabled={form.power_management_kind !== "custom"}>
+              <FormGrid columns={2}>
+                {text("power_on_cmd", "上电命令")}
+                {text("power_off_cmd", "下电命令")}
+              </FormGrid>
+            </fieldset>
+            <fieldset
+              disabled={form.power_management_kind !== "zhongsheng_relay"}
+            >
+              <FormGrid columns={2}>
                 <SelectField
                   label="继电器"
                   value={
@@ -502,22 +651,8 @@ function Editor({ board }: { board?: BoardConfig }) {
                     value: form.relay_serial_key_value,
                   }}
                 />
-              </>
-            )}
-            {form.power_management_kind === "qemu" && (
-              <SelectField
-                label="虚拟设备"
-                value={form.virtual_device_id}
-                onValue={(v) => set("virtual_device_id", v)}
-                options={[
-                  { value: "", label: "选择已有虚拟设备" },
-                  ...(virtual?.devices ?? []).map((d) => ({
-                    value: d.id,
-                    label: `${d.id} · ${d.mac_address}`,
-                  })),
-                ]}
-              />
-            )}
+              </FormGrid>
+            </fieldset>
             <div className="actions">
               <Button
                 permission="devices.power"
@@ -591,129 +726,6 @@ function Editor({ board }: { board?: BoardConfig }) {
             placeholder="可选的幂等恢复命令；在断电后执行，失败时设备继续保留。纯 RAM 启动可留空。"
           />
         </Section>
-        <Section title="启动与绑定">
-          <SelectField
-            label="启动方式"
-            value={form.boot_kind}
-            onValue={(v) =>
-              setForm((f) => ({
-                ...f,
-                boot_kind: v as BoardEditorFormState["boot_kind"],
-                disabled:
-                  !board && !local && v === "httpboot" ? true : f.disabled,
-              }))
-            }
-            options={[
-              { value: "uboot", label: "U-Boot" },
-              { value: "pxe", label: "PXE" },
-              { value: "httpboot", label: "axloader (HTTP Boot)" },
-            ]}
-          />
-          {form.boot_kind !== "uboot" && (
-            <MacPicker
-              value={form.network_mac}
-              onChange={(value) => set("network_mac", value)}
-              devices={loaders}
-              boardId={board?.id}
-            />
-          )}
-          {form.boot_kind !== "uboot" && (
-            <p className="hint">
-              设备架构{" "}
-              {selectedLoader?.online
-                ? selectedLoader.arch
-                : selectedLoader
-                  ? "未知（设备离线）"
-                  : "未知（未发现设备）"}
-              {selectedLoader && (
-                <>
-                  {" "}
-                  · {selectedLoader.ip_address} ·{" "}
-                  {selectedLoader.hardware.product} ·{" "}
-                  {selectedLoader.conflict
-                    ? "MAC 冲突"
-                    : selectedLoader.bound_board_id
-                      ? `已绑定 ${selectedLoader.bound_board_id}`
-                      : selectedLoader.online
-                        ? "在线，未绑定"
-                        : "离线，未绑定"}
-                </>
-              )}
-            </p>
-          )}
-          {form.boot_kind === "pxe" && (
-            <TextareaField
-              label="PXE 备注"
-              value={form.pxe_notes}
-              onValue={(v) => set("pxe_notes", v)}
-            />
-          )}
-          {form.boot_kind === "uboot" && (
-            <>
-              <CheckField
-                label="启用 TFTP"
-                checked={form.use_tftp}
-                onChange={(v) => set("use_tftp", v)}
-              />
-              <SelectField
-                label="预设 DTB"
-                value={form.dtb_name}
-                onValue={(v) => set("dtb_name", v)}
-                options={[
-                  { value: "", label: "无预设" },
-                  ...dtbs.map((d) => ({ value: d.name, label: d.name })),
-                ]}
-              />
-              <DtbUpload onUploaded={(name) => set("dtb_name", name)} />
-              <details
-                className="advanced-options full-width"
-                open={
-                  !!(
-                    form.kernel_load_addr ||
-                    form.fit_load_addr ||
-                    form.bootm_addr
-                  )
-                }
-              >
-                <summary>
-                  高级启动地址 <span>按需配置，留空使用默认值</span>
-                </summary>
-                <FormGrid className="pt-4">
-                  {text("kernel_load_addr", "Kernel 加载地址")}
-                  {text("fit_load_addr", "FIT 加载地址")}
-                  {text("bootm_addr", "bootm 地址")}
-                </FormGrid>
-              </details>
-              {form.use_tftp && (
-                <>
-                  <SelectField
-                    label="网络模式"
-                    value={form.network_mode}
-                    onValue={(v) =>
-                      set("network_mode", v as "dhcp" | "static_ip")
-                    }
-                    options={[
-                      { value: "dhcp", label: "DHCP" },
-                      { value: "static_ip", label: "静态 IP" },
-                    ]}
-                  />
-                  {form.network_mode === "static_ip" && (
-                    <>
-                      {text("board_ip", "开发板 IP")}
-                      {text("server_ip", "服务器 IP", {
-                        hint: `默认 ${tftp?.resolved_server_ip ?? "未解析"}`,
-                      })}
-                      {text("netmask", "子网掩码", {
-                        hint: `默认 ${tftp?.resolved_netmask ?? "未解析"}`,
-                      })}
-                      {text("gatewayip", "网关")}
-                    </>
-                  )}
-                </>
-              )}
-            </>
-          )}
-        </Section>
       </form>
       {board?.network_identity && board.boot.kind === "httpboot" && (
         <>
@@ -750,7 +762,8 @@ function SerialDetails({
   ports: SerialPortSummary[];
   portKey: SerialPortKey;
 }) {
-  if (!portKey.value) return null;
+  if (!portKey.value)
+    return <p className="hint full-width">选择稳定串口后显示设备信息。</p>;
   const matches = matchingSerialPorts(ports, portKey);
   if (matches.length > 1)
     return (

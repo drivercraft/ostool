@@ -489,9 +489,9 @@ exactly the ordinary user permissions plus `board.instant` and can directly clai
 devices with the switch enabled. Neither user role grants console access.
 Duration, concurrency and board-type scope configure the limits of that permission.
 
-The console’s **Device management** group has separate **Current sessions**
-(`/qcl/sessions`) and **Lease history** (`/qcl/session-history`) navigation pages.
-Current sessions shows active device use and release actions; lease history provides
+The console’s **Session management** group has separate **Current sessions**
+(`/qcl/sessions`) and **Session history** (`/qcl/session-history`) navigation pages.
+Current sessions shows active device use and release actions; session history provides
 filtered, paginated persistent usage records. Local edition also records usage;
 completed sessions from before the history feature are not backfilled.
 

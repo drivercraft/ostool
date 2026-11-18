@@ -296,7 +296,7 @@ It uses the `gateway` profile only for public edition, deriving gateway addresse
 from the canonical origin and allowed origins in the same `.env`. The backend has
 no debug flags, alternate authentication paths or simulated runtime. `seed` is an
 explicit offline import; it does not change the running release program. Inventory,
-people, roles, bookings, applications, lease history and audits use ordinary business
+people, roles, bookings, applications, session history and audits use ordinary business
 names and consistent relationships, without UI fixture labels. Imported members
 have independent random passwords; set a member password in user management when
 login is needed. The public import also creates the administrator configured by

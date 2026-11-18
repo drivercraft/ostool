@@ -69,6 +69,69 @@ function mount(
     </PermissionsProvider>,
   );
 }
+it.each(["new", "edit"])(
+  "keeps %s editor fields mounted and preserves drafts across mode changes",
+  async (mode) => {
+    mount(mode === "edit" ? httpBootBoard() : undefined);
+    const user = userEvent.setup();
+    const boot = screen.getByLabelText("启动方式");
+    const manual = screen.getByLabelText("波特率");
+    const automatic = screen.getByLabelText("axloader 波特率");
+    const ip = screen.getByLabelText("开发板 IP");
+    const command = screen.getByLabelText("上电命令");
+    const mac = screen.getByLabelText("MAC 地址");
+    const allFields = Array.from(
+      document.querySelectorAll(
+        ".board-editor-form input, .board-editor-form select, .board-editor-form textarea",
+      ),
+    );
+    await user.selectOptions(boot, "uboot");
+    expect(mac).toBeDisabled();
+    expect(automatic).toBeDisabled();
+    expect(screen.getByLabelText("Kernel 加载地址")).toBeEnabled();
+    await user.click(screen.getByRole("checkbox", { name: "启用串口" }));
+    await user.clear(manual);
+    await user.type(manual, "57600");
+    expect(ip).toBeDisabled();
+    await user.click(screen.getByRole("checkbox", { name: "启用 TFTP" }));
+    await user.selectOptions(screen.getByLabelText("网络模式"), "static_ip");
+    await user.type(ip, "192.0.2.10");
+    await user.selectOptions(screen.getByLabelText("网络模式"), "dhcp");
+    expect(ip).toBeDisabled();
+    expect(ip).toHaveValue("192.0.2.10");
+    await user.clear(command);
+    await user.type(command, "power-on-draft");
+    await user.selectOptions(
+      screen.getByLabelText("电源模块"),
+      "zhongsheng_relay",
+    );
+    expect(command).toBeDisabled();
+    expect(screen.getByLabelText("继电器")).toBeEnabled();
+    await user.selectOptions(screen.getByLabelText("电源模块"), "qemu");
+    expect(screen.getByLabelText("继电器")).toBeDisabled();
+    expect(screen.getByLabelText("虚拟设备")).toBeEnabled();
+    await user.selectOptions(screen.getByLabelText("电源模块"), "custom");
+    expect(command).toHaveValue("power-on-draft");
+    await user.selectOptions(boot, "httpboot");
+    expect(manual).toBeDisabled();
+    expect(screen.getByLabelText("Kernel 加载地址")).toBeDisabled();
+    await user.click(screen.getByRole("checkbox", { name: "指定串口参数" }));
+    expect(automatic).toBeEnabled();
+    await user.selectOptions(boot, "pxe");
+    expect(screen.getByLabelText("PXE 备注")).toBeEnabled();
+    expect(automatic).toBeDisabled();
+    expect(manual).toHaveValue(57600);
+    const currentFields = Array.from(
+      document.querySelectorAll(
+        ".board-editor-form input, .board-editor-form select, .board-editor-form textarea",
+      ),
+    );
+    expect(currentFields).toHaveLength(allFields.length);
+    currentFields.forEach((field, index) =>
+      expect(field).toBe(allFields[index]),
+    );
+  },
+);
 it("creates and rebinds discovered devices while showing their live architectures read-only", async () => {
   const first = {
     mac_address: "02:00:00:00:00:21",
@@ -322,9 +385,7 @@ it("only prefills the MAC and does not require board identity for a power comman
   const user = userEvent.setup();
   expect(screen.getByLabelText("MAC 地址")).toHaveValue("02:00:00:00:00:21");
   expect(screen.getByLabelText("板型")).toHaveValue("");
-  expect(
-    screen.queryByRole("checkbox", { name: "启用串口" }),
-  ).not.toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "启用串口" })).toBeDisabled();
   await user.type(screen.getByLabelText("上电命令"), "true");
   await user.click(screen.getByRole("button", { name: "上电" }));
   expect(power).toHaveBeenCalledOnce();
@@ -424,7 +485,7 @@ it("switches to U-Boot without requiring or submitting a stale MAC", async () =>
   await user.type(screen.getByLabelText("MAC 地址"), "unfinished");
   await user.selectOptions(screen.getByLabelText("启动方式"), "uboot");
   await user.click(screen.getByRole("checkbox", { name: "禁用开发板" }));
-  expect(screen.queryByLabelText("MAC 地址")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("MAC 地址")).toBeDisabled();
   await user.type(screen.getByLabelText("板型"), "arm");
   await user.type(screen.getByLabelText("上电命令"), "true");
   await user.type(screen.getByLabelText("下电命令"), "true");
@@ -571,7 +632,7 @@ it("loads and edits the optional axloader serial override", async () => {
   const user = userEvent.setup();
 
   expect(screen.getByRole("checkbox", { name: "指定串口参数" })).toBeChecked();
-  expect(screen.getByLabelText("波特率")).toHaveValue(921600);
+  expect(screen.getByLabelText("axloader 波特率")).toHaveValue(921600);
   expect(screen.getByLabelText("数据位")).toHaveValue("7");
   await user.selectOptions(screen.getByLabelText("数据位"), "8");
   expect(screen.getByLabelText("数据位")).toHaveValue("8");
@@ -600,10 +661,8 @@ it("switches manual UART draft to axloader and preserves focus on serial SSE upd
   const user = userEvent.setup();
   expect(screen.getByLabelText("波特率")).toHaveValue(57600);
   await user.selectOptions(screen.getByLabelText("启动方式"), "httpboot");
-  expect(screen.queryByLabelText("波特率")).not.toBeInTheDocument();
-  expect(
-    screen.queryByRole("checkbox", { name: "启用串口" }),
-  ).not.toBeInTheDocument();
+  expect(screen.getByLabelText("波特率")).toBeDisabled();
+  expect(screen.getByRole("checkbox", { name: "启用串口" })).toBeDisabled();
   const input = screen.getByLabelText("备注");
   await user.type(input, "local draft");
   act(() =>
