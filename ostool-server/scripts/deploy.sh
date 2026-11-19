@@ -94,6 +94,67 @@ process.stdout.write(value);
 JS
     fi
 }
+
+# 对比 .env 中已显式设置的 TFTP/网络接口键与数据库 server_records.settings 的运行值。
+# 这些键只在首次启动作为初始值写入数据库，此后每次启动被数据库值覆盖；
+# 不一致仅提示，不阻断部署，修改需走管理后台系统设置或 server_records。
+check_settings_drift() {
+    command -v psql >/dev/null || { printf '提示：未安装 psql，跳过数据库运行设置对比。\n'; return 0; }
+    node --input-type=commonjs - "$ENV_FILE" <<'JS'
+const { spawnSync } = require('node:child_process');
+const { readFileSync } = require('node:fs');
+const { parseEnv } = require('node:util');
+
+try {
+    const values = parseEnv(readFileSync(process.argv[2], 'utf8'));
+    const url = new URL(values.OSTOOL_DATABASE_URL);
+    if (!['postgres:', 'postgresql:'].includes(url.protocol)) throw Error();
+    const env = { ...process.env };
+    if (url.password) env.PGPASSWORD = decodeURIComponent(url.password);
+    url.password = '';
+    // Preserve the original spelling of unrelated libpq query parameters.
+    url.search = url.search.slice(1).split('&').filter(option => {
+        const separator = option.indexOf('=');
+        const key = decodeURIComponent(separator < 0 ? option : option.slice(0, separator));
+        if (key === 'sslpassword') throw Error();
+        if (key !== 'password') return true;
+        if (separator < 0) throw Error();
+        env.PGPASSWORD = decodeURIComponent(option.slice(separator + 1));
+        return false;
+    }).join('&');
+
+    const schema = values.OSTOOL_DATABASE_SCHEMA;
+    if (schema && !/^[a-zA-Z0-9_]{1,63}$/.test(schema)) throw Error();
+    const table = schema ? `"${schema}".server_records` : 'server_records';
+    const sql = `select payload from ${table} where name='settings'`;
+    const result = spawnSync('psql', ['-XwtA', '-d', url.href, '-c', sql], {
+        env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, killSignal: 'SIGKILL',
+    });
+    if (result.status !== 0) throw Error();
+    if (!result.stdout.trim()) {
+        console.log('提示：数据库尚无 settings 运行记录，首次启动将从本 .env 初始化，无需对比。');
+    } else {
+        const { network, tftp } = JSON.parse(result.stdout);
+        const keys = [
+            ['OSTOOL_NETWORK_INTERFACE', network?.interface],
+            ['OSTOOL_TFTP_ENABLED', tftp?.enabled],
+        ];
+        if (tftp?.provider === 'builtin') keys.push(['OSTOOL_TFTP_BIND_ADDR', tftp.bind_addr]);
+        let drift = false;
+        for (const [key, actual] of keys) {
+            const expected = values[key];
+            if (!expected || expected === String(actual ?? '')) continue;
+            console.log(`警告：${key}=${expected}，但数据库运行值为 ${JSON.stringify(actual ?? '')}。请在管理后台修改运行设置。`);
+            drift = true;
+        }
+        if (!drift) console.log('数据库运行设置与 .env 一致。');
+    }
+} catch {
+    console.log('提示：无法读取数据库运行设置，跳过对比。');
+}
+JS
+}
+
 deploy_prepare() {
     if [[ $MODE == systemd && ( $ACTION == status || $ACTION == logs || $ACTION == down || $ACTION == build ) ]]; then return; fi
     [[ -f $ENV_FILE ]] || { printf '[错误] 配置不存在：%s\n请复制 ostool-server/.env.example 为 .env。\n' "$ENV_FILE" >&2; exit 1; }
@@ -165,7 +226,8 @@ deploy_systemd() {
     fi
     if [[ $ACTION == check ]]; then
         [[ -n $(deploy_setting OSTOOL_DATABASE_URL) ]] || { echo '缺少 OSTOOL_DATABASE_URL' >&2; exit 1; }
-        echo "配置检查通过：systemd / $EDITION（未连接数据库，未安装服务）"; exit 0
+        check_settings_drift
+        echo "配置检查通过：systemd / $EDITION（未安装服务）"; exit 0
     fi
     STAGING_DIR=$(mktemp -d)
     trap 'find "$STAGING_DIR" -maxdepth 1 -type f -delete; rmdir -- "$STAGING_DIR"' EXIT
@@ -202,7 +264,14 @@ JS
         echo '本站点仍有公网 Caddy 配置；请先移除该站点并 reload caddy，再切换免登录 local 版。' >&2
         exit 1
     fi
-    getent passwd ostool >/dev/null || "${SUDO[@]}" useradd --system --user-group --home-dir /var/lib/ostool-server --shell /usr/sbin/nologin ostool
+    if ! getent passwd ostool >/dev/null; then
+        # 组已存在时 --user-group 无法再建同名组，改为挂接现有组。
+        if getent group ostool >/dev/null; then
+            "${SUDO[@]}" useradd --system --gid ostool --home-dir /var/lib/ostool-server --shell /usr/sbin/nologin ostool
+        else
+            "${SUDO[@]}" useradd --system --user-group --home-dir /var/lib/ostool-server --shell /usr/sbin/nologin ostool
+        fi
+    fi
     "${SUDO[@]}" install -d -m 750 -o ostool -g ostool /etc/ostool-server /var/lib/ostool-server
     # 不删除旧目录，替换配置前保留备份。
     if "${SUDO[@]}" test -f /etc/ostool-server/.env; then "${SUDO[@]}" cp -p /etc/ostool-server/.env "/etc/ostool-server/.env.backup.$(date +%Y%m%d%H%M%S)"; fi

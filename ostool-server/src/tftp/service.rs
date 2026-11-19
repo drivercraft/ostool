@@ -2,10 +2,7 @@ use std::{
     io::ErrorKind,
     path::Path,
     process::Command,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex},
 };
 
 use anyhow::{Context, bail};
@@ -68,16 +65,14 @@ pub fn build_tftp_manager(config: &TftpConfig) -> Arc<dyn TftpManager> {
 
 pub struct BuiltinTftpManager {
     config: BuiltinTftpConfig,
-    started: AtomicBool,
-    last_error: Mutex<Option<String>>,
+    start_result: Mutex<Option<Result<(), String>>>,
 }
 
 impl BuiltinTftpManager {
     pub fn new(config: BuiltinTftpConfig) -> Self {
         Self {
             config,
-            started: AtomicBool::new(false),
-            last_error: Mutex::new(None),
+            start_result: Mutex::new(None),
         }
     }
 }
@@ -88,44 +83,44 @@ impl TftpManager for BuiltinTftpManager {
         if !self.config.enabled {
             return Ok(());
         }
-        if self.started.swap(true, Ordering::AcqRel) {
+        let mut start_result = self.start_result.lock().unwrap();
+        if matches!(*start_result, Some(Ok(()))) {
             return Ok(());
         }
 
-        std::fs::create_dir_all(&self.config.root_dir)
-            .with_context(|| format!("failed to create {}", self.config.root_dir.display()))?;
+        let result = (|| -> anyhow::Result<()> {
+            std::fs::create_dir_all(&self.config.root_dir)
+                .with_context(|| format!("failed to create {}", self.config.root_dir.display()))?;
 
-        let mut config = Config::default();
-        config.directory = self.config.root_dir.clone();
-        config.send_directory = config.directory.clone();
-        config.receive_directory = config.directory.clone();
-        config.read_only = true;
-        config.port = self.config.bind_addr.port();
-        config.ip_address = self.config.bind_addr.ip();
+            let mut config = Config::default();
+            config.directory = self.config.root_dir.clone();
+            config.send_directory = config.directory.clone();
+            config.receive_directory = config.directory.clone();
+            config.read_only = true;
+            config.port = self.config.bind_addr.port();
+            config.ip_address = self.config.bind_addr.ip();
 
-        let last_error = Arc::new(Mutex::new(None));
-        let error_store = last_error.clone();
-
-        tokio::spawn(async move {
-            let result = tokio::task::spawn_blocking(move || match Server::new(&config) {
-                Ok(mut server) => server.listen(),
-                Err(err) => {
-                    *error_store.lock().unwrap() = Some(err.to_string());
-                    log::error!("builtin tftp server failed to start: {err}");
-                }
-            })
-            .await;
-
-            if let Err(err) = result {
-                log::error!("builtin tftp server task failed: {err}");
-            }
-        });
-
-        clear_last_error(&self.last_error);
-        if let Some(error) = last_error.lock().unwrap().clone() {
-            set_last_error(&self.last_error, error);
-        }
-        Ok(())
+            let mut server = Server::new(&config).map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to bind builtin TFTP at {}: {error}",
+                    self.config.bind_addr
+                )
+            })?;
+            // `Server::listen` has no stop API. An independent thread lets the
+            // process exit without Tokio waiting for the blocking listener.
+            std::thread::Builder::new()
+                .name("builtin-tftp".to_string())
+                .spawn(move || server.listen())
+                .context("failed to spawn builtin TFTP server thread")?;
+            Ok(())
+        })();
+        *start_result = Some(
+            result
+                .as_ref()
+                .copied()
+                .map_err(|error| format!("{error:#}")),
+        );
+        result
     }
 
     async fn reconcile(&self) -> anyhow::Result<()> {
@@ -136,17 +131,21 @@ impl TftpManager for BuiltinTftpManager {
 
     async fn status(&self) -> anyhow::Result<TftpStatus> {
         let writable = ensure_ostool_prefix(&self.config.root_dir).is_ok();
+        let start_result = self.start_result.lock().unwrap();
         Ok(TftpStatus {
             provider: "builtin".to_string(),
             enabled: self.config.enabled,
-            healthy: self.config.enabled && self.started.load(Ordering::Acquire),
+            healthy: matches!(*start_result, Some(Ok(()))),
             writable,
             resolved_server_ip: None,
             resolved_netmask: None,
             root_dir: self.config.root_dir.clone(),
             bind_addr_or_address: Some(self.config.bind_addr.to_string()),
             service_state: None,
-            last_error: current_last_error(&self.last_error),
+            last_error: start_result
+                .as_ref()
+                .and_then(|result| result.as_ref().err())
+                .cloned(),
         })
     }
 
@@ -417,5 +416,33 @@ impl TftpManager for DatabaseTftpManager {
     async fn remove_session_dir(&self, sid: &str) -> anyhow::Result<()> {
         self.files.delete_session(sid).await?;
         self.inner.remove_session_dir(sid).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::UdpSocket;
+
+    #[tokio::test]
+    async fn builtin_reports_bind_failure_and_can_retry() {
+        let occupied = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let manager = BuiltinTftpManager::new(BuiltinTftpConfig {
+            enabled: true,
+            root_dir: root.path().into(),
+            bind_addr: occupied.local_addr().unwrap(),
+        });
+
+        assert!(manager.start_if_needed().await.is_err());
+        let failed = manager.status().await.unwrap();
+        assert!(!failed.healthy);
+        assert!(failed.last_error.is_some());
+
+        drop(occupied);
+        manager.start_if_needed().await.unwrap();
+        let started = manager.status().await.unwrap();
+        assert!(started.healthy);
+        assert!(started.last_error.is_none());
     }
 }
