@@ -301,8 +301,12 @@ The launcher calls Compose directly and never calls `deploy.sh`, systemd or sudo
 It uses the `gateway` profile only for public edition, deriving gateway addresses
 from the canonical origin and allowed origins in the same `.env`. The backend has
 no debug flags, alternate authentication paths or simulated runtime. `seed` is an
-explicit offline import; it does not change the running release program. Inventory,
-people, roles, bookings, applications, session history and audits use ordinary business
+explicit offline import; it does not change the running release program.
+U-Boot examples without a serial console and public HTTPboot examples without UDP
+discovery are imported as disabled drafts, since the seed has no real device
+endpoints. Existing records remain unchanged. To enable an HTTPboot board, configure
+its HTTP/HTTPS endpoint or enable UDP discovery; native axloader needs no token or CA.
+Inventory, people, roles, bookings, applications, session history and audits use ordinary business
 names and consistent relationships, without UI fixture labels. Imported members
 have independent random passwords; set a member password in user management when
 login is needed. The public import also creates the administrator configured by
@@ -363,6 +367,14 @@ overview, profile, security, password changes (`/account/password`), rentals,
 applications and CLI tokens on distinct routes. Desktop content uses 80% of the
 viewport width with responsive mobile gutters. Website and console controls, status
 badges, dialogs and theme colors share the same design tokens.
+Board, user and custom-role lists provide quick enable/disable actions in both
+table and card layouts. Updates retain permission checks, activation validation,
+self-account protection and role revision checks, and arrive through SSE.
+Board and user status updates use `PATCH` on their admin item routes with a
+`{"disabled": boolean}` body; role actions reuse the revisioned role `PUT`.
+Current sessions show one primary status; terminal connection is secondary text
+and automatic serial diagnostics are available on demand. Releasing sessions no
+longer display unrelated connection or default device-wait badges.
 Operation results and loading errors use the same top-center popup notifications
 on both surfaces, including login pages and dialogs. They support manual dismissal;
 forms do not repeat these messages inline or in the bottom action bar. Draft state,

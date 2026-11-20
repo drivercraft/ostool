@@ -1594,6 +1594,10 @@
 .listing-filters > [data-slot="field"]:first-child {
   width: 280px;
 }
+.listing-filters .field-title-row,
+.member-list-tools .field-title-row {
+  display: none;
+}
 .listing-filters [data-slot="field-label"] {
   position: absolute;
   width: 1px;

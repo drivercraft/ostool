@@ -142,7 +142,7 @@ async fn main() -> anyhow::Result<()> {
     let dtbs = DtbStore::new(db.clone());
     let existing = boards.load_all().await?;
     for index in 0..BOARD_COUNT {
-        let item = board(index);
+        let item = prepared_board(index, &config);
         item.validate()?;
         if !existing.contains_key(&item.id) {
             boards.write_board(&item).await?;
@@ -171,11 +171,25 @@ async fn main() -> anyhow::Result<()> {
     }
     println!("设备、人员、租赁及使用记录已导入；已有记录保持不变。");
     println!("管理员登录信息保持不变。预置人员使用独立随机密码，可在用户管理中设置登录密码。");
+    println!(
+        "缺少串口或设备接入配置的示例开发板按禁用草稿导入，配置真实设备后再启用；不会改写已有开发板。"
+    );
     Ok(())
 }
 
 fn dtb_name(index: usize) -> String {
     format!("{}-rev{}.dtb", MODELS[index % 4].2, index / 4 + 1)
+}
+
+fn prepared_board(index: usize, config: &ostool_server::ServerConfig) -> BoardConfig {
+    let mut item = board(index);
+    let missing_connection = match item.boot {
+        BootConfig::Uboot(_) => item.serial.is_none(),
+        BootConfig::UefiHttp(_) => config.edition.is_public() && !config.loader_network.enabled,
+        _ => false,
+    };
+    item.disabled |= missing_connection;
+    item
 }
 
 fn board(index: usize) -> BoardConfig {
@@ -442,4 +456,41 @@ fn device_tree(index: usize) -> Vec<u8> {
     result.extend(structure);
     result.extend(strings);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn example_boards_without_real_connections_remain_disabled_drafts() {
+        let mut config = ostool_server::ServerConfig::default();
+        config.edition = ostool_server::config::Edition::Public;
+        config.loader_network.enabled = false;
+        for index in 0..BOARD_COUNT {
+            let draft = prepared_board(index, &config);
+            assert!(
+                draft.disabled,
+                "{} has no real serial or device endpoint",
+                draft.id
+            );
+            let mut expected = board(index);
+            expected.disabled = true;
+            assert_eq!(
+                serde_json::to_value(draft).unwrap(),
+                serde_json::to_value(expected).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_discovery_keeps_httpboot_examples_available_without_fake_endpoints() {
+        let mut config = ostool_server::ServerConfig::default();
+        config.edition = ostool_server::config::Edition::Public;
+        config.loader_network.enabled = true;
+        assert!(!prepared_board(4, &config).disabled);
+        assert!(!prepared_board(5, &config).disabled);
+        assert!(prepared_board(0, &config).disabled);
+        assert!(prepared_board(46, &config).disabled);
+    }
 }

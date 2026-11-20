@@ -376,6 +376,11 @@ GET /api/v1/admin/boards/{board_id}
 完整配置按连接生成，不进入全局推送缓存、历史重放或其他编辑页；普通用户及公开站点事件流忽略该选择器。
 创建和更新响应仍提供当前设备配置，以便保留编辑和保存行为。
 
+快捷启用/禁用使用 `PATCH /api/v1/admin/boards/{board_id}`，请求体仅允许
+`{"disabled": true}` 或 `{"disabled": false}`，成功返回 `200` 和更新后的 `BoardConfig`。
+需要 `devices.manage`；服务端在库存锁内读取原配置，只变更状态并沿用完整更新的
+空闲状态、串口、设备认证和资源校验，不需要客户端提交或重新获取完整配置。
+
 创建和更新使用相同请求结构：
 
 ```http
@@ -1229,6 +1234,13 @@ Board REST 和 Management API 业务处理器产生的错误使用以下格式�
 `ostool` 客户端只使用 Board REST API 错误中的 `code` 和 `message`。任一 Board REST 请求返回 `401 Unauthorized` 时，客户端保留原错误，不自动刷新或重放该业务请求；仅清理被拒绝且仍匹配当前保存记录的凭据，不删除另一个命令保存的新登录，也不清除独立于环境变量 token 的保存记录。WebSocket 握手返回 `401` 时当前不会触发该凭据清理逻辑。公网版 Management API 会生成认证与权限错误；既有网关和反向代理的认证错误不一定使用上述 JSON 格式，CLI 保留状态码并兼容纯文本错误。
 
 ## ostool-server 实时管理接口
+
+`PATCH /api/v1/admin/users/{id}` 接收 `{"disabled": boolean}`，需要 `users.manage`，
+成功返回 `204`。只更新禁用标志，不改动用户名、邮箱、角色、名称或密码，
+沿用目标权限、自禁用及最后管理员保护；状态变化会撤销该用户现有凭据。
+两个状态 PATCH 均拒绝未知字段，并通过现有 SSE 通知列表更新。
+角色快捷启用/禁用沿用带 `revision` 的 `PUT /api/v1/admin/roles/{id}`，
+内置角色和当前账号使用的角色仍不能变更状态。
 
 管理端新增 `GET /api/v1/admin/events`（SSE）、
 `POST /api/v1/admin/power-actions` 和

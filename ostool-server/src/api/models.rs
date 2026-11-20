@@ -149,6 +149,12 @@ pub struct SerialPortSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetDisabledRequest {
+    pub disabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminBoardUpsertRequest {
     #[serde(default)]
     pub allow_instant_use: bool,

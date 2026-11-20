@@ -561,7 +561,7 @@ function ResourceLoading({ children }: { children: ReactNode }) {
               : pathname.startsWith("/session-history")
                 ? ["session_history"]
                 : pathname.startsWith("/sessions")
-                  ? ["sessions"]
+                  ? ["sessions", ...(can("devices.read") ? ["boards"] : [])]
                   : pathname.startsWith("/users")
                     ? ["roles", "listing"]
                     : pathname.startsWith("/rentals")

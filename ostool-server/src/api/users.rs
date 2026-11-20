@@ -55,7 +55,9 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/admin/users", get(list_users).post(create_user))
         .route(
             "/api/v1/admin/users/{id}",
-            put(update_user).delete(delete_user),
+            put(update_user)
+                .patch(set_user_disabled)
+                .delete(delete_user),
         )
         .route("/api/v1/admin/roles", get(list_roles).post(create_role))
         .route(
@@ -221,6 +223,49 @@ async fn update_user(
     state.admin_events.invalidate(&["users"]);
     Ok(StatusCode::NO_CONTENT)
 }
+async fn set_user_disabled(
+    Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+    Extension(CurrentUser(actor)): Extension<CurrentUser>,
+    Json(input): Json<super::models::SetDisabledRequest>,
+) -> Result<StatusCode, ApiError> {
+    if id == actor.id && input.disabled {
+        return Err(ApiError::conflict("不能禁用当前账号"));
+    }
+    let access = crate::security::permissions::access(&state.database, &actor).await?;
+    let mut tx = state.database.begin().await.map_err(sql_error)?;
+    sqlx::query("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE")
+        .execute(&mut *tx)
+        .await
+        .map_err(sql_error)?;
+    let target = sqlx::query("SELECT r.permissions,r.allocation_policy,u.is_admin FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=$1")
+        .bind(id).fetch_optional(&mut *tx).await.map_err(sql_error)?
+        .ok_or_else(|| ApiError::not_found("用户不存在"))?;
+    if !access.allows("system.admin") {
+        let permissions: Vec<String> = target.try_get("permissions").map_err(sql_error)?;
+        let policy =
+            serde_json::from_value(target.try_get("allocation_policy").map_err(sql_error)?)
+                .map_err(anyhow::Error::from)?;
+        crate::security::permissions::ensure_delegable(&access, &permissions, &policy)?;
+        if target.try_get::<bool, _>("is_admin").map_err(sql_error)? {
+            return Err(ApiError::forbidden("不能维护权限高于自己的用户"));
+        }
+    }
+    let result = sqlx::query("UPDATE users SET disabled=$2 WHERE id=$1")
+        .bind(id)
+        .bind(input.disabled)
+        .execute(&mut *tx)
+        .await
+        .map_err(sql_error)?;
+    if result.rows_affected() != 1 {
+        return Err(ApiError::not_found("用户不存在"));
+    }
+    ensure_admin(&mut tx).await?;
+    tx.commit().await.map_err(sql_error)?;
+    state.admin_events.invalidate(&["users"]);
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn delete_user(
     Path(id): Path<Uuid>,
     State(state): State<AppState>,

@@ -7,6 +7,7 @@ import { useListPage } from "@/components/list-pagination";
 import { ListToolbar } from "@/components/list-toolbar";
 import { PagePanel } from "@/components/page-panel";
 import { RowAction } from "@/components/row-action";
+import { EnableAction } from "@/components/enable-action";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -21,7 +22,7 @@ import { usePermissions } from "@/components/permissions";
 export default function Roles() {
   const navigate = useNavigate();
   const roles = useList("roles");
-  const { can } = usePermissions();
+  const { can, user } = usePermissions();
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState("");
   const [status, setStatus] = useState("");
@@ -121,8 +122,8 @@ export default function Roles() {
               </Badge>
               {role.permissions.includes("board.instant") && (
                 <small>
-                  免审批使用：{role.allocation_policy.max_duration_minutes} 分钟 /
-                  最多 {role.allocation_policy.max_concurrent_sessions} 台
+                  免审批使用：{role.allocation_policy.max_duration_minutes} 分钟
+                  / 最多 {role.allocation_policy.max_concurrent_sessions} 台
                 </small>
               )}
             </Cell>
@@ -135,6 +136,23 @@ export default function Roles() {
             </Cell>
             <Cell>
               <div className="actions">
+                <EnableAction
+                  enabled={role.enabled}
+                  name={`角色 ${role.name}`}
+                  permission="roles.manage"
+                  disabled={role.builtin || user?.role_id === role.id}
+                  action={(enabled) =>
+                    api.updateRole(role.id, {
+                      revision: role.revision,
+                      code: role.code,
+                      name: role.name,
+                      description: role.description,
+                      permissions: role.permissions,
+                      allocation_policy: role.allocation_policy,
+                      enabled,
+                    })
+                  }
+                />
                 <RowAction
                   label={can("roles.manage") ? "编辑" : "查看"}
                   icon={Pencil}

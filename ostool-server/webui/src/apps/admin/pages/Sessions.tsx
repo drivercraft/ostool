@@ -14,8 +14,10 @@ import {
   TextField,
   SelectField,
 } from "@/components/forms";
-import { SerialRuntimeDetails } from "@/apps/admin/components/serial-runtime";
-import { Badge } from "@/components/ui/badge";
+import {
+  SessionStatus,
+  sessionPresentation,
+} from "@/apps/admin/components/session-status";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 export default function Sessions() {
   const [params] = useSearchParams();
@@ -27,6 +29,7 @@ export default function Sessions() {
 }
 function ActiveSessions() {
   const sessions = useList("sessions"),
+    boards = useList("boards"),
     runtimes = useResource("runtimes") ?? {};
   const [search, setSearch] = useState("");
   const [board, setBoard] = useState("");
@@ -34,7 +37,8 @@ function ActiveSessions() {
   const filtered = sessions.filter(
     (s) =>
       (!board || s.board_id === board) &&
-      (!status || s.state === status) &&
+      (!status ||
+        sessionPresentation(s, runtimes[s.board_id]).state === status) &&
       `${s.id} ${s.board_id} ${s.owner_username ?? ""} ${s.client_name ?? ""}`
         .toLowerCase()
         .includes(search.toLowerCase()),
@@ -72,8 +76,9 @@ function ActiveSessions() {
               onValue={setStatus}
               options={[
                 { value: "", label: "全部状态" },
-                { value: "active", label: "占用中" },
+                { value: "active", label: "活动会话" },
                 { value: "releasing", label: "释放中" },
+                { value: "release_failed", label: "释放失败" },
               ]}
             />
           </ListToolbar>
@@ -83,7 +88,7 @@ function ActiveSessions() {
       >
         <DataTable
           headers={[
-            "Session",
+            "会话",
             "开发板",
             "使用用户",
             "客户端",
@@ -128,30 +133,14 @@ function ActiveSessions() {
                 </small>
               </Cell>
               <Cell>
-                <Badge
-                  variant={
-                    runtimes[s.board_id]?.last_release_error
-                      ? "destructive"
-                      : s.state === "releasing"
-                        ? "warning"
-                        : "info"
+                <SessionStatus
+                  session={s}
+                  runtime={runtimes[s.board_id]}
+                  automaticSerial={
+                    boards.find((board) => board.id === s.board_id)?.boot
+                      .kind === "httpboot"
                   }
-                >
-                  {runtimes[s.board_id]?.last_release_error
-                    ? "释放失败，等待重试"
-                    : s.state === "releasing"
-                      ? "释放中"
-                      : "占用中"}
-                </Badge>
-                <div className="mt-1">
-                  <Badge variant={s.serial_connected ? "success" : "secondary"}>
-                    WebSocket {s.serial_connected ? "已连接" : "未连接"}
-                  </Badge>
-                </div>
-                <SerialRuntimeDetails status={s.serial_runtime} />
-                <small className="text-destructive">
-                  {runtimes[s.board_id]?.last_release_error}
-                </small>
+                />
               </Cell>
               <Cell>
                 <ConfirmAction
@@ -160,7 +149,9 @@ function ActiveSessions() {
                   label="强制释放"
                   description={`请求释放 ${s.board_id} 的会话？服务器会停止任务并断电，清理完成后资源才重新可用。`}
                   action={() => api.deleteSession(s.id)}
-                  disabled={s.state === "releasing"}
+                  disabled={
+                    sessionPresentation(s, runtimes[s.board_id]).releasing
+                  }
                 />
               </Cell>
             </Row>
@@ -178,5 +169,8 @@ function LeaseClock({ expires }: { expires: string }) {
     return () => clearInterval(timer);
   }, []);
   // Local clock rendering only; this never fetches or changes the lease.
-  return <span>{`剩余 ${formatLeaseRemaining(expires, new Date(now))}`}</span>;
+  const remaining = formatLeaseRemaining(expires, new Date(now));
+  return (
+    <span>{remaining === "已过期" ? remaining : `剩余 ${remaining}`}</span>
+  );
 }

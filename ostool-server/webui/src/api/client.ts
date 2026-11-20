@@ -378,6 +378,12 @@ export const api = {
       bodyJson: payload,
     });
   },
+  setUserDisabled(id: string, disabled: boolean) {
+    return request<void>(`/api/v1/admin/users/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      bodyJson: { disabled },
+    });
+  },
   deleteUser(id: string) {
     return request<void>(`/api/v1/admin/users/${id}`, { method: "DELETE" });
   },
@@ -638,6 +644,15 @@ export const api = {
       {
         method: "PUT",
         bodyJson: payload,
+      },
+    );
+  },
+  setBoardDisabled(boardId: string, disabled: boolean) {
+    return request<BoardConfig>(
+      `/api/v1/admin/boards/${encodeURIComponent(boardId)}`,
+      {
+        method: "PATCH",
+        bodyJson: { disabled },
       },
     );
   },

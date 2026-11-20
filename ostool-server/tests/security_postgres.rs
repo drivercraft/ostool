@@ -121,7 +121,8 @@ impl Fixture {
         origin: Option<&str>,
         bearer: Option<&str>,
     ) -> Reply {
-        if (path == "/api/v1/auth/register" || path.starts_with("/api/v1/admin/users"))
+        if (path == "/api/v1/auth/register"
+            || (path.starts_with("/api/v1/admin/users") && matches!(method, "POST" | "PUT")))
             && body.is_object()
             && body.get("username").is_none()
         {
@@ -3317,4 +3318,257 @@ async fn role_codes_are_unique_immutable_and_disabling_revokes_all_credentials()
     assert_eq!(current["enabled"], true);
     assert_eq!(current["revision"], 4);
     Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn quick_status_board_patch_preserves_configuration_and_activation_guards() {
+    let f = Fixture::new(true).await;
+    let cookie = test_security::cookie_header(&f.login(true).await.headers);
+    let created = f.request("POST", "/api/v1/admin/boards", Some(&cookie), json!({
+        "id":"quick-board", "board_type":"patch-test", "tags":["preserve"], "notes":"保留备注", "allow_instant_use":true,
+        "reset_command":"true", "disabled":false, "serial":null, "network_identity":null,
+        "boot":{"kind":"pxe","notes":"保留启动配置"},
+        "power_management":{"kind":"custom","power_on_cmd":"true","power_off_cmd":"true"}
+    })).await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+    let path = "/api/v1/admin/boards/quick-board";
+    let mut expected = created.body;
+    for disabled in [true, false] {
+        let changed = f
+            .request("PATCH", path, Some(&cookie), json!({"disabled":disabled}))
+            .await;
+        assert_eq!(changed.status, StatusCode::OK, "{}", changed.body);
+        expected["disabled"] = json!(disabled);
+        assert_eq!(changed.body, expected);
+    }
+    assert_eq!(
+        f.request(
+            "PATCH",
+            path,
+            Some(&cookie),
+            json!({"disabled":true,"notes":"overwrite"})
+        )
+        .await
+        .status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    f.state
+        .board_runtimes
+        .write()
+        .await
+        .get_mut("quick-board")
+        .unwrap()
+        .lease_state = ostool_server::state::BoardLeaseState::Using;
+    assert_eq!(
+        f.request("PATCH", path, Some(&cookie), json!({"disabled":true}))
+            .await
+            .status,
+        StatusCode::CONFLICT
+    );
+    let http = f
+        .request(
+            "POST",
+            "/api/v1/admin/boards",
+            Some(&cookie),
+            json!({
+                "id":"quick-http", "board_type":"patch-test", "disabled":true,
+                "network_identity":{"mac_address":"02:00:00:00:00:87"}, "boot":{"kind":"httpboot"},
+                "power_management":{"kind":"custom","power_on_cmd":"true","power_off_cmd":"true"}
+            }),
+        )
+        .await;
+    assert_eq!(http.status, StatusCode::CREATED, "{}", http.body);
+    f.state.config.write().await.loader_network.enabled = false;
+    let rejected = f
+        .request(
+            "PATCH",
+            "/api/v1/admin/boards/quick-http",
+            Some(&cookie),
+            json!({"disabled":false}),
+        )
+        .await;
+    assert_eq!(rejected.status, StatusCode::BAD_REQUEST);
+    assert!(
+        rejected.body["message"]
+            .as_str()
+            .unwrap()
+            .contains("未配置设备地址")
+    );
+    // UDP discovery needs no fixed endpoint or device credential.
+    f.state.config.write().await.loader_network.enabled = true;
+    let http_path = "/api/v1/admin/boards/quick-http";
+    for disabled in [false, true, false, true] {
+        assert_eq!(
+            f.request(
+                "PATCH",
+                http_path,
+                Some(&cookie),
+                json!({"disabled":disabled})
+            )
+            .await
+            .status,
+            StatusCode::OK
+        );
+    }
+    f.state.config.write().await.loader_network.enabled = false;
+    assert_eq!(
+        f.request(
+            "PUT",
+            &format!("{http_path}/device-connection"),
+            Some(&cookie),
+            json!({"endpoint":"http://192.168.10.20:8080"})
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    // A native axloader address is sufficient; Bearer and CA remain optional.
+    for disabled in [false, true, false, true] {
+        assert_eq!(
+            f.request(
+                "PATCH",
+                http_path,
+                Some(&cookie),
+                json!({"disabled":disabled})
+            )
+            .await
+            .status,
+            StatusCode::OK
+        );
+    }
+    sqlx::query("UPDATE device_connections SET token_ciphertext='invalid-fixture-ciphertext' WHERE board_id='quick-http'")
+        .execute(f.state.database.pool()).await.unwrap();
+    let rejected = f
+        .request("PATCH", http_path, Some(&cookie), json!({"disabled":false}))
+        .await;
+    assert_eq!(rejected.status, StatusCode::BAD_REQUEST);
+    assert!(
+        rejected.body["message"]
+            .as_str()
+            .unwrap()
+            .contains("设备连接配置不可用")
+    );
+    assert!(
+        !rejected
+            .body
+            .to_string()
+            .contains("invalid-fixture-ciphertext")
+    );
+    assert_eq!(
+        f.request("PATCH", path, None, json!({"disabled":true}))
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn quick_status_user_patch_preserves_identity_and_revokes_credentials() {
+    let f = Fixture::new(true).await;
+    let cookie = test_security::cookie_header(&f.login(true).await.headers);
+    let target = f
+        .state
+        .database
+        .create_user(
+            "quick_target",
+            "quick-target@test.local",
+            "quick-target-password-123",
+            Some("保留名称"),
+            false,
+        )
+        .await
+        .unwrap();
+    let original: Value = sqlx::query_scalar("SELECT jsonb_build_object('username',username,'email',email,'display_name',display_name,'role_id',role_id,'password_hash',password_hash) FROM users WHERE id=$1")
+        .bind(target.id).fetch_one(f.state.database.pool()).await.unwrap();
+    let login = f.request("POST", "/api/v1/auth/login", None, json!({"email":"quick-target@test.local","password":"quick-target-password-123","verification":f.proof("login").await})).await;
+    assert_eq!(login.status, StatusCode::OK, "{}", login.body);
+    let target_cookie = test_security::cookie_header(&login.headers);
+    let path = format!("/api/v1/admin/users/{}", target.id);
+    for disabled in [true, false] {
+        let changed = f
+            .request("PATCH", &path, Some(&cookie), json!({"disabled":disabled}))
+            .await;
+        assert_eq!(changed.status, StatusCode::NO_CONTENT, "{}", changed.body);
+        let current: Value = sqlx::query_scalar("SELECT jsonb_build_object('username',username,'email',email,'display_name',display_name,'role_id',role_id,'password_hash',password_hash) FROM users WHERE id=$1")
+            .bind(target.id).fetch_one(f.state.database.pool()).await.unwrap();
+        assert_eq!(current, original);
+        let flag: bool = sqlx::query_scalar("SELECT disabled FROM users WHERE id=$1")
+            .bind(target.id)
+            .fetch_one(f.state.database.pool())
+            .await
+            .unwrap();
+        assert_eq!(flag, disabled);
+        assert_eq!(
+            f.request("GET", "/api/v1/auth/me", Some(&target_cookie), Value::Null)
+                .await
+                .status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    let actor = f
+        .state
+        .database
+        .find_user("admin@security.test")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        f.request(
+            "PATCH",
+            &format!("/api/v1/admin/users/{}", actor.id),
+            Some(&cookie),
+            json!({"disabled":true})
+        )
+        .await
+        .status,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        f.request(
+            "PATCH",
+            &path,
+            Some(&cookie),
+            json!({"disabled":true,"role_id":"admin"})
+        )
+        .await
+        .status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let login = f.request("POST", "/api/v1/auth/login", None, json!({"email":"quick-target@test.local","password":"quick-target-password-123","verification":f.proof("login").await})).await;
+    let member = test_security::cookie_header(&login.headers);
+    assert_eq!(
+        f.request("PATCH", &path, Some(&member), json!({"disabled":true}))
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    let target = f
+        .state
+        .database
+        .user_by_id(target.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let auth = f.state.config.read().await.auth.clone();
+    let grant = f
+        .state
+        .database
+        .issue_grant(target, "ostool-cli", "board:operate offline_access", &auth)
+        .await
+        .unwrap();
+    assert_eq!(
+        f.custom(
+            "PATCH",
+            &path,
+            None,
+            json!({"disabled":true}),
+            Some(&f.origin),
+            Some(&grant.access_token)
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
 }

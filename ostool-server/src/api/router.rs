@@ -158,7 +158,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/admin/boards/{board_id}",
-            get(get_board).put(update_board).delete(delete_board),
+            get(get_board)
+                .put(update_board)
+                .patch(set_board_disabled)
+                .delete(delete_board),
         )
         .route(
             "/api/v1/admin/dtbs/{dtb_name}",
@@ -522,9 +525,47 @@ async fn update_board(
     axum::Json(request): axum::Json<AdminBoardUpsertRequest>,
 ) -> Result<axum::Json<BoardConfig>, ApiError> {
     let _inventory_guard = state.board_inventory_gate.lock().await;
-    let board = build_board_config_for_update(&state, &board_id, request).await?;
+    update_board_locked(&state, board_id, request).await
+}
+
+async fn set_board_disabled(
+    Path(board_id): Path<String>,
+    State(state): State<AppState>,
+    axum::Json(request): axum::Json<super::models::SetDisabledRequest>,
+) -> Result<axum::Json<BoardConfig>, ApiError> {
+    let _inventory_guard = state.board_inventory_gate.lock().await;
+    let board = state
+        .boards
+        .read()
+        .await
+        .get(&board_id)
+        .cloned()
+        .ok_or_else(|| ApiError::not_found(format!("board `{board_id}` not found")))?;
+    let request = AdminBoardUpsertRequest {
+        id: Some(board.id),
+        board_type: board.board_type,
+        tags: board.tags,
+        notes: board.notes,
+        disabled: request.disabled,
+        serial: board.serial,
+        power_management: board.power_management,
+        boot: board.boot,
+        network_identity: board.network_identity,
+        allow_instant_use: board.allow_instant_use,
+        reset_command: board.reset_command,
+    };
+    update_board_locked(&state, board_id, request).await
+}
+
+// Both full edits and status-only edits hold board_inventory_gate.
+async fn update_board_locked(
+    state: &AppState,
+    board_id: String,
+    request: AdminBoardUpsertRequest,
+) -> Result<axum::Json<BoardConfig>, ApiError> {
+    let board = build_board_config_for_update(state, &board_id, request).await?;
     if board.id != board_id {
-        super::rentals::protect_board(&state, &board_id).await?;
+        super::rentals::protect_board(state, &board_id).await?;
     }
     validate_board_config(&board)?;
     if state.admin_power.is_busy(&board.power_management) {
@@ -537,7 +578,7 @@ async fn update_board(
     {
         return Err(ApiError::conflict("power resource has a running action"));
     }
-    validate_virtual_binding(&state, &board).await?;
+    validate_virtual_binding(state, &board).await?;
 
     {
         let boards = state.boards.read().await;
@@ -561,13 +602,26 @@ async fn update_board(
     if !board.disabled && matches!(board.boot, BootConfig::UefiHttp(_)) && requires_fixed_endpoint {
         // A rename changes the encryption context; credentials must be provisioned
         // for the new ID before enabling it.
-        if board.id != board_id
-            || crate::device_security::connection(&state, &board.id)
-                .await
-                .is_err()
+        if board.id != board_id {
+            return Err(ApiError::bad_request(
+                "重命名 HTTPboot 开发板时请先禁用保存，再为新 ID 配置设备连接后启用",
+            ));
+        }
+        if crate::device_security::projection(state, &board.id)
+            .await?
+            .is_none()
         {
             return Err(ApiError::bad_request(
-                "请先禁用开发板并配置设备认证，再启用 HTTPboot",
+                "未配置设备地址，且服务器未启用 UDP 自动发现；请在编辑页“设备认证”中保存设备 HTTP/HTTPS 地址，或由管理员启用 UDP 自动发现后再启用开发板",
+            ));
+        }
+        if let Err(error) = crate::device_security::connection(state, &board.id).await {
+            log::warn!(
+                "cannot enable board {}: device connection is unusable: {error:#}",
+                board.id
+            );
+            return Err(ApiError::bad_request(
+                "设备连接配置不可用；请检查编辑页的设备地址、CA 证书及部署凭据密钥，详细原因见服务器日志",
             ));
         }
     }

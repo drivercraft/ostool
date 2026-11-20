@@ -2,6 +2,8 @@ import { MessageToast } from "@/components/message-toast";
 import { Badge } from "@/components/ui/badge";
 import { Pencil as ActionEdit, Trash2 as ActionDelete } from "lucide-react";
 import { RowAction } from "@/components/row-action";
+import { EnableAction } from "@/components/enable-action";
+import { usePermissions } from "@/components/permissions";
 import { PagePanel } from "@/components/page-panel";
 import { useServerList } from "@/components/server-list";
 import { ListToolbar } from "@/components/list-toolbar";
@@ -33,6 +35,7 @@ import {
 } from "@/components/forms";
 
 export default function Users() {
+  const { user: currentUser } = usePermissions();
   const formId = useId();
   const roles = useList("roles"),
     deployment = useResource("deployment");
@@ -159,6 +162,13 @@ export default function Users() {
               <Cell>{new Date(user.created_at).toLocaleString()}</Cell>
               <Cell>
                 <div className="actions">
+                  <EnableAction
+                    enabled={!user.disabled}
+                    name={`用户 ${user.username}`}
+                    permission="users.manage"
+                    disabled={currentUser?.id === user.id}
+                    action={(enabled) => api.setUserDisabled(user.id, !enabled)}
+                  />
                   <RowAction
                     label="编辑"
                     permission="users.manage"

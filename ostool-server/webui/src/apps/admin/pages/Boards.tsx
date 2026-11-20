@@ -6,6 +6,7 @@ import {
   Plus as ActionCreate,
 } from "lucide-react";
 import { RowAction } from "@/components/row-action";
+import { EnableAction } from "@/components/enable-action";
 import { PagePanel } from "@/components/page-panel";
 import { useListPage } from "@/components/list-pagination";
 import { ListToolbar } from "@/components/list-toolbar";
@@ -249,6 +250,18 @@ export default function Boards() {
                   </Cell>
                   <Cell>
                     <div className="actions">
+                      <EnableAction
+                        enabled={!b.disabled}
+                        name={`开发板 ${b.id}`}
+                        permission="devices.manage"
+                        disabled={
+                          !!runtimes[b.id] &&
+                          runtimes[b.id].lease_state !== "idle"
+                        }
+                        action={(enabled) =>
+                          api.setBoardDisabled(b.id, !enabled)
+                        }
+                      />
                       <RowAction
                         label="编辑"
                         permission="devices.manage"

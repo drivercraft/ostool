@@ -118,6 +118,25 @@ describe("api client", () => {
     );
   });
 
+  it("updates only disabled flags through the partial status endpoints", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+    await api.setBoardDisabled("board/id", true);
+    await api.setUserDisabled("user-id", false);
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/admin/boards/board%2Fid",
+      expect.objectContaining({ method: "PATCH", body: '{"disabled":true}' }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/admin/users/user-id",
+      expect.objectContaining({ method: "PATCH", body: '{"disabled":false}' }),
+    );
+  });
+
   it("uploads with byte progress and preserves the admin surface, cookies and refresh retry", async () => {
     window.history.replaceState({}, "", "/qcl/boards/demo");
     UploadRequest.requests = [];
