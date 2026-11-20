@@ -467,7 +467,10 @@ uploads.
 Servers advertising `server_side_operations` handle U-Boot network setup,
 TFTP/serial loading and shared-file command expansion. ostool receives RAM load
 addresses, uploads the FIT and requests boot; device-network addresses are kept
-out of the user API. Both editions use the same routes; public uploads, downloads
+out of the user API. While the server loads the image onto the board, the terminal
+shows a live `#` progress bar: YMODEM reports sent/total bytes, and TFTP preserves
+U-Boot's `#` progress marks without estimating a percentage. Successful transfers
+show completion. Both editions use the same routes; public uploads, downloads
 and serial connections carry login credentials over HTTPS/WSS. Servers without
 this capability continue to use the original client boot flow.
 

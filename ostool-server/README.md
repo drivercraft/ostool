@@ -587,6 +587,10 @@ services are available in either edition; axloader does not need TLS firmware.
   optional; ordinary axloader firmware uses none. HTTPS endpoints and custom CAs
   remain supported for devices that implement them; stored credentials stay encrypted.
 - U-Boot retains TFTP and YMODEM, selected by the board's `use_tftp` setting.
+  Managed transfers stream a `#` progress bar over the existing binary terminal
+  channel: YMODEM includes sent/total bytes; TFTP forwards only progress marks,
+  keeping device-LAN addresses and internal file paths private. Progress ends
+  with `done` only after the transfer succeeds.
   TFTP-selected boards fail clearly if the service is unavailable rather than
   silently sending large images over the UART. In public edition, enabled TFTP
   must bind an explicit LAN IP (for example `192.168.10.2:69`), not `0.0.0.0` or

@@ -1107,6 +1107,8 @@ async fn exercise_managed_boot(tftp: bool, disconnect: bool) -> anyhow::Result<(
                     "84000000"
                 } else if command.starts_with("echo $fdt_addr_r") {
                     "88000000"
+                } else if command.starts_with("tftp ") {
+                    "TFTP from server 192.168.44.1; our IP address is 192.168.44.2\nLoading: ###"
                 } else {
                     ""
                 };
@@ -1266,6 +1268,14 @@ async fn managed_uboot_client_probe() -> anyhow::Result<()> {
         data.push(rx.read_u8().await?);
     }
     assert!(String::from_utf8_lossy(&data).contains("fixture guest ready"));
+    let output = String::from_utf8_lossy(&data);
+    assert!(
+        output.contains("Uploading image ("),
+        "missing upload progress: {output}"
+    );
+    assert!(output.contains("###"), "missing progress bar: {output}");
+    assert!(output.contains("done\r\n"), "missing completion: {output}");
+    assert!(!output.contains("192.168.44."), "device LAN address leaked");
     tx.write_all(format!("\u{1e}{}\u{1f}\n", ids[0]).as_bytes())
         .await?;
     tx.flush().await?;

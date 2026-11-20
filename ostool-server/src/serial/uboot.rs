@@ -10,7 +10,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::{
-    io::{AsyncRead, AsyncWrite},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{Mutex, Notify, watch},
 };
 use tokio_util::compat::{
@@ -201,6 +201,64 @@ async fn read_address(shell: &mut UbootShell, name: &str) -> anyhow::Result<u64>
     )?)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TransferProgress {
+    sent: usize,
+    // TFTP reports hash marks, not acknowledged byte counts.
+    total: Option<usize>,
+    done: bool,
+}
+
+#[derive(Default)]
+struct ProgressOutput {
+    previous: Option<TransferProgress>,
+}
+
+impl ProgressOutput {
+    // Only synthesized progress enters the user console. In particular, U-Boot
+    // command output can contain private device-LAN addresses and file paths.
+    fn render(&mut self, progress: Option<TransferProgress>) -> Option<axum::extract::ws::Message> {
+        let progress = progress?;
+        if self.previous.as_ref() == Some(&progress) {
+            return None;
+        }
+        let mut output = if let Some(total) = progress.total {
+            let filled = if total == 0 {
+                usize::from(progress.done) * 40
+            } else {
+                ((progress.sent.min(total) as u128 * 40) / total as u128) as usize
+            };
+            format!(
+                "\rUploading image (YMODEM) [{}{}] {:>width$}/{} bytes",
+                "#".repeat(filled),
+                "-".repeat(40 - filled),
+                progress.sent,
+                total,
+                width = total.to_string().len(),
+            )
+        } else {
+            let mut output = if self.previous.is_none() {
+                "Uploading image (TFTP) [".to_owned()
+            } else {
+                String::new()
+            };
+            let previous = self.previous.as_ref().map_or(0, |p| p.sent);
+            output.push_str(&"#".repeat(progress.sent.saturating_sub(previous)));
+            if progress.done {
+                output.push(']');
+            }
+            output
+        };
+        if progress.done {
+            output.push_str(" done\r\n");
+        }
+        self.previous = Some(progress);
+        Some(axum::extract::ws::Message::Binary(
+            output.into_bytes().into(),
+        ))
+    }
+}
+
 /// The bridge and orchestration are scoped to the websocket, so cancellation owns all UART I/O.
 pub(super) async fn run<R, W, S, I, E, F, H>(
     rx: &mut R,
@@ -223,9 +281,35 @@ where
     let (state, session) = link.commands.context("managed boot requires a session")?;
     let (console, relay) = tokio::io::duplex(256 * 1024);
     let (mut relay_rx, mut relay_tx) = tokio::io::split(relay);
+    // Callbacks and serial reads only update the latest progress; they never
+    // wait for the WebSocket or queue one message per packet.
+    let (progress_tx, mut progress_rx) = watch::channel(None::<TransferProgress>);
     let bridge = async {
+        let read = async {
+            let mut buffer = [0; 4096];
+            loop {
+                let size = rx.read(&mut buffer).await?;
+                if size == 0 {
+                    return Ok::<_, std::io::Error>(());
+                }
+                // Observe only hash marks during TFTP. Forward every original
+                // byte unchanged to UbootShell, which still owns the protocol.
+                progress_tx.send_if_modified(|progress| {
+                    if let Some(progress) = progress
+                        && progress.total.is_none()
+                        && !progress.done
+                    {
+                        let hashes = buffer[..size].iter().filter(|&&b| b == b'#').count();
+                        progress.sent += hashes;
+                        return hashes != 0;
+                    }
+                    false
+                });
+                relay_tx.write_all(&buffer[..size]).await?;
+            }
+        };
         tokio::select! {
-            r=tokio::io::copy(rx,&mut relay_tx)=>r.map(|_|()),
+            r=read=>r,
             r=tokio::io::copy(&mut relay_rx,tx)=>r.map(|_|()),
         }
     };
@@ -362,6 +446,11 @@ where
                     } else {
                         "dhcp"
                     };
+                    progress_tx.send_replace(Some(TransferProgress {
+                        sent: 0,
+                        total: None,
+                        done: false,
+                    }));
                     shell
                         .cmd(&format!("{command} {}", file.relative_path))
                         .await?;
@@ -370,10 +459,21 @@ where
                         .loady(
                             usize::try_from(addresses.fit_load_addr)?,
                             &file.disk_path,
-                            |_, _| {},
+                            |sent, total| {
+                                progress_tx.send_replace(Some(TransferProgress {
+                                    sent,
+                                    total: Some(total),
+                                    done: false,
+                                }));
+                            },
                         )
                         .await?;
                 }
+                progress_tx.send_modify(|progress| {
+                    if let Some(progress) = progress {
+                        progress.done = true;
+                    }
+                });
                 if let Some(cmdline) = &boot.cmdline {
                     shell.set_env("bootargs", format!("'{cmdline}'")).await?;
                 }
@@ -395,11 +495,29 @@ where
             Ok::<_, anyhow::Error>(shell)
         };
         tokio::pin!(startup);
+        let mut progress_output = ProgressOutput::default();
         let mut shell = loop {
             use axum::extract::ws::Message;
             use futures_util::{SinkExt, StreamExt};
             tokio::select! {
-                result=&mut startup=>break result?,
+                result=&mut startup=>{
+                    // Completion can win the select before the last update.
+                    let progress = progress_rx.borrow_and_update().clone();
+                    if let Some(message) = progress_output.render(progress) {
+                        sender.send(message).await?;
+                    }
+                    if result.is_err() && progress_output.previous.as_ref().is_some_and(|p| !p.done) {
+                        sender.send(Message::Binary(b" failed\r\n".to_vec().into())).await?;
+                    }
+                    break result?;
+                },
+                changed=progress_rx.changed()=>{
+                    changed?;
+                    let progress = progress_rx.borrow_and_update().clone();
+                    if let Some(message) = progress_output.render(progress) {
+                        sender.send(message).await?;
+                    }
+                },
                 message=receiver.next()=>match message {
                     Some(Ok(Message::Ping(bytes)))=>sender.send(Message::Pong(bytes)).await?,
                     Some(Ok(Message::Pong(_)))=>{},
@@ -415,4 +533,67 @@ where
         super::transport::run(&mut r, &mut w, sender, receiver, link).await
     };
     tokio::select! {result=work=>result,result=bridge=>{result?;anyhow::bail!("device serial closed")}}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(message: Option<axum::extract::ws::Message>) -> String {
+        let Some(axum::extract::ws::Message::Binary(bytes)) = message else {
+            panic!("expected binary terminal progress");
+        };
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    #[test]
+    fn serial_progress_handles_retry_and_waits_for_confirmed_completion() {
+        let mut output = ProgressOutput::default();
+        let mut progress = TransferProgress {
+            sent: 1024,
+            total: Some(2048),
+            done: false,
+        };
+        let halfway = text(output.render(Some(progress.clone())));
+        assert!(halfway.contains(&format!("[{}{}]", "#".repeat(20), "-".repeat(20))));
+        assert!(halfway.contains("1024/2048 bytes"));
+        assert!(output.render(Some(progress.clone())).is_none());
+        progress.sent = 0;
+        assert!(text(output.render(Some(progress.clone()))).contains("0/2048 bytes"));
+        progress.sent = 2048;
+        assert!(!text(output.render(Some(progress.clone()))).contains("done"));
+        progress.done = true;
+        assert!(text(output.render(Some(progress))).ends_with(" done\r\n"));
+    }
+
+    #[test]
+    fn coalesced_tftp_progress_preserves_all_hashes_and_completion() {
+        let (tx, mut rx) = watch::channel(None);
+        let mut output = ProgressOutput::default();
+        assert!(output.render(rx.borrow_and_update().clone()).is_none());
+        let mut progress = TransferProgress {
+            sent: 0,
+            total: None,
+            done: false,
+        };
+        tx.send_replace(Some(progress.clone()));
+        let mut rendered = text(output.render(rx.borrow_and_update().clone()));
+        // A slow consumer skips intermediate updates, including startup.
+        for hashes in 1..=3 {
+            progress.sent = hashes;
+            tx.send_replace(Some(progress.clone()));
+        }
+        rendered.push_str(&text(output.render(rx.borrow_and_update().clone())));
+        progress.sent = 5;
+        progress.done = true;
+        tx.send_replace(Some(progress.clone()));
+        rendered.push_str(&text(output.render(rx.borrow_and_update().clone())));
+        assert_eq!(rendered, "Uploading image (TFTP) [#####] done\r\n");
+        assert!(output.render(Some(progress.clone())).is_none());
+        // Completion may also be the first state observed by the consumer.
+        assert_eq!(
+            text(ProgressOutput::default().render(Some(progress))),
+            rendered
+        );
+    }
 }
