@@ -34,6 +34,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Section,
+  FieldTitle,
   TextField,
   ReloadNotice,
   FormGrid,
@@ -46,7 +47,10 @@ import {
 } from "@/components/forms";
 import { MacPicker } from "@/apps/admin/components/mac-picker";
 import { DtbUpload } from "./Dtbs";
-import { SerialRuntimeDetails } from "@/apps/admin/components/serial-runtime";
+import {
+  SerialRuntimeDetails,
+  serialRuntimeLabel,
+} from "@/apps/admin/components/serial-runtime";
 import { BoardOta } from "./BoardOta";
 import { DeviceConnection } from "./DeviceConnection";
 
@@ -100,8 +104,13 @@ function Editor({ board }: { board?: BoardConfig }) {
   );
   const [accepted, setAccepted] = useState<PowerResult>();
   const result = actions.find((a) => a.id === actionId) ?? accepted;
-  const [uncertain, setUncertain] = useState(false);
-  const powerBusy = power.pending || result?.state === "running" || uncertain;
+  const [requestedAction, setRequestedAction] = useState<"on" | "off">();
+  const powerBusy = power.pending || result?.state === "running";
+  const activeAction = power.pending
+    ? requestedAction
+    : result?.state === "running"
+      ? result.action
+      : undefined;
   const sending = useRef(false);
   const live = JSON.stringify(board ? boardToFormState(board) : null);
   const conflict = !!board && live !== baseline && live !== previousSource;
@@ -120,7 +129,8 @@ function Editor({ board }: { board?: BoardConfig }) {
     const id = crypto.randomUUID();
     setActionId(id);
     sessionStorage.setItem(storageKey, id);
-    setUncertain(true);
+    setAccepted(undefined);
+    setRequestedAction(action);
     await power.run(async () => {
       const value = await api.powerAction({
         request_id: id,
@@ -128,13 +138,13 @@ function Editor({ board }: { board?: BoardConfig }) {
         power_management: buildPowerManagementConfig(form),
       });
       setAccepted(value);
-      setUncertain(false);
     }, false);
     sending.current = false;
   }
   useEffect(() => {
-    if (actions.some((a) => a.id === actionId)) setUncertain(false);
-  }, [actions, actionId]);
+    if (result && result.state !== "running")
+      sessionStorage.removeItem(storageKey);
+  }, [result, storageKey]);
   function chooseSerial(value: string, relay = false) {
     const colon = value.indexOf(":");
     const kind = value.slice(0, colon) as SerialPortKeyKind;
@@ -184,7 +194,7 @@ function Editor({ board }: { board?: BoardConfig }) {
   const text = (
     key: keyof BoardEditorFormState,
     label: string,
-    props: { hint?: string; fullWidth?: boolean } = {},
+    props: { hint?: string; fullWidth?: boolean; disabled?: boolean } = {},
   ) => (
     <TextField
       key={key}
@@ -197,7 +207,7 @@ function Editor({ board }: { board?: BoardConfig }) {
   async function submit() {
     const error = validateForm(form);
     if (error) toast.error(error);
-    if (error || conflict || powerBusy) return;
+    if (error || conflict) return;
     await save.run(async () => {
       const payload = buildRequestPayload(form);
       const saved = board
@@ -250,7 +260,6 @@ function Editor({ board }: { board?: BoardConfig }) {
             <ConfirmAction
               label="删除开发板"
               description={`删除 ${board.id} 的配置？`}
-              disabled={powerBusy}
               action={async () => {
                 await api.deleteBoard(board.id);
                 navigate("/boards");
@@ -263,7 +272,7 @@ function Editor({ board }: { board?: BoardConfig }) {
           <Button
             type="submit"
             form={formId}
-            disabled={save.pending || powerBusy || conflict}
+            disabled={save.pending || conflict}
           >
             {save.pending ? "保存中…" : "保存开发板"}
           </Button>
@@ -288,7 +297,7 @@ function Editor({ board }: { board?: BoardConfig }) {
           void submit();
         }}
       >
-        <Section title="基本信息" columns={2}>
+        <Section title="基本信息" columns={3}>
           <TextField
             label="板型"
             required
@@ -302,19 +311,21 @@ function Editor({ board }: { board?: BoardConfig }) {
             onValue={(v) => set("id", v)}
             hint="留空自动生成"
           />
-          <TextareaField
-            label="标签"
-            fullWidth={false}
-            value={form.tags_text}
-            onValue={(v) => set("tags_text", v)}
-            hint="用逗号或换行分隔"
-          />
-          <TextareaField
-            label="备注"
-            fullWidth={false}
-            value={form.notes}
-            onValue={(v) => set("notes", v)}
-          />
+          <FormGrid columns={2} className="board-metadata-fields">
+            <TextareaField
+              fullWidth={false}
+              label="标签"
+              value={form.tags_text}
+              onValue={(v) => set("tags_text", v)}
+              hint="用逗号或换行分隔"
+            />
+            <TextareaField
+              fullWidth={false}
+              label="备注"
+              value={form.notes}
+              onValue={(v) => set("notes", v)}
+            />
+          </FormGrid>
           {!local && (
             <CheckField
               label="开放免申请"
@@ -331,11 +342,16 @@ function Editor({ board }: { board?: BoardConfig }) {
         </Section>
         <Section
           title="启动与绑定"
-          columns={2}
+          columns={3}
           hint="选择启动方式后，下方对应配置可编辑；其他配置保留草稿。"
         >
           <SelectField
             label="启动方式"
+            hint={
+              !local
+                ? "新增公网 HTTPboot 开发板会先禁用保存。保存后配置设备认证，再取消禁用并保存以开放分配。"
+                : "启动方式决定下方配置是否可编辑。"
+            }
             value={form.boot_kind}
             onValue={(v) =>
               setForm((f) => ({
@@ -358,34 +374,22 @@ function Editor({ board }: { board?: BoardConfig }) {
             boardId={board?.id}
             disabled={form.boot_kind === "uboot"}
           />
-          {!local && (
-            <p className="hint">
-              新增公网 HTTPboot
-              开发板会先禁用保存。保存后配置设备认证，再取消禁用并保存以开放分配。
-            </p>
-          )}
-          <p className="hint">
-            设备架构{" "}
-            {selectedLoader?.online
-              ? selectedLoader.arch
-              : selectedLoader
-                ? "未知（设备离线）"
-                : "未知（未发现设备）"}
-            {selectedLoader && (
-              <>
-                {" "}
-                · {selectedLoader.ip_address} ·{" "}
-                {selectedLoader.hardware.product} ·{" "}
-                {selectedLoader.conflict
-                  ? "MAC 冲突"
-                  : selectedLoader.bound_board_id
-                    ? `已绑定 ${selectedLoader.bound_board_id}`
-                    : selectedLoader.online
-                      ? "在线，未绑定"
-                      : "离线，未绑定"}
-              </>
-            )}
-          </p>
+          <TextField
+            label="设备架构"
+            readOnly
+            value={
+              selectedLoader?.online
+                ? selectedLoader.arch
+                : selectedLoader
+                  ? "未知（设备离线）"
+                  : "未知（未发现设备）"
+            }
+            hint={
+              selectedLoader
+                ? `${selectedLoader.ip_address} · ${selectedLoader.hardware.product} · ${selectedLoader.conflict ? "MAC 冲突" : selectedLoader.bound_board_id ? `已绑定 ${selectedLoader.bound_board_id}` : selectedLoader.online ? "在线，未绑定" : "离线，未绑定"}`
+                : undefined
+            }
+          />
           <TextareaField
             label="PXE 备注"
             value={form.pxe_notes}
@@ -396,7 +400,7 @@ function Editor({ board }: { board?: BoardConfig }) {
         <div className="board-editor-columns">
           <Section
             title="手动串口"
-            columns={2}
+            columns={3}
             hint="用于 U-Boot 与 PXE；axloader HTTP Boot 使用下方自动串口。"
           >
             <CheckField
@@ -406,166 +410,198 @@ function Editor({ board }: { board?: BoardConfig }) {
               onChange={(v) => set("serial_enabled", v)}
               hint="启用 U-Boot 开发板必须配置串口；未完成配置可先禁用保存。"
             />
-            <fieldset
+            <SelectField
+              label="稳定串口"
               disabled={form.boot_kind === "httpboot" || !form.serial_enabled}
-            >
-              <FormGrid columns={2}>
-                <SelectField
-                  label="稳定串口"
-                  value={
-                    form.serial_key_value
-                      ? `${form.serial_key_kind}:${form.serial_key_value}`
-                      : ""
-                  }
-                  onValue={(v) => chooseSerial(v)}
-                  options={serialOptions()}
-                />
-                <TextField
-                  label="波特率"
-                  type="number"
-                  min={1}
-                  value={form.serial_baud_rate}
-                  onValue={(v) => set("serial_baud_rate", Number(v))}
-                />
-                <SerialDetails
-                  ports={serial}
-                  portKey={{
-                    kind: form.serial_key_kind,
-                    value: form.serial_key_value,
-                  }}
-                />
-              </FormGrid>
-            </fieldset>
+              hint={serialDetails(serial, {
+                kind: form.serial_key_kind,
+                value: form.serial_key_value,
+              })}
+              value={
+                form.serial_key_value
+                  ? `${form.serial_key_kind}:${form.serial_key_value}`
+                  : ""
+              }
+              onValue={(v) => chooseSerial(v)}
+              options={serialOptions()}
+            />
+            <TextField
+              label="波特率"
+              disabled={form.boot_kind === "httpboot" || !form.serial_enabled}
+              type="number"
+              min={1}
+              value={form.serial_baud_rate}
+              onValue={(v) => set("serial_baud_rate", Number(v))}
+            />
           </Section>
           <Section
             title="自动串口"
-            columns={2}
+            columns={3}
             hint="仅用于 axloader HTTP Boot；未指定参数时采用设备上报值。"
           >
-            <p className="text-sm text-muted-foreground">
-              axloader 上报实际参数，每次上电自动确认串口身份。
-            </p>
-            <SerialRuntimeDetails
-              status={
-                sessions.find((s) => s.board_id === board?.id)?.serial_runtime
-              }
-            />
-            <p className="text-sm">
-              发现请求 {serialManager?.pending ?? 0} · 候选监听{" "}
-              {serialManager?.candidates ?? 0}
-            </p>
             <CheckField
               label="指定串口参数"
               disabled={form.boot_kind !== "httpboot"}
               checked={form.axloader_serial_parameters_enabled}
               onChange={(v) => set("axloader_serial_parameters_enabled", v)}
             />
-            <fieldset
+            <div data-slot="field">
+              <FieldTitle
+                label="串口状态"
+                hint={
+                  <SerialRuntimeDetails
+                    status={
+                      sessions.find((session) => session.board_id === board?.id)
+                        ?.serial_runtime
+                    }
+                  />
+                }
+              />
+              <div className="board-readonly-value">
+                {serialRuntimeLabel(
+                  sessions.find((session) => session.board_id === board?.id)
+                    ?.serial_runtime,
+                )}
+              </div>
+            </div>
+            <div data-slot="field">
+              <FieldTitle label="自动发现" />
+              <div className="board-readonly-value">
+                发现请求 {serialManager?.pending ?? 0} · 候选监听{" "}
+                {serialManager?.candidates ?? 0}
+              </div>
+            </div>
+            <TextField
               disabled={
                 form.boot_kind !== "httpboot" ||
                 !form.axloader_serial_parameters_enabled
               }
-            >
-              <FormGrid columns={2}>
-                <TextField
-                  label="axloader 波特率"
-                  type="number"
-                  min={1}
-                  value={form.axloader_baud_rate}
-                  onValue={(v) => set("axloader_baud_rate", Number(v))}
-                  hint="整组参数优先于 axloader 上报；未配置时采用上报值或 115200/8N1"
-                />
-                <SelectField
-                  label="数据位"
-                  value={String(form.axloader_data_bits)}
-                  onValue={(v) => set("axloader_data_bits", Number(v))}
-                  options={[
-                    { value: "7", label: "7" },
-                    { value: "8", label: "8" },
-                  ]}
-                />
-                <SelectField
-                  label="校验"
-                  value={form.axloader_parity}
-                  onValue={(v) =>
-                    set(
-                      "axloader_parity",
-                      v as BoardEditorFormState["axloader_parity"],
-                    )
-                  }
-                  options={[
-                    { value: "none", label: "无" },
-                    { value: "odd", label: "奇校验" },
-                    { value: "even", label: "偶校验" },
-                  ]}
-                />
-                <SelectField
-                  label="停止位"
-                  value={form.axloader_stop_bits}
-                  onValue={(v) =>
-                    set(
-                      "axloader_stop_bits",
-                      v as BoardEditorFormState["axloader_stop_bits"],
-                    )
-                  }
-                  options={[
-                    { value: "one", label: "1" },
-                    { value: "two", label: "2" },
-                  ]}
-                />
-                <SelectField
-                  label="流控"
-                  value={form.axloader_flow_control}
-                  onValue={(v) =>
-                    set(
-                      "axloader_flow_control",
-                      v as BoardEditorFormState["axloader_flow_control"],
-                    )
-                  }
-                  options={[
-                    { value: "none", label: "无" },
-                    { value: "rts_cts", label: "RTS/CTS" },
-                  ]}
-                />
-              </FormGrid>
-            </fieldset>
+              label="axloader 波特率"
+              type="number"
+              min={1}
+              value={form.axloader_baud_rate}
+              onValue={(v) => set("axloader_baud_rate", Number(v))}
+              hint="整组参数优先于 axloader 上报；未配置时采用上报值或 115200/8N1"
+            />
+            <SelectField
+              disabled={
+                form.boot_kind !== "httpboot" ||
+                !form.axloader_serial_parameters_enabled
+              }
+              label="数据位"
+              value={String(form.axloader_data_bits)}
+              onValue={(v) => set("axloader_data_bits", Number(v))}
+              options={[
+                { value: "7", label: "7" },
+                { value: "8", label: "8" },
+              ]}
+            />
+            <SelectField
+              disabled={
+                form.boot_kind !== "httpboot" ||
+                !form.axloader_serial_parameters_enabled
+              }
+              label="校验"
+              value={form.axloader_parity}
+              onValue={(v) =>
+                set(
+                  "axloader_parity",
+                  v as BoardEditorFormState["axloader_parity"],
+                )
+              }
+              options={[
+                { value: "none", label: "无" },
+                { value: "odd", label: "奇校验" },
+                { value: "even", label: "偶校验" },
+              ]}
+            />
+            <SelectField
+              disabled={
+                form.boot_kind !== "httpboot" ||
+                !form.axloader_serial_parameters_enabled
+              }
+              label="停止位"
+              value={form.axloader_stop_bits}
+              onValue={(v) =>
+                set(
+                  "axloader_stop_bits",
+                  v as BoardEditorFormState["axloader_stop_bits"],
+                )
+              }
+              options={[
+                { value: "one", label: "1" },
+                { value: "two", label: "2" },
+              ]}
+            />
+            <SelectField
+              disabled={
+                form.boot_kind !== "httpboot" ||
+                !form.axloader_serial_parameters_enabled
+              }
+              label="流控"
+              value={form.axloader_flow_control}
+              onValue={(v) =>
+                set(
+                  "axloader_flow_control",
+                  v as BoardEditorFormState["axloader_flow_control"],
+                )
+              }
+              options={[
+                { value: "none", label: "无" },
+                { value: "rts_cts", label: "RTS/CTS" },
+              ]}
+            />
           </Section>
         </div>
         <div className="board-editor-columns">
-          <fieldset disabled={form.boot_kind !== "uboot"}>
+          <div>
             <Section
               title="U-Boot 启动"
-              columns={2}
+              columns={3}
               hint="仅 U-Boot 启动使用这些配置；加载地址留空时使用默认值。"
             >
-              <SelectField
-                label="预设 DTB"
-                value={form.dtb_name}
-                onValue={(v) => set("dtb_name", v)}
-                options={[
-                  { value: "", label: "无预设" },
-                  ...dtbs.map((d) => ({ value: d.name, label: d.name })),
-                ]}
-              />
-              <DtbUpload onUploaded={(name) => set("dtb_name", name)} />
-              {text("kernel_load_addr", "Kernel 加载地址")}
-              {text("fit_load_addr", "FIT 加载地址")}
-              {text("bootm_addr", "bootm 地址")}
+              <div className="board-inline-field" data-slot="field">
+                <SelectField
+                  label="预设 DTB"
+                  disabled={form.boot_kind !== "uboot"}
+                  value={form.dtb_name}
+                  onValue={(v) => set("dtb_name", v)}
+                  options={[
+                    { value: "", label: "无预设" },
+                    ...dtbs.map((d) => ({ value: d.name, label: d.name })),
+                  ]}
+                />
+                <DtbUpload
+                  disabled={form.boot_kind !== "uboot"}
+                  onUploaded={(name) => set("dtb_name", name)}
+                />
+              </div>
+              {text("kernel_load_addr", "Kernel 加载地址", {
+                disabled: form.boot_kind !== "uboot",
+              })}
+              {text("fit_load_addr", "FIT 加载地址", {
+                disabled: form.boot_kind !== "uboot",
+              })}
+              {text("bootm_addr", "bootm 地址", {
+                disabled: form.boot_kind !== "uboot",
+              })}
               <CheckField
                 label="启用 TFTP"
+                disabled={form.boot_kind !== "uboot"}
                 checked={form.use_tftp}
                 onChange={(v) => set("use_tftp", v)}
               />
             </Section>
-          </fieldset>
-          <fieldset disabled={form.boot_kind !== "uboot" || !form.use_tftp}>
+          </div>
+          <div>
             <Section
               title="TFTP 网络"
-              columns={2}
+              columns={3}
               hint="启用 U-Boot TFTP 后可编辑；静态网络参数仅在静态 IP 模式下生效。"
             >
               <SelectField
                 label="网络模式"
+                disabled={form.boot_kind !== "uboot" || !form.use_tftp}
                 value={form.network_mode}
                 onValue={(v) => set("network_mode", v as "dhcp" | "static_ip")}
                 options={[
@@ -573,165 +609,148 @@ function Editor({ board }: { board?: BoardConfig }) {
                   { value: "static_ip", label: "静态 IP" },
                 ]}
               />
-              <fieldset disabled={form.network_mode !== "static_ip"}>
-                <FormGrid columns={2}>
-                  {text("board_ip", "开发板 IP")}
-                  {text("server_ip", "服务器 IP", {
-                    hint: `默认 ${tftp?.resolved_server_ip ?? "未解析"}`,
-                  })}
-                  {text("netmask", "子网掩码", {
-                    hint: `默认 ${tftp?.resolved_netmask ?? "未解析"}`,
-                  })}
-                  {text("gatewayip", "网关")}
-                </FormGrid>
-              </fieldset>
+              {text("board_ip", "开发板 IP", {
+                disabled:
+                  form.boot_kind !== "uboot" ||
+                  !form.use_tftp ||
+                  form.network_mode !== "static_ip",
+              })}
+              {text("server_ip", "服务器 IP", {
+                disabled:
+                  form.boot_kind !== "uboot" ||
+                  !form.use_tftp ||
+                  form.network_mode !== "static_ip",
+                hint: `默认 ${tftp?.resolved_server_ip ?? "未解析"}`,
+              })}
+              {text("netmask", "子网掩码", {
+                disabled:
+                  form.boot_kind !== "uboot" ||
+                  !form.use_tftp ||
+                  form.network_mode !== "static_ip",
+                hint: `默认 ${tftp?.resolved_netmask ?? "未解析"}`,
+              })}
+              {text("gatewayip", "网关", {
+                disabled:
+                  form.boot_kind !== "uboot" ||
+                  !form.use_tftp ||
+                  form.network_mode !== "static_ip",
+              })}
             </Section>
-          </fieldset>
+          </div>
         </div>
-        <fieldset disabled={powerBusy} className="power-fields">
-          <Section
-            title="电源管理"
-            columns={2}
-            hint="选择模块后可直接上电或下电，无需先保存开发板。"
-          >
-            <SelectField
-              label="电源模块"
-              value={form.power_management_kind}
-              onValue={(v) =>
-                set(
-                  "power_management_kind",
-                  v as BoardEditorFormState["power_management_kind"],
-                )
-              }
-              options={[
-                { value: "custom", label: "Custom 命令" },
-                { value: "zhongsheng_relay", label: "中盛继电器" },
-                { value: "qemu", label: "QEMU 虚拟设备" },
-              ]}
-            />
-            <SelectField
-              disabled={form.power_management_kind !== "qemu"}
-              label="虚拟设备"
-              value={form.virtual_device_id}
-              onValue={(v) => set("virtual_device_id", v)}
-              options={[
-                { value: "", label: "选择已有虚拟设备" },
-                ...(virtual?.devices ?? []).map((d) => ({
-                  value: d.id,
-                  label: `${d.id} · ${d.mac_address}`,
-                })),
-              ]}
-            />
-            <fieldset disabled={form.power_management_kind !== "custom"}>
-              <FormGrid columns={2}>
-                {text("power_on_cmd", "上电命令")}
-                {text("power_off_cmd", "下电命令")}
-              </FormGrid>
-            </fieldset>
-            <fieldset
-              disabled={form.power_management_kind !== "zhongsheng_relay"}
+        <Section
+          title="电源管理"
+          columns={3}
+          hint="选择模块后可直接上电或下电，无需先保存开发板。"
+        >
+          <SelectField
+            label="电源模块"
+            value={form.power_management_kind}
+            onValue={(v) =>
+              set(
+                "power_management_kind",
+                v as BoardEditorFormState["power_management_kind"],
+              )
+            }
+            options={[
+              { value: "custom", label: "Custom 命令" },
+              { value: "zhongsheng_relay", label: "中盛继电器" },
+              { value: "qemu", label: "QEMU 虚拟设备" },
+            ]}
+          />
+          <SelectField
+            disabled={form.power_management_kind !== "qemu"}
+            label="虚拟设备"
+            value={form.virtual_device_id}
+            onValue={(v) => set("virtual_device_id", v)}
+            options={[
+              { value: "", label: "选择已有虚拟设备" },
+              ...(virtual?.devices ?? []).map((d) => ({
+                value: d.id,
+                label: `${d.id} · ${d.mac_address}`,
+              })),
+            ]}
+          />
+          <SelectField
+            disabled={form.power_management_kind !== "zhongsheng_relay"}
+            label="继电器"
+            hint={serialDetails(serial, {
+              kind: form.relay_serial_key_kind,
+              value: form.relay_serial_key_value,
+            })}
+            value={
+              form.relay_serial_key_value
+                ? `${form.relay_serial_key_kind}:${form.relay_serial_key_value}`
+                : ""
+            }
+            onValue={(v) => chooseSerial(v, true)}
+            options={serialOptions(true)}
+          />
+          <FormGrid columns={2}>
+            <div
+              className="board-inline-field"
+              data-slot="field"
+              role="group"
+              aria-label="上电测试"
             >
-              <FormGrid columns={2}>
-                <SelectField
-                  label="继电器"
-                  value={
-                    form.relay_serial_key_value
-                      ? `${form.relay_serial_key_kind}:${form.relay_serial_key_value}`
-                      : ""
-                  }
-                  onValue={(v) => chooseSerial(v, true)}
-                  options={serialOptions(true)}
-                />
-                <SerialDetails
-                  ports={serial}
-                  portKey={{
-                    kind: form.relay_serial_key_kind,
-                    value: form.relay_serial_key_value,
-                  }}
-                />
-              </FormGrid>
-            </fieldset>
-            <div className="actions">
+              <TextField
+                label="上电命令"
+                disabled={form.power_management_kind !== "custom"}
+                value={form.power_on_cmd}
+                onValue={(value) => set("power_on_cmd", value)}
+              />
               <Button
                 permission="devices.power"
                 type="button"
+                variant="outline"
+                disabled={powerBusy}
                 onClick={() => void sendPower("on")}
               >
-                上电
+                {activeAction === "on" ? "测试中…" : "上电测试"}
               </Button>
+            </div>
+            <div
+              className="board-inline-field"
+              data-slot="field"
+              role="group"
+              aria-label="下电测试"
+            >
+              <TextField
+                label="下电命令"
+                disabled={form.power_management_kind !== "custom"}
+                value={form.power_off_cmd}
+                onValue={(value) => set("power_off_cmd", value)}
+              />
               <Button
                 permission="devices.power"
                 type="button"
                 variant="outline"
+                disabled={powerBusy}
                 onClick={() => void sendPower("off")}
               >
-                下电
+                {activeAction === "off" ? "测试中…" : "下电测试"}
               </Button>
             </div>
-          </Section>
-        </fieldset>
-        <div className="power-feedback">
-          <MessageToast
-            kind={
-              result?.state === "succeeded"
-                ? "success"
-                : result?.state === "failed"
-                  ? "error"
-                  : "info"
-            }
-            message={
-              result?.state === "running"
-                ? "电源命令执行中…"
-                : result?.state === "succeeded"
-                  ? `${result.action === "on" ? "上电" : "下电"}命令已完成`
-                  : result?.state === "failed"
-                    ? `电源命令失败：${result.message}`
-                    : null
-            }
-          />
-          {(uncertain || (actionId && !result)) && (
-            <Notice>
-              动作结果尚未确认。查询已有动作不会重复执行命令。
-              <Button
-                type="button"
-                variant="outline"
-                disabled={power.pending}
-                onClick={() =>
-                  void power.run(async () => {
-                    setAccepted(await api.getPowerAction(actionId));
-                    setUncertain(false);
-                  }, false)
-                }
-              >
-                查询执行结果
-              </Button>
-            </Notice>
-          )}
-          {power.error && (
-            <div className="actions">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setUncertain(false);
-                  setAccepted(undefined);
-                  setActionId("");
-                  sessionStorage.removeItem(storageKey);
-                }}
-              >
-                清除结果提示
-              </Button>
-            </div>
-          )}
-        </div>
+          </FormGrid>
+        </Section>
+        <MessageToast
+          kind={result?.state === "failed" ? "error" : "success"}
+          message={
+            result?.state === "succeeded"
+              ? `${result.action === "on" ? "上电" : "下电"}命令已完成`
+              : result?.state === "failed"
+                ? `电源命令失败：${result.message}`
+                : null
+          }
+        />
         <Section title="设备恢复">
           <TextField
             label="释放后恢复命令"
             fullWidth
             value={form.reset_command}
             onValue={(v) => setForm((f) => ({ ...f, reset_command: v }))}
-            hint=""
-            placeholder="可选的幂等恢复命令；在断电后执行，失败时设备继续保留。纯 RAM 启动可留空。"
+            hint="在断电后执行的幂等恢复命令。纯 RAM 启动可留空。"
+            placeholder="可选"
           />
         </Section>
       </form>
@@ -763,28 +782,16 @@ function serialLabel(p: SerialPortSummary, key?: SerialPortKey) {
         : "USB PATH";
   return `${kind} ${key?.value ?? p.primary_key_value ?? "无稳定标识"} · ${p.current_device_path} · ${p.manufacturer ?? ""} ${p.product ?? ""}`;
 }
-function SerialDetails({
-  ports,
-  portKey,
-}: {
-  ports: SerialPortSummary[];
-  portKey: SerialPortKey;
-}) {
-  if (!portKey.value)
-    return <p className="hint full-width">选择稳定串口后显示设备信息。</p>;
+function serialDetails(
+  ports: SerialPortSummary[],
+  portKey: SerialPortKey,
+): string | undefined {
+  if (!portKey.value) return undefined;
   const matches = matchingSerialPorts(ports, portKey);
   if (matches.length > 1)
-    return (
-      <p className="hint full-width">
-        匹配多个串口接口，请选择 USB ID 或 USB PATH。
-      </p>
-    );
-  const p = matches[0];
-  return (
-    <p className="hint full-width">
-      {p
-        ? `${p.usb_id ?? p.usb_path ?? ""} · ${p.current_device_path} · ${p.manufacturer ?? ""} ${p.product ?? ""} · VID:PID ${p.usb_vendor_id?.toString(16) ?? "—"}:${p.usb_product_id?.toString(16) ?? "—"}`
-        : "当前未检测到该设备，保留稳定标识"}
-    </p>
-  );
+    return "匹配多个串口接口，请选择 USB ID 或 USB PATH。";
+  const port = matches[0];
+  return port
+    ? `${port.usb_id ?? port.usb_path ?? ""} · ${port.current_device_path} · ${port.manufacturer ?? ""} ${port.product ?? ""} · VID:PID ${port.usb_vendor_id?.toString(16) ?? "—"}:${port.usb_product_id?.toString(16) ?? "—"}`
+    : "当前未检测到该设备，保留稳定标识";
 }

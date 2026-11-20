@@ -1068,13 +1068,6 @@
   .full-width {
     grid-column: 1/-1;
   }
-  .power-feedback {
-    margin: 12px 0;
-    font-size: 13px;
-  }
-  .power-fields:disabled {
-    opacity: 0.65;
-  }
   [data-slot="alert"] {
     margin: 16px 0;
   }
@@ -1099,6 +1092,35 @@
 }
 /* Shared form layout, used by sections, dialogs, and standalone editors. */
 .board-editor-form fieldset {
+  min-width: 0;
+}
+.form-fields.board-metadata-fields {
+  align-items: stretch;
+  grid-auto-rows: 1fr;
+}
+.board-metadata-fields [data-slot="textarea"] {
+  flex: 1;
+}
+.board-readonly-value {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  min-height: var(--control-height);
+  font-size: 1rem;
+}
+.board-editor-form .board-inline-field {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.board-editor-form [data-slot="popover-trigger"][data-size] {
+  height: var(--control-height);
+  min-height: var(--control-height);
+  padding-inline: 16px;
+  font-size: 1rem;
+}
+.board-inline-field > [data-slot="field"] {
+  flex: 1;
   min-width: 0;
 }
 .board-editor-columns {

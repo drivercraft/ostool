@@ -167,7 +167,7 @@ test("the board editor keeps credentials write-only and preserves a draft across
       timeout: 15000,
     });
     await expect(
-      page.getByRole("checkbox", { name: "禁用开发板" }),
+      page.getByRole("switch", { name: "禁用开发板" }),
     ).toBeChecked();
     const endpoint = page.getByLabel("设备 HTTP / HTTPS 地址");
     await expect(endpoint).toBeVisible();

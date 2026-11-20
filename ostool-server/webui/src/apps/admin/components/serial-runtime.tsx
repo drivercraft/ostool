@@ -9,6 +9,9 @@ const phases: Record<SerialRuntimeStatus["phase"], string> = {
   failed: "绑定失败",
   closed: "已释放",
 };
+export function serialRuntimeLabel(status?: SerialRuntimeStatus) {
+  return status ? phases[status.phase] : "等待会话自动绑定";
+}
 export function SerialRuntimeDetails({
   status,
 }: {
@@ -28,7 +31,7 @@ export function SerialRuntimeDetails({
                 : "warning"
         }
       >
-        {status ? phases[status.phase] : "等待会话自动绑定"}
+        {serialRuntimeLabel(status)}
       </Badge>
       {status?.port && <p className="mono">{status.port}</p>}
       {p && (

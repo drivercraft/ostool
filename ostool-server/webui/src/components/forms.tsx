@@ -15,20 +15,20 @@ import {
   useListLayout,
 } from "./list-layout";
 import { toast } from "sonner";
-import { Inbox, type LucideIcon } from "lucide-react";
+import { CircleAlert, Inbox, type LucideIcon } from "lucide-react";
 import { RowAction } from "./row-action";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import {
-  Field,
-  FieldGroup,
-  FieldLabel,
-  FieldDescription,
-} from "@/components/ui/field";
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "@/components/ui/popover";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Dialog,
@@ -82,6 +82,53 @@ const inputHints: Record<string, string> = {
   指定开发板: "仅可选择已启用设备；日历灰色时段表示已占用或已过期。",
 };
 
+export function FieldHelp({
+  label,
+  children,
+}: {
+  label: string;
+  children?: ReactNode;
+}) {
+  if (!children) return null;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="field-help-trigger"
+          aria-label={`${label}说明`}
+        >
+          <CircleAlert aria-hidden="true" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="field-help-content"
+        role="note"
+        aria-label={`${label}说明`}
+      >
+        {children}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+export function FieldTitle({
+  label,
+  hint,
+  htmlFor,
+}: {
+  label: string;
+  hint?: ReactNode;
+  htmlFor?: string;
+}) {
+  return (
+    <div className="field-title-row">
+      <FieldLabel htmlFor={htmlFor}>{label}</FieldLabel>
+      <FieldHelp label={label}>{hint}</FieldHelp>
+    </div>
+  );
+}
+
 export function TextField({
   label,
   hint,
@@ -96,16 +143,17 @@ export function TextField({
   onValue?: (value: string) => void;
 }) {
   const id = useId();
-  const description = hint ?? inputHints[label];
+  const description =
+    hint ?? props["aria-description"] ?? props.title ?? inputHints[label];
   return (
     <Field className={fullWidth ? "full-width" : undefined}>
-      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <FieldTitle htmlFor={id} label={label} hint={description} />
       <Input
         id={id}
         type={type}
         {...props}
-        placeholder={props.placeholder ?? (description || `请输入${label}`)}
-        title={props.title ?? (description || undefined)}
+        placeholder={props.placeholder ?? `请输入${label}`}
+        title={props.title}
         aria-description={
           props["aria-description"] ?? (description || undefined)
         }
@@ -127,16 +175,17 @@ export function TextareaField({
   onValue: (value: string) => void;
 }) {
   const id = useId();
-  const description = hint ?? inputHints[label];
+  const description =
+    hint ?? props["aria-description"] ?? props.title ?? inputHints[label];
   return (
     <Field className={fullWidth ? "full-width" : undefined}>
-      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <FieldTitle htmlFor={id} label={label} hint={description} />
       <Textarea
         id={id}
         rows={2}
         {...props}
-        placeholder={props.placeholder ?? (description || `请输入${label}`)}
-        title={props.title ?? (description || undefined)}
+        placeholder={props.placeholder ?? `请输入${label}`}
+        title={props.title}
         aria-description={
           props["aria-description"] ?? (description || undefined)
         }
@@ -158,7 +207,8 @@ export function SelectField({
   onValue: (value: string) => void;
 }) {
   const id = useId();
-  const description = hint ?? inputHints[label];
+  const description =
+    hint ?? props["aria-description"] ?? props.title ?? inputHints[label];
   const optionsWithCurrent = [...options];
   if (props.value && !options.some((o) => o.value === props.value))
     optionsWithCurrent.unshift({
@@ -167,12 +217,12 @@ export function SelectField({
     });
   return (
     <Field>
-      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <FieldTitle htmlFor={id} label={label} hint={description} />
       <NativeSelect
         id={id}
         className="w-full"
         {...props}
-        title={props.title ?? (description || undefined)}
+        title={props.title}
         aria-description={
           props["aria-description"] ?? (description || undefined)
         }
@@ -202,17 +252,16 @@ export function CheckField({
 }) {
   const id = useId();
   return (
-    <Field orientation="horizontal">
-      <Checkbox
-        id={id}
-        checked={checked}
-        aria-describedby={hint ? `${id}-hint` : undefined}
-        onCheckedChange={(value) => onChange(value === true)}
-        disabled={disabled}
-      />
-      <div>
-        <FieldLabel htmlFor={id}>{label}</FieldLabel>
-        {hint && <FieldDescription id={`${id}-hint`}>{hint}</FieldDescription>}
+    <Field>
+      <FieldTitle htmlFor={id} label={label} hint={hint} />
+      <div className="switch-field-control">
+        <Switch
+          id={id}
+          checked={checked}
+          aria-description={hint || undefined}
+          onCheckedChange={onChange}
+          disabled={disabled}
+        />
       </div>
     </Field>
   );

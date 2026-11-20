@@ -1,7 +1,8 @@
+import { FieldTitle } from "@/components/forms";
 import { useId, useState } from "react";
 import { ChevronDownIcon } from "lucide-react";
 import type { LoaderDeviceSummary } from "@/types/api";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,7 +30,11 @@ export function MacPicker({
   );
   return (
     <Field>
-      <FieldLabel htmlFor={id}>MAC 地址</FieldLabel>
+      <FieldTitle
+        htmlFor={id}
+        label="MAC 地址"
+        hint="发现列表实时更新；选择后需保存配置才能完成绑定。"
+      />
       <div className="flex gap-2">
         <Input
           id={id}
@@ -37,7 +42,6 @@ export function MacPicker({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="选择或输入 MAC，例如 02:00:00:00:00:01"
-          title="发现列表实时更新；选择后需保存配置才能完成绑定。"
           aria-description="发现列表实时更新；选择后需保存配置才能完成绑定。"
         />
         <Popover open={open && !disabled} onOpenChange={setOpen}>

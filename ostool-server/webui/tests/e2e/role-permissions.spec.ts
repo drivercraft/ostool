@@ -23,7 +23,7 @@ test("role matrix grants instant device access without administrator rights and 
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.getByLabel("角色编码", { exact: true }).fill(`engineer_${stamp}`);
   await expect(
-    page.getByRole("checkbox", { name: "启用角色", exact: true }),
+    page.getByRole("switch", { name: "启用角色", exact: true }),
   ).toBeChecked();
   await page.getByLabel("角色名称", { exact: true }).fill(name);
   await page

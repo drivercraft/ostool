@@ -22,6 +22,7 @@ import type {
 
 type RequestOptions = RequestInit & {
   bodyJson?: unknown;
+  uploadProgress?: (loaded: number, total: number) => void;
 };
 
 const NETWORK_ERROR_MESSAGE =
@@ -99,6 +100,39 @@ function verifyIdentity() {
   return stepUp;
 }
 
+function uploadResponse(
+  path: string,
+  headers: Headers,
+  file: File,
+  progress: (loaded: number, total: number) => void,
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", path);
+    xhr.withCredentials = true;
+    headers.forEach((value, name) => xhr.setRequestHeader(name, value));
+    xhr.upload.onprogress = (event) =>
+      progress(event.loaded, event.lengthComputable ? event.total : 0);
+    xhr.onload = () =>
+      resolve(
+        new Response(xhr.responseText || null, {
+          status: xhr.status,
+          statusText: xhr.statusText,
+          headers: {
+            "content-type":
+              xhr.getResponseHeader("content-type") ?? "application/json",
+          },
+        }),
+      );
+    xhr.onerror =
+      xhr.onabort =
+      xhr.ontimeout =
+        () => reject(new Error(NETWORK_ERROR_MESSAGE));
+    progress(0, file.size);
+    xhr.send(file);
+  });
+}
+
 async function requestResponse(
   path: string,
   options: RequestOptions = {},
@@ -113,14 +147,16 @@ async function requestResponse(
 
   headers.set("x-ostool-surface", authSurface());
   const send = () =>
-    fetch(path, {
-      ...options,
-      credentials: "same-origin",
-      headers,
-      body,
-    }).catch(() => {
-      throw new Error(NETWORK_ERROR_MESSAGE);
-    });
+    options.uploadProgress && body instanceof File
+      ? uploadResponse(path, headers, body, options.uploadProgress)
+      : fetch(path, {
+          ...options,
+          credentials: "same-origin",
+          headers,
+          body,
+        }).catch(() => {
+          throw new Error(NETWORK_ERROR_MESSAGE);
+        });
   let response = await send();
   const authentication =
     path.startsWith("/api/v1/auth/") &&
@@ -503,11 +539,16 @@ export const api = {
       { method: "DELETE" },
     );
   },
-  uploadLoaderImage(file: File, version?: string) {
+  uploadLoaderImage(
+    file: File,
+    version?: string,
+    uploadProgress?: (loaded: number, total: number) => void,
+  ) {
     return request<LoaderImage>("/api/v1/admin/loader-images", {
       method: "POST",
       headers: version ? { "X-Image-Version": version } : undefined,
       body: file,
+      uploadProgress,
     });
   },
   deleteLoaderImage(imageSha256: string) {

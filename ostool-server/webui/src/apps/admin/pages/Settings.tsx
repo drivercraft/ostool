@@ -427,8 +427,7 @@ function ServerForm({ source }: { source: AdminServerConfigResponse }) {
                 type="number"
                 min={1}
                 step={1}
-                hint=""
-                placeholder={placeholder}
+                hint={placeholder}
                 value={config.upload_limits[key]}
                 onValue={(v) =>
                   setConfig((c) => ({

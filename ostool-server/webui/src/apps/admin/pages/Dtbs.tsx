@@ -32,8 +32,10 @@ export function validateFile(file: File | null) {
 }
 export function DtbUpload({
   onUploaded,
+  disabled = false,
 }: {
   onUploaded?: (name: string) => void;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -45,6 +47,7 @@ export function DtbUpload({
         permission="dtbs.manage"
         type="button"
         variant="outline"
+        disabled={disabled}
         onClick={() => setOpen(true)}
       >
         上传 DTB

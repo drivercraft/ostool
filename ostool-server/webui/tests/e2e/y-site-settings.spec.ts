@@ -108,9 +108,7 @@ test("site settings publish through SSE, legal pages and explicit versioned sign
   await page
     .getByLabel("维护提示内容", { exact: true })
     .fill("设备平台将在今晚进行维护。");
-  await page
-    .getByRole("checkbox", { name: "显示维护提示", exact: true })
-    .check();
+  await page.getByRole("switch", { name: "显示维护提示", exact: true }).check();
   await page.getByRole("button", { name: "保存配置", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "保存配置", exact: true }),
@@ -125,7 +123,7 @@ test("site settings publish through SSE, legal pages and explicit versioned sign
     "设备平台将在今晚进行维护。",
   );
   await page.getByRole("tab", { name: "登录与安全", exact: true }).click();
-  const registration = page.getByRole("checkbox", {
+  const registration = page.getByRole("switch", {
     name: "允许站点用户注册",
     exact: true,
   });

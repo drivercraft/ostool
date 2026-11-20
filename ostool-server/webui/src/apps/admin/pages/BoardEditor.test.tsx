@@ -1,5 +1,12 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  within,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, expect, it, vi } from "vitest";
@@ -8,6 +15,8 @@ import Boards from "./Boards";
 import { PermissionsProvider } from "@/components/permissions";
 import { admin } from "@/api/events";
 import { api } from "@/api/client";
+import { toast } from "sonner";
+import type { PowerResult } from "@/api/events";
 import type {
   BoardConfig,
   LoaderDeviceSummary,
@@ -89,11 +98,11 @@ it.each(["new", "edit"])(
     expect(mac).toBeDisabled();
     expect(automatic).toBeDisabled();
     expect(screen.getByLabelText("Kernel 加载地址")).toBeEnabled();
-    await user.click(screen.getByRole("checkbox", { name: "启用串口" }));
+    await user.click(screen.getByRole("switch", { name: "启用串口" }));
     await user.clear(manual);
     await user.type(manual, "57600");
     expect(ip).toBeDisabled();
-    await user.click(screen.getByRole("checkbox", { name: "启用 TFTP" }));
+    await user.click(screen.getByRole("switch", { name: "启用 TFTP" }));
     await user.selectOptions(screen.getByLabelText("网络模式"), "static_ip");
     await user.type(ip, "192.0.2.10");
     await user.selectOptions(screen.getByLabelText("网络模式"), "dhcp");
@@ -115,7 +124,7 @@ it.each(["new", "edit"])(
     await user.selectOptions(boot, "httpboot");
     expect(manual).toBeDisabled();
     expect(screen.getByLabelText("Kernel 加载地址")).toBeDisabled();
-    await user.click(screen.getByRole("checkbox", { name: "指定串口参数" }));
+    await user.click(screen.getByRole("switch", { name: "指定串口参数" }));
     expect(automatic).toBeEnabled();
     await user.selectOptions(boot, "pxe");
     expect(screen.getByLabelText("PXE 备注")).toBeEnabled();
@@ -190,7 +199,7 @@ it("creates and rebinds discovered devices while showing their live architecture
   expect(screen.getByLabelText("MAC 地址")).toHaveValue(first.mac_address);
   expect(screen.queryByLabelText("启动架构")).not.toBeInTheDocument();
   expect(screen.queryByText("高级启动设置")).not.toBeInTheDocument();
-  expect(screen.getByText(/设备架构 riscv64/)).toBeVisible();
+  expect(screen.getByLabelText("设备架构")).toHaveValue("riscv64");
   await user.type(screen.getByLabelText("板型"), "discovered");
   await user.type(screen.getByLabelText("上电命令"), "true");
   await user.type(screen.getByLabelText("下电命令"), "true");
@@ -211,14 +220,14 @@ it("creates and rebinds discovered devices while showing their live architecture
       data: { loaders: [{ ...first, arch: "aarch64" }, second] },
     }),
   );
-  expect(screen.getByText(/设备架构 aarch64/)).toBeVisible();
+  expect(screen.getByLabelText("设备架构")).toHaveValue("aarch64");
   expect(notes).toHaveValue("local draft");
   expect(notes).toHaveFocus();
   await user.click(screen.getByRole("button", { name: "发现 2 台设备" }));
   await user.click(
     await screen.findByRole("button", { name: new RegExp(second.mac_address) }),
   );
-  expect(screen.getByText(/设备架构 loongarch64/)).toBeVisible();
+  expect(screen.getByLabelText("设备架构")).toHaveValue("loongarch64");
   expect(screen.queryByLabelText("启动架构")).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "保存开发板" }));
   expect(update).toHaveBeenCalledOnce();
@@ -318,7 +327,11 @@ it.each([
         within(select).getByRole("option", { selected: true }),
       ).not.toHaveTextContent("当前未检测到");
     }
-    expect(screen.getAllByText(/VID:PID 403:6011/)).toHaveLength(2);
+    for (const label of ["稳定串口", "继电器"])
+      expect(screen.getByLabelText(label)).toHaveAttribute(
+        "aria-description",
+        expect.stringContaining("VID:PID 403:6011"),
+      );
     expect(notes).toHaveValue("local serial draft");
     expect(notes).toHaveFocus();
     await user.click(screen.getByRole("button", { name: "保存开发板" }));
@@ -350,7 +363,11 @@ it("marks shared serial numbers ambiguous until an interface is selected", async
     expect(selected).toHaveTextContent("匹配多个接口");
     expect(selected).toBeDisabled();
   }
-  expect(screen.getAllByText(/匹配多个串口接口/)).toHaveLength(2);
+  for (const label of ["稳定串口", "继电器"])
+    expect(screen.getByLabelText(label)).toHaveAttribute(
+      "aria-description",
+      expect.stringContaining("匹配多个串口接口"),
+    );
   expect(screen.queryByText(/VID:PID/)).not.toBeInTheDocument();
   act(() =>
     admin.apply({
@@ -360,13 +377,21 @@ it("marks shared serial numbers ambiguous until an interface is selected", async
       data: { serial: [relayPort, consolePort] },
     }),
   );
-  expect(screen.getAllByText(/匹配多个串口接口/)).toHaveLength(2);
+  for (const label of ["稳定串口", "继电器"])
+    expect(screen.getByLabelText(label)).toHaveAttribute(
+      "aria-description",
+      expect.stringContaining("匹配多个串口接口"),
+    );
   expect(screen.queryByText(/VID:PID/)).not.toBeInTheDocument();
   const user = userEvent.setup();
   await user.selectOptions(serialSelect, `usb_id:${consolePort.usb_id}`);
   await user.selectOptions(relaySelect, `usb_id:${relayPort.usb_id}`);
   expect(screen.queryByText(/匹配多个串口接口/)).not.toBeInTheDocument();
-  expect(screen.getAllByText(/VID:PID 403:6011/)).toHaveLength(2);
+  for (const label of ["稳定串口", "继电器"])
+    expect(screen.getByLabelText(label)).toHaveAttribute(
+      "aria-description",
+      expect.stringContaining("VID:PID 403:6011"),
+    );
   await user.click(screen.getByRole("button", { name: "保存开发板" }));
   expect(update).toHaveBeenCalledOnce();
   expect(update.mock.calls[0][1]).toMatchObject({
@@ -385,15 +410,104 @@ it("only prefills the MAC and does not require board identity for a power comman
   const user = userEvent.setup();
   expect(screen.getByLabelText("MAC 地址")).toHaveValue("02:00:00:00:00:21");
   expect(screen.getByLabelText("板型")).toHaveValue("");
-  expect(screen.getByRole("checkbox", { name: "启用串口" })).toBeDisabled();
+  expect(screen.getByRole("switch", { name: "启用串口" })).toBeDisabled();
   await user.type(screen.getByLabelText("上电命令"), "true");
-  await user.click(screen.getByRole("button", { name: "上电" }));
+  await user.click(screen.getByRole("button", { name: "上电测试" }));
   expect(power).toHaveBeenCalledOnce();
   expect(power.mock.calls[0][0]).toMatchObject({
     action: "on",
     power_management: { kind: "custom", power_on_cmd: "true" },
   });
   expect(power.mock.calls[0][0]).not.toHaveProperty("board_id");
+});
+
+it.each(["succeeded", "failed"] as const)(
+  "keeps power fields editable while running and reports %s only through a popup",
+  async (state) => {
+    let accept!: (result: PowerResult) => void;
+    const power = vi.spyOn(api, "powerAction").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          accept = resolve;
+        }),
+    );
+    const success = vi.spyOn(toast, "success").mockImplementation(() => 0);
+    const error = vi.spyOn(toast, "error").mockImplementation(() => 0);
+    mount();
+    const user = userEvent.setup();
+    const command = screen.getByLabelText("上电命令");
+    await user.type(command, "true");
+    await user.click(screen.getByRole("button", { name: "上电测试" }));
+    expect(screen.getByRole("button", { name: "测试中…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "下电测试" })).toBeDisabled();
+    expect(command).toBeEnabled();
+    expect(screen.getByLabelText("电源模块")).toBeEnabled();
+    expect(screen.getByLabelText("板型")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "保存开发板" })).toBeEnabled();
+    await user.type(command, " changed");
+    expect(power.mock.calls[0][0].power_management).toMatchObject({
+      power_on_cmd: "true",
+    });
+    const id = power.mock.calls[0][0].request_id;
+    await act(async () =>
+      accept({ id, action: "on", state: "running", message: null }),
+    );
+    expect(success).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "查询执行结果" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "清除结果提示" })).toBeNull();
+    act(() =>
+      admin.apply({
+        epoch: "power-completion",
+        revision: 1,
+        kind: "snapshot",
+        data: {
+          power_actions: [
+            {
+              id,
+              action: "on",
+              state,
+              message: state === "failed" ? "fixture failure" : null,
+            },
+          ],
+        },
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "上电测试" })).toBeEnabled(),
+    );
+    const message =
+      state === "succeeded"
+        ? "上电命令已完成"
+        : "电源命令失败：fixture failure";
+    expect(state === "succeeded" ? success : error).toHaveBeenCalledWith(
+      message,
+      expect.any(Object),
+    );
+    expect(state === "succeeded" ? error : success).not.toHaveBeenCalled();
+    expect(screen.queryByText(message)).toBeNull();
+    expect(screen.getByLabelText("上电命令")).toBe(command);
+    expect(command).toHaveValue("true changed");
+    expect(sessionStorage.getItem("ostool-power:new")).toBeNull();
+    expect(power).toHaveBeenCalledOnce();
+  },
+);
+
+it("reports a power request failure without a result panel or automatic replay", async () => {
+  const power = vi
+    .spyOn(api, "powerAction")
+    .mockRejectedValue(new Error("连接已中断"));
+  const query = vi.spyOn(api, "getPowerAction");
+  const error = vi.spyOn(toast, "error").mockImplementation(() => 0);
+  mount();
+  await userEvent.click(screen.getByRole("button", { name: "上电测试" }));
+  await waitFor(() => expect(error).toHaveBeenCalledWith("连接已中断"));
+  expect(screen.getByRole("button", { name: "上电测试" })).toBeEnabled();
+  expect(screen.getByLabelText("电源模块")).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "查询执行结果" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "清除结果提示" })).toBeNull();
+  expect(screen.queryByText("连接已中断")).toBeNull();
+  expect(power).toHaveBeenCalledOnce();
+  expect(query).not.toHaveBeenCalled();
 });
 it("preserves typed MAC and input identity while devices arrive", async () => {
   mount();
@@ -484,7 +598,7 @@ it("switches to U-Boot without requiring or submitting a stale MAC", async () =>
   await user.clear(screen.getByLabelText("MAC 地址"));
   await user.type(screen.getByLabelText("MAC 地址"), "unfinished");
   await user.selectOptions(screen.getByLabelText("启动方式"), "uboot");
-  await user.click(screen.getByRole("checkbox", { name: "禁用开发板" }));
+  await user.click(screen.getByRole("switch", { name: "禁用开发板" }));
   expect(screen.getByLabelText("MAC 地址")).toBeDisabled();
   await user.type(screen.getByLabelText("板型"), "arm");
   await user.type(screen.getByLabelText("上电命令"), "true");
@@ -529,12 +643,11 @@ it.each([
 
     expect(screen.queryByLabelText("启动架构")).not.toBeInTheDocument();
     expect(
-      screen.getByText(
-        online ? new RegExp(`设备架构 ${arch}`) : /设备架构 未知/,
-      ),
-    ).toBeVisible();
+      (screen.getByLabelText("设备架构") as HTMLInputElement).value,
+    ).toContain(online ? arch! : "未知");
+    expect(screen.getByLabelText("设备架构")).toHaveAttribute("readonly");
     expect(screen.getByText("axloader OTA")).toBeVisible();
-    expect(screen.getByLabelText("EFI 镜像（最多 32 MiB）")).toBeVisible();
+    expect(screen.getByLabelText("上传 EFI 镜像")).toHaveAttribute("hidden");
     expect(screen.getByRole("button", { name: "上传镜像" })).toBeVisible();
 
     const previous: LoaderUpdateJob = {
@@ -594,10 +707,10 @@ it.each([
           },
         }),
       );
-      expect(screen.getByText(/previous-update.*failed/)).toBeVisible();
-      expect(screen.getByText(previous.error!)).toBeVisible();
-      expect(screen.getByRole("button", { name: "下发升级" })).toBeEnabled();
-      expect(screen.getByLabelText("EFI 镜像（最多 32 MiB）")).toBeVisible();
+      expect(screen.getByText(/new-update.*queued/)).toBeVisible();
+      expect(screen.getByText(queued.error!)).toBeVisible();
+      expect(screen.getByRole("button", { name: "下发升级" })).toBeDisabled();
+      expect(screen.getByLabelText("上传 EFI 镜像")).toHaveAttribute("hidden");
     }
     act(() =>
       admin.apply({
@@ -631,7 +744,7 @@ it("loads and edits the optional axloader serial override", async () => {
   mount(board);
   const user = userEvent.setup();
 
-  expect(screen.getByRole("checkbox", { name: "指定串口参数" })).toBeChecked();
+  expect(screen.getByRole("switch", { name: "指定串口参数" })).toBeChecked();
   expect(screen.getByLabelText("axloader 波特率")).toHaveValue(921600);
   expect(screen.getByLabelText("数据位")).toHaveValue("7");
   await user.selectOptions(screen.getByLabelText("数据位"), "8");
@@ -662,7 +775,7 @@ it("switches manual UART draft to axloader and preserves focus on serial SSE upd
   expect(screen.getByLabelText("波特率")).toHaveValue(57600);
   await user.selectOptions(screen.getByLabelText("启动方式"), "httpboot");
   expect(screen.getByLabelText("波特率")).toBeDisabled();
-  expect(screen.getByRole("checkbox", { name: "启用串口" })).toBeDisabled();
+  expect(screen.getByRole("switch", { name: "启用串口" })).toBeDisabled();
   const input = screen.getByLabelText("备注");
   await user.type(input, "local draft");
   act(() =>
@@ -682,12 +795,13 @@ it("switches manual UART draft to axloader and preserves focus on serial SSE upd
 
 it("keeps new public HTTPboot boards disabled until device authentication can be configured", async () => {
   mount(undefined, "/boards/new?mac=02:00:00:00:00:21", [], [], false);
-  expect(screen.getByRole("checkbox", { name: "禁用开发板" })).toBeChecked();
-  const pool = screen.getByRole("checkbox", { name: "开放免申请" });
+  expect(screen.getByRole("switch", { name: "禁用开发板" })).toBeChecked();
+  const pool = screen.getByRole("switch", { name: "开放免申请" });
   expect(pool).not.toBeChecked();
-  expect(
-    screen.getByText(/新增公网 HTTPboot 开发板会先禁用保存/),
-  ).toBeVisible();
+  expect(screen.getByLabelText("启动方式")).toHaveAttribute(
+    "aria-description",
+    expect.stringContaining("新增公网 HTTPboot 开发板会先禁用保存"),
+  );
   const create = vi
     .spyOn(api, "createBoard")
     .mockRejectedValue(new Error("stop after request"));

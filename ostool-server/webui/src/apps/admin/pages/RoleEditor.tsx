@@ -11,6 +11,7 @@ import {
   TextareaField,
   CheckField,
   Section,
+  FieldHelp,
   Notice,
   useAction,
 } from "@/components/forms";
@@ -214,11 +215,11 @@ function Editor({
             />
           </Section>
         </fieldset>
-        <Section title="角色权限">
+        <Section
+          title="角色权限"
+          hint="依赖的查看权限会随操作权限一同开启；移除前置权限会一并移除依赖项。"
+        >
           <div className="permission-master">
-            <span>
-              依赖的查看权限会随操作权限一同开启；移除前置权限会一并移除依赖项。
-            </span>
             <label>
               <Checkbox
                 aria-label="全部权限"
@@ -275,8 +276,9 @@ function Editor({
                   </div>
                   <div className="role-permission-options">
                     {items.map((item) => (
-                      <label key={item.code} className="role-permission-option">
+                      <div key={item.code} className="role-permission-option">
                         <Checkbox
+                          id={`permission-${item.code}`}
                           aria-label={item.name}
                           disabled={!can(item.code)}
                           checked={selected.has(item.code)}
@@ -284,11 +286,13 @@ function Editor({
                             choose([item.code], checked === true)
                           }
                         />
-                        <span>
+                        <label htmlFor={`permission-${item.code}`}>
                           <strong>{item.name}</strong>
-                          <small>{item.description}</small>
-                        </span>
-                      </label>
+                        </label>
+                        <FieldHelp label={item.name}>
+                          {item.description}
+                        </FieldHelp>
+                      </div>
                     ))}
                   </div>
                 </section>
@@ -332,7 +336,7 @@ function Editor({
                     required
                     value={draft.allocation_policy.min_available_minutes}
                     onValue={(v) => policy("min_available_minutes", Number(v))}
-                    placeholder="预约临近时，剩余时间不足此值则不分配"
+                    hint="预约临近时，剩余时间不足此值则不分配"
                   />
                   <TextareaField
                     label="可用板型范围"

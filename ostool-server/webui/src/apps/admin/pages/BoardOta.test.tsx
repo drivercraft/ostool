@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -73,18 +73,74 @@ it("allows selecting the same image after a successful upload", async () => {
   const upload = vi.spyOn(api, "uploadLoaderImage").mockResolvedValue(image);
   render(<BoardOta boardId="board-1" />);
   const user = userEvent.setup();
-  const input = screen.getByLabelText("EFI 镜像（最多 32 MiB）");
-  const button = screen.getByRole("button", { name: "上传镜像" });
+  const input = screen.getByLabelText("上传 EFI 镜像");
   const file = new File(["efi"], "loader.efi", {
     type: "application/octet-stream",
   });
 
   await user.upload(input, file);
-  await user.click(button);
   await waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
   expect(input).toHaveValue("");
 
   await user.upload(input, file);
-  await user.click(button);
   await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+});
+
+it("shows real upload progress in the image field and keeps the original filename before SSE arrives", async () => {
+  applyOta(job("succeeded"));
+  let finish!: (value: typeof image) => void;
+  vi.spyOn(api, "uploadLoaderImage").mockImplementation(
+    (_file, _version, progress) => {
+      progress?.(29, 100);
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    },
+  );
+  render(<BoardOta boardId="board-1" />);
+  await userEvent.upload(
+    screen.getByLabelText("上传 EFI 镜像"),
+    new File(["efi"], "研发 镜像.efi"),
+  );
+  expect(
+    screen.getByRole("progressbar", { name: "镜像上传进度" }),
+  ).toHaveAttribute("aria-valuenow", "29");
+  expect(screen.getByText("上传中 29%")).toBeVisible();
+  expect(screen.getByRole("button", { name: "上传镜像" })).toBeDisabled();
+  await act(async () => finish({ ...image, sha256: "22".repeat(32) }));
+  expect(screen.queryByRole("progressbar")).toBeNull();
+  expect(screen.getByRole("option", { name: "研发 镜像.efi" })).toHaveProperty(
+    "selected",
+    true,
+  );
+  expect(screen.getByRole("button", { name: "下发升级" })).toBeEnabled();
+});
+
+it("tracks dispatch stages through SSE without inventing a percentage", async () => {
+  applyOta(job("succeeded"));
+  const queued = { ...job("queued"), board_id: "board-1" };
+  vi.spyOn(api, "queueLoaderUpdate").mockResolvedValue(queued);
+  render(<BoardOta boardId="board-1" />);
+  const user = userEvent.setup();
+  await user.selectOptions(screen.getByLabelText("待下发镜像"), image.sha256);
+  await user.click(screen.getByRole("button", { name: "下发升级" }));
+  expect(
+    screen.getByRole("progressbar", { name: "镜像下发进度" }),
+  ).not.toHaveAttribute("aria-valuenow");
+  expect(screen.getByText("等待设备接收…")).toBeVisible();
+  expect(screen.getByRole("button", { name: "下发升级" })).toBeDisabled();
+  act(() => applyOta({ ...queued, phase: "downloading" }));
+  expect(screen.getByText("正在下发镜像…")).toBeVisible();
+  act(() =>
+    applyOta({
+      ...queued,
+      phase: "downloading",
+      waiting_for_device_change: true,
+    }),
+  );
+  expect(screen.getByText("等待设备状态变化…")).toBeVisible();
+  act(() => applyOta({ ...queued, phase: "succeeded" }));
+  expect(screen.queryByRole("progressbar")).toBeNull();
+  expect(screen.getByLabelText("待下发镜像")).toHaveValue(image.sha256);
+  expect(screen.getByRole("button", { name: "下发升级" })).toBeEnabled();
 });

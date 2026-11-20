@@ -20,7 +20,7 @@ test("authenticated unbound power and manual MAC binding preserve drafts while u
   await expect(page.getByLabel("板型", { exact: true })).toBeVisible();
   await page.getByLabel("上电命令", { exact: true }).fill("true");
   await page.getByLabel("下电命令", { exact: true }).fill("true");
-  await page.getByRole("button", { name: "上电", exact: true }).click();
+  await page.getByRole("button", { name: "上电测试", exact: true }).click();
   await expect(page.getByText("上电命令已完成")).toBeVisible();
   expect(
     await (

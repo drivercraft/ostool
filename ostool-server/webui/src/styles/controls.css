@@ -8,6 +8,106 @@
   font-size: 1rem;
   line-height: 1.5;
 }
+.field-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+}
+.field-help-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  padding: 2px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted-foreground);
+  background: transparent;
+  cursor: pointer;
+}
+.field-help-trigger svg {
+  width: 18px;
+  height: 18px;
+}
+.field-help-trigger:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+.field-help-trigger:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.field-help-content {
+  max-width: calc(100vw - 32px);
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.switch-field-control {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-height);
+}
+.ota-image-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ota-image-selection {
+  position: relative;
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.ota-image-progress {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  background: var(--card);
+  padding-inline: 14px;
+}
+.ota-image-progress span {
+  position: relative;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ota-image-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: color-mix(in oklch, var(--primary), transparent 86%);
+  transition: width 150ms ease;
+}
+.ota-image-progress-fill.is-indeterminate {
+  width: 35%;
+  animation: ota-image-progress 1.5s ease-in-out infinite;
+}
+@keyframes ota-image-progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ota-image-progress-fill.is-indeterminate {
+    animation: none;
+  }
+}
+@media (max-width: 640px) {
+  .ota-image-selection {
+    flex-basis: 100%;
+  }
+}
 [data-slot="button"][data-size] {
   height: var(--control-height);
   min-height: var(--control-height);
@@ -191,4 +291,8 @@
   [data-slot="dialog-footer"] {
     padding: 16px;
   }
+}
+
+.role-permission-option .field-help-trigger {
+  margin-left: auto;
 }

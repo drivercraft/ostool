@@ -249,6 +249,12 @@ reverse OTA flow calls device `PUT /api/v1/ota/image` and
 old poll, download, and `ota-status` routes are removed. Device credentials and
 trusted certificates remain required; there is no plaintext fallback.
 
+The board editor places device addresses and credentials side by side, with CA
+certificates on a separate row. OTA uses one image selector followed by upload,
+delete and deploy buttons. Selecting a file starts its upload and shows byte
+progress inside the selector; completion displays the filename. Deployment uses
+SSE stage updates with an indeterminate bar, without estimating byte percentages.
+
 A device's `202` means staged or ready for handoff, not completed: success requires the matching new
 slot to run and be confirmed with the expected digest. Device `400`, `413` and
 `422` responses fail the operation once and preserve the HTTP status and bounded
@@ -361,6 +367,17 @@ Operation results and loading errors use the same top-center popup notifications
 on both surfaces, including login pages and dialogs. They support manual dismissal;
 forms do not repeat these messages inline or in the bottom action bar. Draft state,
 field guidance, diagnostic records and notices requiring an action remain contextual.
+Field guidance uses a clickable exclamation icon beside each field title, rather
+than text below controls or long placeholders. Section descriptions remain visible
+below their headings, with no section help icon.
+Boolean configuration fields use a title above a Switch in the same control row
+height as inputs. List selections, permission sets and explicit confirmations keep
+checkboxes. Toggling a configuration field still edits the draft until it is saved. Board editor sections
+stack vertically with compact rows on wide screens. Tags and notes share a row;
+power selectors share the first row and the two command/test groups share the next.
+Controls use the same height. Running an operation
+only disables the power buttons; fields remain editable. Results arrive through
+SSE and use the shared popup, without a separate result panel or query/clear buttons.
 Website navigation starts new pages at the top, preserves document anchor links,
 and leaves back/forward scroll restoration to the browser. Live data updates do
 not reset the current page's position.

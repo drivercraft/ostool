@@ -40,14 +40,17 @@ function Editor({ id, source }: { id: string; source: Connection | null }) {
   const task = useAction();
   const conflict = sourceKey(source) !== baseline;
   return (
-    <Section title="设备认证">
-      <Notice>
-        {source?.configured
+    <Section
+      title="设备认证"
+      columns={2}
+      hint={
+        source?.configured
           ? "已配置设备连接。凭据留空保留现有凭据。"
           : local
             ? "可通过设备内网 UDP 发现 axloader，也可直接配置 HTTP 地址。"
-            : "设备内网支持 axloader HTTP，无需 HTTPS 证书或设备凭据；也可通过 UDP 发现。"}
-      </Notice>
+            : "设备内网支持 axloader HTTP，无需 HTTPS 证书或设备凭据；也可通过 UDP 发现。"
+      }
+    >
       {conflict && (
         <ReloadNotice
           onReload={() => {
@@ -63,14 +66,14 @@ function Editor({ id, source }: { id: string; source: Connection | null }) {
       )}
       <TextField
         label="设备 HTTP / HTTPS 地址"
-        fullWidth
+        fullWidth={false}
         value={endpoint}
         onValue={setEndpoint}
         hint="例如 http://192.168.10.20:8080，只填写来源地址；HTTP 必须使用内网 IP。"
       />
       <TextField
         label="设备独立凭据"
-        fullWidth
+        fullWidth={false}
         value={token}
         type="password"
         onValue={setToken}
@@ -84,11 +87,7 @@ function Editor({ id, source }: { id: string; source: Connection | null }) {
       />
       <Button
         permission="devices.manage"
-        disabled={
-          task.pending ||
-          conflict ||
-          !endpoint
-        }
+        disabled={task.pending || conflict || !endpoint}
         onClick={() =>
           void task.run(async () => {
             const saved = await api.saveDeviceConnection(id, {

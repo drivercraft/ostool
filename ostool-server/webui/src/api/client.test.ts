@@ -2,6 +2,31 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, refreshAuth, ApiRequestError } from "./client";
 
+class UploadRequest {
+  static requests: UploadRequest[] = [];
+  upload = {
+    onprogress: undefined as ((event: ProgressEvent) => void) | undefined,
+  };
+  open = vi.fn();
+  setRequestHeader = vi.fn();
+  getResponseHeader = () => "application/json";
+  send = vi.fn();
+  withCredentials = false;
+  status = 200;
+  statusText = "OK";
+  responseText = "";
+  onload?: () => void;
+  onerror?: () => void;
+  constructor() {
+    UploadRequest.requests.push(this);
+  }
+  complete(status: number, body: unknown) {
+    this.status = status;
+    this.responseText = JSON.stringify(body);
+    this.onload?.();
+  }
+}
+
 describe("api client", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -45,12 +70,14 @@ describe("api client", () => {
     window.history.replaceState({}, "", "/qcl/overview");
     const verify = vi.fn();
     window.addEventListener("ostool:step-up", verify);
-    const fetch = vi.fn().mockResolvedValue(
-      Response.json(
-        { code: "reauth_required", message: "verification rejected" },
-        { status: 403 },
-      ),
-    );
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json(
+          { code: "reauth_required", message: "verification rejected" },
+          { status: 403 },
+        ),
+      );
     vi.stubGlobal("fetch", fetch);
     try {
       await expect(api.deleteSession("demo-session")).rejects.toMatchObject({
@@ -89,5 +116,65 @@ describe("api client", () => {
     await expect(api.me()).rejects.toThrow(
       "无法连接 ostool-server，服务可能正在安装、升级或重启，连接恢复后将自动同步状态。",
     );
+  });
+
+  it("uploads with byte progress and preserves the admin surface, cookies and refresh retry", async () => {
+    window.history.replaceState({}, "", "/qcl/boards/demo");
+    UploadRequest.requests = [];
+    vi.stubGlobal("XMLHttpRequest", UploadRequest);
+    const refresh = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", refresh);
+    const progress = vi.fn();
+    const file = new File(["efi"], "loader.efi");
+    const result = api.uploadLoaderImage(file, "loader.efi", progress);
+    const first = UploadRequest.requests[0];
+    expect(first.open).toHaveBeenCalledWith(
+      "POST",
+      "/api/v1/admin/loader-images",
+    );
+    expect(first.withCredentials).toBe(true);
+    expect(first.setRequestHeader).toHaveBeenCalledWith(
+      "x-ostool-surface",
+      "admin",
+    );
+    expect(first.setRequestHeader).toHaveBeenCalledWith(
+      "x-image-version",
+      "loader.efi",
+    );
+    first.upload.onprogress?.(
+      new ProgressEvent("progress", {
+        loaded: 2,
+        total: 3,
+        lengthComputable: true,
+      }),
+    );
+    expect(progress).toHaveBeenLastCalledWith(2, 3);
+    first.complete(401, { code: "unauthorized", message: "expired" });
+    await vi.waitFor(() => expect(UploadRequest.requests).toHaveLength(2));
+    const retry = UploadRequest.requests[1];
+    expect(retry.send).toHaveBeenCalledWith(file);
+    const image = { sha256: "digest", size: 3, version: "loader.efi" };
+    retry.complete(201, image);
+    await expect(result).resolves.toEqual(image);
+    expect(refresh).toHaveBeenCalledWith(
+      "/api/v1/auth/refresh",
+      expect.any(Object),
+    );
+    window.history.replaceState({}, "", "/");
+  });
+
+  it("reports upload network failures through the standard error path", async () => {
+    UploadRequest.requests = [];
+    vi.stubGlobal("XMLHttpRequest", UploadRequest);
+    const result = api.uploadLoaderImage(
+      new File(["efi"], "loader.efi"),
+      undefined,
+      vi.fn(),
+    );
+    const rejected = expect(result).rejects.toThrow("无法连接 ostool-server");
+    UploadRequest.requests[0].onerror?.();
+    await rejected;
   });
 });
