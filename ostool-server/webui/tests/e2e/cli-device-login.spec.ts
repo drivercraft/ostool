@@ -60,6 +60,8 @@ test("website approves CLI device login only after terminal confirmation", async
     await expect(
       page.getByText("设备登录已批准，可以返回 ostool CLI。"),
     ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "登录成功", exact: true })).toBeVisible();
+    await expect(submit).toHaveCount(0);
     const grantResponse = await cli.post(`${base}/oauth/token`, {
       form: exchange,
     });

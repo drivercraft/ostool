@@ -204,6 +204,16 @@ body:has(.auth-page-fullscreen) {
   font-size: 14px;
   color: var(--primary);
 }
+.auth-page-split .auth-success-card {
+  justify-items: center;
+  text-align: center;
+  padding-block: 56px;
+}
+.auth-success-icon {
+  width: 72px;
+  height: 72px;
+  color: var(--success);
+}
 @media (min-width: 901px) and (max-height: 900px) {
   .auth-page.auth-page-split .auth-aside {
     padding-block: 28px;

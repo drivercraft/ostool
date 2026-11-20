@@ -170,6 +170,8 @@ function Login() {
   const location = useLocation();
   const query = new URLSearchParams(location.search);
   const userCode = query.get("user_code") ?? "";
+  const [approvedCode, setApprovedCode] = useState("");
+  const deviceApproved = !!userCode && approvedCode === userCode;
   const [deviceConfirmed, setDeviceConfirmed] = useState(false);
   useEffect(() => setDeviceConfirmed(false), [userCode]);
   const registering =
@@ -179,10 +181,16 @@ function Login() {
   const legalSite = useSiteSettings();
   useEffect(() => {
     document.title =
-      (userCode ? "批准 CLI 登录" : registering ? "注册" : "登录") +
+      (deviceApproved
+        ? "登录成功"
+        : userCode
+          ? "批准 CLI 登录"
+          : registering
+            ? "注册"
+            : "登录") +
       " · " +
       legalSite.settings.name;
-  }, [registering, userCode, legalSite.settings.name]);
+  }, [deviceApproved, registering, userCode, legalSite.settings.name]);
   const [accepted, setAccepted] = useState(false);
   useEffect(
     () => setAccepted(false),
@@ -253,7 +261,9 @@ function Login() {
       notifyAuthChanged();
       if (userCode) {
         await api.authorizeDevice(userCode);
-        setMessage("设备登录已批准，可以返回 ostool CLI。");
+        setApprovedCode(userCode);
+        setPassword("");
+        setOtp("");
       } else {
         navigate(safeWebsiteRedirect(query.get("redirect")));
       }
@@ -310,268 +320,292 @@ function Login() {
         </aside>
         <section
           className="auth-form-pane"
-          aria-label={registering ? "注册账号" : "用户登录"}
+          aria-label={
+            deviceApproved ? "登录成功" : registering ? "注册账号" : "用户登录"
+          }
         >
           <div className="auth-form-scroll">
-            <form className="auth-card" onSubmit={submit}>
-              <div>
-                <h2>
-                  {userCode
-                    ? "批准 CLI 登录"
-                    : registering
-                      ? "创建你的账号"
-                      : "欢迎回来"}
-                </h2>
-                <p>
-                  {userCode
-                    ? "确认设备验证码并授权 ostool CLI。"
-                    : registering
-                      ? "创建账号，开始管理你的设备。"
-                      : "登录后进入个人工作台，查看租赁和申请设备。"}
-                </p>
+            {deviceApproved ? (
+              <div
+                className="auth-card auth-success-card"
+                role="status"
+                aria-labelledby="cli-login-success"
+                tabIndex={-1}
+                ref={(node) => node?.focus()}
+              >
+                <CheckCircle2
+                  className="auth-success-icon"
+                  aria-hidden="true"
+                />
+                <div>
+                  <h2 id="cli-login-success">登录成功</h2>
+                  <p>设备登录已批准，可以返回 ostool CLI。</p>
+                  <p>你可以关闭此页面，回到终端继续操作。</p>
+                </div>
               </div>
-              {userCode && (
-                <>
-                  <div className="auth-code">
-                    <span>设备验证码</span>
-                    <code>{userCode}</code>
-                  </div>
-                  <p className="auth-device-warning">
-                    仅批准您刚在自己的终端发起的登录，请核对验证码，不要代他人批准登录链接。
+            ) : (
+              <form className="auth-card" onSubmit={submit}>
+                <div>
+                  <h2>
+                    {userCode
+                      ? "批准 CLI 登录"
+                      : registering
+                        ? "创建你的账号"
+                        : "欢迎回来"}
+                  </h2>
+                  <p>
+                    {userCode
+                      ? "确认设备验证码并授权 ostool CLI。"
+                      : registering
+                        ? "创建账号，开始管理你的设备。"
+                        : "登录后进入个人工作台，查看租赁和申请设备。"}
                   </p>
-                </>
-              )}
-              {registering && registrationAllowed === false && (
-                <p role="alert">当前站点未开放注册，请联系管理员。</p>
-              )}
-              {!challenge ? (
-                <>
-                  {registering && (
-                    <div className="auth-identity-fields">
-                      <TextField
-                        label="用户名"
-                        required
-                        minLength={3}
-                        maxLength={40}
-                        pattern="[A-Za-z0-9][A-Za-z0-9_-]{2,39}"
-                        autoComplete="username"
-                        placeholder="3–40 位字母、数字、_ 或 -"
-                        value={username}
-                        onValue={setUsername}
-                      />
-                      <TextField
-                        label="显示名称"
-                        value={displayName}
-                        onValue={setDisplayName}
-                        placeholder="你的名字"
-                        hint=""
-                      />
+                </div>
+                {userCode && (
+                  <>
+                    <div className="auth-code">
+                      <span>设备验证码</span>
+                      <code>{userCode}</code>
                     </div>
-                  )}
-                  <TextField
-                    label={registering ? "邮箱" : "账号"}
-                    type={registering ? "email" : "text"}
-                    required
-                    value={email}
-                    onValue={(value) => {
-                      setEmail(value);
-                      setEmailChallenge(undefined);
-                      setEmailCode("");
-                    }}
-                    autoComplete={registering ? "email" : "username"}
-                    placeholder={
-                      registering ? "you@company.com" : "输入用户名或邮箱"
-                    }
-                    hint=""
-                  />
-
-                  <TextField
-                    label="密码"
-                    type="password"
-                    required
-                    maxLength={1024}
-                    minLength={registering ? 8 : undefined}
-                    value={password}
-                    onValue={setPassword}
-                    autoComplete={
-                      registering ? "new-password" : "current-password"
-                    }
-                    placeholder={
-                      registering ? "至少 8 个字符" : "输入登录密码"
-                    }
-                  />
-                  {registering && (
+                    <p className="auth-device-warning">
+                      仅批准您刚在自己的终端发起的登录，请核对验证码，不要代他人批准登录链接。
+                    </p>
+                  </>
+                )}
+                {registering && registrationAllowed === false && (
+                  <p role="alert">当前站点未开放注册，请联系管理员。</p>
+                )}
+                {!challenge ? (
+                  <>
+                    {registering && (
+                      <div className="auth-identity-fields">
+                        <TextField
+                          label="用户名"
+                          required
+                          minLength={3}
+                          maxLength={40}
+                          pattern="[A-Za-z0-9][A-Za-z0-9_-]{2,39}"
+                          autoComplete="username"
+                          placeholder="3–40 位字母、数字、_ 或 -"
+                          value={username}
+                          onValue={setUsername}
+                        />
+                        <TextField
+                          label="显示名称"
+                          value={displayName}
+                          onValue={setDisplayName}
+                          placeholder="你的名字"
+                          hint=""
+                        />
+                      </div>
+                    )}
                     <TextField
-                      label="确认密码"
+                      label={registering ? "邮箱" : "账号"}
+                      type={registering ? "email" : "text"}
+                      required
+                      value={email}
+                      onValue={(value) => {
+                        setEmail(value);
+                        setEmailChallenge(undefined);
+                        setEmailCode("");
+                      }}
+                      autoComplete={registering ? "email" : "username"}
+                      placeholder={
+                        registering ? "you@company.com" : "输入用户名或邮箱"
+                      }
+                      hint=""
+                    />
+
+                    <TextField
+                      label="密码"
                       type="password"
                       required
-                      minLength={8}
                       maxLength={1024}
-                      value={confirmPassword}
-                      onValue={setConfirmPassword}
-                      autoComplete="new-password"
-                      placeholder="再次输入密码"
+                      minLength={registering ? 8 : undefined}
+                      value={password}
+                      onValue={setPassword}
+                      autoComplete={
+                        registering ? "new-password" : "current-password"
+                      }
+                      placeholder={
+                        registering ? "至少 8 个字符" : "输入登录密码"
+                      }
                     />
-                  )}
-                  {emailRequired && (
-                    <div className="security-form">
-                      {emailChallenge ? (
-                        <>
-                          <TextField
-                            label="邮箱验证码"
-                            value={emailCode}
-                            onValue={setEmailCode}
-                            required
-                            maxLength={6}
-                            inputMode="numeric"
-                          />
-                          <p role="status">
-                            验证码已发送，签发后 {emailChallenge.expires_in}{" "}
-                            秒内有效。
-                          </p>
+                    {registering && (
+                      <TextField
+                        label="确认密码"
+                        type="password"
+                        required
+                        minLength={8}
+                        maxLength={1024}
+                        value={confirmPassword}
+                        onValue={setConfirmPassword}
+                        autoComplete="new-password"
+                        placeholder="再次输入密码"
+                      />
+                    )}
+                    {emailRequired && (
+                      <div className="security-form">
+                        {emailChallenge ? (
+                          <>
+                            <TextField
+                              label="邮箱验证码"
+                              value={emailCode}
+                              onValue={setEmailCode}
+                              required
+                              maxLength={6}
+                              inputMode="numeric"
+                            />
+                            <p role="status">
+                              验证码已发送，签发后 {emailChallenge.expires_in}{" "}
+                              秒内有效。
+                            </p>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              disabled={resendRemaining > 0}
+                              onClick={() => {
+                                setEmailChallenge(undefined);
+                                setEmailCode("");
+                                setRefreshKey((v) => v + 1);
+                              }}
+                            >
+                              {resendRemaining
+                                ? `${resendRemaining} 秒后可重新获取验证码`
+                                : "重新获取邮箱验证码"}
+                            </Button>
+                          </>
+                        ) : (
                           <Button
                             type="button"
                             variant="outline"
-                            disabled={resendRemaining > 0}
+                            disabled={busy || !email || !proof?.captcha_code}
                             onClick={() => {
-                              setEmailChallenge(undefined);
-                              setEmailCode("");
-                              setRefreshKey((v) => v + 1);
+                              setBusy(true);
+                              setMessage("");
+                              void api
+                                .emailCode(email, "register", proof ?? {})
+                                .then((value) => {
+                                  setEmailChallenge(value);
+                                  setEmailUntil(
+                                    Date.now() + value.resend_after * 1000,
+                                  );
+                                })
+                                .catch((e) => setMessage(e.message))
+                                .finally(() => {
+                                  setBusy(false);
+                                  setRefreshKey((v) => v + 1);
+                                });
                             }}
                           >
-                            {resendRemaining
-                              ? `${resendRemaining} 秒后可重新获取验证码`
-                              : "重新获取邮箱验证码"}
+                            发送邮箱验证码
                           </Button>
-                        </>
-                      ) : (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          disabled={busy || !email || !proof?.captcha_code}
-                          onClick={() => {
-                            setBusy(true);
-                            setMessage("");
-                            void api
-                              .emailCode(email, "register", proof ?? {})
-                              .then((value) => {
-                                setEmailChallenge(value);
-                                setEmailUntil(
-                                  Date.now() + value.resend_after * 1000,
-                                );
-                              })
-                              .catch((e) => setMessage(e.message))
-                              .finally(() => {
-                                setBusy(false);
-                                setRefreshKey((v) => v + 1);
-                              });
-                          }}
-                        >
-                          发送邮箱验证码
-                        </Button>
-                      )}
-                    </div>
-                  )}
-                  <HumanVerification
-                    action={
-                      emailRequired && !emailChallenge
-                        ? "registration_email"
-                        : registering
-                          ? "register"
-                          : "login"
-                    }
-                    refreshKey={refreshKey}
-                    disabled={busy}
-                    onChange={setProof}
+                        )}
+                      </div>
+                    )}
+                    <HumanVerification
+                      action={
+                        emailRequired && !emailChallenge
+                          ? "registration_email"
+                          : registering
+                            ? "register"
+                            : "login"
+                      }
+                      refreshKey={refreshKey}
+                      disabled={busy}
+                      onChange={setProof}
+                    />
+                  </>
+                ) : (
+                  <TextField
+                    label="验证码或恢复码"
+                    value={otp}
+                    onValue={setOtp}
+                    autoComplete="one-time-code"
+                    maxLength={128}
+                    required
                   />
-                </>
-              ) : (
-                <TextField
-                  label="验证码或恢复码"
-                  value={otp}
-                  onValue={setOtp}
-                  autoComplete="one-time-code"
-                  maxLength={128}
-                  required
-                />
-              )}
-              {query.get("password_changed") === "1" && (
-                <p role="status">密码已更新，请使用新密码重新登录。</p>
-              )}
-              {message && (
-                <p className="auth-message" role="alert">
-                  {message}
-                </p>
-              )}
-              {!challenge && (
-                <AuthLegal
-                  registration={registering}
-                  accepted={accepted}
-                  onChange={setAccepted}
-                />
-              )}
-              {userCode && (
-                <label className="auth-device-confirmation">
-                  <Checkbox
-                    checked={deviceConfirmed}
-                    onCheckedChange={(value) =>
-                      setDeviceConfirmed(value === true)
-                    }
-                    aria-label="确认由我发起并核对终端验证码"
-                  />
-                  <span>确认由我发起并核对终端验证码</span>
-                </label>
-              )}
-              <Button
-                className="auth-submit"
-                type="submit"
-                disabled={
-                  busy ||
-                  (!!userCode && !deviceConfirmed) ||
-                  (!challenge && !proof?.captcha_code) ||
-                  (registering &&
-                    (registrationAllowed !== true || !accepted)) ||
-                  (emailRequired && (!emailChallenge || !emailCode))
-                }
-              >
-                {busy
-                  ? "处理中…"
-                  : challenge
-                    ? "验证并登录"
-                    : userCode
-                      ? "登录并批准"
-                      : registering
-                        ? "创建账号"
-                        : "登录"}{" "}
-                <ArrowRight size={15} />
-              </Button>
-              {challenge && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    setChallenge(undefined);
-                    setOtp("");
-                    setRefreshKey((v) => v + 1);
-                  }}
-                >
-                  重新登录
-                </Button>
-              )}
-              {!registering &&
-                (authConfig.password_reset_available ??
-                  authConfig.email_security_available) && (
-                  <Link to="/password-reset">忘记密码</Link>
                 )}
-              {!userCode && (
-                <Link
-                  className="auth-switch"
-                  to={registering ? "/login" : "/register"}
+                {query.get("password_changed") === "1" && (
+                  <p role="status">密码已更新，请使用新密码重新登录。</p>
+                )}
+                {message && (
+                  <p className="auth-message" role="alert">
+                    {message}
+                  </p>
+                )}
+                {!challenge && (
+                  <AuthLegal
+                    registration={registering}
+                    accepted={accepted}
+                    onChange={setAccepted}
+                  />
+                )}
+                {userCode && (
+                  <label className="auth-device-confirmation">
+                    <Checkbox
+                      checked={deviceConfirmed}
+                      onCheckedChange={(value) =>
+                        setDeviceConfirmed(value === true)
+                      }
+                      aria-label="确认由我发起并核对终端验证码"
+                    />
+                    <span>确认由我发起并核对终端验证码</span>
+                  </label>
+                )}
+                <Button
+                  className="auth-submit"
+                  type="submit"
+                  disabled={
+                    busy ||
+                    (!!userCode && !deviceConfirmed) ||
+                    (!challenge && !proof?.captcha_code) ||
+                    (registering &&
+                      (registrationAllowed !== true || !accepted)) ||
+                    (emailRequired && (!emailChallenge || !emailCode))
+                  }
                 >
-                  {registering ? "已有账号？返回登录" : "还没有账号？免费注册"}
-                </Link>
-              )}
-            </form>
+                  {busy
+                    ? "处理中…"
+                    : challenge
+                      ? "验证并登录"
+                      : userCode
+                        ? "登录并批准"
+                        : registering
+                          ? "创建账号"
+                          : "登录"}{" "}
+                  <ArrowRight size={15} />
+                </Button>
+                {challenge && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setChallenge(undefined);
+                      setOtp("");
+                      setRefreshKey((v) => v + 1);
+                    }}
+                  >
+                    重新登录
+                  </Button>
+                )}
+                {!registering &&
+                  (authConfig.password_reset_available ??
+                    authConfig.email_security_available) && (
+                    <Link to="/password-reset">忘记密码</Link>
+                  )}
+                {!userCode && (
+                  <Link
+                    className="auth-switch"
+                    to={registering ? "/login" : "/register"}
+                  >
+                    {registering
+                      ? "已有账号？返回登录"
+                      : "还没有账号？免费注册"}
+                  </Link>
+                )}
+              </form>
+            )}
           </div>
         </section>
       </main>

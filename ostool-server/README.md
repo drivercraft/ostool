@@ -488,6 +488,10 @@ Turnstile settings in the management console; hostname and action are checked.
 There is no CAPTCHA bypass switch. Email verification is optional and defaults
 to `OSTOOL_REGISTRATION_EMAIL_VERIFICATION=false`.
 
+After CLI device authorization succeeds, the right-hand login pane switches to
+a success card prompting the user to return to the ostool terminal. Failed
+authorization keeps the login form and displays the error.
+
 New/changed passwords require at least 8 characters and at most 1024 bytes;
 Argon2 hashing is concurrency-limited. Login is limited by account and source IP,
 with six failed attempts causing a 15-minute cooldown by default. Auth entrypoints

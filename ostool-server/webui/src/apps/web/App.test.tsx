@@ -342,7 +342,27 @@ describe("CLI device authorization", () => {
     );
     await user.click(submit);
     await screen.findByText("设备登录已批准，可以返回 ostool CLI。");
+    const success = screen.getByRole("status", { name: "登录成功" });
+    expect(success).toBe(document.activeElement);
+    expect(screen.getByRole("heading", { name: "登录成功" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "登录并批准" })).toBeNull();
+    expect(screen.queryByLabelText("密码")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "批准 CLI 登录" })).toBeNull();
     expect(mocks.authorizeDevice).toHaveBeenCalledWith("ABCD-EFGH");
+  });
+  it("keeps the login form and error visible when device approval fails", async () => {
+    mocks.authorizeDevice.mockRejectedValueOnce(new Error("设备验证码已过期"));
+    window.history.replaceState({}, "", "/login?user_code=ABCD-EFGH");
+    const user = userEvent.setup();
+    render(<PublicApp />);
+    await user.type(await screen.findByLabelText("账号"), "member@test.local");
+    await user.type(screen.getByLabelText("密码"), "member-password-123");
+    await user.type(await screen.findByLabelText("图形验证码"), "AB29Q");
+    await user.click(screen.getByRole("checkbox", { name: "确认由我发起并核对终端验证码" }));
+    await user.click(screen.getByRole("button", { name: "登录并批准" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("设备验证码已过期");
+    expect(screen.getByRole("button", { name: "登录并批准" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "登录成功" })).toBeNull();
   });
 });
 
