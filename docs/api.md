@@ -657,6 +657,17 @@ DELETE /api/v1/admin/sessions/{session_id}
 
 成功返回 `202 Accepted` 且没有响应体。释放是异步过程，期间会话可能继续出现在列表中并处于 `releasing`；不存在时返回 `404 Not Found`。
 
+管理员可显式使用 `DELETE /api/v1/admin/sessions/{session_id}?force=true` 强制结束
+失联、释放中或释放失败的会话，返回 `204 No Content`，重复请求同样返回 `204`。
+这会停止旧释放任务、关闭终端并在有界等待后移除活动会话，不依赖设备恢复；
+历史以 `admin_forced` 结束并保留清理错误，开发板持久化为禁用，断电和恢复不视为已确认。
+需要 `sessions.manage`；普通客户端 DELETE 的行为保持不变。
+
+`DELETE /api/v1/admin/boards/{board_id}?force=true` 可强制结束开发板现有会话、
+取消未结束租赁后删除设备清单，历史记录保留；除 `devices.manage` 外，公网版还要求
+`sessions.manage` 和 `rentals.manage`。未带 `force` 的删除仍要求设备空闲且无未结束租赁。
+
+
 ### 硬件会话历史
 
 硬件使用历史接口：`GET /api/v1/admin/session-history`。公网版仅管理员可访问；
@@ -667,7 +678,7 @@ DELETE /api/v1/admin/sessions/{session_id}
 历史字段包括 `session_id,board_id,board_type,user_id,username,rental_id,client_name`、
 `created_at,last_heartbeat_at,expires_at,stop_requested_at,ended_at`，以及
 `stop_reason,end_reason,release_failures,last_release_error`。身份字段为分配时快照。
-结束原因包括 `client_released,admin_released,serial_closed,boot_failed,lease_expired,rental_revoked,`
+结束原因包括 `client_released,admin_released,admin_forced,serial_closed,boot_failed,lease_expired,rental_revoked,`
 `authorization_unavailable,server_shutdown,server_interrupted,session_dropped`。
 未结束记录的 `ended_at/end_reason` 为 null。重启发现的遗留连接记为 `server_interrupted`，
 其结束时间是发现时间，最后心跳更接近最后可确认的使用时间。删除账号或设备不会删除历史。

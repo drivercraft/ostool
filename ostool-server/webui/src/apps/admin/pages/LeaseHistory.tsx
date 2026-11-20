@@ -31,6 +31,7 @@ import {
 const reasons: Record<string, string> = {
   client_released: "客户端释放",
   admin_released: "管理员释放",
+  admin_forced: "管理员强制结束",
   serial_closed: "串口连接关闭",
   boot_failed: "启动失败",
   lease_expired: "租约到期 / 心跳超时",

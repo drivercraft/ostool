@@ -862,6 +862,104 @@ impl AppState {
     }
 
     async fn process_release_job(&self, job: ReleaseJob) {
+        let session = job.session.clone();
+        let _release = session.release_gate.lock().await;
+        let mut forced = session.force_end.subscribe();
+        if *forced.borrow() {
+            return;
+        }
+        tokio::select! {
+            biased;
+            _ = forced.wait_for(|forced| *forced) => {},
+            _ = self.process_release_job_inner(job) => {},
+        }
+    }
+
+    /// The caller holds board_inventory_gate so a new owner cannot be admitted
+    /// while the previous release worker is being cancelled.
+    pub(crate) async fn force_end_session_locked(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<Option<Session>> {
+        let Some(session) = self.sessions.read().await.get(id).cloned() else {
+            return Ok(None);
+        };
+        session.force_end.send_replace(true);
+        let _release = session.release_gate.lock().await;
+        if !self.sessions.read().await.contains_key(id) {
+            return Ok(None);
+        }
+        let snapshot = session.snapshot().await;
+        let mut board = self
+            .boards
+            .read()
+            .await
+            .get(&snapshot.board_id)
+            .cloned()
+            .context("board disappeared during forced session termination")?;
+        // Hardware cleanup was bypassed. Keep the device out of allocation until
+        // an administrator verifies it or explicitly deletes it.
+        board.disabled = true;
+        self.board_store.write_board(&board).await?;
+        self.boards.write().await.insert(board.id.clone(), board);
+        session.request_stop(SessionStopReason::AdminRelease);
+        session.begin_release();
+        session.signal_shutdown();
+        let mut errors = self
+            .board_runtime_status(&snapshot.board_id)
+            .await
+            .and_then(|runtime| runtime.last_release_error)
+            .into_iter()
+            .collect::<Vec<_>>();
+        errors.push("管理员强制结束会话，设备断电和恢复结果未确认".to_string());
+        if let Err(error) = self
+            .wait_for_session_tasks_to_stop(&session, RELEASE_WAIT_TIMEOUT)
+            .await
+        {
+            errors.push(error);
+        }
+        let cleanup = async {
+            let _files = session.file_gate.lock().await;
+            self.tftp_manager
+                .read()
+                .await
+                .clone()
+                .remove_session_dir(id)
+                .await
+        };
+        match tokio::time::timeout(RELEASE_WAIT_TIMEOUT, cleanup).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => errors.push(format!("file cleanup failed: {error:#}")),
+            Err(_) => errors.push("file cleanup timed out".into()),
+        }
+        self.database
+            .lease_release_failed(id, &errors.join("; "))
+            .await?;
+        self.database.finish_lease(id, "admin_forced").await?;
+        self.complete_session_release(&snapshot.board_id, id)
+            .await?;
+        self.admin_events.invalidate(&[
+            "boards",
+            "sessions",
+            "runtimes",
+            "session_history",
+            "rentals",
+        ]);
+        self.rental_changed.notify_one();
+        crate::audit::system_event(
+            self,
+            "session.force_ended",
+            "管理员强制结束会话，设备已禁用",
+            "sessions",
+            Some(id),
+            true,
+            serde_json::json!({"board_id":snapshot.board_id,"hardware_cleanup_confirmed":false}),
+        )
+        .await;
+        Ok(Some(snapshot))
+    }
+
+    async fn process_release_job_inner(&self, job: ReleaseJob) {
         let session = job.session;
         let snapshot = session.snapshot().await;
         let board = session.board().clone();
@@ -1418,6 +1516,183 @@ mod tests {
         assert!(removed.is_some());
         shutdown.changed().await.unwrap();
         assert!(*shutdown.borrow());
+    }
+
+    #[tokio::test]
+    async fn force_end_removes_failed_session_and_prevents_stale_release_jobs() {
+        let temp = tempdir().unwrap();
+        let state = test_state(temp.path()).await;
+        let log = temp.path().join("power-off.log");
+        let mut board = sample_board("force-board");
+        board.power_management = PowerManagementConfig::Custom(CustomPowerManagement {
+            power_on_cmd: "true".into(),
+            power_off_cmd: format!("printf off >> '{}'; exit 1", log.display()),
+        });
+        state.board_store.write_board(&board).await.unwrap();
+        state
+            .boards
+            .write()
+            .await
+            .insert(board.id.clone(), board.clone());
+        state.sync_board_runtime_states().await;
+        let snapshot = state
+            .create_session(&board.board_type, &[], None)
+            .await
+            .unwrap();
+        let old = state
+            .sessions
+            .read()
+            .await
+            .get(&snapshot.id)
+            .cloned()
+            .unwrap();
+        let shutdown = old.subscribe_shutdown();
+        state
+            .request_session_stop(&snapshot.id, SessionStopReason::ApiDelete)
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if state
+                    .board_runtime_status(&board.id)
+                    .await
+                    .unwrap()
+                    .lease_state
+                    == BoardLeaseState::Error
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        {
+            let _inventory = state.board_inventory_gate.lock().await;
+            assert!(
+                state
+                    .force_end_session_locked(&snapshot.id)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+        }
+        assert!(*shutdown.borrow());
+        assert!(state.get_session(&snapshot.id).await.is_none());
+        let disabled = state.board_store.load_all().await.unwrap();
+        assert!(disabled[&board.id].disabled);
+        let runtime = state.board_runtime_status(&board.id).await.unwrap();
+        assert_eq!(runtime.lease_state, BoardLeaseState::Idle);
+        assert!(runtime.active_session_id.is_none());
+        assert!(
+            state
+                .create_session(&board.board_type, &[], None)
+                .await
+                .is_err()
+        );
+        let history = state
+            .database
+            .lease_page(&crate::persistence::leases::LeaseFilters::default())
+            .await
+            .unwrap();
+        let record = history
+            .items
+            .iter()
+            .find(|record| record.session_id == snapshot.id)
+            .unwrap();
+        assert!(record.ended_at.is_some());
+        assert_eq!(record.end_reason.as_deref(), Some("admin_forced"));
+        assert!(
+            record
+                .last_release_error
+                .as_deref()
+                .unwrap()
+                .contains("power-off failed")
+        );
+        assert!(
+            record
+                .last_release_error
+                .as_deref()
+                .unwrap()
+                .contains("管理员强制结束")
+        );
+        let before = fs::read_to_string(&log).unwrap();
+        // Explicitly admit a new owner and then deliver a delayed old release job.
+        state
+            .boards
+            .write()
+            .await
+            .get_mut(&board.id)
+            .unwrap()
+            .disabled = false;
+        let replacement = state
+            .create_session(&board.board_type, &[], None)
+            .await
+            .unwrap();
+        state
+            .process_release_job(super::ReleaseJob {
+                session: old,
+                reason: SessionStopReason::Expired,
+            })
+            .await;
+        assert_eq!(fs::read_to_string(&log).unwrap(), before);
+        assert_eq!(
+            state
+                .board_runtime_status(&board.id)
+                .await
+                .unwrap()
+                .active_session_id
+                .as_deref(),
+            Some(replacement.id.as_str())
+        );
+        let _inventory = state.board_inventory_gate.lock().await;
+        state
+            .force_end_session_locked(&replacement.id)
+            .await
+            .unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn force_end_interrupts_a_blocked_power_command_without_waiting_for_recovery() {
+        let temp = tempdir().unwrap();
+        let state = test_state(temp.path()).await;
+        let marker = temp.path().join("blocked-power.log");
+        let mut board = sample_board("blocked-force-board");
+        board.power_management = PowerManagementConfig::Custom(CustomPowerManagement {
+            power_on_cmd: "true".into(),
+            power_off_cmd: format!("printf started > '{}'; sleep 60", marker.display()),
+        });
+        state.board_store.write_board(&board).await.unwrap();
+        state
+            .boards
+            .write()
+            .await
+            .insert(board.id.clone(), board.clone());
+        state.sync_board_runtime_states().await;
+        let session = state
+            .create_session(&board.board_type, &[], None)
+            .await
+            .unwrap();
+        state
+            .request_session_stop(&session.id, SessionStopReason::ApiDelete)
+            .await;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !marker.exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let _inventory = state.board_inventory_gate.lock().await;
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            state.force_end_session_locked(&session.id),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(state.get_session(&session.id).await.is_none());
     }
 
     #[tokio::test]

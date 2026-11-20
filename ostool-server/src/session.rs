@@ -128,6 +128,8 @@ pub struct SessionState {
     pub(crate) downloads: Arc<tokio::sync::Semaphore>,
     pub(crate) rental_deadline: RwLock<Option<chrono::DateTime<chrono::Utc>>>,
     pub serial_runtime: Arc<crate::serial::runtime::SessionSerialRuntime>,
+    pub(crate) release_gate: Mutex<()>,
+    pub(crate) force_end: watch::Sender<bool>,
     boot_generation: watch::Sender<u64>,
     info: RwLock<Session>,
     board: BoardConfig,
@@ -203,6 +205,8 @@ impl SessionState {
             downloads: Arc::new(tokio::sync::Semaphore::new(2)),
             rental_deadline: RwLock::new(None),
             serial_runtime: Arc::default(),
+            release_gate: Mutex::new(()),
+            force_end: watch::channel(false).0,
             boot_generation: watch::channel(0).0,
             info: RwLock::new(Session::new_with_id(
                 session_id,
@@ -306,7 +310,7 @@ impl SessionState {
     }
 
     pub fn signal_shutdown(&self) {
-        let _ = self.shutdown_tx.send(true);
+        self.shutdown_tx.send_replace(true);
     }
 
     pub fn try_set_serial_connected(&self) -> bool {

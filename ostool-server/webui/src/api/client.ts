@@ -656,17 +656,17 @@ export const api = {
       },
     );
   },
-  deleteBoard(boardId: string) {
+  deleteBoard(boardId: string, force = false) {
     return request<void>(
-      `/api/v1/admin/boards/${encodeURIComponent(boardId)}`,
+      `/api/v1/admin/boards/${encodeURIComponent(boardId)}${force ? "?force=true" : ""}`,
       {
         method: "DELETE",
       },
     );
   },
-  deleteSession(sessionId: string) {
+  deleteSession(sessionId: string, force = false) {
     return request<void>(
-      `/api/v1/admin/sessions/${encodeURIComponent(sessionId)}`,
+      `/api/v1/admin/sessions/${encodeURIComponent(sessionId)}${force ? "?force=true" : ""}`,
       {
         method: "DELETE",
       },

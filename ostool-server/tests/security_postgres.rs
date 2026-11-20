@@ -3572,3 +3572,186 @@ async fn quick_status_user_patch_preserves_identity_and_revokes_credentials() {
         StatusCode::FORBIDDEN
     );
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn force_release_admin_ends_disconnected_session_and_can_delete_busy_board() {
+    let f = Fixture::new(true).await;
+    let cookie = test_security::cookie_header(&f.login(true).await.headers);
+    let actor = f
+        .state
+        .database
+        .find_user("admin@security.test")
+        .await
+        .unwrap()
+        .unwrap();
+    for id in ["force-session", "force-delete"] {
+        let create = f.request("POST", "/api/v1/admin/boards", Some(&cookie), json!({"id":id,"board_type":id,"disabled":false,"boot":{"kind":"pxe"},"power_management":{"kind":"custom","power_on_cmd":"true","power_off_cmd":"false"}})).await;
+        assert_eq!(create.status, StatusCode::CREATED, "{}", create.body);
+        let allocated = f
+            .request(
+                "POST",
+                "/api/v1/sessions",
+                Some(&cookie),
+                json!({"board_type":id,"client_name":"lost-device"}),
+            )
+            .await;
+        assert_eq!(allocated.status, StatusCode::CREATED, "{}", allocated.body);
+        let sid = allocated.body["session_id"].as_str().unwrap();
+        assert_eq!(
+            f.request(
+                "DELETE",
+                &format!("/api/v1/admin/sessions/{sid}"),
+                Some(&cookie),
+                Value::Null
+            )
+            .await
+            .status,
+            StatusCode::ACCEPTED
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if f.state.board_runtime_status(id).await.unwrap().lease_state
+                    == ostool_server::state::BoardLeaseState::Error
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(f.state.get_session(sid).await.is_some());
+        if id == "force-session" {
+            let path = format!("/api/v1/admin/sessions/{sid}?force=true");
+            assert_eq!(
+                f.request("DELETE", &path, None, Value::Null).await.status,
+                StatusCode::UNAUTHORIZED
+            );
+            for _ in 0..2 {
+                assert_eq!(
+                    f.request("DELETE", &path, Some(&cookie), Value::Null)
+                        .await
+                        .status,
+                    StatusCode::NO_CONTENT
+                );
+            }
+            assert!(f.state.get_session(sid).await.is_none());
+            assert!(f.state.boards.read().await[id].disabled);
+            assert!(
+                f.state
+                    .database
+                    .lease_page(&Default::default())
+                    .await
+                    .unwrap()
+                    .items
+                    .iter()
+                    .any(|row| row.session_id == sid
+                        && row.end_reason.as_deref() == Some("admin_forced"))
+            );
+            assert_eq!(
+                f.request(
+                    "DELETE",
+                    &format!("/api/v1/admin/boards/{id}"),
+                    Some(&cookie),
+                    Value::Null
+                )
+                .await
+                .status,
+                StatusCode::NO_CONTENT
+            );
+        } else {
+            sqlx::query("INSERT INTO board_rentals(board_id,user_id,starts_at,ends_at) VALUES($1,$2,now()-interval '1 minute',now()+interval '1 hour')").bind(id).bind(actor.id).execute(f.state.database.pool()).await.unwrap();
+            assert_eq!(
+                f.request(
+                    "DELETE",
+                    &format!("/api/v1/admin/boards/{id}"),
+                    Some(&cookie),
+                    Value::Null
+                )
+                .await
+                .status,
+                StatusCode::CONFLICT
+            );
+            let deleted = f
+                .request(
+                    "DELETE",
+                    &format!("/api/v1/admin/boards/{id}?force=true"),
+                    Some(&cookie),
+                    Value::Null,
+                )
+                .await;
+            assert_eq!(deleted.status, StatusCode::NO_CONTENT, "{}", deleted.body);
+            assert!(f.state.get_session(sid).await.is_none());
+            assert!(!f.state.boards.read().await.contains_key(id));
+            assert!(
+                !f.state
+                    .board_store
+                    .load_all()
+                    .await
+                    .unwrap()
+                    .contains_key(id)
+            );
+            let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM board_rentals WHERE board_id=$1 AND cancelled_at IS NULL)").bind(id).fetch_one(f.state.database.pool()).await.unwrap();
+            assert!(!active);
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn force_release_requires_explicit_session_and_rental_management_permissions() {
+    let f = Fixture::new(true).await;
+    let cookie = test_security::cookie_header(&f.login(true).await.headers);
+    assert_eq!(f.request("POST", "/api/v1/admin/roles", Some(&cookie), json!({"code":"force_device_editor","name":"仅设备编辑","enabled":true,"description":"","permissions":["console.access","devices.manage"]})).await.status, StatusCode::CREATED);
+    let role: String = sqlx::query_scalar("SELECT id FROM roles WHERE code='force_device_editor'")
+        .fetch_one(f.state.database.pool())
+        .await
+        .unwrap();
+    let editor = f
+        .state
+        .database
+        .create_user(
+            "force_editor",
+            "force-editor@test.local",
+            "force-editor-password-123",
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    sqlx::query("UPDATE users SET role_id=$2 WHERE id=$1")
+        .bind(editor.id)
+        .bind(role)
+        .execute(f.state.database.pool())
+        .await
+        .unwrap();
+    let login = f.request("POST", "/api/v1/admin/auth/login", None, json!({"email":"force-editor@test.local","password":"force-editor-password-123","verification":f.proof("admin_login").await})).await;
+    assert_eq!(login.status, StatusCode::OK, "{}", login.body);
+    let editor_cookie = test_security::cookie_header(&login.headers);
+    let create = f.request("POST", "/api/v1/admin/boards", Some(&cookie), json!({"id":"force-protected","board_type":"force-protected","disabled":true,"boot":{"kind":"pxe"},"power_management":{"kind":"custom","power_on_cmd":"true","power_off_cmd":"true"}})).await;
+    assert_eq!(create.status, StatusCode::CREATED);
+    assert_eq!(
+        f.request(
+            "DELETE",
+            "/api/v1/admin/boards/force-protected?force=true",
+            Some(&editor_cookie),
+            Value::Null
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    assert!(f.state.boards.read().await.contains_key("force-protected"));
+    assert_eq!(
+        f.request(
+            "DELETE",
+            "/api/v1/admin/sessions/unknown?force=true",
+            Some(&editor_cookie),
+            Value::Null
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+}

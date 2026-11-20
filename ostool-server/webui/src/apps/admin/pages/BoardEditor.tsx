@@ -71,7 +71,7 @@ export default function BoardEditor() {
   return <Editor key={boardId ?? "new"} board={board} />;
 }
 function Editor({ board }: { board?: BoardConfig }) {
-  const { local } = usePermissions();
+  const { local, can } = usePermissions();
   const formId = useId();
   const [query] = useSearchParams();
   const navigate = useNavigate();
@@ -259,9 +259,16 @@ function Editor({ board }: { board?: BoardConfig }) {
           {board && (
             <ConfirmAction
               label="删除开发板"
-              description={`删除 ${board.id} 的配置？`}
+              description={
+                can("sessions.manage") && can("rentals.manage")
+                  ? `删除 ${board.id}？将强制结束其会话并取消未结束租赁，不等待设备恢复；历史记录保留。`
+                  : `删除 ${board.id} 的配置？`
+              }
               action={async () => {
-                await api.deleteBoard(board.id);
+                await api.deleteBoard(
+                  board.id,
+                  can("sessions.manage") && can("rentals.manage"),
+                );
                 navigate("/boards");
               }}
             />

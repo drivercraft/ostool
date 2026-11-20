@@ -194,7 +194,7 @@ test("all management modules, DTB CRUD, session release and narrow viewport", as
   await expect(
     page.getByRole("cell", { name: "browser-test", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "强制释放" }).click();
+  await page.getByRole("button", { name: "释放会话" }).click();
   await page.getByRole("button", { name: "确认", exact: true }).click();
   await expect(
     page.getByRole("cell", { name: "browser-test", exact: true }),

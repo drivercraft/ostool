@@ -1,4 +1,5 @@
 import { Unplug as ActionRelease } from "lucide-react";
+import { ForceReleaseAction } from "@/components/force-release-action";
 import { PagePanel } from "@/components/page-panel";
 import { useListPage } from "@/components/list-pagination";
 import { ListToolbar } from "@/components/list-toolbar";
@@ -144,16 +145,19 @@ function ActiveSessions() {
                 />
               </Cell>
               <Cell>
-                <ConfirmAction
-                  permission="sessions.manage"
-                  icon={ActionRelease}
-                  label="强制释放"
-                  description={`请求释放 ${s.board_id} 的会话？服务器会停止任务并断电，清理完成后资源才重新可用。`}
-                  action={() => api.deleteSession(s.id)}
-                  disabled={
-                    sessionPresentation(s, runtimes[s.board_id]).releasing
-                  }
-                />
+                <div className="actions">
+                  <ConfirmAction
+                    permission="sessions.manage"
+                    icon={ActionRelease}
+                    label="释放会话"
+                    description={`请求释放 ${s.board_id} 的会话？服务器会停止任务并断电，清理完成后资源才重新可用。`}
+                    action={() => api.deleteSession(s.id)}
+                    disabled={
+                      sessionPresentation(s, runtimes[s.board_id]).releasing
+                    }
+                  />
+                  <ForceReleaseAction sessionId={s.id} boardId={s.board_id} />
+                </div>
               </Cell>
             </Row>
           ))}

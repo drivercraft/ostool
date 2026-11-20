@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { RowAction } from "@/components/row-action";
 import { EnableAction } from "@/components/enable-action";
+import { ForceReleaseAction } from "@/components/force-release-action";
 import { PagePanel } from "@/components/page-panel";
 import { useListPage } from "@/components/list-pagination";
 import { ListToolbar } from "@/components/list-toolbar";
@@ -273,13 +274,29 @@ export default function Boards() {
                         permission="devices.manage"
                         icon={ActionDelete}
                         label="删除"
-                        description={`删除开发板 ${b.id} 的配置？`}
-                        action={() => api.deleteBoard(b.id)}
+                        description={
+                          can("sessions.manage") && can("rentals.manage")
+                            ? `删除开发板 ${b.id}？将强制结束其会话并取消未结束的租赁，不等待失联设备恢复，历史记录保留。`
+                            : `删除开发板 ${b.id} 的配置？`
+                        }
+                        action={() =>
+                          api.deleteBoard(
+                            b.id,
+                            can("sessions.manage") && can("rentals.manage"),
+                          )
+                        }
                         disabled={
+                          !(can("sessions.manage") && can("rentals.manage")) &&
                           !!runtimes[b.id] &&
                           runtimes[b.id].lease_state !== "idle"
                         }
                       />
+                      {runtimes[b.id]?.active_session_id && (
+                        <ForceReleaseAction
+                          sessionId={runtimes[b.id].active_session_id!}
+                          boardId={b.id}
+                        />
+                      )}
                     </div>
                   </Cell>
                 </Row>

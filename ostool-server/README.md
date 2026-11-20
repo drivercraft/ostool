@@ -379,6 +379,13 @@ Board and user status updates use `PATCH` on their admin item routes with a
 Current sessions show one primary status; terminal connection is secondary text
 and automatic serial diagnostics are available on demand. Releasing sessions no
 longer display unrelated connection or default device-wait badges.
+Normal release waits for cleanup. Administrators can explicitly force-end a
+disconnected or stuck session from sessions or device lists; this cancels old
+release retries, removes the active session and persistently disables the board.
+History records `admin_forced` and preserves cleanup errors without claiming
+hardware power-off or recovery succeeded. Force-deleting a board also cancels
+unfinished rentals, and requires device, session and rental management permissions.
+
 Operation results and loading errors use the same top-center popup notifications
 on both surfaces, including login pages and dialogs. They support manual dismissal;
 forms do not repeat these messages inline or in the bottom action bar. Draft state,

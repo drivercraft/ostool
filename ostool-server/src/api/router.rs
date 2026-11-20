@@ -1178,10 +1178,30 @@ async fn delete_dtb(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForceDelete {
+    #[serde(default)]
+    force: bool,
+}
+
 async fn delete_board(
     Path(board_id): Path<String>,
     State(state): State<AppState>,
+    axum::extract::Query(options): axum::extract::Query<ForceDelete>,
+    actor: Option<Extension<super::auth::CurrentUser>>,
 ) -> Result<StatusCode, ApiError> {
+    if options.force && state.config.read().await.edition.is_public() {
+        let Extension(super::auth::CurrentUser(user)) =
+            actor.ok_or_else(|| ApiError::unauthorized("请先登录管理后台"))?;
+        let access = crate::security::permissions::access(&state.database, &user).await?;
+        if !access.allows("sessions.manage") || !access.allows("rentals.manage") {
+            return Err(ApiError::forbidden(
+                "强制删除开发板还需要会话管理和租赁管理权限",
+            ));
+        }
+    }
+    let _rentals = state.rental_gate.lock().await;
     let _inventory_guard = state.board_inventory_gate.lock().await;
     if let Some(board) = state.boards.read().await.get(&board_id)
         && state.admin_power.is_busy(&board.power_management)
@@ -1192,7 +1212,13 @@ async fn delete_board(
         .board_runtime_status(&board_id)
         .await
         .ok_or_else(|| ApiError::not_found(format!("board `{board_id}` not found")))?;
-    if runtime.lease_state != BoardLeaseState::Idle {
+    if options.force {
+        if let Some(id) = &runtime.active_session_id {
+            state.force_end_session_locked(id).await?;
+        }
+        sqlx::query("UPDATE board_rentals SET cancelled_at=now() WHERE board_id=$1 AND cancelled_at IS NULL AND ends_at>now()")
+            .bind(&board_id).execute(state.database.pool()).await?;
+    } else if runtime.lease_state != BoardLeaseState::Idle {
         return Err(ApiError::conflict(format!(
             "board `{board_id}` is not idle"
         )));
@@ -1206,6 +1232,14 @@ async fn delete_board(
     state.boards.write().await.remove(&board_id);
     state.sync_board_runtime_states().await;
     state.refresh_serial_exclusions().await?;
+    state.admin_events.invalidate(&[
+        "boards",
+        "sessions",
+        "runtimes",
+        "rentals",
+        "session_history",
+    ]);
+    state.rental_changed.notify_one();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1267,7 +1301,13 @@ async fn list_session_history(
 async fn delete_admin_session(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
+    axum::extract::Query(options): axum::extract::Query<ForceDelete>,
 ) -> Result<StatusCode, ApiError> {
+    if options.force {
+        let _inventory = state.board_inventory_gate.lock().await;
+        state.force_end_session_locked(&session_id).await?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
     let removed = state
         .request_session_stop(&session_id, SessionStopReason::AdminRelease)
         .await;

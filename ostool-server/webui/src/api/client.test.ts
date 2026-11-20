@@ -66,6 +66,31 @@ describe("api client", () => {
     await expect(api.deleteSession("demo-session")).resolves.toBeUndefined();
   });
 
+  it("keeps normal deletion compatible and requests forced cleanup only when explicitly selected", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+    await api.deleteSession("stuck/id", true);
+    await api.deleteBoard("board/id", true);
+    await api.deleteSession("normal");
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/admin/sessions/stuck%2Fid?force=true",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/admin/boards/board%2Fid?force=true",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      "/api/v1/admin/sessions/normal",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
   it("reports admin errors directly without opening identity confirmation", async () => {
     window.history.replaceState({}, "", "/qcl/overview");
     const verify = vi.fn();
