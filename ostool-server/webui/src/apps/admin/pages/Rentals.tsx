@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import { Badge } from "@/components/ui/badge";
 import { Pencil as ActionEdit, CircleX as ActionCancel } from "lucide-react";
 import { RowAction } from "@/components/row-action";
@@ -16,7 +17,6 @@ import {
   Row,
   Cell,
   ConfirmAction,
-  Notice,
 } from "@/components/forms";
 
 export const rentalStatusLabels = {
@@ -39,7 +39,7 @@ export default function Rentals() {
   });
   return (
     <>
-      {pagination.error && <Notice>{pagination.error}</Notice>}
+      {pagination.error && <MessageToast message={pagination.error} />}
       <PagePanel
         table
         loading={pagination.loading}

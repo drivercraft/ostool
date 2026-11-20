@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { PagePanel, EditorFooter } from "@/components/page-panel";
@@ -35,7 +36,7 @@ export default function RentalEditor() {
   if (error && !context)
     return (
       <PagePanel>
-        <Notice>{error}</Notice>
+        <MessageToast message={error} />
       </PagePanel>
     );
   if (!context || (context.query.id ?? undefined) !== rentalId || !boards)
@@ -273,8 +274,7 @@ function RentalForm({
         </EditorFooter>
       }
     >
-      {error && <Notice>{error}</Notice>}
-      {task.error && <Notice>{task.error}</Notice>}
+      {error && <MessageToast message={error} />}
       {initial && JSON.stringify(current) !== original.current && (
         <Notice>
           该租赁状态已更新，当前编辑内容已保留，请结合最新日历确认。

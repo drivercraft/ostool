@@ -1,3 +1,5 @@
+import { toast } from "sonner";
+import { MessageToast } from "@/components/message-toast";
 import {
   SiteSettingsProvider,
   useSiteSettings,
@@ -212,20 +214,18 @@ function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (userCode && !deviceConfirmed) {
-      setMessage("请确认由您发起登录，并核对终端验证码。");
+      toast.error("请确认由您发起登录，并核对终端验证码。");
       return;
     }
     if (registering && password !== confirmPassword) {
-      setMessage("两次输入的密码不一致");
+      toast.error("两次输入的密码不一致");
       return;
     }
     setBusy(true);
-    setMessage("");
     try {
       if (
         registering &&
@@ -268,7 +268,7 @@ function Login() {
         navigate(safeWebsiteRedirect(query.get("redirect")));
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "登录失败");
+      toast.error(error instanceof Error ? error.message : "登录失败");
       if (!challenge) setRefreshKey((v) => v + 1);
     } finally {
       setBusy(false);
@@ -373,7 +373,10 @@ function Login() {
                   </>
                 )}
                 {registering && registrationAllowed === false && (
-                  <p role="alert">当前站点未开放注册，请联系管理员。</p>
+                  <MessageToast
+                    kind="warning"
+                    message="当前站点未开放注册，请联系管理员。"
+                  />
                 )}
                 {!challenge ? (
                   <>
@@ -456,8 +459,8 @@ function Login() {
                               maxLength={6}
                               inputMode="numeric"
                             />
-                            <p role="status">
-                              验证码已发送，签发后 {emailChallenge.expires_in}{" "}
+                            <p>
+                              验证码签发后 {emailChallenge.expires_in}{" "}
                               秒内有效。
                             </p>
                             <Button
@@ -482,16 +485,16 @@ function Login() {
                             disabled={busy || !email || !proof?.captcha_code}
                             onClick={() => {
                               setBusy(true);
-                              setMessage("");
                               void api
                                 .emailCode(email, "register", proof ?? {})
                                 .then((value) => {
                                   setEmailChallenge(value);
+                                  toast.success("邮箱验证码已发送");
                                   setEmailUntil(
                                     Date.now() + value.resend_after * 1000,
                                   );
                                 })
-                                .catch((e) => setMessage(e.message))
+                                .catch((e) => toast.error(e.message))
                                 .finally(() => {
                                   setBusy(false);
                                   setRefreshKey((v) => v + 1);
@@ -527,13 +530,12 @@ function Login() {
                   />
                 )}
                 {query.get("password_changed") === "1" && (
-                  <p role="status">密码已更新，请使用新密码重新登录。</p>
+                  <MessageToast
+                    kind="success"
+                    message="密码已更新，请使用新密码重新登录。"
+                  />
                 )}
-                {message && (
-                  <p className="auth-message" role="alert">
-                    {message}
-                  </p>
-                )}
+
                 {!challenge && (
                   <AuthLegal
                     registration={registering}
@@ -633,10 +635,10 @@ export default function PublicApp() {
             <div className="site-root">
               <PublicRoutes />
             </div>
-            <Toaster position="top-right" richColors closeButton />
           </SiteSessionProvider>
         </SiteSettingsProvider>
       </EditionProvider>
+      <Toaster />
     </ThemeProvider>
   );
 }

@@ -23,7 +23,6 @@ import {
   ConfirmAction,
   TextField,
   FormGrid,
-  Notice,
   useAction,
 } from "@/components/forms";
 import type { DtbFileResponse } from "@/types/api";
@@ -75,7 +74,6 @@ export function DtbUpload({
               />
               <TextField label="文件名" value={name} onValue={setName} />
             </FormGrid>
-            {task.error && <Notice>{task.error}</Notice>}
           </DialogBody>
           <DialogFooter>
             <Button
@@ -211,7 +209,6 @@ function EditDtb({ dtb, close }: { dtb: DtbFileResponse; close: () => void }) {
               }}
             />
           </FormGrid>
-          {task.error && <Notice>{task.error}</Notice>}
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={close} disabled={task.pending}>

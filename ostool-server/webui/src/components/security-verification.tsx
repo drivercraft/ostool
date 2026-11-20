@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import { useEffect, useId, useState, type FormEvent } from "react";
 import { api, type SecurityStatus } from "@/api/client";
 import {
@@ -10,7 +11,7 @@ import {
   DialogFooter,
 } from "./ui/dialog";
 import { Button } from "./ui/button";
-import { TextField, Notice } from "./forms";
+import { TextField } from "./forms";
 type Pending = { resolve: () => void; reject: (error: Error) => void };
 export function SecurityVerification() {
   const formId = useId();
@@ -93,7 +94,7 @@ export function SecurityVerification() {
                 required
               />
             )}
-            {error && <Notice>{error}</Notice>}
+            {error && <MessageToast message={error} />}
           </form>
         </DialogBody>
         <DialogFooter>

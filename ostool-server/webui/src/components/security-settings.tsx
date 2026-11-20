@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import { useEffect, useState, type FormEvent } from "react";
 import { api, type MfaEnrollment, type EmailChallenge } from "@/api/client";
 import { security, useSecurityResource, useSecurityErrors } from "@/api/events";
@@ -66,9 +67,8 @@ export function SecuritySettings({
   return (
     <div className="security-settings">
       {Object.entries(errors).map(([key, value]) => (
-        <Notice key={key}>{value}</Notice>
+        <MessageToast key={key} message={value} />
       ))}
-      {task.error && <Notice>{task.error}</Notice>}
       {!status ? (
         <Skeleton className="h-32 w-full" />
       ) : (
@@ -141,8 +141,7 @@ export function SecuritySettings({
                 重新生成恢复码
               </Button>
               {!(
-                status.require_admin_mfa &&
-                location.pathname.startsWith("/qcl")
+                status.require_admin_mfa && location.pathname.startsWith("/qcl")
               ) && (
                 <ConfirmAction
                   label="关闭双重验证"

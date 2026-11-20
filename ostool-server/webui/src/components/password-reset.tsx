@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import { useState, type FormEvent } from "react";
 import { api, type EmailChallenge, type HumanProof } from "@/api/client";
 import { useEdition } from "@/edition";
@@ -47,7 +48,7 @@ export function PasswordReset() {
         setConfirmation("");
         setCode("");
         setDone(true);
-      });
+      }, false);
     }
   }
   return (
@@ -56,7 +57,10 @@ export function PasswordReset() {
       {!available ? (
         <Notice>本站暂未开放邮箱找回，请联系管理员。</Notice>
       ) : done ? (
-        <p role="status">密码已重置，旧登录和访问令牌已失效，请重新登录。</p>
+        <MessageToast
+          kind="success"
+          message="密码已重置，旧登录和访问令牌已失效，请重新登录。"
+        />
       ) : (
         <>
           <TextField
@@ -125,7 +129,6 @@ export function PasswordReset() {
               </Button>
             </>
           )}
-          {task.error && <Notice>{task.error}</Notice>}
           <Button
             type="submit"
             disabled={task.pending || (!challenge && !proof?.captcha_code)}

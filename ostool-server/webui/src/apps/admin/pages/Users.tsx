@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import { Badge } from "@/components/ui/badge";
 import { Pencil as ActionEdit, Trash2 as ActionDelete } from "lucide-react";
 import { RowAction } from "@/components/row-action";
@@ -66,7 +67,7 @@ export default function Users() {
       {deployment && !deployment.database_connected && (
         <Notice>用户管理需要连接 PostgreSQL。</Notice>
       )}
-      {pagination.error && <Notice>{pagination.error}</Notice>}
+      {pagination.error && <MessageToast message={pagination.error} />}
       <PagePanel
         table
         loading={pagination.loading}
@@ -262,7 +263,6 @@ export default function Users() {
                     checked={editor.draft.disabled}
                     onChange={(disabled) => patch({ disabled })}
                   />
-                  {task.error && <Notice>{task.error}</Notice>}
                 </form>
               </FormGrid>
             )}

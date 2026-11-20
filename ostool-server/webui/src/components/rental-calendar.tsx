@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import {
   ChevronLeft,
@@ -54,7 +55,6 @@ export function RentalCalendar({
   const [anchor, setAnchor] = useState(() => dateOnly(valid));
   const [view, setView] = useState<View>("month");
   const [preview, setPreview] = useState<TimeWindow>();
-  const [error, setError] = useState("");
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 30000);
@@ -137,14 +137,13 @@ export function RentalCalendar({
     if (disabled) return;
     const from = Math.max(window.start, Math.ceil(Date.now() / 60000) * 60000);
     if (from >= window.end) {
-      setError("请选择尚未结束的时段。");
+      toast.error("请选择尚未结束的时段。");
       return;
     }
     if (rentalConflicts(bookings, from, window.end, excludeId).length) {
-      setError("所选时段已有租赁，请调整范围或选择当日可用时段。");
+      toast.error("所选时段已有租赁，请调整范围或选择当日可用时段。");
       return;
     }
-    setError("");
     onSelect(new Date(from), new Date(window.end));
   }
   function selectSingle(window: TimeWindow) {
@@ -182,7 +181,6 @@ export function RentalCalendar({
     drag.current = { pointer: event.pointerId, first: window, last: window };
     setSelected(dateOnly(new Date(window.start)));
     setPreview(window);
-    setError("");
     event.currentTarget.setPointerCapture(event.pointerId);
   }
   function pointerMove(event: PointerEvent<HTMLElement>) {
@@ -462,15 +460,10 @@ export function RentalCalendar({
             可用时段
           </span>
         </div>
-        <p
-          className={`calendar-selection-feedback${error ? " has-error" : ""}`}
-          role={error ? "alert" : undefined}
-          aria-live="polite"
-        >
-          {error ||
-            (view === "day"
-              ? "单击或拖拽选择时段，灰色不可选 · 浏览器时区"
-              : "单击重新选择日期，拖拽多选，双击查看时段")}
+        <p className="calendar-selection-feedback">
+          {view === "day"
+            ? "单击或拖拽选择时段，灰色不可选 · 浏览器时区"
+            : "单击重新选择日期，拖拽多选，双击查看时段"}
         </p>
       </div>
       <div className="rental-calendar-body" ref={body}>

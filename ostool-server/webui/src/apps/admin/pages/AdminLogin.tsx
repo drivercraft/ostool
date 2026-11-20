@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import { firstPage } from "@/components/permissions";
 import { AuthLegal } from "@/components/auth-legal";
 import { useSiteSettings } from "@/components/site-settings";
@@ -15,7 +16,7 @@ import { useEdition } from "@/edition";
 import { safeAdminRedirect } from "@/auth-session";
 import { ThemeMenu } from "@/components/theme-menu";
 import { Button } from "@/components/ui/button";
-import { TextField, Notice } from "@/components/forms";
+import { TextField } from "@/components/forms";
 
 export default function AdminLogin() {
   const [email, setEmail] = useState(""),
@@ -196,7 +197,7 @@ export default function AdminLogin() {
                   required
                 />
               )}
-              {error && <Notice variant="destructive">{error}</Notice>}
+              {error && <MessageToast message={error} />}
               {!challenge && <AuthLegal />}
               <Button
                 type="submit"

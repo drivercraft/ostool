@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import { Badge } from "@/components/ui/badge";
 import {
   Activity,
@@ -26,7 +27,7 @@ import { useEdition } from "@/edition";
 import { PagePanel } from "@/components/page-panel";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DataTable, Row, Cell, Notice } from "@/components/forms";
+import { DataTable, Row, Cell } from "@/components/forms";
 import type { DashboardInfo } from "@/types/api";
 const bytes = (value: number | null | undefined) => {
   if (value == null) return "不可用";
@@ -626,7 +627,10 @@ function Operations({
         </div>
       )}
       {operations.database_available === false && (
-        <Notice>运营统计暂时无法连接数据库，实时板卡状态仍会保留。</Notice>
+        <MessageToast
+          kind="error"
+          message="运营统计暂时无法连接数据库，实时板卡状态仍会保留。"
+        />
       )}
       <div className="dashboard-columns">
         <section className="dashboard-card">

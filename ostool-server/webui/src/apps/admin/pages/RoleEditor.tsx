@@ -138,7 +138,7 @@ function Editor({
                   ? "只读权限"
                   : JSON.stringify(draft) !== baseline
                     ? "尚未保存"
-                    : "配置已保存"
+                    : ""
           }
         >
           <Button variant="outline" asChild>
@@ -163,7 +163,6 @@ function Editor({
           角色配置已更新，草稿已保留。
         </ReloadNotice>
       )}
-      {task.error && <Notice variant="destructive">{task.error}</Notice>}
       <form
         id={id}
         onSubmit={(event) => {

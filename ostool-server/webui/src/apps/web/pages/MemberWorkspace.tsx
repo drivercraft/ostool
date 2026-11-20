@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import { SecuritySettings } from "@/components/security-settings";
 import { useEffect, useState, type FormEvent } from "react";
 import { requestStatusLabels } from "@/types/api";
@@ -99,7 +100,7 @@ export default function MemberWorkspace() {
   if (!user)
     return error ? (
       <main className="member-loading">
-        <Notice>{error}</Notice>
+        <MessageToast message={error} />
         <Link to="/login">重新登录</Link>
       </main>
     ) : (
@@ -113,10 +114,13 @@ export default function MemberWorkspace() {
       <MemberSidebar user={user} />
       <div className="member-main">
         {connection === "reconnecting" && (
-          <Notice>连接暂时中断，输入已保留，恢复后自动同步。</Notice>
+          <MessageToast
+            kind="warning"
+            message="连接暂时中断，输入已保留，恢复后自动同步。"
+          />
         )}
         {Object.entries(errors).map(([key, message]) => (
-          <Notice key={key}>{message}</Notice>
+          <MessageToast key={key} message={message} />
         ))}
         <Routes>
           <Route index element={<Overview user={user} />} />
@@ -127,7 +131,10 @@ export default function MemberWorkspace() {
           <Route path="allocations/new" element={<ClaimBoard user={user} />} />
           <Route path="requests" element={<MyRequests />} />
           <Route path="tokens" element={<Tokens />} />
-          <Route path="*" element={<NotFound homeTo="/account" homeLabel="返回个人工作台" />} />
+          <Route
+            path="*"
+            element={<NotFound homeTo="/account" homeLabel="返回个人工作台" />}
+          />
         </Routes>
       </div>
     </main>
@@ -320,7 +327,6 @@ function Profile({ user }: { user: AuthUser }) {
     <>
       <Heading title="基本信息" text="管理对外显示的名称和登录邮箱。" />
       <form className="member-card member-form" onSubmit={save}>
-        {task.error && <Notice>{task.error}</Notice>}
         <Section title="个人资料" columns={2}>
           <TextField label="用户名" value={user.username} readOnly hint="" />
           <TextField
@@ -387,7 +393,7 @@ function Password() {
       await api.changePassword(current, password);
       clearBrowserSession();
       window.location.assign("/login?password_changed=1");
-    });
+    }, false);
   }
   return (
     <>
@@ -396,7 +402,6 @@ function Password() {
         text="设置独立且不重复使用的密码，保护账号与设备访问。"
       />
       <form className="member-card member-form" onSubmit={save}>
-        {task.error && <Notice>{task.error}</Notice>}
         <Section title="登录密码" columns={2}>
           <TextField
             label="当前密码"
@@ -496,7 +501,7 @@ function RentalHistory() {
           />
           <ListLayoutToggle />
         </div>
-        {page.error && <Notice>{page.error}</Notice>}
+        {page.error && <MessageToast message={page.error} />}
         <ListDataLoadingContext.Provider value={page.loading}>
           <DataTable
             headers={["开发板", "使用时间", "状态", "备注", "操作"]}
@@ -565,7 +570,7 @@ function ApplicationHistory() {
           />
           <ListLayoutToggle />
         </div>
-        {page.error && <Notice>{page.error}</Notice>}
+        {page.error && <MessageToast message={page.error} />}
         <ListDataLoadingContext.Provider value={page.loading}>
           <DataTable
             headers={["开发板 / 说明", "申请时段", "状态 / 审核意见", "操作"]}
@@ -639,7 +644,6 @@ function Tokens() {
         text="为 ostool CLI 创建、查看和撤销访问凭据。"
       />
       <form className="member-card member-form" onSubmit={create}>
-        {task.error && <Notice>{task.error}</Notice>}
         <TextField
           label="令牌名称"
           value={name}
@@ -720,7 +724,9 @@ function ClaimBoard({ user }: { user: AuthUser }) {
   const navigate = useNavigate();
   const allowed = user.permissions?.includes("board.instant") || user.is_admin;
   if (!allowed)
-    return <Notice>当前角色没有免审批使用设备权限，请通过租赁申请获取设备。</Notice>;
+    return (
+      <Notice>当前角色没有免审批使用设备权限，请通过租赁申请获取设备。</Notice>
+    );
   return (
     <PagePanel
       footer={
@@ -762,7 +768,10 @@ function ClaimBoard({ user }: { user: AuthUser }) {
         ]}
       />
       {selected && !available.some((b) => b.id === selected) && (
-        <Notice>所选开发板已不可领取，请重新选择。</Notice>
+        <MessageToast
+          kind="warning"
+          message="所选开发板已不可领取，请重新选择。"
+        />
       )}
       <Link to="/account/rentals">返回我的租赁</Link>
     </PagePanel>

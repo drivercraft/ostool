@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import {
   createContext,
   useContext,
@@ -77,8 +78,9 @@ export function StartupScreen({
         </header>
         <main>
           {error ? (
-            <div role="alert">
-              {error}
+            <div>
+              <MessageToast message={error} />
+              <p>暂时无法加载页面</p>
               <button type="button" onClick={() => window.location.reload()}>
                 重试
               </button>

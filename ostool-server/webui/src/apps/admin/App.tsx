@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import {
   PermissionsProvider,
   usePermissions,
@@ -89,6 +90,7 @@ export default function App() {
           <AdminEntry />
         </SiteSettingsProvider>
       </EditionProvider>
+      <Toaster />
     </ThemeProvider>
   );
 }
@@ -135,11 +137,13 @@ function AdminEntry() {
   if (gate !== "checking" && gate !== "allowed")
     return (
       <div className="admin-gate">
-        <Notice>
-          {gate === "denied"
-            ? "你的账号没有管理后台权限，请联系管理员分配角色。"
-            : message}
-        </Notice>
+        <MessageToast
+          message={
+            gate === "denied"
+              ? "你的账号没有管理后台权限，请联系管理员分配角色。"
+              : message
+          }
+        />
         <a href="/account">个人中心</a>
         <a href="/qcl/login">重新登录后台</a>
       </div>
@@ -351,9 +355,7 @@ function AdminConsole({
           />
           <div className="admin-notices" aria-live="polite">
             {Object.entries(errors).map(([topic, error]) => (
-              <Notice key={topic}>
-                {topic}：{error}
-              </Notice>
+              <MessageToast key={topic} message={error} />
             ))}
           </div>
           <div className="admin-workspace" aria-busy={pending}>
@@ -484,9 +486,16 @@ function AdminConsole({
                       element={
                         <PagePanel
                           className="not-found-panel"
-                          footer={<span className="panel-status">404 · 页面不存在</span>}
+                          footer={
+                            <span className="panel-status">
+                              404 · 页面不存在
+                            </span>
+                          }
                         >
-                          <NotFound homeTo={firstPage(can)} homeLabel="返回管理后台" />
+                          <NotFound
+                            homeTo={firstPage(can)}
+                            homeLabel="返回管理后台"
+                          />
                         </PagePanel>
                       }
                     />
@@ -496,7 +505,6 @@ function AdminConsole({
             )}
           </div>
         </main>
-        <Toaster position="top-right" duration={2500} richColors closeButton />
       </div>
     </BrowserRouter>
   );

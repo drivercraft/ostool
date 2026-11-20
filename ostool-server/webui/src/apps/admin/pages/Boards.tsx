@@ -25,7 +25,6 @@ import {
   SelectField,
   TextField,
   useAction,
-  Notice,
 } from "@/components/forms";
 export const leaseLabels: Record<string, string> = {
   idle: "空闲",
@@ -429,7 +428,6 @@ export default function Boards() {
               footer={virtualPage.footer}
               scrollKey={virtualPage.viewKey}
             >
-              {task.error && <Notice>{task.error}</Notice>}
               <DataTable
                 headers={["设备", "MAC / TAP", "电源 / 串口", "操作"]}
                 empty={!filteredVirtual.length}

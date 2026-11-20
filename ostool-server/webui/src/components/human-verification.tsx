@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import { useEffect, useId, useRef, useState } from "react";
 import {
   api,
@@ -5,7 +6,6 @@ import {
   type HumanChallenge,
   type HumanProof,
 } from "@/api/client";
-import { Notice } from "./forms";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Field, FieldLabel } from "./ui/field";
@@ -73,7 +73,7 @@ function TurnstileWidget({
   return (
     <div>
       <div ref={root} />
-      {error && <Notice>{error}</Notice>}
+      {error && <MessageToast message={error} />}
     </div>
   );
 }
@@ -186,11 +186,7 @@ export function HumanVerification({
           </div>
         </Field>
       )}
-      {error && (
-        <p className="security-error" role="alert">
-          {error}
-        </p>
-      )}
+      <MessageToast message={error} />
     </div>
   );
 }

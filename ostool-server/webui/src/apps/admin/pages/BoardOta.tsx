@@ -110,9 +110,6 @@ export function BoardOta({ boardId }: { boardId: string }) {
       >
         下发升级
       </Button>
-      {(upload.error || assign.error) && (
-        <Notice>{upload.error || assign.error}</Notice>
-      )}
     </Section>
   );
 }

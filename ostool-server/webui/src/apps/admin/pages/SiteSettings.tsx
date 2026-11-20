@@ -331,7 +331,6 @@ function Editor({ source, group }: { source: SiteView; group: string }) {
           当前配置已在其他窗口更新，草稿已保留；请先复制草稿，再取消以载入最新版本。
         </Notice>
       )}
-      {task.error && <Notice>{task.error}</Notice>}
       <form
         id={id}
         className={legal ? "legal-editor-form" : "settings-form"}
@@ -352,7 +351,7 @@ function Editor({ source, group }: { source: SiteView; group: string }) {
               await api.updateSite(source.revision, current);
               setAwaiting(source.revision + 1);
             },
-            legal ? `${label}已发布` : "配置已保存",
+            legal ? `${label}已发布` : "",
           );
         }}
       >

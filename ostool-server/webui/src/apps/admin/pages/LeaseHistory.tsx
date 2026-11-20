@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Eye } from "lucide-react";
 import { useEdition } from "@/edition";
@@ -22,7 +23,6 @@ import {
   Cell,
   TextField,
   SelectField,
-  Notice,
   ReadonlyInfo,
   ListDataLoadingContext,
 } from "@/components/forms";
@@ -209,8 +209,8 @@ export default function LeaseHistory() {
           </ListToolbar>
         }
       >
-        {filterError && <Notice>{filterError}</Notice>}
-        {error && <Notice>{error}</Notice>}
+        {filterError && <MessageToast message={filterError} />}
+        {error && <MessageToast message={error} />}
         <ListDataLoadingContext.Provider
           value={!data?.active && !error && !filterError}
         >

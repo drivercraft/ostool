@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import { useEffect, useId, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Plus, Trash2, FileText } from "lucide-react";
@@ -33,7 +34,7 @@ export default function DeviceDocuments() {
     return () => admin.setDeviceDocument(null);
   }, [boardId]);
   if (boardId) {
-    if (error) return <Notice>{error}</Notice>;
+    if (error) return <MessageToast message={error} />;
     if (!selected || selected.id !== boardId)
       return <Skeleton className="h-64 w-full" />;
     if (!selected.document)
@@ -135,7 +136,6 @@ function DocumentEditor({ source }: { source: DeviceDocumentView }) {
           文档已被其他管理员更新，当前输入已保留。
         </ReloadNotice>
       )}
-      {task.error && <Notice>{task.error}</Notice>}
       <form
         id={formId}
         onSubmit={(event) => {

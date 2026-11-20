@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import { Badge } from "@/components/ui/badge";
 import { Check as ActionApprove, X as ActionReject } from "lucide-react";
 import { RowAction } from "@/components/row-action";
@@ -21,7 +22,6 @@ import {
   TextField,
   TextareaField,
   SelectField,
-  Notice,
   DataTable,
   Row,
   Cell,
@@ -44,7 +44,7 @@ export default function RentalRequests() {
   }
   return (
     <>
-      {page.error && <Notice>{page.error}</Notice>}
+      {page.error && <MessageToast message={page.error} />}
       <PagePanel
         table
         loading={page.loading}
@@ -149,7 +149,6 @@ export default function RentalRequests() {
               {editor?.request.user_email} · {editor?.request.board_id}
               。批准时重新检查时间冲突并创建正式租赁。
             </DialogDescription>
-            {task.error && <Notice>{task.error}</Notice>}
             <TextareaField label="审核意见" value={note} onValue={setNote} />
           </DialogBody>
           <DialogFooter>

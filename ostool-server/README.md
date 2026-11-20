@@ -357,6 +357,10 @@ overview, profile, security, password changes (`/account/password`), rentals,
 applications and CLI tokens on distinct routes. Desktop content uses 80% of the
 viewport width with responsive mobile gutters. Website and console controls, status
 badges, dialogs and theme colors share the same design tokens.
+Operation results and loading errors use the same top-center popup notifications
+on both surfaces, including login pages and dialogs. They support manual dismissal;
+forms do not repeat these messages inline or in the bottom action bar. Draft state,
+field guidance, diagnostic records and notices requiring an action remain contextual.
 Website navigation starts new pages at the top, preserves document anchor links,
 and leaves back/forward scroll restoration to the browser. Live data updates do
 not reset the current page's position.

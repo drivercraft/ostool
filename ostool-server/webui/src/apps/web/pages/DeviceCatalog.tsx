@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import { useState, useSyncExternalStore } from "react";
 import { CircuitBoard, Search } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -7,7 +8,7 @@ import { useSiteSession } from "@/apps/web/session";
 import { Button } from "@/components/ui/button";
 import { BoardVisual } from "@/apps/web/components/board-visual";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Notice, TextField } from "@/components/forms";
+import { TextField } from "@/components/forms";
 import { useListPage } from "@/components/list-pagination";
 
 /** Public projection is shared by visitors and members, with cards in both editions. */
@@ -79,9 +80,11 @@ export function DeviceCatalog() {
           ))}
         </div>
       )}
-      {errors.device_catalog && <Notice>{errors.device_catalog}</Notice>}
+      {errors.device_catalog && (
+        <MessageToast message={errors.device_catalog} />
+      )}
       {connection === "reconnecting" && (
-        <Notice>设备目录连接中断，正在重连…</Notice>
+        <MessageToast kind="warning" message="设备目录连接中断，正在重连…" />
       )}
       {!devices ? (
         <div className="device-directory-grid" aria-label="正在加载设备">

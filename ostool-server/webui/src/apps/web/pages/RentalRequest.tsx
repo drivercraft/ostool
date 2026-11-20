@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import { useCallback, useEffect, useId, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { api, type AuthUser } from "@/api/client";
@@ -59,12 +60,15 @@ export default function RentalRequest() {
       {checking ? (
         <Skeleton className="h-72 w-full" />
       ) : error ? (
-        <Notice>{error}</Notice>
+        <MessageToast message={error} />
       ) : (
         user && (
           <>
             {connection === "reconnecting" && (
-              <Notice>连接暂时中断，输入已保留，恢复后自动同步。</Notice>
+              <MessageToast
+                kind="warning"
+                message="连接暂时中断，输入已保留，恢复后自动同步。"
+              />
             )}
             <RentalRequestEditor user={user} />
           </>
@@ -315,11 +319,18 @@ function RentalRequestForm({
           </EditorFooter>
         }
       >
-        {error && <Notice>{error}</Notice>}
-        {task.error && <Notice>{task.error}</Notice>}
-        {!boardExists && <Notice>所选设备目前不可申请，请重新选择。</Notice>}
+        {error && <MessageToast message={error} />}
+        {!boardExists && (
+          <MessageToast
+            kind="warning"
+            message="所选设备目前不可申请，请重新选择。"
+          />
+        )}
         {conflicts.length > 0 && (
-          <Notice>所选时段已有租赁，请调整时间或在日历中选择空闲时段。</Notice>
+          <MessageToast
+            kind="warning"
+            message="所选时段已有租赁，请调整时间或在日历中选择空闲时段。"
+          />
         )}
         {boardExists && (
           <RentalCalendar

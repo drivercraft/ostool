@@ -292,7 +292,10 @@ export function useAction() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const running = useRef(false);
-  async function run(action: () => Promise<unknown>, message?: string) {
+  async function run(
+    action: () => Promise<unknown>,
+    message: string | false = "操作成功",
+  ) {
     if (running.current) return false;
     running.current = true;
     setPending(true);
@@ -367,7 +370,6 @@ export function ConfirmAction({
           </DialogHeader>
           <DialogBody>
             <DialogDescription>{description}</DialogDescription>
-            {task.error && <Notice>{task.error}</Notice>}
           </DialogBody>
           <DialogFooter>
             <Button

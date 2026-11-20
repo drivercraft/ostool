@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import { usePermissions } from "@/components/permissions";
 import { Badge } from "@/components/ui/badge";
 import { History } from "lucide-react";
@@ -51,7 +52,7 @@ export function TftpState({ status }: { status: TftpStatus }) {
           子网掩码: status.resolved_netmask,
         }}
       />
-      {status.last_error && <Notice>{status.last_error}</Notice>}
+      {status.last_error && <MessageToast message={status.last_error} />}
     </>
   );
 }
@@ -138,7 +139,7 @@ function TftpForm({
               ? "服务器配置已更新，草稿已保留"
               : JSON.stringify(config) !== baseline
                 ? "存在未保存的修改"
-                : "配置已保存"
+                : ""
           }
         >
           <Button
@@ -252,9 +253,6 @@ function TftpForm({
               </>
             )}
           </Section>
-          {task.error && <Notice>{task.error}</Notice>}
-
-          {reconcile.error && <Notice>{reconcile.error}</Notice>}
         </fieldset>
       </form>
       {status && (
@@ -300,7 +298,7 @@ function ServerForm({ source }: { source: AdminServerConfigResponse }) {
               ? "服务器配置已更新，草稿已保留"
               : JSON.stringify(config) !== baseline
                 ? "存在未保存的修改"
-                : "配置已保存"
+                : ""
           }
         >
           <Button
@@ -441,7 +439,6 @@ function ServerForm({ source }: { source: AdminServerConfigResponse }) {
               />
             ))}
           </Section>
-          {task.error && <Notice>{task.error}</Notice>}
         </fieldset>
       </form>
     </PagePanel>
@@ -746,7 +743,6 @@ function AccountForm({
           当前策略已被修改，草稿已保留；请先复制草稿，再取消以载入最新策略。
         </Notice>
       )}
-      {task.error && <Notice>{task.error}</Notice>}
       <form
         id={id}
         onSubmit={(event) => {

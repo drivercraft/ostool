@@ -1,3 +1,5 @@
+import { MessageToast } from "@/components/message-toast";
+import { toast } from "sonner";
 import { usePermissions } from "@/components/permissions";
 import { PagePanel, EditorFooter } from "@/components/page-panel";
 import { useEffect, useId, useRef, useState } from "react";
@@ -52,7 +54,7 @@ export default function BoardEditor() {
   const { boardId } = useParams();
   const data = useResource("board_editor");
   const error = useErrors().board_editor;
-  if (boardId && error) return <Notice variant="destructive">{error}</Notice>;
+  if (boardId && error) return <MessageToast message={error} />;
   if (boardId && (!data || data.id !== boardId))
     return <Skeleton className="h-40 w-full" />;
   const board = boardId ? (data?.board ?? undefined) : undefined;
@@ -82,7 +84,6 @@ function Editor({ board }: { board?: BoardConfig }) {
     JSON.stringify(board ? boardToFormState(board) : null),
   );
   const [previousSource, setPreviousSource] = useState<string | null>(null);
-  const [validation, setValidation] = useState("");
   const save = useAction();
   const power = useAction();
   const serial = useList("serial"),
@@ -128,7 +129,7 @@ function Editor({ board }: { board?: BoardConfig }) {
       });
       setAccepted(value);
       setUncertain(false);
-    });
+    }, false);
     sending.current = false;
   }
   useEffect(() => {
@@ -195,7 +196,7 @@ function Editor({ board }: { board?: BoardConfig }) {
   );
   async function submit() {
     const error = validateForm(form);
-    setValidation(error);
+    if (error) toast.error(error);
     if (error || conflict || powerBusy) return;
     await save.run(async () => {
       const payload = buildRequestPayload(form);
@@ -242,7 +243,7 @@ function Editor({ board }: { board?: BoardConfig }) {
                 ? "服务器配置已更新，草稿已保留"
                 : JSON.stringify(form) !== baseline
                   ? "存在未保存的修改"
-                  : "配置已保存"
+                  : ""
           }
         >
           {board && (
@@ -278,9 +279,6 @@ function Editor({ board }: { board?: BoardConfig }) {
         >
           服务器配置已被其他操作修改。你的草稿已保留，请载入最新配置后重新编辑。
         </ReloadNotice>
-      )}
-      {(validation || save.error) && (
-        <Notice>{validation || save.error}</Notice>
       )}
       <form
         id={formId}
@@ -672,14 +670,25 @@ function Editor({ board }: { board?: BoardConfig }) {
             </div>
           </Section>
         </fieldset>
-        <div className="power-feedback" aria-live="polite">
-          {result?.state === "running"
-            ? "电源命令执行中…"
-            : result?.state === "succeeded"
-              ? `${result.action === "on" ? "上电" : "下电"}命令已完成`
-              : result?.state === "failed"
-                ? `电源命令失败：${result.message}`
-                : null}
+        <div className="power-feedback">
+          <MessageToast
+            kind={
+              result?.state === "succeeded"
+                ? "success"
+                : result?.state === "failed"
+                  ? "error"
+                  : "info"
+            }
+            message={
+              result?.state === "running"
+                ? "电源命令执行中…"
+                : result?.state === "succeeded"
+                  ? `${result.action === "on" ? "上电" : "下电"}命令已完成`
+                  : result?.state === "failed"
+                    ? `电源命令失败：${result.message}`
+                    : null
+            }
+          />
           {(uncertain || (actionId && !result)) && (
             <Notice>
               动作结果尚未确认。查询已有动作不会重复执行命令。
@@ -691,7 +700,7 @@ function Editor({ board }: { board?: BoardConfig }) {
                   void power.run(async () => {
                     setAccepted(await api.getPowerAction(actionId));
                     setUncertain(false);
-                  })
+                  }, false)
                 }
               >
                 查询执行结果
@@ -699,8 +708,7 @@ function Editor({ board }: { board?: BoardConfig }) {
             </Notice>
           )}
           {power.error && (
-            <Notice>
-              {power.error}
+            <div className="actions">
               <Button
                 type="button"
                 variant="outline"
@@ -713,7 +721,7 @@ function Editor({ board }: { board?: BoardConfig }) {
               >
                 清除结果提示
               </Button>
-            </Notice>
+            </div>
           )}
         </div>
         <Section title="设备恢复">

@@ -1,3 +1,4 @@
+import { MessageToast } from "@/components/message-toast";
 import { Badge } from "@/components/ui/badge";
 import { RowAction } from "@/components/row-action";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -31,7 +32,6 @@ import {
   TextField,
   SelectField,
   ReadonlyInfo,
-  Notice,
   useAction,
 } from "@/components/forms";
 import type { AuditEvent, AuditFilters } from "@/types/api";
@@ -162,7 +162,7 @@ export default function Audits() {
   async function open(id: string) {
     setDetails(null);
     setDetailOpen(true);
-    await task.run(async () => setDetails(await api.auditDetail(id)));
+    await task.run(async () => setDetails(await api.auditDetail(id)), false);
   }
   async function download() {
     await task.run(async () => {
@@ -368,9 +368,9 @@ export default function Audits() {
         }
         footer={footer}
       >
-        {filterError && <Notice>{filterError}</Notice>}
-        {task.error && !detailOpen && !cleanup && <Notice>{task.error}</Notice>}
-        {error && <Notice>{error}</Notice>}
+        {filterError && <MessageToast message={filterError} />}
+
+        {error && <MessageToast message={error} />}
         <DataTable
           headers={[
             "时间",
@@ -447,7 +447,6 @@ export default function Audits() {
             <DialogDescription>
               操作身份、请求关联和安全摘要；不包含凭据及原始请求内容。
             </DialogDescription>
-            {task.error && <Notice>{task.error}</Notice>}
             {details ? (
               <>
                 <ReadonlyInfo
@@ -515,7 +514,6 @@ export default function Audits() {
               value={days}
               onValue={setDays}
             />
-            {task.error && <Notice>{task.error}</Notice>}
           </DialogBody>
           <DialogFooter>
             <Button

@@ -118,7 +118,9 @@ describe("unknown website pages", () => {
   it("returns home when the missing page has no previous in-app entry", async () => {
     window.history.replaceState({ idx: 0 }, "", "/missing-page");
     render(<PublicApp />);
-    await userEvent.click(await screen.findByRole("button", { name: "返回上一页" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "返回上一页" }),
+    );
     await waitFor(() => expect(window.location.pathname).toBe("/"));
     expect(screen.queryByRole("heading", { name: "页面不存在" })).toBeNull();
   });
@@ -129,7 +131,9 @@ describe("unknown website pages", () => {
       render(<PublicApp />);
       await screen.findByRole("heading", { name: "页面不存在" });
       expect(screen.getByRole("navigation", { name: "网站导航" })).toBeTruthy();
-      expect(screen.getByRole("link", { name: "返回首页" }).getAttribute("href")).toBe("/");
+      expect(
+        screen.getByRole("link", { name: "返回首页" }).getAttribute("href"),
+      ).toBe("/");
       expect(window.location.pathname).toBe(path);
       await waitFor(() => expect(document.title).toContain("404"));
       await userEvent.click(screen.getByRole("link", { name: "返回首页" }));
@@ -230,9 +234,7 @@ describe("registration", () => {
       }),
     );
     await user.click(screen.getByRole("button", { name: /创建账号/ }));
-    expect(screen.getByRole("alert").textContent).toContain(
-      "两次输入的密码不一致",
-    );
+    expect(await screen.findByText("两次输入的密码不一致")).toBeTruthy();
     expect(mocks.register).not.toHaveBeenCalled();
     await user.clear(screen.getByLabelText("确认密码"));
     await user.type(screen.getByLabelText("确认密码"), "Abc123!@");
@@ -358,9 +360,18 @@ describe("CLI device authorization", () => {
     await user.type(await screen.findByLabelText("账号"), "member@test.local");
     await user.type(screen.getByLabelText("密码"), "member-password-123");
     await user.type(await screen.findByLabelText("图形验证码"), "AB29Q");
-    await user.click(screen.getByRole("checkbox", { name: "确认由我发起并核对终端验证码" }));
+    await user.click(
+      screen.getByRole("checkbox", { name: "确认由我发起并核对终端验证码" }),
+    );
     await user.click(screen.getByRole("button", { name: "登录并批准" }));
-    expect((await screen.findByRole("alert")).textContent).toContain("设备验证码已过期");
+    const error = await screen.findByText("设备验证码已过期");
+    expect(error.closest("[data-sonner-toast]")).toBeTruthy();
+    expect(
+      error.closest("[data-sonner-toaster]")?.getAttribute("data-x-position"),
+    ).toBe("center");
+    expect(
+      error.closest("[data-sonner-toaster]")?.getAttribute("data-y-position"),
+    ).toBe("top");
     expect(screen.getByRole("button", { name: "登录并批准" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "登录成功" })).toBeNull();
   });
