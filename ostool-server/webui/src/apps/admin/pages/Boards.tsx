@@ -186,6 +186,7 @@ export default function Boards() {
             scrollKey={boardPage.viewKey}
           >
             <DataTable
+              rowOffset={boardPage.rowOffset}
               headers={["开发板", "状态", "连接", "启动方式", "操作"]}
               empty={!filtered.length}
             >
@@ -328,6 +329,7 @@ export default function Boards() {
             scrollKey={discoveryPage.viewKey}
           >
             <DataTable
+              rowOffset={discoveryPage.rowOffset}
               headers={["MAC / IP", "硬件", "架构 / Loader", "状态", "操作"]}
               empty={!filteredLoaders.length}
             >
@@ -442,6 +444,7 @@ export default function Boards() {
               scrollKey={virtualPage.viewKey}
             >
               <DataTable
+                rowOffset={virtualPage.rowOffset}
                 headers={["设备", "MAC / TAP", "电源 / 串口", "操作"]}
                 empty={!filteredVirtual.length}
               >

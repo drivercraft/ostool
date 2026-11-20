@@ -109,6 +109,7 @@ export default function Rentals() {
         scrollKey={pagination.viewKey}
       >
         <DataTable
+          rowOffset={pagination.rowOffset}
           headers={[
             "开发板",
             "使用用户",

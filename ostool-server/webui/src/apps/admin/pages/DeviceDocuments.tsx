@@ -1,3 +1,4 @@
+import { useListPage } from "@/components/list-pagination";
 import { MessageToast } from "@/components/message-toast";
 import { useEffect, useId, useState } from "react";
 import { Link, useParams } from "react-router-dom";
@@ -33,6 +34,12 @@ export default function DeviceDocuments() {
     admin.setDeviceDocument(boardId ?? null);
     return () => admin.setDeviceDocument(null);
   }, [boardId]);
+  const filtered = boards.filter((board) =>
+    `${board.id} ${board.board_type}`
+      .toLowerCase()
+      .includes(search.toLowerCase()),
+  );
+  const pagination = useListPage(filtered, search);
   if (boardId) {
     if (error) return <MessageToast message={error} />;
     if (!selected || selected.id !== boardId)
@@ -45,11 +52,6 @@ export default function DeviceDocuments() {
       );
     return <DocumentEditor key={boardId} source={selected} />;
   }
-  const filtered = boards.filter((board) =>
-    `${board.id} ${board.board_type}`
-      .toLowerCase()
-      .includes(search.toLowerCase()),
-  );
   return (
     <PagePanel
       table
@@ -58,13 +60,15 @@ export default function DeviceDocuments() {
           <TextField label="搜索设备文档" value={search} onValue={setSearch} />
         </ListToolbar>
       }
-      footer={<span>共 {filtered.length} 台开发板</span>}
+      footer={pagination.footer}
+      scrollKey={pagination.viewKey}
     >
       <DataTable
+        rowOffset={pagination.rowOffset}
         headers={["开发板", "公开标题", "文档状态", "操作"]}
         empty={!filtered.length}
       >
-        {filtered.map((board) => (
+        {pagination.rows.map((board) => (
           <Row key={board.id}>
             <Cell>
               <strong>{board.id}</strong>

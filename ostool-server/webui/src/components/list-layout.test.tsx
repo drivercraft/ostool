@@ -48,7 +48,7 @@ it("keeps empty list headers and uses an icon with text in both layouts", async 
   );
   expect(
     screen.getAllByRole("columnheader").map((cell) => cell.textContent),
-  ).toEqual(["开发板", "状态", "操作"]);
+  ).toEqual(["编号", "开发板", "状态", "操作"]);
   const empty = screen.getByRole("status", { name: "暂无数据" });
   expect(empty.querySelector("svg")).toBeTruthy();
   expect(within(empty).getByText("暂无数据")).toBeTruthy();
@@ -61,7 +61,7 @@ it("keeps empty list headers and uses an icon with text in both layouts", async 
   ).toBeTruthy();
   await user.click(screen.getByRole("button", { name: "切换列表布局" }));
   await user.click(screen.getByRole("menuitemradio", { name: /列表视图/ }));
-  expect(screen.getAllByRole("columnheader")).toHaveLength(3);
+  expect(screen.getAllByRole("columnheader")).toHaveLength(4);
 });
 
 it("keeps table headers and skeletons until the first data snapshot arrives", async () => {
@@ -77,7 +77,7 @@ it("keeps table headers and skeletons until the first data snapshot arrives", as
     </ListDataLoadingContext.Provider>
   );
   const app = render(<App loading />);
-  expect(screen.getAllByRole("columnheader")).toHaveLength(2);
+  expect(screen.getAllByRole("columnheader")).toHaveLength(3);
   expect(screen.getByRole("status").textContent).toBe("正在加载数据");
   expect(screen.queryByText("暂无数据")).toBeNull();
   await user.click(screen.getByRole("button", { name: "切换列表布局" }));

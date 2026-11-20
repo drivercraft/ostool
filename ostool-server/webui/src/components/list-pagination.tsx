@@ -78,6 +78,7 @@ export function useListPage<T>(items: T[], filterKey: string) {
     setSelection({ ...selection, filterKey, page });
   const start = (page - 1) * selection.size;
   return {
+    rowOffset: start,
     viewKey: JSON.stringify([filterKey, page, selection.size]),
     rows: items.slice(start, start + selection.size),
     footer: (

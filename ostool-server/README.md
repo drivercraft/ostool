@@ -367,6 +367,10 @@ overview, profile, security, password changes (`/account/password`), rentals,
 applications and CLI tokens on distinct routes. Desktop content uses 80% of the
 viewport width with responsive mobile gutters. Website and console controls, status
 badges, dialogs and theme colors share the same design tokens.
+All paginated lists use the same footer, including session history, audits and
+device documents. Tables start with a row-number column that continues across
+pages within the current filter; cards retain their record title and show the
+same number separately. Record IDs remain unchanged.
 Board, user and custom-role lists provide quick enable/disable actions in both
 table and card layouts. Updates retain permission checks, activation validation,
 self-account protection and role revision checks, and arrive through SSE.

@@ -1855,6 +1855,20 @@ body:has(.app-shell) {
 .pagination-actions [data-slot="native-select"] {
   min-width: 100px;
 }
+.table-frame .row-number {
+  width: 72px;
+  min-width: 72px;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+.data-card-number {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+  font-weight: 400;
+}
 .workspace-tabs[data-slot="tabs"] {
   display: flex;
   flex: 1 1 0;

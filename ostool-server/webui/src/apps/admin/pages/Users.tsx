@@ -119,6 +119,7 @@ export default function Users() {
         scrollKey={pagination.viewKey}
       >
         <DataTable
+          rowOffset={pagination.rowOffset}
           headers={[
             "用户",
             "角色",

@@ -1,15 +1,9 @@
+import { ListPagination } from "@/components/list-pagination";
 import { MessageToast } from "@/components/message-toast";
 import { Badge } from "@/components/ui/badge";
 import { RowAction } from "@/components/row-action";
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  ChevronLeft,
-  ChevronRight,
-  Download,
-  Eye,
-  Filter,
-  Trash2,
-} from "lucide-react";
+import { Download, Eye, Filter, Trash2 } from "lucide-react";
 import { admin, useErrors, useResource } from "@/api/events";
 import { api } from "@/api/client";
 import { PagePanel } from "@/components/page-panel";
@@ -154,8 +148,7 @@ export default function Audits() {
     rows = data?.active ? (data?.items ?? []) : [],
     total = data?.total ?? 0,
     page = data?.page ?? 1,
-    size = data?.page_size ?? filters.page_size ?? 20,
-    pages = Math.max(1, Math.ceil(total / size));
+    size = data?.page_size ?? filters.page_size ?? 20;
   function change(value: Partial<AuditFilters>) {
     setFilters((old) => ({ ...old, ...value, page: value.page ?? 1 }));
   }
@@ -176,46 +169,14 @@ export default function Audits() {
     }, "审计日志已导出");
   }
   const footer = (
-    <div className="audit-pagination">
-      <span>
-        共 {total} 条 ·{" "}
-        {ready
-          ? `${total ? (page - 1) * size + 1 : 0}–${Math.min(page * size, total)}`
-          : "同步中…"}
-      </span>
-      <div>
-        <SelectField
-          label="每页条数"
-          value={String(filters.page_size)}
-          onValue={(value) => change({ page_size: Number(value) })}
-          options={[10, 20, 50, 100].map((value) => ({
-            value: String(value),
-            label: `${value} 条/页`,
-          }))}
-        />
-        <Button
-          size="icon-sm"
-          variant="outline"
-          aria-label="上一页"
-          disabled={!ready || page <= 1}
-          onClick={() => change({ page: page - 1 })}
-        >
-          <ChevronLeft />
-        </Button>
-        <span>
-          第 {page} / {pages} 页
-        </span>
-        <Button
-          size="icon-sm"
-          variant="outline"
-          aria-label="下一页"
-          disabled={!ready || page >= pages}
-          onClick={() => change({ page: page + 1 })}
-        >
-          <ChevronRight />
-        </Button>
-      </div>
-    </div>
+    <ListPagination
+      total={total}
+      page={page}
+      size={size}
+      pending={!ready || !!filterError}
+      onPage={(page) => change({ page })}
+      onSize={(page_size) => change({ page_size })}
+    />
   );
   return (
     <>
@@ -372,6 +333,7 @@ export default function Audits() {
 
         {error && <MessageToast message={error} />}
         <DataTable
+          rowOffset={(page - 1) * size}
           headers={[
             "时间",
             "操作者 / 来源",

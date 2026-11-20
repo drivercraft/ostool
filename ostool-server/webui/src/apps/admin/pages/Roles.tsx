@@ -90,6 +90,7 @@ export default function Roles() {
       scrollKey={pagination.viewKey}
     >
       <DataTable
+        rowOffset={pagination.rowOffset}
         headers={[
           "角色",
           "唯一编码",

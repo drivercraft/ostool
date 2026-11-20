@@ -72,6 +72,7 @@ export function useServerList<K extends keyof Rows>(
       setSelection((old) => ({ ...old, page: data.page }));
   }, [ready, data?.page, page]);
   return {
+    rowOffset: data ? (data.page - 1) * data.page_size : 0,
     rows: data?.items ?? [],
     total: data?.total ?? 0,
     error,

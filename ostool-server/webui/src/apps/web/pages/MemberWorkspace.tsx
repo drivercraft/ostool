@@ -504,6 +504,7 @@ function RentalHistory() {
         {page.error && <MessageToast message={page.error} />}
         <ListDataLoadingContext.Provider value={page.loading}>
           <DataTable
+            rowOffset={page.rowOffset}
             headers={["开发板", "使用时间", "状态", "备注", "操作"]}
             empty={!page.rows.length}
           >
@@ -573,6 +574,7 @@ function ApplicationHistory() {
         {page.error && <MessageToast message={page.error} />}
         <ListDataLoadingContext.Provider value={page.loading}>
           <DataTable
+            rowOffset={page.rowOffset}
             headers={["开发板 / 说明", "申请时段", "状态 / 审核意见", "操作"]}
             empty={!page.rows.length}
           >

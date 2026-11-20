@@ -142,6 +142,7 @@ export default function Dtbs() {
         scrollKey={pagination.viewKey}
       >
         <DataTable
+          rowOffset={pagination.rowOffset}
           headers={["名称", "大小", "更新时间", "TFTP 路径模板", "操作"]}
           empty={!filtered.length}
         >

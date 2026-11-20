@@ -549,33 +549,6 @@ a.dashboard-metric:hover {
   box-shadow: none;
   background: var(--card);
 }
-.audit-pagination {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--muted-foreground);
-  font-size: 0.875rem;
-}
-.audit-pagination > div {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.audit-pagination [data-slot="field"] {
-  width: auto;
-}
-.audit-pagination [data-slot="field-label"] {
-  position: absolute;
-  clip: rect(0, 0, 0, 0);
-  height: 1px;
-  width: 1px;
-  overflow: hidden;
-}
-.audit-pagination select {
-  min-width: 100px;
-}
 .audit-advanced {
   display: flex;
   flex-wrap: wrap;
@@ -687,9 +660,6 @@ a.dashboard-metric:hover {
   .dashboard-footer {
     flex-wrap: wrap;
     gap: 5px;
-  }
-  .audit-pagination {
-    flex-wrap: wrap;
   }
   .audit-advanced > [data-slot="field"] {
     max-width: none;

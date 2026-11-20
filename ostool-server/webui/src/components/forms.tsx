@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   Children,
+  cloneElement,
   isValidElement,
   type ReactNode,
   type ComponentProps,
@@ -452,11 +453,13 @@ export function DataTable({
   children,
   empty,
   layout = "switchable",
+  rowOffset = 0,
 }: {
   headers: string[];
   children: ReactNode;
   empty?: boolean;
   layout?: "switchable" | "table";
+  rowOffset?: number;
 }) {
   const view = useListLayout();
   const loading = useContext(ListDataLoadingContext);
@@ -468,7 +471,7 @@ export function DataTable({
         <div className="standalone-layout-tools">
           <ListLayoutToggle />
         </div>
-        <DataTable headers={headers} empty={empty}>
+        <DataTable headers={headers} empty={empty} rowOffset={rowOffset}>
           {children}
         </DataTable>
       </ListLayoutProvider>
@@ -503,6 +506,9 @@ export function DataTable({
               <div
                 className={`data-card-title ${cells[0]?.props.className ?? ""}`}
               >
+                <span className="data-card-number">
+                  编号 {rowOffset + rowIndex + 1}
+                </span>
                 {cells[0]?.props.children}
               </div>
               <dl>
@@ -532,6 +538,7 @@ export function DataTable({
       <Table>
         <TableHeader>
           <TableRow>
+            <TableHead className="row-number">编号</TableHead>
             {headers.map((h, index) => (
               <TableHead key={`${index}:${h}`}>{h}</TableHead>
             ))}
@@ -541,6 +548,9 @@ export function DataTable({
           {loading
             ? [0, 1, 2].map((row) => (
                 <TableRow key={row}>
+                  <TableCell className="row-number">
+                    <Skeleton className="h-4 w-6" />
+                  </TableCell>
                   {headers.map((header, index) => (
                     <TableCell key={`${index}:${header}`}>
                       <Skeleton className="my-2 h-4 w-3/4" />
@@ -550,7 +560,18 @@ export function DataTable({
               ))
             : empty
               ? null
-              : children}
+              : Children.toArray(children).map((row, index) =>
+                  isValidElement<{ children?: ReactNode }>(row)
+                    ? cloneElement(
+                        row,
+                        {},
+                        <TableCell className="row-number" key="row-number">
+                          {rowOffset + index + 1}
+                        </TableCell>,
+                        row.props.children,
+                      )
+                    : row,
+                )}
         </TableBody>
       </Table>
       {loading && (

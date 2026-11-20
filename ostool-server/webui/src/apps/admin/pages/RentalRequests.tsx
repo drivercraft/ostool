@@ -73,6 +73,7 @@ export default function RentalRequests() {
         footer={page.footer}
       >
         <DataTable
+          rowOffset={page.rowOffset}
           headers={[
             "申请用户",
             "开发板 / 说明",

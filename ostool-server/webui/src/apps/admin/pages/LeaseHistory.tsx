@@ -1,6 +1,7 @@
+import { ListPagination } from "@/components/list-pagination";
 import { MessageToast } from "@/components/message-toast";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Eye } from "lucide-react";
+import { Eye } from "lucide-react";
 import { useEdition } from "@/edition";
 import { admin, useErrors, useResource } from "@/api/events";
 import type { LeaseFilters, LeaseRecord } from "@/types/api";
@@ -97,47 +98,18 @@ export default function LeaseHistory() {
   const total = data?.total ?? 0,
     page = data?.page ?? 1,
     size = data?.page_size ?? filters.page_size ?? 20;
-  const pages = Math.max(1, Math.ceil(total / size));
   function change(value: Partial<LeaseFilters>) {
     setFilters((old) => ({ ...old, ...value, page: value.page ?? 1 }));
   }
   const footer = (
-    <div className="audit-pagination">
-      <span>{ready ? `共 ${total} 条会话记录` : "正在同步会话历史…"}</span>
-      <div>
-        <SelectField
-          label="每页条数"
-          hint=""
-          value={String(filters.page_size)}
-          onValue={(value) => change({ page_size: Number(value) })}
-          options={[10, 20, 50, 100].map((value) => ({
-            value: String(value),
-            label: `${value} 条/页`,
-          }))}
-        />
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          aria-label="上一页"
-          disabled={!ready || page <= 1}
-          onClick={() => change({ page: page - 1 })}
-        >
-          <ChevronLeft />
-        </Button>
-        <span>
-          第 {page} / {pages} 页
-        </span>
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          aria-label="下一页"
-          disabled={!ready || page >= pages}
-          onClick={() => change({ page: page + 1 })}
-        >
-          <ChevronRight />
-        </Button>
-      </div>
-    </div>
+    <ListPagination
+      total={total}
+      page={page}
+      size={size}
+      pending={!ready || !!filterError}
+      onPage={(page) => change({ page })}
+      onSize={(page_size) => change({ page_size })}
+    />
   );
   return (
     <>
@@ -215,6 +187,7 @@ export default function LeaseHistory() {
           value={!data?.active && !error && !filterError}
         >
           <DataTable
+            rowOffset={(page - 1) * size}
             headers={[
               "会话 / 设备",
               "使用用户",

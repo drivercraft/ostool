@@ -87,6 +87,7 @@ function ActiveSessions() {
         scrollKey={pagination.viewKey}
       >
         <DataTable
+          rowOffset={pagination.rowOffset}
           headers={[
             "会话",
             "开发板",

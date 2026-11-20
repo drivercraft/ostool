@@ -31,7 +31,7 @@ afterEach(() => {
 });
 it("shows table headers and loading placeholders before declaring the audit list empty", () => {
   const view = render(<Audits />);
-  expect(screen.getAllByRole("columnheader")).toHaveLength(7);
+  expect(screen.getAllByRole("columnheader")).toHaveLength(8);
   expect(screen.getByRole("status").textContent).toBe("正在加载数据");
   expect(screen.queryByText("暂无数据")).toBeNull();
   mocks.data = {

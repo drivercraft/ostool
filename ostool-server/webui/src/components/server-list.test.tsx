@@ -70,4 +70,23 @@ it("debounces search, retains the last page, and replaces it only when new data 
   );
   expect(hook.result.current.rows[0].id).toBe("replacement");
   expect(hook.result.current.updating).toBe(false);
+  act(() =>
+    admin.apply({
+      epoch: "e",
+      revision: 3,
+      kind: "update",
+      data: {
+        listing: {
+          ...page("new", "second-page"),
+          query: { view: "users", q: "new", page: 2, page_size: 20 },
+          page: 2,
+          total: 45,
+        },
+      },
+    }),
+  );
+  expect(hook.result.current.rowOffset).toBe(20);
+  hook.rerender({ q: "another-filter" });
+  expect(hook.result.current.rows[0].id).toBe("second-page");
+  expect(hook.result.current.rowOffset).toBe(20);
 });
