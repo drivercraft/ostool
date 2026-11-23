@@ -13,6 +13,7 @@ use std::{
 pub struct DtbFile {
     pub name: String,
     pub size: u64,
+    pub disabled: bool,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -26,7 +27,7 @@ impl DtbStore {
     }
     pub async fn list_all(&self) -> anyhow::Result<Vec<DtbFile>> {
         let db = &self.database;
-        sqlx::query("SELECT name,size,updated_at FROM dtb_records ORDER BY name")
+        sqlx::query("SELECT name,size,disabled,updated_at FROM dtb_records ORDER BY name")
             .fetch_all(db.pool())
             .await?
             .iter()
@@ -36,7 +37,7 @@ impl DtbStore {
     pub async fn get(&self, name: &str) -> anyhow::Result<Option<DtbFile>> {
         let name = normalize_dtb_name(name)?;
         let db = &self.database;
-        sqlx::query("SELECT name,size,updated_at FROM dtb_records WHERE name=$1")
+        sqlx::query("SELECT name,size,disabled,updated_at FROM dtb_records WHERE name=$1")
             .bind(name)
             .fetch_optional(db.pool())
             .await?
@@ -47,11 +48,24 @@ impl DtbStore {
     pub async fn read(&self, name: &str) -> anyhow::Result<Vec<u8>> {
         let name = normalize_dtb_name(name)?;
         let db = &self.database;
-        sqlx::query_scalar("SELECT content FROM dtb_records WHERE name=$1")
-            .bind(&name)
-            .fetch_optional(db.pool())
-            .await?
-            .with_context(|| format!("DTB {name} not found"))
+        let (disabled, content): (bool, Vec<u8>) =
+            sqlx::query_as("SELECT disabled,content FROM dtb_records WHERE name=$1")
+                .bind(&name)
+                .fetch_optional(db.pool())
+                .await?
+                .with_context(|| format!("DTB {name} not found"))?;
+        anyhow::ensure!(!disabled, "DTB {name} is disabled");
+        Ok(content)
+    }
+    pub async fn set_disabled(
+        &self,
+        name: &str,
+        disabled: bool,
+    ) -> anyhow::Result<Option<DtbFile>> {
+        let name = normalize_dtb_name(name)?;
+        sqlx::query("UPDATE dtb_records SET disabled=$2,updated_at=now() WHERE name=$1 RETURNING name,size,disabled,updated_at")
+            .bind(name).bind(disabled).fetch_optional(self.database.pool()).await?
+            .as_ref().map(dtb_from_row).transpose()
     }
     pub async fn write(&self, name: &str, bytes: &[u8]) -> anyhow::Result<DtbFile> {
         let name = normalize_dtb_name(name)?;
@@ -92,6 +106,7 @@ fn dtb_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<DtbFile> {
     Ok(DtbFile {
         name: row.try_get("name")?,
         size: row.try_get::<i64, _>("size")?.try_into()?,
+        disabled: row.try_get("disabled")?,
         updated_at: row.try_get("updated_at")?,
     })
 }

@@ -1,6 +1,11 @@
 import { MessageToast } from "@/components/message-toast";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import {
+  Link,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import { PagePanel, EditorFooter } from "@/components/page-panel";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -77,9 +82,18 @@ function RentalForm({
   context: RentalEditorData;
 }) {
   const users = context.users;
+  const [query] = useSearchParams();
   const [draft, setDraft] = useState<RentalInput>(() => ({
-    board_id: initial?.board_id ?? boards.find((b) => !b.disabled)?.id ?? "",
-    user_id: initial?.user_id ?? users.find((u) => !u.disabled)?.id ?? "",
+    board_id:
+      initial?.board_id ??
+      query.get("board") ??
+      boards.find((b) => !b.disabled)?.id ??
+      "",
+    user_id:
+      initial?.user_id ??
+      query.get("user") ??
+      users.find((u) => !u.disabled)?.id ??
+      "",
     starts_at: localDateTime(new Date(initial?.starts_at ?? Date.now())),
     ends_at: localDateTime(new Date(initial?.ends_at ?? Date.now() + 3600000)),
     notes: initial?.notes ?? "",

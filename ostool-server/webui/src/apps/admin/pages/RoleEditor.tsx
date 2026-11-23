@@ -1,5 +1,10 @@
 import { useId, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import {
+  Link,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import { useList } from "@/api/events";
 import { api } from "@/api/client";
 import type { RoleInput, UserRole, PermissionCapability } from "@/types/api";
@@ -21,6 +26,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { usePermissions } from "@/components/permissions";
 export default function RoleEditor() {
   const { roleId } = useParams();
+  const [query] = useSearchParams();
   const roles = useList("roles"),
     catalog = useList("permissions");
   const role = roles.find((r) => r.id === roleId);
@@ -31,13 +37,24 @@ export default function RoleEditor() {
         角色不存在或已删除。<Link to="/users/roles">返回角色列表</Link>
       </Notice>
     );
-  return <Editor key={roleId ?? "new"} role={role} catalog={catalog} />;
+  return (
+    <Editor
+      key={roleId ?? "new"}
+      role={role}
+      template={
+        !roleId ? roles.find((r) => r.id === query.get("copy")) : undefined
+      }
+      catalog={catalog}
+    />
+  );
 }
 function Editor({
   role,
+  template,
   catalog,
 }: {
   role?: UserRole;
+  template?: UserRole;
   catalog: PermissionCapability[];
 }) {
   const { can, user } = usePermissions(),
@@ -47,12 +64,13 @@ function Editor({
   const initial = (): RoleInput => ({
     revision: role?.revision,
     code: role?.code ?? "",
-    enabled: role?.enabled ?? true,
-    name: role?.name ?? "",
-    description: role?.description ?? "",
+    enabled: (role ?? template)?.enabled ?? true,
+    name: (role ?? template)?.name ?? "",
+    description: (role ?? template)?.description ?? "",
     permissions:
-      role?.permissions ?? ["board.use", "rental.request"].filter(can),
-    allocation_policy: role?.allocation_policy ??
+      (role ?? template)?.permissions ??
+      ["board.use", "rental.request"].filter(can),
+    allocation_policy: (role ?? template)?.allocation_policy ??
       user?.allocation_policy ?? {
         max_duration_minutes: 120,
         max_concurrent_sessions: 1,
@@ -118,7 +136,7 @@ function Editor({
       toolbar={
         <ListToolbar
           aria-label="角色快捷工具栏"
-          count={`${role?.name ?? "创建角色"} · 已选 ${selected.size} 项权限`}
+          count={`${(role ?? template)?.name ?? "创建角色"} · 已选 ${selected.size} 项权限`}
         >
           <TextField
             label="搜索权限"

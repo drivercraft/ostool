@@ -1,10 +1,13 @@
+import { useSearchParams } from "react-router-dom";
+import { Copy, CircuitBoard, Terminal } from "lucide-react";
+import { ListActions } from "@/components/list-actions";
 import { MessageToast } from "@/components/message-toast";
 import { Badge } from "@/components/ui/badge";
 import { Pencil as ActionEdit, CircleX as ActionCancel } from "lucide-react";
 import { RowAction } from "@/components/row-action";
 import { PagePanel } from "@/components/page-panel";
 import { useServerList } from "@/components/server-list";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/api/client";
 import { useList } from "@/api/events";
@@ -26,10 +29,13 @@ export const rentalStatusLabels = {
   cancelled: "已取消",
 };
 export default function Rentals() {
+  const [filters] = useSearchParams();
   const boards = useList("boards");
   const [status, setStatus] = useState("");
-  const [user, setUser] = useState("");
-  const [board, setBoard] = useState("");
+  const [user, setUser] = useState(filters.get("user") ?? "");
+  useEffect(() => setUser(filters.get("user") ?? ""), [filters]);
+  const [board, setBoard] = useState(filters.get("board") ?? "");
+  useEffect(() => setBoard(filters.get("board") ?? ""), [filters]);
   const [search, setSearch] = useState("");
   const pagination = useServerList("rentals", {
     q: search,
@@ -152,28 +158,62 @@ export default function Rentals() {
               </Cell>
               <Cell>{r.notes || "—"}</Cell>
               <Cell>
-                <div className="actions">
-                  <RowAction
-                    label="编辑"
-                    permission="rentals.manage"
-                    icon={ActionEdit}
-                    disabled={
-                      r.source === "instant" ||
-                      r.status === "expired" ||
-                      r.status === "cancelled"
-                    }
-                    to={`/rentals/${r.id}`}
-                  />
-                  {r.status !== "cancelled" && r.status !== "expired" && (
+                <ListActions
+                  primary={[
+                    <RowAction
+                      key="edit"
+                      label="编辑"
+                      permission="rentals.manage"
+                      icon={ActionEdit}
+                      disabled={
+                        r.source === "instant" ||
+                        r.status === "expired" ||
+                        r.status === "cancelled"
+                      }
+                      title={
+                        r.source === "instant"
+                          ? "即时使用租赁不支持编辑"
+                          : r.status === "expired" || r.status === "cancelled"
+                            ? "租赁已结束，不能编辑"
+                            : "编辑"
+                      }
+                      to={`/rentals/${r.id}`}
+                    />,
                     <ConfirmAction
+                      key="cancel"
                       permission="rentals.manage"
                       icon={ActionCancel}
                       label="取消租赁"
+                      disabled={
+                        r.status === "cancelled" || r.status === "expired"
+                      }
                       description={`取消 ${r.board_id} 的租赁？相关会话会终止，并按正常流程断电、清理文件。`}
                       action={() => api.cancelRental(r.id)}
-                    />
-                  )}
-                </div>
+                    />,
+                  ]}
+                >
+                  <RowAction
+                    key="基于此新建"
+                    label="基于此新建"
+                    icon={Copy}
+                    permission="rentals.manage"
+                    to={`/rentals/new?board=${encodeURIComponent(r.board_id)}&user=${encodeURIComponent(r.user_id)}`}
+                  />
+                  <RowAction
+                    key="转到开发板"
+                    label="转到开发板"
+                    icon={CircuitBoard}
+                    permission="devices.manage"
+                    to={`/boards/${encodeURIComponent(r.board_id)}`}
+                  />
+                  <RowAction
+                    key="转到会话"
+                    label="转到会话"
+                    icon={Terminal}
+                    permission="sessions.read"
+                    to={`/sessions?board=${encodeURIComponent(r.board_id)}`}
+                  />
+                </ListActions>
               </Cell>
             </Row>
           ))}

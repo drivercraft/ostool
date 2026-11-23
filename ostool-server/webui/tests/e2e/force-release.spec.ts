@@ -72,16 +72,19 @@ test("administrators can remove failed sessions without an offline device recove
     ).toBe(200);
     await allocate();
     await page.goto("/qcl/boards");
+    await board.getByRole("button", { name: "更多", exact: true }).click();
     await expect(
-      board.getByRole("button", { name: "强制释放", exact: true }),
+      page.getByRole("menuitem", { name: "强制释放", exact: true }),
     ).toBeEnabled();
+    await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "切换列表布局" }).click();
     await page.getByRole("menuitemradio", { name: /卡片视图/ }).click();
     const card = page.getByRole("listitem").filter({ hasText: id });
+    await card.getByRole("button", { name: "更多", exact: true }).click();
     await expect(
-      card.getByRole("button", { name: "删除", exact: true }),
+      page.getByRole("menuitem", { name: "删除", exact: true }),
     ).toBeEnabled();
-    await card.getByRole("button", { name: "删除", exact: true }).click();
+    await page.getByRole("menuitem", { name: "删除", exact: true }).click();
     await expect(page.getByRole("dialog")).toContainText("强制结束其会话");
     const deleted = page.waitForResponse(
       (response) =>

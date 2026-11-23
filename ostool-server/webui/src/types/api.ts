@@ -269,6 +269,7 @@ export interface BoardTypeSummary {
 }
 
 export interface DtbFileResponse {
+  disabled: boolean;
   name: string;
   size: number;
   updated_at: string;

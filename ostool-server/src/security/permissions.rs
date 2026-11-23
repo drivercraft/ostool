@@ -98,8 +98,8 @@ pub const CATALOG: &[Capability] = &[
     ),
     cap!(
         "sessions.manage",
-        "释放会话",
-        "结束设备会话并执行清理",
+        "管理会话",
+        "结束设备会话、执行清理并删除已结束的会话历史",
         "使用与租赁",
         ["sessions.read"]
     ),

@@ -195,7 +195,7 @@ test("public member profile, rental request approval, theme and password lifecyc
     const adminRow = admin
       .getByRole("row")
       .filter({ has: admin.getByRole("cell", { name: email, exact: true }) });
-    await adminRow.getByRole("button", { name: "批准", exact: true }).click();
+    await adminRow.getByRole("button", { name: "同意", exact: true }).click();
     await admin.getByLabel("审核意见").fill("按时归还开发板");
     await admin.getByRole("button", { name: "确认审核", exact: true }).click();
     await expect(memberRow.getByText("已通过", { exact: true })).toBeVisible();

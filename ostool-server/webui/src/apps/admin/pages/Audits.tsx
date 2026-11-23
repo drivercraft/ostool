@@ -1,3 +1,4 @@
+import { ListActions } from "@/components/list-actions";
 import { ListPagination } from "@/components/list-pagination";
 import { MessageToast } from "@/components/message-toast";
 import { Badge } from "@/components/ui/badge";
@@ -390,11 +391,16 @@ export default function Audits() {
                 </small>
               </Cell>
               <Cell>
-                <RowAction
-                  label="详情"
-                  icon={Eye}
-                  onClick={() => void open(row.id)}
-                />
+                <ListActions
+                  primary={[
+                    <RowAction
+                      key="详情"
+                      label="详情"
+                      icon={Eye}
+                      onClick={() => void open(row.id)}
+                    />,
+                  ]}
+                ></ListActions>
               </Cell>
             </Row>
           ))}

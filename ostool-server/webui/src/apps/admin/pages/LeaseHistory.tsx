@@ -1,7 +1,9 @@
+import { ListActions } from "@/components/list-actions";
 import { ListPagination } from "@/components/list-pagination";
 import { MessageToast } from "@/components/message-toast";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Eye } from "lucide-react";
+import { Eye, CircuitBoard, Trash2 } from "lucide-react";
+import { api } from "@/api/client";
 import { useEdition } from "@/edition";
 import { admin, useErrors, useResource } from "@/api/events";
 import type { LeaseFilters, LeaseRecord } from "@/types/api";
@@ -19,6 +21,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import {
+  ConfirmAction,
   DataTable,
   Row,
   Cell,
@@ -195,7 +198,8 @@ export default function LeaseHistory() {
               "客户端",
               "起止时间",
               "使用时长",
-              "状态 / 结束原因",
+              "状态",
+              "结束原因",
               "操作",
             ]}
             empty={!rows.length}
@@ -245,21 +249,46 @@ export default function LeaseHistory() {
                         ? "释放中"
                         : "使用中"}
                   </Badge>
-                  <small>
-                    {record.end_reason
-                      ? (reasons[record.end_reason] ?? record.end_reason)
-                      : "—"}
-                  </small>
                   {record.release_failures > 0 && (
                     <small>曾重试释放 {record.release_failures} 次</small>
                   )}
                 </Cell>
                 <Cell>
-                  <RowAction
-                    label="会话详情"
-                    icon={Eye}
-                    onClick={() => setDetails(record)}
-                  />
+                  {record.end_reason
+                    ? (reasons[record.end_reason] ?? record.end_reason)
+                    : "—"}
+                </Cell>
+                <Cell>
+                  <ListActions
+                    primary={[
+                      <RowAction
+                        key="会话详情"
+                        label="会话详情"
+                        icon={Eye}
+                        onClick={() => setDetails(record)}
+                      />,
+                      record.ended_at && (
+                        <ConfirmAction
+                          key="删除"
+                          label="删除"
+                          icon={Trash2}
+                          permission="sessions.manage"
+                          description={`永久删除会话 ${record.session_id} 的历史记录？`}
+                          action={() =>
+                            api.deleteSessionHistory(record.session_id)
+                          }
+                        />
+                      ),
+                    ]}
+                  >
+                    <RowAction
+                      key="查看开发板"
+                      label="查看开发板"
+                      icon={CircuitBoard}
+                      permission="devices.manage"
+                      to={`/boards/${encodeURIComponent(record.board_id)}`}
+                    />
+                  </ListActions>
                 </Cell>
               </Row>
             ))}

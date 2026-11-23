@@ -644,6 +644,7 @@ fn intent(method: &Method, path: &str, payload: &Value) -> Option<Intent> {
         ("dtbs", _, "POST") => ("dtb.create", "上传 DTB"),
         ("dtbs", _, "DELETE") => ("dtb.delete", "删除 DTB"),
         ("dtbs", _, _) => ("dtb.update", "修改 DTB"),
+        ("session-history", _, "DELETE") => ("session.history.delete", "删除会话历史"),
         ("sessions", None, _) => ("session.create", "创建板卡会话"),
         ("sessions", _, "DELETE") if parts.len() == 2 => ("session.release", "释放板卡会话"),
         ("sessions", _, _) => ("session.operation", "执行会话操作"),

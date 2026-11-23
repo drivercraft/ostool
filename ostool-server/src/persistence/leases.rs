@@ -134,7 +134,37 @@ pub struct LeasePage {
     pub page: i64,
     pub page_size: i64,
 }
+pub enum LeaseDeletion {
+    Deleted,
+    NotFound,
+    Active,
+}
+
 impl Database {
+    /// Lock the record so a concurrent lifecycle update cannot race deletion.
+    pub async fn delete_ended_lease(&self, id: &str) -> anyhow::Result<LeaseDeletion> {
+        let mut tx = self.begin().await?;
+        let ended: Option<Option<DateTime<Utc>>> = sqlx::query_scalar(
+            "SELECT ended_at FROM session_history WHERE session_id=$1 FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let result = match ended {
+            None => LeaseDeletion::NotFound,
+            Some(None) => LeaseDeletion::Active,
+            Some(Some(_)) => {
+                sqlx::query("DELETE FROM session_history WHERE session_id=$1")
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+                LeaseDeletion::Deleted
+            }
+        };
+        tx.commit().await?;
+        Ok(result)
+    }
+
     pub async fn start_lease(&self, session: &Session, board: &BoardConfig) -> anyhow::Result<()> {
         sqlx::query("INSERT INTO session_history(session_id,board_id,board_type,client_name,created_at,last_heartbeat_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)")
             .bind(&session.id).bind(&session.board_id).bind(&board.board_type).bind(&session.client_name)

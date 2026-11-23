@@ -1,3 +1,6 @@
+import { ListActions } from "@/components/list-actions";
+import { RowAction } from "@/components/row-action";
+import { Pencil, CircuitBoard } from "lucide-react";
 import { useListPage } from "@/components/list-pagination";
 import { MessageToast } from "@/components/message-toast";
 import { useEffect, useId, useState } from "react";
@@ -77,12 +80,23 @@ export default function DeviceDocuments() {
             <Cell>{summaries[board.id]?.title || "尚未填写"}</Cell>
             <Cell>{summaries[board.id] ? "已发布" : "待编写"}</Cell>
             <Cell>
-              <Button asChild permission="devices.manage" variant="outline">
-                <Link to={`/device-documents/${encodeURIComponent(board.id)}`}>
-                  <FileText />
-                  编辑文档
-                </Link>
-              </Button>
+              <ListActions
+                edit={
+                  <RowAction
+                    label="修改"
+                    icon={Pencil}
+                    permission="devices.manage"
+                    to={`/device-documents/${encodeURIComponent(board.id)}`}
+                  />
+                }
+              >
+                <RowAction
+                  label="转到开发板"
+                  icon={CircuitBoard}
+                  permission="devices.manage"
+                  to={`/boards/${encodeURIComponent(board.id)}`}
+                />
+              </ListActions>
             </Cell>
           </Row>
         ))}

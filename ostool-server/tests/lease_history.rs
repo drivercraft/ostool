@@ -440,3 +440,163 @@ async fn failed_history_write_cannot_allocate_hardware() {
             .is_none()
     );
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn history_deletion_only_removes_ended_records_and_keeps_the_board() {
+    let f = Fixture::new(false).await;
+    let id = f.create(None).await;
+    let path = format!("/api/v1/admin/session-history/{id}");
+    assert_eq!(
+        f.call("DELETE", &path, None, Value::Null).await.0,
+        StatusCode::CONFLICT
+    );
+    assert!(f.state.get_session(&id).await.is_some());
+    assert_eq!(
+        f.state
+            .database
+            .lease_page(&LeaseFilters::default())
+            .await
+            .unwrap()
+            .total,
+        1
+    );
+    assert_eq!(
+        f.call(
+            "DELETE",
+            &format!("/api/v1/admin/sessions/{id}"),
+            None,
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::ACCEPTED
+    );
+    f.wait_ended(&id).await;
+    assert_eq!(
+        f.call("DELETE", &path, None, Value::Null).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        f.state
+            .database
+            .lease_page(&LeaseFilters::default())
+            .await
+            .unwrap()
+            .total,
+        0
+    );
+    assert!(f.state.boards.read().await.contains_key("history-board"));
+    assert_eq!(
+        f.call("DELETE", &path, None, Value::Null).await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn history_deletion_requires_session_management_permission() {
+    let f = Fixture::new(true).await;
+    let manager = f
+        .state
+        .database
+        .create_user(
+            "history_admin",
+            "history-admin@test.local",
+            "history-admin-password",
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+    let manager = f
+        .state
+        .database
+        .issue_grant(
+            manager,
+            "admin-web",
+            "board:operate",
+            &f.state.config.read().await.auth,
+        )
+        .await
+        .unwrap();
+    let session = Session::new("history-board".into(), None);
+    f.state
+        .database
+        .start_lease(&session, &board())
+        .await
+        .unwrap();
+    f.state
+        .database
+        .finish_lease(&session.id, "admin_released")
+        .await
+        .unwrap();
+    assert_eq!(f.call("POST", "/api/v1/admin/roles", Some(&manager.access_token), json!({"code":"history_reader","name":"History reader","enabled":true,"description":"","permissions":["sessions.read"]})).await.0, StatusCode::CREATED);
+    let role: String = sqlx::query_scalar("SELECT id FROM roles WHERE code='history_reader'")
+        .fetch_one(f.state.database.pool())
+        .await
+        .unwrap();
+    let user = f
+        .state
+        .database
+        .create_user(
+            "history_reader",
+            "history-reader@test.local",
+            "history-reader-password",
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    sqlx::query("UPDATE users SET role_id=$1 WHERE id=$2")
+        .bind(role)
+        .bind(user.id)
+        .execute(f.state.database.pool())
+        .await
+        .unwrap();
+    let user = f
+        .state
+        .database
+        .find_user("history-reader@test.local")
+        .await
+        .unwrap()
+        .unwrap();
+    let grant = f
+        .state
+        .database
+        .issue_grant(
+            user,
+            "admin-web",
+            "board:operate",
+            &f.state.config.read().await.auth,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        f.call(
+            "GET",
+            "/api/v1/admin/session-history",
+            Some(&grant.access_token),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let path = format!("/api/v1/admin/session-history/{}", session.id);
+    assert_eq!(
+        f.call("DELETE", &path, Some(&grant.access_token), Value::Null)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        f.state
+            .database
+            .lease_page(&LeaseFilters::default())
+            .await
+            .unwrap()
+            .total,
+        1
+    );
+}

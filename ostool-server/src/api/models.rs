@@ -215,6 +215,7 @@ pub struct VirtualDevicesResponse {
 pub struct DtbFileResponse {
     pub name: String,
     pub size: u64,
+    pub disabled: bool,
     pub updated_at: DateTime<Utc>,
     pub relative_tftp_path_template: String,
 }
@@ -226,6 +227,7 @@ impl DtbFileResponse {
             relative_tftp_path_template: format!("boot/dtb/{name}"),
             name,
             size: file.size,
+            disabled: file.disabled,
             updated_at: file.updated_at,
         }
     }

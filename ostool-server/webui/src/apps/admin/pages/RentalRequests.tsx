@@ -1,3 +1,5 @@
+import { ListActions } from "@/components/list-actions";
+import { CircuitBoard } from "lucide-react";
 import { MessageToast } from "@/components/message-toast";
 import { Badge } from "@/components/ui/badge";
 import { Check as ActionApprove, X as ActionReject } from "lucide-react";
@@ -78,7 +80,8 @@ export default function RentalRequests() {
             "申请用户",
             "开发板 / 说明",
             "申请时段",
-            "状态 / 审核意见",
+            "状态",
+            "审核意见",
             "操作",
           ]}
           empty={!page.rows.length}
@@ -109,25 +112,39 @@ export default function RentalRequests() {
                 >
                   {requestStatusLabels[r.status]}
                 </Badge>
-                <small className="block">{r.decision_note || "—"}</small>
               </Cell>
+              <Cell>{r.decision_note || "—"}</Cell>
               <Cell>
-                {r.status === "pending" && (
-                  <div className="row-actions">
-                    <RowAction
-                      label="批准"
-                      permission="requests.manage"
-                      icon={ActionApprove}
-                      onClick={() => open(r, "approve")}
-                    />
-                    <RowAction
-                      label="拒绝"
-                      permission="requests.manage"
-                      icon={ActionReject}
-                      onClick={() => open(r, "reject")}
-                    />
-                  </div>
-                )}
+                <ListActions
+                  primary={
+                    r.status === "pending"
+                      ? [
+                          <RowAction
+                            key="批准"
+                            label="同意"
+                            permission="requests.manage"
+                            icon={ActionApprove}
+                            onClick={() => open(r, "approve")}
+                          />,
+                          <RowAction
+                            key="拒绝"
+                            label="拒绝"
+                            permission="requests.manage"
+                            icon={ActionReject}
+                            onClick={() => open(r, "reject")}
+                          />,
+                        ]
+                      : []
+                  }
+                >
+                  <RowAction
+                    key="转到开发板"
+                    label="转到开发板"
+                    icon={CircuitBoard}
+                    permission="devices.manage"
+                    to={`/boards/${encodeURIComponent(r.board_id)}`}
+                  />
+                </ListActions>
               </Cell>
             </Row>
           ))}
@@ -142,7 +159,7 @@ export default function RentalRequests() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {editor?.decision === "approve" ? "批准租赁申请" : "拒绝租赁申请"}
+              {editor?.decision === "approve" ? "同意租赁申请" : "拒绝租赁申请"}
             </DialogTitle>
           </DialogHeader>
           <DialogBody>

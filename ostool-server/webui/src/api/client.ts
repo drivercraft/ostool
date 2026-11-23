@@ -627,6 +627,12 @@ export const api = {
       },
     );
   },
+  setDtbDisabled(name: string, disabled: boolean) {
+    return request<DtbFileResponse>(
+      `/api/v1/admin/dtbs/${encodeURIComponent(name)}`,
+      { method: "PATCH", bodyJson: { disabled } },
+    );
+  },
   deleteDtb(dtbName: string) {
     return request<void>(`/api/v1/admin/dtbs/${encodeURIComponent(dtbName)}`, {
       method: "DELETE",
@@ -662,6 +668,12 @@ export const api = {
       {
         method: "DELETE",
       },
+    );
+  },
+  deleteSessionHistory(sessionId: string) {
+    return request<void>(
+      `/api/v1/admin/session-history/${encodeURIComponent(sessionId)}`,
+      { method: "DELETE" },
     );
   },
   deleteSession(sessionId: string, force = false) {

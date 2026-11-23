@@ -307,8 +307,8 @@ token=<refresh_token>
 | axloader 设备发现 | `GET /api/v1/admin/loader-devices` |
 | QEMU 虚拟设备 | `GET /api/v1/admin/virtual-devices`；`POST /api/v1/admin/virtual-devices`；`DELETE /api/v1/admin/virtual-devices/{device_id}` |
 | DTB 列表与创建 | `GET /api/v1/admin/dtbs`；`POST /api/v1/admin/dtbs` |
-| 单个 DTB | `GET /api/v1/admin/dtbs/{dtb_name}`；`PUT /api/v1/admin/dtbs/{dtb_name}`；`DELETE /api/v1/admin/dtbs/{dtb_name}` |
-| 会话历史 | `GET /api/v1/admin/session-history` |
+| 单个 DTB | `GET`、`PUT`、`PATCH`、`DELETE /api/v1/admin/dtbs/{dtb_name}` |
+| 会话历史 | `GET /api/v1/admin/session-history`、`DELETE /api/v1/admin/session-history/{session_id}` |
 | 活动会话 | `GET /api/v1/admin/sessions`；`DELETE /api/v1/admin/sessions/{session_id}` |
 | TFTP 配置 | `GET /api/v1/admin/tftp`；`PUT /api/v1/admin/tftp` |
 | TFTP 状态与协调 | `GET /api/v1/admin/tftp/status`；`POST /api/v1/admin/tftp/reconcile` |
@@ -588,6 +588,7 @@ GET /api/v1/admin/dtbs/{dtb_name}
 ```json
 {
   "name": "rk3588-orangepi-5-plus.dtb",
+  "disabled": false,
   "size": 131072,
   "updated_at": "2026-07-30T06:00:00Z",
   "relative_tftp_path_template": "boot/dtb/rk3588-orangepi-5-plus.dtb"
@@ -623,6 +624,11 @@ DELETE /api/v1/admin/dtbs/{dtb_name}
 ```
 
 删除成功返回 `204 No Content`。仍被任一开发板引用时返回 `409 Conflict`，不存在时返回 `404 Not Found`。
+
+DTB 默认启用，既有记录迁移后也保持启用。`PATCH /api/v1/admin/dtbs/{dtb_name}` 接收 `{ "disabled": true | false }`，要求 `dtbs.manage`，返回更新后的元数据；不存在返回 `404`。
+禁用后不能在开发板表单中选用，服务端拒绝新绑定或启用仍引用该 DTB 的开发板（`409`），会话分配跳过引用禁用 DTB 的开发板；DTB 下载与缓存加载同样拒绝禁用文件（`409`）。
+已有开发板引用保留，可将板卡禁用或改选其他 DTB。活动会话正在引用该 DTB 时不允许禁用或重命名，须先释放会话（`409`）。
+重命名和替换内容保留禁用状态，重新启用后可继续使用。状态通过 `dtbs` SSE topic 更新，不需要重新获取列表。
 
 ### 活动会话管理
 
@@ -682,6 +688,8 @@ DELETE /api/v1/admin/sessions/{session_id}
 `authorization_unavailable,server_shutdown,server_interrupted,session_dropped`。
 未结束记录的 `ended_at/end_reason` 为 null。重启发现的遗留连接记为 `server_interrupted`，
 其结束时间是发现时间，最后心跳更接近最后可确认的使用时间。删除账号或设备不会删除历史。
+
+`sessions.manage` 可调用 `DELETE /api/v1/admin/session-history/{session_id}` 显式删除已结束历史，成功返回 `204`，不存在返回 `404`，未结束（包括释放中）返回 `409`。该操作仅删除历史记录，保留开发板、租赁和审计记录，不会释放活动会话。删除后通过 `session_history` SSE topic 更新分页列表。
 
 后台订阅 `GET /api/v1/admin/events?lease_view=1&lease_page=1&lease_page_size=20`，
 其他筛选参数同样加 `lease_` 前缀；`session_history` topic 推送对应分页结果。

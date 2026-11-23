@@ -1,3 +1,7 @@
+import { EnableAction } from "@/components/enable-action";
+import { Badge } from "@/components/ui/badge";
+import { CircuitBoard } from "lucide-react";
+import { ListActions } from "@/components/list-actions";
 import { Pencil as ActionEdit, Trash2 as ActionDelete } from "lucide-react";
 import { RowAction } from "@/components/row-action";
 import { PagePanel } from "@/components/page-panel";
@@ -143,21 +147,53 @@ export default function Dtbs() {
       >
         <DataTable
           rowOffset={pagination.rowOffset}
-          headers={["名称", "大小", "更新时间", "TFTP 路径模板", "操作"]}
+          headers={[
+            "名称",
+            "状态",
+            "大小",
+            "更新时间",
+            "TFTP 路径模板",
+            "操作",
+          ]}
           empty={!filtered.length}
         >
           {pagination.rows.map((d) => (
             <Row key={d.name}>
               <Cell className="mono">{d.name}</Cell>
+              <Cell>
+                <Badge variant={d.disabled ? "secondary" : "success"}>
+                  {d.disabled ? "已禁用" : "已启用"}
+                </Badge>
+              </Cell>
               <Cell>{formatSize(d.size)}</Cell>
               <Cell>{new Date(d.updated_at).toLocaleString()}</Cell>
               <Cell className="mono">{d.relative_tftp_path_template}</Cell>
               <Cell>
-                <div className="actions">
+                <ListActions
+                  edit={
+                    <RowAction
+                      key="修改"
+                      label="修改"
+                      permission="dtbs.manage"
+                      icon={ActionEdit}
+                      onClick={() => setEditing(d)}
+                    />
+                  }
+                  enable={
+                    <EnableAction
+                      enabled={!d.disabled}
+                      name={`DTB ${d.name}`}
+                      permission="dtbs.manage"
+                      action={(enabled) => api.setDtbDisabled(d.name, !enabled)}
+                    />
+                  }
+                >
                   <RowAction
-                    label="修改"
-                    icon={ActionEdit}
-                    onClick={() => setEditing(d)}
+                    key="转到开发板"
+                    label="转到开发板"
+                    icon={CircuitBoard}
+                    permission="devices.read"
+                    to="/boards"
                   />
                   <ConfirmAction
                     permission="dtbs.manage"
@@ -166,7 +202,7 @@ export default function Dtbs() {
                     description={`删除 DTB ${d.name}？已被板卡引用的文件不能删除。`}
                     action={() => api.deleteDtb(d.name)}
                   />
-                </div>
+                </ListActions>
               </Cell>
             </Row>
           ))}

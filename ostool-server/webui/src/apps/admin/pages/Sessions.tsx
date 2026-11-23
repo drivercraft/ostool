@@ -1,3 +1,6 @@
+import { RowAction } from "@/components/row-action";
+import { CircuitBoard, Calendar } from "lucide-react";
+import { ListActions } from "@/components/list-actions";
 import { Unplug as ActionRelease } from "lucide-react";
 import { ForceReleaseAction } from "@/components/force-release-action";
 import { PagePanel } from "@/components/page-panel";
@@ -29,11 +32,13 @@ export default function Sessions() {
   );
 }
 function ActiveSessions() {
+  const [filters] = useSearchParams();
   const sessions = useList("sessions"),
     boards = useList("boards"),
     runtimes = useResource("runtimes") ?? {};
   const [search, setSearch] = useState("");
-  const [board, setBoard] = useState("");
+  const [board, setBoard] = useState(filters.get("board") ?? "");
+  useEffect(() => setBoard(filters.get("board") ?? ""), [filters]);
   const [status, setStatus] = useState("");
   const filtered = sessions.filter(
     (s) =>
@@ -145,19 +150,40 @@ function ActiveSessions() {
                 />
               </Cell>
               <Cell>
-                <div className="actions">
-                  <ConfirmAction
-                    permission="sessions.manage"
-                    icon={ActionRelease}
-                    label="释放会话"
-                    description={`请求释放 ${s.board_id} 的会话？服务器会停止任务并断电，清理完成后资源才重新可用。`}
-                    action={() => api.deleteSession(s.id)}
-                    disabled={
-                      sessionPresentation(s, runtimes[s.board_id]).releasing
-                    }
+                <ListActions
+                  primary={[
+                    <ConfirmAction
+                      permission="sessions.manage"
+                      icon={ActionRelease}
+                      label="释放会话"
+                      description={`请求释放 ${s.board_id} 的会话？服务器会停止任务并断电，清理完成后资源才重新可用。`}
+                      action={() => api.deleteSession(s.id)}
+                      disabled={
+                        sessionPresentation(s, runtimes[s.board_id]).releasing
+                      }
+                    />,
+                    <ForceReleaseAction
+                      key="force-release"
+                      sessionId={s.id}
+                      boardId={s.board_id}
+                    />,
+                  ]}
+                >
+                  <RowAction
+                    key="转到开发板"
+                    label="转到开发板"
+                    icon={CircuitBoard}
+                    permission="devices.manage"
+                    to={`/boards/${encodeURIComponent(s.board_id)}`}
                   />
-                  <ForceReleaseAction sessionId={s.id} boardId={s.board_id} />
-                </div>
+                  <RowAction
+                    key="转到租赁"
+                    label="转到租赁"
+                    icon={Calendar}
+                    permission="rentals.read"
+                    to={`/rentals?board=${encodeURIComponent(s.board_id)}`}
+                  />
+                </ListActions>
               </Cell>
             </Row>
           ))}

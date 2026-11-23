@@ -815,3 +815,101 @@ it("keeps new public HTTPboot boards disabled until device authentication can be
     expect.objectContaining({ disabled: true, allow_instant_use: true }),
   );
 });
+
+it("copies existing board data into a new draft only on explicit selection", async () => {
+  const source: BoardConfig = {
+    id: "template",
+    board_type: "arm-template",
+    tags: ["lab"],
+    notes: "template notes",
+    disabled: true,
+    serial: null,
+    network_identity: null,
+    power_management: {
+      kind: "custom",
+      power_on_cmd: "echo on",
+      power_off_cmd: "echo off",
+    },
+    boot: { kind: "pxe", notes: "PXE template" },
+  };
+  const create = vi.spyOn(api, "createBoard");
+  mount(source, "/boards/new");
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "复制已有数据" }));
+  await user.selectOptions(screen.getByLabelText("已有开发板"), source.id);
+  await user.click(screen.getByRole("button", { name: "复制到当前表单" }));
+  await waitFor(() =>
+    expect(screen.getByLabelText("板型")).toHaveValue("arm-template"),
+  );
+  expect(screen.getByLabelText("ID")).toHaveValue("");
+  expect(screen.getByLabelText("备注")).toHaveValue("template notes");
+  expect(screen.getByLabelText("上电命令")).toHaveValue("echo on");
+  expect(create).not.toHaveBeenCalled();
+  await user.clear(screen.getByLabelText("备注"));
+  await user.type(screen.getByLabelText("备注"), "local draft");
+  act(() =>
+    admin.apply({
+      epoch: "copy-refresh",
+      revision: 1,
+      kind: "snapshot",
+      data: {
+        board_editor: {
+          id: source.id,
+          board: { ...source, notes: "remote update" },
+        },
+      },
+    }),
+  );
+  expect(screen.getByLabelText("备注")).toHaveValue("local draft");
+  await user.click(screen.getByRole("button", { name: "复制已有数据" }));
+  await user.selectOptions(screen.getByLabelText("已有开发板"), source.id);
+  await user.click(screen.getByRole("button", { name: "复制到当前表单" }));
+  await waitFor(() =>
+    expect(screen.getByLabelText("备注")).toHaveValue("remote update"),
+  );
+});
+
+it("initializes a board draft from the list copy shortcut", async () => {
+  const source = httpBootBoard();
+  mount(source, `/boards/new?copy=${source.id}`, [], [], false);
+  await waitFor(() =>
+    expect(screen.getByLabelText("板型")).toHaveValue(source.board_type),
+  );
+  expect(screen.getByLabelText("ID")).toHaveValue("");
+  expect(screen.getByRole("switch", { name: "禁用开发板" })).toBeChecked();
+});
+
+it("shows disabled DTBs as unavailable choices without changing the draft", () => {
+  mount(undefined, "/boards/new");
+  act(() =>
+    admin.apply({
+      epoch: "dtb-status",
+      revision: 1,
+      kind: "snapshot",
+      data: {
+        dtbs: [
+          {
+            name: "enabled.dtb",
+            disabled: false,
+            size: 10,
+            updated_at: "2026-11-01T00:00:00Z",
+            relative_tftp_path_template: "boot/dtb/enabled.dtb",
+          },
+          {
+            name: "disabled.dtb",
+            disabled: true,
+            size: 10,
+            updated_at: "2026-11-01T00:00:00Z",
+            relative_tftp_path_template: "boot/dtb/disabled.dtb",
+          },
+        ],
+      },
+    }),
+  );
+  expect(
+    screen.getByRole("option", { name: "disabled.dtb（已禁用）" }),
+  ).toBeDisabled();
+  expect(
+    screen.getByRole("option", { name: "enabled.dtb" }),
+  ).not.toBeDisabled();
+});

@@ -1,3 +1,6 @@
+import { useSearchParams } from "react-router-dom";
+import { Copy, UsersRound, Calendar } from "lucide-react";
+import { ListActions } from "@/components/list-actions";
 import { MessageToast } from "@/components/message-toast";
 import { Badge } from "@/components/ui/badge";
 import { Pencil as ActionEdit, Trash2 as ActionDelete } from "lucide-react";
@@ -7,7 +10,7 @@ import { usePermissions } from "@/components/permissions";
 import { PagePanel } from "@/components/page-panel";
 import { useServerList } from "@/components/server-list";
 import { ListToolbar } from "@/components/list-toolbar";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { api } from "@/api/client";
 import { useList, useResource } from "@/api/events";
 import type { ManagedUser, UserInput } from "@/types/api";
@@ -35,12 +38,14 @@ import {
 } from "@/components/forms";
 
 export default function Users() {
+  const [filters] = useSearchParams();
   const { user: currentUser } = usePermissions();
   const formId = useId();
   const roles = useList("roles"),
     deployment = useResource("deployment");
   const [search, setSearch] = useState("");
-  const [roleFilter, setRoleFilter] = useState("");
+  const [roleFilter, setRoleFilter] = useState(filters.get("role") ?? "");
+  useEffect(() => setRoleFilter(filters.get("role") ?? ""), [filters]);
   const [statusFilter, setStatusFilter] = useState("");
   const [editor, setEditor] = useState<{
     id?: string;
@@ -162,19 +167,54 @@ export default function Users() {
               </Cell>
               <Cell>{new Date(user.created_at).toLocaleString()}</Cell>
               <Cell>
-                <div className="actions">
-                  <EnableAction
-                    enabled={!user.disabled}
-                    name={`用户 ${user.username}`}
+                <ListActions
+                  edit={
+                    <RowAction
+                      label="修改"
+                      permission="users.manage"
+                      icon={ActionEdit}
+                      onClick={() => open(user)}
+                    />
+                  }
+                  enable={
+                    <EnableAction
+                      enabled={!user.disabled}
+                      name={`用户 ${user.username}`}
+                      permission="users.manage"
+                      disabled={currentUser?.id === user.id}
+                      action={(enabled) =>
+                        api.setUserDisabled(user.id, !enabled)
+                      }
+                    />
+                  }
+                >
+                  <RowAction
+                    label="基于此新建"
+                    icon={Copy}
                     permission="users.manage"
-                    disabled={currentUser?.id === user.id}
-                    action={(enabled) => api.setUserDisabled(user.id, !enabled)}
+                    onClick={() => {
+                      setEditor({
+                        draft: {
+                          username: "",
+                          email: "",
+                          display_name: user.display_name ?? "",
+                          role_id: user.role_id,
+                          disabled: user.disabled,
+                        },
+                      });
+                    }}
                   />
                   <RowAction
-                    label="编辑"
-                    permission="users.manage"
-                    icon={ActionEdit}
-                    onClick={() => open(user)}
+                    label="转到角色"
+                    icon={UsersRound}
+                    permission="roles.read"
+                    to={`/users/roles/${encodeURIComponent(user.role_id)}`}
+                  />
+                  <RowAction
+                    label="转到租赁"
+                    icon={Calendar}
+                    permission="rentals.read"
+                    to={`/rentals?user=${encodeURIComponent(user.id)}`}
                   />
                   <ConfirmAction
                     permission="users.manage"
@@ -183,7 +223,7 @@ export default function Users() {
                     description={`永久删除 ${user.email} 及其登录令牌？`}
                     action={() => api.deleteUser(user.id)}
                   />
-                </div>
+                </ListActions>
               </Cell>
             </Row>
           ))}

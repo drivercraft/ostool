@@ -160,7 +160,8 @@ test("all management modules, DTB CRUD, session release and narrow viewport", as
   await expect(
     page.getByRole("cell", { name: "renamed.dtb", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "删除", exact: true }).click();
+  await page.getByRole("button", { name: "更多", exact: true }).click();
+  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await page.getByRole("button", { name: "确认", exact: true }).click();
   await expect(
     page.getByRole("cell", { name: "renamed.dtb", exact: true }),

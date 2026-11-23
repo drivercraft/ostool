@@ -389,6 +389,7 @@ export function ConfirmAction({
     <>
       {icon ? (
         <RowAction
+          keepMenuOpen
           label={label}
           permission={permission}
           icon={icon}

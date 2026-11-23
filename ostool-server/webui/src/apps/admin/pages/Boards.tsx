@@ -1,8 +1,9 @@
+import { Copy, Terminal, Calendar, FileText } from "lucide-react";
+import { ListActions } from "@/components/list-actions";
 import { usePermissions } from "@/components/permissions";
 import {
   Pencil as ActionEdit,
   Trash2 as ActionDelete,
-  Eye as ActionView,
   Plus as ActionCreate,
 } from "lucide-react";
 import { RowAction } from "@/components/row-action";
@@ -251,24 +252,58 @@ export default function Boards() {
                         : "HTTP Boot"}
                   </Cell>
                   <Cell>
-                    <div className="actions">
-                      <EnableAction
-                        enabled={!b.disabled}
-                        name={`开发板 ${b.id}`}
+                    <ListActions
+                      edit={
+                        <RowAction
+                          key="修改"
+                          label="修改"
+                          permission="devices.manage"
+                          icon={ActionEdit}
+                          to={`/boards/${encodeURIComponent(b.id)}`}
+                        />
+                      }
+                      enable={
+                        <EnableAction
+                          enabled={!b.disabled}
+                          name={`开发板 ${b.id}`}
+                          permission="devices.manage"
+                          disabled={
+                            !!runtimes[b.id] &&
+                            runtimes[b.id].lease_state !== "idle"
+                          }
+                          action={(enabled) =>
+                            api.setBoardDisabled(b.id, !enabled)
+                          }
+                        />
+                      }
+                    >
+                      <RowAction
+                        key="基于此新建"
+                        label="基于此新建"
+                        icon={Copy}
                         permission="devices.manage"
-                        disabled={
-                          !!runtimes[b.id] &&
-                          runtimes[b.id].lease_state !== "idle"
-                        }
-                        action={(enabled) =>
-                          api.setBoardDisabled(b.id, !enabled)
-                        }
+                        to={`/boards/new?copy=${encodeURIComponent(b.id)}`}
                       />
                       <RowAction
-                        label="编辑"
-                        permission="devices.manage"
-                        icon={ActionEdit}
-                        to={`/boards/${encodeURIComponent(b.id)}`}
+                        key="转到会话"
+                        label="转到会话"
+                        icon={Terminal}
+                        permission="sessions.read"
+                        to={`/sessions?board=${encodeURIComponent(b.id)}`}
+                      />
+                      <RowAction
+                        key="转到租赁"
+                        label="转到租赁"
+                        icon={Calendar}
+                        permission="rentals.read"
+                        to={`/rentals?board=${encodeURIComponent(b.id)}`}
+                      />
+                      <RowAction
+                        key="转到设备文档"
+                        label="转到设备文档"
+                        icon={FileText}
+                        permission="devices.read"
+                        to={`/device-documents/${encodeURIComponent(b.id)}`}
                       />
                       <ConfirmAction
                         permission="devices.manage"
@@ -293,11 +328,12 @@ export default function Boards() {
                       />
                       {runtimes[b.id]?.active_session_id && (
                         <ForceReleaseAction
+                          key="force-release"
                           sessionId={runtimes[b.id].active_session_id!}
                           boardId={b.id}
                         />
                       )}
-                    </div>
+                    </ListActions>
                   </Cell>
                 </Row>
               ))}
@@ -392,20 +428,28 @@ export default function Boards() {
                     </small>
                   </Cell>
                   <Cell>
-                    {d.bound_board_id ? (
-                      <RowAction
-                        label="查看配置"
-                        icon={ActionView}
-                        to={`/boards/${encodeURIComponent(d.bound_board_id)}`}
-                      />
-                    ) : (
-                      <RowAction
-                        label="创建配置"
-                        icon={ActionCreate}
-                        disabled={d.conflict}
-                        to={`/boards/new?mac=${encodeURIComponent(d.mac_address)}`}
-                      />
-                    )}
+                    <ListActions
+                      primary={[
+                        d.bound_board_id ? (
+                          <RowAction
+                            key="修改"
+                            label="修改"
+                            icon={ActionEdit}
+                            permission="devices.manage"
+                            to={`/boards/${encodeURIComponent(d.bound_board_id)}`}
+                          />
+                        ) : (
+                          <RowAction
+                            key="创建配置"
+                            label="创建配置"
+                            icon={ActionCreate}
+                            permission="devices.manage"
+                            disabled={d.conflict}
+                            to={`/boards/new?mac=${encodeURIComponent(d.mac_address)}`}
+                          />
+                        ),
+                      ]}
+                    />
                   </Cell>
                 </Row>
               ))}
@@ -482,15 +526,19 @@ export default function Boards() {
                       </small>
                     </Cell>
                     <Cell>
-                      <ConfirmAction
-                        permission="devices.manage"
-                        icon={ActionDelete}
-                        label="清理"
-                        description="停止并清理这个未绑定的虚拟设备？"
-                        action={() => api.deleteVirtualDevice(d.id)}
-                        disabled={boards.some(
-                          (b) => b.virtual_device_id === d.id,
-                        )}
+                      <ListActions
+                        primary={[
+                          <ConfirmAction
+                            permission="devices.manage"
+                            icon={ActionDelete}
+                            label="清理"
+                            description="停止并清理这个未绑定的虚拟设备？"
+                            action={() => api.deleteVirtualDevice(d.id)}
+                            disabled={boards.some(
+                              (b) => b.virtual_device_id === d.id,
+                            )}
+                          />,
+                        ]}
                       />
                     </Cell>
                   </Row>

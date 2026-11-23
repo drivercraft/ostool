@@ -55,7 +55,7 @@ test("device documents publish to product details and the rental workspace with 
       fullPage: true,
     });
 
-    await page.getByRole("link", { name: "编辑文档", exact: true }).click();
+    await page.getByRole("link", { name: "修改", exact: true }).click();
     await page
       .getByLabel("公开标题", { exact: true })
       .fill("Explorer development board");

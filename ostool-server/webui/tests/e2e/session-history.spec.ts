@@ -59,6 +59,20 @@ test("lease history follows real allocation and release through the paginated ev
   const row = page.getByRole("row").filter({ hasText: session });
   await expect(row).toBeVisible();
   await expect(row.getByText("使用中", { exact: true })).toBeVisible();
+  await expect(
+    row.getByRole("button", { name: "修改", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    row.getByRole("button", { name: "禁用", exact: true }),
+  ).toHaveCount(0);
+  await row.getByRole("button", { name: "更多", exact: true }).click();
+  await expect(
+    page.getByRole("menuitem", { name: "删除", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("menuitem", { name: "查看开发板", exact: true }).click();
+  await expect(page).toHaveURL(`/qcl/boards/${board}`);
+  await page.goBack();
+  await page.getByLabel("设备标识", { exact: true }).fill(board);
   expect(
     (await request.delete(base + "/api/v1/admin/sessions/" + session)).status(),
   ).toBe(202);
@@ -98,4 +112,15 @@ test("lease history follows real allocation and release through the paginated ev
     headers: { accept: "text/html" },
   });
   expect(document.status()).toBe(200);
+  await page
+    .getByRole("listitem")
+    .filter({ hasText: session })
+    .getByRole("button", { name: "删除", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toContainText(session);
+  await page.getByRole("button", { name: "确认", exact: true }).click();
+  await expect(
+    page.getByRole("listitem").filter({ hasText: session }),
+  ).toHaveCount(0);
+  expect(privateReads).toEqual([]);
 });

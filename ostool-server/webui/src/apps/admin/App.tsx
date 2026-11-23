@@ -510,7 +510,7 @@ function AdminConsole({
   );
 }
 function ResourceLoading({ children }: { children: ReactNode }) {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const topic = pathname.startsWith("/users/roles")
     ? "roles"
     : pathname.startsWith("/boards")
@@ -579,18 +579,22 @@ function ResourceLoading({ children }: { children: ReactNode }) {
                                 "mail_deliveries",
                               ]
                             : [];
+    const copyId =
+      pathname === "/boards/new"
+        ? new URLSearchParams(search).get("copy")
+        : null;
     const editing =
       pathname.startsWith("/boards/") && pathname !== "/boards/new";
     admin.setBoardEditor(
-      editing ? decodeURIComponent(pathname.slice("/boards/".length)) : null,
+      editing ? decodeURIComponent(pathname.slice("/boards/".length)) : copyId,
     );
     admin.setTopics([
       ...common,
       ...topics,
       ...(pathname.startsWith("/users/roles") ? ["permissions"] : []),
-      ...(editing ? ["board_editor"] : []),
+      ...(editing || copyId ? ["board_editor"] : []),
     ]);
-  }, [pathname]);
+  }, [pathname, search]);
   if (!can(pagePermission(pathname)))
     return (
       <Notice variant="destructive">当前角色没有此页面的访问权限。</Notice>

@@ -1,3 +1,4 @@
+import { ListActions } from "@/components/list-actions";
 import { usePermissions } from "@/components/permissions";
 import { useEffect, useId, useState } from "react";
 import { Eye, History, Maximize, Minimize, RotateCcw } from "lucide-react";
@@ -389,6 +390,7 @@ function Editor({ source, group }: { source: SiteView; group: string }) {
                       onClick={() => setPreview((value) => !value)}
                     />
                     <RowAction
+                      key="发布历史"
                       label="发布历史"
                       icon={History}
                       onClick={() => {
@@ -495,22 +497,26 @@ function Editor({ source, group }: { source: SiteView; group: string }) {
                           {new Date(item.published_at).toLocaleString()}
                         </Cell>
                         <Cell>
-                          <div className="actions">
-                            <RowAction
-                              label={`查看版本 v${item.version}`}
-                              icon={Eye}
-                              disabled={reading}
-                              onClick={() => void readVersion(item.version)}
-                            />
-                            <RowAction
-                              label={`载入版本 v${item.version}`}
-                              icon={RotateCcw}
-                              disabled={reading}
-                              onClick={() =>
-                                void readVersion(item.version, true)
-                              }
-                            />
-                          </div>
+                          <ListActions
+                            primary={[
+                              <RowAction
+                                key="view"
+                                label={`查看版本 v${item.version}`}
+                                icon={Eye}
+                                disabled={reading}
+                                onClick={() => void readVersion(item.version)}
+                              />,
+                              <RowAction
+                                key="load"
+                                label={`载入版本 v${item.version}`}
+                                icon={RotateCcw}
+                                disabled={reading}
+                                onClick={() =>
+                                  void readVersion(item.version, true)
+                                }
+                              />,
+                            ]}
+                          />
                         </Cell>
                       </Row>
                     ))}

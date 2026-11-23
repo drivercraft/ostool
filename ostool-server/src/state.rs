@@ -16,7 +16,7 @@ use crate::{
         BoardAllocationStatus, BoardAllocationWithIdStatus, allocate_board,
         allocate_board_with_board_id,
     },
-    config::{BoardConfig, PowerManagementConfig, ServerConfig},
+    config::{BoardConfig, BootConfig, PowerManagementConfig, ServerConfig},
     loader::LoaderRegistry,
     ota::OtaStore,
     persistence::boards::BoardStore,
@@ -376,7 +376,29 @@ impl AppState {
                 unavailable_board_ids
                     .extend(boards.keys().filter(|id| !allowed.contains(*id)).cloned());
             }
+            let disabled_dtbs = if boards
+                .values()
+                .any(|b| matches!(&b.boot, BootConfig::Uboot(p) if p.dtb_name.is_some()))
+            {
+                self.dtb_store
+                    .list_all()
+                    .await
+                    .map_err(|error| {
+                        log::error!("failed to read DTB availability: {error:#}");
+                        BoardAllocationWithIdStatus::DatabaseUnavailable
+                    })?
+                    .into_iter()
+                    .filter(|d| d.disabled)
+                    .map(|d| d.name)
+                    .collect::<BTreeSet<_>>()
+            } else {
+                BTreeSet::new()
+            };
             for board in boards.values() {
+                if matches!(&board.boot, BootConfig::Uboot(p) if p.dtb_name.as_ref().is_some_and(|name| disabled_dtbs.contains(name)))
+                {
+                    unavailable_board_ids.insert(board.id.clone());
+                }
                 if self.admin_power.is_busy(&board.power_management) {
                     unavailable_board_ids.insert(board.id.clone());
                 }

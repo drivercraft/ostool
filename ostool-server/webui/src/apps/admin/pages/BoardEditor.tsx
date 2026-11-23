@@ -1,3 +1,13 @@
+import { Copy } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogBody,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { MessageToast } from "@/components/message-toast";
 import { toast } from "sonner";
 import { usePermissions } from "@/components/permissions";
@@ -73,7 +83,15 @@ export default function BoardEditor() {
 function Editor({ board }: { board?: BoardConfig }) {
   const { local, can } = usePermissions();
   const formId = useId();
-  const [query] = useSearchParams();
+  const [query, setQuery] = useSearchParams();
+  const boards = useList("boards");
+  const source = useResource("board_editor");
+  const sourceError = useErrors().board_editor;
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [selectedCopy, setSelectedCopy] = useState("");
+  const copied = useRef<string | null>(null);
+  const [copyRequest, setCopyRequest] = useState(0);
+  const copyId = !board ? query.get("copy") : null;
   const navigate = useNavigate();
   const [form, setForm] = useState<BoardEditorFormState>(() => {
     const f = board ? boardToFormState(board) : defaultFormState();
@@ -84,6 +102,22 @@ function Editor({ board }: { board?: BoardConfig }) {
     if (!board && !local && f.boot_kind === "httpboot") f.disabled = true;
     return f;
   });
+  useEffect(() => {
+    if (
+      !copyId ||
+      source?.id !== copyId ||
+      !source.board ||
+      copied.current === copyId
+    )
+      return;
+    const next = boardToFormState(source.board);
+    next.id = "";
+    if (query.get("mac")) next.network_mac = query.get("mac")!;
+    if (!local && next.boot_kind === "httpboot") next.disabled = true;
+    setForm(next);
+    copied.current = copyId;
+    toast.success("已复制开发板配置，请确认设备绑定后保存");
+  }, [copyId, source, local, query, copyRequest]);
   const [baseline, setBaseline] = useState(() =>
     JSON.stringify(board ? boardToFormState(board) : null),
   );
@@ -256,6 +290,20 @@ function Editor({ board }: { board?: BoardConfig }) {
                   : ""
           }
         >
+          {!board && (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={save.pending || !boards.length}
+              onClick={() => {
+                setSelectedCopy("");
+                setCopyOpen(true);
+              }}
+            >
+              <Copy />
+              复制已有数据
+            </Button>
+          )}
           {board && (
             <ConfirmAction
               label="删除开发板"
@@ -279,7 +327,11 @@ function Editor({ board }: { board?: BoardConfig }) {
           <Button
             type="submit"
             form={formId}
-            disabled={save.pending || conflict}
+            disabled={
+              save.pending ||
+              conflict ||
+              (!!copyId && !sourceError && source?.id !== copyId)
+            }
           >
             {save.pending ? "保存中…" : "保存开发板"}
           </Button>
@@ -296,6 +348,62 @@ function Editor({ board }: { board?: BoardConfig }) {
           服务器配置已被其他操作修改。你的草稿已保留，请载入最新配置后重新编辑。
         </ReloadNotice>
       )}
+      {!board && copyId && sourceError && (
+        <MessageToast message={sourceError} />
+      )}
+      {!board && copyId && source?.id === copyId && !source.board && (
+        <Notice>复制来源不存在或已被删除，请重新选择开发板。</Notice>
+      )}
+      <Dialog open={copyOpen} onOpenChange={setCopyOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>复制已有开发板数据</DialogTitle>
+            <DialogDescription>
+              复制会替换当前表单，ID 留空自动生成。串口、MAC
+              和电源配置会一并复制，请确认它们属于新设备；设备认证需单独配置。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody>
+            <SelectField
+              label="已有开发板"
+              value={selectedCopy}
+              onValue={setSelectedCopy}
+              options={[
+                { value: "", label: "请选择开发板" },
+                ...boards.map((b) => ({
+                  value: b.id,
+                  label: `${b.id} · ${b.board_type}`,
+                })),
+              ]}
+            />
+          </DialogBody>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setCopyOpen(false)}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              disabled={!boards.some((b) => b.id === selectedCopy)}
+              onClick={() => {
+                copied.current = null;
+                setCopyRequest((value) => value + 1);
+                setQuery((old) => {
+                  const next = new URLSearchParams(old);
+                  next.set("copy", selectedCopy);
+                  return next;
+                });
+                setCopyOpen(false);
+              }}
+            >
+              复制到当前表单
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <form
         id={formId}
         className="board-editor-form"
@@ -575,7 +683,11 @@ function Editor({ board }: { board?: BoardConfig }) {
                   onValue={(v) => set("dtb_name", v)}
                   options={[
                     { value: "", label: "无预设" },
-                    ...dtbs.map((d) => ({ value: d.name, label: d.name })),
+                    ...dtbs.map((d) => ({
+                      value: d.name,
+                      label: d.disabled ? `${d.name}（已禁用）` : d.name,
+                      disabled: d.disabled,
+                    })),
                   ]}
                 />
                 <DtbUpload

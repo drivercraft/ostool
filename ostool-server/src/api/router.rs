@@ -81,6 +81,10 @@ pub fn build_router(state: AppState) -> Router {
         .merge(crate::audit::routes())
         .route("/api/v1/admin/dashboard", get(crate::dashboard::get))
         .route("/api/v1/admin/session-history", get(list_session_history))
+        .route(
+            "/api/v1/admin/session-history/{session_id}",
+            delete(delete_session_history),
+        )
         .merge(super::ota::routes())
         .merge(crate::device_security::routes())
         .route("/device-files/{id}", get(crate::device_security::download))
@@ -165,7 +169,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/admin/dtbs/{dtb_name}",
-            get(get_dtb).put(update_dtb).delete(delete_dtb),
+            get(get_dtb)
+                .put(update_dtb)
+                .patch(set_dtb_disabled)
+                .delete(delete_dtb),
         )
         .route("/api/v1/admin/sessions", get(list_admin_sessions))
         .route(
@@ -415,6 +422,61 @@ async fn get_dtb(
     Ok(axum::Json(DtbFileResponse::from_dtb(file)))
 }
 
+async fn set_dtb_disabled(
+    Path(dtb_name): Path<String>,
+    State(state): State<AppState>,
+    axum::Json(request): axum::Json<super::models::SetDisabledRequest>,
+) -> Result<axum::Json<DtbFileResponse>, ApiError> {
+    let name = normalize_dtb_name(&dtb_name).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let _inventory = state.board_inventory_gate.lock().await;
+    if request.disabled
+        && state
+            .sessions
+            .read()
+            .await
+            .values()
+            .any(|s| board_preset_dtb_name(s.board()) == Some(name.as_str()))
+    {
+        return Err(ApiError::conflict("DTB 正在被活动会话使用，请先释放会话"));
+    }
+    let file = state
+        .dtb_store
+        .set_disabled(&name, request.disabled)
+        .await?
+        .ok_or_else(|| ApiError::not_found("DTB 不存在"))?;
+    Ok(axum::Json(DtbFileResponse::from_dtb(file)))
+}
+
+async fn ensure_dtb_enabled(state: &AppState, name: &str) -> Result<(), ApiError> {
+    let file = state
+        .dtb_store
+        .get(name)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("DTB `{name}` not found")))?;
+    if file.disabled {
+        return Err(ApiError::conflict(format!("DTB `{name}` 已禁用")));
+    }
+    Ok(())
+}
+
+async fn validate_board_dtb(
+    state: &AppState,
+    board: &BoardConfig,
+    previous: Option<&BoardConfig>,
+) -> Result<(), ApiError> {
+    if let Some(name) = board_preset_dtb_name(board) {
+        let changed = previous.and_then(board_preset_dtb_name) != Some(name);
+        if (changed || !board.disabled)
+            && state.dtb_store.get(name).await?.is_some_and(|d| d.disabled)
+        {
+            return Err(ApiError::conflict(format!(
+                "DTB `{name}` 已禁用，请选择其他 DTB"
+            )));
+        }
+    }
+    Ok(())
+}
+
 async fn create_dtb(
     State(state): State<AppState>,
     request: Request,
@@ -480,6 +542,7 @@ async fn create_board(
         board.disabled = true;
     }
     validate_board_config(&board)?;
+    validate_board_dtb(&state, &board, None).await?;
     if state.admin_power.is_busy(&board.power_management) {
         return Err(ApiError::conflict("power resource has a running action"));
     }
@@ -572,6 +635,7 @@ async fn update_board_locked(
         return Err(ApiError::conflict("power resource has a running action"));
     }
     let existing_board = state.boards.read().await.get(&board_id).cloned();
+    validate_board_dtb(state, &board, existing_board.as_ref()).await?;
     if existing_board
         .as_ref()
         .is_some_and(|b| state.admin_power.is_busy(&b.power_management))
@@ -1109,6 +1173,7 @@ async fn update_dtb(
         .transpose()?;
     let mut effective_name = current_name.clone();
     let body = read_limited_body(request, DTB_UPLOAD_MAX_MIB, "DTB").await?;
+    let _inventory = state.board_inventory_gate.lock().await;
 
     if requested_name.as_deref() == Some(current_name.as_str()) && body.is_empty() {
         let file = state
@@ -1122,6 +1187,17 @@ async fn update_dtb(
     if let Some(new_name) = requested_name.as_deref()
         && new_name != current_name
     {
+        if state
+            .sessions
+            .read()
+            .await
+            .values()
+            .any(|s| board_preset_dtb_name(s.board()) == Some(current_name.as_str()))
+        {
+            return Err(ApiError::conflict(
+                "DTB 正在被活动会话使用，请先释放会话再重命名",
+            ));
+        }
         state
             .dtb_store
             .rename(&current_name, new_name)
@@ -1296,6 +1372,21 @@ async fn list_session_history(
         .await
         .map(axum::Json)
         .map_err(ApiError::from)
+}
+
+async fn delete_session_history(
+    Path(session_id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, ApiError> {
+    use crate::persistence::leases::LeaseDeletion;
+    match state.database.delete_ended_lease(&session_id).await? {
+        LeaseDeletion::Deleted => {
+            state.admin_events.invalidate(&["session_history"]);
+            Ok(StatusCode::NO_CONTENT)
+        }
+        LeaseDeletion::NotFound => Err(ApiError::not_found("会话历史不存在或已被删除")),
+        LeaseDeletion::Active => Err(ApiError::conflict("会话尚未结束，不能删除历史记录")),
+    }
 }
 
 async fn delete_admin_session(
@@ -1832,6 +1923,7 @@ async fn download_session_dtb(
         .ok_or_else(|| ApiError::not_found("session board not found"))?;
     let dtb_name = board_preset_dtb_name(&board)
         .ok_or_else(|| ApiError::not_found("board has no preset DTB configured"))?;
+    ensure_dtb_enabled(&state, dtb_name).await?;
     let bytes = state.dtb_store.read(dtb_name).await.map_err(|err| {
         let message = err.to_string();
         if message.contains("No such file") || message.contains("not found") {
@@ -2952,6 +3044,7 @@ async fn ensure_session_preset_dtb_file(
     let Some(dtb_name) = board_preset_dtb_name(board) else {
         return Ok(None);
     };
+    ensure_dtb_enabled(state, dtb_name).await?;
     let file_path = session_dtb_file_path(dtb_name);
     let manager = state.tftp_manager.read().await.clone();
     if let Some(existing) = manager.get_session_file(session_id, &file_path).await? {

@@ -55,7 +55,7 @@ test("role matrix grants instant device access without administrator rights and 
   await page
     .getByText(name, { exact: true })
     .locator("xpath=ancestor::tr")
-    .getByRole("link", { name: "编辑", exact: true })
+    .getByRole("link", { name: "修改", exact: true })
     .click();
   await expect(page.getByLabel("角色编码", { exact: true })).toBeDisabled();
   await page.getByRole("link", { name: "取消", exact: true }).click();

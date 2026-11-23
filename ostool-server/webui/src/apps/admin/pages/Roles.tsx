@@ -1,3 +1,5 @@
+import { Copy, UsersRound } from "lucide-react";
+import { ListActions } from "@/components/list-actions";
 import { Pencil, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
@@ -136,28 +138,45 @@ export default function Roles() {
                 : "—"}
             </Cell>
             <Cell>
-              <div className="actions">
-                <EnableAction
-                  enabled={role.enabled}
-                  name={`角色 ${role.name}`}
+              <ListActions
+                edit={
+                  <RowAction
+                    label={can("roles.manage") ? "修改" : "查看"}
+                    icon={Pencil}
+                    to={`/users/roles/${encodeURIComponent(role.id)}`}
+                  />
+                }
+                enable={
+                  <EnableAction
+                    enabled={role.enabled}
+                    name={`角色 ${role.name}`}
+                    permission="roles.manage"
+                    disabled={role.builtin || user?.role_id === role.id}
+                    action={(enabled) =>
+                      api.updateRole(role.id, {
+                        revision: role.revision,
+                        code: role.code,
+                        name: role.name,
+                        description: role.description,
+                        permissions: role.permissions,
+                        allocation_policy: role.allocation_policy,
+                        enabled,
+                      })
+                    }
+                  />
+                }
+              >
+                <RowAction
+                  label="基于此新建"
+                  icon={Copy}
                   permission="roles.manage"
-                  disabled={role.builtin || user?.role_id === role.id}
-                  action={(enabled) =>
-                    api.updateRole(role.id, {
-                      revision: role.revision,
-                      code: role.code,
-                      name: role.name,
-                      description: role.description,
-                      permissions: role.permissions,
-                      allocation_policy: role.allocation_policy,
-                      enabled,
-                    })
-                  }
+                  to={`/users/roles/new?copy=${encodeURIComponent(role.id)}`}
                 />
                 <RowAction
-                  label={can("roles.manage") ? "编辑" : "查看"}
-                  icon={Pencil}
-                  to={`/users/roles/${encodeURIComponent(role.id)}`}
+                  label="转到用户"
+                  icon={UsersRound}
+                  permission="users.read"
+                  to={`/users?role=${encodeURIComponent(role.id)}`}
                 />
                 {!role.builtin && can("roles.manage") && (
                   <ConfirmAction
@@ -168,7 +187,7 @@ export default function Roles() {
                     action={() => api.deleteRole(role.id)}
                   />
                 )}
-              </div>
+              </ListActions>
             </Cell>
           </Row>
         ))}
