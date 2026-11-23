@@ -98,7 +98,7 @@ ostool axloader continue --device http://DEVICE:2999
 
 ### 4.1 可复现入口
 
-ostool 使用相关 crate 测试、Clippy、server 构建和 pnpm 测试、构建、Playwright。QEMU 的隔离夹具只列出其私有 PTY，逐字节转发 OVMF UART 并把 guest TCP4 映射到 hostfwd；不接触系统服务或实体串口。
+ostool 使用相关 crate 测试、Clippy、server 构建和前端 API/业务单元测试、构建。QEMU 的隔离夹具只列出其私有 PTY，逐字节转发 OVMF UART 并把 guest TCP4 映射到 hostfwd；不接触系统服务或实体串口。
 
 ```bash
 # 使用独立测试数据库，测试自动创建隔离 schema

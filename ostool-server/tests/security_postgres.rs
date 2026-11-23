@@ -2305,48 +2305,6 @@ async fn reserved_name_settings_apply_to_admin_writes_and_survive_restart_withou
 
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL and Redis"]
-async fn builtin_role_upgrade_preserves_existing_users_roles_and_credentials() -> anyhow::Result<()>
-{
-    let url = std::env::var("OSTOOL_TEST_DATABASE_URL")?;
-    let mut connection = <sqlx::PgConnection as sqlx::Connection>::connect(&url).await?;
-    let mut tx = sqlx::Connection::begin(&mut connection).await?;
-    let schema = format!("ostool_role_upgrade_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("SELECT set_config('search_path',$1,true)")
-        .bind(format!("{schema},public"))
-        .execute(&mut *tx)
-        .await?;
-    for migration in sqlx::migrate!("./migrations")
-        .iter()
-        .filter(|m| m.version < 20261118000000)
-    {
-        sqlx::raw_sql(&migration.sql).execute(&mut *tx).await?;
-    }
-    sqlx::query("INSERT INTO users(username,email,password_hash,role_id,is_admin) VALUES ('existing_admin','admin@upgrade.test','existing-admin-hash','admin',true),('existing_member','member@upgrade.test','existing-member-hash','member',false)")
-        .execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO oauth_sessions(user_id,client_id,access_token_hash,refresh_token_hash,access_expires_at,refresh_expires_at,absolute_expires_at) SELECT id,'web','existing-access','existing-refresh',now()+interval '1 hour',now()+interval '1 day',now()+interval '1 day' FROM users WHERE username='existing_member'")
-        .execute(&mut *tx).await?;
-    let snapshot = "SELECT jsonb_build_object('users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'roles',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM roles r WHERE id<>'advanced'),'credentials',(SELECT jsonb_agg(to_jsonb(s) ORDER BY id) FROM oauth_sessions s))";
-    let before: Value = sqlx::query_scalar(snapshot).fetch_one(&mut *tx).await?;
-    sqlx::raw_sql(include_str!(
-        "../migrations/20261118000000_advanced_builtin_role.sql"
-    ))
-    .execute(&mut *tx)
-    .await?;
-    let after: Value = sqlx::query_scalar(snapshot).fetch_one(&mut *tx).await?;
-    assert_eq!(before, after);
-    let builtin_count: i64 = sqlx::query_scalar("SELECT count(*) FROM roles WHERE builtin")
-        .fetch_one(&mut *tx)
-        .await?;
-    assert_eq!(builtin_count, 3);
-    tx.rollback().await?;
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "requires disposable PostgreSQL and Redis"]
 async fn builtin_roles_include_advanced_members_with_only_approval_free_use_added()
 -> anyhow::Result<()> {
     let f = Fixture::new(true).await;
@@ -2999,30 +2957,6 @@ async fn instant_device_use_respects_pool_bookings_concurrency_ownership_and_ear
             .fetch_one(f.state.database.pool())
             .await?;
     assert_eq!(cancelled, "cancelled");
-    sqlx::query("DELETE FROM rental_requests WHERE rental_id=$1")
-        .bind(rental)
-        .execute(f.state.database.pool())
-        .await?;
-    sqlx::raw_sql(include_str!(
-        "../migrations/20261026010000_auto_rental_requests.sql"
-    ))
-    .execute(f.state.database.pool())
-    .await?;
-    let restored: String =
-        sqlx::query_scalar("SELECT status FROM rental_requests WHERE rental_id=$1")
-            .bind(rental)
-            .fetch_one(f.state.database.pool())
-            .await?;
-    assert_eq!(restored, "auto_approved");
-    let application_count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM rental_requests WHERE user_id=$1")
-            .bind(user.id)
-            .fetch_one(f.state.database.pool())
-            .await?;
-    assert_eq!(
-        application_count, 2,
-        "history backfill must not duplicate existing applications"
-    );
     let status_input = |revision, enabled| json!({"code":"instant_engineer","enabled":enabled,"revision":revision,"name":"即时研发成员","description":"角色状态测试","permissions":["board.instant"],"allocation_policy":{"max_duration_minutes":120,"max_concurrent_sessions":1,"min_available_minutes":10,"board_types":["shared-arm"]}});
     assert_eq!(
         f.request(

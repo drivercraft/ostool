@@ -175,8 +175,6 @@ SMTP 密码、Turnstile 服务端密钥及 MFA 加密密钥由 `.env` 管理，�
 以上查询均通过现有 SSE 完成，不增加轮询或 mutation 后全量 GET。
 筛选改变后返回第一页，实时推送保留当前页和滚动位置；记录删除后自动收敛到有效页。
 开发板编辑和系统配置的保存、取消按钮固定在底栏，表单校验和并发修改提示继续生效。
-UI 验证可运行 `pnpm --dir ostool-server/webui test:e2e`。测试使用独立数据库和管理员登录，
-不启动无认证 UDP 发现，不操作已有服务。
 开发板页面用紧凑筛选栏搜索名称、板型、MAC，并按板型、标签、状态筛选；
 发现设备和虚拟设备从工具栏按钮打开；状态与常用编辑操作优先展示。
 
@@ -302,35 +300,31 @@ Linux 使用 inotify 监听串口设备节点、netlink 监听网卡/IPv4、syst
 两个应用的路由、登录、会话和主题独立，公共组件、接口与类型分别位于
 `src/components/`、`src/api/` 和 `src/types/api.ts`；不能相互导入私有页面。
 
-全局样式入口为 `src/styles/global.css`。单元测试与源码同目录，浏览器测试和临时服务
-放在 `tests/e2e/`、`tests/fixtures/`，不进入运行时入口。构建同时生成两个 HTML 和共享的
+全局样式入口为 `src/styles/global.css`。API、事件流、配置转换和业务算法测试与源码同目录；
+不维护界面组件和浏览器测试。构建同时生成两个 HTML 和共享的
 带哈希资源；Vite 开发代理默认连接 4175 后端。数据库、域名与密钥不应编入 `VITE_*`。
 
 ## 开发与验证
 
 前端使用 React、TypeScript、Vite、Tailwind 和官方 shadcn 源码组件，pnpm 固定
-为 10.33.0。Prettier 用于维护 TSX/样式的一致格式；测试采用 Vitest、React Testing
-Library 和 Playwright。构建继续复制前端到 Cargo 输出目录、冻结锁文件安装、
-构建并嵌入资源；不提交依赖目录或构建产物。
+为 10.33.0。Prettier 维护 TSX/样式格式，Vitest 覆盖 API、事件流和业务算法。
+界面布局与交互采用手动验证，不维护组件测试、浏览器测试及其专用夹具。
+构建继续复制前端到 Cargo 输出目录，使用冻结锁文件安装依赖、构建并嵌入资源。
 
 ```bash
 pnpm --dir ostool-server/webui install --frozen-lockfile
 pnpm --dir ostool-server/webui test
 pnpm --dir ostool-server/webui build
-# Rust 状态测试也需要独立 PostgreSQL，每个测试使用隔离 schema
-OSTOOL_TEST_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_browser_tests RUST_TEST_THREADS=4 cargo test -p ostool-server
+# 服务器测试使用独立 PostgreSQL、Redis 和隔离 schema
+export OSTOOL_TEST_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_tests
+export OSTOOL_TEST_REDIS_URL=redis://127.0.0.1:6379/0
+RUST_TEST_THREADS=4 cargo test -p ostool-server
 cargo build -p ostool-server
-pnpm --dir ostool-server/webui exec playwright install chromium
-OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_browser_tests pnpm --dir ostool-server/webui test:e2e
 ```
 
-浏览器测试启动临时目录下的真实服务器及 Vite 代理，使用 TCP 4174/4175、UDP
-2998，要求端口空闲；不会修改宿主服务或 `/etc/ostool-server`。自定义服务器二进制
-使用 `OSTOOL_TEST_SERVER_BIN`，已有 Chromium 可用 `PLAYWRIGHT_CHROMIUM_EXECUTABLE`。
-测试覆盖真实电源提交、HTTPS 设备配置、SSE 更新、双客户端冲突、Loader 无请求
-离线、DTB 管理、会话释放、配置保存和移动端布局。
-需预先创建独立的测试数据库，由 `OSTOOL_E2E_LOCAL_DATABASE_URL` 指定；每次运行自动
-使用独立 schema，避免测试记录污染现有开发数据。CI 自动提供 PostgreSQL。
+SQLx 的单一初始基线包含完整表结构、索引、触发器和内置角色，适用于新的空 schema。
+已有开发库须备份后使用新的数据库或 `OSTOOL_DATABASE_SCHEMA`；服务器不会自动清空数据库。
+部署、开发启动和旧板卡文件导入脚本保留，服务端测试夹具位于 `ostool-server/tests/fixtures/`。
 
 ## 本地演示数据
 

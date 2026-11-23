@@ -354,9 +354,9 @@ aligned with the React routers when adding pages.
 
 Shared controls are in `src/components/`, API clients/SSE in `src/api/`, contracts
 in `src/types/api.ts`, and styles under `src/styles/` with `global.css` as the
-entry. Unit tests live beside source; Playwright tests and private server fixtures
-live in `tests/e2e/` and `tests/fixtures/`. Neither app imports the other's private
-pages. Website and console use independent browser sessions and theme settings,
+entry. API, event-stream, configuration and algorithm tests live beside source;
+component and browser test suites are not maintained. Neither app imports the
+other's private pages. Website and console use independent browser sessions and theme settings,
 sharing PostgreSQL accounts and role checks. `/login` opens `/account/*`, while
 `/qcl/login` rejects non-administrators. Logging out of one does not log out of
 the other. Local edition has no browser login or account/rental features.
@@ -460,7 +460,7 @@ ready; list changes carry revision markers rather than complete user/rental hist
 Search is debounced, loading keeps table headers, and updates preserve displayed
 rows and editor drafts. Calendars query only the visible device/time range, and user
 selection searches at most 50 results. Audit filter options share a 60-second cache.
-SQLx migrations add pagination indexes without changing existing migration checksums.
+The initial SQLx baseline includes the pagination indexes.
 Bundled Caddy configurations compress hashed static assets with zstd/gzip; HTML
 remains uncached and hashed assets keep their long-lived immutable cache policy.
 
@@ -775,15 +775,13 @@ delete migration history or mark an unapplied migration complete to bypass check
 The service never resets data automatically. Existing board-file import is
 independent of old SQLx development history.
 
-The additive `20261022010000_global_usernames.sql` upgrade introduces mandatory,
-case-insensitive unique usernames without resetting accounts or credentials. It
-uses existing email prefixes where valid and unique; otherwise it derives a unique
-name from the account ID. Administrators can inspect and update these names in
-user management. New registrations and administrator-created accounts require a
-3–40 character username (ASCII letters/digits, underscores or hyphens, starting
-with a letter/digit); values are stored in lowercase. Login accepts either username
-or email. Both identifiers share the account's failure limits, and username changes
-revoke the account's credentials. No product/tenant account model is introduced.
+The baseline includes mandatory, case-insensitive unique usernames. Registrations
+and administrator-created accounts require a 3–40 character username (ASCII
+letters/digits, underscores or hyphens, starting with a letter/digit); values are
+stored in lowercase. Login accepts a username or email. Both identifiers share
+the account's failure limits, and changing a username revokes its credentials.
+The baseline also includes all three builtin roles, rental and usage history,
+session artifacts, device connections/documents, and DTB enable/disable state.
 
 Hardware usage history is stored in `session_history` in both editions. The
 administrator's session page links to a paginated history view with device,
@@ -794,8 +792,8 @@ cleanup succeeds. Normal shutdown requests release; the next controller startup
 marks any remaining open records `server_interrupted`, without restoring old
 connections. For these records, `ended_at` is detection time, not a claim about
 when the process or hardware stopped; `last_heartbeat_at` records last observed
-activity. History starts with this upgrade; earlier completed usage cannot be
-reconstructed. There is no automatic history deletion.
+activity. History records allocations after database initialization; earlier usage cannot
+be reconstructed. There is no automatic history deletion.
 
 Each inventory/database schema must have one active hardware controller. Running
 multiple controllers against the same inventory is unsupported. Browser login
@@ -813,26 +811,18 @@ export RUST_TEST_THREADS=4
 cargo test -p ostool-server
 cargo test -p ostool-server --test auth_postgres --test account_postgres \
   --test audit_postgres --test security_postgres --test unified_persistence \
-  --test board_migration --test username_migration --test lease_history --test cli_rental_contract --test security_completion -- --ignored
+  --test board_migration --test dtb_status --test lease_history --test cli_rental_contract --test security_completion -- --ignored
 cargo test -p ostool-server --test cli_gateway_contract
 pnpm --dir ostool-server/webui test
 pnpm --dir ostool-server/webui build
 cargo build -p ostool-server
-OSTOOL_E2E_PUBLIC=true \
-OSTOOL_E2E_REDIS_URL=redis://127.0.0.1:6379/0 \
-OSTOOL_E2E_LOCAL_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:5432/ostool_tests \
-  pnpm --dir ostool-server/webui test:e2e
 ```
 
-Authentication browser tests start two isolated public-edition servers; the local HTTP integration and actual CLI simulation separately validate anonymous local mode. Fixtures, create fresh `ostool_e2e_...`
-schemas and stop the fixtures automatically; ports 4174, 4175, 4191 and UDP 2998
-must be available. Public tests set known CAPTCHA digests only in that isolated
-database; the application has no test bypass. Without `OSTOOL_E2E_PUBLIC=true`
-or explicitly configured public fixtures, public tests are skipped. An external
-fixture must provide matching `OSTOOL_E2E_AUTH_BASE_URL`,
-`OSTOOL_E2E_AUTH_DATABASE_URL`, `OSTOOL_E2E_AUTH_DATABASE_SCHEMA`,
-`OSTOOL_E2E_ADMIN_EMAIL` and `OSTOOL_E2E_ADMIN_PASSWORD`, with loopback hosts and an
-`ostool_e2e_` schema. See [browser test details](../docs/admin-ui.md#开发与验证).
+The web test command covers API clients, event streams and business algorithms.
+UI component and browser tests, their fixtures and their dependencies have been
+removed. Verify visual changes manually and keep the production web build passing.
+Server tests continue to cover authentication, authorization, persistence, session
+lifecycle and hardware transport boundaries with disposable PostgreSQL/Redis.
 
 ### Board creation and activation
 

@@ -6,19 +6,30 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- Identity and credentials.
 CREATE TABLE roles (
     id TEXT PRIMARY KEY,
+    code TEXT NOT NULL,
     name TEXT NOT NULL UNIQUE,
     description TEXT NOT NULL DEFAULT '',
     administrator BOOLEAN NOT NULL DEFAULT false,
     builtin BOOLEAN NOT NULL DEFAULT false,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    revision BIGINT NOT NULL DEFAULT 1,
+    permissions TEXT[] NOT NULL DEFAULT ARRAY['board.use','rental.request']::TEXT[],
+    allocation_policy JSONB NOT NULL DEFAULT '{"max_duration_minutes":120,"max_concurrent_sessions":1,"min_available_minutes":10,"board_types":[]}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT roles_code_unique UNIQUE(code),
+    CONSTRAINT roles_code_format CHECK(code ~ '^[a-z][a-z0-9_-]{2,63}$'),
+    CONSTRAINT roles_permissions_limit CHECK(cardinality(permissions)<=64),
+    CONSTRAINT builtin_roles_enabled CHECK(NOT builtin OR enabled)
 );
-INSERT INTO roles (id,name,description,administrator,builtin) VALUES
-    ('admin','管理员','管理用户、角色、板卡及系统配置',true,true),
-    ('member','普通用户','通过 CLI 使用板卡会话，无管理后台权限',false,true);
+INSERT INTO roles (id,code,name,description,administrator,builtin,permissions) VALUES
+    ('admin','admin','管理员','管理用户、角色、板卡及系统配置',true,true,ARRAY['system.admin']),
+    ('member','member','普通用户','通过 CLI 使用板卡会话，无管理后台权限',false,true,ARRAY['board.use','rental.request']),
+    ('advanced','advanced','高级用户','拥有普通用户权限，并可免申请审批使用已开放免申请的设备，无管理后台权限',false,true,ARRAY['board.instant','board.use','rental.request']);
 
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username TEXT NOT NULL CONSTRAINT users_username_format CHECK(username ~ '^[a-z0-9][a-z0-9_-]{2,39}$'),
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     display_name TEXT,
@@ -34,6 +45,7 @@ CREATE TABLE users (
     last_login_ip TEXT
 );
 CREATE INDEX users_role_status ON users(role_id,disabled,created_at);
+CREATE UNIQUE INDEX users_username_unique ON users(lower(username));
 
 CREATE TABLE oauth_sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -103,6 +115,7 @@ CREATE INDEX board_inventory_tags ON board_records USING gin(tags);
 
 CREATE TABLE dtb_records (
     name TEXT PRIMARY KEY,
+    disabled BOOLEAN NOT NULL DEFAULT false,
     size BIGINT NOT NULL,
     sha256 TEXT,
     content BYTEA NOT NULL,
@@ -123,6 +136,8 @@ CREATE TABLE ota_images (
 -- Scheduled allocations and applications share one ownership authority.
 CREATE TABLE board_rentals (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source TEXT NOT NULL DEFAULT 'scheduled' CHECK(source IN ('scheduled','instant')),
+    released_at TIMESTAMPTZ,
     board_id TEXT NOT NULL,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     starts_at TIMESTAMPTZ NOT NULL,
@@ -147,7 +162,7 @@ CREATE TABLE rental_requests (
     starts_at TIMESTAMPTZ NOT NULL,
     ends_at TIMESTAMPTZ NOT NULL,
     notes TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','cancelled')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','auto_approved','rejected','cancelled')),
     decision_note TEXT NOT NULL DEFAULT '',
     reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL,
     reviewed_at TIMESTAMPTZ,
@@ -155,7 +170,7 @@ CREATE TABLE rental_requests (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK (starts_at < ends_at)
 );
-CREATE INDEX rental_requests_user ON rental_requests(user_id,created_at DESC);
+CREATE INDEX rental_requests_user ON rental_requests(user_id,created_at DESC,id DESC);
 CREATE INDEX rental_requests_pending ON rental_requests(status,created_at) WHERE status='pending';
 
 -- Security proofs are durable; expiring risk counters live exclusively in Redis.
@@ -300,6 +315,8 @@ CREATE INDEX audit_events_result ON audit_events(result,created_at DESC);
 CREATE FUNCTION invalidate_user_credentials() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF NEW.password_hash IS DISTINCT FROM OLD.password_hash
+       OR NEW.email IS DISTINCT FROM OLD.email
+       OR NEW.username IS DISTINCT FROM OLD.username
        OR NEW.role_id IS DISTINCT FROM OLD.role_id
        OR NEW.disabled IS DISTINCT FROM OLD.disabled
        OR NEW.security_version IS DISTINCT FROM OLD.security_version THEN
@@ -344,3 +361,109 @@ END;
 $$;
 CREATE TRIGGER legal_revision_immutable BEFORE UPDATE OR DELETE ON legal_document_versions
 FOR EACH ROW EXECUTE FUNCTION protect_legal_revision();
+
+-- 硬件租约历史独立于活动连接；身份和设备名称保留分配时的快照。
+-- 不使用级联外键，删除用户、设备或租赁不能抹去使用记录。
+CREATE TABLE session_history (
+    session_id TEXT PRIMARY KEY,
+    board_id TEXT NOT NULL,
+    board_type TEXT NOT NULL,
+    user_id UUID,
+    username TEXT,
+    rental_id UUID,
+    client_name TEXT,
+    created_at TIMESTAMPTZ NOT NULL,
+    last_heartbeat_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    stop_requested_at TIMESTAMPTZ,
+    ended_at TIMESTAMPTZ,
+    stop_reason TEXT,
+    end_reason TEXT,
+    release_failures INTEGER NOT NULL DEFAULT 0 CHECK (release_failures >= 0),
+    last_release_error TEXT,
+    CHECK (ended_at IS NULL OR ended_at >= created_at),
+    CHECK ((ended_at IS NULL) = (end_reason IS NULL))
+);
+CREATE INDEX session_history_created ON session_history(created_at DESC,session_id DESC);
+CREATE INDEX session_history_board ON session_history(board_id,created_at DESC);
+CREATE INDEX session_history_user ON session_history(user_id,created_at DESC);
+CREATE INDEX session_history_open ON session_history(session_id) WHERE ended_at IS NULL;
+
+-- PostgreSQL owns session artifacts; filesystem copies are disposable transport caches.
+CREATE TABLE session_files (
+    id UUID PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    size BIGINT NOT NULL CHECK (size >= 0),
+    sha256 TEXT NOT NULL,
+    uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (session_id, path)
+);
+CREATE INDEX session_files_session ON session_files (session_id);
+CREATE TABLE session_file_chunks (
+    file_id UUID NOT NULL REFERENCES session_files(id) ON DELETE CASCADE,
+    chunk_index BIGINT NOT NULL CHECK (chunk_index >= 0),
+    content BYTEA NOT NULL CHECK (octet_length(content) <= 262144),
+    PRIMARY KEY (file_id, chunk_index)
+);
+
+-- Public product information is explicitly authored, separate from private board configuration.
+CREATE TABLE device_documents (
+    board_id TEXT PRIMARY KEY REFERENCES board_records(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    revision BIGINT NOT NULL CHECK (revision > 0),
+    document JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE device_connections (
+    board_id TEXT PRIMARY KEY REFERENCES board_records(id) ON DELETE CASCADE,
+    endpoint TEXT NOT NULL,
+    ca_pem TEXT,
+    token_ciphertext TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE device_file_grants (
+    token_hash TEXT PRIMARY KEY,
+    file_id UUID NOT NULL REFERENCES session_files(id) ON DELETE CASCADE,
+    expires_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX device_file_grants_expiry ON device_file_grants(expires_at);
+
+
+-- 管理列表及个人中心按创建时间分页，主键作为相同时间记录的稳定排序条件。
+CREATE INDEX board_rentals_created ON board_rentals(created_at DESC,id DESC);
+CREATE INDEX board_rentals_user_created ON board_rentals(user_id,created_at DESC,id DESC);
+CREATE INDEX rental_requests_created ON rental_requests(created_at DESC,id DESC);
+CREATE INDEX rental_requests_status_created ON rental_requests(status,created_at DESC,id DESC);
+
+CREATE INDEX board_rentals_instant_active ON board_rentals(user_id,ends_at) WHERE source='instant' AND released_at IS NULL AND cancelled_at IS NULL;
+
+CREATE FUNCTION apply_role_permissions() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.code IS DISTINCT FROM OLD.code THEN
+        RAISE EXCEPTION 'role code is immutable' USING ERRCODE='23514';
+    END IF;
+    NEW.revision := OLD.revision + 1;
+    IF NEW.permissions IS DISTINCT FROM OLD.permissions
+       OR NEW.allocation_policy IS DISTINCT FROM OLD.allocation_policy
+       OR NEW.enabled IS DISTINCT FROM OLD.enabled THEN
+        NEW.administrator := 'system.admin'=ANY(NEW.permissions);
+        UPDATE users SET is_admin=NEW.administrator,security_version=security_version+1 WHERE role_id=OLD.id;
+        UPDATE board_rentals SET cancelled_at=now()
+        WHERE source='instant' AND released_at IS NULL AND cancelled_at IS NULL AND ends_at>now()
+          AND user_id IN (SELECT id FROM users WHERE role_id=OLD.id);
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER roles_permission_changes BEFORE UPDATE ON roles FOR EACH ROW EXECUTE FUNCTION apply_role_permissions();
+
+CREATE FUNCTION invalidate_instant_allocations() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW.role_id IS DISTINCT FROM OLD.role_id OR NEW.disabled IS DISTINCT FROM OLD.disabled THEN
+  UPDATE board_rentals SET cancelled_at=now() WHERE user_id=NEW.id AND source='instant' AND released_at IS NULL AND cancelled_at IS NULL AND ends_at>now();
+ END IF;
+ RETURN NEW;
+END;
+$$;
+CREATE TRIGGER users_instant_allocations AFTER UPDATE OF role_id,disabled ON users FOR EACH ROW EXECUTE FUNCTION invalidate_instant_allocations();

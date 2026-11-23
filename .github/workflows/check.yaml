@@ -82,7 +82,7 @@ jobs:
     - name: Unit test
       if: ${{ matrix.targets == 'x86_64-unknown-linux-gnu' }}
       run: cargo test --target ${{ matrix.targets }} -- --nocapture
-    - name: Web UI unit tests
+    - name: Web client contracts and build
       run: |
         pnpm --dir ostool-server/webui install --frozen-lockfile
         pnpm --dir ostool-server/webui test
@@ -90,15 +90,6 @@ jobs:
     - name: Server PostgreSQL integration and offline migration
       env:
         OSTOOL_TEST_DATABASE_URL: postgres://ostool:ostool@127.0.0.1:5432/ostool_e2e_local
-      run: cargo test -p ostool-server --target ${{ matrix.targets }} --test cli_rental_contract --test security_postgres --test auth_postgres --test account_postgres --test audit_postgres --test unified_persistence --test board_migration --test username_migration --test lease_history --test dtb_status --test security_completion --test access_boundaries --test local_http --test device_documents -- --ignored
-    - name: Install browser for admin integration tests
-      run: pnpm --dir ostool-server/webui exec playwright install --with-deps chromium
-    - name: Web UI integration tests
-      env:
-        OSTOOL_TEST_SERVER_BIN: ${{ github.workspace }}/target/${{ matrix.targets }}/debug/ostool-server
-        OSTOOL_E2E_LOCAL_DATABASE_URL: postgres://ostool:ostool@127.0.0.1:5432/ostool_e2e_local
-        OSTOOL_E2E_PUBLIC: "true"
-        OSTOOL_E2E_REDIS_URL: redis://127.0.0.1:6379/0
-      run: pnpm --dir ostool-server/webui test:e2e
+      run: cargo test -p ostool-server --target ${{ matrix.targets }} --test cli_rental_contract --test security_postgres --test auth_postgres --test account_postgres --test audit_postgres --test unified_persistence --test board_migration --test lease_history --test dtb_status --test security_completion --test access_boundaries --test local_http --test device_documents -- --ignored
     - name: Publish dry run
       run: cargo publish --workspace --dry-run --locked

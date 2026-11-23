@@ -20,12 +20,10 @@
 - 使用官方 shadcn 组件和统一设计 token；推送不得覆盖编辑草稿、焦点或滚动位置。
 - 前后台私有代码分别放在 `src/apps/admin/` 和 `src/apps/web/`；共享组件、接口和业务
   定义放在公共目录，两个应用不得相互导入私有页面。全局样式入口为 `src/styles/global.css`。
-- 浏览器测试放在 `tests/e2e/`，服务端测试夹具放在 `tests/fixtures/`；单元测试与源码同目录。
+- 不维护界面组件和浏览器测试；API、事件流、配置转换及业务算法测试与源码同目录，使用 `.test.ts`。
 
 ## 验证
 
-- UI 逻辑改动优先运行 `pnpm --dir ostool-server/webui test`。
+- API、事件流或业务算法改动优先运行 `pnpm --dir ostool-server/webui test`。
 - 修改路由、类型使用、构建配置或嵌入资源时，运行
   `pnpm --dir ostool-server/webui build`。
-
-- 浏览器集成测试先运行 `cargo build -p ostool-server`，再运行 `pnpm --dir ostool-server/webui test:e2e`。测试启动独立服务器，使用 HTTP 4175、Vite 4174、UDP 2998；这些端口必须空闲。
