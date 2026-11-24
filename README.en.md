@@ -24,7 +24,7 @@ deployment, security and existing board migration, and the
 
 The new board form supports copying an existing board from its footer. Admin lists show edit, enable/disable and more icons according to supported actions, with copy and related management links in the menu. Copied boards have an empty ID; review device bindings before saving. DTB management supports enable/disable. Disabled files cannot be newly selected or loaded; release sessions using a DTB before disabling it.
 
-Board IDs `new` (case insensitive), `.` and `..` are reserved. Each relay belongs to one board, including aliases that resolve to the same device. U-Boot boards require a configured serial console before enabling; incomplete configurations can be saved disabled. Without device UDP discovery, new public HTTPboot boards start disabled: configure a fixed endpoint, then explicitly enable them. With discovery enabled, boards can connect by MAC over LAN HTTP. Disable a board before removing its fixed endpoint.
+Board IDs `new` (case insensitive), `.` and `..` are reserved. Enabled boards cannot share communication or relay serial ports, including aliases of the same device; disabled configurations do not reserve ports. U-Boot boards require a configured serial console before enabling; incomplete configurations can be saved disabled. Without device UDP discovery, new public HTTPboot boards start disabled: configure a fixed endpoint, then explicitly enable them. With discovery enabled, boards can connect by MAC over LAN HTTP. Disable a board before removing its fixed endpoint.
 
 Use `ostool-server/scripts/dev.sh start|stop|status` for the unified Docker Compose
 release environment; `build` only builds the image, and `restart` applies source

@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { AdminStore } from "./events";
 import * as client from "./client";
-import type { BoardConfig } from "@/types/api";
+import type { AdminBoardSummary, BoardConfig } from "@/types/api";
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -133,8 +133,8 @@ describe("management event projection", () => {
   });
   it("reconciles rows by ID, removes deleted rows, and preserves unchanged references", () => {
     const store = new AdminStore();
-    const a = { id: "a", board_type: "arm" } as BoardConfig,
-      b = { id: "b" } as BoardConfig;
+    const a = { id: "a", board_type: "arm" } as AdminBoardSummary,
+      b = { id: "b" } as AdminBoardSummary;
     store.apply({
       epoch: "e",
       revision: 1,
@@ -171,7 +171,7 @@ describe("management event projection", () => {
       epoch: "e",
       revision: 3,
       kind: "update",
-      data: { boards: [{ id: "lost" } as BoardConfig] },
+      data: { boards: [{ id: "lost" } as AdminBoardSummary] },
     });
     expect(restart).toHaveBeenCalledOnce();
     expect(store.get("boards")).toEqual([]);
@@ -188,7 +188,7 @@ describe("management event projection", () => {
       epoch: "new",
       revision: 1,
       kind: "snapshot",
-      data: { boards: [{ id: "new" } as BoardConfig] },
+      data: { boards: [{ id: "new" } as AdminBoardSummary] },
     });
     store.apply({
       epoch: "new",

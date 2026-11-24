@@ -254,7 +254,8 @@ async fn inventory_and_unscoped_events_never_return_commands_but_selected_editor
     assert_eq!(list.body.as_array().unwrap().len(), 2);
     for board in list.body.as_array().unwrap() {
         assert_eq!(board.as_object().unwrap().len(), 9);
-        for field in ["power_management", "reset_command", "notes"] {
+        assert_eq!(board["power_management"], json!({"kind":"custom"}));
+        for field in ["reset_command", "notes"] {
             assert!(board.get(field).is_none());
         }
         assert_eq!(board["boot"].as_object().unwrap().len(), 1);

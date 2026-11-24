@@ -13,9 +13,9 @@ import { PagePanel } from "@/components/page-panel";
 import { useListPage } from "@/components/list-pagination";
 import { ListToolbar } from "@/components/list-toolbar";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, Radar, Monitor, PlusIcon } from "lucide-react";
-import { api } from "@/api/client";
+import { api, ApiRequestError } from "@/api/client";
 import { useList, useResource } from "@/api/events";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
@@ -37,6 +37,7 @@ export const leaseLabels: Record<string, string> = {
 };
 export default function Boards() {
   const { can } = usePermissions();
+  const navigate = useNavigate();
   const boards = useList("boards"),
     loaders = useList("loaders"),
     runtimes = useResource("runtimes") ?? {},
@@ -189,7 +190,14 @@ export default function Boards() {
           >
             <DataTable
               rowOffset={boardPage.rowOffset}
-              headers={["开发板", "状态", "连接", "启动方式", "操作"]}
+              headers={[
+                "开发板",
+                "状态",
+                "通信端口",
+                "控制端口",
+                "启动方式",
+                "操作",
+              ]}
               empty={!filtered.length}
             >
               {boardPage.rows.map((b) => (
@@ -244,6 +252,22 @@ export default function Boards() {
                       {b.network_identity?.mac_address ?? "未绑定 MAC"}
                     </small>
                   </Cell>
+                  <Cell className="mono">
+                    {b.power_management.kind === "zhongsheng_relay" ? (
+                      <>
+                        {b.power_management.resolved_device_path ??
+                          b.power_management.key.value}
+                        <small>中盛继电器</small>
+                      </>
+                    ) : b.power_management.kind === "qemu" ? (
+                      <>
+                        QEMU
+                        <small>{b.power_management.virtual_device_id}</small>
+                      </>
+                    ) : (
+                      "Custom 命令"
+                    )}
+                  </Cell>
                   <Cell>
                     {b.boot.kind === "uboot"
                       ? "U-Boot"
@@ -266,6 +290,13 @@ export default function Boards() {
                         <EnableAction
                           enabled={!b.disabled}
                           name={`开发板 ${b.id}`}
+                          onError={(error) => {
+                            if (
+                              error instanceof ApiRequestError &&
+                              error.code === "serial_port_conflict"
+                            )
+                              navigate(`/boards/${encodeURIComponent(b.id)}`);
+                          }}
                           permission="devices.manage"
                           disabled={
                             !!runtimes[b.id] &&
@@ -535,7 +566,9 @@ export default function Boards() {
                             description="停止并清理这个未绑定的虚拟设备？"
                             action={() => api.deleteVirtualDevice(d.id)}
                             disabled={boards.some(
-                              (b) => b.virtual_device_id === d.id,
+                              (b) =>
+                                b.power_management.kind === "qemu" &&
+                                b.power_management.virtual_device_id === d.id,
                             )}
                           />,
                         ]}

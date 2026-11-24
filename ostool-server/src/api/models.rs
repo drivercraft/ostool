@@ -7,7 +7,7 @@ use url::Url;
 use crate::{
     config::{
         BoardConfig, BoardNetworkIdentity, BootConfig, PowerManagementConfig, SerialConfig,
-        SerialPortKeyKind, TftpConfig, TftpNetworkConfig, UploadLimitsConfig,
+        SerialPortKey, SerialPortKeyKind, TftpConfig, TftpNetworkConfig, UploadLimitsConfig,
     },
     persistence::dtbs::DtbFile,
     session::Session,
@@ -47,7 +47,35 @@ pub struct AdminBoardSummary {
     pub serial: Option<SerialConfig>,
     pub network_identity: Option<BoardNetworkIdentity>,
     pub boot: AdminBootSummary,
-    pub virtual_device_id: Option<String>,
+    pub power_management: AdminPowerSummary,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AdminPowerSummary {
+    Custom,
+    ZhongshengRelay {
+        key: SerialPortKey,
+        resolved_device_path: Option<String>,
+    },
+    Qemu {
+        virtual_device_id: String,
+    },
+}
+impl From<&PowerManagementConfig> for AdminPowerSummary {
+    fn from(power: &PowerManagementConfig) -> Self {
+        match power {
+            PowerManagementConfig::Custom(_) => Self::Custom,
+            PowerManagementConfig::ZhongshengRelay(relay) => Self::ZhongshengRelay {
+                key: relay.key.clone(),
+                resolved_device_path: crate::serial::discovery::resolve_serial_key(&relay.key)
+                    .ok()
+                    .map(|p| p.current_device_path),
+            },
+            PowerManagementConfig::Qemu { virtual_device_id } => Self::Qemu {
+                virtual_device_id: virtual_device_id.clone(),
+            },
+        }
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminBootSummary {
@@ -55,13 +83,9 @@ pub struct AdminBootSummary {
 }
 impl From<BoardConfig> for AdminBoardSummary {
     fn from(board: BoardConfig) -> Self {
-        let virtual_device_id = match &board.power_management {
-            PowerManagementConfig::Qemu { virtual_device_id } => Some(virtual_device_id.clone()),
-            _ => None,
-        };
         Self {
+            power_management: AdminPowerSummary::from(&board.power_management),
             allow_instant_use: board.allow_instant_use,
-            virtual_device_id,
             id: board.id,
             board_type: board.board_type,
             tags: board.tags,

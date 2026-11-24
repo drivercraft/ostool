@@ -1503,3 +1503,5 @@ PUT 字段为 `endpoint`（内网 IP 的 HTTP 来源，或 HTTPS 来源）、`to
 - `device_documents` SSE topic 只包含文档摘要。站点或后台订阅可加
   `device_document_id={id}` 获取当前文档的 `device_document: {id,revision,document}`。
   全部正文不进入共享事件历史；未选中的设备正文不推送。
+
+管理开发板摘要的 `power_management` 仅包含控制类型：`custom` 不返回命令，`zhongsheng_relay` 返回 `key` 和 `resolved_device_path`，`qemu` 返回 `virtual_device_id`。通信串口和继电器串口在启用配置之间互斥（包括可解析到同一物理端口的别名），禁用配置不占用端口；创建、修改和启用冲突返回 `409` / `serial_port_conflict` 并标明占用方。

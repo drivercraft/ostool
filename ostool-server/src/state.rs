@@ -619,6 +619,7 @@ impl AppState {
             .read()
             .await
             .values()
+            .filter(|b| !b.disabled)
             .filter_map(|b| crate::serial::backend::relay_selector(&b.power_management))
             .collect();
         self.serial_manager.exclude(selectors).await?;
@@ -632,12 +633,14 @@ impl AppState {
         let boards = self.boards.read().await;
         let mut selectors: Vec<_> = boards
             .iter()
-            .filter(|(id, _)| Some(id.as_str()) != replaced)
+            .filter(|(id, b)| Some(id.as_str()) != replaced && !b.disabled)
             .filter_map(|(_, b)| crate::serial::backend::relay_selector(&b.power_management))
             .collect();
-        selectors.extend(crate::serial::backend::relay_selector(
-            &board.power_management,
-        ));
+        if !board.disabled {
+            selectors.extend(crate::serial::backend::relay_selector(
+                &board.power_management,
+            ));
+        }
         drop(boards);
         self.serial_manager.exclude(selectors).await?;
         Ok(())

@@ -189,6 +189,93 @@ function Editor({ board }: { board?: BoardConfig }) {
         : { ...f, serial_key_kind: kind, serial_key_value: key },
     );
   }
+  function portOwners(key: SerialPortKey) {
+    if (!key.value) return [];
+    const paths = matchingSerialPorts(serial, key).map(
+      (p) => p.current_device_path,
+    );
+    return boards
+      .filter(
+        (b) =>
+          !b.disabled &&
+          b.id !== board?.id &&
+          [
+            ...(b.boot.kind !== "httpboot" && b.serial
+              ? [{ key: b.serial.key, path: b.serial.resolved_device_path }]
+              : []),
+            ...(b.power_management.kind === "zhongsheng_relay"
+              ? [
+                  {
+                    key: b.power_management.key,
+                    path: b.power_management.resolved_device_path,
+                  },
+                ]
+              : []),
+          ].some(
+            (port) =>
+              (key.kind === port.key.kind && key.value === port.key.value) ||
+              (port.path && paths.includes(port.path)) ||
+              matchingSerialPorts(serial, port.key).some((p) =>
+                paths.includes(p.current_device_path),
+              ),
+          ),
+      )
+      .map((b) => b.id);
+  }
+  const serialWarnings = [
+    ...(form.boot_kind !== "httpboot" && form.serial_enabled
+      ? [
+          {
+            label: "通信端口",
+            key: { kind: form.serial_key_kind, value: form.serial_key_value },
+          },
+        ]
+      : []),
+    ...(form.power_management_kind === "zhongsheng_relay"
+      ? [
+          {
+            label: "控制端口",
+            key: {
+              kind: form.relay_serial_key_kind,
+              value: form.relay_serial_key_value,
+            },
+          },
+        ]
+      : []),
+  ].flatMap(({ label, key }) => {
+    const owners = portOwners(key);
+    return owners.length
+      ? [`${label}已被 ${owners.join("、")} 占用，请更换端口或禁用占用方。`]
+      : [];
+  });
+  if (
+    form.serial_enabled &&
+    form.boot_kind !== "httpboot" &&
+    form.power_management_kind === "zhongsheng_relay" &&
+    form.serial_key_value &&
+    form.relay_serial_key_value
+  ) {
+    const communication = {
+      kind: form.serial_key_kind,
+      value: form.serial_key_value,
+    };
+    const control = {
+      kind: form.relay_serial_key_kind,
+      value: form.relay_serial_key_value,
+    };
+    if (
+      (communication.kind === control.kind &&
+        communication.value === control.value) ||
+      matchingSerialPorts(serial, communication).some((p) =>
+        matchingSerialPorts(serial, control).some(
+          (r) => r.current_device_path === p.current_device_path,
+        ),
+      )
+    )
+      serialWarnings.push(
+        "控制端口已被当前配置的通信端口占用，请选择不同串口。",
+      );
+  }
   const serialOptions = (relay = false) => {
     const choices = [
       { value: "", label: "请选择稳定设备" },
@@ -196,7 +283,12 @@ function Editor({ board }: { board?: BoardConfig }) {
         .filter((p) => !relay || p.stable_identity)
         .map((p) => ({
           value: `${p.primary_key_kind}:${p.primary_key_value}`,
-          label: serialLabel(p),
+          label: `${serialLabel(p)}${portOwners({
+            kind: p.primary_key_kind!,
+            value: p.primary_key_value!,
+          })
+            .map((id) => ` · 已被 ${id} 占用`)
+            .join("")}`,
           disabled: !p.stable_identity,
         })),
       ...(!relay
@@ -404,6 +496,12 @@ function Editor({ board }: { board?: BoardConfig }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {serialWarnings.length > 0 && (
+        <Notice>
+          {serialWarnings.join(" ")}
+          {form.disabled && " 当前为禁用草稿，可以保存；启用前需要解除冲突。"}
+        </Notice>
+      )}
       <form
         id={formId}
         className="board-editor-form"

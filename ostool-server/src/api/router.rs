@@ -557,7 +557,7 @@ async fn create_board(
             )));
         }
         ensure_unique_network_identity(&boards, &board, None)?;
-        ensure_unique_relay(&boards, &board, None)?;
+        ensure_unique_serial_ports(&boards, &board, None)?;
     }
 
     state
@@ -656,7 +656,7 @@ async fn update_board_locked(
             )));
         }
         ensure_unique_network_identity(&boards, &board, Some(&board_id))?;
-        ensure_unique_relay(&boards, &board, Some(&board_id))?;
+        ensure_unique_serial_ports(&boards, &board, Some(&board_id))?;
     }
 
     let requires_fixed_endpoint = {
@@ -743,29 +743,54 @@ fn ensure_unique_network_identity(
     Ok(())
 }
 
-fn ensure_unique_relay(
+fn ensure_unique_serial_ports(
     boards: &BTreeMap<String, BoardConfig>,
     candidate: &BoardConfig,
     replaced_board_id: Option<&str>,
 ) -> Result<(), ApiError> {
-    let PowerManagementConfig::ZhongshengRelay(relay) = &candidate.power_management else {
+    use crate::config::SerialPortKey;
+    fn ports(board: &BoardConfig) -> Vec<&SerialPortKey> {
+        let mut keys = Vec::new();
+        if !matches!(board.boot, BootConfig::UefiHttp(_))
+            && let Some(serial) = &board.serial
+        {
+            keys.push(&serial.key);
+        }
+        if let PowerManagementConfig::ZhongshengRelay(relay) = &board.power_management {
+            keys.push(&relay.key);
+        }
+        keys
+    }
+    fn same(a: &SerialPortKey, b: &SerialPortKey) -> bool {
+        a == b
+            || crate::serial::discovery::resolve_serial_key(a)
+                .ok()
+                .zip(crate::serial::discovery::resolve_serial_key(b).ok())
+                .is_some_and(|(a, b)| a.current_device_path == b.current_device_path)
+    }
+    if candidate.disabled {
         return Ok(());
-    };
-    let resolved = crate::serial::discovery::resolve_serial_key(&relay.key).ok();
+    }
+    let keys = ports(candidate);
+    if keys.len() == 2 && same(keys[0], keys[1]) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "serial_port_conflict",
+            "通信端口和控制端口不能使用同一串口",
+        ));
+    }
     for (id, board) in boards {
-        if Some(id.as_str()) == replaced_board_id {
+        if board.disabled || Some(id.as_str()) == replaced_board_id {
             continue;
         }
-        let PowerManagementConfig::ZhongshengRelay(existing) = &board.power_management else {
-            continue;
-        };
-        let same_port = relay.key == existing.key
-            || resolved.as_ref().is_some_and(|port| {
-                crate::serial::discovery::resolve_serial_key(&existing.key)
-                    .is_ok_and(|other| other.current_device_path == port.current_device_path)
-            });
-        if same_port {
-            return Err(ApiError::conflict(format!("继电器已绑定开发板 `{id}`")));
+        for key in &keys {
+            if ports(board).iter().any(|other| same(key, other)) {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "serial_port_conflict",
+                    format!("串口 {} 已被开发板 `{id}` 占用，请修改端口配置", key.value),
+                ));
+            }
         }
     }
     Ok(())
@@ -3238,7 +3263,7 @@ pub(crate) async fn admin_topic(
 
 #[cfg(test)]
 mod tests {
-    use super::ensure_unique_relay;
+    use super::ensure_unique_serial_ports;
     use axum::{
         Json,
         extract::{Path, State},
@@ -4004,10 +4029,10 @@ mod tests {
         let mut second = first.clone();
         second.id = "relay-other".into();
         assert_eq!(create_board(&app, &second).await, StatusCode::CONFLICT);
-        assert_eq!(
-            create_board(&app, sample_board(&second.id)).await,
-            StatusCode::CREATED
-        );
+        let mut unbound = sample_board(&second.id);
+        unbound.serial = None;
+        unbound.boot = BootConfig::Pxe(crate::config::PxeProfile::default());
+        assert_eq!(create_board(&app, unbound).await, StatusCode::CREATED);
         assert_eq!(
             put_board(&app, &second.id, &second).await,
             StatusCode::CONFLICT
@@ -4041,8 +4066,8 @@ mod tests {
                 },
             });
         let boards = BTreeMap::from([(first.id.clone(), first)]);
-        assert!(ensure_unique_relay(&boards, &other, None).is_err());
-        assert!(ensure_unique_relay(&boards, &other, Some("owner")).is_ok());
+        assert!(ensure_unique_serial_ports(&boards, &other, None).is_err());
+        assert!(ensure_unique_serial_ports(&boards, &other, Some("owner")).is_ok());
     }
 
     #[tokio::test]
@@ -6119,6 +6144,7 @@ mod tests {
         for board_id in ["demo-01", "demo-02"] {
             let mut board = sample_board(board_id);
             board.board_type = "demo".to_string();
+            board.serial.as_mut().unwrap().key.value = format!("/dev/serial/by-id/{board_id}");
             assert_eq!(
                 create_board(&app, serde_json::to_value(board).unwrap()).await,
                 StatusCode::CREATED
@@ -6409,6 +6435,67 @@ mod tests {
         assert_eq!(
             app.oneshot(delete()).await.unwrap().status(),
             StatusCode::NOT_FOUND
+        );
+    }
+    #[test]
+    fn only_enabled_boards_claim_serial_ports_including_cross_role_use() {
+        let mut owner = sample_board("owner");
+        let mut draft = owner.clone();
+        draft.id = "draft".into();
+        let mut boards = BTreeMap::from([(owner.id.clone(), owner.clone())]);
+        let error = ensure_unique_serial_ports(&boards, &draft, None).unwrap_err();
+        assert_eq!(error.code, "serial_port_conflict");
+        assert!(error.message.contains("owner"));
+        draft.disabled = true;
+        assert!(ensure_unique_serial_ports(&boards, &draft, None).is_ok());
+        draft.disabled = false;
+        owner.disabled = true;
+        boards.insert(owner.id.clone(), owner.clone());
+        assert!(ensure_unique_serial_ports(&boards, &draft, None).is_ok());
+        owner.disabled = false;
+        boards.insert(owner.id.clone(), owner.clone());
+        draft.serial = None;
+        draft.boot = BootConfig::Pxe(crate::config::PxeProfile::default());
+        draft.power_management =
+            PowerManagementConfig::ZhongshengRelay(crate::config::ZhongshengRelayPowerManagement {
+                key: owner.serial.unwrap().key,
+            });
+        assert!(ensure_unique_serial_ports(&boards, &draft, None).is_err());
+        let mut self_conflict = sample_board("self");
+        self_conflict.power_management = draft.power_management.clone();
+        assert!(ensure_unique_serial_ports(&BTreeMap::new(), &self_conflict, None).is_err());
+        self_conflict.disabled = true;
+        assert!(ensure_unique_serial_ports(&BTreeMap::new(), &self_conflict, None).is_ok());
+    }
+
+    #[tokio::test]
+    async fn disabled_serial_drafts_can_share_but_enable_rechecks_ownership() {
+        let app = test_router().await;
+        let mut first = sample_board("port-owner");
+        assert_eq!(create_board(&app, &first).await, StatusCode::CREATED);
+        let mut second = first.clone();
+        second.id = "port-draft".into();
+        second.disabled = true;
+        assert_eq!(create_board(&app, &second).await, StatusCode::CREATED);
+        let enable = || {
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/admin/boards/port-draft")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"disabled":false}"#))
+                .unwrap()
+        };
+        let response = app.clone().oneshot(enable()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["code"], "serial_port_conflict");
+        assert!(body["message"].as_str().unwrap().contains("port-owner"));
+        first.disabled = true;
+        assert_eq!(put_board(&app, &first.id, &first).await, StatusCode::OK);
+        assert_eq!(
+            app.clone().oneshot(enable()).await.unwrap().status(),
+            StatusCode::OK
         );
     }
 }

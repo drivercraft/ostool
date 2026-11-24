@@ -827,11 +827,11 @@ lifecycle and hardware transport boundaries with disposable PostgreSQL/Redis.
 ### Board creation and activation
 
 `POST /api/v1/admin/boards` and `PUT /api/v1/admin/boards/{id}` reject reserved
-IDs `new` (case insensitive), `.` and `..` and relay identities already assigned to another board.
+IDs `new` (case insensitive), `.` and `..` and serial ports already assigned to another enabled board. Disabled configurations do not reserve communication or relay ports; enabling rechecks ownership.
 Relay checks compare saved selectors even while offline and, when resolvable,
 compare device paths to catch different aliases for the same port. Offline aliases
 with different selectors cannot be proven equivalent until the device is present;
-use the same stable selector consistently. Each relay currently controls one output.
+use the same stable selector consistently. Communication and relay ports share the same ownership check; each relay currently controls one output.
 
 Enabled U-Boot boards require a configured serial console. Incomplete U-Boot
 configurations may be saved with `disabled: true`, but cannot be enabled until

@@ -166,9 +166,17 @@ export interface BoardConfig {
   disabled: boolean;
 }
 
+export type AdminPowerSummary =
+  | { kind: "custom" }
+  | {
+      kind: "zhongsheng_relay";
+      key: SerialPortKey;
+      resolved_device_path: string | null;
+    }
+  | { kind: "qemu"; virtual_device_id: string };
 export interface AdminBoardSummary {
+  power_management: AdminPowerSummary;
   allow_instant_use?: boolean;
-  virtual_device_id?: string | null;
   id: string;
   board_type: string;
   tags: string[];
