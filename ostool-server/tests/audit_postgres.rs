@@ -60,7 +60,7 @@ async fn call(
             body["legal"] = json!({"accepted":true,"terms_version":1,"privacy_version":1});
         }
         body["verification"] =
-            test_security::proof(TEST_DATABASE.get().unwrap(), action, &client).await;
+            test_security::proof(app, TEST_DATABASE.get().unwrap(), action, &client).await;
     }
     let mut request = Request::builder()
         .method(method)
@@ -161,7 +161,7 @@ async fn complete_audit_contract_with_real_postgres() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let admin = access_cookie(&_grant_headers);
-    let (_, _member, _member_headers) = call(
+    let (status, _member, _member_headers) = call(
         &app,
         "POST",
         "/api/v1/auth/register",
@@ -169,6 +169,7 @@ async fn complete_audit_contract_with_real_postgres() {
         json!({"email":"member@audit.test","password":"member-password-NEVER_COPY_PASSWORD"}),
     )
     .await;
+    assert_eq!(status, StatusCode::CREATED, "{_member}");
     let member = access_cookie(&_member_headers);
     assert_eq!(
         call(
@@ -235,7 +236,7 @@ async fn complete_audit_contract_with_real_postgres() {
             .unwrap()
             .is_none()
     );
-    let (_, _, active_admin_headers) = call(
+    let (status, active_admin, active_admin_headers) = call(
         &app,
         "POST",
         "/api/v1/admin/auth/login",
@@ -243,6 +244,7 @@ async fn complete_audit_contract_with_real_postgres() {
         json!({"email":"admin@audit.test","password":"audit-admin-password-NEVER_COPY_PASSWORD"}),
     )
     .await;
+    assert_eq!(status, StatusCode::OK, "{active_admin}");
     let admin = access_cookie(&active_admin_headers);
 
     assert_eq!(

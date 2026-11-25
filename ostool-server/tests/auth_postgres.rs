@@ -59,7 +59,7 @@ async fn call(
             body["legal"] = json!({"accepted":true,"terms_version":1,"privacy_version":1});
         }
         body["verification"] =
-            test_security::proof(TEST_DATABASE.get().unwrap(), action, &client).await;
+            test_security::proof(app, TEST_DATABASE.get().unwrap(), action, &client).await;
     }
     let mut req = Request::builder()
         .method(method)
@@ -450,7 +450,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
         call(&app, "GET", &path, Some(member), Value::Null).await.0,
         StatusCode::OK
     );
-    let (_, _other, _other_headers) = call(
+    let (status, _other, _other_headers) = call(
         &app,
         "POST",
         "/api/v1/auth/register",
@@ -458,6 +458,7 @@ async fn registration_roles_revocation_and_inventory_restart() {
         json!({"email":"other@test.local","password":"other-password-123"}),
     )
     .await;
+    assert_eq!(status, StatusCode::CREATED, "{_other}");
     assert_eq!(
         call(
             &app,
@@ -728,18 +729,23 @@ async fn registration_roles_revocation_and_inventory_restart() {
             StatusCode::NOT_FOUND
         );
     }
-    assert_eq!(
-        call(
-            &local_app,
-            "POST",
-            "/api/v1/auth/login",
-            None,
-            json!({"email":"admin@test.local","password":"test-admin-password"})
+    // The local edition has no CAPTCHA/auth routes; test rejection without preparing a proof.
+    let local_login = local_app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"email":"admin@test.local","password":"test-admin-password"})
+                        .to_string(),
+                ))
+                .unwrap(),
         )
         .await
-        .0,
-        StatusCode::NOT_FOUND
-    );
+        .unwrap();
+    assert_eq!(local_login.status(), StatusCode::NOT_FOUND);
     assert_eq!(
         form(
             &local_app,

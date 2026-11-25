@@ -60,7 +60,7 @@ async fn call(
             body["legal"] = json!({"accepted":true,"terms_version":1,"privacy_version":1});
         }
         body["verification"] =
-            test_security::proof(TEST_DATABASE.get().unwrap(), action, &client).await;
+            test_security::proof(app, TEST_DATABASE.get().unwrap(), action, &client).await;
     }
     let mut request = Request::builder()
         .method(method)
@@ -167,7 +167,7 @@ async fn member_workspace_isolation_approvals_and_security() {
     .unwrap();
     TEST_DATABASE.set(state.database.clone()).unwrap();
     let app = build_router(state.clone());
-    let (_, _grant, _grant_headers) = call(
+    let (status, _grant, _grant_headers) = call(
         &app,
         "POST",
         "/api/v1/admin/auth/login",
@@ -175,8 +175,9 @@ async fn member_workspace_isolation_approvals_and_security() {
         json!({"email":"admin@test.local","password":"test-admin-password"}),
     )
     .await;
+    assert_eq!(status, StatusCode::OK, "_grant: {_grant}");
     let admin = access_cookie(&_grant_headers);
-    let (_, _first, _first_headers) = call(
+    let (status, _first, _first_headers) = call(
         &app,
         "POST",
         "/api/v1/auth/register",
@@ -184,8 +185,9 @@ async fn member_workspace_isolation_approvals_and_security() {
         json!({"email":"first@test.local","password":"first-password-123"}),
     )
     .await;
+    assert_eq!(status, StatusCode::CREATED, "_first: {_first}");
     let first = access_cookie(&_first_headers);
-    let (_, _second, _second_headers) = call(
+    let (status, _second, _second_headers) = call(
         &app,
         "POST",
         "/api/v1/auth/register",
@@ -193,6 +195,7 @@ async fn member_workspace_isolation_approvals_and_security() {
         json!({"email":"second@test.local","password":"second-password-123"}),
     )
     .await;
+    assert_eq!(status, StatusCode::CREATED, "_second: {_second}");
     let second = access_cookie(&_second_headers);
     assert_eq!(
         call(&app, "GET", "/api/v1/account", None, Value::Null)
