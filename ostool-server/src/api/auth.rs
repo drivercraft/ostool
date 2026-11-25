@@ -153,10 +153,14 @@ pub async fn middleware(
                 "/api/v1/admin/auth",
                 "/api/v1/admin/users",
                 "/api/v1/admin/roles",
+                "/api/v1/admin/permissions",
+                "/api/v1/admin/deployment",
                 "/api/v1/admin/rentals",
                 "/api/v1/admin/rental-requests",
                 "/api/v1/admin/mail-deliveries",
                 "/api/v1/admin/account-settings",
+                "/api/v1/admin/legal-history",
+                "/api/v1/site/legal/",
                 "/api/v1/account",
             ]
             .iter()

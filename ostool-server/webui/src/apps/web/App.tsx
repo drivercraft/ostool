@@ -500,8 +500,14 @@ function PublicRoutes() {
           }
         />
         <Route path="/docs" element={<Docs />} />
-        <Route path="/legal/terms" element={<LegalPage />} />
-        <Route path="/legal/privacy" element={<LegalPage />} />
+        <Route
+          path="/legal/terms"
+          element={publicEdition ? <LegalPage /> : <Navigate replace to="/" />}
+        />
+        <Route
+          path="/legal/privacy"
+          element={publicEdition ? <LegalPage /> : <Navigate replace to="/" />}
+        />
         <Route path="/about" element={<About />} />
         <Route
           path="/login"

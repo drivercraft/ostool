@@ -16,7 +16,9 @@ export default function SystemSettings() {
   const [params, setParams] = useSearchParams();
   const { can } = usePermissions();
   const tabs = [
-    ...["site", "terms", "privacy"].filter(() => can("site.read")),
+    ...(can("site.read")
+      ? ["site", ...(publicEdition ? ["terms", "privacy"] : [])]
+      : []),
     ...["server", "tftp"].filter(() => can("server.read")),
     ...(publicEdition && can("security.read") ? ["security", "email"] : []),
   ];
@@ -68,16 +70,18 @@ export default function SystemSettings() {
             <TabsTrigger value="security">登录与安全</TabsTrigger>
           )}
         </TabsList>
-        {["site", "terms", "privacy"].map((group) => (
-          <TabsContent
-            key={group}
-            value={group}
-            forceMount
-            hidden={tab !== group}
-          >
-            <SiteSettings group={group} />
-          </TabsContent>
-        ))}
+        {tabs
+          .filter((group) => ["site", "terms", "privacy"].includes(group))
+          .map((group) => (
+            <TabsContent
+              key={group}
+              value={group}
+              forceMount
+              hidden={tab !== group}
+            >
+              <SiteSettings group={group} />
+            </TabsContent>
+          ))}
         {publicEdition && (
           <TabsContent value="email" forceMount hidden={tab !== "email"}>
             <Accounts group="email" />

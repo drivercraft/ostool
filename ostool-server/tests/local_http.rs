@@ -359,16 +359,109 @@ async fn local_anonymous_http_allocates_exclusively_and_persists_files_without_a
         serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await?)?;
     assert_eq!(config["enabled"], false);
     assert_eq!(config["allow_registration"], false);
+    for flag in [
+        "captcha_required",
+        "registration_email_verification",
+        "email_security_available",
+        "password_reset_available",
+    ] {
+        assert_eq!(config[flag], false, "{flag}");
+    }
     for path in [
         "/api/v1/account",
         "/api/v1/admin/users",
         "/api/v1/admin/rentals",
+        "/api/v1/admin/rental-requests",
+        "/api/v1/admin/roles",
+        "/api/v1/admin/permissions",
+        "/api/v1/admin/deployment",
+        "/api/v1/admin/account-settings",
+        "/api/v1/admin/account-settings/captcha",
+        "/api/v1/admin/mail-deliveries",
+        "/api/v1/admin/legal-history",
+        "/api/v1/site/legal/terms/1",
+        "/api/v1/auth/captcha?action=register",
+        "/api/v1/admin/events?list_view=users",
+        "/api/v1/admin/events?list_view=rentals",
+        "/api/v1/admin/events?list_view=rental_requests",
+        "/api/v1/admin/events?editor_view=1",
+        "/api/v1/admin/events?topics=account_settings",
+        "/api/v1/admin/events?topics=roles,permissions",
+        "/api/v1/admin/events?topics=mail_deliveries",
     ] {
         assert_eq!(
             call("GET", path, Value::Null).await?.status(),
             StatusCode::NOT_FOUND
         );
     }
+    for path in [
+        "/api/v1/auth/register",
+        "/api/v1/auth/email-code",
+        "/api/v1/auth/registration-email/verify",
+        "/api/v1/auth/password-reset",
+        "/api/v1/admin/account-settings/captcha/verify",
+    ] {
+        assert_eq!(
+            call("POST", path, json!({})).await?.status(),
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
+    }
+    for path in [
+        "/api/v1/admin/boards",
+        "/api/v1/admin/sessions",
+        "/api/v1/admin/audits",
+        "/api/v1/admin/site-settings",
+        "/api/v1/admin/server-config",
+        "/api/v1/admin/tftp",
+    ] {
+        assert_eq!(
+            call("GET", path, Value::Null).await?.status(),
+            StatusCode::OK,
+            "{path}"
+        );
+    }
+    // The default stream must omit disabled resources as well as rejecting explicit queries.
+    use futures_util::StreamExt;
+    let response = call("GET", "/api/v1/admin/events", Value::Null).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body().into_data_stream();
+    let chunk = tokio::time::timeout(std::time::Duration::from_secs(10), stream.next())
+        .await?
+        .unwrap()?;
+    let text = std::str::from_utf8(&chunk)?;
+    let snapshot: Value = serde_json::from_str(
+        text.lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .unwrap(),
+    )?;
+    let data = snapshot["data"].as_object().unwrap();
+    for topic in [
+        "boards",
+        "sessions",
+        "session_history",
+        "audit",
+        "site",
+        "server",
+        "tftp",
+    ] {
+        assert!(data.contains_key(topic), "{topic}");
+    }
+    for topic in [
+        "users",
+        "roles",
+        "permissions",
+        "rentals",
+        "rental_requests",
+        "account_settings",
+        "deployment",
+        "mail_deliveries",
+        "legal_history",
+        "security_revision",
+    ] {
+        assert!(!data.contains_key(topic), "{topic}");
+    }
+    drop(stream);
     assert_eq!(call("POST","/api/v1/admin/boards",json!({"id":"local","board_type":"local-test","tags":[],"disabled":false,"serial":{"key":{"kind":"serial_number","value":"local-console"},"baud_rate":115200},"boot":{"kind":"uboot","use_tftp":false},"power_management":{"kind":"custom","power_on_cmd":"true","power_off_cmd":"true"}})).await?.status(),StatusCode::CREATED);
     let response = call(
         "POST",
@@ -442,6 +535,18 @@ async fn local_anonymous_http_allocates_exclusively_and_persists_files_without_a
         .status(),
         StatusCode::CREATED
     );
+    assert_eq!(
+        call(
+            "DELETE",
+            "/api/v1/admin/boards/local?force=true",
+            Value::Null
+        )
+        .await?
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(state.sessions.read().await.is_empty());
+    assert!(!state.boards.read().await.contains_key("local"));
     state.shutdown_sessions().await?;
     Ok(())
 }

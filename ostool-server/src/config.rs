@@ -216,7 +216,7 @@ impl ServerConfig {
                 "network.interface must be configured or auto-detected from a non-loopback interface"
             );
         }
-        self.upload_limits.validate()?;
+        self.upload_limits.validate(self.edition)?;
         if self.loader_network.bind_addr.port() != LOADER_DISCOVERY_PORT {
             bail!(
                 "loader_network.bind_addr must use UDP port {}",
@@ -534,7 +534,7 @@ impl Default for UploadLimitsConfig {
     }
 }
 impl UploadLimitsConfig {
-    pub fn validate(&self) -> anyhow::Result<()> {
+    pub fn validate(&self, edition: Edition) -> anyhow::Result<()> {
         anyhow::ensure!(
             (1..=1024).contains(&self.session_file_max_mib),
             "单文件上限须为 1–1024 MiB"
@@ -553,8 +553,9 @@ impl UploadLimitsConfig {
             "上传并发须为 1–32"
         );
         anyhow::ensure!(
-            (1..=32).contains(&self.user_max_concurrent_uploads)
-                && self.user_total_max_mib >= self.session_file_max_mib,
+            !edition.is_public()
+                || ((1..=32).contains(&self.user_max_concurrent_uploads)
+                    && self.user_total_max_mib >= self.session_file_max_mib),
             "账号上传并发须为 1–32，账号容量须不小于单文件上限"
         );
         anyhow::ensure!(
@@ -999,6 +1000,22 @@ mod tests {
         SerialPortKeyKind, ServerConfig, UbootNetworkMode, UbootProfile, UefiHttpProfile,
         ZhongshengRelayPowerManagement,
     };
+
+    #[test]
+    fn local_upload_settings_ignore_inactive_account_quotas() {
+        let mut limits = super::UploadLimitsConfig {
+            session_file_max_mib: 128,
+            user_total_max_mib: 64,
+            ..Default::default()
+        };
+        assert!(limits.validate(super::Edition::Local).is_ok());
+        assert!(limits.validate(super::Edition::Public).is_err());
+        limits.user_total_max_mib = 256;
+        assert!(limits.validate(super::Edition::Public).is_ok());
+        limits.session_total_max_mib = 64;
+        assert!(limits.validate(super::Edition::Local).is_err());
+        assert!(limits.validate(super::Edition::Public).is_err());
+    }
 
     #[test]
     fn local_network_services_are_allowed_but_public_services_require_authentication() {

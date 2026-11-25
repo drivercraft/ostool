@@ -82,6 +82,8 @@ export default function BoardEditor() {
 }
 function Editor({ board }: { board?: BoardConfig }) {
   const { local, can } = usePermissions();
+  const canForceDelete =
+    can("sessions.manage") && (local || can("rentals.manage"));
   const formId = useId();
   const [query, setQuery] = useSearchParams();
   const boards = useList("boards");
@@ -400,15 +402,12 @@ function Editor({ board }: { board?: BoardConfig }) {
             <ConfirmAction
               label="删除开发板"
               description={
-                can("sessions.manage") && can("rentals.manage")
-                  ? `删除 ${board.id}？将强制结束其会话并取消未结束租赁，不等待设备恢复；历史记录保留。`
+                canForceDelete
+                  ? `删除 ${board.id}？将强制结束其会话${local ? "" : "并取消未结束租赁"}，不等待设备恢复；历史记录保留。`
                   : `删除 ${board.id} 的配置？`
               }
               action={async () => {
-                await api.deleteBoard(
-                  board.id,
-                  can("sessions.manage") && can("rentals.manage"),
-                );
+                await api.deleteBoard(board.id, canForceDelete);
                 navigate("/boards");
               }}
             />

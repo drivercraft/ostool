@@ -36,7 +36,9 @@ export const leaseLabels: Record<string, string> = {
   error: "释放失败",
 };
 export default function Boards() {
-  const { can } = usePermissions();
+  const { can, local } = usePermissions();
+  const canForceDelete =
+    can("sessions.manage") && (local || can("rentals.manage"));
   const navigate = useNavigate();
   const boards = useList("boards"),
     loaders = useList("loaders"),
@@ -341,18 +343,13 @@ export default function Boards() {
                         icon={ActionDelete}
                         label="删除"
                         description={
-                          can("sessions.manage") && can("rentals.manage")
-                            ? `删除开发板 ${b.id}？将强制结束其会话并取消未结束的租赁，不等待失联设备恢复，历史记录保留。`
+                          canForceDelete
+                            ? `删除开发板 ${b.id}？将强制结束其会话${local ? "" : "并取消未结束的租赁"}，不等待失联设备恢复，历史记录保留。`
                             : `删除开发板 ${b.id} 的配置？`
                         }
-                        action={() =>
-                          api.deleteBoard(
-                            b.id,
-                            can("sessions.manage") && can("rentals.manage"),
-                          )
-                        }
+                        action={() => api.deleteBoard(b.id, canForceDelete)}
                         disabled={
-                          !(can("sessions.manage") && can("rentals.manage")) &&
+                          !canForceDelete &&
                           !!runtimes[b.id] &&
                           runtimes[b.id].lease_state !== "idle"
                         }

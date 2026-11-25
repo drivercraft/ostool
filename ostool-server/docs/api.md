@@ -677,7 +677,7 @@ DELETE /api/v1/admin/sessions/{session_id}
 ### 硬件会话历史
 
 硬件使用历史接口：`GET /api/v1/admin/session-history`。公网版仅管理员可访问；
-本地版使用相同的认证管理入口。参数为 `q`（会话、设备、板型、用户名或客户端的字面子串）、
+本地版使用相同路径免登录访问，界面隐藏用户及租赁字段。参数为 `q`（会话、设备、板型、用户名或客户端的字面子串）、
 `board`（精确设备 ID）、`state`（active/releasing/ended）、`reason`（结束原因）、
 `from` / `to`（创建时间，RFC3339，含起点不含终点）、`page`（从 1 开始）和
 `page_size`（1–100，默认 20）。响应包含 `items,total,page,page_size,query,active`。

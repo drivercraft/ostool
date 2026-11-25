@@ -67,7 +67,8 @@ function duration(record: LeaseRecord) {
   return `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds / 60) % 60} 分 ${seconds % 60} 秒`;
 }
 export default function LeaseHistory() {
-  const unknownOwner = !useEdition().enabled ? "本地操作者" : "未完成身份绑定";
+  const publicEdition = useEdition().enabled;
+  const unknownOwner = publicEdition ? "未完成身份绑定" : "本地操作者";
   const [filters, setFilters] = useState<LeaseFilters>({
     page: 1,
     page_size: 20,
@@ -127,7 +128,11 @@ export default function LeaseHistory() {
           <ListToolbar count={ready ? `${total} 条历史记录` : "正在同步…"}>
             <TextField
               label="搜索会话历史"
-              placeholder="会话、设备、用户名或客户端"
+              placeholder={
+                publicEdition
+                  ? "会话、设备、用户名或客户端"
+                  : "会话、设备或客户端"
+              }
               value={filters.q ?? ""}
               onValue={(q) => change({ q })}
             />
@@ -194,7 +199,7 @@ export default function LeaseHistory() {
             rowOffset={(page - 1) * size}
             headers={[
               "会话 / 设备",
-              "使用用户",
+              ...(publicEdition ? ["使用用户"] : []),
               "客户端",
               "起止时间",
               "使用时长",
@@ -212,12 +217,14 @@ export default function LeaseHistory() {
                     {record.board_id} · {record.board_type}
                   </small>
                 </Cell>
-                <Cell>
-                  {record.username ?? unknownOwner}
-                  {record.rental_id && (
-                    <small>租赁 {record.rental_id.slice(0, 8)}</small>
-                  )}
-                </Cell>
+                {publicEdition && (
+                  <Cell>
+                    {record.username ?? unknownOwner}
+                    {record.rental_id && (
+                      <small>租赁 {record.rental_id.slice(0, 8)}</small>
+                    )}
+                  </Cell>
+                )}
                 <Cell>{record.client_name ?? "—"}</Cell>
                 <Cell>
                   {date(record.created_at)}
@@ -307,7 +314,8 @@ export default function LeaseHistory() {
           </DialogHeader>
           <DialogBody>
             <DialogDescription>
-              记录保留分配时的设备与用户名。中断记录的结束时间表示重启时发现连接已失效的时间。
+              记录保留分配时的设备{publicEdition ? "与用户名" : "信息"}
+              。中断记录的结束时间表示重启时发现连接已失效的时间。
             </DialogDescription>
             {details && (
               <ReadonlyInfo
@@ -315,9 +323,13 @@ export default function LeaseHistory() {
                   会话: details.session_id,
                   设备: details.board_id,
                   板型: details.board_type,
-                  用户名: details.username ?? unknownOwner,
-                  用户ID: details.user_id ?? "—",
-                  租赁ID: details.rental_id ?? "—",
+                  ...(publicEdition
+                    ? {
+                        用户名: details.username ?? unknownOwner,
+                        用户ID: details.user_id ?? "—",
+                        租赁ID: details.rental_id ?? "—",
+                      }
+                    : {}),
                   客户端: details.client_name ?? "—",
                   创建时间: date(details.created_at),
                   最后心跳: date(details.last_heartbeat_at),

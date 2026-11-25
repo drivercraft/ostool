@@ -283,7 +283,7 @@ export function Server() {
   );
 }
 function ServerForm({ source }: { source: AdminServerConfigResponse }) {
-  const { can } = usePermissions();
+  const { can, local } = usePermissions();
   const formId = useId();
   const [config, setConfig] = useState(source.editable),
     [baseline, setBaseline] = useState(JSON.stringify(source.editable));
@@ -445,23 +445,25 @@ function ServerForm({ source }: { source: AdminServerConfigResponse }) {
                   "15–3600；连续 15 秒无数据也会终止",
                 ],
               ] as const
-            ).map(([key, label, placeholder]) => (
-              <TextField
-                key={key}
-                label={label}
-                type="number"
-                min={1}
-                step={1}
-                hint={placeholder}
-                value={config.upload_limits[key]}
-                onValue={(v) =>
-                  setConfig((c) => ({
-                    ...c,
-                    upload_limits: { ...c.upload_limits, [key]: Number(v) },
-                  }))
-                }
-              />
-            ))}
+            )
+              .filter(([key]) => !local || !key.startsWith("user_"))
+              .map(([key, label, placeholder]) => (
+                <TextField
+                  key={key}
+                  label={label}
+                  type="number"
+                  min={1}
+                  step={1}
+                  hint={placeholder}
+                  value={config.upload_limits[key]}
+                  onValue={(v) =>
+                    setConfig((c) => ({
+                      ...c,
+                      upload_limits: { ...c.upload_limits, [key]: Number(v) },
+                    }))
+                  }
+                />
+              ))}
           </Section>
         </fieldset>
       </form>

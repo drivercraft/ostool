@@ -1,5 +1,20 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type { AuthUser } from "@/api/client";
+export function hasPermission(
+  user: AuthUser | undefined,
+  local: boolean,
+  code: string,
+) {
+  if (local)
+    return /^(console|dashboard|devices|dtbs|ota|sessions|site|server|audits)\./.test(
+      code,
+    );
+  return (
+    !!user?.is_admin ||
+    !!user?.permissions?.includes("system.admin") ||
+    !!user?.permissions?.includes(code)
+  );
+}
 const Context = createContext<{
   can: (code: string) => boolean;
   user?: AuthUser;
@@ -17,11 +32,7 @@ export function PermissionsProvider({
   local: boolean;
   children: ReactNode;
 }) {
-  const can = (code: string) =>
-    local ||
-    !!user?.is_admin ||
-    !!user?.permissions?.includes("system.admin") ||
-    !!user?.permissions?.includes(code);
+  const can = (code: string) => hasPermission(user, local, code);
   return (
     <Context.Provider value={{ can, user, local }}>{children}</Context.Provider>
   );

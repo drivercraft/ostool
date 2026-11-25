@@ -1518,7 +1518,7 @@ async fn update_server_config(
     }
     request
         .upload_limits
-        .validate()
+        .validate(state.config.read().await.edition)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
 
     let can_manage_audit = if let Some(actor) = actor {
@@ -3190,21 +3190,9 @@ pub(crate) async fn admin_topic(
     topic: &str,
 ) -> Result<serde_json::Value, ApiError> {
     if !state.config.read().await.edition.is_public()
-        && matches!(
-            topic,
-            "account_settings"
-                | "users"
-                | "roles"
-                | "rentals"
-                | "rental_requests"
-                | "mail_deliveries"
-        )
+        && !crate::admin_events::local_topic_enabled(topic)
     {
-        return Ok(if topic == "account_settings" {
-            serde_json::Value::Null
-        } else {
-            serde_json::json!([])
-        });
+        return Ok(serde_json::Value::Null);
     }
     let extractor = State(state.clone());
     let value = match topic {

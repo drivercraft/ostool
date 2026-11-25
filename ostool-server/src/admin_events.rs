@@ -52,6 +52,24 @@ pub const TOPICS: &[&str] = &[
 ];
 const HISTORY_LIMIT: usize = 256;
 
+pub(crate) fn local_topic_enabled(topic: &str) -> bool {
+    !matches!(
+        topic,
+        "account_settings"
+            | "deployment"
+            | "users"
+            | "roles"
+            | "permissions"
+            | "rentals"
+            | "rental_requests"
+            | "mail_deliveries"
+            | "legal_history"
+            | "security_revision"
+            | "listing"
+            | "rental_editor"
+    )
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Update {
     pub epoch: String,
@@ -304,6 +322,19 @@ async fn subscribe_scoped(
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
     let cookie_config = state.config.read().await.clone();
+    let local = !cookie_config.edition.is_public();
+    if local
+        && (query.contains_key("list_view")
+            || query.contains_key("editor_view")
+            || query.get("security_view").is_some_and(|value| value == "1")
+            || query
+                .get("topics")
+                .is_some_and(|topics| topics.split(',').any(|topic| !local_topic_enabled(topic))))
+    {
+        return Err(crate::api::error::ApiError::not_found(
+            "this feature is unavailable in local edition",
+        ));
+    }
     let credential = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -394,7 +425,7 @@ async fn subscribe_scoped(
     {
         return Err(crate::api::error::ApiError::bad_request("设备标识无效"));
     }
-    let current_session = if let Some(token) = credential.as_ref() {
+    let current_session = if !local && let Some(token) = credential.as_ref() {
         state
             .database
             .authenticate_credential(token)
@@ -429,6 +460,7 @@ async fn subscribe_scoped(
         document_id,
         access: None,
         requested_topics,
+        local,
         _guard: guard,
     };
     let stream = stream::unfold(initial, |mut subscription| async move {
@@ -724,6 +756,9 @@ async fn subscribe_scoped(
                 if let Some(topics) = &subscription.requested_topics {
                     update.data.retain(|topic, _| topics.contains(topic));
                 }
+                if subscription.local {
+                    update.data.retain(|topic, _| local_topic_enabled(topic));
+                }
                 let id = format!("{}:{}", update.epoch, update.revision);
                 subscription.cursor = Some(id.clone());
                 let event = Event::default()
@@ -744,6 +779,7 @@ async fn subscribe_scoped(
 }
 
 struct Subscription {
+    local: bool,
     events: AdminEvents,
     changed: watch::Receiver<u64>,
     cursor: Option<String>,

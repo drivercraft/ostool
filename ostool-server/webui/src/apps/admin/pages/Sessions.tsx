@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { formatLeaseRemaining } from "@/utils/time";
 import { useList, useResource } from "@/api/events";
 import { api } from "@/api/client";
+import { useEdition } from "@/edition";
 import {
   DataTable,
   Row,
@@ -32,6 +33,7 @@ export default function Sessions() {
   );
 }
 function ActiveSessions() {
+  const publicEdition = useEdition().enabled;
   const [filters] = useSearchParams();
   const sessions = useList("sessions"),
     boards = useList("boards"),
@@ -63,7 +65,11 @@ function ActiveSessions() {
               label="搜索会话"
               value={search}
               onValue={setSearch}
-              placeholder="会话、设备、用户名或客户端"
+              placeholder={
+                publicEdition
+                  ? "会话、设备、用户名或客户端"
+                  : "会话、设备或客户端"
+              }
             />
             <SelectField
               label="开发板筛选"
@@ -97,7 +103,7 @@ function ActiveSessions() {
           headers={[
             "会话",
             "开发板",
-            "使用用户",
+            ...(publicEdition ? ["使用用户"] : []),
             "客户端",
             "创建 / 到期",
             "状态",
@@ -116,19 +122,22 @@ function ActiveSessions() {
                   {s.board_id}
                 </Link>
               </Cell>
-              <Cell>
-                {s.owner_username ?? "本地会话"}
-                {s.rental_id && (
-                  <small>
-                    <Link to="/rentals">租赁 {s.rental_id.slice(0, 8)}</Link>
-                  </small>
-                )}
-                {s.rental_ends_at && (
-                  <small>
-                    使用至 {new Date(s.rental_ends_at).toLocaleString("zh-CN")}
-                  </small>
-                )}
-              </Cell>
+              {publicEdition && (
+                <Cell>
+                  {s.owner_username ?? "本地会话"}
+                  {s.rental_id && (
+                    <small>
+                      <Link to="/rentals">租赁 {s.rental_id.slice(0, 8)}</Link>
+                    </small>
+                  )}
+                  {s.rental_ends_at && (
+                    <small>
+                      使用至{" "}
+                      {new Date(s.rental_ends_at).toLocaleString("zh-CN")}
+                    </small>
+                  )}
+                </Cell>
+              )}
               <Cell>{s.client_name ?? "—"}</Cell>
               <Cell>
                 <LeaseClock expires={s.expires_at} />

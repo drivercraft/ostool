@@ -524,15 +524,14 @@ function ResourceLoading({ children }: { children: ReactNode }) {
             : pathname.startsWith("/sessions")
               ? "sessions"
               : "server";
-  const { can } = usePermissions();
+  const { can, local } = usePermissions();
   const data = useResource(topic),
     errors = useErrors();
   useEffect(() => {
     const common = [
       "site",
-      "account_settings",
+      ...(!local ? ["account_settings", "deployment"] : []),
       "server",
-      "deployment",
       "runtimes",
       "power_actions",
     ];
@@ -572,11 +571,12 @@ function ResourceLoading({ children }: { children: ReactNode }) {
                           ? ["audit"]
                           : pathname.startsWith("/settings")
                             ? [
-                                "legal_history",
+                                ...(!local
+                                  ? ["legal_history", "mail_deliveries"]
+                                  : []),
                                 "network",
                                 "tftp",
                                 "tftp_status",
-                                "mail_deliveries",
                               ]
                             : [];
     const copyId =
@@ -590,11 +590,13 @@ function ResourceLoading({ children }: { children: ReactNode }) {
     );
     admin.setTopics([
       ...common,
-      ...topics,
-      ...(pathname.startsWith("/users/roles") ? ["permissions"] : []),
+      ...(!local || can(pagePermission(pathname)) ? topics : []),
+      ...(!local && pathname.startsWith("/users/roles") ? ["permissions"] : []),
       ...(editing || copyId ? ["board_editor"] : []),
     ]);
-  }, [pathname, search]);
+  }, [pathname, search, local]);
+  if (local && !can(pagePermission(pathname)))
+    return <Navigate replace to={firstPage(can)} />;
   if (!can(pagePermission(pathname)))
     return (
       <Notice variant="destructive">当前角色没有此页面的访问权限。</Notice>

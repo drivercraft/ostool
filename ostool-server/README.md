@@ -162,6 +162,7 @@ re-encryption of existing settings and MFA seeds, not an ordinary settings edit.
 ### Local and public editions
 
 Both editions require PostgreSQL. `local` uses anonymous HTTP with exclusive hardware sessions; it has no account, rental or approval workflow and does not require Redis. Set CLI `auth_mode="disabled"`.
+The local console retains device management, sessions/history, audit logs, site branding, network/upload settings and TFTP. Account, role, registration, email, CAPTCHA and legal-policy screens are hidden; their APIs and SSE queries are disabled.
 `public` requires login, permissions, rentals and Redis, with a loopback backend behind Caddy HTTPS. Bootstrap its first administrator through `.env`. Authentication follows the edition: local=false, public=true; a conflicting `OSTOOL_AUTH_ENABLED` is rejected.
 
 Both editions serve the same Board REST and serial WebSocket routes, request
