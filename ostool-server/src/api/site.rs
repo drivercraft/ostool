@@ -389,104 +389,154 @@ pub async fn register(
         .ok_or_else(|| ApiError::unauthorized("账号状态已变化"))
 }
 
-// Business secrets use authenticated encryption with field-specific contexts.
+// Business secrets use authenticated encryption with provider-specific contexts.
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountSecrets {
-    #[serde(default)]
-    pub smtp_username: Option<String>,
-    pub smtp_password: Option<String>,
+    pub mail_credentials: std::collections::BTreeMap<
+        crate::security::config::MailProvider,
+        crate::security::config::MailCredentials,
+    >,
     pub turnstile_secret: Option<String>,
 }
+fn transform_secret(
+    config: &crate::ServerConfig,
+    context: &str,
+    value: &Option<String>,
+    encrypt: bool,
+) -> anyhow::Result<Option<String>> {
+    value
+        .as_ref()
+        .map(|value| {
+            let key = config
+                .security
+                .mfa_encryption_key
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("敏感配置需要部署主加密密钥"))?;
+            if encrypt {
+                crypto::seal(key, context, value.as_bytes())
+            } else {
+                Ok(String::from_utf8(crypto::open(key, context, value)?)?)
+            }
+        })
+        .transpose()
+}
 impl AccountSecrets {
+    fn transform(
+        config: &crate::ServerConfig,
+        credentials: &std::collections::BTreeMap<
+            crate::security::config::MailProvider,
+            crate::security::config::MailCredentials,
+        >,
+        encrypt: bool,
+    ) -> anyhow::Result<
+        std::collections::BTreeMap<
+            crate::security::config::MailProvider,
+            crate::security::config::MailCredentials,
+        >,
+    > {
+        credentials
+            .iter()
+            .map(|(provider, credentials)| {
+                Ok((
+                    *provider,
+                    crate::security::config::MailCredentials {
+                        username: transform_secret(
+                            config,
+                            &format!("account-settings:{}:username", provider.key()),
+                            &credentials.username,
+                            encrypt,
+                        )?,
+                        password: transform_secret(
+                            config,
+                            &format!("account-settings:{}:password", provider.key()),
+                            &credentials.password,
+                            encrypt,
+                        )?,
+                    },
+                ))
+            })
+            .collect()
+    }
     fn from_config(config: &crate::ServerConfig) -> anyhow::Result<Self> {
-        let seal = |name: &str, value: &Option<String>| -> anyhow::Result<Option<String>> {
-            value
-                .as_ref()
-                .map(|value| {
-                    let key = config
-                        .security
-                        .mfa_encryption_key
-                        .as_deref()
-                        .ok_or_else(|| anyhow::anyhow!("保存敏感配置前必须配置主加密密钥"))?;
-                    crypto::seal(key, &format!("account-settings:{name}"), value.as_bytes())
-                })
-                .transpose()
-        };
         Ok(Self {
-            smtp_username: seal("smtp_username", &config.security.smtp_username)?,
-            smtp_password: seal("smtp_password", &config.security.smtp_password)?,
-            turnstile_secret: seal("turnstile_secret", &config.security.turnstile_secret)?,
+            mail_credentials: Self::transform(config, &config.security.mail_credentials, true)?,
+            turnstile_secret: transform_secret(
+                config,
+                "account-settings:turnstile_secret",
+                &config.security.turnstile_secret,
+                true,
+            )?,
         })
     }
     fn apply(&self, config: &mut crate::ServerConfig) -> anyhow::Result<()> {
-        let open = |name: &str, value: &Option<String>| -> anyhow::Result<Option<String>> {
-            value
-                .as_ref()
-                .map(|value| {
-                    let key = config
-                        .security
-                        .mfa_encryption_key
-                        .as_deref()
-                        .ok_or_else(|| anyhow::anyhow!("读取敏感配置需要原主加密密钥"))?;
-                    Ok(String::from_utf8(crypto::open(
-                        key,
-                        &format!("account-settings:{name}"),
-                        value,
-                    )?)?)
-                })
-                .transpose()
-        };
-        config.security.smtp_username = open("smtp_username", &self.smtp_username)?;
-        config.security.smtp_password = open("smtp_password", &self.smtp_password)?;
-        config.security.turnstile_secret = open("turnstile_secret", &self.turnstile_secret)?;
+        config.security.mail_credentials = Self::transform(config, &self.mail_credentials, false)?;
+        config.security.turnstile_secret = transform_secret(
+            config,
+            "account-settings:turnstile_secret",
+            &self.turnstile_secret,
+            false,
+        )?;
         Ok(())
     }
 }
 #[derive(Default, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
+pub struct MailCredentialUpdates {
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub clear_username: bool,
+    pub clear_password: bool,
+}
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct SecretUpdates {
-    pub smtp_username: Option<String>,
-    #[serde(default)]
-    pub clear_smtp_username: bool,
-    pub smtp_password: Option<String>,
+    pub mail_credentials:
+        std::collections::BTreeMap<crate::security::config::MailProvider, MailCredentialUpdates>,
     pub turnstile_secret: Option<String>,
-    #[serde(default)]
-    pub clear_smtp_password: bool,
-    #[serde(default)]
     pub clear_turnstile_secret: bool,
 }
+fn update_secret(
+    target: &mut Option<String>,
+    value: &Option<String>,
+    clear: bool,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !(clear && value.as_ref().is_some_and(|s| !s.is_empty())),
+        "不能同时设置和清除同一密钥"
+    );
+    if clear {
+        *target = None;
+    } else if let Some(value) = value.as_ref().filter(|s| !s.is_empty()) {
+        anyhow::ensure!(value.len() <= 4096, "密钥过长");
+        *target = Some(value.clone());
+    }
+    Ok(())
+}
 impl SecretUpdates {
-    fn apply(&self, config: &mut crate::ServerConfig) -> anyhow::Result<()> {
-        for (value, clear, target) in [
-            (
-                &self.smtp_username,
-                self.clear_smtp_username,
-                &mut config.security.smtp_username,
-            ),
-            (
-                &self.smtp_password,
-                self.clear_smtp_password,
-                &mut config.security.smtp_password,
-            ),
-            (
-                &self.turnstile_secret,
-                self.clear_turnstile_secret,
-                &mut config.security.turnstile_secret,
-            ),
-        ] {
-            anyhow::ensure!(
-                !(clear && value.as_ref().is_some_and(|s| !s.is_empty())),
-                "不能同时设置和清除同一密钥"
-            );
-            if clear {
-                *target = None;
-            } else if let Some(value) = value.as_ref().filter(|s| !s.is_empty()) {
-                anyhow::ensure!(value.len() <= 4096, "密钥过长");
-                *target = Some(value.clone());
-            }
+    pub(crate) fn apply(&self, config: &mut crate::ServerConfig) -> anyhow::Result<()> {
+        for (provider, update) in &self.mail_credentials {
+            let target = config
+                .security
+                .mail_credentials
+                .entry(*provider)
+                .or_default();
+            update_secret(
+                &mut target.username,
+                &update.username,
+                update.clear_username,
+            )?;
+            update_secret(
+                &mut target.password,
+                &update.password,
+                update.clear_password,
+            )?;
         }
-        Ok(())
+        update_secret(
+            &mut config.security.turnstile_secret,
+            &self.turnstile_secret,
+            self.clear_turnstile_secret,
+        )
     }
 }
 #[derive(Deserialize)]
@@ -542,9 +592,13 @@ pub async fn account_settings(State(state): State<AppState>) -> Result<Json<Valu
         .record("account-settings")
         .await?
         .ok_or_else(|| ApiError::not_found("账号策略尚未初始化"))?;
+    let credentials: std::collections::BTreeMap<_, _> = crate::security::config::MailProvider::ALL.into_iter().map(|provider| {
+        let value = config.security.mail_credentials.get(&provider);
+        (provider, json!({"username": value.is_some_and(|value| value.username.is_some()), "password": value.is_some_and(|value| value.password.is_some())}))
+    }).collect();
     Ok(Json(
         json!({"revision":record.revision,"settings":crate::security::config::AccountSettings::from_config(&config),
-        "secrets":{"smtp_username":config.security.smtp_username.is_some(),"smtp_password":config.security.smtp_password.is_some(),"turnstile_secret":config.security.turnstile_secret.is_some(),"mfa_key":config.security.mfa_encryption_key.is_some()}}),
+        "secrets":{"mail_credentials":credentials,"turnstile_secret":config.security.turnstile_secret.is_some(),"mfa_key":config.security.mfa_encryption_key.is_some()}}),
     ))
 }
 async fn update_account_settings(
@@ -565,10 +619,6 @@ async fn update_account_settings(
         return Err(ApiError::conflict("配置已更新，请保留草稿后载入最新版本"));
     }
     let mut next = config.clone();
-    if input.settings.mail_provider != config.security.mail_provider {
-        next.security.smtp_username = None;
-        next.security.smtp_password = None;
-    }
     input
         .secret_updates
         .apply(&mut next)

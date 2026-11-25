@@ -508,7 +508,7 @@ pub async fn deployment(State(state): State<AppState>) -> Json<serde_json::Value
             "登录失败阈值":config.security.login_max_failures,
             "登录锁定秒数":config.security.login_lock_secs,
             "管理员强制双重验证":config.security.require_admin_mfa,
-            "SMTP 密码已配置":config.security.smtp_password.is_some(),
+            "SMTP 密码已配置":config.security.credentials().password.is_some(),
             "双重验证加密密钥已配置":config.security.mfa_encryption_key.is_some()
         })
     };

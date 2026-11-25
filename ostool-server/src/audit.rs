@@ -583,6 +583,7 @@ fn intent(method: &Method, path: &str, payload: &Value) -> Option<Intent> {
         ("account-settings", Some("captcha"), "POST") => {
             ("system.captcha.test", "测试人机验证配置")
         }
+        ("account-settings", Some("mail"), "POST") => ("system.mail.test", "测试邮件连接配置"),
         ("account-settings", _, _) => ("system.account.update", "更新账号与邮件安全策略"),
         ("site-settings", _, _) => ("system.site.update", "更新站点与协议配置"),
         ("auth", Some("login"), _) if path.starts_with("/api/v1/admin/") => {
@@ -1104,6 +1105,16 @@ mod tests {
     use super::*;
     #[test]
     fn captcha_configuration_tests_do_not_claim_to_update_settings() {
+        assert_eq!(
+            intent(
+                &Method::POST,
+                "/api/v1/admin/account-settings/mail/test",
+                &json!({})
+            )
+            .unwrap()
+            .action,
+            "system.mail.test"
+        );
         assert_eq!(
             intent(
                 &Method::POST,

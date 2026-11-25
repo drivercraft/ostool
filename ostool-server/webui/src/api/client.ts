@@ -520,6 +520,16 @@ export const api = {
       method: "POST",
     });
   },
+  testMailConnection(
+    revision: number,
+    settings: import("@/types/api").AccountSettings,
+    secret_updates: import("@/types/api").SecretUpdates,
+  ) {
+    return request<{ message: string }>(
+      "/api/v1/admin/account-settings/mail/test",
+      { method: "POST", bodyJson: { revision, settings, secret_updates } },
+    );
+  },
   emailCode(
     email: string,
     action: "register" | "password_reset",

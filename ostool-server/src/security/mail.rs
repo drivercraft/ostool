@@ -97,6 +97,10 @@ struct VerifyRegistrationEmail {
 }
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route(
+            "/api/v1/admin/account-settings/mail/test",
+            post(test_connection),
+        )
         .route("/api/v1/auth/email-code", post(request))
         .route(
             "/api/v1/auth/registration-email/verify",
@@ -106,13 +110,97 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/auth/security/email", post(send_verification))
         .route("/api/v1/auth/security/email/confirm", post(confirm_email))
 }
+fn transport(config: &SecurityConfig) -> Result<AsyncSmtpTransport<Tokio1Executor>, ApiError> {
+    let (host, port, tls) = config.mail_endpoint();
+    let mut builder = match tls {
+        SmtpTls::Starttls => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&host)
+            .map_err(|_| ApiError::bad_request("SMTP 主机或 TLS 配置无效"))?,
+        SmtpTls::Tls => AsyncSmtpTransport::<Tokio1Executor>::relay(&host)
+            .map_err(|_| ApiError::bad_request("SMTP 主机或 TLS 配置无效"))?,
+        SmtpTls::LoopbackPlaintext => {
+            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&host)
+        }
+    }
+    .port(port)
+    .timeout(Some(std::time::Duration::from_secs(10)));
+    if let (Some(username), Some(password)) =
+        (config.credentials().username, config.credentials().password)
+    {
+        builder = builder.credentials(Credentials::new(username, password));
+    }
+    Ok(builder.build())
+}
+pub async fn test_connection(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Extension(client): Extension<ClientContext>,
+    Json(input): Json<crate::api::site::AccountSettingsInput>,
+) -> Result<Json<Value>, ApiError> {
+    let mut next = {
+        let config = state.config.read().await;
+        let current: crate::api::site::AccountSettingsRecord = state
+            .database
+            .record("account-settings")
+            .await?
+            .ok_or_else(|| ApiError::not_found("账号策略尚未初始化"))?;
+        if current.revision != input.revision {
+            return Err(ApiError::conflict("配置已更新，请载入最新配置后测试"));
+        }
+        config.clone()
+    };
+    store::limit(
+        &state.security_cache,
+        "mail-test-user",
+        &user.id.to_string(),
+        5,
+        60,
+    )
+    .await?;
+    store::limit(&state.security_cache, "mail-test-ip", &client.ip, 10, 60).await?;
+    next.security.mail_provider = input.settings.mail_provider;
+    next.security.smtp_host = input.settings.smtp_host;
+    next.security.smtp_port = input.settings.smtp_port;
+    next.security.smtp_tls = input.settings.smtp_tls;
+    next.security.smtp_from = input.settings.smtp_from;
+    next.security.ses_region = input.settings.ses_region;
+    next.security.smtp_enabled = true;
+    next.security.registration_email_verification = false;
+    let updates = crate::api::site::SecretUpdates {
+        mail_credentials: input
+            .secret_updates
+            .mail_credentials
+            .into_iter()
+            .filter(|(provider, _)| *provider == next.security.mail_provider)
+            .collect(),
+        ..Default::default()
+    };
+    updates
+        .apply(&mut next)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    next.security
+        .validate(true)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    if !next.security.smtp_available() {
+        return Err(ApiError::bad_request("请填写发件人及所测服务商的完整配置"));
+    }
+    let ok = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        transport(&next.security)?.test_connection(),
+    )
+    .await
+    .map_err(|_| ApiError::service_unavailable("邮件连接测试超时"))?
+    .map_err(|_| ApiError::bad_request("邮件连接或认证失败，请检查主机、网络及认证凭据"))?;
+    if !ok {
+        return Err(ApiError::bad_request("邮件服务器未接受连接测试"));
+    }
+    Ok(Json(json!({"message":"邮件连接及认证测试通过"})))
+}
 async fn send(
     config: &SecurityConfig,
     email: &str,
     code: &str,
     ttl_secs: u32,
 ) -> Result<(), ApiError> {
-    let (host, port, tls) = config.mail_endpoint();
     let from = config
         .smtp_from
         .as_deref()
@@ -123,32 +211,15 @@ async fn send(
         .subject("ostool 账号安全验证码")
         .body(format!("你的 ostool 验证码是：{code}\n验证码 {ttl_secs} 秒内有效，只能使用一次。请勿向任何人提供验证码。\n如果这不是你的操作，请忽略本邮件。"))
         .map_err(anyhow::Error::from)?;
-    let mut builder = match tls {
-        SmtpTls::Starttls => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&host)
-            .map_err(anyhow::Error::from)?,
-        SmtpTls::Tls => {
-            AsyncSmtpTransport::<Tokio1Executor>::relay(&host).map_err(anyhow::Error::from)?
-        }
-        SmtpTls::LoopbackPlaintext => {
-            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&host)
-        }
-    }
-    .port(port)
-    .timeout(Some(std::time::Duration::from_secs(10)));
-    if let (Some(username), Some(password)) = (&config.smtp_username, &config.smtp_password) {
-        builder = builder.credentials(Credentials::new(username.clone(), password.clone()));
-    }
-    tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        builder.build().send(message),
-    )
-    .await
-    .map_err(|_| ApiError::service_unavailable("验证码发送超时，请稍后重试"))?
-    .map_err(|_| {
-        // Provider diagnostics can contain addresses or credentials; keep them out of logs.
-        log::warn!("SMTP delivery failed");
-        ApiError::service_unavailable("验证码发送失败，请稍后重试")
-    })?;
+    let transport = transport(config)?;
+    tokio::time::timeout(std::time::Duration::from_secs(15), transport.send(message))
+        .await
+        .map_err(|_| ApiError::service_unavailable("验证码发送超时，请稍后重试"))?
+        .map_err(|_| {
+            // Provider diagnostics can contain addresses or credentials; keep them out of logs.
+            log::warn!("SMTP delivery failed");
+            ApiError::service_unavailable("验证码发送失败，请稍后重试")
+        })?;
     Ok(())
 }
 async fn issue(

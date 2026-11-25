@@ -2,6 +2,7 @@ use anyhow::{bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
@@ -38,9 +39,7 @@ pub struct SecurityConfig {
     pub smtp_host: Option<String>,
     pub smtp_port: u16,
     #[serde(skip_serializing)]
-    pub smtp_username: Option<String>,
-    #[serde(skip_serializing)]
-    pub smtp_password: Option<String>,
+    pub mail_credentials: BTreeMap<MailProvider, MailCredentials>,
     pub smtp_from: Option<String>,
     pub smtp_tls: SmtpTls,
 }
@@ -65,7 +64,9 @@ pub enum SmtpTls {
     LoopbackPlaintext,
 }
 /// Managed providers use the same encrypted SMTP credential storage as custom SMTP.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
+#[derive(
+    Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq, PartialOrd, Ord,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum MailProvider {
     #[default]
@@ -74,6 +75,23 @@ pub enum MailProvider {
     Mailjet,
     Ses,
 }
+impl MailProvider {
+    pub const ALL: [Self; 4] = [Self::Brevo, Self::Mailjet, Self::Ses, Self::Smtp];
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Smtp => "smtp",
+            Self::Brevo => "brevo",
+            Self::Mailjet => "mailjet",
+            Self::Ses => "ses",
+        }
+    }
+}
+#[derive(Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MailCredentials {
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
 fn default_ses_region() -> String {
     "us-east-1".into()
 }
@@ -81,6 +99,15 @@ fn default_mail_hourly_limit() -> u32 {
     100
 }
 impl SecurityConfig {
+    pub fn credentials(&self) -> MailCredentials {
+        self.mail_credentials
+            .get(&self.mail_provider)
+            .cloned()
+            .unwrap_or_default()
+    }
+    pub fn credentials_mut(&mut self) -> &mut MailCredentials {
+        self.mail_credentials.entry(self.mail_provider).or_default()
+    }
     pub fn mail_endpoint(&self) -> (String, u16, SmtpTls) {
         match self.mail_provider {
             MailProvider::Smtp => (
@@ -157,8 +184,7 @@ impl Default for SecurityConfig {
             registration_email_policy: EmailPolicy::default(),
             smtp_host: None,
             smtp_port: 587,
-            smtp_username: None,
-            smtp_password: None,
+            mail_credentials: BTreeMap::new(),
             smtp_from: None,
             smtp_tls: SmtpTls::Starttls,
         }
@@ -258,7 +284,8 @@ impl SecurityConfig {
             "SMTP requires both host and from address"
         );
         ensure!(
-            !complete || self.smtp_username.is_some() == self.smtp_password.is_some(),
+            !complete
+                || self.credentials().username.is_some() == self.credentials().password.is_some(),
             "SMTP credentials require both username and password"
         );
         ensure!(
@@ -281,8 +308,16 @@ impl SecurityConfig {
         if complete && self.smtp_enabled && self.mail_provider != MailProvider::Smtp {
             ensure!(
                 self.smtp_from.is_some()
-                    && self.smtp_username.as_ref().is_some_and(|s| !s.is_empty())
-                    && self.smtp_password.as_ref().is_some_and(|s| !s.is_empty()),
+                    && self
+                        .credentials()
+                        .username
+                        .as_ref()
+                        .is_some_and(|s| !s.is_empty())
+                    && self
+                        .credentials()
+                        .password
+                        .as_ref()
+                        .is_some_and(|s| !s.is_empty()),
                 "邮件服务商需要发件人、SMTP 用户名和密码"
             );
         }
@@ -302,12 +337,22 @@ impl SecurityConfig {
                 "发件人须为邮箱或名称 <邮箱> 格式"
             );
         }
-        ensure!(
-            self.smtp_username
-                .as_ref()
-                .is_none_or(|value| value.len() <= 320),
-            "SMTP 用户名过长"
-        );
+        for credentials in self.mail_credentials.values() {
+            ensure!(
+                credentials
+                    .username
+                    .as_ref()
+                    .is_none_or(|value| value.len() <= 320),
+                "SMTP 用户名过长"
+            );
+            ensure!(
+                credentials
+                    .password
+                    .as_ref()
+                    .is_none_or(|value| value.len() <= 4096),
+                "SMTP 密码过长"
+            );
+        }
         self.email_policy.validate(86400)?;
         self.registration_email_policy.validate(3600)?;
         ensure!(
@@ -388,8 +433,15 @@ impl SecurityConfig {
             && match self.mail_provider {
                 MailProvider::Smtp => self.smtp_host.is_some(),
                 _ => {
-                    self.smtp_username.as_ref().is_some_and(|s| !s.is_empty())
-                        && self.smtp_password.as_ref().is_some_and(|s| !s.is_empty())
+                    self.credentials()
+                        .username
+                        .as_ref()
+                        .is_some_and(|s| !s.is_empty())
+                        && self
+                            .credentials()
+                            .password
+                            .as_ref()
+                            .is_some_and(|s| !s.is_empty())
                 }
             }
     }
@@ -570,8 +622,8 @@ mod tests {
             };
             assert!(config.validate(true).is_err());
             assert!(!config.smtp_available());
-            config.smtp_username = Some("provider-login".into());
-            config.smtp_password = Some("secret-smtp-key".into());
+            config.credentials_mut().username = Some("provider-login".into());
+            config.credentials_mut().password = Some("secret-smtp-key".into());
             config.smtp_from = Some("ostool <noreply@example.test>".into());
             config.registration_email_verification = true;
             config.validate(true).unwrap();

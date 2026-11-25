@@ -17,12 +17,22 @@ import { HumanVerification } from "@/components/human-verification";
 import { useCountdown } from "@/components/security-hooks";
 import { Button } from "@/components/ui/button";
 import {
+  createRegistrationChallenge,
   canVisitRegistrationStep,
   normalizeRegistrationEmail,
   registrationProgress,
   type RegistrationChallenge,
   type RegistrationStep,
 } from "../registration-flow";
+
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogBody,
+} from "@/components/ui/dialog";
 
 const cooldownKey = "ostool.registration.email-cooldown";
 export function RegistrationForm() {
@@ -35,7 +45,9 @@ export function RegistrationForm() {
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [challenge, setChallenge] = useState<RegistrationChallenge>();
-  const [resendRequested, setResendRequested] = useState(false);
+  const [resendOpen, setResendOpen] = useState(false);
+  const [resendProof, setResendProof] = useState<HumanProof>();
+  const [resendRefreshKey, setResendRefreshKey] = useState(0);
   const [until, setUntil] = useState(() => {
     try {
       return Number(sessionStorage.getItem(cooldownKey)) || 0;
@@ -44,6 +56,7 @@ export function RegistrationForm() {
     }
   });
   const remaining = useCountdown(until);
+  const codeRemaining = useCountdown(challenge?.expiresAt ?? 0);
   const [username, setUsername] = useState(""),
     [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState(""),
@@ -58,7 +71,7 @@ export function RegistrationForm() {
   const heading = useRef<HTMLHeadingElement>(null);
   const progress = registrationProgress(email, code, challenge);
   const needsProof = emailRequired
-    ? step === 1 && (!progress.active || resendRequested)
+    ? step === 1 && !progress.active
     : step === 3;
   const hasProof = !!proof?.captcha_code;
   const steps: RegistrationStep[] = emailRequired ? [1, 2, 3] : [1, 3];
@@ -97,19 +110,50 @@ export function RegistrationForm() {
   function visit(target: RegistrationStep) {
     if (
       inFlight.current ||
-      !canVisitRegistrationStep(
-        target,
-        emailRequired,
-        email,
-        code,
-        challenge,
-        resendRequested,
-      )
+      !canVisitRegistrationStep(target, emailRequired, email, code, challenge)
     )
       return;
     if (step === 1 && target !== 1 && !form.current?.reportValidity()) return;
     setStep(target);
     setError("");
+  }
+  async function sendEmail(verification: HumanProof) {
+    const result = await api.emailCode(
+      normalizeRegistrationEmail(email),
+      "register",
+      verification,
+    );
+    setChallenge(createRegistrationChallenge(email, result));
+    setCode("");
+    cooldown(result.resend_after);
+    setStep(2);
+  }
+  async function resend(event: FormEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (
+      inFlight.current ||
+      !config.allow_registration ||
+      Date.now() < until ||
+      !resendProof?.captcha_code
+    )
+      return;
+    inFlight.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      await sendEmail(resendProof);
+      setResendOpen(false);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "发送失败，请重试");
+      if (failure instanceof ApiRequestError && failure.status === 429)
+        cooldown(failure.retryAfterSeconds ?? 60);
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+      setResendProof(undefined);
+      setResendRefreshKey((value) => value + 1);
+    }
   }
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -123,30 +167,13 @@ export function RegistrationForm() {
           setStep(3);
           return;
         }
-        if (
-          registrationProgress(email, code, challenge).active &&
-          !resendRequested
-        ) {
+        if (registrationProgress(email, code, challenge).active) {
           setStep(2);
           return;
         }
         if (Date.now() < until) throw new Error("请等待重发冷却结束后再发送。");
         try {
-          const result = await api.emailCode(
-            normalizeRegistrationEmail(email),
-            "register",
-            proof ?? {},
-          );
-          setChallenge({
-            ...result,
-            email: normalizeRegistrationEmail(email),
-            expiresAt: Date.now() + result.expires_in * 1000,
-            verifiedCode: "",
-          });
-          setCode("");
-          setResendRequested(false);
-          cooldown(result.resend_after);
-          setStep(2);
+          await sendEmail(proof ?? {});
         } finally {
           setProof(undefined);
           setRefreshKey((v) => v + 1);
@@ -237,221 +264,263 @@ export function RegistrationForm() {
     }
   }
   return (
-    <form ref={form} className="auth-card" onSubmit={submit} aria-busy={busy}>
-      <div>
-        <h2 ref={heading} tabIndex={-1}>
-          {titles[step]}
-        </h2>
-        <p>
-          {step === 1
-            ? "先填写用于登录与找回密码的邮箱。"
-            : step === 2
-              ? `请输入发送至 ${email} 的验证码。`
-              : "设置账号信息，完成注册。"}
-        </p>
-      </div>
-      <ol className="registration-steps" aria-label="注册进度">
-        {steps.map((target, index) => (
-          <li key={target} aria-current={step === target ? "step" : undefined}>
-            <Button
-              type="button"
-              variant={step === target ? "secondary" : "ghost"}
-              disabled={
-                busy ||
-                !canVisitRegistrationStep(
-                  target,
-                  emailRequired,
-                  email,
-                  code,
-                  challenge,
-                  resendRequested,
-                )
-              }
-              onClick={() => visit(target)}
+    <>
+      <form ref={form} className="auth-card" onSubmit={submit} aria-busy={busy}>
+        <div>
+          <h2 ref={heading} tabIndex={-1}>
+            {titles[step]}
+          </h2>
+          <p>
+            {step === 1
+              ? "先填写用于登录与找回密码的邮箱。"
+              : step === 2
+                ? `请输入发送至 ${email} 的验证码。`
+                : "设置账号信息，完成注册。"}
+          </p>
+        </div>
+        <ol className="registration-steps" aria-label="注册进度">
+          {steps.map((target, index) => (
+            <li
+              key={target}
+              aria-current={step === target ? "step" : undefined}
             >
-              {index + 1}. {titles[target]}
-            </Button>
-          </li>
-        ))}
-      </ol>
-      {!config.allow_registration && (
-        <MessageToast
-          kind="warning"
-          message="当前站点未开放注册，请联系管理员。"
-        />
-      )}
-      <fieldset
-        disabled={busy || !config.allow_registration}
-        className="registration-fields"
-      >
-        {step === 1 && (
-          <TextField
-            label="邮箱"
-            type="email"
-            required
-            maxLength={320}
-            autoComplete="email"
-            value={email}
-            onValue={(value) => {
-              setEmail(value);
-              setError("");
-              if (
-                challenge &&
-                normalizeRegistrationEmail(value) !== challenge.email
-              ) {
-                setChallenge(undefined);
-                setCode("");
-              }
-            }}
-            placeholder="you@company.com"
+              <Button
+                type="button"
+                variant={step === target ? "secondary" : "ghost"}
+                disabled={
+                  busy ||
+                  !canVisitRegistrationStep(
+                    target,
+                    emailRequired,
+                    email,
+                    code,
+                    challenge,
+                  )
+                }
+                onClick={() => visit(target)}
+              >
+                {index + 1}. {titles[target]}
+              </Button>
+            </li>
+          ))}
+        </ol>
+        {!config.allow_registration && (
+          <MessageToast
+            kind="warning"
+            message="当前站点未开放注册，请联系管理员。"
           />
         )}
-        {step === 2 && (
-          <>
+        <fieldset
+          disabled={busy || !config.allow_registration}
+          className="registration-fields"
+        >
+          {step === 1 && (
             <TextField
-              label="邮箱验证码"
-              required={emailRequired}
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              maxLength={6}
-              pattern={emailRequired ? "[0-9]{6}" : undefined}
-              value={code}
+              label="邮箱"
+              type="email"
+              required
+              maxLength={320}
+              autoComplete="email"
+              value={email}
               onValue={(value) => {
-                setCode(value.replace(/\D/g, "").slice(0, 6));
-                setChallenge((current) =>
-                  current ? { ...current, verifiedCode: "" } : current,
-                );
+                setEmail(value);
                 setError("");
+                if (
+                  challenge &&
+                  normalizeRegistrationEmail(value) !== challenge.email
+                ) {
+                  setChallenge(undefined);
+                  setCode("");
+                }
               }}
-              disabled={!progress.active}
+              placeholder="you@company.com"
             />
-            <p>
-              {!emailRequired
-                ? "站点已取消邮箱验证，可以继续设置账号。"
-                : progress.active
-                  ? `验证码签发后 ${challenge?.expires_in} 秒内有效。`
-                  : "验证码已过期或失效，请重新发送。"}
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={remaining > 0}
-              onClick={() => {
-                setResendRequested(true);
-                setStep(1);
-                setProof(undefined);
-                setRefreshKey((v) => v + 1);
-                setError("");
-              }}
-            >
-              {remaining ? `${remaining} 秒后可重新发送` : "重新发送验证码"}
-            </Button>
-          </>
-        )}
-        {step === 3 && (
-          <>
-            <p>注册邮箱：{normalizeRegistrationEmail(email)}</p>
-            {emailRequired && !progress.verified && (
+          )}
+          {step === 2 && (
+            <>
+              <TextField
+                label="邮箱验证码"
+                required={emailRequired}
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                maxLength={6}
+                pattern={emailRequired ? "[0-9]{6}" : undefined}
+                value={code}
+                onValue={(value) => {
+                  setCode(value.replace(/\D/g, "").slice(0, 6));
+                  setChallenge((current) =>
+                    current ? { ...current, verifiedCode: "" } : current,
+                  );
+                  setError("");
+                }}
+                disabled={!progress.active}
+              />
               <p>
-                注册现在要求验证邮箱，请返回第一步完成验证；已填写的账号信息会保留。
+                {!emailRequired
+                  ? "站点已取消邮箱验证，可以继续设置账号。"
+                  : progress.active
+                    ? `验证码将在 ${codeRemaining} 秒后失效。`
+                    : "验证码已过期或失效，请重新发送。"}
               </p>
-            )}
-            <TextField
-              label="用户名"
-              required
-              minLength={3}
-              maxLength={40}
-              pattern="[A-Za-z0-9][A-Za-z0-9_-]{2,39}"
-              autoComplete="username"
-              placeholder="3–40 位字母、数字、_ 或 -"
-              value={username}
-              onValue={setUsername}
+              <Button
+                type="button"
+                variant="outline"
+                disabled={remaining > 0}
+                onClick={() => {
+                  setResendProof(undefined);
+                  setResendOpen(true);
+                  setError("");
+                }}
+              >
+                {remaining ? `${remaining} 秒后可重新发送` : "重新发送邮件"}
+              </Button>
+            </>
+          )}
+          {step === 3 && (
+            <>
+              <p>注册邮箱：{normalizeRegistrationEmail(email)}</p>
+              {emailRequired && !progress.verified && (
+                <p>
+                  注册现在要求验证邮箱，请返回第一步完成验证；已填写的账号信息会保留。
+                </p>
+              )}
+              <TextField
+                label="用户名"
+                required
+                minLength={3}
+                maxLength={40}
+                pattern="[A-Za-z0-9][A-Za-z0-9_-]{2,39}"
+                autoComplete="username"
+                placeholder="3–40 位字母、数字、_ 或 -"
+                value={username}
+                onValue={setUsername}
+              />
+              <TextField
+                label="显示名称"
+                maxLength={120}
+                value={displayName}
+                onValue={setDisplayName}
+              />
+              <TextField
+                label="密码"
+                type="password"
+                required
+                minLength={8}
+                maxLength={1024}
+                autoComplete="new-password"
+                value={password}
+                onValue={setPassword}
+              />
+              <TextField
+                label="确认密码"
+                type="password"
+                required
+                minLength={8}
+                maxLength={1024}
+                autoComplete="new-password"
+                value={confirmation}
+                onValue={setConfirmation}
+              />
+            </>
+          )}
+          {needsProof && (
+            <HumanVerification
+              action={emailRequired ? "registration_email" : "register"}
+              refreshKey={refreshKey}
+              onChange={setProof}
+              disabled={busy}
             />
-            <TextField
-              label="显示名称"
-              maxLength={120}
-              value={displayName}
-              onValue={setDisplayName}
+          )}
+          {step === 3 && (
+            <AuthLegal
+              registration
+              accepted={accepted}
+              onChange={setAccepted}
             />
-            <TextField
-              label="密码"
-              type="password"
-              required
-              minLength={8}
-              maxLength={1024}
-              autoComplete="new-password"
-              value={password}
-              onValue={setPassword}
-            />
-            <TextField
-              label="确认密码"
-              type="password"
-              required
-              minLength={8}
-              maxLength={1024}
-              autoComplete="new-password"
-              value={confirmation}
-              onValue={setConfirmation}
-            />
-          </>
-        )}
-        {needsProof && (
-          <HumanVerification
-            action={emailRequired ? "registration_email" : "register"}
-            refreshKey={refreshKey}
-            onChange={setProof}
-            disabled={busy}
-          />
-        )}
-        {step === 3 && (
-          <AuthLegal registration accepted={accepted} onChange={setAccepted} />
-        )}
-      </fieldset>
-      {error && <MessageToast message={error} />}
-      <Button
-        className="auth-submit"
-        type="submit"
-        disabled={
-          busy ||
-          !config.allow_registration ||
-          (needsProof && !hasProof) ||
-          (step === 1 && needsProof && remaining > 0) ||
-          (step === 2 &&
-            emailRequired &&
-            (!progress.active || !/^\d{6}$/.test(code))) ||
-          (step === 3 && (!accepted || (emailRequired && !progress.verified)))
-        }
-      >
-        {busy
-          ? "处理中…"
-          : step === 1
-            ? needsProof
-              ? remaining
-                ? `${remaining} 秒后可发送`
-                : "发送验证码"
-              : "下一步"
-            : step === 2
-              ? emailRequired
-                ? "验证邮箱并继续"
-                : "下一步"
-              : "创建账号"}
-        <ArrowRight size={15} />
-      </Button>
-      {step !== 1 && (
+          )}
+        </fieldset>
+        {error && <MessageToast message={error} />}
         <Button
-          type="button"
-          variant="ghost"
-          disabled={busy}
-          onClick={() =>
-            visit(step === 3 && emailRequired && progress.active ? 2 : 1)
+          className="auth-submit"
+          type="submit"
+          disabled={
+            busy ||
+            !config.allow_registration ||
+            (needsProof && !hasProof) ||
+            (step === 1 && needsProof && remaining > 0) ||
+            (step === 2 &&
+              emailRequired &&
+              (!progress.active || !/^\d{6}$/.test(code))) ||
+            (step === 3 && (!accepted || (emailRequired && !progress.verified)))
           }
         >
-          上一步
+          {busy
+            ? "处理中…"
+            : step === 1
+              ? needsProof
+                ? remaining
+                  ? `${remaining} 秒后可发送`
+                  : "下一步：发送验证码"
+                : "下一步"
+              : step === 2
+                ? emailRequired
+                  ? "验证邮箱并继续"
+                  : "下一步"
+                : "创建账号"}
+          <ArrowRight size={15} />
         </Button>
-      )}
-      <Link className="auth-switch" to="/login">
-        已有账号？返回登录
-      </Link>
-    </form>
+        {step !== 1 && (
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={busy}
+            onClick={() =>
+              visit(step === 3 && emailRequired && progress.active ? 2 : 1)
+            }
+          >
+            上一步
+          </Button>
+        )}
+        <Link className="auth-switch" to="/login">
+          已有账号？返回登录
+        </Link>
+      </form>
+      <Dialog
+        open={resendOpen}
+        onOpenChange={(open) => {
+          if (!busy) setResendOpen(open);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>重新发送验证码</DialogTitle>
+            <DialogDescription>
+              邮件将发送至 {normalizeRegistrationEmail(email)}
+              ；请先完成人机验证。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody>
+            <form onSubmit={resend}>
+              <HumanVerification
+                action="registration_email"
+                refreshKey={resendRefreshKey}
+                onChange={setResendProof}
+                disabled={busy}
+              />
+              <Button
+                type="submit"
+                disabled={busy || remaining > 0 || !resendProof?.captcha_code}
+              >
+                {busy
+                  ? "发送中…"
+                  : remaining > 0
+                    ? `${remaining} 秒后可重新发送`
+                    : "重新发送邮件"}
+              </Button>
+            </form>
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

@@ -1462,7 +1462,7 @@ Cookie 写请求拒绝不匹配/缺失的 Origin。配置、部署与升级说�
 邮件设置新增 `mail_provider=smtp|brevo|mailjet|ses`（默认 `smtp`）、`ses_region`
 （默认 `us-east-1`）和 `mail_hourly_limit`（全站小时额度，1–100000，默认 100）。
 Brevo/Mailjet 固定服务商主机并强制 STARTTLS/587，SES 根据区域生成 SMTP 主机；自定义 SMTP
-沿用 `smtp_host`、`smtp_port`、`smtp_tls`。共用加密凭据 `smtp_username` 与 `smtp_password`（通过 `secret_updates` 写入，普通 settings 不接受账号字段）：
+沿用 `smtp_host`、`smtp_port`、`smtp_tls`。每家服务商独立保存加密的 `username` 与 `password`（通过 `secret_updates.mail_credentials.<provider>` 写入，普通 settings 不接受账号字段）：
 Brevo 填 SMTP login/SMTP Key；Mailjet 填 API Key/Secret Key；SES 填区域 SMTP 凭据。
 服务商要求发件人和完整凭据，新增站点使用服务默认值。
 
@@ -1486,11 +1486,11 @@ MFA 主加密密钥、数据库及 Redis 连接不接受此接口修改；SMTP �
 新时效用于新签发的令牌或邮件证明，旧证明保留已记录的截止时间；尝试耗尽后不可恢复使用。
 
 账号策略 PUT `/api/v1/admin/account-settings` 可带 `secret_updates`，其字段包括
-`smtp_username`、`smtp_password`、`turnstile_secret` 及对应 `clear_smtp_username`、`clear_smtp_password`、`clear_turnstile_secret`。
-密钥字段省略或空字符串表示保留；清除需显式传对应布尔值 true，不能与替换同时操作。切换邮件服务商会清除原服务商的凭据，须显式提交新凭据；验证失败则原配置不变。
+`mail_credentials` 和 `turnstile_secret`、`clear_turnstile_secret`。`mail_credentials` 按 `smtp`、`brevo`、`mailjet`、`ses` 分组，每组接受 `username`、`password`、`clear_username`、`clear_password`。
+密钥字段省略或空字符串表示保留；清除需显式传对应布尔值 true，不能与替换同时操作。切换邮件服务商保留各家独立凭据，不向其他服务商复用；验证失败则原配置不变。
 此接口检查管理员身份、后台会话、CSRF 来源和配置 revision；GET/SSE 只返回配置状态。
 
-敏感字段 GET/SSE 只返回 `secrets.smtp_username`、`secrets.smtp_password`、`secrets.turnstile_secret`
+敏感字段 GET/SSE 只返回 `secrets.mail_credentials.<provider>.username`、`secrets.mail_credentials.<provider>.password`、`secrets.turnstile_secret`
 布尔状态，普通配置和输入框不回显保存值；公开 Turnstile Site Key 不属于服务端秘密。
 仅接受当前账号设置记录结构；不在启动时迁移明文 SMTP 账号或补建缺失的 secrets。
 旧记录应在升级前离线处理；格式无效时返回错误，保留原记录不自动改写。
@@ -1499,6 +1499,11 @@ MFA 主加密密钥、数据库及 Redis 连接不接受此接口修改；SMTP �
 1–3650 天；省略时保留当前值。公网修改此字段除 `server.manage` 还需 `audits.manage`。
 网络、上传和保留策略先校验并持久化，再原子发布到运行配置与 SSE；无效请求不改变运行值。
 审计清理任务每小时读取最新策略，修改无需重启。本地版也可通过该系统设置维护保留策略。
+
+`POST /api/v1/admin/account-settings/mail/test` 接受与策略保存相同的 `{revision, settings, secret_updates}`，以 `settings.mail_provider` 选择要测试的服务商。
+测试当前草稿，留空凭据使用该服务商已保存的值，不写入设置、不发送邮件；只执行 SMTP 连接、TLS、认证和 NOOP 检查。
+接口要求后台会话、来源校验和 `security.manage`；每管理员每分钟最多 5 次、每 IP 最多 10 次，超限返回 429 和 Retry-After，整体超时 15 秒。
+版本冲突返回 409；连接和认证错误返回通用错误，不返回服务商原始诊断或凭据。审计动作为 `system.mail.test`。
 
 ## 管理响应与内部诊断
 

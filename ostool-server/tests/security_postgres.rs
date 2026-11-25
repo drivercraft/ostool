@@ -643,6 +643,15 @@ async fn smtp_sink() -> (
     tokio::sync::mpsc::Receiver<String>,
     tokio::task::JoinHandle<()>,
 ) {
+    smtp_sink_with_auth(None).await
+}
+async fn smtp_sink_with_auth(
+    expected: Option<(String, String)>,
+) -> (
+    u16,
+    tokio::sync::mpsc::Receiver<String>,
+    tokio::task::JoinHandle<()>,
+) {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -651,6 +660,7 @@ async fn smtp_sink() -> (
         loop {
             let (socket, _) = listener.accept().await.unwrap();
             let sender = sender.clone();
+            let expected = expected.clone();
             tokio::spawn(async move {
                 let (read, mut write) = socket.into_split();
                 write
@@ -671,7 +681,27 @@ async fn smtp_sink() -> (
                             message.push_str("\r\n");
                         }
                     } else if line.starts_with("EHLO") || line.starts_with("HELO") {
-                        write.write_all(b"250 localhost\r\n").await.unwrap();
+                        if expected.is_some() {
+                            write
+                                .write_all(b"250-localhost\r\n250 AUTH PLAIN\r\n")
+                                .await
+                                .unwrap();
+                        } else {
+                            write.write_all(b"250 localhost\r\n").await.unwrap();
+                        }
+                    } else if let Some(encoded) = line.strip_prefix("AUTH PLAIN ") {
+                        let decoded = STANDARD.decode(encoded).unwrap_or_default();
+                        let matches = expected.as_ref().is_some_and(|(username, password)| {
+                            decoded == format!("\0{username}\0{password}").as_bytes()
+                        });
+                        write
+                            .write_all(if matches {
+                                b"235 authenticated\r\n"
+                            } else {
+                                b"535 authentication failed\r\n"
+                            })
+                            .await
+                            .unwrap();
                     } else if line == "DATA" {
                         write.write_all(b"354 send message\r\n").await.unwrap();
                         data = true;
@@ -1295,7 +1325,13 @@ async fn account_settings_are_validated_private_versioned_persistent_and_enforce
         .await;
     assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
     assert_eq!(f.state.config.read().await.security.login_max_failures, 6);
-    f.state.config.write().await.security.smtp_password = Some("deploy-smtp-secret".into());
+    f.state
+        .config
+        .write()
+        .await
+        .security
+        .credentials_mut()
+        .password = Some("deploy-smtp-secret".into());
     settings["smtp_host"] = json!("smtp.example.test");
     settings["smtp_from"] = json!("noreply@example.test");
     settings["login_max_failures"] = json!(3);
@@ -1308,7 +1344,7 @@ async fn account_settings_are_validated_private_versioned_persistent_and_enforce
             "PUT",
             endpoint,
             Some(&cookies),
-            json!({"revision":1,"settings":settings,"secret_updates":{"smtp_username":"smtp-user"}}),
+            json!({"revision":1,"settings":settings,"secret_updates":{"mail_credentials":{"smtp":{"username":"smtp-user"}}}}),
         )
         .await;
     assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
@@ -1336,7 +1372,7 @@ async fn account_settings_are_validated_private_versioned_persistent_and_enforce
     reloaded.auth.max_active_sessions = 10;
     reloaded.security.login_max_failures = 6;
     // 部署环境只提供密码，用户名等非密钥字段由数据库恢复。
-    reloaded.security.smtp_username = None;
+    reloaded.security.credentials_mut().username = None;
     let env_file = f._root.path().join("runtime.env");
     std::fs::write(
         &env_file,
@@ -1353,11 +1389,11 @@ async fn account_settings_are_validated_private_versioned_persistent_and_enforce
     assert_eq!(reloaded.auth.max_active_sessions, 1);
     assert_eq!(reloaded.security.login_max_failures, 3);
     assert_eq!(
-        reloaded.security.smtp_username.as_deref(),
+        reloaded.security.credentials().username.as_deref(),
         Some("smtp-user")
     );
     assert_eq!(
-        reloaded.security.smtp_password.as_deref(),
+        reloaded.security.credentials().password.as_deref(),
         Some("deploy-smtp-secret")
     );
     let persisted: Value =
@@ -1369,7 +1405,7 @@ async fn account_settings_are_validated_private_versioned_persistent_and_enforce
     assert!(!persisted.to_string().contains("deploy-smtp-secret"));
     let local = Fixture::new(false).await;
     let mut invalid = reloaded.clone();
-    invalid.security.smtp_username = None;
+    invalid.security.credentials_mut().username = None;
     assert!(
         ostool_server::api::site::load_account_settings(&local.state.database, &mut invalid)
             .await
@@ -1783,7 +1819,7 @@ async fn settings_secrets_are_encrypted_write_only_versioned_and_recoverable() {
         .body;
     view["settings"]["smtp_host"] = json!("smtp.example.test");
     view["settings"]["smtp_from"] = json!("noreply@example.test");
-    let saved=f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_username":"smtp-account","smtp_password":"private-smtp-password","turnstile_secret":"private-turnstile-key"}})).await;
+    let saved=f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"mail_credentials":{"smtp":{"username":"smtp-account","password":"private-smtp-password"}},"turnstile_secret":"private-turnstile-key"}})).await;
     assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
     let payload = f
         .state
@@ -1796,19 +1832,19 @@ async fn settings_secrets_are_encrypted_write_only_versioned_and_recoverable() {
     assert!(!text.contains("private-smtp-password"));
     assert!(!text.contains("private-turnstile-key"));
     assert!(
-        payload["secrets"]["smtp_password"]
+        payload["secrets"]["mail_credentials"]["smtp"]["password"]
             .as_str()
             .unwrap()
             .starts_with("v1:")
     );
     let mut restarted = f.state.config.read().await.clone();
-    restarted.security.smtp_password = None;
+    restarted.security.credentials_mut().password = None;
     restarted.security.turnstile_secret = None;
     ostool_server::api::site::load_account_settings(&f.state.database, &mut restarted)
         .await
         .unwrap();
     assert_eq!(
-        restarted.security.smtp_password.as_deref(),
+        restarted.security.credentials().password.as_deref(),
         Some("private-smtp-password")
     );
     assert_eq!(
@@ -1826,10 +1862,13 @@ async fn settings_secrets_are_encrypted_write_only_versioned_and_recoverable() {
         .request("GET", endpoint, Some(&cookies), Value::Null)
         .await
         .body;
-    assert_eq!(view["secrets"]["smtp_password"], true);
+    assert_eq!(
+        view["secrets"]["mail_credentials"]["smtp"]["password"],
+        true
+    );
     assert_eq!(view["secrets"]["turnstile_secret"], true);
     assert!(!view.to_string().contains("private-smtp-password"));
-    let unchanged=f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_password":""}})).await;
+    let unchanged=f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"mail_credentials":{"smtp":{"password":""}}}})).await;
     assert_eq!(unchanged.status, StatusCode::OK);
     assert_eq!(
         f.state
@@ -1837,22 +1876,26 @@ async fn settings_secrets_are_encrypted_write_only_versioned_and_recoverable() {
             .read()
             .await
             .security
-            .smtp_password
+            .credentials()
+            .password
             .as_deref(),
         Some("private-smtp-password")
     );
-    assert_eq!(f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_password":"stale-edit"}})).await.status,StatusCode::CONFLICT);
+    assert_eq!(f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"mail_credentials":{"smtp":{"password":"stale-edit"}}}})).await.status,StatusCode::CONFLICT);
     view = f
         .request("GET", endpoint, Some(&cookies), Value::Null)
         .await
         .body;
-    let cleared=f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"clear_smtp_username":true,"clear_smtp_password":true,"clear_turnstile_secret":true}})).await;
+    let cleared=f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"mail_credentials":{"smtp":{"clear_username":true,"clear_password":true}},"clear_turnstile_secret":true}})).await;
     assert_eq!(cleared.status, StatusCode::OK, "{}", cleared.body);
     view = f
         .request("GET", endpoint, Some(&cookies), Value::Null)
         .await
         .body;
-    assert_eq!(view["secrets"]["smtp_password"], false);
+    assert_eq!(
+        view["secrets"]["mail_credentials"]["smtp"]["password"],
+        false
+    );
     assert_eq!(view["secrets"]["turnstile_secret"], false);
     let audit = sqlx::query_scalar::<_, String>("SELECT details::text FROM audit_events")
         .fetch_all(f.state.database.pool())
@@ -1862,7 +1905,7 @@ async fn settings_secrets_are_encrypted_write_only_versioned_and_recoverable() {
     assert!(!audit.contains("private-smtp-password"));
     assert!(!audit.contains("private-turnstile-key"));
     f.state.config.write().await.security.mfa_encryption_key = None;
-    assert_eq!(f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_username":"smtp-account","smtp_password":"must-not-store-without-key"}})).await.status,StatusCode::BAD_REQUEST);
+    assert_eq!(f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"mail_credentials":{"smtp":{"username":"smtp-account","password":"must-not-store-without-key"}}}})).await.status,StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -4589,7 +4632,10 @@ async fn runtime_credentials_are_write_only_and_debug_policy_is_persistent_witho
         .await
         .body;
     assert!(view["settings"].get("smtp_username").is_none());
-    assert_eq!(view["secrets"]["smtp_username"], false);
+    assert_eq!(
+        view["secrets"]["mail_credentials"]["mailjet"]["username"],
+        false
+    );
     view["settings"]["dev_registration_codes"] = json!(true);
     view["settings"]["registration_email_verification"] = json!(true);
     let saved = f
@@ -4623,14 +4669,20 @@ async fn runtime_credentials_are_write_only_and_debug_policy_is_persistent_witho
         .body;
     view["settings"]["mail_provider"] = json!("mailjet");
     view["settings"]["smtp_from"] = json!("noreply@example.test");
-    let saved = f.request("PUT", endpoint, Some(&cookies), json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_username":"private-mailjet-api-key","smtp_password":"private-mailjet-secret-key"}})).await;
+    let saved = f.request("PUT", endpoint, Some(&cookies), json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"mail_credentials":{"mailjet":{"username":"private-mailjet-api-key","password":"private-mailjet-secret-key"}}}})).await;
     assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
     view = f
         .request("GET", endpoint, Some(&cookies), Value::Null)
         .await
         .body;
-    assert_eq!(view["secrets"]["smtp_username"], true);
-    assert_eq!(view["secrets"]["smtp_password"], true);
+    assert_eq!(
+        view["secrets"]["mail_credentials"]["mailjet"]["username"],
+        true
+    );
+    assert_eq!(
+        view["secrets"]["mail_credentials"]["mailjet"]["password"],
+        true
+    );
     assert!(!view.to_string().contains("private-mailjet"));
     let stored: Value = f
         .state
@@ -4642,12 +4694,12 @@ async fn runtime_credentials_are_write_only_and_debug_policy_is_persistent_witho
     assert!(!stored.to_string().contains("private-mailjet"));
     assert!(stored["settings"].get("smtp_username").is_none());
     assert!(
-        stored["secrets"]["smtp_username"]
+        stored["secrets"]["mail_credentials"]["mailjet"]["username"]
             .as_str()
             .unwrap()
             .starts_with("v1:")
     );
-    let unchanged = f.request("PUT", endpoint, Some(&cookies), json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_username":"","smtp_password":""}})).await;
+    let unchanged = f.request("PUT", endpoint, Some(&cookies), json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"mail_credentials":{"mailjet":{"username":"","password":""}}}})).await;
     assert_eq!(unchanged.status, StatusCode::OK);
     assert_eq!(
         f.state
@@ -4655,7 +4707,8 @@ async fn runtime_credentials_are_write_only_and_debug_policy_is_persistent_witho
             .read()
             .await
             .security
-            .smtp_username
+            .credentials()
+            .username
             .as_deref(),
         Some("private-mailjet-api-key")
     );
@@ -4692,14 +4745,20 @@ async fn runtime_credentials_are_write_only_and_debug_policy_is_persistent_witho
         "must not lock the current administrator out"
     );
     view["settings"]["admin_allowed_networks"] = json!(["203.0.113.0/24"]);
-    let cleared = f.request("PUT", endpoint, Some(&cookies), json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"clear_smtp_username":true,"clear_smtp_password":true}})).await;
+    let cleared = f.request("PUT", endpoint, Some(&cookies), json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"mail_credentials":{"mailjet":{"clear_username":true,"clear_password":true}}}})).await;
     assert_eq!(cleared.status, StatusCode::OK, "{}", cleared.body);
     let empty = f
         .request("GET", endpoint, Some(&cookies), Value::Null)
         .await
         .body;
-    assert_eq!(empty["secrets"]["smtp_username"], false);
-    assert_eq!(empty["secrets"]["smtp_password"], false);
+    assert_eq!(
+        empty["secrets"]["mail_credentials"]["mailjet"]["username"],
+        false
+    );
+    assert_eq!(
+        empty["secrets"]["mail_credentials"]["mailjet"]["password"],
+        false
+    );
     let audit: Vec<String> = sqlx::query_scalar("SELECT details::text FROM audit_events")
         .fetch_all(f.state.database.pool())
         .await
@@ -4852,7 +4911,7 @@ async fn changing_mail_provider_never_reuses_the_previous_provider_credentials()
         .body;
     view["settings"]["mail_provider"] = json!("brevo");
     view["settings"]["smtp_from"] = json!("noreply@example.test");
-    let saved = f.request("PUT", endpoint, Some(&cookies), json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_username":"brevo-login","smtp_password":"brevo-password"}})).await;
+    let saved = f.request("PUT", endpoint, Some(&cookies), json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"mail_credentials":{"brevo":{"username":"brevo-login","password":"brevo-password"}}}})).await;
     assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
     view = f
         .request("GET", endpoint, Some(&cookies), Value::Null)
@@ -4901,7 +4960,8 @@ async fn changing_mail_provider_never_reuses_the_previous_provider_credentials()
             .read()
             .await
             .security
-            .smtp_username
+            .credentials()
+            .username
             .as_deref(),
         Some("brevo-login")
     );
@@ -4916,5 +4976,245 @@ async fn changing_mail_provider_never_reuses_the_previous_provider_credentials()
         .await;
     assert_eq!(disabled.status, StatusCode::OK, "{}", disabled.body);
     let current = f.state.config.read().await;
-    assert!(current.security.smtp_username.is_none() && current.security.smtp_password.is_none());
+    assert!(
+        current.security.credentials().username.is_none()
+            && current.security.credentials().password.is_none()
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn mail_profiles_keep_independent_encrypted_credentials_across_switches_and_restart() {
+    use ostool_server::security::config::MailProvider;
+    let f = Fixture::new(true).await;
+    let login = f.login(true).await;
+    let cookies = test_security::cookie_header(&login.headers);
+    let endpoint = "/api/v1/admin/account-settings";
+    let mut view = f
+        .request("GET", endpoint, Some(&cookies), Value::Null)
+        .await
+        .body;
+    view["settings"]["smtp_enabled"] = json!(false);
+    view["settings"]["smtp_host"] = json!("smtp.example.test");
+    view["settings"]["smtp_from"] = json!("ostool <noreply@example.test>");
+    let credentials: serde_json::Map<String, Value> = MailProvider::ALL.into_iter().map(|provider| (provider.key().into(), json!({"username":format!("{}-private-login",provider.key()),"password":format!("{}-private-password",provider.key())}))).collect();
+    let saved = f.request("PUT", endpoint, Some(&cookies), json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"mail_credentials":credentials}})).await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+    for provider in MailProvider::ALL {
+        view = f
+            .request("GET", endpoint, Some(&cookies), Value::Null)
+            .await
+            .body;
+        assert!(!view.to_string().contains("private-"));
+        assert_eq!(
+            view["secrets"]["mail_credentials"][provider.key()]["username"],
+            true
+        );
+        assert_eq!(
+            view["secrets"]["mail_credentials"][provider.key()]["password"],
+            true
+        );
+        view["settings"]["mail_provider"] = json!(provider);
+        let saved = f
+            .request(
+                "PUT",
+                endpoint,
+                Some(&cookies),
+                json!({"revision":view["revision"],"settings":view["settings"]}),
+            )
+            .await;
+        assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+        let config = f.state.config.read().await;
+        assert_eq!(
+            config.security.credentials().username,
+            Some(format!("{}-private-login", provider.key()))
+        );
+    }
+    let mut restored = f.state.config.read().await.clone();
+    restored.security.mail_credentials.clear();
+    ostool_server::api::site::load_account_settings(&f.state.database, &mut restored)
+        .await
+        .unwrap();
+    assert_eq!(restored.security.mail_credentials.len(), 4);
+    for provider in MailProvider::ALL {
+        assert_eq!(
+            restored.security.mail_credentials[&provider].password,
+            Some(format!("{}-private-password", provider.key()))
+        );
+    }
+    let mut record: Value = f
+        .state
+        .database
+        .record("account-settings")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!record.to_string().contains("private-"));
+    // Copying ciphertext between providers must fail authentication.
+    record["secrets"]["mail_credentials"]["brevo"] =
+        record["secrets"]["mail_credentials"]["mailjet"].clone();
+    f.state
+        .database
+        .save_record("account-settings", &record)
+        .await
+        .unwrap();
+    assert!(
+        ostool_server::api::site::load_account_settings(&f.state.database, &mut restored)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn mail_connection_tests_use_unsaved_drafts_without_sending_saving_or_bypassing_limits() {
+    let f = Fixture::new(true).await;
+    let login = f.login(true).await;
+    let cookies = test_security::cookie_header(&login.headers);
+    let endpoint = "/api/v1/admin/account-settings/mail/test";
+    let (port, mut messages, task) = smtp_sink().await;
+    let view = f
+        .request(
+            "GET",
+            "/api/v1/admin/account-settings",
+            Some(&cookies),
+            Value::Null,
+        )
+        .await
+        .body;
+    let mut settings = view["settings"].clone();
+    settings["smtp_host"] = json!("127.0.0.1");
+    settings["smtp_port"] = json!(port);
+    settings["smtp_tls"] = json!("loopback_plaintext");
+    settings["smtp_from"] = json!("test@example.test");
+    let body = json!({"revision":view["revision"],"settings":settings});
+    assert_eq!(
+        f.request("POST", endpoint, None, body.clone()).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    for _ in 0..5 {
+        let response = f
+            .request("POST", endpoint, Some(&cookies), body.clone())
+            .await;
+        assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+    }
+    assert!(
+        messages.try_recv().is_err(),
+        "connection tests never send email"
+    );
+    assert!(
+        f.state.config.read().await.security.smtp_host.is_none(),
+        "test drafts are never applied"
+    );
+    let stored = f
+        .request(
+            "GET",
+            "/api/v1/admin/account-settings",
+            Some(&cookies),
+            Value::Null,
+        )
+        .await
+        .body;
+    assert_eq!(stored["revision"], view["revision"]);
+    assert_eq!(stored["settings"], view["settings"]);
+    let limited = f
+        .request("POST", endpoint, Some(&cookies), body.clone())
+        .await;
+    assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(limited.headers.contains_key("retry-after"));
+    let mut stale = body;
+    stale["revision"] = json!(0);
+    assert_eq!(
+        f.request("POST", endpoint, Some(&cookies), stale)
+            .await
+            .status,
+        StatusCode::CONFLICT
+    );
+    let local = Fixture::new(false).await;
+    assert_eq!(
+        local
+            .request("POST", endpoint, None, json!({}))
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn mail_connection_tests_authenticate_draft_username_with_saved_provider_password() {
+    let f = Fixture::new(true).await;
+    let login = f.login(true).await;
+    let cookies = test_security::cookie_header(&login.headers);
+    let (port, mut messages, task) = smtp_sink_with_auth(Some((
+        "draft-user".into(),
+        "stored-provider-password".into(),
+    )))
+    .await;
+    let endpoint = "/api/v1/admin/account-settings";
+    let mut view = f
+        .request("GET", endpoint, Some(&cookies), Value::Null)
+        .await
+        .body;
+    view["settings"]["smtp_host"] = json!("127.0.0.1");
+    view["settings"]["smtp_port"] = json!(port);
+    view["settings"]["smtp_tls"] = json!("loopback_plaintext");
+    view["settings"]["smtp_from"] = json!("test@example.test");
+    let saved = f.request("PUT", endpoint, Some(&cookies), json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"mail_credentials":{"smtp":{"username":"stored-user","password":"stored-provider-password"}}}})).await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+    view = f
+        .request("GET", endpoint, Some(&cookies), Value::Null)
+        .await
+        .body;
+    let before: Value = f
+        .state
+        .database
+        .record("account-settings")
+        .await
+        .unwrap()
+        .unwrap();
+    let mut body = json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"mail_credentials":{"smtp":{"username":"draft-user","password":""}}}});
+    let tested = f
+        .request(
+            "POST",
+            "/api/v1/admin/account-settings/mail/test",
+            Some(&cookies),
+            body.clone(),
+        )
+        .await;
+    assert_eq!(tested.status, StatusCode::OK, "{}", tested.body);
+    assert!(messages.try_recv().is_err());
+    assert_eq!(
+        f.state
+            .config
+            .read()
+            .await
+            .security
+            .credentials()
+            .username
+            .as_deref(),
+        Some("stored-user")
+    );
+    let after: Value = f
+        .state
+        .database
+        .record("account-settings")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(before, after);
+    body["secret_updates"]["mail_credentials"]["smtp"]["password"] =
+        json!("wrong-private-password");
+    let failed = f
+        .request(
+            "POST",
+            "/api/v1/admin/account-settings/mail/test",
+            Some(&cookies),
+            body,
+        )
+        .await;
+    assert_eq!(failed.status, StatusCode::BAD_REQUEST);
+    assert!(!failed.body.to_string().contains("password"));
+    task.abort();
 }

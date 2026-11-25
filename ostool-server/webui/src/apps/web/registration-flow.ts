@@ -6,6 +6,18 @@ export type RegistrationChallenge = EmailChallenge & {
   expiresAt: number;
   verifiedCode: string;
 };
+export function createRegistrationChallenge(
+  email: string,
+  result: EmailChallenge,
+  now = Date.now(),
+): RegistrationChallenge {
+  return {
+    ...result,
+    email: normalizeRegistrationEmail(email),
+    expiresAt: now + result.expires_in * 1000,
+    verifiedCode: "",
+  };
+}
 export const normalizeRegistrationEmail = (email: string) =>
   email.trim().toLowerCase();
 export function registrationProgress(
@@ -29,14 +41,11 @@ export function canVisitRegistrationStep(
   email: string,
   code: string,
   challenge: RegistrationChallenge | undefined,
-  resendRequested: boolean,
   now = Date.now(),
 ) {
   if (target === 1) return true;
   if (!emailRequired)
     return target === 3 && !!normalizeRegistrationEmail(email);
   const progress = registrationProgress(email, code, challenge, now);
-  return (
-    !resendRequested && progress.active && (target === 2 || progress.verified)
-  );
+  return progress.active && (target === 2 || progress.verified);
 }

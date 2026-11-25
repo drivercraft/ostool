@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createRegistrationChallenge,
   canVisitRegistrationStep,
   registrationProgress,
   type RegistrationChallenge,
@@ -23,7 +24,6 @@ describe("registration step guards", () => {
         challenge.email,
         "123456",
         undefined,
-        false,
         100,
       ),
     ).toBe(false);
@@ -34,7 +34,6 @@ describe("registration step guards", () => {
         challenge.email,
         "123456",
         { ...challenge, verifiedCode: "" },
-        false,
         100,
       ),
     ).toBe(false);
@@ -45,20 +44,11 @@ describe("registration step guards", () => {
         challenge.email,
         "123456",
         challenge,
-        false,
         100,
       ),
     ).toBe(true);
     expect(
-      canVisitRegistrationStep(
-        2,
-        true,
-        challenge.email,
-        "",
-        challenge,
-        false,
-        100,
-      ),
+      canVisitRegistrationStep(2, true, challenge.email, "", challenge, 100),
     ).toBe(true);
   });
   it("allows normalized email edits but rejects email or code substitution", () => {
@@ -83,7 +73,6 @@ describe("registration step guards", () => {
           challenge.email,
           "123456",
           challenge,
-          false,
           10000,
         ),
       ).toBe(false);
@@ -94,50 +83,35 @@ describe("registration step guards", () => {
         challenge.email,
         "123456",
         challenge,
-        false,
         10000,
       ),
     ).toBe(true);
   });
-  it("requires a new send after requesting a resend", () => {
-    for (const target of [2, 3] as const)
-      expect(
-        canVisitRegistrationStep(
-          target,
-          true,
-          challenge.email,
-          "123456",
-          challenge,
-          true,
-          100,
-        ),
-      ).toBe(false);
+  it("requires verification again after a successful resend", () => {
+    const resent = createRegistrationChallenge(
+      " MEMBER@EXAMPLE.TEST ",
+      { ...challenge, challenge_id: "fresh-proof" },
+      100,
+    );
+    expect(resent.email).toBe(challenge.email);
+    expect(resent.expiresAt).toBe(600100);
+    expect(resent.verifiedCode).toBe("");
+    expect(
+      canVisitRegistrationStep(2, true, challenge.email, "", resent, 100),
+    ).toBe(true);
+    expect(
+      canVisitRegistrationStep(3, true, challenge.email, "123456", resent, 100),
+    ).toBe(false);
   });
   it("skips email verification only for sites that disable it", () => {
     expect(
-      canVisitRegistrationStep(
-        3,
-        false,
-        challenge.email,
-        "",
-        undefined,
-        false,
-        100,
-      ),
+      canVisitRegistrationStep(3, false, challenge.email, "", undefined, 100),
     ).toBe(true);
     expect(
-      canVisitRegistrationStep(
-        2,
-        false,
-        challenge.email,
-        "",
-        undefined,
-        false,
-        100,
-      ),
+      canVisitRegistrationStep(2, false, challenge.email, "", undefined, 100),
     ).toBe(false);
-    expect(
-      canVisitRegistrationStep(3, false, "  ", "", undefined, false, 100),
-    ).toBe(false);
+    expect(canVisitRegistrationStep(3, false, "  ", "", undefined, 100)).toBe(
+      false,
+    );
   });
 });

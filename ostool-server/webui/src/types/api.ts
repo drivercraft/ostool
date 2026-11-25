@@ -796,6 +796,14 @@ export interface NamePolicy {
   username_keywords: string[];
   display_name_keywords: string[];
 }
+export type MailProvider = "smtp" | "brevo" | "mailjet" | "ses";
+export interface MailCredentialUpdates {
+  username?: string;
+  password?: string;
+  clear_username?: boolean;
+  clear_password?: boolean;
+}
+
 export interface AccountSettings {
   dev_registration_codes: boolean;
   admin_allowed_networks: string[];
@@ -812,7 +820,7 @@ export interface AccountSettings {
   registration_email_verification: boolean;
   login_max_failures: number;
   login_lock_secs: number;
-  mail_provider: "smtp" | "brevo" | "mailjet" | "ses";
+  mail_provider: MailProvider;
   ses_region: string;
   mail_hourly_limit: number;
   smtp_enabled: boolean;
@@ -829,8 +837,10 @@ export interface AccountSettingsView {
   revision: number;
   settings: AccountSettings;
   secrets: {
-    smtp_username: boolean;
-    smtp_password: boolean;
+    mail_credentials: Record<
+      MailProvider,
+      { username: boolean; password: boolean }
+    >;
     turnstile_secret: boolean;
     mfa_key: boolean;
   };
@@ -877,11 +887,8 @@ export interface LeasePage {
 }
 
 export interface SecretUpdates {
-  smtp_username?: string;
-  clear_smtp_username?: boolean;
-  smtp_password?: string;
+  mail_credentials?: Partial<Record<MailProvider, MailCredentialUpdates>>;
   turnstile_secret?: string;
-  clear_smtp_password?: boolean;
   clear_turnstile_secret?: boolean;
 }
 

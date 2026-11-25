@@ -673,11 +673,18 @@ regional SMTP credentials, not an AWS Secret Access Key. Managed providers use
 STARTTLS on port 587; SES derives its endpoint from `ses_region` (default `us-east-1`).
 Custom SMTP uses the configured host, port and TLS mode: `starttls` normally uses
 587, `tls` 465, and `loopback_plaintext` is restricted to loopback mail relays/tests.
+Each provider retains separate encrypted username/password credentials when switching.
+The mail page shows a shared sender section and four provider cards. Each card can test
+its current draft using saved credentials for blank inputs; tests do not save settings
+or send mail. Tests require `security.manage`, allow five attempts/administrator/minute
+and ten/IP/minute, and time out after 15 seconds.
 Provider selection affects new submissions only. This integration sends through SMTP;
 it does not synchronize provider quotas, bounces or delivery receipts.
 
 Enable **Registration email verification** in the security settings to require an
 email code before account creation (disabled by default for existing deployments).
+The registration page shows separate code-expiry and resend countdowns. After cooldown,
+resending stays on the code step and requires a fresh CAPTCHA.
 The registration page has three steps: enter email and complete CAPTCHA to send a
 code, validate the code with the server, then set up username/password and accept
 the legal documents. The final submission includes `email_challenge_id` and

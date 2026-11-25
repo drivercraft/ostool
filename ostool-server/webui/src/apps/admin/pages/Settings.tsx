@@ -1,3 +1,4 @@
+import { MailSettings } from "@/apps/admin/components/mail-settings";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import { Label } from "@/components/ui/label";
@@ -613,84 +614,7 @@ const policySections: Record<
       ],
     },
   ],
-  email: [
-    {
-      title: "邮件服务",
-      fields: [
-        {
-          key: "smtp_enabled",
-          label: "启用邮件服务",
-          type: "check",
-          hint: "停用后隐藏邮箱验证与找回密码入口；本地调试注册码在登录与安全设置中控制。",
-        },
-        {
-          key: "mail_provider",
-          label: "邮件服务商",
-          type: "select",
-          options: [
-            { value: "smtp", label: "自定义 SMTP" },
-            { value: "brevo", label: "Brevo" },
-            { value: "mailjet", label: "Mailjet" },
-            { value: "ses", label: "Amazon SES" },
-          ],
-          hint: "服务商自动使用 STARTTLS/587；切换服务商须重新填写认证凭据。自定义 SMTP 使用下方连接设置。",
-        },
-        {
-          key: "ses_region",
-          label: "SES 区域",
-          placeholder: "us-east-1",
-          hint: "仅 Amazon SES 使用；填写已验证发件人及 SMTP 凭据所在区域。",
-        },
-        {
-          key: "mail_hourly_limit",
-          label: "全站每小时邮件额度",
-          type: "number",
-          min: 1,
-          max: 100000,
-          hint: "所有用途共用；失败也计入额度，防止分散 IP 和邮箱耗尽服务商配额。",
-        },
-        {
-          key: "smtp_host",
-          label: "SMTP 主机",
-          hint: "仅填写主机名或 IP，不带 smtp:// 或端口。",
-          placeholder: "smtp.example.com",
-        },
-        {
-          key: "smtp_port",
-          label: "SMTP 端口",
-          type: "number",
-          min: 1,
-          max: 65535,
-          hint: "STARTTLS 通常为 587，隐式 TLS 通常为 465。",
-        },
-        {
-          key: "smtp_tls",
-          label: "SMTP 传输安全",
-          type: "select",
-          hint: "公网邮件必须加密；明文仅供回环地址测试或本机邮件代理。",
-          options: [
-            { value: "starttls", label: "STARTTLS" },
-            { value: "tls", label: "隐式 TLS" },
-            { value: "loopback_plaintext", label: "回环明文（仅本机）" },
-          ],
-        },
-        {
-          key: "smtp_from",
-          label: "发件人",
-          hint: "使用邮箱或“名称 <邮箱>”格式，须符合服务商发件域名要求。",
-          placeholder: "ostool <noreply@example.com>",
-        },
-        {
-          key: "password_reset_ttl_secs",
-          label: "密码恢复验证码有效期（秒）",
-          type: "number",
-          min: 300,
-          max: 7200,
-          hint: "300–7200 秒；仅影响新签发的恢复验证码。",
-        },
-      ],
-    },
-  ],
+  email: [],
 };
 function DevelopmentRegistrationCode({
   code,
@@ -777,28 +701,17 @@ function AccountForm({
       setBaseline(source.settings);
       setBaselineRevision(source.revision);
     }
-    if (key === "mail_provider" && value !== current.mail_provider) {
-      setSecretDraft((old) => {
-        const next = { ...old };
-        delete next.smtp_username;
-        delete next.smtp_password;
-        delete next.clear_smtp_username;
-        delete next.clear_smtp_password;
-        return next;
-      });
-    }
     setDraft((d) => ({ ...d, [key]: value }));
   };
-  const secretKeys =
-    group === "email"
-      ? (["smtp_username", "smtp_password"] as const)
-      : (["turnstile_secret"] as const);
-  const secretConfigured = (
-    key: "smtp_username" | "smtp_password" | "turnstile_secret",
-  ) =>
-    source.secrets[key] &&
-    (key === "turnstile_secret" ||
-      current.mail_provider === source.settings.mail_provider);
+  const secretKeys = ["turnstile_secret"] as const;
+  const secretConfigured = (key: "turnstile_secret") => source.secrets[key];
+  const changeSecrets = (updates: import("@/types/api").SecretUpdates) => {
+    if (!dirty) {
+      setBaseline(source.settings);
+      setBaselineRevision(source.revision);
+    }
+    setSecretDraft(updates);
+  };
   return (
     <PagePanel
       footer={
@@ -861,19 +774,20 @@ function AccountForm({
           disabled={task.pending || !can("security.manage")}
           className="settings-fields"
         >
+          {group === "email" && (
+            <MailSettings
+              settings={current}
+              secrets={source.secrets}
+              updates={secretDraft}
+              onChange={change}
+              onSecretsChange={changeSecrets}
+              revision={secretDirty ? baselineRevision : source.revision}
+              disabled={conflict || task.pending || !can("security.manage")}
+            />
+          )}
           {policySections[group].map((section) => (
             <Section key={section.title} title={section.title}>
               {section.fields.map((field) => {
-                if (
-                  group === "email" &&
-                  ((["smtp_host", "smtp_port", "smtp_tls"].includes(
-                    field.key,
-                  ) &&
-                    current.mail_provider !== "smtp") ||
-                    (field.key === "ses_region" &&
-                      current.mail_provider !== "ses"))
-                )
-                  return null;
                 const value = current[field.key];
                 if (field.type === "check")
                   return (
@@ -964,82 +878,70 @@ function AccountForm({
                 ))}
             </Section>
           ))}
-          <Section
-            title={group === "email" ? "邮件认证凭据" : "人机验证服务密钥"}
-            columns={2}
-          >
-            {secretKeys.map((key) => (
-              <Field key={key} className="gap-3">
-                <TextField
-                  status={
-                    <Badge
-                      variant={secretConfigured(key) ? "success" : "secondary"}
-                    >
-                      {secretConfigured(key) ? "已配置" : "未配置"}
-                    </Badge>
-                  }
-                  label={
-                    key === "smtp_username"
-                      ? "SMTP 账号 / API Key"
-                      : key === "smtp_password"
-                        ? "SMTP 密码 / Secret Key"
-                        : "Turnstile Secret Key"
-                  }
-                  type="password"
-                  autoComplete="new-password"
-                  maxLength={key === "smtp_username" ? 320 : 4096}
-                  placeholder="留空保留原值；输入新值后保存替换"
-                  hint={
-                    key === "smtp_username"
-                      ? "Brevo 填 SMTP login；Mailjet 填 API Key；SES 填区域 SMTP 用户名。凭据加密存储，保存后只显示配置状态。"
-                      : "凭据加密存储，保存后不回显；勾选清除并保存可删除。"
-                  }
-                  value={secretDraft[key] ?? ""}
-                  disabled={
-                    !source.secrets.mfa_key || !!secretDraft[`clear_${key}`]
-                  }
-                  onValue={(value) => {
-                    if (!dirty) {
-                      setBaseline(source.settings);
-                      setBaselineRevision(source.revision);
+          {group === "security" && (
+            <Section title="人机验证服务密钥" columns={2}>
+              {secretKeys.map((key) => (
+                <Field key={key} className="gap-3">
+                  <TextField
+                    status={
+                      <Badge
+                        variant={
+                          secretConfigured(key) ? "success" : "secondary"
+                        }
+                      >
+                        {secretConfigured(key) ? "已配置" : "未配置"}
+                      </Badge>
                     }
-                    setSecretDraft((old) => ({ ...old, [key]: value }));
-                  }}
-                />
-                <div className="flex items-center gap-2">
-                  <Checkbox
-                    id={`${id}-${key}-clear`}
-                    checked={!!secretDraft[`clear_${key}`]}
-                    disabled={!secretConfigured(key)}
-                    onCheckedChange={(value) => {
+                    label="Turnstile Secret Key"
+                    type="password"
+                    autoComplete="new-password"
+                    maxLength={4096}
+                    placeholder={
+                      secretConfigured(key) ? "已配置，留空不修改" : "未配置"
+                    }
+                    hint="凭据加密存储，保存后不回显；勾选清除并保存可删除。"
+                    value={secretDraft[key] ?? ""}
+                    disabled={
+                      !source.secrets.mfa_key || !!secretDraft[`clear_${key}`]
+                    }
+                    onValue={(value) => {
                       if (!dirty) {
                         setBaseline(source.settings);
                         setBaselineRevision(source.revision);
                       }
-                      setSecretDraft((old) => ({
-                        ...old,
-                        [key]: undefined,
-                        [`clear_${key}`]: value === true,
-                      }));
+                      setSecretDraft((old) => ({ ...old, [key]: value }));
                     }}
                   />
-                  <Label htmlFor={`${id}-${key}-clear`}>
-                    清除已保存的
-                    {key === "smtp_username"
-                      ? " SMTP 账号 / API Key"
-                      : key === "smtp_password"
-                        ? " SMTP 密码 / Secret Key"
-                        : " Turnstile 密钥"}
-                  </Label>
-                </div>
-              </Field>
-            ))}
-            {!source.secrets.mfa_key && (
-              <Notice>
-                保存敏感配置前，请先配置部署主加密密钥；主密钥不在数据库中保存。
-              </Notice>
-            )}
-          </Section>
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id={`${id}-${key}-clear`}
+                      checked={!!secretDraft[`clear_${key}`]}
+                      disabled={!secretConfigured(key)}
+                      onCheckedChange={(value) => {
+                        if (!dirty) {
+                          setBaseline(source.settings);
+                          setBaselineRevision(source.revision);
+                        }
+                        setSecretDraft((old) => ({
+                          ...old,
+                          [key]: undefined,
+                          [`clear_${key}`]: value === true,
+                        }));
+                      }}
+                    />
+                    <Label htmlFor={`${id}-${key}-clear`}>
+                      清除已保存的 Turnstile 密钥
+                    </Label>
+                  </div>
+                </Field>
+              ))}
+              {!source.secrets.mfa_key && (
+                <Notice>
+                  保存敏感配置前，请先配置部署主加密密钥；主密钥不在数据库中保存。
+                </Notice>
+              )}
+            </Section>
+          )}
           {group === "email" &&
             (
               [

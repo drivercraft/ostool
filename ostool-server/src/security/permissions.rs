@@ -516,6 +516,10 @@ mod tests {
     #[test]
     fn human_configuration_tests_require_manage_permission_even_when_loading_the_widget() {
         assert_eq!(
+            required(&Method::POST, "/api/v1/admin/account-settings/mail/test"),
+            Some("security.manage")
+        );
+        assert_eq!(
             required(&Method::GET, "/api/v1/admin/account-settings/captcha"),
             Some("security.manage")
         );
