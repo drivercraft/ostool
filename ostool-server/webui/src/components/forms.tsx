@@ -116,15 +116,18 @@ export function FieldHelp({
 export function FieldTitle({
   label,
   hint,
+  status,
   htmlFor,
 }: {
   label: string;
   hint?: ReactNode;
+  status?: ReactNode;
   htmlFor?: string;
 }) {
   return (
     <div className="field-title-row">
       <FieldLabel htmlFor={htmlFor}>{label}</FieldLabel>
+      {status && <span className="ml-auto shrink-0">{status}</span>}
       <FieldHelp label={label}>{hint}</FieldHelp>
     </div>
   );
@@ -134,12 +137,14 @@ export function TextField({
   label,
   hint,
   type,
+  status,
   fullWidth = type === "url" || type === "file",
   onValue,
   ...props
 }: ComponentProps<typeof Input> & {
   label: string;
   hint?: string;
+  status?: ReactNode;
   fullWidth?: boolean;
   onValue?: (value: string) => void;
 }) {
@@ -148,7 +153,12 @@ export function TextField({
     hint ?? props["aria-description"] ?? props.title ?? inputHints[label];
   return (
     <Field className={fullWidth ? "full-width" : undefined}>
-      <FieldTitle htmlFor={id} label={label} hint={description} />
+      <FieldTitle
+        htmlFor={id}
+        label={label}
+        hint={description}
+        status={status}
+      />
       <Input
         id={id}
         type={type}

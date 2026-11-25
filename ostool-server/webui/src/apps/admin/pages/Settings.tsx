@@ -1,3 +1,6 @@
+import { Checkbox } from "@/components/ui/checkbox";
+import { Field } from "@/components/ui/field";
+import { Label } from "@/components/ui/label";
 import { HumanVerificationTest } from "@/apps/admin/components/human-verification-test";
 import { parseVerificationHostnames } from "@/human-verification";
 import { useCountdown } from "@/components/security-hooks";
@@ -961,15 +964,18 @@ function AccountForm({
           ))}
           <Section
             title={group === "email" ? "邮件认证凭据" : "人机验证服务密钥"}
+            columns={2}
           >
             {secretKeys.map((key) => (
-              <div key={key}>
-                <Badge
-                  variant={secretConfigured(key) ? "success" : "secondary"}
-                >
-                  {secretConfigured(key) ? "已配置" : "未配置"}
-                </Badge>
+              <Field key={key} className="gap-3">
                 <TextField
+                  status={
+                    <Badge
+                      variant={secretConfigured(key) ? "success" : "secondary"}
+                    >
+                      {secretConfigured(key) ? "已配置" : "未配置"}
+                    </Badge>
+                  }
                   label={
                     key === "smtp_username"
                       ? "SMTP 账号 / API Key"
@@ -998,29 +1004,33 @@ function AccountForm({
                     setSecretDraft((old) => ({ ...old, [key]: value }));
                   }}
                 />
-                <CheckField
-                  label={
-                    key === "smtp_username"
-                      ? "清除已保存的 SMTP 账号 / API Key"
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id={`${id}-${key}-clear`}
+                    checked={!!secretDraft[`clear_${key}`]}
+                    disabled={!secretConfigured(key)}
+                    onCheckedChange={(value) => {
+                      if (!dirty) {
+                        setBaseline(source.settings);
+                        setBaselineRevision(source.revision);
+                      }
+                      setSecretDraft((old) => ({
+                        ...old,
+                        [key]: undefined,
+                        [`clear_${key}`]: value === true,
+                      }));
+                    }}
+                  />
+                  <Label htmlFor={`${id}-${key}-clear`}>
+                    清除已保存的
+                    {key === "smtp_username"
+                      ? " SMTP 账号 / API Key"
                       : key === "smtp_password"
-                        ? "清除已保存的 SMTP 密码 / Secret Key"
-                        : "清除已保存的 Turnstile 密钥"
-                  }
-                  checked={!!secretDraft[`clear_${key}`]}
-                  disabled={!secretConfigured(key)}
-                  onChange={(value) => {
-                    if (!dirty) {
-                      setBaseline(source.settings);
-                      setBaselineRevision(source.revision);
-                    }
-                    setSecretDraft((old) => ({
-                      ...old,
-                      [key]: undefined,
-                      [`clear_${key}`]: value,
-                    }));
-                  }}
-                />
-              </div>
+                        ? " SMTP 密码 / Secret Key"
+                        : " Turnstile 密钥"}
+                  </Label>
+                </div>
+              </Field>
             ))}
             {!source.secrets.mfa_key && (
               <Notice>
