@@ -369,7 +369,7 @@ function Editor({
                           .filter(Boolean),
                       );
                     }}
-                    placeholder="用逗号或换行分隔；留空允许所有已开放免申请的设备。"
+                    placeholder="用逗号或换行分隔；留空允许所有允许自动审批的设备。"
                   />
                 </Section>
               </fieldset>

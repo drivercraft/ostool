@@ -545,6 +545,11 @@ export interface RentalRequest {
   rental_id: string | null;
   created_at: string;
 }
+export interface RentalApplicationResult {
+  id: string;
+  status: "pending" | "auto_approved";
+  rental_id: string | null;
+}
 export interface RentalApplication {
   board_id: string;
   starts_at: string;
@@ -552,8 +557,7 @@ export interface RentalApplication {
   notes: string;
 }
 export interface CatalogBoard {
-  instant_available?: boolean;
-  instant_ends_at?: string | null;
+  auto_approval_available?: boolean;
   id: string;
   board_type: string;
   tags: string[];
@@ -779,7 +783,7 @@ export interface MailDelivery {
 export const requestStatusLabels: Record<RentalRequest["status"], string> = {
   pending: "待审核",
   approved: "已通过",
-  auto_approved: "自动放行",
+  auto_approved: "自动通过",
   rejected: "已拒绝",
   cancelled: "已撤回",
 };

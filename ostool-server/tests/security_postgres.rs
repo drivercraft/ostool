@@ -2597,472 +2597,543 @@ async fn capability_roles_gate_admin_login_http_and_scoped_events_and_prevent_es
     Ok(())
 }
 
+struct ApplicationFixture {
+    f: Fixture,
+    cookie: String,
+    advanced: ostool_server::persistence::postgres::AccessGrant,
+    normal: ostool_server::persistence::postgres::AccessGrant,
+}
+impl ApplicationFixture {
+    async fn new(concurrent: u32) -> anyhow::Result<Self> {
+        use ostool_server::{
+            BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig,
+        };
+        let f = Fixture::new(true).await;
+        let login = f.login(true).await;
+        let cookie = test_security::cookie_header(&login.headers);
+        let policy = json!({"max_duration_minutes":120,"max_concurrent_sessions":concurrent,"min_available_minutes":10,"board_types":["shared-arm"]});
+        sqlx::query("INSERT INTO roles(id,code,name,permissions,allocation_policy) VALUES('application_role','application_role','自动审批角色',ARRAY['board.instant','board.use','rental.request'],$1)")
+            .bind(policy).execute(f.state.database.pool()).await?;
+        for (id, open, kind) in [
+            ("shared-1", true, "shared-arm"),
+            ("shared-2", true, "shared-arm"),
+            ("shared-3", true, "shared-arm"),
+            ("private-1", false, "shared-arm"),
+            ("foreign-1", true, "shared-x86"),
+        ] {
+            let board = BoardConfig {
+                id: id.into(),
+                board_type: kind.into(),
+                tags: vec![],
+                serial: None,
+                boot: BootConfig::Uboot(Default::default()),
+                power_management: PowerManagementConfig::Custom(CustomPowerManagement {
+                    power_on_cmd: "true".into(),
+                    power_off_cmd: "true".into(),
+                }),
+                notes: None,
+                network_identity: None,
+                disabled: false,
+                allow_instant_use: open,
+                reset_command: None,
+            };
+            f.state.board_store.write_board(&board).await?;
+            f.state.boards.write().await.insert(id.into(), board);
+        }
+        f.state.sync_board_runtime_states().await;
+        let advanced = f
+            .state
+            .database
+            .create_user(
+                "auto_user",
+                "auto@applications.test",
+                "application-password-123",
+                Some("自动用户".into()),
+                false,
+            )
+            .await?;
+        sqlx::query("UPDATE users SET role_id='application_role' WHERE id=$1")
+            .bind(advanced.id)
+            .execute(f.state.database.pool())
+            .await?;
+        let advanced = f.state.database.user_by_id(advanced.id).await?.unwrap();
+        let normal = f
+            .state
+            .database
+            .create_user(
+                "normal_user",
+                "normal@applications.test",
+                "application-password-123",
+                Some("普通用户".into()),
+                false,
+            )
+            .await?;
+        let auth = f.state.config.read().await.auth.clone();
+        let advanced = f
+            .state
+            .database
+            .issue_grant(advanced, "web", "profile", &auth)
+            .await?;
+        let normal = f
+            .state
+            .database
+            .issue_grant(normal, "web", "profile", &auth)
+            .await?;
+        Ok(Self {
+            f,
+            cookie,
+            advanced,
+            normal,
+        })
+    }
+    async fn apply(
+        &self,
+        token: &str,
+        board: &str,
+        start: chrono::DateTime<chrono::Utc>,
+        end: chrono::DateTime<chrono::Utc>,
+    ) -> Reply {
+        self.f.custom("POST","/api/v1/account/rental-requests",None,json!({"board_id":board,"starts_at":start,"ends_at":end,"notes":"application note"}),Some(&self.f.origin),Some(token)).await
+    }
+    async fn admin_rental(
+        &self,
+        user: Uuid,
+        board: &str,
+        start: chrono::DateTime<chrono::Utc>,
+        end: chrono::DateTime<chrono::Utc>,
+    ) -> Reply {
+        self.f.request("POST","/api/v1/admin/rentals",Some(&self.cookie),json!({"board_id":board,"user_id":user,"starts_at":start,"ends_at":end,"notes":"private administrator note"})).await
+    }
+}
+fn tomorrow() -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::from_timestamp(chrono::Utc::now().timestamp() + 86400, 0).unwrap()
+}
+
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL and Redis"]
-async fn instant_device_use_respects_pool_bookings_concurrency_ownership_and_early_release()
+async fn scheduled_rentals_share_one_board_by_time_and_calendar_privacy_is_scoped()
 -> anyhow::Result<()> {
-    use ostool_server::{BoardConfig, BootConfig, CustomPowerManagement, PowerManagementConfig};
-    let f = Fixture::new(true).await;
-    let root = f.login(true).await;
-    let cookie = test_security::cookie_header(&root.headers);
-    let role_reply=f.request("POST","/api/v1/admin/roles",Some(&cookie),json!({"code":"instant_engineer","enabled":true,"name":"即时研发成员","description":"可即时使用指定板型","permissions":["board.instant","rental.request"],"allocation_policy":{"max_duration_minutes":120,"max_concurrent_sessions":1,"min_available_minutes":10,"board_types":["shared-arm"]}})).await;
+    use chrono::Duration;
+    let f = ApplicationFixture::new(1).await?;
+    let start = tomorrow();
+    let end = start + Duration::hours(1);
+    // An existing active rental must not block a different user's later reservation.
     assert_eq!(
-        role_reply.status,
+        f.admin_rental(
+            f.normal.user.id,
+            "shared-1",
+            chrono::Utc::now() - Duration::hours(1),
+            end
+        )
+        .await
+        .status,
+        StatusCode::CREATED
+    );
+    let next = f
+        .apply(
+            &f.advanced.access_token,
+            "shared-1",
+            end,
+            end + Duration::hours(1),
+        )
+        .await;
+    assert_eq!(next.status, StatusCode::CREATED, "{}", next.body);
+    assert_eq!(next.body["status"], "auto_approved");
+    assert_eq!(
+        f.admin_rental(
+            f.normal.user.id,
+            "shared-1",
+            end - Duration::microseconds(1),
+            end + Duration::minutes(10)
+        )
+        .await
+        .status,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        f.admin_rental(
+            f.normal.user.id,
+            "shared-1",
+            end + Duration::hours(1),
+            end + Duration::hours(2)
+        )
+        .await
+        .status,
+        StatusCode::CREATED
+    );
+    let context = ostool_server::api::listing::editor(
+        &f.f.state,
+        &ostool_server::api::listing::EditorFilters {
+            board: "shared-1".into(),
+            from: Some(start),
+            to: Some(end + Duration::hours(3)),
+            ..Default::default()
+        },
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!(error.message))?;
+    let bookings = context["bookings"].as_array().unwrap();
+    assert_eq!(bookings.len(), 3);
+    assert!(
+        bookings
+            .iter()
+            .any(|r| r["label"].as_str().unwrap().contains("auto_user"))
+    );
+    assert!(
+        bookings
+            .iter()
+            .any(|r| r["label"].as_str().unwrap().contains("normal_user"))
+    );
+    let calendar =
+        f.f.custom(
+            "GET",
+            &format!(
+                "/api/v1/account/availability?board=shared-1&from={}&to={}",
+                start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                (end + Duration::hours(3)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            ),
+            None,
+            Value::Null,
+            Some(&f.f.origin),
+            Some(&f.advanced.access_token),
+        )
+        .await;
+    assert_eq!(calendar.status, StatusCode::OK, "{}", calendar.body);
+    let busy = calendar.body["items"].as_array().unwrap();
+    assert_eq!(
+        busy.len(),
+        1,
+        "adjacent tenants are one anonymous occupied interval"
+    );
+    assert_eq!(busy[0]["starts_at"], json!(start));
+    assert_eq!(busy[0]["ends_at"], json!(end + Duration::hours(2)));
+    assert_eq!(
+        busy[0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["board_id", "ends_at", "starts_at", "status"]
+    );
+    let payload = calendar.body.to_string();
+    for private in [
+        "normal_user",
+        "auto_user",
+        "applications.test",
+        "administrator note",
+        next.body["rental_id"].as_str().unwrap(),
+    ] {
+        assert!(!payload.contains(private), "{private}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn rental_applications_auto_approve_only_within_board_and_role_limits() -> anyhow::Result<()>
+{
+    use chrono::Duration;
+    let f = ApplicationFixture::new(1).await?;
+    let start = tomorrow();
+    for (token, board, from, to) in [
+        (
+            &f.normal.access_token,
+            "shared-1",
+            start,
+            start + Duration::hours(1),
+        ),
+        (
+            &f.advanced.access_token,
+            "private-1",
+            start,
+            start + Duration::hours(1),
+        ),
+        (
+            &f.advanced.access_token,
+            "foreign-1",
+            start,
+            start + Duration::hours(1),
+        ),
+        (
+            &f.advanced.access_token,
+            "shared-1",
+            start,
+            start + Duration::hours(3),
+        ),
+        (
+            &f.advanced.access_token,
+            "shared-1",
+            start,
+            start + Duration::minutes(5),
+        ),
+    ] {
+        let pending = f.apply(token, board, from, to).await;
+        assert_eq!(pending.status, StatusCode::CREATED, "{}", pending.body);
+        assert_eq!(pending.body["status"], "pending");
+        assert!(pending.body["rental_id"].is_null());
+    }
+    // Pending applications do not reserve a window or prevent automatic approval.
+    let approved = f
+        .apply(
+            &f.advanced.access_token,
+            "shared-1",
+            start,
+            start + Duration::hours(1),
+        )
+        .await;
+    assert_eq!(approved.status, StatusCode::CREATED, "{}", approved.body);
+    assert_eq!(approved.body["status"], "auto_approved");
+    let rental: Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM board_rentals r WHERE id=$1")
+        .bind(Uuid::parse_str(
+            approved.body["rental_id"].as_str().unwrap(),
+        )?)
+        .fetch_one(f.f.state.database.pool())
+        .await?;
+    assert_eq!(
+        chrono::DateTime::parse_from_rfc3339(rental["starts_at"].as_str().unwrap())?
+            .with_timezone(&chrono::Utc),
+        start
+    );
+    assert_eq!(
+        chrono::DateTime::parse_from_rfc3339(rental["ends_at"].as_str().unwrap())?
+            .with_timezone(&chrono::Utc),
+        start + Duration::hours(1)
+    );
+    let capacity = f
+        .apply(
+            &f.advanced.access_token,
+            "shared-2",
+            start,
+            start + Duration::minutes(30),
+        )
+        .await;
+    assert_eq!(capacity.status, StatusCode::CREATED);
+    assert_eq!(capacity.body["status"], "pending");
+    let later = f
+        .apply(
+            &f.advanced.access_token,
+            "shared-2",
+            start + Duration::hours(1),
+            start + Duration::hours(2),
+        )
+        .await;
+    assert_eq!(later.status, StatusCode::CREATED);
+    assert_eq!(later.body["status"], "auto_approved");
+    assert_eq!(
+        f.apply(
+            &f.normal.access_token,
+            "shared-1",
+            start,
+            start + Duration::hours(1)
+        )
+        .await
+        .status,
+        StatusCode::CONFLICT
+    );
+    // Approval creates a normal reservation: restarts and later permission changes
+    // must not shorten a user's already approved time windows.
+    assert_eq!(rental["source"], "scheduled");
+    f.f.state.database.recover_interrupted_leases().await?;
+    sqlx::query("UPDATE users SET role_id='member' WHERE id=$1")
+        .bind(f.advanced.user.id)
+        .execute(f.f.state.database.pool())
+        .await?;
+    let active: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM board_rentals WHERE user_id=$1 AND cancelled_at IS NULL",
+    )
+    .bind(f.advanced.user.id)
+    .fetch_one(f.f.state.database.pool())
+    .await?;
+    assert_eq!(active, 2);
+    let end: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT ends_at FROM board_rentals WHERE id=$1")
+            .bind(Uuid::parse_str(
+                approved.body["rental_id"].as_str().unwrap(),
+            )?)
+            .fetch_one(f.f.state.database.pool())
+            .await?;
+    assert_eq!(end, start + Duration::hours(1));
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn automatic_approval_uses_peak_concurrency_instead_of_intersection_count()
+-> anyhow::Result<()> {
+    use chrono::Duration;
+    let f = ApplicationFixture::new(2).await?;
+    let start = tomorrow();
+    assert_eq!(
+        f.admin_rental(
+            f.advanced.user.id,
+            "shared-1",
+            start,
+            start + Duration::minutes(30)
+        )
+        .await
+        .status,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        f.admin_rental(
+            f.advanced.user.id,
+            "shared-2",
+            start + Duration::minutes(30),
+            start + Duration::hours(1)
+        )
+        .await
+        .status,
+        StatusCode::CREATED
+    );
+    let overlapping = f
+        .apply(
+            &f.advanced.access_token,
+            "shared-3",
+            start,
+            start + Duration::hours(1),
+        )
+        .await;
+    assert_eq!(
+        overlapping.status,
         StatusCode::CREATED,
         "{}",
-        role_reply.body
-    );
-    let role: String = sqlx::query_scalar("SELECT id FROM roles WHERE name='即时研发成员'")
-        .fetch_one(f.state.database.pool())
-        .await?;
-    for (id, pool, kind) in [
-        ("shared-1", true, "shared-arm"),
-        ("shared-2", true, "shared-arm"),
-        ("private-1", false, "shared-arm"),
-        ("foreign-1", true, "shared-x86"),
-    ] {
-        let board = BoardConfig {
-            allow_instant_use: pool,
-            reset_command: None,
-            id: id.into(),
-            board_type: kind.into(),
-            tags: vec!["kernel".into()],
-            serial: None,
-            boot: BootConfig::Uboot(Default::default()),
-            power_management: PowerManagementConfig::Custom(CustomPowerManagement {
-                power_on_cmd: "true".into(),
-                power_off_cmd: "true".into(),
-            }),
-            notes: None,
-            network_identity: None,
-            disabled: false,
-        };
-        f.state.board_store.write_board(&board).await?;
-        f.state.boards.write().await.insert(id.into(), board);
-    }
-    f.state.sync_board_runtime_states().await;
-    let user = f
-        .state
-        .database
-        .create_user(
-            "instant_engineer",
-            "instant@permissions.test",
-            "instant-engineer-password-123",
-            None,
-            false,
-        )
-        .await?;
-    sqlx::query("UPDATE users SET role_id=$1 WHERE id=$2")
-        .bind(&role)
-        .bind(user.id)
-        .execute(f.state.database.pool())
-        .await?;
-    let user = f.state.database.user_by_id(user.id).await?.unwrap();
-    let auth = f.state.config.read().await.auth.clone();
-    let grant = f
-        .state
-        .database
-        .issue_grant(
-            user.clone(),
-            "ostool-cli",
-            "board:operate offline_access",
-            &auth,
-        )
-        .await?;
-    let normal = f
-        .state
-        .database
-        .create_user(
-            "reserved_engineer",
-            "reserved@permissions.test",
-            "reserved-engineer-password-123",
-            None,
-            false,
-        )
-        .await?;
-    // Opening a device does not grant ordinary members approval-free access.
-    let normal_grant = f
-        .state
-        .database
-        .issue_grant(normal.clone(), "ostool-cli", "board:operate", &auth)
-        .await?;
-    let normal_web = f
-        .state
-        .database
-        .issue_grant(normal.clone(), "web", "profile", &auth)
-        .await?;
-    let advanced_web = f
-        .state
-        .database
-        .issue_grant(user.clone(), "web", "profile", &auth)
-        .await?;
-    for (path, input, token) in [
-        (
-            "/api/v1/account/allocations",
-            json!({"board_id":"shared-2"}),
-            &normal_web.access_token,
-        ),
-        (
-            "/api/v1/sessions",
-            json!({"board_type":"shared-arm","board_id":"shared-2"}),
-            &normal_grant.access_token,
-        ),
-    ] {
-        let denied = f
-            .custom("POST", path, None, input, Some(&f.origin), Some(token))
-            .await;
-        assert_eq!(
-            denied.status,
-            StatusCode::FORBIDDEN,
-            "{path}: {}",
-            denied.body
-        );
-    }
-    let ordinary = f
-        .custom(
-            "GET",
-            "/api/v1/account",
-            None,
-            Value::Null,
-            Some(&f.origin),
-            Some(&normal_web.access_token),
-        )
-        .await;
-    assert_eq!(ordinary.status, StatusCode::OK);
-    assert!(
-        ordinary.body["catalog"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|b| b["instant_available"] == false)
-    );
-    // The advanced role can claim only devices explicitly opened for this use.
-    let advanced = f
-        .custom(
-            "GET",
-            "/api/v1/account",
-            None,
-            Value::Null,
-            Some(&f.origin),
-            Some(&advanced_web.access_token),
-        )
-        .await;
-    assert_eq!(advanced.status, StatusCode::OK);
-    for board in advanced.body["catalog"].as_array().unwrap() {
-        let eligible = matches!(board["id"].as_str(), Some("shared-1" | "shared-2"));
-        assert_eq!(board["instant_available"], eligible, "{board}");
-    }
-    sqlx::query("INSERT INTO board_rentals(board_id,user_id,starts_at,ends_at) VALUES('shared-1',$1,now()+interval '30 minutes',now()+interval '2 hours')").bind(normal.id).execute(f.state.database.pool()).await?;
-    let create =
-        |id: &str| json!({"board_type":"shared-arm","board_id":id,"required_tags":["kernel"]});
-    let access = f
-        .custom(
-            "GET",
-            "/api/v1/board-types",
-            None,
-            Value::Null,
-            Some(&f.origin),
-            Some(&grant.access_token),
-        )
-        .await;
-    assert_eq!(access.status, StatusCode::OK);
-    assert!(access.body.to_string().contains("shared-arm"));
-    assert!(!access.body.to_string().contains("shared-x86"));
-    let denied = f
-        .custom(
-            "POST",
-            "/api/v1/sessions",
-            None,
-            create("private-1"),
-            Some(&f.origin),
-            Some(&grant.access_token),
-        )
-        .await;
-    assert_eq!(denied.status, StatusCode::CONFLICT);
-    // Concurrent requests by one user cannot exceed the configured limit, even on different devices.
-    let (a, b) = tokio::join!(
-        f.custom(
-            "POST",
-            "/api/v1/sessions",
-            None,
-            create("shared-1"),
-            Some(&f.origin),
-            Some(&grant.access_token)
-        ),
-        f.custom(
-            "POST",
-            "/api/v1/sessions",
-            None,
-            create("shared-2"),
-            Some(&f.origin),
-            Some(&grant.access_token)
-        )
+        overlapping.body
     );
     assert_eq!(
-        [a.status, b.status]
-            .into_iter()
-            .filter(|s| *s == StatusCode::CREATED)
-            .count(),
-        1
+        overlapping.body["status"], "auto_approved",
+        "only two devices are ever simultaneous"
     );
-    let winner = if a.status == StatusCode::CREATED {
-        a
-    } else {
-        b
-    };
-    let sid = winner.body["session_id"].as_str().unwrap();
-    let board = winner.body["board_id"].as_str().unwrap();
-    let row=sqlx::query("SELECT r.id,r.ends_at,r.source FROM board_rentals r JOIN session_owners s ON s.rental_id=r.id WHERE s.session_id=$1").bind(sid).fetch_one(f.state.database.pool()).await?;
-    use sqlx::Row;
-    let rental: Uuid = row.try_get("id")?;
-    assert_eq!(row.try_get::<String, _>("source")?, "instant");
-    let applications = f
-        .request(
-            "GET",
-            "/api/v1/admin/rental-requests?status=auto_approved",
-            Some(&cookie),
-            Value::Null,
-        )
-        .await;
-    assert_eq!(applications.status, StatusCode::OK, "{}", applications.body);
-    assert_eq!(applications.body["total"], 1);
-    let application = &applications.body["items"][0];
-    assert_eq!(application["user_id"], user.id.to_string());
-    assert_eq!(application["board_id"], board);
-    assert_eq!(application["rental_id"], rental.to_string());
-    assert_eq!(application["status"], "auto_approved");
-    assert_eq!(application["decision_note"], "自动放行");
-    assert!(application["reviewed_at"].is_string());
-    let application_id = application["id"].as_str().unwrap();
-    let review = f
-        .request(
-            "POST",
-            &format!("/api/v1/admin/rental-requests/{application_id}/review"),
-            Some(&cookie),
-            json!({"decision":"approve","note":"重复批准"}),
-        )
-        .await;
-    assert_eq!(review.status, StatusCode::CONFLICT);
-    if board == "shared-1" {
-        assert!(
-            row.try_get::<chrono::DateTime<Utc>, _>("ends_at")?
-                < Utc::now() + chrono::Duration::minutes(30)
-        );
-    }
-    let foreign = f
-        .state
-        .database
-        .issue_grant(normal.clone(), "ostool-cli", "board:operate", &auth)
-        .await?;
-    assert_eq!(
-        f.custom(
-            "GET",
-            &format!("/api/v1/sessions/{sid}"),
-            None,
-            Value::Null,
-            Some(&f.origin),
-            Some(&foreign.access_token)
-        )
-        .await
-        .status,
-        StatusCode::NOT_FOUND
-    );
-    let upload = f
-        .custom(
-            "PUT",
-            &format!("/api/v1/sessions/{sid}/files"),
-            None,
-            json!({}),
-            Some(&f.origin),
-            Some(&grant.access_token),
-        )
-        .await;
-    assert_ne!(upload.status, StatusCode::UNAUTHORIZED);
-    assert_ne!(upload.status, StatusCode::FORBIDDEN); // body lacks X-File-Path, proving normal session authorization succeeded.
-    assert_eq!(
-        f.custom(
-            "POST",
-            &format!("/api/v1/sessions/{sid}/heartbeat"),
-            None,
-            Value::Null,
-            Some(&f.origin),
-            Some(&grant.access_token)
-        )
-        .await
-        .status,
-        StatusCode::OK
-    );
-    assert_eq!(
-        f.custom(
-            "DELETE",
-            &format!("/api/v1/sessions/{sid}"),
-            None,
-            Value::Null,
-            Some(&f.origin),
-            Some(&grant.access_token)
-        )
-        .await
-        .status,
-        StatusCode::ACCEPTED
-    );
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while f.state.get_session(sid).await.is_some() {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await?;
-    let ended: bool = sqlx::query_scalar(
-        "SELECT released_at IS NOT NULL AND ends_at<=now() FROM board_rentals WHERE id=$1",
-    )
-    .bind(rental)
-    .fetch_one(f.state.database.pool())
-    .await?;
-    assert!(ended);
-    // A failed application insert must not leave an orphan rental allocation.
-    sqlx::query("CREATE FUNCTION reject_auto_request() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'application persistence failed'; END $$")
-        .execute(f.state.database.pool()).await?;
-    sqlx::query("CREATE TRIGGER reject_auto_request BEFORE INSERT ON rental_requests FOR EACH ROW EXECUTE FUNCTION reject_auto_request()")
-        .execute(f.state.database.pool()).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn auto_approval_is_atomic_under_request_failure_and_competing_bookings() -> anyhow::Result<()>
+{
+    use chrono::Duration;
+    let f = ApplicationFixture::new(1).await?;
+    let start = tomorrow();
+    sqlx::query("CREATE FUNCTION reject_automatic_application() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.status='auto_approved' THEN RAISE EXCEPTION 'test request failure'; END IF; RETURN NEW; END $$").execute(f.f.state.database.pool()).await?;
+    sqlx::query("CREATE TRIGGER reject_automatic_application BEFORE INSERT ON rental_requests FOR EACH ROW EXECUTE FUNCTION reject_automatic_application()").execute(f.f.state.database.pool()).await?;
     let failed = f
-        .custom(
-            "POST",
-            "/api/v1/sessions",
-            None,
-            create(board),
-            Some(&f.origin),
-            Some(&grant.access_token),
+        .apply(
+            &f.advanced.access_token,
+            "shared-1",
+            start,
+            start + Duration::hours(1),
         )
         .await;
     assert_eq!(failed.status, StatusCode::SERVICE_UNAVAILABLE);
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM board_rentals WHERE user_id=$1")
-        .bind(user.id)
-        .fetch_one(f.state.database.pool())
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM board_rentals")
+        .fetch_one(f.f.state.database.pool())
         .await?;
+    assert_eq!(count, 0, "failed application cannot leave an allocation");
+    sqlx::query("DROP TRIGGER reject_automatic_application ON rental_requests")
+        .execute(f.f.state.database.pool())
+        .await?;
+    let other =
+        f.f.state
+            .database
+            .create_user(
+                "other_auto_user",
+                "other-auto@applications.test",
+                "application-password-123",
+                None,
+                false,
+            )
+            .await?;
+    sqlx::query("UPDATE users SET role_id='application_role' WHERE id=$1")
+        .bind(other.id)
+        .execute(f.f.state.database.pool())
+        .await?;
+    let other = f.f.state.database.user_by_id(other.id).await?.unwrap();
+    let other =
+        f.f.state
+            .database
+            .issue_grant(other, "web", "profile", &f.f.state.config.read().await.auth)
+            .await?;
+    let (first, second) = tokio::join!(
+        f.apply(
+            &f.advanced.access_token,
+            "shared-1",
+            start,
+            start + Duration::hours(1)
+        ),
+        f.apply(
+            &other.access_token,
+            "shared-1",
+            start,
+            start + Duration::hours(1)
+        )
+    );
+    assert!(matches!(
+        (first.status, second.status),
+        (StatusCode::CREATED, StatusCode::CONFLICT) | (StatusCode::CONFLICT, StatusCode::CREATED)
+    ));
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM rental_requests WHERE status='auto_approved'")
+            .fetch_one(f.f.state.database.pool())
+            .await?;
     assert_eq!(count, 1);
-    sqlx::query("DROP TRIGGER reject_auto_request ON rental_requests")
-        .execute(f.state.database.pool())
-        .await?;
-    sqlx::query("DROP FUNCTION reject_auto_request()")
-        .execute(f.state.database.pool())
-        .await?;
-    let again = f
-        .custom(
+    let (one, two) = tokio::join!(
+        f.apply(
+            &f.advanced.access_token,
+            "shared-1",
+            start + Duration::hours(2),
+            start + Duration::hours(3)
+        ),
+        f.apply(
+            &f.advanced.access_token,
+            "shared-2",
+            start + Duration::hours(2),
+            start + Duration::hours(3)
+        )
+    );
+    assert_eq!(one.status, StatusCode::CREATED);
+    assert_eq!(two.status, StatusCode::CREATED);
+    let statuses = [
+        one.body["status"].as_str().unwrap(),
+        two.body["status"].as_str().unwrap(),
+    ];
+    assert!(
+        statuses.contains(&"auto_approved") && statuses.contains(&"pending"),
+        "{statuses:?}"
+    );
+    // A still-open device cannot be consumed through the old claim API or CLI.
+    let bypass =
+        f.f.custom(
+            "POST",
+            "/api/v1/account/allocations",
+            None,
+            json!({"board_id":"shared-2"}),
+            Some(&f.f.origin),
+            Some(&f.advanced.access_token),
+        )
+        .await;
+    assert_eq!(bypass.status, StatusCode::NOT_FOUND);
+    let grant =
+        f.f.state
+            .database
+            .issue_grant(
+                f.advanced.user.clone(),
+                "ostool-cli",
+                "board:operate",
+                &f.f.state.config.read().await.auth,
+            )
+            .await?;
+    let session =
+        f.f.custom(
             "POST",
             "/api/v1/sessions",
             None,
-            create(board),
-            Some(&f.origin),
+            json!({"board_type":"shared-arm","board_id":"shared-2"}),
+            Some(&f.f.origin),
             Some(&grant.access_token),
         )
         .await;
-    assert_eq!(again.status, StatusCode::CREATED, "{}", again.body);
-    let next_sid = again.body["session_id"].as_str().unwrap();
-    let next_rental: Uuid =
-        sqlx::query_scalar("SELECT rental_id FROM session_owners WHERE session_id=$1")
-            .bind(next_sid)
-            .fetch_one(f.state.database.pool())
-            .await?;
-    let update=f.request("PUT",&format!("/api/v1/admin/roles/{role}"),Some(&cookie),json!({"code":"instant_engineer","enabled":true,"name":"即时研发成员","revision":1,"description":"取消即时使用","permissions":["board.use"],"allocation_policy":{"max_duration_minutes":120,"max_concurrent_sessions":1,"min_available_minutes":10,"board_types":["shared-arm"]}})).await;
-    assert_eq!(update.status, StatusCode::NO_CONTENT, "{}", update.body);
-    assert_eq!(
-        f.custom(
-            "GET",
-            &format!("/api/v1/sessions/{next_sid}"),
-            None,
-            Value::Null,
-            Some(&f.origin),
-            Some(&grant.access_token)
-        )
-        .await
-        .status,
-        StatusCode::UNAUTHORIZED
-    );
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while f.state.get_session(next_sid).await.is_some() {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await?;
-    assert!(
-        !f.state
-            .database
-            .authenticate_password("instant_engineer", "instant-engineer-password-123")
-            .await?
-            .unwrap()
-            .is_admin
-    );
-    ostool_server::api::instant::cancel_failed(&f.state, next_rental).await;
-    let cancelled: String =
-        sqlx::query_scalar("SELECT status FROM rental_requests WHERE rental_id=$1")
-            .bind(next_rental)
-            .fetch_one(f.state.database.pool())
-            .await?;
-    assert_eq!(cancelled, "cancelled");
-    let status_input = |revision, enabled| json!({"code":"instant_engineer","enabled":enabled,"revision":revision,"name":"即时研发成员","description":"角色状态测试","permissions":["board.instant"],"allocation_policy":{"max_duration_minutes":120,"max_concurrent_sessions":1,"min_available_minutes":10,"board_types":["shared-arm"]}});
-    assert_eq!(
-        f.request(
-            "PUT",
-            &format!("/api/v1/admin/roles/{role}"),
-            Some(&cookie),
-            status_input(2, true)
-        )
-        .await
-        .status,
-        StatusCode::NO_CONTENT
-    );
-    let current_user = f.state.database.user_by_id(user.id).await?.unwrap();
-    let current_grant = f
-        .state
-        .database
-        .issue_grant(
-            current_user,
-            "ostool-cli",
-            "board:operate offline_access",
-            &auth,
-        )
-        .await?;
-    let active = f
-        .custom(
-            "POST",
-            "/api/v1/sessions",
-            None,
-            create(board),
-            Some(&f.origin),
-            Some(&current_grant.access_token),
-        )
-        .await;
-    assert_eq!(active.status, StatusCode::CREATED, "{}", active.body);
-    let active_sid = active.body["session_id"].as_str().unwrap();
-    assert_eq!(
-        f.request(
-            "PUT",
-            &format!("/api/v1/admin/roles/{role}"),
-            Some(&cookie),
-            status_input(3, false)
-        )
-        .await
-        .status,
-        StatusCode::NO_CONTENT
-    );
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while f.state.get_session(active_sid).await.is_some() {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await?;
-    assert_eq!(
-        f.custom(
-            "POST",
-            "/api/v1/sessions",
-            None,
-            create(board),
-            Some(&f.origin),
-            Some(&current_grant.access_token)
-        )
-        .await
-        .status,
-        StatusCode::UNAUTHORIZED
-    );
+    assert_eq!(session.status, StatusCode::FORBIDDEN);
+    assert!(f.f.state.sessions.read().await.is_empty());
     Ok(())
 }
 

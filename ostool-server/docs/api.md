@@ -1528,29 +1528,22 @@ MFA 主加密密钥、数据库及 Redis 连接不接受此接口修改；SMTP �
 `system.admin` 保留完整管理员访问。只有设备只读权限不能读取含控制命令的单设备编辑详情。
 SSE 同样逐主题过滤，伪造 `topics/list_view/editor_view/board_editor_id` 不能取得其他权限数据。
 授权者不能授予自身未拥有的权限，不能维护更高权限用户或角色；内置权限不可修改，不能修改自己的角色权限。
-角色能力或使用规则改变会原子撤销该角色旧凭据并取消其即时租赁；更新名称、说明不撤销凭据。
+角色能力或使用规则改变会原子撤销该角色旧凭据；已审核通过的预约保留原时段，更新名称、说明不撤销凭据。
 
 预置角色为 `admin`（管理员，`system.admin`）、`member`（普通用户，`board.use`、`rental.request`）、
 `advanced`（高级用户，在普通用户基础上仅增加 `board.instant`）。新注册用户仍默认分配 `member`，
 升级不自动提升现有用户权限。高级用户没有管理后台权限，内置角色的状态、权限和使用限制不可修改，也不可删除。
 
-`board.use` 允许使用有效租赁，`rental.request` 允许提交申请，`board.instant` 是角色的“免审批使用设备”权限，允许立即分配。
-设备新增/编辑的 `allow_instant_use`（“开放免申请”，默认 false）仅控制设备是否参与分配，不授予用户权限；
-必须同时满足用户拥有 `board.instant` 且设备开启此配置，才允许免申请审批直接领取。普通用户仍需通过申请审批获得租赁。原有 `POST /api/v1/sessions` 不变；
-若成员没有可用的已分配设备且具有即时权限，服务器按板型、标签、设备 ID、共享标记和预约日历筛选。
-角色并发上限、当前独占状态及预约冲突在分配门锁内复查。预约开始前保留 60 秒释放缓冲，不足最短可用时间时返回原有空闲不足错误。
-分配成功生成 `board_rentals.source='instant'` 并与 `session_owners/session_history` 关联，
-后续上传、下载、WebSocket 继续按账号和租赁校验。固定到期时间不能通过心跳延长。
-提前清理完成后写 `released_at` 并缩短 `ends_at`；服务器重启结束中断的即时授权；失败分配取消对应记录。
-即时记录不能由租赁修改接口延长。普通预约的 `source='scheduled'`，原有审批流程保留。
-角色权限、即时使用及关联记录已纳入统一初始基线；该基线用于新的空 schema，既有开发库应备份后另建 schema。
+`board.use` 允许使用当前有效租赁，`rental.request` 允许提交申请，`board.instant` 使符合策略的申请自动通过，并依赖前两项权限。
+所有前台用户统一调用 `POST /api/v1/account/rental-requests`，提交 `board_id,starts_at,ends_at,notes`。返回 201 及 `{id,status,rental_id}`：`status` 为 `pending` 或 `auto_approved`，待审时 `rental_id=null`。
+自动审批需同时满足设备的 `allow_instant_use`、角色板型范围、最短/最长时长和整个申请窗口内的峰值并发限制。超出免审批范围的有效申请仍可进入人工审核。
+已通过的租赁不得重叠，判定为 `[starts_at,ends_at)`；相邻时段允许交接，不能因该板已有其他租赁而拒绝无冲突的时段。最终写入在同一事务中检查用户/角色版本、开发板冲突及并发，失败不留下部分申请或分配。
+自动审批创建与人工审批相同的 `source='scheduled'` 预约，并保留用户选择的完整时段；CLI 会话结束和服务重启不缩短预约。
+`POST /api/v1/sessions` 只接受已通过且当前生效的租赁，不再隐式分配免审批设备。前台直接领取接口已移除。
 
-## 统一认证与设备凭据接口
-
-以下身份、租赁及账号接口仅适用于公网版，未认证请求返回 401，权限不足返回 403；本地版不启用这些接口，返回 404。
-`POST /api/v1/account/allocations` 接收 `{"board_id":"..."}`，仅允许 `board.instant` 成员给自己领取设备，
-返回 201 和 `id,board_id,ends_at`；预约冲突、池范围或并发上限返回 409。
-`DELETE /api/v1/account/allocations/{id}` 只归还当前用户的未结束即时分配，并释放关联硬件会话。
+管理员日历投影在 `rental_editor.bookings` 中返回租赁 ID、起止时间及租赁人标签。
+`GET /api/v1/account/availability` 与成员 SSE 的 `availability` 只返回 `{board_id,starts_at,ends_at,status}`，按查询范围裁剪并合并相邻占用段；不返回租赁 ID、标签、用户及备注。成员日历只能选空闲时段。
+租赁与账号接口仅适用于公网版；本地版返回 404。
 
 `GET/PUT/DELETE /api/v1/admin/boards/{id}/device-connection` 要求 `devices.manage`。
 PUT 字段为 `endpoint`（内网 IP 的 HTTP 来源，或 HTTPS 来源）、`token`（可选，后续空值保留已有凭据）和 `ca_pem`（可选 HTTPS CA PEM）。

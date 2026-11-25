@@ -641,7 +641,7 @@ never extends its absolute or sensitive-operation deadline.
 
 Password/role changes and disabled/deleted users revoke sessions, PATs and pending
 device approvals. Built-in role permissions are fixed; editing assigned custom
-roles revokes affected credentials and instant allocations. Roles with users cannot
+roles revokes affected credentials. Roles with users cannot
 be deleted. PATs last 90 days by
 default (configurable 1–365) and grant CLI board access only. Admin-console operations,
 including audit export and security management, use the authenticated administrator
@@ -866,7 +866,7 @@ all-administrator privileges. `system.admin` remains the full trusted administra
 capability. Administrators cannot grant capabilities they do not own or edit higher
 privilege users/roles. Built-in role capabilities are fixed, and changing your own
 active role's permissions is prohibited. Editing an assigned custom role revokes
-its old credentials, ends its instant allocations and requires affected users to
+its old credentials and requires affected users to
 log in again. Role metadata changes alone preserve sessions.
 
 The three built-in roles are Administrator (`admin`, `system.admin`), Ordinary user
@@ -876,31 +876,27 @@ upgrading adds `advanced` without changing existing users or their role assignme
 Neither user role grants console access. Built-in roles cannot be disabled, deleted
 or have their permissions and allocation limits changed.
 
-Grant `board.instant` to a custom role to allow immediate use without approval.
-This also grants `board.use`, not console access. The role editor configures a
-maximum duration (1–1440 minutes), concurrent device count (1–16), minimum usable
-window and optional board-type allowlist within the permission section. `board.instant`
-is the sole allocation grant; `allocation_policy` stores its numeric/scope parameters,
-not a second permission switch. Separately enable **Open for use without application** (开放免申请)
-on each device; existing inventory defaults to closed. This switch grants no user
-permissions. In the role editor, **Use devices without approval** (免审批使用设备)
-controls `board.instant`: ordinary members still submit applications for approval,
-while the built-in Advanced user role or a custom role granted this capability can directly claim devices
-with the switch enabled. Only enabled, idle devices
-in both the role's scope and the open pool can be allocated. Existing bookings
-have priority; the server bounds each allocation by the next booking minus a
-60-second release buffer and rejects windows below the role's minimum.
+Grant `board.instant` to enable automatic approval of qualifying rental applications.
+It includes `rental.request` and `board.use`, without console access. Every member
+uses the same application page, selects an available board and a start/end time,
+and submits the request. Administrators see tenant names and occupied windows in
+the rental calendar; members see only anonymous, merged occupied intervals, with
+no tenant details or rental identifiers. Occupied time slots cannot be selected.
 
-Existing CLI session creation requests continue unchanged. The server atomically
-selects a candidate and records an `instant` rental and an `auto_approved` application
-in the same database transaction under the admission gate. Both application lists
-show “自动放行” (automatically approved) as its status and decision note;
-normal rental ownership, upload, HTTP download and WebSocket checks then apply.
-A fixed deadline cannot be extended by heartbeats. Failed allocations are cancelled,
-early session release shortens the rental after hardware cleanup, and server restart
-ends interrupted instant grants. Rental lists distinguish scheduled and instant
-allocations; instant periods cannot be manually extended through the rental editor.
-Manual approval remains available through `rental.request`. Public edition enforces authenticated identity and rental permissions; local edition uses direct exclusive board sessions.
+Enable **Allow automatic approval** (允许自动审批, `allow_instant_use`) per device.
+Automatic approval also checks the role's board-type scope, minimum/maximum duration
+and peak concurrent reservations over the requested window. Nonqualifying requests
+remain pending for administrator review. Conflicting reservations return 409; exact
+adjacent `[start, end)` windows are allowed, so one board can be rented to different
+people at different times, including after another person's current rental.
+
+Application submission returns `id`, `status` (`pending` or `auto_approved`) and
+`rental_id`. Automatic approval atomically creates an ordinary scheduled rental with
+the exact requested times. It has the same lifecycle as manual approval: ending a
+CLI session or restarting the server does not shorten the reservation. CLI requests
+only use approved rentals that are currently effective; they never allocate devices
+without an application. Public edition enforces identity and rental ownership;
+local edition continues to use direct exclusive hardware sessions.
 
 ## Existing board migration
 
@@ -1017,12 +1013,10 @@ operation before offering the board to users. Disable public boards before remov
 a fixed endpoint, and configure the new ID before re-enabling a renamed board when
 UDP discovery is disabled.
 
-### Website instant allocation and device provisioning
+### Website rental applications and device provisioning
 
-Members with `board.instant` can use **即时领取开发板** in their workspace and return
-active instant allocations from **我的租赁**. The server infers the current user; clients
-cannot assign to another user. Pool membership, board types, duration, existing bookings
-and concurrent allocations are checked atomically under the existing rental admission gate.
+Ordinary and approval-free users share the **申请租赁** workflow. The server decides
+whether to auto-approve after checking the chosen board, time and role limits.
 Administrators retain direct scheduled assignment and application approval.
 
 `PUT /api/v1/admin/boards/{id}/device-connection` accepts a LAN-IP HTTP origin or an

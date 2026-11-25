@@ -232,16 +232,16 @@ pub const CATALOG: &[Capability] = &[
     cap!(
         "rental.request",
         "申请租赁",
-        "从前台提交待审核的设备使用申请",
+        "从前台选择可用时段并提交设备使用申请",
         "前台设备使用",
         ["board.use"]
     ),
     cap!(
         "board.instant",
         "免审批使用设备",
-        "无需提交申请或逐次审批，仅可领取已开放免申请的空闲设备",
+        "提交租赁申请后，符合设备开放范围及角色限制时自动通过",
         "前台设备使用",
-        ["board.use"]
+        ["rental.request"]
     ),
 ];
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -351,8 +351,7 @@ pub fn expand(values: &[String]) -> Result<Vec<String>, ApiError> {
 }
 pub async fn access(db: &Database, user: &User) -> Result<Access, ApiError> {
     let row=sqlx::query("SELECT r.id AS role_id,u.is_admin,r.permissions,r.allocation_policy FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=$1 AND NOT u.disabled AND r.enabled").bind(user.id).fetch_optional(db.pool()).await?.ok_or_else(||ApiError::unauthorized("账号或角色不可用"))?;
-    let mut permissions: BTreeSet<String> = row
-        .try_get::<Vec<String>, _>("permissions")?
+    let mut permissions: BTreeSet<String> = expand(&row.try_get::<Vec<String>, _>("permissions")?)?
         .into_iter()
         .collect();
     if row.try_get::<bool, _>("is_admin")? {
@@ -540,7 +539,10 @@ mod tests {
         let ordinary = expand(&["board.use".into(), "rental.request".into()]).unwrap();
         assert!(!ordinary.iter().any(|p| p == "board.instant"));
         let advanced = expand(&["board.instant".into()]).unwrap();
-        assert_eq!(advanced, vec!["board.instant", "board.use"]);
+        assert_eq!(
+            advanced,
+            vec!["board.instant", "board.use", "rental.request"]
+        );
     }
     #[test]
     fn capability_dependencies_are_expanded_but_unknown_codes_and_routes_fail_closed() {

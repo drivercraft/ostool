@@ -40,15 +40,21 @@ export function RentalCalendar({
   onSelect,
   onRangeChange,
   disabled = false,
+  showRenters = false,
 }: {
   bookings: RentalWindow[];
   onRangeChange?: (from: Date, to: Date) => void;
   disabled?: boolean;
+  showRenters?: boolean;
   startsAt: string;
   endsAt?: string;
   excludeId?: string;
   onSelect: (start: Date, end: Date) => void;
 }) {
+  const bookingLabel = (booking: RentalWindow) =>
+    showRenters ? booking.label || "已有租赁" : "不可用";
+  const bookingKey = (booking: RentalWindow) =>
+    booking.id ?? `${booking.starts_at}/${booking.ends_at}`;
   const initial = new Date(startsAt);
   const valid = Number.isNaN(initial.getTime()) ? new Date() : initial;
   const [selected, setSelected] = useState(() => dateOnly(valid));
@@ -309,14 +315,19 @@ export function RentalCalendar({
                 <div className="calendar-cell-events">
                   {entries.slice(0, 2).map((booking) => (
                     <span
-                      key={booking.id}
+                      key={bookingKey(booking)}
                       className="calendar-booking"
-                      title={booking.label || "已有租赁"}
+                      title={bookingLabel(booking)}
                     >
                       {clock(
                         Math.max(window.start, Date.parse(booking.starts_at)),
-                      )}{" "}
-                      {booking.label || "已有租赁"}
+                      )}
+                      –
+                      {Math.min(window.end, Date.parse(booking.ends_at)) ===
+                      window.end
+                        ? "24:00"
+                        : clock(Date.parse(booking.ends_at))}{" "}
+                      · {bookingLabel(booking)}
                     </span>
                   ))}
                   {entries.length > 2 && (
@@ -521,9 +532,7 @@ export function RentalCalendar({
                   <span>
                     {status === "已结束"
                       ? status
-                      : entries
-                          .map((item) => item.label || "已有租赁")
-                          .join("、") || "空闲"}
+                      : entries.map(bookingLabel).join("、") || "空闲"}
                   </span>
                 </button>
               );
@@ -545,14 +554,14 @@ export function RentalCalendar({
             <h3>已有租赁</h3>
             {reservations.length ? (
               reservations.map((booking) => (
-                <div className="calendar-reservation" key={booking.id}>
+                <div className="calendar-reservation" key={bookingKey(booking)}>
                   <span>
                     {clock(Math.max(start, Date.parse(booking.starts_at)))}–
                     {Math.min(end, Date.parse(booking.ends_at)) === end
                       ? "24:00"
                       : clock(Date.parse(booking.ends_at))}
                   </span>
-                  <strong>{booking.label || "已租赁"}</strong>
+                  <strong>{bookingLabel(booking)}</strong>
                 </div>
               ))
             ) : (

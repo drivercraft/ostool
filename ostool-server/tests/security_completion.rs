@@ -424,20 +424,19 @@ async fn kernel_upload_admission_and_timeout_cover_receiving_the_request_body() 
 }
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL and Redis"]
-async fn front_end_claims_are_owned_limited_and_cannot_bypass_bookings() -> Result<()> {
+async fn applications_share_a_form_and_auto_approval_keeps_ownership_and_time_limits() -> Result<()>
+{
     let f = Fixture::new().await?;
     f.board("shared-a", false, true).await?;
     f.board("shared-b", false, true).await?;
+    let auth = f.state.config.read().await.auth.clone();
     let web = f
         .state
         .database
-        .issue_grant(
-            f.member.user.clone(),
-            "web",
-            "board:operate",
-            &f.state.config.read().await.auth,
-        )
+        .issue_grant(f.member.user.clone(), "web", "profile", &auth)
         .await?;
+    let start = chrono::Utc::now() + chrono::Duration::days(1);
+    let body = |board: &str, minutes: i64| json!({"board_id":board,"starts_at":start,"ends_at":start+chrono::Duration::minutes(minutes),"notes":"same form"});
     assert_eq!(
         f.call(
             "POST",
@@ -447,74 +446,85 @@ async fn front_end_claims_are_owned_limited_and_cannot_bypass_bookings() -> Resu
         )
         .await?
         .0,
-        StatusCode::FORBIDDEN
+        StatusCode::NOT_FOUND
     );
-    sqlx::query("INSERT INTO roles(id,code,name,permissions,allocation_policy) VALUES('instant','instant','Instant',ARRAY['board.use','board.instant'],'{\"max_duration_minutes\":30,\"max_concurrent_sessions\":1,\"min_available_minutes\":5,\"board_types\":[]}'::jsonb)").execute(f.state.database.pool()).await?;
+    let (status, ordinary) = f
+        .call(
+            "POST",
+            "/api/v1/account/rental-requests",
+            Some(&web.access_token),
+            body("shared-a", 60),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "{ordinary}");
+    assert_eq!(ordinary["status"], "pending");
+    // Capability dependencies apply to stored roles as well as new role edits.
+    sqlx::query("INSERT INTO roles(id,code,name,permissions,allocation_policy) VALUES('instant','instant','Automatic',ARRAY['board.use','board.instant'],'{\"max_duration_minutes\":30,\"max_concurrent_sessions\":1,\"min_available_minutes\":5,\"board_types\":[]}'::jsonb)").execute(f.state.database.pool()).await?;
     sqlx::query("UPDATE users SET role_id='instant' WHERE id=$1")
         .bind(f.member.user.id)
         .execute(f.state.database.pool())
         .await?;
+    let user = f
+        .state
+        .database
+        .user_by_id(f.member.user.id)
+        .await?
+        .unwrap();
     let web = f
         .state
         .database
-        .issue_grant(
-            f.state
-                .database
-                .user_by_id(f.member.user.id)
-                .await?
-                .unwrap(),
-            "web",
-            "board:operate",
-            &f.state.config.read().await.auth,
-        )
+        .issue_grant(user, "web", "profile", &auth)
         .await?;
-    let (status, claim) = f
+    let (status, approved) = f
         .call(
             "POST",
-            "/api/v1/account/allocations",
+            "/api/v1/account/rental-requests",
             Some(&web.access_token),
-            json!({"board_id":"shared-a"}),
+            body("shared-b", 30),
         )
         .await?;
-    assert_eq!(status, StatusCode::CREATED, "{claim}");
-    assert_eq!(
-        f.call(
+    assert_eq!(status, StatusCode::CREATED, "{approved}");
+    assert_eq!(approved["status"], "auto_approved");
+    let (_, limited) = f
+        .call(
             "POST",
-            "/api/v1/account/allocations",
+            "/api/v1/account/rental-requests",
             Some(&web.access_token),
-            json!({"board_id":"shared-b"})
-        )
-        .await?
-        .0,
-        StatusCode::CONFLICT
-    );
-    let route = format!(
-        "/api/v1/account/allocations/{}",
-        claim["id"].as_str().unwrap()
-    );
-    let other = f
-        .state
-        .database
-        .issue_grant(
-            f.admin.user.clone(),
-            "web",
-            "board:operate",
-            &f.state.config.read().await.auth,
+            body("shared-a", 20),
         )
         .await?;
+    assert_eq!(limited["status"], "pending");
+    // Automatic and manual approval share the same post-approval withdrawal rules.
+    let path = format!(
+        "/api/v1/account/rental-requests/{}",
+        approved["id"].as_str().unwrap()
+    );
     assert_eq!(
-        f.call("DELETE", &route, Some(&other.access_token), Value::Null)
+        f.call("DELETE", &path, Some(&web.access_token), Value::Null)
             .await?
             .0,
         StatusCode::NOT_FOUND
     );
+
+    sqlx::query(
+        "INSERT INTO board_rentals(board_id,user_id,starts_at,ends_at) VALUES('shared-a',$1,$2,$3)",
+    )
+    .bind(f.admin.user.id)
+    .bind(start)
+    .bind(start + chrono::Duration::hours(1))
+    .execute(f.state.database.pool())
+    .await?;
     assert_eq!(
-        f.call("DELETE", &route, Some(&web.access_token), Value::Null)
-            .await?
-            .0,
-        StatusCode::NO_CONTENT
+        f.call(
+            "POST",
+            "/api/v1/account/rental-requests",
+            Some(&web.access_token),
+            body("shared-a", 30)
+        )
+        .await?
+        .0,
+        StatusCode::CONFLICT
     );
-    sqlx::query("INSERT INTO board_rentals(board_id,user_id,starts_at,ends_at) VALUES('shared-b',$1,now()-interval '1 minute',now()+interval '1 hour')").bind(f.admin.user.id).execute(f.state.database.pool()).await?;
     assert_eq!(
         f.call(
             "POST",
@@ -524,7 +534,7 @@ async fn front_end_claims_are_owned_limited_and_cannot_bypass_bookings() -> Resu
         )
         .await?
         .0,
-        StatusCode::CONFLICT
+        StatusCode::NOT_FOUND
     );
     Ok(())
 }

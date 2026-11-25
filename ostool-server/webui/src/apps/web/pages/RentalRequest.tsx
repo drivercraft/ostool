@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { MessageToast } from "@/components/message-toast";
 import { useCallback, useEffect, useId, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
@@ -51,7 +52,9 @@ export default function RentalRequest() {
       <div className="member-heading">
         <div>
           <h1>租赁申请</h1>
-          <p>选择开发板及使用时段，提交后等待管理员审核。</p>
+          <p>
+            选择开发板的空闲时段并提交申请；符合免审批策略时自动通过，其余等待管理员审核。
+          </p>
         </div>
         <Button asChild variant="outline">
           <Link to="/account/requests">申请记录</Link>
@@ -233,15 +236,20 @@ function RentalRequestForm({
                     if (!boardExists) throw new Error("请选择可申请的设备");
                     if (!valid) throw new Error("开始时间必须早于结束时间");
                     if (conflicts.length)
-                      throw new Error("所选时段已有租赁，请选择空闲时段");
+                      throw new Error("所选时段不可用，请选择空闲时段");
                     if (!ready) throw new Error("请等待日历同步完成");
-                    await api.applyRental({
+                    const result = await api.applyRental({
                       board_id: board,
                       starts_at: new Date(start).toISOString(),
                       ends_at: new Date(end).toISOString(),
                       notes,
                     });
-                  }, "申请已提交，等待管理员审核")
+                    toast.success(
+                      result.status === "auto_approved"
+                        ? "申请已自动通过，可在所选时段使用开发板"
+                        : "申请已提交，等待管理员审核",
+                    );
+                  }, false)
                   .then((ok) => {
                     if (ok) navigate("/account/requests");
                   });
@@ -297,7 +305,7 @@ function RentalRequestForm({
             status={
               conflicts.length
                 ? "所选时段已有租赁"
-                : "申请不预占设备，通过审核后生效"
+                : "提交后根据免审批策略自动通过或等待审核，通过后预留所选时段"
             }
           >
             <Button asChild variant="outline">
@@ -329,7 +337,7 @@ function RentalRequestForm({
         {conflicts.length > 0 && (
           <MessageToast
             kind="warning"
-            message="所选时段已有租赁，请调整时间或在日历中选择空闲时段。"
+            message="所选时段不可用，请调整时间或在日历中选择空闲时段。"
           />
         )}
         {boardExists && (

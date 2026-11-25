@@ -540,10 +540,10 @@ function Editor({ board }: { board?: BoardConfig }) {
           </FormGrid>
           {!local && (
             <CheckField
-              label="开放免申请"
+              label="允许自动审批"
               checked={form.allow_instant_use}
               onChange={(value) => set("allow_instant_use", value)}
-              hint="仅拥有“免审批使用设备”权限的用户可直接领取；普通用户仍需申请审批，已有预约和使用限制继续生效。"
+              hint="拥有免审批权限的用户提交符合角色限制的申请后自动通过；其他申请仍需管理员审核，已有预约时段不可重叠。"
             />
           )}
           <CheckField

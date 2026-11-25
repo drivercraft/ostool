@@ -252,7 +252,7 @@ pub async fn editor(state: &AppState, filters: &EditorFilters) -> Result<Value, 
         .bind(filters.id).fetch_optional(state.database.pool()).await?;
     let from = filters.from.unwrap_or_else(Utc::now);
     let to = filters.to.unwrap_or(from + chrono::Duration::days(32));
-    let bookings: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',r.id,'board_id',r.board_id,'starts_at',r.starts_at,'ends_at',r.ends_at,'label',coalesce(u.display_name,u.username),'status','reserved') FROM board_rentals r JOIN users u ON u.id=r.user_id WHERE r.board_id=$1 AND r.cancelled_at IS NULL AND r.starts_at<$3 AND r.ends_at>$2 ORDER BY r.starts_at LIMIT 10001")
+    let bookings: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',r.id,'board_id',r.board_id,'starts_at',r.starts_at,'ends_at',r.ends_at,'label',concat_ws(' · ',u.username,nullif(u.display_name,'')),'status','reserved') FROM board_rentals r JOIN users u ON u.id=r.user_id WHERE r.board_id=$1 AND r.cancelled_at IS NULL AND r.starts_at<$3 AND r.ends_at>$2 ORDER BY r.starts_at LIMIT 10001")
         .bind(&filters.board).bind(from).bind(to).fetch_all(state.database.pool()).await?;
     if bookings.len() > 10000 {
         return Err(ApiError::bad_request(

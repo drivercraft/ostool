@@ -314,23 +314,14 @@ export const api = {
       { method: "PUT", bodyJson: input },
     );
   },
-  claimBoard(board_id: string) {
-    return request<{ id: string; board_id: string; ends_at: string }>(
-      "/api/v1/account/allocations",
-      { method: "POST", bodyJson: { board_id } },
-    );
-  },
-  returnBoard(id: string) {
-    return request<void>(
-      `/api/v1/account/allocations/${encodeURIComponent(id)}`,
-      { method: "DELETE" },
-    );
-  },
   applyRental(payload: import("@/types/api").RentalApplication) {
-    return request<void>("/api/v1/account/rental-requests", {
-      method: "POST",
-      bodyJson: payload,
-    });
+    return request<import("@/types/api").RentalApplicationResult>(
+      "/api/v1/account/rental-requests",
+      {
+        method: "POST",
+        bodyJson: payload,
+      },
+    );
   },
   withdrawRentalRequest(id: string) {
     return request<void>(

@@ -449,6 +449,8 @@ async fn member_workspace_isolation_approvals_and_security() {
     assert!(data["listing"]["items"].as_array().unwrap().is_empty());
     assert_eq!(data["availability"].as_array().unwrap().len(), 1);
     for window in data["availability"].as_array().unwrap() {
+        assert!(window.get("id").is_none());
+        assert!(window.get("label").is_none());
         assert!(window.get("user_id").is_none());
         assert!(window.get("notes").is_none());
         assert!(window.get("user_email").is_none());

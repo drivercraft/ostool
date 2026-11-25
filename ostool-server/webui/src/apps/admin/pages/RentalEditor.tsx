@@ -135,7 +135,9 @@ function RentalForm({
   const task = useAction(),
     navigate = useNavigate(),
     formId = useId();
-  const bookings = context.bookings;
+  const bookings = context.bookings.filter(
+    (booking) => booking.board_id === draft.board_id,
+  );
   const conflicts = rentalConflicts(
     bookings,
     Date.parse(draft.starts_at),
@@ -301,6 +303,7 @@ function RentalForm({
       )}
 
       <RentalCalendar
+        showRenters
         bookings={bookings}
         disabled={!ready || !!error}
         onRangeChange={onRangeChange}

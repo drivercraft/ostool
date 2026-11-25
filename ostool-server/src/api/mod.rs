@@ -11,6 +11,6 @@ pub mod rentals;
 
 pub mod site;
 
-pub mod instant;
+mod auto_approval;
 
 pub mod documents;

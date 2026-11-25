@@ -90,9 +90,7 @@ export default function Home() {
         >
           <div className="home-feature-copy">
             <span className="section-label">01 / DEVICE RESOURCES</span>
-            <h2 id="hardware-title">
-              真实硬件与虚拟设备，放在同一个工作区。
-            </h2>
+            <h2 id="hardware-title">真实硬件与虚拟设备，放在同一个工作区。</h2>
             <p>
               按设备类型与标签组织开发资源，统一维护接入配置。切换目标硬件时，让熟悉的工作方式继续沿用。
             </p>
@@ -162,9 +160,7 @@ export default function Home() {
         >
           <div className="home-feature-copy">
             <span className="section-label">02 / TERMINAL FIRST</span>
-            <h2 id="workflow-title">
-              留在终端，完成从启动到调试。
-            </h2>
+            <h2 id="workflow-title">留在终端，完成从启动到调试。</h2>
             <p>
               沿用 ostool
               命令连接设备，上传构建产物并进入串口会话。网站负责资源安排，命令行负责把开发工作继续向前推进。
@@ -215,11 +211,9 @@ export default function Home() {
           >
             <div className="home-feature-copy">
               <span className="section-label">03 / SHARED HARDWARE</span>
-              <h2 id="booking-title">
-                共享设备，各自拥有专注的时间。
-              </h2>
+              <h2 id="booking-title">共享设备，各自拥有专注的时间。</h2>
               <p>
-                先查看可用日历，再申请需要的使用时段。获授权的成员也可以直接领取空闲设备，系统自动记录申请与使用过程。
+                先查看可用日历，再申请需要的使用时段。符合免审批策略的申请会自动通过，其他申请由管理员审核。
               </p>
               <ul>
                 <li>
@@ -228,7 +222,7 @@ export default function Home() {
                 </li>
                 <li>
                   <CheckCircle2 />
-                  按角色授权即时分配与使用额度
+                  申请时统一检查时段与角色限制
                 </li>
                 <li>
                   <CheckCircle2 />
@@ -249,7 +243,7 @@ export default function Home() {
               <ol>
                 {[
                   ["01", "选择设备", "了解板型，查看可用时段"],
-                  ["02", "安排使用", "提交申请，或按权限即时分配"],
+                  ["02", "安排使用", "选择空闲时段并提交申请"],
                   ["03", "连接与开发", "在授权时段内连接 ostool"],
                   ["04", "释放资源", "结束会话，设备交还资源池"],
                 ].map(([number, title, text]) => (

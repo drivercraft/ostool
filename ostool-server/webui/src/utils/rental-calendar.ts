@@ -1,5 +1,5 @@
 export interface RentalWindow {
-  id: string;
+  id?: string;
   board_id: string;
   starts_at: string;
   ends_at: string;
@@ -24,7 +24,7 @@ export function busyWindows(
   exclude?: string,
 ): TimeWindow[] {
   const windows = bookings
-    .filter((r) => r.id !== exclude && r.status !== "cancelled")
+    .filter((r) => (!exclude || r.id !== exclude) && r.status !== "cancelled")
     .map((r) => ({
       start: Math.max(start, Date.parse(r.starts_at)),
       end: Math.min(end, occupiedEnd(r.ends_at)),
@@ -66,7 +66,7 @@ export function rentalConflicts(
 ) {
   return bookings.filter(
     (r) =>
-      r.id !== exclude &&
+      (!exclude || r.id !== exclude) &&
       r.status !== "cancelled" &&
       Date.parse(r.starts_at) < end &&
       occupiedEnd(r.ends_at) > start,

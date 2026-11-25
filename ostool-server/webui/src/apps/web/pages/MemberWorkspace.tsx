@@ -10,7 +10,6 @@ import {
   Route,
   Routes,
   useLocation,
-  useNavigate,
 } from "react-router-dom";
 import {
   CalendarClock,
@@ -47,7 +46,6 @@ import {
 } from "@/components/forms";
 import { useServerList } from "@/components/server-list";
 import { ListLayoutProvider, ListLayoutToggle } from "@/components/list-layout";
-import { PagePanel } from "@/components/page-panel";
 
 const rentalLabels: Record<string, string> = {
   active: "使用期内",
@@ -128,7 +126,6 @@ export default function MemberWorkspace() {
           <Route path="security" element={<Security />} />
           <Route path="password" element={<Password />} />
           <Route path="rentals" element={<MyRentals />} />
-          <Route path="allocations/new" element={<ClaimBoard user={user} />} />
           <Route path="requests" element={<MyRequests />} />
           <Route path="tokens" element={<Tokens />} />
           <Route
@@ -193,18 +190,11 @@ function Heading({
     </div>
   );
 }
-function RentalActions({ instant }: { instant: boolean }) {
+function RentalActions() {
   return (
-    <div className="row-actions">
-      {instant && (
-        <Button asChild variant="outline">
-          <Link to="/account/allocations/new">即时领取开发板</Link>
-        </Button>
-      )}
-      <Button asChild>
-        <Link to="/rental-request">申请租赁</Link>
-      </Button>
-    </div>
+    <Button asChild>
+      <Link to="/rental-request">申请租赁</Link>
+    </Button>
   );
 }
 function Overview({ user }: { user: AuthUser }) {
@@ -215,7 +205,7 @@ function Overview({ user }: { user: AuthUser }) {
       <Heading
         title={`你好，${user.display_name || user.username || "开发者"}`}
         text="查看设备使用安排，继续你的开发工作。"
-        action={<RentalActions instant={!!instant} />}
+        action={<RentalActions />}
       />
       <div className="member-metrics">
         {[
@@ -233,14 +223,14 @@ function Overview({ user }: { user: AuthUser }) {
       <div className="member-overview-grid">
         <section className="member-card member-access-card">
           <div className="member-card-heading">
-            <h2>{instant ? "即时使用设备" : "连接开发板"}</h2>
+            <h2>连接开发板</h2>
             <Badge variant={instant ? "success" : "info"}>
-              {instant ? "自动放行" : "按预约使用"}
+              {instant ? "符合条件自动审批" : "需管理员审批"}
             </Badge>
           </div>
           <p>
             {instant
-              ? "通过 ostool 领取已开放的空闲设备，无需逐次审核；已有预约优先。"
+              ? "先选择开发板的可用时段并提交申请，符合设备范围、时长和并发限制时自动通过。"
               : "租赁审核通过后，在分配的使用时段内登录 ostool 并连接开发板。"}
           </p>
           {instant && (
@@ -447,15 +437,12 @@ function Password() {
   );
 }
 function MyRentals() {
-  const { user } = useSiteSession();
-  const instant =
-    user?.is_admin || user?.permissions?.includes("board.instant");
   return (
     <>
       <Heading
         title="我的租赁"
         text="查看分配给你的开发板及使用时段。"
-        action={<RentalActions instant={!!instant} />}
+        action={<RentalActions />}
       />
       <RentalHistory />
     </>
@@ -467,7 +454,7 @@ function MyRequests() {
       <Heading
         title="租赁申请"
         text="查看你的设备租赁申请及审核结果。"
-        action={<RentalActions instant={false} />}
+        action={<RentalActions />}
       />
       <ApplicationHistory />
     </>
@@ -505,7 +492,7 @@ function RentalHistory() {
         <ListDataLoadingContext.Provider value={page.loading}>
           <DataTable
             rowOffset={page.rowOffset}
-            headers={["开发板", "使用时间", "状态", "备注", "操作"]}
+            headers={["开发板", "使用时间", "状态", "备注"]}
             empty={!page.rows.length}
           >
             {page.rows.map((r) => (
@@ -532,15 +519,6 @@ function RentalHistory() {
                   </Badge>
                 </Cell>
                 <Cell>{r.notes || "—"}</Cell>
-                <Cell>
-                  {r.source === "instant" && r.status === "active" && (
-                    <ConfirmAction
-                      label="归还设备"
-                      description="归还后将释放设备并结束当前使用会话。"
-                      action={() => api.returnBoard(r.id)}
-                    />
-                  )}
-                </Cell>
               </Row>
             ))}
           </DataTable>
@@ -715,67 +693,5 @@ function MemberList({
     <ListLayoutProvider storageKey={`member:${storageKey}`}>
       <section className="member-card member-list">{children}</section>
     </ListLayoutProvider>
-  );
-}
-
-function ClaimBoard({ user }: { user: AuthUser }) {
-  const catalog = useAccountResource("catalog") ?? [];
-  const available = catalog.filter((board) => board.instant_available);
-  const [selected, setSelected] = useState("");
-  const task = useAction();
-  const navigate = useNavigate();
-  const allowed = user.permissions?.includes("board.instant") || user.is_admin;
-  if (!allowed)
-    return (
-      <Notice>当前角色没有免审批使用设备权限，请通过租赁申请获取设备。</Notice>
-    );
-  return (
-    <PagePanel
-      footer={
-        <>
-          <span>设备将分配给当前账号，使用时段按角色限制确定。</span>
-          <Button
-            disabled={
-              !selected ||
-              !available.some((b) => b.id === selected) ||
-              task.pending
-            }
-            onClick={() =>
-              void task.run(async () => {
-                await api.claimBoard(selected);
-                navigate("/account/rentals");
-              }, "开发板已分配")
-            }
-          >
-            确认领取
-          </Button>
-        </>
-      }
-    >
-      <Heading
-        title="即时领取开发板"
-        text="选择可即时使用的空闲设备，领取后通过 ostool 登录使用。"
-      />
-      {!available.length && <Notice>暂无符合当前角色条件的空闲开发板。</Notice>}
-      <SelectField
-        label="开发板"
-        value={selected}
-        onValue={setSelected}
-        options={[
-          { value: "", label: "请选择开发板" },
-          ...available.map((board) => ({
-            value: board.id,
-            label: `${board.id} · ${board.board_type}`,
-          })),
-        ]}
-      />
-      {selected && !available.some((b) => b.id === selected) && (
-        <MessageToast
-          kind="warning"
-          message="所选开发板已不可领取，请重新选择。"
-        />
-      )}
-      <Link to="/account/rentals">返回我的租赁</Link>
-    </PagePanel>
   );
 }

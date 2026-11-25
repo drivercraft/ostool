@@ -87,3 +87,18 @@ it("builds continuous local-day slots through daylight-saving boundaries", () =>
     });
   }
 });
+
+it("blocks anonymous occupied intervals without requiring rental identifiers", () => {
+  const booking = row("private-id", 20, 40);
+  delete booking.id;
+  expect(rentalConflicts([booking], 20, 40)).toHaveLength(1);
+  expect(freeWindows([booking], 0, 60)).toEqual([
+    { start: 0, end: 20 },
+    { start: 40, end: 60 },
+  ]);
+  expect(rentalConflicts([booking], 40, 60)).toHaveLength(0);
+  expect(freeWindows([booking], 0, 60, "editing-some-other-rental")).toEqual([
+    { start: 0, end: 20 },
+    { start: 40, end: 60 },
+  ]);
+});

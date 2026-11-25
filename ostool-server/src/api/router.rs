@@ -1559,11 +1559,7 @@ async fn list_board_types(
 ) -> Result<axum::Json<Vec<BoardTypeSummary>>, ApiError> {
     let allowed = match actor {
         Some(Extension(super::auth::CurrentUser(user))) if !user.is_admin => {
-            let mut allowed = super::rentals::active(&state, user.id).await?;
-            for (id, end) in super::instant::candidates(&state, &user, None, None, &[]).await? {
-                allowed.entry(id).or_insert((uuid::Uuid::nil(), end));
-            }
-            Some(allowed)
+            Some(super::rentals::active(&state, user.id).await?)
         }
         _ => None,
     };
@@ -1579,7 +1575,6 @@ async fn list_board_types(
 
 async fn create_session(
     State(state): State<AppState>,
-    context: Option<Extension<crate::audit::Context>>,
     actor: Option<Extension<super::auth::CurrentUser>>,
     axum::Json(request): axum::Json<CreateSessionRequest>,
 ) -> Result<
@@ -1601,54 +1596,18 @@ async fn create_session(
     }
 
     let _rental_guard = state.rental_gate.lock().await;
-    let mut rental_access = match actor.as_ref() {
+    let rental_access = match actor.as_ref() {
         Some(Extension(super::auth::CurrentUser(user))) if !user.is_admin => {
             Some(super::rentals::active(&state, user.id).await?)
         }
         _ => None,
     };
-    let mut instant_rental = None;
-    if let (Some(access), Some(Extension(super::auth::CurrentUser(user)))) =
-        (&mut rental_access, actor.as_ref())
-    {
-        let boards = state.boards.read().await;
-        let runtimes = state.board_runtimes.read().await;
-        let available = access.keys().any(|id| {
-            boards.get(id).is_some_and(|b| {
-                b.board_type == request.board_type
-                    && !b.disabled
-                    && request.required_tags.iter().all(|t| b.tags.contains(t))
-            }) && board_id.is_none_or(|v| id == v)
-                && runtimes
-                    .get(id)
-                    .is_none_or(|r| r.lease_state == crate::BoardLeaseState::Idle)
-        });
-        drop(runtimes);
-        drop(boards);
-        if !available
-            && crate::security::permissions::access(&state.database, user)
-                .await?
-                .allows("board.instant")
-        {
-            let (id, rental, end) = super::instant::assign(
-                &state,
-                user,
-                &request.board_type,
-                board_id,
-                &request.required_tags,
-            )
-            .await?;
-            access.clear();
-            access.insert(id, (rental, end));
-            instant_rental = Some(rental);
-        }
-    }
     let allocation = async {
         let session = if let Some(access) = &rental_access {
             let allowed = access.keys().cloned().collect::<BTreeSet<_>>();
             if allowed.is_empty() || board_id.is_some_and(|id| !allowed.contains(id)) {
                 return Err(ApiError::forbidden(
-                    "当前时间没有已分配的开发板，请联系管理员查看租赁",
+                    "当前时间没有已通过的租赁，请先申请开发板的可用时段",
                 ));
             }
             state
@@ -1747,15 +1706,7 @@ async fn create_session(
         Ok::<_, ApiError>(session)
     }
     .await;
-    let session = match allocation {
-        Ok(session) => session,
-        Err(error) => {
-            if let Some(id) = instant_rental {
-                super::instant::cancel_failed(&state, id).await;
-            }
-            return Err(error);
-        }
-    };
+    let session = allocation?;
     let rental = rental_access
         .as_ref()
         .and_then(|access| access.get(&session.board_id))
@@ -1781,9 +1732,6 @@ async fn create_session(
             state
                 .request_session_stop(&session.id, SessionStopReason::AuthorizationUnavailable)
                 .await;
-            if let Some(id) = instant_rental {
-                super::instant::cancel_failed(&state, id).await;
-            }
             log::error!("failed to persist session owner: {error}");
             return Err(ApiError::service_unavailable(
                 "failed to record session owner",
@@ -1792,10 +1740,6 @@ async fn create_session(
         state
             .admin_events
             .invalidate(&["sessions", "session_history"]);
-    }
-    if let (Some(rental), Some(Extension(context))) = (instant_rental, context) {
-        crate::audit::event(&state,&context,"rental.instant.created","即时分配设备","rentals",Some(&rental.to_string()),true,
-            serde_json::json!({"board_id":session.board_id,"session_id":session.id,"ends_at":rental_access.as_ref().and_then(|a|a.get(&session.board_id)).map(|(_,end)|end)})).await;
     }
     let session = state
         .get_session(&session.id)

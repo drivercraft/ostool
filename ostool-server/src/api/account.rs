@@ -65,11 +65,6 @@ struct PasswordInput {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/account", get(snapshot))
-        .route("/api/v1/account/allocations", post(super::instant::claim))
-        .route(
-            "/api/v1/account/allocations/{id}",
-            axum::routing::delete(super::instant::release),
-        )
         .route("/api/v1/account/rentals", get(member_rentals))
         .route("/api/v1/account/availability", get(member_availability))
         .route(
@@ -154,8 +149,8 @@ pub(crate) async fn availability(
         .await
         .get(&filters.board)
         .is_some_and(|board| !board.disabled);
-    let rows: Vec<Value> = if visible {
-        sqlx::query_scalar("SELECT jsonb_build_object('id',id,'board_id',board_id,'starts_at',starts_at,'ends_at',ends_at,'status','reserved') FROM board_rentals WHERE board_id=$1 AND cancelled_at IS NULL AND starts_at<$3 AND ends_at>$2 ORDER BY starts_at,id LIMIT 10001")
+    let rows: Vec<(DateTime<Utc>, DateTime<Utc>)> = if visible {
+        sqlx::query_as("SELECT greatest(starts_at,$2),least(ends_at,$3) FROM board_rentals WHERE board_id=$1 AND cancelled_at IS NULL AND starts_at<$3 AND ends_at>$2 ORDER BY starts_at,ends_at LIMIT 10001")
             .bind(&filters.board).bind(from).bind(to).fetch_all(state.database.pool()).await.map_err(db_error)?
     } else {
         Vec::new()
@@ -165,7 +160,19 @@ pub(crate) async fn availability(
             "该日历范围的租赁过多，请缩小时间范围",
         ));
     }
-    Ok(json!({"query":filters,"items":rows}))
+    // Publish only occupied intervals. Merging also hides boundaries between tenants.
+    let mut busy: Vec<(DateTime<Utc>, DateTime<Utc>)> = Vec::new();
+    for (start, end) in rows {
+        if let Some(last) = busy.last_mut()
+            && start <= last.1
+        {
+            last.1 = last.1.max(end);
+        } else {
+            busy.push((start, end));
+        }
+    }
+    let items: Vec<_> = busy.into_iter().map(|(start,end)| json!({"board_id":filters.board,"starts_at":start,"ends_at":end,"status":"reserved"})).collect();
+    Ok(json!({"query":filters,"items":items}))
 }
 
 pub(crate) async fn projection(state: &AppState, user: Uuid) -> Result<Value, ApiError> {
@@ -175,17 +182,15 @@ pub(crate) async fn projection(state: &AppState, user: Uuid) -> Result<Value, Ap
         .await
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::unauthorized("账号不可用，请重新登录"))?;
-    let candidates = super::instant::candidates(state, &profile, None, None, &[]).await?;
-    let runtimes = state.board_runtimes.read().await;
+    let access = crate::security::permissions::access(db, &profile).await?;
     let catalog: Vec<_> = state
         .boards
         .read()
         .await
         .values()
         .filter(|b| !b.disabled)
-        .map(|b| json!({"id":b.id,"board_type":b.board_type,"tags":b.tags,"instant_available":candidates.contains_key(&b.id) && runtimes.get(&b.id).is_some_and(|r|r.lease_state==crate::BoardLeaseState::Idle),"instant_ends_at":candidates.get(&b.id)}))
+        .map(|b| json!({"id":b.id,"board_type":b.board_type,"tags":b.tags,"auto_approval_available":super::auto_approval::eligible(&access,b)}))
         .collect();
-    drop(runtimes);
     let tokens = sqlx::query("SELECT id,name,expires_at,created_at FROM personal_access_tokens WHERE user_id=$1 ORDER BY created_at DESC")
         .bind(user).fetch_all(db.pool()).await.map_err(db_error)?.into_iter().map(|r| Ok(json!({"id":r.try_get::<Uuid,_>("id")?,"name":r.try_get::<String,_>("name")?,"expires_at":r.try_get::<Option<DateTime<Utc>>,_>("expires_at")?,"created_at":r.try_get::<DateTime<Utc>,_>("created_at")?}))).collect::<Result<Vec<_>,sqlx::Error>>().map_err(db_error)?;
     let summary: Value = sqlx::query_scalar("SELECT jsonb_build_object('active',(SELECT count(*) FROM board_rentals WHERE user_id=$1 AND cancelled_at IS NULL AND starts_at<=now() AND ends_at>now()),'scheduled',(SELECT count(*) FROM board_rentals WHERE user_id=$1 AND cancelled_at IS NULL AND starts_at>now()),'pending',(SELECT count(*) FROM rental_requests WHERE user_id=$1 AND status='pending'))").bind(user).fetch_one(db.pool()).await.map_err(db_error)?;
@@ -312,11 +317,25 @@ async fn change_password(
     state.admin_events.invalidate(&["users"]);
     Ok(StatusCode::NO_CONTENT)
 }
+#[derive(Serialize)]
+struct ApplicationResult {
+    id: Uuid,
+    status: &'static str,
+    rental_id: Option<Uuid>,
+}
 async fn submit(
     State(state): State<AppState>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
+    context: Option<Extension<crate::audit::Context>>,
     Json(input): Json<RequestInput>,
-) -> Result<(StatusCode, Extension<crate::audit::Target>), ApiError> {
+) -> Result<
+    (
+        StatusCode,
+        Extension<crate::audit::Target>,
+        Json<ApplicationResult>,
+    ),
+    ApiError,
+> {
     if input.starts_at >= input.ends_at || input.ends_at <= Utc::now() || input.notes.len() > 2000 {
         return Err(ApiError::bad_request(
             "请选择有效的起止时间，申请说明不能超过 2000 字符",
@@ -324,30 +343,100 @@ async fn submit(
     }
     let _gate = state.rental_gate.lock().await;
     let _inventory = state.board_inventory_gate.lock().await;
-    if state
+    let board = state
         .boards
         .read()
         .await
         .get(&input.board_id)
-        .is_none_or(|b| b.disabled)
-    {
-        return Err(ApiError::bad_request("开发板不存在或已禁用"));
+        .filter(|b| !b.disabled)
+        .cloned()
+        .ok_or_else(|| ApiError::bad_request("开发板不存在或已禁用"))?;
+    let access = crate::security::permissions::access(&state.database, &user).await?;
+    let mut tx = state.database.begin().await.map_err(db_error)?;
+    // Serialize same-user concurrency and same-board overlap checks with durable locks.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,3000))")
+        .bind(user.id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,2999))")
+        .bind(&input.board_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
+    // Match the role-update lock order, then verify the authenticated version.
+    let role_enabled: Option<bool> =
+        sqlx::query_scalar("SELECT enabled FROM roles WHERE id=$1 FOR SHARE")
+            .bind(&access.role_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_error)?;
+    let valid: Option<bool> = sqlx::query_scalar(
+        "SELECT NOT disabled AND security_version=$2 FROM users WHERE id=$1 FOR SHARE",
+    )
+    .bind(user.id)
+    .bind(user.security_version)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(db_error)?;
+    if role_enabled != Some(true) || valid != Some(true) {
+        return Err(ApiError::unauthorized("账号或角色已变化，请重新登录"));
     }
-    let overlap:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM board_rentals WHERE board_id=$1 AND cancelled_at IS NULL AND starts_at<$3 AND ends_at>$2)").bind(&input.board_id).bind(input.starts_at).bind(input.ends_at).fetch_one(state.database.pool()).await.map_err(db_error)?;
+    let overlap: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM board_rentals WHERE board_id=$1 AND cancelled_at IS NULL AND starts_at<$3 AND ends_at>$2)")
+        .bind(&input.board_id).bind(input.starts_at).bind(input.ends_at).fetch_one(&mut *tx).await.map_err(db_error)?;
     if overlap {
-        return Err(ApiError::conflict("该时段已有租赁，请调整申请时间"));
+        return Err(ApiError::conflict("该时段已不可用，请调整申请时间"));
     }
-    let duplicate:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM rental_requests WHERE user_id=$1 AND board_id=$2 AND status='pending' AND starts_at=$3 AND ends_at=$4)").bind(user.id).bind(&input.board_id).bind(input.starts_at).bind(input.ends_at).fetch_one(state.database.pool()).await.map_err(db_error)?;
+    let duplicate: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM rental_requests WHERE user_id=$1 AND board_id=$2 AND status='pending' AND starts_at=$3 AND ends_at=$4)")
+        .bind(user.id).bind(&input.board_id).bind(input.starts_at).bind(input.ends_at).fetch_one(&mut *tx).await.map_err(db_error)?;
     if duplicate {
         return Err(ApiError::conflict("相同申请正在审核中，请勿重复提交"));
     }
-    let id: Uuid = sqlx::query_scalar("INSERT INTO rental_requests (user_id,board_id,starts_at,ends_at,notes) VALUES ($1,$2,$3,$4,$5) RETURNING id").bind(user.id).bind(input.board_id).bind(input.starts_at).bind(input.ends_at).bind(input.notes).fetch_one(state.database.pool()).await.map_err(db_error)?;
-    state.admin_events.invalidate(&["rental_requests"]);
+    let approved = super::auto_approval::approval_allowed(
+        &mut tx,
+        &access,
+        &board,
+        user.id,
+        input.starts_at,
+        input.ends_at,
+    )
+    .await?;
+    let rental = if approved {
+        Some(sqlx::query_scalar::<_,Uuid>("INSERT INTO board_rentals(board_id,user_id,starts_at,ends_at,notes) VALUES($1,$2,$3,$4,$5) RETURNING id")
+            .bind(&input.board_id).bind(user.id).bind(input.starts_at).bind(input.ends_at).bind(&input.notes).fetch_one(&mut *tx).await.map_err(db_error)?)
+    } else {
+        None
+    };
+    let status = if approved { "auto_approved" } else { "pending" };
+    let id: Uuid = sqlx::query_scalar("INSERT INTO rental_requests(user_id,board_id,starts_at,ends_at,notes,status,decision_note,reviewed_at,rental_id) VALUES($1,$2,$3,$4,$5,$6,$7,CASE WHEN $8 THEN now() ELSE NULL END,$9) RETURNING id")
+        .bind(user.id).bind(input.board_id).bind(input.starts_at).bind(input.ends_at).bind(input.notes)
+        .bind(status).bind(if approved { "符合免审批策略，系统自动通过" } else { "" }).bind(approved).bind(rental)
+        .fetch_one(&mut *tx).await.map_err(db_error)?;
+    tx.commit().await.map_err(db_error)?;
+    state.admin_events.invalidate(if approved {
+        &["rental_requests", "rentals"]
+    } else {
+        &["rental_requests"]
+    });
+    if approved {
+        state.rental_changed.notify_one();
+    }
+    if let (Some(rental), Some(Extension(context))) = (rental, context) {
+        crate::audit::event(&state, &context, "rental.auto_approved", "自动通过租赁申请", "rentals", Some(&rental.to_string()), true,
+            json!({"request_id":id,"board_id":board.id,"starts_at":input.starts_at,"ends_at":input.ends_at})).await;
+    }
+
     Ok((
         StatusCode::CREATED,
         Extension(crate::audit::Target(id.to_string())),
+        Json(ApplicationResult {
+            id,
+            status,
+            rental_id: rental,
+        }),
     ))
 }
+
 async fn withdraw(
     State(state): State<AppState>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
